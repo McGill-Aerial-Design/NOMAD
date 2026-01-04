@@ -5,7 +5,7 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using Newtonsoft.Json.Linq;
 
-namespace NOMADPlugin
+namespace NOMAD.MissionPlanner
 {
     /// <summary>
     /// Jetson Health Monitor Tab for NOMAD Mission Planner Plugin.

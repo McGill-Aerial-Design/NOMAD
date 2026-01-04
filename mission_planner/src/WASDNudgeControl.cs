@@ -3,7 +3,7 @@ using System.Windows.Forms;
 using MissionPlanner;
 using MissionPlanner.Utilities;
 
-namespace NOMADPlugin
+namespace NOMAD.MissionPlanner
 {
     /// <summary>
     /// Indoor WASD Nudge Control for NOMAD Mission Planner Plugin.

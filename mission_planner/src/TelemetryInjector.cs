@@ -3,7 +3,7 @@ using System.Threading.Tasks;
 using MissionPlanner;
 using MissionPlanner.Utilities;
 
-namespace NOMADPlugin
+namespace NOMAD.MissionPlanner
 {
     /// <summary>
     /// Telemetry Injection for NOMAD Mission Planner Plugin.

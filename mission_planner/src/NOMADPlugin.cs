@@ -287,23 +287,30 @@ namespace NOMAD.MissionPlanner
                 return;
             }
 
-            if (_controlPanelWindow == null)
-            {
-                _controlPanelWindow = new NOMADControlPanel(_sender, _config);
-            }
-
+            // Always create a fresh instance to avoid disposed object errors
             if (_panelForm == null || _panelForm.IsDisposed)
             {
+                // Create new panel instance
+                _controlPanelWindow = new NOMADControlPanel(_sender, _config);
+                
                 _panelForm = new Form
                 {
                     Text = "NOMAD Control Panel",
                     StartPosition = FormStartPosition.CenterParent,
                     Width = 420,
-                    Height = 900
+                    Height = 1000,  // Increased height for health tab
+                    AutoScroll = true  // Enable scrolling if content exceeds form
                 };
-                _panelForm.FormClosed += (s, e) => { _panelForm = null; };
+                _panelForm.FormClosed += (s, e) =>
+                {
+                    // Dispose control when form closes
+                    _controlPanelWindow?.Dispose();
+                    _controlPanelWindow = null;
+                    _panelForm = null;
+                };
                 _panelForm.Controls.Add(_controlPanelWindow);
                 _controlPanelWindow.Dock = DockStyle.Fill;
+                _controlPanelWindow.AutoScroll = true;  // Enable scrolling in panel too
             }
 
             if (!_panelForm.Visible)

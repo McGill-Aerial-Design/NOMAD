@@ -31,6 +31,11 @@ namespace NOMAD.MissionPlanner
         public int JetsonPort { get; set; } = 8000;
 
         /// <summary>
+        /// Full Jetson Base URL (computed property).
+        /// </summary>
+        public string JetsonBaseUrl => $"http://{JetsonIP}:{JetsonPort}";
+
+        /// <summary>
         /// RTSP video stream URL (primary camera - ZED/Navigation).
         /// </summary>
         public string RtspUrlPrimary { get; set; } = "rtsp://192.168.1.100:8554/live";

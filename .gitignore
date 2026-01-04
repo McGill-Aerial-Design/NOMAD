@@ -1,2 +1,293 @@
-/.dockerignore
-/.github
+# ============================================================
+# NOMAD Project .gitignore
+# ============================================================
+
+# ============================================================
+# Python
+# ============================================================
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# ============================================================
+# C# / .NET / Visual Studio
+# ============================================================
+
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+
+# Visual Studio cache/options
+.vs/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Visual Studio profiler
+*.psess
+*.vsp
+*.vspx
+
+# ReSharper
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+
+# NuGet Packages
+*.nupkg
+**/packages/*
+!**/packages/build/
+*.nuget.props
+*.nuget.targets
+
+# MSBuild Binary and Structured Log
+*.binlog
+
+# ============================================================
+# Mission Planner Plugin
+# ============================================================
+
+# Compiled plugin (should be built fresh)
+mission_planner/src/bin/
+mission_planner/src/obj/
+mission_planner/plugins-dist/*.dll
+mission_planner/plugins-dist/*.pdb
+
+# User config (contains Tailscale IPs, etc.)
+mission_planner/nomad_config.json
+
+# ============================================================
+# Runtime / Data / Logs
+# ============================================================
+
+# Mission logs (large JSON files)
+data/mission_logs/*.json
+!data/mission_logs/README.md
+
+# Video recordings
+recordings/
+*.mp4
+*.avi
+*.mkv
+
+# ZED SDK cache
+*.svo
+*.svo2
+
+# ============================================================
+# Configuration / Secrets
+# ============================================================
+
+# Environment files with secrets
+.env
+.env.*
+!.env.example
+!*.env.example
+
+# Tailscale auth keys
+config/env/*.env
+!config/env/*.env.example
+
+# Private keys
+*.key
+*.pem
+*.p12
+
+# ============================================================
+# Operating System Files
+# ============================================================
+
+# Windows
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# ============================================================
+# IDE / Editor
+# ============================================================
+
+# JetBrains IDEs (PyCharm, Rider, etc.)
+.idea/
+*.iml
+*.iws
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Emacs
+*~
+\#*\#
+
+# Vim
+*.swp
+*.swo
+*~
+
+# ============================================================
+# Docker
+# ============================================================
+
+# Docker volumes
+.docker/
+
+# ============================================================
+# Temporary / Generated Files
+# ============================================================
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.old
+
+# Logs
+*.log
+logs/
+
+# Test outputs
+test_output/
+*.test
+
+# ============================================================
+# Specific to NOMAD
+# ============================================================
+
+# Local development overrides
+local_config.json
+dev_settings.json
+
+# Large model files (should be downloaded separately)
+models/*.pt
+models/*.onnx
+models/*.tflite
+!models/README.md
+
+# Jetson-specific
+/opt/nomad/
+
+# ============================================================
+# GitHub / CI
+# ============================================================
+
+# Keep .github folder but ignore certain files
+# (Remove these lines if you want to track .github)
+# .github/
+# !.github/workflows/
+# !.github/agents/
+
+# ============================================================
+# Documentation Builds
+# ============================================================
+
+# Sphinx documentation
+docs/_build/
+docs/_static/
+docs/_templates/
+
+# ============================================================
+# Archives
+# ============================================================
+
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# ============================================================
+# Exceptions (force include important files)
+# ============================================================
+
+# Include README files everywhere
+!**/README.md
+
+# Include example configurations
+!**/*.example
+!**/*.template
+
+# Include documentation
+!docs/**
+
+# Include empty directories with .gitkeep
+!**/.gitkeep

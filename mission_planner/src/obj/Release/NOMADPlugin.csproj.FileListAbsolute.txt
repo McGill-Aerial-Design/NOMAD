@@ -1,6 +1,6 @@
-c:\Users\Youssef\Documents\Code\MAD\NOMAD\mission_planner\src\obj\Release\NOMADPlugin.csproj.AssemblyReference.cache
-c:\Users\Youssef\Documents\Code\MAD\NOMAD\mission_planner\src\obj\Release\NOMADPlugin.csproj.CoreCompileInputs.cache
-c:\Users\Youssef\Documents\Code\MAD\NOMAD\mission_planner\src\bin\Release\NOMADPlugin.dll
-c:\Users\Youssef\Documents\Code\MAD\NOMAD\mission_planner\src\bin\Release\NOMADPlugin.pdb
-c:\Users\Youssef\Documents\Code\MAD\NOMAD\mission_planner\src\obj\Release\NOMADPlugin.dll
-c:\Users\Youssef\Documents\Code\MAD\NOMAD\mission_planner\src\obj\Release\NOMADPlugin.pdb
+C:\Users\Youssef\Documents\Code\MAD\NOMAD\mission_planner\src\bin\Release\NOMADPlugin.dll
+C:\Users\Youssef\Documents\Code\MAD\NOMAD\mission_planner\src\bin\Release\NOMADPlugin.pdb
+C:\Users\Youssef\Documents\Code\MAD\NOMAD\mission_planner\src\obj\Release\NOMADPlugin.csproj.AssemblyReference.cache
+C:\Users\Youssef\Documents\Code\MAD\NOMAD\mission_planner\src\obj\Release\NOMADPlugin.csproj.CoreCompileInputs.cache
+C:\Users\Youssef\Documents\Code\MAD\NOMAD\mission_planner\src\obj\Release\NOMADPlugin.dll
+C:\Users\Youssef\Documents\Code\MAD\NOMAD\mission_planner\src\obj\Release\NOMADPlugin.pdb

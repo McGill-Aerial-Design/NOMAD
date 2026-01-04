@@ -29,6 +29,11 @@ namespace NOMAD.MissionPlanner
         private readonly DualLinkSender _sender;
         private NOMADConfig _config;
 
+        // New Feature Instances
+        private TelemetryInjector _telemetryInjector;
+        private WASDNudgeControl _wasdControl;
+        private JetsonHealthTab _healthTab;
+
         // UI Controls
         private Label _lblTitle;
         private Label _lblStatus;
@@ -47,10 +52,10 @@ namespace NOMAD.MissionPlanner
         private NumericUpDown _numX, _numY, _numZ;
         private Label _lblExclusionCount;
 
-        // Indoor Nudge Controls
+        // Indoor Nudge Controls (WASD)
         private GroupBox _grpNudge;
-        private CheckBox _chkEnableNudge;
-        private Label _lblNudgeStatus;
+        private CheckBox _chkEnableWASD;
+        private Label _lblWASDStatus;
         private NumericUpDown _numNudgeSpeed;
 
         // Video Stream Controls
@@ -73,14 +78,29 @@ namespace NOMAD.MissionPlanner
             _sender = sender ?? throw new ArgumentNullException(nameof(sender));
             _config = config ?? throw new ArgumentNullException(nameof(config));
 
+            // Initialize new features
+            try
+            {
+                _telemetryInjector = new TelemetryInjector(null); // Will use MainV2.comPort internally
+                _wasdControl = new WASDNudgeControl(null); // Will use MainV2.comPort internally
+                _wasdControl.NudgeSpeed = DEFAULT_NUDGE_SPEED;
+                
+                _healthTab = new JetsonHealthTab(); // Initialize health tab
+                
+                // Send initial status
+                _telemetryInjector?.SendCustomStatus("Control Panel Loaded");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"NOMAD: Feature init error - {ex.Message}");
+            }
+
             InitializeComponents();
             UpdateModeDisplay();
 
-            // Enable keyboard input for nudge controls
+            // Enable keyboard input for WASD controls
             this.SetStyle(ControlStyles.Selectable, true);
             this.TabStop = true;
-            this.KeyDown += NOMADControlPanel_KeyDown;
-            this.KeyUp += NOMADControlPanel_KeyUp;
         }
 
         // ============================================================
@@ -122,6 +142,8 @@ namespace NOMAD.MissionPlanner
         {
             this.BackColor = Color.FromArgb(45, 45, 48);
             this.Padding = new Padding(10);
+            this.AutoScroll = true;  // Enable vertical scrolling
+            this.AutoScrollMinSize = new Size(350, 1200);  // Set minimum size for scroll
 
             int yOffset = 10;
 
@@ -321,17 +343,17 @@ namespace NOMAD.MissionPlanner
                 BackColor = Color.FromArgb(55, 55, 58)
             };
 
-            _chkEnableNudge = new CheckBox
+            _chkEnableWASD = new CheckBox
             {
-                Text = "Enable Indoor Nudge (WASD)",
+                Text = "Enable WASD Indoor Control",
                 Location = new Point(15, 25),
                 Size = new Size(320, 25),
                 ForeColor = Color.White,
                 Font = new Font("Segoe UI", 10),
                 Checked = false
             };
-            _chkEnableNudge.CheckedChanged += ChkEnableNudge_CheckedChanged;
-            _grpNudge.Controls.Add(_chkEnableNudge);
+            _chkEnableWASD.CheckedChanged += ChkEnableWASD_CheckedChanged;
+            _grpNudge.Controls.Add(_chkEnableWASD);
 
             var lblSpeed = new Label
             {
@@ -366,7 +388,7 @@ namespace NOMAD.MissionPlanner
             };
             _grpNudge.Controls.Add(lblNudgeHelp);
 
-            _lblNudgeStatus = new Label
+            _lblWASDStatus = new Label
             {
                 Text = "Status: Disabled",
                 Location = new Point(15, 110),
@@ -374,7 +396,7 @@ namespace NOMAD.MissionPlanner
                 Font = new Font("Segoe UI", 9),
                 AutoSize = true
             };
-            _grpNudge.Controls.Add(_lblNudgeStatus);
+            _grpNudge.Controls.Add(_lblWASDStatus);
 
             this.Controls.Add(_grpNudge);
             yOffset += 150;
@@ -455,6 +477,19 @@ namespace NOMAD.MissionPlanner
             _grpVideo.Controls.Add(_lblVideoStatus);
 
             this.Controls.Add(_grpVideo);
+            yOffset += 140;
+
+            // ============================================================
+            // Jetson Health Monitor Tab
+            // ============================================================
+
+            if (_healthTab != null)
+            {
+                _healthTab.Location = new Point(10, yOffset);
+                _healthTab.Size = new Size(350, 450);
+                _healthTab.SetJetsonUrl(_config?.JetsonBaseUrl ?? "http://127.0.0.1:8000");
+                this.Controls.Add(_healthTab);
+            }
         }
 
         private NumericUpDown CreateNumericUpDown(int x, int y)
@@ -490,6 +525,9 @@ namespace NOMAD.MissionPlanner
             _btnTask1Capture.Enabled = false;
             _btnTask1Capture.Text = "Capturing...";
             _txtTask1Result.Text = "";
+            
+            // Send telemetry
+            _telemetryInjector?.SendTaskStatus(1, "Capturing");
 
             try
             {
@@ -503,11 +541,15 @@ namespace NOMAD.MissionPlanner
                         dynamic json = Newtonsoft.Json.JsonConvert.DeserializeObject(result.Data);
                         _txtTask1Result.Text = json?.target_text ?? "Capture successful";
                         _txtTask1Result.ForeColor = Color.LimeGreen;
+                        
+                        // Send success telemetry
+                        _telemetryInjector?.SendTaskStatus(1, "Snapshot Captured");
                     }
                     catch
                     {
                         _txtTask1Result.Text = result.Message;
                         _txtTask1Result.ForeColor = Color.LimeGreen;
+                        _telemetryInjector?.SendTaskStatus(1, "Captured");
                     }
                 }
                 else
@@ -540,6 +582,9 @@ namespace NOMAD.MissionPlanner
             if (confirm != DialogResult.Yes) return;
 
             _btnTask2Reset.Enabled = false;
+            
+            // Send telemetry
+            _telemetryInjector?.SendTaskStatus(2, "Resetting Map");
 
             try
             {
@@ -549,10 +594,12 @@ namespace NOMAD.MissionPlanner
                 {
                     _lblExclusionCount.Text = "Targets: 0";
                     _lblExclusionCount.ForeColor = Color.LimeGreen;
+                    _telemetryInjector?.SendTaskStatus(2, "Map Cleared");
                     MessageBox.Show("Exclusion map cleared!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
                 else
                 {
+                    _telemetryInjector?.SendCustomStatus("Map Reset Failed");
                     MessageBox.Show($"Reset failed: {result.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
@@ -608,31 +655,78 @@ namespace NOMAD.MissionPlanner
         }
 
         // ============================================================
-        // Indoor Nudge Event Handlers
+        // WASD Control Event Handlers
         // ============================================================
 
-        private void ChkEnableNudge_CheckedChanged(object sender, EventArgs e)
+        private void ChkEnableWASD_CheckedChanged(object sender, EventArgs e)
         {
-            _nudgeEnabled = _chkEnableNudge.Checked;
+            _nudgeEnabled = _chkEnableWASD.Checked;
+            
+            if (_wasdControl != null)
+            {
+                _wasdControl.Enabled = _chkEnableWASD.Checked;
+            }
 
             if (_nudgeEnabled)
             {
-                _lblNudgeStatus.Text = "Status: ENABLED - Press WASD to nudge";
-                _lblNudgeStatus.ForeColor = Color.LimeGreen;
-                _chkEnableNudge.ForeColor = Color.LimeGreen;
+                _lblWASDStatus.Text = "Status: ENABLED - W/A/S/D/Q/E to nudge";
+                _lblWASDStatus.ForeColor = Color.LimeGreen;
+                _chkEnableWASD.ForeColor = Color.LimeGreen;
+
+                // Send telemetry status
+                _telemetryInjector?.SendCustomStatus("WASD Control Enabled");
+
+                // Show warning message
+                CustomMessageBox.Show(
+                    "WASD Control Enabled\n\n" +
+                    "W/S = Forward/Back\n" +
+                    "A/D = Left/Right\n" +
+                    "Q/E = Up/Down\n\n" +
+                    "CAUTION: Use only in Guided mode!\n" +
+                    "Keep RC transmitter ready for manual override.",
+                    "WASD Control",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning
+                );
 
                 // Focus this control to receive keyboard events
                 this.Focus();
             }
             else
             {
-                _lblNudgeStatus.Text = "Status: Disabled";
-                _lblNudgeStatus.ForeColor = Color.Gray;
-                _chkEnableNudge.ForeColor = Color.White;
+                _lblWASDStatus.Text = "Status: Disabled";
+                _lblWASDStatus.ForeColor = Color.Gray;
+                _chkEnableWASD.ForeColor = Color.White;
 
-                // Send zero velocity to stop any movement
-                SendBodyVelocity(0, 0);
+                // Send telemetry status
+                _telemetryInjector?.SendCustomStatus("WASD Control Disabled");
             }
+        }
+
+        // Override keyboard handling for WASD
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (_wasdControl?.Enabled == true)
+            {
+                // Handle WASD Q E keys
+                if (keyData == Keys.W || keyData == Keys.A || 
+                    keyData == Keys.S || keyData == Keys.D || 
+                    keyData == Keys.Q || keyData == Keys.E)
+                {
+                    _wasdControl.HandleKeyDown(keyData);
+                    return true; // Handled
+                }
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        protected override void OnKeyUp(KeyEventArgs e)
+        {
+            if (_wasdControl?.Enabled == true)
+            {
+                _wasdControl.HandleKeyUp(e.KeyCode);
+            }
+            base.OnKeyUp(e);
         }
 
         // ============================================================
@@ -716,129 +810,6 @@ namespace NOMAD.MissionPlanner
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error
                 );
-            }
-        }
-
-        private void NOMADControlPanel_KeyDown(object sender, KeyEventArgs e)
-        {
-            if (!_nudgeEnabled) return;
-
-            float speed = (float)_numNudgeSpeed.Value;
-            float vx = 0, vy = 0;
-
-            // Map WASD to body-frame velocities
-            // W = Forward (+X body), S = Back (-X body)
-            // A = Left (-Y body), D = Right (+Y body)
-            switch (e.KeyCode)
-            {
-                case Keys.W:
-                    vx = speed;  // Forward
-                    break;
-                case Keys.S:
-                    vx = -speed;  // Back
-                    break;
-                case Keys.A:
-                    vy = -speed;  // Left
-                    break;
-                case Keys.D:
-                    vy = speed;  // Right
-                    break;
-                default:
-                    return;  // Ignore other keys
-            }
-
-            // Update status display
-            _lblNudgeStatus.Text = $"Status: Nudging {e.KeyCode} ({vx:F1}, {vy:F1}) m/s";
-            _lblNudgeStatus.ForeColor = Color.Orange;
-
-            // Send velocity command
-            SendBodyVelocity(vx, vy);
-
-            e.Handled = true;
-            e.SuppressKeyPress = true;
-        }
-
-        private void NOMADControlPanel_KeyUp(object sender, KeyEventArgs e)
-        {
-            if (!_nudgeEnabled) return;
-
-            // Stop movement when key released
-            if (e.KeyCode == Keys.W || e.KeyCode == Keys.S ||
-                e.KeyCode == Keys.A || e.KeyCode == Keys.D)
-            {
-                SendBodyVelocity(0, 0);
-                _lblNudgeStatus.Text = "Status: ENABLED - Press WASD to nudge";
-                _lblNudgeStatus.ForeColor = Color.LimeGreen;
-
-                e.Handled = true;
-                e.SuppressKeyPress = true;
-            }
-        }
-
-        /// <summary>
-        /// Send body-frame velocity command via ELRS/MAVLink direct link.
-        /// Uses SET_POSITION_TARGET_LOCAL_NED with MAV_FRAME_BODY_NED.
-        /// Bypasses 4G network for low-latency indoor control.
-        /// </summary>
-        /// <param name="vx">Forward velocity in m/s (body X, nose direction)</param>
-        /// <param name="vy">Right velocity in m/s (body Y, right wing direction)</param>
-        private void SendBodyVelocity(float vx, float vy)
-        {
-            try
-            {
-                // Check if connected via direct ELRS link
-                if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen)
-                {
-                    _lblNudgeStatus.Text = "Status: ERROR - No ELRS connection";
-                    _lblNudgeStatus.ForeColor = Color.Red;
-                    return;
-                }
-
-                // ============================================================
-                // SET_POSITION_TARGET_LOCAL_NED Message
-                // ============================================================
-                // Coordinate Frame: MAV_FRAME_BODY_NED (8) - relative to drone nose
-                // Type Mask: 0x0DC7 - Ignore Position, Accel, Yaw
-                //   Bits 0-2 (pos): 1 (ignore)
-                //   Bits 3-5 (vel): 0 (use) - We want velocity control
-                //   Bits 6-8 (acc): 1 (ignore)
-                //   Bit 9 (force): 1 (ignore)
-                //   Bit 10 (yaw): 1 (ignore)
-                //   Bit 11 (yaw_rate): 1 (ignore)
-                //   = 0b0000_1101_1100_0111 = 0x0DC7
-                // ============================================================
-
-                const ushort TYPE_MASK_VELOCITY_ONLY = 0x0DC7;
-                const byte MAV_FRAME_BODY_NED = 8;
-
-                var packet = new MAVLink.mavlink_set_position_target_local_ned_t
-                {
-                    time_boot_ms = 0,                    // 0 = use system time
-                    target_system = MainV2.comPort.MAV.sysid,
-                    target_component = MainV2.comPort.MAV.compid,
-                    coordinate_frame = MAV_FRAME_BODY_NED,
-                    type_mask = TYPE_MASK_VELOCITY_ONLY,
-                    x = 0,                               // Position X (ignored)
-                    y = 0,                               // Position Y (ignored)
-                    z = 0,                               // Position Z (ignored)
-                    vx = vx,                             // Velocity X (body forward)
-                    vy = vy,                             // Velocity Y (body right)
-                    vz = 0,                              // Velocity Z (no vertical)
-                    afx = 0,                             // Accel X (ignored)
-                    afy = 0,                             // Accel Y (ignored)
-                    afz = 0,                             // Accel Z (ignored)
-                    yaw = 0,                             // Yaw angle (ignored)
-                    yaw_rate = 0                         // Yaw rate (ignored)
-                };
-
-                // Send directly via ELRS/Serial link (bypasses 4G)
-                MainV2.comPort.sendPacket(packet, MainV2.comPort.MAV.sysid, MainV2.comPort.MAV.compid);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"NOMAD Nudge Error: {ex.Message}");
-                _lblNudgeStatus.Text = $"Status: ERROR - {ex.Message}";
-                _lblNudgeStatus.ForeColor = Color.Red;
             }
         }
     }
