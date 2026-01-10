@@ -2,41 +2,67 @@
 
 **McGill Aerial Design - AEAC 2026 Competition System**
 
-🚁 Autonomous drone system with:
-- **Platform:** Tricopter Tiltrotor
-- **Computer:** NVIDIA Jetson Orin Nano  
-- **Vision:** ZED 2i Stereo Camera  
-- **Flight Controller:** Cube Orange (ArduPilot)  
-- **Communication:** 4G/LTE + Tailscale VPN
+🚁 Drone system for two distinct competition tasks:
+
+| Task | Configuration | Computer | Navigation |
+|------|--------------|----------|------------|
+| **Task 1** (Outdoor Recon) | No Jetson | None | GPS/RTK |
+| **Task 2** (Indoor Extinguish) | With Jetson | Orin Nano | ZED VIO |
+
+---
+
+## 🎯 Task Overview
+
+### Task 1: Outdoor Reconnaissance
+- **Pilot-only operation** - no edge compute
+- GPS/RTK positioning via ELRS telemetry
+- RTCM corrections through Mission Planner
+- **Jetson is NOT mounted on drone**
+
+### Task 2: Indoor Fire Extinguishing  
+- **Jetson-powered autonomous** operation
+- ZED 2i Visual-Inertial Odometry
+- YOLO target detection
+- 4G/LTE + Tailscale communication
 
 ---
 
 ## 🏗️ System Architecture
 
+### Task 1 (No Jetson)
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    GROUND STATION                               │
+│  Mission Planner ←──ELRS Gemini──→ Cube Orange ←──GPS──→ RTK   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Task 2 (With Jetson)
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    GROUND STATION                               │
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │         Mission Planner + NOMAD Plugin (C#)              │  │
-│  │  • Health Monitor    • Telemetry     • Settings          │  │
+│  │  • Jetson Health     • WASD Nudge    • Task 2 Controls   │  │
 │  └──────────────────────────────────────────────────────────┘  │
 │                            ↕ MAVLink + HTTP                     │
 │                    ┌────────────────────┐                       │
 │                    │   Tailscale VPN    │                       │
-│                    │   100.x.x.x/16     │                       │
+│                    │   (4G/LTE)         │                       │
 │                    └────────────────────┘                       │
 └─────────────────────────────────────────────────────────────────┘
-                              ↕ 4G/LTE
+                              ↕
 ┌─────────────────────────────────────────────────────────────────┐
 │                     DRONE                                       │
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │              EDGE CORE (Jetson Orin Nano)                │  │
-│  │  • FastAPI Server     • MAVLink Interface                │  │
-│  │  • State Manager      • Time Sync Service                │  │
+│  │  • FastAPI Server     • ZED VIO      • YOLO Detection    │  │
+│  │  • State Manager      • Gimbal PID   • Exclusion Map     │  │
 │  └──────────────────────────────────────────────────────────┘  │
 │                            ↕ MAVLink Router                     │
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │         Cube Orange Flight Controller (ArduPilot)        │  │
+│  │  • EKF with VIO fusion   • ELRS backup receiver          │  │
 │  └──────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -51,21 +77,16 @@ NOMAD/
 │   ├── architecture.md     # System design
 │   └── PRD.md              # Product requirements
 │
-├── config/                 # Configuration files
-│   └── landmarks.json      # GPS waypoints
-│
-├── edge_core/              # Jetson software (Python 3.13)
+├── edge_core/              # Jetson software (Task 2 only)
 │   ├── main.py             # Entry point
 │   ├── api.py              # REST API endpoints
 │   ├── state.py            # State manager
 │   ├── mavlink_interface.py  # Flight controller comms
 │   ├── time_manager.py     # Time synchronization
 │   ├── geospatial.py       # GPS calculations
-│   ├── ipc.py              # ZMQ IPC
-│   ├── logging_service.py  # Mission logging
 │   └── models.py           # Data models
 │
-├── tailscale/              # VPN configuration
+├── tailscale/              # VPN configuration (Task 2)
 │   ├── SETUP.md            # Installation guide
 │   ├── src/                # Python managers
 │   ├── scripts/            # Setup/watchdog scripts
@@ -80,6 +101,9 @@ NOMAD/
 │       ├── NOMADPlugin.cs
 │       └── ...
 │
+├── config/                 # Configuration files
+│   └── params/             # ArduPilot parameter files
+│
 ├── infra/                  # Deployment configs
 │   ├── Dockerfile
 │   └── nomad.service
@@ -92,68 +116,51 @@ NOMAD/
 
 ## 🚀 Quick Start
 
-### 1. Jetson Setup
-
+### Task 1 Setup (No Jetson)
 ```bash
-# Clone repo
-git clone https://github.com/mcgill-aerial-design/NOMAD.git
-cd NOMAD
-
-# Install Python dependencies
-pip install -r edge_core/requirements.txt
-
-# Run Edge Core
-python -m edge_core.main --host 0.0.0.0 --port 8000
+# Ground station only
+1. Connect ELRS Gemini TX to computer
+2. Open Mission Planner
+3. Connect to drone via ELRS
+4. Configure RTK/NTRIP for corrections
+5. Fly with GPS waypoints
 ```
 
-### 2. Tailscale VPN Setup
-
+### Task 2 Setup (With Jetson)
 ```bash
 # On Jetson
-cd tailscale/scripts
-sudo ./setup.sh --authkey <YOUR_KEY>
+cd NOMAD
+pip install -r edge_core/requirements.txt
+sudo tailscale/scripts/setup.sh --authkey <KEY>
+python -m edge_core.main --host 0.0.0.0 --port 8000
 
-# Verify
-tailscale status
-tailscale ip -4
-```
-
-### 3. Configure MAVLink Router
-
-```bash
-sudo cp transport/mavlink_router/main.conf /etc/mavlink-router/main.conf
-# Edit to set Ground Station Tailscale IP
-sudo systemctl restart mavlink-router
+# On Ground Station
+1. Connect via Tailscale IP
+2. Open Mission Planner with NOMAD plugin
+3. Verify Jetson health in plugin tab
 ```
 
 ---
 
-## 📡 API Endpoints
+## 📡 Communication Links
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | Service info |
-| `/status` | GET | Full system state |
-| `/health` | GET | Health check |
-| `/ws/state` | WS | Real-time state |
-
----
-
-## 🔧 Development
-
-```bash
-# Run in development mode
-python -m edge_core.main --log-level debug
-```
+| Link | Task 1 | Task 2 |
+|------|--------|--------|
+| **ELRS 2.4GHz** | Primary control | Backup control |
+| **ELRS 900MHz** | Extended range | Backup control |
+| **4G/LTE** | Not used | Primary data |
+| **Tailscale** | Not used | API + Video |
 
 ---
 
 ## 📋 Status
 
-| Component | Status |
-|-----------|--------|
-| Edge Core API | ✅ Ready |
-| MAVLink Interface | ✅ Ready |
-| Time Sync | ✅ Ready |
-| Tailscale VPN | ✅ Ready |
-| Mission Planner Plugin | ⏳ In Progress |
+| Component | Task 1 | Task 2 |
+|-----------|--------|--------|
+| ArduPilot Integration | ✅ Ready | ✅ Ready |
+| ELRS Telemetry | ✅ Ready | ✅ Ready |
+| Edge Core API | N/A | ✅ Ready |
+| Tailscale VPN | N/A | ✅ Ready |
+| ZED VIO | N/A | ⏳ In Progress |
+| YOLO Detection | N/A | ⏳ In Progress |
+| Mission Planner Plugin | ✅ Basic | ⏳ In Progress |
