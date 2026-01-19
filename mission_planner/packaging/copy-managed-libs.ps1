@@ -2,7 +2,7 @@ param(
     [string]$ScriptDir = $PSScriptRoot
 )
 
-$srcManaged = Resolve-Path (Join-Path $ScriptDir '..\..\third_party\libvlc') -ErrorAction SilentlyContinue
+$srcManaged = Resolve-Path (Join-Path $ScriptDir '..\third_party\libvlc') -ErrorAction SilentlyContinue
 if (-not $srcManaged) {
     Write-Host "No managed LibVLC assemblies found in third_party (skipping)" -ForegroundColor Gray
     return 0

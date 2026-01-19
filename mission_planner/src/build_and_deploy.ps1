@@ -105,6 +105,17 @@ if (-not (Test-Path $AppDataPluginsDir)) {
 Copy-Item $BuiltDll $AppDataPluginsDir -Force
 Write-Host "  Copied to: $AppDataPluginsDir" -ForegroundColor Green
 
+    # Also copy any libVLC native files, plugins folder, and managed assemblies to the AppData plugin folder
+    Get-ChildItem "$ScriptDir\bin\Release" -Filter "libvlc*.dll" -File -ErrorAction SilentlyContinue | ForEach-Object {
+        Copy-Item $_.FullName $AppDataPluginsDir -Force
+    }
+    if (Test-Path "$ScriptDir\bin\Release\plugins") {
+        Copy-Item "$ScriptDir\bin\Release\plugins\*" (Join-Path $AppDataPluginsDir 'plugins') -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Get-ChildItem "$ScriptDir\bin\Release" -Filter "LibVLCSharp*.dll" -File -ErrorAction SilentlyContinue | ForEach-Object {
+        Copy-Item $_.FullName $AppDataPluginsDir -Force
+    }
+
 # Try to deploy to Program Files (may require admin)
 $ProgramFilesPluginsDir = "${env:ProgramFiles(x86)}\Mission Planner\plugins"
 if (Test-Path "${env:ProgramFiles(x86)}\Mission Planner") {

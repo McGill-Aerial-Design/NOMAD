@@ -1,6 +1,9 @@
 C:\Users\Youssef\Documents\Code\MAD\NOMAD\mission_planner\src\bin\Release\NOMADPlugin.dll
 C:\Users\Youssef\Documents\Code\MAD\NOMAD\mission_planner\src\bin\Release\NOMADPlugin.pdb
+C:\Users\Youssef\Documents\Code\MAD\NOMAD\mission_planner\src\bin\Release\LibVLCSharp.WinForms.dll
+C:\Users\Youssef\Documents\Code\MAD\NOMAD\mission_planner\src\bin\Release\LibVLCSharp.dll
 C:\Users\Youssef\Documents\Code\MAD\NOMAD\mission_planner\src\obj\Release\NOMADPlugin.csproj.AssemblyReference.cache
 C:\Users\Youssef\Documents\Code\MAD\NOMAD\mission_planner\src\obj\Release\NOMADPlugin.csproj.CoreCompileInputs.cache
+C:\Users\Youssef\Documents\Code\MAD\NOMAD\mission_planner\src\obj\Release\NOMADPlu.B8FCA340.Up2Date
 C:\Users\Youssef\Documents\Code\MAD\NOMAD\mission_planner\src\obj\Release\NOMADPlugin.dll
 C:\Users\Youssef\Documents\Code\MAD\NOMAD\mission_planner\src\obj\Release\NOMADPlugin.pdb
