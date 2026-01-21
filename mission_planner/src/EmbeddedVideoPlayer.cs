@@ -653,27 +653,24 @@ namespace NOMAD.MissionPlanner
 
         private string BuildGStreamerPipeline()
         {
-            var latency = Math.Max(50, _networkCaching);
+            // Mission Planner's GStreamer class expects:
+            // 1. appsink named "outsink" (not "appsink")
+            // 2. format=BGRA (not BGRx or RGB)
+            // 3. sync=false at the end
             
             // Check if the URL is UDP or RTSP
             if (_streamUrl.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
             {
                 // UDP RTP stream (e.g., udp://@:5600)
-                // Extract port from URL like "udp://@:5600" or "udp://0.0.0.0:5600"
                 var port = ExtractUdpPort(_streamUrl);
                 
-                // Simple UDP pipeline - let GStreamer auto-detect the stream format
-                // This is more compatible with Mission Planner's GStreamer wrapper
-                return $"udpsrc port={port} ! application/x-rtp,media=video,clock-rate=90000,encoding-name=H264 ! " +
-                       $"rtpjitterbuffer latency={latency} ! rtph264depay ! avdec_h264 ! " +
-                       "videoconvert ! video/x-raw,format=BGRx ! appsink name=appsink";
+                // Match Mission Planner's AutoConnect format for UDP H264
+                return $"udpsrc port={port} buffer-size=90000 ! application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264 ! decodebin3 ! queue max-size-buffers=1 leaky=2 ! videoconvert ! video/x-raw,format=BGRA ! appsink name=outsink sync=false";
             }
             else
             {
-                // RTSP stream (default) - use same format as Mission Planner OSD
-                return $"rtspsrc location={_streamUrl} latency={latency} ! " +
-                       "rtph264depay ! avdec_h264 ! videoconvert ! " +
-                       "video/x-raw,format=BGRx ! appsink name=appsink";
+                // RTSP stream - match Mission Planner's HereLink format
+                return $"rtspsrc location={_streamUrl} latency=41 udp-reconnect=1 timeout=0 do-retransmission=false ! application/x-rtp ! decodebin3 ! queue max-size-buffers=1 leaky=2 ! videoconvert ! video/x-raw,format=BGRA ! appsink name=outsink sync=false";
             }
         }
 
