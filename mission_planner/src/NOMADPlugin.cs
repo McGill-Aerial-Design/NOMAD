@@ -118,6 +118,9 @@ namespace NOMAD.MissionPlanner
                             if (insertIndex < 0) insertIndex = 0;
                             menuStrip.Items.Insert(insertIndex, nomadMenu);
                         }
+                        
+                        // Add click handler to main menu item - clicking opens the NOMAD page
+                        nomadMenu.Click += (s, e) => ShowNomadPage();
 
                         // Avoid duplicate items if plugin reloads
                         nomadMenu.DropDownItems.Clear();
@@ -466,6 +469,61 @@ namespace NOMAD.MissionPlanner
             catch (Exception ex)
             {
                 Console.WriteLine($"NOMAD: RemoveNomadFullPageTab failed - {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Shows the NOMAD page - either switches to docked tab or shows undocked window
+        /// This is called when clicking the main NOMAD menu item
+        /// </summary>
+        private void ShowNomadPage()
+        {
+            if (Host?.MainForm != null && Host.MainForm.InvokeRequired)
+            {
+                Host.MainForm.BeginInvoke((MethodInvoker)delegate { ShowNomadPage(); });
+                return;
+            }
+
+            if (_isDocked)
+            {
+                // Docked mode - switch to the NOMAD tab in FlightData
+                // First, make sure we're on FlightData screen
+                try
+                {
+                    // Use reflection to access MyView.ShowScreen
+                    var myViewProp = Host.MainForm.GetType().GetProperty("MyView");
+                    if (myViewProp != null)
+                    {
+                        var myView = myViewProp.GetValue(Host.MainForm);
+                        if (myView != null)
+                        {
+                            var showScreenMethod = myView.GetType().GetMethod("ShowScreen", 
+                                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance,
+                                null, new Type[] { typeof(string) }, null);
+                            showScreenMethod?.Invoke(myView, new object[] { "FlightData" });
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"NOMAD: Could not switch to FlightData - {ex.Message}");
+                }
+
+                // Make sure tab is added and select it
+                if (_nomadFlightDataTab == null || !_flightDataTabControl.TabPages.Contains(_nomadFlightDataTab))
+                {
+                    AddNomadFullPageTab();
+                }
+                
+                if (_flightDataTabControl != null && _nomadFlightDataTab != null)
+                {
+                    _flightDataTabControl.SelectedTab = _nomadFlightDataTab;
+                }
+            }
+            else
+            {
+                // Undocked mode - show the separate window
+                ShowFullPage();
             }
         }
 
