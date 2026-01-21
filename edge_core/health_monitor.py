@@ -346,22 +346,43 @@ class JetsonHealthMonitor:
         """Get power consumption information."""
         result = {"draw": 0.0, "budget": 15.0}
         
-        # Jetson power sensor paths
-        power_paths = [
-            "/sys/bus/i2c/drivers/ina3221x/0-0040/iio:device0/in_power0_input",
-            "/sys/bus/i2c/drivers/ina3221x/0-0041/iio:device1/in_power0_input",
+        # Jetson Orin Nano power sensor via INA3221 hwmon interface
+        # hwmon1 is typically the INA3221 sensor
+        hwmon_paths = [
+            "/sys/class/hwmon/hwmon1",
+            "/sys/class/hwmon/hwmon2",
         ]
         
-        total_mw = 0.0
-        for path in power_paths:
-            if os.path.exists(path):
+        for hwmon in hwmon_paths:
+            # Check if this is the ina3221 sensor
+            name_path = os.path.join(hwmon, "name")
+            if os.path.exists(name_path):
                 try:
-                    with open(path, "r") as f:
-                        total_mw += float(f.read().strip())
+                    with open(name_path, "r") as f:
+                        if "ina3221" not in f.read().strip().lower():
+                            continue
                 except Exception:
-                    pass
+                    continue
                     
-        result["draw"] = total_mw / 1000.0  # Convert mW to W
+            # Read channel 1 (VDD_IN) which is total system power
+            # Power = Voltage (mV) × Current (mA) / 1,000,000 = Watts
+            try:
+                voltage_path = os.path.join(hwmon, "in1_input")
+                current_path = os.path.join(hwmon, "curr1_input")
+                
+                if os.path.exists(voltage_path) and os.path.exists(current_path):
+                    with open(voltage_path, "r") as f:
+                        voltage_mv = float(f.read().strip())
+                    with open(current_path, "r") as f:
+                        current_ma = float(f.read().strip())
+                    
+                    power_w = (voltage_mv * current_ma) / 1_000_000.0
+                    result["draw"] = power_w
+                    break
+                    
+            except Exception as e:
+                logger.debug(f"Power read error: {e}")
+                continue
         
         return result
     

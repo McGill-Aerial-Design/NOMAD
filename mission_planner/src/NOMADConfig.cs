@@ -335,15 +335,23 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         private void MigrateDefaults()
         {
-            // Ensure video URLs use effective IP
-            if (RtspUrlZed.Contains("192.168.1.100") && UseTailscale)
+            // Migrate from old RTSP format to UDP stream
+            if (RtspUrlZed.StartsWith("rtsp://", StringComparison.OrdinalIgnoreCase))
             {
-                RtspUrlZed = $"rtsp://{TailscaleIP}:8554/zed";
+                // New default is UDP stream on port 5600
+                RtspUrlZed = "udp://@:5600";
             }
-            // Migrate from old 'live' endpoint to 'zed'
-            if (RtspUrlZed.EndsWith("/live"))
+            
+            // Migrate old Jetson IP to Tailscale if using Tailscale
+            if (JetsonIP == "192.168.1.100" && UseTailscale)
             {
-                RtspUrlZed = RtspUrlZed.Replace("/live", "/zed");
+                JetsonIP = TailscaleIP;
+            }
+            
+            // Migrate SSH username from 'nomad' to 'mad'
+            if (SshUsername == "nomad")
+            {
+                SshUsername = "mad";
             }
         }
 
