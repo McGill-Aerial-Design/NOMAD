@@ -64,44 +64,37 @@
 
 ## 🚀 How to Start NOMAD
 
-### Method 1: Manual Start (Foreground)
+### Method 1: Unified Startup (Recommended)
+Starts both Edge Core API and ZED Video Stream:
 ```bash
 ssh mad@100.75.218.89
-
-cd ~/NOMAD
-export PATH=$HOME/.local/bin:$PATH
-python3 -m edge_core.main
+~/start_nomad_full.sh
 ```
 
-### Method 2: Background with nohup
+### Method 2: Background Mode
 ```bash
-ssh mad@100.75.218.89
-
-nohup ~/start_nomad.sh > ~/nomad.log 2>&1 &
+ssh mad@100.75.218.89 "nohup ~/start_nomad_full.sh > /dev/null 2>&1 &"
 ```
 
-### Method 3: Using the Start Script
+### Method 3: Systemd Service (Auto-start on boot)
 ```bash
-ssh mad@100.75.218.89
-
-~/start_nomad.sh
-```
-
-### Method 4: Systemd Service (Recommended for Production)
-```bash
-# First, copy the service file
-sudo cp ~/NOMAD/infra/nomad.service /etc/systemd/system/
-
-# Enable and start
+# Install the service
+sudo cp ~/nomad.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable nomad
 sudo systemctl start nomad
 
 # Check status
 sudo systemctl status nomad
+```
 
-# View logs
-journalctl -u nomad -f
+### Method 4: Manual Start (Components Separately)
+```bash
+# Start Edge Core only
+~/start_nomad.sh
+
+# Start Video Stream only
+~/start_zed_stream.sh
 ```
 
 ---
