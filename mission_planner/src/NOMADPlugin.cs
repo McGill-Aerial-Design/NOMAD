@@ -41,10 +41,14 @@ namespace NOMAD.MissionPlanner
         private NOMADControlPanel _controlPanelTab;
         private NOMADControlPanel _controlPanelWindow;
         private NOMADFullPage _fullPage;
+        private NOMADFullPage _fullPageDocked;  // Docked instance for FlightData tab
         private TabPage _tabPage;
+        private TabPage _nomadFlightDataTab;     // Tab in FlightData's tabControlactions
         private Form _panelForm;
         private Form _fullPageForm;
+        private TabControl _flightDataTabControl; // Reference to FlightData's tab control
         private bool _tabAdded;
+        private bool _isDocked = true;  // Whether NOMAD is docked in FlightData
 
         // ============================================================
         // Plugin Lifecycle
@@ -118,13 +122,18 @@ namespace NOMAD.MissionPlanner
                         // Avoid duplicate items if plugin reloads
                         nomadMenu.DropDownItems.Clear();
 
-                        // NEW: Full Page Control (Primary)
-                        var openFullPageItem = new ToolStripMenuItem(">> Open Full Control Page");
-                        openFullPageItem.Font = new Font(openFullPageItem.Font, FontStyle.Bold);
-                        openFullPageItem.Click += (s, e) => ShowFullPage();
-                        nomadMenu.DropDownItems.Add(openFullPageItem);
+                        // Dock/Undock toggle (Primary action)
+                        var toggleDockItem = new ToolStripMenuItem(_isDocked ? "⬜ Undock to Window" : "📌 Dock to FlightData");
+                        toggleDockItem.Font = new Font(toggleDockItem.Font, FontStyle.Bold);
+                        toggleDockItem.Click += (s, e) => ToggleDockState();
+                        nomadMenu.DropDownItems.Add(toggleDockItem);
                         
                         nomadMenu.DropDownItems.Add(new ToolStripSeparator());
+                        
+                        // Open in separate window (always available)
+                        var openFullPageItem = new ToolStripMenuItem("Open in New Window");
+                        openFullPageItem.Click += (s, e) => ShowFullPage();
+                        nomadMenu.DropDownItems.Add(openFullPageItem);
                         
                         var openPanelItem = new ToolStripMenuItem("Quick Control Panel");
                         openPanelItem.Click += (s, e) => ShowControlPanel();
@@ -198,6 +207,7 @@ namespace NOMAD.MissionPlanner
                     return true;
                 }
 
+                // Create the Quick Control Panel (always available in small tab)
                 if (_controlPanelTab == null)
                 {
                     _controlPanelTab = new NOMADControlPanel(_sender, _config);
@@ -206,7 +216,7 @@ namespace NOMAD.MissionPlanner
 
                 if (_tabPage == null)
                 {
-                    _tabPage = new TabPage("NOMAD")
+                    _tabPage = new TabPage("NOMAD Quick")
                     {
                         BackColor = Color.FromArgb(45, 45, 48)
                     };
@@ -214,15 +224,20 @@ namespace NOMAD.MissionPlanner
                     _controlPanelTab.Dock = DockStyle.Fill;
                 }
 
-                // Attempt tab injection; if it fails, use the control-panel window.
+                // Attempt tab injection for quick control panel
                 if (!_tabAdded)
                 {
                     _tabAdded = AddTabToFlightData(_tabPage);
                     if (!_tabAdded)
                     {
-                        Console.WriteLine("NOMAD: Could not add FlightData tab; using control panel window");
-                        // Don't auto-show - let user choose from menu
+                        Console.WriteLine("NOMAD: Could not add FlightData quick tab");
                     }
+                }
+
+                // Add NOMAD Full Page tab (docked mode is default)
+                if (_isDocked)
+                {
+                    AddNomadFullPageTab();
                 }
 
                 return true;
@@ -257,6 +272,16 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
+                // Remove NOMAD tab from FlightData
+                RemoveNomadFullPageTab();
+                
+                // Dispose docked full page
+                if (_fullPageDocked != null && !_fullPageDocked.IsDisposed)
+                {
+                    _fullPageDocked.Dispose();
+                    _fullPageDocked = null;
+                }
+                
                 // Force close forms (bypass FormClosing hide behavior)
                 if (_fullPageForm != null && !_fullPageForm.IsDisposed)
                 {
@@ -280,6 +305,7 @@ namespace NOMAD.MissionPlanner
             }
 
             _fullPage = null;
+            _fullPageDocked = null;
             _controlPanelWindow = null;
             _sender?.Dispose();
             return true;
@@ -289,6 +315,9 @@ namespace NOMAD.MissionPlanner
         // Private Methods
         // ============================================================
 
+        /// <summary>
+        /// Adds a tab to the quick control panel area (small tabs at bottom-left of FlightData)
+        /// </summary>
         private bool AddTabToFlightData(TabPage tab)
         {
             // Access FlightData tab control
@@ -302,6 +331,7 @@ namespace NOMAD.MissionPlanner
                     var tabControl = fd.Controls.Find("tabControlactions", true);
                     if (tabControl.Length > 0 && tabControl[0] is TabControl tc)
                     {
+                        _flightDataTabControl = tc;
                         if (!tc.TabPages.Contains(tab))
                         {
                             tc.TabPages.Add(tab);
@@ -316,6 +346,166 @@ namespace NOMAD.MissionPlanner
             {
                 Console.WriteLine($"NOMAD: Tab insertion failed - {ex.Message}");
                 return false;
+            }
+        }
+
+        /// <summary>
+        /// Adds the NOMAD Full Page as a tab in FlightData's main tab control
+        /// Similar to how OpenDroneID plugin does it
+        /// </summary>
+        private bool AddNomadFullPageTab()
+        {
+            try
+            {
+                if (_flightDataTabControl == null)
+                {
+                    // Try to find the tab control
+                    var flightData = Host.MainForm.Controls.Find("FlightData", true);
+                    if (flightData.Length > 0 && flightData[0] is UserControl fd)
+                    {
+                        var tabControl = fd.Controls.Find("tabControlactions", true);
+                        if (tabControl.Length > 0 && tabControl[0] is TabControl tc)
+                        {
+                            _flightDataTabControl = tc;
+                        }
+                    }
+                }
+
+                if (_flightDataTabControl == null)
+                    return false;
+
+                // Create the full page control if needed
+                if (_fullPageDocked == null || _fullPageDocked.IsDisposed)
+                {
+                    _fullPageDocked = new NOMADFullPage(_sender, _config);
+                }
+
+                // Create the tab if needed
+                if (_nomadFlightDataTab == null || _nomadFlightDataTab.IsDisposed)
+                {
+                    _nomadFlightDataTab = new TabPage("NOMAD");
+                    _nomadFlightDataTab.Name = "tabNOMAD";
+                    _nomadFlightDataTab.BackColor = Color.FromArgb(30, 30, 30);
+                    _nomadFlightDataTab.Controls.Add(_fullPageDocked);
+                    _fullPageDocked.Dock = DockStyle.Fill;
+                }
+
+                // Add to FlightData's TabListOriginal so it persists across refreshes
+                try
+                {
+                    // Access Host.MainForm.FlightData.TabListOriginal
+                    var flightDataProp = Host.MainForm.GetType().GetProperty("FlightData");
+                    if (flightDataProp != null)
+                    {
+                        var flightDataObj = flightDataProp.GetValue(Host.MainForm);
+                        if (flightDataObj != null)
+                        {
+                            var tabListProp = flightDataObj.GetType().GetField("TabListOriginal", 
+                                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                            if (tabListProp != null)
+                            {
+                                var tabList = tabListProp.GetValue(flightDataObj) as System.Collections.IList;
+                                if (tabList != null && !tabList.Contains(_nomadFlightDataTab))
+                                {
+                                    tabList.Add(_nomadFlightDataTab);
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"NOMAD: Could not add to TabListOriginal - {ex.Message}");
+                }
+
+                // Add the tab directly to the tab control
+                if (!_flightDataTabControl.TabPages.Contains(_nomadFlightDataTab))
+                {
+                    _flightDataTabControl.TabPages.Add(_nomadFlightDataTab);
+                    
+                    // Apply theme
+                    try
+                    {
+                        // Use reflection to call ThemeManager.ApplyThemeTo since it's in MissionPlanner namespace
+                        var themeType = Type.GetType("MissionPlanner.Utilities.ThemeManager, MissionPlanner");
+                        if (themeType != null)
+                        {
+                            var applyMethod = themeType.GetMethod("ApplyThemeTo", 
+                                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static,
+                                null, new Type[] { typeof(Control) }, null);
+                            applyMethod?.Invoke(null, new object[] { _nomadFlightDataTab });
+                        }
+                    }
+                    catch { /* Theme application is optional */ }
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"NOMAD: AddNomadFullPageTab failed - {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Removes the NOMAD Full Page tab from FlightData
+        /// </summary>
+        private void RemoveNomadFullPageTab()
+        {
+            try
+            {
+                if (_flightDataTabControl != null && _nomadFlightDataTab != null)
+                {
+                    if (_flightDataTabControl.TabPages.Contains(_nomadFlightDataTab))
+                    {
+                        _flightDataTabControl.TabPages.Remove(_nomadFlightDataTab);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"NOMAD: RemoveNomadFullPageTab failed - {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Toggles between docked (tab in FlightData) and undocked (separate window) modes
+        /// </summary>
+        private void ToggleDockState()
+        {
+            if (Host?.MainForm != null && Host.MainForm.InvokeRequired)
+            {
+                Host.MainForm.BeginInvoke((MethodInvoker)delegate { ToggleDockState(); });
+                return;
+            }
+
+            if (_isDocked)
+            {
+                // Currently docked -> Undock to separate window
+                RemoveNomadFullPageTab();
+                ShowFullPage();
+                _isDocked = false;
+            }
+            else
+            {
+                // Currently undocked -> Dock back to FlightData
+                // Hide the separate window if open
+                if (_fullPageForm != null && _fullPageForm.Visible)
+                {
+                    _fullPageForm.Hide();
+                }
+                
+                // Add the tab to FlightData
+                if (AddNomadFullPageTab())
+                {
+                    // Switch to the NOMAD tab
+                    if (_flightDataTabControl != null && _nomadFlightDataTab != null)
+                    {
+                        _flightDataTabControl.SelectedTab = _nomadFlightDataTab;
+                    }
+                }
+                _isDocked = true;
             }
         }
 
