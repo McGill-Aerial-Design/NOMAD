@@ -52,7 +52,7 @@ namespace NOMAD.MissionPlanner
             { "NOMAD Service", "systemctl status nomad.service --no-pager -l" },
             { "NOMAD Logs", "journalctl -u nomad.service -n 50 --no-pager" },
             { "List Processes", "ps aux | head -20" },
-            { "Disk Usage", "df -h && du -sh /home/nomad/NOMAD 2>/dev/null" },
+            { "Disk Usage", "df -h && du -sh ~/NOMAD 2>/dev/null" },
             { "MAVLink Router", "systemctl status mavlink-router --no-pager" },
             { "Ping Test", "ping -c 3 8.8.8.8" },
             { "MediaMTX Status", "systemctl status mediamtx --no-pager" },
@@ -216,7 +216,7 @@ namespace NOMAD.MissionPlanner
             
             var promptLabel = new Label
             {
-                Text = "nomad@jetson:~$",
+                Text = $"{_config.SshUsername}@jetson:~$",
                 Location = new Point(5, 8),
                 ForeColor = Color.LimeGreen,
                 Font = new Font("Consolas", 10, FontStyle.Bold),
@@ -480,12 +480,13 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                var sshCommand = $"ssh nomad@{_config.JetsonIP}";
+                var jetsonIp = _config.UseTailscale ? _config.TailscaleIP : _config.JetsonIP;
+                var sshCommand = $"ssh {_config.SshUsername}@{jetsonIp}";
                 
                 // Try Windows Terminal first
                 try
                 {
-                    System.Diagnostics.Process.Start("wt.exe", $"ssh nomad@{_config.JetsonIP}");
+                    System.Diagnostics.Process.Start("wt.exe", sshCommand);
                     return;
                 }
                 catch { }
@@ -495,11 +496,12 @@ namespace NOMAD.MissionPlanner
             }
             catch (Exception ex)
             {
+                var jetsonIp = _config.UseTailscale ? _config.TailscaleIP : _config.JetsonIP;
                 MessageBox.Show(
                     $"Could not open SSH session.\n\n" +
-                    $"IP: {_config.JetsonIP}\n" +
+                    $"IP: {jetsonIp}\n" +
                     $"Error: {ex.Message}\n\n" +
-                    $"Try running manually:\n  ssh nomad@{_config.JetsonIP}",
+                    $"Try running manually:\n  ssh {_config.SshUsername}@{jetsonIp}",
                     "SSH Error",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning
