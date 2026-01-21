@@ -154,13 +154,20 @@ Invoke-WebRequest -Uri "http://100.75.218.89:8000/health" -UseBasicParsing | Sel
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/health` | GET | Quick health check |
+| `/` | GET | Service information |
+| `/health` | GET | Quick health check with Jetson metrics |
+| `/health/detailed` | GET | Full Jetson health (CPU, GPU, memory, disk, fan) |
+| `/status` | GET | Current drone state (telemetry) |
 | `/docs` | GET | Swagger API documentation |
-| `/redoc` | GET | ReDoc API documentation |
-| `/api/state` | GET | Get current drone state |
-| `/api/task1/capture` | POST | Trigger Task 1 capture |
-| `/api/task2/reset-exclusion` | POST | Reset exclusion map |
-| `/ws/health` | WS | WebSocket health updates |
+| `/api/task/1/capture` | POST | Trigger Task 1 capture |
+| `/api/task/2/exclusion_map` | GET | Get exclusion map |
+| `/api/task/2/reset_map` | POST | Reset exclusion map |
+| `/api/task/2/target_hit` | POST | Mark target as hit |
+| `/api/vio/status` | GET | VIO pipeline status |
+| `/api/vio/reset_origin` | POST | Reset VIO origin |
+| `/api/isaac/status` | GET | Isaac ROS bridge status |
+| `/api/terminal/exec` | POST | Execute terminal command |
+| `/ws/state` | WS | WebSocket real-time state (10Hz) |
 
 ### Access Swagger UI:
 ```
