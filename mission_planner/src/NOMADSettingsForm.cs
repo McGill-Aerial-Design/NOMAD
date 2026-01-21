@@ -62,13 +62,14 @@ namespace NOMAD.MissionPlanner
             this.ForeColor = Color.White;
 
             int yOffset = 20;
-            int labelWidth = 130;
+            int labelWidth = 140;  // Increased from 130 for longer labels
+            int inputX = labelWidth + 25;
 
             // Jetson IP
             AddLabel("Jetson IP:", 20, yOffset);
             _txtJetsonIP = new TextBox
             {
-                Location = new Point(labelWidth + 30, yOffset - 3),
+                Location = new Point(inputX, yOffset - 3),
                 Size = new Size(200, 23),
                 BackColor = Color.FromArgb(30, 30, 30),
                 ForeColor = Color.White
@@ -80,7 +81,7 @@ namespace NOMAD.MissionPlanner
             AddLabel("API Port:", 20, yOffset);
             _numPort = new NumericUpDown
             {
-                Location = new Point(labelWidth + 30, yOffset - 3),
+                Location = new Point(inputX, yOffset - 3),
                 Size = new Size(80, 23),
                 Minimum = 1,
                 Maximum = 65535,
@@ -97,16 +98,18 @@ namespace NOMAD.MissionPlanner
                 Location = new Point(20, yOffset),
                 AutoSize = true,
                 ForeColor = Color.FromArgb(200, 100, 200),
-                Font = new Font("Segoe UI", 9, FontStyle.Bold)
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                BackColor = Color.Transparent
             };
             this.Controls.Add(lblVideoSection);
+            lblVideoSection.BringToFront();
             yOffset += 25;
 
             // ZED Camera RTSP URL
             AddLabel("ZED Camera URL:", 20, yOffset);
             _txtRtspZed = new TextBox
             {
-                Location = new Point(labelWidth + 30, yOffset - 3),
+                Location = new Point(inputX, yOffset - 3),
                 Size = new Size(250, 23),
                 BackColor = Color.FromArgb(30, 30, 30),
                 ForeColor = Color.White
@@ -118,7 +121,7 @@ namespace NOMAD.MissionPlanner
             AddLabel("Tilt Servo Channel:", 20, yOffset);
             _numServoChannel = new NumericUpDown
             {
-                Location = new Point(labelWidth + 30, yOffset - 3),
+                Location = new Point(inputX, yOffset - 3),
                 Size = new Size(60, 23),
                 Minimum = 0,
                 Maximum = 16,
@@ -131,12 +134,14 @@ namespace NOMAD.MissionPlanner
             var lblServoHelp = new Label
             {
                 Text = "(0=off, 9-14=AUX1-6)",
-                Location = new Point(labelWidth + 100, yOffset),
+                Location = new Point(inputX + 70, yOffset),
                 AutoSize = true,
                 ForeColor = Color.Gray,
-                Font = new Font("Segoe UI", 8)
+                Font = new Font("Segoe UI", 8),
+                BackColor = Color.Transparent
             };
             this.Controls.Add(lblServoHelp);
+            lblServoHelp.BringToFront();
             yOffset += 40;
 
             // Use ELRS
@@ -154,7 +159,7 @@ namespace NOMAD.MissionPlanner
             AddLabel("HTTP Timeout (s):", 20, yOffset);
             _numTimeout = new NumericUpDown
             {
-                Location = new Point(labelWidth + 30, yOffset - 3),
+                Location = new Point(inputX, yOffset - 3),
                 Size = new Size(60, 23),
                 Minimum = 1,
                 Maximum = 30,
@@ -224,9 +229,11 @@ namespace NOMAD.MissionPlanner
                 Text = text,
                 Location = new Point(x, y),
                 AutoSize = true,
-                ForeColor = Color.LightGray
+                ForeColor = Color.LightGray,
+                BackColor = Color.Transparent  // Ensure transparency
             };
             this.Controls.Add(label);
+            label.BringToFront();  // Ensure labels are on top of other controls
             return label;
         }
 

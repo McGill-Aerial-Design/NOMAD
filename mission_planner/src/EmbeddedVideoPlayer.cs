@@ -394,9 +394,13 @@ namespace NOMAD.MissionPlanner
             
             if (_streamUrl.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
             {
-                // UDP stream - simpler arguments
-                vlcArgs = $"--network-caching={_networkCaching} \"{_streamUrl}\"";
-                ffplayArgs = $"-fflags nobuffer -flags low_delay \"{_streamUrl}\"";
+                // UDP stream - VLC needs special format for UDP listen
+                // Input: udp://@:5600 or udp://5600
+                // VLC expects: udp://@:5600
+                var port = ExtractUdpPort(_streamUrl);
+                var vlcUrl = $"udp://@:{port}";
+                vlcArgs = $"--network-caching={_networkCaching} \"{vlcUrl}\"";
+                ffplayArgs = $"-fflags nobuffer -flags low_delay -i \"udp://0.0.0.0:{port}?listen=1\"";
             }
             else
             {
@@ -690,6 +694,27 @@ namespace NOMAD.MissionPlanner
             {
                 System.Diagnostics.Debug.WriteLine($"NOMAD Video: Frame update error - {ex.Message}");
             }
+        }
+        
+        /// <summary>
+        /// Extract UDP port from URL (udp://@:5600, udp://5600, udp://@:5600, etc.)
+        /// </summary>
+        private int ExtractUdpPort(string url)
+        {
+            try
+            {
+                // Handle various formats:
+                // udp://@:5600
+                // udp://5600
+                // udp://:5600
+                var cleaned = url.Replace("udp://", "").Replace("@", "").TrimStart(':');
+                if (int.TryParse(cleaned, out int port))
+                {
+                    return port;
+                }
+            }
+            catch { }
+            return 5600; // Default port
         }
     }
 }
