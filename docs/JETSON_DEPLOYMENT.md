@@ -176,7 +176,44 @@ http://100.75.218.89:8000/docs
 
 ---
 
-## 🔧 Configuration
+## � Video Streaming
+
+### ZED 2i Camera Status
+The ZED 2i camera is connected and accessible via V4L2:
+- Device: `/dev/video0`
+- Resolution: 1344x376 (stereo side-by-side) or 672x376 (left eye only)
+- Frame Rate: 30 FPS
+
+### Start Video Stream (UDP to Ground Station)
+```bash
+ssh mad@100.75.218.89
+~/start_zed_stream.sh
+```
+
+### View Stream on Windows (VLC)
+```
+vlc udp://@:5600
+```
+
+Or create an SDP file `zed.sdp`:
+```
+v=0
+m=video 5600 RTP/AVP 96
+c=IN IP4 100.76.127.17
+a=rtpmap:96 H264/90000
+```
+Then: `vlc zed.sdp`
+
+### Stream Parameters
+- Codec: H.264
+- Bitrate: 2 Mbps
+- Port: UDP 5600
+- Resolution: 672x376 (left eye)
+- Latency: ~100-200ms over Tailscale
+
+---
+
+## �🔧 Configuration
 
 ### Environment Variables (`.env`)
 Located at: `/home/mad/NOMAD/.env`
