@@ -44,18 +44,20 @@ namespace NOMAD.MissionPlanner
         // Quick commands
         private readonly Dictionary<string, string> _quickCommands = new Dictionary<string, string>
         {
-            { "System Status", "uptime && free -m && df -h" },
+            { "System Status", "uptime && free -m && df -h /" },
             { "Tailscale Status", "tailscale status" },
             { "Network Info", "ip addr show | grep -E 'inet |state'" },
-            { "GPU Status", "tegrastats --interval 100 --iterations 1 2>/dev/null || nvidia-smi" },
-            { "CPU Temperature", "cat /sys/devices/virtual/thermal/thermal_zone*/temp 2>/dev/null | head -5" },
-            { "NOMAD Service", "systemctl status nomad.service --no-pager -l" },
-            { "NOMAD Logs", "journalctl -u nomad.service -n 50 --no-pager" },
-            { "List Processes", "ps aux | head -20" },
-            { "Disk Usage", "df -h && du -sh ~/NOMAD 2>/dev/null" },
-            { "MAVLink Router", "systemctl status mavlink-router --no-pager" },
+            { "Tegrastats (1 sample)", "timeout 2 tegrastats --interval 500 2>&1 | head -3" },
+            { "Temperature", "cat /sys/devices/virtual/thermal/thermal_zone*/temp 2>/dev/null | awk '{printf \"Zone %d: %.1fC\\n\", NR-1, $1/1000}'" },
+            { "Edge Core Status", "pgrep -f edge_core.main && echo 'Edge Core: Running' || echo 'Edge Core: Not running'" },
+            { "Edge Core Logs", "tail -50 ~/nomad.log 2>/dev/null || echo 'No logs found'" },
+            { "List Processes", "ps aux --sort=-%cpu | head -15" },
+            { "Disk Usage", "df -h / && du -sh ~/NOMAD 2>/dev/null" },
+            { "ZED Camera Check", "lsusb | grep -i stereolabs && echo 'ZED Camera: Connected' || echo 'ZED Camera: Not found'" },
             { "Ping Test", "ping -c 3 8.8.8.8" },
-            { "MediaMTX Status", "systemctl status mediamtx --no-pager" },
+            { "Video Stream Check", "pgrep -f gst-launch && echo 'Video Stream: Running' || echo 'Video Stream: Not running'" },
+            { "Start NOMAD", "~/start_nomad_full.sh &" },
+            { "Stop NOMAD", "pkill -f edge_core.main; pkill -f gst-launch; echo 'NOMAD services stopped'" },
         };
         
         // ============================================================
