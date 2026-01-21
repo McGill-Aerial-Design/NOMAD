@@ -506,7 +506,7 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                var response = await _httpClient.GetAsync($"{_config.JetsonBaseUrl}/health/detailed");
+                var response = await _httpClient.GetAsync($"{_config.EffectiveBaseUrl}/health/detailed");
                 
                 if (response.IsSuccessStatusCode)
                 {

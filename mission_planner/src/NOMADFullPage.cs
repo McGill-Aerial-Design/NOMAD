@@ -1138,7 +1138,7 @@ namespace NOMAD.MissionPlanner
                     Timeout = TimeSpan.FromSeconds(5)
                 };
                 var response = await client.PostAsync(
-                    $"{_config.JetsonBaseUrl}/api/vio/reset_origin",
+                    $"{_config.EffectiveBaseUrl}/api/vio/reset_origin",
                     new System.Net.Http.StringContent("{}", System.Text.Encoding.UTF8, "application/json")
                 );
                 

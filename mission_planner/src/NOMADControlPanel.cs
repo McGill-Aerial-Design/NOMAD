@@ -571,7 +571,7 @@ namespace NOMAD.MissionPlanner
             {
                 _healthTab.Location = new Point(10, yOffset);
                 _healthTab.Size = new Size(350, 450);
-                _healthTab.SetJetsonUrl(_config?.JetsonBaseUrl ?? "http://127.0.0.1:8000");
+                _healthTab.SetJetsonUrl(_config?.EffectiveBaseUrl ?? "http://127.0.0.1:8000");
                 this.Controls.Add(_healthTab);
             }
         }

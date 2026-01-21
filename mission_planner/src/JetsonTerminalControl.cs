@@ -356,7 +356,7 @@ namespace NOMAD.MissionPlanner
         
         private async Task<CommandResult> SendCommand(string command)
         {
-            var url = $"{_config.JetsonBaseUrl}/api/terminal/exec";
+            var url = $"{_config.EffectiveBaseUrl}/api/terminal/exec";
             
             var payload = new
             {
@@ -416,7 +416,7 @@ namespace NOMAD.MissionPlanner
 
 ", Color.Cyan);
             
-            AppendOutput($"Jetson endpoint: {_config.JetsonBaseUrl}\n", Color.Gray);
+            AppendOutput($"Jetson endpoint: {_config.EffectiveBaseUrl}\n", Color.Gray);
             AppendOutput("Type 'help' or select a quick command to get started.\n\n", Color.Gray);
         }
         
@@ -510,7 +510,7 @@ namespace NOMAD.MissionPlanner
         public void UpdateConfig(NOMADConfig config)
         {
             _config = config;
-            AppendOutput($"\n[Config updated: {_config.JetsonBaseUrl}]\n", Color.Yellow);
+            AppendOutput($"\n[Config updated: {_config.EffectiveBaseUrl}]\n", Color.Yellow);
         }
         
         // ============================================================
