@@ -410,6 +410,23 @@ namespace NOMAD.MissionPlanner
         
         public void OpenExternal()
         {
+            // Build VLC/FFplay arguments based on stream type
+            string vlcArgs;
+            string ffplayArgs;
+            
+            if (_streamUrl.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
+            {
+                // UDP stream - simpler arguments
+                vlcArgs = $"--network-caching={_networkCaching} \"{_streamUrl}\"";
+                ffplayArgs = $"-fflags nobuffer -flags low_delay \"{_streamUrl}\"";
+            }
+            else
+            {
+                // RTSP stream - use TCP transport
+                vlcArgs = $"--network-caching={_networkCaching} --rtsp-tcp \"{_streamUrl}\"";
+                ffplayArgs = $"-fflags nobuffer -flags low_delay -rtsp_transport tcp \"{_streamUrl}\"";
+            }
+            
             // Common VLC installation paths on Windows
             var vlcPaths = new[]
             {
@@ -427,7 +444,7 @@ namespace NOMAD.MissionPlanner
                     var psi = new System.Diagnostics.ProcessStartInfo
                     {
                         FileName = vlcPath,
-                        Arguments = $"--network-caching={_networkCaching} --rtsp-tcp \"{_streamUrl}\"",
+                        Arguments = vlcArgs,
                         UseShellExecute = true,
                     };
                     System.Diagnostics.Process.Start(psi);
@@ -457,7 +474,7 @@ namespace NOMAD.MissionPlanner
                     var psi = new System.Diagnostics.ProcessStartInfo
                     {
                         FileName = ffplayPath,
-                        Arguments = $"-fflags nobuffer -flags low_delay -rtsp_transport tcp \"{_streamUrl}\"",
+                        Arguments = ffplayArgs,
                         UseShellExecute = true,
                     };
                     System.Diagnostics.Process.Start(psi);
@@ -621,9 +638,30 @@ namespace NOMAD.MissionPlanner
         private string BuildGStreamerPipeline()
         {
             var latency = Math.Max(50, _networkCaching);
-            return $"rtspsrc location=\"{_streamUrl}\" latency={latency} protocols=tcp ! " +
-                   "queue ! decodebin ! videoconvert ! videoscale ! " +
-                   "video/x-raw,format=RGB ! appsink name=appsink";
+            
+            // Check if the URL is UDP or RTSP
+            if (_streamUrl.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
+            {
+                // UDP RTP stream (e.g., udp://@:5600)
+                // Extract port from URL like "udp://@:5600" or "udp://0.0.0.0:5600"
+                var port = "5600";
+                var match = System.Text.RegularExpressions.Regex.Match(_streamUrl, @":(\d+)");
+                if (match.Success)
+                {
+                    port = match.Groups[1].Value;
+                }
+                
+                return $"udpsrc port={port} caps=\"application/x-rtp,media=video,clock-rate=90000,encoding-name=H264\" ! " +
+                       $"rtpjitterbuffer latency={latency} ! rtph264depay ! decodebin ! " +
+                       "videoconvert ! videoscale ! video/x-raw,format=RGB ! appsink name=appsink";
+            }
+            else
+            {
+                // RTSP stream (default)
+                return $"rtspsrc location=\"{_streamUrl}\" latency={latency} protocols=tcp ! " +
+                       "queue ! decodebin ! videoconvert ! videoscale ! " +
+                       "video/x-raw,format=RGB ! appsink name=appsink";
+            }
         }
 
         private void OnGstNewImage(object sender, MPBitmap frame)

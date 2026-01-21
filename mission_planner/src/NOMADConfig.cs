@@ -24,7 +24,7 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// Jetson IP address (local network or Tailscale).
         /// </summary>
-        public string JetsonIP { get; set; } = "192.168.1.100";
+        public string JetsonIP { get; set; } = "100.75.218.89";
 
         /// <summary>
         /// Jetson API port.
@@ -64,9 +64,9 @@ namespace NOMAD.MissionPlanner
         // ============================================================
 
         /// <summary>
-        /// RTSP video stream URL for ZED camera.
+        /// Video stream URL for ZED camera (UDP or RTSP).
         /// </summary>
-        public string RtspUrlZed { get; set; } = "rtsp://192.168.1.100:8554/zed";
+        public string RtspUrlZed { get; set; } = "udp://@:5600";
 
         /// <summary>
         /// Legacy: Primary RTSP URL (mapped to ZED for compatibility).
@@ -213,7 +213,7 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// SSH username for direct SSH connection.
         /// </summary>
-        public string SshUsername { get; set; } = "nomad";
+        public string SshUsername { get; set; } = "mad";
 
         /// <summary>
         /// Terminal command timeout (seconds).
