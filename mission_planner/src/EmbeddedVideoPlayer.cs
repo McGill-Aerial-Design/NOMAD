@@ -405,18 +405,18 @@ namespace NOMAD.MissionPlanner
             if (_streamUrl.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
             {
                 // UDP stream - VLC needs special format for UDP listen
-                // Input: udp://@:5600 or udp://5600
-                // VLC expects: udp://@:5600
+                // VLC expects: udp://@:5600 (the @ means "listen on all interfaces")
                 var port = ExtractUdpPort(_streamUrl);
                 var vlcUrl = $"udp://@:{port}";
-                vlcArgs = $"--network-caching={_networkCaching} \"{vlcUrl}\"";
-                ffplayArgs = $"-fflags nobuffer -flags low_delay -i \"udp://0.0.0.0:{port}?listen=1\"";
+                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Opening VLC with UDP URL: {vlcUrl}");
+                vlcArgs = $"--network-caching={_networkCaching} {vlcUrl}";
+                ffplayArgs = $"-fflags nobuffer -flags low_delay -i udp://0.0.0.0:{port}";
             }
             else
             {
                 // RTSP stream - use TCP transport
                 vlcArgs = $"--network-caching={_networkCaching} --rtsp-tcp \"{_streamUrl}\"";
-                ffplayArgs = $"-fflags nobuffer -flags low_delay -rtsp_transport tcp \"{_streamUrl}\"";
+                ffplayArgs = $"-fflags nobuffer -flags low_delay -rtsp_transport tcp -i \"{_streamUrl}\"";
             }
             
             // Common VLC installation paths on Windows
