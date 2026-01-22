@@ -41,7 +41,6 @@ namespace NOMAD.MissionPlanner
         private Button _btnFullscreen;
         private Button _btnExternal;
         private Button _btnSnapshot;
-        private ComboBox _cmbQuality;
         private ComboBox _cmbCameraView;  // Camera view selector
         private TrackBar _trkLatency;
         private Label _lblLatency;
@@ -363,30 +362,8 @@ namespace NOMAD.MissionPlanner
             _cmbCameraView.SelectedIndexChanged += CmbCameraView_SelectedIndexChanged;
             panel.Controls.Add(_cmbCameraView);
             
-            // Quality Selector (less important - bottom row)
-            var lblQuality = new Label
-            {
-                Text = "Quality:",
-                Location = new Point(270, 48),
-                ForeColor = Color.Gray,
-                Font = new Font("Segoe UI", 8),
-                AutoSize = true,
-            };
-            panel.Controls.Add(lblQuality);
-            
-            _cmbQuality = new ComboBox
-            {
-                Location = new Point(315, 45),
-                Size = new Size(80, 25),
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                BackColor = Color.FromArgb(30, 30, 30),
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 8),
-            };
-            _cmbQuality.Items.AddRange(new object[] { "Auto", "720p", "480p", "360p" });
-            _cmbQuality.SelectedIndex = 0;
-            _cmbQuality.SelectedIndexChanged += (s, e) => _quality = _cmbQuality.SelectedItem.ToString().ToLower();
-            panel.Controls.Add(_cmbQuality);
+            // Quality is fixed at 720p - no selector needed
+            _quality = "720p";
             
             return panel;
         }

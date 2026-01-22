@@ -989,8 +989,9 @@ namespace NOMAD.MissionPlanner
                 }
                 else
                 {
-                    // RTSP stream - use proven HereLink/Siyi format
-                    pipeline = $"rtspsrc location={streamUrl} latency={latency} udp-reconnect=1 timeout=0 do-retransmission=false ! application/x-rtp ! decodebin3 ! queue max-size-buffers=1 leaky=2 ! videoconvert ! video/x-raw,format=BGRA ! appsink name=outsink sync=false";
+                    // RTSP stream - crop to left camera only (left half of 2560x720)
+                    // Add videocrop after decoding to extract left 1280 pixels
+                    pipeline = $"rtspsrc location={streamUrl} latency={latency} udp-reconnect=1 timeout=0 do-retransmission=false ! application/x-rtp ! decodebin3 ! queue max-size-buffers=1 leaky=2 ! videocrop right=1280 ! videoconvert ! video/x-raw,format=BGRA ! appsink name=outsink sync=false";
                 }
                 
                 Console.WriteLine($"NOMAD HUD: Starting video with pipeline: {pipeline}");
