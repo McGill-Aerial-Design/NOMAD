@@ -66,7 +66,7 @@ namespace NOMAD.MissionPlanner
             _streamTitle = title;
             _streamUrl = rtspUrl;
             _isPlaying = false;
-            _useGStreamer = TryInitializeGStreamer();
+            _useGStreamer = CheckGStreamerAvailable();
             
             InitializeUI();
             
@@ -80,14 +80,13 @@ namespace NOMAD.MissionPlanner
         }
         
         // ============================================================
-        // LibVLC Initialization
+        // GStreamer Availability Check
         // ============================================================
         
-        private bool TryInitializeGStreamer()
+        private bool CheckGStreamerAvailable()
         {
             try
             {
-                _gst = new GStreamer();
                 var gstPath = GStreamer.LookForGstreamer();
                 if (string.IsNullOrWhiteSpace(gstPath) || !GStreamer.GstLaunchExists)
                 {
@@ -96,14 +95,13 @@ namespace NOMAD.MissionPlanner
                     return false;
                 }
 
-                _gst.OnNewImage += OnGstNewImage;
-                System.Diagnostics.Debug.WriteLine("NOMAD: GStreamer initialized successfully");
+                System.Diagnostics.Debug.WriteLine("NOMAD: GStreamer is available");
                 return true;
             }
             catch (Exception ex)
             {
                 _embeddedInitErrorMessage = ex.Message;
-                System.Diagnostics.Debug.WriteLine($"NOMAD: GStreamer initialization failed - {ex}");
+                System.Diagnostics.Debug.WriteLine($"NOMAD: GStreamer check failed - {ex}");
             }
             
             return false;
@@ -364,26 +362,43 @@ namespace NOMAD.MissionPlanner
             
             try
             {
-                if (_useGStreamer && _gst != null)
-                {
-                    var pipeline = BuildGStreamerPipeline();
-                    System.Diagnostics.Debug.WriteLine($"NOMAD Video: Starting pipeline: {pipeline}");
-                    _gst.Start(pipeline);
-
-                    _isPlaying = true;
-                    UpdateStatus("Playing (GStreamer)", Color.LimeGreen);
-                    UpdatePlayStopButton();
-                }
-                else
+                if (!_useGStreamer)
                 {
                     var errorMsg = _embeddedInitErrorMessage ?? "GStreamer not available";
                     UpdateStatus($"Error: {errorMsg}", Color.Red);
                     System.Diagnostics.Debug.WriteLine($"NOMAD Video: Cannot start - {errorMsg}");
+                    return;
                 }
+
+                // Create a fresh GStreamer instance for each session
+                // This prevents "attempted to read or write protected memory" errors
+                // that occur when reusing a stopped GStreamer instance
+                if (_gst != null)
+                {
+                    try { _gst.OnNewImage -= OnGstNewImage; } catch { }
+                    try { _gst.Stop(); } catch { }
+                    _gst = null;
+                }
+
+                // Small delay to ensure cleanup
+                System.Threading.Thread.Sleep(50);
+
+                // Create new instance
+                _gst = new GStreamer();
+                _gst.OnNewImage += OnGstNewImage;
+
+                var pipeline = BuildGStreamerPipeline();
+                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Starting pipeline: {pipeline}");
+                _gst.Start(pipeline);
+
+                _isPlaying = true;
+                _frameCount = 0; // Reset frame counter
+                UpdateStatus("Playing (GStreamer)", Color.LimeGreen);
+                UpdatePlayStopButton();
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Play error - {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Play error - {ex.Message}\n{ex.StackTrace}");
                 UpdateStatus($"Error: {ex.Message}", Color.Red);
             }
         }
@@ -392,19 +407,23 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                if (_useGStreamer && _gst != null)
+                _isPlaying = false;
+                
+                if (_gst != null)
                 {
-                    // Unhook the event handler to prevent more callbacks
+                    // Unhook the event handler first to prevent callbacks during cleanup
                     try { _gst.OnNewImage -= OnGstNewImage; } catch { }
                     
                     // Stop the pipeline
-                    _gst.Stop();
+                    try { _gst.Stop(); } catch { }
                     
                     // Give GStreamer a moment to clean up
                     System.Threading.Thread.Sleep(100);
+                    
+                    // Clear the reference - we'll create a new instance on next Start
+                    _gst = null;
                 }
                 
-                _isPlaying = false;
                 UpdateStatus("Stopped", Color.Gray);
                 UpdatePlayStopButton();
             }
@@ -675,26 +694,10 @@ a=recvonly";
             {
                 try
                 {
-                    // First stop the stream and unhook events
+                    // Stop the stream - this handles GStreamer cleanup
                     StopStream();
                     
-                    // Force GStreamer cleanup on a background thread with timeout
-                    if (_gst != null)
-                    {
-                        var cleanupTask = System.Threading.Tasks.Task.Run(() =>
-                        {
-                            try
-                            {
-                                _gst.Stop();
-                            }
-                            catch { }
-                        });
-                        
-                        // Wait max 500ms for cleanup
-                        cleanupTask.Wait(500);
-                        _gst = null;
-                    }
-
+                    // Dispose the last frame
                     if (_lastFrame != null)
                     {
                         _lastFrame.Dispose();
