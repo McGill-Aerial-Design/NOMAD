@@ -64,30 +64,11 @@ namespace NOMAD.MissionPlanner
         // ============================================================
 
         /// <summary>
-        /// Video stream URL for ZED camera (RTSP or UDP).
-        /// RTSP allows multiple viewers, UDP is single viewer only.
+        /// Video stream URL for ZED camera.
+        /// Default: RTSP stream supporting multiple simultaneous viewers.
+        /// Format: rtsp://&lt;jetson-ip&gt;:8554/zed
         /// </summary>
-        public string RtspUrlZed { get; set; } = "rtsp://100.75.218.89:8554/zed";
-
-        /// <summary>
-        /// Legacy: Primary RTSP URL (mapped to ZED for compatibility).
-        /// </summary>
-        [Obsolete("Use RtspUrlZed instead")]
-        public string RtspUrlPrimary
-        {
-            get => RtspUrlZed;
-            set => RtspUrlZed = value;
-        }
-
-        /// <summary>
-        /// Legacy: Secondary RTSP URL (no longer used - only ZED camera available).
-        /// </summary>
-        [Obsolete("Secondary camera not available - use RtspUrlZed")]
-        public string RtspUrlSecondary
-        {
-            get => RtspUrlZed;
-            set { /* No-op for compatibility */ }
-        }
+        public string VideoUrl { get; set; } = "rtsp://100.75.218.89:8554/zed";
 
         /// <summary>
         /// Servo channel for ZED camera tilt control (0 = disabled).
@@ -337,10 +318,10 @@ namespace NOMAD.MissionPlanner
         private void MigrateDefaults()
         {
             // Migrate from old UDP format to RTSP (multiple viewers)
-            if (RtspUrlZed == "udp://@:5600")
+            if (VideoUrl == "udp://@:5600" || string.IsNullOrEmpty(VideoUrl))
             {
                 // New default is RTSP stream (allows multiple viewers)
-                RtspUrlZed = "rtsp://100.75.218.89:8554/zed";
+                VideoUrl = $"rtsp://{EffectiveIP}:8554/zed";
             }
             
             // Migrate old Jetson IP to Tailscale if using Tailscale
@@ -377,7 +358,7 @@ namespace NOMAD.MissionPlanner
             JetsonPort = defaults.JetsonPort;
             TailscaleIP = defaults.TailscaleIP;
             UseTailscale = defaults.UseTailscale;
-            RtspUrlZed = defaults.RtspUrlZed;
+            VideoUrl = defaults.VideoUrl;
             ZedServoChannel = defaults.ZedServoChannel;
             ZedServoMin = defaults.ZedServoMin;
             ZedServoMax = defaults.ZedServoMax;

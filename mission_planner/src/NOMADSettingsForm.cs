@@ -245,7 +245,7 @@ namespace NOMAD.MissionPlanner
         {
             _txtJetsonIP.Text = Config.JetsonIP;
             _numPort.Value = Config.JetsonPort;
-            _txtRtspZed.Text = Config.RtspUrlZed;
+            _txtRtspZed.Text = Config.VideoUrl;
             _numServoChannel.Value = Config.ZedServoChannel;
             _chkUseELRS.Checked = Config.UseELRS;
             _numTimeout.Value = Config.HttpTimeoutSeconds;
@@ -256,7 +256,7 @@ namespace NOMAD.MissionPlanner
         {
             Config.JetsonIP = _txtJetsonIP.Text.Trim();
             Config.JetsonPort = (int)_numPort.Value;
-            Config.RtspUrlZed = _txtRtspZed.Text.Trim();
+            Config.VideoUrl = _txtRtspZed.Text.Trim();
             Config.ZedServoChannel = (int)_numServoChannel.Value;
             Config.UseELRS = _chkUseELRS.Checked;
             Config.HttpTimeoutSeconds = (int)_numTimeout.Value;

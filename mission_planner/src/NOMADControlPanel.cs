@@ -853,7 +853,7 @@ namespace NOMAD.MissionPlanner
 
         private void BtnOpenZedVideo_Click(object sender, EventArgs e)
         {
-            OpenVideoStream(_config.RtspUrlZed, "ZED Camera");
+            OpenVideoStream(_config.VideoUrl, "ZED Camera");
         }
 
         /// <summary>

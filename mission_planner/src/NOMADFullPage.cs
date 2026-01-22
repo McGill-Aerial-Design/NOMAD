@@ -728,7 +728,7 @@ namespace NOMAD.MissionPlanner
             // ZED Camera Video Player (full width)
             _zedVideoPlayer = new EmbeddedVideoPlayer(
                 "ZED Camera (Navigation/VIO)",
-                _config.RtspUrlZed
+                _config.VideoUrl
             );
             _zedVideoPlayer.Dock = DockStyle.Fill;
             mainPanel.Controls.Add(_zedVideoPlayer, 0, 0);
@@ -979,7 +979,7 @@ namespace NOMAD.MissionPlanner
             
             var txtZedUrl = new TextBox
             {
-                Text = _config.RtspUrlZed,
+                Text = _config.VideoUrl,
                 Location = new Point(80, 27),
                 Size = new Size(300, 25),
                 BackColor = Color.FromArgb(30, 30, 30),
@@ -1054,7 +1054,7 @@ namespace NOMAD.MissionPlanner
             {
                 _config.JetsonIP = txtIp.Text;
                 _config.JetsonPort = int.Parse(txtPort.Text);
-                _config.RtspUrlZed = txtZedUrl.Text;
+                _config.VideoUrl = txtZedUrl.Text;
                 if (int.TryParse(txtServoChannel.Text, out int servo)) _config.ZedServoChannel = servo;
                 if (int.TryParse(txtPwmMin.Text, out int pwmMin)) _config.ZedServoMin = pwmMin;
                 if (int.TryParse(txtPwmMax.Text, out int pwmMax)) _config.ZedServoMax = pwmMax;
@@ -1193,7 +1193,7 @@ namespace NOMAD.MissionPlanner
         public void UpdateConfig(NOMADConfig config)
         {
             _config = config;
-            _zedVideoPlayer?.UpdateStreamUrl(_config.RtspUrlZed);
+            _zedVideoPlayer?.UpdateStreamUrl(_config.VideoUrl);
             _terminalControl?.UpdateConfig(_config);
             _healthDashboard?.UpdateConfig(_config);
             
