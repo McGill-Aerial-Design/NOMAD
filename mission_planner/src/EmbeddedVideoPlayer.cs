@@ -29,6 +29,7 @@ namespace NOMAD.MissionPlanner
         
         private string _streamTitle;
         private string _streamUrl;
+        private string _baseStreamUrl;  // Base URL without camera view suffix
         private bool _isPlaying;
         private bool _useGStreamer;
         
@@ -42,6 +43,7 @@ namespace NOMAD.MissionPlanner
         private Button _btnExternal;
         private Button _btnSnapshot;
         private ComboBox _cmbQuality;
+        private ComboBox _cmbCameraView;  // Camera view selector
         private TrackBar _trkLatency;
         private Label _lblLatency;
         
@@ -56,6 +58,15 @@ namespace NOMAD.MissionPlanner
         // Playback settings - ultra-low latency defaults
         private int _networkCaching = 50; // ms - minimum for stable playback
         private string _quality = "auto";
+        private string _cameraView = "left";  // Current camera view: left, right, both
+        
+        // Camera view options with display names
+        private static readonly (string View, string DisplayName, string UrlSuffix)[] CameraViews = new[]
+        {
+            ("left", "Left Camera (Nav)", ""),          // /zed
+            ("right", "Right Camera", "-right"),        // /zed-right
+            ("both", "Side-by-Side (Wide)", "-both"),   // /zed-both
+        };
         
         // ============================================================
         // Constructor
@@ -64,7 +75,8 @@ namespace NOMAD.MissionPlanner
         public EmbeddedVideoPlayer(string title, string rtspUrl)
         {
             _streamTitle = title;
-            _streamUrl = rtspUrl;
+            _baseStreamUrl = rtspUrl;  // Store the base URL (e.g., rtsp://ip:8554/zed)
+            _streamUrl = rtspUrl;       // Current active URL
             _isPlaying = false;
             _useGStreamer = CheckGStreamerAvailable();
             
@@ -324,7 +336,35 @@ namespace NOMAD.MissionPlanner
             };
             panel.Controls.Add(_lblLatency);
             
-            // Quality Selector
+            // Camera View Selector (most important control - at top)
+            var lblCamera = new Label
+            {
+                Text = "Camera:",
+                Location = new Point(260, 15),
+                ForeColor = Color.Cyan,
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                AutoSize = true,
+            };
+            panel.Controls.Add(lblCamera);
+            
+            _cmbCameraView = new ComboBox
+            {
+                Location = new Point(320, 10),
+                Size = new Size(150, 25),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                BackColor = Color.FromArgb(30, 30, 30),
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 9),
+            };
+            foreach (var (view, displayName, _) in CameraViews)
+            {
+                _cmbCameraView.Items.Add(displayName);
+            }
+            _cmbCameraView.SelectedIndex = 0;  // Default to left camera
+            _cmbCameraView.SelectedIndexChanged += CmbCameraView_SelectedIndexChanged;
+            panel.Controls.Add(_cmbCameraView);
+            
+            // Quality Selector (less important - bottom row)
             var lblQuality = new Label
             {
                 Text = "Quality:",
@@ -350,6 +390,33 @@ namespace NOMAD.MissionPlanner
             panel.Controls.Add(_cmbQuality);
             
             return panel;
+        }
+        
+        /// <summary>
+        /// Handles camera view selection change.
+        /// </summary>
+        private void CmbCameraView_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (_cmbCameraView.SelectedIndex < 0 || _cmbCameraView.SelectedIndex >= CameraViews.Length)
+                return;
+                
+            var (view, displayName, urlSuffix) = CameraViews[_cmbCameraView.SelectedIndex];
+            _cameraView = view;
+            
+            // Build new URL with the appropriate suffix
+            // Base URL is like rtsp://ip:8554/zed
+            // For right camera: rtsp://ip:8554/zed-right
+            // For both: rtsp://ip:8554/zed-both
+            _streamUrl = _baseStreamUrl + urlSuffix;
+            
+            System.Diagnostics.Debug.WriteLine($"NOMAD Video: Camera view changed to {displayName} -> {_streamUrl}");
+            
+            // If currently playing, restart with new URL
+            if (_isPlaying)
+            {
+                StopStream();
+                StartStream();
+            }
         }
         
         // ============================================================
@@ -393,7 +460,10 @@ namespace NOMAD.MissionPlanner
 
                 _isPlaying = true;
                 _frameCount = 0; // Reset frame counter
-                UpdateStatus("Playing (GStreamer)", Color.LimeGreen);
+                
+                // Update status to show current camera view
+                var viewName = _cameraView == "both" ? "Wide" : (_cameraView == "right" ? "Right" : "Left");
+                UpdateStatus($"Playing [{viewName}]", Color.LimeGreen);
                 UpdatePlayStopButton();
             }
             catch (Exception ex)
