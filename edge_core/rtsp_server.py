@@ -100,15 +100,16 @@ class ZEDRtspServer:
         """
         # ZED camera capture - stereo side-by-side
         # For HD720: input is 2560x720, we crop left 1280x720
+        # Note: GstRtspServer requires stream-format=byte-stream for rtph264pay
         pipeline = (
             f"v4l2src device={self.device} ! "
             f"video/x-raw,width=2560,height={self.height},framerate={self.framerate}/1 ! "
-            f"videocrop left=0 right=1280 ! "  # Crop to left eye
+            f"videocrop left=0 right=1280 ! "
             f"videoconvert ! "
             f"x264enc tune=zerolatency bitrate={self.bitrate} "
             f"speed-preset=ultrafast sliced-threads=true "
             f"key-int-max=15 bframes=0 ! "
-            f"video/x-h264,profile=baseline ! "
+            f"h264parse ! "
             f"rtph264pay name=pay0 pt=96 config-interval=1"
         )
         return pipeline
@@ -127,7 +128,7 @@ class ZEDRtspServer:
             f"video/x-raw(memory:NVMM) ! "
             f"nvv4l2h264enc bitrate={self.bitrate * 1000} "
             f"preset-level=1 iframeinterval=15 insert-sps-pps=true ! "
-            f"video/x-h264,stream-format=byte-stream ! "
+            f"h264parse ! "
             f"rtph264pay name=pay0 pt=96 config-interval=1"
         )
         return pipeline
