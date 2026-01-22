@@ -6,7 +6,7 @@
 
 | Task | Configuration | Computer | Navigation |
 |------|--------------|----------|------------|
-| **Task 1** (Outdoor Recon) | No Jetson | None | GPS/RTK |
+| **Task 1** (Outdoor Recon) | ZED 2i camera | Orin Nano (imaging only) | GPS/RTK (pilot-only) |
 | **Task 2** (Indoor Extinguish) | With Jetson | Orin Nano | ZED VIO |
 
 ---
@@ -14,10 +14,11 @@
 ## 🎯 Task Overview
 
 ### Task 1: Outdoor Reconnaissance
-- **Pilot-only operation** - no edge compute
+- **Pilot-only operation** - no autonomous navigation
+- Jetson Orin Nano + ZED 2i camera mounted for target imagery
+- Images used to generate text descriptions (out of scope for this repo)
 - GPS/RTK positioning via ELRS telemetry
 - RTCM corrections through Mission Planner
-- **Jetson is NOT mounted on drone**
 
 ### Task 2: Indoor Fire Extinguishing  
 - **Jetson-powered autonomous** operation
@@ -29,13 +30,14 @@
 
 ## 🏗️ System Architecture
 
-### Task 1 (No Jetson)
+### Task 1 (Jetson camera only)
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    GROUND STATION                               │
 │  Mission Planner ←──ELRS Gemini──→ Cube Orange ←──GPS──→ RTK   │
 └─────────────────────────────────────────────────────────────────┘
 ```
+Jetson Orin Nano + ZED 2i camera are mounted for imaging only (no autonomous navigation).
 
 ### Task 2 (With Jetson)
 ```
@@ -77,7 +79,7 @@ NOMAD/
 │   ├── architecture.md     # System design
 │   └── PRD.md              # Product requirements
 │
-├── edge_core/              # Jetson software (Task 2 only)
+├── edge_core/              # Jetson software (Task 2 autonomy + Task 1 imaging support)
 │   ├── main.py             # Entry point
 │   ├── api.py              # REST API endpoints
 │   ├── state.py            # State manager
@@ -121,9 +123,9 @@ NOMAD/
 
 ## 🚀 Quick Start
 
-### Task 1 Setup (No Jetson)
+### Task 1 Setup (Jetson camera)
 ```bash
-# Ground station only
+# Ground station + Jetson camera (imaging only)
 1. Connect ELRS Gemini TX to computer
 2. Open Mission Planner
 3. Connect to drone via ELRS
@@ -186,7 +188,7 @@ python -m edge_core.main --host 0.0.0.0 --port 8000
 | ELRS Telemetry | ✅ Ready | ✅ Ready |
 | Edge Core API | ✅ Ready | ✅ Ready |
 | Tailscale VPN | N/A | ✅ Ready |
-| ZED 2i VIO | ✅ Ready | ✅ Ready |
+| ZED 2i Camera | ✅ Ready | ✅ Ready |
 | YOLO Detection | N/A | ⏳ In Progress |
 | Mission Planner Plugin | ✅ Ready | ✅ Ready |
 | Embedded Video | ✅ Ready | ✅ Ready |
