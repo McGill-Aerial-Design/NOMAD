@@ -106,6 +106,12 @@ namespace NOMAD.MissionPlanner
         /// Enable video stream auto-start when opening video tab.
         /// </summary>
         public bool VideoAutoStart { get; set; } = false;
+        
+        /// <summary>
+        /// Auto-start video on Mission Planner's HUD when plugin loads.
+        /// This displays the ZED camera feed as a background overlay on the HUD.
+        /// </summary>
+        public bool AutoStartHudVideo { get; set; } = true;
 
         // ============================================================
         // Communication Configuration

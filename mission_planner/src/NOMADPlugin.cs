@@ -22,6 +22,7 @@ using System.Drawing;
 using System.Windows.Forms;
 using MissionPlanner;
 using MissionPlanner.Plugin;
+using MissionPlanner.Utilities;
 
 namespace NOMAD.MissionPlanner
 {
@@ -49,6 +50,7 @@ namespace NOMAD.MissionPlanner
         private TabControl _flightDataTabControl; // Reference to FlightData's tab control
         private bool _tabAdded;
         private bool _isDocked = true;  // Whether NOMAD is docked in FlightData
+        private bool _hudVideoStarted = false;  // Track if HUD video has been started
 
         // ============================================================
         // Plugin Lifecycle
@@ -133,6 +135,24 @@ namespace NOMAD.MissionPlanner
                         
                         nomadMenu.DropDownItems.Add(new ToolStripSeparator());
                         
+                        // HUD Video controls
+                        var hudVideoItem = new ToolStripMenuItem("▶ Start HUD Video");
+                        hudVideoItem.Click += (s, e) => {
+                            if (_hudVideoStarted)
+                            {
+                                StopHudVideo();
+                                hudVideoItem.Text = "▶ Start HUD Video";
+                            }
+                            else
+                            {
+                                StartHudVideo();
+                                hudVideoItem.Text = "■ Stop HUD Video";
+                            }
+                        };
+                        nomadMenu.DropDownItems.Add(hudVideoItem);
+                        
+                        nomadMenu.DropDownItems.Add(new ToolStripSeparator());
+                        
                         // Open in separate window (always available)
                         var openFullPageItem = new ToolStripMenuItem("Open in New Window");
                         openFullPageItem.Click += (s, e) => ShowFullPage();
@@ -154,7 +174,7 @@ namespace NOMAD.MissionPlanner
                             $"McGill Aerial Design - AEAC 2026\n\n" +
                             $"Features:\n" +
                             $"• Full-page control interface\n" +
-                            $"• Embedded video streaming\n" +
+                            $"• Embedded video streaming (HUD & Tab)\n" +
                             $"• Jetson terminal access\n" +
                             $"• Real-time health monitoring\n" +
                             $"• Task 1 (Outdoor) & Task 2 (Indoor) support\n\n" +
@@ -241,6 +261,20 @@ namespace NOMAD.MissionPlanner
                 if (_isDocked)
                 {
                     AddNomadFullPageTab();
+                }
+                
+                // Auto-start HUD video if configured
+                if (_config.AutoStartHudVideo && !_hudVideoStarted)
+                {
+                    // Delay slightly to ensure FlightData is fully loaded
+                    System.Threading.Tasks.Task.Run(async () =>
+                    {
+                        await System.Threading.Tasks.Task.Delay(2000); // 2 second delay
+                        Host?.MainForm?.BeginInvoke((MethodInvoker)delegate
+                        {
+                            StartHudVideo();
+                        });
+                    });
                 }
 
                 return true;
@@ -865,6 +899,121 @@ namespace NOMAD.MissionPlanner
             {
                 Console.WriteLine($"NOMAD: Tab selection failed - {ex.Message}");
             }
+        }
+        
+        // ============================================================
+        // HUD Video Streaming
+        // ============================================================
+        
+        /// <summary>
+        /// Starts the ZED camera video stream on Mission Planner's HUD overlay.
+        /// Uses the same GStreamer pipeline format as built-in HereLink support.
+        /// </summary>
+        public void StartHudVideo()
+        {
+            try
+            {
+                // Build the GStreamer pipeline using Mission Planner's expected format
+                var streamUrl = _config.VideoUrl;
+                if (string.IsNullOrWhiteSpace(streamUrl))
+                {
+                    Console.WriteLine("NOMAD HUD: No video URL configured");
+                    return;
+                }
+                
+                // Ensure GStreamer is available
+                GStreamer.GstLaunch = GStreamer.LookForGstreamer();
+                if (!GStreamer.GstLaunchExists)
+                {
+                    Console.WriteLine("NOMAD HUD: GStreamer not found, cannot start HUD video");
+                    CustomMessageBox.Show(
+                        "GStreamer is not installed. The HUD video requires GStreamer.\n\n" +
+                        "You can install it via Tools > GStreamer in Mission Planner.",
+                        "GStreamer Required"
+                    );
+                    return;
+                }
+                
+                // Build pipeline - matches Mission Planner's proven format for RTSP streams
+                // Key elements: decodebin3 for auto codec detection, queue with leaky for low latency
+                string pipeline;
+                int latency = 50; // Low latency for real-time video
+                
+                if (streamUrl.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
+                {
+                    // UDP RTP stream
+                    var port = ExtractUdpPort(streamUrl);
+                    pipeline = $"udpsrc port={port} buffer-size=90000 ! application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264 ! decodebin3 ! queue max-size-buffers=1 leaky=2 ! videoconvert ! video/x-raw,format=BGRA ! appsink name=outsink sync=false";
+                }
+                else
+                {
+                    // RTSP stream - use proven HereLink/Siyi format
+                    pipeline = $"rtspsrc location={streamUrl} latency={latency} udp-reconnect=1 timeout=0 do-retransmission=false ! application/x-rtp ! decodebin3 ! queue max-size-buffers=1 leaky=2 ! videoconvert ! video/x-raw,format=BGRA ! appsink name=outsink sync=false";
+                }
+                
+                Console.WriteLine($"NOMAD HUD: Starting video with pipeline: {pipeline}");
+                
+                // Start video on the HUD using Mission Planner's static hudGStreamer
+                // Use global:: to avoid namespace ambiguity with NOMAD.MissionPlanner
+                global::MissionPlanner.GCSViews.FlightData.hudGStreamer.Start(pipeline);
+                _hudVideoStarted = true;
+                
+                Console.WriteLine("NOMAD HUD: Video started successfully");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"NOMAD HUD: Failed to start video - {ex.Message}");
+                _hudVideoStarted = false;
+            }
+        }
+        
+        /// <summary>
+        /// Stops the HUD video stream.
+        /// </summary>
+        public void StopHudVideo()
+        {
+            try
+            {
+                global::MissionPlanner.GCSViews.FlightData.hudGStreamer.Stop();
+                _hudVideoStarted = false;
+                Console.WriteLine("NOMAD HUD: Video stopped");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"NOMAD HUD: Failed to stop video - {ex.Message}");
+            }
+        }
+        
+        /// <summary>
+        /// Toggles HUD video on/off.
+        /// </summary>
+        public void ToggleHudVideo()
+        {
+            if (_hudVideoStarted)
+            {
+                StopHudVideo();
+            }
+            else
+            {
+                StartHudVideo();
+            }
+        }
+        
+        /// <summary>
+        /// Extract UDP port from URL (udp://@:5600, udp://5600, etc.)
+        /// </summary>
+        private int ExtractUdpPort(string url)
+        {
+            try
+            {
+                var cleaned = url.Replace("udp://", "").Replace("@", "").TrimStart(':');
+                if (int.TryParse(cleaned, out int port))
+                {
+                    return port;
+                }
+            }
+            catch { }
+            return 5600; // Default port
         }
     }
 }
