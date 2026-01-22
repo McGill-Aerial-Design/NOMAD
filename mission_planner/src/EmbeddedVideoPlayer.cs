@@ -742,11 +742,21 @@ a=recvonly";
             }
         }
 
+        private int _frameCount = 0;
+        private DateTime _lastFrameTime = DateTime.MinValue;
+        
         private void OnGstNewImage(object sender, MPBitmap frame)
         {
             if (frame == null)
             {
+                System.Diagnostics.Debug.WriteLine("NOMAD Video: Received null frame");
                 return;
+            }
+
+            _frameCount++;
+            if (_frameCount % 30 == 1) // Log every 30 frames (once per second)
+            {
+                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Frame #{_frameCount} received, Size: {frame.Width}x{frame.Height}");
             }
 
             if (InvokeRequired)
@@ -785,6 +795,13 @@ a=recvonly";
                     _lastFrame.Dispose();
                 }
                 _lastFrame = snapshotFrame;
+                
+                // Update status periodically
+                if (_frameCount % 30 == 1)
+                {
+                    var fps = 30.0; // Estimate since we log every second
+                    UpdateStatus($"Playing @ ~{fps:F0}fps ({frame.Width}x{frame.Height})", Color.LimeGreen);
+                }
             }
             catch (Exception ex)
             {

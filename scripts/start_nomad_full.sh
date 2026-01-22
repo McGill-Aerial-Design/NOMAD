@@ -72,15 +72,16 @@ fi
 # Start ZED Video Stream -> MediaMTX
 echo "[5/5] Starting ZED Video Stream (Ultra-Low Latency)..."
 # Ultra-low latency H.264 pipeline:
+# - Convert to I420 (YUV 4:2:0) for compatibility
 # - x264enc: zerolatency tune, ultrafast preset, no B-frames
+# - baseline profile: maximum compatibility
 # - key-int-max=15: Frequent keyframes for fast recovery
-# - sliced-threads: Parallel encoding
-# - sync=false: No A/V sync delays
 gst-launch-1.0 -q \
   v4l2src device=/dev/video0 do-timestamp=true ! \
   "video/x-raw,width=2560,height=720,framerate=30/1" ! \
   videocrop left=0 right=1280 ! \
   videoconvert ! \
+  "video/x-raw,format=I420" ! \
   x264enc tune=zerolatency bitrate=4000 speed-preset=ultrafast \
     sliced-threads=true key-int-max=15 bframes=0 \
     rc-lookahead=0 sync-lookahead=0 ! \
