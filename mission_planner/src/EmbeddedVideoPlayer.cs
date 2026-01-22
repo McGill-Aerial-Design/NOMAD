@@ -722,8 +722,10 @@ a=recvonly";
         {
             // Mission Planner's GStreamer class expects:
             // 1. appsink named "outsink" (not "appsink")
-            // 2. format=BGRA (not BGRx or RGB)
+            // 2. format=BGRA (32-bit BGRA required by GStreamer.cs bitmap creation)
             // 3. sync=false at the end
+            // 4. decodebin3 for automatic codec detection
+            // 5. queue with leaky=2 for low latency
             
             // Check if the URL is UDP or RTSP
             if (_streamUrl.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
@@ -732,13 +734,24 @@ a=recvonly";
                 var port = ExtractUdpPort(_streamUrl);
                 
                 // Match Mission Planner's AutoConnect format for UDP H264
-                return $"udpsrc port={port} buffer-size=90000 ! application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264 ! rtph264depay ! avdec_h264 ! videoconvert ! video/x-raw,format=BGRA ! appsink name=outsink sync=false";
+                // Uses decodebin3 for automatic codec detection
+                return $"udpsrc port={port} buffer-size=90000 ! application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264 ! decodebin3 ! queue max-size-buffers=1 leaky=2 ! videoconvert ! video/x-raw,format=BGRA ! appsink name=outsink sync=false";
             }
             else
             {
-                // RTSP stream - explicit H264 decoding pipeline for reliability
-                // Uses rtph264depay + avdec_h264 instead of decodebin3 for direct decoding
-                return $"rtspsrc location={_streamUrl} latency=0 protocols=tcp ! rtph264depay ! avdec_h264 ! videoconvert ! video/x-raw,format=BGRA ! appsink name=outsink sync=false drop=true";
+                // RTSP stream - Use Mission Planner's proven pipeline format
+                // Key elements:
+                // - rtspsrc: handles RTSP protocol
+                // - latency: lower = less delay, but 41ms is stable minimum
+                // - udp-reconnect=1: auto reconnect on UDP drops
+                // - timeout=0: no timeout (important for network glitches)
+                // - do-retransmission=false: don't request retransmission (reduces latency)
+                // - application/x-rtp: explicit RTP media type
+                // - decodebin3: automatic codec detection and decoding
+                // - queue with leaky=2: drop old buffers if full (low latency)
+                // - videoconvert to BGRA: required format for Mission Planner's bitmap
+                // - appsink name=outsink sync=false: named sink without clock sync
+                return $"rtspsrc location={_streamUrl} latency={_networkCaching} udp-reconnect=1 timeout=0 do-retransmission=false ! application/x-rtp ! decodebin3 ! queue max-size-buffers=1 leaky=2 ! videoconvert ! video/x-raw,format=BGRA ! appsink name=outsink sync=false";
             }
         }
 
@@ -749,7 +762,21 @@ a=recvonly";
         {
             if (frame == null)
             {
-                System.Diagnostics.Debug.WriteLine("NOMAD Video: Received null frame");
+                System.Diagnostics.Debug.WriteLine("NOMAD Video: Received null frame (stream may have ended)");
+                if (InvokeRequired)
+                {
+                    BeginInvoke(new Action(() => UpdateStatus("Stream ended", Color.Gray)));
+                }
+                else
+                {
+                    UpdateStatus("Stream ended", Color.Gray);
+                }
+                return;
+            }
+
+            if (frame.Width <= 0 || frame.Height <= 0)
+            {
+                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Invalid frame dimensions: {frame.Width}x{frame.Height}");
                 return;
             }
 
@@ -767,34 +794,44 @@ a=recvonly";
 
             try
             {
-                // Clone frames for display and snapshot
-                // Use dynamic to handle the type mismatch between compile-time and runtime assemblies
-                dynamic displayFrame = frame.Clone();
-                var snapshotFrame = (MPBitmap)frame.Clone();
+                // Create a System.Drawing.Bitmap from the SkiaSharp bitmap data
+                // This matches Mission Planner's GimbalVideoControl approach:
+                // Uses LockBits to get raw pixel data pointer and creates bitmap from it
+                var displayBitmap = new Bitmap(
+                    frame.Width, 
+                    frame.Height, 
+                    4 * frame.Width,  // stride = 4 bytes per pixel (BGRA)
+                    System.Drawing.Imaging.PixelFormat.Format32bppPArgb,
+                    frame.LockBits(Rectangle.Empty, null, SkiaSharp.SKColorType.Bgra8888).Scan0
+                );
 
                 // Update video display
                 var old = _videoBox?.Image;
                 if (_videoBox != null)
                 {
-                    _videoBox.Image = displayFrame;
+                    _videoBox.Image = displayBitmap;
                 }
-                (old as IDisposable)?.Dispose();
+                old?.Dispose();
 
                 // Update fullscreen display
                 if (_fullscreenBox != null)
                 {
                     var oldFull = _fullscreenBox.Image;
-                    dynamic fullFrame = frame.Clone();
-                    _fullscreenBox.Image = fullFrame;
-                    (oldFull as IDisposable)?.Dispose();
+                    var fullBitmap = new Bitmap(
+                        frame.Width, 
+                        frame.Height, 
+                        4 * frame.Width,
+                        System.Drawing.Imaging.PixelFormat.Format32bppPArgb,
+                        frame.LockBits(Rectangle.Empty, null, SkiaSharp.SKColorType.Bgra8888).Scan0
+                    );
+                    _fullscreenBox.Image = fullBitmap;
+                    oldFull?.Dispose();
                 }
 
-                // Keep last frame for snapshot
-                if (_lastFrame != null)
-                {
-                    _lastFrame.Dispose();
-                }
-                _lastFrame = snapshotFrame;
+                // Keep last frame for snapshot (clone it since frame may be disposed)
+                var oldLastFrame = _lastFrame;
+                _lastFrame = (MPBitmap)frame.Clone();
+                oldLastFrame?.Dispose();
                 
                 // Update status periodically
                 if (_frameCount % 30 == 1)
@@ -805,7 +842,7 @@ a=recvonly";
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Frame update error - {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Frame update error - {ex.Message}\n{ex.StackTrace}");
             }
         }
         

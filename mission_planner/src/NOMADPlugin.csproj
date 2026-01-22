@@ -94,6 +94,11 @@
       <HintPath>C:\Program Files (x86)\Mission Planner\Newtonsoft.Json.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <!-- SkiaSharp for video frame handling -->
+    <Reference Include="SkiaSharp">
+      <HintPath>C:\Program Files (x86)\Mission Planner\SkiaSharp.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
   </ItemGroup>
   
   <ItemGroup>
