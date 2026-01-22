@@ -51,6 +51,21 @@ else
     exit 1
 fi
 
+# Start MAVLink Router
+echo "[3.5/5] Checking MAVLink Router..."
+if pgrep -x mavlink-routerd > /dev/null; then
+    echo "    OK: MAVLink Router running"
+else
+    echo "    Starting MAVLink Router..."
+    # Check if binary exists
+    if command -v mavlink-routerd &> /dev/null; then
+        nohup mavlink-routerd -c $NOMAD_DIR/transport/mavlink_router/mavlink-router.conf > $LOG_DIR/mavlink.log 2>&1 &
+        sleep 2
+    else
+        echo "    WARNING: mavlink-routerd not found! Systems may not connect to Flight Controller."
+    fi
+fi
+
 # Start Edge Core API
 echo "[4/5] Starting Edge Core API..."
 cd $NOMAD_DIR
