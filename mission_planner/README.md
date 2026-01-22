@@ -2,7 +2,7 @@
 
 **Comprehensive Control Interface for NOMAD Operations - AEAC 2026**
 
-This C# plugin integrates directly with Mission Planner to provide full control of the NOMAD drone system including task execution, embedded video streaming, remote terminal access, and indoor manual control.
+This C# plugin integrates directly with Mission Planner to provide full control of the NOMAD drone system including task execution, embedded video streaming, remote terminal access, MAVLink dual-link failover, and indoor manual control.
 
 ## Features
 
@@ -13,6 +13,14 @@ This C# plugin integrates directly with Mission Planner to provide full control 
 - **Video Tab**: Embedded RTSP streaming (no external VLC required)
 - **Terminal Tab**: Remote command execution on Jetson
 - **Health Tab**: Real-time Jetson health monitoring (CPU/GPU temps, memory, network)
+
+### MAVLink Dual Link Failover (NEW)
+- **Primary Link**: LTE/Tailscale via Jetson mavlink-router
+- **Secondary Link**: RadioMaster transmitter (UDP 14550)
+- **Automatic Failover**: Switches links on connection loss
+- **Health Monitoring**: Real-time latency and packet loss tracking
+- **Manual Override**: Switch links manually via Link Status panel
+- **Auto-Reconnect**: Returns to preferred link when available
 
 ### Core Functionality
 - **Task 1 (Recon)**: Capture snapshot and calculate target position relative to landmarks
@@ -30,6 +38,8 @@ This C# plugin integrates directly with Mission Planner to provide full control 
 | `src/NOMADFullPage.cs` | Full-page tabbed control interface |
 | `src/NOMADControlPanel.cs` | Quick access popup panel |
 | `src/DualLinkSender.cs` | HTTP and MAVLink communication handler |
+| `src/MAVLinkConnectionManager.cs` | **Dual link failover manager** |
+| `src/LinkHealthPanel.cs` | **Link health monitoring UI** |
 | `src/EmbeddedVideoPlayer.cs` | Built-in RTSP video player |
 | `src/JetsonTerminalControl.cs` | Remote terminal interface |
 | `src/EnhancedHealthDashboard.cs` | Health monitoring display |

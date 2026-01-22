@@ -105,6 +105,8 @@
     <!-- Source Files -->
     <Compile Include="DualLinkSender.cs" />
     <Compile Include="JetsonHealthTab.cs" />
+    <Compile Include="MAVLinkConnectionManager.cs" />
+    <Compile Include="LinkHealthPanel.cs" />
     <Compile Include="NOMADConfig.cs" />
     <Compile Include="NOMADControlPanel.cs" />
     <Compile Include="NOMADPlugin.cs" />

@@ -33,12 +33,13 @@ namespace NOMAD.MissionPlanner
     {
         // Plugin metadata
         public override string Name => "NOMAD Control";
-        public override string Version => "2.0.0";
+        public override string Version => "2.1.0";
         public override string Author => "McGill Aerial Design";
 
         // Plugin state
         private NOMADConfig _config;
         private DualLinkSender _sender;
+        private MAVLinkConnectionManager _connectionManager;  // Dual link manager
         private NOMADControlPanel _controlPanelTab;
         private NOMADControlPanel _controlPanelWindow;
         private NOMADFullPage _fullPage;
@@ -69,6 +70,12 @@ namespace NOMAD.MissionPlanner
                 // Initialize dual-link sender
                 _sender = new DualLinkSender(_config);
 
+                // Initialize MAVLink dual link connection manager
+                if (_config.DualLinkEnabled)
+                {
+                    InitializeConnectionManager();
+                }
+
                 // Add menu items to FlightData right-click menu (if available)
                 try
                 {
@@ -85,6 +92,11 @@ namespace NOMAD.MissionPlanner
                         var settingsItem = new ToolStripMenuItem("NOMAD Settings");
                         settingsItem.Click += (s, e) => ShowSettings();
                         Host.FDMenuMap.Items.Add(settingsItem);
+                        
+                        // Add link status menu item
+                        var linkStatusItem = new ToolStripMenuItem("NOMAD Link Status");
+                        linkStatusItem.Click += (s, e) => ShowLinkHealthPanel();
+                        Host.FDMenuMap.Items.Add(linkStatusItem);
                     }
                 }
                 catch (Exception ex)
@@ -135,6 +147,12 @@ namespace NOMAD.MissionPlanner
                         
                         nomadMenu.DropDownItems.Add(new ToolStripSeparator());
                         
+                        // Link Status (Dual Link Failover)
+                        var linkStatusItem = new ToolStripMenuItem("🔗 Link Status (Failover)");
+                        linkStatusItem.ForeColor = _config.DualLinkEnabled ? Color.LimeGreen : Color.Gray;
+                        linkStatusItem.Click += (s, e) => ShowLinkHealthPanel();
+                        nomadMenu.DropDownItems.Add(linkStatusItem);
+                        
                         // HUD Video controls
                         var hudVideoItem = new ToolStripMenuItem("▶ Start HUD Video");
                         hudVideoItem.Click += (s, e) => {
@@ -177,8 +195,10 @@ namespace NOMAD.MissionPlanner
                             $"• Embedded video streaming (HUD & Tab)\n" +
                             $"• Jetson terminal access\n" +
                             $"• Real-time health monitoring\n" +
+                            $"• MAVLink dual link failover\n" +
                             $"• Task 1 (Outdoor) & Task 2 (Indoor) support\n\n" +
                             $"Jetson: {_config.EffectiveIP}:{_config.JetsonPort}\n" +
+                            $"Dual Link: {(_config.DualLinkEnabled ? "Enabled" : "Disabled")}\n" +
                             $"Mode: {(_config.UseELRS ? "ELRS/MAVLink" : "HTTP")}",
                             "About NOMAD"
                         );
@@ -299,6 +319,23 @@ namespace NOMAD.MissionPlanner
 
             _controlPanelTab?.UpdateStatus(connected, lat, lng, alt);
             _controlPanelWindow?.UpdateStatus(connected, lat, lng, alt);
+            
+            // Feed MAVLink heartbeats to connection manager for link monitoring
+            if (_connectionManager != null && MainV2.comPort?.BaseStream?.IsOpen == true)
+            {
+                // Determine which link this heartbeat came from based on connection
+                // By convention: if using Tailscale IP endpoint, it's LTE; otherwise RadioMaster
+                try
+                {
+                    var endpoint = MainV2.comPort.BaseStream.ToString();
+                    var linkType = endpoint?.Contains(_config.TailscaleIP) == true 
+                        ? LinkType.LTE 
+                        : LinkType.RadioMaster;
+                    _connectionManager.ProcessHeartbeat(linkType);
+                }
+                catch { /* ignore monitoring errors */ }
+            }
+            
             return true;
         }
 
@@ -309,6 +346,11 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
+                // Stop connection manager monitoring
+                _connectionManager?.StopMonitoring();
+                _connectionManager?.Dispose();
+                _connectionManager = null;
+                
                 // Remove NOMAD tab from FlightData
                 RemoveNomadFullPageTab();
                 
@@ -1015,5 +1057,113 @@ namespace NOMAD.MissionPlanner
             catch { }
             return 5600; // Default port
         }
+
+        // ============================================================
+        // MAVLink Dual Link Management
+        // ============================================================
+
+        /// <summary>
+        /// Initialize the MAVLink connection manager for dual link failover.
+        /// </summary>
+        private void InitializeConnectionManager()
+        {
+            try
+            {
+                var linkConfig = new MAVLinkConnectionManager.ConnectionConfig
+                {
+                    JetsonTailscaleIP = _config.TailscaleIP,
+                    LtePort = _config.LteMavlinkPort,
+                    RadioMasterPort = _config.RadioMasterPort,
+                    AutoFailoverEnabled = _config.AutoFailoverEnabled,
+                    PreferredLink = _config.PreferredMavlinkLink switch
+                    {
+                        "LTE" => LinkType.LTE,
+                        "RadioMaster" => LinkType.RadioMaster,
+                        _ => LinkType.None
+                    },
+                    AutoReconnectPreferred = _config.AutoReconnectToPreferred,
+                    PreferredLinkReconnectDelaySec = _config.PreferredLinkReconnectDelay,
+                    MonitorIntervalMs = _config.LinkMonitorInterval
+                };
+
+                _connectionManager = new MAVLinkConnectionManager(linkConfig);
+                
+                // Subscribe to failover events for logging/notification
+                _connectionManager.FailoverOccurred += (s, e) =>
+                {
+                    Console.WriteLine($"NOMAD: Link failover {e.FromLink} → {e.ToLink}: {e.Reason}");
+                    
+                    // Inject notification into Mission Planner's message system
+                    try
+                    {
+                        MainV2.comPort?.MAV?.cs?.messages?.Add((DateTime.Now, 
+                            $"NOMAD: Failover to {e.ToLink} - {e.Reason}"));
+                    }
+                    catch { }
+                };
+
+                _connectionManager.ActiveLinkChanged += (s, newLink) =>
+                {
+                    Console.WriteLine($"NOMAD: Active link changed to {newLink}");
+                };
+
+                // Start monitoring
+                _connectionManager.StartMonitoring();
+                Console.WriteLine("NOMAD: Dual link connection manager initialized");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"NOMAD: Failed to initialize connection manager - {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Shows the Link Health Panel in a separate window.
+        /// </summary>
+        private void ShowLinkHealthPanel()
+        {
+            if (Host?.MainForm != null && Host.MainForm.InvokeRequired)
+            {
+                Host.MainForm.BeginInvoke((MethodInvoker)delegate { ShowLinkHealthPanel(); });
+                return;
+            }
+
+            try
+            {
+                if (_connectionManager == null)
+                {
+                    CustomMessageBox.Show(
+                        "Dual link management is not enabled.\n\n" +
+                        "Enable it in NOMAD Settings → Connection → Enable Dual Link.",
+                        "Link Manager Not Available"
+                    );
+                    return;
+                }
+
+                var form = new Form
+                {
+                    Text = "NOMAD MAVLink Link Status",
+                    Size = new Size(550, 650),
+                    StartPosition = FormStartPosition.CenterParent,
+                    BackColor = Color.FromArgb(30, 30, 30),
+                    MinimumSize = new Size(500, 500),
+                };
+
+                var linkPanel = new LinkHealthPanel(_connectionManager, _config);
+                linkPanel.Dock = DockStyle.Fill;
+                form.Controls.Add(linkPanel);
+
+                form.Show(Host.MainForm);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"NOMAD: Failed to show link health panel - {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Get the connection manager instance (for external access).
+        /// </summary>
+        public MAVLinkConnectionManager ConnectionManager => _connectionManager;
     }
 }

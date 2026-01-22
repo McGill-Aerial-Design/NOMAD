@@ -138,6 +138,56 @@ namespace NOMAD.MissionPlanner
         public int HealthPollInterval { get; set; } = 2000;
 
         // ============================================================
+        // MAVLink Dual Link Configuration
+        // ============================================================
+
+        /// <summary>
+        /// Enable MAVLink dual link management (LTE + RadioMaster failover).
+        /// </summary>
+        public bool DualLinkEnabled { get; set; } = true;
+
+        /// <summary>
+        /// RadioMaster UDP port (typically 14550 for RC telemetry).
+        /// </summary>
+        public int RadioMasterPort { get; set; } = 14550;
+
+        /// <summary>
+        /// LTE/Tailscale MAVLink UDP port on Jetson (forwarded from Cube).
+        /// </summary>
+        public int LteMavlinkPort { get; set; } = 14550;
+
+        /// <summary>
+        /// Enable automatic failover between links.
+        /// </summary>
+        public bool AutoFailoverEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Preferred MAVLink link when both are available.
+        /// Options: "LTE", "RadioMaster", "None"
+        /// </summary>
+        public string PreferredMavlinkLink { get; set; } = "LTE";
+
+        /// <summary>
+        /// Auto-reconnect to preferred link when it becomes available.
+        /// </summary>
+        public bool AutoReconnectToPreferred { get; set; } = true;
+
+        /// <summary>
+        /// Delay in seconds before switching back to preferred link.
+        /// </summary>
+        public int PreferredLinkReconnectDelay { get; set; } = 10;
+
+        /// <summary>
+        /// MAVLink heartbeat timeout in seconds before considering link dead.
+        /// </summary>
+        public double MavlinkHeartbeatTimeout { get; set; } = 3.0;
+
+        /// <summary>
+        /// Link monitoring interval in milliseconds.
+        /// </summary>
+        public int LinkMonitorInterval { get; set; } = 500;
+
+        // ============================================================
         // Task 1 Configuration (Outdoor Recon)
         // ============================================================
 

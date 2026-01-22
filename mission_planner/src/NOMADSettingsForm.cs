@@ -29,6 +29,13 @@ namespace NOMAD.MissionPlanner
         private Button _btnOK;
         private Button _btnCancel;
         private Button _btnTest;
+        
+        // Dual Link Settings
+        private CheckBox _chkDualLinkEnabled;
+        private NumericUpDown _numRadioMasterPort;
+        private CheckBox _chkAutoFailover;
+        private ComboBox _cmbPreferredLink;
+        private CheckBox _chkAutoReconnect;
 
         /// <summary>
         /// Gets the configured settings.
@@ -53,16 +60,17 @@ namespace NOMAD.MissionPlanner
         private void InitializeComponents()
         {
             this.Text = "NOMAD Settings";
-            this.Size = new Size(450, 420);
+            this.Size = new Size(500, 580);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
             this.StartPosition = FormStartPosition.CenterParent;
             this.BackColor = Color.FromArgb(45, 45, 48);
             this.ForeColor = Color.White;
+            this.AutoScroll = true;
 
             int yOffset = 20;
-            int labelWidth = 140;  // Increased from 130 for longer labels
+            int labelWidth = 140;
             int inputX = labelWidth + 25;
 
             // Jetson IP
@@ -143,6 +151,113 @@ namespace NOMAD.MissionPlanner
             this.Controls.Add(lblServoHelp);
             lblServoHelp.BringToFront();
             yOffset += 40;
+
+            // ============================================================
+            // MAVLink Dual Link Section
+            // ============================================================
+            var lblDualLinkSection = new Label
+            {
+                Text = "-- MAVLink Dual Link (Failover) --",
+                Location = new Point(20, yOffset),
+                AutoSize = true,
+                ForeColor = Color.FromArgb(0, 200, 150),
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                BackColor = Color.Transparent
+            };
+            this.Controls.Add(lblDualLinkSection);
+            lblDualLinkSection.BringToFront();
+            yOffset += 25;
+
+            // Enable Dual Link
+            _chkDualLinkEnabled = new CheckBox
+            {
+                Text = "Enable Dual Link Management",
+                Location = new Point(20, yOffset),
+                AutoSize = true,
+                ForeColor = Color.LimeGreen
+            };
+            _chkDualLinkEnabled.CheckedChanged += (s, e) => UpdateDualLinkControlsState();
+            this.Controls.Add(_chkDualLinkEnabled);
+            yOffset += 28;
+
+            // RadioMaster Port
+            AddLabel("RadioMaster Port:", 40, yOffset);
+            _numRadioMasterPort = new NumericUpDown
+            {
+                Location = new Point(inputX + 20, yOffset - 3),
+                Size = new Size(80, 23),
+                Minimum = 1,
+                Maximum = 65535,
+                Value = 14550,
+                BackColor = Color.FromArgb(30, 30, 30),
+                ForeColor = Color.White
+            };
+            this.Controls.Add(_numRadioMasterPort);
+            
+            var lblRadioHelp = new Label
+            {
+                Text = "(typically 14550)",
+                Location = new Point(inputX + 110, yOffset),
+                AutoSize = true,
+                ForeColor = Color.Gray,
+                Font = new Font("Segoe UI", 8),
+                BackColor = Color.Transparent
+            };
+            this.Controls.Add(lblRadioHelp);
+            lblRadioHelp.BringToFront();
+            yOffset += 28;
+
+            // Auto Failover
+            _chkAutoFailover = new CheckBox
+            {
+                Text = "Enable Automatic Failover",
+                Location = new Point(40, yOffset),
+                AutoSize = true,
+                ForeColor = Color.White
+            };
+            this.Controls.Add(_chkAutoFailover);
+            yOffset += 28;
+
+            // Preferred Link
+            AddLabel("Preferred Link:", 40, yOffset);
+            _cmbPreferredLink = new ComboBox
+            {
+                Location = new Point(inputX + 20, yOffset - 3),
+                Size = new Size(130, 23),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                BackColor = Color.FromArgb(30, 30, 30),
+                ForeColor = Color.White
+            };
+            _cmbPreferredLink.Items.AddRange(new object[] { "LTE (Tailscale)", "RadioMaster", "None" });
+            this.Controls.Add(_cmbPreferredLink);
+            yOffset += 28;
+
+            // Auto-reconnect to preferred
+            _chkAutoReconnect = new CheckBox
+            {
+                Text = "Auto-reconnect to preferred link",
+                Location = new Point(40, yOffset),
+                AutoSize = true,
+                ForeColor = Color.White
+            };
+            this.Controls.Add(_chkAutoReconnect);
+            yOffset += 35;
+
+            // ============================================================
+            // Communication Section
+            // ============================================================
+            var lblCommSection = new Label
+            {
+                Text = "-- Communication --",
+                Location = new Point(20, yOffset),
+                AutoSize = true,
+                ForeColor = Color.FromArgb(100, 150, 255),
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                BackColor = Color.Transparent
+            };
+            this.Controls.Add(lblCommSection);
+            lblCommSection.BringToFront();
+            yOffset += 25;
 
             // Use ELRS
             _chkUseELRS = new CheckBox
@@ -250,6 +365,20 @@ namespace NOMAD.MissionPlanner
             _chkUseELRS.Checked = Config.UseELRS;
             _numTimeout.Value = Config.HttpTimeoutSeconds;
             _chkDebug.Checked = Config.DebugMode;
+            
+            // Dual Link settings
+            _chkDualLinkEnabled.Checked = Config.DualLinkEnabled;
+            _numRadioMasterPort.Value = Config.RadioMasterPort;
+            _chkAutoFailover.Checked = Config.AutoFailoverEnabled;
+            _cmbPreferredLink.SelectedIndex = Config.PreferredMavlinkLink switch
+            {
+                "LTE" => 0,
+                "RadioMaster" => 1,
+                _ => 2
+            };
+            _chkAutoReconnect.Checked = Config.AutoReconnectToPreferred;
+            
+            UpdateDualLinkControlsState();
         }
 
         private void SaveSettings()
@@ -261,6 +390,27 @@ namespace NOMAD.MissionPlanner
             Config.UseELRS = _chkUseELRS.Checked;
             Config.HttpTimeoutSeconds = (int)_numTimeout.Value;
             Config.DebugMode = _chkDebug.Checked;
+            
+            // Dual Link settings
+            Config.DualLinkEnabled = _chkDualLinkEnabled.Checked;
+            Config.RadioMasterPort = (int)_numRadioMasterPort.Value;
+            Config.AutoFailoverEnabled = _chkAutoFailover.Checked;
+            Config.PreferredMavlinkLink = _cmbPreferredLink.SelectedIndex switch
+            {
+                0 => "LTE",
+                1 => "RadioMaster",
+                _ => "None"
+            };
+            Config.AutoReconnectToPreferred = _chkAutoReconnect.Checked;
+        }
+        
+        private void UpdateDualLinkControlsState()
+        {
+            bool enabled = _chkDualLinkEnabled.Checked;
+            _numRadioMasterPort.Enabled = enabled;
+            _chkAutoFailover.Enabled = enabled;
+            _cmbPreferredLink.Enabled = enabled;
+            _chkAutoReconnect.Enabled = enabled;
         }
 
         // ============================================================
