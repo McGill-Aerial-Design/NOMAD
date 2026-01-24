@@ -6,49 +6,68 @@ This C# plugin integrates directly with Mission Planner to provide full control 
 
 ## Features
 
-### NEW Full-Screen Sidebar Interface (v3.0)
+### Full-Screen Sidebar Interface (v3.1)
 The primary interface features a modern sidebar navigation design:
 - **Dashboard**: Quick overview of all critical systems at a glance
 - **Task 1: Recon**: GPS-based outdoor reconnaissance with snapshot capture
 - **Task 2: Extinguish**: VIO-based indoor navigation with target tracking
-- **Video Feed**: Embedded RTSP streaming
+- **Video Feed**: Embedded RTSP streaming with WASD controls
 - **Terminal**: Remote command execution on Jetson
 - **System Health**: Real-time Jetson monitoring (CPU/GPU temps, memory, network)
 - **Link Status**: Dual-link failover monitoring
 - **Settings**: Plugin configuration
 
+### Pop-Out Window Support
+- The NOMAD main screen can be popped out into a separate window
+- Ideal for multi-monitor setups
+- Access via **NOMAD -> Pop Out NOMAD Window** menu
+
 ### MAVLink Dual Link Failover
 - **Primary Link**: LTE/Tailscale via Jetson mavlink-router
-- **Secondary Link**: RadioMaster transmitter (UDP 14550)
+- **Secondary Link**: RadioMaster transmitter (UDP 14550 or COM port)
 - **Automatic Failover**: Switches links on connection loss
 - **Health Monitoring**: Real-time latency and packet loss tracking
 - **Manual Override**: Switch links manually via Link Status panel
 - **Auto-Reconnect**: Returns to preferred link when available
 
+### RadioMaster Connection Options
+- **UDP Mode**: Listens on port 14550 for MAVLink packets
+- **COM Port Mode**: Direct serial connection to RadioMaster receiver
+  - Windows: COM3, COM4, etc.
+  - Linux: /dev/ttyUSB0, /dev/ttyACM0, etc.
+- Automatic detection and switching between modes
+
+### Enhanced WASD Nudge Controls
+The Video view includes comprehensive manual drone control:
+- **Movement (WASD)**: Forward, Back, Left, Right
+- **Altitude (Up/Down Arrows)**: Climb/Descend
+- **Yaw (Left/Right Arrows)**: Rotate left/right
+- **Visual Feedback**: Real-time key press visualization
+- **Mouse-Based Activation**: Hover over the keyboard panel to enable
+- **Payload Controls**: Drop mechanisms and water pump control
+
 ### Core Functionality
 - **Task 1 (Recon)**: Capture snapshot and calculate target position relative to landmarks
 - **Task 2 (Extinguish)**: Manage exclusion map and target hit registration
-- **Embedded Video**: Built-in RTSP player with low-latency streaming
-- **Indoor Nudge**: WASD keyboard controls for manual indoor positioning
+- **Embedded Video**: Built-in RTSP player with low-latency streaming (LibVLC)
 - **Telemetry Display**: Real-time position and connection status
-- **Dual-Link Communication**: HTTP API or MAVLink via ELRS for redundancy
+- **Dual-Link Communication**: HTTP API over Tailscale or MAVLink via ELRS for redundancy
 
 ## Files
 
 | File | Description |
 |------|-------------|
 | `src/NOMADPlugin.cs` | Main plugin class (implements `MissionPlanner.Plugin.Plugin`) |
-| `src/NOMADMainScreen.cs` | **Full-page sidebar interface** |
+| `src/NOMADMainScreen.cs` | **Full-page sidebar interface with pop-out support** |
 | `src/NOMADDashboardView.cs` | **Dashboard overview panel** |
-| `src/NOMADViews.cs` | **Individual view implementations** |
-| `src/NOMADControlPanel.cs` | Quick access popup panel |
+| `src/NOMADViews.cs` | **Individual view implementations (includes WASD controls)** |
 | `src/DualLinkSender.cs` | HTTP and MAVLink communication handler |
-| `src/MAVLinkConnectionManager.cs` | Dual link failover manager |
+| `src/MAVLinkConnectionManager.cs` | Dual link failover manager (UDP + COM port) |
 | `src/LinkHealthPanel.cs` | Link health monitoring UI |
 | `src/EmbeddedVideoPlayer.cs` | Built-in RTSP video player |
 | `src/JetsonTerminalControl.cs` | Remote terminal interface |
 | `src/EnhancedHealthDashboard.cs` | Health monitoring display |
-| `src/WASDNudgeControl.cs` | WASD keyboard control handler |
+| `src/EnhancedWASDControl.cs` | **Full keyboard control with visual feedback** |
 | `src/NOMADConfig.cs` | Configuration persistence |
 | `src/NOMADSettingsForm.cs` | Settings dialog |
 | `src/NOMADPlugin.csproj` | Project file |
@@ -151,14 +170,14 @@ Example:
 
 ### Opening the Control Interface
 
-**Method 1: Menu Bar**
-- Click **NOMAD → Open Full Control Page**
+**Method 1: Menu Bar (Pop-Out Window)**
+- Click **NOMAD -> Pop Out NOMAD Window**
+- Opens the full NOMAD interface in a separate, movable window
+- Ideal for multi-monitor setups
 
-**Method 2: Quick Panel**
-- Click **NOMAD → Open Control Panel** (smaller popup)
-
-**Method 3: FlightData Context**
-- NOMAD tab may appear in FlightData actions panel
+**Method 2: FlightData Tab**
+- NOMAD tab appears in FlightData actions panel
+- Provides the same interface integrated into Mission Planner
 
 ### Dashboard Tab
 
@@ -166,6 +185,7 @@ The dashboard provides:
 - Connection status indicator (green = connected)
 - Quick action buttons for common operations
 - System status cards showing VIO and GPS state
+- Video preview (loads automatically when Jetson is online)
 - Activity log with recent events
 
 ### Task 1: Outdoor Recon
@@ -173,28 +193,40 @@ The dashboard provides:
 1. Ensure GPS fix is acquired
 2. Navigate the drone to view a target
 3. Go to **Task 1** tab
-4. Click **📸 CAPTURE SNAPSHOT**
+4. Click **CAPTURE SNAPSHOT**
 5. Position and image are logged
 
 ### Task 2: Indoor Extinguish
 
 1. Go to **Task 2** tab
 2. Click **Reset VIO Origin** at your start position
-3. Use WASD controls for precise positioning:
-   - **W/S**: Forward/Backward
-   - **A/D**: Left/Right
-   - **Q/E**: Rotate
-   - **R/F**: Up/Down
+3. Use the Enhanced WASD controls (in Video tab) for precise positioning
 4. Click **Reset Exclusion Map** to clear engaged targets
 
-### Video Tab
+### Video Tab with WASD Controls
 
-The embedded video player supports:
+The Video tab combines streaming with drone control:
+
+**Video Features:**
 - **Play/Stop**: Start and stop video streams
 - **Snapshot**: Capture current frame
 - **Fullscreen**: Expand video to full window
-- **Latency Control**: Adjust network caching (lower = less delay)
-- **External Player**: Fall back to VLC if needed
+
+**WASD Nudge Controls:**
+1. Hover mouse over the keyboard visual panel
+2. Enable via the toggle switch
+3. Use keys:
+   - **W/S**: Forward/Backward
+   - **A/D**: Left/Right strafe
+   - **Up/Down Arrows**: Climb/Descend altitude
+   - **Left/Right Arrows**: Yaw rotation
+4. Keys automatically release when mouse leaves the panel
+5. Visual feedback shows which keys are pressed
+
+**Payload Controls:**
+- **Drop Payload 1/2**: Trigger linear actuators
+- **Shoot Water**: Activate water pump
+- **Nozzle Angle**: Servo position slider (0-180 degrees)
 
 ### Terminal Tab
 
@@ -216,63 +248,85 @@ Real-time monitoring:
 
 ### Settings
 
-1. Click **NOMAD → Settings** in the menu
-2. Configure connection settings, video preferences
-3. Click **Test Connection** to verify
-4. Click **OK** to save
+1. Click **NOMAD -> Settings** in the menu
+2. Configure connection settings:
+   - Jetson IP/Port
+   - Tailscale IP (if using Tailscale VPN)
+   - RTSP URLs for video streams
+3. Configure RadioMaster connection:
+   - **UDP Mode**: Default port 14550
+   - **COM Port Mode**: Select serial port and baud rate
+4. Click **Test Connection** to verify
+5. Click **OK** to save
 
+### RadioMaster ELRS Connection
 
-### Task 2: Extinguish
+The plugin supports two connection modes for RadioMaster ELRS:
 
-1. Click **Reset Exclusion Map** at the start of a new run
-2. Manually register hits with X, Y, Z coordinates and **Hit** button
+**UDP Mode (Default):**
+- RadioMaster transmitter outputs MAVLink over USB
+- Mission Planner listens on UDP port 14550
+- Works when RadioMaster is in WiFi bridge mode
 
-### Video Streaming
+**COM Port Mode:**
+- Direct serial connection to RadioMaster receiver
+- Select the appropriate COM port (Windows) or /dev/ttyUSB* (Linux)
+- Baud rate typically 420000 for ELRS or 115200 for standard
+- Better for direct connections without network stack overhead
 
-1. Select video player: VLC (recommended), FFplay, or System Default
-2. Click **Open Primary** for ZED/Navigation view
-3. Click **Open Secondary** for Gimbal/Targeting view
+## Linux Support
 
-### Indoor Nudge
+The plugin runs on Linux via Mono with Mission Planner:
 
-1. Check **Enable Indoor Nudge (WASD)**
-2. Use W/A/S/D for forward/left/back/right movement
-3. Adjust nudge speed (default 0.5 m/s)
+| Feature | Windows | Linux |
+|---------|---------|-------|
+| Core UI (WinForms) | Full | Full (Mono) |
+| HTTP API calls | Full | Full |
+| SSH Terminal | Full | Full |
+| MAVLink protocol | Full | Full |
+| WASD Nudge Control | Full Win32 API | Event-based (works) |
+| LibVLC Video | Bundled | System libvlc |
+| Serial Ports | COM1, COM2... | /dev/ttyUSB0... |
+
+**Linux Installation:**
+1. Install Mission Planner via Mono
+2. Install `libvlc-dev` package for video support
+3. Configure serial port paths in settings
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Mission Planner                      │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │              NOMAD Plugin                        │   │
-│  │  ┌─────────┐ ┌─────────┐ ┌────────────────────┐ │   │
-│  │  │ Task 1  │ │ Task 2  │ │   Video Streams    │ │   │
-│  │  │ Capture │ │  Map    │ │  (VLC/FFplay)      │ │   │
-│  │  └────┬────┘ └────┬────┘ └─────────┬──────────┘ │   │
-│  │       │           │                │            │   │
-│  │       ▼           ▼                ▼            │   │
-│  │  ┌──────────────────────────────────────────┐   │   │
-│  │  │           DualLinkSender                 │   │   │
-│  │  │  HTTP API ──────────┐  MAVLink/ELRS     │   │   │
-│  │  └──────────────────────┼───────────────────┘   │   │
-│  └──────────────────────────┼──────────────────────┘   │
-└──────────────────────────────┼─────────────────────────┘
-                               │
-         ┌─────────────────────┼─────────────────────┐
-         │                     ▼                     │
-         │  ┌──────────────────────────────────┐     │
-         │  │        Jetson Orin Nano          │     │
-         │  │  ┌─────────────────────────────┐ │     │
-         │  │  │    NOMAD Edge Core API      │ │     │
-         │  │  │    (FastAPI on port 8000)   │ │     │
-         │  │  └─────────────────────────────┘ │     │
-         │  │  ┌─────────────────────────────┐ │     │
-         │  │  │   MediaMTX RTSP Server      │ │     │
-         │  │  │   (port 8554: /live /gimbal)│ │     │
-         │  │  └─────────────────────────────┘ │     │
-         │  └──────────────────────────────────┘     │
-         └───────────────────────────────────────────┘
++----------------------------------------------------------+
+|                    Mission Planner                        |
+|  +----------------------------------------------------+  |
+|  |              NOMAD Plugin                          |  |
+|  |  +---------+ +---------+ +---------------------+   |  |
+|  |  | Task 1  | | Task 2  | |   Video + WASD      |   |  |
+|  |  | Capture | |  Map    | |   (LibVLC + Keys)   |   |  |
+|  |  +----+----+ +----+----+ +----------+----------+   |  |
+|  |       |           |                 |              |  |
+|  |       v           v                 v              |  |
+|  |  +---------------------------------------------+   |  |
+|  |  |           DualLinkSender                    |   |  |
+|  |  |  HTTP (Tailscale) -or- MAVLink (ELRS)       |   |  |
+|  |  +------------------+--------------------------|   |  |
+|  +---------------------|---------------------------+  |
++------------------------|-----------------------------+
+                         |
+    +--------------------|----------------------+
+    |                    v                      |
+    |  +------------------------------------+   |
+    |  |        Jetson Orin Nano            |   |
+    |  |  +------------------------------+  |   |
+    |  |  |    NOMAD Edge Core API       |  |   |
+    |  |  |    (FastAPI on port 8000)    |  |   |
+    |  |  +------------------------------+  |   |
+    |  |  +------------------------------+  |   |
+    |  |  |   MediaMTX RTSP Server       |  |   |
+    |  |  |   (port 8554: /live)         |  |   |
+    |  |  +------------------------------+  |   |
+    |  +------------------------------------+   |
+    +------------------------------------------+
 ```
 
 ## MAVLink Commands (ELRS Mode)
@@ -283,10 +337,29 @@ Real-time monitoring:
 | 31011 | `CMD_NOMAD_TASK2_RESET` | (none) |
 | 31012 | `CMD_NOMAD_TASK2_HIT` | p1: x, p2: y, p3: z |
 
+### WASD Nudge MAVLink Messages
+
+The WASD controls send the following MAVLink messages:
+
+| Action | Message Type | Notes |
+|--------|-------------|-------|
+| Forward/Back | `SET_POSITION_TARGET_LOCAL_NED` | Velocity in body frame |
+| Left/Right | `SET_POSITION_TARGET_LOCAL_NED` | Strafe velocity |
+| Climb/Descend | `SET_POSITION_TARGET_LOCAL_NED` | Vertical velocity |
+| Yaw Left/Right | `SET_POSITION_TARGET_LOCAL_NED` | Yaw rate |
+
+**Requirements:**
+- Drone must be in GUIDED mode
+- MAVLink connection must be active
+- Speed adjustable via slider (0.1 - 2.0 m/s)
+
 ## Troubleshooting
 
 - **Plugin Not Loading**: Check DLL is in correct plugins folder
-- **Connection Failed**: Verify Jetson IP/port, check firewall
-- **Video Not Playing**: Ensure VLC is installed and in PATH
-- **Nudge Not Working**: Check ELRS connection, drone must be in GUIDED mode
+- **Connection Failed**: Verify Jetson IP/port, check Tailscale is connected
+- **Video Not Playing**: Ensure LibVLC DLLs are in plugin folder
+- **Nudge Not Working**: Check drone is in GUIDED mode, verify MAVLink connection
+- **COM Port Not Found**: Check RadioMaster connection type in settings
+- **Dashboard Button Hidden**: Ensure plugin is updated to v3.1+
+- **Keys Stuck**: Move mouse outside the keyboard panel to release all keys
 
