@@ -155,8 +155,13 @@ namespace NOMAD.MissionPlanner
             /// <summary>Local port for RadioMaster (typically 14550) - used for UDP connection</summary>
             public int RadioMasterPort { get; set; } = RADIOMASTER_PORT;
 
-            /// <summary>COM port for RadioMaster (e.g., "COM3") - used for serial connection</summary>
-            public string RadioMasterComPort { get; set; } = "COM3";
+            /// <summary>
+            /// Serial port for RadioMaster - used for COM/serial connection.
+            /// Windows examples: "COM3", "COM4"
+            /// Linux examples: "/dev/ttyUSB0", "/dev/ttyACM0"
+            /// </summary>
+            public string RadioMasterComPort { get; set; } = 
+                Environment.OSVersion.Platform == PlatformID.Win32NT ? "COM3" : "/dev/ttyUSB0";
 
             /// <summary>Baud rate for RadioMaster COM port (ELRS typically 420000 or 115200)</summary>
             public int RadioMasterBaudRate { get; set; } = 420000;

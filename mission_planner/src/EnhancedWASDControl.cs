@@ -795,12 +795,15 @@ namespace NOMAD.MissionPlanner
         }
         
         // ============================================================
-        // Keyboard Event Handling - Event-based with Windows API backup
+        // Keyboard Event Handling - Event-based with platform-specific backup
         // ============================================================
         
-        // Windows API for checking key state directly
+        // Windows API for checking key state directly (only works on Windows)
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         private static extern short GetAsyncKeyState(int vKey);
+        
+        // Platform detection
+        private static readonly bool _isWindows = Environment.OSVersion.Platform == PlatformID.Win32NT;
         
         // Virtual key codes
         private const int VK_W = 0x57;
@@ -813,9 +816,28 @@ namespace NOMAD.MissionPlanner
         private const int VK_RIGHT = 0x27;
         
         /// <summary>
+        /// Check if a key is currently pressed using Windows API.
+        /// Returns false on Linux (rely on event-based key tracking instead).
+        /// </summary>
+        private bool IsKeyPressed(int vKey)
+        {
+            if (!_isWindows) return true;  // On Linux, trust the event-based state
+            
+            try
+            {
+                return (GetAsyncKeyState(vKey) & 0x8000) != 0;
+            }
+            catch
+            {
+                return true;  // If API fails, trust event-based state
+            }
+        }
+        
+        /// <summary>
         /// Safety check using Windows API - ensures keys are actually released.
         /// Called periodically to catch any missed key releases.
         /// Also checks if mouse has left the control area.
+        /// On Linux, this only handles mouse-leave checks since Win API is unavailable.
         /// </summary>
         private void CheckKeyReleases()
         {
@@ -833,17 +855,20 @@ namespace NOMAD.MissionPlanner
                 return;
             }
             
-            // Check if keys that we think are pressed are actually still pressed
+            // On non-Windows platforms, skip Win32 API checks (rely on event-based tracking)
+            if (!_isWindows) return;
+            
+            // Check if keys that we think are pressed are actually still pressed (Windows only)
             bool stateChanged = false;
             
-            if (_keyW && (GetAsyncKeyState(VK_W) & 0x8000) == 0) { _keyW = false; stateChanged = true; }
-            if (_keyA && (GetAsyncKeyState(VK_A) & 0x8000) == 0) { _keyA = false; stateChanged = true; }
-            if (_keyS && (GetAsyncKeyState(VK_S) & 0x8000) == 0) { _keyS = false; stateChanged = true; }
-            if (_keyD && (GetAsyncKeyState(VK_D) & 0x8000) == 0) { _keyD = false; stateChanged = true; }
-            if (_keyUp && (GetAsyncKeyState(VK_UP) & 0x8000) == 0) { _keyUp = false; stateChanged = true; }
-            if (_keyDown && (GetAsyncKeyState(VK_DOWN) & 0x8000) == 0) { _keyDown = false; stateChanged = true; }
-            if (_keyLeft && (GetAsyncKeyState(VK_LEFT) & 0x8000) == 0) { _keyLeft = false; stateChanged = true; }
-            if (_keyRight && (GetAsyncKeyState(VK_RIGHT) & 0x8000) == 0) { _keyRight = false; stateChanged = true; }
+            if (_keyW && !IsKeyPressed(VK_W)) { _keyW = false; stateChanged = true; }
+            if (_keyA && !IsKeyPressed(VK_A)) { _keyA = false; stateChanged = true; }
+            if (_keyS && !IsKeyPressed(VK_S)) { _keyS = false; stateChanged = true; }
+            if (_keyD && !IsKeyPressed(VK_D)) { _keyD = false; stateChanged = true; }
+            if (_keyUp && !IsKeyPressed(VK_UP)) { _keyUp = false; stateChanged = true; }
+            if (_keyDown && !IsKeyPressed(VK_DOWN)) { _keyDown = false; stateChanged = true; }
+            if (_keyLeft && !IsKeyPressed(VK_LEFT)) { _keyLeft = false; stateChanged = true; }
+            if (_keyRight && !IsKeyPressed(VK_RIGHT)) { _keyRight = false; stateChanged = true; }
             
             if (stateChanged)
             {
