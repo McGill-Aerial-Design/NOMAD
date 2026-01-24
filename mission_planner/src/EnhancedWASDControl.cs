@@ -333,10 +333,10 @@ namespace NOMAD.MissionPlanner
             };
             section.Controls.Add(title);
             
-            int keySize = 45;
-            int spacing = 8;  // Increased spacing between keys
-            int startX = 45;
-            int startY = 35;
+            int keySize = 48;  // Square keys
+            int spacing = 6;   // Consistent spacing
+            int startX = 40;
+            int startY = 30;
             
             // W key (top center)
             _keyW_Panel = CreateKeyPanel("W", "FWD", startX + keySize + spacing, startY);
@@ -375,10 +375,10 @@ namespace NOMAD.MissionPlanner
             };
             section.Controls.Add(title);
             
-            int keySize = 45;
-            int spacing = 8;  // Increased spacing between keys
-            int startX = 45;
-            int startY = 35;
+            int keySize = 48;  // Square keys
+            int spacing = 6;   // Consistent spacing
+            int startX = 40;
+            int startY = 30;
             
             // Up arrow (altitude up) - centered above down
             _keyUp_Panel = CreateKeyPanel("[^]", "ALT+", startX + keySize + spacing, startY);
@@ -401,10 +401,12 @@ namespace NOMAD.MissionPlanner
         
         private Panel CreateKeyPanel(string keyText, string actionText, int x, int y)
         {
+            int keySize = 48;  // Square key size
+            
             var panel = new Panel
             {
                 Location = new Point(x, y),
-                Size = new Size(45, 50),
+                Size = new Size(keySize, keySize),  // Square buttons
                 BackColor = KEY_INACTIVE,
             };
             
@@ -422,10 +424,10 @@ namespace NOMAD.MissionPlanner
             var keyLabel = new Label
             {
                 Text = keyText,
-                Font = new Font("Segoe UI", 12, FontStyle.Bold),
+                Font = new Font("Segoe UI", 11, FontStyle.Bold),
                 ForeColor = TEXT_PRIMARY,
-                Location = new Point(0, 5),
-                Size = new Size(45, 22),
+                Location = new Point(0, 4),
+                Size = new Size(keySize, 20),
                 TextAlign = ContentAlignment.MiddleCenter,
                 BackColor = Color.Transparent,
             };
@@ -436,8 +438,8 @@ namespace NOMAD.MissionPlanner
                 Text = actionText,
                 Font = new Font("Segoe UI", 7),
                 ForeColor = TEXT_SECONDARY,
-                Location = new Point(0, 28),
-                Size = new Size(45, 18),
+                Location = new Point(0, 26),
+                Size = new Size(keySize, 16),
                 TextAlign = ContentAlignment.MiddleCenter,
                 BackColor = Color.Transparent,
             };

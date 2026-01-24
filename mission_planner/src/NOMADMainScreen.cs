@@ -207,8 +207,6 @@ namespace NOMAD.MissionPlanner
             };
             logoPanel.Controls.Add(subtitleLabel);
             
-            _sidebarPanel.Controls.Add(logoPanel);
-            
             // Navigation buttons using FlowLayoutPanel for automatic positioning
             var navPanel = new FlowLayoutPanel
             {
@@ -269,7 +267,11 @@ namespace NOMAD.MissionPlanner
             _btnSettings.Click += (s, e) => ShowView("Settings");
             navPanel.Controls.Add(_btnSettings);
             
+            // IMPORTANT: In Windows Forms, docking order is reverse of Z-order
+            // Add navPanel FIRST (will be at back, fills remaining space)
+            // Add logoPanel SECOND (will be in front, docked at top)
             _sidebarPanel.Controls.Add(navPanel);
+            _sidebarPanel.Controls.Add(logoPanel);
             
             this.Controls.Add(_sidebarPanel);
         }
