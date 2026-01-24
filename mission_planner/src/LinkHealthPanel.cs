@@ -147,7 +147,7 @@ namespace NOMAD.MissionPlanner
 
             var title = new Label
             {
-                Text = "🔗 MAVLink Dual Link Status",
+                Text = "MAVLink Dual Link Status",
                 Font = new Font("Segoe UI", 14, FontStyle.Bold),
                 ForeColor = _accentColor,
                 Location = new Point(15, 8),

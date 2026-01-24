@@ -6,6 +6,7 @@
 
 using System;
 using System.Drawing;
+using System.IO.Ports;
 using System.Windows.Forms;
 
 namespace NOMAD.MissionPlanner
@@ -32,7 +33,10 @@ namespace NOMAD.MissionPlanner
         
         // Dual Link Settings
         private CheckBox _chkDualLinkEnabled;
+        private ComboBox _cmbRadioMasterConnType;
         private NumericUpDown _numRadioMasterPort;
+        private ComboBox _cmbRadioMasterComPort;
+        private ComboBox _cmbRadioMasterBaudRate;
         private CheckBox _chkAutoFailover;
         private ComboBox _cmbPreferredLink;
         private CheckBox _chkAutoReconnect;
@@ -180,8 +184,23 @@ namespace NOMAD.MissionPlanner
             this.Controls.Add(_chkDualLinkEnabled);
             yOffset += 28;
 
-            // RadioMaster Port
-            AddLabel("RadioMaster Port:", 40, yOffset);
+            // RadioMaster Connection Type
+            AddLabel("RadioMaster Type:", 40, yOffset);
+            _cmbRadioMasterConnType = new ComboBox
+            {
+                Location = new Point(inputX + 20, yOffset - 3),
+                Size = new Size(80, 23),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                BackColor = Color.FromArgb(30, 30, 30),
+                ForeColor = Color.White
+            };
+            _cmbRadioMasterConnType.Items.AddRange(new object[] { "UDP", "COM" });
+            _cmbRadioMasterConnType.SelectedIndexChanged += (s, e) => UpdateRadioMasterConnTypeState();
+            this.Controls.Add(_cmbRadioMasterConnType);
+            yOffset += 28;
+
+            // RadioMaster Port (UDP)
+            AddLabel("UDP Port:", 40, yOffset);
             _numRadioMasterPort = new NumericUpDown
             {
                 Location = new Point(inputX + 20, yOffset - 3),
@@ -205,6 +224,39 @@ namespace NOMAD.MissionPlanner
             };
             this.Controls.Add(lblRadioHelp);
             lblRadioHelp.BringToFront();
+            yOffset += 28;
+
+            // RadioMaster COM Port
+            AddLabel("COM Port:", 40, yOffset);
+            _cmbRadioMasterComPort = new ComboBox
+            {
+                Location = new Point(inputX + 20, yOffset - 3),
+                Size = new Size(80, 23),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                BackColor = Color.FromArgb(30, 30, 30),
+                ForeColor = Color.White
+            };
+            // Populate with available COM ports
+            foreach (string port in System.IO.Ports.SerialPort.GetPortNames())
+            {
+                _cmbRadioMasterComPort.Items.Add(port);
+            }
+            if (_cmbRadioMasterComPort.Items.Count > 0)
+                _cmbRadioMasterComPort.SelectedIndex = 0;
+            this.Controls.Add(_cmbRadioMasterComPort);
+            
+            // Baud Rate
+            _cmbRadioMasterBaudRate = new ComboBox
+            {
+                Location = new Point(inputX + 110, yOffset - 3),
+                Size = new Size(90, 23),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                BackColor = Color.FromArgb(30, 30, 30),
+                ForeColor = Color.White
+            };
+            _cmbRadioMasterBaudRate.Items.AddRange(new object[] { "115200", "420000", "460800", "921600" });
+            _cmbRadioMasterBaudRate.SelectedIndex = 1; // Default 420000
+            this.Controls.Add(_cmbRadioMasterBaudRate);
             yOffset += 28;
 
             // Auto Failover
@@ -368,7 +420,23 @@ namespace NOMAD.MissionPlanner
             
             // Dual Link settings
             _chkDualLinkEnabled.Checked = Config.DualLinkEnabled;
+            _cmbRadioMasterConnType.SelectedIndex = Config.RadioMasterConnectionType == "COM" ? 1 : 0;
             _numRadioMasterPort.Value = Config.RadioMasterPort;
+            
+            // Set COM port
+            var comPortIndex = _cmbRadioMasterComPort.Items.IndexOf(Config.RadioMasterComPort);
+            if (comPortIndex >= 0)
+                _cmbRadioMasterComPort.SelectedIndex = comPortIndex;
+            else if (_cmbRadioMasterComPort.Items.Count > 0)
+                _cmbRadioMasterComPort.SelectedIndex = 0;
+            
+            // Set baud rate
+            var baudRateIndex = _cmbRadioMasterBaudRate.Items.IndexOf(Config.RadioMasterBaudRate.ToString());
+            if (baudRateIndex >= 0)
+                _cmbRadioMasterBaudRate.SelectedIndex = baudRateIndex;
+            else
+                _cmbRadioMasterBaudRate.SelectedIndex = 1; // Default 420000
+            
             _chkAutoFailover.Checked = Config.AutoFailoverEnabled;
             _cmbPreferredLink.SelectedIndex = Config.PreferredMavlinkLink switch
             {
@@ -379,6 +447,7 @@ namespace NOMAD.MissionPlanner
             _chkAutoReconnect.Checked = Config.AutoReconnectToPreferred;
             
             UpdateDualLinkControlsState();
+            UpdateRadioMasterConnTypeState();
         }
 
         private void SaveSettings()
@@ -393,7 +462,10 @@ namespace NOMAD.MissionPlanner
             
             // Dual Link settings
             Config.DualLinkEnabled = _chkDualLinkEnabled.Checked;
+            Config.RadioMasterConnectionType = _cmbRadioMasterConnType.SelectedIndex == 1 ? "COM" : "UDP";
             Config.RadioMasterPort = (int)_numRadioMasterPort.Value;
+            Config.RadioMasterComPort = _cmbRadioMasterComPort.SelectedItem?.ToString() ?? "COM3";
+            Config.RadioMasterBaudRate = int.TryParse(_cmbRadioMasterBaudRate.SelectedItem?.ToString(), out int baud) ? baud : 420000;
             Config.AutoFailoverEnabled = _chkAutoFailover.Checked;
             Config.PreferredMavlinkLink = _cmbPreferredLink.SelectedIndex switch
             {
@@ -407,10 +479,26 @@ namespace NOMAD.MissionPlanner
         private void UpdateDualLinkControlsState()
         {
             bool enabled = _chkDualLinkEnabled.Checked;
+            _cmbRadioMasterConnType.Enabled = enabled;
             _numRadioMasterPort.Enabled = enabled;
+            _cmbRadioMasterComPort.Enabled = enabled;
+            _cmbRadioMasterBaudRate.Enabled = enabled;
             _chkAutoFailover.Enabled = enabled;
             _cmbPreferredLink.Enabled = enabled;
             _chkAutoReconnect.Enabled = enabled;
+            
+            if (enabled)
+            {
+                UpdateRadioMasterConnTypeState();
+            }
+        }
+        
+        private void UpdateRadioMasterConnTypeState()
+        {
+            bool isUDP = _cmbRadioMasterConnType.SelectedIndex == 0;
+            _numRadioMasterPort.Visible = isUDP;
+            _cmbRadioMasterComPort.Visible = !isUDP;
+            _cmbRadioMasterBaudRate.Visible = !isUDP;
         }
 
         // ============================================================

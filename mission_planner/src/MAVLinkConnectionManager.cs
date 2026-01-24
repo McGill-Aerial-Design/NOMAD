@@ -149,8 +149,17 @@ namespace NOMAD.MissionPlanner
             /// <summary>UDP port for LTE link on Jetson</summary>
             public int LtePort { get; set; } = LTE_PORT;
 
-            /// <summary>Local port for RadioMaster (typically 14550)</summary>
+            /// <summary>RadioMaster connection type: "UDP" or "COM"</summary>
+            public string RadioMasterConnectionType { get; set; } = "UDP";
+
+            /// <summary>Local port for RadioMaster (typically 14550) - used for UDP connection</summary>
             public int RadioMasterPort { get; set; } = RADIOMASTER_PORT;
+
+            /// <summary>COM port for RadioMaster (e.g., "COM3") - used for serial connection</summary>
+            public string RadioMasterComPort { get; set; } = "COM3";
+
+            /// <summary>Baud rate for RadioMaster COM port (ELRS typically 420000 or 115200)</summary>
+            public int RadioMasterBaudRate { get; set; } = 420000;
 
             /// <summary>Enable automatic failover</summary>
             public bool AutoFailoverEnabled { get; set; } = true;
@@ -267,11 +276,16 @@ namespace NOMAD.MissionPlanner
                 Health = LinkHealth.Disconnected
             };
 
+            // Build RadioMaster endpoint based on connection type
+            string radioMasterEndpoint = _config.RadioMasterConnectionType == "COM"
+                ? $"{_config.RadioMasterComPort} @ {_config.RadioMasterBaudRate}"
+                : $"localhost:{_config.RadioMasterPort}";
+
             _radioMasterStats = new LinkStatistics
             {
                 Type = LinkType.RadioMaster,
                 Name = "RadioMaster",
-                Endpoint = $"localhost:{_config.RadioMasterPort}",
+                Endpoint = radioMasterEndpoint,
                 Health = LinkHealth.Disconnected
             };
         }
@@ -393,8 +407,8 @@ namespace NOMAD.MissionPlanner
             lock (_lock)
             {
                 var active = _activeLink == LinkType.None ? "NONE" : _activeLink.ToString();
-                var lteStatus = _lteStats.IsConnected ? $"✓ {_lteStats.LatencyMs:F0}ms" : "✗ Offline";
-                var rmStatus = _radioMasterStats.IsConnected ? $"✓ {_radioMasterStats.LatencyMs:F0}ms" : "✗ Offline";
+                var lteStatus = _lteStats.IsConnected ? $"[OK] {_lteStats.LatencyMs:F0}ms" : "[X] Offline";
+                var rmStatus = _radioMasterStats.IsConnected ? $"[OK] {_radioMasterStats.LatencyMs:F0}ms" : "[X] Offline";
                 
                 return $"Active: {active} | LTE: {lteStatus} | Radio: {rmStatus}";
             }

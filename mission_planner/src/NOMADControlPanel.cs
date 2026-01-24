@@ -178,7 +178,7 @@ namespace NOMAD.MissionPlanner
             // Dock/Undock Button
             _btnDockUndock = new Button
             {
-                Text = "⇱",  // Unicode pop-out icon
+                Text = "^",  // Pop-out icon
                 Location = new Point(280, 0),
                 Size = new Size(28, 28),
                 FlatStyle = FlatStyle.Flat,
@@ -195,7 +195,7 @@ namespace NOMAD.MissionPlanner
             // Open Full Page Button
             _btnOpenFullPage = new Button
             {
-                Text = "⛶",  // Full screen icon
+                Text = "[]",  // Full screen icon
                 Location = new Point(310, 0),
                 Size = new Size(28, 28),
                 FlatStyle = FlatStyle.Flat,
@@ -538,7 +538,7 @@ namespace NOMAD.MissionPlanner
 
             var btnTiltCenter = new Button
             {
-                Text = "⟳",
+                Text = "O",
                 Location = new Point(305, 95),
                 Size = new Size(30, 25),
                 FlatStyle = FlatStyle.Flat,
@@ -629,9 +629,9 @@ namespace NOMAD.MissionPlanner
         {
             if (_lblMode == null) return;
 
-            var mode = _config.UseELRS ? "ELRS/MAVLink" : "HTTP";
+            var mode = _config.UseELRS ? "MAVLink/ELRS" : "Tailscale";
             _lblMode.Text = $"| Mode: {mode}";
-            _lblMode.ForeColor = _config.UseELRS ? Color.Orange : Color.LightBlue;
+            _lblMode.ForeColor = _config.UseELRS ? Color.Orange : Color.LightGreen;
         }
 
         // ============================================================
@@ -972,7 +972,7 @@ namespace NOMAD.MissionPlanner
         {
             if (_btnDockUndock != null)
             {
-                _btnDockUndock.Text = IsDocked ? "⇱" : "⇲";  // Pop-out / Dock icons
+                _btnDockUndock.Text = IsDocked ? "^" : "v";  // Pop-out / Dock icons
             }
         }
         

@@ -147,9 +147,28 @@ namespace NOMAD.MissionPlanner
         public bool DualLinkEnabled { get; set; } = true;
 
         /// <summary>
+        /// RadioMaster connection type: "UDP" or "COM"
+        /// UDP uses network port, COM uses serial port (e.g., COM3)
+        /// </summary>
+        public string RadioMasterConnectionType { get; set; } = "UDP";
+
+        /// <summary>
         /// RadioMaster UDP port (typically 14550 for RC telemetry).
+        /// Used when RadioMasterConnectionType is "UDP"
         /// </summary>
         public int RadioMasterPort { get; set; } = 14550;
+
+        /// <summary>
+        /// RadioMaster COM port (e.g., "COM3", "COM4").
+        /// Used when RadioMasterConnectionType is "COM"
+        /// </summary>
+        public string RadioMasterComPort { get; set; } = "COM3";
+
+        /// <summary>
+        /// RadioMaster COM port baud rate.
+        /// ELRS typically uses 420000 or 115200
+        /// </summary>
+        public int RadioMasterBaudRate { get; set; } = 420000;
 
         /// <summary>
         /// LTE/Tailscale MAVLink UDP port on Jetson (forwarded from Cube).

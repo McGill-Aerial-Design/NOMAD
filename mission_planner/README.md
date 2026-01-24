@@ -6,15 +6,18 @@ This C# plugin integrates directly with Mission Planner to provide full control 
 
 ## Features
 
-### Full Control Page
-- **Dashboard Tab**: System overview with quick actions and status cards
-- **Task 1 Tab**: GPS-based outdoor reconnaissance with snapshot capture
-- **Task 2 Tab**: VIO-based indoor navigation with WASD controls
-- **Video Tab**: Embedded RTSP streaming (no external VLC required)
-- **Terminal Tab**: Remote command execution on Jetson
-- **Health Tab**: Real-time Jetson health monitoring (CPU/GPU temps, memory, network)
+### NEW Full-Screen Sidebar Interface (v3.0)
+The primary interface features a modern sidebar navigation design:
+- **Dashboard**: Quick overview of all critical systems at a glance
+- **Task 1: Recon**: GPS-based outdoor reconnaissance with snapshot capture
+- **Task 2: Extinguish**: VIO-based indoor navigation with target tracking
+- **Video Feed**: Embedded RTSP streaming
+- **Terminal**: Remote command execution on Jetson
+- **System Health**: Real-time Jetson monitoring (CPU/GPU temps, memory, network)
+- **Link Status**: Dual-link failover monitoring
+- **Settings**: Plugin configuration
 
-### MAVLink Dual Link Failover (NEW)
+### MAVLink Dual Link Failover
 - **Primary Link**: LTE/Tailscale via Jetson mavlink-router
 - **Secondary Link**: RadioMaster transmitter (UDP 14550)
 - **Automatic Failover**: Switches links on connection loss
@@ -35,11 +38,13 @@ This C# plugin integrates directly with Mission Planner to provide full control 
 | File | Description |
 |------|-------------|
 | `src/NOMADPlugin.cs` | Main plugin class (implements `MissionPlanner.Plugin.Plugin`) |
-| `src/NOMADFullPage.cs` | Full-page tabbed control interface |
+| `src/NOMADMainScreen.cs` | **Full-page sidebar interface** |
+| `src/NOMADDashboardView.cs` | **Dashboard overview panel** |
+| `src/NOMADViews.cs` | **Individual view implementations** |
 | `src/NOMADControlPanel.cs` | Quick access popup panel |
 | `src/DualLinkSender.cs` | HTTP and MAVLink communication handler |
-| `src/MAVLinkConnectionManager.cs` | **Dual link failover manager** |
-| `src/LinkHealthPanel.cs` | **Link health monitoring UI** |
+| `src/MAVLinkConnectionManager.cs` | Dual link failover manager |
+| `src/LinkHealthPanel.cs` | Link health monitoring UI |
 | `src/EmbeddedVideoPlayer.cs` | Built-in RTSP video player |
 | `src/JetsonTerminalControl.cs` | Remote terminal interface |
 | `src/EnhancedHealthDashboard.cs` | Health monitoring display |

@@ -57,6 +57,7 @@ namespace NOMAD.MissionPlanner
         private int _networkCaching = 50; // ms - minimum for stable playback
         private string _quality = "auto";
         private string _cameraView = "left";  // Current camera view: left, right, both
+        private bool _showControls = true;    // Whether to show control bar and title
         
         // Camera view options - all available (client-side cropping)
         // Stream is 2560x720 stereo, we crop to show left/right/both
@@ -71,11 +72,18 @@ namespace NOMAD.MissionPlanner
         // Constructor
         // ============================================================
         
-        public EmbeddedVideoPlayer(string title, string rtspUrl)
+        /// <summary>
+        /// Creates an embedded video player.
+        /// </summary>
+        /// <param name="title">Title to display</param>
+        /// <param name="rtspUrl">RTSP stream URL</param>
+        /// <param name="showControls">Whether to show control bar and title (false for minimal view)</param>
+        public EmbeddedVideoPlayer(string title, string rtspUrl, bool showControls = true)
         {
             _streamTitle = title;
             _streamUrl = rtspUrl;  // Single stereo stream URL (e.g., rtsp://ip:8554/zed)
             _isPlaying = false;
+            _showControls = showControls;
             _useGStreamer = CheckGStreamerAvailable();
             
             InitializeUI();
@@ -125,7 +133,14 @@ namespace NOMAD.MissionPlanner
         {
             this.BackColor = Color.FromArgb(30, 30, 30);
             this.Dock = DockStyle.Fill;
-            this.Padding = new Padding(5);
+            this.Padding = new Padding(_showControls ? 5 : 0);
+            
+            // If showControls is false, create minimal UI (just the video)
+            if (!_showControls)
+            {
+                InitializeMinimalUI();
+                return;
+            }
             
             var mainPanel = new TableLayoutPanel
             {
@@ -197,6 +212,49 @@ namespace NOMAD.MissionPlanner
             mainPanel.Controls.Add(_controlPanel, 0, 2);
             
             this.Controls.Add(mainPanel);
+        }
+        
+        /// <summary>
+        /// Creates minimal UI with just the video display - no title, no controls.
+        /// </summary>
+        private void InitializeMinimalUI()
+        {
+            this.BackColor = Color.Black;
+            this.Padding = new Padding(0);
+            
+            _videoPanel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Color.Black,
+                Margin = new Padding(0),
+            };
+            
+            _videoBox = new PictureBox
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Color.Black,
+                SizeMode = PictureBoxSizeMode.Zoom,
+            };
+
+            if (_useGStreamer)
+            {
+                _videoPanel.Controls.Add(_videoBox);
+            }
+            else
+            {
+                var placeholder = new Label
+                {
+                    Text = "Video",
+                    Dock = DockStyle.Fill,
+                    ForeColor = Color.Gray,
+                    Font = new Font("Segoe UI", 10),
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    BackColor = Color.Black,
+                };
+                _videoPanel.Controls.Add(placeholder);
+            }
+            
+            this.Controls.Add(_videoPanel);
         }
         
         private Panel CreateTitleBar()

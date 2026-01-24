@@ -71,6 +71,12 @@ namespace NOMAD.MissionPlanner
         /// Gets the configured Jetson IP address.
         /// </summary>
         public string JetsonIP => _config.JetsonIP;
+        
+        /// <summary>
+        /// Gets whether the Jetson is currently connected/reachable.
+        /// This is set by the last health check result.
+        /// </summary>
+        public bool IsJetsonConnected { get; private set; }
 
         // ============================================================
         // Public Methods
@@ -174,6 +180,7 @@ namespace NOMAD.MissionPlanner
 
         /// <summary>
         /// Get health status from Jetson.
+        /// Also updates IsJetsonConnected property.
         /// </summary>
         public async Task<CommandResult> GetHealthAsync()
         {
@@ -183,6 +190,9 @@ namespace NOMAD.MissionPlanner
                 var response = await _httpClient.GetAsync(url);
                 var responseBody = await response.Content.ReadAsStringAsync();
 
+                // Update connection status
+                IsJetsonConnected = response.IsSuccessStatusCode;
+                
                 return new CommandResult
                 {
                     Success = response.IsSuccessStatusCode,
@@ -193,6 +203,9 @@ namespace NOMAD.MissionPlanner
             }
             catch (Exception ex)
             {
+                // Update connection status - failed to reach Jetson
+                IsJetsonConnected = false;
+                
                 return new CommandResult
                 {
                     Success = false,

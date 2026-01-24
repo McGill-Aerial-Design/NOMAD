@@ -357,7 +357,7 @@ namespace NOMAD.MissionPlanner
 
             _lblStatus = new Label
             {
-                Text = "✓ Inside Boundaries",
+                Text = "[OK] Inside Boundaries",
                 Font = new Font("Segoe UI", 14, FontStyle.Bold),
                 ForeColor = Color.White,
                 Location = new Point(15, 8),
@@ -636,7 +636,7 @@ namespace NOMAD.MissionPlanner
 
             _btnImportKml = new Button
             {
-                Text = "📁 Import from KML/KMZ",
+                Text = "Import from KML/KMZ",
                 Location = new Point(15, 25),
                 Size = new Size(170, 35),
                 FlatStyle = FlatStyle.Flat,
@@ -648,7 +648,7 @@ namespace NOMAD.MissionPlanner
 
             _btnImportGoogleMaps = new Button
             {
-                Text = "🌍 Paste Google Maps Link",
+                Text = "Paste Google Maps Link",
                 Location = new Point(195, 25),
                 Size = new Size(170, 35),
                 FlatStyle = FlatStyle.Flat,
@@ -660,7 +660,7 @@ namespace NOMAD.MissionPlanner
 
             var btnGetFromMP = new Button
             {
-                Text = "📌 Get from MP Fence",
+                Text = "Get from MP Fence",
                 Location = new Point(375, 25),
                 Size = new Size(160, 35),
                 FlatStyle = FlatStyle.Flat,
@@ -777,19 +777,19 @@ namespace NOMAD.MissionPlanner
             {
                 case "inside":
                     _statusPanel.BackColor = Color.FromArgb(40, 100, 40);
-                    _lblStatus.Text = "✓ Inside Boundaries";
+                    _lblStatus.Text = "[OK] Inside Boundaries";
                     _lblCountdown.Visible = false;
                     break;
 
                 case "soft_violation":
                     _statusPanel.BackColor = Color.FromArgb(180, 150, 0);
-                    _lblStatus.Text = "⚠ SOFT BOUNDARY - Turn Around!";
+                    _lblStatus.Text = "[!] SOFT BOUNDARY - Turn Around!";
                     _lblCountdown.Visible = false;
                     break;
 
                 case "hard_violation":
                     _statusPanel.BackColor = Color.FromArgb(180, 40, 40);
-                    _lblStatus.Text = "🚨 HARD BOUNDARY VIOLATION!";
+                    _lblStatus.Text = "[!!] HARD BOUNDARY VIOLATION!";
                     _lblCountdown.Visible = true;
                     break;
             }
