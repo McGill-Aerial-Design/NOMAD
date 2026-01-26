@@ -118,6 +118,7 @@
     <Compile Include="NOMADPlugin.cs" />
     <Compile Include="NOMADSettingsForm.cs" />
     <Compile Include="NOMADViews.cs" />
+    <Compile Include="ServiceControlPanel.cs" />
     <Compile Include="TelemetryInjector.cs" />
     <Compile Include="WASDNudgeControl.cs" />
   </ItemGroup>
