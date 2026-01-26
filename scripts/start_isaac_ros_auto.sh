@@ -143,15 +143,16 @@ start_container() {
 install_dependencies() {
     log_info "Installing ROS2 dependencies inside container..."
     
+    # Install apt packages
     docker exec "$CONTAINER_NAME" bash -c "
-        apt update && apt install -y \
+        apt-get update && apt-get install -y --no-install-recommends \
             ros-humble-zed-msgs \
             ros-humble-robot-localization \
             ros-humble-point-cloud-transport \
             ros-humble-tf2-ros \
             ros-humble-tf2-tools \
-            python3-pip
-        pip3 install requests
+            python3-pip 2>/dev/null || true
+        pip3 install requests 2>/dev/null || true
     " 2>&1 | tail -5
     
     log_info "Dependencies installed"
