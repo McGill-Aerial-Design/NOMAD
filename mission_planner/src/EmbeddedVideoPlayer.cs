@@ -56,17 +56,14 @@ namespace NOMAD.MissionPlanner
         // Playback settings - ultra-low latency defaults
         private int _networkCaching = 50; // ms - minimum for stable playback
         private string _quality = "auto";
-        private string _cameraView = "left";  // Current camera view: left, right, both
+        private string _selectedStream = "zed";  // Current selected stream name
         private bool _showControls = true;    // Whether to show control bar and title
         
-        // Camera view options - all available (client-side cropping)
-        // Stream is 2560x720 stereo, we crop to show left/right/both
-        private static readonly (string View, string DisplayName)[] CameraViews = new[]
-        {
-            ("left", "Left Camera (Nav)"),       // Crop left half: 0-1280
-            ("right", "Right Camera"),           // Crop right half: 1280-2560
-            ("both", "Side-by-Side (Wide)"),     // Full frame: 2560x720
-        };
+        // Stream configuration
+        private string _baseRtspUrl;  // Base URL without stream path (e.g., rtsp://ip:8554)
+        private System.Collections.Generic.List<(string Name, string DisplayName)> _availableStreams;
+        private Button _btnRefreshStreams;
+        private ComboBox _cmbStreamSelect;  // Stream selector (replaces camera view)
         
         // ============================================================
         // Constructor
@@ -76,15 +73,25 @@ namespace NOMAD.MissionPlanner
         /// Creates an embedded video player.
         /// </summary>
         /// <param name="title">Title to display</param>
-        /// <param name="rtspUrl">RTSP stream URL</param>
+        /// <param name="rtspUrl">RTSP stream URL (e.g., rtsp://ip:8554/zed)</param>
         /// <param name="showControls">Whether to show control bar and title (false for minimal view)</param>
         public EmbeddedVideoPlayer(string title, string rtspUrl, bool showControls = true)
         {
             _streamTitle = title;
-            _streamUrl = rtspUrl;  // Single stereo stream URL (e.g., rtsp://ip:8554/zed)
+            _streamUrl = rtspUrl;  // Full stream URL (e.g., rtsp://ip:8554/zed)
             _isPlaying = false;
             _showControls = showControls;
             _useGStreamer = CheckGStreamerAvailable();
+            
+            // Parse base URL and stream name from rtspUrl
+            ParseStreamUrl(rtspUrl);
+            
+            // Initialize with default streams (will be updated when refreshed)
+            _availableStreams = new System.Collections.Generic.List<(string, string)>
+            {
+                ("zed", "ZED Camera (Main)"),
+                ("live", "Live Stream"),
+            };
             
             InitializeUI();
             
@@ -95,6 +102,26 @@ namespace NOMAD.MissionPlanner
                     StartStream();
                 }
             };
+        }
+        
+        /// <summary>
+        /// Parses the RTSP URL to extract base URL and stream name.
+        /// </summary>
+        private void ParseStreamUrl(string rtspUrl)
+        {
+            try
+            {
+                var uri = new Uri(rtspUrl);
+                _baseRtspUrl = $"{uri.Scheme}://{uri.Host}:{uri.Port}";
+                _selectedStream = uri.AbsolutePath.TrimStart('/');
+                if (string.IsNullOrEmpty(_selectedStream))
+                    _selectedStream = "zed";
+            }
+            catch
+            {
+                _baseRtspUrl = "rtsp://100.75.218.89:8554";
+                _selectedStream = "zed";
+            }
         }
         
         // ============================================================
@@ -392,33 +419,43 @@ namespace NOMAD.MissionPlanner
             };
             panel.Controls.Add(_lblLatency);
             
-            // Camera View Selector (most important control - at top)
-            var lblCamera = new Label
+            // Stream Selector (replaces fixed camera view selector)
+            var lblStream = new Label
             {
-                Text = "Camera:",
+                Text = "Stream:",
                 Location = new Point(260, 15),
                 ForeColor = Color.Cyan,
                 Font = new Font("Segoe UI", 9, FontStyle.Bold),
                 AutoSize = true,
             };
-            panel.Controls.Add(lblCamera);
+            panel.Controls.Add(lblStream);
             
-            _cmbCameraView = new ComboBox
+            _cmbStreamSelect = new ComboBox
             {
                 Location = new Point(320, 10),
-                Size = new Size(155, 25),
+                Size = new Size(135, 25),
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 BackColor = Color.FromArgb(30, 30, 30),
                 ForeColor = Color.White,
                 Font = new Font("Segoe UI", 9),
             };
-            foreach (var (view, displayName) in CameraViews)
+            PopulateStreamSelector();
+            _cmbStreamSelect.SelectedIndexChanged += CmbStreamSelect_SelectedIndexChanged;
+            panel.Controls.Add(_cmbStreamSelect);
+            
+            // Refresh Streams Button
+            _btnRefreshStreams = new Button
             {
-                _cmbCameraView.Items.Add(displayName);
-            }
-            _cmbCameraView.SelectedIndex = 0;  // Default to left camera
-            _cmbCameraView.SelectedIndexChanged += CmbCameraView_SelectedIndexChanged;
-            panel.Controls.Add(_cmbCameraView);
+                Text = "...",
+                Location = new Point(460, 10),
+                Size = new Size(30, 25),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(60, 60, 65),
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 9),
+            };
+            _btnRefreshStreams.Click += (s, e) => RefreshAvailableStreams();
+            panel.Controls.Add(_btnRefreshStreams);
             
             // Quality is fixed at 720p - no selector needed
             _quality = "720p";
@@ -427,24 +464,102 @@ namespace NOMAD.MissionPlanner
         }
         
         /// <summary>
-        /// Handles camera view selection change.
-        /// Cropping is done client-side when rendering frames.
+        /// Populates the stream selector with available streams.
         /// </summary>
-        private void CmbCameraView_SelectedIndexChanged(object sender, EventArgs e)
+        private void PopulateStreamSelector()
         {
-            if (_cmbCameraView.SelectedIndex < 0 || _cmbCameraView.SelectedIndex >= CameraViews.Length)
+            _cmbStreamSelect.Items.Clear();
+            foreach (var (name, displayName) in _availableStreams)
+            {
+                _cmbStreamSelect.Items.Add(displayName);
+            }
+            
+            // Select current stream if available
+            var currentIndex = _availableStreams.FindIndex(s => s.Name == _selectedStream);
+            _cmbStreamSelect.SelectedIndex = currentIndex >= 0 ? currentIndex : 0;
+        }
+        
+        /// <summary>
+        /// Refreshes available streams from MediaMTX API.
+        /// </summary>
+        private async void RefreshAvailableStreams()
+        {
+            try
+            {
+                UpdateStatus("Refreshing streams...", Color.Yellow);
+                
+                // Query MediaMTX API for available paths
+                var uri = new Uri(_baseRtspUrl);
+                var apiUrl = $"http://{uri.Host}:9997/v3/paths/list";
+                
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.Timeout = TimeSpan.FromSeconds(5);
+                    var response = await client.GetStringAsync(apiUrl);
+                    
+                    // Parse JSON response
+                    var paths = Newtonsoft.Json.Linq.JObject.Parse(response);
+                    var items = paths["items"] as Newtonsoft.Json.Linq.JArray;
+                    
+                    if (items != null && items.Count > 0)
+                    {
+                        _availableStreams.Clear();
+                        foreach (var item in items)
+                        {
+                            var name = item["name"]?.ToString();
+                            var ready = item["ready"]?.Value<bool>() ?? false;
+                            var tracks = item["tracks"] as Newtonsoft.Json.Linq.JArray;
+                            
+                            if (!string.IsNullOrEmpty(name))
+                            {
+                                var status = ready ? "[LIVE]" : "[--]";
+                                var trackInfo = tracks?.Count > 0 ? $" ({string.Join(",", tracks)})" : "";
+                                _availableStreams.Add((name, $"{status} {name}{trackInfo}"));
+                            }
+                        }
+                        
+                        PopulateStreamSelector();
+                        UpdateStatus($"Found {_availableStreams.Count} streams", Color.LimeGreen);
+                    }
+                    else
+                    {
+                        UpdateStatus("No streams found", Color.Orange);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Failed to refresh streams - {ex.Message}");
+                UpdateStatus("Could not fetch streams", Color.Red);
+            }
+        }
+        
+        /// <summary>
+        /// Handles stream selection change.
+        /// Restarts playback with the new stream.
+        /// </summary>
+        private void CmbStreamSelect_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (_cmbStreamSelect.SelectedIndex < 0 || _cmbStreamSelect.SelectedIndex >= _availableStreams.Count)
+                return;
+            
+            var (name, displayName) = _availableStreams[_cmbStreamSelect.SelectedIndex];
+            
+            // Don't restart if same stream
+            if (name == _selectedStream)
                 return;
                 
-            var (view, displayName) = CameraViews[_cmbCameraView.SelectedIndex];
-            _cameraView = view;
+            _selectedStream = name;
+            _streamUrl = $"{_baseRtspUrl}/{_selectedStream}";
             
-            System.Diagnostics.Debug.WriteLine($"NOMAD Video: Camera view changed to {displayName} (client-side crop)");
+            System.Diagnostics.Debug.WriteLine($"NOMAD Video: Stream changed to {displayName} -> {_streamUrl}");
             
-            // Update status to show current view
+            // Restart stream with new URL if currently playing
             if (_isPlaying)
             {
-                var viewName = _cameraView == "both" ? "Wide" : (_cameraView == "right" ? "Right" : "Left");
-                UpdateStatus($"Playing [{viewName}]", Color.LimeGreen);
+                StopStream();
+                System.Threading.Thread.Sleep(100);
+                StartStream();
             }
         }
         
@@ -490,9 +605,8 @@ namespace NOMAD.MissionPlanner
                 _isPlaying = true;
                 _frameCount = 0; // Reset frame counter
                 
-                // Update status to show current camera view
-                var viewName = _cameraView == "both" ? "Wide" : (_cameraView == "right" ? "Right" : "Left");
-                UpdateStatus($"Playing [{viewName}]", Color.LimeGreen);
+                // Update status to show current stream
+                UpdateStatus($"Playing [{_selectedStream}]", Color.LimeGreen);
                 UpdatePlayStopButton();
             }
             catch (Exception ex)
@@ -860,26 +974,6 @@ a=recvonly";
         private int _frameCount = 0;
         private DateTime _lastFrameTime = DateTime.MinValue;
         
-        /// <summary>
-        /// Crops the incoming stereo frame (2560x720) based on selected camera view.
-        /// </summary>
-        private Rectangle GetCropRegion(int frameWidth, int frameHeight)
-        {
-            // Stereo frame is 2560x720 (side-by-side)
-            // Left camera: left half (0-1280)
-            // Right camera: right half (1280-2560)
-            // Both: full frame
-            int halfWidth = frameWidth / 2;
-            
-            return _cameraView switch
-            {
-                "left" => new Rectangle(0, 0, halfWidth, frameHeight),
-                "right" => new Rectangle(halfWidth, 0, halfWidth, frameHeight),
-                "both" => new Rectangle(0, 0, frameWidth, frameHeight),
-                _ => new Rectangle(0, 0, halfWidth, frameHeight)  // Default to left
-            };
-        }
-        
         private void OnGstNewImage(object sender, MPBitmap frame)
         {
             if (frame == null)
@@ -905,7 +999,7 @@ a=recvonly";
             _frameCount++;
             if (_frameCount % 30 == 1) // Log every 30 frames (once per second)
             {
-                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Frame #{_frameCount} received, Size: {frame.Width}x{frame.Height}, View: {_cameraView}");
+                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Frame #{_frameCount} received, Size: {frame.Width}x{frame.Height}, Stream: {_selectedStream}");
             }
 
             if (InvokeRequired)
@@ -917,29 +1011,13 @@ a=recvonly";
             try
             {
                 // Create a System.Drawing.Bitmap from the SkiaSharp bitmap data
-                var fullBitmap = new Bitmap(
+                var displayBitmap = new Bitmap(
                     frame.Width, 
                     frame.Height, 
                     4 * frame.Width,  // stride = 4 bytes per pixel (BGRA)
                     System.Drawing.Imaging.PixelFormat.Format32bppPArgb,
                     frame.LockBits(Rectangle.Empty, null, SkiaSharp.SKColorType.Bgra8888).Scan0
                 );
-
-                // Crop based on selected camera view
-                var cropRegion = GetCropRegion(frame.Width, frame.Height);
-                Bitmap displayBitmap;
-                
-                if (cropRegion.Width == frame.Width && cropRegion.Height == frame.Height)
-                {
-                    // No crop needed (both view)
-                    displayBitmap = fullBitmap;
-                }
-                else
-                {
-                    // Crop to selected region
-                    displayBitmap = fullBitmap.Clone(cropRegion, fullBitmap.PixelFormat);
-                    fullBitmap.Dispose();
-                }
 
                 // Update video display
                 var old = _videoBox?.Image;
