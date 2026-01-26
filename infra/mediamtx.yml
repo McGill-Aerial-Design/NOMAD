@@ -21,6 +21,22 @@ writeTimeout: 5s
 writeQueueSize: 64  # Smaller buffer = lower latency
 
 # ============================================================
+# Authentication
+# ============================================================
+
+# Allow unauthenticated access for API, metrics, and streaming
+authMethod: internal
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: api
+      - action: metrics
+      - action: publish
+      - action: read
+
+# ============================================================
 # API (for monitoring)
 # ============================================================
 
