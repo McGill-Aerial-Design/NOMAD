@@ -35,11 +35,5 @@ RUN test -f /usr/local/zed/lib/libsl_zed.so && \
 # Set ZED library path
 ENV LD_LIBRARY_PATH="/usr/local/zed/lib:${LD_LIBRARY_PATH}"
 
-# Install additional ROS2 dependencies for ZED
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ros-humble-zed-msgs \
-    ros-humble-robot-localization \
-    ros-humble-point-cloud-transport \
-    ros-humble-tf2-ros \
-    ros-humble-tf2-tools \
-    && rm -rf /var/lib/apt/lists/*
+# Note: ROS2 dependencies (ros-humble-zed-msgs, etc.) are installed at runtime
+# via the setup script since they may require updated apt sources
