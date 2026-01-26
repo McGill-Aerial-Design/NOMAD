@@ -126,10 +126,68 @@ install_dependencies() {
     log_info "Dependencies installed"
 }
 
+check_and_build_nvblox() {
+    log_info "Checking for Nvblox packages..."
+    
+    # Check if nvblox is already built
+    if docker exec "$CONTAINER_NAME" bash -c "source /opt/ros/humble/setup.bash && source /workspaces/isaac_ros-dev/install/setup.bash && ros2 pkg list 2>/dev/null | grep -q nvblox"; then
+        log_info "Nvblox packages already built"
+        return 0
+    fi
+    
+    log_warn "Nvblox packages not found - checking source..."
+    
+    # Check if nvblox source exists
+    if ! docker exec "$CONTAINER_NAME" test -d /workspaces/isaac_ros-dev/src/isaac_ros_nvblox; then
+        log_warn "Nvblox source not found. Please clone it first:"
+        log_warn "  cd ~/ros2/isaac_ros_ws/src"
+        log_warn "  git clone https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nvblox.git"
+        log_warn "  git clone https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_visual_slam.git"
+        log_warn "Then rebuild: colcon build --symlink-install"
+        log_warn ""
+        log_warn "Falling back to ZED-only mode (no Nvblox)..."
+        return 1
+    fi
+    
+    log_info "Building Nvblox (this may take 10-30 minutes)..."
+    docker exec "$CONTAINER_NAME" bash -c "
+        source /opt/ros/humble/setup.bash
+        cd /workspaces/isaac_ros-dev
+        colcon build --symlink-install --packages-up-to nvblox_examples_bringup
+    " 2>&1 | tail -20
+    
+    return 0
+}
+
 launch_zed_nvblox() {
     log_info "Launching ZED + Nvblox..."
     
-    # Create a launch script inside container
+    # Check if nvblox is available
+    if ! docker exec "$CONTAINER_NAME" bash -c "source /opt/ros/humble/setup.bash && source /workspaces/isaac_ros-dev/install/setup.bash && ros2 pkg list 2>/dev/null | grep -q nvblox"; then
+        log_warn "Nvblox not available - launching ZED wrapper only"
+        
+        # Create a ZED-only launch script
+        docker exec "$CONTAINER_NAME" bash -c "
+            cat > /tmp/launch_zed_only.sh << 'LAUNCH_SCRIPT'
+#!/bin/bash
+source /opt/ros/humble/setup.bash
+source /workspaces/isaac_ros-dev/install/setup.bash
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2
+LAUNCH_SCRIPT
+            chmod +x /tmp/launch_zed_only.sh
+        "
+        
+        docker exec -d "$CONTAINER_NAME" bash -c "
+            nohup /tmp/launch_zed_only.sh > /tmp/zed_nvblox.log 2>&1 &
+            echo \$! > /tmp/zed_nvblox.pid
+        "
+        
+        log_info "ZED wrapper launched (without Nvblox)"
+        return
+    fi
+    
+    # Create a launch script inside container for full Nvblox
     docker exec "$CONTAINER_NAME" bash -c "
         cat > /tmp/launch_zed_nvblox.sh << 'LAUNCH_SCRIPT'
 #!/bin/bash
@@ -250,6 +308,7 @@ case "${1:-start}" in
         check_prerequisites
         start_container
         install_dependencies
+        check_and_build_nvblox
         launch_zed_nvblox
         # Wait for ZED to initialize before starting bridge
         log_info "Waiting for ZED initialization (20s)..."
