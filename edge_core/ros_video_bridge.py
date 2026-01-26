@@ -85,7 +85,7 @@ class ROSVideoPublisher(Node):
         """Start FFmpeg process for RTSP streaming."""
         # FFmpeg command for RTSP streaming via MediaMTX
         # Uses pipe input for raw video frames
-        # Try hardware encoder first, fall back to software
+        # Use V4L2 M2M encoder (Jetson hardware encoder)
         cmd = [
             'ffmpeg',
             '-y',  # Overwrite output
@@ -95,13 +95,9 @@ class ROSVideoPublisher(Node):
             '-s', f'{self.width}x{self.height}',
             '-r', str(self.fps),
             '-i', '-',  # Input from pipe
-            '-c:v', 'libx264',  # Use software encoder (more compatible)
-            '-preset', 'ultrafast',  # Fastest preset for low latency
-            '-tune', 'zerolatency',  # Ultra low latency tuning
-            '-x264-params', 'keyint=60:min-keyint=60',  # GOP settings
+            '-c:v', 'h264_v4l2m2m',  # Use V4L2 M2M encoder (Jetson HW)
             '-b:v', '4M',  # 4 Mbps bitrate
-            '-maxrate', '4M',
-            '-bufsize', '500k',  # Small buffer for low latency
+            '-g', '60',  # GOP size
             '-f', 'rtsp',
             '-rtsp_transport', 'tcp',
             self.rtsp_url
