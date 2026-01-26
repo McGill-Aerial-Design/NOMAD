@@ -177,10 +177,26 @@ start_isaac_ros() {
 }
 
 # -----------------------------------------------------------------------------
-# Start Video Stream (Task 1 Mode - direct GStreamer)
+# Start Multi-Stream Video
+# -----------------------------------------------------------------------------
+
+start_multi_stream() {
+    log_info "Starting multi-stream video system..."
+    
+    if [ -f "$SCRIPT_DIR/start_multi_video.sh" ]; then
+        bash "$SCRIPT_DIR/start_multi_video.sh" start
+    else
+        log_warn "Multi-stream video script not found"
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Start Video Stream (Task 1 Mode - direct GStreamer - DEPRECATED)
 # -----------------------------------------------------------------------------
 
 start_video_stream() {
+    log_warn "Single-stream GStreamer mode is deprecated. Use multi-stream instead."
+    # Kept for compatibility but not recommended
     log_info "Starting ZED Video Stream..."
     pkill -f "gst-launch" 2>/dev/null || true
     sleep 1
@@ -281,24 +297,24 @@ main() {
             start_mavlink_router
             start_mediamtx
             start_edge_core
-            # Both tasks use Isaac ROS - video comes from ROS topic via video_bridge
             start_isaac_ros
+            start_multi_stream
             ;;
         task2)
             log_info "Starting Task 2 (VIO-based) services..."
             start_mavlink_router
             start_mediamtx
             start_edge_core
-            # Both tasks use Isaac ROS - video comes from ROS topic via video_bridge
             start_isaac_ros
+            start_multi_stream
             ;;
         all|*)
-            log_info "Starting all services (Isaac ROS mode)..."
+            log_info "Starting all services (Isaac ROS + Multi-Stream)..."
             start_mavlink_router
             start_mediamtx
             start_edge_core
-            # Both tasks use Isaac ROS - video comes from ROS topic via video_bridge
             start_isaac_ros
+            start_multi_stream
             ;;
     esac
     

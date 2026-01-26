@@ -46,6 +46,7 @@ class ROSVideoPublisher(Node):
         self,
         topic: str,
         rtsp_url: str,
+        tcp_port: int = 9999,
         width: int = 1280,
         height: int = 720,
         fps: int = 30,
@@ -54,6 +55,7 @@ class ROSVideoPublisher(Node):
         
         self.topic = topic
         self.rtsp_url = rtsp_url
+        self.tcp_port = tcp_port
         self.width = width
         self.height = height
         self.fps = fps
@@ -83,18 +85,18 @@ class ROSVideoPublisher(Node):
         """Start TCP server to send raw frames to host encoder."""
         # We'll send raw BGR frames via TCP to the host
         # The host runs FFmpeg with libx264 to encode and stream
-        # TCP server binds to 0.0.0.0:9999 for external access
+        # TCP server binds to 0.0.0.0:PORT for external access
         import socket
         
         self.tcp_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.tcp_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.tcp_server.bind(('0.0.0.0', 9999))
+        self.tcp_server.bind(('0.0.0.0', self.tcp_port))
         self.tcp_server.listen(1)
         self.tcp_server.setblocking(False)
         self.tcp_client = None
         
-        logger.info("TCP server started on port 9999 - waiting for encoder connection")
-        logger.info("Run on host: ffmpeg -f rawvideo -pix_fmt bgr24 -s 1280x720 -r 30 -i tcp://localhost:9999 -c:v libx264 -preset ultrafast -tune zerolatency -f rtsp rtsp://localhost:8554/zed")
+        logger.info(f"TCP server started on port {self.tcp_port} - waiting for encoder connection")
+        logger.info(f"Run on host: ffmpeg -f rawvideo -pix_fmt bgr24 -s {self.width}x{self.height} -r {self.fps} -i tcp://localhost:{self.tcp_port} -c:v libx264 -preset ultrafast -tune zerolatency -f rtsp {self.rtsp_url}")
         
         # Set ffmpeg_process to a dummy for compatibility
         self.ffmpeg_process = type('obj', (object,), {'stdin': None, 'poll': lambda: None, 'stderr': None})()
@@ -203,6 +205,8 @@ def main():
                         help='MediaMTX host')
     parser.add_argument('--port', default=8554, type=int,
                         help='MediaMTX RTSP port')
+    parser.add_argument('--tcp-port', default=9999, type=int,
+                        help='TCP port for raw video frames')
     parser.add_argument('--width', default=1280, type=int,
                         help='Output video width')
     parser.add_argument('--height', default=720, type=int,
@@ -219,6 +223,7 @@ def main():
     logger.info("=" * 60)
     logger.info(f"  Topic: {args.topic}")
     logger.info(f"  Stream: {rtsp_url}")
+    logger.info(f"  TCP Port: {args.tcp_port}")
     logger.info(f"  Resolution: {args.width}x{args.height}@{args.fps}fps")
     logger.info("=" * 60)
     
@@ -227,6 +232,7 @@ def main():
     node = ROSVideoPublisher(
         topic=args.topic,
         rtsp_url=rtsp_url,
+        tcp_port=args.tcp_port,
         width=args.width,
         height=args.height,
         fps=args.fps,

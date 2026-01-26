@@ -1,0 +1,34 @@
+{
+  "streams": [
+    {
+      "name": "zed_rgb",
+      "topic": "/zed/zed_node/rgb/image_rect_color",
+      "port": 9999,
+      "description": "ZED RGB color (rectified)"
+    },
+    {
+      "name": "zed_left",
+      "topic": "/zed/zed_node/left/image_rect_color",
+      "port": 10000,
+      "description": "ZED left camera (rectified)"
+    },
+    {
+      "name": "zed_right",
+      "topic": "/zed/zed_node/right/image_rect_color",
+      "port": 10001,
+      "description": "ZED right camera (rectified)"
+    },
+    {
+      "name": "zed_depth",
+      "topic": "/zed/zed_node/depth/depth_registered",
+      "port": 10002,
+      "description": "ZED depth map (colorized)"
+    },
+    {
+      "name": "zed_left_gray",
+      "topic": "/zed/zed_node/left_raw/image_raw_gray",
+      "port": 10003,
+      "description": "ZED left grayscale (raw)"
+    }
+  ]
+}
