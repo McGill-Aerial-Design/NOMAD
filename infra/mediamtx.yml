@@ -80,23 +80,27 @@ record: no
 # ============================================================
 
 paths:
-  # ZED2i Stereo Stream
-  # Full 2560x720 side-by-side stereo frame @ 30fps H.264
-  # Mission Planner crops to Left/Right/Both views client-side
+  # ZED2i stream - accepts RTSP publish from FFmpeg/GStreamer
+  # FFmpeg should use: ffmpeg ... -f rtsp rtsp://localhost:8554/zed
   zed:
     source: publisher
-    # Allow anyone to publish
+    # Disable authentication for local publishing
     publishUser:
     publishPass:
+    # Read authentication also disabled  
+    readUser:
+    readPass:
 
-  # Alternative generic endpoint
+  # Alternative endpoint
   live:
     source: publisher
     publishUser:
     publishPass:
+    readUser:
+    readPass:
 
-  # Test path for debugging
-  test:
+  # Wildcard path - accept any stream name
+  all:
     source: publisher
     publishUser:
     publishPass:
