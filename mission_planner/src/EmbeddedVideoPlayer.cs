@@ -492,10 +492,14 @@ namespace NOMAD.MissionPlanner
                 var uri = new Uri(_baseRtspUrl);
                 var apiUrl = $"http://{uri.Host}:9997/v3/paths/list";
                 
+                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Fetching streams from: {apiUrl}");
+                
                 using (var client = new System.Net.Http.HttpClient())
                 {
-                    client.Timeout = TimeSpan.FromSeconds(5);
+                    client.Timeout = TimeSpan.FromSeconds(10);  // Increased timeout
                     var response = await client.GetStringAsync(apiUrl);
+                    
+                    System.Diagnostics.Debug.WriteLine($"NOMAD Video: Received response: {response.Substring(0, Math.Min(200, response.Length))}...");
                     
                     // Parse JSON response
                     var paths = Newtonsoft.Json.Linq.JObject.Parse(response);
@@ -529,8 +533,17 @@ namespace NOMAD.MissionPlanner
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Failed to refresh streams - {ex.Message}");
-                UpdateStatus("Could not fetch streams", Color.Red);
+                var errorMsg = ex.Message;
+                if (ex.InnerException != null)
+                    errorMsg += $" ({ex.InnerException.Message})";
+                    
+                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Failed to refresh streams - {errorMsg}");
+                UpdateStatus($"Fetch error: {errorMsg}", Color.Red);
+                
+                // Show the URL that failed for debugging
+                var uri = new Uri(_baseRtspUrl);
+                var apiUrl = $"http://{uri.Host}:9997/v3/paths/list";
+                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Attempted URL: {apiUrl}");
             }
         }
         
