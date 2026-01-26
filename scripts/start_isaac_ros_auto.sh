@@ -303,6 +303,7 @@ launch_video_bridge() {
     "
     
     # Create a launch script for the video bridge
+    # Note: With --network host, use localhost for MediaMTX
     docker exec "$CONTAINER_NAME" bash -c "
         cat > /tmp/launch_video_bridge.sh << 'VIDEO_SCRIPT'
 #!/bin/bash
@@ -311,10 +312,11 @@ source /workspaces/isaac_ros-dev/install/setup.bash
 # Wait for ZED images to be publishing
 sleep 8
 # Start the video bridge
+# With --network host, MediaMTX is accessible on localhost
 python3 /tmp/ros_video_bridge.py \\
     --topic /zed/zed_node/rgb/image_rect_color \\
-    --stream live \\
-    --host host.docker.internal \\
+    --stream zed \\
+    --host localhost \\
     --port 8554 \\
     --width 1280 \\
     --height 720 \\

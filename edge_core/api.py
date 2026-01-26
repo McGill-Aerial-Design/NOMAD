@@ -787,7 +787,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
         rtsp_base = os.environ.get("MEDIA_SERVER_URL", "rtsp://localhost:8554")
         
         return {
-            "primary_stream": f"{rtsp_base}/live",
+            "primary_stream": f"{rtsp_base}/zed",
             "secondary_stream": f"{rtsp_base}/gimbal",
             "format": "H.264/RTSP",
             "recommended_player": "VLC or FFplay",

@@ -281,6 +281,7 @@ main() {
             start_mavlink_router
             start_mediamtx
             start_edge_core
+            # Task 1 uses direct GStreamer stream (no Isaac ROS)
             start_video_stream
             ;;
         task2)
@@ -288,13 +289,17 @@ main() {
             start_mavlink_router
             start_mediamtx
             start_edge_core
+            # Task 2 uses Isaac ROS - video comes from ROS topic via video_bridge
+            # Do NOT start direct GStreamer stream - camera is used by ROS
             start_isaac_ros
             ;;
         all|*)
-            log_info "Starting all services..."
+            log_info "Starting all services (Isaac ROS mode)..."
             start_mavlink_router
             start_mediamtx
             start_edge_core
+            # Default: Use Isaac ROS - video comes from ROS topic via video_bridge
+            # Do NOT start direct GStreamer stream - camera is used by ROS
             start_isaac_ros
             ;;
     esac
