@@ -86,6 +86,22 @@ class VIOStatusResponse(BaseModel):
     reset_counter: int
 
 
+class VIOUpdateRequest(BaseModel):
+    """Request model for VIO pose update from ROS bridge."""
+    timestamp: float
+    x: float
+    y: float
+    z: float
+    roll: float
+    pitch: float
+    yaw: float
+    vx: float = 0.0
+    vy: float = 0.0
+    vz: float = 0.0
+    confidence: float = 1.0
+    source: str = "external"
+
+
 # ==================== Global Service References ====================
 # These are set by main.py after initialization
 
@@ -94,6 +110,11 @@ _camera_service: Optional["ZEDCameraService"] = None
 _vio_pipeline: Optional["VIOPipeline"] = None
 _isaac_bridge: Optional["IsaacROSBridge"] = None
 _exclusion_map: list[dict] = []
+
+# VIO state from external sources (ROS bridge)
+_external_vio_state: Optional[dict] = None
+_vio_trajectory: list[dict] = []  # List of {x, y, z, timestamp} points
+_vio_trajectory_max_points: int = 1000  # Keep last N points
 
 
 def set_health_monitor(monitor: "JetsonHealthMonitor") -> None:
@@ -384,12 +405,119 @@ def create_app(state_manager: StateManager) -> FastAPI:
     @app.get("/api/vio/status", tags=["VIO"])
     async def vio_status():
         """Get VIO pipeline status."""
+        # Check for external VIO state first
+        if _external_vio_state:
+            return {
+                "health": "healthy" if _external_vio_state.get("confidence", 0) > 0.5 else "degraded",
+                "tracking_confidence": _external_vio_state.get("confidence", 0),
+                "position_valid": True,
+                "message_rate_hz": 30.0,
+                "reset_counter": 0,
+                "source": _external_vio_state.get("source", "external"),
+            }
+        
         if not _vio_pipeline:
-            raise HTTPException(status_code=503, detail="VIO pipeline not initialized")
+            return {
+                "health": "unknown",
+                "tracking_confidence": 0,
+                "position_valid": False,
+                "message_rate_hz": 0,
+                "reset_counter": 0,
+                "source": "none",
+            }
         
         return _vio_pipeline.status.to_dict()
 
+    @app.post("/api/vio/update", tags=["VIO"])
+    async def vio_update(request: VIOUpdateRequest):
+        """
+        Receive VIO pose update from external source (ROS bridge).
+        
+        This endpoint is called by the ros_http_bridge.py script running
+        inside the Isaac ROS container to send VIO data to edge_core.
+        """
+        global _external_vio_state, _vio_trajectory
+        
+        # Store latest state
+        _external_vio_state = {
+            "timestamp": request.timestamp,
+            "x": request.x,
+            "y": request.y,
+            "z": request.z,
+            "roll": request.roll,
+            "pitch": request.pitch,
+            "yaw": request.yaw,
+            "vx": request.vx,
+            "vy": request.vy,
+            "vz": request.vz,
+            "confidence": request.confidence,
+            "source": request.source,
+        }
+        
+        # Add to trajectory
+        _vio_trajectory.append({
+            "x": request.x,
+            "y": request.y,
+            "z": request.z,
+            "timestamp": request.timestamp,
+        })
+        
+        # Trim trajectory if too long
+        if len(_vio_trajectory) > _vio_trajectory_max_points:
+            _vio_trajectory = _vio_trajectory[-_vio_trajectory_max_points:]
+        
+        return {"success": True, "trajectory_points": len(_vio_trajectory)}
+
+    @app.get("/api/vio/pose", tags=["VIO"])
+    async def vio_pose():
+        """Get current VIO pose (position and orientation)."""
+        if _external_vio_state:
+            return _external_vio_state
+        
+        if _isaac_bridge and _isaac_bridge.vio_state:
+            vio = _isaac_bridge.vio_state
+            return {
+                "timestamp": vio.timestamp,
+                "x": vio.x,
+                "y": vio.y,
+                "z": vio.z,
+                "roll": vio.roll,
+                "pitch": vio.pitch,
+                "yaw": vio.yaw,
+                "vx": vio.vx,
+                "vy": vio.vy,
+                "vz": vio.vz,
+                "confidence": vio.confidence,
+                "source": "isaac_ros",
+            }
+        
+        return {"valid": False, "message": "No VIO data available"}
+
+    @app.get("/api/vio/trajectory", tags=["VIO"])
+    async def vio_trajectory(max_points: int = Query(default=100, le=1000)):
+        """
+        Get VIO trajectory for visualization.
+        
+        Returns a list of (x, y, z) points representing the drone's path.
+        Use max_points to limit the response size.
+        """
+        points = _vio_trajectory[-max_points:] if _vio_trajectory else []
+        return {
+            "total_points": len(_vio_trajectory),
+            "returned_points": len(points),
+            "trajectory": points,
+        }
+
+    @app.delete("/api/vio/trajectory", tags=["VIO"])
+    async def vio_clear_trajectory():
+        """Clear the VIO trajectory history."""
+        global _vio_trajectory
+        count = len(_vio_trajectory)
+        _vio_trajectory = []
+        return {"success": True, "cleared_points": count}
+
     @app.post("/api/vio/reset_origin", tags=["VIO"])
+    async def vio_reset_origin():
     async def vio_reset_origin():
         """Reset VIO tracking origin to current position."""
         if not _vio_pipeline:
