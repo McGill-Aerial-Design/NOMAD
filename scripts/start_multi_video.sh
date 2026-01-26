@@ -37,21 +37,21 @@ start_bridges() {
     log_info "Starting ROS video bridges..."
     
     # Start each video bridge from config
-    # RGB Stream (main)
-    log_info "Starting RGB stream bridge..."
+    # Stereo Stream (side-by-side)
+    log_info "Starting stereo stream bridge..."
     docker exec -d nomad_isaac_ros bash -c '
         source /opt/ros/humble/setup.bash && \
         source /workspaces/isaac_ros-dev/install/setup.bash && \
         python3 /tmp/ros_video_bridge.py \
-            --topic /zed/zed_node/rgb/image_rect_color \
-            --stream zed_rgb \
+            --topic /zed/zed_node/stereo/image_rect_color \
+            --stream zed_stereo \
             --tcp-port 9999 \
             --host localhost \
             --port 8554 \
-            --width 1280 \
+            --width 2560 \
             --height 720 \
             --fps 30 \
-            > /tmp/video_bridge_rgb.log 2>&1
+            > /tmp/video_bridge_stereo.log 2>&1
     '
     
     # Left camera
@@ -88,6 +88,23 @@ start_bridges() {
             > /tmp/video_bridge_right.log 2>&1
     '
     
+    # Depth map
+    log_info "Starting depth stream bridge..."
+    docker exec -d nomad_isaac_ros bash -c '
+        source /opt/ros/humble/setup.bash && \
+        source /workspaces/isaac_ros-dev/install/setup.bash && \
+        python3 /tmp/ros_video_bridge.py \
+            --topic /zed/zed_node/depth/depth_registered \
+            --stream zed_depth \
+            --tcp-port 10002 \
+            --host localhost \
+            --port 8554 \
+            --width 1280 \
+            --height 720 \
+            --fps 30 \
+            > /tmp/video_bridge_depth.log 2>&1
+    '
+    
     sleep 5
     log_ok "Video bridges started"
 }
@@ -99,13 +116,13 @@ start_bridges() {
 start_encoders() {
     log_info "Starting FFmpeg encoders..."
     
-    # RGB encoder
-    nohup ffmpeg -f rawvideo -pix_fmt bgr24 -s 1280x720 -r 30 \
+    # Stereo encoder (2560x720 side-by-side)
+    nohup ffmpeg -f rawvideo -pix_fmt bgr24 -s 2560x720 -r 30 \
         -i tcp://127.0.0.1:9999 \
         -c:v libx264 -preset ultrafast -tune zerolatency -crf 23 \
         -f rtsp -rtsp_transport tcp \
-        rtsp://localhost:8554/zed_rgb \
-        > "$LOG_DIR/ffmpeg_rgb.log" 2>&1 &
+        rtsp://localhost:8554/zed_stereo \
+        > "$LOG_DIR/ffmpeg_stereo.log" 2>&1 &
     
     # Left camera encoder  
     nohup ffmpeg -f rawvideo -pix_fmt bgr24 -s 1280x720 -r 30 \
@@ -122,6 +139,14 @@ start_encoders() {
         -f rtsp -rtsp_transport tcp \
         rtsp://localhost:8554/zed_right \
         > "$LOG_DIR/ffmpeg_right.log" 2>&1 &
+    
+    # Depth encoder
+    nohup ffmpeg -f rawvideo -pix_fmt bgr24 -s 1280x720 -r 30 \
+        -i tcp://127.0.0.1:10002 \
+        -c:v libx264 -preset ultrafast -tune zerolatency -crf 23 \
+        -f rtsp -rtsp_transport tcp \
+        rtsp://localhost:8554/zed_depth \
+        > "$LOG_DIR/ffmpeg_depth.log" 2>&1 &
     
     sleep 5
     log_ok "FFmpeg encoders started"

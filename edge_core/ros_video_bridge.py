@@ -142,6 +142,36 @@ class ROSVideoPublisher(Node):
                     cv_image = cv2.cvtColor(img_array, cv2.COLOR_BGRA2BGR)
                 else:  # bgr8
                     cv_image = img_array
+            elif encoding == '32FC1':
+                # Depth image (32-bit float, single channel)
+                # Convert to colorized visualization
+                dtype = np.float32
+                depth_array = np.frombuffer(msg.data, dtype=dtype).reshape(height, width)
+                
+                # Normalize to 0-255 range for visualization
+                # Filter out invalid depths (inf, nan)
+                valid_depth = np.isfinite(depth_array)
+                if np.any(valid_depth):
+                    min_depth = np.min(depth_array[valid_depth])
+                    max_depth = np.max(depth_array[valid_depth])
+                    
+                    # Normalize and convert to uint8
+                    if max_depth > min_depth:
+                        normalized = (depth_array - min_depth) / (max_depth - min_depth)
+                    else:
+                        normalized = np.zeros_like(depth_array)
+                    
+                    # Set invalid depths to 0
+                    normalized[~valid_depth] = 0
+                    
+                    # Convert to uint8
+                    depth_uint8 = (normalized * 255).astype(np.uint8)
+                    
+                    # Apply colormap for better visualization
+                    cv_image = cv2.applyColorMap(depth_uint8, cv2.COLORMAP_JET)
+                else:
+                    # All invalid depths - return black image
+                    cv_image = np.zeros((height, width, 3), dtype=np.uint8)
             else:
                 logger.warning(f"Unsupported encoding: {encoding}, skipping frame")
                 return

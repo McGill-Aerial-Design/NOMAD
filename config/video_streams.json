@@ -1,10 +1,10 @@
 {
   "streams": [
     {
-      "name": "zed_rgb",
-      "topic": "/zed/zed_node/rgb/image_rect_color",
+      "name": "zed_stereo",
+      "topic": "/zed/zed_node/stereo/image_rect_color",
       "port": 9999,
-      "description": "ZED RGB color (rectified)"
+      "description": "ZED stereo side-by-side (2560x720)"
     },
     {
       "name": "zed_left",
@@ -23,12 +23,6 @@
       "topic": "/zed/zed_node/depth/depth_registered",
       "port": 10002,
       "description": "ZED depth map (colorized)"
-    },
-    {
-      "name": "zed_left_gray",
-      "topic": "/zed/zed_node/left_raw/image_raw_gray",
-      "port": 10003,
-      "description": "ZED left grayscale (raw)"
     }
   ]
 }
