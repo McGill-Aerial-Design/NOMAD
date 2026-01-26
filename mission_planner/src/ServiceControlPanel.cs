@@ -90,9 +90,8 @@ namespace NOMAD.MissionPlanner
             AddServiceRow("Edge Core API", ref _lblEdgeCoreStatus, ref _btnEdgeCoreRestart, ref yOffset);
             _btnEdgeCoreRestart.Click += async (s, e) => await RestartEdgeCoreAsync();
             
-            // === Isaac ROS ===
-            AddServiceRow("Isaac ROS", ref _lblIsaacRosStatus, ref _btnIsaacRosStart, ref yOffset, "Start");
-            _btnIsaacRosStart.Click += async (s, e) => await StartIsaacRosAsync();
+            // === Isaac ROS (with Start/Stop) ===
+            AddIsaacRosRow(ref yOffset);
             
             // Separator
             yOffset += 10;
@@ -251,6 +250,57 @@ namespace NOMAD.MissionPlanner
                 FlatStyle = FlatStyle.Flat
             };
             this.Controls.Add(actionButton);
+            
+            yOffset += 35;
+        }
+        
+        private Button _btnIsaacRosStop;
+        
+        private void AddIsaacRosRow(ref int yOffset)
+        {
+            int leftCol = 15;
+            
+            var lblName = new Label
+            {
+                Text = "Isaac ROS:",
+                Location = new Point(leftCol, yOffset + 3),
+                Size = new Size(120, 20),
+                ForeColor = Color.LightGray
+            };
+            this.Controls.Add(lblName);
+            
+            _lblIsaacRosStatus = new Label
+            {
+                Text = "Checking...",
+                Location = new Point(140, yOffset + 3),
+                Size = new Size(90, 20),
+                ForeColor = Color.Yellow
+            };
+            this.Controls.Add(_lblIsaacRosStatus);
+            
+            _btnIsaacRosStart = new Button
+            {
+                Text = "Start",
+                Location = new Point(235, yOffset),
+                Size = new Size(70, 25),
+                BackColor = Color.FromArgb(0, 120, 60),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+            _btnIsaacRosStart.Click += async (s, e) => await StartIsaacRosAsync();
+            this.Controls.Add(_btnIsaacRosStart);
+            
+            _btnIsaacRosStop = new Button
+            {
+                Text = "Stop",
+                Location = new Point(310, yOffset),
+                Size = new Size(70, 25),
+                BackColor = Color.FromArgb(150, 50, 50),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+            _btnIsaacRosStop.Click += async (s, e) => await StopIsaacRosAsync();
+            this.Controls.Add(_btnIsaacRosStop);
             
             yOffset += 35;
         }
@@ -435,27 +485,57 @@ namespace NOMAD.MissionPlanner
         
         private async Task StartIsaacRosAsync()
         {
-            LogMessage("Starting Isaac ROS container...");
+            LogMessage("Starting Isaac ROS (automatic)...");
             UpdateStatusLabel(_lblIsaacRosStatus, false, "Starting...");
             
-            // Note: This would need interactive terminal for full startup
-            // For now, log instructions
-            LogMessage("Isaac ROS requires interactive startup:");
-            LogMessage("1. SSH to Jetson: ssh mad@100.75.218.89");
-            LogMessage("2. Run: ~/start_isaac_ros.sh");
-            LogMessage("3. Inside container: ~/ros2/isaac_ros_ws/scripts/setup_isaac_zed.sh");
+            var result = await _sender.StartIsaacRosAsync();
             
-            MessageBox.Show(
-                "Isaac ROS requires interactive startup.\n\n" +
-                "SSH to Jetson and run:\n" +
-                "  ~/start_isaac_ros.sh\n\n" +
-                "Then inside container:\n" +
-                "  bash ~/ros2/isaac_ros_ws/scripts/setup_isaac_zed.sh\n" +
-                "  ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2",
-                "Isaac ROS Startup",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information
-            );
+            if (result.Success)
+            {
+                LogMessage("Isaac ROS startup initiated");
+                LogMessage("Container starting, ZED + Nvblox launching...");
+                LogMessage("Full startup takes 30-60 seconds");
+                
+                // Show non-blocking message
+                Task.Run(() => {
+                    MessageBox.Show(
+                        "Isaac ROS startup initiated!\n\n" +
+                        "The following will start automatically:\n" +
+                        "1. Docker container\n" +
+                        "2. ROS2 dependencies installation\n" +
+                        "3. ZED + Nvblox VSLAM\n" +
+                        "4. ROS-HTTP bridge to Edge Core\n\n" +
+                        "Full startup takes 30-60 seconds.\n" +
+                        "Status will update automatically.",
+                        "Isaac ROS Starting",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information
+                    );
+                });
+            }
+            else
+            {
+                LogMessage($"Failed to start Isaac ROS: {result.Message}");
+                UpdateStatusLabel(_lblIsaacRosStatus, false, "Start Failed");
+            }
+        }
+
+        private async Task StopIsaacRosAsync()
+        {
+            LogMessage("Stopping Isaac ROS...");
+            UpdateStatusLabel(_lblIsaacRosStatus, false, "Stopping...");
+            
+            var result = await _sender.StopIsaacRosAsync();
+            
+            if (result.Success)
+            {
+                LogMessage("Isaac ROS stopped");
+                UpdateStatusLabel(_lblIsaacRosStatus, false, "Stopped");
+            }
+            else
+            {
+                LogMessage($"Failed to stop Isaac ROS: {result.Message}");
+            }
         }
         
         private async Task ResetVioOriginAsync()

@@ -300,15 +300,31 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> GetIsaacRosContainerStatusAsync()
         {
-            return await ExecuteTerminalCommandAsync("docker ps --filter ancestor=isaac_ros_dev-aarch64 --format '{{.Status}}'", 5);
+            return await ExecuteTerminalCommandAsync("docker ps --filter name=nomad_isaac_ros --format '{{.Status}}'", 5);
         }
 
         /// <summary>
-        /// Start Isaac ROS container.
+        /// Start Isaac ROS container and services.
         /// </summary>
-        public async Task<CommandResult> StartIsaacRosContainerAsync()
+        public async Task<CommandResult> StartIsaacRosAsync()
         {
-            return await ExecuteTerminalCommandAsync("cd ~/ros2/isaac_ros_ws && ./src/isaac_ros_common/scripts/run_dev.sh ~/ros2/isaac_ros_ws &", 30);
+            return await SendHttpPost("/api/isaac/start", null);
+        }
+
+        /// <summary>
+        /// Stop Isaac ROS container and services.
+        /// </summary>
+        public async Task<CommandResult> StopIsaacRosAsync()
+        {
+            return await SendHttpPost("/api/isaac/stop", null);
+        }
+
+        /// <summary>
+        /// Get Isaac ROS logs.
+        /// </summary>
+        public async Task<CommandResult> GetIsaacRosLogsAsync(string logType = "all")
+        {
+            return await SendHttpGet($"/api/isaac/logs?log_type={logType}");
         }
 
         // ============================================================

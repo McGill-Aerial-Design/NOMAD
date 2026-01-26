@@ -803,17 +803,139 @@ def create_app(state_manager: StateManager) -> FastAPI:
         Returns information about the perception backend,
         VIO state, and exclusion map status.
         """
+        # Check container status first
+        container_running = False
+        try:
+            result = subprocess.run(
+                ["docker", "ps", "--filter", "name=nomad_isaac_ros", "--format", "{{.Status}}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            container_running = bool(result.stdout.strip())
+        except Exception:
+            pass
+        
         if not _isaac_bridge:
             return {
                 "available": False,
                 "backend": "not_initialized",
+                "container_running": container_running,
                 "message": "Isaac ROS bridge not initialized - using direct ZED mode",
             }
         
         return {
             "available": True,
+            "container_running": container_running,
             **_isaac_bridge.get_status(),
         }
+
+    @app.post("/api/isaac/start", tags=["Isaac ROS"])
+    async def isaac_start():
+        """
+        Start Isaac ROS container and services.
+        
+        This runs the start_isaac_ros_auto.sh script which:
+        1. Starts the Docker container
+        2. Installs dependencies
+        3. Launches ZED + Nvblox
+        4. Starts the ROS-HTTP bridge
+        """
+        script_path = os.path.expanduser("~/NOMAD/scripts/start_isaac_ros_auto.sh")
+        
+        if not os.path.exists(script_path):
+            return {
+                "success": False,
+                "error": f"Script not found: {script_path}",
+            }
+        
+        try:
+            # Run in background
+            process = subprocess.Popen(
+                ["bash", script_path, "start"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+            
+            # Don't wait for completion - it takes a while
+            return {
+                "success": True,
+                "message": "Isaac ROS startup initiated. Check status in 30-60 seconds.",
+                "pid": process.pid,
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+            }
+
+    @app.post("/api/isaac/stop", tags=["Isaac ROS"])
+    async def isaac_stop():
+        """Stop Isaac ROS container and services."""
+        script_path = os.path.expanduser("~/NOMAD/scripts/start_isaac_ros_auto.sh")
+        
+        try:
+            result = subprocess.run(
+                ["bash", script_path, "stop"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            
+            return {
+                "success": result.returncode == 0,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+            }
+
+    @app.get("/api/isaac/logs", tags=["Isaac ROS"])
+    async def isaac_logs(log_type: str = Query(default="all", description="Log type: all, zed, bridge")):
+        """Get Isaac ROS container logs."""
+        try:
+            if log_type == "zed":
+                result = subprocess.run(
+                    ["docker", "exec", "nomad_isaac_ros", "tail", "-50", "/tmp/zed_nvblox.log"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+            elif log_type == "bridge":
+                result = subprocess.run(
+                    ["docker", "exec", "nomad_isaac_ros", "tail", "-50", "/tmp/ros_bridge.log"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+            else:
+                zed_result = subprocess.run(
+                    ["docker", "exec", "nomad_isaac_ros", "tail", "-25", "/tmp/zed_nvblox.log"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                bridge_result = subprocess.run(
+                    ["docker", "exec", "nomad_isaac_ros", "tail", "-25", "/tmp/ros_bridge.log"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                return {
+                    "zed_nvblox": zed_result.stdout if zed_result.returncode == 0 else zed_result.stderr,
+                    "ros_bridge": bridge_result.stdout if bridge_result.returncode == 0 else bridge_result.stderr,
+                }
+            
+            return {
+                "log_type": log_type,
+                "logs": result.stdout if result.returncode == 0 else result.stderr,
+            }
+        except Exception as e:
+            return {"error": str(e)}
 
     @app.get("/api/isaac/vio", tags=["Isaac ROS"])
     async def isaac_vio():
