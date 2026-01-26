@@ -518,10 +518,19 @@ def create_app(state_manager: StateManager) -> FastAPI:
 
     @app.post("/api/vio/reset_origin", tags=["VIO"])
     async def vio_reset_origin():
-    async def vio_reset_origin():
         """Reset VIO tracking origin to current position."""
+        global _vio_trajectory
+        
+        # Clear trajectory on reset
+        _vio_trajectory = []
+        
         if not _vio_pipeline:
-            raise HTTPException(status_code=503, detail="VIO pipeline not initialized")
+            # Just clear trajectory if no VIO pipeline
+            return {
+                "success": True,
+                "reset_counter": 0,
+                "message": "Trajectory cleared (no VIO pipeline)",
+            }
         
         success = _vio_pipeline.reset_origin()
         return {
