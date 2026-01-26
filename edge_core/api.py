@@ -668,6 +668,117 @@ def create_app(state_manager: StateManager) -> FastAPI:
         except Exception as e:
             return {"error": str(e)}
 
+    # ==================== Services Status Endpoint ====================
+
+    @app.get("/api/services/status", tags=["System"])
+    async def services_status():
+        """
+        Get status of all NOMAD services.
+        
+        Returns status of:
+        - mavlink-router: MAVLink routing to CubePilot
+        - mediamtx: RTSP video server
+        - edge_core: This API service (always running if you see this)
+        - isaac_ros: Isaac ROS bridge status
+        - vio: VIO pipeline status
+        """
+        services = {}
+        
+        # Check mavlink-router
+        try:
+            result = subprocess.run(
+                ["systemctl", "is-active", "mavlink-router"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            services["mavlink_router"] = {
+                "status": result.stdout.strip(),
+                "running": result.returncode == 0,
+            }
+        except Exception as e:
+            services["mavlink_router"] = {"status": "error", "error": str(e)}
+        
+        # Check mediamtx
+        try:
+            result = subprocess.run(
+                ["systemctl", "is-active", "mediamtx"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            services["mediamtx"] = {
+                "status": result.stdout.strip(),
+                "running": result.returncode == 0,
+            }
+        except Exception as e:
+            services["mediamtx"] = {"status": "error", "error": str(e)}
+        
+        # Edge Core is always running (we're responding)
+        services["edge_core"] = {
+            "status": "active",
+            "running": True,
+        }
+        
+        # Isaac ROS status
+        if _isaac_bridge:
+            services["isaac_ros"] = {
+                "status": "active",
+                "running": True,
+                **_isaac_bridge.get_status(),
+            }
+        else:
+            services["isaac_ros"] = {
+                "status": "not_initialized",
+                "running": False,
+                "message": "Isaac ROS bridge not enabled",
+            }
+        
+        # VIO status
+        if _external_vio_state:
+            services["vio"] = {
+                "status": "active",
+                "running": True,
+                "source": _external_vio_state.get("source", "external"),
+                "confidence": _external_vio_state.get("confidence", 0),
+                "trajectory_points": len(_vio_trajectory),
+            }
+        elif _vio_pipeline:
+            vio_status = _vio_pipeline.status
+            services["vio"] = {
+                "status": vio_status.health.value,
+                "running": vio_status.health.value != "failed",
+                "confidence": vio_status.tracking_confidence,
+                "trajectory_points": len(_vio_trajectory),
+            }
+        else:
+            services["vio"] = {
+                "status": "not_initialized",
+                "running": False,
+                "trajectory_points": len(_vio_trajectory),
+            }
+        
+        # Check for Isaac ROS Docker container
+        try:
+            result = subprocess.run(
+                ["docker", "ps", "--filter", "ancestor=isaac_ros_dev-aarch64", "--format", "{{.Status}}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            container_status = result.stdout.strip()
+            services["isaac_ros_container"] = {
+                "status": container_status if container_status else "not_running",
+                "running": bool(container_status),
+            }
+        except Exception:
+            services["isaac_ros_container"] = {
+                "status": "docker_unavailable",
+                "running": False,
+            }
+        
+        return services
+
     # ==================== Streaming Endpoints ====================
 
     @app.get("/api/stream/info", tags=["Streaming"])

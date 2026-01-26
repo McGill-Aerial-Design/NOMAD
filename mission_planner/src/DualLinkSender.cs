@@ -223,9 +223,137 @@ namespace NOMAD.MissionPlanner
             return await SendHttpPost("/api/vio/reset_origin", null);
         }
 
+        /// <summary>
+        /// Get VIO status from Jetson.
+        /// </summary>
+        public async Task<CommandResult> GetVioStatusAsync()
+        {
+            return await SendHttpGet("/api/vio/status");
+        }
+
+        /// <summary>
+        /// Get VIO trajectory for visualization.
+        /// </summary>
+        public async Task<CommandResult> GetVioTrajectoryAsync(int maxPoints = 100)
+        {
+            return await SendHttpGet($"/api/vio/trajectory?max_points={maxPoints}");
+        }
+
+        /// <summary>
+        /// Get Isaac ROS status.
+        /// </summary>
+        public async Task<CommandResult> GetIsaacStatusAsync()
+        {
+            return await SendHttpGet("/api/isaac/status");
+        }
+
+        /// <summary>
+        /// Get all services status.
+        /// </summary>
+        public async Task<CommandResult> GetServicesStatusAsync()
+        {
+            return await SendHttpGet("/api/services/status");
+        }
+
+        /// <summary>
+        /// Execute a terminal command on the Jetson.
+        /// </summary>
+        public async Task<CommandResult> ExecuteTerminalCommandAsync(string command, int timeout = 10)
+        {
+            return await SendHttpPost("/api/terminal/exec", new { command, timeout });
+        }
+
+        /// <summary>
+        /// Start a service on the Jetson.
+        /// </summary>
+        public async Task<CommandResult> StartServiceAsync(string serviceName)
+        {
+            return await ExecuteTerminalCommandAsync($"sudo systemctl start {serviceName}", 15);
+        }
+
+        /// <summary>
+        /// Stop a service on the Jetson.
+        /// </summary>
+        public async Task<CommandResult> StopServiceAsync(string serviceName)
+        {
+            return await ExecuteTerminalCommandAsync($"sudo systemctl stop {serviceName}", 15);
+        }
+
+        /// <summary>
+        /// Restart a service on the Jetson.
+        /// </summary>
+        public async Task<CommandResult> RestartServiceAsync(string serviceName)
+        {
+            return await ExecuteTerminalCommandAsync($"sudo systemctl restart {serviceName}", 15);
+        }
+
+        /// <summary>
+        /// Get service status on the Jetson.
+        /// </summary>
+        public async Task<CommandResult> GetServiceStatusAsync(string serviceName)
+        {
+            return await ExecuteTerminalCommandAsync($"systemctl is-active {serviceName}", 5);
+        }
+
+        /// <summary>
+        /// Check if Isaac ROS container is running.
+        /// </summary>
+        public async Task<CommandResult> GetIsaacRosContainerStatusAsync()
+        {
+            return await ExecuteTerminalCommandAsync("docker ps --filter ancestor=isaac_ros_dev-aarch64 --format '{{.Status}}'", 5);
+        }
+
+        /// <summary>
+        /// Start Isaac ROS container.
+        /// </summary>
+        public async Task<CommandResult> StartIsaacRosContainerAsync()
+        {
+            return await ExecuteTerminalCommandAsync("cd ~/ros2/isaac_ros_ws && ./src/isaac_ros_common/scripts/run_dev.sh ~/ros2/isaac_ros_ws &", 30);
+        }
+
         // ============================================================
         // HTTP Communication
         // ============================================================
+
+        private async Task<CommandResult> SendHttpGet(string endpoint)
+        {
+            try
+            {
+                var url = $"http://{_config.JetsonIP}:{_config.JetsonPort}{endpoint}";
+                var response = await _httpClient.GetAsync(url);
+                var responseBody = await response.Content.ReadAsStringAsync();
+
+                if (response.IsSuccessStatusCode)
+                {
+                    return new CommandResult
+                    {
+                        Success = true,
+                        Message = "HTTP GET successful",
+                        Data = responseBody,
+                        Method = "HTTP"
+                    };
+                }
+                else
+                {
+                    return new CommandResult
+                    {
+                        Success = false,
+                        Message = $"HTTP {(int)response.StatusCode}: {response.ReasonPhrase}",
+                        Data = responseBody,
+                        Method = "HTTP"
+                    };
+                }
+            }
+            catch (Exception ex)
+            {
+                return new CommandResult
+                {
+                    Success = false,
+                    Message = $"HTTP error: {ex.Message}",
+                    Method = "HTTP"
+                };
+            }
+        }
 
         private async Task<CommandResult> SendHttpPost(string endpoint, object body)
         {

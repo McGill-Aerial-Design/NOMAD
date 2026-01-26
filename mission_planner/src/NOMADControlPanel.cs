@@ -33,6 +33,7 @@ namespace NOMAD.MissionPlanner
         private TelemetryInjector _telemetryInjector;
         private WASDNudgeControl _wasdControl;
         private JetsonHealthTab _healthTab;
+        private ServiceControlPanel _servicePanel;
 
         // UI Controls
         private Label _lblTitle;
@@ -95,6 +96,7 @@ namespace NOMAD.MissionPlanner
                 _wasdControl.NudgeSpeed = DEFAULT_NUDGE_SPEED;
                 
                 _healthTab = new JetsonHealthTab(); // Initialize health tab
+                _servicePanel = new ServiceControlPanel(_sender); // Initialize service control panel
                 
                 // Send initial status
                 _telemetryInjector?.SendCustomStatus("Control Panel Loaded");
@@ -573,6 +575,19 @@ namespace NOMAD.MissionPlanner
                 _healthTab.Size = new Size(350, 450);
                 _healthTab.SetJetsonUrl(_config?.EffectiveBaseUrl ?? "http://127.0.0.1:8000");
                 this.Controls.Add(_healthTab);
+                yOffset += 460;
+            }
+
+            // ============================================================
+            // Service Control Panel (Isaac ROS, MAVLink, VIO)
+            // ============================================================
+
+            if (_servicePanel != null)
+            {
+                _servicePanel.Location = new Point(10, yOffset);
+                _servicePanel.Size = new Size(350, 550);
+                this.Controls.Add(_servicePanel);
+                yOffset += 560;
             }
         }
 
