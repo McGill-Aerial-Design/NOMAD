@@ -16,15 +16,30 @@ import logging
 import os
 import signal
 import sys
+from pathlib import Path
 from typing import Any
 
 import uvicorn
+import asyncio
 
-from .api import create_app, set_isaac_bridge, set_health_monitor
+sys.path.insert (
+    0, str(Path(__file__).resolve().parent.parent / "tailscale" / "src" )
+)
+
+from .api import ( create_app, 
+                  set_isaac_bridge, 
+                  set_health_monitor,
+                  set_tailscale_manager,
+                  set_network_monitor,
+)
+
+
 from .mavlink_interface import MavlinkService
 from .state import StateManager
 from .time_manager import TimeSyncService, TimeSyncStatus
 from .health_monitor import JetsonHealthMonitor
+from tailscale_manager import init_tailscale_manager
+from network_monitor import init_network_monitor
 
 # Conditional import for Isaac ROS bridge (ROS2 environment only)
 try:
@@ -55,6 +70,8 @@ health_monitor: JetsonHealthMonitor | None = None
 # Isaac ROS bridge (Task 2 only - requires ROS2 environment)
 isaac_bridge: "IsaacROSBridge | None" = None
 
+tailscale_manager = None
+network_monitor = None
 
 def get_app():
     """Get or create the FastAPI application."""
@@ -107,6 +124,7 @@ def run(
         log_level: Logging level
     """
     global time_sync_service, isaac_bridge, health_monitor
+    global tailscale_manager, network_monitor
 
     logger.info("=" * 50)
     logger.info("NOMAD Edge Core Starting")
@@ -119,6 +137,26 @@ def run(
     health_monitor.start()
     set_health_monitor(health_monitor)
     logger.info("Health monitor started")
+
+    tailscale_manager = init_tailscale_manager(
+        hostname="nomad-jetson",
+        on_status_change=lambda info: logger.info(
+            f"Tailscale: {info.status.value}"
+        ),
+    )
+    set_tailscale_manager(tailscale_manager)
+
+    network_monitor = init_network_monitor(gcs_tailscale_ip="100.103.238.9" 
+    ) #IP of Tailscale on my laptop
+    set_network_monitor(network_monitor)
+
+    async def _start_network_services():
+        await tailscale_manager.start()
+        await network_monitor.start()
+
+    asyncio.run(_start_network_services())
+    logger.info("Tailscale manager + network monitor started")
+
 
     # Initialize Isaac ROS bridge (Task 2 only - requires NOMAD_ENABLE_ISAAC_ROS=true)
     enable_isaac = os.environ.get("NOMAD_ENABLE_ISAAC_ROS", "false").lower() == "true"

@@ -10,6 +10,7 @@ Target: Python 3.13 | NVIDIA Jetson Orin Nano
 import asyncio
 import logging
 import os
+import re
 import subprocess
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
@@ -110,6 +111,8 @@ _camera_service: Optional["ZEDCameraService"] = None
 _vio_pipeline: Optional["VIOPipeline"] = None
 _isaac_bridge: Optional["IsaacROSBridge"] = None
 _exclusion_map: list[dict] = []
+_tailscale_manager: Any | None = None
+_network_monitor: Any | None = None
 
 # VIO state from external sources (ROS bridge)
 _external_vio_state: Optional[dict] = None
@@ -139,6 +142,16 @@ def set_isaac_bridge(bridge: "IsaacROSBridge") -> None:
     """Set the Isaac ROS bridge reference."""
     global _isaac_bridge
     _isaac_bridge = bridge
+
+def set_tailscale_manager(manager: Any) -> None:
+    """Set the Tailscale manager reference."""
+    global _tailscale_manager
+    _tailscale_manager = manager
+
+def set_network_monitor(monitor: Any) -> None:
+    """Set the NetworkMonitor reference."""
+    global _network_monitor
+    _network_monitor = monitor
 
 
 def create_app(state_manager: StateManager) -> FastAPI:
@@ -258,6 +271,103 @@ def create_app(state_manager: StateManager) -> FastAPI:
         """Get current system state including all telemetry."""
         state = state_manager.get_state()
         return jsonable_encoder(state)
+
+    # =================== Network Endpoints =====================
+
+    @app.get("/network/status", tags=["Network"])
+    async def network_status():
+        """Get current network + tailscale status."""
+        tailscale = None
+        modem = None
+        internet_reachable = False
+        gcs_reachable = False
+
+        if _tailscale_manager:
+            info = _tailscale_manager.info
+            tailscale = {
+                "status": info.status.value if getattr(info, "status", None) else "unknown",
+                "ip": getattr(info, "ip_address", None),
+                "hostname": getattr(info, "hostname", "unknown"),
+                "peer_count": getattr(info, "peer_count", None),
+                "latency_ms": getattr(info, "latency_ms", None),
+            }
+
+        if _network_monitor:
+            status = _network_monitor.status
+            internet_reachable = bool(getattr(status, "internet_reachable", False))
+            gcs_reachable = bool(getattr(status, "tailscale_reachable", False))
+
+            if getattr(status, "modem", None):
+                modem_obj = status.modem
+                modem = {
+                    "connected": modem_obj.connected,
+                    "signal_strength_dbm": modem_obj.signal_strength_dbm,
+                    "signal_quality": modem_obj.signal_quality.value,
+                    "carrier": modem_obj.carrier,
+                    "technology": modem_obj.technology,
+                }
+        return {
+            "tailscale": tailscale,
+            "modem": modem,
+            "internet_reachable": internet_reachable,
+            "gcs_reachable": gcs_reachable,
+        }
+    
+    @app.post("/network/reconnect", tags=["Network"])
+    async def network_reconnect():
+        """Trigger Tailscale reconnection."""
+        if not _tailscale_manager:
+            raise HTTPException(status_code=503, detail="Tailscale manager not initialized")
+        
+        ok = await _tailscale_manager.reconnect()
+        return {
+            "success": ok, 
+            "message": "Tailscale reconnection triggered" if ok else "Failed to trigger reconnection"}
+    
+    @app.get("/network/ping/{host}", tags=["Network"])
+    async def network_ping(host: str):
+        try:
+            result = subprocess.run(
+                ["ping", "-c", "3", host],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+
+            out = result.stdout + "\n" + result.stderr
+
+            # Extract packet counts
+            sent = received = None
+            m = re.search(r"(\d+)\s+packets transmitted,\s+(\d+)\s+received", out)
+            if m:
+                sent = int(m.group(1))
+                received = int(m.group(2))
+
+            # Extract average latency (ms)
+            latency_ms = None
+            m = re.search(
+                r"rtt [^=]+= ([\d\.]+)/([\d\.]+)/([\d\.]+)/([\d\.]+)\s*ms",
+                out,
+            )
+            if m:
+                latency_ms = float(m.group(2))
+
+            if result.returncode != 0 and received in (0, None):
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Ping failed: {out.strip()[:300]}",
+                )
+
+            return {
+                "host": host,
+                "latency_ms": latency_ms,
+                "packets_sent": sent,
+                "packets_received": received,
+            }
+
+        except subprocess.TimeoutExpired:
+            raise HTTPException(status_code=504, detail="Ping timed out")
+
 
     @app.websocket("/ws/state")
     async def ws_state(websocket: WebSocket):
