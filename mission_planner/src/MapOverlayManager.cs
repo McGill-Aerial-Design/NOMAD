@@ -4,6 +4,12 @@
 // Manages NOMAD boundary visualization on Mission Planner's map.
 // Draws soft (yellow) and hard (red) boundary polygons.
 // Uses reflection to access GMap.NET types for compatibility.
+// 
+// NOTE: This class uses .NET Reflection to access internal Mission Planner and GMap.NET fields.
+// If Mission Planner or GMap.NET updates break this, the plugin will continue to work but
+// boundary visualization will be disabled (no errors thrown). The code includes automatic
+// fallback from primary field names (mymap) to alternate names (gMapControl1) for robustness.
+// See error logs if boundaries do not appear on the map.
 // ============================================================
 
 using System;
@@ -24,6 +30,7 @@ namespace NOMAD.MissionPlanner
         private static object _boundaryOverlay; // GMapOverlay instance via reflection
         private static bool _initialized = false;
         private static bool _initFailed = false;    // Track if init has permanently failed
+        private static bool _fallbackUsedLogged = false;  // Track if fallback logging has been shown (prevent spam)
         private static Type _overlayType;
         private static Type _polygonType;
         private static Type _pointType;
@@ -84,6 +91,7 @@ namespace NOMAD.MissionPlanner
 
         /// <summary>
         /// Get the map control via reflection from FlightData.
+        /// Includes fallback from 'mymap' to 'gMapControl1' field name for version compatibility.
         /// </summary>
         private static object GetMapControl()
         {
@@ -125,7 +133,7 @@ namespace NOMAD.MissionPlanner
                             
                             if (flightData != null)
                             {
-                                // Get mymap from FlightData instance
+                                // Get mymap from FlightData instance (primary field name)
                                 var mymapInstanceField = flightData.GetType().GetField("mymap", 
                                     BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
                                 if (mymapInstanceField != null)
@@ -138,7 +146,8 @@ namespace NOMAD.MissionPlanner
                                     }
                                 }
 
-                                // Try gMapControl1 as alternate name
+                                // FALLBACK: Try gMapControl1 as alternate name (handles version differences)
+                                // Log this once to indicate we're using a fallback field name
                                 var gMapField = flightData.GetType().GetField("gMapControl1", 
                                     BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
                                 if (gMapField != null)
@@ -146,7 +155,12 @@ namespace NOMAD.MissionPlanner
                                     _mapControl = gMapField.GetValue(flightData);
                                     if (_mapControl != null)
                                     {
-                                        Console.WriteLine($"NOMAD: Found map control via gMapControl1 (type: {_mapControl.GetType().FullName})");
+                                        // Log fallback only once to avoid console spam
+                                        if (!_fallbackUsedLogged)
+                                        {
+                                            Console.WriteLine($"NOMAD: Primary field 'mymap' not found, using fallback field 'gMapControl1' (type: {_mapControl.GetType().FullName})");
+                                            _fallbackUsedLogged = true;
+                                        }
                                         return _mapControl;
                                     }
                                 }

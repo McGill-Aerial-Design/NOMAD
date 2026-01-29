@@ -50,6 +50,9 @@ namespace NOMAD.MissionPlanner
         
         /// <summary>Task 2: Register target hit (MAV_CMD_USER_3 = 31012)</summary>
         public const ushort CMD_NOMAD_TASK2_HIT = 31012;
+        
+        /// <summary>MAV_CMD_SET_EKF_SOURCE_SET (42007) - Switch EKF source</summary>
+        public const ushort CMD_SET_EKF_SOURCE = 42007;
 
         // ============================================================
         // Fields
@@ -198,6 +201,94 @@ namespace NOMAD.MissionPlanner
         {
             return await SendTask2ResetMap();
         }
+
+        // ============================================================
+        // EKF Source Switching
+        // ============================================================
+
+        /// <summary>
+        /// EKF source options for ArduPilot EK3_SRC parameters.
+        /// </summary>
+        public enum EkfSource
+        {
+            /// <summary>SRC1: GPS (outdoor)</summary>
+            GPS = 1,
+            /// <summary>SRC2: External Navigation / Vision (indoor)</summary>
+            ExternalNav = 2,
+            /// <summary>SRC3: Optical Flow</summary>
+            OpticalFlow = 3
+        }
+
+        /// <summary>
+        /// Switch ArduPilot EKF source using MAV_CMD_SET_EKF_SOURCE_SET (42007).
+        /// RC9 is configured as source selector, but this allows GCS override.
+        /// </summary>
+        /// <param name="source">EKF source to switch to (1=GPS, 2=Vision, 3=OptFlow)</param>
+        /// <returns>Command result</returns>
+        public async Task<CommandResult> SetEkfSource(EkfSource source)
+        {
+            try
+            {
+                if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen)
+                {
+                    return new CommandResult
+                    {
+                        Success = false,
+                        Message = "MAVLink not connected",
+                        Method = "MAVLink"
+                    };
+                }
+
+                // Send MAV_CMD_SET_EKF_SOURCE_SET (42007)
+                // param1 = source set number (1, 2, or 3)
+                MainV2.comPort.doCommand(
+                    MainV2.comPort.MAV.sysid,
+                    MainV2.comPort.MAV.compid,
+                    (MAVLink.MAV_CMD)CMD_SET_EKF_SOURCE,
+                    (float)source,  // Source set number
+                    0, 0, 0, 0, 0, 0
+                );
+
+                string sourceName = source switch
+                {
+                    EkfSource.GPS => "GPS (SRC1)",
+                    EkfSource.ExternalNav => "Vision/VIO (SRC2)",
+                    EkfSource.OpticalFlow => "Optical Flow (SRC3)",
+                    _ => $"Unknown ({(int)source})"
+                };
+
+                return new CommandResult
+                {
+                    Success = true,
+                    Message = $"EKF source switched to {sourceName}",
+                    Method = "MAVLink"
+                };
+            }
+            catch (Exception ex)
+            {
+                return new CommandResult
+                {
+                    Success = false,
+                    Message = $"EKF source switch failed: {ex.Message}",
+                    Method = "MAVLink"
+                };
+            }
+        }
+
+        /// <summary>
+        /// Switch to GPS source (SRC1) - for outdoor flight.
+        /// </summary>
+        public Task<CommandResult> SetEkfSourceGPS() => SetEkfSource(EkfSource.GPS);
+
+        /// <summary>
+        /// Switch to External Navigation / Vision source (SRC2) - for indoor flight.
+        /// </summary>
+        public Task<CommandResult> SetEkfSourceVision() => SetEkfSource(EkfSource.ExternalNav);
+
+        /// <summary>
+        /// Switch to Optical Flow source (SRC3).
+        /// </summary>
+        public Task<CommandResult> SetEkfSourceOptFlow() => SetEkfSource(EkfSource.OpticalFlow);
 
         /// <summary>
         /// Get health status from Jetson.

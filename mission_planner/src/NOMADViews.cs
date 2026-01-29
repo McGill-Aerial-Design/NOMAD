@@ -93,15 +93,20 @@ namespace NOMAD.MissionPlanner
     {
         private readonly DualLinkSender _sender;
         private readonly NOMADConfig _config;
+        private readonly JetsonConnectionManager _jetsonConnectionManager;
         private Label _lblPosition;
         private Label _lblGpsStatus;
         private Button _btnCapture;
         private TextBox _txtResult;
+        private EmbeddedVideoPlayer _videoPlayer;
+        private FlowLayoutPanel _galleryPanel;
+        private static readonly System.Net.Http.HttpClient _httpClient = new System.Net.Http.HttpClient();
         
-        public NOMADTask1View(DualLinkSender sender, NOMADConfig config)
+        public NOMADTask1View(DualLinkSender sender, NOMADConfig config, JetsonConnectionManager jetsonConnectionManager = null)
         {
             _sender = sender;
             _config = config;
+            _jetsonConnectionManager = jetsonConnectionManager;
             InitializeUI();
         }
         
@@ -155,6 +160,32 @@ namespace NOMAD.MissionPlanner
             
             layout.Controls.Add(gpsCard);
             
+            // Video Section
+            var videoCard = CreateCard("LIVE VIDEO");
+            videoCard.Size = new Size(600, 360);
+            try
+            {
+                string rtspUrl = $"rtsp://{_config.EffectiveIP}:8554/primary";
+                _videoPlayer = new EmbeddedVideoPlayer("Task 1 Camera", rtspUrl, true, _jetsonConnectionManager);
+                _videoPlayer.Dock = DockStyle.Fill;
+                _videoPlayer.Location = new Point(15, 45);
+                _videoPlayer.Size = new Size(570, 300);
+                videoCard.Controls.Add(_videoPlayer);
+            }
+            catch (Exception ex)
+            {
+                var lblVideoError = new Label
+                {
+                    Text = $"Video unavailable: {ex.Message}",
+                    Font = new Font("Segoe UI", 10),
+                    ForeColor = ERROR_COLOR,
+                    Location = new Point(15, 45),
+                    AutoSize = true,
+                };
+                videoCard.Controls.Add(lblVideoError);
+            }
+            layout.Controls.Add(videoCard);
+            
             // Capture Card
             var captureCard = CreateCard("SNAPSHOT CAPTURE");
             captureCard.Size = new Size(600, 180);
@@ -180,6 +211,22 @@ namespace NOMAD.MissionPlanner
             
             layout.Controls.Add(captureCard);
             
+            // Gallery Card
+            var galleryCard = CreateCard("CAPTURED IMAGES");
+            galleryCard.Size = new Size(600, 200);
+            
+            _galleryPanel = new FlowLayoutPanel
+            {
+                Location = new Point(15, 45),
+                Size = new Size(570, 140),
+                AutoScroll = true,
+                BorderStyle = BorderStyle.FixedSingle,
+                BackColor = Color.FromArgb(25, 25, 28),
+            };
+            galleryCard.Controls.Add(_galleryPanel);
+            
+            layout.Controls.Add(galleryCard);
+            
             this.Controls.Add(layout);
         }
         
@@ -197,6 +244,72 @@ namespace NOMAD.MissionPlanner
                 {
                     _txtResult.Text = $"[OK] Capture successful: {result.Message}";
                     _txtResult.ForeColor = SUCCESS_COLOR;
+                    
+                    // Download and display the captured image
+                    try
+                    {
+                        // Parse response data to get image filename
+                        if (!string.IsNullOrEmpty(result.Data))
+                        {
+                            var data = Newtonsoft.Json.Linq.JObject.Parse(result.Data);
+                            var imageName = data["image_name"]?.ToString();
+                            
+                            if (!string.IsNullOrEmpty(imageName))
+                            {
+                                // Construct download URL
+                                string imageUrl = $"http://{_config.EffectiveIP}:{_config.JetsonPort}/api/task/1/images/{imageName}";
+                                
+                                // Download image
+                                var imageBytes = await _httpClient.GetByteArrayAsync(imageUrl);
+                                
+                                // Save to local directory
+                                var task1Dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NOMAD", "Task1");
+                                Directory.CreateDirectory(task1Dir);
+                                var localPath = Path.Combine(task1Dir, imageName);
+                                File.WriteAllBytes(localPath, imageBytes);
+                                
+                                // Add thumbnail to gallery
+                                using (var ms = new MemoryStream(imageBytes))
+                                {
+                                    var originalImage = Image.FromStream(ms);
+                                    var thumbnail = originalImage.GetThumbnailImage(120, 90, null, IntPtr.Zero);
+                                    
+                                    var picBox = new PictureBox
+                                    {
+                                        Image = thumbnail,
+                                        Size = new Size(120, 90),
+                                        SizeMode = PictureBoxSizeMode.Zoom,
+                                        Margin = new Padding(5),
+                                        Cursor = Cursors.Hand,
+                                        Tag = localPath,
+                                    };
+                                    
+                                    picBox.Click += (s, evt) =>
+                                    {
+                                        try
+                                        {
+                                            System.Diagnostics.Process.Start(picBox.Tag.ToString());
+                                        }
+                                        catch { }
+                                    };
+                                    
+                                    var tooltip = new ToolTip();
+                                    tooltip.SetToolTip(picBox, imageName);
+                                    
+                                    _galleryPanel.Controls.Add(picBox);
+                                    _galleryPanel.ScrollControlIntoView(picBox);
+                                    
+                                    originalImage.Dispose();
+                                }
+                                
+                                _txtResult.Text = $"[OK] Image saved: {imageName}";
+                            }
+                        }
+                    }
+                    catch (Exception imgEx)
+                    {
+                        _txtResult.Text += $" (Image download failed: {imgEx.Message})";
+                    }
                 }
                 else
                 {
@@ -244,6 +357,15 @@ namespace NOMAD.MissionPlanner
                 _lblPosition.Text = $"Position: {cs.lat:F6}, {cs.lng:F6} | Alt: {cs.alt:F1}m";
             }
             catch { }
+        }
+        
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _videoPlayer?.Dispose();
+            }
+            base.Dispose(disposing);
         }
     }
     

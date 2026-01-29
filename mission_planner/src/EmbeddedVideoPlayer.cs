@@ -5,6 +5,12 @@ extern alias MPDrawing;
 // ============================================================
 // Provides in-app RTSP video streaming for Mission Planner
 // using the built-in GStreamer pipeline (same core as OSD video).
+//
+// NOTE: This class uses .NET Reflection to access internal Mission Planner fields
+// (specifically the gstreamer pipeline and native bitmap conversion). If Mission Planner
+// updates break these reflection points, the embedded player will show a graceful error
+// message and fallback to external VLC/FFplay options instead of crashing. Video display
+// will be disabled but the plugin will remain functional. See error logs for details.
 // ============================================================
 
 using System;
@@ -69,8 +75,10 @@ namespace NOMAD.MissionPlanner
         private string _selectedStream = "zed";  // Current selected stream name
         private bool _showControls = true;    // Whether to show control bar and title
         
-        // Stream configuration
+        // Stream configuration - Zero-Copy Architecture
+        // RTSP URL stays constant, content is switched via Jetson API
         private string _baseRtspUrl;  // Base URL without stream path (e.g., rtsp://ip:8554)
+        private string _apiBaseUrl;   // Edge Core API URL (e.g., http://ip:8000)
         private System.Collections.Generic.List<(string Name, string DisplayName)> _availableStreams;
         private Button _btnRefreshStreams;
         private ComboBox _cmbStreamSelect;  // Stream selector (replaces camera view)
@@ -106,11 +114,12 @@ namespace NOMAD.MissionPlanner
             // Parse base URL and stream name from rtspUrl
             ParseStreamUrl(rtspUrl);
             
-            // Initialize with default streams (will be updated when refreshed)
+            // Initialize with persistent streams (primary/secondary)
+            // In zero-copy architecture, these are always available
             _availableStreams = new System.Collections.Generic.List<(string, string)>
             {
-                ("zed", "ZED Camera (Main)"),
-                ("live", "Live Stream"),
+                ("primary", "[*] Primary Stream"),
+                ("secondary", "[*] Secondary Stream"),
             };
             
             InitializeUI();
@@ -126,6 +135,7 @@ namespace NOMAD.MissionPlanner
         
         /// <summary>
         /// Parses the RTSP URL to extract base URL and stream name.
+        /// In zero-copy architecture, stream URLs are constant (primary/secondary).
         /// </summary>
         private void ParseStreamUrl(string rtspUrl)
         {
@@ -133,15 +143,25 @@ namespace NOMAD.MissionPlanner
             {
                 var uri = new Uri(rtspUrl);
                 _baseRtspUrl = $"{uri.Scheme}://{uri.Host}:{uri.Port}";
+                _apiBaseUrl = $"http://{uri.Host}:8000";  // Edge Core API
                 _selectedStream = uri.AbsolutePath.TrimStart('/');
-                if (string.IsNullOrEmpty(_selectedStream))
-                    _selectedStream = "zed";
+                
+                // Map legacy stream names to new persistent instances
+                if (string.IsNullOrEmpty(_selectedStream) || _selectedStream == "zed" || _selectedStream == "live" || _selectedStream == "dynamic")
+                    _selectedStream = "primary";
+                else if (_selectedStream == "depth" || _selectedStream == "gimbal")
+                    _selectedStream = "secondary";
             }
             catch
             {
                 _baseRtspUrl = "rtsp://100.75.218.89:8554";
-                _selectedStream = "zed";
+                _apiBaseUrl = "http://100.75.218.89:8000";
+                _selectedStream = "primary";
             }
+            
+            // Always use constant stream URL (primary or secondary)
+            // Content is controlled via API, not by changing URL
+            _streamUrl = $"{_baseRtspUrl}/{_selectedStream}";
         }
         
         /// <summary>
@@ -545,19 +565,19 @@ namespace NOMAD.MissionPlanner
         
         /// <summary>
         /// Toggles the object detection overlay on the Jetson.
+        /// Uses the new API endpoint: POST /api/video/overlay?enabled={}&instance={}
         /// </summary>
         private async void ToggleOverlay(bool enabled)
         {
             try
             {
-                var uri = new Uri(_baseRtspUrl);
-                var apiUrl = $"http://{uri.Host}:8000/api/video/overlay?enabled={enabled}";
+                var apiUrl = $"{_apiBaseUrl}/api/video/overlay?enabled={enabled}&instance={_selectedStream}";
                 
                 using (var client = new System.Net.Http.HttpClient())
                 {
                     client.Timeout = TimeSpan.FromSeconds(2);
                     await client.PostAsync(apiUrl, null);
-                    System.Diagnostics.Debug.WriteLine($"NOMAD Video: Overlay set to {enabled}");
+                    System.Diagnostics.Debug.WriteLine($"NOMAD Video: Overlay set to {enabled} for {_selectedStream}");
                 }
             }
             catch (Exception ex)
@@ -567,57 +587,61 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Refreshes available streams from MediaMTX API and ROS Topics.
+        /// Refreshes available streams from Edge Core API.
+        /// Gets both persistent bridges (primary/secondary) and available ROS topics.
         /// </summary>
         private async void RefreshAvailableStreams()
         {
             try
             {
                 UpdateStatus("Refreshing streams...", Color.Yellow);
-                var uri = new Uri(_baseRtspUrl);
                 
                 // Preserve current selection if possible
                 var currentSelection = _selectedStream;
                 _availableStreams.Clear();
 
+                // Always add persistent streams first
+                _availableStreams.Add(("primary", "[*] Primary Stream"));
+                _availableStreams.Add(("secondary", "[*] Secondary Stream"));
+
                 using (var client = new System.Net.Http.HttpClient())
                 {
                     client.Timeout = TimeSpan.FromSeconds(5);
 
-                    // 1. Fetch MediaMTX streams (Standard RTSP)
+                    // Fetch bridge status to check if they're healthy
                     try 
                     {
-                        var mtxUrl = $"http://{uri.Host}:9997/v3/paths/list";
-                        var response = await client.GetStringAsync(mtxUrl);
-                        var paths = Newtonsoft.Json.Linq.JObject.Parse(response);
-                        var items = paths["items"] as Newtonsoft.Json.Linq.JArray;
+                        var bridgesUrl = $"{_apiBaseUrl}/api/video/bridges";
+                        var response = await client.GetStringAsync(bridgesUrl);
+                        var data = Newtonsoft.Json.Linq.JObject.Parse(response);
+                        var bridges = data["bridges"] as Newtonsoft.Json.Linq.JObject;
                         
-                        if (items != null)
+                        if (bridges != null)
                         {
-                            foreach (var item in items)
-                            {
-                                var name = item["name"]?.ToString();
-                                var ready = item["ready"]?.ToObject<bool>() ?? false;
-                                if (!string.IsNullOrEmpty(name) && name != "dynamic") 
-                                {
-                                    var status = ready ? "" : "(Offline)";
-                                    _availableStreams.Add((name, $"[Stream] {name} {status}"));
-                                }
-                            }
+                            // Update primary/secondary display names with current topic
+                            _availableStreams.Clear();
+                            
+                            var primary = bridges["primary"];
+                            var primaryTopic = primary?["current_topic"]?.ToString() ?? "unknown";
+                            var primaryShort = primaryTopic.Contains("/") ? primaryTopic.Substring(primaryTopic.LastIndexOf('/') + 1) : primaryTopic;
+                            _availableStreams.Add(("primary", $"[*] Primary ({primaryShort})"));
+                            
+                            var secondary = bridges["secondary"];
+                            var secondaryTopic = secondary?["current_topic"]?.ToString() ?? "unknown";
+                            var secondaryShort = secondaryTopic.Contains("/") ? secondaryTopic.Substring(secondaryTopic.LastIndexOf('/') + 1) : secondaryTopic;
+                            _availableStreams.Add(("secondary", $"[*] Secondary ({secondaryShort})"));
                         }
                     }
                     catch (Exception ex) 
                     { 
-                        System.Diagnostics.Debug.WriteLine($"MediaMTX fetch failed: {ex.Message}");
-                        // Add default fallback if fetch failed
-                        _availableStreams.Add(("zed", "[Stream] zed (Default)"));
+                        System.Diagnostics.Debug.WriteLine($"Bridge status fetch failed: {ex.Message}");
                     }
 
-                    // 2. Fetch ROS Topics (Dynamic)
+                    // Fetch ROS Topics (Dynamic switching options)
                     try
                     {
-                        var apiUrl = $"http://{uri.Host}:8000/api/video/topics";
-                        var response = await client.GetStringAsync(apiUrl);
+                        var topicsUrl = $"{_apiBaseUrl}/api/video/topics";
+                        var response = await client.GetStringAsync(topicsUrl);
                         var data = Newtonsoft.Json.Linq.JObject.Parse(response);
                         var topics = data["topics"] as Newtonsoft.Json.Linq.JArray;
                         
@@ -653,7 +677,8 @@ namespace NOMAD.MissionPlanner
         
         /// <summary>
         /// Handles stream selection change.
-        /// Restarts playback with the new stream.
+        /// Uses API to switch topic - RTSP URL stays constant.
+        /// This enables instant content switching without video player reconnection.
         /// </summary>
         private async void CmbStreamSelect_SelectedIndexChanged(object sender, EventArgs e)
         {
@@ -662,11 +687,11 @@ namespace NOMAD.MissionPlanner
             
             var (name, displayName) = _availableStreams[_cmbStreamSelect.SelectedIndex];
             
-            // Don't restart if same stream
-            if (name == _selectedStream)
+            // Don't switch if same stream (for standard streams)
+            if (!name.StartsWith("ros:") && name == _selectedStream)
                 return;
             
-            // Handle ROS Topic selection (Dynamic)
+            // Handle ROS Topic selection (Dynamic switching via API)
             if (name.StartsWith("ros:"))
             {
                 var topic = name.Substring(4); // Remove "ros:"
@@ -674,38 +699,60 @@ namespace NOMAD.MissionPlanner
                 
                 try
                 {
-                    // Call API to switch source
-                    var uri = new Uri(_baseRtspUrl);
-                    var apiUrl = $"http://{uri.Host}:8000/api/video/source?topic={Uri.EscapeDataString(topic)}";
+                    // Call new API endpoint to switch topic without restarting stream
+                    // POST /api/video/switch {"instance": "primary", "topic": "<topic>"}
+                    var apiUrl = $"{_apiBaseUrl}/api/video/switch";
+                    var payload = new { instance = _selectedStream, topic = topic };
+                    var jsonPayload = Newtonsoft.Json.JsonConvert.SerializeObject(payload);
                     
                     using (var client = new System.Net.Http.HttpClient())
                     {
-                        await client.PostAsync(apiUrl, null);
+                        client.Timeout = TimeSpan.FromSeconds(5);
+                        var content = new System.Net.Http.StringContent(jsonPayload, System.Text.Encoding.UTF8, "application/json");
+                        var response = await client.PostAsync(apiUrl, content);
+                        
+                        if (!response.IsSuccessStatusCode)
+                        {
+                            UpdateStatus($"Switch failed: {response.StatusCode}", Color.Red);
+                            return;
+                        }
                     }
                     
-                    // Switch to dynamic stream URL
-                    _selectedStream = name;
-                    _streamUrl = $"{_baseRtspUrl}/dynamic";
-                    
-                    // Allow time for bridge to restart
-                    await Task.Delay(1000);
-                    
-                    RestartStream();
+                    // RTSP URL stays the same - no need to restart player
+                    // The video content changes on the Jetson side instantly
+                    UpdateStatus($"Switched to: {topic}", Color.LimeGreen);
+                    System.Diagnostics.Debug.WriteLine($"NOMAD Video: Topic switched via API to {topic}");
                 }
                 catch (Exception ex)
                 {
                     UpdateStatus($"Switch Failed: {ex.Message}", Color.Red);
+                    System.Diagnostics.Debug.WriteLine($"NOMAD Video: API switch failed - {ex.Message}");
                 }
             }
             else
             {
-                // Standard MediaMTX Stream
-                _selectedStream = name;
-                _streamUrl = $"{_baseRtspUrl}/{_selectedStream}";
-                RestartStream();
+                // Standard MediaMTX Stream (primary/secondary)
+                // These are persistent streams - just ensure we're connected to the right one
+                if (name == "primary" || name == "secondary")
+                {
+                    _selectedStream = name;
+                    var newUrl = $"{_baseRtspUrl}/{_selectedStream}";
+                    
+                    if (newUrl != _streamUrl)
+                    {
+                        _streamUrl = newUrl;
+                        UpdateStatus($"Connecting to {name}...", Color.Yellow);
+                        RestartStream();
+                    }
+                }
             }
         }
 
+        /// <summary>
+        /// Restarts the video stream.
+        /// In zero-copy architecture, this is only needed when switching between
+        /// primary and secondary streams, not for topic changes.
+        /// </summary>
         private void RestartStream()
         {
             // SAFETY: Prevent concurrent stream switches

@@ -31,11 +31,14 @@ from .api import ( create_app,
                   set_health_monitor,
                   set_tailscale_manager,
                   set_network_monitor,
+                  set_nav_controller,
 )
 
+from .logging_service import cleanup_old_logs
 from .video_manager import init_video_manager
 
 from .mavlink_interface import MavlinkService
+from .nav_controller import NavController
 from .state import StateManager
 from .time_manager import TimeSyncService, TimeSyncStatus
 from .health_monitor import JetsonHealthMonitor
@@ -68,6 +71,9 @@ time_sync_service: TimeSyncService | None = None
 # Health monitor for Jetson metrics
 health_monitor: JetsonHealthMonitor | None = None
 
+# Navigation controller with velocity watchdog (0.5s timeout)
+nav_controller: NavController | None = None
+
 # Isaac ROS bridge (Task 2 only - requires ROS2 environment)
 isaac_bridge: "IsaacROSBridge | None" = None
 
@@ -85,10 +91,15 @@ app = get_app()
 
 def cleanup() -> None:
     """Cleanup on shutdown."""
-    global time_sync_service, isaac_bridge, health_monitor
+    global time_sync_service, isaac_bridge, health_monitor, nav_controller
     logger.info("Shutting down Edge Core...")
 
-    # Stop Isaac ROS bridge first (depends on ROS being active)
+    # Stop navigation controller first (safety - stops velocity watchdog)
+    if nav_controller:
+        nav_controller.stop()
+        logger.info("Navigation controller stopped")
+
+    # Stop Isaac ROS bridge (depends on ROS being active)
     if isaac_bridge:
         isaac_bridge.stop()
         logger.info("Isaac ROS bridge stopped")
@@ -124,7 +135,7 @@ def run(
         port: Port number
         log_level: Logging level
     """
-    global time_sync_service, isaac_bridge, health_monitor
+    global time_sync_service, isaac_bridge, health_monitor, nav_controller
     global tailscale_manager, network_monitor
 
     logger.info("=" * 50)
@@ -133,10 +144,18 @@ def run(
     logger.info(f"Host: {host}:{port}")
     logger.info("=" * 50)
 
+    # Cleanup old logs before starting services (non-blocking, fail-safe)
+    try:
+        deleted = cleanup_old_logs()
+        if deleted > 0:
+            logger.info(f"Cleaned up {deleted} old log files")
+    except Exception as e:
+        logger.warning(f"Log cleanup failed (non-critical): {e}")
+
     # Initialize Jetson health monitor
     health_monitor = JetsonHealthMonitor(poll_interval=2.0)
     health_monitor.start()
-    set_health_monitor(health_monitor)
+    set_health_monitor(app, health_monitor)
     logger.info("Health monitor started")
 
     tailscale_manager = init_tailscale_manager(
@@ -145,11 +164,11 @@ def run(
             f"Tailscale: {info.status.value}"
         ),
     )
-    set_tailscale_manager(tailscale_manager)
+    set_tailscale_manager(app, tailscale_manager)
 
     network_monitor = init_network_monitor(gcs_tailscale_ip="100.103.238.9" 
     ) #IP of Tailscale on my laptop
-    set_network_monitor(network_monitor)
+    set_network_monitor(app, network_monitor)
 
     async def _start_network_services():
         await tailscale_manager.start()
@@ -165,7 +184,7 @@ def run(
         try:
             isaac_bridge = init_isaac_bridge()
             isaac_bridge.start()
-            set_isaac_bridge(isaac_bridge)
+            set_isaac_bridge(app, isaac_bridge)
             logger.info("Isaac ROS bridge started")
         except Exception as e:
             logger.error(f"Failed to start Isaac ROS bridge: {e}")
@@ -209,6 +228,13 @@ def run(
     mavlink_service.set_time_sync_service(time_sync_service)
     mavlink_service.start()
     logger.info("MAVLink service started")
+
+    # Start navigation controller with velocity watchdog (SAFETY: 0.5s timeout)
+    # This ensures commands timeout and vehicle stops if connection is lost
+    nav_controller = NavController(mavlink_service, state_manager)
+    nav_controller.start()
+    set_nav_controller(app, nav_controller)
+    logger.info("Navigation controller started (velocity watchdog: 0.5s timeout)")
 
     # Start health status broadcast (every 2 seconds)
     mavlink_service.start_health_broadcast(interval=2.0)

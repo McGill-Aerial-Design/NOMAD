@@ -44,11 +44,20 @@ services:
 
   # ============================================================
   # NOMAD Edge Core - Main Application
+  # 
+  # Build targets available:
+  # - generic-runtime (default): python:3.13-slim for dev/testing
+  # - jetson-runtime: L4T with CUDA/GPU for Jetson Orin Nano
+  #
+  # To build for Jetson, change target from "generic-runtime" to "jetson-runtime"
+  # Then rebuild: docker compose build --no-cache nomad-core
   # ============================================================
   nomad-core:
     build:
       context: .
       dockerfile: infra/Dockerfile
+      # Target platform: "generic-runtime" for development, "jetson-runtime" for Jetson Orin
+      target: generic-runtime
     image: nomad-edge-core:latest
     container_name: nomad-core
     restart: unless-stopped

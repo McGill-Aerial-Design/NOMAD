@@ -99,7 +99,8 @@ class MavlinkService:
                 # Check armed status from base_mode (bit 7 = MAV_MODE_FLAG_SAFETY_ARMED)
                 base_mode = getattr(msg, "base_mode", 0)
                 is_armed = bool(base_mode & 128)  # MAV_MODE_FLAG_SAFETY_ARMED = 128
-                self.state_manager.update_state(flight_mode=mode, connected=True, armed=is_armed)
+                # Critical state change - use force_state_update for immediate visibility
+                self.state_manager.force_state_update(flight_mode=mode, connected=True, armed=is_armed)
             elif msg_type == "SYS_STATUS":
                 voltage = getattr(msg, "voltage_battery", 0) or 0
                 if voltage:
@@ -108,7 +109,9 @@ class MavlinkService:
                 gps_fix = bool(getattr(msg, "lat", 0) or getattr(msg, "lon", 0))
                 self.state_manager.update_state(gps_fix=gps_fix)
             elif msg_type == "ATTITUDE":
-                self.state_manager.update_state()
+                # Skip ATTITUDE update: no useful state fields extracted
+                # (Attitude data available in msg but not tracked in SystemState)
+                pass
             elif msg_type == "SYSTEM_TIME":
                 # Update time sync service with GPS time
                 if self._time_sync_service is not None:
@@ -120,7 +123,8 @@ class MavlinkService:
     def _update_connection_status(self, now: float) -> None:
         if self._last_heartbeat and (now - self._last_heartbeat) > self.disconnect_timeout:
             if self.state_manager.get_state().connected:
-                self.state_manager.update_state(connected=False, flight_mode="LOST")
+                # Critical state change (disconnection) - use force_state_update
+                self.state_manager.force_state_update(connected=False, flight_mode="LOST")
 
     @staticmethod
     def _resolve_mode(msg) -> str:

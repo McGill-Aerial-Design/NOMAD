@@ -23,12 +23,14 @@ Requires=mavlink-router.service
 Type=simple
 User=mad
 Group=mad
-WorkingDirectory=/home/mad/NOMAD
+# Use %h systemd specifier for home directory (/home/mad when User=mad)
+WorkingDirectory=%h/NOMAD
 
 # Environment variables
 Environment="NOMAD_SIM_MODE=false"
 Environment="PYTHONUNBUFFERED=1"
-Environment="PYTHONPATH=/home/mad/NOMAD"
+# Use %h systemd specifier for home directory to support user-agnostic deployment
+Environment="PYTHONPATH=%h/NOMAD"
 
 # Main command - run orchestrator with uvicorn
 ExecStart=/usr/bin/python3 -m uvicorn edge_core.main:app --host 0.0.0.0 --port 8000 --log-level info

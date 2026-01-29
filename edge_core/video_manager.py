@@ -1,8 +1,18 @@
 """
-Video Stream Manager - Dynamic Multi-Stream Support
+Video Stream Manager - Zero-Copy GStreamer Pipeline
 
-Manages multiple concurrent ros_video_bridge.py streams for dynamic RTSP streaming.
-Supports starting/stopping individual streams with automatic port allocation.
+Manages persistent video bridge instances for low-latency ROS-to-RTSP streaming.
+Uses the new nomad_video_bridge.py with NVENC hardware encoding.
+
+Architecture:
+    ZED Camera -> ROS Topic (NVMM) -> GStreamer Bridge (NVENC) -> MediaMTX -> Mission Planner
+
+Key Features:
+- Two persistent bridge instances (primary, secondary) - always running
+- Dynamic topic switching via HTTP API (no process restart)
+- ~150ms glass-to-glass latency with hardware encoding
+- Overlay support for object detection visualization
+
 Runs on Jetson Edge Core.
 """
 
@@ -11,8 +21,11 @@ import subprocess
 import threading
 import time
 import os
+import json
 from typing import List, Dict, Optional
 from dataclasses import dataclass, asdict
+from urllib.request import urlopen, Request
+from urllib.error import URLError
 
 logger = logging.getLogger("edge_core.video_manager")
 
@@ -23,20 +36,34 @@ DEFAULT_ZED_TOPICS = [
     "/zed/zed_node/stereo/image_rect_color",
 ]
 
+# Bridge instance configuration
+BRIDGE_INSTANCES = {
+    "primary": {
+        "http_port": 9100,
+        "default_topic": "/zed/zed_node/rgb/image_rect_color",
+        "description": "Main camera view for Mission Planner",
+    },
+    "secondary": {
+        "http_port": 9101,
+        "default_topic": "/zed/zed_node/depth/depth_registered",
+        "description": "Secondary view (depth/gimbal)",
+    },
+}
+
 
 @dataclass
 class StreamInfo:
     """Information about an active video stream."""
     stream_name: str
     topic: str
-    tcp_port: int
+    http_port: int
     width: int
     height: int
     fps: int
     rtsp_url: str
     bridge_pid: Optional[int] = None
-    encoder_pid: Optional[int] = None
     started_at: float = 0.0
+    overlay_enabled: bool = True
     
     def to_dict(self) -> dict:
         return asdict(self)
@@ -44,31 +71,32 @@ class StreamInfo:
 
 class VideoStreamManager:
     """
-    Manages dynamic multi-stream video pipeline.
+    Manages persistent video bridge instances with zero-copy GStreamer pipelines.
     
-    Each stream consists of:
-    1. ROS video bridge (inside container) - subscribes to ROS topic, sends to TCP
-    2. FFmpeg encoder (on host) - reads from TCP, encodes, pushes to MediaMTX
+    Architecture:
+    - Two persistent bridge instances (primary, secondary) run inside Docker container
+    - Each bridge uses nomad_video_bridge.py with NVENC hardware encoding
+    - Topic switching is done via HTTP API calls to the bridge (no restart needed)
+    - RTSP URLs stay constant, only the content changes
+    
+    This replaces the old approach of:
+    1. Starting/stopping FFmpeg processes
+    2. TCP pipe between ROS bridge and FFmpeg
+    3. Process restarts on topic switch
     """
     
     def __init__(self, container_name="nomad_isaac_ros_32"):
         self.container_name = container_name
         self.streams: Dict[str, StreamInfo] = {}
         self.lock = threading.RLock()
-        self.next_port = 9999  # Start port allocation from 9999
         self.mediamtx_host = "localhost"
         self.mediamtx_port = 8554
         self._auto_started = False
         self._container_ready = False
-        self._use_nvenc = True  # Default to NVENC hardware encoding
+        self._persistent_bridges_started = False
         
         logger.info(f"VideoStreamManager initialized for container: {container_name}")
-        logger.info(f"Using {'NVENC hardware' if self._use_nvenc else 'libx264 software'} encoding")
-
-    def set_use_nvenc(self, use_nvenc: bool) -> None:
-        """Set whether to use NVENC hardware encoding (default: True)."""
-        self._use_nvenc = use_nvenc
-        logger.info(f"Encoding mode: {'NVENC hardware' if use_nvenc else 'libx264 software'}")
+        logger.info("Using zero-copy GStreamer pipeline with NVENC hardware encoding")
 
     def set_container_name(self, name: str) -> None:
         """Update the container name (useful when container is discovered dynamically)."""
@@ -103,12 +131,215 @@ class VideoStreamManager:
         logger.warning(f"Container not ready after {timeout}s")
         return False
 
+    def start_persistent_bridges(self) -> Dict[str, bool]:
+        """
+        Start the two persistent video bridge instances inside the Docker container.
+        
+        These bridges run continuously and handle topic switching via HTTP API.
+        The RTSP stream URLs remain constant:
+        - primary: rtsp://localhost:8554/primary
+        - secondary: rtsp://localhost:8554/secondary
+        
+        Returns:
+            Dict mapping instance name to start success status
+        """
+        if self._persistent_bridges_started:
+            logger.info("Persistent bridges already started")
+            return {"primary": True, "secondary": True}
+        
+        if not self.is_container_running():
+            logger.warning("Cannot start bridges: container not running")
+            return {"primary": False, "secondary": False}
+        
+        results = {}
+        
+        # Copy bridge script to container
+        bridge_script = os.path.join(os.path.dirname(__file__), 'nomad_video_bridge.py')
+        if os.path.exists(bridge_script):
+            try:
+                subprocess.run(
+                    ["docker", "cp", bridge_script, f"{self.container_name}:/tmp/nomad_video_bridge.py"],
+                    capture_output=True,
+                    timeout=5
+                )
+                logger.info("Copied nomad_video_bridge.py to container")
+            except Exception as e:
+                logger.error(f"Failed to copy bridge script: {e}")
+                return {"primary": False, "secondary": False}
+        else:
+            logger.error(f"Bridge script not found: {bridge_script}")
+            return {"primary": False, "secondary": False}
+        
+        # Start each bridge instance
+        for instance_name, config in BRIDGE_INSTANCES.items():
+            success = self._start_bridge_instance(
+                instance_name=instance_name,
+                topic=config["default_topic"],
+                http_port=config["http_port"],
+            )
+            results[instance_name] = success
+            
+            if success:
+                # Track the stream
+                rtsp_url = f"rtsp://{self.mediamtx_host}:{self.mediamtx_port}/{instance_name}"
+                self.streams[instance_name] = StreamInfo(
+                    stream_name=instance_name,
+                    topic=config["default_topic"],
+                    http_port=config["http_port"],
+                    width=1280,
+                    height=720,
+                    fps=30,
+                    rtsp_url=rtsp_url,
+                    bridge_pid=1,  # Dummy PID (docker exec -d)
+                    started_at=time.time(),
+                    overlay_enabled=True,
+                )
+            
+            time.sleep(2)  # Allow bridge to initialize
+        
+        self._persistent_bridges_started = all(results.values())
+        return results
+
+    def _start_bridge_instance(
+        self,
+        instance_name: str,
+        topic: str,
+        http_port: int,
+        width: int = 1280,
+        height: int = 720,
+        fps: int = 30,
+        bitrate: int = 4000,
+    ) -> bool:
+        """Start a single bridge instance inside the container."""
+        try:
+            cmd = [
+                "docker", "exec", "-d", self.container_name,
+                "bash", "-c",
+                f"source /opt/ros/humble/setup.bash && "
+                f"source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null ; "
+                f"python3 /tmp/nomad_video_bridge.py "
+                f"--instance '{instance_name}' "
+                f"--topic '{topic}' "
+                f"--host '{self.mediamtx_host}' "
+                f"--port {self.mediamtx_port} "
+                f"--width {width} "
+                f"--height {height} "
+                f"--fps {fps} "
+                f"--bitrate {bitrate} "
+                f"--http-port {http_port} "
+                f"> /tmp/nomad_bridge_{instance_name}.log 2>&1"
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            
+            if result.returncode == 0:
+                logger.info(f"Bridge '{instance_name}' started (HTTP port: {http_port})")
+                return True
+            else:
+                logger.error(f"Failed to start bridge '{instance_name}': {result.stderr}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error starting bridge '{instance_name}': {e}")
+            return False
+
+    def switch_video_source(self, instance: str, topic: str) -> bool:
+        """
+        Switch a bridge instance to a different ROS topic.
+        
+        This uses the bridge's HTTP control API to change the subscription
+        without restarting the pipeline. The RTSP stream stays up.
+        
+        Args:
+            instance: Bridge instance name (primary, secondary)
+            topic: New ROS image topic to subscribe to
+            
+        Returns:
+            True if switch was successful
+        """
+        with self.lock:
+            stream = self.streams.get(instance)
+            if not stream:
+                logger.error(f"Stream '{instance}' not found")
+                return False
+            
+            if stream.topic == topic:
+                logger.info(f"'{instance}' already subscribed to {topic}")
+                return True
+            
+            try:
+                # Call bridge HTTP API to switch topic
+                url = f"http://localhost:{stream.http_port}/switch_topic?topic={topic}"
+                req = Request(url, method='POST')
+                
+                with urlopen(req, timeout=5) as response:
+                    data = json.loads(response.read().decode())
+                    
+                if data.get("success"):
+                    stream.topic = data.get("topic", topic)
+                    logger.info(f"'{instance}' switched to topic: {stream.topic}")
+                    return True
+                else:
+                    logger.error(f"Failed to switch topic: {data}")
+                    return False
+                    
+            except URLError as e:
+                logger.error(f"HTTP error switching topic: {e}")
+                return False
+            except Exception as e:
+                logger.error(f"Error switching topic: {e}")
+                return False
+
+    def set_overlay_enabled(self, instance: str, enabled: bool) -> bool:
+        """
+        Enable or disable object detection overlay for a bridge instance.
+        
+        Args:
+            instance: Bridge instance name
+            enabled: Whether to enable overlay
+            
+        Returns:
+            True if setting was applied
+        """
+        with self.lock:
+            stream = self.streams.get(instance)
+            if not stream:
+                logger.error(f"Stream '{instance}' not found")
+                return False
+            
+            try:
+                url = f"http://localhost:{stream.http_port}/set_overlay?enabled={str(enabled).lower()}"
+                req = Request(url, method='POST')
+                
+                with urlopen(req, timeout=5) as response:
+                    data = json.loads(response.read().decode())
+                
+                stream.overlay_enabled = data.get("overlay_enabled", enabled)
+                logger.info(f"'{instance}' overlay: {stream.overlay_enabled}")
+                return True
+                
+            except Exception as e:
+                logger.error(f"Error setting overlay: {e}")
+                return False
+
+    def get_bridge_status(self, instance: str) -> Optional[Dict]:
+        """Get status of a specific bridge instance via its HTTP API."""
+        with self.lock:
+            stream = self.streams.get(instance)
+            if not stream:
+                return None
+            
+            try:
+                url = f"http://localhost:{stream.http_port}/status"
+                with urlopen(url, timeout=2) as response:
+                    return json.loads(response.read().decode())
+            except Exception as e:
+                logger.debug(f"Failed to get status for '{instance}': {e}")
+                return None
+
     def auto_start_default_stream(self) -> Optional[Dict]:
         """
-        Auto-start a default video stream when edge_core initializes.
-        
-        Tries to find an available ZED topic and starts streaming it as 'zed'.
-        This is called automatically after Isaac ROS container is ready.
+        Auto-start the persistent video bridges when edge_core initializes.
         
         Returns:
             Stream info dict if successful, None otherwise.
@@ -121,39 +352,18 @@ class VideoStreamManager:
             logger.warning("Cannot auto-start: container not running")
             return None
         
-        # Find available image topics
-        topics = self.list_topics()
-        if not topics:
-            logger.warning("No image topics available for auto-start")
-            return None
+        logger.info("Auto-starting persistent video bridges...")
+        results = self.start_persistent_bridges()
         
-        # Try preferred topics first, then any available
-        topic_to_use = None
-        for preferred in DEFAULT_ZED_TOPICS:
-            if preferred in topics:
-                topic_to_use = preferred
-                break
-        
-        if not topic_to_use:
-            # Use first available image topic
-            topic_to_use = topics[0]
-        
-        logger.info(f"Auto-starting default stream with topic: {topic_to_use}")
-        
-        try:
-            stream = self.start_stream(
-                stream_name="zed",
-                topic=topic_to_use,
-                width=1280,
-                height=720,
-                fps=30
-            )
+        if results.get("primary"):
             self._auto_started = True
-            logger.info(f"Auto-start successful: {stream['rtsp_url']}")
-            return stream
-        except Exception as e:
-            logger.error(f"Auto-start failed: {e}")
-            return None
+            stream = self.streams.get("primary")
+            if stream:
+                logger.info(f"Auto-start successful: {stream.rtsp_url}")
+                return stream.to_dict()
+        
+        logger.warning("Auto-start failed")
+        return None
 
     def list_topics(self) -> List[str]:
         """List available image topics from ROS 2."""
@@ -196,6 +406,8 @@ class VideoStreamManager:
             stream = self.streams.get(stream_name)
             return stream.to_dict() if stream else None
 
+    # Legacy compatibility methods
+    
     def start_stream(
         self,
         stream_name: str,
@@ -205,289 +417,47 @@ class VideoStreamManager:
         fps: int = 30
     ) -> Dict:
         """
-        Start a new video stream.
+        Legacy method for starting streams.
         
-        Args:
-            stream_name: Name for the RTSP stream (e.g., 'zed_left')
-            topic: ROS image topic to subscribe to
-            width: Output video width
-            height: Output video height
-            fps: Output video FPS
-            
-        Returns:
-            Stream info dict with RTSP URL
+        For backward compatibility, this maps to the new persistent bridge architecture:
+        - 'zed', 'primary', 'live' -> primary bridge
+        - 'secondary', 'depth', 'gimbal' -> secondary bridge
+        - Other names -> creates a new bridge instance (deprecated behavior)
         """
-        with self.lock:
-            # Check if stream already exists
-            if stream_name in self.streams:
-                raise ValueError(f"Stream '{stream_name}' already exists. Stop it first.")
-            
-            # Allocate TCP port
-            tcp_port = self._allocate_port()
-            rtsp_url = f"rtsp://{self.mediamtx_host}:{self.mediamtx_port}/{stream_name}"
-            
-            logger.info(f"Starting stream '{stream_name}': {topic} -> {rtsp_url}")
-            
-            if self._use_nvenc:
-                # Use NVENC hardware encoding (single process in container)
-                bridge_pid = self._start_nvenc_bridge(stream_name, topic, rtsp_url, width, height, fps)
-                encoder_pid = None  # NVENC bridge handles encoding internally
-            else:
-                # Use legacy TCP + FFmpeg libx264 approach
-                bridge_pid = self._start_bridge(stream_name, topic, tcp_port, width, height, fps)
-                time.sleep(2)
-                encoder_pid = self._start_encoder(stream_name, tcp_port, rtsp_url, width, height, fps)
-            
-            # Track stream
-            stream = StreamInfo(
-                stream_name=stream_name,
-                topic=topic,
-                tcp_port=tcp_port,
-                width=width,
-                height=height,
-                fps=fps,
-                rtsp_url=rtsp_url,
-                bridge_pid=bridge_pid,
-                encoder_pid=encoder_pid,
-                started_at=time.time()
-            )
-            self.streams[stream_name] = stream
-            
-            logger.info(f"Stream '{stream_name}' started successfully")
-            return stream.to_dict()
+        # Map legacy names to new persistent instances
+        primary_aliases = {'zed', 'primary', 'live', 'zed_left', 'dynamic'}
+        secondary_aliases = {'secondary', 'depth', 'gimbal', 'zed_depth'}
+        
+        if stream_name.lower() in primary_aliases:
+            self.switch_video_source("primary", topic)
+            return self.get_stream("primary") or {}
+        elif stream_name.lower() in secondary_aliases:
+            self.switch_video_source("secondary", topic)
+            return self.get_stream("secondary") or {}
+        else:
+            # For other stream names, use primary and switch topic
+            logger.warning(f"Legacy stream name '{stream_name}' mapped to 'primary'")
+            self.switch_video_source("primary", topic)
+            return self.get_stream("primary") or {}
 
     def stop_stream(self, stream_name: str) -> bool:
         """
-        Stop a specific stream.
+        Legacy method for stopping streams.
         
-        Args:
-            stream_name: Name of the stream to stop
-            
-        Returns:
-            True if stopped, False if not found
+        In the new architecture, bridges are persistent and don't stop.
+        This method is kept for API compatibility but doesn't actually stop anything.
         """
-        with self.lock:
-            stream = self.streams.get(stream_name)
-            if not stream:
-                logger.warning(f"Stream '{stream_name}' not found")
-                return False
-            
-            logger.info(f"Stopping stream '{stream_name}'")
-            
-            # Stop FFmpeg encoder first (consumer) - use pkill to find by TCP port
-            if stream.encoder_pid and stream.encoder_pid != -1:
-                try:
-                    subprocess.run(["pkill", "-f", f"tcp://127.0.0.1:{stream.tcp_port}"], timeout=2, capture_output=True)
-                    time.sleep(0.5)
-                    subprocess.run(["pkill", "-9", "-f", f"tcp://127.0.0.1:{stream.tcp_port}"], timeout=2, capture_output=True)
-                except:
-                    pass
-            
-            # Stop bridge inside container by matching the stream name in process args
-            # Since we can't reliably get PID, we kill by matching the topic pattern
-            try:
-                # Kill any bridge process that is streaming to this stream name
-                subprocess.run([
-                    "docker", "exec", self.container_name,
-                    "pkill", "-f", f"--stream '{stream_name}'"
-                ], timeout=5, capture_output=True)
-                time.sleep(0.5)
-                subprocess.run([
-                    "docker", "exec", self.container_name,
-                    "pkill", "-9", "-f", f"--stream '{stream_name}'"
-                ], timeout=5, capture_output=True)
-            except Exception as e:
-                logger.warning(f"Error killing bridge: {e}")
-            
-            # Remove from tracking
-            del self.streams[stream_name]
-            logger.info(f"Stream '{stream_name}' stopped")
-            return True
+        logger.info(f"stop_stream('{stream_name}'): Bridges are now persistent - ignoring stop request")
+        return True
 
     def stop_all_streams(self) -> int:
-        """Stop all active streams. Returns count stopped."""
-        with self.lock:
-            stream_names = list(self.streams.keys())
-            count = 0
-            for name in stream_names:
-                if self.stop_stream(name):
-                    count += 1
-            return count
+        """Legacy method - persistent bridges don't stop. Returns 0."""
+        logger.info("stop_all_streams(): Bridges are now persistent - ignoring stop request")
+        return 0
 
-    def _allocate_port(self) -> int:
-        """Allocate next available TCP port."""
-        port = self.next_port
-        self.next_port += 1
-        return port
-
-    def _start_nvenc_bridge(
-        self,
-        stream_name: str,
-        topic: str,
-        rtsp_url: str,
-        width: int,
-        height: int,
-        fps: int
-    ) -> Optional[int]:
-        """Start NVENC video bridge inside container (hardware encoding). Returns PID.
-        
-        This approach uses GStreamer with nvv4l2h264enc for hardware H.264 encoding
-        directly in the container. Lower CPU/memory usage than TCP+FFmpeg libx264.
-        """
-        try:
-            # Copy NVENC bridge script to container /tmp
-            bridge_script = os.path.join(os.path.dirname(__file__), 'ros_video_bridge_nvenc.py')
-            if os.path.exists(bridge_script):
-                subprocess.run(
-                    ["docker", "cp", bridge_script, f"{self.container_name}:/tmp/ros_video_bridge_nvenc.py"],
-                    capture_output=True,
-                    timeout=5
-                )
-            else:
-                logger.warning(f"NVENC bridge script not found: {bridge_script}, falling back to TCP+FFmpeg")
-                # Fallback to legacy bridge
-                tcp_port = self._allocate_port()
-                pid = self._start_bridge(stream_name, topic, tcp_port, width, height, fps)
-                time.sleep(2)
-                self._start_encoder(stream_name, tcp_port, rtsp_url, width, height, fps)
-                return pid
-            
-            # Start NVENC bridge in background using docker exec -d
-            cmd = [
-                "docker", "exec", "-d", self.container_name,
-                "bash", "-c",
-                f"source /opt/ros/humble/setup.bash && "
-                f"source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null ; "
-                f"python3 /tmp/ros_video_bridge_nvenc.py "
-                f"--topic '{topic}' "
-                f"--stream '{stream_name}' "
-                f"--host '{self.mediamtx_host}' "
-                f"--port {self.mediamtx_port} "
-                f"--width {width} "
-                f"--height {height} "
-                f"--fps {fps} "
-                f"--bitrate 4000 "
-                f"> /tmp/video_bridge_{stream_name}.log 2>&1"
-            ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-            
-            if result.returncode == 0:
-                logger.info(f"NVENC bridge started for '{stream_name}' (hardware encoding)")
-                return 1  # Dummy PID
-            else:
-                logger.error(f"Failed to start NVENC bridge: {result.stderr}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Error starting NVENC bridge: {e}")
-            return None
-
-    def _start_bridge(
-        self,
-        stream_name: str,
-        topic: str,
-        tcp_port: int,
-        width: int,
-        height: int,
-        fps: int
-    ) -> Optional[int]:
-        """Start ROS video bridge inside container. Returns PID."""
-        try:
-            # Copy bridge script to container /tmp
-            bridge_script = os.path.join(os.path.dirname(__file__), 'ros_video_bridge.py')
-            if os.path.exists(bridge_script):
-                subprocess.run(
-                    ["docker", "cp", bridge_script, f"{self.container_name}:/tmp/ros_video_bridge.py"],
-                    capture_output=True,
-                    timeout=5
-                )
-            else:
-                logger.error(f"Bridge script not found: {bridge_script}")
-                return None
-            
-            # Start bridge in background using docker exec -d
-            # Note: PID tracking isn't reliable with 'docker exec -d', but the process will run
-            cmd = [
-                "docker", "exec", "-d", self.container_name,
-                "bash", "-c",
-                f"source /opt/ros/humble/setup.bash && "
-                f"source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null ; "
-                f"python3 /tmp/ros_video_bridge.py "
-                f"--topic '{topic}' "
-                f"--stream '{stream_name}' "
-                f"--tcp-port {tcp_port} "
-                f"--width {width} "
-                f"--height {height} "
-                f"--fps {fps} "
-                f"> /tmp/video_bridge_{stream_name}.log 2>&1"
-            ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-            
-            if result.returncode == 0:
-                logger.info(f"Bridge started for '{stream_name}' on TCP port {tcp_port}")
-                # Return a dummy PID since we can't reliably get it with 'docker exec -d'
-                return 1
-            else:
-                logger.error(f"Failed to start bridge: {result.stderr}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Error starting bridge: {e}")
-            return None
-
-    def _start_encoder(
-        self,
-        stream_name: str,
-        tcp_port: int,
-        rtsp_url: str,
-        width: int,
-        height: int,
-        fps: int
-    ) -> Optional[int]:
-        """Start FFmpeg encoder on host. Returns PID."""
-        try:
-            # Quality settings optimized for low latency
-            cmd = [
-                "nohup", "ffmpeg",
-                "-f", "rawvideo",
-                "-pix_fmt", "bgr24",
-                "-s", f"{width}x{height}",
-                "-r", str(fps),
-                "-i", f"tcp://127.0.0.1:{tcp_port}",
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-tune", "zerolatency",
-                "-crf", "18",
-                "-g", "30",
-                "-keyint_min", "15",
-                "-bf", "0",
-                "-maxrate", "4000k",
-                "-bufsize", "2000k",
-                "-flags", "+cgop",
-                "-f", "rtsp",
-                "-rtsp_transport", "tcp",
-                rtsp_url
-            ]
-            
-            log_file = f"/tmp/nomad_video/ffmpeg_{stream_name}.log"
-            os.makedirs("/tmp/nomad_video", exist_ok=True)
-            
-            with open(log_file, "w") as log:
-                process = subprocess.Popen(
-                    cmd,
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                    preexec_fn=os.setpgrp  # Create new process group
-                )
-                
-            logger.info(f"FFmpeg encoder started for '{stream_name}' (PID: {process.pid})")
-            return process.pid
-            
-        except Exception as e:
-            logger.error(f"Error starting encoder: {e}")
-            return None
+    def set_use_nvenc(self, use_nvenc: bool) -> None:
+        """Legacy method - NVENC is always used in new architecture."""
+        logger.info("set_use_nvenc(): NVENC is always enabled in zero-copy architecture")
 
 
 # Global instance
@@ -509,7 +479,7 @@ def init_video_manager(container_name: str = "nomad_isaac_ros_32", auto_start: b
     
     Args:
         container_name: Name of the Isaac ROS Docker container
-        auto_start: Whether to auto-start a default stream when container is ready
+        auto_start: Whether to auto-start persistent bridges when container is ready
         
     Returns:
         The initialized VideoStreamManager instance
@@ -521,20 +491,20 @@ def init_video_manager(container_name: str = "nomad_isaac_ros_32", auto_start: b
     _cleanup_legacy_video_processes(container_name)
     
     if auto_start:
-        # Start auto-start in background thread to not block startup
+        # Start persistent bridges in background thread to not block startup
         def _delayed_auto_start():
             # Wait for container to be ready
             if _video_manager.wait_for_container(timeout=90):
                 # Wait a bit more for ZED to publish topics
                 logger.info("Container ready, waiting for ZED topics...")
                 time.sleep(10)
-                _video_manager.auto_start_default_stream()
+                _video_manager.start_persistent_bridges()
             else:
                 logger.warning("Skipping video auto-start: container not available")
         
         thread = threading.Thread(target=_delayed_auto_start, daemon=True)
         thread.start()
-        logger.info("Video auto-start scheduled in background")
+        logger.info("Video bridge auto-start scheduled in background")
     
     return _video_manager
 
@@ -543,7 +513,7 @@ def _cleanup_legacy_video_processes(container_name: str) -> None:
     """
     Clean up any legacy video bridge or FFmpeg processes from old static approach.
     
-    This ensures the new dynamic VideoStreamManager has a clean slate.
+    This ensures the new persistent bridge architecture has a clean slate.
     """
     logger.info("Cleaning up any legacy video processes...")
     
@@ -566,5 +536,15 @@ def _cleanup_legacy_video_processes(container_name: str) -> None:
         )
     except Exception as e:
         logger.debug(f"Container video bridge cleanup: {e}")
+    
+    try:
+        # Also kill any nomad_video_bridge processes (from previous runs)
+        subprocess.run(
+            ["docker", "exec", container_name, "pkill", "-f", "nomad_video_bridge"],
+            capture_output=True,
+            timeout=5
+        )
+    except Exception as e:
+        logger.debug(f"Container nomad_video_bridge cleanup: {e}")
     
     logger.info("Legacy video process cleanup complete")

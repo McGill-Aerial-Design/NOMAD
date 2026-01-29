@@ -9,6 +9,7 @@ Target: Python 3.13 | NVIDIA Jetson Orin Nano
 from __future__ import annotations
 
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -21,14 +22,19 @@ class StateManager:
 
     Manages:
     - SystemState: Telemetry and sensor data (immutable snapshots)
+    - Raw telemetry dict for high-frequency updates (50-70Hz)
+    - Batched Pydantic model updates at 10Hz to reduce GC pressure
     """
 
     _instance: "StateManager | None" = None
     _instance_lock = threading.Lock()
+    MODEL_UPDATE_INTERVAL = 0.1  # 10Hz max for Pydantic model updates
 
     def __init__(self) -> None:
         self._state = SystemState.default()
         self._lock = threading.RLock()
+        self._raw_state: dict[str, Any] = {}  # Fast mutable dict for batching
+        self._last_model_update: float = 0.0
 
     @classmethod
     def instance(cls) -> "StateManager":
@@ -49,10 +55,55 @@ class StateManager:
             return self._state
 
     def update_state(self, **fields: Any) -> SystemState:
+        """
+        Update system state with rate-limited Pydantic model rebuilding.
+        
+        High-frequency telemetry (50-70Hz) is accumulated in _raw_state dict
+        without Pydantic overhead. The model is rebuilt at 10Hz intervals.
+        This reduces memory allocation pressure and GC pauses from model creation.
+        
+        Args:
+            **fields: State fields to update
+        
+        Returns:
+            Current SystemState (may be up to 100ms stale for telemetry fields)
+        """
         with self._lock:
-            data = self._state.model_dump()
-            data.update(fields)
-            if "timestamp" not in fields:
+            # Always update raw state immediately (fast dict operation)
+            self._raw_state.update(fields)
+            
+            # Only rebuild Pydantic model at configured interval (10Hz)
+            now = time.time()
+            if now - self._last_model_update >= self.MODEL_UPDATE_INTERVAL:
+                data = self._state.model_dump()
+                data.update(self._raw_state)
                 data["timestamp"] = datetime.now(timezone.utc)
+                self._state = SystemState(**data)
+                self._raw_state.clear()  # Reset after applying
+                self._last_model_update = now
+            
+            return self._state
+
+    def force_state_update(self, **fields: Any) -> SystemState:
+        """
+        Force immediate Pydantic model rebuild (for critical updates).
+        
+        Use this for important state changes that need immediate visibility
+        (e.g., flight mode changes, armed status) rather than the rate-limited
+        update_state().
+        
+        Args:
+            **fields: State fields to update
+        
+        Returns:
+            Updated SystemState with changes applied immediately
+        """
+        with self._lock:
+            self._raw_state.update(fields)
+            data = self._state.model_dump()
+            data.update(self._raw_state)
+            data["timestamp"] = datetime.now(timezone.utc)
             self._state = SystemState(**data)
+            self._raw_state.clear()
+            self._last_model_update = time.time()
             return self._state

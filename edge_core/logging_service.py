@@ -9,14 +9,20 @@ Target: Python 3.13 | NVIDIA Jetson Orin Nano
 
 from __future__ import annotations
 
+import glob
 import json
+import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 # Default log directory (relative to project root)
 DEFAULT_LOG_DIR = Path(__file__).parent.parent / "data" / "mission_logs"
+
+# Log rotation settings
+MAX_LOG_DIR_SIZE_MB = 500
+MAX_LOG_AGE_HOURS = 48
 
 
 def strip_non_ascii(text: str) -> str:
@@ -205,3 +211,51 @@ def read_mission_log(file_path: Path | str) -> dict[str, Any]:
     path = Path(file_path)
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def cleanup_old_logs(log_dir: str | None = None) -> int:
+    """
+    Remove logs older than MAX_LOG_AGE_HOURS or if directory exceeds MAX_LOG_DIR_SIZE_MB.
+    
+    This function safely cleans up old log files to prevent disk filling.
+    Errors during cleanup do not raise exceptions (fail-safe for startup).
+    
+    Args:
+        log_dir: Custom log directory. Default: ~/nomad_logs
+        
+    Returns:
+        Number of files deleted
+        
+    Example:
+        >>> deleted = cleanup_old_logs()
+        >>> print(f"Deleted {deleted} old log files")
+    """
+    if log_dir is None:
+        log_dir = os.path.expanduser("~/nomad_logs")
+    
+    deleted = 0
+    
+    try:
+        # Ensure directory exists
+        if not os.path.isdir(log_dir):
+            return 0
+        
+        cutoff = datetime.now() - timedelta(hours=MAX_LOG_AGE_HOURS)
+        
+        # Find all log files (*.log)
+        log_files = glob.glob(os.path.join(log_dir, "*.log"))
+        
+        for log_file in log_files:
+            try:
+                mtime = datetime.fromtimestamp(os.path.getmtime(log_file))
+                if mtime < cutoff:
+                    os.remove(log_file)
+                    deleted += 1
+            except OSError:
+                # Skip files we can't access (don't crash)
+                pass
+    except Exception:
+        # Fail silently - cleanup errors should not stop startup
+        pass
+    
+    return deleted

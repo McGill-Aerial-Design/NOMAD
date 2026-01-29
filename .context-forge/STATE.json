@@ -1,0 +1,433 @@
+{
+  "version": "1.0.0",
+  "projectRoot": "C:\\Users\\Youssef\\Documents\\Code\\MAD\\NOMAD",
+  "lastUpdated": 1769714853734,
+  "activeDecisions": [
+    {
+      "id": "2be7ee9d-3d08-4916-9e30-eb9855a9f572",
+      "type": "decision",
+      "content": "NOMAD Direct ROS2-MAVLink architecture COMPLETE. Files deployed to Jetson Docker (/workspaces/isaac_ros-dev/): 1) vio_bridge.py - ZED odom to MAVROS vision_pose at 30Hz, 2) nav2_mavros_params.yaml - Nav2 config using ZED point cloud for costmap and ZED odom for localization, 3) nomad_task2.launch.py - Launch file with critical remap /cmd_vel to /mavros/setpoint_velocity/cmd_vel_unstamped. No Python middleware needed! Nav2 commands go directly to ArduPilot.",
+      "timestamp": 1769713750317,
+      "supersedes": null,
+      "tags": [
+        "architecture",
+        "complete",
+        "critical",
+        "nav2",
+        "mavros"
+      ],
+      "createdAt": 1769713750317,
+      "lastVerified": 1769713750317,
+      "citations": [
+        "edge_core/ros/nav2_mavros_params.yaml",
+        "edge_core/ros/nomad_task2.launch.py",
+        "edge_core/ros/vio_bridge.py"
+      ],
+      "priority": 5
+    },
+    {
+      "id": "5723052e-691a-4963-bce3-63f74efd8619",
+      "type": "decision",
+      "content": "DIRECT ROS2-MAVLINK ARCHITECTURE VERIFIED WORKING on Jetson Orin Nano (mad@100.75.218.89). Full stack: ZED2i camera -> vio_bridge.py -> MAVROS -> Cube Orange ArduPilot. VIO flowing at 30Hz from /zed/zed_node/odom through /mavros/vision_pose/pose to ArduPilot EKF. No Python middleware needed! Nav2 should publish directly to /mavros/setpoint_velocity/cmd_vel_unstamped for velocity control.",
+      "timestamp": 1769713635801,
+      "supersedes": null,
+      "tags": [
+        "architecture",
+        "verified",
+        "critical",
+        "ros2-mavlink"
+      ],
+      "createdAt": 1769713635801,
+      "lastVerified": 1769713635801,
+      "citations": [
+        "edge_core/ros/vio_bridge.py"
+      ],
+      "priority": 5
+    },
+    {
+      "id": "953ea5d3-e570-4633-a165-2c96b7e9286f",
+      "type": "decision",
+      "content": "FINAL STATUS Jan 29: VIO bridge deployed to Jetson at /workspaces/isaac_ros-dev/vio_bridge.py in Docker nomad_isaac_ros_32. SSH: mad@100.75.218.89. ZED running at 30Hz. MAVROS connected to Cube Orange (MANUAL mode). To run full stack: 1) docker exec bash, 2) source ROS, 3) python3 vio_bridge.py. NEXT: Run VIO bridge, configure Nav2 params to publish /mavros/setpoint_velocity/cmd_vel_unstamped, verify ArduPilot receives vision pose on EKF.",
+      "timestamp": 1769713474025,
+      "supersedes": null,
+      "tags": [
+        "status",
+        "final",
+        "critical",
+        "todo",
+        "jan29"
+      ],
+      "createdAt": 1769713474025,
+      "lastVerified": 1769713474025,
+      "citations": [
+        "edge_core/ros/vio_bridge.py",
+        "AGENTS.md"
+      ],
+      "priority": 5
+    },
+    {
+      "id": "a0e9da37-afcf-43fd-a116-e664ec70fda5",
+      "type": "decision",
+      "content": "NOMAD COMPLETE ARCHITECTURE STATUS: Jetson SSH: mad@100.75.218.89, Docker: nomad_isaac_ros_32. Components verified working: (1) ZED wrapper at 30Hz VIO on /zed/zed_node/odom, YOLOv26 on /zed/zed_node/obj_det/objects, (2) MAVROS connected to Cube Orange at /dev/ttyACM0:921600 in MANUAL mode, (3) VIO bridge created at /workspaces/isaac_ros-dev/vio_bridge.py. NEXT STEPS: Run vio_bridge.py, configure Nav2 to publish /mavros/setpoint_velocity/cmd_vel_unstamped, test full system. Edge Core nav_controller.py can be deprecated - direct ROS-MAVLink is working!",
+      "timestamp": 1769713413887,
+      "supersedes": null,
+      "tags": [
+        "architecture",
+        "status",
+        "nomad",
+        "critical",
+        "complete"
+      ],
+      "createdAt": 1769713413887,
+      "lastVerified": 1769713413887,
+      "citations": [
+        "AGENTS.md",
+        "PRD.md"
+      ],
+      "priority": 5
+    },
+    {
+      "id": "d7ea4246-ddc9-40f3-b6a8-5f3c2393abbe",
+      "type": "decision",
+      "content": "NOMAD ROS2 architecture verified working on Jetson: ZED wrapper publishing VIO at /zed/zed_node/odom (30Hz), object detection at /zed/zed_node/obj_det/objects. MAVROS connected to Cube Orange via /dev/ttyACM0:921600 inside Docker container nomad_isaac_ros_32. Need remapping: /zed/zed_node/odom -> /mavros/vision_pose/pose for EKF, /cmd_vel -> /mavros/setpoint_velocity/cmd_vel_unstamped for Nav2",
+      "timestamp": 1769713295576,
+      "supersedes": null,
+      "tags": [
+        "architecture",
+        "ros2",
+        "mavros",
+        "zed",
+        "navigation",
+        "working"
+      ],
+      "createdAt": 1769713295576,
+      "lastVerified": 1769713295576,
+      "citations": [
+        "edge_core/isaac_ros_bridge.py",
+        "PRD.md"
+      ],
+      "priority": 5
+    },
+    {
+      "id": "89d4c589-2281-4f00-9555-a27ded777c1d",
+      "type": "decision",
+      "content": "Edge Core refactored to mission orchestrator only - NOT navigation controller. Responsibilities: HTTP API, WASD velocity publisher (→/cmd_vel), high-level Nav2 action client, health monitoring. Removed: velocity translation, safety limits, command timeouts (Nav2 handles)",
+      "timestamp": 1769703979605,
+      "supersedes": null,
+      "tags": [
+        "architecture",
+        "edge-core",
+        "nav2",
+        "refactor"
+      ],
+      "createdAt": 1769703979605,
+      "lastVerified": 1769703979605,
+      "citations": [
+        "docs/NAV2_INTEGRATION_PLAN.md"
+      ],
+      "relatedTo": [
+        "3dff59e0-a0c0-4e37-a382-02aecdfbb797"
+      ],
+      "priority": 5
+    },
+    {
+      "id": "3dff59e0-a0c0-4e37-a382-02aecdfbb797",
+      "type": "decision",
+      "content": "Nav2 integration approved: Eliminate nav_controller.py middleware, use mavros2 for direct ROS2-to-MAVLink communication. Architecture: Nav2 → /cmd_vel → mavros2 → SET_POSITION_TARGET_LOCAL_NED → ArduPilot GUIDED mode",
+      "timestamp": 1769703972524,
+      "supersedes": null,
+      "tags": [
+        "architecture",
+        "nav2",
+        "mavros2",
+        "navigation",
+        "task2"
+      ],
+      "createdAt": 1769703972524,
+      "lastVerified": 1769703972524,
+      "citations": [
+        "docs/NAV2_INTEGRATION_PLAN.md",
+        "edge_core/nav_controller.py"
+      ],
+      "priority": 5
+    },
+    {
+      "id": "a5e9e794-3cf9-491a-a507-57fd5d3ba8e0",
+      "type": "decision",
+      "content": "NOMAD Video Bridge (nomad_video_bridge.py) uses GStreamer NVENC for zero-copy hardware H.264 encoding with 150ms glass-to-glass latency",
+      "timestamp": 1769703947455,
+      "supersedes": null,
+      "tags": [
+        "video",
+        "hardware-acceleration",
+        "nvenc",
+        "gstreamer",
+        "performance"
+      ],
+      "createdAt": 1769703947455,
+      "lastVerified": 1769703947455,
+      "citations": [
+        "edge_core/nomad_video_bridge.py:1-50"
+      ],
+      "priority": 5
+    },
+    {
+      "id": "5057747d-2432-4ade-94c5-8dfc6acd182c",
+      "type": "decision",
+      "content": "Edge Core refactored from global variables to FastAPI app.state dependency injection for thread-safe service management",
+      "timestamp": 1769703947431,
+      "supersedes": null,
+      "tags": [
+        "architecture",
+        "refactor",
+        "thread-safety",
+        "fastapi"
+      ],
+      "createdAt": 1769703947431,
+      "lastVerified": 1769703947431,
+      "citations": [
+        "DEPENDENCY_INJECTION_REFACTOR.md",
+        "edge_core/api.py",
+        "edge_core/main.py"
+      ],
+      "priority": 5
+    },
+    {
+      "id": "867fce27-0564-48f0-8d2a-649224c1f8b0",
+      "type": "decision",
+      "content": "Isaac ROS bridge (isaac_ros_bridge.py) needs fixes for ZED+YOLOv26 integration. Current code expects Isaac ROS YOLO Detection2DArray but system uses ZED wrapper's ObjectsStamped messages. VIO topic, detection topic, and message parsing all incorrect.",
+      "timestamp": 1769703258903,
+      "supersedes": null,
+      "tags": [
+        "isaac-ros",
+        "zed",
+        "yolo",
+        "bug",
+        "todo",
+        "perception"
+      ],
+      "createdAt": 1769703258903,
+      "lastVerified": 1769703258903,
+      "citations": [
+        "edge_core/isaac_ros_bridge.py:126",
+        "edge_core/isaac_ros_bridge.py:219-237"
+      ],
+      "priority": 5
+    },
+    {
+      "id": "20107583-bec8-4037-aa03-e7ab589e357d",
+      "type": "decision",
+      "content": "Visual-Inertial Odometry (VIO) pipeline handles indoor navigation for Task 2",
+      "timestamp": 1769702285851,
+      "supersedes": null,
+      "tags": [
+        "navigation",
+        "vio",
+        "computer-vision"
+      ],
+      "createdAt": 1769702285851,
+      "lastVerified": 1769702285851,
+      "citations": [
+        "edge_core/vio_pipeline.py",
+        "docs/JETSON_NAV_ARCHITECTURE.md"
+      ],
+      "priority": 5
+    },
+    {
+      "id": "979cd8c6-d3af-41a1-a8a1-7b90e34797ef",
+      "type": "decision",
+      "content": "Edge Core API runs on port 8000 with uvicorn ASGI server on Jetson Orin Nano",
+      "timestamp": 1769702276331,
+      "supersedes": "c9b875f4-19ab-4762-bfd8-5e43b0855a58",
+      "tags": [
+        "architecture",
+        "backend",
+        "deployment",
+        "ports"
+      ],
+      "createdAt": 1769702276331,
+      "lastVerified": 1769702276331,
+      "citations": [
+        "edge_core/api.py",
+        "edge_core/main.py"
+      ],
+      "priority": 5
+    },
+    {
+      "id": "a8be7521-43a3-40de-bdab-dc779a90f132",
+      "type": "decision",
+      "content": "EKF Source Control Panel implemented in Mission Planner plugin: EkfSourceControlPanel.cs provides UI for switching ArduPilot EKF sources (GPS/Vision/OptFlow), with auto-switch based on GPS fix and force-vision toggle for outdoor VIO testing. DualLinkSender.cs has SetEkfSource() method using MAV_CMD_SET_EKF_SOURCE_SET (42007).",
+      "timestamp": 1769714853733,
+      "supersedes": null,
+      "tags": [
+        "ekf",
+        "mission-planner",
+        "vio",
+        "gps",
+        "architecture",
+        "critical"
+      ],
+      "createdAt": 1769714853733,
+      "lastVerified": 1769714853733,
+      "citations": [
+        "mission_planner/src/EkfSourceControlPanel.cs",
+        "mission_planner/src/DualLinkSender.cs:56",
+        "mission_planner/src/NOMADControlPanel.cs"
+      ],
+      "priority": 4
+    },
+    {
+      "id": "10aab30a-ba16-4f59-b1bc-796b3d8f7780",
+      "type": "decision",
+      "content": "Dynamic multi-stream video system supports runtime topic switching without pipeline restart via HTTP API",
+      "timestamp": 1769703947487,
+      "supersedes": null,
+      "tags": [
+        "video",
+        "streaming",
+        "api",
+        "flexibility"
+      ],
+      "createdAt": 1769703947487,
+      "lastVerified": 1769703947487,
+      "citations": [
+        "edge_core/nomad_video_bridge.py:320-370"
+      ],
+      "priority": 4
+    },
+    {
+      "id": "4ccef8f9-d872-450c-acfe-a7fd73885040",
+      "type": "decision",
+      "content": "ZED camera model changed from zed2 to zed2i for hardware compatibility (nvblox only supports zed2/zedx)",
+      "timestamp": 1769703947464,
+      "supersedes": null,
+      "tags": [
+        "hardware",
+        "camera",
+        "configuration"
+      ],
+      "createdAt": 1769703947464,
+      "lastVerified": 1769703947464,
+      "citations": [
+        "git:b6841b5"
+      ],
+      "priority": 4
+    },
+    {
+      "id": "4ce975c8-4646-4235-bef7-fc1ee77550e8",
+      "type": "decision",
+      "content": "NOMAD uses hybrid ROS setup: ZED ROS wrapper provides camera, depth, VIO, and YOLOv26 object detection. Isaac ROS provides only nvblox for 3D mapping (subscribes to ZED's depth+odom). This avoids Isaac ROS YOLO version limitations while getting nvblox benefits",
+      "timestamp": 1769703302732,
+      "supersedes": null,
+      "tags": [
+        "architecture",
+        "isaac-ros",
+        "zed",
+        "nvblox",
+        "yolo"
+      ],
+      "createdAt": 1769703302732,
+      "lastVerified": 1769703302732,
+      "citations": [
+        "edge_core/isaac_ros_bridge.py",
+        "AGENTS.md"
+      ],
+      "priority": 4
+    },
+    {
+      "id": "d9a36415-f45b-4712-b1a1-3b4ba53c67e4",
+      "type": "decision",
+      "content": "NavController velocity commands use async queue processing with 3ms average latency and 5 m/s safety limits",
+      "timestamp": 1769702499684,
+      "supersedes": null,
+      "tags": [
+        "performance",
+        "safety",
+        "navigation"
+      ],
+      "createdAt": 1769702499684,
+      "lastVerified": 1769702499684,
+      "citations": [
+        "Ollama summarization",
+        "Code review session"
+      ],
+      "priority": 4
+    },
+    {
+      "id": "d678a28f-9f8f-48fd-b130-11d9cc3a9eb2",
+      "type": "decision",
+      "content": "Mission Planner plugin written in C# targets Windows Ground Control Station",
+      "timestamp": 1769702229952,
+      "supersedes": null,
+      "tags": [
+        "architecture",
+        "frontend",
+        "csharp"
+      ],
+      "createdAt": 1769702229952,
+      "lastVerified": 1769702229952,
+      "citations": [
+        "mission_planner/src/NOMADPlugin.cs"
+      ],
+      "priority": 4
+    },
+    {
+      "id": "933c64ed-d7a2-41f9-8a4a-862362567e47",
+      "type": "decision",
+      "content": "Tailscale VPN used for remote connectivity between Jetson (100.75.218.89) and Ground Station (100.76.127.17)",
+      "timestamp": 1769702229935,
+      "supersedes": null,
+      "tags": [
+        "networking",
+        "vpn",
+        "connectivity"
+      ],
+      "createdAt": 1769702229935,
+      "lastVerified": 1769702229935,
+      "citations": [
+        "AGENTS.md",
+        "tailscale/SETUP.md"
+      ],
+      "priority": 4
+    },
+    {
+      "id": "27eb9e0f-b513-447c-b5cb-98b8df91874d",
+      "type": "decision",
+      "content": "H.265 video encoding deployed for competition to reduce bandwidth on RTSP streams with 200-300ms latency",
+      "timestamp": 1769702499706,
+      "supersedes": null,
+      "tags": [
+        "video",
+        "streaming",
+        "performance",
+        "competition"
+      ],
+      "createdAt": 1769702499706,
+      "lastVerified": 1769702499706,
+      "citations": [
+        "Meeting notes Jan 29 2026"
+      ],
+      "priority": 3
+    },
+    {
+      "id": "f2df30c4-0619-4cee-9770-723283a01f33",
+      "type": "decision",
+      "content": "Health dashboard displays Jetson GPU, CPU, memory, and thermal metrics in real-time",
+      "timestamp": 1769702285832,
+      "supersedes": null,
+      "tags": [
+        "monitoring",
+        "ui",
+        "health"
+      ],
+      "createdAt": 1769702285832,
+      "lastVerified": 1769702285832,
+      "citations": [
+        "mission_planner/src/EnhancedHealthDashboard.cs"
+      ],
+      "priority": 3
+    }
+  ],
+  "fileCount": 35,
+  "symbolCount": 651
+}

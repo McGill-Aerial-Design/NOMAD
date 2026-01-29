@@ -745,7 +745,7 @@ namespace NOMAD.MissionPlanner
                     var peerCount = tailscale["peer_count"]?.Value<int>() ?? 0;
                     var latency = tailscale["latency_ms"];
                     
-                    bool isConnected = status == "connected";
+                    bool isConnected = status.Equals("connected", StringComparison.OrdinalIgnoreCase);
                     _lblTailscaleStatus.Text = isConnected ? "Connected" : status.Replace("_", " ");
                     _lblTailscaleStatus.ForeColor = isConnected ? Color.LimeGreen : 
                         (status == "connecting" ? Color.Yellow : Color.Red);

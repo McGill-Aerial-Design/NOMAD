@@ -15,10 +15,13 @@ import subprocess
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
-from fastapi import FastAPI, HTTPException, WebSocket, Query
+import cv2
+import numpy as np
+
+from fastapi import FastAPI, HTTPException, Request, WebSocket, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.websockets import WebSocketDisconnect
 from pydantic import BaseModel
 
@@ -50,6 +53,7 @@ class Task1CaptureResponse(BaseModel):
     target_text: Optional[str] = None
     position: Optional[dict] = None
     heading_deg: Optional[float] = None
+    image_name: Optional[str] = None
     error: Optional[str] = None
 
 
@@ -65,9 +69,24 @@ class Task2HitRequest(BaseModel):
     z: float
 
 
+# Whitelist of allowed terminal commands for safety
+COMMAND_WHITELIST: dict[str, str] = {
+    "restart_video": "sudo systemctl restart mediamtx",
+    "restart_edge_core": "sudo systemctl restart nomad",
+    "reboot_jetson": "sudo reboot",
+    "shutdown_jetson": "sudo shutdown -h now",
+    "check_disk": "df -h",
+    "check_memory": "free -h",
+    "check_processes": "ps aux | head -20",
+    "tailscale_status": "tailscale status",
+    "network_info": "ip addr show",
+    "gpu_status": "tegrastats --interval 1000 --stop 2",
+}
+
+
 class TerminalCommandRequest(BaseModel):
     """Request model for terminal command execution."""
-    command: str
+    command_name: str  # Must be a key in COMMAND_WHITELIST
     timeout: int = 10
 
 
@@ -77,6 +96,7 @@ class TerminalCommandResponse(BaseModel):
     stdout: str
     stderr: str
     return_code: int
+    command_executed: Optional[str] = None
 
 
 class VIOStatusResponse(BaseModel):
@@ -123,62 +143,42 @@ class NavPositionRequest(BaseModel):
     source: str = "nav2"
 
 
-# ==================== Global Service References ====================
-# These are set by main.py after initialization
+# ==================== Setter Functions for Dependency Injection ====================
+# These receive app parameter and store services in app.state (thread-safe)
 
-_health_monitor: Optional["JetsonHealthMonitor"] = None
-_camera_service: Optional["ZEDCameraService"] = None
-_vio_pipeline: Optional["VIOPipeline"] = None
-_isaac_bridge: Optional["IsaacROSBridge"] = None
-_nav_controller: Optional["NavController"] = None
-_exclusion_map: list[dict] = []
-_tailscale_manager: Any | None = None
-_network_monitor: Any | None = None
-
-# VIO state from external sources (ROS bridge)
-_external_vio_state: Optional[dict] = None
-_vio_trajectory: list[dict] = []  # List of {x, y, z, timestamp} points
-_vio_trajectory_max_points: int = 1000  # Keep last N points
+def set_health_monitor(app: FastAPI, monitor: "JetsonHealthMonitor") -> None:
+    """Register health monitor with API via app.state."""
+    app.state.health_monitor = monitor
 
 
-def set_health_monitor(monitor: "JetsonHealthMonitor") -> None:
-    """Set the health monitor reference."""
-    global _health_monitor
-    _health_monitor = monitor
+def set_camera_service(app: FastAPI, camera: "ZEDCameraService") -> None:
+    """Register camera service with API via app.state."""
+    app.state.camera_service = camera
 
 
-def set_camera_service(camera: "ZEDCameraService") -> None:
-    """Set the camera service reference."""
-    global _camera_service
-    _camera_service = camera
+def set_vio_pipeline(app: FastAPI, pipeline: "VIOPipeline") -> None:
+    """Register VIO pipeline with API via app.state."""
+    app.state.vio_pipeline = pipeline
 
 
-def set_vio_pipeline(pipeline: "VIOPipeline") -> None:
-    """Set the VIO pipeline reference."""
-    global _vio_pipeline
-    _vio_pipeline = pipeline
+def set_isaac_bridge(app: FastAPI, bridge: "IsaacROSBridge") -> None:
+    """Register Isaac ROS bridge with API via app.state."""
+    app.state.isaac_bridge = bridge
 
 
-def set_isaac_bridge(bridge: "IsaacROSBridge") -> None:
-    """Set the Isaac ROS bridge reference."""
-    global _isaac_bridge
-    _isaac_bridge = bridge
-
-def set_tailscale_manager(manager: Any) -> None:
-    """Set the Tailscale manager reference."""
-    global _tailscale_manager
-    _tailscale_manager = manager
-
-def set_network_monitor(monitor: Any) -> None:
-    """Set the NetworkMonitor reference."""
-    global _network_monitor
-    _network_monitor = monitor
+def set_tailscale_manager(app: FastAPI, manager: Any) -> None:
+    """Register Tailscale manager with API via app.state."""
+    app.state.tailscale_manager = manager
 
 
-def set_nav_controller(controller: "NavController") -> None:
-    """Set the navigation controller reference."""
-    global _nav_controller
-    _nav_controller = controller
+def set_network_monitor(app: FastAPI, monitor: Any) -> None:
+    """Register network monitor with API via app.state."""
+    app.state.network_monitor = monitor
+
+
+def set_nav_controller(app: FastAPI, controller: "NavController") -> None:
+    """Register navigation controller with API via app.state."""
+    app.state.nav_controller = controller
 
 
 def create_app(state_manager: StateManager) -> FastAPI:
@@ -207,6 +207,22 @@ def create_app(state_manager: StateManager) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    
+    # Initialize app.state with all service references (dependency injection)
+    app.state.state_manager = state_manager
+    app.state.health_monitor = None
+    app.state.camera_service = None
+    app.state.vio_pipeline = None
+    app.state.isaac_bridge = None
+    app.state.nav_controller = None
+    app.state.tailscale_manager = None
+    app.state.network_monitor = None
+    
+    # VIO state from external sources (ROS bridge)
+    app.state.external_vio_state: Optional[dict] = None
+    app.state.vio_trajectory: list[dict] = []  # List of {x, y, z, timestamp} points
+    app.state.vio_trajectory_max_points: int = 1000  # Keep last N points
+    app.state.exclusion_map: list[dict] = []
 
     # ==================== Root / Health ====================
 
@@ -231,14 +247,14 @@ def create_app(state_manager: StateManager) -> FastAPI:
     # ==================== Health Endpoints ====================
 
     @app.get("/health", tags=["System"])
-    async def health_check():
+    async def health_check(request: Request):
         """
         Comprehensive health check endpoint.
         
         Returns system health including CPU/GPU temperatures,
         memory usage, VIO status, and network connectivity.
         """
-        state = state_manager.get_state()
+        state = request.app.state.state_manager.get_state()
         
         # Base health response
         response = {
@@ -250,8 +266,9 @@ def create_app(state_manager: StateManager) -> FastAPI:
         }
         
         # Add Jetson health metrics if available
-        if _health_monitor:
-            health = _health_monitor.health
+        health_monitor = request.app.state.health_monitor
+        if health_monitor:
+            health = health_monitor.health
             response.update({
                 "cpu_temp": health.cpu_temp_c,
                 "cpu_load": health.cpu_load_pct,
@@ -273,8 +290,9 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 response["status"] = "warning"
         
         # Add VIO health if available
-        if _vio_pipeline:
-            vio_status = _vio_pipeline.status
+        vio_pipeline = request.app.state.vio_pipeline
+        if vio_pipeline:
+            vio_status = vio_pipeline.status
             response["vio"] = {
                 "health": vio_status.health.value,
                 "tracking_confidence": vio_status.tracking_confidence,
@@ -284,33 +302,35 @@ def create_app(state_manager: StateManager) -> FastAPI:
         return response
 
     @app.get("/health/detailed", tags=["System"])
-    async def detailed_health():
+    async def detailed_health(request: Request):
         """Get detailed health metrics for monitoring dashboard."""
-        if not _health_monitor:
+        health_monitor = request.app.state.health_monitor
+        if not health_monitor:
             return {"error": "Health monitor not initialized"}
         
-        return _health_monitor.health.to_dict()
+        return health_monitor.health.to_dict()
 
     # ==================== Status Endpoints ====================
 
     @app.get("/status", tags=["System"])
-    async def get_status():
+    async def get_status(request: Request):
         """Get current system state including all telemetry."""
-        state = state_manager.get_state()
+        state = request.app.state.state_manager.get_state()
         return jsonable_encoder(state)
 
     # =================== Network Endpoints =====================
 
     @app.get("/network/status", tags=["Network"])
-    async def network_status():
+    async def network_status(request: Request):
         """Get current network + tailscale status."""
         tailscale = None
         modem = None
         internet_reachable = False
         gcs_reachable = False
 
-        if _tailscale_manager:
-            info = _tailscale_manager.info
+        tailscale_manager = request.app.state.tailscale_manager
+        if tailscale_manager:
+            info = tailscale_manager.info
             tailscale = {
                 "status": info.status.value if getattr(info, "status", None) else "unknown",
                 "ip": getattr(info, "ip_address", None),
@@ -319,8 +339,9 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 "latency_ms": getattr(info, "latency_ms", None),
             }
 
-        if _network_monitor:
-            status = _network_monitor.status
+        network_monitor = request.app.state.network_monitor
+        if network_monitor:
+            status = network_monitor.status
             internet_reachable = bool(getattr(status, "internet_reachable", False))
             gcs_reachable = bool(getattr(status, "tailscale_reachable", False))
 
@@ -341,12 +362,13 @@ def create_app(state_manager: StateManager) -> FastAPI:
         }
     
     @app.post("/network/reconnect", tags=["Network"])
-    async def network_reconnect():
+    async def network_reconnect(request: Request):
         """Trigger Tailscale reconnection."""
-        if not _tailscale_manager:
+        tailscale_manager = request.app.state.tailscale_manager
+        if not tailscale_manager:
             raise HTTPException(status_code=503, detail="Tailscale manager not initialized")
         
-        ok = await _tailscale_manager.reconnect()
+        ok = await tailscale_manager.reconnect()
         return {
             "success": ok, 
             "message": "Tailscale reconnection triggered" if ok else "Failed to trigger reconnection"}
@@ -402,14 +424,16 @@ def create_app(state_manager: StateManager) -> FastAPI:
         await websocket.accept()
         try:
             while True:
-                state = state_manager.get_state()
+                state = websocket.app.state.state_manager.get_state()
                 data = jsonable_encoder(state)
                 
                 # Add additional real-time data
-                if _health_monitor:
-                    data["jetson_health"] = _health_monitor.health.to_dict()
-                if _vio_pipeline:
-                    data["vio_status"] = _vio_pipeline.status.to_dict()
+                health_monitor = websocket.app.state.health_monitor
+                vio_pipeline = websocket.app.state.vio_pipeline
+                if health_monitor:
+                    data["jetson_health"] = health_monitor.health.to_dict()
+                if vio_pipeline:
+                    data["vio_status"] = vio_pipeline.status.to_dict()
                 
                 await websocket.send_json(data)
                 await asyncio.sleep(0.1)  # 10Hz
@@ -419,18 +443,18 @@ def create_app(state_manager: StateManager) -> FastAPI:
     # ==================== Task 1: Recon (Outdoor) ====================
 
     @app.post("/api/task/1/capture", tags=["Task 1"], response_model=Task1CaptureResponse)
-    async def task1_capture(request: Task1CaptureRequest = None):
+    async def task1_capture(task_request: Task1CaptureRequest = None, request: Request = None):
         """
         Capture snapshot for Task 1 recon mission.
         
         Captures current position, heading, and camera image.
         Used for outdoor GPS-based reconnaissance.
         """
-        state = state_manager.get_state()
+        state = request.app.state.state_manager.get_state()
         
         # Get values from request or current state
-        heading = request.heading_deg if request and request.heading_deg else state.heading_deg
-        gimbal_pitch = request.gimbal_pitch_deg if request and request.gimbal_pitch_deg else state.gimbal_pitch_deg
+        heading = task_request.heading_deg if task_request and task_request.heading_deg else state.heading_deg
+        gimbal_pitch = task_request.gimbal_pitch_deg if task_request and task_request.gimbal_pitch_deg else state.gimbal_pitch_deg
         
         # Validate we have required data
         if not state.gps_fix:
@@ -459,6 +483,41 @@ def create_app(state_manager: StateManager) -> FastAPI:
         
         log_file = os.path.join(log_dir, f"task1_{timestamp.strftime('%Y%m%d_%H%M%S')}.json")
         
+        image_filename = None
+        
+        # Capture image from ZED camera if available
+        camera_service = request.app.state.camera_service
+        if camera_service:
+            try:
+                frame = camera_service.get_frame()
+                if frame and frame.left_image is not None:
+                    # Create image directory
+                    image_dir = "./data/task1_images"
+                    os.makedirs(image_dir, exist_ok=True)
+                    
+                    # Generate filename
+                    image_filename = f"task1_{timestamp.strftime('%Y%m%d_%H%M%S_%f')[:-3]}.jpg"
+                    image_path = os.path.join(image_dir, image_filename)
+                    
+                    # Convert from BGRA to BGR if needed (ZED often returns BGRA)
+                    if frame.left_image.shape[2] == 4:
+                        image_bgr = cv2.cvtColor(frame.left_image, cv2.COLOR_BGRA2BGR)
+                    else:
+                        image_bgr = frame.left_image
+                    
+                    # Save image
+                    cv2.imwrite(image_path, image_bgr)
+                    logger.info(f"Task 1 image saved: {image_path}")
+                    
+                    # Add image reference to capture record
+                    capture["image_file"] = image_filename
+                else:
+                    logger.warning("Task 1 capture: Camera frame not available")
+            except Exception as e:
+                logger.error(f"Task 1 image capture failed: {e}")
+        else:
+            logger.warning("Task 1 capture: Camera service not available")
+        
         try:
             import json
             with open(log_file, "w") as f:
@@ -472,6 +531,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 target_text=f"Captured at {state.gps_lat:.6f}, {state.gps_lon:.6f}",
                 position=capture["position"],
                 heading_deg=heading,
+                image_name=image_filename,
             )
             
         except Exception as e:
@@ -482,19 +542,37 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 error=str(e)
             )
 
+    @app.get("/api/task/1/images/{filename}", tags=["Task 1"])
+    async def task1_get_image(filename: str):
+        """
+        Retrieve a saved Task 1 image.
+        
+        Returns the image file captured during a Task 1 recon mission.
+        """
+        image_dir = "./data/task1_images"
+        image_path = os.path.join(image_dir, filename)
+        
+        # Validate filename to prevent directory traversal
+        if ".." in filename or "/" in filename or "\\" in filename:
+            raise HTTPException(status_code=400, detail="Invalid filename")
+        
+        # Check if file exists
+        if not os.path.exists(image_path):
+            raise HTTPException(status_code=404, detail="Image not found")
+        
+        return FileResponse(image_path, media_type="image/jpeg")
+
     # ==================== Task 2: Extinguish (Indoor) ====================
 
     @app.post("/api/task/2/reset_map", tags=["Task 2"])
-    async def task2_reset_map(request: Task2ResetRequest = None):
+    async def task2_reset_map(request: Request):
         """
         Reset the exclusion map for Task 2.
         
         Clears all recorded target positions, allowing
         previously sprayed targets to be detected again.
         """
-        global _exclusion_map
-        
-        _exclusion_map = []
+        request.app.state.exclusion_map = []
         logger.info("Task 2 exclusion map reset")
         
         return {
@@ -504,56 +582,56 @@ def create_app(state_manager: StateManager) -> FastAPI:
         }
 
     @app.post("/api/task/2/target_hit", tags=["Task 2"])
-    async def task2_target_hit(request: Task2HitRequest):
+    async def task2_target_hit(hit_request: Task2HitRequest, request: Request):
         """
         Register a target hit for Task 2 exclusion map.
         
         Records the 3D position of a sprayed target to prevent
         re-engagement. Uses VIO frame coordinates.
         """
-        global _exclusion_map
-        
         target = {
-            "x": request.x,
-            "y": request.y,
-            "z": request.z,
+            "x": hit_request.x,
+            "y": hit_request.y,
+            "z": hit_request.z,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         
-        _exclusion_map.append(target)
-        logger.info(f"Task 2 target hit registered: ({request.x}, {request.y}, {request.z})")
+        request.app.state.exclusion_map.append(target)
+        logger.info(f"Task 2 target hit registered: ({hit_request.x}, {hit_request.y}, {hit_request.z})")
         
         return {
             "success": True,
             "target": target,
-            "total_targets": len(_exclusion_map),
+            "total_targets": len(request.app.state.exclusion_map),
         }
 
     @app.get("/api/task/2/exclusion_map", tags=["Task 2"])
-    async def task2_get_exclusion_map():
+    async def task2_get_exclusion_map(request: Request):
         """Get current exclusion map targets."""
         return {
-            "total_targets": len(_exclusion_map),
-            "targets": _exclusion_map,
+            "total_targets": len(request.app.state.exclusion_map),
+            "targets": request.app.state.exclusion_map,
         }
 
     # ==================== VIO Endpoints ====================
 
     @app.get("/api/vio/status", tags=["VIO"])
-    async def vio_status():
+    async def vio_status(request: Request):
         """Get VIO pipeline status."""
         # Check for external VIO state first
-        if _external_vio_state:
+        external_vio_state = request.app.state.external_vio_state
+        if external_vio_state:
             return {
-                "health": "healthy" if _external_vio_state.get("confidence", 0) > 0.5 else "degraded",
-                "tracking_confidence": _external_vio_state.get("confidence", 0),
+                "health": "healthy" if external_vio_state.get("confidence", 0) > 0.5 else "degraded",
+                "tracking_confidence": external_vio_state.get("confidence", 0),
                 "position_valid": True,
                 "message_rate_hz": 30.0,
                 "reset_counter": 0,
-                "source": _external_vio_state.get("source", "external"),
+                "source": external_vio_state.get("source", "external"),
             }
         
-        if not _vio_pipeline:
+        vio_pipeline = request.app.state.vio_pipeline
+        if not vio_pipeline:
             return {
                 "health": "unknown",
                 "tracking_confidence": 0,
@@ -563,56 +641,56 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 "source": "none",
             }
         
-        return _vio_pipeline.status.to_dict()
+        return vio_pipeline.status.to_dict()
 
     @app.post("/api/vio/update", tags=["VIO"])
-    async def vio_update(request: VIOUpdateRequest):
+    async def vio_update(vio_request: VIOUpdateRequest, request: Request):
         """
         Receive VIO pose update from external source (ROS bridge).
         
         This endpoint is called by the ros_http_bridge.py script running
         inside the Isaac ROS container to send VIO data to edge_core.
         """
-        global _external_vio_state, _vio_trajectory
-        
         # Store latest state
-        _external_vio_state = {
-            "timestamp": request.timestamp,
-            "x": request.x,
-            "y": request.y,
-            "z": request.z,
-            "roll": request.roll,
-            "pitch": request.pitch,
-            "yaw": request.yaw,
-            "vx": request.vx,
-            "vy": request.vy,
-            "vz": request.vz,
-            "confidence": request.confidence,
-            "source": request.source,
+        request.app.state.external_vio_state = {
+            "timestamp": vio_request.timestamp,
+            "x": vio_request.x,
+            "y": vio_request.y,
+            "z": vio_request.z,
+            "roll": vio_request.roll,
+            "pitch": vio_request.pitch,
+            "yaw": vio_request.yaw,
+            "vx": vio_request.vx,
+            "vy": vio_request.vy,
+            "vz": vio_request.vz,
+            "confidence": vio_request.confidence,
+            "source": vio_request.source,
         }
         
         # Add to trajectory
-        _vio_trajectory.append({
-            "x": request.x,
-            "y": request.y,
-            "z": request.z,
-            "timestamp": request.timestamp,
+        request.app.state.vio_trajectory.append({
+            "x": vio_request.x,
+            "y": vio_request.y,
+            "z": vio_request.z,
+            "timestamp": vio_request.timestamp,
         })
         
         # Trim trajectory if too long
-        if len(_vio_trajectory) > _vio_trajectory_max_points:
-            _vio_trajectory = _vio_trajectory[-_vio_trajectory_max_points:]
+        if len(request.app.state.vio_trajectory) > request.app.state.vio_trajectory_max_points:
+            request.app.state.vio_trajectory = request.app.state.vio_trajectory[-request.app.state.vio_trajectory_max_points:]
         
-        return {"success": True, "trajectory_points": len(_vio_trajectory)}
+        return {"success": True, "trajectory_points": len(request.app.state.vio_trajectory)}
 
     @app.get("/api/vio/pose", tags=["VIO"])
-    async def vio_pose():
+    async def vio_pose(request: Request):
         """Get current VIO pose (position and orientation)."""
-        if _external_vio_state:
-            return _external_vio_state
+        external_vio_state = request.app.state.external_vio_state
+        if external_vio_state:
+            return external_vio_state
         
-        if _isaac_bridge and _isaac_bridge.vio_state:
-            vio = _isaac_bridge.vio_state
+        isaac_bridge = request.app.state.isaac_bridge
+        if isaac_bridge and isaac_bridge.vio_state:
+            vio = isaac_bridge.vio_state
             return {
                 "timestamp": vio.timestamp,
                 "x": vio.x,
@@ -631,37 +709,36 @@ def create_app(state_manager: StateManager) -> FastAPI:
         return {"valid": False, "message": "No VIO data available"}
 
     @app.get("/api/vio/trajectory", tags=["VIO"])
-    async def vio_trajectory(max_points: int = Query(default=100, le=1000)):
+    async def vio_trajectory(request: Request, max_points: int = Query(default=100, le=1000)):
         """
         Get VIO trajectory for visualization.
         
         Returns a list of (x, y, z) points representing the drone's path.
         Use max_points to limit the response size.
         """
-        points = _vio_trajectory[-max_points:] if _vio_trajectory else []
+        trajectory = request.app.state.vio_trajectory
+        points = trajectory[-max_points:] if trajectory else []
         return {
-            "total_points": len(_vio_trajectory),
+            "total_points": len(trajectory),
             "returned_points": len(points),
             "trajectory": points,
         }
 
     @app.delete("/api/vio/trajectory", tags=["VIO"])
-    async def vio_clear_trajectory():
+    async def vio_clear_trajectory(request: Request):
         """Clear the VIO trajectory history."""
-        global _vio_trajectory
-        count = len(_vio_trajectory)
-        _vio_trajectory = []
+        count = len(request.app.state.vio_trajectory)
+        request.app.state.vio_trajectory = []
         return {"success": True, "cleared_points": count}
 
     @app.post("/api/vio/reset_origin", tags=["VIO"])
-    async def vio_reset_origin():
+    async def vio_reset_origin(request: Request):
         """Reset VIO tracking origin to current position."""
-        global _vio_trajectory
-        
         # Clear trajectory on reset
-        _vio_trajectory = []
+        request.app.state.vio_trajectory = []
         
-        if not _vio_pipeline:
+        vio_pipeline = request.app.state.vio_pipeline
+        if not vio_pipeline:
             # Just clear trajectory if no VIO pipeline
             return {
                 "success": True,
@@ -669,27 +746,28 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 "message": "Trajectory cleared (no VIO pipeline)",
             }
         
-        success = _vio_pipeline.reset_origin()
+        success = vio_pipeline.reset_origin()
         return {
             "success": success,
-            "reset_counter": _vio_pipeline.status.reset_counter,
+            "reset_counter": vio_pipeline.status.reset_counter,
         }
 
     @app.get("/api/vio/calibration", tags=["VIO"])
-    async def vio_calibration_status():
+    async def vio_calibration_status(request: Request):
         """Get VIO calibration validation results."""
-        if not _camera_service:
+        camera_service = request.app.state.camera_service
+        if not camera_service:
             raise HTTPException(status_code=503, detail="Camera service not initialized")
         
         from .vio_pipeline import VIOCalibration
-        results = VIOCalibration.validate_tracking(_camera_service, duration_s=3.0)
+        results = VIOCalibration.validate_tracking(camera_service, duration_s=3.0)
         return results
 
     # ==================== Navigation Endpoints ====================
     # Jetson-centric navigation: Isaac ROS nav2/nvblox -> Edge Core -> ArduPilot GUIDED
 
     @app.get("/api/nav/status", tags=["Navigation"])
-    async def nav_status():
+    async def nav_status(request: Request):
         """
         Get navigation controller status.
         
@@ -697,21 +775,22 @@ def create_app(state_manager: StateManager) -> FastAPI:
         This is the Jetson-centric navigation controller that bridges
         ROS2 nav2/nvblox to ArduPilot GUIDED mode.
         """
-        if not _nav_controller:
+        nav_controller = request.app.state.nav_controller
+        if not nav_controller:
             return {
                 "available": False,
                 "mode": "disabled",
                 "message": "Navigation controller not initialized",
             }
         
-        status = _nav_controller.status
+        status = nav_controller.status
         return {
             "available": True,
             **status.to_dict(),
         }
 
     @app.post("/api/nav/velocity", tags=["Navigation"])
-    async def nav_velocity(request: NavVelocityRequest):
+    async def nav_velocity(nav_request: NavVelocityRequest, request: Request):
         """
         Send velocity command for autonomous navigation.
         
@@ -726,82 +805,86 @@ def create_app(state_manager: StateManager) -> FastAPI:
         - vz: Vertical velocity (m/s, positive = up)
         - yaw_rate: Yaw rate (rad/s, positive = CCW)
         """
-        if not _nav_controller:
+        nav_controller = request.app.state.nav_controller
+        if not nav_controller:
             raise HTTPException(status_code=503, detail="Navigation controller not initialized")
         
-        success = _nav_controller.send_velocity(
-            vx=request.vx,
-            vy=request.vy,
-            vz=request.vz,
-            yaw_rate=request.yaw_rate,
-            source=request.source,
+        success = nav_controller.send_velocity(
+            vx=nav_request.vx,
+            vy=nav_request.vy,
+            vz=nav_request.vz,
+            yaw_rate=nav_request.yaw_rate,
+            source=nav_request.source,
         )
         
         return {
             "success": success,
-            "timestamp": request.timestamp,
+            "timestamp": nav_request.timestamp,
             "commanded": {
-                "vx": request.vx,
-                "vy": request.vy,
-                "vz": request.vz,
-                "yaw_rate": request.yaw_rate,
+                "vx": nav_request.vx,
+                "vy": nav_request.vy,
+                "vz": nav_request.vz,
+                "yaw_rate": nav_request.yaw_rate,
             },
         }
 
     @app.post("/api/nav/position", tags=["Navigation"])
-    async def nav_position(request: NavPositionRequest):
+    async def nav_position(pos_request: NavPositionRequest, request: Request):
         """
         Send position target for navigation.
         
         Position is in local NED frame relative to VIO origin.
         """
-        if not _nav_controller:
+        nav_controller = request.app.state.nav_controller
+        if not nav_controller:
             raise HTTPException(status_code=503, detail="Navigation controller not initialized")
         
-        success = _nav_controller.send_position(
-            x=request.x,
-            y=request.y,
-            z=request.z,
-            yaw=request.yaw,
-            source=request.source,
+        success = nav_controller.send_position(
+            x=pos_request.x,
+            y=pos_request.y,
+            z=pos_request.z,
+            yaw=pos_request.yaw,
+            source=pos_request.source,
         )
         
         return {
             "success": success,
             "target": {
-                "x": request.x,
-                "y": request.y,
-                "z": request.z,
-                "yaw": request.yaw,
+                "x": pos_request.x,
+                "y": pos_request.y,
+                "z": pos_request.z,
+                "yaw": pos_request.yaw,
             },
         }
 
     @app.post("/api/nav/stop", tags=["Navigation"])
-    async def nav_stop():
+    async def nav_stop(request: Request):
         """
         Emergency stop - send zero velocity command.
         
         Use this to immediately halt all movement. The vehicle will
         attempt to hold position (requires VIO/GPS).
         """
-        if not _nav_controller:
+        nav_controller = request.app.state.nav_controller
+        if not nav_controller:
             raise HTTPException(status_code=503, detail="Navigation controller not initialized")
         
-        success = _nav_controller.stop_movement()
+        success = nav_controller.stop_movement()
         return {"success": success, "message": "Stop command sent"}
 
     @app.post("/api/nav/enable_guided", tags=["Navigation"])
-    async def nav_enable_guided():
+    async def nav_enable_guided(request: Request):
         """
         Request ArduPilot to enter GUIDED mode.
         
         GUIDED mode is required for Jetson navigation commands to work.
         This sends a MAVLink mode change request to the flight controller.
         """
-        if not _nav_controller:
+        nav_controller = request.app.state.nav_controller
+        if not nav_controller:
             raise HTTPException(status_code=503, detail="Navigation controller not initialized")
         
-        success = _nav_controller.enable_guided_mode()
+        success = nav_controller.enable_guided_mode()
         return {
             "success": success,
             "message": "GUIDED mode requested" if success else "Failed to request GUIDED mode",
@@ -810,9 +893,10 @@ def create_app(state_manager: StateManager) -> FastAPI:
     # ==================== Camera Endpoints ====================
 
     @app.get("/api/camera/status", tags=["Camera"])
-    async def camera_status():
+    async def camera_status(request: Request):
         """Get ZED camera status."""
-        if not _camera_service:
+        camera_service = request.app.state.camera_service
+        if not camera_service:
             return {
                 "initialized": False,
                 "tracking": False,
@@ -820,50 +904,74 @@ def create_app(state_manager: StateManager) -> FastAPI:
             }
         
         return {
-            "initialized": _camera_service.is_initialized,
-            "tracking": _camera_service.is_tracking,
-            "fps": _camera_service.current_fps,
+            "initialized": camera_service.is_initialized,
+            "tracking": camera_service.is_tracking,
+            "fps": camera_service.current_fps,
         }
 
     @app.post("/api/camera/reset_tracking", tags=["Camera"])
-    async def camera_reset_tracking():
+    async def camera_reset_tracking(request: Request):
         """Reset camera positional tracking."""
-        if not _camera_service:
+        camera_service = request.app.state.camera_service
+        if not camera_service:
             raise HTTPException(status_code=503, detail="Camera not initialized")
         
-        success = _camera_service.reset_tracking()
+        success = camera_service.reset_tracking()
         return {"success": success}
 
     # ==================== Terminal Endpoints ====================
 
-    @app.post("/api/terminal/exec", tags=["Terminal"], response_model=TerminalCommandResponse)
+    @app.post("/api/terminal/run", tags=["Terminal"], response_model=TerminalCommandResponse)
     async def execute_terminal_command(request: TerminalCommandRequest):
         """
-        Execute a shell command on the Jetson.
+        Execute a whitelisted shell command on the Jetson.
 
-        WARNING: This is a powerful endpoint. Use with caution.
-        All commands are now allowed in production mode.
+        Only commands in the whitelist are allowed. To see available commands,
+        use GET /api/terminal/commands.
 
         Common uses:
         - System diagnostics
         - Network troubleshooting
         - Service management
         """
-        # All commands are now allowed in production mode
-        try:
-            result = subprocess.run(
-                request.command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=request.timeout,
+        # Validate command_name is in whitelist
+        if request.command_name not in COMMAND_WHITELIST:
+            available = list(COMMAND_WHITELIST.keys())
+            raise HTTPException(
+                status_code=400,
+                detail=f"Command '{request.command_name}' not allowed. Available: {available}",
             )
+
+        command_str = COMMAND_WHITELIST[request.command_name]
+        
+        try:
+            # For commands with pipes or redirects, use shell=True
+            # (safe because the command itself is whitelisted)
+            if "|" in command_str or ">" in command_str or "<" in command_str:
+                result = subprocess.run(
+                    command_str,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=request.timeout,
+                )
+            else:
+                # For simple commands, use shell=False with list
+                cmd_parts = command_str.split()
+                result = subprocess.run(
+                    cmd_parts,
+                    shell=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=request.timeout,
+                )
             
             return TerminalCommandResponse(
                 success=result.returncode == 0,
                 stdout=result.stdout,
                 stderr=result.stderr,
                 return_code=result.returncode,
+                command_executed=command_str,
             )
             
         except subprocess.TimeoutExpired:
@@ -872,6 +980,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 stdout="",
                 stderr=f"Command timed out after {request.timeout}s",
                 return_code=-1,
+                command_executed=command_str,
             )
         except Exception as e:
             return TerminalCommandResponse(
@@ -879,7 +988,17 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 stdout="",
                 stderr=str(e),
                 return_code=-1,
+                command_executed=command_str,
             )
+
+    @app.get("/api/terminal/commands", tags=["Terminal"])
+    async def list_terminal_commands():
+        """
+        List all available whitelisted terminal commands.
+        
+        Returns a dictionary mapping command names to their actual shell commands.
+        """
+        return {"commands": COMMAND_WHITELIST}
 
     @app.get("/api/terminal/logs", tags=["Terminal"])
     async def get_service_logs(
@@ -905,7 +1024,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
     # ==================== Services Status Endpoint ====================
 
     @app.get("/api/services/status", tags=["System"])
-    async def services_status():
+    async def services_status(request: Request):
         """
         Get status of all NOMAD services.
         
@@ -955,11 +1074,12 @@ def create_app(state_manager: StateManager) -> FastAPI:
         }
         
         # Isaac ROS status
-        if _isaac_bridge:
+        isaac_bridge = request.app.state.isaac_bridge
+        if isaac_bridge:
             services["isaac_ros"] = {
                 "status": "active",
                 "running": True,
-                **_isaac_bridge.get_status(),
+                **isaac_bridge.get_status(),
             }
         else:
             services["isaac_ros"] = {
@@ -969,27 +1089,31 @@ def create_app(state_manager: StateManager) -> FastAPI:
             }
         
         # VIO status
-        if _external_vio_state:
+        external_vio_state = request.app.state.external_vio_state
+        vio_trajectory = request.app.state.vio_trajectory
+        vio_pipeline = request.app.state.vio_pipeline
+        
+        if external_vio_state:
             services["vio"] = {
                 "status": "active",
                 "running": True,
-                "source": _external_vio_state.get("source", "external"),
-                "confidence": _external_vio_state.get("confidence", 0),
-                "trajectory_points": len(_vio_trajectory),
+                "source": external_vio_state.get("source", "external"),
+                "confidence": external_vio_state.get("confidence", 0),
+                "trajectory_points": len(vio_trajectory),
             }
-        elif _vio_pipeline:
-            vio_status = _vio_pipeline.status
+        elif vio_pipeline:
+            vio_status = vio_pipeline.status
             services["vio"] = {
                 "status": vio_status.health.value,
                 "running": vio_status.health.value != "failed",
                 "confidence": vio_status.tracking_confidence,
-                "trajectory_points": len(_vio_trajectory),
+                "trajectory_points": len(vio_trajectory),
             }
         else:
             services["vio"] = {
                 "status": "not_initialized",
                 "running": False,
-                "trajectory_points": len(_vio_trajectory),
+                "trajectory_points": len(vio_trajectory),
             }
         
         # Check for Isaac ROS Docker container
@@ -1030,7 +1154,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
     # ==================== Isaac ROS Bridge Endpoints ====================
 
     @app.get("/api/isaac/status", tags=["Isaac ROS"])
-    async def isaac_status():
+    async def isaac_status(request: Request):
         """
         Get Isaac ROS bridge status.
         
@@ -1050,7 +1174,8 @@ def create_app(state_manager: StateManager) -> FastAPI:
         except Exception:
             pass
         
-        if not _isaac_bridge:
+        isaac_bridge = request.app.state.isaac_bridge
+        if not isaac_bridge:
             return {
                 "available": False,
                 "backend": "not_initialized",
@@ -1061,7 +1186,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
         return {
             "available": True,
             "container_running": container_running,
-            **_isaac_bridge.get_status(),
+            **isaac_bridge.get_status(),
         }
 
     @app.post("/api/isaac/start", tags=["Isaac ROS"])
@@ -1172,12 +1297,13 @@ def create_app(state_manager: StateManager) -> FastAPI:
             return {"error": str(e)}
 
     @app.get("/api/isaac/vio", tags=["Isaac ROS"])
-    async def isaac_vio():
+    async def isaac_vio(request: Request):
         """Get current VIO state from Isaac ROS VSLAM or ZED."""
-        if not _isaac_bridge:
+        isaac_bridge = request.app.state.isaac_bridge
+        if not isaac_bridge:
             raise HTTPException(status_code=503, detail="Isaac bridge not initialized")
         
-        vio = _isaac_bridge.vio_state
+        vio = isaac_bridge.vio_state
         if not vio:
             return {"valid": False, "message": "No VIO data available"}
         
@@ -1192,12 +1318,13 @@ def create_app(state_manager: StateManager) -> FastAPI:
         }
 
     @app.get("/api/isaac/detections", tags=["Isaac ROS"])
-    async def isaac_detections():
+    async def isaac_detections(request: Request):
         """Get current YOLO detections from Isaac ROS."""
-        if not _isaac_bridge:
+        isaac_bridge = request.app.state.isaac_bridge
+        if not isaac_bridge:
             raise HTTPException(status_code=503, detail="Isaac bridge not initialized")
         
-        detections = _isaac_bridge.detections
+        detections = isaac_bridge.detections
         return {
             "count": len(detections),
             "detections": [
@@ -1222,17 +1349,20 @@ def create_app(state_manager: StateManager) -> FastAPI:
         }
 
     @app.get("/api/isaac/exclusion_map", tags=["Isaac ROS"])
-    async def isaac_exclusion_map():
+    async def isaac_exclusion_map(request: Request):
         """Get exclusion map from Isaac ROS bridge (auto-managed)."""
-        if not _isaac_bridge:
+        isaac_bridge = request.app.state.isaac_bridge
+        exclusion_map = request.app.state.exclusion_map
+        
+        if not isaac_bridge:
             # Fall back to local exclusion map
             return {
                 "backend": "local",
-                "total_targets": len(_exclusion_map),
-                "targets": _exclusion_map,
+                "total_targets": len(exclusion_map),
+                "targets": exclusion_map,
             }
         
-        exclusion = _isaac_bridge.exclusion_map
+        exclusion = isaac_bridge.exclusion_map
         return {
             "backend": "isaac_ros",
             "total_targets": len(exclusion),
@@ -1249,34 +1379,37 @@ def create_app(state_manager: StateManager) -> FastAPI:
         }
 
     @app.post("/api/isaac/exclusion_map/add", tags=["Isaac ROS"])
-    async def isaac_add_exclusion(request: Task2HitRequest):
+    async def isaac_add_exclusion(hit_request: Task2HitRequest, request: Request):
         """Add target to Isaac ROS managed exclusion map."""
-        if _isaac_bridge:
-            target_id = _isaac_bridge.add_to_exclusion_map(
-                x=request.x, y=request.y, z=request.z
+        isaac_bridge = request.app.state.isaac_bridge
+        exclusion_map = request.app.state.exclusion_map
+        
+        if isaac_bridge:
+            target_id = isaac_bridge.add_to_exclusion_map(
+                x=hit_request.x, y=hit_request.y, z=hit_request.z
             )
             return {"success": True, "target_id": target_id}
         else:
             # Fall back to local
-            _exclusion_map.append({
-                "x": request.x,
-                "y": request.y,
-                "z": request.z,
+            exclusion_map.append({
+                "x": hit_request.x,
+                "y": hit_request.y,
+                "z": hit_request.z,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
-            return {"success": True, "target_id": f"local_{len(_exclusion_map)}"}
+            return {"success": True, "target_id": f"local_{len(exclusion_map)}"}
 
     @app.post("/api/isaac/exclusion_map/clear", tags=["Isaac ROS"])
-    async def isaac_clear_exclusion():
+    async def isaac_clear_exclusion(request: Request):
         """Clear Isaac ROS managed exclusion map."""
-        global _exclusion_map
+        isaac_bridge = request.app.state.isaac_bridge
         
-        if _isaac_bridge:
-            count = _isaac_bridge.clear_exclusion_map()
+        if isaac_bridge:
+            count = isaac_bridge.clear_exclusion_map()
             return {"success": True, "cleared": count}
         else:
-            count = len(_exclusion_map)
-            _exclusion_map = []
+            count = len(request.app.state.exclusion_map)
+            request.app.state.exclusion_map = []
             return {"success": True, "cleared": count}
 
     # ==================== Video Manager Endpoints ====================
@@ -1290,13 +1423,17 @@ def create_app(state_manager: StateManager) -> FastAPI:
         height: int = Field(720, description="Output video height", ge=240, le=2160)
         fps: int = Field(30, description="Output video FPS", ge=1, le=60)
     
+    class SwitchTopicRequest(BaseModel):
+        instance: str = Field("primary", description="Bridge instance (primary or secondary)")
+        topic: str = Field(..., description="ROS image topic to switch to")
+    
     @app.get("/api/video/topics", tags=["Video"])
     async def get_video_topics():
         """
         List available ROS image topics.
         
         Returns a list of all sensor_msgs/Image topics currently published in ROS.
-        Use this to discover available camera feeds before starting a stream.
+        Use this to discover available camera feeds before switching streams.
         """
         mgr = get_video_manager()
         return {"topics": mgr.list_topics()}
@@ -1304,13 +1441,13 @@ def create_app(state_manager: StateManager) -> FastAPI:
     @app.get("/api/video/streams", tags=["Video"])
     async def list_video_streams():
         """
-        List all active video streams.
+        List all active video streams (persistent bridges).
         
         Returns information about each stream including:
         - Stream name and RTSP URL
-        - Source ROS topic
+        - Current ROS topic
         - Resolution and FPS
-        - Process IDs
+        - Overlay status
         """
         mgr = get_video_manager()
         return {"streams": mgr.list_streams()}
@@ -1327,25 +1464,13 @@ def create_app(state_manager: StateManager) -> FastAPI:
     @app.post("/api/video/streams", tags=["Video"])
     async def create_video_stream(request: StartStreamRequest):
         """
-        Start a new video stream.
+        Start or update a video stream (legacy endpoint).
         
-        Creates a new ROS-to-RTSP video pipeline:
-        1. Starts ROS video bridge subscribing to the specified topic
-        2. Starts FFmpeg encoder publishing to MediaMTX
-        3. Returns RTSP URL for viewing
+        In the new architecture, this maps stream names to persistent bridges:
+        - 'zed', 'primary', 'live' -> switches primary bridge topic
+        - 'secondary', 'depth' -> switches secondary bridge topic
         
-        Example:
-        ```json
-        {
-            "stream_name": "zed_left",
-            "topic": "/zed/zed_node/left/image_rect_color",
-            "width": 1280,
-            "height": 720,
-            "fps": 30
-        }
-        ```
-        
-        View with: `rtsp://<jetson_ip>:8554/<stream_name>`
+        The RTSP URL stays constant - only the content changes.
         """
         try:
             mgr = get_video_manager()
@@ -1366,84 +1491,155 @@ def create_app(state_manager: StateManager) -> FastAPI:
     @app.delete("/api/video/streams/{stream_name}", tags=["Video"])
     async def delete_video_stream(stream_name: str):
         """
-        Stop a specific video stream.
+        Stop a specific video stream (legacy - bridges are now persistent).
         
-        Gracefully shuts down the video pipeline:
-        1. Stops FFmpeg encoder
-        2. Stops ROS video bridge
-        3. Frees allocated resources
+        In the new architecture, this endpoint is a no-op since bridges
+        run continuously. The RTSP connection stays alive.
         """
         mgr = get_video_manager()
         success = mgr.stop_stream(stream_name)
-        if not success:
-            raise HTTPException(status_code=404, detail=f"Stream '{stream_name}' not found")
-        return {"success": True, "message": f"Stream '{stream_name}' stopped"}
+        return {"success": True, "message": f"Bridges are now persistent - '{stream_name}' continues running"}
 
     @app.delete("/api/video/streams", tags=["Video"])
     async def delete_all_video_streams():
-        """Stop all active video streams."""
+        """Stop all video streams (legacy - bridges are now persistent)."""
         mgr = get_video_manager()
         count = mgr.stop_all_streams()
-        return {"success": True, "stopped": count}
+        return {"success": True, "message": "Bridges are now persistent and continue running"}
+
+    @app.post("/api/video/switch", tags=["Video"])
+    async def switch_video_topic(request: SwitchTopicRequest):
+        """
+        Switch a bridge instance to a different ROS topic.
+        
+        This is the primary endpoint for dynamic stream switching from Mission Planner.
+        The RTSP URL stays constant, only the content changes - no reconnect needed.
+        
+        Args:
+            instance: Bridge instance name (primary, secondary)
+            topic: New ROS image topic to subscribe to
+            
+        Example:
+            POST /api/video/switch
+            {"instance": "primary", "topic": "/zed/zed_node/depth/depth_registered"}
+        
+        The Mission Planner plugin should:
+        1. Keep the same RTSP URL (rtsp://<ip>:8554/primary)
+        2. Call this endpoint to change what's shown on that stream
+        3. The video player continues playing - no reconnect needed
+        """
+        mgr = get_video_manager()
+        success = mgr.switch_video_source(request.instance, request.topic)
+        stream = mgr.get_stream(request.instance)
+        
+        if not success:
+            raise HTTPException(status_code=500, detail=f"Failed to switch topic for '{request.instance}'")
+        
+        return {
+            "success": True,
+            "instance": request.instance,
+            "topic": stream.get("topic") if stream else request.topic,
+            "rtsp_url": stream.get("rtsp_url") if stream else f"rtsp://localhost:8554/{request.instance}"
+        }
+
+    @app.post("/api/video/overlay", tags=["Video"])
+    async def set_video_overlay(
+        enabled: bool = Query(True, description="Enable or disable overlay"),
+        instance: str = Query("primary", description="Bridge instance")
+    ):
+        """
+        Enable or disable object detection overlay for a bridge instance.
+        
+        When enabled, the bridge draws bounding boxes from ZED object detection
+        on the video stream.
+        """
+        mgr = get_video_manager()
+        success = mgr.set_overlay_enabled(instance, enabled)
+        
+        return {
+            "success": success,
+            "instance": instance,
+            "overlay_enabled": enabled
+        }
+
+    @app.get("/api/video/bridges", tags=["Video"])
+    async def get_video_bridges():
+        """
+        Get status of all persistent video bridges.
+        
+        Returns detailed status from each bridge's HTTP control API including:
+        - Current topic and state
+        - Frame count and error statistics
+        - Overlay status
+        """
+        mgr = get_video_manager()
+        bridges = {}
+        
+        for instance in ["primary", "secondary"]:
+            status = mgr.get_bridge_status(instance)
+            if status:
+                bridges[instance] = status
+            else:
+                stream = mgr.get_stream(instance)
+                bridges[instance] = stream if stream else {"state": "unknown"}
+        
+        return {"bridges": bridges}
+
+    @app.post("/api/video/bridges/start", tags=["Video"])
+    async def start_video_bridges():
+        """
+        Start the persistent video bridge instances.
+        
+        This is typically called automatically on startup, but can be used
+        to manually start bridges if they weren't auto-started.
+        """
+        mgr = get_video_manager()
+        results = mgr.start_persistent_bridges()
+        
+        return {
+            "success": all(results.values()),
+            "results": results,
+            "streams": mgr.list_streams()
+        }
 
     @app.post("/api/video/source", tags=["Video"])
     async def switch_video_source(topic: str = Query(..., description="ROS image topic to stream")):
         """
-        Switch the active video stream to a different ROS topic.
+        Switch the primary video stream to a different ROS topic.
         
         This endpoint enables dynamic stream switching from Mission Planner:
-        1. Stops any existing 'dynamic' stream
-        2. Starts a new stream from the specified topic as 'dynamic'
-        3. Returns the RTSP URL for the new stream
+        The RTSP URL stays constant (rtsp://<ip>:8554/primary), only content changes.
         
-        The stream is always named 'dynamic' to allow easy switching without
-        needing to track multiple stream names.
+        In the new architecture, this is equivalent to:
+            POST /api/video/switch {"instance": "primary", "topic": "<topic>"}
         
         Example:
             POST /api/video/source?topic=/zed/zed_node/left/image_rect_color
         """
-        try:
-            mgr = get_video_manager()
-            
-            # Stop existing dynamic stream if any
-            if mgr.get_stream("dynamic"):
-                logger.info(f"Stopping existing 'dynamic' stream before switching to {topic}")
-                mgr.stop_stream("dynamic")
-                # Wait for cleanup
-                import time
-                time.sleep(1)
-            
-            # Start new stream with the specified topic
-            stream = mgr.start_stream(
-                stream_name="dynamic",
-                topic=topic,
-                width=1280,
-                height=720,
-                fps=30
-            )
-            
-            return {
-                "success": True,
-                "topic": topic,
-                "rtsp_url": stream["rtsp_url"],
-                "stream": stream
-            }
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        except Exception as e:
-            logger.error(f"Failed to switch video source: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+        mgr = get_video_manager()
+        success = mgr.switch_video_source("primary", topic)
+        stream = mgr.get_stream("primary")
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to switch video source")
+        
+        return {
+            "success": True,
+            "topic": topic,
+            "rtsp_url": stream.get("rtsp_url") if stream else "rtsp://localhost:8554/primary",
+            "stream": stream
+        }
 
     @app.get("/api/video/source", tags=["Video"])
     async def get_video_source():
         """
-        Get the current active video source (the 'dynamic' stream).
+        Get the current active video source (primary stream).
         
-        Returns information about the currently streaming topic,
-        or null if no dynamic stream is active.
+        Returns information about the currently streaming topic
+        and the constant RTSP URL.
         """
         mgr = get_video_manager()
-        stream = mgr.get_stream("dynamic")
+        stream = mgr.get_stream("primary")
         if not stream:
             return {"active": False, "stream": None}
         return {"active": True, "stream": stream}
@@ -1453,39 +1649,28 @@ def create_app(state_manager: StateManager) -> FastAPI:
         """
         Get the current video encoding mode.
         
-        Returns whether NVENC hardware encoding is enabled.
-        NVENC uses ~5-10% CPU vs ~60-90% for libx264.
+        In the new zero-copy architecture, NVENC hardware encoding is always used.
         """
-        mgr = get_video_manager()
         return {
-            "use_nvenc": mgr._use_nvenc,
-            "encoder": "nvv4l2h264enc (NVENC hardware)" if mgr._use_nvenc else "libx264 (software)",
-            "description": "Hardware encoding uses GPU, lower CPU/memory" if mgr._use_nvenc else "Software encoding, higher CPU usage"
+            "use_nvenc": True,
+            "encoder": "nvv4l2h264enc (NVENC hardware)",
+            "architecture": "Zero-copy GStreamer pipeline",
+            "description": "Hardware encoding with ~150ms glass-to-glass latency"
         }
 
     @app.post("/api/video/encoding", tags=["Video"])
     async def set_video_encoding(use_nvenc: bool = Query(True, description="Use NVENC hardware encoding")):
         """
-        Set the video encoding mode.
+        Set the video encoding mode (legacy endpoint).
         
-        Args:
-            use_nvenc: True for NVENC hardware encoding (default), False for libx264 software encoding
-        
-        Note: This only affects NEW streams. Existing streams continue with their current encoder.
-        To apply to existing streams, stop and restart them.
-        
-        NVENC hardware encoding benefits:
-        - ~5-10% CPU usage (vs ~60-90% for libx264)
-        - Lower memory usage (GPU memory vs RAM)
-        - Lower latency (~5ms vs ~30ms)
+        In the new zero-copy architecture, NVENC is always used.
+        This endpoint is kept for backward compatibility.
         """
-        mgr = get_video_manager()
-        mgr.set_use_nvenc(use_nvenc)
         return {
             "success": True,
-            "use_nvenc": use_nvenc,
-            "encoder": "nvv4l2h264enc (NVENC hardware)" if use_nvenc else "libx264 (software)",
-            "note": "Setting applies to new streams only"
+            "use_nvenc": True,
+            "encoder": "nvv4l2h264enc (NVENC hardware)",
+            "note": "NVENC is always enabled in zero-copy architecture"
         }
 
     return app

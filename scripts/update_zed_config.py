@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 import re
+import os
 
-config_path = '/home/mad/ros2/isaac_ros_ws/src/zed-ros2-wrapper/zed_wrapper/config/common_stereo.yaml'
+# Use expanduser to support ~/ paths, making the script portable across users
+# This resolves to /home/mad/... if running as mad user, or /home/<user>/... for others
+config_path = os.path.expanduser('~/ros2/isaac_ros_ws/src/zed-ros2-wrapper/zed_wrapper/config/common_stereo.yaml')
 
 with open(config_path, 'r') as f:
     content = f.read()

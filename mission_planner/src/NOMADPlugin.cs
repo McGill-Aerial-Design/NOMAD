@@ -15,6 +15,11 @@
 // - Dual-link communication (HTTP or MAVLink/ELRS)
 // - Task 1: Capture snapshot command
 // - Task 2: Reset exclusion map, WASD indoor control
+//
+// NOTE: This class uses .NET Reflection to access internal Mission Planner fields.
+// If Mission Planner updates break this, the plugin will continue to work but
+// NOMAD screen registration and menu integration may be disabled. See error logs
+// for details. The plugin is designed to degrade gracefully rather than crash.
 // ============================================================
 
 using System;
@@ -58,6 +63,27 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
+                // Version check warning - log if running on untested Mission Planner version
+                try
+                {
+                    var mpVersion = System.Reflection.Assembly.GetEntryAssembly()?.GetName()?.Version;
+                    if (mpVersion != null)
+                    {
+                        // Log version for compatibility tracking
+                        Console.WriteLine($"NOMAD: Mission Planner version detected: {mpVersion}");
+                        
+                        // Warn if version is below tested minimum (1.3.80)
+                        if (mpVersion < new System.Version("1.3.80"))
+                        {
+                            Console.WriteLine($"NOMAD: WARNING - Untested Mission Planner version {mpVersion}. Recommend 1.3.80+. Some features may not work correctly.");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"NOMAD: Could not determine Mission Planner version - {ex.Message}");
+                }
+                
                 // Load configuration
                 _config = NOMADConfig.Load();
                 _missionConfig = MissionConfig.Load();

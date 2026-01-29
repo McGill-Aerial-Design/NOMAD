@@ -92,19 +92,51 @@ srtAddress: :8890
 record: no
 
 # ============================================================
-# Paths (stream endpoints) - ZED2i Multi-Camera Views
+# Paths (stream endpoints) - Zero-Copy GStreamer Pipeline
 # ============================================================
 
 paths:
-  # ZED2i stream - publisher endpoint
-  # Accepts RTSP ANNOUNCE from FFmpeg/GStreamer
+  # Primary stream - always running (for Mission Planner main view)
+  # Content is controlled by Jetson API - stream URL stays constant
+  primary:
+    source: publisher
+    sourceOnDemand: no
+    readBufferCount: 1024
+    writeQueueSize: 512
+
+  # Secondary stream - always running (for Gimbal/Secondary view)
+  secondary:
+    source: publisher
+    sourceOnDemand: no
+    readBufferCount: 1024
+    writeQueueSize: 512
+
+  # Legacy endpoints for backward compatibility
   zed:
     source: publisher
+    sourceOnDemand: no
+    readBufferCount: 1024
+    writeQueueSize: 512
 
-  # Alternative endpoint for direct RTSP publish
   live:
     source: publisher
+    sourceOnDemand: no
+    readBufferCount: 1024
+    writeQueueSize: 512
+
+  # Dynamic stream for topic switching
+  dynamic:
+    source: publisher
+    sourceOnDemand: no
+    readBufferCount: 1024
+    writeQueueSize: 512
 
   # Wildcard path - accept any stream name
+  # Critical for low latency:
   all_others:
     source: publisher
+    sourceOnDemand: no
+    runOnDemandStartTimeout: 10s
+    runOnDemandCloseAfter: 10s
+    readBufferCount: 1024
+    writeQueueSize: 512

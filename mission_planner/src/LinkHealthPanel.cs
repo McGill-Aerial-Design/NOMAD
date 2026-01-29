@@ -51,6 +51,9 @@ namespace NOMAD.MissionPlanner
         private ProgressBar _prgRadioMasterHealth;
         private Button _btnSwitchToRadioMaster;
         private PictureBox _picRadioMasterIndicator;
+        
+        // ToolTip for disabled buttons
+        private ToolTip _toolTip;
 
         // UI Controls - Settings
         private Panel _settingsPanel;
@@ -77,6 +80,8 @@ namespace NOMAD.MissionPlanner
         {
             _connectionManager = connectionManager ?? throw new ArgumentNullException(nameof(connectionManager));
             _config = config ?? throw new ArgumentNullException(nameof(config));
+            
+            _toolTip = new ToolTip();
 
             InitializeUI();
             SubscribeToEvents();
@@ -560,6 +565,20 @@ namespace NOMAD.MissionPlanner
             btnSwitch.Enabled = stats.IsConnected && !isActive;
             btnSwitch.Text = isActive ? "ACTIVE" : "Switch";
             btnSwitch.BackColor = isActive ? Color.ForestGreen : _accentColor;
+            
+            // Set tooltip for disabled button
+            if (!stats.IsConnected)
+            {
+                _toolTip.SetToolTip(btnSwitch, "Link is disconnected");
+            }
+            else if (isActive)
+            {
+                _toolTip.SetToolTip(btnSwitch, "This link is currently active");
+            }
+            else
+            {
+                _toolTip.SetToolTip(btnSwitch, $"Switch to {linkType} link");
+            }
         }
 
         private void UpdateActiveLinkDisplay(LinkType activeLink)
@@ -617,6 +636,19 @@ namespace NOMAD.MissionPlanner
 
         private void SwitchToLink(LinkType targetLink)
         {
+            // Check if connection manager is initialized and connected
+            if (_connectionManager == null || !_connectionManager.IsMonitoring)
+            {
+                MessageBox.Show(
+                    "Cannot switch link: MAVLink Connection Manager is not initialized or connected.\n\n" +
+                    "Please ensure MAVLink connection is established first.",
+                    "Connection Not Ready",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning
+                );
+                return;
+            }
+            
             var result = _connectionManager.SwitchToLink(targetLink);
             
             if (!result)
@@ -646,6 +678,7 @@ namespace NOMAD.MissionPlanner
             {
                 _updateTimer?.Stop();
                 _updateTimer?.Dispose();
+                _toolTip?.Dispose();
 
                 if (_connectionManager != null)
                 {

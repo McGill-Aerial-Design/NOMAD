@@ -25,7 +25,8 @@ NOMAD_DIR="$(dirname "$SCRIPT_DIR")"
 # Configuration
 API_PORT=8000
 RTSP_PORT=8554
-LOG_DIR=/home/mad/nomad_logs
+# Use HOME environment variable for user-agnostic paths (default: /home/mad)
+LOG_DIR=${HOME}/nomad_logs
 TASK_MODE="${1:-all}"
 
 # Colors
@@ -41,6 +42,12 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_fail() { echo -e "${RED}[FAIL]${NC} $1"; }
 
 mkdir -p $LOG_DIR
+
+# Cleanup old logs (keep last 48 hours or 500MB max)
+log_info "Cleaning up logs older than 2 days..."
+LOG_CLEANUP_AGE_DAYS=2
+find ${LOG_DIR} -name "*.log" -mtime +${LOG_CLEANUP_AGE_DAYS} -delete 2>/dev/null || true
+log_ok "Old logs cleaned"
 
 # Get Tailscale IP
 JETSON_IP=$(tailscale ip -4 2>/dev/null || hostname -I | awk '{print $1}')
@@ -146,7 +153,8 @@ start_edge_core() {
     sleep 1
     
     cd $NOMAD_DIR
-    export PATH=/home/mad/.local/bin:$PATH
+    # Use HOME environment variable for user-agnostic Python local bin path
+    export PATH=${HOME}/.local/bin:$PATH
     export NOMAD_DEBUG=true
     export NOMAD_LOG_DIR="$NOMAD_DIR/data/mission_logs"
     

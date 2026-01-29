@@ -22,7 +22,8 @@ echo -e "${GREEN}  NOMAD Jetson Orin Nano Setup${NC}"
 echo -e "${GREEN}========================================${NC}"
 
 # Configuration
-NOMAD_HOME="/home/mad/NOMAD"
+# Use HOME environment variable for user-agnostic NOMAD path (default: /home/mad/NOMAD)
+NOMAD_HOME="${HOME}/NOMAD"
 NOMAD_USER="mad"
 JETSON_TAILSCALE_IP="100.75.218.89"
 GCS_TAILSCALE_IP="100.76.127.17"

@@ -53,6 +53,9 @@ namespace NOMAD.MissionPlanner
         private NumericUpDown _numX, _numY, _numZ;
         private Label _lblExclusionCount;
 
+        // EKF Source Control
+        private EkfSourceControlPanel _ekfSourcePanel;
+
         // Indoor Nudge Controls (WASD)
         private GroupBox _grpNudge;
         private CheckBox _chkEnableWASD;
@@ -385,6 +388,18 @@ namespace NOMAD.MissionPlanner
             yOffset += 190;
 
             // ============================================================
+            // EKF Source Control
+            // ============================================================
+
+            _ekfSourcePanel = new EkfSourceControlPanel(_sender)
+            {
+                Location = new Point(10, yOffset)
+            };
+            _ekfSourcePanel.SourceChanged += EkfSourcePanel_SourceChanged;
+            this.Controls.Add(_ekfSourcePanel);
+            yOffset += 185;
+
+            // ============================================================
             // Indoor Nudge Controls
             // ============================================================
 
@@ -652,6 +667,27 @@ namespace NOMAD.MissionPlanner
         // ============================================================
         // Event Handlers
         // ============================================================
+
+        private void EkfSourcePanel_SourceChanged(object sender, EkfSourceChangedEventArgs e)
+        {
+            string method = e.IsAutomatic ? "auto" : "manual";
+            string sourceName = e.NewSource switch
+            {
+                DualLinkSender.EkfSource.GPS => "GPS (SRC1)",
+                DualLinkSender.EkfSource.ExternalNav => "Vision (SRC2)",
+                DualLinkSender.EkfSource.OpticalFlow => "OptFlow (SRC3)",
+                _ => "Unknown"
+            };
+            
+            // Update status
+            UpdateStatus($"EKF: {sourceName} [{method}]", 
+                e.NewSource == DualLinkSender.EkfSource.GPS ? Color.LightGreen : Color.Cyan);
+            
+            // Send telemetry
+            _telemetryInjector?.SendTelemetry("ekf_source", ((int)e.NewSource).ToString());
+            
+            System.Diagnostics.Debug.WriteLine($"NOMAD: EKF source changed to {sourceName} ({method})");
+        }
 
         private async void BtnTask1Capture_Click(object sender, EventArgs e)
         {

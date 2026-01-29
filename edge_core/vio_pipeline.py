@@ -124,6 +124,11 @@ class VIOPipeline:
     OPTICAL_FLOW_ENABLED = True  # Enable optical flow as backup
     OPTICAL_FLOW_MIN_QUALITY = 50  # Minimum quality for optical flow data
     
+    # Failsafe configuration - rangefinder-assisted descent
+    ALT_HOLD_MODE = 2  # ArduCopter ALT_HOLD mode ID
+    FAILSAFE_DESCENT_RATE = 0.3  # m/s - slow controlled descent
+    MAX_RANGEFINDER_ALTITUDE = 10.0  # meters - rangefinder effective range
+    
     def __init__(
         self,
         camera_service,  # ZEDCameraService
@@ -374,18 +379,138 @@ class VIOPipeline:
         # Notify status change
         self._update_status(error_message="VIO degraded - optical flow backup active")
     
+    def _check_rangefinder_healthy(self) -> tuple[bool, float]:
+        """
+        Check if rangefinder is providing valid data.
+        
+        Queries the system state for rangefinder altitude. Validates that
+        the measurement is within the effective range and shows no sign of
+        saturation or invalid data.
+        
+        Returns:
+            Tuple of (is_healthy, altitude_m)
+                - is_healthy: True if rangefinder provides usable data
+                - altitude_m: Altitude reading in meters (0.0 if not healthy)
+        """
+        if not self._state_manager:
+            return False, 0.0
+        
+        try:
+            state = self._state_manager.get_state()
+            
+            # Check lidar_distance_m as a proxy for rangefinder altitude
+            # (commonly available on vehicles with LiDAR/rangefinder sensors)
+            rngfnd_alt = getattr(state, 'lidar_distance_m', None)
+            
+            # Validate rangefinder data:
+            # - Not None (sensor present)
+            # - Positive (valid measurement)
+            # - Within effective range (0.1 to MAX_RANGEFINDER_ALTITUDE)
+            if rngfnd_alt is not None:
+                if 0.1 < rngfnd_alt < self.MAX_RANGEFINDER_ALTITUDE:
+                    logger.debug(f"Rangefinder healthy: altitude={rngfnd_alt:.2f}m")
+                    return True, rngfnd_alt
+                elif rngfnd_alt >= self.MAX_RANGEFINDER_ALTITUDE:
+                    logger.debug(f"Out of rangefinder range: altitude={rngfnd_alt:.2f}m (max={self.MAX_RANGEFINDER_ALTITUDE}m)")
+                    return False, 0.0
+            
+            return False, 0.0
+            
+        except Exception as e:
+            logger.debug(f"Rangefinder health check error: {e}")
+            return False, 0.0
+    
+    def _command_descent(self, rate_mps: float) -> bool:
+        """
+        Command controlled descent velocity.
+        
+        Sends a vertical velocity command for controlled descent. This is safer
+        than relying solely on barometer (which has poor performance indoors due
+        to ground effect and HVAC). The descent rate is kept slow (0.3 m/s) to
+        allow the pilot time to take control if needed.
+        
+        Uses existing NavController if available, otherwise falls back to
+        direct MAVLink velocity commands.
+        
+        FRAME CONVENTIONS:
+        - NavController: Body frame with Z-UP convention (vz positive = UP, so vz negative = DOWN)
+        - MAVLink (NED): Global frame (vz positive = DOWN)
+        
+        Both paths will result in downward descent motion.
+        
+        Args:
+            rate_mps: Descent rate in m/s (positive value = downward magnitude)
+            
+        Returns:
+            True if descent command was sent successfully
+        """
+        try:
+            # Clamp descent rate to safe value
+            safe_rate = min(abs(rate_mps), 0.5)  # m/s down
+            
+            logger.info(f"Descending at {safe_rate:.2f} m/s (rangefinder-assisted)")
+            
+            # Try NavController first if it's available via state manager
+            # (check if we can access it through a module-level reference)
+            try:
+                from . import api as api_module
+                if hasattr(api_module, '_nav_controller') and api_module._nav_controller:
+                    nav_controller = api_module._nav_controller
+                    # NavController uses body frame: positive vz = UP
+                    # For descent, use negative vz (DOWN in body frame)
+                    success = nav_controller.send_velocity(
+                        vx=0.0,
+                        vy=0.0,
+                        vz=-safe_rate,  # Negative = DOWN in body frame
+                        yaw_rate=0.0,
+                        source="failsafe",
+                    )
+                    if success:
+                        logger.info("Descent command sent via NavController")
+                        return True
+            except (ImportError, AttributeError):
+                pass
+            
+            # Fall back to direct MAVLink velocity command
+            if hasattr(self._mavlink, 'send_velocity_command'):
+                # MAVLink SET_POSITION_TARGET_LOCAL_NED uses NED frame: positive vz = DOWN
+                # For descent, use positive vz (DOWN in NED frame)
+                success = self._mavlink.send_velocity_command(
+                    vx=0.0,
+                    vy=0.0,
+                    vz=safe_rate,  # Positive = DOWN in NED frame
+                    yaw_rate=0.0,
+                    source="failsafe",
+                )
+                if success:
+                    logger.info("Descent command sent via direct MAVLink")
+                    return True
+            
+            logger.warning("Could not send descent command - MAVLink interface incomplete")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Descent command error: {e}")
+            return False
+    
+    
     def _trigger_failsafe(self, reason: str) -> None:
         """
-        Trigger VIO failsafe response.
+        Trigger VIO failsafe response with rangefinder-assisted descent.
         
         Per PRD [T2-SAFE-01]:
-        1. Switch EKF source to fallback (Baro/IMU only)
-        2. Set flight mode to ALT_HOLD
-        3. Alert pilot for manual takeover
+        1. Check if rangefinder is healthy and altitude is within range
+        2. If yes: Command controlled descent at 0.3 m/s (safer for indoor)
+        3. If no: Fall back to ALT_HOLD mode (barometer-based)
+        4. Alert pilot for manual takeover
         
-        SAFETY: NOT using Auto-land, RTL, or motor kill as these are
-        unsafe in confined indoor spaces. ALT_HOLD gives the pilot
-        control while maintaining altitude via barometer.
+        SAFETY: Rangefinder-assisted descent is preferred indoors because:
+        - Barometer is unreliable indoors (ground effect, HVAC disturbances)
+        - Rangefinder provides direct altitude feedback for precise control
+        - Slow descent (0.3 m/s) gives pilot time to take control
+        
+        NOT using Auto-land, RTL, or motor kill as these are unsafe in
+        confined indoor spaces.
         """
         self._failsafe_triggered = True
         
@@ -403,12 +528,35 @@ class VIOPipeline:
             except Exception as e:
                 logger.error(f"Failsafe callback error: {e}")
         
-        # Request ALT_HOLD mode via MAVLink
-        # Mode 2 = ALT_HOLD in ArduCopter
-        ALT_HOLD_MODE = 2
+        # Check if controlled descent is possible (rangefinder healthy, low altitude)
+        rngfnd_healthy, current_alt = self._check_rangefinder_healthy()
+        
+        if rngfnd_healthy and current_alt < self.MAX_RANGEFINDER_ALTITUDE:
+            # Controlled descent using rangefinder feedback
+            logger.warning(
+                f"VIO FAILSAFE: Initiating rangefinder-assisted descent "
+                f"at {current_alt:.1f}m (rate={self.FAILSAFE_DESCENT_RATE} m/s)"
+            )
+            
+            if self._command_descent(self.FAILSAFE_DESCENT_RATE):
+                logger.info("Rangefinder-assisted descent active - pilot can take over anytime")
+                return
+            else:
+                logger.warning("Descent command failed, falling back to ALT_HOLD")
+        else:
+            # Log why we're not using rangefinder
+            if not rngfnd_healthy:
+                logger.warning("VIO FAILSAFE: Rangefinder not healthy, switching to ALT_HOLD")
+            else:
+                logger.warning(
+                    f"VIO FAILSAFE: Altitude {current_alt:.1f}m too high for rangefinder "
+                    f"(max={self.MAX_RANGEFINDER_ALTITUDE}m), switching to ALT_HOLD"
+                )
+        
+        # Fall back to ALT_HOLD mode if no rangefinder
         try:
             if hasattr(self._mavlink, 'set_mode'):
-                success = self._mavlink.set_mode(ALT_HOLD_MODE)
+                success = self._mavlink.set_mode(self.ALT_HOLD_MODE)
                 if success:
                     logger.info("Successfully switched to ALT_HOLD mode")
                 else:
@@ -426,6 +574,7 @@ class VIOPipeline:
                 self._state_manager.set_vio_failed(True, reason)
             except:
                 pass
+    
     
     def _update_rate(self) -> None:
         """Update message rate calculation."""
