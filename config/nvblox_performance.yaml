@@ -1,0 +1,83 @@
+# ==============================================================
+# NOMAD nvblox Performance Configuration
+# 
+# Optimized for Jetson Orin Nano (8GB RAM)
+# Uses larger voxels and limited map bounds to reduce memory
+# 
+# Usage:
+#   ros2 launch nvblox_examples_bringup zed_example.launch.py \
+#     camera:=zed2 \
+#     nvblox_params_file:=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml
+# ==============================================================
+
+nvblox_node:
+  ros__parameters:
+    # ==============================================================
+    # Voxel Settings (CRITICAL FOR MEMORY)
+    # Default: 0.05m (5cm) = high resolution, high memory
+    # Performance: 0.10m (10cm) = ~8x less voxels = much lower memory
+    # ==============================================================
+    voxel_size: 0.10  # 10cm voxels (cubes) - trade resolution for RAM
+    
+    # ==============================================================
+    # Mapping Mode
+    # 'static_tsdf' - good for static indoor environments
+    # 'static_occupancy' - simpler, less memory, just occupancy grid
+    # ==============================================================
+    mapping_type: 'static_occupancy'  # Occupancy grid only, no TSDF mesh
+    
+    # ==============================================================
+    # ESDF (Euclidean Signed Distance Field)
+    # '2D' - only computes distance in 2D slice (DRONE HEIGHT)
+    # '3D' - full 3D distance computation (more memory)
+    # ==============================================================
+    esdf_mode: '2D'  # 2D slice at robot height - saves significant RAM
+    
+    # ==============================================================
+    # Map Bounds (CRITICAL FOR MEMORY)
+    # Limit how far the map extends to reduce voxel count
+    # ==============================================================
+    max_integration_distance: 4.0   # Only integrate depth up to 4m (was 5.0)
+    max_obstacle_distance: 1.5      # Obstacles beyond 1.5m not tracked (was 2.0)
+    
+    # Map memory limits
+    max_tsdf_update_hz: 10.0        # Reduce update rate (was unlimited)
+    max_mesh_update_hz: 5.0         # Reduce mesh updates (was unlimited)
+    
+    # ==============================================================
+    # ESDF Slice Parameters (for 2D costmap)
+    # ==============================================================
+    esdf_2d_min_height: 0.0         # Minimum height to consider
+    esdf_2d_max_height: 2.0         # Maximum height (drone operating altitude)
+    
+    # ==============================================================
+    # Memory Optimization
+    # ==============================================================
+    clear_outside_radius: 5.0       # Clear voxels beyond this radius
+    
+    # Disable mesh generation (saves significant RAM)
+    output_mesh: false              # NO mesh output - just occupancy
+    output_esdf: true               # Keep ESDF for costmap
+    output_occupancy: true          # Keep occupancy grid
+    
+    # ==============================================================
+    # Rate Limiting (reduce CPU/GPU load)
+    # ==============================================================
+    integrate_depth_rate_hz: 15.0   # Depth integration rate (was 30)
+    integrate_color_rate_hz: 0.0    # Disable color integration
+    integrate_lidar_rate_hz: 0.0    # We don't have LiDAR
+    
+    # ==============================================================
+    # Frame IDs
+    # ==============================================================
+    global_frame: 'odom'
+    map_frame: 'map'
+
+# ==============================================================
+# Costmap Parameters for Nav2 Integration
+# ==============================================================
+nvblox_costmap_layer:
+  ros__parameters:
+    enabled: true
+    publish_rate: 5.0               # Costmap publish rate
+    resolution: 0.10                # Match nvblox voxel size

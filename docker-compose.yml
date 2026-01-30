@@ -1,23 +1,99 @@
 # ============================================================
-# NOMAD Docker Compose Configuration
+# NOMAD Docker Compose - Isaac ROS Architecture
 # 
-# Services:
-# - mediamtx: RTSP video streaming server (feeds Mission Planner)
-# - nomad-core: Edge Core (FastAPI + Vision + MAVLink)
-# - mavlink-router: MAVLink message routing
+# This compose file recreates the production Isaac ROS setup for Jetson Orin Nano.
+# Used for: recovery, fresh deployment, or development.
+#
+# Prerequisites:
+# - Jetson Orin Nano with JetPack 6.2
+# - ZED2i camera connected
+# - Cube Orange connected via USB (/dev/ttyACM0)
 #
 # Usage:
-#   docker compose up -d           # Start all services
-#   docker compose logs -f         # View logs
-#   docker compose down            # Stop all services
+#   docker compose up -d isaac-ros    # Start Isaac ROS container
+#   docker compose logs -f            # View logs
+#   docker compose exec isaac-ros bash # Enter container
+#   docker compose down               # Stop all
 #
-# For Jetson Orin Nano deployment
-# Control interface: Mission Planner plugin
+# Alternative: Start individual services
+#   docker compose up -d mediamtx     # Video streaming only
+#
+# Profiles:
+#   docker compose --profile edge-api up    # Include Edge Core HTTP API
+#   docker compose --profile mavlink up     # Include MAVLink Router
 # ============================================================
 
 services:
   # ============================================================
-  # MediaMTX - Video Streaming Server
+  # Isaac ROS Container - Main Navigation Stack
+  # Replaces: nomad_isaac_ros_32
+  # 
+  # Contains:
+  # - ZED ROS2 wrapper (VIO at 30Hz)
+  # - MAVROS connected to Cube Orange via /dev/ttyACM0:921600
+  # - vio_bridge.py for VIO -> MAVLink forwarding
+  # - Nav2 stack (for autonomous navigation)
+  # - nvblox (for 3D mapping)
+  # ============================================================
+  isaac-ros:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.isaac_ros_full
+    image: nomad-isaac-ros:latest
+    container_name: nomad_isaac_ros
+    restart: unless-stopped
+    runtime: nvidia  # NVIDIA Container Runtime for GPU
+    network_mode: host
+    privileged: true
+    ipc: host  # Shared memory for ROS2 DDS
+    volumes:
+      # Device access
+      - /dev:/dev
+      # ZED SDK config (host-side installation)
+      - /usr/local/zed:/usr/local/zed:ro
+      # NOMAD configs
+      - ./config:/workspaces/isaac_ros-dev/config:ro
+      # VIO bridge and ROS files
+      - ./edge_core/ros:/workspaces/isaac_ros-dev/nomad_ros:ro
+      # NVMe storage for recordings and data
+      - /mnt/nvme:/mnt/nvme
+      # ROS logs
+      - ~/.ros:/root/.ros
+    environment:
+      # ROS2 settings
+      - ROS_DOMAIN_ID=0
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+      - FASTRTPS_DEFAULT_PROFILES_FILE=/workspaces/isaac_ros-dev/config/fastdds.xml
+      # CUDA
+      - CUDA_HOME=/usr/local/cuda
+      - LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/zed/lib:$LD_LIBRARY_PATH
+      # MAVROS FCU connection
+      - FCU_URL=/dev/ttyACM0:921600
+    devices:
+      - /dev/video0:/dev/video0  # ZED camera
+      - /dev/ttyACM0:/dev/ttyACM0  # Cube Orange
+    command: >
+      bash -c "
+        source /opt/ros/humble/setup.bash &&
+        source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null || true &&
+        echo 'Isaac ROS container ready. Run your launch files.' &&
+        tail -f /dev/null
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "ros2 topic list > /dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+  # ============================================================
+  # MediaMTX - Video Streaming Server (Host-side)
+  # Provides RTSP streams for Mission Planner video feed
   # ============================================================
   mediamtx:
     image: bluenviron/mediamtx:latest
@@ -26,7 +102,6 @@ services:
     network_mode: host
     volumes:
       - ./infra/mediamtx.yml:/mediamtx.yml:ro
-      # Optional: recording storage
       - /mnt/nvme/recordings:/mnt/nvme/recordings
     environment:
       - MTX_PROTOCOLS=tcp
@@ -43,67 +118,30 @@ services:
         max-file: "3"
 
   # ============================================================
-  # NOMAD Edge Core - Main Application
-  # 
-  # Build targets available:
-  # - generic-runtime (default): python:3.13-slim for dev/testing
-  # - jetson-runtime: L4T with CUDA/GPU for Jetson Orin Nano
-  #
-  # To build for Jetson, change target from "generic-runtime" to "jetson-runtime"
-  # Then rebuild: docker compose build --no-cache nomad-core
+  # Edge Core API (Optional - for HTTP API access)
+  # Only needed if running Edge Core outside Isaac container
   # ============================================================
-  nomad-core:
+  edge-core:
     build:
       context: .
       dockerfile: infra/Dockerfile
-      # Target platform: "generic-runtime" for development, "jetson-runtime" for Jetson Orin
-      target: generic-runtime
+      target: jetson-runtime
     image: nomad-edge-core:latest
-    container_name: nomad-core
+    container_name: nomad-edge-core
     restart: unless-stopped
     network_mode: host
-    privileged: true  # Required for USB/GPIO/ZED access
+    privileged: true
+    profiles: ["edge-api"]  # Only start with: docker compose --profile edge-api up
     depends_on:
-      mediamtx:
+      isaac-ros:
         condition: service_healthy
     volumes:
-      # Device access
       - /dev:/dev
-      # NVMe storage for evidence and logs
       - /mnt/nvme:/mnt/nvme
-      # Configuration (live reload)
       - ./config:/app/config:ro
-      # ZED SDK resources (if installed on host)
-      - /usr/local/zed:/usr/local/zed:ro
     environment:
-      # NOMAD configuration
       - NOMAD_LOG_LEVEL=INFO
-      - NOMAD_SIM_MODE=${NOMAD_SIM_MODE:-false}
-      - NOMAD_CONFIG_PATH=/app/config
-      - NOMAD_DATA_PATH=/mnt/nvme
-      # MAVLink
-      - MAVLINK_CONNECTION=udpin:0.0.0.0:14550
-      - MAVLINK_SYSTEM_ID=1
-      - MAVLINK_COMPONENT_ID=191
-      # Vision
-      - VISION_MODEL_PATH=/app/config/models/yolov8n.pt
-      - VISION_VIDEO_SOURCE=zed
-      - VISION_CONFIDENCE=0.5
-      - ENABLE_VIO=true
-      # RTSP streaming (for Mission Planner video feed)
-      - RTSP_OUTPUT_URL=rtsp://127.0.0.1:8554/live
-      - RTSP_FRAMERATE=30
-    # Resource limits (optional)
-    deploy:
-      resources:
-        limits:
-          memory: 4G
-        reservations:
-          memory: 2G
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+      - NOMAD_SIM_MODE=false
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -117,20 +155,19 @@ services:
         max-file: "5"
 
   # ============================================================
-  # MAVLink Router - Message Routing
+  # MAVLink Router - Message Routing (Optional)
+  # Use when Isaac ROS MAVROS is not handling MAVLink
   # ============================================================
   mavlink-router:
     image: tiiuae/mavlink-router:latest
     container_name: nomad-mavlink-router
     restart: unless-stopped
     network_mode: host
-    privileged: true  # Required for serial port access
+    privileged: true
+    profiles: ["mavlink"]  # Only start with: docker compose --profile mavlink up
     volumes:
-      # Configuration file (using main.conf as the single source of truth)
       - ./transport/mavlink_router/main.conf:/etc/mavlink-router/main.conf:ro
-      # Serial device access
       - /dev:/dev
-    # Override default command to use our config
     command: ["-c", "/etc/mavlink-router/main.conf"]
     healthcheck:
       test: ["CMD-SHELL", "pgrep mavlink-routerd || exit 1"]
@@ -146,14 +183,6 @@ services:
 
 
 # ============================================================
-# Networks (using host mode, so not needed)
-# ============================================================
-# networks:
-#   nomad-net:
-#     driver: bridge
-
-
-# ============================================================
 # Volumes
 # ============================================================
 volumes:
@@ -163,17 +192,3 @@ volumes:
       type: none
       o: bind
       device: /mnt/nvme
-
-
-# ============================================================
-# Profiles for different deployment scenarios
-# ============================================================
-# Usage: docker compose --profile sim up
-# 
-# profiles:
-#   sim:
-#     - nomad-core-sim (simulation mode)
-#   dev:
-#     - all services + hot reload
-#   prod:
-#     - optimized production settings

@@ -1,4 +1,13 @@
 """
+DEPRECATED: This module is deprecated as of January 2026.
+VIO is now handled by edge_core/ros/vio_bridge.py running inside the Isaac ROS container.
+The vio_bridge subscribes to /zed/zed_node/odom and publishes to /mavros/vision_pose/pose.
+
+This file is kept for reference only.
+See docs/NAV2_INTEGRATION_PLAN.md for the new architecture.
+"""
+
+"""
 NOMAD Edge Core - VIO Pipeline Service
 
 Visual Inertial Odometry pipeline that provides position feedback for

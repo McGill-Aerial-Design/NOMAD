@@ -1,8 +1,30 @@
 {
   "version": "1.0.0",
   "projectRoot": "C:\\Users\\Youssef\\Documents\\Code\\MAD\\NOMAD",
-  "lastUpdated": 1769717747502,
+  "lastUpdated": 1769811225729,
   "activeDecisions": [
+    {
+      "id": "a45321a8-e6d8-477a-ae0a-38e8c8802466",
+      "type": "decision",
+      "content": "docker-compose.yml updated to Isaac ROS architecture (Jan 30 2026). Now includes: isaac-ros service (builds from Dockerfile.isaac_ros_full), mediamtx service, and optional edge-core profile. Created Dockerfile.isaac_ros_full with ZED SDK 4.2, MAVROS, Nav2, and nvblox. Recovery: run 'docker compose build isaac-ros && docker compose up -d' to recreate the nomad_isaac_ros container from scratch.",
+      "timestamp": 1769810922994,
+      "supersedes": null,
+      "tags": [
+        "docker",
+        "isaac-ros",
+        "architecture",
+        "recovery",
+        "critical"
+      ],
+      "createdAt": 1769810922994,
+      "lastVerified": 1769810922994,
+      "citations": [
+        "docker-compose.yml",
+        "infra/docker/Dockerfile.isaac_ros_full",
+        "infra/docker/ros_entrypoint.sh"
+      ],
+      "priority": 5
+    },
     {
       "id": "2be7ee9d-3d08-4916-9e30-eb9855a9f572",
       "type": "decision",
@@ -254,6 +276,26 @@
       "priority": 5
     },
     {
+      "id": "23d268db-c661-4030-b89e-32dc28f948f7",
+      "type": "decision",
+      "content": "For Task 2 indoor navigation on Jetson Orin Nano, nvblox should be configured with: voxel_size=0.10, esdf_mode=2D, mesh_update_rate_hz=0.0, map_clearing_radius_m=8.0, esdf_update_rate_hz=2.0, max_integration_distance=4.0, esdf_2d_min_height=0.1, esdf_2d_max_height=1.5. This configuration prioritizes 2D costmap output for Nav2 over 3D visualization.",
+      "timestamp": 1769811225728,
+      "supersedes": null,
+      "tags": [
+        "nvblox",
+        "architecture",
+        "task2",
+        "jetson",
+        "configuration"
+      ],
+      "createdAt": 1769811225728,
+      "lastVerified": 1769811225728,
+      "citations": [
+        "docs/NAV2_INTEGRATION_PLAN.md"
+      ],
+      "priority": 4
+    },
+    {
       "id": "a8be7521-43a3-40de-bdab-dc779a90f132",
       "type": "decision",
       "content": "EKF Source Control Panel implemented in Mission Planner plugin: EkfSourceControlPanel.cs provides UI for switching ArduPilot EKF sources (GPS/Vision/OptFlow), with auto-switch based on GPS fix and force-vision toggle for outdoor VIO testing. DualLinkSender.cs has SetEkfSource() method using MAV_CMD_SET_EKF_SOURCE_SET (42007).",
@@ -428,6 +470,6 @@
       "priority": 3
     }
   ],
-  "fileCount": 35,
-  "symbolCount": 651
+  "fileCount": 37,
+  "symbolCount": 654
 }

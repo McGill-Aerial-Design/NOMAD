@@ -1,4 +1,14 @@
 """
+DEPRECATED: This module is deprecated as of January 2026.
+The nav_controller middleware has been replaced by direct ROS2-MAVLink architecture:
+- Nav2 publishes to /cmd_vel
+- mavros2 subscribes and sends SET_POSITION_TARGET_LOCAL_NED to ArduPilot
+
+This file is kept for reference and potential fallback only.
+See docs/NAV2_INTEGRATION_PLAN.md for the new architecture.
+"""
+
+"""
 NOMAD Edge Core - Navigation Controller
 
 Jetson-centric navigation that bridges ROS2 nav2/nvblox velocity commands
