@@ -317,18 +317,18 @@ class VideoRelayNode(Node):
             self.encoder_type = "nvv4l2h264enc (NVENC)"
             logger.info("Using NVIDIA NVENC hardware encoder")
         else:
-            # Fallback to software encoder
-            logger.warning("NVENC not available, falling back to software encoding (x264enc)")
+            # Fallback to OpenH264 software encoder (available in Isaac ROS container)
+            logger.warning("NVENC not available, falling back to software encoding (openh264enc)")
             pipeline_str = (
                 f"appsrc name=src format=time is-live=true block=true do-timestamp=true "
                 f"caps=video/x-raw,format=BGR,width={self.width},height={self.height},framerate={self.fps}/1 ! "
                 f"queue max-size-buffers=2 leaky=downstream ! "
                 f"videoconvert ! video/x-raw,format=I420 ! "
-                f"x264enc bitrate={self.bitrate * 1000} speed-preset=ultrafast tune=zerolatency ! "
+                f"openh264enc bitrate={self.bitrate * 1000000} complexity=low enable-frame-skip=true ! "
                 f"h264parse config-interval=1 ! "
                 f"rtspclientsink location={self.rtsp_url} protocols=tcp latency=0"
             )
-            self.encoder_type = "x264enc (software)"
+            self.encoder_type = "openh264enc (software)"
         
         logger.info(f"Creating GStreamer pipeline")
         logger.debug(f"Pipeline: {pipeline_str}")
