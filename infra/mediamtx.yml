@@ -18,7 +18,6 @@ logDestinations: [stdout]
 # Minimal timeouts for low latency
 readTimeout: 5s
 writeTimeout: 5s
-writeQueueSize: 64  # Smaller buffer = lower latency
 
 # ============================================================
 # Authentication
@@ -101,30 +100,25 @@ paths:
   primary:
     source: publisher
     sourceOnDemand: no
-    writeQueueSize: 512
 
   # Secondary stream - always running (for Gimbal/Secondary view)
   secondary:
     source: publisher
     sourceOnDemand: no
-    writeQueueSize: 512
 
   # Legacy endpoints for backward compatibility
   zed:
     source: publisher
     sourceOnDemand: no
-    writeQueueSize: 512
 
   live:
     source: publisher
     sourceOnDemand: no
-    writeQueueSize: 512
 
   # Dynamic stream for topic switching
   dynamic:
     source: publisher
     sourceOnDemand: no
-    writeQueueSize: 512
 
   # Wildcard path - accept any stream name
   # Critical for low latency:
@@ -133,4 +127,3 @@ paths:
     sourceOnDemand: no
     runOnDemandStartTimeout: 10s
     runOnDemandCloseAfter: 10s
-    writeQueueSize: 512
