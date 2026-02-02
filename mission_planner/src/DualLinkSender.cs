@@ -404,7 +404,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> ExecuteTerminalCommandAsync(string command, int timeout = 10)
         {
-            return await SendHttpPost("/api/terminal/exec", new { command, timeout });
+            return await SendHttpPost("/api/terminal/run", new { command, timeout });
         }
 
         /// <summary>

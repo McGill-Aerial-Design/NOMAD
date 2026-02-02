@@ -310,7 +310,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 "status": "/status",
                 "task1": "/api/task/1/*",
                 "task2": "/api/task/2/*",
-                "terminal": "/api/terminal/exec",
+                "terminal": "/api/terminal/run",
                 "vio": "/api/vio/*",
             }
         }
