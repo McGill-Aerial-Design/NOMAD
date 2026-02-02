@@ -101,34 +101,29 @@ paths:
   primary:
     source: publisher
     sourceOnDemand: no
-    readBufferCount: 1024
     writeQueueSize: 512
 
   # Secondary stream - always running (for Gimbal/Secondary view)
   secondary:
     source: publisher
     sourceOnDemand: no
-    readBufferCount: 1024
     writeQueueSize: 512
 
   # Legacy endpoints for backward compatibility
   zed:
     source: publisher
     sourceOnDemand: no
-    readBufferCount: 1024
     writeQueueSize: 512
 
   live:
     source: publisher
     sourceOnDemand: no
-    readBufferCount: 1024
     writeQueueSize: 512
 
   # Dynamic stream for topic switching
   dynamic:
     source: publisher
     sourceOnDemand: no
-    readBufferCount: 1024
     writeQueueSize: 512
 
   # Wildcard path - accept any stream name
@@ -138,5 +133,4 @@ paths:
     sourceOnDemand: no
     runOnDemandStartTimeout: 10s
     runOnDemandCloseAfter: 10s
-    readBufferCount: 1024
     writeQueueSize: 512
