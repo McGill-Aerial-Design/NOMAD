@@ -4,7 +4,8 @@
 # Ultra-low latency configuration for FPV drone operations.
 # Optimized for <150ms glass-to-glass latency.
 #
-# Source: https://github.com/bluenviron/mediamtx
+# Source: https://github.com
+/bluenviron/mediamtx
 ###############################################
 
 # ============================================================
@@ -52,8 +53,8 @@ rtsp: yes
 rtspAddress: :8554
 rtspTransports: [udp, tcp]  # UDP first for lower latency
 
-# Use basic auth (allow any user/pass for local/Tailscale access)
-rtspAuthMethods: [basic]
+# Disable auth for local/Tailscale access
+rtspAuthMethods: []
 
 # ============================================================
 # RTMP Server (disabled)
