@@ -118,6 +118,61 @@ services:
         max-file: "3"
 
   # ============================================================
+  # Jetson Video Streamer - Hardware-Accelerated RTSP Streaming
+  # Minimal container with Jetson HW encoder (nvv4l2h264enc)
+  # Uses dedicated hw encoder chip - zero extra resources
+  # ============================================================
+  jetson-video-stream:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.jetson_video
+    image: nomad-jetson-video:latest
+    container_name: nomad-jetson-video
+    restart: unless-stopped
+    runtime: nvidia
+    network_mode: host
+    privileged: true
+    ipc: host
+    depends_on:
+      isaac-ros:
+        condition: service_healthy
+      mediamtx:
+        condition: service_healthy
+    volumes:
+      - /dev:/dev
+      - ./edge_core/ros:/workspace/ros:ro
+      - ~/.ros:/root/.ros
+    environment:
+      - ROS_DOMAIN_ID=0
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+      - VIDEO_SOURCE_TOPIC=/zed/zed_node/rgb/image_rect_color
+      - RTSP_URL=rtsp://localhost:8554/primary
+      - VIDEO_WIDTH=1280
+      - VIDEO_HEIGHT=720
+      - VIDEO_BITRATE=4000000
+    command: >
+      bash -c "
+        source /opt/ros/humble/setup.bash &&
+        python3 /workspace/ros/jetson_video_bridge.py \
+          --source-topic $${VIDEO_SOURCE_TOPIC} \
+          --rtsp-url $${RTSP_URL} \
+          --width $${VIDEO_WIDTH} \
+          --height $${VIDEO_HEIGHT} \
+          --bitrate $${VIDEO_BITRATE}
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f jetson_video_bridge || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # ============================================================
   # Edge Core API (Optional - for HTTP API access)
   # Only needed if running Edge Core outside Isaac container
   # ============================================================
