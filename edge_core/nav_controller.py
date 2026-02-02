@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 DEPRECATED: This module is deprecated as of January 2026.
 The nav_controller middleware has been replaced by direct ROS2-MAVLink architecture:
@@ -21,8 +22,6 @@ Architecture:
 
 Target: Python 3.13 | NVIDIA Jetson Orin Nano
 """
-
-from __future__ import annotations
 
 import logging
 import math
