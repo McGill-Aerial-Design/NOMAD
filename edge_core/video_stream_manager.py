@@ -185,25 +185,36 @@ class VideoStreamManager:
                 return False
             
             # Copy bridge script to container
-            script_path = os.path.join(os.path.dirname(__file__), "ros", "isaac_h264_rtsp_bridge.py")
+            # Try GStreamer bridge first (more reliable), fallback to Isaac ROS
+            script_name = "gstreamer_rtsp_bridge.py"
+            script_path = os.path.join(os.path.dirname(__file__), "ros", script_name)
             if not os.path.exists(script_path):
-                logger.error(f"Bridge script not found: {script_path}")
-                return False
+                logger.warning(f"GStreamer bridge not found, trying Isaac H264 bridge")
+                script_name = "isaac_h264_rtsp_bridge.py"
+                script_path = os.path.join(os.path.dirname(__file__), "ros", script_name)
+                if not os.path.exists(script_path):
+                    logger.error(f"No bridge script found: {script_path}")
+                    return False
             
             try:
                 subprocess.run(
-                    ["docker", "cp", script_path, f"{self.container_name}:/tmp/isaac_h264_rtsp_bridge.py"],
+                    ["docker", "cp", script_path, f"{self.container_name}:/tmp/{script_name}"],
                     capture_output=True,
                     timeout=10,
                     check=True
                 )
-                logger.info("Copied Isaac H264 bridge script to container")
+                logger.info(f"Copied {script_name} to container")
             except subprocess.CalledProcessError as e:
                 logger.error(f"Failed to copy bridge script: {e}")
                 return False
             
             # Kill any existing bridge/encoder processes
             try:
+                subprocess.run(
+                    ["docker", "exec", self.container_name, "pkill", "-f", "gstreamer_rtsp_bridge"],
+                    capture_output=True,
+                    timeout=5
+                )
                 subprocess.run(
                     ["docker", "exec", self.container_name, "pkill", "-f", "isaac_h264_rtsp_bridge"],
                     capture_output=True,
@@ -217,19 +228,33 @@ class VideoStreamManager:
             except Exception:
                 pass  # OK if nothing to kill
             
-            # Start the Isaac H264 RTSP bridge
+            # Start the video bridge (GStreamer or Isaac ROS)
+            # Extract RTSP port and path from rtsp_url
+            # Format: rtsp://host:port/path
+            rtsp_port = 8554  # default
+            rtsp_path = "/primary"  # default
+            if ":" in self.rtsp_url and "/" in self.rtsp_url:
+                try:
+                    port_and_path = self.rtsp_url.split(":")[-1]  # "8554/primary"
+                    rtsp_port = int(port_and_path.split("/")[0])
+                    rtsp_path = "/" + "/".join(port_and_path.split("/")[1:])
+                except Exception as e:
+                    logger.warning(f"Failed to parse RTSP URL {self.rtsp_url}: {e}, using defaults")
+            
             cmd = [
                 "docker", "exec", "-d", self.container_name,
                 "bash", "-c",
                 f"source /opt/ros/humble/setup.bash && "
                 f"source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null ; "
-                f"python3 /tmp/isaac_h264_rtsp_bridge.py "
+                f"python3 /tmp/{script_name} "
                 f"--source-topic '{self.default_topic}' "
-                f"--rtsp-url '{self.rtsp_url}' "
+                f"--rtsp-port {rtsp_port} "
+                f"--rtsp-path '{rtsp_path}' "
                 f"--http-port {self.relay_http_port} "
                 f"--width {self.width} "
                 f"--height {self.height} "
-                f"> /tmp/isaac_h264_bridge.log 2>&1"
+                f"--bitrate {self.bitrate} "
+                f"> /tmp/video_bridge.log 2>&1"
             ]
             
             try:
@@ -246,7 +271,7 @@ class VideoStreamManager:
                 time.sleep(1)
                 if self.is_relay_running():
                     self._started = True
-                    logger.info("Isaac H264 RTSP bridge started successfully")
+                    logger.info(f"{script_name} started successfully")
                     return True
             
             logger.error("Isaac H264 bridge did not start in time")
