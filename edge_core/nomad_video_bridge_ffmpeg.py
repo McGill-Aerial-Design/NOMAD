@@ -302,13 +302,22 @@ class FFmpegVideoBridge(Node):
         try:
             encoding = msg.encoding.lower()
             
-            if 'bgr' in encoding:
+            if encoding == 'bgr8':
                 frame = np.frombuffer(msg.data, dtype=np.uint8)
                 frame = frame.reshape((msg.height, msg.width, 3))
-            elif 'rgb' in encoding:
+            elif encoding == 'bgra8':
+                # BGRA8 has 4 channels - convert to BGR
+                frame = np.frombuffer(msg.data, dtype=np.uint8)
+                frame = frame.reshape((msg.height, msg.width, 4))
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+            elif encoding == 'rgb8':
                 frame = np.frombuffer(msg.data, dtype=np.uint8)
                 frame = frame.reshape((msg.height, msg.width, 3))
                 frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            elif encoding == 'rgba8':
+                frame = np.frombuffer(msg.data, dtype=np.uint8)
+                frame = frame.reshape((msg.height, msg.width, 4))
+                frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
             elif 'mono8' in encoding or '8uc1' in encoding:
                 frame = np.frombuffer(msg.data, dtype=np.uint8)
                 frame = frame.reshape((msg.height, msg.width))
