@@ -213,6 +213,9 @@ class NomadVideoBridge(Node):
         # Shutdown handling
         self._shutdown_requested = False
         
+        # Encoder type (will be set during pipeline initialization)
+        self._encoder_type = "NVENC hardware"  # Default, changed if software fallback
+        
         # Initialize GStreamer pipeline
         self._init_gstreamer_pipeline()
         
@@ -277,18 +280,34 @@ class NomadVideoBridge(Node):
                 f"rtspclientsink location={self.rtsp_url} protocols=tcp latency=0"
             )
         else:
-            # Fallback to software encoder (openh264)
-            logger.warning("NVIDIA NVENC not available, falling back to openh264 software encoder")
-            logger.warning("Performance will be reduced - consider using a container with NVENC support")
-            pipeline_str = (
-                f"appsrc name=src format=time is-live=true block=true do-timestamp=true "
-                f"caps=video/x-raw,format=BGR,width={self.width},height={self.height},framerate={self.fps}/1 ! "
-                f"queue max-size-buffers=2 leaky=downstream ! "
-                f"videoconvert ! video/x-raw,format=I420 ! "
-                f"openh264enc bitrate={self.bitrate * 1000} complexity=0 ! "
-                f"h264parse config-interval=1 ! "
-                f"rtspclientsink location={self.rtsp_url} protocols=tcp latency=0"
-            )
+            # Fallback to software encoder - try x264enc first (faster), then openh264
+            x264_available = self._check_element_available("x264enc")
+            if x264_available:
+                logger.warning("NVIDIA NVENC not available, falling back to x264 software encoder")
+                pipeline_str = (
+                    f"appsrc name=src format=time is-live=true block=true do-timestamp=true "
+                    f"caps=video/x-raw,format=BGR,width={self.width},height={self.height},framerate={self.fps}/1 ! "
+                    f"queue max-size-buffers=2 leaky=downstream ! "
+                    f"videoconvert ! video/x-raw,format=I420 ! "
+                    f"x264enc bitrate={self.bitrate} speed-preset=ultrafast tune=zerolatency ! "
+                    f"h264parse config-interval=1 ! "
+                    f"rtspclientsink location={self.rtsp_url} protocols=tcp latency=0"
+                )
+                self._encoder_type = "x264 software"
+            else:
+                # Final fallback to openh264enc (slowest)
+                logger.warning("x264enc not available, falling back to openh264 software encoder")
+                logger.warning("Performance will be limited - consider installing x264 or NVENC")
+                pipeline_str = (
+                    f"appsrc name=src format=time is-live=true block=true do-timestamp=true "
+                    f"caps=video/x-raw,format=BGR,width={self.width},height={self.height},framerate={self.fps}/1 ! "
+                    f"queue max-size-buffers=2 leaky=downstream ! "
+                    f"videoconvert ! video/x-raw,format=I420 ! "
+                    f"openh264enc bitrate={self.bitrate * 1000} complexity=0 ! "
+                    f"h264parse config-interval=1 ! "
+                    f"rtspclientsink location={self.rtsp_url} protocols=tcp latency=0"
+                )
+                self._encoder_type = "openh264 software"
         
         logger.info(f"Creating GStreamer pipeline: {pipeline_str[:120]}...")
         
@@ -322,7 +341,7 @@ class NomadVideoBridge(Node):
                 return
             
             self._pipeline_running = True
-            encoder_type = "NVENC hardware" if use_nvenc else "openh264 software"
+            encoder_type = "NVENC hardware" if use_nvenc else self._encoder_type
             logger.info(f"GStreamer pipeline started successfully ({encoder_type})")
             
         except Exception as e:
