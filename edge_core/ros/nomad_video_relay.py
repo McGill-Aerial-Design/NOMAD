@@ -298,11 +298,11 @@ class VideoRelayNode(Node):
     
     def _init_gstreamer_pipeline(self):
         """Initialize GStreamer pipeline with NVENC encoding."""
-        # Build pipeline string
-        # appsrc -> videoconvert -> nvvidconv -> nvv4l2h264enc -> h264parse -> rtspclientsink
+        # Check NVENC availability first
+        use_nvenc = self._check_nvenc_available()
         
-        try:
-            # Try NVENC pipeline first
+        if use_nvenc:
+            # NVENC hardware pipeline
             pipeline_str = (
                 f"appsrc name=src format=time is-live=true block=true do-timestamp=true "
                 f"caps=video/x-raw,format=BGR,width={self.width},height={self.height},framerate={self.fps}/1 ! "
@@ -315,15 +315,15 @@ class VideoRelayNode(Node):
                 f"rtspclientsink location={self.rtsp_url} protocols=tcp latency=0"
             )
             self.encoder_type = "nvv4l2h264enc (NVENC)"
-            logger.info(f"Using NVIDIA NVENC hardware encoder")
-        except Exception:
+            logger.info("Using NVIDIA NVENC hardware encoder")
+        else:
             # Fallback to software encoder
-            logger.warning("NVENC not available, falling back to software encoding")
+            logger.warning("NVENC not available, falling back to software encoding (x264enc)")
             pipeline_str = (
                 f"appsrc name=src format=time is-live=true block=true do-timestamp=true "
                 f"caps=video/x-raw,format=BGR,width={self.width},height={self.height},framerate={self.fps}/1 ! "
                 f"queue max-size-buffers=2 leaky=downstream ! "
-                f"videoconvert ! "
+                f"videoconvert ! video/x-raw,format=I420 ! "
                 f"x264enc bitrate={self.bitrate * 1000} speed-preset=ultrafast tune=zerolatency ! "
                 f"h264parse config-interval=1 ! "
                 f"rtspclientsink location={self.rtsp_url} protocols=tcp latency=0"
