@@ -66,9 +66,9 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// Video stream URL for ZED camera.
         /// Default: RTSP stream supporting multiple simultaneous viewers.
-        /// Format: rtsp://&lt;jetson-ip&gt;:8554/zed
+        /// Format: rtsp://&lt;jetson-ip&gt;:8554/primary
         /// </summary>
-        public string VideoUrl { get; set; } = "rtsp://100.75.218.89:8554/zed";
+        public string VideoUrl { get; set; } = "rtsp://100.75.218.89:8554/primary";
 
         /// <summary>
         /// Servo channel for ZED camera tilt control (0 = disabled).
@@ -424,7 +424,7 @@ namespace NOMAD.MissionPlanner
             if (VideoUrl == "udp://@:5600" || string.IsNullOrEmpty(VideoUrl))
             {
                 // New default is RTSP stream (allows multiple viewers)
-                VideoUrl = $"rtsp://{EffectiveIP}:8554/zed";
+                VideoUrl = $"rtsp://{EffectiveIP}:8554/primary";
             }
             
             // Migrate old Jetson IP to Tailscale if using Tailscale

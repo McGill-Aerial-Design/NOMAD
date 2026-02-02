@@ -13,7 +13,7 @@
 #   task2 - Start services for Task 2 (VIO-based) including Isaac ROS
 #   all   - Start everything (default)
 #
-# Stream URL: rtsp://<JETSON_IP>:8554/zed
+# Stream URL: rtsp://<JETSON_IP>:8554/primary
 # API URL: http://<JETSON_IP>:8000
 # =============================================================================
 
@@ -226,7 +226,7 @@ except: pass
     echo "Connection Info:"
     echo "  Tailscale IP: $JETSON_IP"
     echo "  API:          http://$JETSON_IP:$API_PORT"
-    echo "  Video:        rtsp://$JETSON_IP:$RTSP_PORT/zed"
+    echo "  Video:        rtsp://$JETSON_IP:$RTSP_PORT/primary"
     echo "  MAVLink:      UDP $JETSON_IP:14550"
     echo ""
     echo "Logs:"

@@ -92,13 +92,13 @@ namespace NOMAD.MissionPlanner
         /// Creates an embedded video player.
         /// </summary>
         /// <param name="title">Title to display</param>
-        /// <param name="rtspUrl">RTSP stream URL (e.g., rtsp://ip:8554/zed)</param>
+        /// <param name="rtspUrl">RTSP stream URL (e.g., rtsp://ip:8554/primary)</param>
         /// <param name="showControls">Whether to show control bar and title (false for minimal view)</param>
         /// <param name="jetsonConnectionManager">Connection manager for safety-aware behavior</param>
         public EmbeddedVideoPlayer(string title, string rtspUrl, bool showControls = true, JetsonConnectionManager jetsonConnectionManager = null)
         {
             _streamTitle = title;
-            _streamUrl = rtspUrl;  // Full stream URL (e.g., rtsp://ip:8554/zed)
+            _streamUrl = rtspUrl;  // Full stream URL (e.g., rtsp://ip:8554/primary)
             _isPlaying = false;
             _showControls = showControls;
             _useGStreamer = CheckGStreamerAvailable();
