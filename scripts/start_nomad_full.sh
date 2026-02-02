@@ -192,26 +192,6 @@ start_isaac_ros() {
 }
 
 # -----------------------------------------------------------------------------
-# Start Multi-Stream Video (Dynamic API-Based)
-# -----------------------------------------------------------------------------
-
-start_multi_stream() {
-    log_info "Starting multi-stream video system (API-based)..."
-    
-    # Verify Edge Core API is accessible
-    if ! curl -s http://localhost:$API_PORT/health > /dev/null; then
-        log_fail "Edge Core API not ready. Cannot start video streams."
-        return 1
-    fi
-    
-    if [ -f "$SCRIPT_DIR/start_multi_video.sh" ]; then
-        bash "$SCRIPT_DIR/start_multi_video.sh" start
-    else
-        log_warn "Multi-stream video script not found"
-    fi
-}
-
-# -----------------------------------------------------------------------------
 # Print Status
 # -----------------------------------------------------------------------------
 
@@ -271,7 +251,7 @@ main() {
             start_mediamtx
             start_edge_core
             start_isaac_ros
-            start_multi_stream
+            # Video streaming handled by VideoStreamManager (auto-starts with container)
             ;;
         task2)
             log_info "Starting Task 2 (VIO-based) services..."
@@ -279,7 +259,7 @@ main() {
             start_mediamtx
             start_edge_core
             start_isaac_ros
-            start_multi_stream
+            # Video streaming handled by VideoStreamManager (auto-starts with container)
             ;;
         all|*)
             log_info "Starting all services (Isaac ROS + Dynamic Video)..."

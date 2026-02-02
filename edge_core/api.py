@@ -1748,266 +1748,168 @@ def create_app(state_manager: StateManager) -> FastAPI:
             request.app.state.exclusion_map = []
             return {"success": True, "cleared": count}
 
-    # ==================== Video Manager Endpoints ====================
-    from .video_manager import get_video_manager
-    from pydantic import BaseModel, Field
+    # ==================== Video Streaming Endpoints ====================
+    # Isaac ROS H.264 video streaming with dynamic topic switching
     
-    class StartStreamRequest(BaseModel):
-        stream_name: str = Field(..., description="Unique name for the stream (e.g., 'zed_left')")
-        topic: str = Field(..., description="ROS image topic to subscribe to")
-        width: int = Field(1280, description="Output video width", ge=320, le=3840)
-        height: int = Field(720, description="Output video height", ge=240, le=2160)
-        fps: int = Field(30, description="Output video FPS", ge=1, le=60)
-    
-    class SwitchTopicRequest(BaseModel):
-        instance: str = Field("primary", description="Bridge instance (primary or secondary)")
-        topic: str = Field(..., description="ROS image topic to switch to")
+    from .video_stream_manager import get_video_stream_manager
     
     @app.get("/api/video/topics", tags=["Video"])
     async def get_video_topics():
         """
-        List available ROS image topics.
+        List available ROS image topics from ZED camera.
         
-        Returns a list of all sensor_msgs/Image topics currently published in ROS.
-        Use this to discover available camera feeds before switching streams.
+        Returns topics with both full path and trimmed display names for UI:
+        - Full: /zed/zed_node/rgb/image_rect_color
+        - Display: zed: rgb/image_rect_color
+        
+        Use the full name when switching topics via POST /api/video/source.
         """
-        mgr = get_video_manager()
-        return {"topics": mgr.list_topics()}
-
-    @app.get("/api/video/streams", tags=["Video"])
-    async def list_video_streams():
-        """
-        List all active video streams (persistent bridges).
+        mgr = get_video_stream_manager()
+        if not mgr:
+            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
         
-        Returns information about each stream including:
-        - Stream name and RTSP URL
-        - Current ROS topic
-        - Resolution and FPS
-        - Overlay status
-        """
-        mgr = get_video_manager()
-        return {"streams": mgr.list_streams()}
-
-    @app.get("/api/video/streams/{stream_name}", tags=["Video"])
-    async def get_video_stream(stream_name: str):
-        """Get detailed information about a specific stream."""
-        mgr = get_video_manager()
-        stream = mgr.get_stream(stream_name)
-        if not stream:
-            raise HTTPException(status_code=404, detail=f"Stream '{stream_name}' not found")
-        return stream
-
-    @app.post("/api/video/streams", tags=["Video"])
-    async def create_video_stream(request: StartStreamRequest):
-        """
-        Start or update a video stream (legacy endpoint).
-        
-        In the new architecture, this maps stream names to persistent bridges:
-        - 'zed', 'primary', 'live' -> switches primary bridge topic
-        - 'secondary', 'depth' -> switches secondary bridge topic
-        
-        The RTSP URL stays constant - only the content changes.
-        """
-        try:
-            mgr = get_video_manager()
-            stream = mgr.start_stream(
-                stream_name=request.stream_name,
-                topic=request.topic,
-                width=request.width,
-                height=request.height,
-                fps=request.fps
-            )
-            return {"success": True, "stream": stream}
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        except Exception as e:
-            logger.error(f"Failed to start stream: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
-
-    @app.delete("/api/video/streams/{stream_name}", tags=["Video"])
-    async def delete_video_stream(stream_name: str):
-        """
-        Stop a specific video stream (legacy - bridges are now persistent).
-        
-        In the new architecture, this endpoint is a no-op since bridges
-        run continuously. The RTSP connection stays alive.
-        """
-        mgr = get_video_manager()
-        success = mgr.stop_stream(stream_name)
-        return {"success": True, "message": f"Bridges are now persistent - '{stream_name}' continues running"}
-
-    @app.delete("/api/video/streams", tags=["Video"])
-    async def delete_all_video_streams():
-        """Stop all video streams (legacy - bridges are now persistent)."""
-        mgr = get_video_manager()
-        count = mgr.stop_all_streams()
-        return {"success": True, "message": "Bridges are now persistent and continue running"}
-
-    @app.post("/api/video/switch", tags=["Video"])
-    async def switch_video_topic(request: SwitchTopicRequest):
-        """
-        Switch a bridge instance to a different ROS topic.
-        
-        This is the primary endpoint for dynamic stream switching from Mission Planner.
-        The RTSP URL stays constant, only the content changes - no reconnect needed.
-        
-        Args:
-            instance: Bridge instance name (primary, secondary)
-            topic: New ROS image topic to subscribe to
-            
-        Example:
-            POST /api/video/switch
-            {"instance": "primary", "topic": "/zed/zed_node/depth/depth_registered"}
-        
-        The Mission Planner plugin should:
-        1. Keep the same RTSP URL (rtsp://<ip>:8554/primary)
-        2. Call this endpoint to change what's shown on that stream
-        3. The video player continues playing - no reconnect needed
-        """
-        mgr = get_video_manager()
-        success = mgr.switch_video_source(request.instance, request.topic)
-        stream = mgr.get_stream(request.instance)
-        
-        if not success:
-            raise HTTPException(status_code=500, detail=f"Failed to switch topic for '{request.instance}'")
-        
+        topics = mgr.list_topics()
         return {
-            "success": True,
-            "instance": request.instance,
-            "topic": stream.get("topic") if stream else request.topic,
-            "rtsp_url": stream.get("rtsp_url") if stream else f"rtsp://localhost:8554/{request.instance}"
+            "topics": [t.to_dict() for t in topics],
+            "count": len(topics)
         }
 
-    @app.post("/api/video/overlay", tags=["Video"])
-    async def set_video_overlay(
-        enabled: bool = Query(True, description="Enable or disable overlay"),
-        instance: str = Query("primary", description="Bridge instance")
-    ):
+    @app.get("/api/video/status", tags=["Video"])
+    async def get_video_status():
         """
-        Enable or disable object detection overlay for a bridge instance.
+        Get current video stream status.
         
-        When enabled, the bridge draws bounding boxes from ZED object detection
-        on the video stream.
+        Returns:
+        - streaming: Whether the stream is active
+        - current_topic: The ROS topic currently being streamed
+        - rtsp_url: The constant RTSP URL (does not change on topic switch)
+        - fps: Current frame rate
+        - frame_count: Total frames streamed
+        - error_count: Number of encoding/streaming errors
         """
-        mgr = get_video_manager()
-        success = mgr.set_overlay_enabled(instance, enabled)
+        mgr = get_video_stream_manager()
+        if not mgr:
+            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
         
-        return {
-            "success": success,
-            "instance": instance,
-            "overlay_enabled": enabled
-        }
-
-    @app.get("/api/video/bridges", tags=["Video"])
-    async def get_video_bridges():
-        """
-        Get status of all persistent video bridges.
-        
-        Returns detailed status from each bridge's HTTP control API including:
-        - Current topic and state
-        - Frame count and error statistics
-        - Overlay status
-        """
-        mgr = get_video_manager()
-        bridges = {}
-        
-        for instance in ["primary", "secondary"]:
-            status = mgr.get_bridge_status(instance)
-            if status:
-                bridges[instance] = status
-            else:
-                stream = mgr.get_stream(instance)
-                bridges[instance] = stream if stream else {"state": "unknown"}
-        
-        return {"bridges": bridges}
-
-    @app.post("/api/video/bridges/start", tags=["Video"])
-    async def start_video_bridges():
-        """
-        Start the persistent video bridge instances.
-        
-        This is typically called automatically on startup, but can be used
-        to manually start bridges if they weren't auto-started.
-        """
-        mgr = get_video_manager()
-        results = mgr.start_persistent_bridges()
-        
-        return {
-            "success": all(results.values()),
-            "results": results,
-            "streams": mgr.list_streams()
-        }
+        status = mgr.get_status()
+        return status.to_dict()
 
     @app.post("/api/video/source", tags=["Video"])
     async def switch_video_source(topic: str = Query(..., description="ROS image topic to stream")):
         """
-        Switch the primary video stream to a different ROS topic.
+        Switch the video stream to a different ROS topic.
         
-        This endpoint enables dynamic stream switching from Mission Planner:
-        The RTSP URL stays constant (rtsp://<ip>:8554/primary), only content changes.
+        The RTSP URL stays constant - only the content changes.
+        Mission Planner video player does not need to reconnect.
         
-        In the new architecture, this is equivalent to:
-            POST /api/video/switch {"instance": "primary", "topic": "<topic>"}
+        Available topics can be listed via GET /api/video/topics.
         
         Example:
             POST /api/video/source?topic=/zed/zed_node/left/image_rect_color
         """
-        mgr = get_video_manager()
-        success = mgr.switch_video_source("primary", topic)
-        stream = mgr.get_stream("primary")
+        mgr = get_video_stream_manager()
+        if not mgr:
+            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
         
+        success = mgr.switch_topic(topic)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to switch video source")
         
+        status = mgr.get_status()
         return {
             "success": True,
             "topic": topic,
-            "rtsp_url": stream.get("rtsp_url") if stream else "rtsp://localhost:8554/primary",
-            "stream": stream
+            "rtsp_url": mgr.get_rtsp_url(),
+            "status": status.to_dict()
         }
 
     @app.get("/api/video/source", tags=["Video"])
     async def get_video_source():
         """
-        Get the current active video source (primary stream).
+        Get the current video source topic and RTSP URL.
+        """
+        mgr = get_video_stream_manager()
+        if not mgr:
+            return {"active": False, "topic": None, "rtsp_url": None}
         
-        Returns information about the currently streaming topic
-        and the constant RTSP URL.
-        """
-        mgr = get_video_manager()
-        stream = mgr.get_stream("primary")
-        if not stream:
-            return {"active": False, "stream": None}
-        return {"active": True, "stream": stream}
-
-    @app.get("/api/video/encoding", tags=["Video"])
-    async def get_video_encoding():
-        """
-        Get the current video encoding mode.
-        
-        In the new zero-copy architecture, NVENC hardware encoding is always used.
-        """
+        status = mgr.get_status()
         return {
-            "use_nvenc": True,
-            "encoder": "nvv4l2h264enc (NVENC hardware)",
-            "architecture": "Zero-copy GStreamer pipeline",
-            "description": "Hardware encoding with ~150ms glass-to-glass latency"
+            "active": status.streaming,
+            "topic": status.current_topic,
+            "rtsp_url": mgr.get_rtsp_url()
         }
 
-    @app.post("/api/video/encoding", tags=["Video"])
-    async def set_video_encoding(use_nvenc: bool = Query(True, description="Use NVENC hardware encoding")):
+    @app.post("/api/video/start", tags=["Video"])
+    async def start_video_stream():
         """
-        Set the video encoding mode (legacy endpoint).
+        Start the video streaming pipeline.
         
-        In the new zero-copy architecture, NVENC is always used.
-        This endpoint is kept for backward compatibility.
+        Launches the video relay node inside the Isaac ROS container.
+        This is typically called automatically on startup.
         """
+        mgr = get_video_stream_manager()
+        if not mgr:
+            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
+        
+        success = mgr.start()
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to start video stream")
+        
         return {
             "success": True,
-            "use_nvenc": True,
-            "encoder": "nvv4l2h264enc (NVENC hardware)",
-            "note": "NVENC is always enabled in zero-copy architecture"
+            "rtsp_url": mgr.get_rtsp_url(),
+            "message": "Video pipeline started"
         }
+
+    @app.post("/api/video/stop", tags=["Video"])
+    async def stop_video_stream():
+        """
+        Stop the video streaming pipeline.
+        """
+        mgr = get_video_stream_manager()
+        if not mgr:
+            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
+        
+        success = mgr.stop()
+        return {
+            "success": success,
+            "message": "Video pipeline stopped" if success else "Failed to stop"
+        }
+
+    @app.post("/api/video/restart", tags=["Video"])
+    async def restart_video_stream():
+        """
+        Restart the video streaming pipeline.
+        
+        Useful for recovery from errors or after container restart.
+        """
+        mgr = get_video_stream_manager()
+        if not mgr:
+            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
+        
+        success = mgr.restart()
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to restart video stream")
+        
+        return {
+            "success": True,
+            "rtsp_url": mgr.get_rtsp_url(),
+            "message": "Video pipeline restarted"
+        }
+
+    @app.get("/api/video/logs", tags=["Video"])
+    async def get_video_logs(lines: int = Query(50, description="Number of log lines to return")):
+        """
+        Get recent logs from the video relay process.
+        
+        Useful for debugging video streaming issues.
+        """
+        mgr = get_video_stream_manager()
+        if not mgr:
+            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
+        
+        logs = mgr.get_logs(lines)
+        return {"logs": logs}
 
     # ==================== SLAM 3D Mesh Endpoints ====================
     # These endpoints stream nvblox 3D mesh data for Mission Planner visualization

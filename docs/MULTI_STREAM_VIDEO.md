@@ -1,188 +1,266 @@
-# NOMAD Multi-Stream Video System
+# NOMAD Video Streaming System
 
-This system provides multiple simultaneous video streams from the ZED camera to Mission Planner.
-
-## Available Streams
-
-The system publishes the following streams to MediaMTX:
-
-| Stream Name | ROS Topic | Description | Port |
-|------------|-----------|-------------|------|
-| `zed_rgb` | `/zed/zed_node/rgb/image_rect_color` | Main RGB color feed (rectified) | 9999 |
-| `zed_left` | `/zed/zed_node/left/image_rect_color` | Left camera only (rectified) | 10000 |
-| `zed_right` | `/zed/zed_node/right/image_rect_color` | Right camera only (rectified) | 10001 |
+Isaac ROS H.264 hardware-accelerated video streaming with dynamic topic switching.
 
 ## Architecture
 
 ```
-ZED Camera → Isaac ROS → ROS Topics → Video Bridges → FFmpeg → MediaMTX → RTSP
+ZED Camera -> ROS2 Topic -> Video Relay (NVENC) -> MediaMTX -> RTSP -> Mission Planner
+                 ^
+                 |-- Topic switch via API (no URL change)
 ```
+
+### Key Features
+
+- **Single RTSP URL**: `rtsp://jetson:8554/primary` - never changes
+- **Dynamic Topic Switching**: Change ZED camera view via API
+- **Hardware Encoding**: NVIDIA NVENC H.264 (~150ms latency)
+- **Multiple Viewers**: MediaMTX distributes to any number of clients
 
 ### Components
 
-1. **Isaac ROS Container**: Runs ZED ROS2 wrapper publishing multiple topics
-2. **Video Bridges** (Python): Subscribe to ROS topics, send raw frames via TCP
-3. **FFmpeg Encoders**: Receive raw frames, encode with H.264, publish to MediaMTX
-4. **MediaMTX**: RTSP server distributing streams to Mission Planner
+1. **Video Relay Node** (`edge_core/ros/nomad_video_relay.py`)
+   - Runs inside Isaac ROS container
+   - Subscribes to selected ROS2 image topic
+   - Encodes with GStreamer nvv4l2h264enc (NVENC)
+   - Streams to MediaMTX via RTSP
+   - HTTP control API on port 9200
 
-## Usage
+2. **Video Stream Manager** (`edge_core/video_stream_manager.py`)
+   - Runs on Jetson host
+   - Controls relay node via HTTP
+   - Provides Edge Core API integration
 
-### Start All Streams
+3. **MediaMTX** (`infra/mediamtx.yml`)
+   - RTSP server on port 8554
+   - Distributes stream to multiple clients
 
-```bash
-~/NOMAD/scripts/start_multi_video.sh start
-```
+## API Endpoints
 
-### Check Status
+All endpoints are on the Edge Core API (port 8000).
 
-```bash
-~/NOMAD/scripts/start_multi_video.sh status
-```
-
-### Stop All Streams
-
-```bash
-~/NOMAD/scripts/start_multi_video.sh stop
-```
-
-### Restart Streams
+### List Available Topics
 
 ```bash
-~/NOMAD/scripts/start_multi_video.sh restart
+GET /api/video/topics
 ```
 
-## Integration with Mission Planner
-
-The Mission Planner plugin includes a stream selector dropdown that:
-
-1. Shows all available streams from MediaMTX
-2. Displays live status: `[LIVE]` or `[--]`
-3. Shows codec info (H264)
-4. Allows switching between streams dynamically
-5. Includes a refresh button (...) to query MediaMTX for current streams
-
-### Refreshing Available Streams
-
-Click the "..." button next to the stream selector to query MediaMTX and update the list with current streams and their status.
-
-## Stream URLs
-
-When streams are running, they are accessible at:
-
-- RGB: `rtsp://jetson:8554/zed_rgb`
-- Left: `rtsp://jetson:8554/zed_left`
-- Right: `rtsp://jetson:8554/zed_right`
-
-Replace `jetson` with your Tailscale IP or hostname.
-
-## Full System Startup
-
-The main startup script now automatically starts all streams:
-
-```bash
-~/NOMAD/scripts/start_nomad_full.sh
-```
-
-This starts:
-1. MAVLink Router (telemetry)
-2. MediaMTX (RTSP server)
-3. Edge Core API
-4. Isaac ROS + ZED camera
-5. Multi-stream video system
-
-## Configuration
-
-Stream configuration is in `config/video_streams.json`:
-
+Response:
 ```json
 {
-  "streams": [
-    {
-      "name": "zed_rgb",
-      "topic": "/zed/zed_node/rgb/image_rect_color",
-      "port": 9999,
-      "description": "ZED RGB color (rectified)"
-    },
-    ...
-  ]
+  "topics": [
+    {"name": "/zed/zed_node/rgb/image_rect_color", "display_name": "zed: rgb/image_rect_color"},
+    {"name": "/zed/zed_node/left/image_rect_color", "display_name": "zed: left/image_rect_color"},
+    {"name": "/zed/zed_node/right/image_rect_color", "display_name": "zed: right/image_rect_color"},
+    {"name": "/zed/zed_node/depth/depth_registered", "display_name": "zed: depth/depth_registered"}
+  ],
+  "count": 4
 }
 ```
 
-## Adding New Streams
-
-To add a new stream (e.g., depth):
-
-1. Edit `config/video_streams.json` to add the new stream config
-2. Edit `scripts/start_multi_video.sh`:
-   - Add a new bridge start command in `start_bridges()`
-   - Add a new FFmpeg encoder in `start_encoders()`
-3. Restart the system
-
-Example for depth stream:
+### Switch Video Source
 
 ```bash
-# In start_bridges():
-docker exec -d nomad_isaac_ros bash -c '
-    source /opt/ros/humble/setup.bash && \
-    source /workspaces/isaac_ros-dev/install/setup.bash && \
-    python3 /tmp/ros_video_bridge.py \
-        --topic /zed/zed_node/depth/depth_registered \
-        --stream zed_depth \
-        --tcp-port 10002 \
-        --host localhost \
-        --port 8554 \
-        > /tmp/video_bridge_depth.log 2>&1
-'
-
-# In start_encoders():
-nohup ffmpeg -f rawvideo -pix_fmt bgr24 -s 1280x720 -r 30 \
-    -i tcp://127.0.0.1:10002 \
-    -c:v libx264 -preset ultrafast -tune zerolatency -crf 23 \
-    -f rtsp -rtsp_transport tcp \
-    rtsp://localhost:8554/zed_depth \
-    > /tmp/nomad_video/ffmpeg_depth.log 2>&1 &
+POST /api/video/source?topic=/zed/zed_node/left/image_rect_color
 ```
+
+Response:
+```json
+{
+  "success": true,
+  "topic": "/zed/zed_node/left/image_rect_color",
+  "rtsp_url": "rtsp://localhost:8554/primary"
+}
+```
+
+**Important**: The RTSP URL stays constant. Only the content changes.
+
+### Get Current Status
+
+```bash
+GET /api/video/status
+```
+
+Response:
+```json
+{
+  "streaming": true,
+  "current_topic": "/zed/zed_node/rgb/image_rect_color",
+  "rtsp_url": "rtsp://localhost:8554/primary",
+  "fps": 29.8,
+  "frame_count": 12345,
+  "error_count": 0,
+  "dropped_count": 0,
+  "uptime_s": 456.7,
+  "width": 1280,
+  "height": 720,
+  "bitrate_mbps": 4
+}
+```
+
+### Start/Stop/Restart Stream
+
+```bash
+POST /api/video/start
+POST /api/video/stop
+POST /api/video/restart
+```
+
+### Get Logs
+
+```bash
+GET /api/video/logs?lines=50
+```
+
+## Usage
+
+### Automatic Startup
+
+The video stream starts automatically when:
+1. Edge Core starts with `NOMAD_VIDEO_AUTO_START=true` (default)
+2. Isaac ROS container is running
+3. ZED camera is publishing topics
+
+### Manual Control
+
+```bash
+# Start stream
+curl -X POST http://jetson:8000/api/video/start
+
+# List topics
+curl http://jetson:8000/api/video/topics
+
+# Switch to left camera
+curl -X POST "http://jetson:8000/api/video/source?topic=/zed/zed_node/left/image_rect_color"
+
+# Check status
+curl http://jetson:8000/api/video/status
+
+# Stop stream
+curl -X POST http://jetson:8000/api/video/stop
+```
+
+### View Stream
+
+The RTSP URL is always: `rtsp://jetson:8554/primary`
+
+Replace `jetson` with your Tailscale IP (e.g., `100.75.218.89`).
+
+```bash
+# VLC
+vlc rtsp://100.75.218.89:8554/primary --rtsp-tcp --network-caching=200
+
+# FFplay
+ffplay -fflags nobuffer -flags low_delay -rtsp_transport tcp rtsp://100.75.218.89:8554/primary
+```
+
+## Mission Planner Integration
+
+The video panel in Mission Planner includes:
+
+1. **Topic Dropdown**: Select which ZED view to stream
+2. **Refresh Button (...)**: Query Jetson for available topics
+3. **Latency Slider**: Adjust network caching (50-1000ms)
+4. **Play/Stop/Snapshot**: Standard video controls
+
+When you select a topic from the dropdown:
+- The API switches the source topic on the Jetson
+- The RTSP URL stays the same
+- The video player does NOT reconnect
+- Content changes within ~100ms
+
+## Configuration
+
+### Environment Variables
+
+Set in `config/env/jetson.env`:
+
+```bash
+NOMAD_VIDEO_AUTO_START=true     # Auto-start stream on Edge Core startup
+```
+
+### Video Relay Parameters
+
+The relay node accepts these command-line arguments:
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--topic` | `/zed/zed_node/rgb/image_rect_color` | Initial ROS topic |
+| `--rtsp-url` | `rtsp://172.17.0.1:8554/primary` | MediaMTX RTSP URL |
+| `--http-port` | `9200` | HTTP control API port |
+| `--width` | `1280` | Output video width |
+| `--height` | `720` | Output video height |
+| `--fps` | `30` | Output frame rate |
+| `--bitrate` | `4` | H.264 bitrate in Mbps |
 
 ## Troubleshooting
 
-### Stream shows [--] in Mission Planner
+### Stream not playing
 
-- Check if the video bridge is running: `docker exec nomad_isaac_ros pgrep -af ros_video_bridge`
-- Check if FFmpeg encoder is running: `pgrep -af ffmpeg`
-- Check bridge logs: `docker exec nomad_isaac_ros cat /tmp/video_bridge_rgb.log`
-- Check encoder logs: `cat /tmp/nomad_video/ffmpeg_rgb.log`
+1. Check if relay is running:
+```bash
+ssh mad@100.75.218.89 "docker exec nomad_isaac_ros_32 pgrep -af nomad_video_relay"
+```
 
-### FFmpeg encoder fails
+2. Check relay logs:
+```bash
+curl http://100.75.218.89:8000/api/video/logs
+```
 
-- Ensure the video bridge started first (it creates the TCP server)
-- Check if the TCP port is already in use: `netstat -tulpn | grep 9999`
-- Try restarting: `~/NOMAD/scripts/start_multi_video.sh restart`
+3. Check if MediaMTX is running:
+```bash
+ssh mad@100.75.218.89 "curl -s http://localhost:9997/v3/paths/list"
+```
 
-### ROS topic doesn't exist
+### No topics available
 
-- Check available topics: `docker exec nomad_isaac_ros bash -c "source /opt/ros/humble/setup.bash && ros2 topic list | grep zed"`
-- Ensure ZED camera is connected and Isaac ROS is running
-- Check ZED launch parameters in `scripts/start_isaac_ros_auto.sh`
+1. Check if ZED wrapper is running:
+```bash
+ssh mad@100.75.218.89 "docker exec nomad_isaac_ros_32 ros2 topic list | grep zed"
+```
 
-### No streams appear after refresh
+2. If no topics, restart Isaac ROS container:
+```bash
+ssh mad@100.75.218.89
+cd ~/NOMAD
+./scripts/start_isaac_ros_auto.sh restart
+```
 
-- Check MediaMTX API: `curl http://localhost:9997/v3/paths/list`
-- Ensure MediaMTX API authentication is disabled in `infra/mediamtx.yml`
-- Restart MediaMTX if needed
+### High latency
 
-## Performance Notes
+1. Reduce network caching in VLC to 100-200ms
+2. Check Jetson CPU/GPU load: `curl http://100.75.218.89:8000/health/detailed`
+3. Try reducing resolution or bitrate via API
 
-- Each stream uses ~4-6 Mbps bandwidth (H.264 @ CRF 23)
-- Running 3 streams simultaneously uses ~12-18 Mbps
-- CPU usage: ~15-20% per FFmpeg encoder on Jetson Orin Nano
-- Consider reducing FPS or resolution if performance is an issue
+### Topic switch not working
 
-## Files Modified
+1. Check API response for errors:
+```bash
+curl -X POST "http://100.75.218.89:8000/api/video/source?topic=/zed/zed_node/left/image_rect_color"
+```
 
-- `edge_core/ros_video_bridge.py` - Added `--tcp-port` parameter
-- `scripts/start_multi_video.sh` - New script for managing multiple streams
-- `scripts/start_nomad_full.sh` - Updated to use multi-stream system
-- `config/video_streams.json` - Stream configuration
-- `mission_planner/src/EmbeddedVideoPlayer.cs` - Stream selector with live status
+2. Check relay HTTP is accessible:
+```bash
+ssh mad@100.75.218.89 "curl http://localhost:9200/status"
+```
 
+## Performance
+
+- **Latency**: ~150ms glass-to-glass
+- **Bandwidth**: ~4 Mbps (configurable)
+- **CPU Usage**: ~15% on Jetson
+- **GPU Usage**: ~25% (NVENC encoder)
+- **Topic Switch Time**: ~100ms
+
+## Files
+
+| File | Description |
+|------|-------------|
+| `edge_core/ros/nomad_video_relay.py` | ROS2 node with GStreamer NVENC encoder |
+| `edge_core/video_stream_manager.py` | Host-side manager class |
+| `edge_core/api.py` | API endpoints (`/api/video/*`) |
+| `mission_planner/src/EmbeddedVideoPlayer.cs` | Video player UI |
+| `infra/mediamtx.yml` | MediaMTX RTSP server config |
+
+---
 AEAC 2026 - McGill Aerial Design

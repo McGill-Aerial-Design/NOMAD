@@ -35,7 +35,7 @@ from .api import ( create_app,
 )
 
 from .logging_service import cleanup_old_logs
-from .video_manager import init_video_manager
+from .video_stream_manager import init_video_stream_manager
 
 from .mavlink_interface import MavlinkService
 from .nav_controller import NavController
@@ -195,13 +195,13 @@ def run(
         logger.info("Isaac ROS bridge disabled (set NOMAD_ENABLE_ISAAC_ROS=true to enable)")
 
     # Initialize video stream manager with auto-start
-    # This runs in background and will auto-start a default ZED stream when container is ready
+    # This runs in background and will auto-start the video relay when container is ready
     enable_video_auto_start = os.environ.get("NOMAD_VIDEO_AUTO_START", "true").lower() == "true"
-    init_video_manager(
+    init_video_stream_manager(
         container_name="nomad_isaac_ros_32",
         auto_start=enable_video_auto_start
     )
-    logger.info(f"Video manager initialized (auto_start={enable_video_auto_start})")
+    logger.info(f"Video stream manager initialized (auto_start={enable_video_auto_start})")
 
     # Initialize time synchronization service
     def on_time_sync_change(status: TimeSyncStatus) -> None:
