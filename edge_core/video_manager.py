@@ -154,10 +154,21 @@ class VideoStreamManager:
         
         results = {}
         
-        # Copy bridge script to container
-        bridge_script = os.path.join(os.path.dirname(__file__), 'nomad_video_bridge.py')
+        # Choose bridge script - FFmpeg (h264_v4l2m2m) for hardware encoding, GStreamer as fallback
+        # FFmpeg bridge is preferred as it reliably uses Jetson's V4L2 hardware encoder
+        use_ffmpeg = os.environ.get("NOMAD_VIDEO_USE_FFMPEG", "true").lower() == "true"
+        
+        if use_ffmpeg:
+            bridge_script_name = 'nomad_video_bridge_ffmpeg.py'
+            logger.info("Using FFmpeg video bridge (h264_v4l2m2m hardware encoder)")
+        else:
+            bridge_script_name = 'nomad_video_bridge.py'
+            logger.info("Using GStreamer video bridge (software encoder fallback)")
+        
+        bridge_script = os.path.join(os.path.dirname(__file__), bridge_script_name)
         if os.path.exists(bridge_script):
             try:
+                # Copy to same destination name for compatibility
                 subprocess.run(
                     ["docker", "cp", bridge_script, f"{self.container_name}:/tmp/nomad_video_bridge.py"],
                     capture_output=True,
