@@ -235,11 +235,22 @@ class NomadVideoBridge(Node):
         logger.info(f"  Bitrate: {bitrate} kbps")
         logger.info(f"  Overlay: {'enabled' if self.overlay_enabled else 'disabled'}")
 
+    def _check_nvenc_available(self) -> bool:
+        """Check if NVIDIA hardware encoder is available."""
+        try:
+            factory = Gst.ElementFactory.find('nvv4l2h264enc')
+            return factory is not None
+        except Exception:
+            return False
+
     def _init_gstreamer_pipeline(self):
-        """Initialize the GStreamer NVENC pipeline.
+        """Initialize the GStreamer video pipeline with encoder fallback.
         
-        Pipeline architecture:
+        Pipeline architecture (NVENC - preferred):
         appsrc (BGR frames) -> videoconvert -> nvvidconv (NVMM) -> nvv4l2h264enc -> rtspclientsink
+        
+        Pipeline architecture (Software fallback):
+        appsrc (BGR frames) -> videoconvert -> openh264enc -> rtspclientsink
         
         Key optimizations:
         - nvvidconv copies to GPU memory (NVMM) for zero-copy encoding
@@ -248,20 +259,38 @@ class NomadVideoBridge(Node):
         - preset-level=1 for UltraFast encoding (lowest latency)
         - insert-sps-pps=true for stream compatibility
         """
-        # Build NVENC pipeline with hardware acceleration
-        pipeline_str = (
-            f"appsrc name=src format=time is-live=true block=true do-timestamp=true "
-            f"caps=video/x-raw,format=BGR,width={self.width},height={self.height},framerate={self.fps}/1 ! "
-            f"queue max-size-buffers=2 leaky=downstream ! "
-            f"videoconvert ! video/x-raw,format=BGRx ! "
-            f"nvvidconv ! video/x-raw(memory:NVMM),format=NV12 ! "
-            f"nvv4l2h264enc bitrate={self.bitrate * 1000} preset-level=1 "
-            f"iframeinterval={self.fps} insert-sps-pps=true control-rate=1 ! "
-            f"h264parse config-interval=1 ! "
-            f"rtspclientsink location={self.rtsp_url} protocols=tcp latency=0"
-        )
+        # Check for hardware encoder availability
+        use_nvenc = self._check_nvenc_available()
         
-        logger.info(f"Creating NVENC pipeline: {pipeline_str[:100]}...")
+        if use_nvenc:
+            # Build NVENC pipeline with hardware acceleration
+            logger.info("Using NVIDIA NVENC hardware encoder")
+            pipeline_str = (
+                f"appsrc name=src format=time is-live=true block=true do-timestamp=true "
+                f"caps=video/x-raw,format=BGR,width={self.width},height={self.height},framerate={self.fps}/1 ! "
+                f"queue max-size-buffers=2 leaky=downstream ! "
+                f"videoconvert ! video/x-raw,format=BGRx ! "
+                f"nvvidconv ! video/x-raw(memory:NVMM),format=NV12 ! "
+                f"nvv4l2h264enc bitrate={self.bitrate * 1000} preset-level=1 "
+                f"iframeinterval={self.fps} insert-sps-pps=true control-rate=1 ! "
+                f"h264parse config-interval=1 ! "
+                f"rtspclientsink location={self.rtsp_url} protocols=tcp latency=0"
+            )
+        else:
+            # Fallback to software encoder (openh264)
+            logger.warning("NVIDIA NVENC not available, falling back to openh264 software encoder")
+            logger.warning("Performance will be reduced - consider using a container with NVENC support")
+            pipeline_str = (
+                f"appsrc name=src format=time is-live=true block=true do-timestamp=true "
+                f"caps=video/x-raw,format=BGR,width={self.width},height={self.height},framerate={self.fps}/1 ! "
+                f"queue max-size-buffers=2 leaky=downstream ! "
+                f"videoconvert ! video/x-raw,format=I420 ! "
+                f"openh264enc bitrate={self.bitrate * 1000} complexity=0 ! "
+                f"h264parse config-interval=1 ! "
+                f"rtspclientsink location={self.rtsp_url} protocols=tcp latency=0"
+            )
+        
+        logger.info(f"Creating GStreamer pipeline: {pipeline_str[:120]}...")
         
         try:
             self.pipeline = Gst.parse_launch(pipeline_str)
@@ -293,7 +322,8 @@ class NomadVideoBridge(Node):
                 return
             
             self._pipeline_running = True
-            logger.info("NVENC GStreamer pipeline started successfully")
+            encoder_type = "NVENC hardware" if use_nvenc else "openh264 software"
+            logger.info(f"GStreamer pipeline started successfully ({encoder_type})")
             
         except Exception as e:
             logger.error(f"Failed to create GStreamer pipeline: {e}")
