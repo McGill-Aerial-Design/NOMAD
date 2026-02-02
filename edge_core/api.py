@@ -2136,4 +2136,150 @@ def create_app(state_manager: StateManager) -> FastAPI:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    # ==================== Admin Endpoints ====================
+
+    @app.post("/api/admin/git-update", tags=["Admin"])
+    async def git_update():
+        """
+        Update the NOMAD codebase from Git.
+        
+        Performs:
+        1. git stash (save any local changes)
+        2. git pull origin main
+        3. chmod +x scripts/*.sh (make scripts executable)
+        
+        Returns the output of each command.
+        """
+        results = {
+            "success": True,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "steps": [],
+        }
+        
+        nomad_dir = os.path.expanduser("~/NOMAD")
+        
+        try:
+            # Step 1: git stash
+            stash_result = subprocess.run(
+                ["git", "stash"],
+                cwd=nomad_dir,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            results["steps"].append({
+                "step": "git stash",
+                "success": stash_result.returncode == 0,
+                "output": stash_result.stdout.strip(),
+                "error": stash_result.stderr.strip() if stash_result.returncode != 0 else None,
+            })
+            
+            # Step 2: git pull
+            pull_result = subprocess.run(
+                ["git", "pull", "origin", "main"],
+                cwd=nomad_dir,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            results["steps"].append({
+                "step": "git pull origin main",
+                "success": pull_result.returncode == 0,
+                "output": pull_result.stdout.strip(),
+                "error": pull_result.stderr.strip() if pull_result.returncode != 0 else None,
+            })
+            
+            if pull_result.returncode != 0:
+                results["success"] = False
+                results["error"] = "Git pull failed"
+                return results
+            
+            # Step 3: chmod +x scripts
+            chmod_result = subprocess.run(
+                ["chmod", "+x", "scripts/*.sh"],
+                cwd=nomad_dir,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            # Try with bash -c for glob expansion
+            chmod_result = subprocess.run(
+                ["bash", "-c", "chmod +x scripts/*.sh"],
+                cwd=nomad_dir,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            results["steps"].append({
+                "step": "chmod +x scripts/*.sh",
+                "success": chmod_result.returncode == 0,
+                "output": "Scripts made executable" if chmod_result.returncode == 0 else chmod_result.stdout.strip(),
+                "error": chmod_result.stderr.strip() if chmod_result.returncode != 0 else None,
+            })
+            
+            return results
+            
+        except subprocess.TimeoutExpired:
+            results["success"] = False
+            results["error"] = "Command timed out"
+            return results
+        except Exception as e:
+            results["success"] = False
+            results["error"] = str(e)
+            return results
+
+    @app.get("/api/admin/git-status", tags=["Admin"])
+    async def git_status():
+        """
+        Get current Git status and branch info.
+        
+        Returns current branch, commit hash, and any uncommitted changes.
+        """
+        nomad_dir = os.path.expanduser("~/NOMAD")
+        
+        try:
+            # Get current branch
+            branch_result = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=nomad_dir,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            
+            # Get current commit
+            commit_result = subprocess.run(
+                ["git", "log", "--oneline", "-1"],
+                cwd=nomad_dir,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            
+            # Get status
+            status_result = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=nomad_dir,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            
+            return {
+                "branch": branch_result.stdout.strip(),
+                "commit": commit_result.stdout.strip(),
+                "has_changes": len(status_result.stdout.strip()) > 0,
+                "changes": status_result.stdout.strip().split("\n") if status_result.stdout.strip() else [],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            
+        except Exception as e:
+            return {
+                "error": str(e),
+                "branch": "unknown",
+                "commit": "unknown",
+                "has_changes": False,
+            }
+
     return app

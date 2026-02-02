@@ -48,6 +48,10 @@ namespace NOMAD.MissionPlanner
         private Label _lblOverallStatus;
         private Label _lblLastUpdate;
         
+        // Git update controls
+        private Button _btnGitUpdate;
+        private Label _lblGitStatus;
+        
         // Metric labels
         private Label _lblCpuTemp, _lblCpuLoad;
         private Label _lblGpuTemp, _lblGpuLoad;
@@ -186,6 +190,32 @@ namespace NOMAD.MissionPlanner
                 AutoSize = true,
             };
             panel.Controls.Add(lblAutoRefresh);
+            
+            // Git status label
+            _lblGitStatus = new Label
+            {
+                Text = "",
+                Location = new Point(400, 50),
+                ForeColor = Color.Gray,
+                Font = new Font("Consolas", 8),
+                AutoSize = true,
+            };
+            panel.Controls.Add(_lblGitStatus);
+            
+            // Git update button
+            _btnGitUpdate = new Button
+            {
+                Text = "Git Update",
+                Location = new Point(250, 20),
+                Size = new Size(85, 28),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(70, 100, 150),
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+            };
+            _btnGitUpdate.FlatAppearance.BorderSize = 0;
+            _btnGitUpdate.Click += async (s, e) => await TriggerGitUpdate();
+            panel.Controls.Add(_btnGitUpdate);
             
             return panel;
         }
@@ -869,6 +899,81 @@ namespace NOMAD.MissionPlanner
                 _btnReconnectTailscale.Enabled = true;
                 _btnReconnectTailscale.Text = "Reconnect";
             }
+        }
+        
+        private async Task TriggerGitUpdate()
+        {
+            try
+            {
+                _btnGitUpdate.Enabled = false;
+                _btnGitUpdate.Text = "Updating...";
+                _lblGitStatus.Text = "Stashing & pulling...";
+                _lblGitStatus.ForeColor = Color.Yellow;
+                
+                var response = await _httpClient.PostAsync(
+                    $"{_config.EffectiveBaseUrl}/api/admin/git-update", 
+                    null
+                );
+                
+                if (response.IsSuccessStatusCode)
+                {
+                    var json = await response.Content.ReadAsStringAsync();
+                    var data = JObject.Parse(json);
+                    var success = data["success"]?.Value<bool>() ?? false;
+                    
+                    if (success)
+                    {
+                        // Show pull result - find the git pull step manually to avoid LINQ
+                        var steps = data["steps"] as JArray;
+                        string pullOutput = "Updated";
+                        if (steps != null)
+                        {
+                            foreach (var step in steps)
+                            {
+                                if (step["step"]?.ToString() == "git pull origin main")
+                                {
+                                    pullOutput = step["output"]?.ToString() ?? "Updated";
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        _lblGitStatus.Text = TruncateString(pullOutput, 50);
+                        _lblGitStatus.ForeColor = Color.LimeGreen;
+                        AddAlert($"[{DateTime.Now:HH:mm:ss}] Git update successful");
+                    }
+                    else
+                    {
+                        var error = data["error"]?.ToString() ?? "Unknown error";
+                        _lblGitStatus.Text = $"Failed: {error}";
+                        _lblGitStatus.ForeColor = Color.Red;
+                        AddAlert($"[{DateTime.Now:HH:mm:ss}] Git update failed: {error}");
+                    }
+                }
+                else
+                {
+                    _lblGitStatus.Text = $"HTTP {response.StatusCode}";
+                    _lblGitStatus.ForeColor = Color.Red;
+                    AddAlert($"[{DateTime.Now:HH:mm:ss}] Git update request failed: HTTP {response.StatusCode}");
+                }
+            }
+            catch (Exception ex)
+            {
+                _lblGitStatus.Text = $"Error: {ex.Message}";
+                _lblGitStatus.ForeColor = Color.Red;
+                AddAlert($"[{DateTime.Now:HH:mm:ss}] Git update error: {ex.Message}");
+            }
+            finally
+            {
+                _btnGitUpdate.Enabled = true;
+                _btnGitUpdate.Text = "Git Update";
+            }
+        }
+        
+        private string TruncateString(string value, int maxLength)
+        {
+            if (string.IsNullOrEmpty(value)) return value;
+            return value.Length <= maxLength ? value : value.Substring(0, maxLength - 3) + "...";
         }
         
         private void UpdateOverallStatus(string status)
