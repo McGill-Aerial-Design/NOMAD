@@ -51,10 +51,10 @@ metricsAddress: :9998
 
 rtsp: yes
 rtspAddress: :8554
-protocols: [udp, tcp]  # UDP first for lower latency
+rtspTransports: [udp, tcp]  # UDP first for lower latency
 
-# Disable RTSP authentication for local/Tailscale access
-rtspAuthMethods: []
+# Use basic auth (allow any user/pass for local/Tailscale access)
+rtspAuthMethods: [basic]
 
 # ============================================================
 # RTMP Server (disabled)
