@@ -134,8 +134,6 @@ services:
     privileged: true
     ipc: host
     depends_on:
-      isaac-ros:
-        condition: service_healthy
       mediamtx:
         condition: service_healthy
     volumes:
