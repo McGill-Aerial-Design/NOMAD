@@ -41,9 +41,8 @@ authInternalUsers:
 
 api: yes
 apiAddress: :9997
-# Metrics for Prometheus
-metrics: yes
-metricsAddress: :9998
+# Metrics disabled (port conflict)
+metrics: no
 
 # ============================================================
 # RTSP Server - LOW LATENCY OPTIMIZED
@@ -88,7 +87,9 @@ srtAddress: :8890
 # Recording (optional)
 # ============================================================
 
-record: no
+# Use pathDefaults instead of global record
+pathDefaults:
+  record: no
 
 # ============================================================
 # Paths (stream endpoints) - Zero-Copy GStreamer Pipeline
