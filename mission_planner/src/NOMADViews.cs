@@ -10,6 +10,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Windows.Forms;
 using MissionPlanner;
 using MissionPlanner.Utilities;
@@ -26,17 +27,18 @@ namespace NOMAD.MissionPlanner
     /// </summary>
     public abstract class NOMADViewBase : UserControl
     {
-        protected static readonly Color CARD_BG = Color.FromArgb(40, 40, 45);
-        protected static readonly Color ACCENT_COLOR = Color.FromArgb(0, 122, 204);
-        protected static readonly Color SUCCESS_COLOR = Color.FromArgb(76, 175, 80);
-        protected static readonly Color WARNING_COLOR = Color.FromArgb(255, 152, 0);
-        protected static readonly Color ERROR_COLOR = Color.FromArgb(244, 67, 54);
-        protected static readonly Color TEXT_PRIMARY = Color.White;
-        protected static readonly Color TEXT_SECONDARY = Color.FromArgb(180, 180, 180);
-        
+        // Colors delegated to NOMADTheme for consistency
+        protected static readonly Color CARD_BG = NOMADTheme.CARD_BG;
+        protected static readonly Color ACCENT_COLOR = NOMADTheme.ACCENT;
+        protected static readonly Color SUCCESS_COLOR = NOMADTheme.SUCCESS;
+        protected static readonly Color WARNING_COLOR = NOMADTheme.WARNING;
+        protected static readonly Color ERROR_COLOR = NOMADTheme.ERROR;
+        protected static readonly Color TEXT_PRIMARY = NOMADTheme.TEXT_PRIMARY;
+        protected static readonly Color TEXT_SECONDARY = NOMADTheme.TEXT_SECONDARY;
+
         protected NOMADViewBase()
         {
-            this.BackColor = Color.FromArgb(30, 30, 33);
+            this.BackColor = NOMADTheme.BG_DARK;
             this.Dock = DockStyle.Fill;
             this.Padding = new Padding(20);
             this.AutoScroll = true;
@@ -188,9 +190,9 @@ namespace NOMAD.MissionPlanner
             
             // Capture Card
             var captureCard = CreateCard("SNAPSHOT CAPTURE");
-            captureCard.Size = new Size(600, 180);
+            captureCard.Size = new Size(600, 260);
             
-            _btnCapture = CreateButton("CAPTURE SNAPSHOT", ACCENT_COLOR, 400, 55);
+            _btnCapture = CreateButton("CAPTURE PHOTO WITH METADATA", ACCENT_COLOR, 400, 55);
             _btnCapture.Location = new Point(15, 50);
             _btnCapture.Click += BtnCapture_Click;
             captureCard.Controls.Add(_btnCapture);
@@ -198,14 +200,15 @@ namespace NOMAD.MissionPlanner
             _txtResult = new TextBox
             {
                 Location = new Point(15, 120),
-                Size = new Size(560, 45),
+                Size = new Size(560, 120),
                 Multiline = true,
                 ReadOnly = true,
+                ScrollBars = ScrollBars.Vertical,
                 BackColor = Color.FromArgb(25, 25, 28),
                 ForeColor = SUCCESS_COLOR,
-                Font = new Font("Consolas", 10),
+                Font = new Font("Consolas", 9),
                 BorderStyle = BorderStyle.FixedSingle,
-                Text = "Ready to capture...",
+                Text = "Ready to capture photo with metadata...",
             };
             captureCard.Controls.Add(_txtResult);
             
@@ -242,17 +245,44 @@ namespace NOMAD.MissionPlanner
                 var result = await _sender.SendTask1Capture();
                 if (result.Success)
                 {
-                    _txtResult.Text = $"[OK] Capture successful: {result.Message}";
                     _txtResult.ForeColor = SUCCESS_COLOR;
                     
                     // Download and display the captured image
                     try
                     {
-                        // Parse response data to get image filename
+                        // Parse response data to get image filename and metadata
                         if (!string.IsNullOrEmpty(result.Data))
                         {
                             var data = Newtonsoft.Json.Linq.JObject.Parse(result.Data);
                             var imageName = data["image_name"]?.ToString();
+                            
+                            // Extract enhanced metadata (with fallback for backward compatibility)
+                            var timestamp = data["timestamp"]?.ToString() ?? DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ssZ");
+                            var headingDeg = data["heading_deg"]?.ToString() ?? "N/A";
+                            var pitchDeg = data["pitch_deg"]?.ToString() ?? "N/A";
+                            var rollDeg = data["roll_deg"]?.ToString() ?? "N/A";
+                            var gimbalPitch = data["gimbal_pitch_deg"]?.ToString() ?? "N/A";
+                            var gimbalYaw = data["gimbal_yaw_deg"]?.ToString() ?? "N/A";
+                            var buildingLocation = data["building_location"]?.ToString() ?? "N/A";
+                            var captureFolder = data["capture_folder"]?.ToString() ?? "N/A";
+                            
+                            var position = data["position"];
+                            var latStr = position?["lat"]?.ToString() ?? "N/A";
+                            var lonStr = position?["lon"]?.ToString() ?? "N/A";
+                            var altStr = position?["alt"]?.ToString() ?? "N/A";
+                            
+                            // Format comprehensive metadata display
+                            var metadataText = new StringBuilder();
+                            metadataText.AppendLine("[OK] Capture Successful");
+                            metadataText.AppendLine($"Time: {timestamp}");
+                            metadataText.AppendLine($"Position: {latStr}, {lonStr} @ {altStr}m");
+                            metadataText.AppendLine($"AHRS: Hdg={headingDeg} Pitch={pitchDeg} Roll={rollDeg}");
+                            metadataText.AppendLine($"Gimbal: Pitch={gimbalPitch} Yaw={gimbalYaw}");
+                            metadataText.AppendLine($"Building: {buildingLocation}");
+                            metadataText.AppendLine($"Folder: {captureFolder}");
+                            metadataText.Append($"Image: {imageName}");
+                            
+                            _txtResult.Text = metadataText.ToString();
                             
                             if (!string.IsNullOrEmpty(imageName))
                             {
@@ -268,7 +298,7 @@ namespace NOMAD.MissionPlanner
                                 var localPath = Path.Combine(task1Dir, imageName);
                                 File.WriteAllBytes(localPath, imageBytes);
                                 
-                                // Add thumbnail to gallery
+                                // Add thumbnail to gallery with enhanced metadata tooltip
                                 using (var ms = new MemoryStream(imageBytes))
                                 {
                                     var originalImage = Image.FromStream(ms);
@@ -281,34 +311,44 @@ namespace NOMAD.MissionPlanner
                                         SizeMode = PictureBoxSizeMode.Zoom,
                                         Margin = new Padding(5),
                                         Cursor = Cursors.Hand,
-                                        Tag = localPath,
+                                        Tag = new { Path = localPath, Metadata = metadataText.ToString() },
                                     };
                                     
                                     picBox.Click += (s, evt) =>
                                     {
                                         try
                                         {
-                                            System.Diagnostics.Process.Start(picBox.Tag.ToString());
+                                            dynamic tagData = picBox.Tag;
+                                            System.Diagnostics.Process.Start(tagData.Path);
                                         }
                                         catch { }
                                     };
                                     
+                                    // Enhanced tooltip with full metadata
                                     var tooltip = new ToolTip();
-                                    tooltip.SetToolTip(picBox, imageName);
+                                    var tooltipText = $"{imageName}\n" +
+                                                     $"Position: {latStr}, {lonStr}\n" +
+                                                     $"Heading: {headingDeg} Pitch: {pitchDeg} Roll: {rollDeg}\n" +
+                                                     $"Gimbal: P={gimbalPitch} Y={gimbalYaw}\n" +
+                                                     $"Building: {buildingLocation}";
+                                    tooltip.SetToolTip(picBox, tooltipText);
                                     
                                     _galleryPanel.Controls.Add(picBox);
                                     _galleryPanel.ScrollControlIntoView(picBox);
                                     
                                     originalImage.Dispose();
                                 }
-                                
-                                _txtResult.Text = $"[OK] Image saved: {imageName}";
                             }
+                        }
+                        else
+                        {
+                            // Fallback for old API version
+                            _txtResult.Text = $"[OK] Capture successful: {result.Message}";
                         }
                     }
                     catch (Exception imgEx)
                     {
-                        _txtResult.Text += $" (Image download failed: {imgEx.Message})";
+                        _txtResult.Text += $"\n[WARN] Image download failed: {imgEx.Message}";
                     }
                 }
                 else
@@ -325,7 +365,7 @@ namespace NOMAD.MissionPlanner
             finally
             {
                 _btnCapture.Enabled = true;
-                _btnCapture.Text = "CAPTURE SNAPSHOT";
+                _btnCapture.Text = "CAPTURE PHOTO WITH METADATA";
             }
         }
         
@@ -382,6 +422,8 @@ namespace NOMAD.MissionPlanner
         private Label _lblTargetCount;
         private Button _btnResetMap;
         private Button _btnResetVio;
+        private SLAM3DView _slam3DView;
+        private TabControl _tabControl;
         
         public NOMADTask2View(DualLinkSender sender, NOMADConfig config, JetsonConnectionManager jetsonConnectionManager = null)
         {
@@ -393,12 +435,25 @@ namespace NOMAD.MissionPlanner
         
         private void InitializeUI()
         {
-            var layout = new FlowLayoutPanel
+            // Use TabControl to switch between Status view and 3D SLAM view
+            _tabControl = new TabControl
+            {
+                Dock = DockStyle.Fill,
+            };
+            
+            // Tab 1: Status & Controls
+            var statusTab = new TabPage("Status & Controls")
+            {
+                BackColor = NOMADTheme.BG_DARK,
+            };
+            
+            var statusLayout = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.TopDown,
                 WrapContents = false,
                 AutoScroll = true,
+                Padding = new Padding(10),
             };
             
             // Description
@@ -406,14 +461,15 @@ namespace NOMAD.MissionPlanner
             {
                 Text = "Task 2: Indoor Fire Extinguishing\n\n" +
                        "VIO-based indoor navigation. GPS is disabled.\n" +
-                       "Use the exclusion map to track extinguished targets.",
+                       "Use the exclusion map to track extinguished targets.\n" +
+                       "Switch to '3D SLAM View' tab for real-time 3D mapping.",
                 Font = new Font("Segoe UI", 11),
                 ForeColor = TEXT_SECONDARY,
                 AutoSize = true,
                 MaximumSize = new Size(600, 0),
                 Margin = new Padding(0, 0, 0, 20),
             };
-            layout.Controls.Add(descLabel);
+            statusLayout.Controls.Add(descLabel);
             
             // VIO Status Card
             var vioCard = CreateCard("VIO STATUS");
@@ -434,7 +490,7 @@ namespace NOMAD.MissionPlanner
             _btnResetVio.Click += async (s, e) => await _sender.ResetVioOriginAsync();
             vioCard.Controls.Add(_btnResetVio);
             
-            layout.Controls.Add(vioCard);
+            statusLayout.Controls.Add(vioCard);
             
             // Exclusion Map Card
             var mapCard = CreateCard("TARGET EXCLUSION MAP");
@@ -468,7 +524,7 @@ namespace NOMAD.MissionPlanner
             };
             mapCard.Controls.Add(_btnResetMap);
             
-            layout.Controls.Add(mapCard);
+            statusLayout.Controls.Add(mapCard);
             
             // WASD Control hint
             var wasdLabel = new Label
@@ -479,14 +535,56 @@ namespace NOMAD.MissionPlanner
                 AutoSize = true,
                 Margin = new Padding(0, 20, 0, 0),
             };
-            layout.Controls.Add(wasdLabel);
+            statusLayout.Controls.Add(wasdLabel);
             
-            this.Controls.Add(layout);
+            statusTab.Controls.Add(statusLayout);
+            _tabControl.TabPages.Add(statusTab);
+            
+            // Tab 2: 3D SLAM View
+            var slam3DTab = new TabPage("3D SLAM View")
+            {
+                BackColor = NOMADTheme.BG_DARK,
+            };
+            
+            try
+            {
+                _slam3DView = new SLAM3DView(_config);
+                _slam3DView.Dock = DockStyle.Fill;
+                slam3DTab.Controls.Add(_slam3DView);
+            }
+            catch (Exception ex)
+            {
+                var errorLabel = new Label
+                {
+                    Text = $"3D SLAM View unavailable: {ex.Message}\n\n" +
+                           "This may be due to missing Helix Toolkit dependencies.\n" +
+                           "Ensure HelixToolkit.Wpf NuGet package is installed.",
+                    Font = new Font("Segoe UI", 11),
+                    ForeColor = ERROR_COLOR,
+                    Dock = DockStyle.Fill,
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    Padding = new Padding(20),
+                };
+                slam3DTab.Controls.Add(errorLabel);
+            }
+            
+            _tabControl.TabPages.Add(slam3DTab);
+            
+            this.Controls.Add(_tabControl);
         }
         
         public void UpdateData()
         {
             // VIO status updates would come from Jetson API
+        }
+        
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _slam3DView?.Dispose();
+            }
+            base.Dispose(disposing);
         }
     }
     
@@ -699,11 +797,15 @@ namespace NOMAD.MissionPlanner
     public class NOMADHealthView : NOMADViewBase, IUpdatableView
     {
         private readonly NOMADConfig _config;
+        private readonly DualLinkSender _sender;
         private EnhancedHealthDashboard _healthDashboard;
+        private ServiceControlPanel _serviceControlPanel;
+        private TabControl _tabControl;
         
-        public NOMADHealthView(NOMADConfig config)
+        public NOMADHealthView(NOMADConfig config, DualLinkSender sender = null)
         {
             _config = config;
+            _sender = sender;
             InitializeUI();
         }
         
@@ -711,9 +813,51 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
+                // Create a TabControl to hold both Health Dashboard and Service Control
+                _tabControl = new TabControl
+                {
+                    Dock = DockStyle.Fill,
+                    Font = new Font("Segoe UI", 10),
+                };
+                
+                // Tab 1: Health Dashboard
+                var healthTab = new TabPage("Jetson Health")
+                {
+                    BackColor = Color.FromArgb(30, 30, 33),
+                };
                 _healthDashboard = new EnhancedHealthDashboard(_config);
                 _healthDashboard.Dock = DockStyle.Fill;
-                this.Controls.Add(_healthDashboard);
+                healthTab.Controls.Add(_healthDashboard);
+                _tabControl.TabPages.Add(healthTab);
+                
+                // Tab 2: Service Control
+                var serviceTab = new TabPage("Service Control")
+                {
+                    BackColor = Color.FromArgb(30, 30, 33),
+                    AutoScroll = true,
+                };
+                
+                if (_sender != null)
+                {
+                    _serviceControlPanel = new ServiceControlPanel(_sender);
+                    _serviceControlPanel.Dock = DockStyle.Fill;
+                    serviceTab.Controls.Add(_serviceControlPanel);
+                }
+                else
+                {
+                    var noSenderLabel = new Label
+                    {
+                        Text = "Service control unavailable - no sender configured.\n\nConnect to Jetson to enable service control.",
+                        Font = new Font("Segoe UI", 11),
+                        ForeColor = WARNING_COLOR,
+                        Dock = DockStyle.Fill,
+                        TextAlign = ContentAlignment.MiddleCenter,
+                    };
+                    serviceTab.Controls.Add(noSenderLabel);
+                }
+                _tabControl.TabPages.Add(serviceTab);
+                
+                this.Controls.Add(_tabControl);
             }
             catch (Exception ex)
             {
@@ -739,6 +883,7 @@ namespace NOMAD.MissionPlanner
             if (disposing)
             {
                 _healthDashboard?.Dispose();
+                _serviceControlPanel?.Dispose();
             }
             base.Dispose(disposing);
         }

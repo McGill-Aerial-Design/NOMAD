@@ -27,20 +27,20 @@ namespace NOMAD.MissionPlanner
     public class EnhancedWASDControl : UserControl
     {
         // ============================================================
-        // Constants
+        // Constants - delegated to NOMADTheme for consistency
         // ============================================================
-        
-        private static readonly Color BG_COLOR = Color.FromArgb(30, 30, 33);
-        private static readonly Color CARD_BG = Color.FromArgb(40, 40, 45);
-        private static readonly Color KEY_INACTIVE = Color.FromArgb(60, 60, 65);
-        private static readonly Color KEY_ACTIVE = Color.FromArgb(0, 122, 204);
-        private static readonly Color TEXT_PRIMARY = Color.White;
-        private static readonly Color TEXT_SECONDARY = Color.FromArgb(150, 150, 150);
-        private static readonly Color SUCCESS_COLOR = Color.FromArgb(76, 175, 80);
-        private static readonly Color WARNING_COLOR = Color.FromArgb(255, 152, 0);
-        private static readonly Color ERROR_COLOR = Color.FromArgb(244, 67, 54);
-        private static readonly Color ACCENT_COLOR = Color.FromArgb(0, 122, 204);
-        private static readonly Color FOCUS_BORDER_COLOR = Color.FromArgb(220, 50, 50);  // Red border for focus
+
+        private static readonly Color BG_COLOR = NOMADTheme.BG_DARK;
+        private static readonly Color CARD_BG = NOMADTheme.CARD_BG;
+        private static readonly Color KEY_INACTIVE = NOMADTheme.CARD_BORDER;
+        private static readonly Color KEY_ACTIVE = NOMADTheme.ACCENT;
+        private static readonly Color TEXT_PRIMARY = NOMADTheme.TEXT_PRIMARY;
+        private static readonly Color TEXT_SECONDARY = NOMADTheme.TEXT_SECONDARY;
+        private static readonly Color SUCCESS_COLOR = NOMADTheme.SUCCESS;
+        private static readonly Color WARNING_COLOR = NOMADTheme.WARNING;
+        private static readonly Color ERROR_COLOR = NOMADTheme.ERROR;
+        private static readonly Color ACCENT_COLOR = NOMADTheme.ACCENT;
+        private static readonly Color FOCUS_BORDER_COLOR = NOMADTheme.FOCUS;
         
         // ============================================================
         // Fields
@@ -86,6 +86,9 @@ namespace NOMAD.MissionPlanner
         
         // Command timer
         private System.Threading.Timer _commandTimer;
+
+        // Shared HttpClient for Jetson API (avoids socket exhaustion from per-request instantiation)
+        private static readonly System.Net.Http.HttpClient _httpClient = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) };
         
         // ============================================================
         // Properties
@@ -637,17 +640,14 @@ namespace NOMAD.MissionPlanner
         // ============================================================
         // Payload Controls Panel
         // ============================================================
-        
-        // GPIO Pin Configuration - HARDWARE SPECIFIC
-        // These values must be updated when hardware wiring is finalized:
-        // - Cube Orange GPIO: Typically AUX1-AUX6 (pins 50-55)
-        // - Jetson GPIO: Use /sys/class/gpio or through Edge Core API
-        // Set to -1 to indicate "not configured" - functions will be disabled
-        private const int GPIO_PAYLOAD1_PIN = -1;  // Cube AUX pin for payload 1 linear actuator
-        private const int GPIO_PAYLOAD2_PIN = -1;  // Cube AUX pin for payload 2 linear actuator  
-        private const int JETSON_WATER_GPIO = -1;  // Jetson GPIO pin for water pump (via API)
-        private const int JETSON_SERVO_PWM = -1;   // Jetson PWM channel for nozzle servo (via API)
-        
+
+        // GPIO Pin Configuration - Read from NOMADConfig for flexibility
+        // Default: -1 = not configured / disabled
+        private int GPIO_PAYLOAD1_PIN => _config?.GpioPayload1Pin ?? -1;
+        private int GPIO_PAYLOAD2_PIN => _config?.GpioPayload2Pin ?? -1;
+        private int JETSON_WATER_GPIO => _config?.JetsonWaterGpio ?? -1;
+        private int JETSON_SERVO_PWM => _config?.JetsonServoPwm ?? -1;
+
         private TrackBar _nozzleServoSlider;
         private Label _lblNozzleValue;
         
@@ -824,34 +824,30 @@ namespace NOMAD.MissionPlanner
                     UpdateStatus("Water pump GPIO not configured", WARNING_COLOR);
                     return;
                 }
-                
-                using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) })
+
+                var jetsonIp = _config?.JetsonIP ?? _config?.EffectiveIP;
+                if (string.IsNullOrEmpty(jetsonIp))
                 {
-                    // Use config IP if available, otherwise show error
-                    var jetsonIp = _config?.JetsonIP ?? _config?.EffectiveIP;
-                    if (string.IsNullOrEmpty(jetsonIp))
-                    {
-                        UpdateStatus("Jetson IP not configured", ERROR_COLOR);
-                        return;
-                    }
-                    
-                    var response = await client.PostAsync(
-                        $"http://{jetsonIp}:8000/api/gpio/water_pump/trigger",
-                        new System.Net.Http.StringContent(
-                            $"{{\"gpio_pin\": {JETSON_WATER_GPIO}, \"duration_ms\": 500}}",
-                            System.Text.Encoding.UTF8,
-                            "application/json"
-                        )
-                    );
-                    
-                    if (response.IsSuccessStatusCode)
-                    {
-                        UpdateStatus("Water pump triggered", SUCCESS_COLOR);
-                    }
-                    else
-                    {
-                        UpdateStatus("Water pump failed", ERROR_COLOR);
-                    }
+                    UpdateStatus("Jetson IP not configured", ERROR_COLOR);
+                    return;
+                }
+
+                var response = await _httpClient.PostAsync(
+                    $"http://{jetsonIp}:8000/api/gpio/water_pump/trigger",
+                    new System.Net.Http.StringContent(
+                        $"{{\"gpio_pin\": {JETSON_WATER_GPIO}, \"duration_ms\": 500}}",
+                        System.Text.Encoding.UTF8,
+                        "application/json"
+                    )
+                );
+
+                if (response.IsSuccessStatusCode)
+                {
+                    UpdateStatus("Water pump triggered", SUCCESS_COLOR);
+                }
+                else
+                {
+                    UpdateStatus("Water pump failed", ERROR_COLOR);
                 }
             }
             catch (Exception ex)
@@ -859,40 +855,37 @@ namespace NOMAD.MissionPlanner
                 UpdateStatus($"Water pump error: {ex.Message}", ERROR_COLOR);
             }
         }
-        
+
         /// <summary>
         /// Update nozzle servo position via Jetson PWM.
         /// </summary>
         private async void UpdateNozzleServo()
         {
             if (_nozzleServoSlider == null || _lblNozzleValue == null) return;
-            
+
             int angle = _nozzleServoSlider.Value;
             _lblNozzleValue.Text = $"{angle} deg";
-            
+
             // Check if PWM is configured
             if (JETSON_SERVO_PWM < 0)
             {
                 // Silent skip - servo not configured
                 return;
             }
-            
+
             try
             {
                 var jetsonIp = _config?.JetsonIP ?? _config?.EffectiveIP;
                 if (string.IsNullOrEmpty(jetsonIp)) return;
-                
-                using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(2) })
-                {
-                    await client.PostAsync(
-                        $"http://{jetsonIp}:8000/api/gpio/servo/{JETSON_SERVO_PWM}/set",
-                        new System.Net.Http.StringContent(
-                            $"{{\"angle\": {angle}}}",
-                            System.Text.Encoding.UTF8,
-                            "application/json"
-                        )
-                    );
-                }
+
+                await _httpClient.PostAsync(
+                    $"http://{jetsonIp}:8000/api/gpio/servo/{JETSON_SERVO_PWM}/set",
+                    new System.Net.Http.StringContent(
+                        $"{{\"angle\": {angle}}}",
+                        System.Text.Encoding.UTF8,
+                        "application/json"
+                    )
+                );
             }
             catch
             {

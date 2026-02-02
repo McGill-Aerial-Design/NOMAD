@@ -31,3 +31,6 @@ jetson-stats>=4.2.0  # jtop for Jetson devices (optional, graceful fallback)
 # Geospatial (optional, for advanced calculations)
 # geopy>=2.4.0
 
+# EXIF metadata for image tagging
+piexif>=1.1.3
+

@@ -8,6 +8,7 @@ Target: Python 3.13 | NVIDIA Jetson Orin Nano
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -17,6 +18,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import cv2
 import numpy as np
+import piexif
+from piexif import GPSIFD
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, Query
 from fastapi.encoders import jsonable_encoder
@@ -53,7 +56,14 @@ class Task1CaptureResponse(BaseModel):
     target_text: Optional[str] = None
     position: Optional[dict] = None
     heading_deg: Optional[float] = None
+    pitch_deg: Optional[float] = None
+    roll_deg: Optional[float] = None
+    gimbal_pitch_deg: Optional[float] = None
+    gimbal_yaw_deg: Optional[float] = None
+    capture_folder: Optional[str] = None
     image_name: Optional[str] = None
+    metadata_file: Optional[str] = None
+    building_location: Optional[str] = None
     error: Optional[str] = None
 
 
@@ -69,6 +79,27 @@ class Task2HitRequest(BaseModel):
     z: float
 
 
+class Task1CapturesList(BaseModel):
+    """Response model for list of Task 1 captures."""
+    captures: list[str]
+    count: int
+
+
+class Task1UploadDescriptionRequest(BaseModel):
+    """Request model for uploading AI-generated description."""
+    folder: str
+    description: str
+    provider: str  # 'gemini' or 'ollama'
+    model: str
+
+
+class Task1UploadDescriptionResponse(BaseModel):
+    """Response model for description upload."""
+    success: bool
+    folder: str
+    message: str
+
+
 # Whitelist of allowed terminal commands for safety
 COMMAND_WHITELIST: dict[str, str] = {
     "restart_video": "sudo systemctl restart mediamtx",
@@ -82,6 +113,46 @@ COMMAND_WHITELIST: dict[str, str] = {
     "network_info": "ip addr show",
     "gpu_status": "tegrastats --interval 1000 --stop 2",
 }
+
+
+# ==================== Helper Functions ====================
+
+def _gps_to_exif(lat: float, lon: float, alt: Optional[float] = None) -> dict:
+    """
+    Convert GPS coordinates to EXIF GPS format.
+    
+    Args:
+        lat: Latitude in decimal degrees
+        lon: Longitude in decimal degrees
+        alt: Altitude in meters (optional)
+    
+    Returns:
+        Dictionary with EXIF GPS tags
+    """
+    def _decimal_to_dms(decimal: float) -> tuple[tuple[int, int], tuple[int, int], tuple[int, int]]:
+        """Convert decimal degrees to degrees, minutes, seconds."""
+        decimal = abs(decimal)
+        degrees = int(decimal)
+        minutes = int((decimal - degrees) * 60)
+        seconds = int(((decimal - degrees) * 60 - minutes) * 60 * 100)
+        return ((degrees, 1), (minutes, 1), (seconds, 100))
+    
+    gps_dict = {}
+    
+    # Latitude
+    gps_dict[piexif.GPSIFD.GPSLatitude] = _decimal_to_dms(lat)
+    gps_dict[piexif.GPSIFD.GPSLatitudeRef] = b'N' if lat >= 0 else b'S'
+    
+    # Longitude
+    gps_dict[piexif.GPSIFD.GPSLongitude] = _decimal_to_dms(lon)
+    gps_dict[piexif.GPSIFD.GPSLongitudeRef] = b'E' if lon >= 0 else b'W'
+    
+    # Altitude (if provided)
+    if alt is not None:
+        gps_dict[piexif.GPSIFD.GPSAltitude] = (int(abs(alt) * 100), 100)
+        gps_dict[piexif.GPSIFD.GPSAltitudeRef] = 0 if alt >= 0 else 1
+    
+    return gps_dict
 
 
 class TerminalCommandRequest(BaseModel):
@@ -447,7 +518,8 @@ def create_app(state_manager: StateManager) -> FastAPI:
         """
         Capture snapshot for Task 1 recon mission.
         
-        Captures current position, heading, and camera image.
+        Captures current position, heading, camera image with EXIF metadata,
+        and comprehensive metadata in JSON format.
         Used for outdoor GPS-based reconnaissance.
         """
         state = request.app.state.state_manager.get_state()
@@ -455,6 +527,20 @@ def create_app(state_manager: StateManager) -> FastAPI:
         # Get values from request or current state
         heading = task_request.heading_deg if task_request and task_request.heading_deg else state.heading_deg
         gimbal_pitch = task_request.gimbal_pitch_deg if task_request and task_request.gimbal_pitch_deg else state.gimbal_pitch_deg
+        gimbal_yaw = state.gimbal_yaw_deg
+        pitch = state.pitch_deg
+        roll = state.roll_deg
+        
+        # Get building location from environment
+        building_name = os.environ.get("TASK1_BUILDING_NAME", "Unknown Building")
+        building_lat = os.environ.get("TASK1_BUILDING_LAT")
+        building_lon = os.environ.get("TASK1_BUILDING_LON")
+        
+        building_location = {
+            "name": building_name,
+            "lat": float(building_lat) if building_lat else None,
+            "lon": float(building_lon) if building_lon else None,
+        }
         
         # Validate we have required data
         if not state.gps_fix:
@@ -464,26 +550,40 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 error="No GPS fix - cannot capture position"
             )
         
-        # Create capture record
+        # Create capture record with timestamp
         timestamp = datetime.now(timezone.utc)
-        capture = {
+        timestamp_str = timestamp.strftime('%Y%m%d_%H%M%S')
+        
+        # Create timestamped folder structure: data/task1_captures/YYYYMMDD_HHMMSS/
+        base_dir = "./data/task1_captures"
+        capture_folder = os.path.join(base_dir, timestamp_str)
+        os.makedirs(capture_folder, exist_ok=True)
+        
+        # Prepare metadata
+        metadata = {
             "timestamp": timestamp.isoformat(),
-            "position": {
+            "gps": {
                 "lat": state.gps_lat,
                 "lon": state.gps_lon,
                 "alt": state.gps_alt,
             },
-            "heading_deg": heading,
-            "gimbal_pitch_deg": gimbal_pitch,
+            "ahrs": {
+                "heading_deg": heading,
+                "pitch_deg": pitch,
+                "roll_deg": roll,
+            },
+            "gimbal": {
+                "pitch_deg": gimbal_pitch,
+                "yaw_deg": gimbal_yaw,
+            },
+            "building_location": building_location,
+            "photo_path": None,  # Will be set after photo capture
         }
         
-        # Save to mission log
-        log_dir = os.environ.get("NOMAD_LOG_DIR", "./data/mission_logs")
-        os.makedirs(log_dir, exist_ok=True)
-        
-        log_file = os.path.join(log_dir, f"task1_{timestamp.strftime('%Y%m%d_%H%M%S')}.json")
-        
-        image_filename = None
+        image_filename = "photo.jpg"
+        metadata_filename = "metadata.json"
+        image_path = os.path.join(capture_folder, image_filename)
+        metadata_path = os.path.join(capture_folder, metadata_filename)
         
         # Capture image from ZED camera if available
         camera_service = request.app.state.camera_service
@@ -491,47 +591,81 @@ def create_app(state_manager: StateManager) -> FastAPI:
             try:
                 frame = camera_service.get_frame()
                 if frame and frame.left_image is not None:
-                    # Create image directory
-                    image_dir = "./data/task1_images"
-                    os.makedirs(image_dir, exist_ok=True)
-                    
-                    # Generate filename
-                    image_filename = f"task1_{timestamp.strftime('%Y%m%d_%H%M%S_%f')[:-3]}.jpg"
-                    image_path = os.path.join(image_dir, image_filename)
-                    
                     # Convert from BGRA to BGR if needed (ZED often returns BGRA)
                     if frame.left_image.shape[2] == 4:
                         image_bgr = cv2.cvtColor(frame.left_image, cv2.COLOR_BGRA2BGR)
                     else:
                         image_bgr = frame.left_image
                     
-                    # Save image
-                    cv2.imwrite(image_path, image_bgr)
-                    logger.info(f"Task 1 image saved: {image_path}")
+                    # Save image temporarily to embed EXIF
+                    temp_path = image_path + ".temp"
+                    cv2.imwrite(temp_path, image_bgr)
                     
-                    # Add image reference to capture record
-                    capture["image_file"] = image_filename
+                    # Prepare EXIF data
+                    exif_dict = {
+                        "0th": {},
+                        "Exif": {},
+                        "GPS": {},
+                    }
+                    
+                    # Embed GPS coordinates in EXIF
+                    if state.gps_lat is not None and state.gps_lon is not None:
+                        exif_dict["GPS"] = _gps_to_exif(state.gps_lat, state.gps_lon, state.gps_alt)
+                    
+                    # Embed timestamp in EXIF DateTime
+                    exif_dict["0th"][piexif.ImageIFD.DateTime] = timestamp.strftime("%Y:%m:%d %H:%M:%S").encode()
+                    
+                    # Embed heading and AHRS data in ImageDescription
+                    description = f"Heading: {heading:.1f}deg, Pitch: {pitch:.1f}deg, Roll: {roll:.1f}deg"
+                    exif_dict["0th"][piexif.ImageIFD.ImageDescription] = description.encode()
+                    
+                    # Dump EXIF data and save final image
+                    exif_bytes = piexif.dump(exif_dict)
+                    piexif.insert(exif_bytes, temp_path, image_path)
+                    
+                    # Remove temporary file
+                    os.remove(temp_path)
+                    
+                    logger.info(f"Task 1 image with EXIF saved: {image_path}")
+                    
+                    # Update metadata with photo path
+                    metadata["photo_path"] = image_path
                 else:
                     logger.warning("Task 1 capture: Camera frame not available")
             except Exception as e:
                 logger.error(f"Task 1 image capture failed: {e}")
+                # Continue to save metadata even if image capture fails
         else:
             logger.warning("Task 1 capture: Camera service not available")
         
+        # Save metadata.json
         try:
-            import json
-            with open(log_file, "w") as f:
-                json.dump(capture, f, indent=2)
+            with open(metadata_path, "w") as f:
+                json.dump(metadata, f, indent=2)
             
-            logger.info(f"Task 1 capture saved: {log_file}")
+            logger.info(f"Task 1 metadata saved: {metadata_path}")
+            
+            # Also save to mission log for backward compatibility
+            log_dir = os.environ.get("NOMAD_LOG_DIR", "./data/mission_logs")
+            os.makedirs(log_dir, exist_ok=True)
+            log_file = os.path.join(log_dir, f"task1_{timestamp_str}.json")
+            with open(log_file, "w") as f:
+                json.dump(metadata, f, indent=2)
             
             return Task1CaptureResponse(
                 success=True,
                 timestamp=timestamp.isoformat(),
                 target_text=f"Captured at {state.gps_lat:.6f}, {state.gps_lon:.6f}",
-                position=capture["position"],
+                position=metadata["gps"],
                 heading_deg=heading,
+                pitch_deg=pitch,
+                roll_deg=roll,
+                gimbal_pitch_deg=gimbal_pitch,
+                gimbal_yaw_deg=gimbal_yaw,
+                capture_folder=capture_folder,
                 image_name=image_filename,
+                metadata_file=metadata_filename,
+                building_location=building_name,
             )
             
         except Exception as e:
@@ -545,9 +679,10 @@ def create_app(state_manager: StateManager) -> FastAPI:
     @app.get("/api/task/1/images/{filename}", tags=["Task 1"])
     async def task1_get_image(filename: str):
         """
-        Retrieve a saved Task 1 image.
+        Retrieve a saved Task 1 image (legacy endpoint for backward compatibility).
         
         Returns the image file captured during a Task 1 recon mission.
+        For new folder-based structure, use /api/task/1/images/{folder}/{filename}
         """
         image_dir = "./data/task1_images"
         image_path = os.path.join(image_dir, filename)
@@ -561,6 +696,207 @@ def create_app(state_manager: StateManager) -> FastAPI:
             raise HTTPException(status_code=404, detail="Image not found")
         
         return FileResponse(image_path, media_type="image/jpeg")
+
+    @app.get("/api/task/1/captures", tags=["Task 1"], response_model=Task1CapturesList)
+    async def list_task1_captures():
+        """
+        List all Task 1 capture folders.
+        
+        Returns: List of folder names (timestamps) sorted by date descending.
+        Example: ["20260202_120000", "20260202_115500", ...]
+        """
+        base_dir = "./data/task1_captures"
+        
+        # Create directory if it doesn't exist
+        if not os.path.exists(base_dir):
+            os.makedirs(base_dir, exist_ok=True)
+            return Task1CapturesList(captures=[], count=0)
+        
+        try:
+            # List all directories in task1_captures
+            entries = os.listdir(base_dir)
+            folders = [
+                entry for entry in entries
+                if os.path.isdir(os.path.join(base_dir, entry))
+            ]
+            
+            # Filter to only timestamp-pattern folders (YYYYMMDD_HHMMSS)
+            timestamp_pattern = re.compile(r'^\d{8}_\d{6}$')
+            valid_folders = [
+                folder for folder in folders
+                if timestamp_pattern.match(folder)
+            ]
+            
+            # Sort by timestamp descending (newest first)
+            valid_folders.sort(reverse=True)
+            
+            return Task1CapturesList(captures=valid_folders, count=len(valid_folders))
+            
+        except Exception as e:
+            logger.error(f"Failed to list Task 1 captures: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to list captures: {str(e)}")
+
+    @app.get("/api/task/1/images/{folder}/{filename}", tags=["Task 1"])
+    async def get_task1_image_with_folder(folder: str, filename: str):
+        """
+        Download specific file from Task 1 capture folder.
+        
+        Args:
+            folder: Folder name (e.g., "20260202_120000")
+            filename: File name (e.g., "photo.jpg", "metadata.json")
+        
+        Returns: File content with appropriate content type
+        """
+        # Security: Validate folder name matches timestamp pattern
+        timestamp_pattern = re.compile(r'^\d{8}_\d{6}$')
+        if not timestamp_pattern.match(folder):
+            raise HTTPException(status_code=400, detail="Invalid folder name format")
+        
+        # Security: Validate filename - whitelist allowed files
+        allowed_files = ['photo.jpg', 'metadata.json', 'description.txt']
+        if filename not in allowed_files:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid filename. Allowed: {', '.join(allowed_files)}"
+            )
+        
+        # Security: Prevent path traversal
+        if ".." in folder or "/" in folder or "\\" in folder:
+            raise HTTPException(status_code=400, detail="Invalid folder name")
+        if ".." in filename or "/" in filename or "\\" in filename:
+            raise HTTPException(status_code=400, detail="Invalid filename")
+        
+        # Build file path
+        base_dir = "./data/task1_captures"
+        file_path = os.path.join(base_dir, folder, filename)
+        
+        # Normalize path and ensure it's within base_dir (additional security)
+        base_dir_abs = os.path.abspath(base_dir)
+        file_path_abs = os.path.abspath(file_path)
+        if not file_path_abs.startswith(base_dir_abs):
+            raise HTTPException(status_code=400, detail="Invalid file path")
+        
+        # Check if file exists
+        if not os.path.exists(file_path):
+            raise HTTPException(
+                status_code=404,
+                detail=f"File not found: {folder}/{filename}"
+            )
+        
+        # Determine media type
+        media_type = "application/octet-stream"
+        if filename.endswith(".jpg") or filename.endswith(".jpeg"):
+            media_type = "image/jpeg"
+        elif filename.endswith(".json"):
+            media_type = "application/json"
+        elif filename.endswith(".txt"):
+            media_type = "text/plain"
+        
+        return FileResponse(file_path, media_type=media_type)
+
+    @app.post("/api/task/1/upload_description", tags=["Task 1"], response_model=Task1UploadDescriptionResponse)
+    async def upload_task1_description(request: Task1UploadDescriptionRequest):
+        """
+        Upload AI-generated description for a capture.
+        
+        Request body:
+        {
+            "folder": "20260202_120000",
+            "description": "Scene description text...",
+            "provider": "gemini" or "ollama",
+            "model": "gemini-1.5-flash" or "llava:13b"
+        }
+        
+        Saves description.txt to data/task1_captures/{folder}/description.txt
+        Also adds AI metadata to metadata.json (provider, model, timestamp)
+        """
+        # Security: Validate folder name matches timestamp pattern
+        timestamp_pattern = re.compile(r'^\d{8}_\d{6}$')
+        if not timestamp_pattern.match(request.folder):
+            raise HTTPException(status_code=400, detail="Invalid folder name format")
+        
+        # Security: Prevent path traversal
+        if ".." in request.folder or "/" in request.folder or "\\" in request.folder:
+            raise HTTPException(status_code=400, detail="Invalid folder name")
+        
+        # Security: Limit description size (10KB)
+        max_description_size = 10 * 1024  # 10KB
+        if len(request.description.encode('utf-8')) > max_description_size:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Description too large. Maximum size: {max_description_size} bytes"
+            )
+        
+        # Validate provider
+        allowed_providers = ['gemini', 'ollama']
+        if request.provider not in allowed_providers:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid provider. Allowed: {', '.join(allowed_providers)}"
+            )
+        
+        # Build folder path
+        base_dir = "./data/task1_captures"
+        folder_path = os.path.join(base_dir, request.folder)
+        
+        # Normalize path and ensure it's within base_dir (additional security)
+        base_dir_abs = os.path.abspath(base_dir)
+        folder_path_abs = os.path.abspath(folder_path)
+        if not folder_path_abs.startswith(base_dir_abs):
+            raise HTTPException(status_code=400, detail="Invalid folder path")
+        
+        # Check if folder exists
+        if not os.path.exists(folder_path):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Capture folder not found: {request.folder}"
+            )
+        
+        try:
+            # Save description.txt
+            description_path = os.path.join(folder_path, "description.txt")
+            with open(description_path, "w", encoding="utf-8") as f:
+                f.write(request.description)
+            
+            logger.info(f"Saved description to {description_path}")
+            
+            # Update metadata.json with AI info
+            metadata_path = os.path.join(folder_path, "metadata.json")
+            if os.path.exists(metadata_path):
+                try:
+                    with open(metadata_path, "r", encoding="utf-8") as f:
+                        metadata = json.load(f)
+                    
+                    # Add AI processing metadata
+                    metadata["ai_processing"] = {
+                        "provider": request.provider,
+                        "model": request.model,
+                        "processed_at": datetime.now(timezone.utc).isoformat(),
+                        "description_file": "description.txt",
+                    }
+                    
+                    # Save updated metadata
+                    with open(metadata_path, "w", encoding="utf-8") as f:
+                        json.dump(metadata, f, indent=2)
+                    
+                    logger.info(f"Updated metadata with AI info: {metadata_path}")
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to update metadata.json: {e}")
+                    # Continue - description was saved successfully
+            
+            return Task1UploadDescriptionResponse(
+                success=True,
+                folder=request.folder,
+                message=f"Description saved successfully using {request.provider}/{request.model}"
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to save description: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to save description: {str(e)}"
+            )
 
     # ==================== Task 2: Extinguish (Indoor) ====================
 
@@ -1672,5 +2008,230 @@ def create_app(state_manager: StateManager) -> FastAPI:
             "encoder": "nvv4l2h264enc (NVENC hardware)",
             "note": "NVENC is always enabled in zero-copy architecture"
         }
+
+    # ==================== SLAM 3D Mesh Endpoints ====================
+    # These endpoints stream nvblox 3D mesh data for Mission Planner visualization
+
+    @app.get("/api/task/2/slam/mesh", tags=["Task 2", "SLAM"])
+    async def get_slam_mesh(request: Request, format: str = Query("full", description="'full' or 'summary'")):
+        """
+        Get current 3D SLAM mesh from nvblox.
+        
+        This endpoint streams the real-time 3D occupancy map built by nvblox
+        from ZED camera depth data. Used by Mission Planner for 3D visualization.
+        
+        Args:
+            format: 'full' for complete mesh data, 'summary' for metadata only
+        
+        Returns:
+            - mesh: The mesh data with vertices, triangles, and optional colors
+            - drone_position: Current VIO position
+            - drone_attitude: Current VIO orientation (roll, pitch, yaw)
+            - timestamp: ISO format timestamp
+            
+        Update Rate: Target 10 Hz for smooth visualization
+        """
+        try:
+            from .ros_mesh_bridge import get_mesh_bridge
+            
+            bridge = get_mesh_bridge()
+            if not bridge or not bridge.is_available():
+                # Return empty mesh with error status
+                return {
+                    "available": False,
+                    "error": "Mesh bridge not initialized or nvblox not running",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "mesh": None,
+                    "drone_position": None,
+                    "drone_attitude": None,
+                }
+            
+            if format == "summary":
+                summary = bridge.get_mesh_summary()
+                if not summary:
+                    return {
+                        "available": True,
+                        "error": "No mesh data available yet",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                
+                # Add drone pose to summary
+                external_vio = request.app.state.external_vio_state
+                if external_vio:
+                    summary["drone_position"] = {
+                        "x": external_vio.get("x", 0),
+                        "y": external_vio.get("y", 0),
+                        "z": external_vio.get("z", 0),
+                    }
+                    summary["drone_attitude"] = {
+                        "roll": external_vio.get("roll", 0),
+                        "pitch": external_vio.get("pitch", 0),
+                        "yaw": external_vio.get("yaw", 0),
+                    }
+                return summary
+            
+            # Full mesh data
+            mesh = bridge.get_latest_mesh()
+            if not mesh:
+                return {
+                    "available": True,
+                    "error": "No mesh data available yet",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "mesh": None,
+                }
+            
+            # Get drone position from VIO
+            external_vio = request.app.state.external_vio_state
+            drone_position = None
+            drone_attitude = None
+            
+            if external_vio:
+                drone_position = {
+                    "x": external_vio.get("x", 0),
+                    "y": external_vio.get("y", 0),
+                    "z": external_vio.get("z", 0),
+                }
+                drone_attitude = {
+                    "roll": external_vio.get("roll", 0),
+                    "pitch": external_vio.get("pitch", 0),
+                    "yaw": external_vio.get("yaw", 0),
+                }
+            
+            return {
+                "available": True,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "mesh": mesh,
+                "drone_position": drone_position,
+                "drone_attitude": drone_attitude,
+            }
+            
+        except ImportError:
+            return {
+                "available": False,
+                "error": "Mesh bridge module not available",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        except Exception as e:
+            logger.error(f"SLAM mesh endpoint error: {e}")
+            return {
+                "available": False,
+                "error": str(e),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+    @app.get("/api/task/2/slam/mesh/delta", tags=["Task 2", "SLAM"])
+    async def get_slam_mesh_delta(request: Request):
+        """
+        Get incremental mesh updates (delta) since last request.
+        
+        More efficient than full mesh for continuous updates.
+        Only returns mesh blocks that have changed since the last delta request.
+        
+        Returns:
+            - changed_blocks: List of mesh blocks that changed
+            - timestamp: When the delta was generated
+            - block_count: Number of changed blocks
+        """
+        try:
+            from .ros_mesh_bridge import get_mesh_bridge
+            
+            bridge = get_mesh_bridge()
+            if not bridge or not bridge.is_available():
+                return {
+                    "available": False,
+                    "error": "Mesh bridge not initialized",
+                }
+            
+            delta = bridge.get_mesh_delta()
+            if not delta:
+                return {
+                    "available": True,
+                    "has_changes": False,
+                    "changed_blocks": [],
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            
+            # Add drone position
+            external_vio = request.app.state.external_vio_state
+            if external_vio:
+                delta["drone_position"] = {
+                    "x": external_vio.get("x", 0),
+                    "y": external_vio.get("y", 0),
+                    "z": external_vio.get("z", 0),
+                }
+                delta["drone_attitude"] = {
+                    "roll": external_vio.get("roll", 0),
+                    "pitch": external_vio.get("pitch", 0),
+                    "yaw": external_vio.get("yaw", 0),
+                }
+            
+            delta["available"] = True
+            delta["has_changes"] = True
+            return delta
+            
+        except Exception as e:
+            logger.error(f"SLAM mesh delta error: {e}")
+            return {"available": False, "error": str(e)}
+
+    @app.get("/api/task/2/slam/status", tags=["Task 2", "SLAM"])
+    async def get_slam_status():
+        """
+        Get nvblox SLAM system status.
+        
+        Returns status information about the 3D mapping pipeline.
+        """
+        try:
+            from .ros_mesh_bridge import get_mesh_bridge
+            
+            bridge = get_mesh_bridge()
+            if not bridge:
+                return {
+                    "available": False,
+                    "running": False,
+                    "error": "Mesh bridge not initialized",
+                }
+            
+            status = bridge.get_status()
+            return {
+                "available": bridge.is_available(),
+                "running": bridge.is_running(),
+                **status,
+            }
+        except ImportError:
+            return {
+                "available": False,
+                "running": False,
+                "error": "Mesh bridge module not available",
+            }
+        except Exception as e:
+            return {
+                "available": False,
+                "running": False,
+                "error": str(e),
+            }
+
+    @app.post("/api/task/2/slam/clear", tags=["Task 2", "SLAM"])
+    async def clear_slam_mesh():
+        """
+        Clear the current SLAM mesh.
+        
+        This clears the cached mesh data. Note: This does NOT clear the
+        nvblox map itself - use the nvblox reset service for that.
+        """
+        try:
+            from .ros_mesh_bridge import get_mesh_bridge
+            
+            bridge = get_mesh_bridge()
+            if not bridge:
+                return {"success": False, "error": "Mesh bridge not initialized"}
+            
+            bridge.clear_mesh()
+            return {
+                "success": True,
+                "message": "Mesh cache cleared",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     return app

@@ -326,6 +326,34 @@ namespace NOMAD.MissionPlanner
         public bool AudioAlerts { get; set; } = true;
 
         // ============================================================
+        // GPIO/Payload Configuration
+        // ============================================================
+
+        /// <summary>
+        /// Cube Orange AUX pin for payload 1 linear actuator.
+        /// Set to -1 to disable. Typical range: 50-55 (AUX1-AUX6).
+        /// </summary>
+        public int GpioPayload1Pin { get; set; } = -1;
+
+        /// <summary>
+        /// Cube Orange AUX pin for payload 2 linear actuator.
+        /// Set to -1 to disable. Typical range: 50-55 (AUX1-AUX6).
+        /// </summary>
+        public int GpioPayload2Pin { get; set; } = -1;
+
+        /// <summary>
+        /// Jetson GPIO pin for water pump control (via Edge Core API).
+        /// Set to -1 to disable.
+        /// </summary>
+        public int JetsonWaterGpio { get; set; } = -1;
+
+        /// <summary>
+        /// Jetson PWM channel for nozzle servo control (via Edge Core API).
+        /// Set to -1 to disable.
+        /// </summary>
+        public int JetsonServoPwm { get; set; } = -1;
+
+        // ============================================================
         // Persistence
         // ============================================================
 

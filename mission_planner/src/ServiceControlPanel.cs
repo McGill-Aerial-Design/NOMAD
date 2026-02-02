@@ -37,6 +37,14 @@ namespace NOMAD.MissionPlanner
         private Label _lblVioTrajectoryPoints;
         private Button _btnClearTrajectory;
         
+        // Video bridges
+        private Label _lblVideoBridgesStatus;
+        private Button _btnStartBridges;
+        
+        // SLAM
+        private Label _lblSlamStatus;
+        private Button _btnClearSlam;
+        
         // Status text
         private Label _lblLastUpdate;
         private TextBox _txtLog;
@@ -92,6 +100,14 @@ namespace NOMAD.MissionPlanner
             
             // === Isaac ROS (with Start/Stop) ===
             AddIsaacRosRow(ref yOffset);
+            
+            // === Video Bridges ===
+            AddServiceRow("Video Bridges", ref _lblVideoBridgesStatus, ref _btnStartBridges, ref yOffset, "Start");
+            _btnStartBridges.Click += async (s, e) => await StartVideoBridgesAsync();
+            
+            // === SLAM Service ===
+            AddServiceRow("SLAM / Mesh", ref _lblSlamStatus, ref _btnClearSlam, ref yOffset, "Clear");
+            _btnClearSlam.Click += async (s, e) => await ClearSlamAsync();
             
             // Separator
             yOffset += 10;
@@ -398,6 +414,42 @@ namespace NOMAD.MissionPlanner
                     catch { }
                 }
                 
+                // Video bridges status
+                var bridgesResult = await _sender.GetVideoBridgesStatusAsync();
+                if (bridgesResult.Success)
+                {
+                    try
+                    {
+                        var data = JObject.Parse(bridgesResult.Data);
+                        var primary = data["bridges"]?["primary"]?["state"]?.ToString() ?? "stopped";
+                        var secondary = data["bridges"]?["secondary"]?["state"]?.ToString() ?? "stopped";
+                        bool bothOk = primary == "playing" && secondary == "playing";
+                        UpdateStatusLabel(_lblVideoBridgesStatus, bothOk, $"P:{primary} S:{secondary}");
+                    }
+                    catch { UpdateStatusLabel(_lblVideoBridgesStatus, false, "Parse Error"); }
+                }
+                else
+                {
+                    UpdateStatusLabel(_lblVideoBridgesStatus, false, "Offline");
+                }
+
+                // SLAM status
+                var slamResult = await _sender.GetSlamStatusAsync();
+                if (slamResult.Success)
+                {
+                    try
+                    {
+                        var data = JObject.Parse(slamResult.Data);
+                        var enabled = data["enabled"]?.Value<bool>() ?? false;
+                        UpdateStatusLabel(_lblSlamStatus, enabled, enabled ? "Active" : "Inactive");
+                    }
+                    catch { UpdateStatusLabel(_lblSlamStatus, false, "Error"); }
+                }
+                else
+                {
+                    UpdateStatusLabel(_lblSlamStatus, false, "Unavailable");
+                }
+                
                 // Update timestamp
                 UpdateLabel(_lblLastUpdate, $"Last update: {DateTime.Now:HH:mm:ss}");
             }
@@ -563,6 +615,32 @@ namespace NOMAD.MissionPlanner
             {
                 LogMessage("Trajectory cleared");
                 UpdateLabel(_lblVioTrajectoryPoints, "0 points");
+            }
+            else
+            {
+                LogMessage($"Clear failed: {result.Message}");
+            }
+        }
+        
+        private async Task StartVideoBridgesAsync()
+        {
+            LogMessage("Starting video bridges...");
+            UpdateStatusLabel(_lblVideoBridgesStatus, false, "Starting...");
+            var result = await _sender.StartVideoBridgesAsync();
+            if (result.Success)
+                LogMessage("Video bridges start command sent");
+            else
+                LogMessage($"Failed to start bridges: {result.Message}");
+        }
+
+        private async Task ClearSlamAsync()
+        {
+            LogMessage("Clearing SLAM mesh...");
+            var result = await _sender.ClearSlamAsync();
+            if (result.Success)
+            {
+                LogMessage("SLAM mesh cleared");
+                UpdateStatusLabel(_lblSlamStatus, true, "Cleared");
             }
             else
             {

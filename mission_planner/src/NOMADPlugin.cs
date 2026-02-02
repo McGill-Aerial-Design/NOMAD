@@ -24,6 +24,7 @@
 
 using System;
 using System.Drawing;
+using System.IO;
 using System.Windows.Forms;
 using MissionPlanner;
 using MissionPlanner.Plugin;
@@ -51,6 +52,9 @@ namespace NOMAD.MissionPlanner
         private Form _popOutForm;                             // Pop-out window for NOMAD screen
         private bool _hudVideoStarted = false;
         private bool _screenRegistered = false;               // Track if NOMAD screen is registered with MainSwitcher
+        
+        // Static assembly resolver for HelixToolkit dependencies
+        private static bool _assemblyResolverRegistered = false;
 
         // ============================================================
         // Plugin Lifecycle
@@ -63,6 +67,51 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
+                // Register assembly resolver for HelixToolkit dependencies (once)
+                if (!_assemblyResolverRegistered)
+                {
+                    AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
+                    {
+                        try
+                        {
+                            var assemblyName = new System.Reflection.AssemblyName(args.Name).Name;
+                            
+                            // Check if it's a HelixToolkit assembly
+                            if (assemblyName.StartsWith("HelixToolkit", StringComparison.OrdinalIgnoreCase))
+                            {
+                                // Look in the plugins folder
+                                string pluginsPath = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                                string dllPath = Path.Combine(pluginsPath, assemblyName + ".dll");
+                                
+                                if (File.Exists(dllPath))
+                                {
+                                    Console.WriteLine($"NOMAD: Loading {assemblyName} from plugins folder");
+                                    return System.Reflection.Assembly.LoadFrom(dllPath);
+                                }
+                                
+                                // Also check user's plugins folder
+                                string userPluginsPath = Path.Combine(
+                                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                                    "Mission Planner", "plugins");
+                                dllPath = Path.Combine(userPluginsPath, assemblyName + ".dll");
+                                
+                                if (File.Exists(dllPath))
+                                {
+                                    Console.WriteLine($"NOMAD: Loading {assemblyName} from user plugins folder");
+                                    return System.Reflection.Assembly.LoadFrom(dllPath);
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"NOMAD: Assembly resolve error for {args.Name}: {ex.Message}");
+                        }
+                        return null;
+                    };
+                    _assemblyResolverRegistered = true;
+                    Console.WriteLine("NOMAD: Assembly resolver registered for HelixToolkit dependencies");
+                }
+                
                 // Version check warning - log if running on untested Mission Planner version
                 try
                 {

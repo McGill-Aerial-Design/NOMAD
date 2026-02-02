@@ -19,19 +19,19 @@ namespace NOMAD.MissionPlanner
     public class NotificationPanel : UserControl
     {
         // ============================================================
-        // Constants
+        // Constants - delegated to NOMADTheme for consistency
         // ============================================================
 
-        private static readonly Color CARD_BG = Color.FromArgb(40, 40, 45);
-        private static readonly Color CARD_BORDER = Color.FromArgb(60, 60, 65);
-        private static readonly Color ACCENT_COLOR = Color.FromArgb(0, 122, 204);
-        private static readonly Color SUCCESS_COLOR = Color.FromArgb(76, 175, 80);
-        private static readonly Color WARNING_COLOR = Color.FromArgb(255, 152, 0);
-        private static readonly Color ERROR_COLOR = Color.FromArgb(244, 67, 54);
-        private static readonly Color INFO_COLOR = Color.FromArgb(33, 150, 243);
-        private static readonly Color TEXT_PRIMARY = Color.White;
-        private static readonly Color TEXT_SECONDARY = Color.FromArgb(180, 180, 180);
-        private static readonly Color TEXT_MUTED = Color.FromArgb(120, 120, 120);
+        private static readonly Color CARD_BG = NOMADTheme.CARD_BG;
+        private static readonly Color CARD_BORDER = NOMADTheme.CARD_BORDER;
+        private static readonly Color ACCENT_COLOR = NOMADTheme.ACCENT;
+        private static readonly Color SUCCESS_COLOR = NOMADTheme.SUCCESS;
+        private static readonly Color WARNING_COLOR = NOMADTheme.WARNING;
+        private static readonly Color ERROR_COLOR = NOMADTheme.ERROR;
+        private static readonly Color INFO_COLOR = NOMADTheme.INFO;
+        private static readonly Color TEXT_PRIMARY = NOMADTheme.TEXT_PRIMARY;
+        private static readonly Color TEXT_SECONDARY = NOMADTheme.TEXT_SECONDARY;
+        private static readonly Color TEXT_MUTED = NOMADTheme.TEXT_MUTED;
 
         // ============================================================
         // Fields

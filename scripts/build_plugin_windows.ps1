@@ -91,6 +91,9 @@ try {
 
 $BuiltDll = "bin\$Configuration\NOMADPlugin.dll"
 
+# Get all DLLs from the bin folder for copying dependencies (Helix Toolkit, etc.)
+$BuiltDlls = Get-ChildItem "bin\$Configuration\*.dll" -ErrorAction SilentlyContinue
+
 if (-not (Test-Path $BuiltDll)) {
     Write-Host "ERROR: Built DLL not found at $BuiltDll" -ForegroundColor Red
     exit 1
@@ -108,6 +111,18 @@ if (-not (Test-Path $AppDataPluginsDir)) {
 
 Copy-Item $BuiltDll $AppDataPluginsDir -Force
 Write-Host "  Copied to: $AppDataPluginsDir" -ForegroundColor Green
+
+# Copy HelixToolkit dependencies
+$HelixDlls = @(
+    "$env:USERPROFILE\.nuget\packages\helixtoolkit.wpf\2.20.2\lib\net45\HelixToolkit.Wpf.dll",
+    "$env:USERPROFILE\.nuget\packages\helixtoolkit\2.20.2\lib\netstandard1.1\HelixToolkit.dll"
+)
+foreach ($dll in $HelixDlls) {
+    if (Test-Path $dll) {
+        Copy-Item $dll $AppDataPluginsDir -Force
+        Write-Host "  Copied: $(Split-Path $dll -Leaf)" -ForegroundColor Gray
+    }
+}
 
     # Also copy any libVLC native files, plugins folder, and managed assemblies to the AppData plugin folder
     Get-ChildItem "$ScriptDir\bin\Release" -Filter "libvlc*.dll" -File -ErrorAction SilentlyContinue | ForEach-Object {

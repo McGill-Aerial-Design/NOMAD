@@ -194,6 +194,11 @@ $RECYCLE.BIN/
 
 # VS Code
 .vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/mcp-settings.json
 *.code-workspace
 
 # Emacs
@@ -221,6 +226,8 @@ $RECYCLE.BIN/
 *.temp
 *.bak
 *.old
+tmpclaude-*/
+nul
 
 # Logs
 *.log
@@ -233,6 +240,10 @@ test_output/
 # ============================================================
 # Specific to NOMAD
 # ============================================================
+
+# MCP Server Data (AI assistant memory/cache)
+.mcp/
+!.mcp/README.md
 
 # Local development overrides
 local_config.json

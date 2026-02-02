@@ -581,8 +581,8 @@ class VIOPipeline:
         if self._state_manager:
             try:
                 self._state_manager.set_vio_failed(True, reason)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to update state manager: {e}")
     
     
     def _update_rate(self) -> None:

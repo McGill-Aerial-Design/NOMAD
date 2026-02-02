@@ -31,9 +31,12 @@ namespace NOMAD.MissionPlanner
 
         // New Feature Instances
         private TelemetryInjector _telemetryInjector;
-        private WASDNudgeControl _wasdControl;
         private JetsonHealthTab _healthTab;
         private ServiceControlPanel _servicePanel;
+
+        // WASD velocity state (inlined - removed WASDNudgeControl.cs duplicate)
+        private float _vx, _vy, _vz;
+        private System.Threading.Timer _wasdTimer;
 
         // UI Controls
         private Label _lblTitle;
@@ -95,12 +98,9 @@ namespace NOMAD.MissionPlanner
             try
             {
                 _telemetryInjector = new TelemetryInjector(null); // Will use MainV2.comPort internally
-                _wasdControl = new WASDNudgeControl(null); // Will use MainV2.comPort internally
-                _wasdControl.NudgeSpeed = DEFAULT_NUDGE_SPEED;
-                
                 _healthTab = new JetsonHealthTab(); // Initialize health tab
                 _servicePanel = new ServiceControlPanel(_sender); // Initialize service control panel
-                
+
                 // Send initial status
                 _telemetryInjector?.SendCustomStatus("Control Panel Loaded");
             }
@@ -137,6 +137,20 @@ namespace NOMAD.MissionPlanner
             _lblPosition.Text = connected
                 ? $"Position: {lat:F6}, {lng:F6} @ {alt:F1}m"
                 : "Position: --";
+        }
+
+        /// <summary>
+        /// Update status display with custom message and color.
+        /// </summary>
+        public void UpdateStatus(string message, Color color)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => UpdateStatus(message, color)));
+                return;
+            }
+            _lblStatus.Text = message;
+            _lblStatus.ForeColor = color;
         }
 
         /// <summary>
@@ -276,7 +290,7 @@ namespace NOMAD.MissionPlanner
 
             _btnTask1Capture = new Button
             {
-                Text = "[CAP] Capture Snapshot",
+                Text = "[CAP] Capture with Metadata",
                 Location = new Point(15, 25),
                 Size = new Size(320, 40),
                 FlatStyle = FlatStyle.Flat,
@@ -684,7 +698,7 @@ namespace NOMAD.MissionPlanner
                 e.NewSource == DualLinkSender.EkfSource.GPS ? Color.LightGreen : Color.Cyan);
             
             // Send telemetry
-            _telemetryInjector?.SendTelemetry("ekf_source", ((int)e.NewSource).ToString());
+            _telemetryInjector?.SendCustomStatus($"EKF:{(int)e.NewSource}");
             
             System.Diagnostics.Debug.WriteLine($"NOMAD: EKF source changed to {sourceName} ({method})");
         }
@@ -704,11 +718,27 @@ namespace NOMAD.MissionPlanner
 
                 if (result.Success)
                 {
-                    // Try to extract target_text from response
+                    // Try to extract enhanced metadata from response
                     try
                     {
                         dynamic json = Newtonsoft.Json.JsonConvert.DeserializeObject(result.Data);
-                        _txtTask1Result.Text = json?.target_text ?? "Capture successful";
+                        
+                        // Check if enhanced metadata is available
+                        if (json?.image_name != null)
+                        {
+                            var imgName = json.image_name.ToString();
+                            var heading = json.heading_deg?.ToString() ?? "N/A";
+                            var gimbalPitch = json.gimbal_pitch_deg?.ToString() ?? "N/A";
+                            var building = json.building_location?.ToString() ?? "N/A";
+                            
+                            _txtTask1Result.Text = $"Saved: {imgName}\nHdg:{heading} Gimbal:{gimbalPitch}\n{building}";
+                        }
+                        else
+                        {
+                            // Fallback for old API or simple response
+                            _txtTask1Result.Text = json?.target_text ?? "Capture successful";
+                        }
+                        
                         _txtTask1Result.ForeColor = Color.LimeGreen;
                         
                         // Send success telemetry
@@ -735,7 +765,7 @@ namespace NOMAD.MissionPlanner
             finally
             {
                 _btnTask1Capture.Enabled = true;
-                _btnTask1Capture.Text = "[CAP] Capture Snapshot";
+                _btnTask1Capture.Text = "[CAP] Capture with Metadata";
             }
         }
 
@@ -830,22 +860,17 @@ namespace NOMAD.MissionPlanner
         private void ChkEnableWASD_CheckedChanged(object sender, EventArgs e)
         {
             _nudgeEnabled = _chkEnableWASD.Checked;
-            
-            if (_wasdControl != null)
-            {
-                _wasdControl.Enabled = _chkEnableWASD.Checked;
-            }
 
             if (_nudgeEnabled)
             {
+                // Start command timer at 10 Hz
+                _wasdTimer = new System.Threading.Timer(_ => SendWasdVelocity(), null, 0, 100);
+
                 _lblWASDStatus.Text = "Status: ENABLED - W/A/S/D/Q/E to nudge";
                 _lblWASDStatus.ForeColor = Color.LimeGreen;
                 _chkEnableWASD.ForeColor = Color.LimeGreen;
-
-                // Send telemetry status
                 _telemetryInjector?.SendCustomStatus("WASD Control Enabled");
 
-                // Show warning message
                 CustomMessageBox.Show(
                     "WASD Control Enabled\n\n" +
                     "W/S = Forward/Back\n" +
@@ -858,16 +883,19 @@ namespace NOMAD.MissionPlanner
                     MessageBoxIcon.Warning
                 );
 
-                // Focus this control to receive keyboard events
                 this.Focus();
             }
             else
             {
+                // Stop timer and reset velocities
+                _wasdTimer?.Dispose();
+                _wasdTimer = null;
+                _vx = _vy = _vz = 0;
+                SendWasdVelocity(); // Send zero velocity
+
                 _lblWASDStatus.Text = "Status: Disabled";
                 _lblWASDStatus.ForeColor = Color.Gray;
                 _chkEnableWASD.ForeColor = Color.White;
-
-                // Send telemetry status
                 _telemetryInjector?.SendCustomStatus("WASD Control Disabled");
             }
         }
@@ -875,27 +903,58 @@ namespace NOMAD.MissionPlanner
         // Override keyboard handling for WASD
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
-            if (_wasdControl?.Enabled == true)
+            if (!_nudgeEnabled) return base.ProcessCmdKey(ref msg, keyData);
+
+            float speed = (float)_numNudgeSpeed.Value;
+            switch (keyData)
             {
-                // Handle WASD Q E keys
-                if (keyData == Keys.W || keyData == Keys.A || 
-                    keyData == Keys.S || keyData == Keys.D || 
-                    keyData == Keys.Q || keyData == Keys.E)
-                {
-                    _wasdControl.HandleKeyDown(keyData);
-                    return true; // Handled
-                }
+                case Keys.W: _vx = speed; return true;
+                case Keys.S: _vx = -speed; return true;
+                case Keys.A: _vy = -speed; return true;
+                case Keys.D: _vy = speed; return true;
+                case Keys.Q: _vz = -speed; return true; // Up
+                case Keys.E: _vz = speed; return true;  // Down
             }
             return base.ProcessCmdKey(ref msg, keyData);
         }
 
         protected override void OnKeyUp(KeyEventArgs e)
         {
-            if (_wasdControl?.Enabled == true)
+            if (_nudgeEnabled)
             {
-                _wasdControl.HandleKeyUp(e.KeyCode);
+                switch (e.KeyCode)
+                {
+                    case Keys.W: case Keys.S: _vx = 0; break;
+                    case Keys.A: case Keys.D: _vy = 0; break;
+                    case Keys.Q: case Keys.E: _vz = 0; break;
+                }
             }
             base.OnKeyUp(e);
+        }
+
+        /// <summary>
+        /// Send SET_POSITION_TARGET_LOCAL_NED velocity command.
+        /// </summary>
+        private void SendWasdVelocity()
+        {
+            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return;
+            try
+            {
+                var msg = new MAVLink.mavlink_set_position_target_local_ned_t
+                {
+                    time_boot_ms = (uint)Environment.TickCount,
+                    target_system = MainV2.comPort.MAV.sysid,
+                    target_component = MainV2.comPort.MAV.compid,
+                    coordinate_frame = (byte)MAVLink.MAV_FRAME.LOCAL_NED,
+                    type_mask = 0b0000_0111_1111_1000, // Velocity only
+                    vx = _vx, vy = _vy, vz = _vz
+                };
+                MainV2.comPort.sendPacket(msg, MainV2.comPort.MAV.sysid, MainV2.comPort.MAV.compid);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"WASD velocity error: {ex.Message}");
+            }
         }
 
         // ============================================================

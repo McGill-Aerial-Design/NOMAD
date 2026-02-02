@@ -54,6 +54,12 @@ namespace NOMAD.MissionPlanner
         /// <summary>MAV_CMD_SET_EKF_SOURCE_SET (42007) - Switch EKF source</summary>
         public const ushort CMD_SET_EKF_SOURCE = 42007;
 
+        // Security: Whitelist of allowed service names (defense-in-depth)
+        private static readonly System.Collections.Generic.HashSet<string> ALLOWED_SERVICES = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "nomad", "edge_core", "mediamtx", "mavlink-router", "isaac-ros", "zed-service"
+        };
+
         // ============================================================
         // Fields
         // ============================================================
@@ -406,6 +412,8 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> StartServiceAsync(string serviceName)
         {
+            if (!ALLOWED_SERVICES.Contains(serviceName))
+                return new CommandResult { Success = false, Message = $"Service '{serviceName}' not in whitelist" };
             return await ExecuteTerminalCommandAsync($"sudo systemctl start {serviceName}", 15);
         }
 
@@ -414,6 +422,8 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> StopServiceAsync(string serviceName)
         {
+            if (!ALLOWED_SERVICES.Contains(serviceName))
+                return new CommandResult { Success = false, Message = $"Service '{serviceName}' not in whitelist" };
             return await ExecuteTerminalCommandAsync($"sudo systemctl stop {serviceName}", 15);
         }
 
@@ -422,6 +432,8 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> RestartServiceAsync(string serviceName)
         {
+            if (!ALLOWED_SERVICES.Contains(serviceName))
+                return new CommandResult { Success = false, Message = $"Service '{serviceName}' not in whitelist" };
             return await ExecuteTerminalCommandAsync($"sudo systemctl restart {serviceName}", 15);
         }
 
@@ -430,6 +442,8 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> GetServiceStatusAsync(string serviceName)
         {
+            if (!ALLOWED_SERVICES.Contains(serviceName))
+                return new CommandResult { Success = false, Message = $"Service '{serviceName}' not in whitelist" };
             return await ExecuteTerminalCommandAsync($"systemctl is-active {serviceName}", 5);
         }
 
@@ -463,6 +477,46 @@ namespace NOMAD.MissionPlanner
         public async Task<CommandResult> GetIsaacRosLogsAsync(string logType = "all")
         {
             return await SendHttpGet($"/api/isaac/logs?log_type={logType}");
+        }
+
+        // ============================================================
+        // Video Bridges Control
+        // ============================================================
+
+        /// <summary>
+        /// Get status of all video bridge instances (primary/secondary).
+        /// </summary>
+        public async Task<CommandResult> GetVideoBridgesStatusAsync()
+        {
+            return await SendHttpGet("/api/video/bridges");
+        }
+
+        /// <summary>
+        /// Start the persistent video bridge instances.
+        /// </summary>
+        public async Task<CommandResult> StartVideoBridgesAsync()
+        {
+            return await SendHttpPost("/api/video/bridges/start", null);
+        }
+
+        // ============================================================
+        // SLAM Control
+        // ============================================================
+
+        /// <summary>
+        /// Get SLAM/nvblox mapping status.
+        /// </summary>
+        public async Task<CommandResult> GetSlamStatusAsync()
+        {
+            return await SendHttpGet("/api/task/2/slam/status");
+        }
+
+        /// <summary>
+        /// Clear SLAM mesh data.
+        /// </summary>
+        public async Task<CommandResult> ClearSlamAsync()
+        {
+            return await SendHttpPost("/api/task/2/slam/clear", null);
         }
 
         // ============================================================

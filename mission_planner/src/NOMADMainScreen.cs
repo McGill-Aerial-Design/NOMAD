@@ -473,7 +473,7 @@ namespace NOMAD.MissionPlanner
                     newView = _terminalView;
                     break;
                 case "Health":
-                    if (_healthView == null) _healthView = new NOMADHealthView(_config);
+                    if (_healthView == null) _healthView = new NOMADHealthView(_config, _sender);
                     newView = _healthView;
                     break;
                 case "Links":

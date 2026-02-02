@@ -26,6 +26,7 @@ from typing import List, Dict, Optional
 from dataclasses import dataclass, asdict
 from urllib.request import urlopen, Request
 from urllib.error import URLError
+from urllib.parse import quote
 
 logger = logging.getLogger("edge_core.video_manager")
 
@@ -268,8 +269,8 @@ class VideoStreamManager:
                 return True
             
             try:
-                # Call bridge HTTP API to switch topic
-                url = f"http://localhost:{stream.http_port}/switch_topic?topic={topic}"
+                # Call bridge HTTP API to switch topic (URL-encode topic for safety)
+                url = f"http://localhost:{stream.http_port}/switch_topic?topic={quote(topic, safe='')}"
                 req = Request(url, method='POST')
                 
                 with urlopen(req, timeout=5) as response:
