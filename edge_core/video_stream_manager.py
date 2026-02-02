@@ -1,20 +1,20 @@
 """
-Video Stream Manager - Isaac ROS H.264 Streaming
+Video Stream Manager - Isaac ROS H264 Encoder Streaming
 
-Manages the video relay node running inside the Isaac ROS Docker container
-for low-latency ROS-to-RTSP streaming using NVIDIA NVENC hardware encoding.
+Manages the Isaac ROS H264 encoder and RTSP bridge running inside the
+Isaac ROS Docker container for low-latency ROS-to-RTSP streaming.
 
 Architecture:
-    ZED Camera -> ROS Topic -> Video Relay Node (NVENC) -> MediaMTX -> Mission Planner
+    ZED Camera -> Isaac ROS H264 Encoder -> CompressedImage (H264) -> RTSP Bridge -> MediaMTX -> Mission Planner
 
 Key Features:
+- Uses NVIDIA Isaac ROS H264 encoder for hardware-accelerated encoding
 - Single persistent stream with dynamic topic switching
 - No RTSP URL change when switching - only content changes
-- Hardware H.264 encoding via nvv4l2h264enc (~150ms latency)
 - HTTP API control for topic switching
 - Multiple viewer support via MediaMTX
 
-Runs on Jetson Edge Core host, controls the relay inside Docker container.
+Runs on Jetson Edge Core host, controls the bridge inside Docker container.
 """
 
 import logging
@@ -103,15 +103,15 @@ class VideoStreamManager:
     """
     Manages the video streaming pipeline for NOMAD.
     
-    This class controls the video relay node running inside the Isaac ROS
-    Docker container. The relay node:
-    - Subscribes to a ROS2 image topic (ZED camera)
-    - Encodes with NVENC hardware (H.264)
-    - Streams to MediaMTX RTSP server
+    This class controls the Isaac H264 RTSP bridge running inside the Isaac ROS
+    Docker container. The bridge:
+    - Launches Isaac ROS H264 encoder (subscribes to ZED camera topic)
+    - Subscribes to H264 CompressedImage output
+    - Pushes H264 to MediaMTX RTSP server
     
-    Topic switching is done via HTTP API to the relay node, which changes
-    the subscription without restarting the pipeline. The RTSP URL stays
-    constant - only the content changes.
+    Topic switching is done via HTTP API to the bridge, which restarts the
+    encoder with the new topic. The RTSP URL stays constant - only the 
+    content changes.
     """
     
     def __init__(
@@ -157,7 +157,7 @@ class VideoStreamManager:
             return False
 
     def is_relay_running(self) -> bool:
-        """Check if the video relay node is running inside the container."""
+        """Check if the Isaac H264 RTSP bridge is running inside the container."""
         try:
             # Check if the HTTP API is responsive
             url = f"http://localhost:{self.relay_http_port}/health"
@@ -171,97 +171,107 @@ class VideoStreamManager:
         """
         Start the video streaming pipeline.
         
-        Copies the relay script to the container and launches it.
+        Copies the Isaac H264 RTSP bridge script to the container and launches it.
+        The bridge launches the Isaac ROS H264 encoder internally.
         Returns True if successful.
         """
         with self._lock:
             if self._started and self.is_relay_running():
-                logger.info("Video relay already running")
+                logger.info("Isaac H264 bridge already running")
                 return True
             
             if not self.is_container_running():
                 logger.warning("Cannot start video: container not running")
                 return False
             
-            # Copy relay script to container
-            script_path = os.path.join(os.path.dirname(__file__), "ros", "nomad_video_relay.py")
+            # Copy bridge script to container
+            script_path = os.path.join(os.path.dirname(__file__), "ros", "isaac_h264_rtsp_bridge.py")
             if not os.path.exists(script_path):
-                logger.error(f"Relay script not found: {script_path}")
+                logger.error(f"Bridge script not found: {script_path}")
                 return False
             
             try:
                 subprocess.run(
-                    ["docker", "cp", script_path, f"{self.container_name}:/tmp/nomad_video_relay.py"],
+                    ["docker", "cp", script_path, f"{self.container_name}:/tmp/isaac_h264_rtsp_bridge.py"],
                     capture_output=True,
                     timeout=10,
                     check=True
                 )
-                logger.info("Copied video relay script to container")
+                logger.info("Copied Isaac H264 bridge script to container")
             except subprocess.CalledProcessError as e:
-                logger.error(f"Failed to copy relay script: {e}")
+                logger.error(f"Failed to copy bridge script: {e}")
                 return False
             
-            # Kill any existing relay process
+            # Kill any existing bridge/encoder processes
             try:
                 subprocess.run(
-                    ["docker", "exec", self.container_name, "pkill", "-f", "nomad_video_relay"],
+                    ["docker", "exec", self.container_name, "pkill", "-f", "isaac_h264_rtsp_bridge"],
+                    capture_output=True,
+                    timeout=5
+                )
+                subprocess.run(
+                    ["docker", "exec", self.container_name, "pkill", "-f", "encoder_node"],
                     capture_output=True,
                     timeout=5
                 )
             except Exception:
                 pass  # OK if nothing to kill
             
-            # Start the relay node
+            # Start the Isaac H264 RTSP bridge
             cmd = [
                 "docker", "exec", "-d", self.container_name,
                 "bash", "-c",
                 f"source /opt/ros/humble/setup.bash && "
                 f"source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null ; "
-                f"python3 /tmp/nomad_video_relay.py "
-                f"--topic '{self.default_topic}' "
+                f"python3 /tmp/isaac_h264_rtsp_bridge.py "
+                f"--source-topic '{self.default_topic}' "
                 f"--rtsp-url '{self.rtsp_url}' "
                 f"--http-port {self.relay_http_port} "
                 f"--width {self.width} "
                 f"--height {self.height} "
-                f"--fps {self.fps} "
-                f"--bitrate {self.bitrate} "
-                f"> /tmp/nomad_video_relay.log 2>&1"
+                f"> /tmp/isaac_h264_bridge.log 2>&1"
             ]
             
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
                 if result.returncode != 0:
-                    logger.error(f"Failed to start relay: {result.stderr}")
+                    logger.error(f"Failed to start bridge: {result.stderr}")
                     return False
             except Exception as e:
-                logger.error(f"Error starting relay: {e}")
+                logger.error(f"Error starting bridge: {e}")
                 return False
             
-            # Wait for relay to be ready
-            for i in range(10):
+            # Wait for bridge to be ready
+            for i in range(15):  # Longer wait for encoder startup
                 time.sleep(1)
                 if self.is_relay_running():
                     self._started = True
-                    logger.info("Video relay started successfully")
+                    logger.info("Isaac H264 RTSP bridge started successfully")
                     return True
             
-            logger.error("Video relay did not start in time")
+            logger.error("Isaac H264 bridge did not start in time")
             return False
 
     def stop(self) -> bool:
         """Stop the video streaming pipeline."""
         with self._lock:
             try:
+                # Stop bridge and encoder
                 subprocess.run(
-                    ["docker", "exec", self.container_name, "pkill", "-f", "nomad_video_relay"],
+                    ["docker", "exec", self.container_name, "pkill", "-f", "isaac_h264_rtsp_bridge"],
+                    capture_output=True,
+                    timeout=5
+                )
+                subprocess.run(
+                    ["docker", "exec", self.container_name, "pkill", "-f", "encoder_node"],
                     capture_output=True,
                     timeout=5
                 )
                 self._started = False
-                logger.info("Video relay stopped")
+                logger.info("Isaac H264 bridge stopped")
                 return True
             except Exception as e:
-                logger.error(f"Error stopping relay: {e}")
+                logger.error(f"Error stopping bridge: {e}")
                 return False
 
     def restart(self) -> bool:
@@ -274,8 +284,9 @@ class VideoStreamManager:
         """
         Switch the video stream to a different ROS topic.
         
-        This calls the relay's HTTP API to change its subscription.
-        The GStreamer pipeline keeps running - only the content changes.
+        This calls the bridge's HTTP API to change its source topic.
+        The Isaac ROS H264 encoder restarts with the new topic.
+        The RTSP URL stays constant - only the content changes.
         
         Args:
             topic: Full ROS topic path (e.g., /zed/zed_node/left/image_rect_color)
@@ -285,21 +296,21 @@ class VideoStreamManager:
         """
         with self._lock:
             if not self.is_relay_running():
-                logger.warning("Cannot switch topic: relay not running")
+                logger.warning("Cannot switch topic: bridge not running")
                 return False
             
             try:
                 url = f"http://localhost:{self.relay_http_port}/switch?topic={quote(topic, safe='')}"
                 req = Request(url, method='POST')
                 
-                with urlopen(req, timeout=5) as response:
+                with urlopen(req, timeout=10) as response:  # Longer timeout for encoder restart
                     data = json.loads(response.read().decode())
                     
                 if data.get("success"):
                     logger.info(f"Switched video source to: {topic}")
                     return True
                 else:
-                    logger.error(f"Failed to switch topic: {data.get('error', 'Unknown error')}")
+                    logger.error(f"Failed to switch topic: {data.get('message', 'Unknown error')}")
                     return False
                     
             except URLError as e:
@@ -313,7 +324,7 @@ class VideoStreamManager:
         """
         List available ROS image topics.
         
-        Queries the relay node's HTTP API which uses ros2 topic list
+        Queries the bridge's HTTP API which uses ros2 topic list
         to find sensor_msgs/Image topics.
         
         Returns:
@@ -374,7 +385,7 @@ class VideoStreamManager:
         """
         Get current stream status.
         
-        Queries the relay node's HTTP API for detailed status.
+        Queries the bridge's HTTP API for detailed status.
         """
         default_status = StreamStatus(
             streaming=False,
@@ -400,16 +411,16 @@ class VideoStreamManager:
             
             return StreamStatus(
                 streaming=data.get("streaming", False),
-                current_topic=data.get("current_topic", ""),
+                current_topic=data.get("source_topic", ""),  # Updated field name
                 rtsp_url=self.rtsp_url.replace("172.17.0.1", "localhost"),
                 fps=data.get("fps", 0.0),
                 frame_count=data.get("frame_count", 0),
                 error_count=data.get("error_count", 0),
-                dropped_count=data.get("dropped_count", 0),
-                uptime_s=data.get("uptime_s", 0.0),
-                width=data.get("width", self.width),
-                height=data.get("height", self.height),
-                bitrate_mbps=data.get("bitrate_mbps", self.bitrate),
+                dropped_count=0,  # Not tracked in new bridge
+                uptime_s=0.0,     # Not tracked in new bridge
+                width=self.width,
+                height=self.height,
+                bitrate_mbps=self.bitrate,
             )
             
         except Exception as e:
@@ -422,11 +433,11 @@ class VideoStreamManager:
         return self.rtsp_url.replace("172.17.0.1", "localhost")
 
     def get_logs(self, lines: int = 50) -> str:
-        """Get recent logs from the video relay process."""
+        """Get recent logs from the Isaac H264 bridge process."""
         try:
             cmd = [
                 "docker", "exec", self.container_name,
-                "tail", f"-{lines}", "/tmp/nomad_video_relay.log"
+                "tail", f"-{lines}", "/tmp/isaac_h264_bridge.log"
             ]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
             return result.stdout
@@ -454,7 +465,7 @@ def init_video_stream_manager(
     
     Args:
         container_name: Name of the Isaac ROS Docker container
-        auto_start: Whether to auto-start the relay when container is ready
+        auto_start: Whether to auto-start the Isaac H264 bridge when container is ready
         **kwargs: Additional arguments passed to VideoStreamManager
         
     Returns:
@@ -469,15 +480,15 @@ def init_video_stream_manager(
             # Wait for container to be ready
             for i in range(45):  # Wait up to 90 seconds
                 if _video_stream_manager.is_container_running():
-                    logger.info("Container ready, starting video relay...")
+                    logger.info("Container ready, starting Isaac H264 bridge...")
                     time.sleep(5)  # Wait for ZED to initialize
                     _video_stream_manager.start()
                     return
                 time.sleep(2)
-            logger.warning("Container not ready, video relay not started")
+            logger.warning("Container not ready, Isaac H264 bridge not started")
         
         thread = threading.Thread(target=_delayed_start, daemon=True)
         thread.start()
-        logger.info("Video stream manager auto-start scheduled")
+        logger.info("Isaac H264 bridge auto-start scheduled")
     
     return _video_stream_manager

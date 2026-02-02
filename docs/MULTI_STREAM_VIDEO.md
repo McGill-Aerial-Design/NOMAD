@@ -1,34 +1,34 @@
 # NOMAD Video Streaming System
 
-Isaac ROS H.264 hardware-accelerated video streaming with dynamic topic switching.
+Isaac ROS H264 encoder-based video streaming with dynamic topic switching.
 
 ## Architecture
 
 ```
-ZED Camera -> ROS2 Topic -> Video Relay (NVENC) -> MediaMTX -> RTSP -> Mission Planner
-                 ^
-                 |-- Topic switch via API (no URL change)
+ZED Camera -> Isaac ROS H264 Encoder -> CompressedImage (H264) -> RTSP Bridge -> MediaMTX -> Mission Planner
+                                                    ^
+                                                    |-- Topic switch via API (restarts encoder)
 ```
 
 ### Key Features
 
 - **Single RTSP URL**: `rtsp://jetson:8554/primary` - never changes
 - **Dynamic Topic Switching**: Change ZED camera view via API
-- **Hardware Encoding**: NVIDIA NVENC H.264 (~150ms latency)
+- **Hardware Encoding**: Isaac ROS H264 encoder with NVIDIA hardware acceleration
 - **Multiple Viewers**: MediaMTX distributes to any number of clients
 
 ### Components
 
-1. **Video Relay Node** (`edge_core/ros/nomad_video_relay.py`)
+1. **Isaac H264 RTSP Bridge** (`edge_core/ros/isaac_h264_rtsp_bridge.py`)
    - Runs inside Isaac ROS container
-   - Subscribes to selected ROS2 image topic
-   - Encodes with GStreamer nvv4l2h264enc (NVENC)
-   - Streams to MediaMTX via RTSP
+   - Launches Isaac ROS H264 encoder node for encoding
+   - Subscribes to H264 CompressedImage output
+   - Pushes raw H264 NAL units to MediaMTX via RTSP
    - HTTP control API on port 9200
 
 2. **Video Stream Manager** (`edge_core/video_stream_manager.py`)
    - Runs on Jetson host
-   - Controls relay node via HTTP
+   - Controls bridge via HTTP
    - Provides Edge Core API integration
 
 3. **MediaMTX** (`infra/mediamtx.yml`)
@@ -73,7 +73,7 @@ Response:
 }
 ```
 
-**Important**: The RTSP URL stays constant. Only the content changes.
+**Important**: The RTSP URL stays constant. The Isaac ROS H264 encoder restarts with the new topic.
 
 ### Get Current Status
 
@@ -90,8 +90,6 @@ Response:
   "fps": 29.8,
   "frame_count": 12345,
   "error_count": 0,
-  "dropped_count": 0,
-  "uptime_s": 456.7,
   "width": 1280,
   "height": 720,
   "bitrate_mbps": 4
@@ -165,11 +163,12 @@ The video panel in Mission Planner includes:
 
 When you select a topic from the dropdown:
 - The API switches the source topic on the Jetson
+- The Isaac ROS H264 encoder restarts with the new topic
 - The RTSP URL stays the same
-- The video player does NOT reconnect
-- Content changes within ~100ms
+- The video player does NOT reconnect (GStreamer handles stream continuity)
+- Brief interruption (~500ms) during encoder restart
 
-## Configuration
+### Configuration
 
 ### Environment Variables
 
@@ -179,35 +178,49 @@ Set in `config/env/jetson.env`:
 NOMAD_VIDEO_AUTO_START=true     # Auto-start stream on Edge Core startup
 ```
 
-### Video Relay Parameters
+### Isaac H264 RTSP Bridge Parameters
 
-The relay node accepts these command-line arguments:
+The bridge accepts these command-line arguments:
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--topic` | `/zed/zed_node/rgb/image_rect_color` | Initial ROS topic |
+| `--source-topic` | `/zed/zed_node/rgb/image_rect_color` | Source ROS image topic |
+| `--h264-topic` | `/image_compressed` | H264 CompressedImage topic |
 | `--rtsp-url` | `rtsp://172.17.0.1:8554/primary` | MediaMTX RTSP URL |
 | `--http-port` | `9200` | HTTP control API port |
 | `--width` | `1280` | Output video width |
 | `--height` | `720` | Output video height |
-| `--fps` | `30` | Output frame rate |
-| `--bitrate` | `4` | H.264 bitrate in Mbps |
+
+### Isaac ROS H264 Encoder Parameters
+
+The encoder uses these settings (configured in bridge):
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `config` | `pframe_cqp` | P-frame constant QP preset |
+| `qp` | `20` | Quality factor (lower = better quality) |
+| `iframe_interval` | `30` | I-frame every 30 frames (~1 sec at 30fps) |
 
 ## Troubleshooting
 
 ### Stream not playing
 
-1. Check if relay is running:
+1. Check if bridge is running:
 ```bash
-ssh mad@100.75.218.89 "docker exec nomad_isaac_ros_32 pgrep -af nomad_video_relay"
+ssh mad@100.75.218.89 "docker exec nomad_isaac_ros_32 pgrep -af isaac_h264_rtsp_bridge"
 ```
 
-2. Check relay logs:
+2. Check if encoder is running:
+```bash
+ssh mad@100.75.218.89 "docker exec nomad_isaac_ros_32 pgrep -af encoder_node"
+```
+
+3. Check bridge logs:
 ```bash
 curl http://100.75.218.89:8000/api/video/logs
 ```
 
-3. Check if MediaMTX is running:
+4. Check if MediaMTX is running:
 ```bash
 ssh mad@100.75.218.89 "curl -s http://localhost:9997/v3/paths/list"
 ```
@@ -239,24 +252,26 @@ cd ~/NOMAD
 curl -X POST "http://100.75.218.89:8000/api/video/source?topic=/zed/zed_node/left/image_rect_color"
 ```
 
-2. Check relay HTTP is accessible:
+2. Check bridge HTTP is accessible:
 ```bash
 ssh mad@100.75.218.89 "curl http://localhost:9200/status"
 ```
 
+Note: Topic switching restarts the Isaac ROS H264 encoder, so there may be a brief interruption.
+
 ## Performance
 
-- **Latency**: ~150ms glass-to-glass
-- **Bandwidth**: ~4 Mbps (configurable)
-- **CPU Usage**: ~15% on Jetson
-- **GPU Usage**: ~25% (NVENC encoder)
-- **Topic Switch Time**: ~100ms
+- **Latency**: ~100-150ms glass-to-glass
+- **Bandwidth**: ~4 Mbps (configurable via encoder QP)
+- **CPU Usage**: ~10% on Jetson (encoder offloaded to NVENC)
+- **GPU Usage**: ~25% (Isaac ROS H264 encoder)
+- **Topic Switch Time**: ~500ms (encoder restart)
 
 ## Files
 
 | File | Description |
 |------|-------------|
-| `edge_core/ros/nomad_video_relay.py` | ROS2 node with GStreamer NVENC encoder |
+| `edge_core/ros/isaac_h264_rtsp_bridge.py` | Bridge launching Isaac ROS encoder and pushing H264 to RTSP |
 | `edge_core/video_stream_manager.py` | Host-side manager class |
 | `edge_core/api.py` | API endpoints (`/api/video/*`) |
 | `mission_planner/src/EmbeddedVideoPlayer.cs` | Video player UI |
