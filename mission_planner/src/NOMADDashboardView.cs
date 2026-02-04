@@ -566,7 +566,7 @@ namespace NOMAD.MissionPlanner
                 _videoPlaceholder.Controls.Clear();
                 
                 // Build RTSP URL for left camera
-                string rtspUrl = $"rtsp://{_config.EffectiveIP}:8554/zed";
+                string rtspUrl = $"rtsp://{_config.EffectiveIP}:8554/primary";
                 _videoPlayer = new EmbeddedVideoPlayer("ZED Left", rtspUrl, showControls: false, _jetsonConnectionManager);
                 _videoPlayer.Dock = DockStyle.Fill;
                 _videoPlaceholder.Controls.Add(_videoPlayer);

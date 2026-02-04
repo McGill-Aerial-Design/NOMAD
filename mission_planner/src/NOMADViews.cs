@@ -626,10 +626,9 @@ namespace NOMAD.MissionPlanner
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 2,
+                RowCount = 1,
             };
-            videoSection.RowStyles.Add(new RowStyle(SizeType.Percent, 85));
-            videoSection.RowStyles.Add(new RowStyle(SizeType.Percent, 15));
+            videoSection.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             
             // Video player panel - left ZED camera
             var videoPanel = new Panel
@@ -642,7 +641,7 @@ namespace NOMAD.MissionPlanner
             try
             {
                 // RTSP URL for ZED stream - left camera will be cropped
-                string rtspUrl = $"rtsp://{_config.EffectiveIP}:8554/zed";
+                string rtspUrl = $"rtsp://{_config.EffectiveIP}:8554/primary";
                 _videoPlayer = new EmbeddedVideoPlayer("ZED Left Camera", rtspUrl, true, _jetsonConnectionManager);
                 _videoPlayer.Dock = DockStyle.Fill;
                 videoPanel.Controls.Add(_videoPlayer);
@@ -652,7 +651,7 @@ namespace NOMAD.MissionPlanner
                 _lblStatus = new Label
                 {
                     Text = $"Video player unavailable: {ex.Message}\n\n" +
-                           $"Stream URL: rtsp://{_config.EffectiveIP}:8554/zed\n\n" +
+                           $"Stream URL: rtsp://{_config.EffectiveIP}:8554/primary\n\n" +
                            "Use VLC or another player to view the stream.",
                     Font = new Font("Segoe UI", 12),
                     ForeColor = TEXT_SECONDARY,
@@ -664,35 +663,8 @@ namespace NOMAD.MissionPlanner
             
             videoSection.Controls.Add(videoPanel, 0, 0);
             
-            // Video controls panel
-            var controlsPanel = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = CARD_BG,
-                Padding = new Padding(15),
-            };
+            // Video player has built-in controls - no need for duplicate controls panel
             
-            var btnPlay = CreateButton("Play", SUCCESS_COLOR, 100, 40);
-            btnPlay.Location = new Point(15, 15);
-            btnPlay.Click += (s, e) => _videoPlayer?.StartStream();
-            controlsPanel.Controls.Add(btnPlay);
-            
-            var btnStop = CreateButton("Stop", ERROR_COLOR, 100, 40);
-            btnStop.Location = new Point(125, 15);
-            btnStop.Click += (s, e) => _videoPlayer?.StopStream();
-            controlsPanel.Controls.Add(btnStop);
-            
-            var lblUrl = new Label
-            {
-                Text = $"Stream: rtsp://{_config.EffectiveIP}:8554/zed",
-                Font = new Font("Consolas", 9),
-                ForeColor = TEXT_SECONDARY,
-                Location = new Point(240, 25),
-                AutoSize = true,
-            };
-            controlsPanel.Controls.Add(lblUrl);
-            
-            videoSection.Controls.Add(controlsPanel, 0, 1);
             mainLayout.Controls.Add(videoSection, 0, 0);
             
             // Right side: WASD Controls
