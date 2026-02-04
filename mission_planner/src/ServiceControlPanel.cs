@@ -414,7 +414,7 @@ namespace NOMAD.MissionPlanner
                     catch { }
                 }
                 
-                // Video bridges status
+                // Video bridge status (single bridge configuration)
                 var bridgesResult = await _sender.GetVideoBridgesStatusAsync();
                 if (bridgesResult.Success)
                 {
@@ -422,9 +422,11 @@ namespace NOMAD.MissionPlanner
                     {
                         var data = JObject.Parse(bridgesResult.Data);
                         var primary = data["bridges"]?["primary"]?["state"]?.ToString() ?? "stopped";
-                        var secondary = data["bridges"]?["secondary"]?["state"]?.ToString() ?? "stopped";
-                        bool bothOk = primary == "playing" && secondary == "playing";
-                        UpdateStatusLabel(_lblVideoBridgesStatus, bothOk, $"P:{primary} S:{secondary}");
+                        // Only check primary bridge (we simplified to single bridge)
+                        bool isStreaming = primary == "playing";
+                        var fps = data["bridges"]?["primary"]?["fps"]?.Value<float>() ?? 0;
+                        string statusText = isStreaming ? $"Streaming ({fps:F1} fps)" : "Stopped";
+                        UpdateStatusLabel(_lblVideoBridgesStatus, isStreaming, statusText);
                     }
                     catch { UpdateStatusLabel(_lblVideoBridgesStatus, false, "Parse Error"); }
                 }

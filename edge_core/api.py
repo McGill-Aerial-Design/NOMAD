@@ -1911,6 +1911,41 @@ def create_app(state_manager: StateManager) -> FastAPI:
         logs = mgr.get_logs(lines)
         return {"logs": logs}
 
+    @app.get("/api/video/bridges", tags=["Video"])
+    async def get_video_bridges_status():
+        """
+        Get status of video bridges in legacy multi-bridge format.
+        
+        Returns status compatible with Mission Planner Service Control Panel.
+        Maps our single video bridge to "primary" bridge.
+        "secondary" bridge is marked as unavailable (we simplified to single bridge).
+        """
+        mgr = get_video_stream_manager()
+        if not mgr:
+            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
+        
+        status = mgr.get_status()
+        
+        # Map our single bridge status to primary/secondary format
+        # "playing" = streaming active, "stopped" = not streaming
+        primary_state = "playing" if status.streaming else "stopped"
+        
+        return {
+            "bridges": {
+                "primary": {
+                    "state": primary_state,
+                    "topic": status.current_topic if status.streaming else None,
+                    "fps": status.fps,
+                    "frame_count": status.frame_count,
+                    "error_count": status.error_count
+                },
+                "secondary": {
+                    "state": "unavailable",
+                    "reason": "Single bridge configuration"
+                }
+            }
+        }
+
     # ==================== SLAM 3D Mesh Endpoints ====================
     # These endpoints stream nvblox 3D mesh data for Mission Planner visualization
 
