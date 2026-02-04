@@ -626,8 +626,18 @@ namespace NOMAD.MissionPlanner
                     }
                 }
                 
-                // RTSP URL stays the same - no need to restart player
-                // The video content changes on the Jetson side instantly
+                // Wait briefly for the bridge to start streaming new topic
+                await System.Threading.Tasks.Task.Delay(500);
+                
+                // Restart player to reconnect to the new stream
+                // Although RTSP URL stays the same, GStreamer needs to reconnect
+                // to handle the stream content change properly
+                if (_isPlaying)
+                {
+                    System.Diagnostics.Debug.WriteLine($"NOMAD Video: Restarting player after topic switch to {fullName}");
+                    RestartStream();
+                }
+                
                 UpdateStatus($"Streaming: {displayName}", Color.LimeGreen);
                 System.Diagnostics.Debug.WriteLine($"NOMAD Video: Topic switched to {fullName}");
             }
