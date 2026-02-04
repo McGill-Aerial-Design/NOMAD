@@ -53,6 +53,14 @@ except ImportError:
     ISAAC_ROS_AVAILABLE = False
     IsaacROSBridge = None  # type: ignore
 
+# Conditional import for ROS mesh bridge (nvblox 3D visualization)
+try:
+    from .ros_mesh_bridge import MeshBridge, init_mesh_bridge, get_mesh_bridge
+    MESH_BRIDGE_AVAILABLE = True
+except ImportError:
+    MESH_BRIDGE_AVAILABLE = False
+    MeshBridge = None  # type: ignore
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -77,6 +85,9 @@ nav_controller: NavController | None = None
 # Isaac ROS bridge (Task 2 only - requires ROS2 environment)
 isaac_bridge: "IsaacROSBridge | None" = None
 
+# ROS mesh bridge for nvblox 3D visualization
+mesh_bridge: "MeshBridge | None" = None
+
 tailscale_manager = None
 network_monitor = None
 
@@ -91,8 +102,13 @@ app = get_app()
 
 def cleanup() -> None:
     """Cleanup on shutdown."""
-    global time_sync_service, isaac_bridge, health_monitor, nav_controller
+    global time_sync_service, isaac_bridge, health_monitor, nav_controller, mesh_bridge
     logger.info("Shutting down Edge Core...")
+
+    # Stop mesh bridge first (depends on ROS)
+    if mesh_bridge:
+        mesh_bridge.stop()
+        logger.info("Mesh bridge stopped")
 
     # Stop navigation controller first (safety - stops velocity watchdog)
     if nav_controller:
@@ -135,7 +151,7 @@ def run(
         port: Port number
         log_level: Logging level
     """
-    global time_sync_service, isaac_bridge, health_monitor, nav_controller
+    global time_sync_service, isaac_bridge, health_monitor, nav_controller, mesh_bridge
     global tailscale_manager, network_monitor
 
     logger.info("=" * 50)
@@ -193,6 +209,32 @@ def run(
         logger.warning("Isaac ROS enabled but rclpy not available - skipping bridge")
     else:
         logger.info("Isaac ROS bridge disabled (set NOMAD_ENABLE_ISAAC_ROS=true to enable)")
+
+    # Initialize ROS mesh bridge for nvblox 3D visualization (Task 2)
+    # Enabled when Isaac ROS is enabled and mesh bridge is available
+    enable_mesh_bridge = os.environ.get("NOMAD_ENABLE_MESH_BRIDGE", "true").lower() == "true"
+    if enable_isaac and enable_mesh_bridge and MESH_BRIDGE_AVAILABLE:
+        try:
+            mesh_bridge = init_mesh_bridge(
+                mesh_topic="/nvblox_node/mesh",
+                enable_colors=True,
+                max_blocks=10000,
+            )
+            if mesh_bridge and mesh_bridge.is_available():
+                mesh_bridge.start()
+                logger.info("Mesh bridge started for nvblox 3D visualization")
+            else:
+                logger.warning("Mesh bridge initialized but not available (ROS2/nvblox_msgs missing)")
+        except Exception as e:
+            logger.error(f"Failed to start mesh bridge: {e}")
+            mesh_bridge = None
+    elif enable_mesh_bridge and not MESH_BRIDGE_AVAILABLE:
+        logger.warning("Mesh bridge enabled but ros_mesh_bridge not importable - skipping")
+    else:
+        if not enable_isaac:
+            logger.info("Mesh bridge disabled (requires NOMAD_ENABLE_ISAAC_ROS=true)")
+        else:
+            logger.info("Mesh bridge disabled (set NOMAD_ENABLE_MESH_BRIDGE=true to enable)")
 
     # Initialize video stream manager with auto-start
     # This runs in background and will auto-start the video relay when container is ready
