@@ -63,22 +63,22 @@
     maximum_input_queue_length: 2  # minimal buffering
 
     # ==============================================================
-    # Map clearing - aggressive for less memory
+    # Map clearing - 15m radius around drone
     # ==============================================================
-    map_clearing_radius_m: 4.0  # smaller = faster clearing
+    map_clearing_radius_m: 15.0  # 15m radius for saved area
     map_clearing_frame_id: "base_link"
 
     # QoS settings
     input_qos: "SYSTEM_DEFAULT"
 
-    # Visualization - minimal for speed
-    esdf_slice_bounds_visualization_side_length: 4.0
-    workspace_height_bounds_visualization_side_length: 4.0
-    layer_visualization_exclusion_height_m: 2.0
-    layer_visualization_exclusion_radius_m: 4.0
-    max_back_projection_distance: 4.0
+    # Visualization - 15m view area
+    esdf_slice_bounds_visualization_side_length: 15.0
+    workspace_height_bounds_visualization_side_length: 15.0
+    layer_visualization_exclusion_height_m: 3.0
+    layer_visualization_exclusion_radius_m: 15.0
+    max_back_projection_distance: 10.0
     back_projection_subsampling: 4  # heavy subsampling for speed
-    layer_streamer_bandwidth_limit_mbps: 20.0  # higher limit for low latency
+    layer_streamer_bandwidth_limit_mbps: 30.0  # higher limit for larger map
 
     # Multi-mapper settings
     multi_mapper:
@@ -90,8 +90,8 @@
       do_depth_preprocessing: false
       depth_preprocessing_num_dilations: 1
       
-      # Integration distances
-      projective_integrator_max_integration_distance_m: 4.0
+      # Integration distances - 15m range
+      projective_integrator_max_integration_distance_m: 15.0
       projective_integrator_truncation_distance_vox: 4.0  # larger = more stable
       projective_integrator_weighting_mode: "inverse_square_tsdf_distance_penalty"
       projective_integrator_max_weight: 10.0  # HIGHER weight = more stable map
@@ -128,6 +128,6 @@
       tsdf_decayed_free_distance_vox: 4.0
       decay_integrator_deallocate_decayed_blocks: false  # keep blocks in memory
       
-      # Streaming
-      layer_streamer_exclusion_height_m: 2.0
-      layer_streamer_exclusion_radius_m: 5.0
+      # Streaming - 15m radius
+      layer_streamer_exclusion_height_m: 3.0
+      layer_streamer_exclusion_radius_m: 15.0
