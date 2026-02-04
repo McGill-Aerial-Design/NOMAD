@@ -2132,11 +2132,11 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 }
             
             except ImportError:
-            return {
-                "available": False,
-                "error": "Mesh bridge module not available",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
+                return {
+                    "available": False,
+                    "error": "Mesh bridge module not available",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
         except Exception as e:
             logger.error(f"SLAM mesh endpoint error: {e}")
             return {
