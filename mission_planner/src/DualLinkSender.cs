@@ -410,59 +410,83 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// Execute a command via SSH directly (bypasses HTTP API).
         /// Use this for operations that kill the HTTP API (like service restarts).
-        /// Requires OpenSSH client (built into Windows 10/11) and SSH key authentication.
+        /// Works with SSH key authentication or password authentication.
+        /// Shows console window for password entry if keys aren't configured.
         /// </summary>
         public async Task<CommandResult> ExecuteSSHCommandAsync(string command, int timeoutSeconds = 30)
         {
             try
             {
-                // Use full path to ssh.exe (Windows 10/11 built-in OpenSSH)
-                var sshPath = @"C:\Windows\System32\OpenSSH\ssh.exe";
+                // Detect OS and find SSH executable
+                string sshPath;
+                bool isWindows = Environment.OSVersion.Platform == PlatformID.Win32NT;
                 
-                // Check if ssh.exe exists, fallback to PATH
-                if (!System.IO.File.Exists(sshPath))
+                if (isWindows)
                 {
-                    sshPath = "ssh"; // Try to find in PATH
+                    // Windows: Use built-in OpenSSH (Windows 10/11)
+                    sshPath = @"C:\Windows\System32\OpenSSH\ssh.exe";
+                    if (!System.IO.File.Exists(sshPath))
+                    {
+                        sshPath = "ssh.exe"; // Fallback to PATH
+                    }
                 }
+                else
+                {
+                    // Linux/Mac: Use standard ssh location
+                    sshPath = "/usr/bin/ssh";
+                    if (!System.IO.File.Exists(sshPath))
+                    {
+                        sshPath = "ssh"; // Fallback to PATH
+                    }
+                }
+                
+                // SSH arguments: allow password prompts, set timeout
+                // Note: Removed BatchMode=yes to allow password authentication
+                // ConnectTimeout prevents hanging if host is unreachable
+                var sshArgs = $"-o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new mad@{_config.EffectiveIP} \"{command}\"";
                 
                 var startInfo = new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = sshPath,
-                    Arguments = $"-o BatchMode=yes -o ConnectTimeout=10 mad@{_config.EffectiveIP} \"{command}\"",
+                    Arguments = sshArgs,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
+                    RedirectStandardInput = true,  // Required for password prompts
                     UseShellExecute = false,
-                    CreateNoWindow = true
+                    CreateNoWindow = false,  // Show console window for password entry
+                    WindowStyle = System.Diagnostics.ProcessWindowStyle.Normal
                 };
 
                 using (var process = System.Diagnostics.Process.Start(startInfo))
                 {
+                    // Use tasks for async I/O
                     var outputTask = process.StandardOutput.ReadToEndAsync();
                     var errorTask = process.StandardError.ReadToEndAsync();
                     
-                    var completedTask = await Task.WhenAny(
-                        Task.Run(() => process.WaitForExit(timeoutSeconds * 1000)),
-                        Task.Delay(timeoutSeconds * 1000)
-                    );
+                    // Wait for process to complete with timeout
+                    var exited = await Task.Run(() => process.WaitForExit(timeoutSeconds * 1000));
 
-                    if (!process.HasExited)
+                    if (!exited)
                     {
                         process.Kill();
                         return new CommandResult 
                         { 
                             Success = false, 
-                            Message = $"SSH command timed out after {timeoutSeconds}s" 
+                            Message = $"SSH command timed out after {timeoutSeconds}s (host unreachable or command hung)" 
                         };
                     }
 
                     var output = await outputTask;
                     var error = await errorTask;
 
+                    // SSH returns 0 on success
+                    bool success = process.ExitCode == 0;
+                    
                     return new CommandResult
                     {
-                        Success = process.ExitCode == 0,
+                        Success = success,
                         Data = output,
-                        Message = process.ExitCode == 0 ? "SSH command executed" : $"SSH error: {error}"
+                        Message = success ? "SSH command executed successfully" : $"SSH failed (exit code {process.ExitCode}): {error}"
                     };
                 }
             }
@@ -471,7 +495,7 @@ namespace NOMAD.MissionPlanner
                 return new CommandResult
                 {
                     Success = false,
-                    Message = $"SSH execution failed: {ex.Message}"
+                    Message = $"SSH execution exception: {ex.Message}"
                 };
             }
         }
