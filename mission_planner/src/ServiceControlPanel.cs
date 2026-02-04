@@ -94,9 +94,9 @@ namespace NOMAD.MissionPlanner
             AddServiceRow("MediaMTX (RTSP)", ref _lblMediamtxStatus, ref _btnMediamtxRestart, ref yOffset);
             _btnMediamtxRestart.Click += async (s, e) => await RestartServiceAsync("mediamtx", _lblMediamtxStatus);
             
-            // === Edge Core ===
-            AddServiceRow("Edge Core API", ref _lblEdgeCoreStatus, ref _btnEdgeCoreRestart, ref yOffset);
-            _btnEdgeCoreRestart.Click += async (s, e) => await RestartEdgeCoreAsync();
+            // === NOMAD Services (Full Restart) ===
+            AddServiceRow("NOMAD Services", ref _lblEdgeCoreStatus, ref _btnEdgeCoreRestart, ref yOffset, "Restart All");
+            _btnEdgeCoreRestart.Click += async (s, e) => await RestartAllServicesAsync();
             
             // === Isaac ROS (with Start/Stop) ===
             AddIsaacRosRow(ref yOffset);
@@ -353,15 +353,15 @@ namespace NOMAD.MissionPlanner
                     mediamtxResult.Data?.Trim().Contains("active") == true;
                 UpdateStatusLabel(_lblMediamtxStatus, mediamtxActive);
                 
-                // Check Isaac ROS status
+                // Check Isaac ROS status (check container_running instead of available)
                 var isaacResult = await _sender.GetIsaacStatusAsync();
                 if (isaacResult.Success)
                 {
                     try
                     {
                         var isaacData = JObject.Parse(isaacResult.Data);
-                        var available = isaacData["available"]?.Value<bool>() ?? false;
-                        UpdateStatusLabel(_lblIsaacRosStatus, available, available ? "Running" : "Not Running");
+                        var containerRunning = isaacData["container_running"]?.Value<bool>() ?? false;
+                        UpdateStatusLabel(_lblIsaacRosStatus, containerRunning, containerRunning ? "Running" : "Not Running");
                     }
                     catch
                     {
@@ -519,28 +519,66 @@ namespace NOMAD.MissionPlanner
             }
         }
         
-        private async Task RestartEdgeCoreAsync()
+        private async Task RestartAllServicesAsync()
         {
-            LogMessage("Restarting Edge Core...");
+            LogMessage("Restarting all NOMAD services...");
             UpdateStatusLabel(_lblEdgeCoreStatus, false, "Restarting...");
+            UpdateStatusLabel(_lblMavlinkStatus, false, "Restarting...");
+            UpdateStatusLabel(_lblMediamtxStatus, false, "Restarting...");
+            UpdateStatusLabel(_lblIsaacRosStatus, false, "Restarting...");
+            UpdateStatusLabel(_lblVideoBridgesStatus, false, "Restarting...");
             
-            // Kill and restart edge_core
-            var killResult = await _sender.ExecuteTerminalCommandAsync("pkill -f 'edge_core.main'", 5);
+            // Kill existing services
+            LogMessage("Stopping existing services...");
+            await _sender.ExecuteTerminalCommandAsync("pkill -f 'start_nomad_full.sh'", 5);
             await Task.Delay(1000);
+            await _sender.ExecuteTerminalCommandAsync("pkill -f 'edge_core.main'", 5);
+            await _sender.ExecuteTerminalCommandAsync("docker exec nomad_isaac_ros_32 pkill -f 'simple_video_bridge'", 5);
+            await Task.Delay(2000);
             
+            // Start NOMAD full script
+            LogMessage("Starting NOMAD full script...");
             var startResult = await _sender.ExecuteTerminalCommandAsync(
-                "cd ~/NOMAD && nohup python3 -m edge_core.main > /tmp/edge_core.log 2>&1 &", 5);
+                "cd ~/NOMAD && nohup bash scripts/start_nomad_full.sh all > /tmp/nomad_startup.log 2>&1 &", 5);
             
-            LogMessage("Edge Core restart initiated");
-            await Task.Delay(3000);
+            if (startResult.Success)
+            {
+                LogMessage("NOMAD services restart initiated");
+                LogMessage("All services starting (MAVLink, MediaMTX, Edge Core, Isaac ROS, Video Bridge)...");
+                LogMessage("Full startup takes 30-45 seconds. Status will update automatically.");
+                
+                // Show info message
+                Task.Run(() => {
+                    MessageBox.Show(
+                        "NOMAD Services Restart Initiated!\n\n" +
+                        "Starting all services:\n" +
+                        "1. MAVLink Router\n" +
+                        "2. MediaMTX (RTSP)\n" +
+                        "3. Edge Core API\n" +
+                        "4. Isaac ROS + ZED Camera\n" +
+                        "5. Video Bridge\n\n" +
+                        "Full startup: 30-45 seconds.\n" +
+                        "Status will update automatically.",
+                        "NOMAD Restarting",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information
+                    );
+                });
+            }
+            else
+            {
+                LogMessage($"Failed to restart services: {startResult.Message}");
+            }
         }
         
         private async Task StartIsaacRosAsync()
         {
-            LogMessage("Starting Isaac ROS (automatic)...");
+            LogMessage("Starting Isaac ROS container and services...");
             UpdateStatusLabel(_lblIsaacRosStatus, false, "Starting...");
             
-            var result = await _sender.StartIsaacRosAsync();
+            // Use the start_isaac_ros_auto.sh script
+            var result = await _sender.ExecuteTerminalCommandAsync(
+                "cd ~/NOMAD && bash scripts/start_isaac_ros_auto.sh start", 60);
             
             if (result.Success)
             {
