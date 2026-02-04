@@ -2438,4 +2438,176 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 "has_changes": False,
             }
 
+    # ==================== Servo Control Endpoints ====================
+    # Control camera tilt servo and water shooter via PWM
+    
+    @app.get("/api/servo/status", tags=["Servo"])
+    async def get_servo_status():
+        """
+        Get status of all servos.
+        
+        Returns current angle and enabled state for each servo.
+        """
+        try:
+            from .servo_controller import get_servo_controller
+            
+            controller = get_servo_controller()
+            if not controller or not controller.is_available():
+                return {
+                    "available": False,
+                    "error": "Servo controller not initialized",
+                    "servos": {}
+                }
+            
+            status = controller.get_status()
+            status["available"] = True
+            return status
+            
+        except ImportError:
+            return {
+                "available": False,
+                "error": "Servo controller module not available",
+                "servos": {}
+            }
+        except Exception as e:
+            logger.error(f"Servo status error: {e}")
+            return {
+                "available": False,
+                "error": str(e),
+                "servos": {}
+            }
+    
+    @app.post("/api/servo/camera/tilt", tags=["Servo"])
+    async def set_camera_tilt(angle: float = Query(..., ge=0, le=180, description="Tilt angle 0-180 degrees")):
+        """
+        Set camera tilt servo angle.
+        
+        Args:
+            angle: Target angle in degrees
+                - 0 = Looking down
+                - 90 = Level (straight ahead)
+                - 180 = Looking up
+                
+        Returns:
+            Success status and new angle
+        """
+        try:
+            from .servo_controller import get_servo_controller
+            
+            controller = get_servo_controller()
+            if not controller or not controller.is_available():
+                raise HTTPException(status_code=503, detail="Servo controller not available")
+            
+            success = controller.set_camera_tilt(angle)
+            
+            if success:
+                return {
+                    "status": "ok",
+                    "angle": angle,
+                    "message": f"Camera tilt set to {angle} degrees"
+                }
+            else:
+                raise HTTPException(status_code=500, detail="Failed to set camera tilt")
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Camera tilt error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    @app.get("/api/servo/camera/tilt", tags=["Servo"])
+    async def get_camera_tilt():
+        """
+        Get current camera tilt angle.
+        
+        Returns:
+            Current angle in degrees
+        """
+        try:
+            from .servo_controller import get_servo_controller
+            
+            controller = get_servo_controller()
+            if not controller or not controller.is_available():
+                return {"angle": None, "available": False}
+            
+            angle = controller.get_camera_tilt()
+            return {"angle": angle, "available": angle is not None}
+            
+        except Exception as e:
+            logger.error(f"Get camera tilt error: {e}")
+            return {"angle": None, "available": False, "error": str(e)}
+    
+    @app.post("/api/servo/shooter/trigger", tags=["Servo"])
+    async def trigger_water_shooter(duration_ms: int = Query(200, ge=50, le=2000, description="Trigger duration in milliseconds")):
+        """
+        Trigger water shooter servo.
+        
+        Args:
+            duration_ms: How long to activate shooter (50-2000ms)
+            
+        Returns:
+            Success status
+        """
+        try:
+            from .servo_controller import get_servo_controller
+            
+            controller = get_servo_controller()
+            if not controller or not controller.is_available():
+                raise HTTPException(status_code=503, detail="Servo controller not available")
+            
+            success = controller.trigger_water_shooter(duration_ms)
+            
+            if success:
+                return {
+                    "status": "ok",
+                    "duration_ms": duration_ms,
+                    "message": f"Water shooter triggered for {duration_ms}ms"
+                }
+            else:
+                raise HTTPException(status_code=500, detail="Failed to trigger water shooter")
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Water shooter error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    @app.post("/api/servo/enable", tags=["Servo"])
+    async def enable_servos():
+        """Enable all servo PWM outputs."""
+        try:
+            from .servo_controller import get_servo_controller
+            
+            controller = get_servo_controller()
+            if not controller:
+                raise HTTPException(status_code=503, detail="Servo controller not available")
+            
+            controller.enable_all()
+            return {"status": "ok", "message": "All servos enabled"}
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Enable servos error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    @app.post("/api/servo/disable", tags=["Servo"])
+    async def disable_servos():
+        """Disable all servo PWM outputs (safety)."""
+        try:
+            from .servo_controller import get_servo_controller
+            
+            controller = get_servo_controller()
+            if not controller:
+                raise HTTPException(status_code=503, detail="Servo controller not available")
+            
+            controller.disable_all()
+            return {"status": "ok", "message": "All servos disabled"}
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Disable servos error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
     return app

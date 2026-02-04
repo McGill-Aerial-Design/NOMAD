@@ -61,6 +61,13 @@ except ImportError:
     MESH_BRIDGE_AVAILABLE = False
     MeshBridge = None  # type: ignore
 
+# Conditional import for servo controller (PWM control)
+try:
+    from .servo_controller import init_servo_controller, shutdown_servo_controller, get_servo_controller
+    SERVO_AVAILABLE = True
+except ImportError:
+    SERVO_AVAILABLE = False
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -88,6 +95,9 @@ isaac_bridge: "IsaacROSBridge | None" = None
 # ROS mesh bridge for nvblox 3D visualization
 mesh_bridge: "MeshBridge | None" = None
 
+# Servo controller for camera tilt and water shooter
+servo_controller_initialized: bool = False
+
 tailscale_manager = None
 network_monitor = None
 
@@ -102,7 +112,7 @@ app = get_app()
 
 def cleanup() -> None:
     """Cleanup on shutdown."""
-    global time_sync_service, isaac_bridge, health_monitor, nav_controller, mesh_bridge
+    global time_sync_service, isaac_bridge, health_monitor, nav_controller, mesh_bridge, servo_controller_initialized
     logger.info("Shutting down Edge Core...")
 
     # Stop mesh bridge first (depends on ROS)
@@ -110,7 +120,19 @@ def cleanup() -> None:
         mesh_bridge.stop()
         logger.info("Mesh bridge stopped")
 
+    # Shutdown servo controller (safety - disable PWM outputs)
+    if servo_controller_initialized and SERVO_AVAILABLE:
+        try:
+            shutdown_servo_controller()
+            servo_controller_initialized = False
+            logger.info("Servo controller stopped")
+        except Exception as e:
+            logger.error(f"Error shutting down servo controller: {e}")
+
     # Stop navigation controller first (safety - stops velocity watchdog)
+    if nav_controller:
+        nav_controller.stop()
+        logger.info("Navigation controller stopped")
     if nav_controller:
         nav_controller.stop()
         logger.info("Navigation controller stopped")
@@ -244,6 +266,23 @@ def run(
         auto_start=enable_video_auto_start
     )
     logger.info(f"Video stream manager initialized (auto_start={enable_video_auto_start})")
+
+    # Initialize servo controller for camera tilt and water shooter
+    global servo_controller_initialized
+    enable_servos = os.environ.get("NOMAD_ENABLE_SERVOS", "true").lower() == "true"
+    if enable_servos and SERVO_AVAILABLE:
+        try:
+            if init_servo_controller():
+                servo_controller_initialized = True
+                logger.info("Servo controller initialized for camera tilt and water shooter")
+            else:
+                logger.warning("Servo controller initialization failed - PWM pins may not be configured")
+        except Exception as e:
+            logger.error(f"Failed to initialize servo controller: {e}")
+    elif not SERVO_AVAILABLE:
+        logger.warning("Servo controller module not available")
+    else:
+        logger.info("Servo controller disabled (set NOMAD_ENABLE_SERVOS=true to enable)")
 
     # Initialize time synchronization service
     def on_time_sync_change(status: TimeSyncStatus) -> None:
