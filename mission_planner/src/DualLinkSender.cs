@@ -416,10 +416,19 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
+                // Use full path to ssh.exe (Windows 10/11 built-in OpenSSH)
+                var sshPath = @"C:\Windows\System32\OpenSSH\ssh.exe";
+                
+                // Check if ssh.exe exists, fallback to PATH
+                if (!System.IO.File.Exists(sshPath))
+                {
+                    sshPath = "ssh"; // Try to find in PATH
+                }
+                
                 var startInfo = new System.Diagnostics.ProcessStartInfo
                 {
-                    FileName = "ssh",
-                    Arguments = $"mad@{_config.EffectiveIP} \"{command}\"",
+                    FileName = sshPath,
+                    Arguments = $"-o BatchMode=yes -o ConnectTimeout=10 mad@{_config.EffectiveIP} \"{command}\"",
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
@@ -453,7 +462,7 @@ namespace NOMAD.MissionPlanner
                     {
                         Success = process.ExitCode == 0,
                         Data = output,
-                        Message = process.ExitCode == 0 ? "SSH command executed" : error
+                        Message = process.ExitCode == 0 ? "SSH command executed" : $"SSH error: {error}"
                     };
                 }
             }
