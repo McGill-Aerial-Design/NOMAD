@@ -2061,77 +2061,77 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 from .ros_mesh_bridge import get_mesh_bridge
                 
                 bridge = get_mesh_bridge()
-            if not bridge or not bridge.is_available():
-                # Return empty mesh with error status
-                return {
-                    "available": False,
-                    "error": "Mesh bridge not initialized or nvblox not running",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "mesh": None,
-                    "drone_position": None,
-                    "drone_attitude": None,
-                }
-            
-            if format == "summary":
-                summary = bridge.get_mesh_summary()
-                if not summary:
+                if not bridge or not bridge.is_available():
+                    # Return empty mesh with error status
+                    return {
+                        "available": False,
+                        "error": "Mesh bridge not initialized or nvblox not running",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "mesh": None,
+                        "drone_position": None,
+                        "drone_attitude": None,
+                    }
+                
+                if format == "summary":
+                    summary = bridge.get_mesh_summary()
+                    if not summary:
+                        return {
+                            "available": True,
+                            "error": "No mesh data available yet",
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }
+                    
+                    # Add drone pose to summary
+                    external_vio = request.app.state.external_vio_state
+                    if external_vio:
+                        summary["drone_position"] = {
+                            "x": external_vio.get("x", 0),
+                            "y": external_vio.get("y", 0),
+                            "z": external_vio.get("z", 0),
+                        }
+                        summary["drone_attitude"] = {
+                            "roll": external_vio.get("roll", 0),
+                            "pitch": external_vio.get("pitch", 0),
+                            "yaw": external_vio.get("yaw", 0),
+                        }
+                    return summary
+                
+                # Full mesh data
+                mesh = bridge.get_latest_mesh()
+                if not mesh:
                     return {
                         "available": True,
                         "error": "No mesh data available yet",
                         "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "mesh": None,
                     }
                 
-                # Add drone pose to summary
+                # Get drone position from VIO
                 external_vio = request.app.state.external_vio_state
+                drone_position = None
+                drone_attitude = None
+                
                 if external_vio:
-                    summary["drone_position"] = {
+                    drone_position = {
                         "x": external_vio.get("x", 0),
                         "y": external_vio.get("y", 0),
                         "z": external_vio.get("z", 0),
                     }
-                    summary["drone_attitude"] = {
+                    drone_attitude = {
                         "roll": external_vio.get("roll", 0),
                         "pitch": external_vio.get("pitch", 0),
                         "yaw": external_vio.get("yaw", 0),
                     }
-                return summary
-            
-            # Full mesh data
-            mesh = bridge.get_latest_mesh()
-            if not mesh:
+                
                 return {
                     "available": True,
-                    "error": "No mesh data available yet",
                     "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "mesh": None,
+                    "mesh": mesh,
+                    "drone_position": drone_position,
+                    "drone_attitude": drone_attitude,
                 }
             
-            # Get drone position from VIO
-            external_vio = request.app.state.external_vio_state
-            drone_position = None
-            drone_attitude = None
-            
-            if external_vio:
-                drone_position = {
-                    "x": external_vio.get("x", 0),
-                    "y": external_vio.get("y", 0),
-                    "z": external_vio.get("z", 0),
-                }
-                drone_attitude = {
-                    "roll": external_vio.get("roll", 0),
-                    "pitch": external_vio.get("pitch", 0),
-                    "yaw": external_vio.get("yaw", 0),
-                }
-            
-            return {
-                "available": True,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "mesh": mesh,
-                "drone_position": drone_position,
-                "drone_attitude": drone_attitude,
-            }
-            
-        except ImportError:
+            except ImportError:
             return {
                 "available": False,
                 "error": "Mesh bridge module not available",
