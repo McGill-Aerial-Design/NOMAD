@@ -41,10 +41,18 @@ from urllib.error import URLError
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped, Twist
 from std_msgs.msg import Float32MultiArray
+
+# Try to import nvblox_msgs for mesh data
+try:
+    from nvblox_msgs.msg import Mesh, MeshBlock
+    NVBLOX_AVAILABLE = True
+except ImportError:
+    NVBLOX_AVAILABLE = False
+    logger.warning("nvblox_msgs not available - mesh bridge disabled")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -88,6 +96,7 @@ class ROSHTTPBridge(Node):
     Bridges:
     - VIO odometry (position feedback)
     - Velocity commands from nav2/nvblox (navigation control)
+    - 3D mesh from nvblox (for Mission Planner 3D visualization)
     """
     
     def __init__(
@@ -96,8 +105,10 @@ class ROSHTTPBridge(Node):
         port: int = 8000,
         vio_topic: str = "/zed/zed_node/odom",  # Default to ZED odom
         cmd_vel_topic: str = "/cmd_vel",         # Nav2 velocity commands
+        mesh_topic: str = "/nvblox_node/mesh",   # Nvblox 3D mesh
         send_rate_hz: float = 30.0,
         enable_nav_control: bool = True,         # Enable velocity command forwarding
+        enable_mesh: bool = True,                # Enable mesh forwarding
     ):
         super().__init__("nomad_ros_http_bridge")
         
@@ -106,12 +117,21 @@ class ROSHTTPBridge(Node):
         self._base_url = f"http://{host}:{port}"
         self._send_interval = 1.0 / send_rate_hz
         self._enable_nav_control = enable_nav_control
+        self._enable_mesh = enable_mesh and NVBLOX_AVAILABLE
         
         # QoS for sensor data
         sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
+        )
+        
+        # QoS for mesh data (transient local to get last published)
+        mesh_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
         
         # Latest data
@@ -124,9 +144,12 @@ class ROSHTTPBridge(Node):
         self._vio_send_count = 0
         self._cmd_vel_recv_count = 0
         self._cmd_vel_send_count = 0
+        self._mesh_recv_count = 0
+        self._mesh_send_count = 0
         self._send_errors = 0
         self._last_send_time = 0.0
         self._last_cmd_vel_send_time = 0.0
+        self._last_mesh_send_time = 0.0
         
         # Subscribe to VIO odometry
         self.create_subscription(
@@ -147,12 +170,26 @@ class ROSHTTPBridge(Node):
             )
             self.get_logger().info(f"Subscribed to cmd_vel: {cmd_vel_topic}")
         
+        # Subscribe to mesh for 3D visualization
+        if self._enable_mesh:
+            self.create_subscription(
+                Mesh,
+                mesh_topic,
+                self._handle_mesh,
+                mesh_qos,
+            )
+            self.get_logger().info(f"Subscribed to mesh: {mesh_topic}")
+        elif enable_mesh and not NVBLOX_AVAILABLE:
+            self.get_logger().warning("Mesh requested but nvblox_msgs not available")
+        
         # Timer to send data to edge_core
         self.create_timer(self._send_interval, self._send_to_edge_core)
         
         self.get_logger().info(f"ROS-HTTP Bridge started -> {self._base_url}")
         if enable_nav_control:
             self.get_logger().info("Navigation control ENABLED - forwarding cmd_vel to Edge Core")
+        if self._enable_mesh:
+            self.get_logger().info("Mesh forwarding ENABLED - forwarding nvblox mesh to Edge Core")
     
     def _handle_vio(self, msg: Odometry) -> None:
         """Handle VIO odometry from Isaac ROS VSLAM."""
@@ -302,6 +339,138 @@ class ROSHTTPBridge(Node):
             self._send_errors += 1
             self.get_logger().error(f"cmd_vel send error: {e}")
     
+    def _handle_mesh(self, msg) -> None:
+        """
+        Handle mesh data from nvblox for 3D visualization.
+        
+        Converts nvblox_msgs/Mesh to simplified JSON and sends to edge_core.
+        """
+        if not self._enable_mesh:
+            return
+        
+        try:
+            # Rate limit mesh updates (max 2 Hz to avoid overwhelming)
+            now = time.time()
+            if now - self._last_mesh_send_time < 0.5:  # 2 Hz max
+                return
+            
+            # Convert mesh to simplified format
+            blocks = []
+            total_vertices = 0
+            total_triangles = 0
+            
+            # Process at most 1000 blocks per update
+            for ros_block in msg.blocks[:1000]:
+                block_data = self._process_mesh_block(ros_block)
+                if block_data:
+                    blocks.append(block_data)
+                    total_vertices += len(block_data.get("vertices", []))
+                    total_triangles += len(block_data.get("triangles", []))
+            
+            if not blocks:
+                return  # Skip empty meshes
+            
+            # Create mesh data payload
+            mesh_data = {
+                "blocks": blocks,
+                "block_size": msg.block_size if hasattr(msg, 'block_size') else 0.2,
+                "total_vertices": total_vertices,
+                "total_triangles": total_triangles,
+                "timestamp": now,
+                "frame_id": msg.header.frame_id if hasattr(msg, 'header') else "map",
+            }
+            
+            self._mesh_recv_count += 1
+            self._send_mesh_to_edge_core(mesh_data)
+            
+        except Exception as e:
+            self.get_logger().error(f"Mesh processing error: {e}")
+    
+    def _process_mesh_block(self, block) -> Optional[dict]:
+        """Convert a ROS mesh block to simplified dict format."""
+        try:
+            # Extract block index
+            if hasattr(block, 'index'):
+                index = [int(block.index.x), int(block.index.y), int(block.index.z)]
+            else:
+                index = [0, 0, 0]
+            
+            # Extract vertices
+            vertices = []
+            if hasattr(block, 'vertices'):
+                for v in block.vertices[:5000]:  # Limit vertices per block
+                    if hasattr(v, 'x'):
+                        vertices.append([float(v.x), float(v.y), float(v.z)])
+            
+            if not vertices:
+                return None
+            
+            # Extract triangles
+            triangles = []
+            if hasattr(block, 'triangles'):
+                tri_indices = list(block.triangles)
+                for i in range(0, len(tri_indices) - 2, 3):
+                    triangles.append([int(tri_indices[i]), int(tri_indices[i+1]), int(tri_indices[i+2])])
+            
+            if not triangles:
+                return None
+            
+            # Extract colors (optional)
+            colors = None
+            if hasattr(block, 'colors') and block.colors:
+                colors = []
+                for c in block.colors[:len(vertices)]:
+                    if hasattr(c, 'r'):
+                        colors.append([int(c.r * 255), int(c.g * 255), int(c.b * 255)])
+            
+            return {
+                "index": index,
+                "vertices": vertices,
+                "triangles": triangles,
+                "colors": colors,
+                "timestamp": time.time(),
+            }
+            
+        except Exception as e:
+            self.get_logger().error(f"Block processing error: {e}")
+            return None
+    
+    def _send_mesh_to_edge_core(self, mesh_data: dict) -> None:
+        """Send mesh data to edge_core via HTTP."""
+        if not self._enable_mesh:
+            return
+        
+        try:
+            url = f"{self._base_url}/api/task/2/slam/mesh/update"
+            data = json.dumps(mesh_data).encode("utf-8")
+            
+            request = Request(
+                url,
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            
+            with urlopen(request, timeout=2.0) as response:  # Longer timeout for mesh data
+                if response.status == 200:
+                    self._mesh_send_count += 1
+                    self._last_mesh_send_time = time.time()
+                    if self._mesh_send_count % 10 == 1:
+                        self.get_logger().info(
+                            f"Mesh sent: {len(mesh_data.get('blocks', []))} blocks, "
+                            f"{mesh_data.get('total_vertices', 0)} vertices"
+                        )
+                else:
+                    self._send_errors += 1
+                    
+        except URLError as e:
+            self._send_errors += 1
+            if self._send_errors % 50 == 1:
+                self.get_logger().warning(f"Failed to send mesh: {e}")
+        except Exception as e:
+            self._send_errors += 1
+            self.get_logger().error(f"Mesh send error: {e}")
+    
     def _quat_to_euler(
         self, x: float, y: float, z: float, w: float
     ) -> tuple[float, float, float]:
@@ -332,8 +501,11 @@ class ROSHTTPBridge(Node):
             "vio_sent": self._vio_send_count,
             "cmd_vel_received": self._cmd_vel_recv_count,
             "cmd_vel_sent": self._cmd_vel_send_count,
+            "mesh_received": self._mesh_recv_count,
+            "mesh_sent": self._mesh_send_count,
             "send_errors": self._send_errors,
             "nav_control_enabled": self._enable_nav_control,
+            "mesh_enabled": self._enable_mesh,
         }
 
 
@@ -345,9 +517,13 @@ def main():
                         help="VIO odometry topic")
     parser.add_argument("--cmd-vel-topic", default="/cmd_vel",
                         help="Navigation velocity command topic")
+    parser.add_argument("--mesh-topic", default="/nvblox_node/mesh",
+                        help="Nvblox mesh topic")
     parser.add_argument("--rate", type=float, default=30.0, help="Send rate Hz")
     parser.add_argument("--disable-nav", action="store_true",
                         help="Disable navigation control (cmd_vel forwarding)")
+    parser.add_argument("--disable-mesh", action="store_true",
+                        help="Disable mesh forwarding for 3D visualization")
     args = parser.parse_args()
     
     rclpy.init()
@@ -357,8 +533,10 @@ def main():
         port=args.port,
         vio_topic=args.vio_topic,
         cmd_vel_topic=args.cmd_vel_topic,
+        mesh_topic=args.mesh_topic,
         send_rate_hz=args.rate,
         enable_nav_control=not args.disable_nav,
+        enable_mesh=not args.disable_mesh,
     )
     
     try:

@@ -1964,14 +1964,50 @@ def create_app(state_manager: StateManager) -> FastAPI:
 
     # ==================== SLAM 3D Mesh Endpoints ====================
     # These endpoints stream nvblox 3D mesh data for Mission Planner visualization
+    # Mesh data is received from ros_http_bridge running inside the Isaac ROS container
+    
+    @app.post("/api/task/2/slam/mesh/update", tags=["Task 2", "SLAM"])
+    async def update_slam_mesh(request: Request):
+        """
+        Receive mesh update from ros_http_bridge (internal use).
+        
+        This endpoint receives mesh data from the ros_http_bridge running
+        inside the Isaac ROS container. The mesh data is stored and served
+        to Mission Planner via the GET /api/task/2/slam/mesh endpoint.
+        
+        Posted by: ros_http_bridge.py (inside Isaac ROS container)
+        """
+        try:
+            mesh_data = await request.json()
+            
+            # Store in app state
+            if not hasattr(request.app.state, 'slam_mesh_data'):
+                request.app.state.slam_mesh_data = {}
+            
+            request.app.state.slam_mesh_data = {
+                "mesh": mesh_data,
+                "received_at": datetime.now(timezone.utc).isoformat(),
+                "block_count": len(mesh_data.get("blocks", [])),
+                "total_vertices": mesh_data.get("total_vertices", 0),
+                "total_triangles": mesh_data.get("total_triangles", 0),
+            }
+            
+            return {"status": "ok", "blocks_received": len(mesh_data.get("blocks", []))}
+            
+        except Exception as e:
+            logger.error(f"SLAM mesh update error: {e}")
+            raise HTTPException(status_code=400, detail=str(e))
 
     @app.get("/api/task/2/slam/mesh", tags=["Task 2", "SLAM"])
     async def get_slam_mesh(request: Request, format: str = Query("full", description="'full' or 'summary'")):
         """
         Get current 3D SLAM mesh from nvblox.
         
-        This endpoint streams the real-time 3D occupancy map built by nvblox
+        This endpoint returns the real-time 3D occupancy map built by nvblox
         from ZED camera depth data. Used by Mission Planner for 3D visualization.
+        
+        Mesh data is received from ros_http_bridge running inside the Isaac ROS
+        container via POST /api/task/2/slam/mesh/update.
         
         Args:
             format: 'full' for complete mesh data, 'summary' for metadata only
@@ -1982,12 +2018,49 @@ def create_app(state_manager: StateManager) -> FastAPI:
             - drone_attitude: Current VIO orientation (roll, pitch, yaw)
             - timestamp: ISO format timestamp
             
-        Update Rate: Target 10 Hz for smooth visualization
+        Update Rate: Target 2 Hz for streaming
         """
         try:
-            from .ros_mesh_bridge import get_mesh_bridge
+            # Check for stored mesh data from ros_http_bridge
+            if hasattr(request.app.state, 'slam_mesh_data') and request.app.state.slam_mesh_data:
+                stored = request.app.state.slam_mesh_data
+                
+                if format == "summary":
+                    result = {
+                        "available": True,
+                        "timestamp": stored.get("received_at"),
+                        "block_count": stored.get("block_count", 0),
+                        "total_vertices": stored.get("total_vertices", 0),
+                        "total_triangles": stored.get("total_triangles", 0),
+                    }
+                else:
+                    result = {
+                        "available": True,
+                        "timestamp": stored.get("received_at"),
+                        "mesh": stored.get("mesh"),
+                    }
+                
+                # Add drone pose
+                external_vio = request.app.state.external_vio_state
+                if external_vio:
+                    result["drone_position"] = {
+                        "x": external_vio.get("x", 0),
+                        "y": external_vio.get("y", 0),
+                        "z": external_vio.get("z", 0),
+                    }
+                    result["drone_attitude"] = {
+                        "roll": external_vio.get("roll", 0),
+                        "pitch": external_vio.get("pitch", 0),
+                        "yaw": external_vio.get("yaw", 0),
+                    }
+                
+                return result
             
-            bridge = get_mesh_bridge()
+            # Fallback: try ros_mesh_bridge (for when running natively with ROS2)
+            try:
+                from .ros_mesh_bridge import get_mesh_bridge
+                
+                bridge = get_mesh_bridge()
             if not bridge or not bridge.is_available():
                 # Return empty mesh with error status
                 return {
@@ -2127,12 +2200,26 @@ def create_app(state_manager: StateManager) -> FastAPI:
             return {"available": False, "error": str(e)}
 
     @app.get("/api/task/2/slam/status", tags=["Task 2", "SLAM"])
-    async def get_slam_status():
+    async def get_slam_status(request: Request):
         """
         Get nvblox SLAM system status.
         
         Returns status information about the 3D mapping pipeline.
         """
+        # Check for stored mesh data from ros_http_bridge first
+        if hasattr(request.app.state, 'slam_mesh_data') and request.app.state.slam_mesh_data:
+            stored = request.app.state.slam_mesh_data
+            return {
+                "available": True,
+                "running": True,
+                "source": "ros_http_bridge",
+                "block_count": stored.get("block_count", 0),
+                "total_vertices": stored.get("total_vertices", 0),
+                "total_triangles": stored.get("total_triangles", 0),
+                "last_update": stored.get("received_at"),
+            }
+        
+        # Fallback: try ros_mesh_bridge
         try:
             from .ros_mesh_bridge import get_mesh_bridge
             
@@ -2141,20 +2228,21 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 return {
                     "available": False,
                     "running": False,
-                    "error": "Mesh bridge not initialized",
+                    "error": "No mesh data available - nvblox may not be running",
                 }
             
             status = bridge.get_status()
             return {
                 "available": bridge.is_available(),
                 "running": bridge.is_running(),
+                "source": "ros_mesh_bridge",
                 **status,
             }
         except ImportError:
             return {
                 "available": False,
                 "running": False,
-                "error": "Mesh bridge module not available",
+                "error": "No mesh data available",
             }
         except Exception as e:
             return {
@@ -2164,28 +2252,32 @@ def create_app(state_manager: StateManager) -> FastAPI:
             }
 
     @app.post("/api/task/2/slam/clear", tags=["Task 2", "SLAM"])
-    async def clear_slam_mesh():
+    async def clear_slam_mesh(request: Request):
         """
         Clear the current SLAM mesh.
         
         This clears the cached mesh data. Note: This does NOT clear the
         nvblox map itself - use the nvblox reset service for that.
         """
+        # Clear stored mesh data
+        if hasattr(request.app.state, 'slam_mesh_data'):
+            request.app.state.slam_mesh_data = None
+        
+        # Also try to clear ros_mesh_bridge if available
         try:
             from .ros_mesh_bridge import get_mesh_bridge
             
             bridge = get_mesh_bridge()
-            if not bridge:
-                return {"success": False, "error": "Mesh bridge not initialized"}
-            
-            bridge.clear_mesh()
-            return {
-                "success": True,
-                "message": "Mesh cache cleared",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+            if bridge:
+                bridge.clear_mesh()
+        except:
+            pass
+        
+        return {
+            "success": True,
+            "message": "Mesh cache cleared",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
 
     # ==================== Admin Endpoints ====================
 
