@@ -211,91 +211,131 @@ class GPIOOutput:
     """
     Controls a simple GPIO output pin for on/off control.
     
-    Uses Jetson.GPIO library for GPIO control.
-    Falls back to sysfs if Jetson.GPIO is not available.
+    Uses libgpiod (gpiod) library for GPIO control on Jetson Orin Nano.
+    Jetson Orin Nano uses gpiochip interface instead of legacy sysfs.
+    
+    Physical pin to gpiochip/line mapping for Jetson Orin Nano:
+    - Pin 18 (J40 header) = gpiochip0 line 50 (PQ.05)
+    - Pin 12 = gpiochip0 line 79 (PR.04)
     """
+    
+    # Mapping of physical pins to (gpiochip, line) for Jetson Orin Nano
+    PIN_MAP = {
+        18: (0, 50),   # Physical pin 18 -> gpiochip0, line 50
+        12: (0, 79),   # Physical pin 12 -> gpiochip0, line 79
+        32: (0, 168),  # Physical pin 32 -> gpiochip0, line 168
+        33: (0, 169),  # Physical pin 33 -> gpiochip0, line 169
+    }
     
     def __init__(self, config: GPIOConfig):
         self.config = config
         self._enabled = False
         self._active = False
         self._gpio_available = False
-        self._gpio = None
+        self._chip = None
+        self._line = None
         
     def initialize(self) -> bool:
         """
-        Initialize the GPIO pin.
+        Initialize the GPIO pin using libgpiod.
         
         Returns True if successful, False otherwise.
         """
         try:
-            # Try to import Jetson.GPIO
-            try:
-                import Jetson.GPIO as GPIO
-                self._gpio = GPIO
-                
-                # Set BOARD mode (physical pin numbers)
-                GPIO.setmode(GPIO.BOARD)
-                GPIO.setwarnings(False)
-                
-                # Setup pin as output, initially OFF
-                initial_state = GPIO.LOW if self.config.active_high else GPIO.HIGH
-                GPIO.setup(self.config.pin, GPIO.OUT, initial=initial_state)
-                
-                self._gpio_available = True
-                logger.info(f"GPIO {self.config.name} initialized on pin {self.config.pin} (Jetson.GPIO)")
-                return True
-                
-            except ImportError:
-                logger.warning(f"Jetson.GPIO not available, using sysfs fallback for {self.config.name}")
-                return self._init_sysfs()
-                
+            import gpiod
+            
+            # Get chip and line number from pin map
+            pin_info = self.PIN_MAP.get(self.config.pin)
+            if pin_info is None:
+                logger.error(f"Unknown physical pin {self.config.pin} - not in PIN_MAP")
+                return False
+            
+            chip_num, line_num = pin_info
+            
+            # Open gpiochip
+            self._chip = gpiod.Chip(f"/dev/gpiochip{chip_num}")
+            
+            # Get the line
+            self._line = self._chip.get_line(line_num)
+            
+            # Request the line as output
+            config_flags = gpiod.LINE_REQ_DIR_OUT
+            initial_value = 0 if self.config.active_high else 1  # Start inactive
+            
+            self._line.request(
+                consumer=f"nomad_{self.config.name}",
+                type=config_flags,
+                default_val=initial_value
+            )
+            
+            self._gpio_available = True
+            logger.info(f"GPIO {self.config.name} initialized: chip{chip_num}/line{line_num} (gpiod)")
+            return True
+            
+        except ImportError:
+            logger.warning(f"gpiod not available, trying subprocess fallback")
+            return self._init_gpioset_fallback()
+            
         except Exception as e:
             logger.error(f"Failed to initialize GPIO {self.config.name}: {e}")
-            return False
+            return self._init_gpioset_fallback()
     
-    def _init_sysfs(self) -> bool:
-        """Initialize GPIO using sysfs interface (fallback)."""
+    def _init_gpioset_fallback(self) -> bool:
+        """
+        Initialize GPIO using gpioset command (fallback when gpiod module not available).
+        """
         try:
-            import os
+            import subprocess
             
-            # Map physical pin to GPIO number (Jetson Orin Nano specific)
-            # Pin 18 = GPIO 50 on Jetson Orin Nano
-            pin_to_gpio = {
-                18: 50,  # Physical pin 18 -> GPIO 50
-                12: 79,  # Physical pin 12 -> GPIO 79
-            }
-            
-            gpio_num = pin_to_gpio.get(self.config.pin)
-            if gpio_num is None:
+            pin_info = self.PIN_MAP.get(self.config.pin)
+            if pin_info is None:
                 logger.error(f"Unknown physical pin {self.config.pin}")
                 return False
             
-            self._gpio_num = gpio_num
-            gpio_path = f"/sys/class/gpio/gpio{gpio_num}"
+            self._chip_num, self._line_num = pin_info
             
-            # Export GPIO if not already exported
-            if not os.path.exists(gpio_path):
-                with open("/sys/class/gpio/export", 'w') as f:
-                    f.write(str(gpio_num))
-                time.sleep(0.1)
+            # Test that gpioset is available
+            result = subprocess.run(
+                ["which", "gpioset"],
+                capture_output=True,
+                text=True
+            )
             
-            # Set direction to output
-            with open(f"{gpio_path}/direction", 'w') as f:
-                f.write("out")
+            if result.returncode != 0:
+                logger.error("gpioset command not found")
+                return False
             
-            # Set initial value (off)
-            initial_value = "0" if self.config.active_high else "1"
-            with open(f"{gpio_path}/value", 'w') as f:
-                f.write(initial_value)
-            
+            self._use_subprocess = True
             self._gpio_available = True
-            self._use_sysfs = True
-            logger.info(f"GPIO {self.config.name} initialized on pin {self.config.pin} (sysfs)")
+            
+            # Set initial state (inactive)
+            initial_value = 0 if self.config.active_high else 1
+            self._run_gpioset(initial_value)
+            
+            logger.info(f"GPIO {self.config.name} initialized: chip{self._chip_num}/line{self._line_num} (gpioset)")
             return True
             
         except Exception as e:
-            logger.error(f"Failed to initialize GPIO {self.config.name} via sysfs: {e}")
+            logger.error(f"Failed to initialize GPIO via gpioset: {e}")
+            return False
+    
+    def _run_gpioset(self, value: int) -> bool:
+        """Run gpioset command to set GPIO value."""
+        import subprocess
+        try:
+            # gpioset sets the line and holds it - we need to use -m time to not block
+            # Actually, for a pump, we want to set and hold, so we'll use a different approach
+            cmd = ["gpioset", f"gpiochip{self._chip_num}", f"{self._line_num}={value}"]
+            
+            # Run in background mode
+            subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            return True
+        except Exception as e:
+            logger.error(f"gpioset failed: {e}")
             return False
     
     def set_output(self, active: bool) -> bool:
@@ -312,17 +352,24 @@ class GPIOOutput:
             return False
         
         try:
-            if hasattr(self, '_use_sysfs') and self._use_sysfs:
-                # sysfs method
-                value = "1" if (active == self.config.active_high) else "0"
-                with open(f"/sys/class/gpio/gpio{self._gpio_num}/value", 'w') as f:
-                    f.write(value)
+            # Determine value based on active_high setting
+            value = 1 if (active == self.config.active_high) else 0
+            
+            if hasattr(self, '_use_subprocess') and self._use_subprocess:
+                # Kill any existing gpioset processes for this line
+                import subprocess
+                subprocess.run(
+                    ["pkill", "-f", f"gpioset.*{self._line_num}="],
+                    capture_output=True
+                )
+                time.sleep(0.05)
+                self._run_gpioset(value)
             else:
-                # Jetson.GPIO method
-                state = self._gpio.HIGH if (active == self.config.active_high) else self._gpio.LOW
-                self._gpio.output(self.config.pin, state)
+                # Use gpiod library
+                self._line.set_value(value)
             
             self._active = active
+            logger.debug(f"GPIO {self.config.name} set to {'ON' if active else 'OFF'}")
             return True
             
         except Exception as e:
@@ -352,8 +399,10 @@ class GPIOOutput:
         """Cleanup GPIO resources."""
         try:
             self.set_output(False)
-            if self._gpio and not hasattr(self, '_use_sysfs'):
-                self._gpio.cleanup(self.config.pin)
+            if self._line is not None:
+                self._line.release()
+            if self._chip is not None:
+                self._chip.close()
         except Exception as e:
             logger.warning(f"GPIO cleanup warning: {e}")
 
