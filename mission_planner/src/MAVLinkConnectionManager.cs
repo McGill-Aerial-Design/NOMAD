@@ -353,6 +353,14 @@ namespace NOMAD.MissionPlanner
             if (_monitorTask != null && !_monitorTask.IsCompleted)
                 return;
 
+            // Initialize active link to preferred link on startup
+            if (_activeLink == LinkType.None && _config.PreferredLink != LinkType.None)
+            {
+                _activeLink = _config.PreferredLink;
+                Console.WriteLine($"NOMAD: Initial active link set to {_activeLink}");
+                ActiveLinkChanged?.Invoke(this, _activeLink);
+            }
+
             _monitorCts = new CancellationTokenSource();
             _monitorTask = Task.Run(() => MonitorLoop(_monitorCts.Token));
         }
