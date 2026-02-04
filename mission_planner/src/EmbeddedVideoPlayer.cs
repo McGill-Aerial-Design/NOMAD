@@ -1,1404 +1,590 @@
 extern alias MPDrawing;
 
 // ============================================================
-// NOMAD Embedded Video Player Control
+// NOMAD Embedded Video Player - GStreamer Implementation
 // ============================================================
-// Provides in-app RTSP video streaming for Mission Planner
-// using the built-in GStreamer pipeline (same core as OSD video).
-//
-// NOTE: This class uses .NET Reflection to access internal Mission Planner fields
-// (specifically the gstreamer pipeline and native bitmap conversion). If Mission Planner
-// updates break these reflection points, the embedded player will show a graceful error
-// message and fallback to external VLC/FFplay options instead of crashing. Video display
-// will be disabled but the plugin will remain functional. See error logs for details.
+// Uses Mission Planner's built-in GStreamer for RTSP/UDP video streaming.
+// Features: Topic switching via API, fullscreen mode, latency control.
+// Falls back to external VLC/FFplay if GStreamer is unavailable.
 // ============================================================
 
 using System;
+using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.IO;
-using System.Threading.Tasks;
+using System.Net.Http;
 using System.Windows.Forms;
 using MissionPlanner.Utilities;
+using Newtonsoft.Json.Linq;
 using MPBitmap = MPDrawing::System.Drawing.Bitmap;
 
 namespace NOMAD.MissionPlanner
 {
     /// <summary>
-    /// Embedded video player for RTSP streams within Mission Planner.
-    /// Uses Mission Planner's GStreamer wrapper for native video playback.
-    /// Falls back to external player only if GStreamer is not available.
+    /// Embedded video player using Mission Planner's GStreamer wrapper.
     /// </summary>
     public class EmbeddedVideoPlayer : UserControl
     {
-        // ============================================================
-        // Fields
-        // ============================================================
-        
-        private string _streamTitle;
-        private string _streamUrl;       // RTSP URL for stereo stream
+        private string _streamUrl;
+        private string _apiBaseUrl;
+        private int _latencyMs = 100;
         private bool _isPlaying;
-        private bool _useGStreamer;
         
-        // UI Controls
-        private Panel _videoPanel;
-        private Panel _controlPanel;
-        private Label _lblTitle;
-        private Label _lblStatus;
-        private Button _btnPlayStop;
-        private Button _btnFullscreen;
-        private Button _btnExternal;
-        private Button _btnSnapshot;
-        private ComboBox _cmbCameraView;  // Camera view selector
-        private TrackBar _trkLatency;
-        private Label _lblLatency;
-        
-        // GStreamer (Mission Planner built-in)
         private GStreamer _gst;
         private PictureBox _videoBox;
+        private Label _lblStatus;
+        private TrackBar _trkLatency;
+        private Label _lblLatencyValue;
+        private ComboBox _cmbTopic;
         private Form _fullscreenForm;
         private PictureBox _fullscreenBox;
         private MPBitmap _lastFrame;
-        private string _embeddedInitErrorMessage = null;
-        
-        // SAFETY: Synchronization for thread-safe stream switching
-        private readonly object _streamLock = new object();
-        private volatile bool _isStreamSwitching = false;
-        private volatile bool _disposed = false;
-        
-        // Connection safety
-        private JetsonConnectionManager _jetsonConnectionManager;
-        private bool _jetsonConnected = true;  // Default true if no manager provided
-        
-        // Playback settings - ultra-low latency defaults
-        private int _networkCaching = 50; // ms - minimum for stable playback
-        private string _quality = "auto";
-        private string _selectedStream = "zed";  // Current selected stream name
-        private bool _showControls = true;    // Whether to show control bar and title
-        
-        // Stream configuration - Isaac ROS H.264 Architecture
-        // RTSP URL stays constant (rtsp://ip:8554/primary), content is switched via API
-        // Only ONE stream supported with dynamic topic switching
-        private string _baseRtspUrl;  // Base URL without stream path (e.g., rtsp://ip:8554)
-        private string _apiBaseUrl;   // Edge Core API URL (e.g., http://ip:8000)
-        private System.Collections.Generic.List<(string FullName, string DisplayName)> _availableTopics;
-        private Button _btnRefreshTopics;
-        private ComboBox _cmbTopicSelect;  // Topic selector for ZED camera views
-        
-        // ============================================================
-        // Constructor
-        // ============================================================
+        private List<(string Name, string Display)> _topics = new List<(string, string)>();
         
         /// <summary>
         /// Creates an embedded video player.
         /// </summary>
-        /// <param name="title">Title to display</param>
-        /// <param name="rtspUrl">RTSP stream URL (e.g., rtsp://ip:8554/primary)</param>
-        /// <param name="showControls">Whether to show control bar and title (false for minimal view)</param>
-        /// <param name="jetsonConnectionManager">Connection manager for safety-aware behavior</param>
-        public EmbeddedVideoPlayer(string title, string rtspUrl, bool showControls = true, JetsonConnectionManager jetsonConnectionManager = null)
+        public EmbeddedVideoPlayer(string title, string streamUrl, bool showControls = true, JetsonConnectionManager jetsonConnectionManager = null)
         {
-            _streamTitle = title;
-            _streamUrl = rtspUrl;  // Full stream URL (e.g., rtsp://ip:8554/primary)
-            _isPlaying = false;
-            _showControls = showControls;
-            _useGStreamer = CheckGStreamerAvailable();
-            _jetsonConnectionManager = jetsonConnectionManager;
-            
-            // Subscribe to connection state if manager provided
-            if (_jetsonConnectionManager != null)
-            {
-                _jetsonConnected = _jetsonConnectionManager.IsConnected;
-                _jetsonConnectionManager.ConnectionStateChanged += OnJetsonConnectionStateChanged;
-            }
-            
-            // Parse base URL from rtspUrl
-            ParseStreamUrl(rtspUrl);
-            
-            // Initialize with default topics (will be refreshed from API)
-            _availableTopics = new System.Collections.Generic.List<(string, string)>
-            {
-                ("/zed/zed_node/rgb/image_rect_color", "zed: rgb/image_rect_color"),
-            };
-            
+            _streamUrl = streamUrl;
+            ParseApiUrl(streamUrl);
             InitializeUI();
             
-            // Auto-start streaming when control is loaded
-            this.Load += (s, e) => {
-                if (_useGStreamer)
+            // Auto-fetch topics when control is loaded
+            this.HandleCreated += async (s, e) =>
+            {
+                // Only auto-fetch if no topics exist
+                if (_topics.Count == 0)
                 {
-                    StartStream();
+                    await RefreshTopicsAsync(autoSelectRgb: true);
                 }
             };
         }
         
-        /// <summary>
-        /// Parses the RTSP URL to extract base URL.
-        /// In Isaac ROS H.264 architecture, stream URL is always /primary.
-        /// </summary>
-        private void ParseStreamUrl(string rtspUrl)
+        private void ParseApiUrl(string rtspUrl)
         {
             try
             {
                 var uri = new Uri(rtspUrl);
-                _baseRtspUrl = $"{uri.Scheme}://{uri.Host}:{uri.Port}";
-                _apiBaseUrl = $"http://{uri.Host}:8000";  // Edge Core API
+                _apiBaseUrl = $"http://{uri.Host}:8000";
             }
             catch
             {
-                _baseRtspUrl = "rtsp://100.75.218.89:8554";
                 _apiBaseUrl = "http://100.75.218.89:8000";
             }
-            
-            // Always use constant stream URL (/primary)
-            // Topic/content is controlled via API, not by changing URL
-            _streamUrl = $"{_baseRtspUrl}/primary";
-            _selectedStream = "primary";
         }
-        
-        /// <summary>
-        /// Handles Jetson connection state changes.
-        /// </summary>
-        private void OnJetsonConnectionStateChanged(object sender, JetsonConnectionStateChangedEventArgs e)
-        {
-            _jetsonConnected = e.NewState == JetsonConnectionState.Connected;
-            
-            if (!_jetsonConnected)
-            {
-                // Stop stream when Jetson disconnects
-                if (InvokeRequired)
-                    BeginInvoke(new Action(() => {
-                        StopStream();
-                        UpdateStatus("Stream stopped - Jetson offline", Color.Orange);
-                    }));
-                else
-                {
-                    StopStream();
-                    UpdateStatus("Stream stopped - Jetson offline", Color.Orange);
-                }
-            }
-            else
-            {
-                // Update status when connected
-                if (InvokeRequired)
-                    BeginInvoke(new Action(() => UpdateStatus("Jetson connected - ready", Color.Gray)));
-                else
-                    UpdateStatus("Jetson connected - ready", Color.Gray);
-            }
-        }
-        
-        // ============================================================
-        // GStreamer Availability Check
-        // ============================================================
-        
-        private bool CheckGStreamerAvailable()
-        {
-            try
-            {
-                var gstPath = GStreamer.LookForGstreamer();
-                if (string.IsNullOrWhiteSpace(gstPath) || !GStreamer.GstLaunchExists)
-                {
-                    _embeddedInitErrorMessage = "GStreamer runtime not found. Install Mission Planner GStreamer support or run its GStreamer downloader.";
-                    System.Diagnostics.Debug.WriteLine("NOMAD: GStreamer not available");
-                    return false;
-                }
-
-                System.Diagnostics.Debug.WriteLine("NOMAD: GStreamer is available");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                _embeddedInitErrorMessage = ex.Message;
-                System.Diagnostics.Debug.WriteLine($"NOMAD: GStreamer check failed - {ex}");
-            }
-            
-            return false;
-        }
-        
-        // ============================================================
-        // UI Initialization
-        // ============================================================
         
         private void InitializeUI()
         {
-            this.BackColor = Color.FromArgb(30, 30, 30);
-            this.Dock = DockStyle.Fill;
-            this.Padding = new Padding(_showControls ? 5 : 0);
+            BackColor = Color.Black;
+            Dock = DockStyle.Fill;
             
-            // If showControls is false, create minimal UI (just the video)
-            if (!_showControls)
-            {
-                InitializeMinimalUI();
-                return;
-            }
-            
-            var mainPanel = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 3,
-                BackColor = Color.Transparent,
-            };
-            
-            mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
-            mainPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            mainPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 80));
-            
-            // Title Bar
-            var titlePanel = CreateTitleBar();
-            mainPanel.Controls.Add(titlePanel, 0, 0);
-            
-            // Video Display Area
-            _videoPanel = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = Color.Black,
-                Margin = new Padding(0),
-            };
-            
+            // Video display
             _videoBox = new PictureBox
             {
                 Dock = DockStyle.Fill,
                 BackColor = Color.Black,
                 SizeMode = PictureBoxSizeMode.Zoom,
             };
-
-            if (_useGStreamer)
-            {
-                _videoPanel.Controls.Add(_videoBox);
-            }
-            else
-            {
-                var placeholder = new Label
-                {
-                    Text = "[VIDEO] ZED Camera Feed\n\nClick Play to start stream\n\n" +
-                           "NOTE: Close OSD video first (right-click HUD > Video > Stop)",
-                    Dock = DockStyle.Fill,
-                    ForeColor = Color.Gray,
-                    Font = new Font("Segoe UI", 11),
-                    TextAlign = ContentAlignment.MiddleCenter,
-                };
-                _videoPanel.Controls.Add(placeholder);
-
-                if (!string.IsNullOrEmpty(_embeddedInitErrorMessage))
-                {
-                    var info = new Label
-                    {
-                        Text = "Embedded player unavailable: " + _embeddedInitErrorMessage,
-                        Dock = DockStyle.Bottom,
-                        ForeColor = Color.Orange,
-                        Font = new Font("Segoe UI", 8),
-                        Height = 32,
-                        TextAlign = ContentAlignment.MiddleLeft,
-                    };
-                    mainPanel.Controls.Add(info, 0, 2);
-                }
-            }
+            _videoBox.DoubleClick += (s, e) => ToggleFullscreen();
             
-            mainPanel.Controls.Add(_videoPanel, 0, 1);
-            
-            // Control Bar
-            _controlPanel = CreateControlBar();
-            mainPanel.Controls.Add(_controlPanel, 0, 2);
-            
-            this.Controls.Add(mainPanel);
-        }
-        
-        /// <summary>
-        /// Creates minimal UI with just the video display - no title, no controls.
-        /// </summary>
-        private void InitializeMinimalUI()
-        {
-            this.BackColor = Color.Black;
-            this.Padding = new Padding(0);
-            
-            _videoPanel = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = Color.Black,
-                Margin = new Padding(0),
-            };
-            
-            _videoBox = new PictureBox
-            {
-                Dock = DockStyle.Fill,
-                BackColor = Color.Black,
-                SizeMode = PictureBoxSizeMode.Zoom,
-            };
-
-            if (_useGStreamer)
-            {
-                _videoPanel.Controls.Add(_videoBox);
-            }
-            else
-            {
-                var placeholder = new Label
-                {
-                    Text = "Video",
-                    Dock = DockStyle.Fill,
-                    ForeColor = Color.Gray,
-                    Font = new Font("Segoe UI", 10),
-                    TextAlign = ContentAlignment.MiddleCenter,
-                    BackColor = Color.Black,
-                };
-                _videoPanel.Controls.Add(placeholder);
-            }
-            
-            this.Controls.Add(_videoPanel);
-        }
-        
-        private Panel CreateTitleBar()
-        {
-            var panel = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = Color.FromArgb(45, 45, 48),
-            };
-            
-            _lblTitle = new Label
-            {
-                Text = $"[VID] {_streamTitle}",
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                ForeColor = Color.White,
-                Location = new Point(10, 5),
-                AutoSize = true,
-            };
-            panel.Controls.Add(_lblTitle);
-            
+            // Status bar
             _lblStatus = new Label
             {
-                Text = "[*] Stopped",
-                Font = new Font("Segoe UI", 9),
+                Text = TryInitializeGStreamer() ? "Ready - Click Play" : "GStreamer not found",
+                Dock = DockStyle.Bottom,
+                Height = 22,
                 ForeColor = Color.Gray,
-                Location = new Point(200, 7),
-                AutoSize = true,
-            };
-            panel.Controls.Add(_lblStatus);
-            
-            return panel;
-        }
-        
-        private Panel CreateControlBar()
-        {
-            var panel = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = Color.FromArgb(40, 40, 43),
-                Padding = new Padding(10, 5, 10, 5),
-            };
-            
-            // Play/Stop Button
-            _btnPlayStop = new Button
-            {
-                Text = "Play",
-                Location = new Point(10, 10),
-                Size = new Size(60, 30),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(60, 120, 60),
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-            };
-            _btnPlayStop.Click += (s, e) => TogglePlayStop();
-            panel.Controls.Add(_btnPlayStop);
-            
-            // Snapshot Button
-            _btnSnapshot = new Button
-            {
-                Text = "Snap",
-                Location = new Point(75, 10),
-                Size = new Size(55, 30),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(100, 100, 150),
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 9),
-            };
-            _btnSnapshot.Click += (s, e) => TakeSnapshot();
-            panel.Controls.Add(_btnSnapshot);
-            
-            // External Button
-            _btnExternal = new Button
-            {
-                Text = "VLC",
-                Location = new Point(135, 10),
-                Size = new Size(50, 30),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(80, 80, 85),
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 9),
-            };
-            _btnExternal.Click += (s, e) => OpenExternal();
-            panel.Controls.Add(_btnExternal);
-            
-            // Fullscreen Button
-            _btnFullscreen = new Button
-            {
-                Text = "[+] Full",
-                Location = new Point(185, 10),
-                Size = new Size(65, 30),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(80, 80, 85),
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 9),
-            };
-            _btnFullscreen.Click += (s, e) => ToggleFullscreen();
-            panel.Controls.Add(_btnFullscreen);
-            
-            // Latency Slider
-            var lblLatencyTitle = new Label
-            {
-                Text = "Latency:",
-                Location = new Point(10, 48),
-                ForeColor = Color.Gray,
+                BackColor = Color.FromArgb(30, 30, 30),
+                TextAlign = ContentAlignment.MiddleCenter,
                 Font = new Font("Segoe UI", 8),
-                AutoSize = true,
             };
-            panel.Controls.Add(lblLatencyTitle);
             
+            // Control panel
+            var ctrlPanel = new Panel
+            {
+                Dock = DockStyle.Top,
+                Height = 60,
+                BackColor = Color.FromArgb(35, 35, 38),
+                Padding = new Padding(5),
+            };
+            
+            // Row 1: Buttons
+            var btnPlay = CreateButton("Play", 10, 5, 55, Color.FromArgb(60, 120, 60));
+            var btnStop = CreateButton("Stop", 70, 5, 55, Color.FromArgb(120, 60, 60));
+            var btnFull = CreateButton("Full", 130, 5, 50, Color.FromArgb(70, 70, 75));
+            var btnVLC = CreateButton("VLC", 185, 5, 45, Color.FromArgb(70, 70, 75));
+            var btnSnap = CreateButton("Snap", 235, 5, 50, Color.FromArgb(80, 80, 120));
+            
+            btnPlay.Click += (s, e) => StartStream();
+            btnStop.Click += (s, e) => StopStream();
+            btnFull.Click += (s, e) => ToggleFullscreen();
+            btnVLC.Click += (s, e) => OpenExternal();
+            btnSnap.Click += (s, e) => TakeSnapshot();
+            
+            // Topic selector
+            var lblTopic = new Label { Text = "Topic:", Location = new Point(295, 8), ForeColor = Color.Cyan, AutoSize = true, Font = new Font("Segoe UI", 8) };
+            _cmbTopic = new ComboBox
+            {
+                Location = new Point(340, 5),
+                Size = new Size(160, 22),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                BackColor = Color.FromArgb(45, 45, 48),
+                ForeColor = Color.White,
+            };
+            _cmbTopic.SelectedIndexChanged += async (s, e) => await SwitchTopicAsync();
+            
+            var btnRefresh = CreateButton("...", 505, 5, 30, Color.FromArgb(60, 60, 65));
+            btnRefresh.Click += async (s, e) => await RefreshTopicsAsync(autoSelectRgb: false);
+            
+            // Row 2: Latency slider
+            var lblLat = new Label { Text = "Latency:", Location = new Point(10, 33), ForeColor = Color.Gray, AutoSize = true, Font = new Font("Segoe UI", 8) };
             _trkLatency = new TrackBar
             {
-                Location = new Point(60, 43),
-                Size = new Size(150, 30),
-                Minimum = 50,
-                Maximum = 1000,
-                Value = _networkCaching,
-                TickFrequency = 100,
-                SmallChange = 50,
-                LargeChange = 100,
+                Location = new Point(65, 30),
+                Size = new Size(180, 25),
+                Minimum = 20,
+                Maximum = 500,
+                Value = _latencyMs,
+                TickFrequency = 50,
             };
+            
+            // Debounce timer to restart stream only after user stops sliding
+            System.Windows.Forms.Timer debounceTimer = null;
             _trkLatency.ValueChanged += (s, e) =>
             {
-                _networkCaching = _trkLatency.Value;
-                _lblLatency.Text = $"{_networkCaching}ms";
+                _latencyMs = _trkLatency.Value;
+                _lblLatencyValue.Text = $"{_latencyMs}ms";
+                
+                // Debounce: restart stream 500ms after user stops adjusting
+                if (debounceTimer != null)
+                {
+                    debounceTimer.Stop();
+                    debounceTimer.Dispose();
+                }
+                debounceTimer = new System.Windows.Forms.Timer { Interval = 500 };
+                debounceTimer.Tick += async (ts, te) =>
+                {
+                    debounceTimer.Stop();
+                    debounceTimer.Dispose();
+                    debounceTimer = null;
+                    
+                    // Restart stream with new latency (with delay between stop/start)
+                    if (_isPlaying)
+                    {
+                        StopStream();
+                        // Give GStreamer 200ms to fully release resources before restart
+                        await System.Threading.Tasks.Task.Delay(200);
+                        StartStream();
+                        _lblStatus.Text = $"Latency: {_latencyMs}ms";
+                        _lblStatus.ForeColor = Color.Cyan;
+                    }
+                };
+                debounceTimer.Start();
             };
-            panel.Controls.Add(_trkLatency);
+            _lblLatencyValue = new Label { Text = $"{_latencyMs}ms", Location = new Point(250, 33), ForeColor = Color.LightGray, AutoSize = true, Font = new Font("Segoe UI", 8) };
             
-            _lblLatency = new Label
-            {
-                Text = $"{_networkCaching}ms",
-                Location = new Point(215, 48),
-                ForeColor = Color.LightGray,
-                Font = new Font("Segoe UI", 8),
-                AutoSize = true,
-            };
-            panel.Controls.Add(_lblLatency);
+            ctrlPanel.Controls.AddRange(new Control[] { btnPlay, btnStop, btnFull, btnVLC, btnSnap, lblTopic, _cmbTopic, btnRefresh, lblLat, _trkLatency, _lblLatencyValue });
             
-            // Topic Selector (select which ZED camera view to stream)
-            var lblTopic = new Label
-            {
-                Text = "Topic:",
-                Location = new Point(260, 15),
-                ForeColor = Color.Cyan,
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                AutoSize = true,
-            };
-            panel.Controls.Add(lblTopic);
+            Controls.Add(_videoBox);
+            Controls.Add(_lblStatus);
+            Controls.Add(ctrlPanel);
             
-            _cmbTopicSelect = new ComboBox
-            {
-                Location = new Point(310, 10),
-                Size = new Size(180, 25),
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                BackColor = Color.FromArgb(30, 30, 30),
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 9),
-            };
-            PopulateTopicSelector();
-            _cmbTopicSelect.SelectedIndexChanged += CmbTopicSelect_SelectedIndexChanged;
-            panel.Controls.Add(_cmbTopicSelect);
-            
-            // Refresh Topics Button
-            _btnRefreshTopics = new Button
-            {
-                Text = "...",
-                Location = new Point(495, 10),
-                Size = new Size(30, 25),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(60, 60, 65),
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 9),
-            };
-            _btnRefreshTopics.Click += (s, e) => RefreshAvailableTopics();
-            panel.Controls.Add(_btnRefreshTopics);
-            
-            // Quality is fixed at 720p - no selector needed
-            _quality = "720p";
-            
-            return panel;
+            // Initialize with default topic
+            _topics.Add(("/zed/zed_node/rgb/image_rect_color", "RGB Color"));
+            PopulateTopics();
         }
         
-        /// <summary>
-        /// Populates the topic selector with available ZED camera topics.
-        /// </summary>
-        private void PopulateTopicSelector()
+        private Button CreateButton(string text, int x, int y, int width, Color color)
         {
-            _cmbTopicSelect.Items.Clear();
-            foreach (var (fullName, displayName) in _availableTopics)
+            return new Button
             {
-                _cmbTopicSelect.Items.Add(displayName);
-            }
-            
-            if (_cmbTopicSelect.Items.Count > 0)
-                _cmbTopicSelect.SelectedIndex = 0;
+                Text = text,
+                Location = new Point(x, y),
+                Size = new Size(width, 24),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = color,
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 8),
+            };
         }
-
-        /// <summary>
-        /// Refreshes available topics from Edge Core API.
-        /// Gets list of ROS image topics available for streaming.
-        /// </summary>
-        private async void RefreshAvailableTopics()
+        
+        private void PopulateTopics()
+        {
+            _cmbTopic.Items.Clear();
+            foreach (var (_, display) in _topics)
+                _cmbTopic.Items.Add(display);
+            if (_cmbTopic.Items.Count > 0)
+                _cmbTopic.SelectedIndex = 0;
+        }
+        
+        private async System.Threading.Tasks.Task RefreshTopicsAsync(bool autoSelectRgb = false)
         {
             try
             {
-                UpdateStatus("Refreshing topics...", Color.Yellow);
-                _availableTopics.Clear();
-
-                using (var client = new System.Net.Http.HttpClient())
+                _lblStatus.Text = "Refreshing topics...";
+                _lblStatus.ForeColor = Color.Yellow;
+                
+                using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) })
                 {
-                    client.Timeout = TimeSpan.FromSeconds(10);
-
-                    // Fetch available topics from new API
-                    // GET /api/video/topics returns {topics: [{name, display_name}], count}
-                    var topicsUrl = $"{_apiBaseUrl}/api/video/topics";
-                    var response = await client.GetStringAsync(topicsUrl);
-                    var data = Newtonsoft.Json.Linq.JObject.Parse(response);
-                    var topics = data["topics"] as Newtonsoft.Json.Linq.JArray;
+                    var json = await client.GetStringAsync($"{_apiBaseUrl}/api/video/topics");
+                    var data = JObject.Parse(json);
+                    var arr = data["topics"] as JArray;
                     
-                    if (topics != null)
+                    _topics.Clear();
+                    if (arr != null)
                     {
-                        foreach (var t in topics)
+                        foreach (var t in arr)
                         {
                             var name = t["name"]?.ToString();
-                            var displayName = t["display_name"]?.ToString();
+                            var disp = t["display_name"]?.ToString() ?? name;
                             if (!string.IsNullOrEmpty(name))
-                            {
-                                _availableTopics.Add((name, displayName ?? name));
-                            }
+                                _topics.Add((name, disp));
+                        }
+                    }
+                    
+                    if (_topics.Count == 0)
+                        _topics.Add(("/zed/zed_node/rgb/image_rect_color", "RGB Color"));
+                    
+                    PopulateTopics();
+                    _lblStatus.Text = $"Found {_topics.Count} topics";
+                    _lblStatus.ForeColor = Color.LimeGreen;
+                    
+                    // Auto-select rgb/image_rect_color topic if requested
+                    if (autoSelectRgb && _topics.Count > 0)
+                    {
+                        int rgbIndex = _topics.FindIndex(t => 
+                            t.Name.IndexOf("rgb/image_rect_color", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            t.Name.IndexOf("rgb_image_rect_color", StringComparison.OrdinalIgnoreCase) >= 0);
+                        
+                        if (rgbIndex >= 0)
+                        {
+                            _cmbTopic.SelectedIndex = rgbIndex;
+                            // Switch to the RGB topic on the server
+                            await SwitchTopicAsync();
                         }
                     }
                 }
-
-                if (_availableTopics.Count == 0)
-                {
-                    // Add default topic if none found
-                    _availableTopics.Add(("/zed/zed_node/rgb/image_rect_color", "zed: rgb/image_rect_color"));
-                }
-
-                PopulateTopicSelector();
-                UpdateStatus($"Found {_availableTopics.Count} topics", Color.LimeGreen);
             }
             catch (Exception ex)
             {
-                UpdateStatus($"Refresh Error: {ex.Message}", Color.Red);
-                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Topic refresh failed - {ex.Message}");
+                _lblStatus.Text = $"Refresh failed: {ex.Message}";
+                _lblStatus.ForeColor = Color.Red;
             }
         }
         
-        /// <summary>
-        /// Handles topic selection change.
-        /// Uses API to switch topic - RTSP URL stays constant.
-        /// This enables instant content switching without video player reconnection.
-        /// </summary>
-        private async void CmbTopicSelect_SelectedIndexChanged(object sender, EventArgs e)
+        private async System.Threading.Tasks.Task SwitchTopicAsync()
         {
-            if (_cmbTopicSelect.SelectedIndex < 0 || _cmbTopicSelect.SelectedIndex >= _availableTopics.Count)
-                return;
+            if (_cmbTopic.SelectedIndex < 0 || _cmbTopic.SelectedIndex >= _topics.Count) return;
             
-            var (fullName, displayName) = _availableTopics[_cmbTopicSelect.SelectedIndex];
-            
-            UpdateStatus($"Switching to {displayName}...", Color.Yellow);
+            var (name, display) = _topics[_cmbTopic.SelectedIndex];
+            _lblStatus.Text = $"Switching to {display}...";
+            _lblStatus.ForeColor = Color.Yellow;
             
             try
             {
-                // Call API endpoint to switch topic
-                // POST /api/video/source?topic=<topic>
-                var apiUrl = $"{_apiBaseUrl}/api/video/source?topic={Uri.EscapeDataString(fullName)}";
-                
-                using (var client = new System.Net.Http.HttpClient())
+                using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) })
                 {
-                    client.Timeout = TimeSpan.FromSeconds(5);
-                    var response = await client.PostAsync(apiUrl, null);
-                    
-                    if (!response.IsSuccessStatusCode)
+                    var resp = await client.PostAsync($"{_apiBaseUrl}/api/video/source?topic={Uri.EscapeDataString(name)}", null);
+                    if (!resp.IsSuccessStatusCode)
                     {
-                        var errorBody = await response.Content.ReadAsStringAsync();
-                        UpdateStatus($"Switch failed: {response.StatusCode}", Color.Red);
-                        System.Diagnostics.Debug.WriteLine($"NOMAD Video: Switch failed - {errorBody}");
+                        _lblStatus.Text = $"Switch failed: {resp.StatusCode}";
+                        _lblStatus.ForeColor = Color.Red;
                         return;
                     }
                 }
                 
-                // Wait briefly for the bridge to start streaming new topic
-                await System.Threading.Tasks.Task.Delay(500);
-                
-                // Restart player to reconnect to the new stream
-                // Although RTSP URL stays the same, GStreamer needs to reconnect
-                // to handle the stream content change properly
+                // Brief delay then restart stream to pick up new topic
+                await System.Threading.Tasks.Task.Delay(300);
                 if (_isPlaying)
                 {
-                    System.Diagnostics.Debug.WriteLine($"NOMAD Video: Restarting player after topic switch to {fullName}");
-                    RestartStream();
+                    StopStream();
+                    await System.Threading.Tasks.Task.Delay(200);
+                    StartStream();
                 }
                 
-                UpdateStatus($"Streaming: {displayName}", Color.LimeGreen);
-                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Topic switched to {fullName}");
+                _lblStatus.Text = $"Streaming: {display}";
+                _lblStatus.ForeColor = Color.LimeGreen;
             }
             catch (Exception ex)
             {
-                UpdateStatus($"Switch Failed: {ex.Message}", Color.Red);
-                System.Diagnostics.Debug.WriteLine($"NOMAD Video: API switch failed - {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Restarts the video stream.
-        /// In zero-copy architecture, this is only needed when switching between
-        /// primary and secondary streams, not for topic changes.
-        /// </summary>
-        private void RestartStream()
-        {
-            // SAFETY: Prevent concurrent stream switches
-            lock (_streamLock)
-            {
-                if (_isStreamSwitching) return;
-                _isStreamSwitching = true;
-            }
-            
-            try
-            {
-                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Restarting stream -> {_streamUrl}");
-                
-                if (_isPlaying)
-                {
-                    // SAFETY: Full stop with cleanup before starting new stream
-                    StopStreamSafe();
-                    
-                    // SAFETY: Allow time for GStreamer to fully release resources
-                    System.Threading.Thread.Sleep(300);
-                    
-                    // Force garbage collection
-                    GC.Collect();
-                    GC.WaitForPendingFinalizers();
-                    
-                    System.Threading.Thread.Sleep(100);
-                    
-                    StartStream();
-                }
-            }
-            finally
-            {
-                lock (_streamLock)
-                {
-                    _isStreamSwitching = false;
-                }
+                _lblStatus.Text = $"Switch error: {ex.Message}";
+                _lblStatus.ForeColor = Color.Red;
             }
         }
         
-        // ============================================================
-        // Playback Methods
-        // ============================================================
+        private bool TryInitializeGStreamer()
+        {
+            try
+            {
+                var gstPath = GStreamer.LookForGstreamer();
+                return !string.IsNullOrWhiteSpace(gstPath) && GStreamer.GstLaunchExists;
+            }
+            catch { return false; }
+        }
+        
+        private string BuildGStreamerPipeline()
+        {
+            // FROM WORKING COMMIT 98fea60 - Uses decodebin3 for automatic codec detection
+            // Requirements:
+            // 1. appsink MUST be named "outsink" (Mission Planner looks for this)
+            // 2. format=BGRA (32-bit matches Windows Forms bitmap creation)
+            // 3. sync=false (no clock sync for live streaming)
+            // 4. decodebin3 handles H264 decoding automatically
+            
+            if (_streamUrl.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
+            {
+                var port = ExtractUdpPort(_streamUrl);
+                return $"udpsrc port={port} buffer-size=90000 ! " +
+                       $"application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264 ! " +
+                       $"decodebin3 ! queue max-size-buffers=1 leaky=2 ! " +
+                       $"videoconvert ! video/x-raw,format=BGRA ! " +
+                       $"appsink name=outsink sync=false";
+            }
+            
+            // RTSP with decodebin3 - proven working pipeline
+            return $"rtspsrc location={_streamUrl} latency={_latencyMs} udp-reconnect=1 timeout=0 do-retransmission=false ! " +
+                   $"application/x-rtp ! decodebin3 ! queue max-size-buffers=1 leaky=2 ! " +
+                   $"videoconvert ! video/x-raw,format=BGRA ! " +
+                   $"appsink name=outsink sync=false";
+        }
         
         public void StartStream()
         {
-            // SAFETY: Check for disposed state
-            if (_disposed)
-            {
-                System.Diagnostics.Debug.WriteLine("NOMAD Video: Cannot start - control is disposed");
-                return;
-            }
-            
-            // SAFETY: Don't start stream if Jetson is offline
-            if (!_jetsonConnected)
-            {
-                UpdateStatus("Stream unavailable - Jetson offline", Color.Orange);
-                System.Diagnostics.Debug.WriteLine("NOMAD Video: Cannot start - Jetson offline");
-                return;
-            }
-            
             if (_isPlaying) return;
             
-            // SAFETY: Prevent starting during a stream switch
-            lock (_streamLock)
+            if (!TryInitializeGStreamer())
             {
-                if (_isStreamSwitching && _gst != null)
-                {
-                    System.Diagnostics.Debug.WriteLine("NOMAD Video: Cannot start during stream switch");
-                    return;
-                }
+                _lblStatus.Text = "GStreamer not available - use VLC";
+                _lblStatus.ForeColor = Color.Orange;
+                return;
             }
             
             try
             {
-                if (!_useGStreamer)
-                {
-                    var errorMsg = _embeddedInitErrorMessage ?? "GStreamer not available";
-                    UpdateStatus($"Error: {errorMsg}", Color.Red);
-                    System.Diagnostics.Debug.WriteLine($"NOMAD Video: Cannot start - {errorMsg}");
-                    return;
-                }
-
-                // SAFETY: Ensure previous instance is fully cleaned up
-                lock (_streamLock)
-                {
-                    if (_gst != null)
-                    {
-                        try { _gst.OnNewImage -= OnGstNewImage; } catch { }
-                        try { _gst.Stop(); } catch { }
-                        _gst = null;
-                        
-                        // Extra cleanup time
-                        System.Threading.Thread.Sleep(100);
-                    }
-
-                    // SAFETY: Create new instance within lock to prevent races
-                    _gst = new GStreamer();
-                    _gst.OnNewImage += OnGstNewImage;
-                }
-
+                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Starting stream to {_streamUrl}");
+                _gst = new GStreamer();
+                _gst.OnNewImage += OnGstNewImage;
+                
                 var pipeline = BuildGStreamerPipeline();
-                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Starting pipeline: {pipeline}");
+                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Pipeline: {pipeline}");
                 
-                lock (_streamLock)
-                {
-                    if (_gst != null)
-                    {
-                        _gst.Start(pipeline);
-                    }
-                }
-
+                _gst.Start(pipeline);
                 _isPlaying = true;
-                _frameCount = 0; // Reset frame counter
-                
-                // Update status to show current stream
-                UpdateStatus($"Playing [{_selectedStream}]", Color.LimeGreen);
-                UpdatePlayStopButton();
+                _lblStatus.Text = "Connecting...";
+                _lblStatus.ForeColor = Color.Yellow;
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Play error - {ex.Message}\n{ex.StackTrace}");
-                UpdateStatus($"Error: {ex.Message}", Color.Red);
-                
-                // SAFETY: Cleanup on failure
-                lock (_streamLock)
-                {
-                    if (_gst != null)
-                    {
-                        try { _gst.OnNewImage -= OnGstNewImage; } catch { }
-                        try { _gst.Stop(); } catch { }
-                        _gst = null;
-                    }
-                }
+                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Start error - {ex}");
+                _lblStatus.Text = $"Error: {ex.Message}";
+                _lblStatus.ForeColor = Color.Red;
             }
         }
         
         public void StopStream()
         {
-            StopStreamSafe();
+            if (!_isPlaying && _gst == null) return;
+            
+            try
+            {
+                if (_gst != null)
+                {
+                    // Unhook event first to prevent callbacks during shutdown
+                    try { _gst.OnNewImage -= OnGstNewImage; } catch { }
+                    
+                    // Stop GStreamer pipeline
+                    try { _gst.Stop(); } catch { }
+                    
+                    // Give GStreamer time to release resources
+                    System.Threading.Thread.Sleep(100);
+                    
+                    _gst = null;
+                }
+            }
+            catch { }
+            
+            _isPlaying = false;
+            _lblStatus.Text = "Stopped";
+            _lblStatus.ForeColor = Color.Gray;
         }
+        
+        private int _frameCount = 0;
         
         /// <summary>
-        /// Safely stops the stream with proper resource cleanup.
-        /// 
-        /// SAFETY CRITICAL: This method must be called before switching streams
-        /// to prevent illegal memory access in GStreamer. The GStreamer instance
-        /// must be fully stopped and dereferenced before creating a new one.
+        /// GStreamer frame callback - invoked on background thread.
+        /// Uses MPBitmap.LockBits() to access raw pixel data directly (PROVEN WORKING from commit 39f9f48).
         /// </summary>
-        private void StopStreamSafe()
+        private void OnGstNewImage(object sender, MPBitmap frame)
         {
+            if (frame == null)
+            {
+                System.Diagnostics.Debug.WriteLine("NOMAD Video: Received null frame");
+                return;
+            }
+            
+            if (frame.Width <= 0 || frame.Height <= 0)
+            {
+                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Invalid frame: {frame.Width}x{frame.Height}");
+                return;
+            }
+            
+            _frameCount++;
+            if (_frameCount % 30 == 1)
+                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Frame #{_frameCount} - {frame.Width}x{frame.Height}");
+            
+            // Marshal to UI thread
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => OnGstNewImage(sender, frame)));
+                return;
+            }
+            
+            if (IsDisposed || _videoBox == null) return;
+            
             try
             {
-                _isPlaying = false;
+                // WORKING METHOD from commit 39f9f48:
+                // Create Bitmap directly from MPBitmap's LockBits pixel data
+                var displayBitmap = new Bitmap(
+                    frame.Width,
+                    frame.Height,
+                    4 * frame.Width,  // stride = 4 bytes per pixel (BGRA)
+                    PixelFormat.Format32bppPArgb,
+                    frame.LockBits(Rectangle.Empty, null, SkiaSharp.SKColorType.Bgra8888).Scan0
+                );
                 
-                lock (_streamLock)
+                // Update video display
+                var oldImage = _videoBox.Image;
+                _videoBox.Image = displayBitmap;
+                oldImage?.Dispose();
+                
+                // Update fullscreen if active
+                if (_fullscreenBox != null && !_fullscreenBox.IsDisposed)
                 {
-                    if (_gst != null)
-                    {
-                        // SAFETY: Unhook event handler FIRST to prevent callbacks during cleanup
-                        // This is critical - callbacks during shutdown cause memory violations
-                        try 
-                        { 
-                            _gst.OnNewImage -= OnGstNewImage; 
-                        } 
-                        catch (Exception ex)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"NOMAD Video: Error unhooking event - {ex.Message}");
-                        }
-                        
-                        // SAFETY: Stop the pipeline with error handling
-                        try 
-                        { 
-                            _gst.Stop(); 
-                        } 
-                        catch (Exception ex)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"NOMAD Video: Error stopping GStreamer - {ex.Message}");
-                        }
-                        
-                        // SAFETY: Give GStreamer time to clean up internal resources
-                        // This is essential to prevent memory access violations
-                        System.Threading.Thread.Sleep(150);
-                        
-                        // Clear the reference - we'll create a new instance on next Start
-                        _gst = null;
-                    }
+                    var oldFull = _fullscreenBox.Image;
+                    _fullscreenBox.Image = (Bitmap)displayBitmap.Clone();
+                    oldFull?.Dispose();
                 }
                 
-                UpdateStatus("Stopped", Color.Gray);
-                UpdatePlayStopButton();
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Stop error - {ex.Message}");
-            }
-        }
-        
-        private void TogglePlayStop()
-        {
-            if (_isPlaying)
-            {
-                StopStream();
-            }
-            else
-            {
-                StartStream();
-            }
-        }
-        
-        private void UpdatePlayStopButton()
-        {
-            if (_btnPlayStop == null) return;
-            
-            if (_isPlaying)
-            {
-                _btnPlayStop.Text = "Stop";
-                _btnPlayStop.BackColor = Color.FromArgb(150, 60, 60);
-            }
-            else
-            {
-                _btnPlayStop.Text = "Play";
-                _btnPlayStop.BackColor = Color.FromArgb(60, 120, 60);
-            }
-        }
-        
-        public void OpenExternal()
-        {
-            // Build VLC/FFplay arguments based on stream type
-            string vlcArgs;
-            string ffplayArgs;
-            
-            if (_streamUrl.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
-            {
-                // UDP stream - use SDP file for best compatibility
-                // VLC works better with SDP file than raw UDP URL
-                var port = ExtractUdpPort(_streamUrl);
+                // Store for snapshots
+                var oldLastFrame = _lastFrame;
+                _lastFrame = (MPBitmap)frame.Clone();
+                oldLastFrame?.Dispose();
                 
-                // Create a temporary SDP file for VLC
-                var sdpContent = $@"v=0
-o=- 0 0 IN IP4 127.0.0.1
-s=NOMAD ZED Camera
-c=IN IP4 127.0.0.1
-t=0 0
-m=video {port} RTP/AVP 96
-a=rtpmap:96 H264/90000
-a=fmtp:96 profile-level-id=42c01f;packetization-mode=1
-a=framerate:30
-a=recvonly";
-                
-                var sdpPath = Path.Combine(Path.GetTempPath(), "nomad_stream.sdp");
-                File.WriteAllText(sdpPath, sdpContent);
-                
-                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Opening VLC with SDP file: {sdpPath}");
-                vlcArgs = $"--network-caching={_networkCaching} --live-caching={_networkCaching} \"{sdpPath}\"";
-                ffplayArgs = $"-fflags nobuffer -flags low_delay -protocol_whitelist file,udp,rtp -i \"{sdpPath}\"";
-            }
-            else
-            {
-                // RTSP stream - ultra-low latency settings
-                // --avcodec-skiploopfilter=all: Skip deblocking for speed
-                // --avcodec-skip-frame=0: Don't skip frames
-                // --avcodec-hurry-up: Decode fast
-                // --sout-mux-caching=0: Minimize mux buffering
-                vlcArgs = $"--network-caching={_networkCaching} --live-caching={_networkCaching} " +
-                          $"--clock-jitter=0 --avcodec-skiploopfilter=all --avcodec-hurry-up " +
-                          $"--sout-mux-caching=0 --rtsp-tcp \"{_streamUrl}\"";
-                ffplayArgs = $"-fflags nobuffer -flags low_delay -rtsp_transport tcp -i \"{_streamUrl}\"";
-            }
-            
-            // Common VLC installation paths on Windows
-            var vlcPaths = new[]
-            {
-                "vlc",  // PATH
-                @"C:\Program Files\VideoLAN\VLC\vlc.exe",
-                @"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe",
-                Environment.ExpandEnvironmentVariables(@"%LOCALAPPDATA%\Programs\VideoLAN\VLC\vlc.exe")
-            };
-            
-            // Try VLC paths
-            foreach (var vlcPath in vlcPaths)
-            {
-                try
+                // Update status periodically
+                if (_frameCount % 30 == 1)
                 {
-                    var psi = new System.Diagnostics.ProcessStartInfo
-                    {
-                        FileName = vlcPath,
-                        Arguments = vlcArgs,
-                        UseShellExecute = true,
-                    };
-                    System.Diagnostics.Process.Start(psi);
-                    
-                    UpdateStatus("Opened in VLC", Color.Yellow);
-                    _isPlaying = true;
-                    return;
-                }
-                catch
-                {
-                    // Try next path
-                }
-            }
-            
-            // Try FFplay (common with FFmpeg)
-            var ffplayPaths = new[]
-            {
-                "ffplay",  // PATH
-                @"C:\ffmpeg\bin\ffplay.exe",
-                Environment.ExpandEnvironmentVariables(@"%LOCALAPPDATA%\Programs\ffmpeg\bin\ffplay.exe")
-            };
-            
-            foreach (var ffplayPath in ffplayPaths)
-            {
-                try
-                {
-                    var psi = new System.Diagnostics.ProcessStartInfo
-                    {
-                        FileName = ffplayPath,
-                        Arguments = ffplayArgs,
-                        UseShellExecute = true,
-                    };
-                    System.Diagnostics.Process.Start(psi);
-                    
-                    UpdateStatus("Opened in FFplay", Color.Yellow);
-                    _isPlaying = true;
-                    return;
-                }
-                catch
-                {
-                    // Try next path
-                }
-            }
-            
-            // No player found - show error
-            UpdateStatus("No player found", Color.Red);
-            MessageBox.Show(
-                $"Could not open video stream.\n\n" +
-                $"Please install VLC or FFplay and ensure it's in your PATH.\n\n" +
-                $"VLC download: https://www.videolan.org/vlc/\n" +
-                $"FFmpeg download: https://ffmpeg.org/download.html\n\n" +
-                $"Stream URL: {_streamUrl}",
-                "Video Player Not Found",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning
-            );
-        }
-        
-        public void TakeSnapshot()
-        {
-            try
-            {
-                if (_lastFrame != null)
-                {
-                    var desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
-                    var filename = $"NOMAD_Snapshot_{DateTime.Now:yyyyMMdd_HHmmss}.png";
-                    var path = System.IO.Path.Combine(desktopPath, filename);
-
-                    _lastFrame.Save(path);
-                    UpdateStatus($"[S] Saved: {filename}", Color.LimeGreen);
-                }
-                else
-                {
-                    UpdateStatus("[!] No frame available", Color.Yellow);
+                    _lblStatus.Text = $"Streaming {frame.Width}x{frame.Height}";
+                    _lblStatus.ForeColor = Color.LimeGreen;
                 }
             }
             catch (Exception ex)
             {
-                UpdateStatus($"[X] Error: {ex.Message}", Color.Red);
+                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Frame error - {ex.Message}");
             }
         }
         
         public void ToggleFullscreen()
         {
-            try
+            if (_fullscreenForm != null && !_fullscreenForm.IsDisposed)
             {
-                if (_fullscreenForm != null && !_fullscreenForm.IsDisposed)
-                {
-                    _fullscreenForm.Close();
-                    _fullscreenForm = null;
-                    _fullscreenBox = null;
-                    return;
-                }
-
-                _fullscreenForm = new Form
-                {
-                    FormBorderStyle = FormBorderStyle.None,
-                    WindowState = FormWindowState.Maximized,
-                    BackColor = Color.Black,
-                    KeyPreview = true,
-                };
-
-                _fullscreenForm.KeyDown += (s, e) =>
-                {
-                    if (e.KeyCode == Keys.Escape)
-                    {
-                        _fullscreenForm.Close();
-                        _fullscreenForm = null;
-                        _fullscreenBox = null;
-                    }
-                };
-
-                _fullscreenBox = new PictureBox
-                {
-                    Dock = DockStyle.Fill,
-                    BackColor = Color.Black,
-                    SizeMode = PictureBoxSizeMode.Zoom,
-                };
-
-                _fullscreenForm.Controls.Add(_fullscreenBox);
-                _fullscreenForm.Show();
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Fullscreen error - {ex.Message}");
-            }
-        }
-        
-        // ============================================================
-        // Helper Methods
-        // ============================================================
-        
-        private void UpdateStatus(string status, Color color)
-        {
-            if (InvokeRequired)
-            {
-                BeginInvoke(new Action(() => UpdateStatus(status, color)));
+                _fullscreenForm.Close();
+                _fullscreenForm = null;
+                _fullscreenBox = null;
                 return;
             }
             
-            _lblStatus.Text = status;
-            _lblStatus.ForeColor = color;
+            _fullscreenForm = new Form
+            {
+                FormBorderStyle = FormBorderStyle.None,
+                WindowState = FormWindowState.Maximized,
+                BackColor = Color.Black,
+                KeyPreview = true,
+            };
+            _fullscreenForm.KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape) ToggleFullscreen(); };
+            
+            _fullscreenBox = new PictureBox
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Color.Black,
+                SizeMode = PictureBoxSizeMode.Zoom,
+            };
+            _fullscreenBox.DoubleClick += (s, e) => ToggleFullscreen();
+            
+            _fullscreenForm.Controls.Add(_fullscreenBox);
+            _fullscreenForm.Show();
+        }
+        
+        public void OpenExternal()
+        {
+            string vlcArgs;
+            
+            if (_streamUrl.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
+            {
+                var port = ExtractUdpPort(_streamUrl);
+                var sdp = $"v=0\no=- 0 0 IN IP4 127.0.0.1\ns=Stream\nc=IN IP4 127.0.0.1\nt=0 0\n" +
+                          $"m=video {port} RTP/AVP 96\na=rtpmap:96 H264/90000";
+                var sdpPath = Path.Combine(Path.GetTempPath(), "nomad_stream.sdp");
+                File.WriteAllText(sdpPath, sdp);
+                vlcArgs = $"--network-caching={_latencyMs} \"{sdpPath}\"";
+            }
+            else
+            {
+                vlcArgs = $"--network-caching={_latencyMs} --rtsp-tcp \"{_streamUrl}\"";
+            }
+            
+            var vlcPaths = new[] { "vlc", @"C:\Program Files\VideoLAN\VLC\vlc.exe", @"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe" };
+            
+            foreach (var path in vlcPaths)
+            {
+                try
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = path, Arguments = vlcArgs, UseShellExecute = true });
+                    _lblStatus.Text = "Opened in VLC";
+                    return;
+                }
+                catch { }
+            }
+            
+            MessageBox.Show($"VLC not found.\n\nStream URL: {_streamUrl}", "VLC Not Found", MessageBoxButtons.OK);
+        }
+        
+        public void TakeSnapshot()
+        {
+            if (_lastFrame == null) { _lblStatus.Text = "No frame available"; return; }
+            var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), $"NOMAD_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            _lastFrame.Save(path);
+            _lblStatus.Text = $"Saved: {Path.GetFileName(path)}";
+            _lblStatus.ForeColor = Color.LimeGreen;
         }
         
         public void UpdateStreamUrl(string newUrl)
         {
             var wasPlaying = _isPlaying;
-            
-            if (_isPlaying)
-            {
-                StopStream();
-            }
-            
+            StopStream();
             _streamUrl = newUrl;
-            
-            if (wasPlaying)
-            {
-                StartStream();
-            }
+            ParseApiUrl(newUrl);
+            if (wasPlaying) StartStream();
         }
         
-        // ============================================================
-        // Cleanup
-        // ============================================================
-        
-        /// <summary>
-        /// Disposes the video player and all resources.
-        /// 
-        /// SAFETY: Sets disposed flag FIRST to prevent any further operations,
-        /// then cleans up in safe order (GStreamer first, then UI resources).
-        /// </summary>
-        protected override void Dispose(bool disposing)
-        {
-            // SAFETY: Set disposed flag immediately to stop all callbacks
-            _disposed = true;
-            
-            if (disposing)
-            {
-                try
-                {
-                    // Stop the stream - this handles GStreamer cleanup
-                    StopStreamSafe();
-                    
-                    // Extra wait for GStreamer cleanup
-                    System.Threading.Thread.Sleep(200);
-                    
-                    // Dispose the last frame
-                    lock (_streamLock)
-                    {
-                        if (_lastFrame != null)
-                        {
-                            _lastFrame.Dispose();
-                            _lastFrame = null;
-                        }
-                    }
-                    
-                    // Close fullscreen form
-                    if (_fullscreenForm != null && !_fullscreenForm.IsDisposed)
-                    {
-                        _fullscreenForm.Close();
-                        _fullscreenForm = null;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"NOMAD Video: Dispose error - {ex.Message}");
-                }
-            }
-            
-            base.Dispose(disposing);
-        }
-
-        // ============================================================
-        // GStreamer Helpers
-        // ============================================================
-
-        private string BuildGStreamerPipeline()
-        {
-            // Mission Planner's GStreamer class expects:
-            // 1. appsink named "outsink" (not "appsink")
-            // 2. format=BGRA (32-bit BGRA required by GStreamer.cs bitmap creation)
-            // 3. sync=false at the end
-            // 4. decodebin3 for automatic codec detection
-            // 5. queue with leaky=2 for low latency
-            
-            // Check if the URL is UDP or RTSP
-            if (_streamUrl.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
-            {
-                // UDP RTP stream (e.g., udp://@:5600)
-                var port = ExtractUdpPort(_streamUrl);
-                
-                // Match Mission Planner's AutoConnect format for UDP H264
-                // Uses decodebin3 for automatic codec detection
-                return $"udpsrc port={port} buffer-size=90000 ! application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264 ! decodebin3 ! queue max-size-buffers=1 leaky=2 ! videoconvert ! video/x-raw,format=BGRA ! appsink name=outsink sync=false";
-            }
-            else
-            {
-                // RTSP stream - Use Mission Planner's proven pipeline format
-                // Key elements:
-                // - rtspsrc: handles RTSP protocol
-                // - latency: lower = less delay, but 41ms is stable minimum
-                // - udp-reconnect=1: auto reconnect on UDP drops
-                // - timeout=0: no timeout (important for network glitches)
-                // - do-retransmission=false: don't request retransmission (reduces latency)
-                // - application/x-rtp: explicit RTP media type
-                // - decodebin3: automatic codec detection and decoding
-                // - queue with leaky=2: drop old buffers if full (low latency)
-                // - videoconvert to BGRA: required format for Mission Planner's bitmap
-                // - appsink name=outsink sync=false: named sink without clock sync
-                return $"rtspsrc location={_streamUrl} latency={_networkCaching} udp-reconnect=1 timeout=0 do-retransmission=false ! application/x-rtp ! decodebin3 ! queue max-size-buffers=1 leaky=2 ! videoconvert ! video/x-raw,format=BGRA ! appsink name=outsink sync=false";
-            }
-        }
-
-        private int _frameCount = 0;
-        private DateTime _lastFrameTime = DateTime.MinValue;
-        
-        /// <summary>
-        /// Handles new frames from GStreamer.
-        /// 
-        /// SAFETY CRITICAL: This callback can be invoked from GStreamer's thread
-        /// at any time. We must check for disposal and stream switching states
-        /// to prevent accessing released memory.
-        /// </summary>
-        private void OnGstNewImage(object sender, MPBitmap frame)
-        {
-            // SAFETY: Check if we're shutting down or switching streams
-            if (_disposed || _isStreamSwitching)
-            {
-                return;
-            }
-            
-            if (frame == null)
-            {
-                System.Diagnostics.Debug.WriteLine("NOMAD Video: Received null frame (stream may have ended)");
-                if (!_disposed && !_isStreamSwitching)
-                {
-                    if (InvokeRequired)
-                    {
-                        try { BeginInvoke(new Action(() => UpdateStatus("Stream ended", Color.Gray))); } catch { }
-                    }
-                    else
-                    {
-                        UpdateStatus("Stream ended", Color.Gray);
-                    }
-                }
-                return;
-            }
-
-            if (frame.Width <= 0 || frame.Height <= 0)
-            {
-                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Invalid frame dimensions: {frame.Width}x{frame.Height}");
-                return;
-            }
-
-            _frameCount++;
-            if (_frameCount % 30 == 1) // Log every 30 frames (once per second)
-            {
-                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Frame #{_frameCount} received, Size: {frame.Width}x{frame.Height}, Stream: {_selectedStream}");
-            }
-
-            // SAFETY: Double-check before invoking on UI thread
-            if (_disposed || _isStreamSwitching)
-            {
-                return;
-            }
-
-            if (InvokeRequired)
-            {
-                try
-                {
-                    BeginInvoke(new Action(() => OnGstNewImage(sender, frame)));
-                }
-                catch (ObjectDisposedException)
-                {
-                    // Control was disposed - ignore
-                }
-                catch (InvalidOperationException)
-                {
-                    // Handle not created - ignore
-                }
-                return;
-            }
-
-            try
-            {
-                // SAFETY: Final check before UI operations
-                if (_disposed || _isStreamSwitching || _videoBox == null)
-                {
-                    return;
-                }
-                
-                // Create a System.Drawing.Bitmap from the MissionPlanner.Drawing.Bitmap
-                // MPBitmap internally wraps SKBitmap - access via reflection or direct property
-                try
-                {
-                    Bitmap displayBitmap = null;
-                    
-                    // Try to get the internal SkiaSharp bitmap via reflection
-                    var frameType = frame.GetType();
-                    SkiaSharp.SKBitmap skBitmap = null;
-                    
-                    // Try property first
-                    var skBitmapProp = frameType.GetProperty("nativeSkBitmap");
-                    if (skBitmapProp != null)
-                    {
-                        skBitmap = skBitmapProp.GetValue(frame) as SkiaSharp.SKBitmap;
-                    }
-                    
-                    // Try field if property not found
-                    if (skBitmap == null)
-                    {
-                        var skBitmapField = frameType.GetField("nativeSkBitmap", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                        if (skBitmapField != null)
-                        {
-                            skBitmap = skBitmapField.GetValue(frame) as SkiaSharp.SKBitmap;
-                        }
-                    }
-                    
-                    if (skBitmap != null)
-                    {
-                        // Direct pixel access from internal SKBitmap
-                        var pixmap = skBitmap.PeekPixels();
-                        if (pixmap != null && pixmap.GetPixels() != IntPtr.Zero)
-                        {
-                            displayBitmap = new Bitmap(
-                                skBitmap.Width,
-                                skBitmap.Height,
-                                skBitmap.RowBytes,
-                                System.Drawing.Imaging.PixelFormat.Format32bppPArgb,
-                                pixmap.GetPixels()
-                            );
-                        }
-                    }
-                    else
-                    {
-                        // Fallback: Use Clone which returns MPBitmap, then try ToSKImage
-                        // This is slower but more compatible
-                        using (var ms = new MemoryStream())
-                        {
-                            // Try saving via reflection on the clone
-                            var cloned = frame.Clone();
-                            var saveMethod = cloned.GetType().GetMethod("Save", new[] { typeof(Stream), typeof(SkiaSharp.SKEncodedImageFormat), typeof(int) });
-                            if (saveMethod != null)
-                            {
-                                saveMethod.Invoke(cloned, new object[] { ms, SkiaSharp.SKEncodedImageFormat.Png, 80 });
-                                ms.Position = 0;
-                                displayBitmap = new Bitmap(ms);
-                            }
-                            (cloned as IDisposable)?.Dispose();
-                        }
-                    }
-                    
-                    if (displayBitmap == null)
-                    {
-                        System.Diagnostics.Debug.WriteLine("NOMAD Video: Failed to convert frame - no compatible method found");
-                        return;
-                    }
-
-                    // Update video display
-                    var old = _videoBox?.Image;
-                    if (_videoBox != null && !_disposed)
-                    {
-                        _videoBox.Image = displayBitmap;
-                    }
-                    else
-                    {
-                        displayBitmap.Dispose();
-                    }
-                    old?.Dispose();
-
-                    // Update fullscreen display
-                    if (_fullscreenBox != null && !_disposed)
-                    {
-                        var oldFull = _fullscreenBox.Image;
-                        // Clone for fullscreen (displayBitmap is used by main view)
-                        _fullscreenBox.Image = (Bitmap)displayBitmap.Clone();
-                        oldFull?.Dispose();
-                    }
-
-                    // Keep last frame for snapshot (clone it since frame may be disposed)
-                    var oldLastFrame = _lastFrame;
-                    _lastFrame = (MPBitmap)frame.Clone();
-                    oldLastFrame?.Dispose();
-                }
-                finally
-                {
-                    // Stream-based conversion handles cleanup automatically
-                }
-            }
-            catch (AccessViolationException ex)
-            {
-                // SAFETY: Log but don't crash - this indicates a GStreamer timing issue
-                System.Diagnostics.Debug.WriteLine($"NOMAD Video: ACCESS VIOLATION - {ex.Message}");
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Frame update error - {ex.Message}\n{ex.StackTrace}");
-            }
-        }
-        
-        /// <summary>
-        /// Extract UDP port from URL (udp://@:5600, udp://5600, udp://@:5600, etc.)
-        /// </summary>
         private int ExtractUdpPort(string url)
         {
-            try
+            var cleaned = url.Replace("udp://", "").Replace("@", "").TrimStart(':');
+            return int.TryParse(cleaned, out int port) ? port : 5600;
+        }
+        
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
             {
-                // Handle various formats:
-                // udp://@:5600
-                // udp://5600
-                // udp://:5600
-                var cleaned = url.Replace("udp://", "").Replace("@", "").TrimStart(':');
-                if (int.TryParse(cleaned, out int port))
-                {
-                    return port;
-                }
+                StopStream();
+                _lastFrame?.Dispose();
+                if (_fullscreenForm != null && !_fullscreenForm.IsDisposed)
+                    _fullscreenForm.Close();
             }
-            catch { }
-            return 5600; // Default port
+            base.Dispose(disposing);
         }
     }
 }

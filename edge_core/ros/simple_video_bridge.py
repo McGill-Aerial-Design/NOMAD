@@ -110,26 +110,52 @@ class VideoStreamNode(Node):
         self.get_logger().info(f'Subscribed to: {topic}')
     
     def switch_topic(self, new_topic: str) -> bool:
-        """Switch to a different ROS2 image topic."""
+        """
+        Switch to a different ROS2 image topic.
+        
+        Restarts the entire GStreamer pipeline to ensure fresh RTSP connection
+        to MediaMTX. This prevents rtspclientsink disconnection issues.
+        Brief interruption (~500ms) but ensures reliable streaming.
+        """
         try:
             self.get_logger().info(f'Switching topic: {self.source_topic} -> {new_topic}')
             
-            # Pause the GStreamer pipeline during topic switch to prevent errors
+            # Stop the current pipeline
             if hasattr(self, 'pipeline') and self.pipeline:
-                self.pipeline.set_state(Gst.State.PAUSED)
-                time.sleep(0.1)  # Brief pause to let pipeline settle
+                self.pipeline.set_state(Gst.State.NULL)
+                time.sleep(0.2)  # Wait for clean shutdown
             
-            # Switch ROS subscription
+            # Update topic
+            self.source_topic = new_topic
+            
+            # Recreate GStreamer pipeline with new topic
+            pipeline_str = (
+                f'appsrc name=source is-live=true format=time do-timestamp=true '
+                f'caps=video/x-raw,format=BGR,width={self.width},height={self.height},framerate={self.fps}/1 ! '
+                f'videoconvert ! '
+                f'openh264enc bitrate={self.bitrate * 1000} num-slices=4 ! '
+                f'video/x-h264,profile=baseline ! '
+                f'h264parse ! '
+                f'rtspclientsink location=rtsp://172.17.0.1:8554/primary protocols=tcp'
+            )
+            
+            self.pipeline = Gst.parse_launch(pipeline_str)
+            self.appsrc = self.pipeline.get_by_name('source')
+            
+            # Start new pipeline
+            ret = self.pipeline.set_state(Gst.State.PLAYING)
+            if ret == Gst.StateChangeReturn.FAILURE:
+                self.get_logger().error('Failed to restart pipeline after topic switch')
+                return False
+            
+            # Update ROS subscription
             self._subscribe_to_topic(new_topic)
             
-            # Resume GStreamer pipeline
-            if hasattr(self, 'pipeline') and self.pipeline:
-                ret = self.pipeline.set_state(Gst.State.PLAYING)
-                if ret == Gst.StateChangeReturn.FAILURE:
-                    self.get_logger().error('Failed to resume pipeline after topic switch')
-                    return False
-                    
-            self.get_logger().info(f'Successfully switched to: {new_topic}')
+            # Reset counters
+            self.frame_count = 0
+            self.start_time = time.time()
+            
+            self.get_logger().info(f'Successfully switched to: {new_topic} (pipeline restarted)')
             return True
         except Exception as e:
             self.get_logger().error(f'Failed to switch topic: {e}')

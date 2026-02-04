@@ -126,12 +126,12 @@ class ROSHTTPBridge(Node):
             depth=1,
         )
         
-        # QoS for mesh data (transient local to get last published)
+        # QoS for mesh data (match nvblox publisher QoS)
         mesh_qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            durability=DurabilityPolicy.VOLATILE,
         )
         
         # Latest data
