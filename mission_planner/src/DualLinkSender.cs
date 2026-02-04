@@ -507,15 +507,11 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> RestartAllServicesViaSSHAsync()
         {
-            // Create a compound command that stops services and starts the script
-            var command = 
-                "pkill -f 'start_nomad_full.sh' 2>/dev/null ; " +
-                "pkill -f 'edge_core.main' 2>/dev/null ; " +
-                "docker exec nomad_isaac_ros_32 pkill -f 'simple_video_bridge' 2>/dev/null ; " +
-                "sleep 2 ; " +
-                "cd ~/NOMAD && nohup bash scripts/start_nomad_full.sh all > /tmp/nomad_startup.log 2>&1 &";
+            // Use dedicated restart script that properly kills all processes (including ZED)
+            // and restarts NOMAD services in background
+            var command = "cd ~/NOMAD && bash scripts/restart_nomad.sh";
             
-            return await ExecuteSSHCommandAsync(command, 15);
+            return await ExecuteSSHCommandAsync(command, 30);
         }
 
         /// <summary>
