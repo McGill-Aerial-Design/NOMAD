@@ -192,6 +192,64 @@ start_isaac_ros() {
 }
 
 # -----------------------------------------------------------------------------
+# Start Video Bridge
+# -----------------------------------------------------------------------------
+
+start_video_bridge() {
+    log_info "Starting video bridge..."
+    
+    # Wait for Edge Core API to be ready
+    local max_wait=30
+    local count=0
+    while [ $count -lt $max_wait ]; do
+        if curl -s http://localhost:$API_PORT/health > /dev/null 2>&1; then
+            break
+        fi
+        sleep 1
+        ((count++))
+    done
+    
+    if [ $count -eq $max_wait ]; then
+        log_warn "Edge Core API not ready, video bridge may not start"
+        return 1
+    fi
+    
+    # Wait for Isaac ROS container to be ready
+    log_info "Waiting for Isaac ROS container..."
+    count=0
+    while [ $count -lt $max_wait ]; do
+        if docker exec nomad_isaac_ros_32 echo "ready" > /dev/null 2>&1; then
+            log_ok "Isaac ROS container ready"
+            break
+        fi
+        sleep 1
+        ((count++))
+    done
+    
+    if [ $count -eq $max_wait ]; then
+        log_warn "Isaac ROS container not ready, video bridge will not start"
+        return 1
+    fi
+    
+    # Give ZED camera time to initialize
+    log_info "Waiting for ZED camera initialization..."
+    sleep 5
+    
+    # Start video bridge via API
+    log_info "Starting video bridge via API..."
+    local response=$(curl -s -X POST http://localhost:$API_PORT/api/video/start 2>&1)
+    
+    if echo "$response" | grep -q '"success":true'; then
+        log_ok "Video bridge started successfully"
+        log_info "RTSP URL: rtsp://$JETSON_IP:$RTSP_PORT/primary"
+        return 0
+    else
+        log_warn "Video bridge may not have started: $response"
+        return 1
+    fi
+}
+
+# -----------------------------------------------------------------------------
 # Print Status
 # -----------------------------------------------------------------------------
 
@@ -251,7 +309,7 @@ main() {
             start_mediamtx
             start_edge_core
             start_isaac_ros
-            # Video streaming handled by VideoStreamManager (auto-starts with container)
+            start_video_bridge
             ;;
         task2)
             log_info "Starting Task 2 (VIO-based) services..."
@@ -259,7 +317,7 @@ main() {
             start_mediamtx
             start_edge_core
             start_isaac_ros
-            # Video streaming handled by VideoStreamManager (auto-starts with container)
+            start_video_bridge
             ;;
         all|*)
             log_info "Starting all services (Isaac ROS + Dynamic Video)..."
@@ -267,12 +325,7 @@ main() {
             start_mediamtx
             start_edge_core
             start_isaac_ros
-            # Video streaming is now handled automatically by edge_core's VideoStreamManager
-            # It auto-starts a default ZED stream when the container is ready
-            # Use the API for dynamic stream switching:
-            #   GET  /api/video/topics           - List available ROS image topics
-            #   POST /api/video/source?topic=X   - Switch to a specific topic
-            #   GET  /api/video/streams          - List active streams
+            start_video_bridge
             ;;
     esac
     
