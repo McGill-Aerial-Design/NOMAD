@@ -408,6 +408,83 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
+        /// Execute a command via SSH directly (bypasses HTTP API).
+        /// Use this for operations that kill the HTTP API (like service restarts).
+        /// Requires OpenSSH client (built into Windows 10/11) and SSH key authentication.
+        /// </summary>
+        public async Task<CommandResult> ExecuteSSHCommandAsync(string command, int timeoutSeconds = 30)
+        {
+            try
+            {
+                var startInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "ssh",
+                    Arguments = $"mad@{_config.EffectiveIP} \"{command}\"",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                using (var process = System.Diagnostics.Process.Start(startInfo))
+                {
+                    var outputTask = process.StandardOutput.ReadToEndAsync();
+                    var errorTask = process.StandardError.ReadToEndAsync();
+                    
+                    var completedTask = await Task.WhenAny(
+                        Task.Run(() => process.WaitForExit(timeoutSeconds * 1000)),
+                        Task.Delay(timeoutSeconds * 1000)
+                    );
+
+                    if (!process.HasExited)
+                    {
+                        process.Kill();
+                        return new CommandResult 
+                        { 
+                            Success = false, 
+                            Message = $"SSH command timed out after {timeoutSeconds}s" 
+                        };
+                    }
+
+                    var output = await outputTask;
+                    var error = await errorTask;
+
+                    return new CommandResult
+                    {
+                        Success = process.ExitCode == 0,
+                        Data = output,
+                        Message = process.ExitCode == 0 ? "SSH command executed" : error
+                    };
+                }
+            }
+            catch (Exception ex)
+            {
+                return new CommandResult
+                {
+                    Success = false,
+                    Message = $"SSH execution failed: {ex.Message}"
+                };
+            }
+        }
+
+        /// <summary>
+        /// Restart all NOMAD services via SSH (doesn't rely on HTTP API).
+        /// Stops existing services and runs start_nomad_full.sh script.
+        /// </summary>
+        public async Task<CommandResult> RestartAllServicesViaSSHAsync()
+        {
+            // Create a compound command that stops services and starts the script
+            var command = 
+                "pkill -f 'start_nomad_full.sh' 2>/dev/null ; " +
+                "pkill -f 'edge_core.main' 2>/dev/null ; " +
+                "docker exec nomad_isaac_ros_32 pkill -f 'simple_video_bridge' 2>/dev/null ; " +
+                "sleep 2 ; " +
+                "cd ~/NOMAD && nohup bash scripts/start_nomad_full.sh all > /tmp/nomad_startup.log 2>&1 &";
+            
+            return await ExecuteSSHCommandAsync(command, 15);
+        }
+
+        /// <summary>
         /// Start a service on the Jetson.
         /// </summary>
         public async Task<CommandResult> StartServiceAsync(string serviceName)

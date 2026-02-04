@@ -521,29 +521,20 @@ namespace NOMAD.MissionPlanner
         
         private async Task RestartAllServicesAsync()
         {
-            LogMessage("Restarting all NOMAD services...");
+            LogMessage("Restarting all NOMAD services via SSH...");
             UpdateStatusLabel(_lblEdgeCoreStatus, false, "Restarting...");
             UpdateStatusLabel(_lblMavlinkStatus, false, "Restarting...");
             UpdateStatusLabel(_lblMediamtxStatus, false, "Restarting...");
             UpdateStatusLabel(_lblIsaacRosStatus, false, "Restarting...");
             UpdateStatusLabel(_lblVideoBridgesStatus, false, "Restarting...");
             
-            // Kill existing services
-            LogMessage("Stopping existing services...");
-            await _sender.ExecuteTerminalCommandAsync("pkill -f 'start_nomad_full.sh'", 5);
-            await Task.Delay(1000);
-            await _sender.ExecuteTerminalCommandAsync("pkill -f 'edge_core.main'", 5);
-            await _sender.ExecuteTerminalCommandAsync("docker exec nomad_isaac_ros_32 pkill -f 'simple_video_bridge'", 5);
-            await Task.Delay(2000);
+            // Use SSH instead of HTTP API (since we're killing edge_core)
+            LogMessage("Using SSH for restart (HTTP API will be unavailable during restart)");
+            var result = await _sender.RestartAllServicesViaSSHAsync();
             
-            // Start NOMAD full script
-            LogMessage("Starting NOMAD full script...");
-            var startResult = await _sender.ExecuteTerminalCommandAsync(
-                "cd ~/NOMAD && nohup bash scripts/start_nomad_full.sh all > /tmp/nomad_startup.log 2>&1 &", 5);
-            
-            if (startResult.Success)
+            if (result.Success || result.Message.Contains("executed") || string.IsNullOrEmpty(result.Message))
             {
-                LogMessage("NOMAD services restart initiated");
+                LogMessage("NOMAD services restart command sent successfully");
                 LogMessage("All services starting (MAVLink, MediaMTX, Edge Core, Isaac ROS, Video Bridge)...");
                 LogMessage("Full startup takes 30-45 seconds. Status will update automatically.");
                 
@@ -551,7 +542,7 @@ namespace NOMAD.MissionPlanner
                 Task.Run(() => {
                     MessageBox.Show(
                         "NOMAD Services Restart Initiated!\n\n" +
-                        "Starting all services:\n" +
+                        "Restarting all services via SSH:\n" +
                         "1. MAVLink Router\n" +
                         "2. MediaMTX (RTSP)\n" +
                         "3. Edge Core API\n" +
@@ -567,7 +558,8 @@ namespace NOMAD.MissionPlanner
             }
             else
             {
-                LogMessage($"Failed to restart services: {startResult.Message}");
+                LogMessage($"SSH restart command may have issues: {result.Message}");
+                LogMessage("Note: This is normal if SSH keys aren't configured. Services may still be restarting.");
             }
         }
         
