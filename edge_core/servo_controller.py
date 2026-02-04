@@ -2,18 +2,19 @@
 """
 Servo Controller for NOMAD.
 
-Controls camera tilt servo and water shooter via PWM on Jetson GPIO pins.
+Controls camera tilt servo via PWM and water shooter via GPIO on Jetson GPIO pins.
 
-Jetson Orin Nano 40-pin Header PWM pins:
-- Pin 13 (PWM8) - Camera tilt servo
-- Pin 15 (PWM1) - Reserved/future use
-- Pin 18 (PWM5) - Water shooter trigger servo
+Jetson Orin Nano 40-pin Header:
+- Pin 13 (PWM8) - Camera tilt servo (PWM)
+- Pin 18 (GPIO) - Water shooter trigger (simple GPIO HIGH/LOW)
 
-Before using, configure pins via jetson-io:
+For camera tilt servo, configure PWM via jetson-io:
     sudo /opt/nvidia/jetson-io/jetson-io.py
     Configure Jetson 40pin Header -> Configure header pins manually
-    -> [*] pwm1 (15), [*] pwm5 (18), [*] pwm8 (13)
+    -> [*] pwm8 (13)
     -> Back -> Save pin changes -> Save and reboot
+
+Water shooter uses simple GPIO - no special configuration needed.
 
 Servo PWM specifications (typical):
 - Frequency: 50 Hz (20ms period)
@@ -32,10 +33,11 @@ logger = logging.getLogger(__name__)
 # PWM chip and channel mapping for Jetson Orin Nano
 # These may need adjustment based on actual jetson-io configuration
 PWM_CHIPS = {
-    "pwm1": {"chip": 0, "channel": 0},  # Pin 15
-    "pwm5": {"chip": 1, "channel": 0},  # Pin 18  
-    "pwm8": {"chip": 2, "channel": 0},  # Pin 13
+    "pwm8": {"chip": 2, "channel": 0},  # Pin 13 - Camera tilt
 }
+
+# GPIO pin for water shooter (uses Jetson.GPIO library)
+WATER_SHOOTER_GPIO_PIN = 18  # Physical pin 18 on 40-pin header
 
 # Servo configuration
 SERVO_FREQ_HZ = 50  # Standard servo frequency
@@ -50,12 +52,12 @@ SERVO_NEUTRAL_PULSE_NS = 1500_000  # 1.5ms -> 90 degrees
 class ServoFunction(Enum):
     """Servo functions in the system."""
     CAMERA_TILT = "camera_tilt"  # Pin 13 (PWM8)
-    WATER_SHOOTER = "water_shooter"  # Pin 18 (PWM5)
+    WATER_SHOOTER = "water_shooter"  # Pin 18 (GPIO - not PWM)
 
 
 @dataclass
 class ServoConfig:
-    """Configuration for a servo."""
+    """Configuration for a PWM servo."""
     name: str
     pwm_chip: int
     pwm_channel: int
@@ -65,6 +67,14 @@ class ServoConfig:
     max_pulse_ns: int = SERVO_MAX_PULSE_NS
     neutral_angle: float = 90.0
     inverted: bool = False  # If True, 0 deg = max pulse
+
+
+@dataclass 
+class GPIOConfig:
+    """Configuration for a GPIO output."""
+    name: str
+    pin: int  # Physical pin number (BOARD mode)
+    active_high: bool = True  # True = HIGH to activate, False = LOW to activate
 
 
 @dataclass
@@ -197,17 +207,171 @@ class PWMServo:
         return os.path.exists(path)
 
 
+class GPIOOutput:
+    """
+    Controls a simple GPIO output pin for on/off control.
+    
+    Uses Jetson.GPIO library for GPIO control.
+    Falls back to sysfs if Jetson.GPIO is not available.
+    """
+    
+    def __init__(self, config: GPIOConfig):
+        self.config = config
+        self._enabled = False
+        self._active = False
+        self._gpio_available = False
+        self._gpio = None
+        
+    def initialize(self) -> bool:
+        """
+        Initialize the GPIO pin.
+        
+        Returns True if successful, False otherwise.
+        """
+        try:
+            # Try to import Jetson.GPIO
+            try:
+                import Jetson.GPIO as GPIO
+                self._gpio = GPIO
+                
+                # Set BOARD mode (physical pin numbers)
+                GPIO.setmode(GPIO.BOARD)
+                GPIO.setwarnings(False)
+                
+                # Setup pin as output, initially OFF
+                initial_state = GPIO.LOW if self.config.active_high else GPIO.HIGH
+                GPIO.setup(self.config.pin, GPIO.OUT, initial=initial_state)
+                
+                self._gpio_available = True
+                logger.info(f"GPIO {self.config.name} initialized on pin {self.config.pin} (Jetson.GPIO)")
+                return True
+                
+            except ImportError:
+                logger.warning(f"Jetson.GPIO not available, using sysfs fallback for {self.config.name}")
+                return self._init_sysfs()
+                
+        except Exception as e:
+            logger.error(f"Failed to initialize GPIO {self.config.name}: {e}")
+            return False
+    
+    def _init_sysfs(self) -> bool:
+        """Initialize GPIO using sysfs interface (fallback)."""
+        try:
+            import os
+            
+            # Map physical pin to GPIO number (Jetson Orin Nano specific)
+            # Pin 18 = GPIO 50 on Jetson Orin Nano
+            pin_to_gpio = {
+                18: 50,  # Physical pin 18 -> GPIO 50
+                12: 79,  # Physical pin 12 -> GPIO 79
+            }
+            
+            gpio_num = pin_to_gpio.get(self.config.pin)
+            if gpio_num is None:
+                logger.error(f"Unknown physical pin {self.config.pin}")
+                return False
+            
+            self._gpio_num = gpio_num
+            gpio_path = f"/sys/class/gpio/gpio{gpio_num}"
+            
+            # Export GPIO if not already exported
+            if not os.path.exists(gpio_path):
+                with open("/sys/class/gpio/export", 'w') as f:
+                    f.write(str(gpio_num))
+                time.sleep(0.1)
+            
+            # Set direction to output
+            with open(f"{gpio_path}/direction", 'w') as f:
+                f.write("out")
+            
+            # Set initial value (off)
+            initial_value = "0" if self.config.active_high else "1"
+            with open(f"{gpio_path}/value", 'w') as f:
+                f.write(initial_value)
+            
+            self._gpio_available = True
+            self._use_sysfs = True
+            logger.info(f"GPIO {self.config.name} initialized on pin {self.config.pin} (sysfs)")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize GPIO {self.config.name} via sysfs: {e}")
+            return False
+    
+    def set_output(self, active: bool) -> bool:
+        """
+        Set GPIO output state.
+        
+        Args:
+            active: True to activate (turn on), False to deactivate (turn off)
+            
+        Returns:
+            True if successful
+        """
+        if not self._gpio_available:
+            return False
+        
+        try:
+            if hasattr(self, '_use_sysfs') and self._use_sysfs:
+                # sysfs method
+                value = "1" if (active == self.config.active_high) else "0"
+                with open(f"/sys/class/gpio/gpio{self._gpio_num}/value", 'w') as f:
+                    f.write(value)
+            else:
+                # Jetson.GPIO method
+                state = self._gpio.HIGH if (active == self.config.active_high) else self._gpio.LOW
+                self._gpio.output(self.config.pin, state)
+            
+            self._active = active
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to set GPIO {self.config.name}: {e}")
+            return False
+    
+    def enable(self) -> bool:
+        """Enable GPIO (mark as enabled, does not change output)."""
+        self._enabled = True
+        return True
+    
+    def disable(self) -> bool:
+        """Disable GPIO (turn off output and mark as disabled)."""
+        self.set_output(False)
+        self._enabled = False
+        return True
+    
+    def get_state(self) -> ServoState:
+        """Get current GPIO state (reusing ServoState for compatibility)."""
+        return ServoState(
+            angle=100.0 if self._active else 0.0,  # 0 = off, 100 = on
+            enabled=self._enabled,
+            last_update=time.time()
+        )
+    
+    def cleanup(self) -> None:
+        """Cleanup GPIO resources."""
+        try:
+            self.set_output(False)
+            if self._gpio and not hasattr(self, '_use_sysfs'):
+                self._gpio.cleanup(self.config.pin)
+        except Exception as e:
+            logger.warning(f"GPIO cleanup warning: {e}")
+
+
 class ServoController:
     """
     Main servo controller managing all servos in the system.
+    
+    Camera tilt uses PWM servo, water shooter uses GPIO.
     """
     
     def __init__(self):
         self._servos: dict[ServoFunction, PWMServo] = {}
+        self._gpio_outputs: dict[ServoFunction, GPIOOutput] = {}
         self._initialized = False
         
-        # Default servo configurations
-        self._configs = {
+        # PWM servo configuration (camera tilt only)
+        self._servo_configs = {
             ServoFunction.CAMERA_TILT: ServoConfig(
                 name="camera_tilt",
                 pwm_chip=2,  # PWM8 on pin 13
@@ -216,25 +380,27 @@ class ServoController:
                 max_angle=180.0,
                 neutral_angle=90.0,  # Camera starts level
             ),
-            ServoFunction.WATER_SHOOTER: ServoConfig(
+        }
+        
+        # GPIO configuration (water shooter)
+        self._gpio_configs = {
+            ServoFunction.WATER_SHOOTER: GPIOConfig(
                 name="water_shooter",
-                pwm_chip=1,  # PWM5 on pin 18
-                pwm_channel=0,
-                min_angle=0.0,
-                max_angle=180.0,
-                neutral_angle=0.0,  # Shooter starts closed/off
+                pin=WATER_SHOOTER_GPIO_PIN,  # Pin 18
+                active_high=True,  # HIGH = pump on
             ),
         }
     
     def initialize(self) -> bool:
         """
-        Initialize all servos.
+        Initialize all servos and GPIO outputs.
         
-        Returns True if at least one servo initialized successfully.
+        Returns True if at least one device initialized successfully.
         """
         success_count = 0
         
-        for function, config in self._configs.items():
+        # Initialize PWM servos
+        for function, config in self._servo_configs.items():
             servo = PWMServo(config)
             if servo.initialize():
                 self._servos[function] = servo
@@ -242,22 +408,36 @@ class ServoController:
             else:
                 logger.warning(f"Servo {function.value} failed to initialize")
         
+        # Initialize GPIO outputs
+        for function, config in self._gpio_configs.items():
+            gpio = GPIOOutput(config)
+            if gpio.initialize():
+                self._gpio_outputs[function] = gpio
+                success_count += 1
+            else:
+                logger.warning(f"GPIO {function.value} failed to initialize")
+        
         self._initialized = success_count > 0
         
         if self._initialized:
-            logger.info(f"Servo controller initialized: {success_count}/{len(self._configs)} servos")
+            total = len(self._servo_configs) + len(self._gpio_configs)
+            logger.info(f"Servo controller initialized: {success_count}/{total} devices")
         else:
-            logger.error("Servo controller failed to initialize - no servos available")
+            logger.error("Servo controller failed to initialize - no devices available")
         
         return self._initialized
     
     def is_available(self) -> bool:
         """Check if servo controller is available."""
-        return self._initialized and len(self._servos) > 0
+        return self._initialized and (len(self._servos) > 0 or len(self._gpio_outputs) > 0)
     
     def get_servo(self, function: ServoFunction) -> Optional[PWMServo]:
-        """Get a specific servo by function."""
+        """Get a specific PWM servo by function."""
         return self._servos.get(function)
+    
+    def get_gpio(self, function: ServoFunction) -> Optional[GPIOOutput]:
+        """Get a specific GPIO output by function."""
+        return self._gpio_outputs.get(function)
     
     def set_camera_tilt(self, angle: float) -> bool:
         """
@@ -286,51 +466,64 @@ class ServoController:
         """
         Trigger water shooter for specified duration.
         
+        Uses GPIO HIGH/LOW to turn pump on/off.
+        
         Args:
             duration_ms: How long to activate shooter (milliseconds)
             
         Returns:
             True if successful
         """
-        servo = self.get_servo(ServoFunction.WATER_SHOOTER)
-        if not servo:
-            logger.warning("Water shooter servo not available")
+        gpio = self.get_gpio(ServoFunction.WATER_SHOOTER)
+        if not gpio:
+            logger.warning("Water shooter GPIO not available")
             return False
         
         try:
-            # Activate shooter (move to max position)
-            servo.set_angle(180.0)
-            servo.enable()
+            # Turn on pump
+            gpio.set_output(True)
+            gpio.enable()
             
             # Wait for duration
             time.sleep(duration_ms / 1000.0)
             
-            # Return to neutral (closed)
-            servo.set_angle(0.0)
+            # Turn off pump
+            gpio.set_output(False)
             
             logger.info(f"Water shooter triggered for {duration_ms}ms")
             return True
             
         except Exception as e:
             logger.error(f"Water shooter trigger failed: {e}")
+            # Ensure pump is off on error
+            try:
+                gpio.set_output(False)
+            except:
+                pass
             return False
     
     def enable_all(self) -> None:
-        """Enable all servos."""
+        """Enable all servos and GPIO outputs."""
         for servo in self._servos.values():
             servo.enable()
+        for gpio in self._gpio_outputs.values():
+            gpio.enable()
     
     def disable_all(self) -> None:
-        """Disable all servos (for safety)."""
+        """Disable all servos and GPIO outputs (for safety)."""
         for servo in self._servos.values():
             servo.disable()
+        for gpio in self._gpio_outputs.values():
+            gpio.disable()
     
     def get_status(self) -> dict:
-        """Get status of all servos."""
+        """Get status of all servos and GPIO outputs."""
         status = {
             "initialized": self._initialized,
             "servo_count": len(self._servos),
-            "servos": {}
+            "gpio_count": len(self._gpio_outputs),
+            "servos": {},
+            "gpio_outputs": {}
         }
         
         for function, servo in self._servos.items():
@@ -339,14 +532,29 @@ class ServoController:
                 "angle": state.angle,
                 "enabled": state.enabled,
                 "last_update": state.last_update,
+                "type": "pwm"
+            }
+        
+        for function, gpio in self._gpio_outputs.items():
+            state = gpio.get_state()
+            status["gpio_outputs"][function.value] = {
+                "active": state.angle > 50,  # angle > 50 means active (on)
+                "enabled": state.enabled,
+                "last_update": state.last_update,
+                "type": "gpio"
             }
         
         return status
     
     def shutdown(self) -> None:
-        """Safely shutdown all servos."""
+        """Safely shutdown all servos and GPIO outputs."""
         logger.info("Shutting down servo controller")
         self.disable_all()
+        
+        # Cleanup GPIO resources
+        for gpio in self._gpio_outputs.values():
+            gpio.cleanup()
+        
         self._initialized = False
 
 
