@@ -147,7 +147,6 @@
     <Compile Include="NOMADViews.cs" />
     <Compile Include="NotificationPanel.cs" />
     <Compile Include="NotificationService.cs" />
-    <Compile Include="ServoControlPanel.cs" />
     <Compile Include="ServiceControlPanel.cs" />
     <Compile Include="SLAM3DView.cs" />
     <Compile Include="SnapshotManager.cs" />

@@ -599,7 +599,6 @@ namespace NOMAD.MissionPlanner
         private readonly JetsonConnectionManager _jetsonConnectionManager;
         private EmbeddedVideoPlayer _videoPlayer;
         private EnhancedWASDControl _wasdControl;
-        private ServoControlPanel _servoControl;
         private Label _lblStatus;
         
         public NOMADVideoView(DualLinkSender sender, NOMADConfig config, JetsonConnectionManager jetsonConnectionManager = null)
@@ -668,15 +667,14 @@ namespace NOMAD.MissionPlanner
             
             mainLayout.Controls.Add(videoSection, 0, 0);
             
-            // Right side: WASD Controls (top) + Servo Control (bottom)
+            // Right side: WASD Controls (full height - includes payload controls)
             var controlsSection = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 2,
+                RowCount = 1,
             };
-            controlsSection.RowStyles.Add(new RowStyle(SizeType.Percent, 65));  // WASD
-            controlsSection.RowStyles.Add(new RowStyle(SizeType.Percent, 35));  // Servo
+            controlsSection.RowStyles.Add(new RowStyle(SizeType.Percent, 100));  // WASD with payload controls
 
             try
             {
@@ -709,28 +707,6 @@ namespace NOMAD.MissionPlanner
                 controlsSection.Controls.Add(errorPanel, 0, 0);
             }
 
-            // Servo control panel (camera tilt + water shooter)
-            try
-            {
-                _servoControl = new ServoControlPanel();
-                _servoControl.Dock = DockStyle.Fill;
-                _servoControl.Initialize(_config);
-                controlsSection.Controls.Add(_servoControl, 0, 1);
-            }
-            catch (Exception ex)
-            {
-                var servoErrorLabel = new Label
-                {
-                    Text = $"Servo control unavailable: {ex.Message}",
-                    Font = new Font("Segoe UI", 9),
-                    ForeColor = ERROR_COLOR,
-                    BackColor = CARD_BG,
-                    Dock = DockStyle.Fill,
-                    TextAlign = ContentAlignment.MiddleCenter,
-                };
-                controlsSection.Controls.Add(servoErrorLabel, 0, 1);
-            }
-
             mainLayout.Controls.Add(controlsSection, 1, 0);
             
             this.Controls.Add(mainLayout);
@@ -744,7 +720,6 @@ namespace NOMAD.MissionPlanner
             {
                 _videoPlayer?.Dispose();
                 _wasdControl?.Dispose();
-                _servoControl?.Dispose();
             }
             base.Dispose(disposing);
         }

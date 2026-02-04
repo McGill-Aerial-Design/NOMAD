@@ -643,10 +643,12 @@ namespace NOMAD.MissionPlanner
 
         // GPIO Pin Configuration - Read from NOMADConfig for flexibility
         // Default: -1 = not configured / disabled
+        // These are for Cube Orange GPIO relay control (payloads)
         private int GPIO_PAYLOAD1_PIN => _config?.GpioPayload1Pin ?? -1;
         private int GPIO_PAYLOAD2_PIN => _config?.GpioPayload2Pin ?? -1;
-        private int JETSON_WATER_GPIO => _config?.JetsonWaterGpio ?? -1;
-        private int JETSON_SERVO_PWM => _config?.JetsonServoPwm ?? -1;
+        
+        // Note: Water shooter and camera tilt servo use fixed API endpoints
+        // /api/servo/shooter/trigger and /api/servo/camera/tilt
 
         private TrackBar _nozzleServoSlider;
         private Label _lblNozzleValue;
@@ -813,18 +815,12 @@ namespace NOMAD.MissionPlanner
         
         /// <summary>
         /// Trigger water pump via Jetson GPIO.
+        /// Uses the /api/servo/shooter/trigger endpoint on edge_core.
         /// </summary>
         private async void ShootWater()
         {
             try
             {
-                // Check if GPIO is configured
-                if (JETSON_WATER_GPIO < 0)
-                {
-                    UpdateStatus("Water pump GPIO not configured", WARNING_COLOR);
-                    return;
-                }
-
                 var jetsonIp = _config?.JetsonIP ?? _config?.EffectiveIP;
                 if (string.IsNullOrEmpty(jetsonIp))
                 {
@@ -832,13 +828,10 @@ namespace NOMAD.MissionPlanner
                     return;
                 }
 
+                // Use the servo/shooter/trigger endpoint with duration in query param
                 var response = await _httpClient.PostAsync(
-                    $"http://{jetsonIp}:8000/api/gpio/water_pump/trigger",
-                    new System.Net.Http.StringContent(
-                        $"{{\"gpio_pin\": {JETSON_WATER_GPIO}, \"duration_ms\": 500}}",
-                        System.Text.Encoding.UTF8,
-                        "application/json"
-                    )
+                    $"http://{jetsonIp}:8000/api/servo/shooter/trigger?duration_ms=500",
+                    null  // No body needed
                 );
 
                 if (response.IsSuccessStatusCode)
@@ -847,7 +840,8 @@ namespace NOMAD.MissionPlanner
                 }
                 else
                 {
-                    UpdateStatus("Water pump failed", ERROR_COLOR);
+                    var errorContent = await response.Content.ReadAsStringAsync();
+                    UpdateStatus($"Water pump failed: {response.StatusCode}", ERROR_COLOR);
                 }
             }
             catch (Exception ex)
@@ -857,7 +851,8 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Update nozzle servo position via Jetson PWM.
+        /// Update nozzle/camera tilt servo position via Jetson PWM.
+        /// Uses the /api/servo/camera/tilt endpoint on edge_core.
         /// </summary>
         private async void UpdateNozzleServo()
         {
@@ -866,25 +861,15 @@ namespace NOMAD.MissionPlanner
             int angle = _nozzleServoSlider.Value;
             _lblNozzleValue.Text = $"{angle} deg";
 
-            // Check if PWM is configured
-            if (JETSON_SERVO_PWM < 0)
-            {
-                // Silent skip - servo not configured
-                return;
-            }
-
             try
             {
                 var jetsonIp = _config?.JetsonIP ?? _config?.EffectiveIP;
                 if (string.IsNullOrEmpty(jetsonIp)) return;
 
+                // Use the camera tilt endpoint with angle as query param
                 await _httpClient.PostAsync(
-                    $"http://{jetsonIp}:8000/api/gpio/servo/{JETSON_SERVO_PWM}/set",
-                    new System.Net.Http.StringContent(
-                        $"{{\"angle\": {angle}}}",
-                        System.Text.Encoding.UTF8,
-                        "application/json"
-                    )
+                    $"http://{jetsonIp}:8000/api/servo/camera/tilt?angle={angle}",
+                    null  // No body needed
                 );
             }
             catch
