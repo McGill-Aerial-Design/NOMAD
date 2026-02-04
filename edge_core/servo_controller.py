@@ -5,8 +5,11 @@ Servo Controller for NOMAD.
 Controls camera tilt servo via PWM and water shooter via GPIO on Jetson GPIO pins.
 
 Jetson Orin Nano 40-pin Header:
-- Pin 13 (PWM8) = pwmchip2 - Camera tilt servo (works without jetson-io)
+- Pin 33 (PWM5) = pwmchip3 - Camera tilt servo
 - Pin 18 (GPIO) - Water shooter trigger (simple GPIO HIGH/LOW)
+
+IMPORTANT: Pin 13 does NOT have PWM on Jetson Orin Nano!
+Use Pin 33 for PWM servo control.
 
 Servo PWM specifications (typical):
 - Frequency: 50 Hz (20ms period)
@@ -22,10 +25,10 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# PWM chip and channel mapping for Jetson Orin Nano  
-# PWM8 (Pin 13) = pwmchip2 at 0x32c0000
+# PWM chip and channel mapping for Jetson Orin Nano
+# PWM5 (Pin 33) = pwmchip3 at 0x32e0000
 PWM_CHIPS = {
-    "pwm8": {"chip": 2, "channel": 0},  # Pin 13
+    "pwm5": {"chip": 3, "channel": 0},  # Pin 33
 }
 
 # GPIO pin for water shooter
@@ -415,7 +418,7 @@ class ServoController:
         self._servo_configs = {
             ServoFunction.CAMERA_TILT: ServoConfig(
                 name="camera_tilt",
-                pwm_chip=2,  # PWM8 on Pin 13
+                pwm_chip=3,  # PWM5 on Pin 33
                 pwm_channel=0,
                 min_angle=0.0,
                 max_angle=180.0,
