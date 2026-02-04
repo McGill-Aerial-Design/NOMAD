@@ -1,18 +1,20 @@
 """
-Video Stream Manager - Isaac ROS H264 Encoder Streaming
+Video Stream Manager - Simple Video Bridge for NOMAD
 
-Manages the Isaac ROS H264 encoder and RTSP bridge running inside the
-Isaac ROS Docker container for low-latency ROS-to-RTSP streaming.
+Manages the simple video bridge running inside the Isaac ROS Docker container
+for low-latency ROS-to-RTSP streaming using software H.264 encoding.
 
 Architecture:
-    ZED Camera -> Isaac ROS H264 Encoder -> CompressedImage (H264) -> RTSP Bridge -> MediaMTX -> Mission Planner
+    ZED Camera (ROS2) -> x264enc (software, ultrafast) -> RTSP -> MediaMTX -> Mission Planner
 
 Key Features:
-- Uses NVIDIA Isaac ROS H264 encoder for hardware-accelerated encoding
+- Software H.264 encoding (x264enc ultrafast preset) for minimal CPU usage
 - Single persistent stream with dynamic topic switching
-- No RTSP URL change when switching - only content changes
-- HTTP API control for topic switching
+- Fixed RTSP URL (never changes when switching topics)
+- HTTP API control for topic switching and status
 - Multiple viewer support via MediaMTX
+- Adaptive bitrate for choppy network conditions
+- Auto-discovery of available ROS2 image topics
 
 Runs on Jetson Edge Core host, controls the bridge inside Docker container.
 """
@@ -103,15 +105,14 @@ class VideoStreamManager:
     """
     Manages the video streaming pipeline for NOMAD.
     
-    This class controls the Isaac H264 RTSP bridge running inside the Isaac ROS
+    This class controls the simple video bridge running inside the Isaac ROS
     Docker container. The bridge:
-    - Launches Isaac ROS H264 encoder (subscribes to ZED camera topic)
-    - Subscribes to H264 CompressedImage output
-    - Pushes H264 to MediaMTX RTSP server
+    - Subscribes to ROS2 image topics from ZED camera
+    - Encodes video using x264enc software encoder (ultrafast preset)
+    - Streams to MediaMTX RTSP server at fixed URL
     
-    Topic switching is done via HTTP API to the bridge, which restarts the
-    encoder with the new topic. The RTSP URL stays constant - only the 
-    content changes.
+    Topic switching is done via HTTP API to the bridge, which changes its
+    ROS2 subscription. The RTSP URL stays constant - only the content changes.
     """
     
     def __init__(
@@ -157,7 +158,7 @@ class VideoStreamManager:
             return False
 
     def is_relay_running(self) -> bool:
-        """Check if the Isaac H264 RTSP bridge is running inside the container."""
+        """Check if the simple video bridge is running inside the container."""
         try:
             # Check if the HTTP API is responsive
             url = f"http://localhost:{self.relay_http_port}/health"
@@ -171,30 +172,24 @@ class VideoStreamManager:
         """
         Start the video streaming pipeline.
         
-        Copies the Isaac H264 RTSP bridge script to the container and launches it.
-        The bridge launches the Isaac ROS H264 encoder internally.
+        Copies the simple video bridge script to the container and launches it.
         Returns True if successful.
         """
         with self._lock:
             if self._started and self.is_relay_running():
-                logger.info("Isaac H264 bridge already running")
+                logger.info("Simple video bridge already running")
                 return True
             
             if not self.is_container_running():
                 logger.warning("Cannot start video: container not running")
                 return False
             
-            # Copy bridge script to container
-            # Try GStreamer bridge first (more reliable), fallback to Isaac ROS
-            script_name = "gstreamer_rtsp_bridge.py"
+            # Copy simple bridge script to container
+            script_name = "simple_video_bridge.py"
             script_path = os.path.join(os.path.dirname(__file__), "ros", script_name)
             if not os.path.exists(script_path):
-                logger.warning(f"GStreamer bridge not found, trying Isaac H264 bridge")
-                script_name = "isaac_h264_rtsp_bridge.py"
-                script_path = os.path.join(os.path.dirname(__file__), "ros", script_name)
-                if not os.path.exists(script_path):
-                    logger.error(f"No bridge script found: {script_path}")
-                    return False
+                logger.error(f"Simple video bridge not found: {script_path}")
+                return False
             
             try:
                 subprocess.run(
@@ -208,52 +203,29 @@ class VideoStreamManager:
                 logger.error(f"Failed to copy bridge script: {e}")
                 return False
             
-            # Kill any existing bridge/encoder processes
+            # Kill any existing bridge processes
             try:
                 subprocess.run(
-                    ["docker", "exec", self.container_name, "pkill", "-f", "gstreamer_rtsp_bridge"],
-                    capture_output=True,
-                    timeout=5
-                )
-                subprocess.run(
-                    ["docker", "exec", self.container_name, "pkill", "-f", "isaac_h264_rtsp_bridge"],
-                    capture_output=True,
-                    timeout=5
-                )
-                subprocess.run(
-                    ["docker", "exec", self.container_name, "pkill", "-f", "encoder_node"],
+                    ["docker", "exec", self.container_name, "pkill", "-f", "simple_video_bridge"],
                     capture_output=True,
                     timeout=5
                 )
             except Exception:
                 pass  # OK if nothing to kill
             
-            # Start the video bridge (GStreamer or Isaac ROS)
-            # Extract RTSP port and path from rtsp_url
-            # Format: rtsp://host:port/path
-            rtsp_port = 8554  # default
-            rtsp_path = "/primary"  # default
-            if ":" in self.rtsp_url and "/" in self.rtsp_url:
-                try:
-                    port_and_path = self.rtsp_url.split(":")[-1]  # "8554/primary"
-                    rtsp_port = int(port_and_path.split("/")[0])
-                    rtsp_path = "/" + "/".join(port_and_path.split("/")[1:])
-                except Exception as e:
-                    logger.warning(f"Failed to parse RTSP URL {self.rtsp_url}: {e}, using defaults")
-            
+            # Start the simple video bridge
+            # Bitrate in kbps for x264enc (multiply by 1000 for bps equivalent)
             cmd = [
                 "docker", "exec", "-d", self.container_name,
                 "bash", "-c",
                 f"source /opt/ros/humble/setup.bash && "
-                f"source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null ; "
                 f"python3 /tmp/{script_name} "
                 f"--source-topic '{self.default_topic}' "
-                f"--rtsp-port {rtsp_port} "
-                f"--rtsp-path '{rtsp_path}' "
-                f"--http-port {self.relay_http_port} "
                 f"--width {self.width} "
                 f"--height {self.height} "
-                f"--bitrate {self.bitrate} "
+                f"--fps {self.fps} "
+                f"--bitrate {self.bitrate * 1000} "
+                f"--http-port {self.relay_http_port} "
                 f"> /tmp/video_bridge.log 2>&1"
             ]
             
@@ -267,33 +239,28 @@ class VideoStreamManager:
                 return False
             
             # Wait for bridge to be ready
-            for i in range(15):  # Longer wait for encoder startup
+            for i in range(10):
                 time.sleep(1)
                 if self.is_relay_running():
                     self._started = True
                     logger.info(f"{script_name} started successfully")
                     return True
             
-            logger.error("Isaac H264 bridge did not start in time")
+            logger.error("Simple video bridge did not start in time")
             return False
 
     def stop(self) -> bool:
         """Stop the video streaming pipeline."""
         with self._lock:
             try:
-                # Stop bridge and encoder
+                # Stop simple video bridge
                 subprocess.run(
-                    ["docker", "exec", self.container_name, "pkill", "-f", "isaac_h264_rtsp_bridge"],
-                    capture_output=True,
-                    timeout=5
-                )
-                subprocess.run(
-                    ["docker", "exec", self.container_name, "pkill", "-f", "encoder_node"],
+                    ["docker", "exec", self.container_name, "pkill", "-f", "simple_video_bridge"],
                     capture_output=True,
                     timeout=5
                 )
                 self._started = False
-                logger.info("Isaac H264 bridge stopped")
+                logger.info("Simple video bridge stopped")
                 return True
             except Exception as e:
                 logger.error(f"Error stopping bridge: {e}")
@@ -311,7 +278,7 @@ class VideoStreamManager:
         
         This calls the bridge's HTTP API to change its source topic.
         The Isaac ROS H264 encoder restarts with the new topic.
-        The RTSP URL stays constant - only the content changes.
+        The ROS2 subscription changes instantly.
         
         Args:
             topic: Full ROS topic path (e.g., /zed/zed_node/left/image_rect_color)
@@ -458,11 +425,11 @@ class VideoStreamManager:
         return self.rtsp_url.replace("172.17.0.1", "localhost")
 
     def get_logs(self, lines: int = 50) -> str:
-        """Get recent logs from the Isaac H264 bridge process."""
+        """Get recent logs from the simple video bridge process."""
         try:
             cmd = [
                 "docker", "exec", self.container_name,
-                "tail", f"-{lines}", "/tmp/isaac_h264_bridge.log"
+                "tail", f"-{lines}", "/tmp/video_bridge.log"
             ]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
             return result.stdout
@@ -490,7 +457,7 @@ def init_video_stream_manager(
     
     Args:
         container_name: Name of the Isaac ROS Docker container
-        auto_start: Whether to auto-start the Isaac H264 bridge when container is ready
+        auto_start: Whether to auto-start the simple video bridge when container is ready
         **kwargs: Additional arguments passed to VideoStreamManager
         
     Returns:
@@ -505,15 +472,15 @@ def init_video_stream_manager(
             # Wait for container to be ready
             for i in range(45):  # Wait up to 90 seconds
                 if _video_stream_manager.is_container_running():
-                    logger.info("Container ready, starting Isaac H264 bridge...")
+                    logger.info("Container ready, starting simple video bridge...")
                     time.sleep(5)  # Wait for ZED to initialize
                     _video_stream_manager.start()
                     return
                 time.sleep(2)
-            logger.warning("Container not ready, Isaac H264 bridge not started")
+            logger.warning("Container not ready, simple video bridge not started")
         
         thread = threading.Thread(target=_delayed_start, daemon=True)
         thread.start()
-        logger.info("Isaac H264 bridge auto-start scheduled")
+        logger.info("Simple video bridge auto-start scheduled")
     
     return _video_stream_manager

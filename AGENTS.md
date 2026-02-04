@@ -260,4 +260,32 @@ The Jetson connects via Tailscale VPN for:
 
 ---
 
-*Last Updated: January 28, 2026*
+## 11. Common AI Agent Mistakes (Learn from This)
+
+### TaskSync Protocol Violations
+
+**Mistake**: Stopping the conversation after asking clarification questions instead of continuing the task cycle.
+
+**Example of Wrong Behavior**:
+```
+Agent: "I have a few questions before implementing..."
+User: [Answers questions]
+Agent: [Session ends or waits indefinitely]
+```
+
+**Correct TaskSync Behavior**:
+```
+Agent: [Asks questions via py -c "question = input('...')"]
+User: [Answers via terminal]
+Agent: [IMMEDIATELY continues with implementation]
+Agent: [Completes task]
+Agent: [IMMEDIATELY requests next task via py -c "task = input('')"]
+```
+
+**Key Rule**: NEVER stop the conversation after asking questions. The TaskSync protocol requires continuous operation until the user explicitly terminates with "stop", "end", "terminate", or "quit".
+
+**Prevention**: Always use the terminal command `py -c "question = input('...')"` for questions and immediately continue with the task after receiving answers.
+
+---
+
+*Last Updated: February 4, 2026*

@@ -288,9 +288,20 @@ main() {
 cleanup() {
     echo ""
     log_info "Shutting down NOMAD services..."
+    
+    # Stop Edge Core API
     pkill -f "edge_core.main" 2>/dev/null || true
+    
+    # Stop video bridge inside Docker container
+    docker exec nomad_isaac_ros_32 pkill -f "simple_video_bridge" 2>/dev/null || true
+    
+    # Stop any GStreamer processes
     pkill -f "gst-launch" 2>/dev/null || true
-    # Don't stop Isaac ROS automatically
+    
+    # Stop MAVLink router
+    pkill -f "mavlink-routerd" 2>/dev/null || true
+    
+    log_ok "All services stopped"
     echo "Goodbye!"
 }
 trap cleanup EXIT INT TERM
