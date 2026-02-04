@@ -201,8 +201,10 @@ start_video_bridge() {
     # Wait for Edge Core API to be ready
     local max_wait=30
     local count=0
+    log_info "Waiting for Edge Core API..."
     while [ $count -lt $max_wait ]; do
         if curl -s http://localhost:$API_PORT/health > /dev/null 2>&1; then
+            log_ok "Edge Core API ready"
             break
         fi
         sleep 1
@@ -210,7 +212,8 @@ start_video_bridge() {
     done
     
     if [ $count -eq $max_wait ]; then
-        log_warn "Edge Core API not ready, video bridge may not start"
+        log_fail "Edge Core API not ready after ${max_wait}s, video bridge cannot start"
+        echo "Check: curl http://localhost:$API_PORT/health" >> $LOG_DIR/video_bridge.log
         return 1
     fi
     
@@ -227,26 +230,59 @@ start_video_bridge() {
     done
     
     if [ $count -eq $max_wait ]; then
-        log_warn "Isaac ROS container not ready, video bridge will not start"
+        log_fail "Isaac ROS container not ready after ${max_wait}s, video bridge cannot start"
+        echo "Container check failed at $(date)" >> $LOG_DIR/video_bridge.log
+        docker ps -a >> $LOG_DIR/video_bridge.log 2>&1
         return 1
     fi
     
-    # Give ZED camera time to initialize
-    log_info "Waiting for ZED camera initialization..."
-    sleep 5
+    # Give ZED camera time to initialize (increased from 5 to 10 seconds)
+    log_info "Waiting for ZED camera initialization (10s)..."
+    sleep 10
     
-    # Start video bridge via API
+    # Start video bridge via API with retries
     log_info "Starting video bridge via API..."
-    local response=$(curl -s -X POST http://localhost:$API_PORT/api/video/start 2>&1)
+    local max_retries=3
+    local retry=0
+    local success=false
     
-    if echo "$response" | grep -q '"success":true'; then
-        log_ok "Video bridge started successfully"
-        log_info "RTSP URL: rtsp://$JETSON_IP:$RTSP_PORT/primary"
-        return 0
-    else
-        log_warn "Video bridge may not have started: $response"
+    while [ $retry -lt $max_retries ]; do
+        if [ $retry -gt 0 ]; then
+            log_info "Retry $retry/$max_retries..."
+            sleep 5
+        fi
+        
+        local response=$(curl -s -w "\nHTTP_CODE:%{http_code}" -X POST http://localhost:$API_PORT/api/video/start 2>&1)
+        local http_code=$(echo "$response" | grep "HTTP_CODE:" | cut -d: -f2)
+        local body=$(echo "$response" | grep -v "HTTP_CODE:")
+        
+        # Log the attempt
+        echo "[$(date)] Attempt $((retry+1)): HTTP $http_code - $body" >> $LOG_DIR/video_bridge.log
+        
+        if echo "$body" | grep -q '"success":true'; then
+            log_ok "Video bridge started successfully"
+            log_info "RTSP URL: rtsp://$JETSON_IP:$RTSP_PORT/primary"
+            success=true
+            break
+        elif [ "$http_code" = "503" ]; then
+            log_warn "Video stream manager not initialized yet (503), retrying..."
+        elif [ "$http_code" = "500" ]; then
+            log_warn "Video stream failed to start (500), retrying..."
+        else
+            log_warn "Unexpected response: HTTP $http_code - $body"
+        fi
+        
+        ((retry++))
+    done
+    
+    if [ "$success" = false ]; then
+        log_fail "Video bridge failed to start after $max_retries attempts"
+        echo "FINAL FAILURE at $(date)" >> $LOG_DIR/video_bridge.log
+        echo "Check edge_core logs: tail -50 $LOG_DIR/edge_core.log" | tee -a $LOG_DIR/video_bridge.log
         return 1
     fi
+    
+    return 0
 }
 
 # -----------------------------------------------------------------------------
@@ -278,6 +314,15 @@ try:
         print(f'{icon} {svc:20} {stat}')
 except: pass
 " 2>/dev/null || true
+        
+        # Check video bridge status
+        echo ""
+        local video_status=$(curl -s http://localhost:$API_PORT/api/video/status 2>/dev/null)
+        if echo "$video_status" | grep -q '"streaming":true'; then
+            echo "[OK] Video Bridge       streaming"
+        else
+            echo "[--] Video Bridge       not streaming"
+        fi
     fi
     
     echo ""
@@ -288,10 +333,10 @@ except: pass
     echo "  MAVLink:      UDP $JETSON_IP:14550"
     echo ""
     echo "Logs:"
-    echo "  MAVLink:    $LOG_DIR/mavlink.log"
-    echo "  Edge Core:  $LOG_DIR/edge_core.log"
-    echo "  Video:      $LOG_DIR/video.log"
-    echo "  Isaac ROS:  docker logs nomad_isaac_ros_32"
+    echo "  MAVLink:      $LOG_DIR/mavlink.log"
+    echo "  Edge Core:    $LOG_DIR/edge_core.log"
+    echo "  Video Bridge: $LOG_DIR/video_bridge.log"
+    echo "  Isaac ROS:    docker logs nomad_isaac_ros_32"
     echo "=========================================="
 }
 
