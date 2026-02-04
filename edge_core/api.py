@@ -102,8 +102,14 @@ class Task1UploadDescriptionResponse(BaseModel):
 
 # Whitelist of allowed terminal commands for safety
 COMMAND_WHITELIST: dict[str, str] = {
+    # Service control
     "restart_video": "sudo systemctl restart mediamtx",
     "restart_edge_core": "sudo systemctl restart nomad",
+    "restart_mavlink": "sudo systemctl restart mavlink-router",
+    "status_mediamtx": "systemctl is-active mediamtx",
+    "status_mavlink": "systemctl is-active mavlink-router",
+    "status_nomad": "systemctl is-active nomad",
+    # System commands
     "reboot_jetson": "sudo reboot",
     "shutdown_jetson": "sudo shutdown -h now",
     "check_disk": "df -h",
@@ -1896,6 +1902,16 @@ def create_app(state_manager: StateManager) -> FastAPI:
             "rtsp_url": mgr.get_rtsp_url(),
             "message": "Video pipeline restarted"
         }
+
+    @app.post("/api/video/bridges/start", tags=["Video"])
+    async def start_video_bridges():
+        """
+        Start video bridges (legacy endpoint for compatibility).
+        
+        This is an alias for /api/video/start since we simplified to a single bridge.
+        Mission Planner Service Control Panel calls this endpoint.
+        """
+        return await start_video_stream()
 
     @app.get("/api/video/logs", tags=["Video"])
     async def get_video_logs(lines: int = Query(50, description="Number of log lines to return")):

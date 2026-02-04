@@ -404,7 +404,8 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> ExecuteTerminalCommandAsync(string command, int timeout = 10)
         {
-            return await SendHttpPost("/api/terminal/run", new { command, timeout });
+            // API expects command_name (whitelist key), not full command string
+            return await SendHttpPost("/api/terminal/run", new { command_name = command, timeout });
         }
 
         /// <summary>
@@ -544,7 +545,17 @@ namespace NOMAD.MissionPlanner
         {
             if (!ALLOWED_SERVICES.Contains(serviceName))
                 return new CommandResult { Success = false, Message = $"Service '{serviceName}' not in whitelist" };
-            return await ExecuteTerminalCommandAsync($"sudo systemctl restart {serviceName}", 15);
+            
+            // Map service names to whitelisted command names
+            string commandName = serviceName switch
+            {
+                "mediamtx" => "restart_video",
+                "mavlink-router" => "restart_mavlink",
+                "nomad" => "restart_edge_core",
+                _ => $"restart_{serviceName}" // Fallback
+            };
+            
+            return await ExecuteTerminalCommandAsync(commandName, 15);
         }
 
         /// <summary>
@@ -554,7 +565,17 @@ namespace NOMAD.MissionPlanner
         {
             if (!ALLOWED_SERVICES.Contains(serviceName))
                 return new CommandResult { Success = false, Message = $"Service '{serviceName}' not in whitelist" };
-            return await ExecuteTerminalCommandAsync($"systemctl is-active {serviceName}", 5);
+            
+            // Map service names to whitelisted command names
+            string commandName = serviceName switch
+            {
+                "mediamtx" => "status_mediamtx",
+                "mavlink-router" => "status_mavlink",
+                "nomad" => "status_nomad",
+                _ => $"status_{serviceName}" // Fallback
+            };
+            
+            return await ExecuteTerminalCommandAsync(commandName, 5);
         }
 
         /// <summary>
