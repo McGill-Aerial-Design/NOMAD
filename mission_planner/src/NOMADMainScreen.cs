@@ -69,7 +69,6 @@ namespace NOMAD.MissionPlanner
         private Button _btnTerminal;
         private Button _btnHealth;
         private Button _btnLinks;
-        private Button _btnSettings;
         private Button _currentActiveButton;
         
         // Content views
@@ -82,7 +81,6 @@ namespace NOMAD.MissionPlanner
         private NOMADTerminalView _terminalView;
         private NOMADHealthView _healthView;
         private NOMADLinksView _linksView;
-        private NOMADSettingsView _settingsView;
         
         // Update timer
         private System.Windows.Forms.Timer _updateTimer;
@@ -287,14 +285,6 @@ namespace NOMAD.MissionPlanner
             _btnLinks.Click += (s, e) => ShowView("Links");
             navPanel.Controls.Add(_btnLinks);
             
-            // Separator
-            navPanel.Controls.Add(CreateSeparatorLabel(""));
-            
-            // Settings button
-            _btnSettings = CreateSidebarButton("Settings");
-            _btnSettings.Click += (s, e) => ShowView("Settings");
-            navPanel.Controls.Add(_btnSettings);
-            
             // IMPORTANT: In Windows Forms, docking order is reverse of Z-order
             // Add navPanel FIRST (will be at back, fills remaining space)
             // Add logoPanel SECOND (will be in front, docked at top)
@@ -424,7 +414,6 @@ namespace NOMAD.MissionPlanner
                     case "Terminal": headerText = "Jetson Terminal"; break;
                     case "Health": headerText = "System Health"; break;
                     case "Links": headerText = "Dual Link Status"; break;
-                    case "Settings": headerText = "Settings"; break;
                 }
                 ((Label)headerLabel[0]).Text = headerText;
             }
@@ -480,10 +469,6 @@ namespace NOMAD.MissionPlanner
                     if (_linksView == null) _linksView = new NOMADLinksView(_connectionManager, _config);
                     newView = _linksView;
                     break;
-                case "Settings":
-                    if (_settingsView == null) _settingsView = new NOMADSettingsView(_config);
-                    newView = _settingsView;
-                    break;
             }
             
             if (newView != null)
@@ -497,7 +482,7 @@ namespace NOMAD.MissionPlanner
         private void UpdateSidebarButtonState(string viewName)
         {
             // Reset all buttons to default state
-            var buttons = new[] { _btnDashboard, _btnTask1, _btnTask2, _btnBoundaries, _btnVideo, _btnTerminal, _btnHealth, _btnLinks, _btnSettings };
+            var buttons = new[] { _btnDashboard, _btnTask1, _btnTask2, _btnBoundaries, _btnVideo, _btnTerminal, _btnHealth, _btnLinks };
             foreach (var btn in buttons)
             {
                 if (btn != null)
@@ -519,7 +504,6 @@ namespace NOMAD.MissionPlanner
                 case "Terminal": activeBtn = _btnTerminal; break;
                 case "Health": activeBtn = _btnHealth; break;
                 case "Links": activeBtn = _btnLinks; break;
-                case "Settings": activeBtn = _btnSettings; break;
             }
             
             if (activeBtn != null)
@@ -578,7 +562,6 @@ namespace NOMAD.MissionPlanner
                 _terminalView?.Dispose();
                 _healthView?.Dispose();
                 _linksView?.Dispose();
-                _settingsView?.Dispose();
             }
             base.Dispose(disposing);
         }
