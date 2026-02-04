@@ -5,7 +5,7 @@ Simple Video Bridge for NOMAD - Minimal Implementation
 Streams ROS2 camera topics to RTSP via MediaMTX using software H.264 encoding.
 
 Features:
-- Software encoding (x264enc) with fastest preset for minimal CPU usage
+- Software encoding (openh264enc) for minimal CPU usage
 - Fixed RTSP URL: rtsp://localhost:8554/primary  
 - Dynamic topic switching via HTTP API
 - Auto-discovery of available ROS2 image topics
@@ -13,9 +13,9 @@ Features:
 - Adaptive bitrate for choppy network conditions
 
 Architecture:
-    ROS2 Image Topic -> x264enc (software, ultrafast) -> RTSP -> MediaMTX
+    ROS2 Image Topic -> openh264enc (software) -> RTSP -> MediaMTX
 
-Target: Jetson Orin Nano (no hardware encoder)
+Target: Jetson Orin Nano / Isaac ROS Docker container
 """
 
 import rclpy
@@ -54,16 +54,14 @@ class VideoStreamNode(Node):
         self.start_time = time.time()
         self.subscription = None
         
-        # Build GStreamer pipeline: appsrc -> x264enc (ultrafast) -> RTSP
-        # Use tune=zerolatency for lowest latency
-        # Use speed-preset=ultrafast for minimal CPU usage
-        # Use bitrate control with automatic quality adjustment
+        # Build GStreamer pipeline: appsrc -> openh264enc (software) -> RTSP
+        # Use openh264enc available in Isaac ROS container
+        # Bitrate is in bps for openh264enc
         pipeline_str = (
             f'appsrc name=source is-live=true format=time do-timestamp=true '
             f'caps=video/x-raw,format=BGR,width={width},height={height},framerate={fps}/1 ! '
             f'videoconvert ! '
-            f'x264enc tune=zerolatency speed-preset=ultrafast bitrate={bitrate} '
-            f'key-int-max=60 vbv-buf-capacity=1000 ! '
+            f'openh264enc bitrate={bitrate * 1000} num-slices=4 ! '
             f'video/x-h264,profile=baseline ! '
             f'h264parse ! '
             f'rtspclientsink location=rtsp://172.17.0.1:8554/primary protocols=tcp'
@@ -72,7 +70,7 @@ class VideoStreamNode(Node):
         self.get_logger().info('Starting GStreamer pipeline')
         self.get_logger().info(f'  Topic: {source_topic}')
         self.get_logger().info(f'  Resolution: {width}x{height}@{fps}fps')
-        self.get_logger().info(f'  Encoder: x264enc ultrafast (software)')
+        self.get_logger().info(f'  Encoder: openh264enc (software)')
         self.get_logger().info(f'  Bitrate: {bitrate}kbps (adaptive)')
         self.get_logger().info(f'  RTSP: rtsp://localhost:8554/primary')
         
