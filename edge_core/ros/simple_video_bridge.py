@@ -113,7 +113,23 @@ class VideoStreamNode(Node):
         """Switch to a different ROS2 image topic."""
         try:
             self.get_logger().info(f'Switching topic: {self.source_topic} -> {new_topic}')
+            
+            # Pause the GStreamer pipeline during topic switch to prevent errors
+            if hasattr(self, 'pipeline') and self.pipeline:
+                self.pipeline.set_state(Gst.State.PAUSED)
+                time.sleep(0.1)  # Brief pause to let pipeline settle
+            
+            # Switch ROS subscription
             self._subscribe_to_topic(new_topic)
+            
+            # Resume GStreamer pipeline
+            if hasattr(self, 'pipeline') and self.pipeline:
+                ret = self.pipeline.set_state(Gst.State.PLAYING)
+                if ret == Gst.StateChangeReturn.FAILURE:
+                    self.get_logger().error('Failed to resume pipeline after topic switch')
+                    return False
+                    
+            self.get_logger().info(f'Successfully switched to: {new_topic}')
             return True
         except Exception as e:
             self.get_logger().error(f'Failed to switch topic: {e}')
