@@ -110,11 +110,11 @@ start_mavlink_router() {
         log_warn "No Tailscale peer found, using: $GCS_IP"
     fi
     
-    nohup mavlink-routerd -e "$GCS_IP:14550" -e 127.0.0.1:14551 /dev/ttyACM0 > $LOG_DIR/mavlink.log 2>&1 &
+    nohup mavlink-routerd -e "$GCS_IP:14550" -e 127.0.0.1:14550 /dev/ttyACM0 > $LOG_DIR/mavlink.log 2>&1 &
     sleep 2
     
     if pgrep -f mavlink-routerd > /dev/null; then
-        log_ok "MAVLink Router started (-> $GCS_IP:14550)"
+        log_ok "MAVLink Router started (-> $GCS_IP:14550 + local Edge Core)"
     else
         log_fail "MAVLink Router failed. Check $LOG_DIR/mavlink.log"
     fi
