@@ -1992,6 +1992,12 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 "total_triangles": mesh_data.get("total_triangles", 0),
             }
             
+            # Store drone pose from mesh data (from TF lookup in ros_http_bridge)
+            if "drone_position" in mesh_data and mesh_data["drone_position"]:
+                request.app.state.slam_mesh_data["drone_position"] = mesh_data["drone_position"]
+            if "drone_attitude" in mesh_data and mesh_data["drone_attitude"]:
+                request.app.state.slam_mesh_data["drone_attitude"] = mesh_data["drone_attitude"]
+            
             return {"status": "ok", "blocks_received": len(mesh_data.get("blocks", []))}
             
         except Exception as e:
@@ -2040,19 +2046,26 @@ def create_app(state_manager: StateManager) -> FastAPI:
                         "mesh": stored.get("mesh"),
                     }
                 
-                # Add drone pose
-                external_vio = request.app.state.external_vio_state
-                if external_vio:
-                    result["drone_position"] = {
-                        "x": external_vio.get("x", 0),
-                        "y": external_vio.get("y", 0),
-                        "z": external_vio.get("z", 0),
-                    }
-                    result["drone_attitude"] = {
-                        "roll": external_vio.get("roll", 0),
-                        "pitch": external_vio.get("pitch", 0),
-                        "yaw": external_vio.get("yaw", 0),
-                    }
+                # Add drone pose from mesh data (TF lookup from ros_http_bridge)
+                if stored.get("drone_position"):
+                    result["drone_position"] = stored["drone_position"]
+                if stored.get("drone_attitude"):
+                    result["drone_attitude"] = stored["drone_attitude"]
+                
+                # Fallback to external VIO state if mesh didn't include pose
+                if "drone_position" not in result:
+                    external_vio = request.app.state.external_vio_state
+                    if external_vio:
+                        result["drone_position"] = {
+                            "x": external_vio.get("x", 0),
+                            "y": external_vio.get("y", 0),
+                            "z": external_vio.get("z", 0),
+                        }
+                        result["drone_attitude"] = {
+                            "roll": external_vio.get("roll", 0),
+                            "pitch": external_vio.get("pitch", 0),
+                            "yaw": external_vio.get("yaw", 0),
+                        }
                 
                 return result
             

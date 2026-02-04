@@ -46,6 +46,13 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped, Twist
 from std_msgs.msg import Float32MultiArray
 
+# TF2 for camera pose lookup
+try:
+    from tf2_ros import Buffer, TransformListener, TransformException
+    TF2_AVAILABLE = True
+except ImportError:
+    TF2_AVAILABLE = False
+
 # Try to import nvblox_msgs for mesh data
 try:
     from nvblox_msgs.msg import Mesh, MeshBlock
@@ -181,6 +188,20 @@ class ROSHTTPBridge(Node):
             self.get_logger().info(f"Subscribed to mesh: {mesh_topic}")
         elif enable_mesh and not NVBLOX_AVAILABLE:
             self.get_logger().warning("Mesh requested but nvblox_msgs not available")
+        
+        # TF2 buffer for camera pose lookup
+        self._tf_buffer = None
+        self._tf_listener = None
+        if TF2_AVAILABLE:
+            self._tf_buffer = Buffer()
+            self._tf_listener = TransformListener(self._tf_buffer, self)
+            self.get_logger().info("TF2 listener initialized for camera pose tracking")
+        else:
+            self.get_logger().warning("TF2 not available - camera pose tracking disabled")
+        
+        # Camera frame to track
+        self._camera_frame = "zed_left_camera_frame"
+        self._reference_frame = "odom"  # Or "map" depending on your setup
         
         # Timer to send data to edge_core
         self.create_timer(self._send_interval, self._send_to_edge_core)
@@ -344,6 +365,7 @@ class ROSHTTPBridge(Node):
         Handle mesh data from nvblox for 3D visualization.
         
         Converts nvblox_msgs/Mesh to simplified JSON and sends to edge_core.
+        Includes camera pose from TF if available.
         """
         if not self._enable_mesh:
             return
@@ -370,6 +392,9 @@ class ROSHTTPBridge(Node):
             if not blocks:
                 return  # Skip empty meshes
             
+            # Get camera pose from TF
+            camera_pose = self._get_camera_pose()
+            
             # Create mesh data payload
             mesh_data = {
                 "blocks": blocks,
@@ -380,11 +405,58 @@ class ROSHTTPBridge(Node):
                 "frame_id": msg.header.frame_id if hasattr(msg, 'header') else "map",
             }
             
+            # Add camera pose if available
+            if camera_pose:
+                mesh_data["drone_position"] = camera_pose["position"]
+                mesh_data["drone_attitude"] = camera_pose["attitude"]
+            
             self._mesh_recv_count += 1
             self._send_mesh_to_edge_core(mesh_data)
             
         except Exception as e:
             self.get_logger().error(f"Mesh processing error: {e}")
+    
+    def _get_camera_pose(self) -> Optional[dict]:
+        """
+        Get camera pose from TF.
+        Returns position (x, y, z) and attitude (roll, pitch, yaw) in the reference frame.
+        """
+        if not self._tf_buffer or not TF2_AVAILABLE:
+            return None
+        
+        try:
+            # Try to get transform from reference frame to camera frame
+            # Use latest available time
+            transform = self._tf_buffer.lookup_transform(
+                self._reference_frame,
+                self._camera_frame,
+                rclpy.time.Time(),  # Use latest
+                timeout=rclpy.duration.Duration(seconds=0.1)
+            )
+            
+            # Extract position
+            pos = transform.transform.translation
+            
+            # Extract rotation and convert to Euler
+            rot = transform.transform.rotation
+            roll, pitch, yaw = self._quat_to_euler(rot.x, rot.y, rot.z, rot.w)
+            
+            return {
+                "position": {"x": pos.x, "y": pos.y, "z": pos.z},
+                "attitude": {"roll": roll, "pitch": pitch, "yaw": yaw}
+            }
+            
+        except TransformException as e:
+            # TF not available yet or frames don't exist - this is normal during startup
+            # Try alternate reference frame
+            if self._reference_frame == "odom":
+                self._reference_frame = "map"  # Try map frame next time
+            elif self._reference_frame == "map":
+                self._reference_frame = "odom"  # Try odom frame next time
+            return None
+        except Exception as e:
+            self.get_logger().debug(f"TF lookup failed: {e}")
+            return None
     
     def _process_mesh_block(self, block) -> Optional[dict]:
         """Convert a ROS mesh block to simplified dict format."""
