@@ -53,6 +53,12 @@ try:
 except ImportError:
     TF2_AVAILABLE = False
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("ros_http_bridge")
+
 # Try to import nvblox_msgs for mesh data
 try:
     from nvblox_msgs.msg import Mesh, MeshBlock
@@ -60,12 +66,6 @@ try:
 except ImportError:
     NVBLOX_AVAILABLE = False
     logger.warning("nvblox_msgs not available - mesh bridge disabled")
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
-logger = logging.getLogger("ros_http_bridge")
 
 
 @dataclass
