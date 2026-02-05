@@ -26,8 +26,8 @@ Wiring (Pin 15 nozzle servo):
 
 import logging
 import os
+import select
 import subprocess
-import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -263,41 +263,77 @@ int main(int argc, char *argv[]) {
     def enable(self) -> bool:
         """Enable servo - start the PWM helper process."""
         with self._lock:
-            try:
-                if self._process is not None:
-                    # Already running
+            return self._enable_locked()
+    
+    def _enable_locked(self) -> bool:
+        """Internal enable - caller must hold self._lock."""
+        try:
+            if self._process is not None:
+                # Check if still alive
+                if self._process.poll() is None:
                     self._enabled = True
                     return True
-                
-                pulse_us = self._angle_to_pulse_us(self._current_angle)
-                
-                self._process = subprocess.Popen(
-                    [
-                        self._binary_path,
-                        str(self.config.gpio_chip),
-                        str(self.config.gpio_line),
-                        str(pulse_us),
-                    ],
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
-                
-                # Wait for READY message
-                ready_line = self._process.stdout.readline().decode().strip()
-                if not ready_line.startswith("READY"):
-                    logger.error(f"Servo helper did not start: {ready_line}")
-                    self._process.terminate()
-                    self._process = None
-                    return False
-                
-                self._enabled = True
-                logger.info(f"Servo {self.config.name} enabled (PID: {ready_line})")
-                return True
-                
-            except Exception as e:
-                logger.error(f"Failed to enable servo {self.config.name}: {e}")
+                # Process died, clean up
+                self._process = None
+            
+            if not os.path.exists(self._binary_path):
+                logger.error(f"Servo binary not found: {self._binary_path}")
                 return False
+            
+            pulse_us = self._angle_to_pulse_us(self._current_angle)
+            
+            self._process = subprocess.Popen(
+                [
+                    self._binary_path,
+                    str(self.config.gpio_chip),
+                    str(self.config.gpio_line),
+                    str(pulse_us),
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            
+            # Wait for READY message with timeout to prevent hanging
+            ready = select.select([self._process.stdout], [], [], 5.0)
+            if not ready[0]:
+                # Timeout - check if process crashed
+                stderr_out = ""
+                if self._process.poll() is not None:
+                    stderr_out = self._process.stderr.read().decode(errors='replace')
+                logger.error(
+                    f"Servo helper timeout waiting for READY. "
+                    f"Exit code: {self._process.poll()}, stderr: {stderr_out}"
+                )
+                self._process.terminate()
+                self._process = None
+                return False
+            
+            ready_line = self._process.stdout.readline().decode().strip()
+            if not ready_line.startswith("READY"):
+                stderr_out = ""
+                if self._process.poll() is not None:
+                    stderr_out = self._process.stderr.read().decode(errors='replace')
+                logger.error(
+                    f"Servo helper did not start: '{ready_line}', stderr: {stderr_out}"
+                )
+                self._process.terminate()
+                self._process = None
+                return False
+            
+            self._enabled = True
+            logger.info(f"Servo {self.config.name} enabled ({ready_line})")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to enable servo {self.config.name}: {e}")
+            if self._process is not None:
+                try:
+                    self._process.terminate()
+                except:
+                    pass
+                self._process = None
+            return False
     
     def disable(self) -> bool:
         """Disable servo - stop the PWM helper process."""
@@ -335,9 +371,10 @@ int main(int argc, char *argv[]) {
         with self._lock:
             self._current_angle = angle
             
-            if self._process is None:
-                # Auto-enable on first angle set
-                if not self.enable():
+            if self._process is None or self._process.poll() is not None:
+                # Auto-enable on first angle set (use _enable_locked to avoid deadlock)
+                self._process = None
+                if not self._enable_locked():
                     return False
             
             try:
@@ -349,8 +386,8 @@ int main(int argc, char *argv[]) {
                 logger.warning(f"Servo helper process died, restarting: {e}")
                 self._process = None
                 self._enabled = False
-                # Try to restart
-                if self.enable():
+                # Try to restart (already holding lock)
+                if self._enable_locked():
                     try:
                         self._process.stdin.write(f"{pulse_us}\n".encode())
                         self._process.stdin.flush()
