@@ -286,6 +286,14 @@ Agent: [IMMEDIATELY requests next task via py -c "task = input('')"]
 
 **Prevention**: Always use the terminal command `py -c "question = input('...')"` for questions and immediately continue with the task after receiving answers.
 
+### TaskSync Does NOT Apply to Subagents
+
+The TaskSync protocol (terminal-based task input loop, continuous operation, no session termination) applies **only to the primary agent** running in the main chat. **Subagents** spawned via `runSubagent` are stateless, single-task workers. They should:
+- Complete their assigned task and return results
+- NOT attempt to run `py -c "task = input('')"` or any TaskSync terminal commands
+- NOT attempt continuous operation or task loops
+- Simply report findings/results back to the primary agent
+
 ---
 
-*Last Updated: February 4, 2026*
+*Last Updated: February 5, 2026*
