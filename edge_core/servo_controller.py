@@ -2,16 +2,16 @@
 """
 Servo Controller for NOMAD.
 
-Controls water nozzle servo via PWM and water shooter pump via GPIO on Jetson GPIO pins.
+Controls water nozzle servo via GPIO bit-bang PWM and water shooter pump via GPIO
+on Jetson Orin Nano GPIO pins.
 
 Jetson Orin Nano 40-pin Header:
-- Pin 15 (PWM1) = pwmchip0 - Water nozzle angle servo
+- Pin 15 - Water nozzle angle servo (GPIO bit-bang PWM via /dev/gpiochip0 line 85)
 - Pin 18 (GPIO) - Water shooter pump trigger (simple GPIO HIGH/LOW)
 
-Pin 15 PWM configuration:
-- Must be configured via jetson-io: sudo python3 /opt/nvidia/jetson-io/config-by-function.py pwm1
-- PWM sysfs path: /sys/devices/3280000.pwm -> /sys/class/pwm/pwmchip0
-- PWM channel: 0
+NOTE: Hardware sysfs PWM (pwmchip0) does NOT route to Pin 15 on the Orin Nano
+due to pinmux limitations. We use a compiled C helper for precise GPIO bit-bang
+PWM instead. This has been tested and confirmed working.
 
 Servo PWM specifications (typical):
 - Frequency: 50 Hz (20ms period)
@@ -19,12 +19,16 @@ Servo PWM specifications (typical):
 - Neutral: 1500us (90 deg)
 
 Wiring (Pin 15 nozzle servo):
-- Servo Signal (orange/white) -> Pin 15 (PWM1)
+- Servo Signal (orange/white) -> Pin 15
 - Servo Power (red)           -> Pin 2 or Pin 4 (5V) or external 5V supply
 - Servo Ground (brown/black)  -> Pin 14 (GND) or any GND pin
 """
 
 import logging
+import os
+import subprocess
+import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -32,23 +36,11 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# PWM chip and channel mapping for Jetson Orin Nano
-# PWM1 (Pin 15) = pwmchip0 at 0x3280000
-PWM_CHIPS = {
-    "pwm1": {"chip": 0, "channel": 0},  # Pin 15 - nozzle servo
-}
-
 # GPIO pin for water shooter
 WATER_SHOOTER_GPIO_PIN = 18  # Physical pin 18 on 40-pin header
 
 # Servo configuration
 SERVO_FREQ_HZ = 50  # Standard servo frequency
-SERVO_PERIOD_NS = int(1e9 / SERVO_FREQ_HZ)  # 20,000,000 ns = 20ms
-
-# Pulse width range (microseconds -> nanoseconds)
-SERVO_MIN_PULSE_NS = 500_000   # 0.5ms -> 0 degrees
-SERVO_MAX_PULSE_NS = 2500_000  # 2.5ms -> 180 degrees
-SERVO_NEUTRAL_PULSE_NS = 1500_000  # 1.5ms -> 90 degrees
 
 
 class ServoFunction(Enum):
@@ -59,16 +51,24 @@ class ServoFunction(Enum):
 
 @dataclass
 class ServoConfig:
-    """Configuration for a PWM servo."""
+    """Configuration for a GPIO bit-bang PWM servo."""
     name: str
-    pwm_chip: int
-    pwm_channel: int
+    gpio_chip: int  # /dev/gpiochipN
+    gpio_line: int  # GPIO line number within the chip
     min_angle: float = 0.0
     max_angle: float = 180.0
-    min_pulse_ns: int = SERVO_MIN_PULSE_NS
-    max_pulse_ns: int = SERVO_MAX_PULSE_NS
+    min_pulse_us: int = 500   # 0.5ms -> 0 degrees
+    max_pulse_us: int = 2500  # 2.5ms -> 180 degrees
     neutral_angle: float = 90.0
     inverted: bool = False  # If True, 0 deg = max pulse
+
+
+# Pin 15 on Jetson Orin Nano = gpiochip0, line 85 (SOC_GPIO39_PN1)
+NOZZLE_SERVO_CONFIG = ServoConfig(
+    name="nozzle",
+    gpio_chip=0,
+    gpio_line=85,
+)
 
 
 @dataclass 
@@ -89,43 +89,171 @@ class ServoState:
 
 class PWMServo:
     """
-    Controls a single PWM servo via sysfs interface.
+    Controls a single servo via GPIO bit-bang PWM using a compiled C helper.
     
-    Uses /sys/class/pwm/pwmchipX/pwmY for hardware PWM control.
+    Uses /dev/gpiochipN character device with ioctl for precise pulse timing.
+    A background C process generates continuous 50Hz PWM pulses.
+    
+    This is used because hardware sysfs PWM (pwmchip0) does not route to
+    Pin 15 on the Jetson Orin Nano despite correct pinmux overlay configuration.
     """
+    
+    # C source for the servo PWM helper - compiled once at init
+    _C_SOURCE = r'''
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/ioctl.h>
+#include <linux/gpio.h>
+#include <time.h>
+
+static volatile int running = 1;
+void handle_sig(int s) { running = 0; }
+
+void sleep_us(long us) {
+    struct timespec ts;
+    ts.tv_sec = us / 1000000;
+    ts.tv_nsec = (us % 1000000) * 1000;
+    nanosleep(&ts, NULL);
+}
+
+int main(int argc, char *argv[]) {
+    if (argc < 4) {
+        fprintf(stderr, "Usage: %s <chip> <line> <pulse_us>\n", argv[0]);
+        return 1;
+    }
+    
+    int chip_num = atoi(argv[1]);
+    int line_num = atoi(argv[2]);
+    int pulse_us = atoi(argv[3]);
+    
+    char chip_path[64];
+    snprintf(chip_path, sizeof(chip_path), "/dev/gpiochip%d", chip_num);
+    
+    int fd = open(chip_path, O_RDONLY);
+    if (fd < 0) { perror("open gpiochip"); return 1; }
+    
+    struct gpiohandle_request req;
+    memset(&req, 0, sizeof(req));
+    req.lineoffsets[0] = line_num;
+    req.flags = GPIOHANDLE_REQUEST_OUTPUT;
+    req.default_values[0] = 0;
+    req.lines = 1;
+    strcpy(req.consumer_label, "nomad_servo");
+    
+    if (ioctl(fd, GPIO_GET_LINEHANDLE_IOCTL, &req) < 0) {
+        perror("ioctl get line");
+        close(fd);
+        return 1;
+    }
+    
+    signal(SIGTERM, handle_sig);
+    signal(SIGINT, handle_sig);
+    
+    /* Write PID to stdout so parent can manage us */
+    printf("READY %d\n", getpid());
+    fflush(stdout);
+    
+    /* Read new pulse widths from stdin (non-blocking) */
+    int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+    fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+    
+    struct gpiohandle_data data;
+    int period_us = 20000; /* 50Hz */
+    char buf[32];
+    
+    while (running) {
+        /* Check for new pulse width command */
+        int n = read(STDIN_FILENO, buf, sizeof(buf) - 1);
+        if (n > 0) {
+            buf[n] = '\0';
+            int new_pulse = atoi(buf);
+            if (new_pulse >= 500 && new_pulse <= 2500) {
+                pulse_us = new_pulse;
+            }
+        }
+        
+        /* Generate one PWM cycle */
+        data.values[0] = 1;
+        ioctl(req.fd, GPIOHANDLE_SET_LINE_VALUES_IOCTL, &data);
+        sleep_us(pulse_us);
+        
+        data.values[0] = 0;
+        ioctl(req.fd, GPIOHANDLE_SET_LINE_VALUES_IOCTL, &data);
+        sleep_us(period_us - pulse_us);
+    }
+    
+    /* Cleanup - set low */
+    data.values[0] = 0;
+    ioctl(req.fd, GPIOHANDLE_SET_LINE_VALUES_IOCTL, &data);
+    
+    close(req.fd);
+    close(fd);
+    return 0;
+}
+'''
+    
+    _binary_path = "/tmp/nomad_servo_pwm"
+    _compiled = False
     
     def __init__(self, config: ServoConfig):
         self.config = config
         self._enabled = False
         self._current_angle = config.neutral_angle
-        self._pwm_path = f"/sys/class/pwm/pwmchip{config.pwm_chip}/pwm{config.pwm_channel}"
-        self._chip_path = f"/sys/class/pwm/pwmchip{config.pwm_chip}"
+        self._process: Optional[subprocess.Popen] = None
+        self._lock = threading.Lock()
         
+    @classmethod
+    def _ensure_compiled(cls) -> bool:
+        """Compile the C PWM helper if not already done."""
+        if cls._compiled and os.path.exists(cls._binary_path):
+            return True
+        
+        src_path = f"{cls._binary_path}.c"
+        try:
+            with open(src_path, 'w') as f:
+                f.write(cls._C_SOURCE)
+            
+            result = subprocess.run(
+                ['gcc', '-O2', '-o', cls._binary_path, src_path],
+                capture_output=True, text=True, timeout=30
+            )
+            
+            if result.returncode != 0:
+                logger.error(f"Failed to compile servo PWM helper: {result.stderr}")
+                return False
+            
+            cls._compiled = True
+            logger.info(f"Servo PWM helper compiled: {cls._binary_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to compile servo PWM helper: {e}")
+            return False
+    
     def initialize(self) -> bool:
         """
-        Initialize the PWM channel.
+        Initialize the servo - compile helper and verify GPIO access.
         
         Returns True if successful, False otherwise.
         """
         try:
-            # Export the PWM channel if not already exported
-            if not self._path_exists(self._pwm_path):
-                export_path = f"{self._chip_path}/export"
-                if self._path_exists(export_path):
-                    self._write_sysfs(export_path, str(self.config.pwm_channel))
-                    time.sleep(0.1)  # Wait for export
-                else:
-                    logger.error(f"PWM chip {self.config.pwm_chip} not found")
-                    return False
+            if not self._ensure_compiled():
+                return False
             
-            # Set period (frequency)
-            self._write_sysfs(f"{self._pwm_path}/period", str(SERVO_PERIOD_NS))
+            # Verify GPIO chip exists
+            chip_path = f"/dev/gpiochip{self.config.gpio_chip}"
+            if not os.path.exists(chip_path):
+                logger.error(f"GPIO chip not found: {chip_path}")
+                return False
             
-            # Set initial duty cycle (neutral)
-            neutral_pulse = self._angle_to_pulse_ns(self.config.neutral_angle)
-            self._write_sysfs(f"{self._pwm_path}/duty_cycle", str(neutral_pulse))
-            
-            logger.info(f"Servo {self.config.name} initialized: chip={self.config.pwm_chip}, channel={self.config.pwm_channel}")
+            logger.info(
+                f"Servo {self.config.name} initialized: "
+                f"gpiochip{self.config.gpio_chip}/line{self.config.gpio_line}"
+            )
             return True
             
         except Exception as e:
@@ -133,26 +261,62 @@ class PWMServo:
             return False
     
     def enable(self) -> bool:
-        """Enable PWM output."""
-        try:
-            self._write_sysfs(f"{self._pwm_path}/enable", "1")
-            self._enabled = True
-            logger.info(f"Servo {self.config.name} enabled")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to enable servo {self.config.name}: {e}")
-            return False
+        """Enable servo - start the PWM helper process."""
+        with self._lock:
+            try:
+                if self._process is not None:
+                    # Already running
+                    self._enabled = True
+                    return True
+                
+                pulse_us = self._angle_to_pulse_us(self._current_angle)
+                
+                self._process = subprocess.Popen(
+                    [
+                        self._binary_path,
+                        str(self.config.gpio_chip),
+                        str(self.config.gpio_line),
+                        str(pulse_us),
+                    ],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                
+                # Wait for READY message
+                ready_line = self._process.stdout.readline().decode().strip()
+                if not ready_line.startswith("READY"):
+                    logger.error(f"Servo helper did not start: {ready_line}")
+                    self._process.terminate()
+                    self._process = None
+                    return False
+                
+                self._enabled = True
+                logger.info(f"Servo {self.config.name} enabled (PID: {ready_line})")
+                return True
+                
+            except Exception as e:
+                logger.error(f"Failed to enable servo {self.config.name}: {e}")
+                return False
     
     def disable(self) -> bool:
-        """Disable PWM output."""
-        try:
-            self._write_sysfs(f"{self._pwm_path}/enable", "0")
-            self._enabled = False
-            logger.info(f"Servo {self.config.name} disabled")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to disable servo {self.config.name}: {e}")
-            return False
+        """Disable servo - stop the PWM helper process."""
+        with self._lock:
+            try:
+                if self._process is not None:
+                    self._process.terminate()
+                    try:
+                        self._process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        self._process.kill()
+                    self._process = None
+                
+                self._enabled = False
+                logger.info(f"Servo {self.config.name} disabled")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to disable servo {self.config.name}: {e}")
+                return False
     
     def set_angle(self, angle: float) -> bool:
         """
@@ -166,15 +330,37 @@ class PWMServo:
         """
         # Clamp angle to valid range
         angle = max(self.config.min_angle, min(self.config.max_angle, angle))
+        pulse_us = self._angle_to_pulse_us(angle)
         
-        try:
-            pulse_ns = self._angle_to_pulse_ns(angle)
-            self._write_sysfs(f"{self._pwm_path}/duty_cycle", str(pulse_ns))
+        with self._lock:
             self._current_angle = angle
-            return True
-        except Exception as e:
-            logger.error(f"Failed to set servo {self.config.name} angle: {e}")
-            return False
+            
+            if self._process is None:
+                # Auto-enable on first angle set
+                if not self.enable():
+                    return False
+            
+            try:
+                # Send new pulse width to the running helper
+                self._process.stdin.write(f"{pulse_us}\n".encode())
+                self._process.stdin.flush()
+                return True
+            except (BrokenPipeError, OSError) as e:
+                logger.warning(f"Servo helper process died, restarting: {e}")
+                self._process = None
+                self._enabled = False
+                # Try to restart
+                if self.enable():
+                    try:
+                        self._process.stdin.write(f"{pulse_us}\n".encode())
+                        self._process.stdin.flush()
+                        return True
+                    except:
+                        pass
+                return False
+            except Exception as e:
+                logger.error(f"Failed to set servo {self.config.name} angle: {e}")
+                return False
     
     def get_state(self) -> ServoState:
         """Get current servo state."""
@@ -184,29 +370,17 @@ class PWMServo:
             last_update=time.time()
         )
     
-    def _angle_to_pulse_ns(self, angle: float) -> int:
-        """Convert angle (degrees) to pulse width (nanoseconds)."""
-        # Normalize angle to 0-1 range
+    def _angle_to_pulse_us(self, angle: float) -> int:
+        """Convert angle (degrees) to pulse width (microseconds)."""
         normalized = (angle - self.config.min_angle) / (self.config.max_angle - self.config.min_angle)
         
         if self.config.inverted:
             normalized = 1.0 - normalized
         
-        # Map to pulse width
-        pulse_range = self.config.max_pulse_ns - self.config.min_pulse_ns
-        pulse_ns = int(self.config.min_pulse_ns + (normalized * pulse_range))
+        pulse_range = self.config.max_pulse_us - self.config.min_pulse_us
+        pulse_us = int(self.config.min_pulse_us + (normalized * pulse_range))
         
-        return pulse_ns
-    
-    def _write_sysfs(self, path: str, value: str) -> None:
-        """Write value to sysfs file."""
-        with open(path, 'w') as f:
-            f.write(value)
-    
-    def _path_exists(self, path: str) -> bool:
-        """Check if sysfs path exists."""
-        import os
-        return os.path.exists(path)
+        return pulse_us
 
 
 class GPIOOutput:
@@ -422,16 +596,9 @@ class ServoController:
         self._gpio_outputs: dict[ServoFunction, GPIOOutput] = {}
         self._initialized = False
         
-        # PWM servo configuration (nozzle on Pin 15)
+        # PWM servo configuration (nozzle on Pin 15 via GPIO bit-bang)
         self._servo_configs = {
-            ServoFunction.CAMERA_TILT: ServoConfig(
-                name="nozzle",
-                pwm_chip=0,  # PWM1 on Pin 15
-                pwm_channel=0,
-                min_angle=0.0,
-                max_angle=180.0,
-                neutral_angle=90.0,  # Nozzle starts level
-            ),
+            ServoFunction.CAMERA_TILT: NOZZLE_SERVO_CONFIG,
         }
         
         # GPIO configuration (water shooter)
@@ -584,7 +751,7 @@ class ServoController:
                 "angle": state.angle,
                 "enabled": state.enabled,
                 "last_update": state.last_update,
-                "type": "pwm"
+                "type": "gpio_pwm"
             }
         
         for function, gpio in self._gpio_outputs.items():
