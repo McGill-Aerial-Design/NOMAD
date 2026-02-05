@@ -2,19 +2,26 @@
 """
 Servo Controller for NOMAD.
 
-Controls camera tilt servo via PWM and water shooter via GPIO on Jetson GPIO pins.
+Controls water nozzle servo via PWM and water shooter pump via GPIO on Jetson GPIO pins.
 
 Jetson Orin Nano 40-pin Header:
-- Pin 33 (PWM5) = pwmchip3 - Camera tilt servo
-- Pin 18 (GPIO) - Water shooter trigger (simple GPIO HIGH/LOW)
+- Pin 15 (PWM1) = pwmchip0 - Water nozzle angle servo
+- Pin 18 (GPIO) - Water shooter pump trigger (simple GPIO HIGH/LOW)
 
-IMPORTANT: Pin 13 does NOT have PWM on Jetson Orin Nano!
-Use Pin 33 for PWM servo control.
+Pin 15 PWM configuration:
+- Must be configured via jetson-io: sudo python3 /opt/nvidia/jetson-io/config-by-function.py pwm1
+- PWM sysfs path: /sys/devices/3280000.pwm -> /sys/class/pwm/pwmchip0
+- PWM channel: 0
 
 Servo PWM specifications (typical):
 - Frequency: 50 Hz (20ms period)
 - Pulse width: 500us (0 deg) to 2500us (180 deg)
 - Neutral: 1500us (90 deg)
+
+Wiring (Pin 15 nozzle servo):
+- Servo Signal (orange/white) -> Pin 15 (PWM1)
+- Servo Power (red)           -> Pin 2 or Pin 4 (5V) or external 5V supply
+- Servo Ground (brown/black)  -> Pin 14 (GND) or any GND pin
 """
 
 import logging
@@ -26,9 +33,9 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # PWM chip and channel mapping for Jetson Orin Nano
-# PWM5 (Pin 33) = pwmchip3 at 0x32e0000
+# PWM1 (Pin 15) = pwmchip0 at 0x3280000
 PWM_CHIPS = {
-    "pwm5": {"chip": 3, "channel": 0},  # Pin 33
+    "pwm1": {"chip": 0, "channel": 0},  # Pin 15 - nozzle servo
 }
 
 # GPIO pin for water shooter
@@ -46,7 +53,7 @@ SERVO_NEUTRAL_PULSE_NS = 1500_000  # 1.5ms -> 90 degrees
 
 class ServoFunction(Enum):
     """Servo functions in the system."""
-    CAMERA_TILT = "camera_tilt"  # Pin 13 (PWM8)
+    CAMERA_TILT = "camera_tilt"  # Pin 15 (PWM1) - Water nozzle angle
     WATER_SHOOTER = "water_shooter"  # Pin 18 (GPIO - not PWM)
 
 
@@ -216,6 +223,7 @@ class GPIOOutput:
     
     # Mapping of physical pins to (gpiochip, line) for Jetson Orin Nano
     PIN_MAP = {
+        15: (0, 85),   # Physical pin 15 -> gpiochip0, line 85 (GPIO12)
         18: (0, 50),   # Physical pin 18 -> gpiochip0, line 50
         12: (0, 79),   # Physical pin 12 -> gpiochip0, line 79
         32: (0, 168),  # Physical pin 32 -> gpiochip0, line 168
@@ -406,7 +414,7 @@ class ServoController:
     """
     Main servo controller managing all servos in the system.
     
-    Camera tilt uses PWM servo, water shooter uses GPIO.
+    Nozzle angle uses PWM servo (Pin 15), water shooter pump uses GPIO (Pin 18).
     """
     
     def __init__(self):
@@ -414,15 +422,15 @@ class ServoController:
         self._gpio_outputs: dict[ServoFunction, GPIOOutput] = {}
         self._initialized = False
         
-        # PWM servo configuration (camera tilt only)
+        # PWM servo configuration (nozzle on Pin 15)
         self._servo_configs = {
             ServoFunction.CAMERA_TILT: ServoConfig(
-                name="camera_tilt",
-                pwm_chip=3,  # PWM5 on Pin 33
+                name="nozzle",
+                pwm_chip=0,  # PWM1 on Pin 15
                 pwm_channel=0,
                 min_angle=0.0,
                 max_angle=180.0,
-                neutral_angle=90.0,  # Camera starts level
+                neutral_angle=90.0,  # Nozzle starts level
             ),
         }
         
@@ -485,10 +493,10 @@ class ServoController:
     
     def set_camera_tilt(self, angle: float) -> bool:
         """
-        Set camera tilt angle.
+        Set nozzle angle (API name kept as camera_tilt for backward compatibility).
         
         Args:
-            angle: Tilt angle in degrees (0=down, 90=level, 180=up)
+            angle: Nozzle angle in degrees (0=down, 90=level, 180=up)
             
         Returns:
             True if successful
@@ -500,7 +508,7 @@ class ServoController:
         return False
     
     def get_camera_tilt(self) -> Optional[float]:
-        """Get current camera tilt angle."""
+        """Get current nozzle angle."""
         servo = self.get_servo(ServoFunction.CAMERA_TILT)
         if servo:
             return servo.get_state().angle

@@ -70,8 +70,7 @@ namespace NOMAD.MissionPlanner
         private Button _btnOpenZedVideo;
         private Label _lblVideoStatus;
         private ComboBox _cmbVideoPlayer;
-        private TrackBar _trkCameraTilt;
-        private Label _lblTiltValue;
+
 
         // Dock/Undock Controls
         private Button _btnDockUndock;
@@ -535,56 +534,12 @@ namespace NOMAD.MissionPlanner
             _cmbVideoPlayer.SelectedIndex = 0;
             _grpVideo.Controls.Add(_cmbVideoPlayer);
 
-            // Camera Tilt Control
-            var lblTilt = new Label
-            {
-                Text = "Tilt:",
-                Location = new Point(15, 100),
-                ForeColor = Color.Gray,
-                AutoSize = true
-            };
-            _grpVideo.Controls.Add(lblTilt);
-
-            _trkCameraTilt = new TrackBar
-            {
-                Minimum = _config.ZedServoMin,
-                Maximum = _config.ZedServoMax,
-                Value = _config.ZedServoCenter,
-                TickFrequency = 250,
-                Location = new Point(50, 95),
-                Size = new Size(200, 30),
-            };
-            _trkCameraTilt.ValueChanged += TrkCameraTilt_ValueChanged;
-            _grpVideo.Controls.Add(_trkCameraTilt);
-
-            _lblTiltValue = new Label
-            {
-                Text = "1500",
-                Location = new Point(255, 100),
-                ForeColor = Color.LimeGreen,
-                Font = new Font("Segoe UI", 9),
-                AutoSize = true
-            };
-            _grpVideo.Controls.Add(_lblTiltValue);
-
-            var btnTiltCenter = new Button
-            {
-                Text = "O",
-                Location = new Point(305, 95),
-                Size = new Size(30, 25),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(0, 122, 204),
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 10),
-            };
-            btnTiltCenter.FlatAppearance.BorderSize = 0;
-            btnTiltCenter.Click += (s, e) => _trkCameraTilt.Value = _config.ZedServoCenter;
-            _grpVideo.Controls.Add(btnTiltCenter);
+            // Servo tilt controls are in EnhancedWASDControl payload panel
 
             _lblVideoStatus = new Label
             {
                 Text = "Status: Ready",
-                Location = new Point(15, 130),
+                Location = new Point(15, 100),
                 ForeColor = Color.Gray,
                 Font = new Font("Segoe UI", 9),
                 AutoSize = true
@@ -617,40 +572,6 @@ namespace NOMAD.MissionPlanner
                 _servicePanel.Size = new Size(350, 550);
                 this.Controls.Add(_servicePanel);
                 yOffset += 560;
-            }
-        }
-
-        private void TrkCameraTilt_ValueChanged(object sender, EventArgs e)
-        {
-            var pwm = _trkCameraTilt.Value;
-            _lblTiltValue.Text = pwm.ToString();
-            
-            // Send servo command to flight controller
-            if (_config.ZedServoChannel > 0)
-            {
-                SendCameraTiltCommand(pwm);
-            }
-        }
-
-        private void SendCameraTiltCommand(int pwm)
-        {
-            try
-            {
-                // Use MAVLink DO_SET_SERVO command via Mission Planner
-                if (MainV2.comPort?.BaseStream?.IsOpen == true)
-                {
-                    MainV2.comPort.doCommand(
-                        (byte)MainV2.comPort.sysidcurrent,
-                        (byte)MainV2.comPort.compidcurrent,
-                        MAVLink.MAV_CMD.DO_SET_SERVO,
-                        _config.ZedServoChannel,  // Servo channel
-                        pwm,                       // PWM value
-                        0, 0, 0, 0, 0);
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"NOMAD: Camera tilt error - {ex.Message}");
             }
         }
 
