@@ -10,6 +10,7 @@ It subscribes to:
 - /cmd_vel (Twist velocity commands from nav2/nvblox for autonomous navigation)
 - /nvblox_node/mesh (3D mesh from Nvblox) - optional
 - /nvblox_node/map_slice (2D occupancy slice) - for visualization
+- /nomad/servo/nozzle_angle (Float32 servo angle for nozzle control)
 
 And sends data to NOMAD Edge Core via HTTP POST requests.
 
@@ -44,7 +45,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped, Twist
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Float32, Float32MultiArray
 
 # TF2 for camera pose lookup
 try:
@@ -113,9 +114,11 @@ class ROSHTTPBridge(Node):
         vio_topic: str = "/zed/zed_node/odom",  # Default to ZED odom
         cmd_vel_topic: str = "/cmd_vel",         # Nav2 velocity commands
         mesh_topic: str = "/nvblox_node/mesh",   # Nvblox 3D mesh
+        servo_topic: str = "/nomad/servo/nozzle_angle",  # Nozzle servo angle
         send_rate_hz: float = 30.0,
         enable_nav_control: bool = True,         # Enable velocity command forwarding
         enable_mesh: bool = True,                # Enable mesh forwarding
+        enable_servo: bool = True,               # Enable servo control forwarding
     ):
         super().__init__("nomad_ros_http_bridge")
         
@@ -125,6 +128,7 @@ class ROSHTTPBridge(Node):
         self._send_interval = 1.0 / send_rate_hz
         self._enable_nav_control = enable_nav_control
         self._enable_mesh = enable_mesh and NVBLOX_AVAILABLE
+        self._enable_servo = enable_servo
         
         # QoS for sensor data
         sensor_qos = QoSProfile(
@@ -153,10 +157,14 @@ class ROSHTTPBridge(Node):
         self._cmd_vel_send_count = 0
         self._mesh_recv_count = 0
         self._mesh_send_count = 0
+        self._servo_recv_count = 0
+        self._servo_send_count = 0
         self._send_errors = 0
         self._last_send_time = 0.0
         self._last_cmd_vel_send_time = 0.0
         self._last_mesh_send_time = 0.0
+        self._last_servo_send_time = 0.0
+        self._last_servo_angle = -1.0
         
         # Subscribe to VIO odometry
         self.create_subscription(
@@ -188,6 +196,16 @@ class ROSHTTPBridge(Node):
             self.get_logger().info(f"Subscribed to mesh: {mesh_topic}")
         elif enable_mesh and not NVBLOX_AVAILABLE:
             self.get_logger().warning("Mesh requested but nvblox_msgs not available")
+        
+        # Subscribe to servo angle for nozzle control
+        if self._enable_servo:
+            self.create_subscription(
+                Float32,
+                servo_topic,
+                self._handle_servo_angle,
+                sensor_qos,
+            )
+            self.get_logger().info(f"Subscribed to servo angle: {servo_topic}")
         
         # TF2 buffer for camera pose lookup
         self._tf_buffer = None
@@ -359,6 +377,75 @@ class ROSHTTPBridge(Node):
         except Exception as e:
             self._send_errors += 1
             self.get_logger().error(f"cmd_vel send error: {e}")
+    
+    def _handle_servo_angle(self, msg: Float32) -> None:
+        """
+        Handle servo angle from a ROS node for autonomous nozzle control.
+        
+        The nozzle servo is controlled via the Edge Core HTTP API.
+        A ROS node (e.g. a fire detection pipeline) publishes a Float32
+        angle to /nomad/servo/nozzle_angle, and this bridge forwards it
+        to Edge Core which drives the physical servo on GPIO Pin 15.
+        
+        Float32 value: angle in degrees (0-180, where 90 is center).
+        """
+        if not self._enable_servo:
+            return
+        
+        try:
+            angle = float(msg.data)
+            self._servo_recv_count += 1
+            
+            # Clamp to valid range
+            angle = max(0.0, min(180.0, angle))
+            
+            # Skip if angle hasn't changed significantly (avoid flooding)
+            if abs(angle - self._last_servo_angle) < 0.5:
+                return
+            
+            self._last_servo_angle = angle
+            self._send_servo_to_edge_core(angle)
+            
+        except Exception as e:
+            self.get_logger().error(f"Servo angle processing error: {e}")
+    
+    def _send_servo_to_edge_core(self, angle: float) -> None:
+        """
+        Send servo angle to Edge Core via HTTP POST.
+        
+        Uses the /api/servo/camera/tilt endpoint which controls the
+        nozzle servo on Jetson GPIO Pin 15 via bit-bang PWM.
+        
+        Rate limited to 10 Hz to avoid overwhelming the servo controller.
+        """
+        # Rate limit servo commands (max 10 Hz)
+        now = time.time()
+        if now - self._last_servo_send_time < 0.1:
+            return
+        self._last_servo_send_time = now
+        
+        try:
+            url = f"{self._base_url}/api/servo/camera/tilt?angle={angle:.1f}"
+            
+            request = Request(
+                url,
+                data=None,
+                method="POST",
+            )
+            
+            with urlopen(request, timeout=0.5) as response:
+                if response.status == 200:
+                    self._servo_send_count += 1
+                else:
+                    self._send_errors += 1
+                    
+        except URLError as e:
+            self._send_errors += 1
+            if self._send_errors % 100 == 1:
+                self.get_logger().warning(f"Failed to send servo angle: {e}")
+        except Exception as e:
+            self._send_errors += 1
+            self.get_logger().error(f"Servo send error: {e}")
     
     def _handle_mesh(self, msg) -> None:
         """
@@ -575,9 +662,12 @@ class ROSHTTPBridge(Node):
             "cmd_vel_sent": self._cmd_vel_send_count,
             "mesh_received": self._mesh_recv_count,
             "mesh_sent": self._mesh_send_count,
+            "servo_received": self._servo_recv_count,
+            "servo_sent": self._servo_send_count,
             "send_errors": self._send_errors,
             "nav_control_enabled": self._enable_nav_control,
             "mesh_enabled": self._enable_mesh,
+            "servo_enabled": self._enable_servo,
         }
 
 
@@ -596,6 +686,10 @@ def main():
                         help="Disable navigation control (cmd_vel forwarding)")
     parser.add_argument("--disable-mesh", action="store_true",
                         help="Disable mesh forwarding for 3D visualization")
+    parser.add_argument("--servo-topic", default="/nomad/servo/nozzle_angle",
+                        help="Servo nozzle angle topic (Float32, 0-180 degrees)")
+    parser.add_argument("--disable-servo", action="store_true",
+                        help="Disable servo angle forwarding")
     args = parser.parse_args()
     
     rclpy.init()
@@ -606,9 +700,11 @@ def main():
         vio_topic=args.vio_topic,
         cmd_vel_topic=args.cmd_vel_topic,
         mesh_topic=args.mesh_topic,
+        servo_topic=args.servo_topic,
         send_rate_hz=args.rate,
         enable_nav_control=not args.disable_nav,
         enable_mesh=not args.disable_mesh,
+        enable_servo=not args.disable_servo,
     )
     
     try:

@@ -126,6 +126,12 @@ Always check this file for actual IP addresses and paths.
 - `POST /api/isaac/start` - Start Isaac ROS container
 - `POST /api/isaac/stop` - Stop Isaac ROS container
 
+### Servo / Nozzle Control
+- `POST /api/servo/camera/tilt?angle={0-180}` - Set nozzle servo angle
+- `POST /api/servo/shooter/trigger?duration_ms={ms}` - Trigger water shooter GPIO
+- `GET /api/servo/status` - Get servo and GPIO output status
+- ROS topic: `/nomad/servo/nozzle_angle` (Float32) - Autonomous servo control via ros_http_bridge
+
 ---
 
 ## 5. Development Workflows
@@ -256,6 +262,7 @@ The Jetson connects via Tailscale VPN for:
 | Tailscale Setup | `tailscale/SETUP.md` |
 | Video Streaming | `docs/MULTI_STREAM_VIDEO.md` |
 | Navigation Architecture | `docs/JETSON_NAV_ARCHITECTURE.md` |
+| Servo Control | `docs/SERVO_CONTROL.md` |
 | This Quick Reference | `docs/AGENTS.md` |
 
 ---
