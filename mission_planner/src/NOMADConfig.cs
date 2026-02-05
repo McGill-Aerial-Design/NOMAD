@@ -71,27 +71,6 @@ namespace NOMAD.MissionPlanner
         public string VideoUrl { get; set; } = "rtsp://100.75.218.89:8554/primary";
 
         /// <summary>
-        /// Servo channel for ZED camera tilt control (0 = disabled).
-        /// Typically AUX1-AUX6 on flight controller (channels 9-14).
-        /// </summary>
-        public int ZedServoChannel { get; set; } = 10;
-
-        /// <summary>
-        /// Minimum PWM for ZED camera tilt (looking down).
-        /// </summary>
-        public int ZedServoMin { get; set; } = 1000;
-
-        /// <summary>
-        /// Maximum PWM for ZED camera tilt (looking up).
-        /// </summary>
-        public int ZedServoMax { get; set; } = 2000;
-
-        /// <summary>
-        /// Center PWM for ZED camera tilt (level).
-        /// </summary>
-        public int ZedServoCenter { get; set; } = 1500;
-
-        /// <summary>
         /// Network caching for video streams (ms).
         /// Lower = less latency, higher = more stable.
         /// </summary>
@@ -341,17 +320,9 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public int GpioPayload2Pin { get; set; } = -1;
 
-        /// <summary>
-        /// Jetson GPIO pin for water pump control (via Edge Core API).
-        /// Set to -1 to disable.
-        /// </summary>
-        public int JetsonWaterGpio { get; set; } = -1;
-
-        /// <summary>
-        /// Jetson PWM channel for nozzle servo control (via Edge Core API).
-        /// Set to -1 to disable.
-        /// </summary>
-        public int JetsonServoPwm { get; set; } = -1;
+        // Note: Water shooter (Pin 18) and nozzle servo (Pin 15) are controlled
+        // via fixed Edge Core API endpoints and do not need configuration here.
+        // See: /api/servo/camera/tilt and /api/servo/shooter/trigger
 
         // ============================================================
         // Persistence
@@ -462,10 +433,6 @@ namespace NOMAD.MissionPlanner
             TailscaleIP = defaults.TailscaleIP;
             UseTailscale = defaults.UseTailscale;
             VideoUrl = defaults.VideoUrl;
-            ZedServoChannel = defaults.ZedServoChannel;
-            ZedServoMin = defaults.ZedServoMin;
-            ZedServoMax = defaults.ZedServoMax;
-            ZedServoCenter = defaults.ZedServoCenter;
             VideoNetworkCaching = defaults.VideoNetworkCaching;
             PreferredVideoPlayer = defaults.PreferredVideoPlayer;
             VideoAutoStart = defaults.VideoAutoStart;

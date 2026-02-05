@@ -36,10 +36,6 @@ namespace NOMAD.MissionPlanner
         
         // Video Tab
         private TextBox _txtVideoUrl;
-        private NumericUpDown _numServoChannel;
-        private NumericUpDown _numServoMin;
-        private NumericUpDown _numServoMax;
-        private NumericUpDown _numServoCenter;
         private NumericUpDown _numVideoCaching;
         private ComboBox _cmbVideoPlayer;
         private CheckBox _chkVideoAutoStart;
@@ -91,8 +87,6 @@ namespace NOMAD.MissionPlanner
         // GPIO Tab
         private NumericUpDown _numGpioPayload1;
         private NumericUpDown _numGpioPayload2;
-        private NumericUpDown _numJetsonWaterGpio;
-        private NumericUpDown _numJetsonServoPwm;
         
         // Buttons
         private Button _btnOK;
@@ -280,23 +274,11 @@ namespace NOMAD.MissionPlanner
             _chkAutoStartHudVideo = AddCheckBox(tab, "Auto-start video on HUD", 20, y);
             y += 35;
 
-            AddSectionLabel(tab, "Camera Tilt Servo", ref y);
+            AddSectionLabel(tab, "Nozzle Servo", ref y);
 
-            AddLabel(tab, "Servo Channel:", 20, y);
-            _numServoChannel = AddNumericUpDown(tab, 150, y, 60, 0, 16, 10);
-            AddLabel(tab, "(0=off, 9-14=AUX1-6)", 220, y, Color.Gray);
-            y += 30;
-
-            AddLabel(tab, "Servo Min PWM:", 20, y);
-            _numServoMin = AddNumericUpDown(tab, 150, y, 70, 500, 2500, 1000);
-            y += 30;
-
-            AddLabel(tab, "Servo Max PWM:", 20, y);
-            _numServoMax = AddNumericUpDown(tab, 150, y, 70, 500, 2500, 2000);
-            y += 30;
-
-            AddLabel(tab, "Servo Center PWM:", 20, y);
-            _numServoCenter = AddNumericUpDown(tab, 150, y, 70, 500, 2500, 1500);
+            AddLabel(tab, "Controlled via Edge Core API (Jetson GPIO Pin 15).", 20, y, Color.FromArgb(180, 180, 180));
+            y += 20;
+            AddLabel(tab, "Use the nozzle slider in WASD Controls to adjust.", 20, y, Color.FromArgb(180, 180, 180));
 
             return tab;
         }
@@ -511,14 +493,17 @@ namespace NOMAD.MissionPlanner
             _numGpioPayload2 = AddNumericUpDown(tab, 180, y, 70, -1, 55, -1);
             y += 40;
 
-            AddSectionLabel(tab, "Jetson GPIO (via Edge Core API)", ref y);
+            AddSectionLabel(tab, "Jetson Servo / Shooter (via Edge Core API)", ref y);
 
-            AddLabel(tab, "Water Pump GPIO:", 20, y);
-            _numJetsonWaterGpio = AddNumericUpDown(tab, 180, y, 70, -1, 40, -1);
-            y += 30;
-
-            AddLabel(tab, "Servo PWM Channel:", 20, y);
-            _numJetsonServoPwm = AddNumericUpDown(tab, 180, y, 70, -1, 4, -1);
+            AddLabel(tab, "Nozzle servo and water shooter are controlled", 20, y);
+            y += 20;
+            AddLabel(tab, "via fixed Edge Core API endpoints:", 20, y);
+            y += 25;
+            AddLabel(tab, "Servo:  POST /api/servo/camera/tilt?angle=N", 30, y, Color.FromArgb(180, 180, 180));
+            y += 20;
+            AddLabel(tab, "Shooter: POST /api/servo/shooter/trigger", 30, y, Color.FromArgb(180, 180, 180));
+            y += 20;
+            AddLabel(tab, "Pins are fixed: servo=Pin15, shooter=Pin18", 30, y, Color.FromArgb(180, 180, 180));
 
             return tab;
         }
@@ -648,10 +633,6 @@ namespace NOMAD.MissionPlanner
             SetComboBoxValue(_cmbVideoPlayer, Config.PreferredVideoPlayer);
             _chkVideoAutoStart.Checked = Config.VideoAutoStart;
             _chkAutoStartHudVideo.Checked = Config.AutoStartHudVideo;
-            _numServoChannel.Value = Config.ZedServoChannel;
-            _numServoMin.Value = Config.ZedServoMin;
-            _numServoMax.Value = Config.ZedServoMax;
-            _numServoCenter.Value = Config.ZedServoCenter;
             
             // Dual Link
             _chkDualLinkEnabled.Checked = Config.DualLinkEnabled;
@@ -702,8 +683,6 @@ namespace NOMAD.MissionPlanner
             // GPIO
             _numGpioPayload1.Value = Config.GpioPayload1Pin;
             _numGpioPayload2.Value = Config.GpioPayload2Pin;
-            _numJetsonWaterGpio.Value = Config.JetsonWaterGpio;
-            _numJetsonServoPwm.Value = Config.JetsonServoPwm;
             
             UpdateDualLinkControlsState();
             UpdateRadioMasterConnTypeState();
@@ -727,10 +706,6 @@ namespace NOMAD.MissionPlanner
             Config.PreferredVideoPlayer = _cmbVideoPlayer.SelectedItem?.ToString() ?? "Embedded";
             Config.VideoAutoStart = _chkVideoAutoStart.Checked;
             Config.AutoStartHudVideo = _chkAutoStartHudVideo.Checked;
-            Config.ZedServoChannel = (int)_numServoChannel.Value;
-            Config.ZedServoMin = (int)_numServoMin.Value;
-            Config.ZedServoMax = (int)_numServoMax.Value;
-            Config.ZedServoCenter = (int)_numServoCenter.Value;
             
             // Dual Link
             Config.DualLinkEnabled = _chkDualLinkEnabled.Checked;
@@ -781,8 +756,6 @@ namespace NOMAD.MissionPlanner
             // GPIO
             Config.GpioPayload1Pin = (int)_numGpioPayload1.Value;
             Config.GpioPayload2Pin = (int)_numGpioPayload2.Value;
-            Config.JetsonWaterGpio = (int)_numJetsonWaterGpio.Value;
-            Config.JetsonServoPwm = (int)_numJetsonServoPwm.Value;
         }
         
         private void SetComboBoxValue(ComboBox combo, string value)
