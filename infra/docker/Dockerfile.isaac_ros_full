@@ -32,6 +32,14 @@ LABEL description="NOMAD Isaac ROS Full Stack for Jetson Orin Nano"
 LABEL version="1.0"
 
 # ==============================================================
+# Refresh ROS2 GPG key (may expire in cached base images)
+# ==============================================================
+RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+    | gpg --dearmor -o /usr/share/keyrings/ros-archive-keyring.gpg \
+    && curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+    -o /etc/apt/trusted.gpg.d/ros.asc
+
+# ==============================================================
 # Install System Dependencies
 # ==============================================================
 RUN apt-get update && apt-get install -y --no-install-recommends \
