@@ -41,8 +41,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libusb-1.0-0-dev \
     python3-pip \
     python3-numpy \
-    python3-transforms3d \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && pip3 install --no-cache-dir transforms3d
 
 # ==============================================================
 # Install ROS2 Packages: MAVROS
