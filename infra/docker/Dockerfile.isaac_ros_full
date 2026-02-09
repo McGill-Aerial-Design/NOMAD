@@ -32,21 +32,26 @@ LABEL description="NOMAD Isaac ROS Full Stack for Jetson Orin Nano"
 LABEL version="1.0"
 
 # ==============================================================
-# Refresh ROS2 GPG key (may expire in cached base images)
+# Setup ROS2 apt repository (dustynv base uses source-built ROS2)
 # ==============================================================
-RUN rm -f /etc/apt/trusted.gpg.d/ros*.gpg /usr/share/keyrings/ros*.gpg 2>/dev/null; \
-    curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
-    -o /etc/apt/trusted.gpg.d/ros-archive-keyring.asc
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    gnupg2 \
+    lsb-release \
+    software-properties-common \
+    && curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+    -o /etc/apt/trusted.gpg.d/ros-archive-keyring.asc \
+    && echo "deb [arch=$(dpkg --print-architecture)] http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" \
+    > /etc/apt/sources.list.d/ros2.list \
+    && rm -rf /var/lib/apt/lists/*
 
 # ==============================================================
 # Install System Dependencies
 # ==============================================================
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
     wget \
     git \
     libusb-1.0-0-dev \
-    python3-pip \
     python3-numpy \
     && rm -rf /var/lib/apt/lists/* \
     && pip3 install --no-cache-dir transforms3d
