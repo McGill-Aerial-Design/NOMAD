@@ -35,11 +35,13 @@ Architecture and system-level documentation.
 - [architecture.md](architecture.md) - Overall system architecture
 - [JETSON_DEPLOYMENT.md](JETSON_DEPLOYMENT.md) - Jetson deployment guide
 - [JETSON_NAV_ARCHITECTURE.md](JETSON_NAV_ARCHITECTURE.md) - Navigation stack architecture
+- [ISAAC_ROS_ZED_SETUP.md](ISAAC_ROS_ZED_SETUP.md) - Isaac ROS + ZED camera setup guide
 - [COMPETITION_SETUP.md](COMPETITION_SETUP.md) - Competition day procedures
 - [MULTI_STREAM_VIDEO.md](MULTI_STREAM_VIDEO.md) - Video streaming configuration
 - [NAV2_INTEGRATION_PLAN.md](NAV2_INTEGRATION_PLAN.md) - Nav2 integration planning
 - [NVBLOX_VISUALIZATION.md](NVBLOX_VISUALIZATION.md) - 3D mapping visualization
 - [DUAL_LINK_FAILOVER.md](DUAL_LINK_FAILOVER.md) - Redundant telemetry setup
+- [SERVO_CONTROL.md](SERVO_CONTROL.md) - Camera tilt servo and water shooter control
 - [PRD.md](PRD.md) - Product requirements document
 
 ---
