@@ -33,6 +33,7 @@ Codebase analysis reports and quality assessments.
 Architecture and system-level documentation.
 
 - [architecture.md](architecture.md) - Overall system architecture
+- [PRODUCTION_STATUS.md](PRODUCTION_STATUS.md) - Current Jetson production status
 - [JETSON_DEPLOYMENT.md](JETSON_DEPLOYMENT.md) - Jetson deployment guide
 - [HARDWARE_CHECKLIST.md](HARDWARE_CHECKLIST.md) - Pre-flight hardware checklist and verification
 - [JETSON_NAV_ARCHITECTURE.md](JETSON_NAV_ARCHITECTURE.md) - Navigation stack architecture
