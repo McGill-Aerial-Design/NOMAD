@@ -204,8 +204,8 @@ def run(
     )
     set_tailscale_manager(app, tailscale_manager)
 
-    network_monitor = init_network_monitor(gcs_tailscale_ip="100.103.238.9" 
-    ) #IP of Tailscale on my laptop
+    gcs_ip = os.environ.get("GCS_IP", "100.76.127.17")
+    network_monitor = init_network_monitor(gcs_tailscale_ip=gcs_ip)
     set_network_monitor(app, network_monitor)
 
     async def _start_network_services():
