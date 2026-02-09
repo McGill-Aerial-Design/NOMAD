@@ -19,7 +19,8 @@
 # ==============================================================
 
 # Base: Isaac ROS for Jetson (L4T 36.x compatible)
-ARG BASE_IMAGE=nvcr.io/nvidia/isaac/ros:humble-ros2_humble-20240402.1-l4t
+# Note: dustynv images are community-maintained for Jetson L4T
+ARG BASE_IMAGE=dustynv/ros:humble-ros-base-l4t-r36.2.0
 FROM ${BASE_IMAGE}
 
 # Avoid prompts during package installation

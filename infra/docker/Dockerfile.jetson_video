@@ -52,8 +52,8 @@ WORKDIR /workspace
 RUN mkdir -p /workspace/src
 
 # Copy video bridge script (will be mounted at runtime)
-COPY edge_core/ros/jetson_video_bridge.py /workspace/jetson_video_bridge.py
-RUN chmod +x /workspace/jetson_video_bridge.py
+COPY edge_core/ros/simple_video_bridge.py /workspace/ros/jetson_video_bridge.py
+RUN chmod +x /workspace/ros/jetson_video_bridge.py
 
 # Entrypoint
 CMD ["bash", "-c", "source /opt/ros/humble/setup.bash && tail -f /dev/null"]
