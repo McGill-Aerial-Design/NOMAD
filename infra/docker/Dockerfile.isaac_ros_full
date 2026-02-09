@@ -34,10 +34,9 @@ LABEL version="1.0"
 # ==============================================================
 # Refresh ROS2 GPG key (may expire in cached base images)
 # ==============================================================
-RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
-    | gpg --dearmor -o /usr/share/keyrings/ros-archive-keyring.gpg \
-    && curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
-    -o /etc/apt/trusted.gpg.d/ros.asc
+RUN rm -f /etc/apt/trusted.gpg.d/ros*.gpg /usr/share/keyrings/ros*.gpg 2>/dev/null; \
+    curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+    -o /etc/apt/trusted.gpg.d/ros-archive-keyring.asc
 
 # ==============================================================
 # Install System Dependencies
