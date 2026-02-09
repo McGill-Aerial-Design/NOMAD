@@ -34,6 +34,7 @@ Architecture and system-level documentation.
 
 - [architecture.md](architecture.md) - Overall system architecture
 - [JETSON_DEPLOYMENT.md](JETSON_DEPLOYMENT.md) - Jetson deployment guide
+- [HARDWARE_CHECKLIST.md](HARDWARE_CHECKLIST.md) - Pre-flight hardware checklist and verification
 - [JETSON_NAV_ARCHITECTURE.md](JETSON_NAV_ARCHITECTURE.md) - Navigation stack architecture
 - [ISAAC_ROS_ZED_SETUP.md](ISAAC_ROS_ZED_SETUP.md) - Isaac ROS + ZED camera setup guide
 - [COMPETITION_SETUP.md](COMPETITION_SETUP.md) - Competition day procedures
