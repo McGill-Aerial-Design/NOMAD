@@ -197,13 +197,20 @@ install_dependencies() {
         rosdep install --from-paths . --ignore-src -r -y 2>/dev/null
     " 2>&1 | tail -5
     
-    # Rebuild ZED packages to pick up the new dependencies  
+    # Rebuild ZED packages (builds dependencies like zed_msgs first)
     log_info "Rebuilding ZED packages..."
     docker exec "$CONTAINER_NAME" bash -c "
         source /opt/ros/humble/install/setup.bash
         cd /workspaces/isaac_ros-dev
-        colcon build --packages-select zed_components zed_wrapper --symlink-install 2>/dev/null
-    " 2>&1 | tail -5
+        colcon build --packages-up-to zed_wrapper --symlink-install --cmake-args -Wno-dev 2>&1
+    " 2>&1 | tail -10
+    
+    # Verify ZED packages built successfully
+    if docker exec "$CONTAINER_NAME" bash -c "source /opt/ros/humble/install/setup.bash && source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null && ros2 pkg list 2>/dev/null | grep -q zed_wrapper"; then
+        log_info "ZED packages built successfully"
+    else
+        log_warn "ZED packages may not have built correctly"
+    fi
     
     log_info "Dependencies installed and ZED packages rebuilt"
 }
