@@ -92,8 +92,9 @@ start_container() {
     log_info "Creating new container..."
     
     # Start container with all necessary mounts and devices
-    # Mount /usr/local/zed from host so the ZED SDK cmake files, headers,
-    # and libraries are available for building and running ROS2 ZED packages.
+    # The ZED SDK will be installed inside the container by
+    # install_dependencies() to ensure CUDA version compatibility.
+    # Do NOT bind-mount /usr/local/zed from the host (CUDA version mismatch).
     docker run -d \
         --name "$CONTAINER_NAME" \
         --runtime nvidia \
@@ -101,7 +102,6 @@ start_container() {
         --network host \
         --ipc host \
         -v "$ISAAC_WS:/workspaces/isaac_ros-dev" \
-        -v /usr/local/zed:/usr/local/zed:ro \
         -v /dev:/dev \
         -v /tmp/.X11-unix:/tmp/.X11-unix \
         -v /tmp/argus_socket:/tmp/argus_socket \
@@ -125,9 +125,39 @@ start_container() {
 install_dependencies() {
     log_info "Checking dependencies inside container..."
     
-    # Check if dependencies are already installed by testing for a key package
+    # Install ZED SDK inside container if not present
+    # We install it inside the container (not bind-mounted from host) to avoid
+    # CUDA version mismatches (host may have newer CUDA than container image).
+    if ! docker exec "$CONTAINER_NAME" bash -c "test -f /usr/local/zed/zed-config.cmake" 2>/dev/null; then
+        log_info "Installing ZED SDK inside container (matching container CUDA)..."
+        
+        # Determine the right SDK URL for container's L4T version
+        # dustynv/ros:humble-ros-base-l4t-r36.2.0 -> L4T r36.2, CUDA 12.2
+        ZED_SDK_URL="https://download.stereolabs.com/zedsdk/4.1/l4t36.3/jetsons"
+        
+        docker exec "$CONTAINER_NAME" bash -c "
+            apt-get update -qq 2>/dev/null
+            apt-get install -y --no-install-recommends zstd wget 2>/dev/null
+            wget -q '$ZED_SDK_URL' -O /tmp/zed_installer.run
+            chmod +x /tmp/zed_installer.run
+            /tmp/zed_installer.run -- silent skip_tools skip_drivers
+            rm -f /tmp/zed_installer.run
+            ldconfig
+        " 2>&1 | tail -5
+        
+        if docker exec "$CONTAINER_NAME" bash -c "test -f /usr/local/zed/zed-config.cmake" 2>/dev/null; then
+            log_info "ZED SDK installed successfully"
+        else
+            log_error "ZED SDK installation failed"
+            return 1
+        fi
+    else
+        log_info "ZED SDK already installed in container"
+    fi
+    
+    # Check if ROS dependencies are already installed by testing for a key package
     if docker exec "$CONTAINER_NAME" bash -c "dpkg -l | grep -q ros-humble-zed-msgs" 2>/dev/null; then
-        log_info "Dependencies already installed, skipping..."
+        log_info "ROS dependencies already installed, skipping..."
         return 0
     fi
     
