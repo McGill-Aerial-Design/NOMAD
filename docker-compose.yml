@@ -112,9 +112,9 @@ services:
         max-file: "3"
 
   # ============================================================
-  # Jetson Video Streamer - Hardware-Accelerated RTSP Streaming
-  # Minimal container with Jetson HW encoder (nvv4l2h264enc)
-  # Uses dedicated hw encoder chip - zero extra resources
+  # Jetson Video Streamer - Software-Encoded RTSP Streaming
+  # Uses openh264enc software encoder (Orin Nano has no NVENC)
+  # Streams ROS2 camera topics to RTSP via MediaMTX
   # ============================================================
   jetson-video-stream:
     build:

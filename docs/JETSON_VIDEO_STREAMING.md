@@ -1,121 +1,118 @@
-# Jetson Video Streaming - Hardware-Accelerated Solution
+# Jetson Video Streaming - Software-Encoded Solution
 
 ## Overview
 
-This container provides hardware-accelerated H.264 video streaming from ROS2 camera topics to RTSP using Jetson's dedicated encoder chip.
+The Jetson Orin Nano does **not** have a hardware video encoder (NVENC). All H.264 encoding is done in software using `openh264enc` via GStreamer, running inside the Isaac ROS Docker container.
 
-**Key Features:**
-- ✅ Uses Jetson's nvv4l2h264enc hardware encoder (dedicated chip - zero CPU/GPU overhead)
-- ✅ Minimal dependencies (ROS2 Humble base + GStreamer)
-- ✅ Direct RTSP push to MediaMTX
-- ✅ Replaces problematic Isaac ROS H264 encoder (which has GXF tensor initialization bugs)
+**Key Facts:**
+- Software H.264 encoding via openh264enc (GStreamer plugin)
+- Runs inside the Isaac ROS container alongside the ZED ROS2 wrapper
+- Managed by Edge Core's `VideoStreamManager` on the host
+- Streams to MediaMTX RTSP server for multi-viewer distribution
+- Dynamic topic switching via REST API (no stream URL change)
 
 ## Architecture
 
 ```
-ROS2 Image Topic → Python Bridge → nvv4l2h264enc (HW Encoder) → RTSP → MediaMTX → Mission Planner
+ROS2 Image Topic -> openh264enc (software) -> RTSP -> MediaMTX -> Mission Planner
 ```
 
 ## Build & Deploy
 
-### On Jetson (via SSH):
+The video bridge runs inside the Isaac ROS container. No separate container build is needed.
+
+### Start Streaming
 
 ```bash
-# 1. Pull latest code
-cd ~/NOMAD
-git pull origin main
+# Edge Core auto-starts the video bridge when Isaac ROS is running
+# Or manually via API:
+curl -X POST http://100.85.121.98:8000/api/video/start
+```
 
-# 2. Build the container
-docker compose build jetson-video-stream
+### View Stream
 
-# 3. Start the container
-docker compose up -d jetson-video-stream
+```bash
+# From Windows - open in VLC:
+vlc rtsp://100.85.121.98:8554/primary --rtsp-tcp --network-caching=200
 
-# 4. Check logs
-docker compose logs -f jetson-video-stream
-
-# 5. Verify streaming
-# From Windows, open VLC: rtsp://100.85.121.98:8554/primary
+# Or FFplay:
+ffplay -fflags nobuffer -flags low_delay -rtsp_transport tcp rtsp://100.85.121.98:8554/primary
 ```
 
 ## Configuration
 
-Edit `docker-compose.yml` to change settings:
+Set in `config/env/jetson.env`:
 
-```yaml
-environment:
-  - VIDEO_SOURCE_TOPIC=/zed/zed_node/rgb/image_rect_color  # ROS2 camera topic
-  - RTSP_URL=rtsp://localhost:8554/primary                  # MediaMTX RTSP endpoint
-  - VIDEO_WIDTH=1280                                         # Output resolution
-  - VIDEO_HEIGHT=720
-  - VIDEO_BITRATE=4000000                                    # 4 Mbps
+```bash
+NOMAD_VIDEO_AUTO_START=true     # Auto-start stream on Edge Core startup
 ```
+
+Default stream parameters (set in `video_stream_manager.py`):
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| Resolution | 1280x720 | Output video size |
+| FPS | 30 | Target frame rate |
+| Bitrate | 4 Mbps | H.264 encoding bitrate |
+| Encoder | openh264enc | Software encoder (no HW encoder on Orin Nano) |
+
+## API Endpoints
+
+All on Edge Core (port 8000):
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/video/topics` | GET | List available ROS2 image topics |
+| `/api/video/source?topic=...` | POST | Switch camera view (RTSP URL stays the same) |
+| `/api/video/status` | GET | Current stream status (fps, frames, errors) |
+| `/api/video/start` | POST | Start streaming |
+| `/api/video/stop` | POST | Stop streaming |
+| `/api/video/restart` | POST | Restart stream |
+| `/api/video/logs?lines=50` | GET | View bridge logs |
 
 ## Troubleshooting
 
-### Container won't start
-```bash
-# Check if isaac-ros and mediamtx are healthy
-docker ps
-
-# Check dependencies
-docker compose up -d isaac-ros mediamtx
-```
-
 ### No video stream
+
 ```bash
-# 1. Check if ROS2 topic is publishing
-docker exec nomad_isaac_ros ros2 topic hz /zed/zed_node/rgb/image_rect_color
+# 1. Check if ZED is publishing topics
+ssh mad@100.85.121.98 "docker exec nomad_isaac_ros bash -c 'source /opt/ros/humble/setup.bash 2>/dev/null; source /opt/ros/humble/install/setup.bash; ros2 topic list | grep zed'"
 
-# 2. Check MediaMTX paths
-curl http://localhost:9997/v3/paths/list | jq
+# 2. Check video bridge status
+curl http://100.85.121.98:8000/api/video/status
 
-# 3. Check bridge logs
-docker logs nomad-jetson-video --tail 50
+# 3. Check MediaMTX
+curl http://100.85.121.98:9997/v3/paths/list
+
+# 4. View bridge logs
+curl http://100.85.121.98:8000/api/video/logs
 ```
 
-### Low FPS or quality issues
-Adjust bitrate and resolution in docker-compose.yml environment variables.
+### Low FPS or choppy video
 
-## Advantages over Isaac ROS H264 Encoder
-
-| Feature | Isaac ROS H264 | Jetson HW Bridge |
-|---------|----------------|------------------|
-| **Stability** | ❌ GXF tensor errors | ✅ Rock solid |
-| **Resources** | ❌ GPU/CPU overhead | ✅ Dedicated HW chip |
-| **Dependencies** | ❌ Complex (Isaac ROS stack) | ✅ Minimal (ROS2 + GStreamer) |
-| **Setup** | ❌ Requires full Isaac ROS workspace | ✅ Single container |
-| **Latency** | 🔶 ~100ms | ✅ ~50ms |
-
-## Technical Details
-
-**Hardware Encoder:** nvv4l2h264enc
-- Uses Jetson's dedicated NVENC hardware block
-- Zero CPU/GPU usage for encoding
-- Up to 4K@30fps encoding capability
-- Supports H.264 High Profile
-
-**GStreamer Pipeline:**
-```
-appsrc → nvvideoconvert → nvv4l2h264enc → h264parse → rtspclientsink
-```
-
-## Migration from Old System
-
-The old `isaac_h264_rtsp_bridge.py` can be removed - it had unfixable GXF tensor initialization issues. This new bridge is the official replacement.
-
-**Edge Core API** (`video_stream_manager.py`) can optionally be updated to control this container via Docker API instead of managing bridges manually.
+Software encoding on Orin Nano uses CPU. If CPU is under heavy load:
+- Reduce resolution (try 640x480)
+- Lower bitrate (try 2 Mbps)
+- Reduce FPS (try 15)
+- Check CPU load: `curl http://100.85.121.98:8000/health/detailed`
 
 ## Performance
 
-- **CPU Usage:** <1% (encoding done in dedicated HW)
-- **GPU Usage:** 0% (no GPU involved)
+- **CPU Usage:** ~15-25% (software encoding)
+- **GPU Usage:** 0% (encoding is CPU-only)
 - **Memory:** ~200MB (ROS2 + Python bridge)
-- **Latency:** 40-60ms (camera → RTSP)
-- **Bitrate:** Configurable, default 4Mbps
+- **Latency:** 100-200ms (camera to RTSP viewer)
+- **Bitrate:** Configurable, default 4 Mbps
 
 ## Files
 
-- `infra/docker/Dockerfile.jetson_video` - Container definition
-- `edge_core/ros/jetson_video_bridge.py` - Python ROS2→RTSP bridge
-- `docker-compose.yml` - Service configuration
+| File | Description |
+|------|-------------|
+| `edge_core/ros/simple_video_bridge.py` | ROS2 to RTSP bridge using openh264enc |
+| `edge_core/video_stream_manager.py` | Host-side manager (starts/stops bridge in container) |
+| `edge_core/api.py` | API endpoints (`/api/video/*`) |
+| `infra/mediamtx.yml` | MediaMTX RTSP server config |
+| `infra/docker/Dockerfile.jetson_video` | Standalone video container (alternative deployment) |
+
+---
+AEAC 2026 - McGill Aerial Design

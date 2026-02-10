@@ -35,9 +35,9 @@ ZED -> Isaac ROS -> ROS Topic -> Python Bridge -> TCP Socket -> FFmpeg Encode ->
 The Jetson Orin Nano runs multiple concurrent workloads:
 - Docker (Isaac ROS VSLAM + Nvblox + YOLO)
 - Python Edge Core (FastAPI + MAVLink handling)
-- FFmpeg (Software or NVENC encoding)
+- FFmpeg / GStreamer (Software H.264 encoding -- Orin Nano lacks NVENC)
 - MAVLink Router
 
-**Risk**: Thermal throttling. If the GPU is maxed out by Isaac ROS, hardware-accelerated video encoding may lag, or the CPU may throttle, affecting the Python orchestrator.
+**Risk**: Thermal throttling. If the GPU is maxed out by Isaac ROS, software video encoding may increase CPU load, or the CPU may throttle, affecting the Python orchestrator.
 
 **Mitigation**: The `health_monitor.py` monitors thermals and can trigger alerts. Consider GPU workload scheduling or reducing Isaac ROS update rates under thermal pressure.

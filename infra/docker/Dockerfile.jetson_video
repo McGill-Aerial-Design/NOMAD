@@ -1,6 +1,7 @@
 # ============================================================
 # NOMAD Jetson Video Streaming Container
-# Minimal ROS2 + GStreamer + Jetson HW Encoder
+# Minimal ROS2 + GStreamer + Software H.264 Encoder
+# Note: Orin Nano has no hardware encoder (NVENC)
 # ============================================================
 FROM nvcr.io/nvidia/l4t-base:r36.2.0
 
@@ -24,7 +25,7 @@ RUN apt-get update && apt-get install -y \
     python3-colcon-common-extensions \
     && rm -rf /var/lib/apt/lists/*
 
-# Install GStreamer with Jetson hardware encoder support
+# Install GStreamer with software encoder plugins
 RUN apt-get update && apt-get install -y \
     gstreamer1.0-tools \
     gstreamer1.0-plugins-base \

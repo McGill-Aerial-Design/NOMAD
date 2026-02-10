@@ -204,7 +204,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gstreamer1.0-rtsp \
     libgstreamer1.0-0 \
     libgstreamer-plugins-base1.0-0 \
-    # FFmpeg for NVENC video encoding
+    # FFmpeg for video encoding (software -- Orin Nano has no NVENC)
     ffmpeg \
     # Networking tools
     iproute2 \
