@@ -34,7 +34,7 @@ from urllib.parse import quote
 logger = logging.getLogger("edge_core.video_stream_manager")
 
 # Configuration
-DEFAULT_CONTAINER_NAME = "nomad_isaac_ros_32"
+DEFAULT_CONTAINER_NAME = "nomad_isaac_ros"
 DEFAULT_RELAY_HTTP_PORT = 9200
 DEFAULT_RTSP_URL = "rtsp://172.17.0.1:8554/primary"
 DEFAULT_TOPIC = "/zed/zed_node/rgb/image_rect_color"

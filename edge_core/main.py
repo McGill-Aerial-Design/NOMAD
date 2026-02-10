@@ -262,7 +262,7 @@ def run(
     # This runs in background and will auto-start the video relay when container is ready
     enable_video_auto_start = os.environ.get("NOMAD_VIDEO_AUTO_START", "true").lower() == "true"
     init_video_stream_manager(
-        container_name="nomad_isaac_ros_32",
+        container_name="nomad_isaac_ros",
         auto_start=enable_video_auto_start
     )
     logger.info(f"Video stream manager initialized (auto_start={enable_video_auto_start})")
