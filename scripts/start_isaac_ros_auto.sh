@@ -15,9 +15,9 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ISAAC_WS="${HOME}/ros2/isaac_ros_32_ws"
-CONTAINER_NAME="nomad_isaac_ros_32"
-IMAGE_NAME="isaac_ros_dev-aarch64:latest"
+ISAAC_WS="${HOME}/workspaces/isaac_ros-dev"
+CONTAINER_NAME="nomad_isaac_ros"
+IMAGE_NAME="dustynv/ros:humble-ros-base-l4t-r36.2.0"
 EDGE_CORE_HOST="172.17.0.1"  # Docker host from inside container
 EDGE_CORE_PORT="8000"
 
@@ -190,7 +190,7 @@ check_and_build_nvblox() {
     # Check if nvblox source exists
     if ! docker exec "$CONTAINER_NAME" test -d /workspaces/isaac_ros-dev/src/isaac_ros_nvblox; then
         log_warn "Nvblox source not found. Please clone it first:"
-        log_warn "  cd ~/ros2/isaac_ros_ws/src"
+        log_warn "  cd ~/workspaces/isaac_ros-dev/src"
         log_warn "  git clone https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nvblox.git"
         log_warn "  git clone https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_visual_slam.git"
         log_warn "Then rebuild: colcon build --symlink-install"

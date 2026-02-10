@@ -221,7 +221,7 @@ start_video_bridge() {
     log_info "Waiting for Isaac ROS container..."
     count=0
     while [ $count -lt $max_wait ]; do
-        if docker exec nomad_isaac_ros_32 echo "ready" > /dev/null 2>&1; then
+        if docker exec nomad_isaac_ros echo "ready" > /dev/null 2>&1; then
             log_ok "Isaac ROS container ready"
             break
         fi
@@ -336,7 +336,7 @@ except: pass
     echo "  MAVLink:      $LOG_DIR/mavlink.log"
     echo "  Edge Core:    $LOG_DIR/edge_core.log"
     echo "  Video Bridge: $LOG_DIR/video_bridge.log"
-    echo "  Isaac ROS:    docker logs nomad_isaac_ros_32"
+    echo "  Isaac ROS:    docker logs nomad_isaac_ros"
     echo "=========================================="
 }
 
@@ -391,7 +391,7 @@ cleanup() {
     pkill -f "edge_core.main" 2>/dev/null || true
     
     # Stop video bridge inside Docker container
-    docker exec nomad_isaac_ros_32 pkill -f "simple_video_bridge" 2>/dev/null || true
+    docker exec nomad_isaac_ros pkill -f "simple_video_bridge" 2>/dev/null || true
     
     # Stop any GStreamer processes
     pkill -f "gst-launch" 2>/dev/null || true

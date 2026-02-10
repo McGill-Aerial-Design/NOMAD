@@ -3,18 +3,18 @@
 # Run this on the Jetson to start ZED camera + nvblox
 #
 # Prerequisites:
-# - Docker container 'nomad_isaac_ros_32' must be running
+# - Docker container 'nomad_isaac_ros' must be running
 # - ZED camera connected via USB
 #
 # Usage from Windows (PowerShell):
-#   ssh mad@100.75.218.89 "bash /home/mad/NOMAD/scripts/start_nvblox_visualization.sh"
+#   ssh mad@100.85.121.98 "bash /home/mad/NOMAD/scripts/start_nvblox_visualization.sh"
 
 set -e
 
 echo "=== NOMAD nvblox Startup (Headless) ==="
 
 # Configuration
-CONTAINER="nomad_isaac_ros_32"
+CONTAINER="nomad_isaac_ros"
 ROS_SETUP="/workspaces/isaac_ros-dev/install/setup.bash"
 LOG_DIR="/tmp"
 

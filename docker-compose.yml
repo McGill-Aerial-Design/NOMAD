@@ -26,7 +26,7 @@
 services:
   # ============================================================
   # Isaac ROS Container - Main Navigation Stack
-  # Replaces: nomad_isaac_ros_32
+  # Container: nomad_isaac_ros
   # 
   # Contains:
   # - ZED ROS2 wrapper (VIO at 30Hz)

@@ -35,7 +35,7 @@ docker compose up -d jetson-video-stream
 docker compose logs -f jetson-video-stream
 
 # 5. Verify streaming
-# From Windows, open VLC: rtsp://100.75.218.89:8554/primary
+# From Windows, open VLC: rtsp://100.85.121.98:8554/primary
 ```
 
 ## Configuration
@@ -65,7 +65,7 @@ docker compose up -d isaac-ros mediamtx
 ### No video stream
 ```bash
 # 1. Check if ROS2 topic is publishing
-docker exec nomad_isaac_ros_32 ros2 topic hz /zed/zed_node/rgb/image_rect_color
+docker exec nomad_isaac_ros ros2 topic hz /zed/zed_node/rgb/image_rect_color
 
 # 2. Check MediaMTX paths
 curl http://localhost:9997/v3/paths/list | jq

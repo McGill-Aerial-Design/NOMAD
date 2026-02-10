@@ -1461,7 +1461,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
         # Check for Isaac ROS Docker container
         try:
             result = subprocess.run(
-                ["docker", "ps", "--filter", "ancestor=isaac_ros_dev-aarch64", "--format", "{{.Status}}"],
+                ["docker", "ps", "--filter", "name=nomad_isaac_ros", "--format", "{{.Status}}"],
                 capture_output=True,
                 text=True,
                 timeout=5,

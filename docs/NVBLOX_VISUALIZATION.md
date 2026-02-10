@@ -7,37 +7,37 @@ This document describes how to run nvblox 3D mesh visualization with the ZED cam
 
 ### From Windows PowerShell:
 ```powershell
-ssh mad@100.75.218.89 "bash /home/mad/NOMAD/scripts/start_nvblox_visualization.sh"
+ssh mad@100.85.121.98 "bash /home/mad/NOMAD/scripts/start_nvblox_visualization.sh"
 ```
 
 ### Manual Steps (if script fails):
 
 1. **Check ZED camera is connected**:
 ```bash
-ssh mad@100.75.218.89 "lsusb | grep -i stereo"
+ssh mad@100.85.121.98 "lsusb | grep -i stereo"
 # Should show: STEREOLABS ZED 2i
 ```
 
 2. **Restart Docker container** (required for fresh USB device access):
 ```bash
-ssh mad@100.75.218.89 "docker restart nomad_isaac_ros_32"
+ssh mad@100.85.121.98 "docker restart nomad_isaac_ros"
 # Wait 15-20 seconds
 ```
 
 3. **Enable X11 display access**:
 ```bash
-ssh mad@100.75.218.89 "export DISPLAY=:1 && export XAUTHORITY=/run/user/1000/gdm/Xauthority && xhost +local:docker"
+ssh mad@100.85.121.98 "export DISPLAY=:1 && export XAUTHORITY=/run/user/1000/gdm/Xauthority && xhost +local:docker"
 ```
 
 4. **Launch full ZED + nvblox stack**:
 ```bash
-ssh mad@100.75.218.89 "docker exec -d nomad_isaac_ros_32 /bin/bash -c 'source /workspaces/isaac_ros-dev/install/setup.bash && ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2 > /tmp/zed_nvblox_full.log 2>&1'"
+ssh mad@100.85.121.98 "docker exec -d nomad_isaac_ros /bin/bash -c 'source /workspaces/isaac_ros-dev/install/setup.bash && ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2 > /tmp/zed_nvblox_full.log 2>&1'"
 # Wait 30 seconds for ZED calibration
 ```
 
 5. **Launch RViz**:
 ```bash
-ssh mad@100.75.218.89 "docker exec -e DISPLAY=:1 -e XAUTHORITY=/run/user/1000/gdm/Xauthority nomad_isaac_ros_32 /bin/bash -c 'source /workspaces/isaac_ros-dev/install/setup.bash && rviz2 -d /workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/visualization/zed_example.rviz'"
+ssh mad@100.85.121.98 "docker exec -e DISPLAY=:1 -e XAUTHORITY=/run/user/1000/gdm/Xauthority nomad_isaac_ros /bin/bash -c 'source /workspaces/isaac_ros-dev/install/setup.bash && rviz2 -d /workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/visualization/zed_example.rviz'"
 ```
 
 ## Key Topics
@@ -55,7 +55,7 @@ ssh mad@100.75.218.89 "docker exec -e DISPLAY=:1 -e XAUTHORITY=/run/user/1000/gd
 
 ### ZED Camera Not Detected
 - Check USB connection: `lsusb | grep -i stereo`
-- Restart the Docker container: `docker restart nomad_isaac_ros_32`
+- Restart the Docker container: `docker restart nomad_isaac_ros`
 - The ZED SDK sometimes needs a fresh USB bind after container restart
 
 ### nvblox Mesh Not Showing
@@ -77,8 +77,8 @@ ssh mad@100.75.218.89 "docker exec -e DISPLAY=:1 -e XAUTHORITY=/run/user/1000/gd
 ## Configuration
 
 ### Docker Container
-- Name: `nomad_isaac_ros_32`
-- Image: `isaac_ros_dev-aarch64:latest`
+- Name: `nomad_isaac_ros`
+- Image: `dustynv/ros:humble-ros-base-l4t-r36.2.0`
 - Workspace: `/workspaces/isaac_ros-dev/`
 
 ### X11 Display
@@ -107,8 +107,8 @@ ssh mad@100.75.218.89 "docker exec -e DISPLAY=:1 -e XAUTHORITY=/run/user/1000/gd
 
 ```bash
 # Stop all ROS nodes
-ssh mad@100.75.218.89 "docker exec nomad_isaac_ros_32 pkill -f 'ros2|rviz'"
+ssh mad@100.85.121.98 "docker exec nomad_isaac_ros pkill -f 'ros2|rviz'"
 
 # Stop just RViz
-ssh mad@100.75.218.89 "docker exec nomad_isaac_ros_32 pkill rviz2"
+ssh mad@100.85.121.98 "docker exec nomad_isaac_ros pkill rviz2"
 ```

@@ -142,14 +142,14 @@ curl -X POST http://jetson:8000/api/video/stop
 
 The RTSP URL is always: `rtsp://jetson:8554/primary`
 
-Replace `jetson` with your Tailscale IP (e.g., `100.75.218.89`).
+Replace `jetson` with your Tailscale IP (e.g., `100.85.121.98`).
 
 ```bash
 # VLC
-vlc rtsp://100.75.218.89:8554/primary --rtsp-tcp --network-caching=200
+vlc rtsp://100.85.121.98:8554/primary --rtsp-tcp --network-caching=200
 
 # FFplay
-ffplay -fflags nobuffer -flags low_delay -rtsp_transport tcp rtsp://100.75.218.89:8554/primary
+ffplay -fflags nobuffer -flags low_delay -rtsp_transport tcp rtsp://100.85.121.98:8554/primary
 ```
 
 ## Mission Planner Integration
@@ -207,34 +207,34 @@ The encoder uses these settings (configured in bridge):
 
 1. Check if bridge is running:
 ```bash
-ssh mad@100.75.218.89 "docker exec nomad_isaac_ros_32 pgrep -af isaac_h264_rtsp_bridge"
+ssh mad@100.85.121.98 "docker exec nomad_isaac_ros pgrep -af isaac_h264_rtsp_bridge"
 ```
 
 2. Check if encoder is running:
 ```bash
-ssh mad@100.75.218.89 "docker exec nomad_isaac_ros_32 pgrep -af encoder_node"
+ssh mad@100.85.121.98 "docker exec nomad_isaac_ros pgrep -af encoder_node"
 ```
 
 3. Check bridge logs:
 ```bash
-curl http://100.75.218.89:8000/api/video/logs
+curl http://100.85.121.98:8000/api/video/logs
 ```
 
 4. Check if MediaMTX is running:
 ```bash
-ssh mad@100.75.218.89 "curl -s http://localhost:9997/v3/paths/list"
+ssh mad@100.85.121.98 "curl -s http://localhost:9997/v3/paths/list"
 ```
 
 ### No topics available
 
 1. Check if ZED wrapper is running:
 ```bash
-ssh mad@100.75.218.89 "docker exec nomad_isaac_ros_32 ros2 topic list | grep zed"
+ssh mad@100.85.121.98 "docker exec nomad_isaac_ros ros2 topic list | grep zed"
 ```
 
 2. If no topics, restart Isaac ROS container:
 ```bash
-ssh mad@100.75.218.89
+ssh mad@100.85.121.98
 cd ~/NOMAD
 ./scripts/start_isaac_ros_auto.sh restart
 ```
@@ -242,19 +242,19 @@ cd ~/NOMAD
 ### High latency
 
 1. Reduce network caching in VLC to 100-200ms
-2. Check Jetson CPU/GPU load: `curl http://100.75.218.89:8000/health/detailed`
+2. Check Jetson CPU/GPU load: `curl http://100.85.121.98:8000/health/detailed`
 3. Try reducing resolution or bitrate via API
 
 ### Topic switch not working
 
 1. Check API response for errors:
 ```bash
-curl -X POST "http://100.75.218.89:8000/api/video/source?topic=/zed/zed_node/left/image_rect_color"
+curl -X POST "http://100.85.121.98:8000/api/video/source?topic=/zed/zed_node/left/image_rect_color"
 ```
 
 2. Check bridge HTTP is accessible:
 ```bash
-ssh mad@100.75.218.89 "curl http://localhost:9200/status"
+ssh mad@100.85.121.98 "curl http://localhost:9200/status"
 ```
 
 Note: Topic switching restarts the Isaac ROS H264 encoder, so there may be a brief interruption.
