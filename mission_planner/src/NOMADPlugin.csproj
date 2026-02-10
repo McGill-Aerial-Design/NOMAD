@@ -51,6 +51,8 @@
     <Reference Include="System.Core" />
     <Reference Include="System.Drawing" />
     <Reference Include="System.Net.Http" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Xml" />
     <Reference Include="Microsoft.CSharp" />
@@ -130,12 +132,12 @@
     <Compile Include="EnhancedHealthDashboard.cs" />
     <Compile Include="EnhancedWASDControl.cs" />
     <Compile Include="JetsonConnectionManager.cs" />
+    <Compile Include="JetsonApiService.cs" />
     <Compile Include="JetsonHealthTab.cs" />
     <Compile Include="JetsonTerminalControl.cs" />
     <Compile Include="LinkHealthPanel.cs" />
     <Compile Include="MAVLinkConnectionManager.cs" />
     <Compile Include="MissionConfig.cs" />
-    <Compile Include="MissionSetupPanel.cs" />
     <Compile Include="MapOverlayManager.cs" />
     <Compile Include="NOMADConfig.cs" />
     <Compile Include="NOMADControlPanel.cs" />

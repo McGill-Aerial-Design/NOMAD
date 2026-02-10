@@ -218,7 +218,7 @@ class VideoStreamManager:
             cmd = [
                 "docker", "exec", "-d", self.container_name,
                 "bash", "-c",
-                f"source /opt/ros/humble/install/setup.bash && "
+                f"source /opt/ros/humble/setup.bash 2>/dev/null; source /opt/ros/humble/install/setup.bash 2>/dev/null; "
                 f"python3 /tmp/{script_name} "
                 f"--source-topic '{self.default_topic}' "
                 f"--width {self.width} "
@@ -349,7 +349,7 @@ class VideoStreamManager:
             cmd = [
                 "docker", "exec", self.container_name,
                 "bash", "-c",
-                "source /opt/ros/humble/install/setup.bash && ros2 topic list -t 2>/dev/null"
+                "source /opt/ros/humble/setup.bash 2>/dev/null; source /opt/ros/humble/install/setup.bash 2>/dev/null; ros2 topic list -t 2>/dev/null"
             ]
             
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)

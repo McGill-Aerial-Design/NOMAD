@@ -28,7 +28,6 @@ namespace NOMAD.MissionPlanner
         // ============================================================
         
         private NOMADConfig _config;
-        private readonly HttpClient _httpClient;
         private readonly List<string> _commandHistory;
         private int _historyIndex;
         
@@ -69,11 +68,6 @@ namespace NOMAD.MissionPlanner
             _config = config ?? throw new ArgumentNullException(nameof(config));
             _commandHistory = new List<string>();
             _historyIndex = -1;
-            
-            _httpClient = new HttpClient
-            {
-                Timeout = TimeSpan.FromSeconds(30)
-            };
             
             InitializeUI();
             PrintWelcome();
@@ -435,7 +429,7 @@ namespace NOMAD.MissionPlanner
                 "application/json"
             );
             
-            var response = await _httpClient.PostAsync(url, content);
+            var response = await JetsonApiService.LongRunClient.PostAsync(url, content);
             var responseBody = await response.Content.ReadAsStringAsync();
             
             if (response.IsSuccessStatusCode)
@@ -599,10 +593,6 @@ namespace NOMAD.MissionPlanner
         
         protected override void Dispose(bool disposing)
         {
-            if (disposing)
-            {
-                _httpClient?.Dispose();
-            }
             base.Dispose(disposing);
         }
     }

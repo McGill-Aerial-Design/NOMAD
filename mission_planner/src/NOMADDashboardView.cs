@@ -146,7 +146,7 @@ namespace NOMAD.MissionPlanner
                 async _ => await PollJetsonHealth(),
                 null,
                 TimeSpan.FromMilliseconds(500),  // Initial delay
-                TimeSpan.FromMilliseconds(3000)  // Poll every 3 seconds
+                TimeSpan.FromMilliseconds(_config.HealthPollInterval)  // Honor config polling interval
             );
         }
         

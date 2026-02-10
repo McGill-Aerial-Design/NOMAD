@@ -26,7 +26,6 @@ namespace NOMAD.MissionPlanner
         // ============================================================
         
         private NOMADConfig _config;
-        private readonly HttpClient _httpClient;
         private System.Threading.Timer _pollTimer;
         
         // Data history for graphs
@@ -91,11 +90,6 @@ namespace NOMAD.MissionPlanner
         public EnhancedHealthDashboard(NOMADConfig config)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
-            
-            _httpClient = new HttpClient
-            {
-                Timeout = TimeSpan.FromSeconds(3)
-            };
             
             InitializeUI();
             StartPolling();
@@ -183,7 +177,7 @@ namespace NOMAD.MissionPlanner
             // Auto-refresh indicator (no manual button needed)
             var lblAutoRefresh = new Label
             {
-                Text = "[AUTO] Refreshing every 2s",
+                Text = $"[AUTO] Refreshing every {_config.HealthPollInterval / 1000.0:0.#}s",
                 Location = new Point(400, 28),
                 ForeColor = Color.LimeGreen,
                 Font = new Font("Segoe UI", 8),
@@ -645,9 +639,9 @@ namespace NOMAD.MissionPlanner
             try
             {
                 // Fetch health/detailed for system metrics
-                var healthTask = _httpClient.GetAsync($"{_config.EffectiveBaseUrl}/health/detailed");
+                var healthTask = JetsonApiService.GetAsync("/health/detailed");
                 // Fetch network/status for detailed network info
-                var networkTask = _httpClient.GetAsync($"{_config.EffectiveBaseUrl}/network/status");
+                var networkTask = JetsonApiService.GetAsync("/network/status");
                 
                 await Task.WhenAll(healthTask, networkTask);
                 
@@ -865,10 +859,7 @@ namespace NOMAD.MissionPlanner
                 _btnReconnectTailscale.Enabled = false;
                 _btnReconnectTailscale.Text = "...";
                 
-                var response = await _httpClient.PostAsync(
-                    $"{_config.EffectiveBaseUrl}/network/reconnect", 
-                    null
-                );
+                var response = await JetsonApiService.PostAsync("/network/reconnect");
                 
                 if (response.IsSuccessStatusCode)
                 {
@@ -910,10 +901,7 @@ namespace NOMAD.MissionPlanner
                 _lblGitStatus.Text = "Stashing & pulling...";
                 _lblGitStatus.ForeColor = Color.Yellow;
                 
-                var response = await _httpClient.PostAsync(
-                    $"{_config.EffectiveBaseUrl}/api/admin/git-update", 
-                    null
-                );
+                var response = await JetsonApiService.PostAsync("/api/admin/git-update");
                 
                 if (response.IsSuccessStatusCode)
                 {
@@ -1223,7 +1211,6 @@ namespace NOMAD.MissionPlanner
             if (disposing)
             {
                 _pollTimer?.Dispose();
-                _httpClient?.Dispose();
             }
             base.Dispose(disposing);
         }

@@ -829,30 +829,28 @@ namespace NOMAD.MissionPlanner
             {
                 SaveSettings();
 
-                using (var client = new System.Net.Http.HttpClient())
-                {
-                    client.Timeout = TimeSpan.FromSeconds(3);
-                    var url = $"http://{Config.EffectiveIP}:{Config.JetsonPort}/health";
-                    var response = await client.GetAsync(url);
+                // Reconfigure centralized API service with updated settings
+                JetsonApiService.Reconfigure(Config);
+                
+                var response = await JetsonApiService.GetAsync("/health");
 
-                    if (response.IsSuccessStatusCode)
-                    {
-                        MessageBox.Show(
-                            $"Connection successful!\n\nJetson at {Config.EffectiveIP}:{Config.JetsonPort} is reachable.",
-                            "Success",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Information
-                        );
-                    }
-                    else
-                    {
-                        MessageBox.Show(
-                            $"Connection failed: HTTP {(int)response.StatusCode}",
-                            "Error",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Warning
-                        );
-                    }
+                if (response.IsSuccessStatusCode)
+                {
+                    MessageBox.Show(
+                        $"Connection successful!\n\nJetson at {Config.EffectiveIP}:{Config.JetsonPort} is reachable.",
+                        "Success",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information
+                    );
+                }
+                else
+                {
+                    MessageBox.Show(
+                        $"Connection failed: HTTP {(int)response.StatusCode}",
+                        "Error",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning
+                    );
                 }
             }
             catch (Exception ex)

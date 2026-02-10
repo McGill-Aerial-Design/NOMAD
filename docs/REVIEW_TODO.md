@@ -64,10 +64,10 @@ Status: Complete (committed 8d376f6, deployed to Jetson)
 
 ### Remaining (deferred -- lower priority)
 
-- [ ] **M8 - C# Boundary Editor Duplication**: Consolidate BoundaryManager and NOMADViews boundary UI
-- [ ] **M9 - C# Unused Panels**: Remove or integrate unused MissionSetupPanel and BoundaryConfigPanel
-- [ ] **M10 - C# Centralize HttpClient**: Create shared Jetson API service instead of per-control HttpClients
-- [ ] **M12 - C# Hardcoded Polling**: Honor user config for polling intervals
+- [x] **M8 - C# Boundary Editor Duplication**: Consolidated BoundaryConfigPanel into NOMADBoundaryView with KML/CSV import and violation actions (2026-02-10)
+- [x] **M9 - C# Unused Panels**: Removed MissionSetupPanel.cs and BoundaryConfigPanel class (2026-02-10)
+- [x] **M10 - C# Centralize HttpClient**: Created JetsonApiService with shared HttpClient instances (2026-02-10)
+- [x] **M12 - C# Hardcoded Polling**: All components now honor user config for polling intervals (2026-02-10)
 
 ---
 

@@ -86,9 +86,6 @@ namespace NOMAD.MissionPlanner
         
         // Command timer
         private System.Threading.Timer _commandTimer;
-
-        // Shared HttpClient for Jetson API (avoids socket exhaustion from per-request instantiation)
-        private static readonly System.Net.Http.HttpClient _httpClient = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) };
         
         // ============================================================
         // Properties
@@ -828,11 +825,8 @@ namespace NOMAD.MissionPlanner
                     return;
                 }
 
-                // Use the servo/shooter/trigger endpoint with duration in query param
-                var response = await _httpClient.PostAsync(
-                    $"http://{jetsonIp}:8000/api/servo/shooter/trigger?duration_ms=500",
-                    null  // No body needed
-                );
+                var response = await JetsonApiService.PostAsync(
+                    $"/api/servo/shooter/trigger?duration_ms=500");
 
                 if (response.IsSuccessStatusCode)
                 {
@@ -867,10 +861,8 @@ namespace NOMAD.MissionPlanner
                 if (string.IsNullOrEmpty(jetsonIp)) return;
 
                 // Use the camera tilt endpoint with angle as query param
-                await _httpClient.PostAsync(
-                    $"http://{jetsonIp}:8000/api/servo/camera/tilt?angle={angle}",
-                    null  // No body needed
-                );
+                await JetsonApiService.PostAsync(
+                    $"/api/servo/camera/tilt?angle={angle}");
             }
             catch
             {

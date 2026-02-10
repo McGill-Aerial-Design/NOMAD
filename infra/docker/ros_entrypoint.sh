@@ -11,9 +11,15 @@
 set -e
 
 # Source ROS2 Humble setup
+# The dustynv image installs custom ROS2 at /opt/ros/humble/install/
+# while apt packages go to /opt/ros/humble/.  Source both.
+if [ -f /opt/ros/humble/setup.bash ]; then
+    source /opt/ros/humble/setup.bash
+    echo "[ros_entrypoint] Sourced ROS2 apt packages"
+fi
 if [ -f /opt/ros/humble/install/setup.bash ]; then
     source /opt/ros/humble/install/setup.bash
-    echo "[ros_entrypoint] Sourced ROS2 Humble"
+    echo "[ros_entrypoint] Sourced ROS2 Humble (dustynv overlay)"
 fi
 
 # Source local workspace if it exists (colcon build output)

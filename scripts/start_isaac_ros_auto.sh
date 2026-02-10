@@ -21,6 +21,15 @@ IMAGE_NAME="dustynv/ros:humble-ros-base-l4t-r36.2.0"
 EDGE_CORE_HOST="172.17.0.1"  # Docker host from inside container
 EDGE_CORE_PORT="8000"
 
+# ZED ROS2 wrapper branch matching ZED SDK 4.x
+ZED_WRAPPER_BRANCH="humble-v4.1.4"
+
+# ROS2 setup command for dustynv containers.
+# The dustynv image puts its custom-built ROS2 base at /opt/ros/humble/install/,
+# while apt-installed ROS2 packages (nmea_msgs, zed_msgs, etc.) go to
+# /opt/ros/humble/.  Source both so cmake and runtime find everything.
+ROS_SETUP="source /opt/ros/humble/setup.bash 2>/dev/null; source /opt/ros/humble/install/setup.bash"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -122,19 +131,35 @@ start_container() {
     sleep 2
 }
 
+clone_zed_wrapper() {
+    # Clone the ZED ROS2 wrapper if it doesn't exist in the workspace.
+    # Uses a specific branch that matches ZED SDK 4.x (humble-v4.1.4).
+    ZED_SRC="${ISAAC_WS}/src/zed-ros2-wrapper"
+    if [ -d "$ZED_SRC" ] && [ -f "$ZED_SRC/CMakeLists.txt" -o -f "$ZED_SRC/zed_wrapper/CMakeLists.txt" ]; then
+        log_info "ZED ROS2 wrapper already cloned"
+        return 0
+    fi
+
+    log_info "Cloning ZED ROS2 wrapper (branch $ZED_WRAPPER_BRANCH)..."
+    rm -rf "$ZED_SRC"
+    git clone --branch "$ZED_WRAPPER_BRANCH" --depth 1 \
+        https://github.com/stereolabs/zed-ros2-wrapper.git "$ZED_SRC"
+    cd "$ZED_SRC"
+    git submodule update --init --recursive
+    cd -
+    log_info "ZED ROS2 wrapper cloned (branch $ZED_WRAPPER_BRANCH, submodules initialized)"
+}
+
 install_dependencies() {
     log_info "Checking dependencies inside container..."
-    
-    # Install ZED SDK inside container if not present
-    # We install it inside the container (not bind-mounted from host) to avoid
-    # CUDA version mismatches (host may have newer CUDA than container image).
+
+    # ---- ZED SDK (inside container to match container CUDA) ----
     if ! docker exec "$CONTAINER_NAME" bash -c "test -f /usr/local/zed/zed-config.cmake" 2>/dev/null; then
         log_info "Installing ZED SDK inside container (matching container CUDA)..."
-        
-        # Determine the right SDK URL for container's L4T version
-        # dustynv/ros:humble-ros-base-l4t-r36.2.0 -> L4T r36.2, CUDA 12.2
+
+        # dustynv/ros:humble-ros-base-l4t-r36.2.0 has CUDA 12.2 / L4T r36.2
         ZED_SDK_URL="https://download.stereolabs.com/zedsdk/4.1/l4t36.3/jetsons"
-        
+
         docker exec "$CONTAINER_NAME" bash -c "
             apt-get update -qq 2>/dev/null
             apt-get install -y --no-install-recommends zstd wget 2>/dev/null
@@ -144,7 +169,7 @@ install_dependencies() {
             rm -f /tmp/zed_installer.run
             ldconfig
         " 2>&1 | tail -5
-        
+
         if docker exec "$CONTAINER_NAME" bash -c "test -f /usr/local/zed/zed-config.cmake" 2>/dev/null; then
             log_info "ZED SDK installed successfully"
         else
@@ -154,20 +179,26 @@ install_dependencies() {
     else
         log_info "ZED SDK already installed in container"
     fi
-    
-    # Check if ROS dependencies are already installed by testing for a key package
+
+    # ---- Quick-exit if deps already present ----
     if docker exec "$CONTAINER_NAME" bash -c "dpkg -l | grep -q ros-humble-zed-msgs" 2>/dev/null; then
         log_info "ROS dependencies already installed, skipping..."
         return 0
     fi
-    
+
+    # ---- apt dependencies ----
     log_info "Installing ROS2 dependencies inside container..."
-    
-    # Remove problematic yarn repo first, then install packages
+
     docker exec "$CONTAINER_NAME" bash -c "
+        # Remove problematic repos and refresh GPG keys
         rm -f /etc/apt/sources.list.d/yarn.list 2>/dev/null
+        curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+            -o /usr/share/keyrings/ros-archive-keyring.gpg 2>/dev/null || true
         apt-get update -qq
+
+        # Force-overwrite avoids conflicts with dustynv custom OpenCV
         apt-get install -y --no-install-recommends \
+            -o Dpkg::Options::=\"--force-overwrite\" \
             ros-humble-zed-msgs \
             ros-humble-nmea-msgs \
             ros-humble-robot-localization \
@@ -175,43 +206,42 @@ install_dependencies() {
             ros-humble-point-cloud-transport-plugins \
             ros-humble-tf2-ros \
             ros-humble-tf2-tools \
-            ros-humble-cob-srvs \
             ros-humble-cv-bridge \
             liburdfdom-dev \
             python3-pip 2>/dev/null
-        # Update library cache for newly installed packages
-        echo /opt/ros/humble/lib >> /etc/ld.so.conf.d/ros.conf
+
+        # Ensure library cache includes apt-installed ROS2 packages
+        echo /opt/ros/humble/lib >> /etc/ld.so.conf.d/ros.conf 2>/dev/null || true
         ldconfig
-        
-        # Check if packages need to be installed/updated
+
         if ! python3 -c 'import requests' 2>/dev/null; then
             pip3 install requests opencv-python-headless 2>/dev/null
         fi
-    " 2>&1 | tail -3
-    
-    # Run rosdep to install remaining dependencies
+    " 2>&1 | tail -5
+
+    # ---- rosdep ----
     log_info "Running rosdep for ZED wrapper..."
     docker exec "$CONTAINER_NAME" bash -c "
-        source /opt/ros/humble/install/setup.bash
+        $ROS_SETUP
         cd /workspaces/isaac_ros-dev/src/zed-ros2-wrapper
         rosdep install --from-paths . --ignore-src -r -y 2>/dev/null
     " 2>&1 | tail -5
-    
-    # Rebuild ZED packages (builds dependencies like zed_msgs first)
-    log_info "Rebuilding ZED packages..."
+
+    # ---- colcon build (uses --packages-up-to so deps like zed_interfaces build first) ----
+    log_info "Building ZED packages (this may take several minutes)..."
     docker exec "$CONTAINER_NAME" bash -c "
-        source /opt/ros/humble/install/setup.bash
+        $ROS_SETUP
         cd /workspaces/isaac_ros-dev
         colcon build --packages-up-to zed_wrapper --symlink-install --cmake-args -Wno-dev 2>&1
     " 2>&1 | tail -10
-    
-    # Verify ZED packages built successfully
-    if docker exec "$CONTAINER_NAME" bash -c "source /opt/ros/humble/install/setup.bash && source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null && ros2 pkg list 2>/dev/null | grep -q zed_wrapper"; then
+
+    # Verify build
+    if docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP && source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null && ros2 pkg list 2>/dev/null | grep -q zed_wrapper"; then
         log_info "ZED packages built successfully"
     else
         log_warn "ZED packages may not have built correctly"
     fi
-    
+
     log_info "Dependencies installed and ZED packages rebuilt"
 }
 
@@ -219,7 +249,7 @@ check_and_build_nvblox() {
     log_info "Checking for Nvblox packages..."
     
     # Check if nvblox is already built
-    if docker exec "$CONTAINER_NAME" bash -c "source /opt/ros/humble/install/setup.bash && source /workspaces/isaac_ros-dev/install/setup.bash && ros2 pkg list 2>/dev/null | grep -q nvblox"; then
+    if docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP && source /workspaces/isaac_ros-dev/install/setup.bash && ros2 pkg list 2>/dev/null | grep -q nvblox"; then
         log_info "Nvblox packages already built"
         return 0
     fi
@@ -240,7 +270,7 @@ check_and_build_nvblox() {
     
     log_info "Building Nvblox (this may take 10-30 minutes)..."
     docker exec "$CONTAINER_NAME" bash -c "
-        source /opt/ros/humble/install/setup.bash
+        $ROS_SETUP
         cd /workspaces/isaac_ros-dev
         colcon build --symlink-install --packages-up-to nvblox_examples_bringup
     " 2>&1 | tail -20
@@ -252,7 +282,7 @@ launch_zed_nvblox() {
     log_info "Launching ZED + Nvblox..."
     
     # Check if nvblox is available
-    if ! docker exec "$CONTAINER_NAME" bash -c "source /opt/ros/humble/install/setup.bash && source /workspaces/isaac_ros-dev/install/setup.bash && ros2 pkg list 2>/dev/null | grep -q nvblox"; then
+    if ! docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP && source /workspaces/isaac_ros-dev/install/setup.bash && ros2 pkg list 2>/dev/null | grep -q nvblox"; then
         log_warn "Nvblox not available - launching ZED wrapper only"
         launch_zed_only
         return
@@ -272,6 +302,7 @@ launch_zed_only() {
     docker exec "$CONTAINER_NAME" bash -c "
         cat > /tmp/launch_zed_only.sh << 'LAUNCH_SCRIPT'
 #!/bin/bash
+source /opt/ros/humble/setup.bash 2>/dev/null
 source /opt/ros/humble/install/setup.bash
 source /workspaces/isaac_ros-dev/install/setup.bash
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
@@ -301,6 +332,7 @@ launch_ros_http_bridge() {
     docker exec "$CONTAINER_NAME" bash -c "
         cat > /tmp/launch_bridge.sh << 'BRIDGE_SCRIPT'
 #!/bin/bash
+source /opt/ros/humble/setup.bash 2>/dev/null
 source /opt/ros/humble/install/setup.bash
 source /workspaces/isaac_ros-dev/install/setup.bash
 # Wait for ROS nodes to be up
@@ -353,7 +385,7 @@ show_status() {
         # Check ROS topics
         echo ""
         echo "ROS2 Topics (sample):"
-        docker exec "$CONTAINER_NAME" bash -c "source /opt/ros/humble/install/setup.bash && source /workspaces/isaac_ros-dev/install/setup.bash && ros2 topic list 2>/dev/null | head -15" || echo "(ROS not fully initialized)"
+        docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP && source /workspaces/isaac_ros-dev/install/setup.bash && ros2 topic list 2>/dev/null | head -15" || echo "(ROS not fully initialized)"
         
         # Check logs
         echo ""
@@ -403,6 +435,7 @@ show_logs() {
 case "${1:-start}" in
     start)
         check_prerequisites
+        clone_zed_wrapper
         start_container
         install_dependencies
         # Don't exit on nvblox check failure - we fall back to ZED-only
@@ -418,7 +451,7 @@ case "${1:-start}" in
         while [ $(($(date +%s) - WAIT_START)) -lt $MAX_WAIT ]; do
             # Check if ZED image topics are being published
             if docker exec "$CONTAINER_NAME" bash -c "
-                source /opt/ros/humble/install/setup.bash && \
+                $ROS_SETUP && \
                 timeout 2 ros2 topic list 2>/dev/null | grep -q '/zed/zed_node/.*image'
             " 2>/dev/null; then
                 ZED_READY=true

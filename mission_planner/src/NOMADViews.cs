@@ -9,6 +9,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Text;
 using System.Windows.Forms;
@@ -102,7 +103,6 @@ namespace NOMAD.MissionPlanner
         private TextBox _txtResult;
         private EmbeddedVideoPlayer _videoPlayer;
         private FlowLayoutPanel _galleryPanel;
-        private static readonly System.Net.Http.HttpClient _httpClient = new System.Net.Http.HttpClient();
         
         public NOMADTask1View(DualLinkSender sender, NOMADConfig config, JetsonConnectionManager jetsonConnectionManager = null)
         {
@@ -290,7 +290,7 @@ namespace NOMAD.MissionPlanner
                                 string imageUrl = $"http://{_config.EffectiveIP}:{_config.JetsonPort}/api/task/1/images/{imageName}";
                                 
                                 // Download image
-                                var imageBytes = await _httpClient.GetByteArrayAsync(imageUrl);
+                                var imageBytes = await JetsonApiService.GetByteArrayAsync(imageUrl);
                                 
                                 // Save to local directory
                                 var task1Dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NOMAD", "Task1");
@@ -821,7 +821,7 @@ namespace NOMAD.MissionPlanner
                 
                 if (_sender != null)
                 {
-                    _serviceControlPanel = new ServiceControlPanel(_sender);
+                    _serviceControlPanel = new ServiceControlPanel(_sender, _config.HealthPollInterval);
                     _serviceControlPanel.Dock = DockStyle.Fill;
                     serviceTab.Controls.Add(_serviceControlPanel);
                 }
@@ -987,6 +987,11 @@ namespace NOMAD.MissionPlanner
         // Building location
         private TextBox _txtBuildingLat;
         private TextBox _txtBuildingLon;
+        
+        // Violation action controls
+        private ComboBox _cmbSoftAction;
+        private ComboBox _cmbHardAction;
+        private NumericUpDown _nudKillDelay;
         
         // Preset management
         private ComboBox _cmbPresets;
@@ -1260,6 +1265,146 @@ namespace NOMAD.MissionPlanner
             hardCard.Controls.Add(lblHardCount);
             
             contentPanel.Controls.Add(hardCard);
+            
+            // ============================================================
+            // Import Boundaries
+            // ============================================================
+            var importCard = CreateCard("IMPORT BOUNDARIES");
+            importCard.Size = new Size(600, 80);
+            
+            var btnImportKml = CreateButton("Import KML/KMZ", ACCENT_COLOR, 130, 30);
+            btnImportKml.Location = new Point(15, 45);
+            btnImportKml.Click += BtnImportKml_Click;
+            importCard.Controls.Add(btnImportKml);
+            
+            var btnImportGoogleMaps = CreateButton("Paste Coords (CSV)", ACCENT_COLOR, 145, 30);
+            btnImportGoogleMaps.Location = new Point(155, 45);
+            btnImportGoogleMaps.Click += BtnImportGoogleMaps_Click;
+            importCard.Controls.Add(btnImportGoogleMaps);
+            
+            var btnGetFromMP = CreateButton("Get from MP Fence", ACCENT_COLOR, 140, 30);
+            btnGetFromMP.Location = new Point(310, 45);
+            btnGetFromMP.Click += BtnGetFromMP_Click;
+            importCard.Controls.Add(btnGetFromMP);
+            
+            contentPanel.Controls.Add(importCard);
+            
+            // ============================================================
+            // Violation Action Configuration
+            // ============================================================
+            var actionCard = CreateCard("VIOLATION ACTIONS");
+            actionCard.Size = new Size(600, 110);
+            
+            var lblSoftAction = new Label
+            {
+                Text = "Soft Violation:",
+                Font = new Font("Segoe UI", 9),
+                ForeColor = TEXT_PRIMARY,
+                Location = new Point(15, 50),
+                AutoSize = true,
+            };
+            actionCard.Controls.Add(lblSoftAction);
+            
+            _cmbSoftAction = new ComboBox
+            {
+                Location = new Point(115, 47),
+                Size = new Size(180, 25),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                BackColor = Color.FromArgb(50, 50, 53),
+                ForeColor = Color.White,
+            };
+            _cmbSoftAction.Items.AddRange(new object[] { "Warn (Audio)", "Warn (Visual)", "Warn (Both)", "Return to Boundary" });
+            // Restore saved selection without triggering the handler
+            var softActionMap = new Dictionary<string, int>
+            {
+                { "warn_audio", 0 }, { "warn_visual", 1 }, { "warn_both", 2 }, { "return_to_boundary", 3 }
+            };
+            if (softActionMap.TryGetValue(_missionConfig.Failsafe.SoftBoundaryAction ?? "", out int softIdx))
+                _cmbSoftAction.SelectedIndex = softIdx;
+            else
+                _cmbSoftAction.SelectedIndex = 2;
+            _cmbSoftAction.SelectedIndexChanged += (s, e) =>
+            {
+                _missionConfig.Failsafe.SoftBoundaryAction = _cmbSoftAction.SelectedItem.ToString()
+                    .ToLower().Replace(" ", "_").Replace("(", "").Replace(")", "");
+                _missionConfig.Save();
+            };
+            actionCard.Controls.Add(_cmbSoftAction);
+            
+            var lblHardAction = new Label
+            {
+                Text = "Hard Violation:",
+                Font = new Font("Segoe UI", 9),
+                ForeColor = TEXT_PRIMARY,
+                Location = new Point(15, 80),
+                AutoSize = true,
+            };
+            actionCard.Controls.Add(lblHardAction);
+            
+            _cmbHardAction = new ComboBox
+            {
+                Location = new Point(115, 77),
+                Size = new Size(180, 25),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                BackColor = Color.FromArgb(50, 50, 53),
+                ForeColor = Color.White,
+            };
+            _cmbHardAction.Items.AddRange(new object[] { "Warn and Kill", "Auto Kill", "Warn Only" });
+            // Restore saved selection without triggering the handler
+            var hardActionMap = new Dictionary<string, int>
+            {
+                { "warn_and_kill", 0 }, { "auto_kill", 1 }, { "warn_only", 2 }
+            };
+            if (hardActionMap.TryGetValue(_missionConfig.Failsafe.HardBoundaryAction ?? "", out int hardIdx))
+                _cmbHardAction.SelectedIndex = hardIdx;
+            else
+                _cmbHardAction.SelectedIndex = 0;
+            _cmbHardAction.SelectedIndexChanged += (s, e) =>
+            {
+                _missionConfig.Failsafe.HardBoundaryAction = _cmbHardAction.SelectedItem.ToString()
+                    .ToLower().Replace(" ", "_");
+                _missionConfig.Save();
+            };
+            actionCard.Controls.Add(_cmbHardAction);
+            
+            var lblKillDelay = new Label
+            {
+                Text = "Kill Delay:",
+                Font = new Font("Segoe UI", 9),
+                ForeColor = TEXT_PRIMARY,
+                Location = new Point(320, 80),
+                AutoSize = true,
+            };
+            actionCard.Controls.Add(lblKillDelay);
+            
+            _nudKillDelay = new NumericUpDown
+            {
+                Location = new Point(395, 77),
+                Size = new Size(60, 25),
+                Minimum = 1,
+                Maximum = 30,
+                Value = _missionConfig.Failsafe.HardBoundaryKillDelaySec,
+                BackColor = Color.FromArgb(50, 50, 53),
+                ForeColor = Color.White,
+            };
+            _nudKillDelay.ValueChanged += (s, e) =>
+            {
+                _missionConfig.Failsafe.HardBoundaryKillDelaySec = (int)_nudKillDelay.Value;
+                _missionConfig.Save();
+            };
+            actionCard.Controls.Add(_nudKillDelay);
+            
+            var lblSec = new Label
+            {
+                Text = "sec",
+                Font = new Font("Segoe UI", 8),
+                ForeColor = TEXT_SECONDARY,
+                Location = new Point(460, 82),
+                AutoSize = true,
+            };
+            actionCard.Controls.Add(lblSec);
+            
+            contentPanel.Controls.Add(actionCard);
             
             // ============================================================
             // Building Location
@@ -1639,6 +1784,299 @@ namespace NOMAD.MissionPlanner
             catch (Exception ex)
             {
                 Console.WriteLine($"NOMAD: Auto-draw error - {ex.Message}");
+            }
+        }
+        
+        // ============================================================
+        // Import Methods (ported from BoundaryConfigPanel)
+        // ============================================================
+        
+        private void BtnImportKml_Click(object sender, EventArgs e)
+        {
+            using (var ofd = new OpenFileDialog
+            {
+                Filter = "KML/KMZ Files|*.kml;*.kmz|All Files|*.*",
+                Title = "Import Boundary from KML"
+            })
+            {
+                if (ofd.ShowDialog() == DialogResult.OK)
+                {
+                    try
+                    {
+                        string content;
+                        
+                        // KMZ files are zipped KML - extract the KML content
+                        if (ofd.FileName.EndsWith(".kmz", StringComparison.OrdinalIgnoreCase))
+                        {
+                            using (var zip = System.IO.Compression.ZipFile.OpenRead(ofd.FileName))
+                            {
+                                var kmlEntry = zip.Entries.FirstOrDefault(e =>
+                                    e.Name.EndsWith(".kml", StringComparison.OrdinalIgnoreCase));
+                                if (kmlEntry == null)
+                                {
+                                    CustomMessageBox.Show("No KML file found inside KMZ archive.", "Error");
+                                    return;
+                                }
+                                using (var sr = new StreamReader(kmlEntry.Open()))
+                                {
+                                    content = sr.ReadToEnd();
+                                }
+                            }
+                        }
+                        else
+                        {
+                            content = File.ReadAllText(ofd.FileName);
+                        }
+                        
+                        var points = ParseKmlCoordinates(content);
+                        
+                        if (points.Count > 0)
+                        {
+                            var result = CustomMessageBox.Show(
+                                $"Import {points.Count} points as Soft (Yes) or Hard (No) boundary?",
+                                "Select Boundary Type",
+                                CustomMessageBox.MessageBoxButtons.YesNo);
+
+                            if (result == CustomMessageBox.DialogResult.Yes)
+                            {
+                                _missionConfig.SoftBoundary.Vertices = points;
+                            }
+                            else
+                            {
+                                _missionConfig.HardBoundary.Vertices = points;
+                            }
+                            _missionConfig.Save();
+                            LoadBoundaries();
+                            AutoDrawBoundariesIfEnabled();
+                            CustomMessageBox.Show($"Imported {points.Count} boundary points from KML.", "Success");
+                        }
+                        else
+                        {
+                            CustomMessageBox.Show("No valid coordinates found in KML file.", "Warning");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        CustomMessageBox.Show($"Error importing KML: {ex.Message}", "Error");
+                    }
+                }
+            }
+        }
+        
+        private List<GpsPoint> ParseKmlCoordinates(string kmlContent)
+        {
+            var points = new List<GpsPoint>();
+            
+            var coordsMatch = System.Text.RegularExpressions.Regex.Match(
+                kmlContent, @"<coordinates>\s*(.*?)\s*</coordinates>",
+                System.Text.RegularExpressions.RegexOptions.Singleline);
+
+            if (coordsMatch.Success)
+            {
+                var coordString = coordsMatch.Groups[1].Value;
+                var coordPairs = coordString.Split(new[] { ' ', '\n', '\r', '\t' },
+                    StringSplitOptions.RemoveEmptyEntries);
+
+                foreach (var pair in coordPairs)
+                {
+                    var parts = pair.Split(',');
+                    if (parts.Length >= 2)
+                    {
+                        if (double.TryParse(parts[0], out double lon) &&
+                            double.TryParse(parts[1], out double lat))
+                        {
+                            points.Add(new GpsPoint(lat, lon));
+                        }
+                    }
+                }
+            }
+
+            return points;
+        }
+        
+        private void BtnImportGoogleMaps_Click(object sender, EventArgs e)
+        {
+            using (var inputForm = new Form())
+            {
+                inputForm.Width = 500;
+                inputForm.Height = 300;
+                inputForm.Text = "Import Coordinates";
+                inputForm.StartPosition = FormStartPosition.CenterParent;
+                inputForm.BackColor = Color.FromArgb(40, 40, 45);
+                inputForm.FormBorderStyle = FormBorderStyle.FixedDialog;
+                inputForm.MaximizeBox = false;
+                inputForm.MinimizeBox = false;
+                
+                var label = new Label
+                {
+                    Left = 20, Top = 20, Width = 440,
+                    Text = "Paste coordinates (one per line, format: lat,lon or lon,lat):",
+                    ForeColor = Color.White,
+                };
+                inputForm.Controls.Add(label);
+                
+                var textBox = new TextBox
+                {
+                    Left = 20, Top = 50, Width = 440, Height = 120,
+                    Multiline = true, ScrollBars = ScrollBars.Vertical,
+                    BackColor = Color.FromArgb(30, 30, 33),
+                    ForeColor = Color.White,
+                    Font = new Font("Consolas", 10),
+                };
+                inputForm.Controls.Add(textBox);
+                
+                var chkReplace = new CheckBox
+                {
+                    Text = "Replace existing points (unchecked = append)",
+                    Location = new Point(20, 180),
+                    ForeColor = Color.White,
+                    AutoSize = true,
+                    Checked = true,
+                };
+                inputForm.Controls.Add(chkReplace);
+                
+                var cmbTarget = new ComboBox
+                {
+                    Location = new Point(20, 210),
+                    Size = new Size(200, 25),
+                    DropDownStyle = ComboBoxStyle.DropDownList,
+                    BackColor = Color.FromArgb(50, 50, 53),
+                    ForeColor = Color.White,
+                };
+                cmbTarget.Items.AddRange(new object[] { "Soft Boundary", "Hard Boundary" });
+                cmbTarget.SelectedIndex = 0;
+                inputForm.Controls.Add(cmbTarget);
+                
+                var btnOk = new Button
+                {
+                    Text = "Import", Left = 300, Width = 80, Top = 240,
+                    DialogResult = DialogResult.OK,
+                    BackColor = Color.FromArgb(0, 122, 204),
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat,
+                };
+                inputForm.Controls.Add(btnOk);
+                
+                var btnCancel = new Button
+                {
+                    Text = "Cancel", Left = 390, Width = 80, Top = 240,
+                    DialogResult = DialogResult.Cancel,
+                    FlatStyle = FlatStyle.Flat,
+                    ForeColor = Color.White,
+                };
+                inputForm.Controls.Add(btnCancel);
+                
+                inputForm.AcceptButton = btnOk;
+                inputForm.CancelButton = btnCancel;
+                
+                if (inputForm.ShowDialog() == DialogResult.OK && !string.IsNullOrWhiteSpace(textBox.Text))
+                {
+                    var points = ParseCoordinates(textBox.Text);
+                    if (points.Count > 0)
+                    {
+                        var boundary = cmbTarget.SelectedIndex == 0
+                            ? _missionConfig.SoftBoundary
+                            : _missionConfig.HardBoundary;
+                        var dgv = cmbTarget.SelectedIndex == 0
+                            ? _dgvSoftBoundary
+                            : _dgvHardBoundary;
+                        
+                        if (chkReplace.Checked)
+                        {
+                            boundary.Vertices.Clear();
+                            dgv.Rows.Clear();
+                        }
+                        
+                        foreach (var point in points)
+                        {
+                            boundary.Vertices.Add(point);
+                            dgv.Rows.Add(point.Lat.ToString("F8"), point.Lon.ToString("F8"));
+                        }
+                        
+                        _missionConfig.Save();
+                        UpdatePointCounts();
+                        AutoDrawBoundariesIfEnabled();
+                        CustomMessageBox.Show($"Imported {points.Count} points.", "Success");
+                    }
+                    else
+                    {
+                        CustomMessageBox.Show("No valid coordinates found.", "Warning");
+                    }
+                }
+            }
+        }
+        
+        private void BtnGetFromMP_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                var mav = MainV2.comPort?.MAV;
+                if (mav == null)
+                {
+                    CustomMessageBox.Show("Not connected to vehicle.", "Warning");
+                    return;
+                }
+                
+                var points = new List<GpsPoint>();
+                
+                // Try to access fencepoints via reflection (type varies by MP version)
+                var fencepointsField = mav.GetType().GetProperty("fencepoints");
+                if (fencepointsField != null)
+                {
+                    var fenceData = fencepointsField.GetValue(mav);
+                    if (fenceData != null)
+                    {
+                        var valuesProperty = fenceData.GetType().GetProperty("Values");
+                        if (valuesProperty != null)
+                        {
+                            var values = valuesProperty.GetValue(fenceData) as System.Collections.IEnumerable;
+                            if (values != null)
+                            {
+                                foreach (var item in values)
+                                {
+                                    var latProp = item.GetType().GetField("lat");
+                                    var lngProp = item.GetType().GetField("lng");
+                                    if (latProp != null && lngProp != null)
+                                    {
+                                        var lat = Convert.ToDouble(latProp.GetValue(item));
+                                        var lng = Convert.ToDouble(lngProp.GetValue(item));
+                                        if (lat != 0 || lng != 0)
+                                            points.Add(new GpsPoint(lat, lng));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                if (points.Count > 0)
+                {
+                    var result = CustomMessageBox.Show(
+                        $"Import {points.Count} fence points as Soft (Yes) or Hard (No) boundary?",
+                        "Select Boundary Type",
+                        CustomMessageBox.MessageBoxButtons.YesNo);
+
+                    if (result == CustomMessageBox.DialogResult.Yes)
+                    {
+                        _missionConfig.SoftBoundary.Vertices = points;
+                    }
+                    else
+                    {
+                        _missionConfig.HardBoundary.Vertices = points;
+                    }
+                    _missionConfig.Save();
+                    LoadBoundaries();
+                    AutoDrawBoundariesIfEnabled();
+                    CustomMessageBox.Show($"Imported {points.Count} fence points.", "Success");
+                }
+                else
+                {
+                    CustomMessageBox.Show("No fence points found in Mission Planner.", "Warning");
+                }
+            }
+            catch (Exception ex)
+            {
+                CustomMessageBox.Show($"Error getting fence: {ex.Message}", "Error");
             }
         }
         

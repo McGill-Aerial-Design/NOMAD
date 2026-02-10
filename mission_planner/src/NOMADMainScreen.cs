@@ -524,7 +524,7 @@ namespace NOMAD.MissionPlanner
             if (_updateTimer == null)
             {
                 _updateTimer = new System.Windows.Forms.Timer();
-                _updateTimer.Interval = 1000; // 1 second updates
+                _updateTimer.Interval = _config.HealthPollInterval; // Honor config polling interval
                 _updateTimer.Tick += UpdateTimer_Tick;
             }
             _updateTimer.Start();

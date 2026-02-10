@@ -65,7 +65,6 @@ namespace NOMAD.MissionPlanner
         // ============================================================
 
         private NOMADConfig _config;
-        private readonly HttpClient _httpClient;
         private bool _disposed;
 
         // ============================================================
@@ -75,11 +74,6 @@ namespace NOMAD.MissionPlanner
         public DualLinkSender(NOMADConfig config)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
-            
-            _httpClient = new HttpClient
-            {
-                Timeout = TimeSpan.FromSeconds(Math.Max(1, _config.HttpTimeoutSeconds))
-            };
         }
 
         // ============================================================
@@ -119,8 +113,8 @@ namespace NOMAD.MissionPlanner
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
 
-            // Keep the HTTP client consistent with updated config
-            _httpClient.Timeout = TimeSpan.FromSeconds(Math.Max(1, _config.HttpTimeoutSeconds));
+            // Reconfigure centralized API service with updated config
+            JetsonApiService.Reconfigure(_config);
         }
 
         /// <summary>
@@ -304,8 +298,7 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                var url = $"http://{_config.EffectiveIP}:{_config.JetsonPort}/health";
-                var response = await _httpClient.GetAsync(url);
+                var response = await JetsonApiService.GetAsync("/health");
                 var responseBody = await response.Content.ReadAsStringAsync();
 
                 // Update connection status
@@ -662,8 +655,7 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                var url = $"http://{_config.EffectiveIP}:{_config.JetsonPort}{endpoint}";
-                var response = await _httpClient.GetAsync(url);
+                var response = await JetsonApiService.GetAsync(endpoint);
                 var responseBody = await response.Content.ReadAsStringAsync();
 
                 if (response.IsSuccessStatusCode)
@@ -702,8 +694,7 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                var url = $"http://{_config.EffectiveIP}:{_config.JetsonPort}{endpoint}";
-                var response = await _httpClient.DeleteAsync(url);
+                var response = await JetsonApiService.DeleteAsync(endpoint);
                 var responseBody = await response.Content.ReadAsStringAsync();
 
                 if (response.IsSuccessStatusCode)
@@ -742,8 +733,6 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                var url = $"http://{_config.EffectiveIP}:{_config.JetsonPort}{endpoint}";
-                
                 var content = body != null
                     ? new StringContent(
                         JsonConvert.SerializeObject(body),
@@ -751,7 +740,7 @@ namespace NOMAD.MissionPlanner
                         "application/json")
                     : new StringContent("{}", Encoding.UTF8, "application/json");
 
-                var response = await _httpClient.PostAsync(url, content);
+                var response = await JetsonApiService.PostAsync(endpoint, content);
                 var responseBody = await response.Content.ReadAsStringAsync();
 
                 if (response.IsSuccessStatusCode)
@@ -878,7 +867,6 @@ namespace NOMAD.MissionPlanner
         {
             if (!_disposed)
             {
-                _httpClient?.Dispose();
                 _disposed = true;
             }
         }

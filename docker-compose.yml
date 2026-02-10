@@ -49,8 +49,9 @@ services:
     volumes:
       # Device access
       - /dev:/dev
-      # ZED SDK config (host-side installation)
-      - /usr/local/zed:/usr/local/zed:ro
+      # ZED SDK is installed INSIDE the container by start_isaac_ros_auto.sh
+      # to avoid CUDA version mismatch with host SDK.
+      # Do NOT mount /usr/local/zed from the host.
       # NOMAD configs
       - ./config:/workspaces/isaac_ros-dev/config:ro
       # VIO bridge and ROS files
@@ -66,7 +67,7 @@ services:
       - FASTRTPS_DEFAULT_PROFILES_FILE=/workspaces/isaac_ros-dev/config/fastdds.xml
       # CUDA
       - CUDA_HOME=/usr/local/cuda
-      - LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/zed/lib:$LD_LIBRARY_PATH
+      - LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/zed/lib:/opt/ros/humble/lib:/opt/ros/humble/install/lib:$LD_LIBRARY_PATH
       # MAVROS FCU connection
       - FCU_URL=/dev/ttyACM0:921600
     devices:
@@ -74,13 +75,14 @@ services:
       - /dev/ttyACM0:/dev/ttyACM0  # Cube Orange
     command: >
       bash -c "
+        source /opt/ros/humble/setup.bash 2>/dev/null;
         source /opt/ros/humble/install/setup.bash &&
         source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null || true &&
         echo 'Isaac ROS container ready. Run your launch files.' &&
         tail -f /dev/null
       "
     healthcheck:
-      test: ["CMD-SHELL", "ros2 topic list > /dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "bash -c 'source /opt/ros/humble/setup.bash 2>/dev/null; source /opt/ros/humble/install/setup.bash 2>/dev/null; ros2 topic list > /dev/null 2>&1 || exit 1'"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -142,7 +144,7 @@ services:
       - VIDEO_BITRATE=4000000
     command: >
       bash -c "
-        source /opt/ros/humble/install/setup.bash &&
+        source /opt/ros/humble/setup.bash &&
         python3 /workspace/ros/jetson_video_bridge.py \
           --source-topic $${VIDEO_SOURCE_TOPIC} \
           --rtsp-url $${RTSP_URL} \

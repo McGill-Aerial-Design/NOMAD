@@ -19,9 +19,9 @@ namespace NOMAD.MissionPlanner
     /// </summary>
     public class JetsonHealthTab : UserControl
     {
-        private readonly HttpClient _httpClient;
         private readonly System.Threading.Timer _pollTimer;
         private string _jetsonBaseUrl = "http://127.0.0.1:8000";
+        private readonly int _pollIntervalMs;
         
         // UI Controls
         private Label _lblStatus;
@@ -36,21 +36,17 @@ namespace NOMAD.MissionPlanner
         private Label _lblLastUpdate;
         private TextBox _txtUrl;
         
-        public JetsonHealthTab()
+        public JetsonHealthTab(int pollIntervalMs = 2000)
         {
-            _httpClient = new HttpClient
-            {
-                Timeout = TimeSpan.FromSeconds(2)
-            };
-            
+            _pollIntervalMs = pollIntervalMs;
             InitializeUI();
             
-            // Start polling every 2 seconds
+            // Start polling using configured interval
             _pollTimer = new System.Threading.Timer(
                 _ => PollJetsonHealth(),
                 null,
                 TimeSpan.FromSeconds(1), // Initial delay
-                TimeSpan.FromSeconds(2)  // Period
+                TimeSpan.FromMilliseconds(_pollIntervalMs)  // Period from config
             );
         }
         
@@ -185,7 +181,7 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                var response = await _httpClient.GetAsync($"{_jetsonBaseUrl}/health");
+                var response = await JetsonApiService.ApiClient.GetAsync($"{_jetsonBaseUrl}/health");
                 
                 if (response.IsSuccessStatusCode)
                 {
@@ -262,7 +258,6 @@ namespace NOMAD.MissionPlanner
             if (disposing)
             {
                 _pollTimer?.Dispose();
-                _httpClient?.Dispose();
             }
             base.Dispose(disposing);
         }

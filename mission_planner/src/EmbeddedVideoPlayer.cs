@@ -226,44 +226,41 @@ namespace NOMAD.MissionPlanner
                 _lblStatus.Text = "Refreshing topics...";
                 _lblStatus.ForeColor = Color.Yellow;
                 
-                using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) })
+                var json = await JetsonApiService.ApiClient.GetStringAsync($"{_apiBaseUrl}/api/video/topics");
+                var data = JObject.Parse(json);
+                var arr = data["topics"] as JArray;
+                
+                _topics.Clear();
+                if (arr != null)
                 {
-                    var json = await client.GetStringAsync($"{_apiBaseUrl}/api/video/topics");
-                    var data = JObject.Parse(json);
-                    var arr = data["topics"] as JArray;
-                    
-                    _topics.Clear();
-                    if (arr != null)
+                    foreach (var t in arr)
                     {
-                        foreach (var t in arr)
-                        {
-                            var name = t["name"]?.ToString();
-                            var disp = t["display_name"]?.ToString() ?? name;
-                            if (!string.IsNullOrEmpty(name))
-                                _topics.Add((name, disp));
-                        }
+                        var name = t["name"]?.ToString();
+                        var disp = t["display_name"]?.ToString() ?? name;
+                        if (!string.IsNullOrEmpty(name))
+                            _topics.Add((name, disp));
                     }
+                }
+                
+                if (_topics.Count == 0)
+                    _topics.Add(("/zed/zed_node/rgb/image_rect_color", "RGB Color"));
+                
+                PopulateTopics();
+                _lblStatus.Text = $"Found {_topics.Count} topics";
+                _lblStatus.ForeColor = Color.LimeGreen;
+                
+                // Auto-select rgb/image_rect_color topic if requested
+                if (autoSelectRgb && _topics.Count > 0)
+                {
+                    int rgbIndex = _topics.FindIndex(t => 
+                        t.Name.IndexOf("rgb/image_rect_color", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        t.Name.IndexOf("rgb_image_rect_color", StringComparison.OrdinalIgnoreCase) >= 0);
                     
-                    if (_topics.Count == 0)
-                        _topics.Add(("/zed/zed_node/rgb/image_rect_color", "RGB Color"));
-                    
-                    PopulateTopics();
-                    _lblStatus.Text = $"Found {_topics.Count} topics";
-                    _lblStatus.ForeColor = Color.LimeGreen;
-                    
-                    // Auto-select rgb/image_rect_color topic if requested
-                    if (autoSelectRgb && _topics.Count > 0)
+                    if (rgbIndex >= 0)
                     {
-                        int rgbIndex = _topics.FindIndex(t => 
-                            t.Name.IndexOf("rgb/image_rect_color", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            t.Name.IndexOf("rgb_image_rect_color", StringComparison.OrdinalIgnoreCase) >= 0);
-                        
-                        if (rgbIndex >= 0)
-                        {
-                            _cmbTopic.SelectedIndex = rgbIndex;
-                            // Switch to the RGB topic on the server
-                            await SwitchTopicAsync();
-                        }
+                        _cmbTopic.SelectedIndex = rgbIndex;
+                        // Switch to the RGB topic on the server
+                        await SwitchTopicAsync();
                     }
                 }
             }
@@ -284,15 +281,12 @@ namespace NOMAD.MissionPlanner
             
             try
             {
-                using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) })
+                var resp = await JetsonApiService.ApiClient.PostAsync($"{_apiBaseUrl}/api/video/source?topic={Uri.EscapeDataString(name)}", null);
+                if (!resp.IsSuccessStatusCode)
                 {
-                    var resp = await client.PostAsync($"{_apiBaseUrl}/api/video/source?topic={Uri.EscapeDataString(name)}", null);
-                    if (!resp.IsSuccessStatusCode)
-                    {
-                        _lblStatus.Text = $"Switch failed: {resp.StatusCode}";
-                        _lblStatus.ForeColor = Color.Red;
-                        return;
-                    }
+                    _lblStatus.Text = $"Switch failed: {resp.StatusCode}";
+                    _lblStatus.ForeColor = Color.Red;
+                    return;
                 }
                 
                 // Brief delay then restart stream to pick up new topic

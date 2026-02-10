@@ -97,8 +97,8 @@ namespace NOMAD.MissionPlanner
             try
             {
                 _telemetryInjector = new TelemetryInjector(null); // Will use MainV2.comPort internally
-                _healthTab = new JetsonHealthTab(); // Initialize health tab
-                _servicePanel = new ServiceControlPanel(_sender); // Initialize service control panel
+                _healthTab = new JetsonHealthTab(_config.HealthPollInterval);
+                _servicePanel = new ServiceControlPanel(_sender, _config.HealthPollInterval);
 
                 // Send initial status
                 _telemetryInjector?.SendCustomStatus("Control Panel Loaded");

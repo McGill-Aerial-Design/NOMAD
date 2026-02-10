@@ -50,7 +50,6 @@ namespace NOMAD.MissionPlanner
         // Constants
         // ============================================================
         
-        private const int POLL_INTERVAL_MS = 3000;       // Check every 3 seconds
         private const int HTTP_TIMEOUT_MS = 2500;        // Fail fast timeout
         private const int CONSECUTIVE_FAILURES_THRESHOLD = 2;  // Require 2 failures before disconnected
         
@@ -60,7 +59,6 @@ namespace NOMAD.MissionPlanner
         
         private readonly object _lock = new object();
         private readonly NOMADConfig _config;
-        private readonly HttpClient _httpClient;
         private Timer _pollTimer;
         private JetsonConnectionState _state = JetsonConnectionState.Unknown;
         private int _consecutiveFailures = 0;
@@ -122,11 +120,6 @@ namespace NOMAD.MissionPlanner
         public JetsonConnectionManager(NOMADConfig config)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
-            
-            _httpClient = new HttpClient
-            {
-                Timeout = TimeSpan.FromMilliseconds(HTTP_TIMEOUT_MS)
-            };
         }
         
         // ============================================================
@@ -149,12 +142,12 @@ namespace NOMAD.MissionPlanner
             // Initial check immediately
             _ = CheckConnectionAsync();
             
-            // Start periodic polling
+            // Start periodic polling using config interval
             _pollTimer = new Timer(
                 async _ => await CheckConnectionAsync(),
                 null,
-                POLL_INTERVAL_MS,
-                POLL_INTERVAL_MS
+                _config.HealthPollInterval,
+                _config.HealthPollInterval
             );
         }
         
@@ -221,8 +214,7 @@ namespace NOMAD.MissionPlanner
             
             try
             {
-                var url = $"http://{_config.EffectiveIP}:{_config.JetsonPort}/health";
-                var response = await _httpClient.GetAsync(url);
+                var response = await JetsonApiService.GetAsync("/health");
                 
                 if (response.IsSuccessStatusCode)
                 {
@@ -327,7 +319,6 @@ namespace NOMAD.MissionPlanner
             _disposed = true;
             
             StopPolling();
-            _httpClient?.Dispose();
         }
     }
 }

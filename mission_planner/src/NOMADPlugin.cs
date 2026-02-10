@@ -137,6 +137,9 @@ namespace NOMAD.MissionPlanner
                 _config = NOMADConfig.Load();
                 _missionConfig = MissionConfig.Load();
                 
+                // Initialize centralized API service (must be before any component that uses HttpClient)
+                JetsonApiService.Initialize(_config);
+                
                 // Initialize dual-link sender
                 _sender = new DualLinkSender(_config);
                 
@@ -417,6 +420,7 @@ namespace NOMAD.MissionPlanner
             }
 
             _sender?.Dispose();
+            JetsonApiService.Shutdown();
             return true;
         }
 

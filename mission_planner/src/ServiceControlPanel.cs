@@ -18,6 +18,7 @@ namespace NOMAD.MissionPlanner
     {
         private readonly DualLinkSender _sender;
         private readonly System.Threading.Timer _pollTimer;
+        private readonly int _pollIntervalMs;
         
         // Service status indicators
         private Label _lblMavlinkStatus;
@@ -49,18 +50,19 @@ namespace NOMAD.MissionPlanner
         private Label _lblLastUpdate;
         private TextBox _txtLog;
         
-        public ServiceControlPanel(DualLinkSender sender)
+        public ServiceControlPanel(DualLinkSender sender, int pollIntervalMs = 3000)
         {
             _sender = sender ?? throw new ArgumentNullException(nameof(sender));
+            _pollIntervalMs = pollIntervalMs;
             
             InitializeUI();
             
-            // Poll every 3 seconds
+            // Poll using configured interval
             _pollTimer = new System.Threading.Timer(
                 _ => PollServicesAsync(),
                 null,
                 TimeSpan.FromSeconds(2),
-                TimeSpan.FromSeconds(3)
+                TimeSpan.FromMilliseconds(_pollIntervalMs)
             );
         }
         

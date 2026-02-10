@@ -44,8 +44,8 @@ RUN pip3 install --no-cache-dir \
     numpy \
     opencv-python-headless
 
-# Setup ROS2 environment
-RUN echo "source /opt/ros/humble/install/setup.bash" >> /root/.bashrc
+# Setup ROS2 environment (apt-installed, standard path)
+RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc
 
 # Create workspace
 WORKDIR /workspace
@@ -56,4 +56,4 @@ COPY edge_core/ros/simple_video_bridge.py /workspace/ros/jetson_video_bridge.py
 RUN chmod +x /workspace/ros/jetson_video_bridge.py
 
 # Entrypoint
-CMD ["bash", "-c", "source /opt/ros/humble/install/setup.bash && tail -f /dev/null"]
+CMD ["bash", "-c", "source /opt/ros/humble/setup.bash && tail -f /dev/null"]

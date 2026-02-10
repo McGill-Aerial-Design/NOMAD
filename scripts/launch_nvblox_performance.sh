@@ -24,8 +24,9 @@ if [ ! -f "$CONFIG_FILE" ]; then
     exit 1
 fi
 
-# Source ROS2
-source /opt/ros/humble/install/setup.bash
+# Source ROS2 (both apt packages and dustynv overlay)
+source /opt/ros/humble/setup.bash 2>/dev/null || true
+source /opt/ros/humble/install/setup.bash 2>/dev/null || true
 if [ -f /workspaces/isaac_ros-dev/install/setup.bash ]; then
     source /workspaces/isaac_ros-dev/install/setup.bash
 fi

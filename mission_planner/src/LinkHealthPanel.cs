@@ -508,7 +508,7 @@ namespace NOMAD.MissionPlanner
         {
             _updateTimer = new System.Windows.Forms.Timer
             {
-                Interval = 500
+                Interval = _config.LinkMonitorInterval
             };
             _updateTimer.Tick += (s, e) => RefreshDisplay();
             _updateTimer.Start();

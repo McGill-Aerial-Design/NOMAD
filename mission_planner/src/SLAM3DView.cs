@@ -97,7 +97,6 @@ namespace NOMAD.MissionPlanner
     {
         // ==================== Fields ====================
         private readonly NOMADConfig _config;
-        private readonly HttpClient _httpClient;
         private CancellationTokenSource _updateCts;
         
         // WPF hosting
@@ -151,10 +150,6 @@ namespace NOMAD.MissionPlanner
         public SLAM3DView(NOMADConfig config)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
-            _httpClient = new HttpClient
-            {
-                Timeout = TimeSpan.FromSeconds(5)
-            };
             
             InitializeComponents();
             Initialize3DViewport();
@@ -484,8 +479,7 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                string url = $"http://{_config.EffectiveIP}:{_config.JetsonPort}/api/task/2/slam/mesh";
-                var response = await _httpClient.GetStringAsync(url);
+                var response = await JetsonApiService.GetStringAsync("/api/task/2/slam/mesh");
                 var data = JsonConvert.DeserializeObject<SLAMMeshData>(response);
                 
                 if (data == null)
@@ -817,8 +811,7 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                string url = $"http://{_config.EffectiveIP}:{_config.JetsonPort}/api/task/2/slam/clear";
-                await _httpClient.PostAsync(url, null);
+                await JetsonApiService.PostAsync("/api/task/2/slam/clear");
                 
                 // Clear local mesh
                 _elementHost.Invoke(new Action(() =>
@@ -915,7 +908,6 @@ namespace NOMAD.MissionPlanner
             {
                 _updateCts?.Cancel();
                 _updateCts?.Dispose();
-                _httpClient?.Dispose();
                 _elementHost?.Dispose();
             }
             base.Dispose(disposing);
