@@ -74,7 +74,7 @@ services:
       - /dev/ttyACM0:/dev/ttyACM0  # Cube Orange
     command: >
       bash -c "
-        source /opt/ros/humble/setup.bash &&
+        source /opt/ros/humble/install/setup.bash &&
         source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null || true &&
         echo 'Isaac ROS container ready. Run your launch files.' &&
         tail -f /dev/null
@@ -142,7 +142,7 @@ services:
       - VIDEO_BITRATE=4000000
     command: >
       bash -c "
-        source /opt/ros/humble/setup.bash &&
+        source /opt/ros/humble/install/setup.bash &&
         python3 /workspace/ros/jetson_video_bridge.py \
           --source-topic $${VIDEO_SOURCE_TOPIC} \
           --rtsp-url $${RTSP_URL} \

@@ -11,8 +11,8 @@
 set -e
 
 # Source ROS2 Humble setup
-if [ -f /opt/ros/humble/setup.bash ]; then
-    source /opt/ros/humble/setup.bash
+if [ -f /opt/ros/humble/install/setup.bash ]; then
+    source /opt/ros/humble/install/setup.bash
     echo "[ros_entrypoint] Sourced ROS2 Humble"
 fi
 

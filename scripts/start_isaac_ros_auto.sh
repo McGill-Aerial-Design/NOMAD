@@ -160,7 +160,7 @@ install_dependencies() {
     # Run rosdep to install remaining dependencies
     log_info "Running rosdep for ZED wrapper..."
     docker exec "$CONTAINER_NAME" bash -c "
-        source /opt/ros/humble/setup.bash
+        source /opt/ros/humble/install/setup.bash
         cd /workspaces/isaac_ros-dev/src/zed-ros2-wrapper
         rosdep install --from-paths . --ignore-src -r -y 2>/dev/null
     " 2>&1 | tail -5
@@ -168,7 +168,7 @@ install_dependencies() {
     # Rebuild ZED packages to pick up the new dependencies  
     log_info "Rebuilding ZED packages..."
     docker exec "$CONTAINER_NAME" bash -c "
-        source /opt/ros/humble/setup.bash
+        source /opt/ros/humble/install/setup.bash
         cd /workspaces/isaac_ros-dev
         colcon build --packages-select zed_components zed_wrapper --symlink-install 2>/dev/null
     " 2>&1 | tail -5
@@ -180,7 +180,7 @@ check_and_build_nvblox() {
     log_info "Checking for Nvblox packages..."
     
     # Check if nvblox is already built
-    if docker exec "$CONTAINER_NAME" bash -c "source /opt/ros/humble/setup.bash && source /workspaces/isaac_ros-dev/install/setup.bash && ros2 pkg list 2>/dev/null | grep -q nvblox"; then
+    if docker exec "$CONTAINER_NAME" bash -c "source /opt/ros/humble/install/setup.bash && source /workspaces/isaac_ros-dev/install/setup.bash && ros2 pkg list 2>/dev/null | grep -q nvblox"; then
         log_info "Nvblox packages already built"
         return 0
     fi
@@ -201,7 +201,7 @@ check_and_build_nvblox() {
     
     log_info "Building Nvblox (this may take 10-30 minutes)..."
     docker exec "$CONTAINER_NAME" bash -c "
-        source /opt/ros/humble/setup.bash
+        source /opt/ros/humble/install/setup.bash
         cd /workspaces/isaac_ros-dev
         colcon build --symlink-install --packages-up-to nvblox_examples_bringup
     " 2>&1 | tail -20
@@ -213,7 +213,7 @@ launch_zed_nvblox() {
     log_info "Launching ZED + Nvblox..."
     
     # Check if nvblox is available
-    if ! docker exec "$CONTAINER_NAME" bash -c "source /opt/ros/humble/setup.bash && source /workspaces/isaac_ros-dev/install/setup.bash && ros2 pkg list 2>/dev/null | grep -q nvblox"; then
+    if ! docker exec "$CONTAINER_NAME" bash -c "source /opt/ros/humble/install/setup.bash && source /workspaces/isaac_ros-dev/install/setup.bash && ros2 pkg list 2>/dev/null | grep -q nvblox"; then
         log_warn "Nvblox not available - launching ZED wrapper only"
         launch_zed_only
         return
@@ -233,7 +233,7 @@ launch_zed_only() {
     docker exec "$CONTAINER_NAME" bash -c "
         cat > /tmp/launch_zed_only.sh << 'LAUNCH_SCRIPT'
 #!/bin/bash
-source /opt/ros/humble/setup.bash
+source /opt/ros/humble/install/setup.bash
 source /workspaces/isaac_ros-dev/install/setup.bash
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 export LD_LIBRARY_PATH=/opt/ros/humble/lib:/usr/local/zed/lib:/workspaces/isaac_ros-dev/install/zed_components/lib:\$LD_LIBRARY_PATH
@@ -262,7 +262,7 @@ launch_ros_http_bridge() {
     docker exec "$CONTAINER_NAME" bash -c "
         cat > /tmp/launch_bridge.sh << 'BRIDGE_SCRIPT'
 #!/bin/bash
-source /opt/ros/humble/setup.bash
+source /opt/ros/humble/install/setup.bash
 source /workspaces/isaac_ros-dev/install/setup.bash
 # Wait for ROS nodes to be up
 sleep 5
@@ -314,7 +314,7 @@ show_status() {
         # Check ROS topics
         echo ""
         echo "ROS2 Topics (sample):"
-        docker exec "$CONTAINER_NAME" bash -c "source /opt/ros/humble/setup.bash && source /workspaces/isaac_ros-dev/install/setup.bash && ros2 topic list 2>/dev/null | head -15" || echo "(ROS not fully initialized)"
+        docker exec "$CONTAINER_NAME" bash -c "source /opt/ros/humble/install/setup.bash && source /workspaces/isaac_ros-dev/install/setup.bash && ros2 topic list 2>/dev/null | head -15" || echo "(ROS not fully initialized)"
         
         # Check logs
         echo ""
@@ -379,7 +379,7 @@ case "${1:-start}" in
         while [ $(($(date +%s) - WAIT_START)) -lt $MAX_WAIT ]; do
             # Check if ZED image topics are being published
             if docker exec "$CONTAINER_NAME" bash -c "
-                source /opt/ros/humble/setup.bash && \
+                source /opt/ros/humble/install/setup.bash && \
                 timeout 2 ros2 topic list 2>/dev/null | grep -q '/zed/zed_node/.*image'
             " 2>/dev/null; then
                 ZED_READY=true

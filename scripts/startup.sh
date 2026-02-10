@@ -15,7 +15,7 @@ source /etc/profile.d/nomad-env.sh 2>/dev/null || {
     export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
     export CUDACXX=/usr/local/cuda/bin/nvcc
     export CUDA_HOME=/usr/local/cuda
-    source /opt/ros/humble/setup.bash
+    source /opt/ros/humble/install/setup.bash
     export ROS_DOMAIN_ID=0
     export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 }
