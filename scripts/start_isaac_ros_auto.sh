@@ -92,8 +92,8 @@ start_container() {
     log_info "Creating new container..."
     
     # Start container with all necessary mounts and devices
-    # Note: We do NOT mount /usr/local/zed from host - the ZED SDK
-    # should be installed INSIDE the container image
+    # Mount /usr/local/zed from host so the ZED SDK cmake files, headers,
+    # and libraries are available for building and running ROS2 ZED packages.
     docker run -d \
         --name "$CONTAINER_NAME" \
         --runtime nvidia \
@@ -101,6 +101,7 @@ start_container() {
         --network host \
         --ipc host \
         -v "$ISAAC_WS:/workspaces/isaac_ros-dev" \
+        -v /usr/local/zed:/usr/local/zed:ro \
         -v /dev:/dev \
         -v /tmp/.X11-unix:/tmp/.X11-unix \
         -v /tmp/argus_socket:/tmp/argus_socket \
@@ -109,7 +110,8 @@ start_container() {
         -e NVIDIA_VISIBLE_DEVICES=all \
         -e NVIDIA_DRIVER_CAPABILITIES=all \
         -e ROS_DOMAIN_ID=0 \
-        -e LD_LIBRARY_PATH=/usr/local/zed/lib:/opt/ros/humble/lib \
+        -e LD_LIBRARY_PATH=/usr/local/zed/lib:/opt/ros/humble/lib:/opt/ros/humble/install/lib \
+        -e CMAKE_PREFIX_PATH=/usr/local/zed \
         -w /workspaces/isaac_ros-dev \
         "$IMAGE_NAME" \
         sleep infinity
