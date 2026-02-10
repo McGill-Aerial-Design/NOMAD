@@ -21,8 +21,7 @@
   - Status: CONNECTED
 
 - **Docker** - v29.2.1 with NVIDIA runtime
-  - MediaMTX container running (RTSP streaming on port 8554)
-  - jetson-video-stream image built
+  - Isaac ROS container (nomad_isaac_ros) for ZED + ROS2
   - Status: RUNNING
 
 ### Development Environment
@@ -136,8 +135,8 @@ tailscale status
 ### Docker Container Issues
 ```bash
 docker ps -a
-docker compose up -d mediamtx
-docker logs nomad-mediamtx
+docker compose up -d isaac-ros
+docker logs nomad_isaac_ros
 ```
 
 ### ROS2 Not Found
@@ -165,7 +164,8 @@ source /opt/ros/humble/setup.bash
    - Check status: `curl localhost:8000/api/servo/status`
 
 4. **Launch Video Streaming**
-   - Start container: `docker compose up -d jetson-video-stream`
+   - Video bridge runs inside Isaac ROS container (managed by Edge Core)
+   - Start via API: `curl -X POST localhost:8000/api/video/start`
    - Connect Mission Planner to `rtsp://100.85.121.98:8554/primary`
 
 5. **Isaac ROS (Optional)**

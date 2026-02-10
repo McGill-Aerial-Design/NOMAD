@@ -112,7 +112,6 @@ Software encoding on Orin Nano uses CPU. If CPU is under heavy load:
 | `edge_core/video_stream_manager.py` | Host-side manager (starts/stops bridge in container) |
 | `edge_core/api.py` | API endpoints (`/api/video/*`) |
 | `infra/mediamtx.yml` | MediaMTX RTSP server config |
-| `infra/docker/Dockerfile.jetson_video` | Standalone video container (alternative deployment) |
 
 ---
 AEAC 2026 - McGill Aerial Design

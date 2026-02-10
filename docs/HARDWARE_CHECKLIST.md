@@ -139,14 +139,10 @@ cd /home/mad/NOMAD
 ### Docker Issues
 ```bash
 docker ps -a
-# Check container status
+# Check Isaac ROS container status
 
-docker logs nomad-mediamtx
-# Check MediaMTX logs
-
-# Rebuild if needed
-cd /home/mad/NOMAD
-docker compose build jetson-video-stream
+# Check MediaMTX (runs on host, not Docker)
+pgrep mediamtx && echo 'MediaMTX running' || echo 'MediaMTX not running'
 ```
 
 ## Competition Day Quick Start
@@ -165,8 +161,8 @@ tailscale status
 lsusb | grep -i "stereolabs\|cube"
 curl -s http://localhost:8000/health/detailed | python3 -m json.tool
 
-# 5. Launch video streaming (if not auto-started)
-docker compose up -d jetson-video-stream
+# 5. Launch video streaming (managed by Edge Core, auto-starts with Isaac ROS)
+curl -X POST http://localhost:8000/api/video/start
 
 # 6. Monitor logs
 journalctl -u nomad -f
