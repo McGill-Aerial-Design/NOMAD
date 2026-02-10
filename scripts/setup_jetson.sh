@@ -25,7 +25,7 @@ echo -e "${GREEN}========================================${NC}"
 # Use HOME environment variable for user-agnostic NOMAD path (default: /home/mad/NOMAD)
 NOMAD_HOME="${HOME}/NOMAD"
 NOMAD_USER="mad"
-JETSON_TAILSCALE_IP="100.75.218.89"
+JETSON_TAILSCALE_IP="100.85.121.98"
 GCS_TAILSCALE_IP="100.76.127.17"
 
 # ============================================================

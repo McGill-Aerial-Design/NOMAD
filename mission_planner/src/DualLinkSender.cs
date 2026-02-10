@@ -384,6 +384,14 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
+        /// Clear VIO trajectory data on the Jetson.
+        /// </summary>
+        public async Task<CommandResult> ClearVioTrajectoryAsync()
+        {
+            return await SendHttpDelete("/api/vio/trajectory");
+        }
+
+        /// <summary>
         /// Get Isaac ROS status.
         /// </summary>
         public async Task<CommandResult> GetIsaacStatusAsync()
@@ -664,6 +672,46 @@ namespace NOMAD.MissionPlanner
                     {
                         Success = true,
                         Message = "HTTP GET successful",
+                        Data = responseBody,
+                        Method = "HTTP"
+                    };
+                }
+                else
+                {
+                    return new CommandResult
+                    {
+                        Success = false,
+                        Message = $"HTTP {(int)response.StatusCode}: {response.ReasonPhrase}",
+                        Data = responseBody,
+                        Method = "HTTP"
+                    };
+                }
+            }
+            catch (Exception ex)
+            {
+                return new CommandResult
+                {
+                    Success = false,
+                    Message = $"HTTP error: {ex.Message}",
+                    Method = "HTTP"
+                };
+            }
+        }
+
+        private async Task<CommandResult> SendHttpDelete(string endpoint)
+        {
+            try
+            {
+                var url = $"http://{_config.EffectiveIP}:{_config.JetsonPort}{endpoint}";
+                var response = await _httpClient.DeleteAsync(url);
+                var responseBody = await response.Content.ReadAsStringAsync();
+
+                if (response.IsSuccessStatusCode)
+                {
+                    return new CommandResult
+                    {
+                        Success = true,
+                        Message = "HTTP DELETE successful",
                         Data = responseBody,
                         Method = "HTTP"
                     };

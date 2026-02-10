@@ -20,9 +20,11 @@ namespace NOMAD.MissionPlanner
     {
         private readonly MAVLink.MavlinkParse _mavlink;
         
-        public TelemetryInjector(MAVLink.MavlinkParse mavlink)
+        public TelemetryInjector(MAVLink.MavlinkParse mavlink = null)
         {
-            _mavlink = mavlink ?? throw new ArgumentNullException(nameof(mavlink));
+            // Accept null gracefully - mavlink parameter is optional.
+            // When null, status messages are still sent via MainV2 fallback path.
+            _mavlink = mavlink;
         }
         
         /// <summary>

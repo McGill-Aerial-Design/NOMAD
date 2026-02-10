@@ -32,16 +32,17 @@ namespace NOMAD.MissionPlanner
         // ============================================================
         
         private const int SIDEBAR_WIDTH = 200;
+        // Use NOMADTheme for consistent colors across the plugin
         private static readonly Color SIDEBAR_BG = Color.FromArgb(25, 25, 28);
-        private static readonly Color CONTENT_BG = Color.FromArgb(30, 30, 33);
-        private static readonly Color ACCENT_COLOR = Color.FromArgb(0, 122, 204);
+        private static readonly Color CONTENT_BG = NOMADTheme.BG_DARK;
+        private static readonly Color ACCENT_COLOR = NOMADTheme.ACCENT;
         private static readonly Color ACCENT_HOVER = Color.FromArgb(30, 144, 255);
-        private static readonly Color TEXT_PRIMARY = Color.White;
-        private static readonly Color TEXT_SECONDARY = Color.FromArgb(180, 180, 180);
-        private static readonly Color CARD_BG = Color.FromArgb(40, 40, 45);
-        private static readonly Color SUCCESS_COLOR = Color.FromArgb(76, 175, 80);
-        private static readonly Color WARNING_COLOR = Color.FromArgb(255, 152, 0);
-        private static readonly Color ERROR_COLOR = Color.FromArgb(244, 67, 54);
+        private static readonly Color TEXT_PRIMARY = NOMADTheme.TEXT_PRIMARY;
+        private static readonly Color TEXT_SECONDARY = NOMADTheme.TEXT_SECONDARY;
+        private static readonly Color CARD_BG = NOMADTheme.CARD_BG;
+        private static readonly Color SUCCESS_COLOR = NOMADTheme.SUCCESS;
+        private static readonly Color WARNING_COLOR = NOMADTheme.WARNING;
+        private static readonly Color ERROR_COLOR = NOMADTheme.ERROR;
         
         // ============================================================
         // Fields

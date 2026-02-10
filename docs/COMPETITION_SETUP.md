@@ -470,7 +470,7 @@ Print this for competition day:
 +------------------------------------------+
 |          NOMAD QUICK REFERENCE           |
 +------------------------------------------+
-| Jetson IP: 100.75.218.89 (Tailscale)    |
+| Jetson IP: 100.85.121.98 (Tailscale)    |
 | API Port: 8000                           |
 | MAVLink: UDP 14550                       |
 +------------------------------------------+

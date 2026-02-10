@@ -208,7 +208,7 @@ public class SLAM3DView : UserControl
     
     private async Task UpdateMeshFromJetson()
     {
-        var response = await httpClient.GetAsync("http://100.75.218.89:8000/api/task/2/slam/mesh");
+        var response = await httpClient.GetAsync("http://100.85.121.98:8000/api/task/2/slam/mesh");
         var data = await response.Content.ReadAsAsync<SLAMMeshData>();
         
         // Update mesh geometry

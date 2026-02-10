@@ -302,10 +302,61 @@ namespace NOMAD.MissionPlanner
         // Command Execution
         // ============================================================
         
+        // SECURITY NOTE: Arbitrary command execution on the Jetson presents a
+        // security risk. The Edge Core API should enforce a server-side whitelist
+        // of allowed commands. The client-side safe-command list below is for UX
+        // convenience only and does NOT replace server-side validation.
+        
+        /// <summary>
+        /// Commands considered safe and executed without extra confirmation.
+        /// Any command not in this set triggers a user confirmation dialog.
+        /// </summary>
+        private static readonly HashSet<string> _safeCommands = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "uptime", "free -m", "df -h /", "df -h", "top -bn1 | head -20",
+            "tailscale status", "ip addr show", "ip addr",
+            "cat /sys/devices/virtual/thermal/thermal_zone*/temp",
+            "pgrep -f edge_core.main", "ps aux --sort=-%cpu | head -15",
+            "lsusb", "ping -c 3 8.8.8.8", "whoami", "hostname", "date",
+            "cat /proc/uptime", "uname -a", "ls ~/NOMAD", "git -C ~/NOMAD log --oneline -5",
+        };
+        
+        /// <summary>
+        /// Check whether a command is considered safe (no confirmation needed).
+        /// </summary>
+        private bool IsCommandSafe(string command)
+        {
+            if (string.IsNullOrWhiteSpace(command)) return false;
+            
+            // Quick-command entries are always considered safe
+            if (_quickCommands.ContainsValue(command)) return true;
+            
+            // Exact match against known safe commands
+            return _safeCommands.Contains(command.Trim());
+        }
+        
         public async Task ExecuteCommand(string command)
         {
             if (string.IsNullOrWhiteSpace(command))
                 return;
+            
+            // SEC3: Warn user before running non-whitelisted commands
+            if (!IsCommandSafe(command))
+            {
+                var confirmResult = MessageBox.Show(
+                    $"You are about to execute a command on the Jetson:\n\n  {command}\n\n" +
+                    "This command is not in the safe-commands list.\n" +
+                    "Only proceed if you trust this command.\n\nContinue?",
+                    "Confirm Command Execution",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning);
+                
+                if (confirmResult != DialogResult.Yes)
+                {
+                    AppendOutput("\n[Command cancelled by user]\n", Color.Yellow);
+                    return;
+                }
+            }
             
             // Add to history
             _commandHistory.Add(command);

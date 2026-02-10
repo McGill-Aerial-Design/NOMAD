@@ -473,7 +473,25 @@ namespace NOMAD.MissionPlanner
             if (_sender == null) return;
 
             var health = _sender.LastHealthStatus;
-            bool vioActive = _sender.IsJetsonConnected;
+
+            // Query actual VIO status from the API endpoint instead of
+            // inferring it from Jetson connectivity alone.
+            bool vioActive = false;
+            try
+            {
+                var vioResult = _sender.GetVioStatusAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+                if (vioResult.Success && !string.IsNullOrEmpty(vioResult.Data))
+                {
+                    var vioData = Newtonsoft.Json.Linq.JObject.Parse(vioResult.Data);
+                    var vioHealth = vioData["health"]?.Value<string>() ?? "unknown";
+                    vioActive = vioHealth == "healthy";
+                }
+            }
+            catch
+            {
+                // If the VIO status endpoint is unreachable, treat as inactive
+                vioActive = false;
+            }
 
             // Detect VIO activation/deactivation
             if (vioActive != _lastVioActive)

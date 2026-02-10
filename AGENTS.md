@@ -10,13 +10,13 @@ This document provides essential information for AI coding assistants working on
 
 | Property | Value |
 |----------|-------|
-| **Tailscale IP** | `100.75.218.89` |
+| **Tailscale IP** | `100.85.121.98` |
 | **Tailscale Hostname** | `ubuntu` |
 | **SSH User** | `mad` |
-| **SSH Command** | `ssh mad@100.75.218.89` |
+| **SSH Command** | `ssh mad@100.85.121.98` |
 | **Home Directory** | `/home/mad/NOMAD/` |
 | **Edge Core Port** | `8000` |
-| **API Docs URL** | `http://100.75.218.89:8000/docs` |
+| **API Docs URL** | `http://100.85.121.98:8000/docs` |
 
 ### Ground Station (Windows)
 
@@ -32,10 +32,10 @@ This document provides essential information for AI coding assistants working on
 tailscale status
 
 # SSH to Jetson
-ssh mad@100.75.218.89
+ssh mad@100.85.121.98
 
 # Test Edge Core API from Windows PowerShell
-Invoke-WebRequest -Uri 'http://100.75.218.89:8000/' -UseBasicParsing
+Invoke-WebRequest -Uri 'http://100.85.121.98:8000/' -UseBasicParsing
 ```
 
 ---
@@ -77,7 +77,7 @@ NOMAD/
 **Location**: `config/env/jetson.env`
 
 This file contains:
-- Jetson Tailscale IP (`TAILSCALE_IP=100.75.218.89`)
+- Jetson Tailscale IP (`TAILSCALE_IP=100.85.121.98`)
 - Ground Station IP (`GCS_IP=100.76.127.17`)
 - Home paths (`/home/mad/NOMAD/`)
 - Port configuration
@@ -139,7 +139,7 @@ Always check this file for actual IP addresses and paths.
 ### Pull Latest Code to Jetson
 
 ```bash
-ssh mad@100.75.218.89
+ssh mad@100.85.121.98
 cd ~/NOMAD
 git stash          # Save local changes
 git pull origin main
@@ -149,7 +149,7 @@ git stash pop      # Restore local changes (optional)
 ### Start Edge Core Manually
 
 ```bash
-ssh mad@100.75.218.89
+ssh mad@100.85.121.98
 cd ~/NOMAD
 python3 -m edge_core.main --port 8000
 ```
@@ -167,13 +167,13 @@ Output: `C:\Users\<user>\AppData\Local\Mission Planner\plugins\NOMADPlugin.dll`
 
 ```powershell
 # Basic health
-Invoke-WebRequest -Uri 'http://100.75.218.89:8000/health' -UseBasicParsing
+Invoke-WebRequest -Uri 'http://100.85.121.98:8000/health' -UseBasicParsing
 
 # Network status (JSON pretty print)
-(Invoke-WebRequest -Uri 'http://100.75.218.89:8000/network/status' -UseBasicParsing).Content | ConvertFrom-Json | ConvertTo-Json -Depth 5
+(Invoke-WebRequest -Uri 'http://100.85.121.98:8000/network/status' -UseBasicParsing).Content | ConvertFrom-Json | ConvertTo-Json -Depth 5
 
 # Ping test
-Invoke-WebRequest -Uri 'http://100.75.218.89:8000/network/ping/8.8.8.8' -UseBasicParsing
+Invoke-WebRequest -Uri 'http://100.85.121.98:8000/network/ping/8.8.8.8' -UseBasicParsing
 ```
 
 ---
@@ -183,7 +183,7 @@ Invoke-WebRequest -Uri 'http://100.75.218.89:8000/network/ping/8.8.8.8' -UseBasi
 ### Issue: SSH prompts for password
 **Solution**: Use correct username `mad`, not `nomad`
 ```bash
-ssh mad@100.75.218.89
+ssh mad@100.85.121.98
 ```
 
 ### Issue: Jetson IP not responding
@@ -196,7 +196,7 @@ The Jetson shows as `ubuntu` not `nomad-jetson`.
 ### Issue: Edge Core not running
 **Start manually**:
 ```bash
-ssh mad@100.75.218.89 "cd ~/NOMAD && python3 -m edge_core.main --port 8000 &"
+ssh mad@100.85.121.98 "cd ~/NOMAD && python3 -m edge_core.main --port 8000 &"
 ```
 
 ### Issue: Network endpoint returns null modem
@@ -205,7 +205,7 @@ ssh mad@100.75.218.89 "cd ~/NOMAD && python3 -m edge_core.main --port 8000 &"
 ### Issue: Code on Jetson is outdated
 **Deploy latest**:
 ```bash
-ssh mad@100.75.218.89
+ssh mad@100.85.121.98
 cd ~/NOMAD
 git fetch origin
 git pull origin main
@@ -223,7 +223,7 @@ git pull origin main
 
 To check which commit is deployed on Jetson:
 ```bash
-ssh mad@100.75.218.89 "cd ~/NOMAD && git log --oneline -1"
+ssh mad@100.85.121.98 "cd ~/NOMAD && git log --oneline -1"
 ```
 
 ---

@@ -48,7 +48,7 @@ class VIOHealth(Enum):
 class VIOStatus:
     """VIO pipeline status information."""
     health: VIOHealth = VIOHealth.UNKNOWN
-    tracking_confidence: float = 0.0
+    tracking_confidence: float = 0.0  # 0-100 scale (ZED SDK native)
     position_valid: bool = False
     velocity_valid: bool = False
     last_update_ms: int = 0
@@ -118,9 +118,9 @@ class VIOPipeline:
     # Target output rate to flight controller
     TARGET_RATE_HZ = 30.0
     
-    # Health thresholds
-    MIN_CONFIDENCE = 30.0  # Minimum tracking confidence
-    MIN_CONFIDENCE_DEGRADED = 15.0  # Below this, consider critically degraded
+    # Health thresholds (ZED SDK confidence is 0-100 scale)
+    MIN_CONFIDENCE = 30.0  # Minimum tracking confidence (0-100 scale)
+    MIN_CONFIDENCE_DEGRADED = 15.0  # Below this, consider critically degraded (0-100 scale)
     MAX_STALE_MS = 100  # Maximum age of pose data
     VIO_FAILURE_TIMEOUT_S = 3.0  # Time before declaring VIO failed
     VIO_DEGRADED_TIMEOUT_S = 1.0  # Time before entering degraded state
@@ -459,24 +459,25 @@ class VIOPipeline:
             
             logger.info(f"Descending at {safe_rate:.2f} m/s (rangefinder-assisted)")
             
-            # Try NavController first if it's available via state manager
-            # (check if we can access it through a module-level reference)
+            # Try NavController first if available via state manager
             try:
-                from . import api as api_module
-                if hasattr(api_module, '_nav_controller') and api_module._nav_controller:
-                    nav_controller = api_module._nav_controller
-                    # NavController uses body frame: positive vz = UP
-                    # For descent, use negative vz (DOWN in body frame)
-                    success = nav_controller.send_velocity(
-                        vx=0.0,
-                        vy=0.0,
-                        vz=-safe_rate,  # Negative = DOWN in body frame
-                        yaw_rate=0.0,
-                        source="failsafe",
-                    )
-                    if success:
-                        logger.info("Descent command sent via NavController")
-                        return True
+                if self._state_manager is not None:
+                    # NavController is stored in the app state via main.py;
+                    # access it through the module-level nav_controller in main.
+                    from . import main as main_module
+                    nc = getattr(main_module, 'nav_controller', None)
+                    if nc is not None:
+                        # NavController uses body frame: positive vz = UP
+                        # For descent, use negative vz (DOWN in body frame)
+                        success = nc.send_velocity(
+                            vx=0.0,
+                            vy=0.0,
+                            vz=-safe_rate,  # Negative = DOWN in body frame
+                            yaw_rate=0.0,
+                        )
+                        if success:
+                            logger.info("Descent command sent via NavController")
+                            return True
             except (ImportError, AttributeError):
                 pass
             
@@ -489,7 +490,6 @@ class VIOPipeline:
                     vy=0.0,
                     vz=safe_rate,  # Positive = DOWN in NED frame
                     yaw_rate=0.0,
-                    source="failsafe",
                 )
                 if success:
                     logger.info("Descent command sent via direct MAVLink")
@@ -604,7 +604,7 @@ class VIOPipeline:
             # Update fields
             for key, value in kwargs.items():
                 if hasattr(self._status, key):
-                    setattr(self._status, key)
+                    setattr(self._status, key, value)
             
             # Rebuild status object (dataclass is not mutable by default)
             self._status = VIOStatus(

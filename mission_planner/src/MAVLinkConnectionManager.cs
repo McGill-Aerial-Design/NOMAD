@@ -158,7 +158,7 @@ namespace NOMAD.MissionPlanner
         public class ConnectionConfig
         {
             /// <summary>Jetson Tailscale IP for LTE link</summary>
-            public string JetsonTailscaleIP { get; set; } = "100.75.218.89";
+            public string JetsonTailscaleIP { get; set; } = "100.85.121.98";
 
             /// <summary>UDP port for LTE link on Jetson</summary>
             public int LtePort { get; set; } = LTE_PORT;

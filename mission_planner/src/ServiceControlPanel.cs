@@ -570,9 +570,8 @@ namespace NOMAD.MissionPlanner
             LogMessage("Starting Isaac ROS container and services...");
             UpdateStatusLabel(_lblIsaacRosStatus, false, "Starting...");
             
-            // Use the start_isaac_ros_auto.sh script
-            var result = await _sender.ExecuteTerminalCommandAsync(
-                "cd ~/NOMAD && bash scripts/start_isaac_ros_auto.sh start", 60);
+            // Use the dedicated Isaac ROS API endpoint instead of raw shell command
+            var result = await _sender.StartIsaacRosAsync();
             
             if (result.Success)
             {
@@ -640,8 +639,8 @@ namespace NOMAD.MissionPlanner
         private async Task ClearTrajectoryAsync()
         {
             LogMessage("Clearing VIO trajectory...");
-            var result = await _sender.ExecuteTerminalCommandAsync(
-                "curl -X DELETE http://localhost:8000/api/vio/trajectory", 5);
+            // Use the dedicated HTTP DELETE endpoint for VIO trajectory
+            var result = await _sender.ClearVioTrajectoryAsync();
             
             if (result.Success)
             {

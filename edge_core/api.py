@@ -27,6 +27,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.websockets import WebSocketDisconnect
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 
 from .state import StateManager
 
@@ -65,11 +67,6 @@ class Task1CaptureResponse(BaseModel):
     metadata_file: Optional[str] = None
     building_location: Optional[str] = None
     error: Optional[str] = None
-
-
-class Task2ResetRequest(BaseModel):
-    """Request model for Task 2 reset."""
-    confirm: bool = False
 
 
 class Task2HitRequest(BaseModel):
@@ -276,14 +273,39 @@ def create_app(state_manager: StateManager) -> FastAPI:
         redoc_url="/redoc",
     )
     
-    # Enable CORS for Mission Planner plugin access
+    # CORS: restrict to GCS origin when configured, otherwise allow all (development)
+    gcs_origin = os.environ.get("GCS_ORIGIN")
+    allowed_origins = [gcs_origin] if gcs_origin else ["*"]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=allowed_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    
+    # API key authentication middleware
+    # If NOMAD_API_KEY is set, require X-API-Key header on non-exempt endpoints.
+    # If NOMAD_API_KEY is not set, skip authentication (development mode).
+    _NOMAD_API_KEY = os.environ.get("NOMAD_API_KEY")
+    _AUTH_EXEMPT_PATHS = {"/", "/health", "/docs", "/redoc", "/openapi.json"}
+
+    class APIKeyMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            if _NOMAD_API_KEY is None:
+                # Development mode - no authentication
+                return await call_next(request)
+            if request.url.path in _AUTH_EXEMPT_PATHS:
+                return await call_next(request)
+            provided_key = request.headers.get("X-API-Key")
+            if provided_key != _NOMAD_API_KEY:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Invalid or missing API key"},
+                )
+            return await call_next(request)
+
+    app.add_middleware(APIKeyMiddleware)
     
     # Initialize app.state with all service references (dependency injection)
     app.state.state_manager = state_manager
@@ -372,7 +394,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
             vio_status = vio_pipeline.status
             response["vio"] = {
                 "health": vio_status.health.value,
-                "tracking_confidence": vio_status.tracking_confidence,
+                "tracking_confidence": vio_status.tracking_confidence / 100.0,  # Normalize 0-100 -> 0-1
                 "message_rate_hz": vio_status.message_rate_hz,
             }
         
@@ -510,7 +532,9 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 if health_monitor:
                     data["jetson_health"] = health_monitor.health.to_dict()
                 if vio_pipeline:
-                    data["vio_status"] = vio_pipeline.status.to_dict()
+                    vio_dict = vio_pipeline.status.to_dict()
+                    vio_dict["tracking_confidence"] = vio_dict["tracking_confidence"] / 100.0  # Normalize 0-100 -> 0-1
+                    data["vio_status"] = vio_dict
                 
                 await websocket.send_json(data)
                 await asyncio.sleep(0.1)  # 10Hz
@@ -622,7 +646,10 @@ def create_app(state_manager: StateManager) -> FastAPI:
                     exif_dict["0th"][piexif.ImageIFD.DateTime] = timestamp.strftime("%Y:%m:%d %H:%M:%S").encode()
                     
                     # Embed heading and AHRS data in ImageDescription
-                    description = f"Heading: {heading:.1f}deg, Pitch: {pitch:.1f}deg, Roll: {roll:.1f}deg"
+                    heading_str = f"{heading:.1f}" if heading is not None else "N/A"
+                    pitch_str = f"{pitch:.1f}" if pitch is not None else "N/A"
+                    roll_str = f"{roll:.1f}" if roll is not None else "N/A"
+                    description = f"Heading: {heading_str}deg, Pitch: {pitch_str}deg, Roll: {roll_str}deg"
                     exif_dict["0th"][piexif.ImageIFD.ImageDescription] = description.encode()
                     
                     # Dump EXIF data and save final image
@@ -661,7 +688,11 @@ def create_app(state_manager: StateManager) -> FastAPI:
             return Task1CaptureResponse(
                 success=True,
                 timestamp=timestamp.isoformat(),
-                target_text=f"Captured at {state.gps_lat:.6f}, {state.gps_lon:.6f}",
+                target_text=(
+                    f"Captured at {state.gps_lat:.6f}, {state.gps_lon:.6f}"
+                    if state.gps_lat is not None and state.gps_lon is not None
+                    else "Captured (GPS coordinates pending)"
+                ),
                 position=metadata["gps"],
                 heading_deg=heading,
                 pitch_deg=pitch,
@@ -690,7 +721,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
         Returns the image file captured during a Task 1 recon mission.
         For new folder-based structure, use /api/task/1/images/{folder}/{filename}
         """
-        image_dir = "./data/task1_images"
+        image_dir = "./data/task1_captures"
         image_path = os.path.join(image_dir, filename)
         
         # Validate filename to prevent directory traversal
@@ -960,12 +991,14 @@ def create_app(state_manager: StateManager) -> FastAPI:
     @app.get("/api/vio/status", tags=["VIO"])
     async def vio_status(request: Request):
         """Get VIO pipeline status."""
-        # Check for external VIO state first
+        # Check for external VIO state first (confidence on 0-1 scale)
         external_vio_state = request.app.state.external_vio_state
         if external_vio_state:
+            # External VIO confidence is 0-1 scale
+            confidence_0_1 = external_vio_state.get("confidence", 0)
             return {
-                "health": "healthy" if external_vio_state.get("confidence", 0) > 0.5 else "degraded",
-                "tracking_confidence": external_vio_state.get("confidence", 0),
+                "health": "healthy" if confidence_0_1 > 0.5 else "degraded",
+                "tracking_confidence": confidence_0_1,  # 0-1 scale
                 "position_valid": True,
                 "message_rate_hz": 30.0,
                 "reset_counter": 0,
@@ -976,14 +1009,18 @@ def create_app(state_manager: StateManager) -> FastAPI:
         if not vio_pipeline:
             return {
                 "health": "unknown",
-                "tracking_confidence": 0,
+                "tracking_confidence": 0,  # 0-1 scale
                 "position_valid": False,
                 "message_rate_hz": 0,
                 "reset_counter": 0,
                 "source": "none",
             }
         
-        return vio_pipeline.status.to_dict()
+        # VIOPipeline uses 0-100 scale internally (ZED SDK native);
+        # normalize to 0-1 for API consumers
+        status_dict = vio_pipeline.status.to_dict()
+        status_dict["tracking_confidence"] = status_dict["tracking_confidence"] / 100.0
+        return status_dict
 
     @app.post("/api/vio/update", tags=["VIO"])
     async def vio_update(vio_request: VIOUpdateRequest, request: Request):
@@ -1448,7 +1485,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
             services["vio"] = {
                 "status": vio_status.health.value,
                 "running": vio_status.health.value != "failed",
-                "confidence": vio_status.tracking_confidence,
+                "confidence": vio_status.tracking_confidence / 100.0,  # Normalize 0-100 -> 0-1
                 "trajectory_points": len(vio_trajectory),
             }
         else:

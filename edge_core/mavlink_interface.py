@@ -106,12 +106,34 @@ class MavlinkService:
                 if voltage:
                     self.state_manager.update_state(battery_voltage=voltage / 1000.0)
             elif msg_type == "GLOBAL_POSITION_INT":
-                gps_fix = bool(getattr(msg, "lat", 0) or getattr(msg, "lon", 0))
-                self.state_manager.update_state(gps_fix=gps_fix)
+                lat_raw = getattr(msg, "lat", 0)
+                lon_raw = getattr(msg, "lon", 0)
+                alt_raw = getattr(msg, "alt", 0)  # mm above MSL
+                gps_fix = bool(lat_raw or lon_raw)
+                # GLOBAL_POSITION_INT encodes lat/lon in 1e7 degrees, alt in mm
+                gps_lat = lat_raw / 1e7 if lat_raw else None
+                gps_lon = lon_raw / 1e7 if lon_raw else None
+                gps_alt = alt_raw / 1000.0 if alt_raw else None  # mm -> m
+                self.state_manager.update_state(
+                    gps_fix=gps_fix,
+                    gps_lat=gps_lat,
+                    gps_lon=gps_lon,
+                    gps_alt=gps_alt,
+                )
             elif msg_type == "ATTITUDE":
-                # Skip ATTITUDE update: no useful state fields extracted
-                # (Attitude data available in msg but not tracked in SystemState)
-                pass
+                import math
+                # ATTITUDE message provides roll/pitch/yaw in radians
+                roll_rad = getattr(msg, "roll", 0.0)
+                pitch_rad = getattr(msg, "pitch", 0.0)
+                yaw_rad = getattr(msg, "yaw", 0.0)
+                heading_deg = math.degrees(yaw_rad) % 360.0  # 0-360
+                pitch_deg = math.degrees(pitch_rad)
+                roll_deg = math.degrees(roll_rad)
+                self.state_manager.update_state(
+                    heading_deg=heading_deg,
+                    pitch_deg=pitch_deg,
+                    roll_deg=roll_deg,
+                )
             elif msg_type == "SYSTEM_TIME":
                 # Update time sync service with GPS time
                 if self._time_sync_service is not None:

@@ -23,7 +23,12 @@ writeTimeout: 5s
 # Authentication
 # ============================================================
 
-# Allow unauthenticated access for API, metrics, and streaming
+# SECURITY NOTE: Access is unauthenticated. MediaMTX does not support
+# IP-based allow-listing natively. Restrict access at the network level:
+# - Tailscale ACLs should limit access to the 100.64.0.0/10 subnet
+# - firewall rules (iptables/nftables) should block non-Tailscale IPs
+#   on ports 8554 (RTSP) and 9997 (API)
+# - Do NOT expose these ports on public interfaces without ACLs
 authMethod: internal
 authInternalUsers:
   - user: any

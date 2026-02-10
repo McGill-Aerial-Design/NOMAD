@@ -106,13 +106,13 @@ python3 ros_http_bridge.py --disable-servo
 
 ```bash
 # Set nozzle to 90 degrees (center)
-curl -X POST 'http://100.75.218.89:8000/api/servo/camera/tilt?angle=90'
+curl -X POST 'http://100.85.121.98:8000/api/servo/camera/tilt?angle=90'
 
 # Set nozzle to 0 degrees
-curl -X POST 'http://100.75.218.89:8000/api/servo/camera/tilt?angle=0'
+curl -X POST 'http://100.85.121.98:8000/api/servo/camera/tilt?angle=0'
 
 # Check servo status
-curl http://100.75.218.89:8000/api/servo/status
+curl http://100.85.121.98:8000/api/servo/status
 ```
 
 ## Edge Core API Endpoints
@@ -166,8 +166,8 @@ Jetson 40-Pin Header (left column, looking at board with USB ports facing you):
 ## Troubleshooting
 
 **Servo not moving via API:**
-1. Check Edge Core is running: `curl http://100.75.218.89:8000/health`
-2. Check servo status: `curl http://100.75.218.89:8000/api/servo/status`
+1. Check Edge Core is running: `curl http://100.85.121.98:8000/health`
+2. Check servo status: `curl http://100.85.121.98:8000/api/servo/status`
 3. Check the helper process: `ps aux | grep nomad_servo`
 4. Check Edge Core logs: `tail -20 /tmp/edge_core.log`
 

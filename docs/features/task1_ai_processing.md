@@ -133,7 +133,7 @@ py scripts\process_task1_ai.py `
   --provider ollama `
   --ollama-model llava:34b `
   --ollama-host http://localhost:11434 `
-  --jetson-ip 100.75.218.89 `
+  --jetson-ip 100.85.121.98 `
   --local-dir C:\NOMAD\Task1 `
   --upload-to-jetson
 ```
@@ -145,7 +145,7 @@ py scripts\process_task1_ai.py `
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--provider` | (required) | AI provider: `gemini` or `ollama` |
-| `--jetson-ip` | `100.75.218.89` | Jetson Tailscale IP |
+| `--jetson-ip` | `100.85.121.98` | Jetson Tailscale IP |
 | `--jetson-port` | `8000` | Edge Core API port |
 | `--local-dir` | `C:\NOMAD\Task1` | Local save directory |
 | `--gemini-key` | (required if gemini) | Google Gemini API key |
@@ -351,7 +351,7 @@ google-generativeai   # Gemini (optional)
 tailscale status
 
 # Test connectivity
-curl http://100.75.218.89:8000/health
+curl http://100.85.121.98:8000/health
 ```
 
 ### Gemini API Errors

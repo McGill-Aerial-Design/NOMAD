@@ -17,7 +17,7 @@ log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-ISAAC_WS="${HOME}/ros2/isaac_ros_ws"
+ISAAC_WS="${HOME}/workspaces/isaac_ros-dev"
 NOMAD_DIR="${HOME}/NOMAD"
 ZED_DOCKER_DIR="${ISAAC_WS}/src/zed-ros2-wrapper/docker"
 
@@ -50,7 +50,7 @@ log_info "Creating Isaac ROS config..."
 cat > ~/.isaac_ros_common-config << 'EOF'
 # Isaac ROS configuration for ZED SDK support
 CONFIG_IMAGE_KEY="ros2_humble.user"
-CONFIG_DOCKER_SEARCH_DIRS=("${HOME}/ros2/isaac_ros_ws/src/zed-ros2-wrapper/docker")
+CONFIG_DOCKER_SEARCH_DIRS=("${HOME}/workspaces/isaac_ros-dev/src/zed-ros2-wrapper/docker")
 EOF
 log_info "Created: ~/.isaac_ros_common-config"
 

@@ -3,7 +3,7 @@
 # 
 # Supports two build targets:
 # 1. Generic (default): python:3.13-slim for development/testing
-# 2. Jetson: dustynv/l4t-pytorch:r35.4.1-py3 with CUDA/GPU support
+# 2. Jetson: dustynv/l4t-pytorch:r36.2.0 with CUDA/GPU support (JetPack 6.2)
 #
 # Build (Generic): 
 #   docker build -t nomad-edge-core -f infra/Dockerfile .
@@ -137,12 +137,13 @@ CMD ["python", "-m", "edge_core.main"]
 # ============================================================
 # JETSON BUILD (L4T with PyTorch, CUDA, GPU support)
 # ============================================================
-# For Jetson Orin Nano with JetPack 5.x and hardware acceleration
-# Includes: CUDA 11.4, cuDNN, PyTorch 2.0, OpenCV with CUDA
+# For Jetson Orin Nano with JetPack 6.2 / L4T 36.x
+# Includes: CUDA 12.x, cuDNN, PyTorch, OpenCV with CUDA
+# Note: r36.2.0 is compatible with JetPack 6.2 (L4T 36.x)
 # ============================================================
 
-# Jetson builder - based on NVIDIA L4T image
-FROM dustynv/l4t-pytorch:r35.4.1-py3 AS jetson-builder
+# Jetson builder - based on NVIDIA L4T image (JetPack 6.2 / L4T 36.x)
+FROM dustynv/l4t-pytorch:r36.2.0 AS jetson-builder
 
 # Install build dependencies on L4T base
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -161,9 +162,9 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 
 # ============================================================
-# JETSON RUNTIME STAGE - GPU/CUDA enabled
+# JETSON RUNTIME STAGE - GPU/CUDA enabled (JetPack 6.2 / L4T 36.x)
 # ============================================================
-FROM dustynv/l4t-pytorch:r35.4.1-py3 AS jetson-runtime
+FROM dustynv/l4t-pytorch:r36.2.0 AS jetson-runtime
 
 # Labels
 LABEL maintainer="McGill Aerial Design <mad@mcgill.ca>"

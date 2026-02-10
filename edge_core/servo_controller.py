@@ -196,7 +196,7 @@ int main(int argc, char *argv[]) {
 }
 '''
     
-    _binary_path = "/tmp/nomad_servo_pwm"
+    _binary_path = os.path.expanduser("~/.nomad/bin/nomad_servo_pwm")
     _compiled = False
     
     def __init__(self, config: ServoConfig):
@@ -214,6 +214,9 @@ int main(int argc, char *argv[]) {
         
         src_path = f"{cls._binary_path}.c"
         try:
+            # Ensure the binary directory exists
+            os.makedirs(os.path.dirname(cls._binary_path), exist_ok=True)
+            
             with open(src_path, 'w') as f:
                 f.write(cls._C_SOURCE)
             

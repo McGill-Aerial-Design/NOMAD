@@ -13,7 +13,7 @@
 | **Username** | mad |
 | **OS** | Ubuntu 22.04.5 LTS |
 | **Kernel** | 5.15.148-tegra (aarch64) |
-| **Tailscale IP** | 100.75.218.89 |
+| **Tailscale IP** | 100.85.121.98 |
 | **Ground Station IP** | 100.76.127.17 |
 
 ---
@@ -67,13 +67,13 @@
 ### Method 1: Unified Startup (Recommended)
 Starts both Edge Core API and ZED Video Stream:
 ```bash
-ssh mad@100.75.218.89
+ssh mad@100.85.121.98
 ~/start_nomad_full.sh
 ```
 
 ### Method 2: Background Mode
 ```bash
-ssh mad@100.75.218.89 "nohup ~/start_nomad_full.sh > /dev/null 2>&1 &"
+ssh mad@100.85.121.98 "nohup ~/start_nomad_full.sh > /dev/null 2>&1 &"
 ```
 
 ### Method 3: Systemd Service (Auto-start on boot)
@@ -125,7 +125,7 @@ curl http://localhost:8000/health
 
 ### From Windows Ground Station:
 ```powershell
-Invoke-WebRequest -Uri "http://100.75.218.89:8000/health" -UseBasicParsing | Select-Object -ExpandProperty Content
+Invoke-WebRequest -Uri "http://100.85.121.98:8000/health" -UseBasicParsing | Select-Object -ExpandProperty Content
 ```
 
 ### Expected Response:
@@ -164,7 +164,7 @@ Invoke-WebRequest -Uri "http://100.75.218.89:8000/health" -UseBasicParsing | Sel
 
 ### Access Swagger UI:
 ```
-http://100.75.218.89:8000/docs
+http://100.85.121.98:8000/docs
 ```
 
 ---
@@ -179,7 +179,7 @@ The ZED 2i camera is connected and accessible via V4L2:
 
 ### Start Video Stream (UDP to Ground Station)
 ```bash
-ssh mad@100.75.218.89
+ssh mad@100.85.121.98
 ~/start_zed_stream.sh
 ```
 
@@ -215,7 +215,7 @@ Located at: `/home/mad/NOMAD/.env`
 # Network
 NOMAD_HOST=0.0.0.0
 NOMAD_PORT=8000
-TAILSCALE_IP=100.75.218.89
+TAILSCALE_IP=100.85.121.98
 GCS_IP=100.76.127.17
 GCS_PORT=14550
 
@@ -303,7 +303,7 @@ tailscale status
 
 # On Windows
 tailscale status
-ping 100.75.218.89
+ping 100.85.121.98
 ```
 
 **Check firewall:**
@@ -347,7 +347,7 @@ dmesg | tail -50
 
 ### SSH Access
 ```bash
-ssh mad@100.75.218.89
+ssh mad@100.85.121.98
 # Password: Set via JETSON_SSH_PASS environment variable
 # DO NOT commit passwords to version control
 ```

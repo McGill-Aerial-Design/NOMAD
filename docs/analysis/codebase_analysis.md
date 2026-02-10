@@ -215,7 +215,7 @@ Codebase appears well-organized with minimal redundancy:
 ### 1. API Documentation Generation
 Use FastAPI's built-in OpenAPI to generate comprehensive API docs:
 ```python
-# Already available at http://100.75.218.89:8000/docs
+# Already available at http://100.85.121.98:8000/docs
 # Consider exporting to static docs/api_reference.md for offline use
 ```
 

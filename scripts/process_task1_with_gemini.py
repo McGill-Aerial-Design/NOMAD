@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 """
+DEPRECATED: This script is superseded by process_task1_ai.py which supports
+multiple AI providers (Gemini, Ollama). Use that script instead:
+    python scripts/process_task1_ai.py --provider gemini --gemini-key YOUR_KEY
+
+---
+
 Task 1 AI Image Description Generator
 
 Processes captured photos from Task 1 (Outdoor Recon) using AI to generate

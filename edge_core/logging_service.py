@@ -231,7 +231,7 @@ def cleanup_old_logs(log_dir: str | None = None) -> int:
         >>> print(f"Deleted {deleted} old log files")
     """
     if log_dir is None:
-        log_dir = os.path.expanduser("~/nomad_logs")
+        log_dir = str(DEFAULT_LOG_DIR)
     
     deleted = 0
     
@@ -242,8 +242,8 @@ def cleanup_old_logs(log_dir: str | None = None) -> int:
         
         cutoff = datetime.now() - timedelta(hours=MAX_LOG_AGE_HOURS)
         
-        # Find all log files (*.log)
-        log_files = glob.glob(os.path.join(log_dir, "*.log"))
+        # Find all log files (*.json mission logs)
+        log_files = glob.glob(os.path.join(log_dir, "*.json"))
         
         for log_file in log_files:
             try:

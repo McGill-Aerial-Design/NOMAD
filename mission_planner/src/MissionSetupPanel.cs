@@ -159,9 +159,9 @@ namespace NOMAD.MissionPlanner
 
             var btnT1GetPos = new Button
             {
-                Text = "📍 Get Current Position",
+                Text = "[GPS] Get Current Position",
                 Location = new Point(15, 145),
-                Size = new Size(150, 25),
+                Size = new Size(170, 25),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(60, 60, 63),
                 ForeColor = Color.White,
@@ -222,9 +222,9 @@ namespace NOMAD.MissionPlanner
 
             var btnT2GetPos = new Button
             {
-                Text = "📍 Get Current Position",
+                Text = "[GPS] Get Current Position",
                 Location = new Point(15, 145),
-                Size = new Size(150, 25),
+                Size = new Size(170, 25),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(60, 60, 63),
                 ForeColor = Color.White,
@@ -337,7 +337,7 @@ namespace NOMAD.MissionPlanner
             // ============================================================
             var btnSave = new Button
             {
-                Text = "💾 Save Configuration",
+                Text = "[SAVE] Save Configuration",
                 Location = new Point(10, yOffset),
                 Size = new Size(200, 40),
                 FlatStyle = FlatStyle.Flat,
@@ -350,7 +350,7 @@ namespace NOMAD.MissionPlanner
 
             var btnReset = new Button
             {
-                Text = "🔄 Reset to Defaults",
+                Text = "[RESET] Reset to Defaults",
                 Location = new Point(220, yOffset),
                 Size = new Size(150, 40),
                 FlatStyle = FlatStyle.Flat,

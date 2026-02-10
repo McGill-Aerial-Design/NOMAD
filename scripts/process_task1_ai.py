@@ -498,8 +498,8 @@ Examples:
     # Jetson connection
     parser.add_argument(
         '--jetson-ip',
-        default='100.75.218.89',
-        help='Jetson IP address (default: 100.75.218.89)'
+        default='100.85.121.98',
+        help='Jetson IP address (default: 100.85.121.98)'
     )
     parser.add_argument(
         '--jetson-port',

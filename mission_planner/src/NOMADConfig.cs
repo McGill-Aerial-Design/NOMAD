@@ -24,7 +24,7 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// Jetson IP address (local network or Tailscale).
         /// </summary>
-        public string JetsonIP { get; set; } = "100.75.218.89";
+        public string JetsonIP { get; set; } = "100.85.121.98";
 
         /// <summary>
         /// Jetson API port.
@@ -40,7 +40,7 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// Tailscale IP address (if using VPN).
         /// </summary>
-        public string TailscaleIP { get; set; } = "100.75.218.89";
+        public string TailscaleIP { get; set; } = "100.85.121.98";
 
         /// <summary>
         /// Use Tailscale IP instead of local IP.
@@ -68,7 +68,7 @@ namespace NOMAD.MissionPlanner
         /// Default: RTSP stream supporting multiple simultaneous viewers.
         /// Format: rtsp://&lt;jetson-ip&gt;:8554/primary
         /// </summary>
-        public string VideoUrl { get; set; } = "rtsp://100.75.218.89:8554/primary";
+        public string VideoUrl { get; set; } = "rtsp://100.85.121.98:8554/primary";
 
         /// <summary>
         /// Network caching for video streams (ms).

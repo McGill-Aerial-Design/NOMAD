@@ -783,7 +783,7 @@ EK3_POSNE_M_NSE = 1.0
 public class WASDNavControl : Form
 {
     private HttpClient _httpClient = new HttpClient();
-    private string _jetsonApiUrl = "http://100.75.218.89:8000";
+    private string _jetsonApiUrl = "http://100.85.121.98:8000";
     
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {

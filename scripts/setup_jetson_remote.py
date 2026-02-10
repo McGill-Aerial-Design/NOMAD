@@ -10,7 +10,7 @@ import os
 
 # Jetson Configuration
 # NOTE: Password should be set via environment variable for security
-JETSON_IP = os.environ.get("JETSON_IP", "100.75.218.89")
+JETSON_IP = os.environ.get("JETSON_IP", "100.85.121.98")
 JETSON_USER = os.environ.get("JETSON_SSH_USER", "mad")
 JETSON_PASS = os.environ.get("JETSON_SSH_PASS", "")
 JETSON_HOME = f"/home/{JETSON_USER}"  # User home directory on Jetson

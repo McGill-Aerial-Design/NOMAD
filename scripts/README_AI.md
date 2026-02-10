@@ -72,7 +72,7 @@ python scripts\process_task1_ai.py --provider gemini --gemini-key KEY --upload-t
 - `--provider {gemini|ollama}` - AI provider to use
 
 ### Jetson Connection
-- `--jetson-ip IP` - Jetson IP address (default: 100.75.218.89)
+- `--jetson-ip IP` - Jetson IP address (default: 100.85.121.98)
 - `--jetson-port PORT` - Jetson API port (default: 8000)
 
 ### Local Storage
@@ -288,7 +288,7 @@ ollama pull llava:13b
 ### Jetson: Cannot Connect
 ```powershell
 # Test Jetson connectivity
-curl http://100.75.218.89:8000/health
+curl http://100.85.121.98:8000/health
 
 # Check Tailscale
 tailscale status

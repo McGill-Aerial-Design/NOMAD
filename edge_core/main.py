@@ -133,9 +133,6 @@ def cleanup() -> None:
     if nav_controller:
         nav_controller.stop()
         logger.info("Navigation controller stopped")
-    if nav_controller:
-        nav_controller.stop()
-        logger.info("Navigation controller stopped")
 
     # Stop Isaac ROS bridge (depends on ROS being active)
     if isaac_bridge:

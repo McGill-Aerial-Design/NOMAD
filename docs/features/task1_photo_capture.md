@@ -132,7 +132,7 @@ Image: photo.jpg
 
 ```bash
 # 1. SSH to Jetson
-ssh mad@100.75.218.89
+ssh mad@100.85.121.98
 cd ~/NOMAD
 
 # 2. Pull latest code
@@ -175,7 +175,7 @@ Get-ChildItem "$env:LOCALAPPDATA\Mission Planner\plugins\NOMADPlugin.dll"
 ### Edge Core API Test
 ```bash
 # Test capture endpoint
-curl -X POST http://100.75.218.89:8000/api/task/1/capture
+curl -X POST http://100.85.121.98:8000/api/task/1/capture
 
 # Check folder created
 ls -lh data/task1_captures/

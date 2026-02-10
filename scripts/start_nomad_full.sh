@@ -347,6 +347,11 @@ except: pass
 main() {
     check_prerequisites
     
+    # NOTE: All task branches currently start the same set of services.
+    # This is intentional -- future iterations will differentiate:
+    #   task1: skip Isaac ROS / VIO (GPS-only)
+    #   task2: skip MAVLink GPS forwarding, enable VIO-only mode
+    # Keeping the branches separate now to make that refactor straightforward.
     case "$TASK_MODE" in
         task1)
             log_info "Starting Task 1 (GPS-based) services..."

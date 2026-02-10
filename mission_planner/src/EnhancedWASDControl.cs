@@ -821,7 +821,7 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                var jetsonIp = _config?.JetsonIP ?? _config?.EffectiveIP;
+                var jetsonIp = _config?.EffectiveIP;
                 if (string.IsNullOrEmpty(jetsonIp))
                 {
                     UpdateStatus("Jetson IP not configured", ERROR_COLOR);
@@ -863,7 +863,7 @@ namespace NOMAD.MissionPlanner
 
             try
             {
-                var jetsonIp = _config?.JetsonIP ?? _config?.EffectiveIP;
+                var jetsonIp = _config?.EffectiveIP;
                 if (string.IsNullOrEmpty(jetsonIp)) return;
 
                 // Use the camera tilt endpoint with angle as query param
