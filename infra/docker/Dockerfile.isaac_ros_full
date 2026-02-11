@@ -1,97 +1,70 @@
 # ==============================================================
-# NOMAD Isaac ROS Full Stack Dockerfile
-# 
-# Builds a complete Isaac ROS environment with:
-# - ZED SDK 4.1 (must stay aligned with scripts/start_isaac_ros_auto.sh ZED_WRAPPER_BRANCH)
-# - ZED ROS2 wrapper
-# - MAVROS
-# - Nav2 stack
-# - nvblox
+# NOMAD Isaac ROS Container Dockerfile
 #
-# For Jetson Orin Nano with JetPack 6.2 / L4T 36.4
+# Built on the official Isaac ROS dev image (produced by
+# isaac_ros_common/scripts/build_image_layers.sh).
 #
-# Usage:
+# What this layer adds on top of the official base:
+#   - ZED SDK 4.1 (matching ZED ROS2 wrapper version)
+#   - Runtime apt deps that get wiped on container restart
+#   - GStreamer for video bridge (simple_video_bridge.py)
+#   - Python helpers (transforms3d, pymavlink)
+#
+# IMPORTANT -- The official Isaac ROS dev image must be built
+# first on the Jetson.  See docs/ISAAC_ROS_NVBLOX_SETUP.md.
+#
+# Build (on Jetson):
+#   docker build -f infra/docker/Dockerfile.isaac_ros_full \
+#       --build-arg BASE_IMAGE=isaac_ros_dev-aarch64 \
+#       -t nomad-isaac-ros:latest .
+#
+# Or via docker compose:
 #   docker compose build isaac-ros
-#   docker compose up -d isaac-ros
-#
-# Manual build:
-#   docker build -f infra/docker/Dockerfile.isaac_ros_full -t nomad-isaac-ros:latest .
 # ==============================================================
 
-# Base: Isaac ROS for Jetson (L4T 36.x compatible)
-# Note: dustynv images are community-maintained for Jetson L4T
-ARG BASE_IMAGE=dustynv/ros:humble-ros-base-l4t-r36.2.0
+ARG BASE_IMAGE=isaac_ros_dev-aarch64
 FROM ${BASE_IMAGE}
 
-# Avoid prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Labels
 LABEL maintainer="NOMAD Team"
-LABEL description="NOMAD Isaac ROS Full Stack for Jetson Orin Nano"
-LABEL version="1.0"
+LABEL description="NOMAD Isaac ROS + ZED + nvblox for Jetson Orin Nano"
 
 # ==============================================================
-# Setup ROS2 apt repository (dustynv base uses source-built ROS2)
+# System Dependencies
 # ==============================================================
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    gnupg2 \
-    lsb-release \
-    software-properties-common \
-    && curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
-    -o /etc/apt/trusted.gpg.d/ros-archive-keyring.asc \
-    && echo "deb [arch=$(dpkg --print-architecture)] http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" \
-    > /etc/apt/sources.list.d/ros2.list \
-    && rm -rf /var/lib/apt/lists/*
-
-# ==============================================================
-# Install System Dependencies
-# ==============================================================
-RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     git \
     libusb-1.0-0-dev \
     python3-numpy \
-    && rm -rf /var/lib/apt/lists/* \
-    && pip3 install --no-cache-dir transforms3d
-
-# ==============================================================
-# Install ROS2 Packages: MAVROS
-# ==============================================================
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ros-humble-mavros \
-    ros-humble-mavros-extras \
-    ros-humble-mavros-msgs \
+    # GStreamer for video bridge
+    python3-gi \
+    gir1.2-gst-plugins-base-1.0 \
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-libav \
+    gstreamer1.0-rtsp \
     && rm -rf /var/lib/apt/lists/*
 
-# Download MAVROS geographiclib datasets (required for MAVROS coordinate transforms)
-RUN wget -q https://raw.githubusercontent.com/mavlink/mavros/master/mavros/scripts/install_geographiclib_datasets.sh && \
-    chmod +x install_geographiclib_datasets.sh && \
-    ./install_geographiclib_datasets.sh && \
-    rm install_geographiclib_datasets.sh
-
 # ==============================================================
-# Install ROS2 Packages: Nav2 Stack
+# ROS2 Dependencies (needed by nvblox + ZED after restart)
 # ==============================================================
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ros-humble-nav2-bringup \
-    ros-humble-nav2-bt-navigator \
-    ros-humble-nav2-controller \
-    ros-humble-nav2-planner \
-    ros-humble-nav2-recoveries \
-    ros-humble-nav2-costmap-2d \
-    ros-humble-nav2-lifecycle-manager \
-    ros-humble-nav2-map-server \
-    ros-humble-nav2-amcl \
+    ros-humble-zed-msgs \
     ros-humble-robot-localization \
+    ros-humble-point-cloud-transport \
+    ros-humble-tf2-ros \
+    ros-humble-tf2-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # ==============================================================
-# Install ZED SDK 4.1 for L4T 36.4 (JetPack 6.2)
-# NOTE: Version must match ZED_WRAPPER_BRANCH in scripts/start_isaac_ros_auto.sh
+# ZED SDK 4.2 for L4T 36.4 (JetPack 6.2)
 # ==============================================================
-ENV ZED_SDK_URL="https://download.stereolabs.com/zedsdk/4.1/l4t36.4/jetsons"
+ENV ZED_SDK_URL="https://download.stereolabs.com/zedsdk/4.2/l4t36.4/jetsons"
 
 RUN curl -L -o /tmp/zed_sdk.run ${ZED_SDK_URL} && \
     chmod +x /tmp/zed_sdk.run && \
@@ -99,46 +72,25 @@ RUN curl -L -o /tmp/zed_sdk.run ${ZED_SDK_URL} && \
     rm /tmp/zed_sdk.run && \
     ldconfig
 
-# Verify ZED SDK installation
 RUN test -f /usr/local/zed/lib/libsl_zed.so && \
     echo "ZED SDK installed successfully"
 
-# Set ZED library path
 ENV LD_LIBRARY_PATH="/usr/local/zed/lib:${LD_LIBRARY_PATH}"
 
 # ==============================================================
-# Install ZED ROS2 Wrapper (if not already in base)
-# Note: May need to build from source depending on base image
-# ==============================================================
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ros-humble-zed-msgs \
-    ros-humble-zed-interfaces \
-    || echo "ZED ROS2 packages not in apt, will need source build" \
-    && rm -rf /var/lib/apt/lists/*
-
-# ==============================================================
-# Create Workspace Directory
-# ==============================================================
-WORKDIR /workspaces/isaac_ros-dev
-
-# ==============================================================
-# Copy NOMAD ROS Files
-# ==============================================================
-# Copy vio_bridge.py, launch files, configs
-COPY edge_core/ros/ /workspaces/isaac_ros-dev/nomad_ros/
-
-# Make vio_bridge.py executable
-RUN chmod +x /workspaces/isaac_ros-dev/nomad_ros/vio_bridge.py 2>/dev/null || true
-
-# ==============================================================
-# Python Dependencies for VIO Bridge
+# Python Dependencies
 # ==============================================================
 RUN pip3 install --no-cache-dir \
     transforms3d \
     pymavlink
 
 # ==============================================================
-# Environment Setup
+# Workspace
+# ==============================================================
+WORKDIR /workspaces/isaac_ros-dev
+
+# ==============================================================
+# Environment
 # ==============================================================
 ENV ROS_DOMAIN_ID=0
 ENV RMW_IMPLEMENTATION=rmw_fastrtps_cpp

@@ -13,5 +13,5 @@ sleep 3
 
 # Start NOMAD services
 cd ~/NOMAD
-nohup bash scripts/start_nomad_full.sh all > /tmp/nomad_startup.log 2>&1 &
+nohup bash scripts/run/start_nomad_full.sh all > /tmp/nomad_startup.log 2>&1 &
 echo "NOMAD services starting in background. Check /tmp/nomad_startup.log for progress."

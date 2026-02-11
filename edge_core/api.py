@@ -95,7 +95,7 @@ class Task1UploadDescriptionResponse(BaseModel):
 
 # Whitelist of allowed terminal commands for safety
 # NOTE: mediamtx and mavlink-routerd run as bare processes (started by
-# scripts/start_nomad_full.sh), NOT as systemd services.  Only nomad
+# scripts/run/start_nomad_full.sh), NOT as systemd services.  Only nomad
 # (edge_core) has a real systemd unit.  Status checks therefore use
 # pgrep and restarts use pkill + nohup.
 COMMAND_WHITELIST: dict[str, str] = {
@@ -105,12 +105,12 @@ COMMAND_WHITELIST: dict[str, str] = {
     "status_nomad": "systemctl is-active nomad",
     # --- Service restart ---
     "restart_video": "pkill -x mediamtx 2>/dev/null; sleep 1; nohup mediamtx ~/NOMAD/infra/mediamtx.yml > ~/nomad_logs/mediamtx.log 2>&1 & sleep 1; pgrep -x mediamtx > /dev/null && echo restarted || echo failed",
-    "restart_mavlink": "bash ~/NOMAD/scripts/restart_mavlink.sh 2>&1",
+    "restart_mavlink": "pkill -f mavlink-routerd 2>/dev/null; sleep 1; [ -e /dev/ttyACM0 ] && { GCS=$(tailscale status 2>/dev/null | grep -v \"$(hostname)\" | grep -oP '\\d+\\.\\d+\\.\\d+\\.\\d+' | head -1); nohup mavlink-routerd -e \"${GCS:-192.168.1.255}:14550\" -e 127.0.0.1:14550 /dev/ttyACM0 > ~/nomad_logs/mavlink.log 2>&1 & sleep 2; pgrep -f mavlink-routerd > /dev/null && echo restarted || echo failed; } || echo 'no CubePilot'",
     "restart_edge_core": "sudo systemctl restart nomad",
     # --- Service start / stop ---
     "start_mediamtx": "pgrep -x mediamtx > /dev/null && echo 'already running' || (nohup mediamtx ~/NOMAD/infra/mediamtx.yml > ~/nomad_logs/mediamtx.log 2>&1 & sleep 1; echo started)",
     "stop_mediamtx": "pkill -x mediamtx 2>&1 && echo stopped || echo 'not running'",
-    "start_mavlink": "bash ~/NOMAD/scripts/restart_mavlink.sh 2>&1",
+    "start_mavlink": "[ -e /dev/ttyACM0 ] && { pgrep -f mavlink-routerd > /dev/null && echo 'already running' || { GCS=$(tailscale status 2>/dev/null | grep -v \"$(hostname)\" | grep -oP '\\d+\\.\\d+\\.\\d+\\.\\d+' | head -1); nohup mavlink-routerd -e \"${GCS:-192.168.1.255}:14550\" -e 127.0.0.1:14550 /dev/ttyACM0 > ~/nomad_logs/mavlink.log 2>&1 & sleep 2; echo started; }; } || echo 'no CubePilot'",
     "stop_mavlink": "pkill -f mavlink-routerd 2>&1 && echo stopped || echo 'not running'",
     "start_nomad": "sudo systemctl start nomad 2>&1 && echo started || echo failed",
     "stop_nomad": "sudo systemctl stop nomad 2>&1 && echo stopped || echo failed",
@@ -1538,7 +1538,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
         3. Launches ZED + Nvblox
         4. Starts the ROS-HTTP bridge
         """
-        script_path = os.path.expanduser("~/NOMAD/scripts/start_isaac_ros_auto.sh")
+        script_path = os.path.expanduser("~/NOMAD/scripts/run/start_isaac_ros_auto.sh")
         
         if not os.path.exists(script_path):
             return {
@@ -1570,7 +1570,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
     @app.post("/api/isaac/stop", tags=["Isaac ROS"])
     async def isaac_stop():
         """Stop Isaac ROS container and services."""
-        script_path = os.path.expanduser("~/NOMAD/scripts/start_isaac_ros_auto.sh")
+        script_path = os.path.expanduser("~/NOMAD/scripts/run/start_isaac_ros_auto.sh")
         
         try:
             result = subprocess.run(
@@ -2298,7 +2298,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
         Performs:
         1. git stash (save any local changes)
         2. git pull origin main
-        3. chmod +x scripts/*.sh (make scripts executable)
+        3. chmod +x on all .sh scripts (recursive)
         
         Returns the output of each command.
         """
@@ -2355,16 +2355,16 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 text=True,
                 timeout=10,
             )
-            # Try with bash -c for glob expansion
+            # Try with bash -c for glob expansion (recursive)
             chmod_result = subprocess.run(
-                ["bash", "-c", "chmod +x scripts/*.sh"],
+                ["bash", "-c", "find scripts -name '*.sh' -exec chmod +x {} +"],
                 cwd=nomad_dir,
                 capture_output=True,
                 text=True,
                 timeout=10,
             )
             results["steps"].append({
-                "step": "chmod +x scripts/*.sh",
+                "step": "chmod +x scripts/**/*.sh",
                 "success": chmod_result.returncode == 0,
                 "output": "Scripts made executable" if chmod_result.returncode == 0 else chmod_result.stdout.strip(),
                 "error": chmod_result.stderr.strip() if chmod_result.returncode != 0 else None,

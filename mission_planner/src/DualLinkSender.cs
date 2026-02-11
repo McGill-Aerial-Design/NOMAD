@@ -12,6 +12,7 @@ using System.Text;
 using System.Threading.Tasks;
 using MissionPlanner;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace NOMAD.MissionPlanner
 {
@@ -410,6 +411,37 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
+        /// Execute a terminal command and parse the JSON response to extract stdout.
+        /// The raw /api/terminal/run response is JSON: {success, stdout, stderr, return_code}.
+        /// This helper extracts stdout into Data and maps command-level success.
+        /// </summary>
+        private async Task<CommandResult> ExecuteTerminalCommandParsedAsync(string commandName, int timeout = 10)
+        {
+            var result = await ExecuteTerminalCommandAsync(commandName, timeout);
+
+            if (result.Success && !string.IsNullOrEmpty(result.Data))
+            {
+                try
+                {
+                    var json = JObject.Parse(result.Data);
+                    var stdout = json["stdout"]?.Value<string>()?.Trim() ?? "";
+                    var cmdSuccess = json["success"]?.Value<bool>() ?? false;
+
+                    return new CommandResult
+                    {
+                        Success = cmdSuccess,
+                        Message = stdout,
+                        Data = stdout,
+                        Method = result.Method
+                    };
+                }
+                catch { /* fall through to raw result */ }
+            }
+
+            return result;
+        }
+
+        /// <summary>   
         /// Execute a command via SSH directly (bypasses HTTP API).
         /// Use this for operations that kill the HTTP API (like service restarts).
         /// Works with SSH key authentication or password authentication.
@@ -510,7 +542,7 @@ namespace NOMAD.MissionPlanner
         {
             // Use dedicated restart script that properly kills all processes (including ZED)
             // and restarts NOMAD services in background
-            var command = "cd ~/NOMAD && bash scripts/restart_nomad.sh";
+            var command = "cd ~/NOMAD && bash scripts/run/restart_nomad.sh";
             
             return await ExecuteSSHCommandAsync(command, 30);
         }
@@ -532,7 +564,7 @@ namespace NOMAD.MissionPlanner
                 _ => $"start_{serviceName}"
             };
 
-            return await ExecuteTerminalCommandAsync(commandName, 15);
+            return await ExecuteTerminalCommandParsedAsync(commandName, 15);
         }
 
         /// <summary>
@@ -552,7 +584,7 @@ namespace NOMAD.MissionPlanner
                 _ => $"stop_{serviceName}"
             };
 
-            return await ExecuteTerminalCommandAsync(commandName, 15);
+            return await ExecuteTerminalCommandParsedAsync(commandName, 15);
         }
 
         /// <summary>
@@ -572,7 +604,7 @@ namespace NOMAD.MissionPlanner
                 _ => $"restart_{serviceName}" // Fallback
             };
             
-            return await ExecuteTerminalCommandAsync(commandName, 15);
+            return await ExecuteTerminalCommandParsedAsync(commandName, 15);
         }
 
         /// <summary>
@@ -592,7 +624,7 @@ namespace NOMAD.MissionPlanner
                 _ => $"status_{serviceName}" // Fallback
             };
             
-            return await ExecuteTerminalCommandAsync(commandName, 5);
+            return await ExecuteTerminalCommandParsedAsync(commandName, 5);
         }
 
         /// <summary>

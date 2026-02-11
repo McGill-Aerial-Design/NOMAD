@@ -194,9 +194,9 @@ docs/
 - **ArduPilot Params**: `config/params/task1_gps.param`, `config/params/task2_vio.param`
 
 ### Scripts
-- **AI Processing**: `scripts/process_task1_ai.py` (dual provider: Gemini/Ollama)
-- **Jetson Setup**: `scripts/setup_jetson.sh`
-- **Windows Build**: `scripts/build_plugin_windows.ps1`
+- **AI Processing**: `scripts/task1/process_task1_ai.py` (dual provider: Gemini/Ollama)
+- **Jetson Setup**: `scripts/setup/setup_jetson.sh`
+- **Windows Build**: `scripts/build/build_plugin_windows.ps1`
 
 ---
 

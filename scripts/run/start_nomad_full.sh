@@ -20,7 +20,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NOMAD_DIR="$(dirname "$SCRIPT_DIR")"
+NOMAD_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
 
 # Configuration
 API_PORT=8000
@@ -129,8 +129,18 @@ start_mediamtx() {
     if pgrep -f mediamtx > /dev/null; then
         log_ok "MediaMTX already running"
     else
-        if [ -f "$NOMAD_DIR/infra/mediamtx.yml" ]; then
-            nohup mediamtx "$NOMAD_DIR/infra/mediamtx.yml" > $LOG_DIR/mediamtx.log 2>&1 &
+        # Prefer systemd service (auto-restarts, boot-persistent)
+        if systemctl --user is-enabled mediamtx &>/dev/null; then
+            systemctl --user start mediamtx
+            sleep 2
+            if pgrep -f mediamtx > /dev/null; then
+                log_ok "MediaMTX started via systemd on rtsp://localhost:$RTSP_PORT"
+            else
+                log_fail "MediaMTX systemd unit failed to start"
+            fi
+        elif [ -f "$NOMAD_DIR/infra/mediamtx.yml" ]; then
+            MEDIAMTX_BIN=$(command -v mediamtx 2>/dev/null || echo "/home/mad/bin/mediamtx")
+            nohup "$MEDIAMTX_BIN" "$NOMAD_DIR/infra/mediamtx.yml" > $LOG_DIR/mediamtx.log 2>&1 &
             sleep 2
             if pgrep -f mediamtx > /dev/null; then
                 log_ok "MediaMTX started on rtsp://localhost:$RTSP_PORT"

@@ -99,28 +99,28 @@ ollama pull llava:13b
 ## Implementation
 
 ### Script Location
-`scripts/process_task1_ai.py` (711 lines)
+`scripts/task1/process_task1_ai.py` (711 lines)
 
 ### Usage Examples
 
 **Basic (Gemini)**:
 ```powershell
-py scripts\process_task1_ai.py --provider gemini --gemini-key YOUR_KEY
+py scripts\task1\process_task1_ai.py --provider gemini --gemini-key YOUR_KEY
 ```
 
 **Basic (Ollama)**:
 ```powershell
-py scripts\process_task1_ai.py --provider ollama --ollama-model llava:13b
+py scripts\task1\process_task1_ai.py --provider ollama --ollama-model llava:13b
 ```
 
 **Specific Folder**:
 ```powershell
-py scripts\process_task1_ai.py --provider ollama --folder 20260202_120000
+py scripts\task1\process_task1_ai.py --provider ollama --folder 20260202_120000
 ```
 
 **Full Pipeline with Upload**:
 ```powershell
-py scripts\process_task1_ai.py `
+py scripts\task1\process_task1_ai.py `
   --provider gemini `
   --gemini-key $env:GEMINI_API_KEY `
   --upload-to-jetson `
@@ -129,7 +129,7 @@ py scripts\process_task1_ai.py `
 
 **Custom Configuration**:
 ```powershell
-py scripts\process_task1_ai.py `
+py scripts\task1\process_task1_ai.py `
   --provider ollama `
   --ollama-model llava:34b `
   --ollama-host http://localhost:11434 `
@@ -438,10 +438,10 @@ ollama pull llava:13b
 ### Process All Captures
 ```powershell
 # Gemini (cloud, fast)
-py scripts\process_task1_ai.py --provider gemini --gemini-key $env:GEMINI_API_KEY
+py scripts\task1\process_task1_ai.py --provider gemini --gemini-key $env:GEMINI_API_KEY
 
 # Ollama (local, private)
-py scripts\process_task1_ai.py --provider ollama
+py scripts\task1\process_task1_ai.py --provider ollama
 ```
 
 ### Files Created

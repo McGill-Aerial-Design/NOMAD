@@ -31,7 +31,7 @@ Reference guide for operating the NOMAD system during development and competitio
 | Edge Core API | Running | systemd `nomad.service`, port 8000, auto-starts on boot |
 | Tailscale VPN | Connected | Jetson 100.85.121.98, GCS 100.76.127.17 |
 | Docker + NVIDIA runtime | Configured | For `nomad_isaac_ros` container only |
-| MediaMTX | Installed | Runs on bare metal, RTSP on port 8554 |
+| MediaMTX | Installed | Native binary at `/home/mad/bin/mediamtx`, systemd user service `mediamtx.service`, RTSP on port 8554, auto-starts on boot |
 | Isaac ROS workspace | Initialized | `/home/mad/workspaces/isaac_ros-dev/` |
 
 ### Pending Hardware
@@ -94,7 +94,7 @@ Ground Station (100.76.127.17)
 - **Video encoding** uses software `openh264enc` -- there is no NVENC on the Orin Nano.
 - **Video streaming** runs inside the Isaac ROS container. There is no separate video-stream container.
 - **MediaMTX** runs on bare metal (not in Docker). It receives the encoded stream from the Isaac ROS container and serves it as RTSP.
-- **MAVLink Router** runs as a host process, started by `scripts/start_nomad_full.sh`.
+- **MAVLink Router** runs as a host process, started by `scripts/run/start_nomad_full.sh`.
 - **Edge Core** runs as systemd service `nomad.service` and auto-starts on boot.
 
 ### Ports
@@ -122,7 +122,7 @@ ssh mad@100.85.121.98
 ```bash
 cd ~/NOMAD
 git pull origin main
-./scripts/start_nomad_full.sh
+./scripts/run/start_nomad_full.sh
 ```
 
 This script starts MAVLink Router, Edge Core (if not already running via systemd), and prepares the system.
@@ -138,7 +138,7 @@ systemctl status nomad
 mavlink-routerd -e 100.76.127.17:14550 -e 127.0.0.1:14551 /dev/ttyACM0 &
 
 # 3. Start Isaac ROS (Task 2 only)
-~/NOMAD/scripts/start_isaac_ros_auto.sh start
+~/NOMAD/scripts/run/start_isaac_ros_auto.sh start
 ```
 
 ### Verify From Jetson
@@ -201,7 +201,7 @@ Invoke-WebRequest -Uri 'http://100.85.121.98:8000/health' -UseBasicParsing
 3. SSH in: `ssh mad@100.85.121.98`
 4. Verify Tailscale: `tailscale status`
 5. Pull latest code if needed: `cd ~/NOMAD && git pull origin main`
-6. Run full startup: `./scripts/start_nomad_full.sh`
+6. Run full startup: `./scripts/run/start_nomad_full.sh`
 
 ### Phase 2: Verify Systems
 
@@ -227,7 +227,7 @@ Invoke-WebRequest -Uri 'http://100.85.121.98:8000/health' -UseBasicParsing
     ```bash
     curl -X POST http://100.85.121.98:8000/api/isaac/start
     ```
-    Or via SSH: `~/NOMAD/scripts/start_isaac_ros_auto.sh start`
+    Or via SSH: `~/NOMAD/scripts/run/start_isaac_ros_auto.sh start`
 
 17. Verify VIO:
     ```bash
@@ -359,7 +359,7 @@ docker logs nomad_isaac_ros --tail 50
 
 # Remove and restart
 docker rm -f nomad_isaac_ros
-~/NOMAD/scripts/start_isaac_ros_auto.sh start
+~/NOMAD/scripts/run/start_isaac_ros_auto.sh start
 ```
 
 ### VIO Tracking Lost

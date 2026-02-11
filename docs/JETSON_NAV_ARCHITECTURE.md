@@ -221,7 +221,7 @@ python -m edge_core.main
 
 ### 2. Start Isaac ROS Container
 ```bash
-./scripts/start_isaac_ros_auto.sh start
+./scripts/run/start_isaac_ros_auto.sh start
 ```
 
 ### 3. Launch ROS Nodes (inside container)

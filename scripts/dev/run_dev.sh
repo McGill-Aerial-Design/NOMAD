@@ -8,16 +8,16 @@
 # without requiring actual hardware (ZED camera, Jetson, ArduPilot).
 #
 # Usage:
-#   ./scripts/run_dev.sh           # Run with default settings
-#   ./scripts/run_dev.sh --port 8080  # Custom port
-#   ./scripts/run_dev.sh --no-vision  # Disable vision process
+#   ./scripts/dev/run_dev.sh           # Run with default settings
+#   ./scripts/dev/run_dev.sh --port 8080  # Custom port
+#   ./scripts/dev/run_dev.sh --no-vision  # Disable vision process
 # =============================================================================
 
 set -e
 
 # Get script directory and project root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Colors for output
 RED='\033[0;31m'

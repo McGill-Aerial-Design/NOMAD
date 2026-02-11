@@ -7,7 +7,7 @@ This document describes how to run nvblox 3D mesh visualization with the ZED cam
 
 ### From Windows PowerShell:
 ```powershell
-ssh mad@100.85.121.98 "bash /home/mad/NOMAD/scripts/start_nvblox_visualization.sh"
+ssh mad@100.85.121.98 "bash /home/mad/NOMAD/scripts/run/start_isaac_ros_auto.sh start"
 ```
 
 ### Manual Steps (if script fails):
@@ -78,7 +78,7 @@ ssh mad@100.85.121.98 "docker exec -e DISPLAY=:1 -e XAUTHORITY=/run/user/1000/gd
 
 ### Docker Container
 - Name: `nomad_isaac_ros`
-- Image: `dustynv/ros:humble-ros-base-l4t-r36.2.0`
+- Image: `isaac_ros_dev-aarch64` (official NVIDIA Isaac ROS dev image)
 - Workspace: `/workspaces/isaac_ros-dev/`
 
 ### X11 Display

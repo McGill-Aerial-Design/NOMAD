@@ -1,89 +1,69 @@
 # ============================================================
-# NOMAD Docker Compose - Isaac ROS Container
-# 
+# NOMAD Docker Compose -- Isaac ROS Container
+#
 # Only the Isaac ROS container runs in Docker. Everything else
 # (Edge Core, MediaMTX, MAVLink Router) runs natively on the
 # Jetson host, managed by start_nomad_full.sh and systemd.
 #
-# Docker is used for Isaac ROS because of its complex dependency
-# tree (ROS2 + CUDA + ZED SDK + nvblox). The other services are
-# single-process binaries with minimal deps -- Docker would just
-# add overhead on the 8GB Orin Nano.
-#
 # Prerequisites:
-# - Jetson Orin Nano with JetPack 6.2
-# - ZED2i camera connected
-# - Cube Orange connected via USB (/dev/ttyACM0)
+#   1. Build the official Isaac ROS dev base image first:
+#        cd ~/workspaces/isaac_ros-dev/src/isaac_ros_common/scripts
+#        ./build_image_layers.sh --image_key ros2_humble
+#      This produces "isaac_ros_dev-aarch64".
+#
+#   2. Then build the NOMAD layer:
+#        docker compose build isaac-ros
 #
 # Usage:
-#   docker compose up -d              # Start Isaac ROS container
-#   docker compose logs -f            # View logs
-#   docker compose exec isaac-ros bash # Enter container
-#   docker compose down               # Stop
+#   docker compose up -d                # Start container
+#   docker compose exec isaac-ros bash  # Enter container
+#   docker compose logs -f              # View logs
+#   docker compose down                 # Stop
 #
-# Production startup:
-#   ./scripts/start_nomad_full.sh     # Starts everything (recommended)
-#   ./scripts/start_isaac_ros_auto.sh # Isaac ROS only
+# Full setup guide: docs/ISAAC_ROS_NVBLOX_SETUP.md
 # ============================================================
 
 services:
-  # ============================================================
-  # Isaac ROS Container - Main Navigation Stack
-  # Container: nomad_isaac_ros
-  # 
-  # Contains:
-  # - ZED ROS2 wrapper (VIO at 30Hz)
-  # - Simple Video Bridge (openh264enc software encoding)
-  # - ROS-HTTP bridge (VIO pose -> Edge Core)
-  # ============================================================
   isaac-ros:
     build:
       context: .
       dockerfile: infra/docker/Dockerfile.isaac_ros_full
+      args:
+        BASE_IMAGE: isaac_ros_dev-aarch64
     image: nomad-isaac-ros:latest
     container_name: nomad_isaac_ros
     restart: unless-stopped
-    runtime: nvidia  # NVIDIA Container Runtime for GPU
+    runtime: nvidia
     network_mode: host
     privileged: true
-    ipc: host  # Shared memory for ROS2 DDS
+    ipc: host
     volumes:
+      # Isaac ROS workspace (source + build artifacts persist here)
+      - /home/mad/workspaces/isaac_ros-dev:/workspaces/isaac_ros-dev
       # Device access
       - /dev:/dev
-      # ZED SDK is installed INSIDE the container by start_isaac_ros_auto.sh
-      # to avoid CUDA version mismatch with host SDK.
-      # Do NOT mount /usr/local/zed from the host.
-      # NOMAD configs
+      # X11 display (for RViz if needed)
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      # Argus camera socket
+      - /tmp/argus_socket:/tmp/argus_socket
+      # Timezone
+      - /etc/localtime:/etc/localtime:ro
+      # NOMAD configs (nvblox_performance.yaml, etc.)
       - ./config:/workspaces/isaac_ros-dev/config:ro
-      # VIO bridge and ROS files
-      - ./edge_core/ros:/workspaces/isaac_ros-dev/nomad_ros:ro
-      # NVMe storage for recordings and data
-      - /mnt/nvme:/mnt/nvme
-      # ROS logs
-      - ~/.ros:/root/.ros
     environment:
-      # ROS2 settings
       - ROS_DOMAIN_ID=0
       - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-      - FASTRTPS_DEFAULT_PROFILES_FILE=/workspaces/isaac_ros-dev/config/fastdds.xml
-      # CUDA
       - CUDA_HOME=/usr/local/cuda
-      - LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/zed/lib:/opt/ros/humble/lib:/opt/ros/humble/install/lib:$LD_LIBRARY_PATH
-      # MAVROS FCU connection
-      - FCU_URL=/dev/ttyACM0:921600
-    devices:
-      - /dev/video0:/dev/video0  # ZED camera
-      - /dev/ttyACM0:/dev/ttyACM0  # Cube Orange
+      - LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/zed/lib
     command: >
       bash -c "
         source /opt/ros/humble/setup.bash 2>/dev/null;
-        source /opt/ros/humble/install/setup.bash &&
-        source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null || true &&
-        echo 'Isaac ROS container ready. Run your launch files.' &&
+        source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null || true;
+        echo 'Isaac ROS container ready.';
         tail -f /dev/null
       "
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'source /opt/ros/humble/setup.bash 2>/dev/null; source /opt/ros/humble/install/setup.bash 2>/dev/null; ros2 topic list > /dev/null 2>&1 || exit 1'"]
+      test: ["CMD-SHELL", "bash -c 'source /opt/ros/humble/setup.bash 2>/dev/null; ros2 topic list > /dev/null 2>&1 || exit 1'"]
       interval: 30s
       timeout: 10s
       retries: 3

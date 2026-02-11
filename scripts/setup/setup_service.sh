@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # NOMAD Edge Core Service Setup
-# Must be run with sudo: sudo bash scripts/setup_service.sh
+# Must be run with sudo: sudo bash scripts/setup/setup_service.sh
 # =============================================================================
 
 if [ "$EUID" -ne 0 ]; then

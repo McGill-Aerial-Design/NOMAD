@@ -202,7 +202,7 @@ ssh mad@100.85.121.98 "docker exec nomad_isaac_ros bash -c 'source /opt/ros/humb
 
 2. If no topics, restart Isaac ROS container:
 ```bash
-ssh mad@100.85.121.98 "cd ~/NOMAD && ./scripts/start_isaac_ros_auto.sh restart"
+ssh mad@100.85.121.98 "cd ~/NOMAD && ./scripts/run/start_isaac_ros_auto.sh restart"
 ```
 
 ### High latency or choppy video

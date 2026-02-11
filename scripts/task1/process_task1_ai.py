@@ -11,16 +11,16 @@ the Jetson via HTTP API. Supports both cloud (Gemini) and local (Ollama) AI.
 
 Usage:
     # Gemini (cloud)
-    python scripts/process_task1_ai.py --provider gemini --gemini-key YOUR_API_KEY
+    python scripts/task1/process_task1_ai.py --provider gemini --gemini-key YOUR_API_KEY
     
     # Ollama (local)
-    python scripts/process_task1_ai.py --provider ollama --ollama-model llava:13b
+    python scripts/task1/process_task1_ai.py --provider ollama --ollama-model llava:13b
     
     # Specific folder
-    python scripts/process_task1_ai.py --provider ollama --folder 20260202_120000
+    python scripts/task1/process_task1_ai.py --provider ollama --folder 20260202_120000
     
     # Upload descriptions back to Jetson
-    python scripts/process_task1_ai.py --provider gemini --gemini-key KEY --upload-to-jetson
+    python scripts/task1/process_task1_ai.py --provider gemini --gemini-key KEY --upload-to-jetson
 
 Requirements:
     pip install requests pillow
@@ -599,19 +599,19 @@ def main():
         epilog="""
 Examples:
   # Process with Gemini (cloud)
-  python scripts/process_task1_ai.py --provider gemini --gemini-key YOUR_API_KEY
+  python scripts/task1/process_task1_ai.py --provider gemini --gemini-key YOUR_API_KEY
 
   # Process with OpenRouter (cloud, free tier)
-  python scripts/process_task1_ai.py --provider openrouter --openrouter-key YOUR_API_KEY
+  python scripts/task1/process_task1_ai.py --provider openrouter --openrouter-key YOUR_API_KEY
 
   # Process with Ollama (local)
-  python scripts/process_task1_ai.py --provider ollama --ollama-model llava:13b
+  python scripts/task1/process_task1_ai.py --provider ollama --ollama-model llava:13b
 
   # Use .env file for API keys (recommended)
-  python scripts/process_task1_ai.py --provider openrouter
+  python scripts/task1/process_task1_ai.py --provider openrouter
 
   # Download from Jetson and upload results back
-  python scripts/process_task1_ai.py --provider gemini --gemini-key KEY --upload-to-jetson
+  python scripts/task1/process_task1_ai.py --provider gemini --gemini-key KEY --upload-to-jetson
         """
     )
     

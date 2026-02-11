@@ -60,6 +60,31 @@ NOMAD/
 |       |-- LinkHealthPanel.cs           # MAVLink dual-link
 |       |-- NOMADPlugin.cs               # Plugin entry point
 |
+|-- scripts/
+|   |-- build/              # Build scripts
+|   |   |-- build_plugin_windows.ps1     # C# plugin build
+|   |   |-- build_nvblox_msgs.sh         # nvblox message package build
+|   |   |-- install_vpi_container.sh     # VPI dependency install
+|   |-- run/                # Runtime/startup scripts
+|   |   |-- start_nomad_full.sh          # Full system startup (main entry point)
+|   |   |-- start_isaac_ros_auto.sh      # Isaac ROS container lifecycle
+|   |   |-- restart_nomad.sh             # Kill-all and restart
+|   |   |-- launch_nvblox_performance.sh # Performance-tuned nvblox launch
+|   |-- setup/              # One-time setup scripts
+|   |   |-- setup_jetson.sh              # Full Jetson initial setup
+|   |   |-- setup_service.sh             # systemd nomad.service install
+|   |   |-- setup_ssh_jetson.ps1         # SSH key setup (Windows)
+|   |   |-- setup_jetson_remote.py       # Remote Jetson setup via SSH
+|   |   |-- fix_power_mode_25w_v2.sh     # Jetson 25W power mode config
+|   |-- dev/                # Development tools
+|   |   |-- run_dev.ps1                  # Windows sim mode
+|   |   |-- run_dev.sh                   # Linux/macOS sim mode
+|   |-- task1/              # Task 1 AI processing
+|   |   |-- process_task1_ai.py          # Multi-provider AI image analysis
+|   |-- hardware/           # Hardware test utilities
+|       |-- servo_test.c                 # GPIO servo test (C)
+|       |-- sw_servo_test.py             # Servo sweep test (Python)
+|
 |-- tailscale/              # VPN configuration and managers
 |   |-- src/
 |       |-- tailscale_manager.py         # Tailscale monitoring
@@ -158,7 +183,7 @@ python3 -m edge_core.main --port 8000
 
 ```powershell
 cd NOMAD
-.\scripts\build_plugin_windows.ps1
+.\scripts\build\build_plugin_windows.ps1
 ```
 
 Output: `C:\Users\<user>\AppData\Local\Mission Planner\plugins\NOMADPlugin.dll`
@@ -262,7 +287,7 @@ The Jetson connects via Tailscale VPN for:
 | Tailscale Setup | `tailscale/SETUP.md` |
 | Video Streaming | `docs/VIDEO_STREAMING.md` |
 | Navigation Architecture | `docs/JETSON_NAV_ARCHITECTURE.md` |
-| Isaac ROS + ZED Setup | `docs/ISAAC_ROS_ZED_SETUP.md` |
+| Isaac ROS + nvblox Setup | `docs/ISAAC_ROS_NVBLOX_SETUP.md` |
 | Servo Control | `docs/SERVO_CONTROL.md` |
 | This Quick Reference | `AGENTS.md` |
 

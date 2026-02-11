@@ -164,12 +164,23 @@ class VideoStreamNode(Node):
     def image_callback(self, msg: Image):
         """Process incoming ROS2 images and push to GStreamer."""
         try:
+            import cv2
+            
             # Convert ROS image to OpenCV BGR format
-            cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            # Handle BGRA8 encoding from ZED cameras which can cause cv_bridge issues
+            encoding = msg.encoding.lower()
+            if encoding in ('bgra8', 'rgba8', '8uc4'):
+                # Manual conversion: avoid cv_bridge desired_encoding issues with alpha channels
+                cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+                if encoding == 'rgba8':
+                    cv_image = cv2.cvtColor(cv_image, cv2.COLOR_RGBA2BGR)
+                else:
+                    cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGRA2BGR)
+            else:
+                cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
             
             # Resize if needed
             if cv_image.shape[1] != self.width or cv_image.shape[0] != self.height:
-                import cv2
                 cv_image = cv2.resize(cv_image, (self.width, self.height))
             
             # Create GStreamer buffer and push to pipeline

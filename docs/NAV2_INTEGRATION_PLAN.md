@@ -675,7 +675,7 @@ def generate_launch_description():
 3. Install Isaac ROS (Docker)
    ```bash
    cd ~/workspaces/isaac_ros-dev
-   ./scripts/run_dev.sh
+   ./scripts/dev/run_dev.sh
    ```
 
 4. Install ZED ROS2 wrapper

@@ -1,76 +1,77 @@
 # Scripts
 
-Utility scripts for development and operations.
+Organized into subfolders by purpose.
 
-## Development Scripts
+## Folder Layout
 
-### `run_dev.ps1` (Windows)
-Run NOMAD Edge Core in simulation mode for local development without hardware.
-
-```powershell
-# Default - runs on port 8000
-.\scripts\run_dev.ps1
-
-# Custom port
-.\scripts\run_dev.ps1 -Port 8080
-
-# Disable vision for API-only testing
-.\scripts\run_dev.ps1 -NoVision
+```
+scripts/
+  build/        Build and compilation scripts
+  run/          Runtime and startup scripts
+  setup/        One-time setup and provisioning
+  dev/          Local development tools
+  task1/        Task 1 AI image processing
+  hardware/     Hardware test utilities
 ```
 
-### `run_dev.sh` (Linux/macOS)
-Same as above for Unix systems.
+## build/
+
+| Script | Description |
+|--------|-------------|
+| `build_plugin_windows.ps1` | Build the Mission Planner C# plugin on Windows |
+| `build_nvblox_msgs.sh` | Build nvblox_msgs package inside Isaac ROS container |
+| `install_vpi_container.sh` | Install VPI dev libraries inside Isaac ROS container |
+
+## run/
+
+| Script | Description |
+|--------|-------------|
+| `start_nomad_full.sh` | Full system startup (Edge Core, MAVLink, MediaMTX, Isaac ROS) |
+| `start_isaac_ros_auto.sh` | Isaac ROS container lifecycle (start/stop/restart/status/logs/shell) |
+| `restart_nomad.sh` | Kill all NOMAD processes and restart everything |
+| `launch_nvblox_performance.sh` | Launch nvblox with memory-optimized config for Orin Nano |
+
+## setup/
+
+| Script | Description |
+|--------|-------------|
+| `setup_jetson.sh` | Full Jetson initial setup (deps, Tailscale, venv, MAVLink, firewall) |
+| `setup_service.sh` | Install systemd `nomad.service` for Edge Core |
+| `setup_ssh_jetson.ps1` | Set up passwordless SSH from Windows to Jetson |
+| `setup_jetson_remote.py` | Remote Jetson setup via SSH (alternative to on-device setup) |
+| `fix_power_mode_25w_v2.sh` | Add 25W MAXN power mode to Jetson Orin Nano |
+
+## dev/
+
+| Script | Description |
+|--------|-------------|
+| `run_dev.ps1` | Run Edge Core in simulation mode on Windows |
+| `run_dev.sh` | Run Edge Core in simulation mode on Linux/macOS |
 
 ```bash
-./scripts/run_dev.sh
-./scripts/run_dev.sh --port 8080
-./scripts/run_dev.sh --no-vision
+# Windows
+.\scripts\dev\run_dev.ps1
+
+# Linux/macOS
+./scripts/dev/run_dev.sh
 ```
 
-## Environment
-- Sets `NOMAD_SIM_MODE=true` to enable mock hardware
-- API available at `http://localhost:8000`
-- API docs at `http://localhost:8000/docs`
+Sets `NOMAD_SIM_MODE=true` for mock hardware. API at `http://localhost:8000/docs`.
 
-## AI Processing Scripts
+## task1/
 
-### `process_task1_ai.py`
-Process Task 1 captured photos with AI to generate detailed scene descriptions. Supports both cloud (Gemini) and local (Ollama) AI providers. Runs on Windows ground station with automatic download from Jetson.
+| Script | Description |
+|--------|-------------|
+| `process_task1_ai.py` | Multi-provider AI image analysis (Gemini, Ollama, OpenRouter) |
+| `README_AI.md` | Full documentation for Task 1 AI processing |
 
-**Documentation**: See [README_AI.md](README_AI.md) for complete guide.
-
-**Quick Start with Gemini (Cloud)**:
 ```powershell
-python scripts\process_task1_ai.py --provider gemini --gemini-key YOUR_API_KEY
+python scripts\task1\process_task1_ai.py --provider gemini --gemini-key YOUR_KEY
 ```
 
-**Quick Start with Ollama (Local)**:
-```powershell
-ollama pull llava:13b
-python scripts\process_task1_ai.py --provider ollama --ollama-model llava:13b
-```
+## hardware/
 
-**Features**:
-- Dual AI provider support (Gemini cloud, Ollama local)
-- Automatic download from Jetson via HTTP API
-- Retry logic for network failures
-- Optional upload of descriptions back to Jetson
-- Batch processing with progress tracking
-- Saves descriptions to `C:\NOMAD\Task1\`
-
-**Requirements**:
-```powershell
-pip install requests pillow
-
-# For Gemini
-pip install google-generativeai
-
-# For Ollama
-# Install from https://ollama.ai
-ollama pull llava:13b
-```
-
-### `process_task1_with_gemini.py` (Legacy)
-Original Gemini-only script. Replaced by `process_task1_ai.py` with dual provider support. Kept for backward compatibility.
-
-**Documentation**: See [README_GEMINI.md](README_GEMINI.md)
+| Script | Description |
+|--------|-------------|
+| `servo_test.c` | Low-level GPIO servo test (C, uses gpiochip0) |
+| `sw_servo_test.py` | Servo sweep test wrapper (compiles and runs servo_test.c) |
