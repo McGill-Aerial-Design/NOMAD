@@ -15,12 +15,10 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import subprocess
 import threading
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("edge_core.health_monitor")
@@ -111,37 +109,28 @@ class JetsonHealthMonitor:
         "board": "/sys/devices/virtual/thermal/thermal_zone2/temp",
     }
     
-    # tegrastats output parsing
-    TEGRASTATS_PATTERN = re.compile(
-        r"RAM (\d+)/(\d+)MB.*"
-        r"CPU \[([^\]]+)\].*"
-        r"GR3D_FREQ (\d+)%.*"
-        r"VDD_CPU_GPU_CV (\d+)mW.*"
-        r"VDD_SOC (\d+)mW",
-        re.IGNORECASE
-    )
-    
     def __init__(
         self,
         poll_interval: float = 2.0,
-        enable_tegrastats: bool = True,
     ):
         self._poll_interval = poll_interval
-        self._enable_tegrastats = enable_tegrastats
         
         self._health = JetsonHealth()
         self._lock = threading.RLock()
+        self._state_manager = None  # Set via set_state_manager()
         
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
-        
-        self._tegrastats_process: Optional[subprocess.Popen] = None
         
     @property
     def health(self) -> JetsonHealth:
         """Get current health metrics."""
         with self._lock:
             return self._health
+    
+    def set_state_manager(self, state_manager) -> None:
+        """Set StateManager reference so health metrics are pushed to system state."""
+        self._state_manager = state_manager
     
     def start(self) -> None:
         """Start health monitoring."""
@@ -157,10 +146,6 @@ class JetsonHealthMonitor:
     def stop(self) -> None:
         """Stop health monitoring."""
         self._stop_event.set()
-        
-        if self._tegrastats_process:
-            self._tegrastats_process.terminate()
-            self._tegrastats_process = None
             
         if self._thread:
             self._thread.join(timeout=2.0)
@@ -227,6 +212,21 @@ class JetsonHealthMonitor:
         
         with self._lock:
             self._health = health
+        
+        # Push key metrics to StateManager so MAVLink health broadcast has data
+        if self._state_manager:
+            try:
+                self._state_manager.update_state(
+                    cpu_temp_c=health.cpu_temp_c,
+                    gpu_temp_c=health.gpu_temp_c,
+                    gpu_load_pct=health.gpu_load_pct,
+                    power_draw_w=health.power_draw_w,
+                    disk_free_gb=health.disk_free_gb,
+                    memory_used_pct=health.memory_used_pct,
+                    throttled=health.throttled,
+                )
+            except Exception as e:
+                logger.debug(f"Failed to push health to state manager: {e}")
     
     def _read_temperature(self, zone: str) -> float:
         """Read temperature from thermal zone."""
@@ -273,7 +273,7 @@ class JetsonHealthMonitor:
         except Exception:
             pass
         
-        # Try tegrastats parsing for Jetson
+        # Try sysfs for Jetson GPU info
         try:
             # Read from sysfs for Jetson
             load_path = "/sys/devices/gpu.0/load"

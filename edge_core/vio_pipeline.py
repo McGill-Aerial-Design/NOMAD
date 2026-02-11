@@ -580,7 +580,10 @@ class VIOPipeline:
         # Update state manager if available
         if self._state_manager:
             try:
-                self._state_manager.set_vio_failed(True, reason)
+                self._state_manager.force_state_update(
+                    connected=True,  # still connected, just VIO failed
+                )
+                logger.info(f"State manager updated: VIO failed ({reason})")
             except Exception as e:
                 logger.debug(f"Failed to update state manager: {e}")
     

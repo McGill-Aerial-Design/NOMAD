@@ -53,14 +53,6 @@ except ImportError:
     ISAAC_ROS_AVAILABLE = False
     IsaacROSBridge = None  # type: ignore
 
-# Conditional import for ROS mesh bridge (nvblox 3D visualization)
-try:
-    from .ros_mesh_bridge import MeshBridge, init_mesh_bridge, get_mesh_bridge
-    MESH_BRIDGE_AVAILABLE = True
-except ImportError:
-    MESH_BRIDGE_AVAILABLE = False
-    MeshBridge = None  # type: ignore
-
 # Conditional import for servo controller (PWM control)
 try:
     from .servo_controller import init_servo_controller, shutdown_servo_controller, get_servo_controller
@@ -92,8 +84,9 @@ nav_controller: NavController | None = None
 # Isaac ROS bridge (Task 2 only - requires ROS2 environment)
 isaac_bridge: "IsaacROSBridge | None" = None
 
-# ROS mesh bridge for nvblox 3D visualization
-mesh_bridge: "MeshBridge | None" = None
+# ROS mesh bridge for nvblox 3D visualization (not auto-started; mesh data
+# is received via ros_http_bridge endpoints in api.py)
+mesh_bridge = None
 
 # Servo controller for camera tilt and water shooter
 servo_controller_initialized: bool = False
@@ -112,13 +105,8 @@ app = get_app()
 
 def cleanup() -> None:
     """Cleanup on shutdown."""
-    global time_sync_service, isaac_bridge, health_monitor, nav_controller, mesh_bridge, servo_controller_initialized
+    global time_sync_service, isaac_bridge, health_monitor, nav_controller, servo_controller_initialized
     logger.info("Shutting down Edge Core...")
-
-    # Stop mesh bridge first (depends on ROS)
-    if mesh_bridge:
-        mesh_bridge.stop()
-        logger.info("Mesh bridge stopped")
 
     # Shutdown servo controller (safety - disable PWM outputs)
     if servo_controller_initialized and SERVO_AVAILABLE:
@@ -170,7 +158,7 @@ def run(
         port: Port number
         log_level: Logging level
     """
-    global time_sync_service, isaac_bridge, health_monitor, nav_controller, mesh_bridge
+    global time_sync_service, isaac_bridge, health_monitor, nav_controller
     global tailscale_manager, network_monitor
 
     logger.info("=" * 50)
@@ -189,6 +177,7 @@ def run(
 
     # Initialize Jetson health monitor
     health_monitor = JetsonHealthMonitor(poll_interval=2.0)
+    health_monitor.set_state_manager(state_manager)
     health_monitor.start()
     set_health_monitor(app, health_monitor)
     logger.info("Health monitor started")
@@ -229,31 +218,8 @@ def run(
     else:
         logger.info("Isaac ROS bridge disabled (set NOMAD_ENABLE_ISAAC_ROS=true to enable)")
 
-    # Initialize ROS mesh bridge for nvblox 3D visualization (Task 2)
-    # Enabled when Isaac ROS is enabled and mesh bridge is available
-    enable_mesh_bridge = os.environ.get("NOMAD_ENABLE_MESH_BRIDGE", "true").lower() == "true"
-    if enable_isaac and enable_mesh_bridge and MESH_BRIDGE_AVAILABLE:
-        try:
-            mesh_bridge = init_mesh_bridge(
-                mesh_topic="/nvblox_node/mesh",
-                enable_colors=True,
-                max_blocks=10000,
-            )
-            if mesh_bridge and mesh_bridge.is_available():
-                mesh_bridge.start()
-                logger.info("Mesh bridge started for nvblox 3D visualization")
-            else:
-                logger.warning("Mesh bridge initialized but not available (ROS2/nvblox_msgs missing)")
-        except Exception as e:
-            logger.error(f"Failed to start mesh bridge: {e}")
-            mesh_bridge = None
-    elif enable_mesh_bridge and not MESH_BRIDGE_AVAILABLE:
-        logger.warning("Mesh bridge enabled but ros_mesh_bridge not importable - skipping")
-    else:
-        if not enable_isaac:
-            logger.info("Mesh bridge disabled (requires NOMAD_ENABLE_ISAAC_ROS=true)")
-        else:
-            logger.info("Mesh bridge disabled (set NOMAD_ENABLE_MESH_BRIDGE=true to enable)")
+    # Mesh bridge is not auto-started; mesh data arrives via ros_http_bridge
+    # (POST /api/task/2/slam/mesh/update -> GET /api/task/2/slam/mesh)
 
     # Initialize video stream manager with auto-start
     # This runs in background and will auto-start the video relay when container is ready

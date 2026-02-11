@@ -20,7 +20,6 @@ namespace NOMAD.MissionPlanner
     public class JetsonHealthTab : UserControl
     {
         private readonly System.Threading.Timer _pollTimer;
-        private string _jetsonBaseUrl = "http://127.0.0.1:8000";
         private readonly int _pollIntervalMs;
         
         // UI Controls
@@ -51,15 +50,14 @@ namespace NOMAD.MissionPlanner
         }
         
         /// <summary>
-        /// Set the Jetson base URL (e.g., Tailscale IP).
+        /// Update the displayed URL to reflect the current JetsonApiService base URL.
+        /// Kept for backward compatibility with callers that used to set a custom URL.
         /// </summary>
         public void SetJetsonUrl(string url)
         {
-            if (!string.IsNullOrEmpty(url))
-            {
-                _jetsonBaseUrl = url.TrimEnd('/');
-                _txtUrl.Text = _jetsonBaseUrl;
-            }
+            // URL is now always derived from JetsonApiService.BaseUrl;
+            // refresh the display text box.
+            _txtUrl.Text = JetsonApiService.BaseUrl;
         }
         
         private void InitializeUI()
@@ -97,7 +95,7 @@ namespace NOMAD.MissionPlanner
             {
                 Location = new Point(15, yOffset),
                 Size = new Size(350, 25),
-                Text = _jetsonBaseUrl,
+                Text = JetsonApiService.BaseUrl,
                 BackColor = Color.FromArgb(30, 30, 30),
                 ForeColor = Color.White,
                 ReadOnly = true  // Auto-configured via settings
@@ -181,7 +179,7 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                var response = await JetsonApiService.ApiClient.GetAsync($"{_jetsonBaseUrl}/health");
+                var response = await JetsonApiService.ApiClient.GetAsync($"{JetsonApiService.BaseUrl}/health");
                 
                 if (response.IsSuccessStatusCode)
                 {

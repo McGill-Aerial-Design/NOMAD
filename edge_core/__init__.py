@@ -101,11 +101,15 @@ __all__ = [
     "NavHealth",
     "NavStatus",
     "VelocityCommand",
-    # Isaac ROS (optional)
-    "IsaacROSBridge",
-    "VIOState",
-    "DetectedTarget",
-    "ExclusionEntry",
-    "get_isaac_bridge",
-    "init_isaac_bridge",
 ]
+
+# Only export Isaac symbols when the import succeeded
+if _ISAAC_AVAILABLE:
+    __all__ += [
+        "IsaacROSBridge",
+        "VIOState",
+        "DetectedTarget",
+        "ExclusionEntry",
+        "get_isaac_bridge",
+        "init_isaac_bridge",
+    ]

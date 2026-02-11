@@ -34,8 +34,6 @@ from .state import StateManager
 
 if TYPE_CHECKING:
     from .health_monitor import JetsonHealthMonitor
-    from .zed_camera import ZEDCameraService
-    from .vio_pipeline import VIOPipeline
     from .isaac_ros_bridge import IsaacROSBridge
     from .nav_controller import NavController
 
@@ -225,16 +223,6 @@ def set_health_monitor(app: FastAPI, monitor: "JetsonHealthMonitor") -> None:
     app.state.health_monitor = monitor
 
 
-def set_camera_service(app: FastAPI, camera: "ZEDCameraService") -> None:
-    """Register camera service with API via app.state."""
-    app.state.camera_service = camera
-
-
-def set_vio_pipeline(app: FastAPI, pipeline: "VIOPipeline") -> None:
-    """Register VIO pipeline with API via app.state."""
-    app.state.vio_pipeline = pipeline
-
-
 def set_isaac_bridge(app: FastAPI, bridge: "IsaacROSBridge") -> None:
     """Register Isaac ROS bridge with API via app.state."""
     app.state.isaac_bridge = bridge
@@ -310,8 +298,6 @@ def create_app(state_manager: StateManager) -> FastAPI:
     # Initialize app.state with all service references (dependency injection)
     app.state.state_manager = state_manager
     app.state.health_monitor = None
-    app.state.camera_service = None
-    app.state.vio_pipeline = None
     app.state.isaac_bridge = None
     app.state.nav_controller = None
     app.state.tailscale_manager = None
@@ -388,14 +374,14 @@ def create_app(state_manager: StateManager) -> FastAPI:
             elif health.thermal_zone == "warning" or health.throttled:
                 response["status"] = "warning"
         
-        # Add VIO health if available
-        vio_pipeline = request.app.state.vio_pipeline
-        if vio_pipeline:
-            vio_status = vio_pipeline.status
+        # Add VIO health from external source (ros_http_bridge) if available
+        external_vio = request.app.state.external_vio_state
+        if external_vio:
+            confidence_0_1 = external_vio.get("confidence", 0)
             response["vio"] = {
-                "health": vio_status.health.value,
-                "tracking_confidence": vio_status.tracking_confidence / 100.0,  # Normalize 0-100 -> 0-1
-                "message_rate_hz": vio_status.message_rate_hz,
+                "health": "healthy" if confidence_0_1 > 0.5 else "degraded",
+                "tracking_confidence": confidence_0_1,
+                "message_rate_hz": 30.0,
             }
         
         return response
@@ -528,13 +514,11 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 
                 # Add additional real-time data
                 health_monitor = websocket.app.state.health_monitor
-                vio_pipeline = websocket.app.state.vio_pipeline
                 if health_monitor:
                     data["jetson_health"] = health_monitor.health.to_dict()
-                if vio_pipeline:
-                    vio_dict = vio_pipeline.status.to_dict()
-                    vio_dict["tracking_confidence"] = vio_dict["tracking_confidence"] / 100.0  # Normalize 0-100 -> 0-1
-                    data["vio_status"] = vio_dict
+                external_vio = websocket.app.state.external_vio_state
+                if external_vio:
+                    data["vio_status"] = external_vio
                 
                 await websocket.send_json(data)
                 await asyncio.sleep(0.1)  # 10Hz
@@ -865,7 +849,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
             )
         
         # Validate provider
-        allowed_providers = ['gemini', 'ollama']
+        allowed_providers = ['gemini', 'ollama', 'openrouter']
         if request.provider not in allowed_providers:
             raise HTTPException(
                 status_code=400,
@@ -1005,22 +989,14 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 "source": external_vio_state.get("source", "external"),
             }
         
-        vio_pipeline = request.app.state.vio_pipeline
-        if not vio_pipeline:
-            return {
-                "health": "unknown",
-                "tracking_confidence": 0,  # 0-1 scale
-                "position_valid": False,
-                "message_rate_hz": 0,
-                "reset_counter": 0,
-                "source": "none",
-            }
-        
-        # VIOPipeline uses 0-100 scale internally (ZED SDK native);
-        # normalize to 0-1 for API consumers
-        status_dict = vio_pipeline.status.to_dict()
-        status_dict["tracking_confidence"] = status_dict["tracking_confidence"] / 100.0
-        return status_dict
+        return {
+            "health": "unknown",
+            "tracking_confidence": 0,  # 0-1 scale
+            "position_valid": False,
+            "message_rate_hz": 0,
+            "reset_counter": 0,
+            "source": "none",
+        }
 
     @app.post("/api/vio/update", tags=["VIO"])
     async def vio_update(vio_request: VIOUpdateRequest, request: Request):
@@ -1116,31 +1092,22 @@ def create_app(state_manager: StateManager) -> FastAPI:
         # Clear trajectory on reset
         request.app.state.vio_trajectory = []
         
-        vio_pipeline = request.app.state.vio_pipeline
+        vio_pipeline = None  # Deprecated: VIO handled via ros_http_bridge
         if not vio_pipeline:
             # Just clear trajectory if no VIO pipeline
             return {
                 "success": True,
                 "reset_counter": 0,
-                "message": "Trajectory cleared (no VIO pipeline)",
+                "message": "Trajectory cleared (VIO managed by ros_http_bridge)",
             }
-        
-        success = vio_pipeline.reset_origin()
-        return {
-            "success": success,
-            "reset_counter": vio_pipeline.status.reset_counter,
-        }
 
     @app.get("/api/vio/calibration", tags=["VIO"])
     async def vio_calibration_status(request: Request):
-        """Get VIO calibration validation results."""
-        camera_service = request.app.state.camera_service
-        if not camera_service:
-            raise HTTPException(status_code=503, detail="Camera service not initialized")
-        
-        from .vio_pipeline import VIOCalibration
-        results = VIOCalibration.validate_tracking(camera_service, duration_s=3.0)
-        return results
+        """Get VIO calibration validation results (deprecated -- VIO via ros_http_bridge)."""
+        raise HTTPException(
+            status_code=503,
+            detail="VIO calibration not available: VIO is now handled by ros_http_bridge",
+        )
 
     # ==================== Navigation Endpoints ====================
     # Jetson-centric navigation: Isaac ROS nav2/nvblox -> Edge Core -> ArduPilot GUIDED
@@ -1470,7 +1437,6 @@ def create_app(state_manager: StateManager) -> FastAPI:
         # VIO status
         external_vio_state = request.app.state.external_vio_state
         vio_trajectory = request.app.state.vio_trajectory
-        vio_pipeline = request.app.state.vio_pipeline
         
         if external_vio_state:
             services["vio"] = {
@@ -1478,14 +1444,6 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 "running": True,
                 "source": external_vio_state.get("source", "external"),
                 "confidence": external_vio_state.get("confidence", 0),
-                "trajectory_points": len(vio_trajectory),
-            }
-        elif vio_pipeline:
-            vio_status = vio_pipeline.status
-            services["vio"] = {
-                "status": vio_status.health.value,
-                "running": vio_status.health.value != "failed",
-                "confidence": vio_status.tracking_confidence / 100.0,  # Normalize 0-100 -> 0-1
                 "trajectory_points": len(vio_trajectory),
             }
         else:

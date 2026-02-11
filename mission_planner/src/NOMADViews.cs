@@ -297,7 +297,74 @@ namespace NOMAD.MissionPlanner
                                 Directory.CreateDirectory(task1Dir);
                                 var localPath = Path.Combine(task1Dir, imageName);
                                 File.WriteAllBytes(localPath, imageBytes);
-                                
+
+                                // Save metadata JSON file
+                                var jsonPath = Path.ChangeExtension(localPath, ".json");
+                                var metadata = new SnapshotMetadata
+                                {
+                                    FileName = imageName,
+                                    CaptureTime = DateTime.TryParse(timestamp, out var captureTime) ? captureTime : DateTime.Now,
+                                    Position = new PositionData
+                                    {
+                                        Lat = double.TryParse(latStr, out var lat) ? lat : 0,
+                                        Lon = double.TryParse(lonStr, out var lon) ? lon : 0,
+                                        Alt = double.TryParse(altStr, out var alt) ? alt : 0
+                                    },
+                                    HeadingDeg = double.TryParse(headingDeg, out var heading) ? heading : (double?)null,
+                                    PitchDeg = double.TryParse(pitchDeg, out var pitch) ? pitch : (double?)null,
+                                    RollDeg = double.TryParse(rollDeg, out var roll) ? roll : (double?)null,
+                                    GimbalPitchDeg = double.TryParse(gimbalPitch, out var gPitch) ? gPitch : (double?)null,
+                                    GimbalYawDeg = double.TryParse(gimbalYaw, out var gYaw) ? gYaw : (double?)null,
+                                    BuildingLocation = buildingLocation
+                                };
+
+                                File.WriteAllText(jsonPath, Newtonsoft.Json.JsonConvert.SerializeObject(metadata, Newtonsoft.Json.Formatting.Indented));
+
+                                // Auto-generate AI description if enabled
+                                if (_config.AiAutoGenerate)
+                                {
+                                    _ = Task.Run(async () =>
+                                    {
+                                        try
+                                        {
+                                            var aiService = new AIDescriptionService(_config);
+                                            var aiResult = await aiService.GenerateDescriptionAsync(localPath, metadata);
+
+                                            if (aiResult.Success)
+                                            {
+                                                // Update metadata with AI description
+                                                metadata.AiDescription = aiResult.Description;
+                                                metadata.AiProvider = aiResult.Provider.ToString();
+                                                metadata.AiModel = aiResult.Model;
+                                                metadata.AiGeneratedAt = aiResult.GeneratedAt;
+
+                                                // Save updated metadata
+                                                File.WriteAllText(jsonPath, Newtonsoft.Json.JsonConvert.SerializeObject(metadata, Newtonsoft.Json.Formatting.Indented));
+
+                                                // Update UI on main thread
+                                                this.BeginInvoke(new Action(() =>
+                                                {
+                                                    _txtResult.Text += $"\n\n[AI] Description generated using {aiResult.Provider}:\n{aiResult.Description}";
+                                                }));
+                                            }
+                                            else
+                                            {
+                                                this.BeginInvoke(new Action(() =>
+                                                {
+                                                    _txtResult.Text += $"\n\n[AI] Failed: {aiResult.ErrorMessage}";
+                                                }));
+                                            }
+                                        }
+                                        catch (Exception aiEx)
+                                        {
+                                            this.BeginInvoke(new Action(() =>
+                                            {
+                                                _txtResult.Text += $"\n\n[AI] Error: {aiEx.Message}";
+                                            }));
+                                        }
+                                    });
+                                }
+
                                 // Add thumbnail to gallery with enhanced metadata tooltip
                                 using (var ms = new MemoryStream(imageBytes))
                                 {

@@ -152,6 +152,7 @@
     <Compile Include="ServiceControlPanel.cs" />
     <Compile Include="SLAM3DView.cs" />
     <Compile Include="SnapshotManager.cs" />
+    <Compile Include="AIDescriptionService.cs" />
     <Compile Include="TelemetryInjector.cs" />
   </ItemGroup>
 

@@ -47,7 +47,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import requests
+from dotenv import load_dotenv
 from PIL import Image
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Optional imports
 try:
@@ -200,6 +204,115 @@ class OllamaProvider(AIProvider):
         return result.get("response", "")
 
 
+class OpenRouterProvider(AIProvider):
+    """OpenRouter AI provider for cloud-based vision models."""
+
+    def __init__(self, api_key: str, model: str = "nvidia/nemotron-nano-12b-v2-vl:free"):
+        """
+        Initialize OpenRouter provider.
+
+        Args:
+            api_key: OpenRouter API key
+            model: Model name (default: nvidia/nemotron-nano-12b-v2-vl:free)
+        """
+        self.api_key = api_key
+        self.model = model
+        self.endpoint = "https://openrouter.ai/api/v1/chat/completions"
+
+        # Verify API key format
+        if not api_key or len(api_key) < 20:
+            raise ValueError("Invalid OpenRouter API key format. Get your key from https://openrouter.ai/keys")
+
+    def generate_description(self, image_path: Path, metadata: Dict) -> str:
+        """Generate description using OpenRouter API."""
+        prompt = self._build_prompt(metadata)
+
+        # Encode image as base64
+        with open(image_path, 'rb') as f:
+            image_data = base64.b64encode(f.read()).decode('utf-8')
+
+        # Build OpenAI-compatible request
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/McGill-Aerial-Design/NOMAD",  # Optional but recommended
+            "X-Title": "NOMAD Task 1 Image Analysis",  # Optional but recommended
+        }
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": prompt
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{image_data}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            "max_tokens": 1000,  # Adjust based on expected description length
+        }
+
+        # Call OpenRouter API with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    self.endpoint,
+                    headers=headers,
+                    json=payload,
+                    timeout=60,  # Vision models can be slow
+                )
+                response.raise_for_status()
+
+                result = response.json()
+
+                # Extract description from response
+                if "choices" in result and len(result["choices"]) > 0:
+                    content = result["choices"][0]["message"]["content"]
+                    return content
+                else:
+                    raise ValueError("Invalid response format from OpenRouter API")
+
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 401:
+                    raise ValueError("Invalid OpenRouter API key. Get your key from https://openrouter.ai/keys")
+                elif e.response.status_code == 429:
+                    # Rate limit - retry with exponential backoff
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** attempt
+                        print(f"  Rate limited, retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
+                    raise RuntimeError("Rate limit exceeded. Please try again later.")
+                elif e.response.status_code >= 500:
+                    # Server error - retry
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** attempt
+                        print(f"  Server error, retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
+                    raise RuntimeError(f"OpenRouter server error: {e.response.status_code}")
+                raise
+            except requests.exceptions.RequestException as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt
+                    print(f"  Network error, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                raise RuntimeError(f"Network error connecting to OpenRouter: {e}")
+
+        raise RuntimeError("Max retries exceeded for OpenRouter API")
+
+
 # ==================== Jetson Integration ====================
 
 def download_capture(
@@ -321,24 +434,28 @@ def upload_description(
     port: int,
     folder: str,
     description: str,
+    provider: str,
+    model: str,
     max_retries: int = 3,
 ) -> Tuple[bool, Optional[str]]:
     """
     Upload description back to Jetson.
-    
+
     Args:
         jetson_ip: Jetson IP address
         port: Jetson API port
         folder: Folder name
         description: Description text
+        provider: AI provider name (gemini/ollama/openrouter)
+        model: Model name used for generation
         max_retries: Maximum number of retry attempts
-        
+
     Returns:
         Tuple of (success, error_message)
     """
     base_url = f"http://{jetson_ip}:{port}"
     upload_url = f"{base_url}/api/task/1/upload_description"
-    
+
     for attempt in range(max_retries):
         try:
             response = requests.post(
@@ -346,6 +463,8 @@ def upload_description(
                 json={
                     "folder": folder,
                     "description": description,
+                    "provider": provider,
+                    "model": model,
                 },
                 timeout=10,
             )
@@ -381,6 +500,8 @@ def load_metadata(capture_folder: Path) -> Optional[Dict]:
 def process_capture(
     capture_folder: Path,
     ai_provider: AIProvider,
+    provider_name: str,
+    model_name: str,
     jetson_ip: Optional[str] = None,
     jetson_port: Optional[int] = None,
     upload_to_jetson: bool = False,
@@ -388,15 +509,17 @@ def process_capture(
 ) -> bool:
     """
     Process a single capture folder with AI provider.
-    
+
     Args:
         capture_folder: Path to capture folder
         ai_provider: AI provider instance
+        provider_name: AI provider name (gemini/ollama/openrouter)
+        model_name: Model name used for generation
         jetson_ip: Jetson IP for uploading (optional)
         jetson_port: Jetson port for uploading (optional)
         upload_to_jetson: Whether to upload description back to Jetson
         verbose: Print detailed output
-        
+
     Returns:
         True if successful, False otherwise
     """
@@ -442,6 +565,8 @@ def process_capture(
                 jetson_port,
                 capture_folder.name,
                 description,
+                provider_name,
+                model_name,
             )
             
             if success:
@@ -475,13 +600,16 @@ def main():
 Examples:
   # Process with Gemini (cloud)
   python scripts/process_task1_ai.py --provider gemini --gemini-key YOUR_API_KEY
-  
+
+  # Process with OpenRouter (cloud, free tier)
+  python scripts/process_task1_ai.py --provider openrouter --openrouter-key YOUR_API_KEY
+
   # Process with Ollama (local)
   python scripts/process_task1_ai.py --provider ollama --ollama-model llava:13b
-  
-  # Process specific folder
-  python scripts/process_task1_ai.py --provider ollama --folder 20260202_120000
-  
+
+  # Use .env file for API keys (recommended)
+  python scripts/process_task1_ai.py --provider openrouter
+
   # Download from Jetson and upload results back
   python scripts/process_task1_ai.py --provider gemini --gemini-key KEY --upload-to-jetson
         """
@@ -491,7 +619,7 @@ Examples:
     parser.add_argument(
         '--provider',
         required=True,
-        choices=['gemini', 'ollama'],
+        choices=['gemini', 'ollama', 'openrouter'],
         help='AI provider to use'
     )
     
@@ -538,6 +666,17 @@ Examples:
         default='http://localhost:11434',
         help='Ollama server URL (default: http://localhost:11434)'
     )
+
+    # OpenRouter options
+    parser.add_argument(
+        '--openrouter-key',
+        help='OpenRouter API key (required if provider=openrouter, or set OPENROUTER_API_KEY env var)'
+    )
+    parser.add_argument(
+        '--openrouter-model',
+        default='nvidia/nemotron-nano-12b-v2-vl:free',
+        help='OpenRouter model (default: nvidia/nemotron-nano-12b-v2-vl:free)'
+    )
     
     # Processing options
     parser.add_argument(
@@ -570,23 +709,40 @@ Examples:
     args = parser.parse_args()
     
     # Validate provider-specific arguments
-    if args.provider == 'gemini' and not args.gemini_key:
-        parser.error("--gemini-key is required when provider=gemini")
-    
+    if args.provider == 'gemini':
+        if not args.gemini_key and not os.getenv('GEMINI_API_KEY'):
+            parser.error("--gemini-key is required when provider=gemini (or set GEMINI_API_KEY env var)")
+    elif args.provider == 'openrouter':
+        if not args.openrouter_key and not os.getenv('OPENROUTER_API_KEY'):
+            parser.error("--openrouter-key is required when provider=openrouter (or set OPENROUTER_API_KEY env var)")
+
     # Initialize AI provider
     if not args.download_only:
         try:
             if args.provider == 'gemini':
+                api_key = args.gemini_key or os.getenv('GEMINI_API_KEY')
                 print(f"Initializing Gemini provider with model: {args.gemini_model}")
-                ai_provider = GeminiProvider(args.gemini_key, args.gemini_model)
+                ai_provider = GeminiProvider(api_key, args.gemini_model)
+                provider_name = 'gemini'
+                model_name = args.gemini_model
+            elif args.provider == 'openrouter':
+                api_key = args.openrouter_key or os.getenv('OPENROUTER_API_KEY')
+                print(f"Initializing OpenRouter provider with model: {args.openrouter_model}")
+                ai_provider = OpenRouterProvider(api_key, args.openrouter_model)
+                provider_name = 'openrouter'
+                model_name = args.openrouter_model
             else:  # ollama
                 print(f"Initializing Ollama provider with model: {args.ollama_model}")
                 ai_provider = OllamaProvider(args.ollama_model, args.ollama_host)
+                provider_name = 'ollama'
+                model_name = args.ollama_model
         except Exception as e:
             print(f"ERROR: Failed to initialize AI provider: {e}")
             sys.exit(1)
     else:
         ai_provider = None
+        provider_name = None
+        model_name = None
     
     # Create local directory
     local_dir = Path(args.local_dir)
@@ -687,6 +843,8 @@ Examples:
         if process_capture(
             folder,
             ai_provider,
+            provider_name,
+            model_name,
             args.jetson_ip,
             args.jetson_port,
             args.upload_to_jetson,

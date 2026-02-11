@@ -21,7 +21,8 @@ IMAGE_NAME="dustynv/ros:humble-ros-base-l4t-r36.2.0"
 EDGE_CORE_HOST="172.17.0.1"  # Docker host from inside container
 EDGE_CORE_PORT="8000"
 
-# ZED ROS2 wrapper branch matching ZED SDK 4.x
+# ZED ROS2 wrapper branch matching ZED SDK 4.1
+# NOTE: Keep aligned with ZED SDK version in infra/docker/Dockerfile.isaac_ros_full
 ZED_WRAPPER_BRANCH="humble-v4.1.4"
 
 # ROS2 setup command for dustynv containers.

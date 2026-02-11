@@ -30,24 +30,17 @@ else
     echo "TAILSCALE_IP=$CURRENT_IP" >> "$ENV_FILE"
 fi
 
-# Create systemd service
-tee /etc/systemd/system/nomad.service > /dev/null << 'EOF'
-[Unit]
-Description=NOMAD Edge Core
-After=network-online.target
+# Install canonical systemd service from infra/nomad.service
+NOMAD_DIR="/home/mad/NOMAD"
+SERVICE_SRC="${NOMAD_DIR}/infra/nomad.service"
 
-[Service]
-Type=simple
-User=mad
-WorkingDirectory=/home/mad/NOMAD
-Environment="PYTHONUNBUFFERED=1"
-ExecStart=/home/mad/NOMAD/venv/bin/python -m uvicorn edge_core.main:app --host 0.0.0.0 --port 8000
-Restart=always
-RestartSec=5
+if [ ! -f "$SERVICE_SRC" ]; then
+    echo "Error: Service unit file not found at $SERVICE_SRC"
+    exit 1
+fi
 
-[Install]
-WantedBy=multi-user.target
-EOF
+echo "Installing systemd unit from $SERVICE_SRC ..."
+sudo cp "$SERVICE_SRC" /etc/systemd/system/nomad.service
 
 # Enable and start
 systemctl daemon-reload

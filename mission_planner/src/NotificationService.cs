@@ -9,6 +9,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Timers;
 using MissionPlanner;
 
@@ -110,6 +111,7 @@ namespace NOMAD.MissionPlanner
         private readonly Dictionary<string, DateTime> _lastNotificationTime = new Dictionary<string, DateTime>();
         private Timer _monitorTimer;
         private bool _disposed;
+        private int _pollGuard;
 
         // Reference to boundary monitor for events
         private BoundaryMonitor _boundaryMonitor;
@@ -319,19 +321,27 @@ namespace NOMAD.MissionPlanner
         // Monitoring Logic
         // ============================================================
 
-        private void MonitorTimer_Elapsed(object sender, ElapsedEventArgs e)
+        private async void MonitorTimer_Elapsed(object sender, ElapsedEventArgs e)
         {
+            // Guard against reentrant execution if a previous poll is still running
+            if (System.Threading.Interlocked.CompareExchange(ref _pollGuard, 1, 0) != 0)
+                return;
+            
             try
             {
                 CheckGPSHealth();
                 CheckBatteryHealth();
                 CheckEKFSource();
-                CheckVIOHealth();
+                await CheckVIOHealthAsync().ConfigureAwait(false);
                 CheckOpticalFlowHealth();
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"NotificationService error: {ex.Message}");
+            }
+            finally
+            {
+                System.Threading.Interlocked.Exchange(ref _pollGuard, 0);
             }
         }
 
@@ -468,7 +478,7 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private void CheckVIOHealth()
+        private async Task CheckVIOHealthAsync()
         {
             if (_sender == null) return;
 
@@ -479,7 +489,7 @@ namespace NOMAD.MissionPlanner
             bool vioActive = false;
             try
             {
-                var vioResult = _sender.GetVioStatusAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+                var vioResult = await _sender.GetVioStatusAsync().ConfigureAwait(false);
                 if (vioResult.Success && !string.IsNullOrEmpty(vioResult.Data))
                 {
                     var vioData = Newtonsoft.Json.Linq.JObject.Parse(vioResult.Data);
@@ -518,6 +528,14 @@ namespace NOMAD.MissionPlanner
                         "Jetson Overheating", $"Temperature: {Math.Max(health.GpuTemp, health.CpuTemp):F0}C - VIO may throttle");
                 }
             }
+        }
+        
+        /// <summary>
+        /// Synchronous wrapper kept for callers outside the async timer path.
+        /// </summary>
+        private void CheckVIOHealth()
+        {
+            CheckVIOHealthAsync().GetAwaiter().GetResult();
         }
 
         private void CheckOpticalFlowHealth()

@@ -872,5 +872,40 @@ namespace NOMAD.MissionPlanner
                 // Ignore link status errors
             }
         }
+        
+        // ============================================================
+        // Dispose
+        // ============================================================
+        
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                // Stop and dispose the health polling timer
+                if (_healthPollTimer != null)
+                {
+                    _healthPollTimer.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+                    _healthPollTimer.Dispose();
+                    _healthPollTimer = null;
+                }
+                
+                // Stop notification monitoring and dispose the service
+                if (_notificationService != null)
+                {
+                    _notificationService.StopMonitoring();
+                    _notificationService.Dispose();
+                    _notificationService = null;
+                }
+                
+                // Dispose the embedded video player
+                if (_videoPlayer != null)
+                {
+                    _videoPlayer.Dispose();
+                    _videoPlayer = null;
+                }
+            }
+            
+            base.Dispose(disposing);
+        }
     }
 }

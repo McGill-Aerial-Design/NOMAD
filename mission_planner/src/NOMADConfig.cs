@@ -200,6 +200,45 @@ namespace NOMAD.MissionPlanner
         public bool Task1AutoCapture { get; set; } = false;
 
         // ============================================================
+        // AI Description Configuration (Task 1)
+        // ============================================================
+
+        /// <summary>
+        /// Enable automatic AI description generation after image capture.
+        /// </summary>
+        public bool AiAutoGenerate { get; set; } = true;
+
+        /// <summary>
+        /// AI provider to use for image descriptions.
+        /// </summary>
+        public AIProvider AiProvider { get; set; } = AIProvider.OpenRouter;
+
+        /// <summary>
+        /// OpenRouter API key.
+        /// Get from: https://openrouter.ai/keys
+        /// </summary>
+        public string OpenRouterApiKey { get; set; } = "";
+
+        /// <summary>
+        /// Google Gemini API key.
+        /// Get from: https://ai.google.dev/
+        /// </summary>
+        public string GeminiApiKey { get; set; } = "";
+
+        /// <summary>
+        /// Ollama server URL for local inference.
+        /// </summary>
+        public string OllamaHost { get; set; } = "http://localhost:11434";
+
+        /// <summary>
+        /// AI model name.
+        /// - OpenRouter: nvidia/nemotron-nano-12b-v2-vl:free (default)
+        /// - Gemini: gemini-1.5-flash or gemini-1.5-pro
+        /// - Ollama: llava:13b or llava:7b
+        /// </summary>
+        public string AiModel { get; set; } = "nvidia/nemotron-nano-12b-v2-vl:free";
+
+        // ============================================================
         // Task 2 Configuration (Indoor Extinguish)
         // ============================================================
 
