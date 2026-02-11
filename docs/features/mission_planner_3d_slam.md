@@ -12,7 +12,6 @@
 **Current Setup**:
 - nvblox 3D mapping runs on Jetson in ROS2
 - Visualization via RViz on Jetson X11 display (not accessible from Windows)
-- Alternative: Foxglove web interface has high latency and low framerate (~5Hz)
 - Not integrated with Mission Planner operator interface
 
 **Requirements**:
@@ -429,7 +428,7 @@ msgpack>=1.0.0            # Binary serialization (optional)
 3. ✓ FPV and TPV camera modes working
 4. ✓ Latency <500ms from ROS2 publish to display
 5. ✓ Stable operation for >30 minutes
-6. ✓ Operator prefers to Foxglove interface
+6. ✓ Operator prefers Mission Planner over external tools
 
 ---
 
