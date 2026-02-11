@@ -331,18 +331,32 @@ namespace NOMAD.MissionPlanner
                 var healthResult = await _sender.GetHealthAsync();
                 UpdateStatusLabel(_lblEdgeCoreStatus, healthResult.Success);
                 
-                if (healthResult.Success)
+                // Check MAVLink Router service status (is the service running?)
+                var mavlinkServiceResult = await _sender.GetServiceStatusAsync("mavlink-router");
+                bool mavlinkServiceActive = mavlinkServiceResult.Success &&
+                    mavlinkServiceResult.Data?.Trim().Equals("active", StringComparison.OrdinalIgnoreCase) == true;
+                
+                if (healthResult.Success && mavlinkServiceActive)
                 {
                     try
                     {
                         var healthData = JObject.Parse(healthResult.Data);
-                        var connected = healthData["connected"]?.Value<bool>() ?? false;
-                        UpdateStatusLabel(_lblMavlinkStatus, connected, connected ? "Connected" : "Disconnected");
+                        var fcConnected = healthData["connected"]?.Value<bool>() ?? false;
+                        string mavStatus = fcConnected ? "Running (FC linked)" : "Running (no FC)";
+                        UpdateStatusLabel(_lblMavlinkStatus, true, mavStatus);
                     }
                     catch
                     {
-                        UpdateStatusLabel(_lblMavlinkStatus, false, "Parse Error");
+                        UpdateStatusLabel(_lblMavlinkStatus, true, "Running");
                     }
+                }
+                else if (mavlinkServiceActive)
+                {
+                    UpdateStatusLabel(_lblMavlinkStatus, true, "Running (no FC)");
+                }
+                else if (healthResult.Success)
+                {
+                    UpdateStatusLabel(_lblMavlinkStatus, false, "Service Stopped");
                 }
                 else
                 {
@@ -352,7 +366,7 @@ namespace NOMAD.MissionPlanner
                 // Check MediaMTX
                 var mediamtxResult = await _sender.GetServiceStatusAsync("mediamtx");
                 bool mediamtxActive = mediamtxResult.Success && 
-                    mediamtxResult.Data?.Trim().Contains("active") == true;
+                    mediamtxResult.Data?.Trim().Equals("active", StringComparison.OrdinalIgnoreCase) == true;
                 UpdateStatusLabel(_lblMediamtxStatus, mediamtxActive);
                 
                 // Check Isaac ROS status (check container_running instead of available)
@@ -444,8 +458,22 @@ namespace NOMAD.MissionPlanner
                     try
                     {
                         var data = JObject.Parse(slamResult.Data);
-                        var enabled = data["enabled"]?.Value<bool>() ?? false;
-                        UpdateStatusLabel(_lblSlamStatus, enabled, enabled ? "Active" : "Inactive");
+                        var available = data["available"]?.Value<bool>() ?? false;
+                        var running = data["running"]?.Value<bool>() ?? false;
+                        if (running)
+                        {
+                            var blocks = data["block_count"]?.Value<int>() ?? 0;
+                            UpdateStatusLabel(_lblSlamStatus, true, $"Active ({blocks} blocks)");
+                        }
+                        else if (available)
+                        {
+                            UpdateStatusLabel(_lblSlamStatus, false, "Available (no data)");
+                        }
+                        else
+                        {
+                            var error = (string)data["error"];
+                            UpdateStatusLabel(_lblSlamStatus, false, error ?? "Inactive");
+                        }
                     }
                     catch { UpdateStatusLabel(_lblSlamStatus, false, "Error"); }
                 }

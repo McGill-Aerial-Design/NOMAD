@@ -88,6 +88,14 @@ namespace NOMAD.MissionPlanner
         private NumericUpDown _numGpioPayload1;
         private NumericUpDown _numGpioPayload2;
         
+        // AI Tab
+        private CheckBox _chkAiAutoGenerate;
+        private ComboBox _cmbAiProvider;
+        private TextBox _txtOpenRouterApiKey;
+        private TextBox _txtGeminiApiKey;
+        private TextBox _txtOllamaHost;
+        private TextBox _txtAiModel;
+        
         // Buttons
         private Button _btnOK;
         private Button _btnCancel;
@@ -142,6 +150,7 @@ namespace NOMAD.MissionPlanner
             _tabControl.TabPages.Add(CreateVioTab());
             _tabControl.TabPages.Add(CreateUiTab());
             _tabControl.TabPages.Add(CreateAlertsTab());
+            _tabControl.TabPages.Add(CreateAiTab());
             _tabControl.TabPages.Add(CreateGpioTab());
 
             // Buttons at bottom
@@ -474,6 +483,54 @@ namespace NOMAD.MissionPlanner
         }
 
         // ============================================================
+        // Tab: AI
+        // ============================================================
+        
+        private TabPage CreateAiTab()
+        {
+            var tab = CreateTabPage("AI");
+            int y = 15;
+
+            AddSectionLabel(tab, "AI Image Description (Task 1)", ref y);
+
+            _chkAiAutoGenerate = AddCheckBox(tab, "Auto-generate AI description after capture", 20, y);
+            y += 35;
+
+            AddLabel(tab, "AI Provider:", 20, y);
+            _cmbAiProvider = AddComboBox(tab, 130, y, 150, new[] { "OpenRouter", "Gemini", "Ollama" });
+            y += 35;
+
+            AddSectionLabel(tab, "API Keys", ref y);
+
+            AddLabel(tab, "OpenRouter Key:", 20, y);
+            _txtOpenRouterApiKey = AddTextBox(tab, 130, y, 200);
+            _txtOpenRouterApiKey.UseSystemPasswordChar = true;
+            y += 30;
+
+            AddLabel(tab, "Gemini Key:", 20, y);
+            _txtGeminiApiKey = AddTextBox(tab, 130, y, 200);
+            _txtGeminiApiKey.UseSystemPasswordChar = true;
+            y += 30;
+
+            AddLabel(tab, "Ollama Host:", 20, y);
+            _txtOllamaHost = AddTextBox(tab, 130, y, 200);
+            y += 35;
+
+            AddSectionLabel(tab, "Model", ref y);
+
+            AddLabel(tab, "Model Name:", 20, y);
+            _txtAiModel = AddTextBox(tab, 130, y, 200);
+            y += 25;
+            AddLabel(tab, "OpenRouter: nvidia/nemotron-nano-12b-v2-vl:free", 30, y, Color.Gray);
+            y += 18;
+            AddLabel(tab, "Gemini: gemini-1.5-flash or gemini-1.5-pro", 30, y, Color.Gray);
+            y += 18;
+            AddLabel(tab, "Ollama: llava:13b or llava:7b", 30, y, Color.Gray);
+
+            return tab;
+        }
+
+        // ============================================================
         // Tab: GPIO
         // ============================================================
         
@@ -680,6 +737,14 @@ namespace NOMAD.MissionPlanner
             _numTempCritical.Value = (decimal)Config.TempCriticalC;
             _chkAudioAlerts.Checked = Config.AudioAlerts;
             
+            // AI
+            _chkAiAutoGenerate.Checked = Config.AiAutoGenerate;
+            SetComboBoxValue(_cmbAiProvider, Config.AiProvider.ToString());
+            _txtOpenRouterApiKey.Text = Config.OpenRouterApiKey;
+            _txtGeminiApiKey.Text = Config.GeminiApiKey;
+            _txtOllamaHost.Text = Config.OllamaHost;
+            _txtAiModel.Text = Config.AiModel;
+            
             // GPIO
             _numGpioPayload1.Value = Config.GpioPayload1Pin;
             _numGpioPayload2.Value = Config.GpioPayload2Pin;
@@ -752,6 +817,19 @@ namespace NOMAD.MissionPlanner
             Config.TempWarningC = (float)_numTempWarning.Value;
             Config.TempCriticalC = (float)_numTempCritical.Value;
             Config.AudioAlerts = _chkAudioAlerts.Checked;
+            
+            // AI
+            Config.AiAutoGenerate = _chkAiAutoGenerate.Checked;
+            Config.AiProvider = _cmbAiProvider.SelectedItem?.ToString() switch
+            {
+                "Gemini" => AIProvider.Gemini,
+                "Ollama" => AIProvider.Ollama,
+                _ => AIProvider.OpenRouter
+            };
+            Config.OpenRouterApiKey = _txtOpenRouterApiKey.Text.Trim();
+            Config.GeminiApiKey = _txtGeminiApiKey.Text.Trim();
+            Config.OllamaHost = _txtOllamaHost.Text.Trim();
+            Config.AiModel = _txtAiModel.Text.Trim();
             
             // GPIO
             Config.GpioPayload1Pin = (int)_numGpioPayload1.Value;

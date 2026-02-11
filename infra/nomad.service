@@ -15,9 +15,8 @@
 [Unit]
 Description=NOMAD Edge Core Orchestrator
 Documentation=https://github.com/NOMAD/edge_core
-After=network-online.target tailscaled.service mavlink-router.service
+After=network-online.target tailscaled.service
 Wants=network-online.target
-Requires=mavlink-router.service
 
 [Service]
 Type=simple

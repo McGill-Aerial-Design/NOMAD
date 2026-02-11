@@ -188,7 +188,7 @@ namespace NOMAD.MissionPlanner
                             ErrorMessage = "Invalid OpenRouter API key"
                         };
                     }
-                    else if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                    else if (response.StatusCode == (System.Net.HttpStatusCode)429)
                     {
                         // Rate limited - retry with backoff
                         if (attempt < 2)

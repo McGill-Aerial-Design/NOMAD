@@ -94,15 +94,27 @@ class Task1UploadDescriptionResponse(BaseModel):
 
 
 # Whitelist of allowed terminal commands for safety
+# NOTE: mediamtx and mavlink-routerd run as bare processes (started by
+# scripts/start_nomad_full.sh), NOT as systemd services.  Only nomad
+# (edge_core) has a real systemd unit.  Status checks therefore use
+# pgrep and restarts use pkill + nohup.
 COMMAND_WHITELIST: dict[str, str] = {
-    # Service control
-    "restart_video": "sudo systemctl restart mediamtx",
-    "restart_edge_core": "sudo systemctl restart nomad",
-    "restart_mavlink": "sudo systemctl restart mavlink-router",
-    "status_mediamtx": "systemctl is-active mediamtx",
-    "status_mavlink": "systemctl is-active mavlink-router",
+    # --- Service status (pgrep for bare processes, systemctl for systemd) ---
+    "status_mediamtx": "pgrep -x mediamtx > /dev/null && echo active || echo inactive",
+    "status_mavlink": "pgrep -f mavlink-routerd > /dev/null && echo active || echo inactive",
     "status_nomad": "systemctl is-active nomad",
-    # System commands
+    # --- Service restart ---
+    "restart_video": "pkill -x mediamtx 2>/dev/null; sleep 1; nohup mediamtx ~/NOMAD/infra/mediamtx.yml > ~/nomad_logs/mediamtx.log 2>&1 & sleep 1; pgrep -x mediamtx > /dev/null && echo restarted || echo failed",
+    "restart_mavlink": "bash ~/NOMAD/scripts/restart_mavlink.sh 2>&1",
+    "restart_edge_core": "sudo systemctl restart nomad",
+    # --- Service start / stop ---
+    "start_mediamtx": "pgrep -x mediamtx > /dev/null && echo 'already running' || (nohup mediamtx ~/NOMAD/infra/mediamtx.yml > ~/nomad_logs/mediamtx.log 2>&1 & sleep 1; echo started)",
+    "stop_mediamtx": "pkill -x mediamtx 2>&1 && echo stopped || echo 'not running'",
+    "start_mavlink": "bash ~/NOMAD/scripts/restart_mavlink.sh 2>&1",
+    "stop_mavlink": "pkill -f mavlink-routerd 2>&1 && echo stopped || echo 'not running'",
+    "start_nomad": "sudo systemctl start nomad 2>&1 && echo started || echo failed",
+    "stop_nomad": "sudo systemctl stop nomad 2>&1 && echo stopped || echo failed",
+    # --- System commands ---
     "reboot_jetson": "sudo reboot",
     "shutdown_jetson": "sudo shutdown -h now",
     "check_disk": "df -h",

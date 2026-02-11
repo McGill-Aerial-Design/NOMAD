@@ -482,7 +482,7 @@ namespace NOMAD.MissionPlanner
                 snapshot.AiModel = data?.ai_model;
                 if (data?.ai_generated_at != null)
                 {
-                    snapshot.AiGeneratedAt = DateTime.TryParse(data.ai_generated_at.ToString(), out var aiDate) ? aiDate : (DateTime?)null;
+                    snapshot.AiGeneratedAt = DateTime.TryParse(data.ai_generated_at.ToString(), out DateTime aiDate) ? aiDate : (DateTime?)null;
                 }
             }
             catch (Exception ex)

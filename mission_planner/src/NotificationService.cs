@@ -493,7 +493,7 @@ namespace NOMAD.MissionPlanner
                 if (vioResult.Success && !string.IsNullOrEmpty(vioResult.Data))
                 {
                     var vioData = Newtonsoft.Json.Linq.JObject.Parse(vioResult.Data);
-                    var vioHealth = vioData["health"]?.Value<string>() ?? "unknown";
+                    var vioHealth = (string)vioData["health"] ?? "unknown";
                     vioActive = vioHealth == "healthy";
                 }
             }

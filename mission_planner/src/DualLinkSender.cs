@@ -522,7 +522,17 @@ namespace NOMAD.MissionPlanner
         {
             if (!ALLOWED_SERVICES.Contains(serviceName))
                 return new CommandResult { Success = false, Message = $"Service '{serviceName}' not in whitelist" };
-            return await ExecuteTerminalCommandAsync($"sudo systemctl start {serviceName}", 15);
+
+            // Map service names to whitelisted command names
+            string commandName = serviceName switch
+            {
+                "mediamtx" => "start_mediamtx",
+                "mavlink-router" => "start_mavlink",
+                "nomad" or "edge_core" => "start_nomad",
+                _ => $"start_{serviceName}"
+            };
+
+            return await ExecuteTerminalCommandAsync(commandName, 15);
         }
 
         /// <summary>
@@ -532,7 +542,17 @@ namespace NOMAD.MissionPlanner
         {
             if (!ALLOWED_SERVICES.Contains(serviceName))
                 return new CommandResult { Success = false, Message = $"Service '{serviceName}' not in whitelist" };
-            return await ExecuteTerminalCommandAsync($"sudo systemctl stop {serviceName}", 15);
+
+            // Map service names to whitelisted command names
+            string commandName = serviceName switch
+            {
+                "mediamtx" => "stop_mediamtx",
+                "mavlink-router" => "stop_mavlink",
+                "nomad" or "edge_core" => "stop_nomad",
+                _ => $"stop_{serviceName}"
+            };
+
+            return await ExecuteTerminalCommandAsync(commandName, 15);
         }
 
         /// <summary>

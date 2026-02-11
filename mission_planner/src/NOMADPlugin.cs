@@ -370,14 +370,42 @@ namespace NOMAD.MissionPlanner
             // Feed MAVLink heartbeats to connection manager for link monitoring
             if (_connectionManager != null && MainV2.comPort?.BaseStream?.IsOpen == true)
             {
-                // Determine which link this heartbeat came from based on connection
-                // By convention: if using Tailscale IP endpoint, it's LTE; otherwise RadioMaster
+                // Determine which link this heartbeat came from.
+                // BaseStream.ToString() returns the class name (e.g. "UdpSerial"),
+                // NOT the remote IP, so we cannot match on TailscaleIP there.
+                // Instead use index-based classification (convention: 0 = LTE,
+                // 1 = RadioMaster) or fall back to stream-type heuristics.
                 try
                 {
-                    var endpoint = MainV2.comPort.BaseStream.ToString();
-                    var linkType = endpoint?.Contains(_config.TailscaleIP) == true 
-                        ? LinkType.LTE 
-                        : LinkType.RadioMaster;
+                    var linkType = LinkType.RadioMaster; // safe default
+
+                    if (MainV2.Comports?.Count > 1)
+                    {
+                        // Multi-link: index 0 = LTE (Tailscale), index 1+ = RadioMaster
+                        int idx = MainV2.Comports.IndexOf(MainV2.comPort);
+                        if (idx >= 0)
+                        {
+                            linkType = idx == 0 ? LinkType.LTE : LinkType.RadioMaster;
+                        }
+                        else
+                        {
+                            // comPort not in Comports list -- fall back to stream type
+                            var st = MainV2.comPort.BaseStream?.GetType().Name ?? "";
+                            if (st.IndexOf("Udp", StringComparison.OrdinalIgnoreCase) >= 0)
+                                linkType = LinkType.LTE;
+                        }
+                    }
+                    else
+                    {
+                        // Single connection: UDP = LTE (Tailscale tunnel),
+                        // serial/COM = RadioMaster
+                        var streamType = MainV2.comPort.BaseStream?.GetType().Name ?? "";
+                        if (streamType.IndexOf("Udp", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            linkType = LinkType.LTE;
+                        }
+                    }
+
                     _connectionManager.ProcessHeartbeat(linkType);
                 }
                 catch { /* ignore monitoring errors */ }
