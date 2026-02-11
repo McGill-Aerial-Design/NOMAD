@@ -16,7 +16,6 @@ from typing import NamedTuple
 
 # WGS84 Earth constants
 EARTH_RADIUS_M = 6371000.0  # Mean Earth radius in meters
-EARTH_RADIUS_EQUATORIAL_M = 6378137.0  # WGS84 semi-major axis
 
 
 class GPSCoordinate(NamedTuple):

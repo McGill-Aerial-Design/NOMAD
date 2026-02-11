@@ -39,9 +39,6 @@ logger = logging.getLogger(__name__)
 # GPIO pin for water shooter
 WATER_SHOOTER_GPIO_PIN = 18  # Physical pin 18 on 40-pin header
 
-# Servo configuration
-SERVO_FREQ_HZ = 50  # Standard servo frequency
-
 
 class ServoFunction(Enum):
     """Servo functions in the system."""

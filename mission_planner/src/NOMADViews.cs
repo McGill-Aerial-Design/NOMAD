@@ -1,8 +1,8 @@
 // ============================================================
-// NOMAD Sidebar View Stubs - Placeholder Implementations
+// NOMAD Sidebar Views
 // ============================================================
-// These are the individual view implementations for each sidebar section.
-// Each view can be expanded with full functionality as needed.
+// Individual view implementations for each sidebar section:
+// Dashboard, Task 1, Task 2, Boundary, Video, Terminal, Health, Links
 // ============================================================
 
 using System;

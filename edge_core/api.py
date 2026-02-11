@@ -17,14 +17,12 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
 import cv2
-import numpy as np
 import piexif
-from piexif import GPSIFD
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import FileResponse
 from fastapi.websockets import WebSocketDisconnect
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -169,15 +167,6 @@ class TerminalCommandResponse(BaseModel):
     stderr: str
     return_code: int
     command_executed: Optional[str] = None
-
-
-class VIOStatusResponse(BaseModel):
-    """Response model for VIO status."""
-    health: str
-    tracking_confidence: float
-    position_valid: bool
-    message_rate_hz: float
-    reset_counter: int
 
 
 class VIOUpdateRequest(BaseModel):

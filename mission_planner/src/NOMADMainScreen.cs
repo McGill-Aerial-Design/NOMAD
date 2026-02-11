@@ -70,7 +70,6 @@ namespace NOMAD.MissionPlanner
         private Button _btnTerminal;
         private Button _btnHealth;
         private Button _btnLinks;
-        private Button _currentActiveButton;
         
         // Content views
         private UserControl _currentView;
@@ -511,7 +510,6 @@ namespace NOMAD.MissionPlanner
             {
                 activeBtn.BackColor = ACCENT_COLOR;
                 activeBtn.ForeColor = TEXT_PRIMARY;
-                _currentActiveButton = activeBtn;
             }
         }
         

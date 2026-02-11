@@ -140,7 +140,6 @@
     <Compile Include="MissionConfig.cs" />
     <Compile Include="MapOverlayManager.cs" />
     <Compile Include="NOMADConfig.cs" />
-    <Compile Include="NOMADControlPanel.cs" />
     <Compile Include="NOMADDashboardView.cs" />
     <Compile Include="NOMADMainScreen.cs" />
     <Compile Include="NOMADPlugin.cs" />
