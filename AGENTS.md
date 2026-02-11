@@ -257,13 +257,14 @@ The Jetson connects via Tailscale VPN for:
 |-------|------|
 | Project Overview | `README.md` |
 | Architecture | `docs/architecture.md` |
-| Competition Setup | `docs/COMPETITION_SETUP.md` |
+| Operations Runbook | `docs/OPERATIONS_RUNBOOK.md` |
 | Jetson Deployment | `docs/JETSON_DEPLOYMENT.md` |
 | Tailscale Setup | `tailscale/SETUP.md` |
-| Video Streaming | `docs/MULTI_STREAM_VIDEO.md` |
+| Video Streaming | `docs/VIDEO_STREAMING.md` |
 | Navigation Architecture | `docs/JETSON_NAV_ARCHITECTURE.md` |
+| Isaac ROS + ZED Setup | `docs/ISAAC_ROS_ZED_SETUP.md` |
 | Servo Control | `docs/SERVO_CONTROL.md` |
-| This Quick Reference | `docs/AGENTS.md` |
+| This Quick Reference | `AGENTS.md` |
 
 ---
 
