@@ -13,7 +13,7 @@
     # ==============================================================
     # VOXEL SIZE - LARGER = FASTER (less computation)
     # ==============================================================
-    voxel_size: 0.12  # 12cm voxels - balance speed/resolution
+    voxel_size: 0.05  # 5cm voxels - higher resolution for indoor mapping
     
     # static_tsdf for 3D mesh generation
     mapping_type: "static_tsdf"

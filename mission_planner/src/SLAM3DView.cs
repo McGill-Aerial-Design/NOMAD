@@ -139,6 +139,9 @@ namespace NOMAD.MissionPlanner
         private int _meshUpdateCount = 0;
         private int _totalBlocks = 0;
         private DateTime _lastUpdateTime = DateTime.MinValue;
+        
+        // Persisted block map: key = "ix,iy,iz", value = color key
+        private Dictionary<string, uint> _persistedBlocks = new Dictionary<string, uint>();
 
         // ==================== Constructor ====================
         
@@ -411,14 +414,11 @@ namespace NOMAD.MissionPlanner
         {
             var droneBuilder = new MeshBuilder();
             
-            // Main body (elongated box for drone shape)
-            droneBuilder.AddBox(new Point3D(0, 0, 0), 0.4, 0.3, 0.1);
-            
-            // Front arrow indicator
+            // Small arrow only - proportional to mesh voxels
             droneBuilder.AddArrow(
-                new Point3D(0, 0, 0.05),
-                new Point3D(0.3, 0, 0.05),
-                0.03, 1
+                new Point3D(-0.04, 0, 0),
+                new Point3D(0.08, 0, 0),
+                0.015, 3
             );
             
             // Create material - bright cyan for visibility
@@ -578,39 +578,59 @@ namespace NOMAD.MissionPlanner
         
         private void UpdateMeshVisual(MeshDataModel meshData)
         {
-            if (meshData?.Blocks == null || meshData.Blocks.Count == 0)
-                return;
-
             try
             {
-                // Clear old mesh if flagged or always (block mode sends full state)
-                _meshModelGroup.Children.Clear();
+                // Only clear when explicitly flagged by backend
+                if (meshData?.Clear == true)
+                {
+                    _meshModelGroup.Children.Clear();
+                    _persistedBlocks.Clear();
+                }
 
-                double bs = meshData.BlockSize > 0 ? meshData.BlockSize : 0.4;
+                if (meshData?.Blocks == null || meshData.Blocks.Count == 0)
+                    return;
 
-                // Block-only mode: render each block as a colored cube
-                // Position = index * block_size, size = block_size
-                var geometry = new MeshGeometry3D();
-                int vertexOffset = 0;
+                double bs = meshData.BlockSize > 0 ? meshData.BlockSize : 0.05;
 
-                // Batch all cubes into a single geometry for performance
-                // Group blocks by color to minimize material count
-                var colorGroups = new Dictionary<uint, List<MeshBlockModel>>();
-
+                // Merge incoming blocks into persisted map
+                bool hasNewBlocks = false;
                 foreach (var block in meshData.Blocks)
                 {
                     if (block.Index == null || block.Index.Count < 3)
                         continue;
 
+                    string key = $"{block.Index[0]},{block.Index[1]},{block.Index[2]}";
                     uint colorKey;
                     if (block.Color != null && block.Color.Count >= 3)
                         colorKey = ((uint)block.Color[0] << 16) | ((uint)block.Color[1] << 8) | (uint)block.Color[2];
                     else
                         colorKey = (150u << 16) | (150u << 8) | 160u; // default gray
 
-                    if (!colorGroups.ContainsKey(colorKey))
-                        colorGroups[colorKey] = new List<MeshBlockModel>();
-                    colorGroups[colorKey].Add(block);
+                    if (!_persistedBlocks.ContainsKey(key) || _persistedBlocks[key] != colorKey)
+                    {
+                        _persistedBlocks[key] = colorKey;
+                        hasNewBlocks = true;
+                    }
+                }
+
+                // Only rebuild geometry when new blocks arrived
+                if (!hasNewBlocks)
+                    return;
+
+                _meshModelGroup.Children.Clear();
+
+                // Rebuild from persisted map grouped by color
+                var colorGroups = new Dictionary<uint, List<int[]>>();
+
+                foreach (var kvp in _persistedBlocks)
+                {
+                    string[] parts = kvp.Key.Split(',');
+                    int[] idx = { int.Parse(parts[0]), int.Parse(parts[1]), int.Parse(parts[2]) };
+                    uint ck = kvp.Value;
+
+                    if (!colorGroups.ContainsKey(ck))
+                        colorGroups[ck] = new List<int[]>();
+                    colorGroups[ck].Add(idx);
                 }
 
                 foreach (var kvp in colorGroups)
@@ -623,11 +643,11 @@ namespace NOMAD.MissionPlanner
                     var groupGeometry = new MeshGeometry3D();
                     int gOffset = 0;
 
-                    foreach (var block in kvp.Value)
+                    foreach (var idx in kvp.Value)
                     {
-                        double ox = block.Index[0] * bs;
-                        double oy = block.Index[1] * bs;
-                        double oz = block.Index[2] * bs;
+                        double ox = idx[0] * bs;
+                        double oy = idx[1] * bs;
+                        double oz = idx[2] * bs;
 
                         // 8 vertices of a cube
                         groupGeometry.Positions.Add(new Point3D(ox,      oy,      oz));
@@ -828,10 +848,11 @@ namespace NOMAD.MissionPlanner
             {
                 await JetsonApiService.PostAsync("/api/task/2/slam/clear");
                 
-                // Clear local mesh
+                // Clear local mesh and persisted blocks
                 _elementHost.Invoke(new Action(() =>
                 {
                     _meshModelGroup.Children.Clear();
+                    _persistedBlocks.Clear();
                 }));
                 
                 // Clear trajectory

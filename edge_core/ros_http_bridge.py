@@ -217,8 +217,8 @@ class ROSHTTPBridge(Node):
         else:
             self.get_logger().warning("TF2 not available - camera pose tracking disabled")
         
-        # Camera frame to track
-        self._camera_frame = "zed_left_camera_frame"
+        # Camera frame to track (zed2_base_link matches camera:=zed2 launch param)
+        self._camera_frame = "zed2_base_link"
         self._reference_frame = "odom"  # Or "map" depending on your setup
         
         # Timer to send data to edge_core
