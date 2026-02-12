@@ -1534,13 +1534,16 @@ def create_app(state_manager: StateManager) -> FastAPI:
 
         isaac_bridge = request.app.state.isaac_bridge
         if not isaac_bridge:
+            # No Python-side bridge, but the external ROS-HTTP bridge may be active
+            external_bridge_active = container_running and nvblox_running and bridge_running
             return {
-                "available": False,
-                "backend": "not_initialized",
+                "available": external_bridge_active,
+                "backend": "ros_http_bridge" if external_bridge_active else "not_initialized",
                 "container_running": container_running,
                 "nvblox_running": nvblox_running,
                 "bridge_running": bridge_running,
-                "message": "Isaac ROS bridge not initialized - using direct ZED mode",
+                "message": "Active via external ROS-HTTP bridge" if external_bridge_active
+                           else "Isaac ROS not running",
             }
 
         return {
