@@ -1638,8 +1638,18 @@ def create_app(state_manager: StateManager) -> FastAPI:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+        # Copy the bridge script into the container (it's not volume-mounted)
+        try:
+            nomad_home = os.path.expanduser("~/NOMAD")
+            bridge_src = os.path.join(nomad_home, "edge_core", "ros_http_bridge.py")
+            subprocess.run(
+                ["docker", "cp", bridge_src, f"{container}:/tmp/ros_http_bridge.py"],
+                capture_output=True, timeout=10, check=True,
+            )
+        except Exception as e:
+            return {"success": False, "error": f"Failed to copy bridge script: {e}"}
+
         # Build inline launch script
-        # Bridge script is available via volume mount at /workspaces/isaac_ros-dev/edge_core/
         launch_script = r"""#!/bin/bash
 set -e
 source /opt/ros/humble/setup.bash 2>/dev/null
@@ -1670,7 +1680,7 @@ echo $! > /tmp/zed_nvblox.pid
 
 # Wait for topics then launch bridge
 sleep 10
-python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom &
+python3 /tmp/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom &
 echo $! > /tmp/ros_bridge.pid
 
 wait

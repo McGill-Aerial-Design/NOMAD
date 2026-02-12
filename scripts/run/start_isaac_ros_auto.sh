@@ -329,14 +329,16 @@ LAUNCH_SCRIPT
 launch_ros_http_bridge() {
     log_info "Launching ROS-HTTP bridge..."
 
-    # Bridge script is available via volume mount (edge_core -> /workspaces/isaac_ros-dev/edge_core)
+    # Copy bridge script into container (edge_core is not volume-mounted)
+    docker cp "$REPO_ROOT/edge_core/ros_http_bridge.py" "$CONTAINER_NAME:/tmp/ros_http_bridge.py"
+
     docker exec "$CONTAINER_NAME" bash -c "
         cat > /tmp/launch_bridge.sh << 'BRIDGE_SCRIPT'
 #!/bin/bash
 source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 sleep 5
-python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom
+python3 /tmp/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom
 BRIDGE_SCRIPT
         chmod +x /tmp/launch_bridge.sh
     "
