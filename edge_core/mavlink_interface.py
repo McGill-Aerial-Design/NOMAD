@@ -21,10 +21,17 @@ class MavlinkService:
         
         # Time sync service reference (set externally)
         self._time_sync_service: Any = None
+        
+        # RC servo bridge reference (set externally)
+        self._rc_servo_bridge: Any = None
 
     def set_time_sync_service(self, service: Any) -> None:
         """Set the TimeSyncService to receive GPS time updates."""
         self._time_sync_service = service
+
+    def set_rc_servo_bridge(self, bridge: Any) -> None:
+        """Set the RCServoBridge to receive RC channel updates."""
+        self._rc_servo_bridge = bridge
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -79,8 +86,12 @@ class MavlinkService:
                 continue
 
             try:
+                # Include RC_CHANNELS when bridge is active
+                msg_types = ["HEARTBEAT", "SYS_STATUS", "GLOBAL_POSITION_INT", "ATTITUDE", "SYSTEM_TIME"]
+                if self._rc_servo_bridge is not None:
+                    msg_types.append("RC_CHANNELS")
                 msg = self._conn.recv_match(
-                    type=["HEARTBEAT", "SYS_STATUS", "GLOBAL_POSITION_INT", "ATTITUDE", "SYSTEM_TIME"],
+                    type=msg_types,
                     blocking=True,
                     timeout=0.2,
                 )
@@ -141,6 +152,13 @@ class MavlinkService:
                     time_boot_ms = getattr(msg, "time_boot_ms", 0)
                     if time_unix_usec > 0:
                         self._time_sync_service.update_gps_time(time_unix_usec, time_boot_ms)
+            elif msg_type == "RC_CHANNELS":
+                # Forward RC channel data to servo bridge
+                if self._rc_servo_bridge is not None:
+                    try:
+                        self._rc_servo_bridge.on_rc_channels(msg)
+                    except Exception:
+                        pass
 
     def _update_connection_status(self, now: float) -> None:
         if self._last_heartbeat and (now - self._last_heartbeat) > self.disconnect_timeout:

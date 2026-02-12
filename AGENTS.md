@@ -155,6 +155,8 @@ Always check this file for actual IP addresses and paths.
 - `POST /api/servo/camera/tilt?angle={0-180}` - Set nozzle servo angle
 - `POST /api/servo/shooter/trigger?duration_ms={ms}` - Trigger water shooter GPIO
 - `GET /api/servo/status` - Get servo and GPIO output status
+- `GET /api/servo/rc/status` - RC-to-servo bridge status (channel, last value, angle)
+- `POST /api/servo/rc/channel?channel={1-18}` - Change which RC channel controls servo
 - ROS topic: `/nomad/servo/nozzle_angle` (Float32) - Autonomous servo control via ros_http_bridge
 
 ---

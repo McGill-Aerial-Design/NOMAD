@@ -2606,4 +2606,62 @@ def create_app(state_manager: StateManager) -> FastAPI:
             logger.error(f"Disable servos error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
+    # ── RC Servo Bridge ───────────────────────────────────────────────
+    
+    @app.get("/api/servo/rc/status", tags=["Servo"])
+    async def get_rc_servo_status():
+        """
+        Get RC-to-servo bridge status.
+        
+        Shows which RC channel is mapped to the nozzle servo,
+        the last received RC value, and the last commanded angle.
+        """
+        try:
+            from .rc_servo_bridge import get_rc_servo_bridge
+            
+            bridge = get_rc_servo_bridge()
+            if bridge is None:
+                return {"active": False, "error": "RC servo bridge not initialized"}
+            
+            return bridge.get_status()
+            
+        except ImportError:
+            return {"active": False, "error": "RC servo bridge module not available"}
+        except Exception as e:
+            logger.error(f"RC servo status error: {e}")
+            return {"active": False, "error": str(e)}
+    
+    @app.post("/api/servo/rc/channel", tags=["Servo"])
+    async def set_rc_servo_channel(
+        channel: int = Query(..., ge=1, le=18, description="RC channel number (1-18)")
+    ):
+        """
+        Change which RC channel controls the servo (runtime).
+        
+        Args:
+            channel: RC channel number (1-18). Common choices:
+                - Channel 6: Knob/potentiometer
+                - Channel 7: 3-position switch
+                - Channel 8: Slider
+        """
+        try:
+            from .rc_servo_bridge import get_rc_servo_bridge
+            
+            bridge = get_rc_servo_bridge()
+            if bridge is None:
+                raise HTTPException(status_code=503, detail="RC servo bridge not initialized")
+            
+            bridge.set_channel(channel)
+            return {
+                "status": "ok",
+                "rc_channel": channel,
+                "message": f"RC servo bridge now using channel {channel}"
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Set RC channel error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
     return app

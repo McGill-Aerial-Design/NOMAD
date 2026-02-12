@@ -60,6 +60,13 @@ try:
 except ImportError:
     SERVO_AVAILABLE = False
 
+# RC channel to servo bridge
+try:
+    from .rc_servo_bridge import init_rc_servo_bridge, shutdown_rc_servo_bridge, get_rc_servo_bridge
+    RC_SERVO_BRIDGE_AVAILABLE = True
+except ImportError:
+    RC_SERVO_BRIDGE_AVAILABLE = False
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -107,6 +114,13 @@ def cleanup() -> None:
     """Cleanup on shutdown."""
     global time_sync_service, isaac_bridge, health_monitor, nav_controller, servo_controller_initialized
     logger.info("Shutting down Edge Core...")
+
+    # Shutdown RC servo bridge
+    if RC_SERVO_BRIDGE_AVAILABLE:
+        try:
+            shutdown_rc_servo_bridge()
+        except Exception:
+            pass
 
     # Shutdown servo controller (safety - disable PWM outputs)
     if servo_controller_initialized and SERVO_AVAILABLE:
@@ -270,6 +284,31 @@ def run(
 
     # Start MAVLink service
     mavlink_service.set_time_sync_service(time_sync_service)
+    
+    # Initialize RC-to-servo bridge (maps ELRS controller knob to nozzle servo)
+    try:
+        rc_channel = int(os.environ.get("NOMAD_RC_SERVO_CHANNEL", "6"))
+    except ValueError:
+        rc_channel = 6
+        logger.warning("Invalid NOMAD_RC_SERVO_CHANNEL value, using default channel 6")
+    enable_rc_servo = os.environ.get("NOMAD_ENABLE_RC_SERVO", "true").lower() == "true"
+    if enable_rc_servo and servo_controller_initialized and RC_SERVO_BRIDGE_AVAILABLE:
+        try:
+            bridge = init_rc_servo_bridge(
+                servo_controller=get_servo_controller(),
+                rc_channel=rc_channel,
+                enabled=True,
+            )
+            if bridge:
+                mavlink_service.set_rc_servo_bridge(bridge)
+                logger.info(f"RC servo bridge started (channel {rc_channel} -> nozzle servo)")
+            else:
+                logger.warning("RC servo bridge failed to start")
+        except Exception as e:
+            logger.error(f"Failed to start RC servo bridge: {e}")
+    elif not enable_rc_servo:
+        logger.info("RC servo bridge disabled (set NOMAD_ENABLE_RC_SERVO=true to enable)")
+    
     mavlink_service.start()
     logger.info("MAVLink service started")
 
