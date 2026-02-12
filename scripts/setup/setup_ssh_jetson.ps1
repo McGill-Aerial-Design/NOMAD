@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 # Setup SSH key authentication to Jetson Orin Nano
-# Run this script once: .\scripts\setup_ssh_jetson.ps1
+# Run this script once: .\scripts\setup\setup_ssh_jetson.ps1
 
 $JetsonIP = "100.85.121.98"
 $JetsonUser = "mad"

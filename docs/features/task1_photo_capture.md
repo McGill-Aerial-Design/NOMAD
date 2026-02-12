@@ -160,7 +160,7 @@ sudo systemctl status nomad
 cd C:\Users\Youssef\Documents\Code\MAD\NOMAD
 
 # 2. Build Mission Planner plugin
-.\scripts\build_plugin_windows.ps1
+.\scripts\build\build_plugin_windows.ps1
 
 # 3. Verify plugin installed
 Get-ChildItem "$env:LOCALAPPDATA\Mission Planner\plugins\NOMADPlugin.dll"

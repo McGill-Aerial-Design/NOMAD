@@ -161,6 +161,18 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
+        /// Perform a POST request using the long-running client (30s timeout).
+        /// Use for operations like starting video bridges, Isaac ROS, etc.
+        /// </summary>
+        /// <param name="path">Relative path.</param>
+        /// <param name="content">Optional request body.</param>
+        /// <returns>HTTP response.</returns>
+        public static Task<HttpResponseMessage> PostLongRunAsync(string path, HttpContent content = null)
+        {
+            return LongRunClient.PostAsync($"{BaseUrl}{path}", content);
+        }
+
+        /// <summary>
         /// Perform a POST request with JSON body.
         /// </summary>
         /// <param name="path">Relative path.</param>

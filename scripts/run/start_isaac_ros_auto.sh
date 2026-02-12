@@ -18,6 +18,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ISAAC_WS="${HOME}/workspaces/isaac_ros-dev"
 CONTAINER_NAME="nomad_isaac_ros"
 # Prefer the NOMAD-layer image (built via docker compose build) if available;
@@ -104,12 +105,16 @@ start_container() {
         --ipc host \
         -v "$ISAAC_WS:/workspaces/isaac_ros-dev" \
         -v /dev:/dev \
+        -v /run/udev:/run/udev:ro \
         -v /tmp/.X11-unix:/tmp/.X11-unix \
         -v /tmp/argus_socket:/tmp/argus_socket \
         -v /etc/localtime:/etc/localtime:ro \
+        -v "$REPO_ROOT/config:/workspaces/isaac_ros-dev/config:ro" \
+        -v "$REPO_ROOT/edge_core:/workspaces/isaac_ros-dev/edge_core:ro" \
         -e DISPLAY="${DISPLAY}" \
         -e NVIDIA_VISIBLE_DEVICES=all \
         -e NVIDIA_DRIVER_CAPABILITIES=all \
+        -e EGL_PLATFORM=device \
         -e ROS_DOMAIN_ID=0 \
         -e LD_LIBRARY_PATH=/usr/local/zed/lib:/opt/ros/humble/lib \
         -e CMAKE_PREFIX_PATH=/usr/local/zed \
@@ -201,7 +206,13 @@ install_dependencies() {
             ros-humble-isaac-ros-nitros-image-type \
             ros-humble-isaac-ros-nitros-camera-info-type \
             ros-humble-isaac-ros-nitros-point-cloud-type \
-            python3-pip
+            python3-pip \
+            gir1.2-gstreamer-1.0 \
+            gir1.2-gst-plugins-base-1.0 \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-rtsp \
+            gstreamer1.0-x
         pip3 install --no-cache-dir requests transforms3d opencv-python-headless 2>/dev/null || true
         ldconfig
     " 2>&1 | tail -5
@@ -262,7 +273,18 @@ export LD_LIBRARY_PATH=/usr/local/zed/lib:\$LD_LIBRARY_PATH
 # Patch ZED publish resolution to native 720p
 sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
     /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null
-# zed2 profile works for ZED 2i (confirmed by NVIDIA)
+# Overlay NOMAD nvblox config onto installed base config
+# Our config has the same YAML structure (/**:/ros__parameters:) and overrides
+# voxel_size (0.12 vs 0.05), ESDF mode (3D), rates, clearing radius, etc.
+# The ZED specialization config (nvblox_zed.yaml) still applies on top.
+NOMAD_CFG=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml
+NVBLOX_BASE=$(python3 -c "from ament_index_python.packages import get_package_share_directory; print(get_package_share_directory('nvblox_examples_bringup'))" 2>/dev/null)/config/nvblox/nvblox_base.yaml
+if [ -f "$NOMAD_CFG" ] && [ -f "$NVBLOX_BASE" ]; then
+    echo "Applying NOMAD nvblox config (voxel_size=0.12, esdf=3d, ...)"
+    cp "$NOMAD_CFG" "$NVBLOX_BASE"
+else
+    echo "NOMAD config or nvblox base not found, using defaults"
+fi
 ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2
 LAUNCH_SCRIPT
             chmod +x /tmp/launch_zed_nvblox.sh
@@ -307,16 +329,14 @@ LAUNCH_SCRIPT
 launch_ros_http_bridge() {
     log_info "Launching ROS-HTTP bridge..."
 
-    docker cp "$SCRIPT_DIR/../edge_core/ros_http_bridge.py" \
-        "$CONTAINER_NAME:/tmp/ros_http_bridge.py"
-
+    # Bridge script is available via volume mount (edge_core -> /workspaces/isaac_ros-dev/edge_core)
     docker exec "$CONTAINER_NAME" bash -c "
         cat > /tmp/launch_bridge.sh << 'BRIDGE_SCRIPT'
 #!/bin/bash
 source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 sleep 5
-python3 /tmp/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom
+python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom
 BRIDGE_SCRIPT
         chmod +x /tmp/launch_bridge.sh
     "

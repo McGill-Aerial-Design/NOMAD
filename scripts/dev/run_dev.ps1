@@ -7,9 +7,9 @@
 # without requiring actual hardware (ZED camera, Jetson, ArduPilot).
 #
 # Usage:
-#   .\scripts\run_dev.ps1             # Run with default settings
-#   .\scripts\run_dev.ps1 -Port 8080  # Custom port
-#   .\scripts\run_dev.ps1 -NoVision   # Disable vision process
+#   .\scripts\dev\run_dev.ps1             # Run with default settings
+#   .\scripts\dev\run_dev.ps1 -Port 8080  # Custom port
+#   .\scripts\dev\run_dev.ps1 -NoVision   # Disable vision process
 # =============================================================================
 
 param(
@@ -23,7 +23,7 @@ param(
 
 # Get script directory and project root
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ProjectRoot = Split-Path -Parent $ScriptDir
+$ProjectRoot = Split-Path -Parent (Split-Path -Parent $ScriptDir)
 
 Write-Host "=============================================" -ForegroundColor Blue
 Write-Host "  NOMAD Edge Core - Development Mode" -ForegroundColor Blue

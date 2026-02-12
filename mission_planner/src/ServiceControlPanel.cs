@@ -38,10 +38,15 @@ namespace NOMAD.MissionPlanner
         private Label _lblVioTrajectoryPoints;
         private Button _btnClearTrajectory;
         
+        // Nvblox + Bridge
+        private Label _lblNvbloxStatus;
+        private Button _btnNvbloxLaunch;
+        private Button _btnNvbloxStop;
+
         // Video bridges
         private Label _lblVideoBridgesStatus;
         private Button _btnStartBridges;
-        
+
         // SLAM
         private Label _lblSlamStatus;
         private Button _btnClearSlam;
@@ -102,7 +107,10 @@ namespace NOMAD.MissionPlanner
             
             // === Isaac ROS (with Start/Stop) ===
             AddIsaacRosRow(ref yOffset);
-            
+
+            // === Nvblox + Bridge (with Launch/Stop) ===
+            AddNvbloxRow(ref yOffset);
+
             // === Video Bridges ===
             AddServiceRow("Video Bridges", ref _lblVideoBridgesStatus, ref _btnStartBridges, ref yOffset, "Start");
             _btnStartBridges.Click += async (s, e) => await StartVideoBridgesAsync();
@@ -323,6 +331,55 @@ namespace NOMAD.MissionPlanner
             yOffset += 35;
         }
         
+        private void AddNvbloxRow(ref int yOffset)
+        {
+            int leftCol = 15;
+
+            var lblName = new Label
+            {
+                Text = "Nvblox + Bridge:",
+                Location = new Point(leftCol, yOffset + 3),
+                Size = new Size(120, 20),
+                ForeColor = Color.LightGray
+            };
+            this.Controls.Add(lblName);
+
+            _lblNvbloxStatus = new Label
+            {
+                Text = "Checking...",
+                Location = new Point(140, yOffset + 3),
+                Size = new Size(90, 20),
+                ForeColor = Color.Yellow
+            };
+            this.Controls.Add(_lblNvbloxStatus);
+
+            _btnNvbloxLaunch = new Button
+            {
+                Text = "Launch",
+                Location = new Point(235, yOffset),
+                Size = new Size(70, 25),
+                BackColor = Color.FromArgb(0, 120, 60),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+            _btnNvbloxLaunch.Click += async (s, e) => await LaunchNvbloxAsync();
+            this.Controls.Add(_btnNvbloxLaunch);
+
+            _btnNvbloxStop = new Button
+            {
+                Text = "Stop",
+                Location = new Point(310, yOffset),
+                Size = new Size(70, 25),
+                BackColor = Color.FromArgb(150, 50, 50),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+            _btnNvbloxStop.Click += async (s, e) => await StopNvbloxAsync();
+            this.Controls.Add(_btnNvbloxStop);
+
+            yOffset += 35;
+        }
+
         private async void PollServicesAsync()
         {
             try
@@ -369,7 +426,7 @@ namespace NOMAD.MissionPlanner
                     mediamtxResult.Data?.Trim().Equals("active", StringComparison.OrdinalIgnoreCase) == true;
                 UpdateStatusLabel(_lblMediamtxStatus, mediamtxActive);
                 
-                // Check Isaac ROS status (check container_running instead of available)
+                // Check Isaac ROS status (container + nvblox + bridge)
                 var isaacResult = await _sender.GetIsaacStatusAsync();
                 if (isaacResult.Success)
                 {
@@ -377,16 +434,30 @@ namespace NOMAD.MissionPlanner
                     {
                         var isaacData = JObject.Parse(isaacResult.Data);
                         var containerRunning = isaacData["container_running"]?.Value<bool>() ?? false;
+                        var nvbloxRunning = isaacData["nvblox_running"]?.Value<bool>() ?? false;
+                        var bridgeRunning = isaacData["bridge_running"]?.Value<bool>() ?? false;
+
                         UpdateStatusLabel(_lblIsaacRosStatus, containerRunning, containerRunning ? "Running" : "Not Running");
+
+                        if (nvbloxRunning && bridgeRunning)
+                            UpdateStatusLabel(_lblNvbloxStatus, true, "Running");
+                        else if (nvbloxRunning)
+                            UpdateStatusLabel(_lblNvbloxStatus, false, "No Bridge");
+                        else if (containerRunning)
+                            UpdateStatusLabel(_lblNvbloxStatus, false, "Stopped");
+                        else
+                            UpdateStatusLabel(_lblNvbloxStatus, false, "No Container");
                     }
                     catch
                     {
                         UpdateStatusLabel(_lblIsaacRosStatus, false, "Not Running");
+                        UpdateStatusLabel(_lblNvbloxStatus, false, "Unknown");
                     }
                 }
                 else
                 {
                     UpdateStatusLabel(_lblIsaacRosStatus, false, "Not Running");
+                    UpdateStatusLabel(_lblNvbloxStatus, false, "Offline");
                 }
                 
                 // Check VIO status
@@ -683,6 +754,40 @@ namespace NOMAD.MissionPlanner
             }
         }
         
+        private async Task LaunchNvbloxAsync()
+        {
+            LogMessage("Launching nvblox + ROS-HTTP bridge...");
+            UpdateStatusLabel(_lblNvbloxStatus, false, "Launching...");
+
+            var result = await _sender.LaunchNvbloxAsync();
+            if (result.Success)
+            {
+                LogMessage("nvblox launch initiated (~15s for ZED init)");
+            }
+            else
+            {
+                LogMessage($"Failed to launch nvblox: {result.Message}");
+                UpdateStatusLabel(_lblNvbloxStatus, false, "Launch Failed");
+            }
+        }
+
+        private async Task StopNvbloxAsync()
+        {
+            LogMessage("Stopping nvblox + bridge...");
+            UpdateStatusLabel(_lblNvbloxStatus, false, "Stopping...");
+
+            var result = await _sender.StopNvbloxAsync();
+            if (result.Success)
+            {
+                LogMessage("nvblox + bridge stopped");
+                UpdateStatusLabel(_lblNvbloxStatus, false, "Stopped");
+            }
+            else
+            {
+                LogMessage($"Failed to stop nvblox: {result.Message}");
+            }
+        }
+
         private async Task StartVideoBridgesAsync()
         {
             LogMessage("Starting video bridges...");

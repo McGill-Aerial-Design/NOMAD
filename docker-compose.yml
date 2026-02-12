@@ -42,6 +42,8 @@ services:
       - /home/mad/workspaces/isaac_ros-dev:/workspaces/isaac_ros-dev
       # Device access
       - /dev:/dev
+      # udev database (required for ZED SDK USB device detection)
+      - /run/udev:/run/udev:ro
       # X11 display (for RViz if needed)
       - /tmp/.X11-unix:/tmp/.X11-unix
       # Argus camera socket
@@ -50,17 +52,72 @@ services:
       - /etc/localtime:/etc/localtime:ro
       # NOMAD configs (nvblox_performance.yaml, etc.)
       - ./config:/workspaces/isaac_ros-dev/config:ro
+      # Edge core scripts (ros_http_bridge, etc.)
+      - ./edge_core:/workspaces/isaac_ros-dev/edge_core:ro
     environment:
       - ROS_DOMAIN_ID=0
       - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
       - CUDA_HOME=/usr/local/cuda
       - LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/zed/lib
+      # Headless EGL for ZED SDK GPU access (no display needed)
+      - EGL_PLATFORM=device
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
     command: >
       bash -c "
+        echo '[init] Binding uvcvideo driver to ZED camera...';
+        for dev in /sys/bus/usb/devices/*/idVendor; do
+          dir=$$(dirname $$dev);
+          vid=$$(cat $$dev 2>/dev/null);
+          if [ \"$$vid\" = \"2b03\" ]; then
+            for iface in $$dir/*:*/bInterfaceClass; do
+              idir=$$(dirname $$iface);
+              cls=$$(cat $$iface 2>/dev/null);
+              iname=$$(basename $$idir);
+              if [ \"$$cls\" = \"0e\" ] && [ ! -e $$idir/driver ]; then
+                echo \"[init] Binding uvcvideo to $$iname (Video class)\";
+                echo $$iname > /sys/bus/usb/drivers/uvcvideo/bind 2>/dev/null || true;
+              fi;
+            done;
+          fi;
+        done;
+        sleep 1;
+        ls /dev/video* 2>/dev/null && echo '[init] Video devices ready.' || echo '[init] Warning: No /dev/video devices found.';
         source /opt/ros/humble/setup.bash 2>/dev/null;
         source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null || true;
-        echo 'Isaac ROS container ready.';
-        tail -f /dev/null
+        export LD_LIBRARY_PATH=/usr/local/zed/lib:$$LD_LIBRARY_PATH;
+        echo '[init] Isaac ROS container ready.';
+
+        echo '[init] Applying NOMAD nvblox config...';
+        NOMAD_CFG=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml;
+        NVBLOX_BASE=$$(python3 -c \"from ament_index_python.packages import get_package_share_directory; print(get_package_share_directory('nvblox_examples_bringup'))\" 2>/dev/null)/config/nvblox/nvblox_base.yaml;
+        if [ -f \"$$NOMAD_CFG\" ] && [ -f \"$$NVBLOX_BASE\" ]; then
+          cp \"$$NOMAD_CFG\" \"$$NVBLOX_BASE\";
+          echo '[init] NOMAD config applied (voxel_size=0.12, esdf=3d)';
+        fi;
+
+        sed -i 's/pub_downscale_factor: 2\\.0/pub_downscale_factor: 1.0/' /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null;
+
+        echo '[init] Launching nvblox...';
+        ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2 > /tmp/zed_nvblox.log 2>&1 &
+        NVBLOX_PID=$$!;
+        echo $$NVBLOX_PID > /tmp/zed_nvblox.pid;
+
+        echo '[init] Waiting for ZED topics before starting bridge...';
+        for i in $$(seq 1 30); do
+          if ros2 topic list 2>/dev/null | grep -q '/zed/zed_node/.*image'; then
+            echo \"[init] ZED ready after $${i}s\";
+            break;
+          fi;
+          sleep 1;
+        done;
+
+        echo '[init] Launching ROS-HTTP bridge...';
+        python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom > /tmp/ros_bridge.log 2>&1 &
+        echo $$! > /tmp/ros_bridge.pid;
+
+        echo '[init] All services launched.';
+        wait $$NVBLOX_PID
       "
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'source /opt/ros/humble/setup.bash 2>/dev/null; ros2 topic list > /dev/null 2>&1 || exit 1'"]

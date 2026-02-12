@@ -1501,29 +1501,53 @@ def create_app(state_manager: StateManager) -> FastAPI:
         """
         # Check container status first
         container_running = False
+        nvblox_running = False
+        bridge_running = False
         try:
             result = subprocess.run(
                 ["docker", "ps", "--filter", "name=nomad_isaac_ros", "--format", "{{.Status}}"],
-                capture_output=True,
-                text=True,
-                timeout=5,
+                capture_output=True, text=True, timeout=5,
             )
             container_running = bool(result.stdout.strip())
         except Exception:
             pass
-        
+
+        if container_running:
+            try:
+                result = subprocess.run(
+                    ["docker", "exec", "nomad_isaac_ros", "bash", "-c",
+                     "ps aux | grep -v grep | grep -c component_container 2>/dev/null || echo 0"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                nvblox_running = int(result.stdout.strip()) > 0
+            except Exception:
+                pass
+            try:
+                result = subprocess.run(
+                    ["docker", "exec", "nomad_isaac_ros", "bash", "-c",
+                     "ps aux | grep -v grep | grep -c ros_http_bridge 2>/dev/null || echo 0"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                bridge_running = int(result.stdout.strip()) > 0
+            except Exception:
+                pass
+
         isaac_bridge = request.app.state.isaac_bridge
         if not isaac_bridge:
             return {
                 "available": False,
                 "backend": "not_initialized",
                 "container_running": container_running,
+                "nvblox_running": nvblox_running,
+                "bridge_running": bridge_running,
                 "message": "Isaac ROS bridge not initialized - using direct ZED mode",
             }
-        
+
         return {
             "available": True,
             "container_running": container_running,
+            "nvblox_running": nvblox_running,
+            "bridge_running": bridge_running,
             **isaac_bridge.get_status(),
         }
 
@@ -1590,6 +1614,102 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 "success": False,
                 "error": str(e),
             }
+
+    @app.post("/api/isaac/launch-nvblox", tags=["Isaac ROS"])
+    async def isaac_launch_nvblox():
+        """
+        Launch nvblox + ROS-HTTP bridge inside a running container.
+
+        Lightweight alternative to /api/isaac/start: does NOT install deps
+        or rebuild packages.  Assumes the container is already running and
+        packages are already built.  Kills any existing nvblox / bridge
+        processes first, applies NOMAD config overlay, then launches both.
+        """
+        container = "nomad_isaac_ros"
+
+        # Verify container is running
+        try:
+            result = subprocess.run(
+                ["docker", "ps", "--filter", f"name={container}", "--format", "{{.Names}}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if container not in result.stdout:
+                return {"success": False, "error": "Container not running"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+        # Build inline launch script
+        # Bridge script is available via volume mount at /workspaces/isaac_ros-dev/edge_core/
+        launch_script = r"""#!/bin/bash
+set -e
+source /opt/ros/humble/setup.bash 2>/dev/null
+source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
+export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH
+
+# Kill previous instances
+pkill -f 'ros2 launch.*nvblox' 2>/dev/null || true
+pkill -f component_container 2>/dev/null || true
+pkill -f ros_http_bridge 2>/dev/null || true
+sleep 2
+
+# Overlay NOMAD nvblox config
+NOMAD_CFG=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml
+NVBLOX_BASE=$(python3 -c "from ament_index_python.packages import get_package_share_directory; print(get_package_share_directory('nvblox_examples_bringup'))" 2>/dev/null)/config/nvblox/nvblox_base.yaml
+if [ -f "$NOMAD_CFG" ] && [ -f "$NVBLOX_BASE" ]; then
+    cp "$NOMAD_CFG" "$NVBLOX_BASE"
+    echo "Applied NOMAD nvblox config"
+fi
+
+# Patch ZED publish resolution
+sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
+    /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null
+
+# Launch nvblox
+ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2 &
+echo $! > /tmp/zed_nvblox.pid
+
+# Wait for topics then launch bridge
+sleep 10
+python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom &
+echo $! > /tmp/ros_bridge.pid
+
+wait
+"""
+        try:
+            # Write launch script into container
+            subprocess.run(
+                ["docker", "exec", container, "bash", "-c",
+                 f"cat > /tmp/launch_nvblox_bridge.sh << 'EOFSCRIPT'\n{launch_script}\nEOFSCRIPT\nchmod +x /tmp/launch_nvblox_bridge.sh"],
+                capture_output=True, timeout=10, check=True,
+            )
+            # Run in background
+            subprocess.run(
+                ["docker", "exec", "-d", container, "bash", "-c",
+                 "bash /tmp/launch_nvblox_bridge.sh > /tmp/zed_nvblox.log 2>&1"],
+                capture_output=True, timeout=10,
+            )
+            return {
+                "success": True,
+                "message": "nvblox + ROS-HTTP bridge launching. ZED init takes ~15s.",
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @app.post("/api/isaac/stop-nvblox", tags=["Isaac ROS"])
+    async def isaac_stop_nvblox():
+        """
+        Stop nvblox and ROS-HTTP bridge without stopping the container.
+        """
+        container = "nomad_isaac_ros"
+        try:
+            for proc in ["ros_http_bridge", "component_container", "ros2 launch.*nvblox"]:
+                subprocess.run(
+                    ["docker", "exec", container, "pkill", "-f", proc],
+                    capture_output=True, timeout=5,
+                )
+            return {"success": True, "message": "nvblox and bridge stopped"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     @app.get("/api/isaac/logs", tags=["Isaac ROS"])
     async def isaac_logs(log_type: str = Query(default="all", description="Log type: all, zed, bridge")):
@@ -1984,8 +2104,8 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 "mesh": mesh_data,
                 "received_at": datetime.now(timezone.utc).isoformat(),
                 "block_count": len(mesh_data.get("blocks", [])),
-                "total_vertices": mesh_data.get("total_vertices", 0),
-                "total_triangles": mesh_data.get("total_triangles", 0),
+                "total_blocks": mesh_data.get("total_blocks", len(mesh_data.get("blocks", []))),
+                "mode": mesh_data.get("mode", "blocks"),
             }
             
             # Store drone pose from mesh data (from TF lookup in ros_http_bridge)
@@ -2032,8 +2152,8 @@ def create_app(state_manager: StateManager) -> FastAPI:
                         "available": True,
                         "timestamp": stored.get("received_at"),
                         "block_count": stored.get("block_count", 0),
-                        "total_vertices": stored.get("total_vertices", 0),
-                        "total_triangles": stored.get("total_triangles", 0),
+                        "total_blocks": stored.get("total_blocks", 0),
+                        "mode": stored.get("mode", "blocks"),
                     }
                 else:
                     result = {

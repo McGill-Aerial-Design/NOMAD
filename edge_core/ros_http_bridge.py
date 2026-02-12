@@ -450,56 +450,69 @@ class ROSHTTPBridge(Node):
     def _handle_mesh(self, msg) -> None:
         """
         Handle mesh data from nvblox for 3D visualization.
-        
-        Converts nvblox_msgs/Mesh to simplified JSON and sends to edge_core.
-        Includes camera pose from TF if available.
+
+        Uses block-only mode: sends block indices + average color per block
+        instead of full vertex/triangle meshes. This dramatically reduces
+        CPU load on the Jetson and bandwidth over the network.
+
+        The Mission Planner renders each block as a colored cube at
+        position = index * block_size.
         """
         if not self._enable_mesh:
             return
-        
+
         try:
             # Rate limit mesh updates (max 2 Hz to avoid overwhelming)
             now = time.time()
             if now - self._last_mesh_send_time < 0.5:  # 2 Hz max
                 return
-            
-            # Convert mesh to simplified format
+
+            block_size = msg.block_size_m if hasattr(msg, 'block_size_m') else 0.2
+
+            # Block-only mode: extract index + average color per block
             blocks = []
-            total_vertices = 0
-            total_triangles = 0
-            
-            # Process at most 1000 blocks per update
-            for ros_block in msg.blocks[:1000]:
-                block_data = self._process_mesh_block(ros_block)
-                if block_data:
-                    blocks.append(block_data)
-                    total_vertices += len(block_data.get("vertices", []))
-                    total_triangles += len(block_data.get("triangles", []))
-            
+            for i, idx in enumerate(msg.block_indices[:2000]):
+                block_entry = {
+                    "index": [int(idx.x), int(idx.y), int(idx.z)],
+                }
+
+                # Compute average color from block vertices if available
+                if i < len(msg.blocks) and hasattr(msg.blocks[i], 'colors') and msg.blocks[i].colors:
+                    colors = msg.blocks[i].colors
+                    if colors:
+                        n = len(colors)
+                        avg_r = int(sum(c.r for c in colors) / n * 255)
+                        avg_g = int(sum(c.g for c in colors) / n * 255)
+                        avg_b = int(sum(c.b for c in colors) / n * 255)
+                        block_entry["color"] = [avg_r, avg_g, avg_b]
+
+                blocks.append(block_entry)
+
             if not blocks:
                 return  # Skip empty meshes
-            
+
             # Get camera pose from TF
             camera_pose = self._get_camera_pose()
-            
-            # Create mesh data payload
+
+            # Create lightweight mesh data payload
             mesh_data = {
                 "blocks": blocks,
-                "block_size": msg.block_size if hasattr(msg, 'block_size') else 0.2,
-                "total_vertices": total_vertices,
-                "total_triangles": total_triangles,
+                "block_size": block_size,
+                "mode": "blocks",
+                "total_blocks": len(blocks),
                 "timestamp": now,
                 "frame_id": msg.header.frame_id if hasattr(msg, 'header') else "map",
+                "clear": msg.clear if hasattr(msg, 'clear') else False,
             }
-            
+
             # Add camera pose if available
             if camera_pose:
                 mesh_data["drone_position"] = camera_pose["position"]
                 mesh_data["drone_attitude"] = camera_pose["attitude"]
-            
+
             self._mesh_recv_count += 1
             self._send_mesh_to_edge_core(mesh_data)
-            
+
         except Exception as e:
             self.get_logger().error(f"Mesh processing error: {e}")
     
@@ -545,55 +558,6 @@ class ROSHTTPBridge(Node):
             self.get_logger().debug(f"TF lookup failed: {e}")
             return None
     
-    def _process_mesh_block(self, block) -> Optional[dict]:
-        """Convert a ROS mesh block to simplified dict format."""
-        try:
-            # Extract block index
-            if hasattr(block, 'index'):
-                index = [int(block.index.x), int(block.index.y), int(block.index.z)]
-            else:
-                index = [0, 0, 0]
-            
-            # Extract vertices
-            vertices = []
-            if hasattr(block, 'vertices'):
-                for v in block.vertices[:5000]:  # Limit vertices per block
-                    if hasattr(v, 'x'):
-                        vertices.append([float(v.x), float(v.y), float(v.z)])
-            
-            if not vertices:
-                return None
-            
-            # Extract triangles
-            triangles = []
-            if hasattr(block, 'triangles'):
-                tri_indices = list(block.triangles)
-                for i in range(0, len(tri_indices) - 2, 3):
-                    triangles.append([int(tri_indices[i]), int(tri_indices[i+1]), int(tri_indices[i+2])])
-            
-            if not triangles:
-                return None
-            
-            # Extract colors (optional)
-            colors = None
-            if hasattr(block, 'colors') and block.colors:
-                colors = []
-                for c in block.colors[:len(vertices)]:
-                    if hasattr(c, 'r'):
-                        colors.append([int(c.r * 255), int(c.g * 255), int(c.b * 255)])
-            
-            return {
-                "index": index,
-                "vertices": vertices,
-                "triangles": triangles,
-                "colors": colors,
-                "timestamp": time.time(),
-            }
-            
-        except Exception as e:
-            self.get_logger().error(f"Block processing error: {e}")
-            return None
-    
     def _send_mesh_to_edge_core(self, mesh_data: dict) -> None:
         """Send mesh data to edge_core via HTTP."""
         if not self._enable_mesh:
@@ -616,8 +580,8 @@ class ROSHTTPBridge(Node):
                     self._last_mesh_send_time = time.time()
                     if self._mesh_send_count % 10 == 1:
                         self.get_logger().info(
-                            f"Mesh sent: {len(mesh_data.get('blocks', []))} blocks, "
-                            f"{mesh_data.get('total_vertices', 0)} vertices"
+                            f"Mesh sent: {mesh_data.get('total_blocks', 0)} blocks "
+                            f"(mode={mesh_data.get('mode', 'blocks')})"
                         )
                 else:
                     self._send_errors += 1

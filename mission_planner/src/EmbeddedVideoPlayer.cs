@@ -138,54 +138,54 @@ namespace NOMAD.MissionPlanner
             var btnRefresh = CreateButton("...", 505, 5, 30, Color.FromArgb(60, 60, 65));
             btnRefresh.Click += async (s, e) => await RefreshTopicsAsync(autoSelectRgb: false);
             
-            // Row 2: Latency slider
+            // Row 2: Latency slider + Apply button
             var lblLat = new Label { Text = "Latency:", Location = new Point(10, 33), ForeColor = Color.Gray, AutoSize = true, Font = new Font("Segoe UI", 8) };
             _trkLatency = new TrackBar
             {
                 Location = new Point(65, 30),
-                Size = new Size(180, 25),
+                Size = new Size(160, 25),
                 Minimum = 20,
                 Maximum = 500,
                 Value = _latencyMs,
                 TickFrequency = 50,
             };
-            
-            // Debounce timer to restart stream only after user stops sliding
-            System.Windows.Forms.Timer debounceTimer = null;
             _trkLatency.ValueChanged += (s, e) =>
             {
-                _latencyMs = _trkLatency.Value;
-                _lblLatencyValue.Text = $"{_latencyMs}ms";
-                
-                // Debounce: restart stream 500ms after user stops adjusting
-                if (debounceTimer != null)
+                _lblLatencyValue.Text = $"{_trkLatency.Value}ms";
+            };
+            _lblLatencyValue = new Label { Text = $"{_latencyMs}ms", Location = new Point(230, 33), ForeColor = Color.LightGray, AutoSize = true, Font = new Font("Segoe UI", 8) };
+
+            var btnApplyLatency = CreateButton("Apply", 275, 30, 55, Color.FromArgb(0, 100, 140));
+            btnApplyLatency.Font = new Font("Segoe UI", 7.5f);
+            btnApplyLatency.Click += async (s, e) =>
+            {
+                int newLatency = _trkLatency.Value;
+                if (newLatency == _latencyMs && _isPlaying) return;
+
+                _latencyMs = newLatency;
+                btnApplyLatency.Enabled = false;
+                btnApplyLatency.Text = "...";
+
+                try
                 {
-                    debounceTimer.Stop();
-                    debounceTimer.Dispose();
-                }
-                debounceTimer = new System.Windows.Forms.Timer { Interval = 500 };
-                debounceTimer.Tick += async (ts, te) =>
-                {
-                    debounceTimer.Stop();
-                    debounceTimer.Dispose();
-                    debounceTimer = null;
-                    
-                    // Restart stream with new latency (with delay between stop/start)
                     if (_isPlaying)
                     {
                         StopStream();
-                        // Give GStreamer 200ms to fully release resources before restart
-                        await System.Threading.Tasks.Task.Delay(200);
+                        // Wait for GStreamer to fully release native resources
+                        await System.Threading.Tasks.Task.Delay(500);
                         StartStream();
                         _lblStatus.Text = $"Latency: {_latencyMs}ms";
                         _lblStatus.ForeColor = Color.Cyan;
                     }
-                };
-                debounceTimer.Start();
+                }
+                finally
+                {
+                    btnApplyLatency.Enabled = true;
+                    btnApplyLatency.Text = "Apply";
+                }
             };
-            _lblLatencyValue = new Label { Text = $"{_latencyMs}ms", Location = new Point(250, 33), ForeColor = Color.LightGray, AutoSize = true, Font = new Font("Segoe UI", 8) };
-            
-            ctrlPanel.Controls.AddRange(new Control[] { btnPlay, btnStop, btnFull, btnVLC, btnSnap, lblTopic, _cmbTopic, btnRefresh, lblLat, _trkLatency, _lblLatencyValue });
+
+            ctrlPanel.Controls.AddRange(new Control[] { btnPlay, btnStop, btnFull, btnVLC, btnSnap, lblTopic, _cmbTopic, btnRefresh, lblLat, _trkLatency, _lblLatencyValue, btnApplyLatency });
             
             Controls.Add(_videoBox);
             Controls.Add(_lblStatus);

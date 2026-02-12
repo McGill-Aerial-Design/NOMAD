@@ -61,18 +61,18 @@ namespace NOMAD.MissionPlanner
     {
         public List<MeshBlockModel> Blocks { get; set; }
         public double BlockSize { get; set; }
-        public int TotalVertices { get; set; }
-        public int TotalTriangles { get; set; }
+        public int TotalBlocks { get; set; }
+        public string Mode { get; set; }
         public double Timestamp { get; set; }
         public string FrameId { get; set; }
+        public bool Clear { get; set; }
     }
 
     public class MeshBlockModel
     {
         public List<int> Index { get; set; }
-        public List<List<double>> Vertices { get; set; }
-        public List<List<int>> Triangles { get; set; }
-        public List<List<int>> Colors { get; set; }
+        /// <summary>Block-only mode: average [R, G, B] color (0-255).</summary>
+        public List<int> Color { get; set; }
     }
 
     public class DronePositionModel
@@ -137,8 +137,7 @@ namespace NOMAD.MissionPlanner
         
         // Statistics
         private int _meshUpdateCount = 0;
-        private int _totalVertices = 0;
-        private int _totalTriangles = 0;
+        private int _totalBlocks = 0;
         private DateTime _lastUpdateTime = DateTime.MinValue;
 
         // ==================== Constructor ====================
@@ -565,12 +564,11 @@ namespace NOMAD.MissionPlanner
                 // Update stats
                 if (data.Mesh != null)
                 {
-                    _totalVertices = data.Mesh.TotalVertices;
-                    _totalTriangles = data.Mesh.TotalTriangles;
+                    _totalBlocks = data.Mesh.TotalBlocks;
                 }
-                
+
                 UpdateStatusSafe($"Status: Connected | Updates: {_meshUpdateCount}");
-                UpdateStatsSafe($"Mesh: {_totalVertices:N0} verts, {_totalTriangles:N0} tris");
+                UpdateStatsSafe($"Mesh: {_totalBlocks:N0} blocks");
             }
             catch (Exception ex)
             {
@@ -582,68 +580,85 @@ namespace NOMAD.MissionPlanner
         {
             if (meshData?.Blocks == null || meshData.Blocks.Count == 0)
                 return;
-            
+
             try
             {
-                // Clear old mesh
+                // Clear old mesh if flagged or always (block mode sends full state)
                 _meshModelGroup.Children.Clear();
-                
-                // Process each block
+
+                double bs = meshData.BlockSize > 0 ? meshData.BlockSize : 0.4;
+
+                // Block-only mode: render each block as a colored cube
+                // Position = index * block_size, size = block_size
+                var geometry = new MeshGeometry3D();
+                int vertexOffset = 0;
+
+                // Batch all cubes into a single geometry for performance
+                // Group blocks by color to minimize material count
+                var colorGroups = new Dictionary<uint, List<MeshBlockModel>>();
+
                 foreach (var block in meshData.Blocks)
                 {
-                    if (block.Vertices == null || block.Triangles == null)
+                    if (block.Index == null || block.Index.Count < 3)
                         continue;
-                    
-                    var geometry = new MeshGeometry3D();
-                    
-                    // Add vertices - convert from [x, y, z] lists
-                    foreach (var vertex in block.Vertices)
-                    {
-                        if (vertex.Count >= 3)
-                        {
-                            geometry.Positions.Add(new Point3D(vertex[0], vertex[1], vertex[2]));
-                        }
-                    }
-                    
-                    // Add triangles - convert from [idx1, idx2, idx3] lists
-                    foreach (var triangle in block.Triangles)
-                    {
-                        if (triangle.Count >= 3)
-                        {
-                            geometry.TriangleIndices.Add(triangle[0]);
-                            geometry.TriangleIndices.Add(triangle[1]);
-                            geometry.TriangleIndices.Add(triangle[2]);
-                        }
-                    }
-                    
-                    // Skip empty blocks
-                    if (geometry.Positions.Count == 0 || geometry.TriangleIndices.Count == 0)
-                        continue;
-                    
-                    // Create material - use colors if available, otherwise default gray
-                    Material material;
-                    if (block.Colors != null && block.Colors.Count == block.Vertices.Count)
-                    {
-                        // Per-vertex colors not directly supported in basic WPF 3D
-                        // Use average color for the block
-                        int avgR = (int)block.Colors.Average(c => c.Count > 0 ? c[0] : 128);
-                        int avgG = (int)block.Colors.Average(c => c.Count > 1 ? c[1] : 128);
-                        int avgB = (int)block.Colors.Average(c => c.Count > 2 ? c[2] : 128);
-                        
-                        material = new DiffuseMaterial(new SolidColorBrush(
-                            Color.FromRgb((byte)avgR, (byte)avgG, (byte)avgB)
-                        ));
-                    }
+
+                    uint colorKey;
+                    if (block.Color != null && block.Color.Count >= 3)
+                        colorKey = ((uint)block.Color[0] << 16) | ((uint)block.Color[1] << 8) | (uint)block.Color[2];
                     else
+                        colorKey = (150u << 16) | (150u << 8) | 160u; // default gray
+
+                    if (!colorGroups.ContainsKey(colorKey))
+                        colorGroups[colorKey] = new List<MeshBlockModel>();
+                    colorGroups[colorKey].Add(block);
+                }
+
+                foreach (var kvp in colorGroups)
+                {
+                    uint ck = kvp.Key;
+                    byte r = (byte)((ck >> 16) & 0xFF);
+                    byte g = (byte)((ck >> 8) & 0xFF);
+                    byte b = (byte)(ck & 0xFF);
+
+                    var groupGeometry = new MeshGeometry3D();
+                    int gOffset = 0;
+
+                    foreach (var block in kvp.Value)
                     {
-                        // Default material - semi-transparent gray
-                        material = new DiffuseMaterial(new SolidColorBrush(
-                            Color.FromArgb(200, 150, 150, 160)
-                        ));
+                        double ox = block.Index[0] * bs;
+                        double oy = block.Index[1] * bs;
+                        double oz = block.Index[2] * bs;
+
+                        // 8 vertices of a cube
+                        groupGeometry.Positions.Add(new Point3D(ox,      oy,      oz));
+                        groupGeometry.Positions.Add(new Point3D(ox + bs, oy,      oz));
+                        groupGeometry.Positions.Add(new Point3D(ox + bs, oy + bs, oz));
+                        groupGeometry.Positions.Add(new Point3D(ox,      oy + bs, oz));
+                        groupGeometry.Positions.Add(new Point3D(ox,      oy,      oz + bs));
+                        groupGeometry.Positions.Add(new Point3D(ox + bs, oy,      oz + bs));
+                        groupGeometry.Positions.Add(new Point3D(ox + bs, oy + bs, oz + bs));
+                        groupGeometry.Positions.Add(new Point3D(ox,      oy + bs, oz + bs));
+
+                        // 12 triangles (2 per face, 6 faces)
+                        int[] faces = {
+                            0,1,2, 0,2,3, // bottom
+                            4,6,5, 4,7,6, // top
+                            0,4,5, 0,5,1, // front
+                            2,6,7, 2,7,3, // back
+                            0,3,7, 0,7,4, // left
+                            1,5,6, 1,6,2, // right
+                        };
+                        foreach (int fi in faces)
+                            groupGeometry.TriangleIndices.Add(gOffset + fi);
+
+                        gOffset += 8;
                     }
-                    
-                    var model = new GeometryModel3D(geometry, material);
-                    model.BackMaterial = material; // Show both sides
+
+                    var material = new DiffuseMaterial(new SolidColorBrush(
+                        Color.FromArgb(220, r, g, b)
+                    ));
+                    var model = new GeometryModel3D(groupGeometry, material);
+                    model.BackMaterial = material;
                     _meshModelGroup.Children.Add(model);
                 }
             }
@@ -821,8 +836,7 @@ namespace NOMAD.MissionPlanner
                 
                 // Clear trajectory
                 _trajectoryPoints.Clear();
-                _totalVertices = 0;
-                _totalTriangles = 0;
+                _totalBlocks = 0;
                 
                 UpdateStatusSafe("Mesh cleared");
             }

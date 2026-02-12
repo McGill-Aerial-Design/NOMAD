@@ -1,6 +1,6 @@
 # NOMAD Mission Planner Plugin - Build and Deploy Script
-# Location: scripts/build_plugin_windows.ps1
-# Usage: .\scripts\build_plugin_windows.ps1 (from repo root)
+# Location: scripts/build/build_plugin_windows.ps1
+# Usage: .\scripts\build\build_plugin_windows.ps1 (from repo root)
 #        or Run from anywhere - it will auto-locate the project
 
 Write-Host "======================================" -ForegroundColor Cyan
@@ -10,7 +10,7 @@ Write-Host ""
 
 # Find project directory (relative to this script)
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$RepoRoot = Split-Path -Parent $ScriptDir
+$RepoRoot = Split-Path -Parent (Split-Path -Parent $ScriptDir)
 $ProjectDir = Join-Path $RepoRoot "mission_planner\src"
 Set-Location $ProjectDir
 
@@ -72,13 +72,14 @@ Write-Host "[4/4] Deploying plugin..." -ForegroundColor Yellow
 
 # Try to include libVLC redistributables if present in packaging folder
 try {
-    $copyManaged = Join-Path $ScriptDir '..\packaging\copy-managed-libs.ps1'
+    $PackagingDir = Join-Path $RepoRoot "mission_planner\packaging"
+    $copyManaged = Join-Path $PackagingDir 'copy-managed-libs.ps1'
     if (Test-Path $copyManaged) {
         Write-Host "  Copying managed LibVLC assemblies (if present)..." -ForegroundColor Gray
         & $copyManaged | Out-Null
     }
 
-    $copyScript = Join-Path $ScriptDir '..\packaging\copy-libvlc.ps1'
+    $copyScript = Join-Path $PackagingDir 'copy-libvlc.ps1'
     if (Test-Path $copyScript) {
         Write-Host "  Found libVLC packaging helper, copying redistributables..." -ForegroundColor Gray
         & $copyScript | Out-Null
@@ -125,13 +126,14 @@ foreach ($dll in $HelixDlls) {
 }
 
     # Also copy any libVLC native files, plugins folder, and managed assemblies to the AppData plugin folder
-    Get-ChildItem "$ScriptDir\bin\Release" -Filter "libvlc*.dll" -File -ErrorAction SilentlyContinue | ForEach-Object {
+    $BuildOutputDir = Join-Path $ProjectDir "bin\$Configuration"
+    Get-ChildItem "$BuildOutputDir" -Filter "libvlc*.dll" -File -ErrorAction SilentlyContinue | ForEach-Object {
         Copy-Item $_.FullName $AppDataPluginsDir -Force
     }
-    if (Test-Path "$ScriptDir\bin\Release\plugins") {
-        Copy-Item "$ScriptDir\bin\Release\plugins\*" (Join-Path $AppDataPluginsDir 'plugins') -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path "$BuildOutputDir\plugins") {
+        Copy-Item "$BuildOutputDir\plugins\*" (Join-Path $AppDataPluginsDir 'plugins') -Recurse -Force -ErrorAction SilentlyContinue
     }
-    Get-ChildItem "$ScriptDir\bin\Release" -Filter "LibVLCSharp*.dll" -File -ErrorAction SilentlyContinue | ForEach-Object {
+    Get-ChildItem "$BuildOutputDir" -Filter "LibVLCSharp*.dll" -File -ErrorAction SilentlyContinue | ForEach-Object {
         Copy-Item $_.FullName $AppDataPluginsDir -Force
     }
 

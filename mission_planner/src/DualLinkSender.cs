@@ -640,7 +640,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> StartIsaacRosAsync()
         {
-            return await SendHttpPost("/api/isaac/start", null);
+            return await SendHttpPostLongRun("/api/isaac/start", null);
         }
 
         /// <summary>
@@ -648,7 +648,24 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> StopIsaacRosAsync()
         {
-            return await SendHttpPost("/api/isaac/stop", null);
+            return await SendHttpPostLongRun("/api/isaac/stop", null);
+        }
+
+        /// <summary>
+        /// Launch nvblox + ROS-HTTP bridge inside a running container.
+        /// Lightweight: does not install deps or rebuild.
+        /// </summary>
+        public async Task<CommandResult> LaunchNvbloxAsync()
+        {
+            return await SendHttpPostLongRun("/api/isaac/launch-nvblox", null);
+        }
+
+        /// <summary>
+        /// Stop nvblox and ROS-HTTP bridge without stopping the container.
+        /// </summary>
+        public async Task<CommandResult> StopNvbloxAsync()
+        {
+            return await SendHttpPostLongRun("/api/isaac/stop-nvblox", null);
         }
 
         /// <summary>
@@ -673,10 +690,12 @@ namespace NOMAD.MissionPlanner
 
         /// <summary>
         /// Start the persistent video bridge instances.
+        /// Uses the long-running HTTP client (30s timeout) because the video bridge
+        /// startup involves docker cp, process launch, and a readiness check loop.
         /// </summary>
         public async Task<CommandResult> StartVideoBridgesAsync()
         {
-            return await SendHttpPost("/api/video/bridges/start", null);
+            return await SendHttpPostLongRun("/api/video/bridges/start", null);
         }
 
         // ============================================================
@@ -793,6 +812,75 @@ namespace NOMAD.MissionPlanner
                     : new StringContent("{}", Encoding.UTF8, "application/json");
 
                 var response = await JetsonApiService.PostAsync(endpoint, content);
+                var responseBody = await response.Content.ReadAsStringAsync();
+
+                if (response.IsSuccessStatusCode)
+                {
+                    return new CommandResult
+                    {
+                        Success = true,
+                        Message = "HTTP request successful",
+                        Data = responseBody,
+                        Method = "HTTP"
+                    };
+                }
+                else
+                {
+                    return new CommandResult
+                    {
+                        Success = false,
+                        Message = $"HTTP {(int)response.StatusCode}: {response.ReasonPhrase}",
+                        Data = responseBody,
+                        Method = "HTTP"
+                    };
+                }
+            }
+            catch (HttpRequestException ex)
+            {
+                return new CommandResult
+                {
+                    Success = false,
+                    Message = $"HTTP connection failed: {ex.Message}",
+                    Method = "HTTP"
+                };
+            }
+            catch (TaskCanceledException)
+            {
+                return new CommandResult
+                {
+                    Success = false,
+                    Message = "HTTP request timed out",
+                    Method = "HTTP"
+                };
+            }
+            catch (Exception ex)
+            {
+                return new CommandResult
+                {
+                    Success = false,
+                    Message = $"HTTP error: {ex.Message}",
+                    Method = "HTTP"
+                };
+            }
+        }
+
+        /// <summary>
+        /// Send an HTTP POST using the long-running client (30s timeout).
+        /// Use for operations that take longer than the standard timeout,
+        /// such as starting video bridges, Isaac ROS, etc.
+        /// </summary>
+        private async Task<CommandResult> SendHttpPostLongRun(string endpoint, object body)
+        {
+            try
+            {
+                var content = body != null
+                    ? new StringContent(
+                        JsonConvert.SerializeObject(body),
+                        Encoding.UTF8,
+                        "application/json")
+                    : new StringContent("{}", Encoding.UTF8, "application/json");
+
+                var response = await JetsonApiService.PostLongRunAsync(endpoint, content);
                 var responseBody = await response.Content.ReadAsStringAsync();
 
                 if (response.IsSuccessStatusCode)
