@@ -564,43 +564,58 @@ namespace NOMAD.MissionPlanner
         
         private void UpdateStatusLabel(Label label, bool isOk, string customText = null)
         {
-            if (label == null) return;
+            if (label == null || label.IsDisposed) return;
             
-            if (label.InvokeRequired)
+            try
             {
-                label.BeginInvoke(new Action(() => UpdateStatusLabel(label, isOk, customText)));
-                return;
+                if (label.InvokeRequired)
+                {
+                    label.BeginInvoke(new Action(() => UpdateStatusLabel(label, isOk, customText)));
+                    return;
+                }
+                
+                label.Text = customText ?? (isOk ? "Running" : "Stopped");
+                label.ForeColor = isOk ? Color.LimeGreen : Color.OrangeRed;
             }
-            
-            label.Text = customText ?? (isOk ? "Running" : "Stopped");
-            label.ForeColor = isOk ? Color.LimeGreen : Color.OrangeRed;
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
         }
         
         private void UpdateLabel(Label label, string text)
         {
-            if (label == null) return;
+            if (label == null || label.IsDisposed) return;
             
-            if (label.InvokeRequired)
+            try
             {
-                label.BeginInvoke(new Action(() => UpdateLabel(label, text)));
-                return;
+                if (label.InvokeRequired)
+                {
+                    label.BeginInvoke(new Action(() => UpdateLabel(label, text)));
+                    return;
+                }
+                
+                label.Text = text;
             }
-            
-            label.Text = text;
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
         }
         
         private void LogMessage(string message)
         {
-            if (_txtLog == null) return;
+            if (_txtLog == null || _txtLog.IsDisposed) return;
             
-            if (_txtLog.InvokeRequired)
+            try
             {
-                _txtLog.BeginInvoke(new Action(() => LogMessage(message)));
-                return;
+                if (_txtLog.InvokeRequired)
+                {
+                    _txtLog.BeginInvoke(new Action(() => LogMessage(message)));
+                    return;
+                }
+                
+                var timestamp = DateTime.Now.ToString("HH:mm:ss");
+                _txtLog.AppendText($"[{timestamp}] {message}\r\n");
             }
-            
-            var timestamp = DateTime.Now.ToString("HH:mm:ss");
-            _txtLog.AppendText($"[{timestamp}] {message}\r\n");
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
         }
         
         private async Task RestartServiceAsync(string serviceName, Label statusLabel)
@@ -641,23 +656,28 @@ namespace NOMAD.MissionPlanner
                 LogMessage("All services starting (MAVLink, MediaMTX, Edge Core, Isaac ROS, Video Bridge)...");
                 LogMessage("Full startup takes 30-45 seconds. Status will update automatically.");
                 
-                // Show info message
-                Task.Run(() => {
-                    MessageBox.Show(
-                        "NOMAD Services Restart Initiated!\n\n" +
-                        "Restarting all services via SSH:\n" +
-                        "1. MAVLink Router\n" +
-                        "2. MediaMTX (RTSP)\n" +
-                        "3. Edge Core API\n" +
-                        "4. Isaac ROS + ZED Camera\n" +
-                        "5. Video Bridge\n\n" +
-                        "Full startup: 30-45 seconds.\n" +
-                        "Status will update automatically.",
-                        "NOMAD Restarting",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Information
-                    );
-                });
+                // Show info message on UI thread
+                if (this.IsHandleCreated && !this.IsDisposed)
+                {
+                    this.BeginInvoke(new Action(() =>
+                    {
+                        MessageBox.Show(
+                            this,
+                            "NOMAD Services Restart Initiated!\n\n" +
+                            "Restarting all services via SSH:\n" +
+                            "1. MAVLink Router\n" +
+                            "2. MediaMTX (RTSP)\n" +
+                            "3. Edge Core API\n" +
+                            "4. Isaac ROS + ZED Camera\n" +
+                            "5. Video Bridge\n\n" +
+                            "Full startup: 30-45 seconds.\n" +
+                            "Status will update automatically.",
+                            "NOMAD Restarting",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Information
+                        );
+                    }));
+                }
             }
             else
             {
@@ -680,22 +700,27 @@ namespace NOMAD.MissionPlanner
                 LogMessage("Container starting, ZED + Nvblox launching...");
                 LogMessage("Full startup takes 30-60 seconds");
                 
-                // Show non-blocking message
-                Task.Run(() => {
-                    MessageBox.Show(
-                        "Isaac ROS startup initiated!\n\n" +
-                        "The following will start automatically:\n" +
-                        "1. Docker container\n" +
-                        "2. ROS2 dependencies installation\n" +
-                        "3. ZED + Nvblox VSLAM\n" +
-                        "4. ROS-HTTP bridge to Edge Core\n\n" +
-                        "Full startup takes 30-60 seconds.\n" +
-                        "Status will update automatically.",
-                        "Isaac ROS Starting",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Information
-                    );
-                });
+                // Show non-blocking message on UI thread
+                if (this.IsHandleCreated && !this.IsDisposed)
+                {
+                    this.BeginInvoke(new Action(() =>
+                    {
+                        MessageBox.Show(
+                            this,
+                            "Isaac ROS startup initiated!\n\n" +
+                            "The following will start automatically:\n" +
+                            "1. Docker container\n" +
+                            "2. ROS2 dependencies installation\n" +
+                            "3. ZED + Nvblox VSLAM\n" +
+                            "4. ROS-HTTP bridge to Edge Core\n\n" +
+                            "Full startup takes 30-60 seconds.\n" +
+                            "Status will update automatically.",
+                            "Isaac ROS Starting",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Information
+                        );
+                    }));
+                }
             }
             else
             {
