@@ -2,7 +2,7 @@
 # NOMAD nvblox 3D LOW-LATENCY Configuration
 # 
 # Optimized for SPEED + 3D on Jetson Orin Nano (8GB RAM)
-# Larger voxels, 3D ESDF, mesh enabled at reduced rate
+# 5cm voxels for navigation accuracy, 3D ESDF, 15m persistent radius
 # ==============================================================
 
 /**:
@@ -11,7 +11,7 @@
     cuda_stream_type: 2
 
     # ==============================================================
-    # VOXEL SIZE - LARGER = FASTER (less computation)
+    # VOXEL SIZE - 5cm for autonomous navigation accuracy
     # ==============================================================
     voxel_size: 0.05  # 5cm voxels - higher resolution for indoor mapping
     

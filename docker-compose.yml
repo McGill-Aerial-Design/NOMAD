@@ -93,7 +93,7 @@ services:
         NVBLOX_BASE=$$(python3 -c \"from ament_index_python.packages import get_package_share_directory; print(get_package_share_directory('nvblox_examples_bringup'))\" 2>/dev/null)/config/nvblox/nvblox_base.yaml;
         if [ -f \"$$NOMAD_CFG\" ] && [ -f \"$$NVBLOX_BASE\" ]; then
           cp \"$$NOMAD_CFG\" \"$$NVBLOX_BASE\";
-          echo '[init] NOMAD config applied (voxel_size=0.12, esdf=3d)';
+          echo '[init] NOMAD config applied (voxel_size=0.05, esdf=3d)';
         fi;
 
         sed -i 's/pub_downscale_factor: 2\\.0/pub_downscale_factor: 1.0/' /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null;

@@ -264,31 +264,28 @@ launch_zed_nvblox() {
     if docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP; $WS_SETUP; ros2 pkg list 2>/dev/null | grep -q nvblox_examples_bringup"; then
         log_info "Launching ZED + nvblox (camera:=zed2)..."
 
-        docker exec "$CONTAINER_NAME" bash -c "
-            cat > /tmp/launch_zed_nvblox.sh << 'LAUNCH_SCRIPT'
+        # Write launch script via stdin to avoid quoting issues with $() and nested "
+        docker exec -i "$CONTAINER_NAME" tee /tmp/launch_zed_nvblox.sh > /dev/null << 'LAUNCH_SCRIPT'
 #!/bin/bash
 source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
-export LD_LIBRARY_PATH=/usr/local/zed/lib:\$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH
 # Patch ZED publish resolution to native 720p
 sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
     /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null
 # Overlay NOMAD nvblox config onto installed base config
-# Our config has the same YAML structure (/**:/ros__parameters:) and overrides
-# voxel_size (0.12 vs 0.05), ESDF mode (3D), rates, clearing radius, etc.
-# The ZED specialization config (nvblox_zed.yaml) still applies on top.
+# voxel_size=0.05, ESDF 3D, 15m clearing radius
 NOMAD_CFG=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml
 NVBLOX_BASE=$(python3 -c "from ament_index_python.packages import get_package_share_directory; print(get_package_share_directory('nvblox_examples_bringup'))" 2>/dev/null)/config/nvblox/nvblox_base.yaml
 if [ -f "$NOMAD_CFG" ] && [ -f "$NVBLOX_BASE" ]; then
-    echo "Applying NOMAD nvblox config (voxel_size=0.12, esdf=3d, ...)"
+    echo "Applying NOMAD nvblox config (voxel_size=0.05, esdf=3d, 15m radius)"
     cp "$NOMAD_CFG" "$NVBLOX_BASE"
 else
     echo "NOMAD config or nvblox base not found, using defaults"
 fi
 ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2
 LAUNCH_SCRIPT
-            chmod +x /tmp/launch_zed_nvblox.sh
-        "
+        docker exec "$CONTAINER_NAME" chmod +x /tmp/launch_zed_nvblox.sh
 
         docker exec -d "$CONTAINER_NAME" bash -c \
             "bash /tmp/launch_zed_nvblox.sh > /tmp/zed_nvblox.log 2>&1 & echo \$! > /tmp/zed_nvblox.pid"
@@ -303,19 +300,17 @@ LAUNCH_SCRIPT
 launch_zed_only() {
     log_info "Launching ZED wrapper only (camera_model:=zed2i)..."
 
-    docker exec "$CONTAINER_NAME" bash -c "
-        cat > /tmp/launch_zed_only.sh << 'LAUNCH_SCRIPT'
+    docker exec -i "$CONTAINER_NAME" tee /tmp/launch_zed_only.sh > /dev/null << 'LAUNCH_SCRIPT'
 #!/bin/bash
 source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
-export LD_LIBRARY_PATH=/usr/local/zed/lib:\$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH
 # Patch ZED publish resolution to native 720p
 sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
     /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null
 ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i
 LAUNCH_SCRIPT
-        chmod +x /tmp/launch_zed_only.sh
-    "
+    docker exec "$CONTAINER_NAME" chmod +x /tmp/launch_zed_only.sh
 
     docker exec -d "$CONTAINER_NAME" bash -c \
         "bash /tmp/launch_zed_only.sh > /tmp/zed_nvblox.log 2>&1 & echo \$! > /tmp/zed_nvblox.pid"
@@ -329,19 +324,15 @@ LAUNCH_SCRIPT
 launch_ros_http_bridge() {
     log_info "Launching ROS-HTTP bridge..."
 
-    # Copy bridge script into container (edge_core is not volume-mounted)
-    docker cp "$REPO_ROOT/edge_core/ros_http_bridge.py" "$CONTAINER_NAME:/tmp/ros_http_bridge.py"
-
-    docker exec "$CONTAINER_NAME" bash -c "
-        cat > /tmp/launch_bridge.sh << 'BRIDGE_SCRIPT'
+    # Bridge script is available via volume mount at /workspaces/isaac_ros-dev/edge_core/
+    docker exec -i "$CONTAINER_NAME" tee /tmp/launch_bridge.sh > /dev/null << 'BRIDGE_SCRIPT'
 #!/bin/bash
 source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 sleep 5
-python3 /tmp/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom
+python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom
 BRIDGE_SCRIPT
-        chmod +x /tmp/launch_bridge.sh
-    "
+    docker exec "$CONTAINER_NAME" chmod +x /tmp/launch_bridge.sh
 
     docker exec -d "$CONTAINER_NAME" bash -c \
         "nohup /tmp/launch_bridge.sh > /tmp/ros_bridge.log 2>&1 & echo \$! > /tmp/ros_bridge.pid"
