@@ -620,7 +620,8 @@ def create_app(state_manager: StateManager) -> FastAPI:
         metadata_filename = "metadata.json"
         image_path = os.path.join(capture_folder, image_filename)
         metadata_path = os.path.join(capture_folder, metadata_filename)
-        
+        image_saved = False
+
         # Capture image from ZED camera if available
         camera_service = request.app.state.camera_service
         if camera_service:
@@ -632,41 +633,42 @@ def create_app(state_manager: StateManager) -> FastAPI:
                         image_bgr = cv2.cvtColor(frame.left_image, cv2.COLOR_BGRA2BGR)
                     else:
                         image_bgr = frame.left_image
-                    
+
                     # Save image temporarily to embed EXIF
                     temp_path = image_path + ".temp"
                     cv2.imwrite(temp_path, image_bgr)
-                    
+
                     # Prepare EXIF data
                     exif_dict = {
                         "0th": {},
                         "Exif": {},
                         "GPS": {},
                     }
-                    
+
                     # Embed GPS coordinates in EXIF
                     if state.gps_lat is not None and state.gps_lon is not None:
                         exif_dict["GPS"] = _gps_to_exif(state.gps_lat, state.gps_lon, state.gps_alt)
-                    
+
                     # Embed timestamp in EXIF DateTime
                     exif_dict["0th"][piexif.ImageIFD.DateTime] = timestamp.strftime("%Y:%m:%d %H:%M:%S").encode()
-                    
+
                     # Embed heading and AHRS data in ImageDescription
                     heading_str = f"{heading:.1f}" if heading is not None else "N/A"
                     pitch_str = f"{pitch:.1f}" if pitch is not None else "N/A"
                     roll_str = f"{roll:.1f}" if roll is not None else "N/A"
                     description = f"Heading: {heading_str}deg, Pitch: {pitch_str}deg, Roll: {roll_str}deg"
                     exif_dict["0th"][piexif.ImageIFD.ImageDescription] = description.encode()
-                    
+
                     # Dump EXIF data and save final image
                     exif_bytes = piexif.dump(exif_dict)
                     piexif.insert(exif_bytes, temp_path, image_path)
-                    
+
                     # Remove temporary file
                     os.remove(temp_path)
-                    
+
+                    image_saved = True
                     logger.info(f"Task 1 image with EXIF saved: {image_path}")
-                    
+
                     # Update metadata with photo path
                     metadata["photo_path"] = image_path
                 else:
@@ -706,7 +708,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 gimbal_pitch_deg=gimbal_pitch,
                 gimbal_yaw_deg=gimbal_yaw,
                 capture_folder=capture_folder,
-                image_name=image_filename,
+                image_name=image_filename if image_saved else None,
                 metadata_file=metadata_filename,
                 building_location=building_name,
             )
@@ -2507,6 +2509,164 @@ wait
             "message": "Mesh cache cleared",
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+
+    # ==================== Sensor Calibration Endpoints ====================
+
+    @app.post("/api/calibration/magnetometer/start", tags=["Calibration"])
+    async def start_magnetometer_calibration():
+        """
+        Start magnetometer calibration data collection.
+
+        Begins collecting raw magnetometer data from the ZED 2i.
+        The camera should be rotated slowly in all orientations
+        (figure-8 pattern) during collection.
+
+        Call /api/calibration/magnetometer/stop when done rotating
+        to compute the calibration.
+        """
+        try:
+            from .sensor_calibration import start_mag_calibration, get_mag_session, CalibrationState
+
+            session = get_mag_session()
+            if session and session.state == CalibrationState.COLLECTING:
+                return {
+                    "success": True,
+                    "message": "Calibration already in progress",
+                    **session.get_status(),
+                }
+
+            session = start_mag_calibration()
+            if session.state == CalibrationState.FAILED:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to start calibration: {session.error}"
+                )
+
+            return {
+                "success": True,
+                "message": "Magnetometer calibration started. Rotate camera in all orientations.",
+                **session.get_status(),
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Mag calibration start error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/api/calibration/magnetometer/status", tags=["Calibration"])
+    async def get_magnetometer_calibration_status():
+        """
+        Get magnetometer calibration progress.
+
+        Returns sample count, coverage, progress percentage, and state.
+        """
+        try:
+            from .sensor_calibration import get_mag_session
+
+            session = get_mag_session()
+            if not session:
+                return {"state": "idle", "message": "No calibration session active"}
+            return session.get_status()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/calibration/magnetometer/stop", tags=["Calibration"])
+    async def stop_magnetometer_calibration():
+        """
+        Stop magnetometer calibration and compute results.
+
+        Stops data collection and computes hard-iron offset and
+        soft-iron correction matrix using ellipsoid fitting.
+
+        Results are saved to config/calibration/magnetometer_cal.json.
+        """
+        try:
+            from starlette.concurrency import run_in_threadpool
+            from .sensor_calibration import stop_mag_calibration, get_mag_session
+
+            session = get_mag_session()
+            if not session:
+                raise HTTPException(status_code=400, detail="No calibration session active")
+
+            # Run blocking compute in threadpool to avoid blocking event loop
+            result = await run_in_threadpool(stop_mag_calibration)
+            if result:
+                return {
+                    "success": True,
+                    "message": "Magnetometer calibration complete",
+                    "result": result.to_dict(),
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": f"Calibration failed: {session.error}",
+                    "state": session.state.value,
+                }
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Mag calibration stop error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/calibration/magnetometer/cancel", tags=["Calibration"])
+    async def cancel_magnetometer_calibration():
+        """Cancel ongoing magnetometer calibration."""
+        try:
+            from .sensor_calibration import get_mag_session
+
+            session = get_mag_session()
+            if session:
+                session.cancel()
+            return {"success": True, "message": "Calibration cancelled"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/api/calibration/magnetometer/saved", tags=["Calibration"])
+    async def get_saved_magnetometer_calibration():
+        """
+        Get the saved magnetometer calibration from disk.
+
+        Returns the most recent calibration result if available.
+        """
+        try:
+            from .sensor_calibration import load_magnetometer_calibration
+
+            cal = load_magnetometer_calibration()
+            if cal:
+                return {
+                    "available": True,
+                    **cal.to_dict(),
+                }
+            return {
+                "available": False,
+                "message": "No magnetometer calibration saved",
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/api/calibration/imu/check", tags=["Calibration"])
+    async def check_imu_health():
+        """
+        Run a quick IMU health check.
+
+        Collects 5 seconds of accelerometer and gyroscope data while
+        the camera should be stationary. Checks:
+        - Gravity magnitude (~9.81 m/s^2)
+        - Gyroscope zero-rate offset
+        - Sensor noise levels
+
+        The camera MUST be stationary during this check.
+        """
+        try:
+            from starlette.concurrency import run_in_threadpool
+            from .sensor_calibration import IMUCalibrationCheck
+
+            # Run blocking 5s check in threadpool
+            result = await run_in_threadpool(IMUCalibrationCheck.run_check, None, 5.0)
+            return result.to_dict()
+        except Exception as e:
+            logger.error(f"IMU check error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
 
     # ==================== Admin Endpoints ====================
 

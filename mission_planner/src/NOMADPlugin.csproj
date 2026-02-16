@@ -153,6 +153,7 @@
     <Compile Include="SnapshotManager.cs" />
     <Compile Include="AIDescriptionService.cs" />
     <Compile Include="TelemetryInjector.cs" />
+    <Compile Include="ZedCalibrationView.cs" />
   </ItemGroup>
 
   <!-- Optional local references for LibVLCSharp managed assemblies (place DLLs in third_party/libvlc) -->

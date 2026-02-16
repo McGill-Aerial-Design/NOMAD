@@ -70,6 +70,7 @@ namespace NOMAD.MissionPlanner
         private Button _btnTerminal;
         private Button _btnHealth;
         private Button _btnLinks;
+        private Button _btnCalibration;
         
         // Content views
         private UserControl _currentView;
@@ -81,6 +82,7 @@ namespace NOMAD.MissionPlanner
         private NOMADTerminalView _terminalView;
         private NOMADHealthView _healthView;
         private NOMADLinksView _linksView;
+        private ZedCalibrationView _calibrationView;
         
         // Update timer
         private System.Windows.Forms.Timer _updateTimer;
@@ -285,6 +287,11 @@ namespace NOMAD.MissionPlanner
             _btnLinks.Click += (s, e) => ShowView("Links");
             navPanel.Controls.Add(_btnLinks);
             
+            // ZED Calibration button
+            _btnCalibration = CreateSidebarButton("ZED Calibration");
+            _btnCalibration.Click += (s, e) => ShowView("Calibration");
+            navPanel.Controls.Add(_btnCalibration);
+            
             // IMPORTANT: In Windows Forms, docking order is reverse of Z-order
             // Add navPanel FIRST (will be at back, fills remaining space)
             // Add logoPanel SECOND (will be in front, docked at top)
@@ -414,6 +421,7 @@ namespace NOMAD.MissionPlanner
                     case "Terminal": headerText = "Jetson Terminal"; break;
                     case "Health": headerText = "System Health"; break;
                     case "Links": headerText = "Dual Link Status"; break;
+                    case "Calibration": headerText = "ZED Camera Calibration"; break;
                 }
                 ((Label)headerLabel[0]).Text = headerText;
             }
@@ -469,6 +477,10 @@ namespace NOMAD.MissionPlanner
                     if (_linksView == null) _linksView = new NOMADLinksView(_connectionManager, _config);
                     newView = _linksView;
                     break;
+                case "Calibration":
+                    if (_calibrationView == null) _calibrationView = new ZedCalibrationView(_config);
+                    newView = _calibrationView;
+                    break;
             }
             
             if (newView != null)
@@ -482,7 +494,7 @@ namespace NOMAD.MissionPlanner
         private void UpdateSidebarButtonState(string viewName)
         {
             // Reset all buttons to default state
-            var buttons = new[] { _btnDashboard, _btnTask1, _btnTask2, _btnBoundaries, _btnVideo, _btnTerminal, _btnHealth, _btnLinks };
+            var buttons = new[] { _btnDashboard, _btnTask1, _btnTask2, _btnBoundaries, _btnVideo, _btnTerminal, _btnHealth, _btnLinks, _btnCalibration };
             foreach (var btn in buttons)
             {
                 if (btn != null)
@@ -504,6 +516,7 @@ namespace NOMAD.MissionPlanner
                 case "Terminal": activeBtn = _btnTerminal; break;
                 case "Health": activeBtn = _btnHealth; break;
                 case "Links": activeBtn = _btnLinks; break;
+                case "Calibration": activeBtn = _btnCalibration; break;
             }
             
             if (activeBtn != null)
@@ -561,6 +574,7 @@ namespace NOMAD.MissionPlanner
                 _terminalView?.Dispose();
                 _healthView?.Dispose();
                 _linksView?.Dispose();
+                _calibrationView?.Dispose();
             }
             base.Dispose(disposing);
         }
