@@ -145,6 +145,7 @@ namespace NOMAD.MissionPlanner
         private Model3DGroup _meshModelGroup;
         private ModelVisual3D _meshVisual;
         private ModelVisual3D _droneVisual;
+        private Model3D _droneModelContent; // Stored to restore after hiding in FPV
         private ModelVisual3D _gridVisual;
         private ModelVisual3D _trajectoryVisual;
         
@@ -180,11 +181,12 @@ namespace NOMAD.MissionPlanner
         
         // Persisted block map: key = "ix,iy,iz", value = color key
         private Dictionary<string, uint> _persistedBlocks = new Dictionary<string, uint>();
-        private const int MaxPersistedVoxels = 15000; // Cap to prevent unbounded growth
+        private const int MaxPersistedVoxels = 5000; // Cap for 15cm voxels (~170m^3)
 
         // Material cache to avoid recreating WPF resources every frame
         private Dictionary<uint, Material> _materialCache = new Dictionary<uint, Material>();
-        private bool _geometryDirty = false;
+        private int _lastRebuildCount = 0; // Track voxel count at last geometry rebuild
+        private const int RebuildThreshold = 50; // Only rebuild when 50+ new voxels added
 
         // ==================== Constructor ====================
         
@@ -472,6 +474,7 @@ namespace NOMAD.MissionPlanner
             droneGroup.Children.Add(droneModel);
             
             _droneVisual = new ModelVisual3D { Content = droneGroup };
+            _droneModelContent = droneGroup;
             _viewport.Children.Add(_droneVisual);
         }
         
@@ -502,8 +505,8 @@ namespace NOMAD.MissionPlanner
                         await FetchAndUpdateMesh();
                     }
                     
-                    // Target 2 Hz update rate (500ms) to reduce GC pressure
-                    await Task.Delay(500, ct);
+                    // 1 Hz update rate (1000ms) to reduce GC pressure
+                    await Task.Delay(1000, ct);
                 }
                 catch (OperationCanceledException)
                 {
@@ -630,6 +633,7 @@ namespace NOMAD.MissionPlanner
                     _meshModelGroup.Children.Clear();
                     _persistedBlocks.Clear();
                     _materialCache.Clear();
+                    _lastRebuildCount = 0;
                 }
 
                 // Route to the appropriate renderer based on mode
@@ -697,6 +701,13 @@ namespace NOMAD.MissionPlanner
 
             if (!hasNew) return;
 
+            // Only rebuild geometry when enough new voxels accumulated
+            // This prevents rebuilding 5000+ cube geometry every second
+            int newSinceRebuild = _persistedBlocks.Count - _lastRebuildCount;
+            if (newSinceRebuild < RebuildThreshold && _lastRebuildCount > 0)
+                return;
+
+            _lastRebuildCount = _persistedBlocks.Count;
             RebuildMeshGeometry(vs, half);
         }
 
@@ -932,11 +943,17 @@ namespace NOMAD.MissionPlanner
             {
                 case CameraViewMode.FirstPerson:
                     UpdateFPVCamera();
+                    // Hide drone arrow in FPV so it doesn't obscure the view
+                    if (_droneVisual != null)
+                        _droneVisual.Content = new Model3DGroup();
                     break;
                 case CameraViewMode.ThirdPerson:
                     UpdateTPVCamera();
+                    RestoreDroneVisual();
                     break;
-                // Free orbit doesn't auto-update
+                case CameraViewMode.FreeOrbit:
+                    RestoreDroneVisual();
+                    break;
             }
         }
         
@@ -952,6 +969,15 @@ namespace NOMAD.MissionPlanner
                 Math.Sin(yaw) * Math.Cos(pitch),
                 -Math.Sin(pitch)
             );
+        }
+
+        private void RestoreDroneVisual()
+        {
+            if (_droneVisual != null && _droneModelContent != null &&
+                _droneVisual.Content != _droneModelContent)
+            {
+                _droneVisual.Content = _droneModelContent;
+            }
         }
         
         private void UpdateTPVCamera()
@@ -1033,6 +1059,7 @@ namespace NOMAD.MissionPlanner
                 _meshModelGroup.Children.Clear();
                 _persistedBlocks.Clear();
                 _materialCache.Clear();
+                _lastRebuildCount = 0;
                 var emptyGroup = new Model3DGroup();
                 _trajectoryVisual.Content = emptyGroup;
             }));
