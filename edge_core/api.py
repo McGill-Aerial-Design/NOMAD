@@ -172,6 +172,12 @@ class TerminalCommandRequest(BaseModel):
     timeout: int = 10
 
 
+class TerminalExecRequest(BaseModel):
+    """Request model for arbitrary terminal command execution."""
+    command: str
+    timeout: int = 30
+
+
 class TerminalCommandResponse(BaseModel):
     """Response model for terminal command."""
     success: bool
@@ -325,7 +331,8 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 "status": "/status",
                 "task1": "/api/task/1/*",
                 "task2": "/api/task/2/*",
-                "terminal": "/api/terminal/run",
+                "terminal_run": "/api/terminal/run",
+                "terminal_exec": "/api/terminal/exec",
                 "vio": "/api/vio/*",
             }
         }
@@ -1329,6 +1336,52 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 command_executed=command_str,
             )
             
+        except subprocess.TimeoutExpired:
+            return TerminalCommandResponse(
+                success=False,
+                stdout="",
+                stderr=f"Command timed out after {request.timeout}s",
+                return_code=-1,
+                command_executed=command_str,
+            )
+        except Exception as e:
+            return TerminalCommandResponse(
+                success=False,
+                stdout="",
+                stderr=str(e),
+                return_code=-1,
+                command_executed=command_str,
+            )
+
+    @app.post("/api/terminal/exec", tags=["Terminal"], response_model=TerminalCommandResponse)
+    async def exec_terminal_command(request: TerminalExecRequest):
+        """
+        Execute an arbitrary shell command on the Jetson.
+
+        Intended for the Mission Planner built-in terminal.
+        Commands are executed via ``bash -c`` so pipes, redirects, and
+        compound statements work as expected.
+        """
+        command_str = request.command.strip()
+        if not command_str:
+            raise HTTPException(status_code=400, detail="Empty command")
+
+        try:
+            result = subprocess.run(
+                ["bash", "-c", command_str],
+                capture_output=True,
+                text=True,
+                timeout=request.timeout,
+            )
+
+            return TerminalCommandResponse(
+                success=result.returncode == 0,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                return_code=result.returncode,
+                command_executed=command_str,
+            )
+
         except subprocess.TimeoutExpired:
             return TerminalCommandResponse(
                 success=False,
@@ -2399,10 +2452,35 @@ wait
         
         This clears the cached mesh data. Note: This does NOT clear the
         nvblox map itself - use the nvblox reset service for that.
+        
+        Instead of nulling slam_mesh_data (which causes the GET endpoint
+        to fall through to the unavailable ros_mesh_bridge fallback),
+        we replace it with a valid cleared state containing an empty
+        block list and clear=True so clients can clear their local caches.
         """
-        # Clear stored mesh data
-        if hasattr(request.app.state, 'slam_mesh_data'):
-            request.app.state.slam_mesh_data = None
+        # Preserve block_size from the previous mesh data if available
+        prev_block_size = 0.05
+        if (hasattr(request.app.state, 'slam_mesh_data')
+                and isinstance(request.app.state.slam_mesh_data, dict)):
+            prev_mesh = request.app.state.slam_mesh_data.get("mesh")
+            if isinstance(prev_mesh, dict):
+                prev_block_size = prev_mesh.get("block_size", 0.05)
+        
+        # Replace with a cleared-but-valid state so the GET endpoint
+        # still returns available=True and clients see clear=True
+        request.app.state.slam_mesh_data = {
+            "mesh": {
+                "blocks": [],
+                "block_size": prev_block_size,
+                "total_blocks": 0,
+                "mode": "blocks",
+                "clear": True,
+            },
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "block_count": 0,
+            "total_blocks": 0,
+            "mode": "blocks",
+        }
         
         # Also try to clear ros_mesh_bridge if available
         try:

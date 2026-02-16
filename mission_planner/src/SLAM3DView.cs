@@ -865,26 +865,26 @@ namespace NOMAD.MissionPlanner
         
         private async void BtnClearMesh_Click(object sender, EventArgs e)
         {
+            // Always clear local data regardless of API success
+            _elementHost.Invoke(new Action(() =>
+            {
+                _meshModelGroup.Children.Clear();
+                _persistedBlocks.Clear();
+                // Clear trajectory visual immediately
+                var emptyGroup = new Model3DGroup();
+                _trajectoryVisual.Content = emptyGroup;
+            }));
+            _trajectoryPoints.Clear();
+            _totalBlocks = 0;
+            
             try
             {
                 await JetsonApiService.PostAsync("/api/task/2/slam/clear");
-                
-                // Clear local mesh and persisted blocks
-                _elementHost.Invoke(new Action(() =>
-                {
-                    _meshModelGroup.Children.Clear();
-                    _persistedBlocks.Clear();
-                }));
-                
-                // Clear trajectory
-                _trajectoryPoints.Clear();
-                _totalBlocks = 0;
-                
                 UpdateStatusSafe("Mesh cleared");
             }
             catch (Exception ex)
             {
-                UpdateStatusSafe($"Clear failed: {ex.Message}");
+                UpdateStatusSafe($"Mesh cleared locally (server: {ex.Message})");
             }
         }
         
