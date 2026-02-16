@@ -612,11 +612,10 @@ namespace NOMAD.MissionPlanner
                     return;
 
                 double bs = meshData.BlockSize > 0 ? meshData.BlockSize : 0.05;
-                // Render cubes at voxel_size (bs/8) for fine detail.
-                // block_size is 8*voxel_size in nvblox, so cubes appear huge
-                // if drawn at block_size. Use voxel-scale cubes centered in
-                // each block for a point-cloud-like look.
-                double cubeSize = bs / 8.0;  // voxel_size
+                // Render full block-size cubes with a small gap for grid lines.
+                // This gives a solid wall/floor look instead of sparse points.
+                double cubeSize = bs * 0.96; // 96% fill -- 2% gap per side for visual grid
+                double gap = (bs - cubeSize) * 0.5;
 
                 // Merge incoming blocks into persisted map
                 bool hasNewBlocks = false;
@@ -671,21 +670,30 @@ namespace NOMAD.MissionPlanner
 
                     foreach (var idx in kvp.Value)
                     {
-                        // Position at block center
-                        double cx = idx[0] * bs + bs * 0.5;
-                        double cy = idx[1] * bs + bs * 0.5;
-                        double cz = idx[2] * bs + bs * 0.5;
-                        double half = cubeSize * 0.5;
+                        // Skip blocks within ~0.5m of the drone so it stays visible
+                        double bcx = idx[0] * bs + bs * 0.5;
+                        double bcy = idx[1] * bs + bs * 0.5;
+                        double bcz = idx[2] * bs + bs * 0.5;
+                        double dx = bcx - _dronePosition.X;
+                        double dy = bcy - _dronePosition.Y;
+                        double dz = bcz - _dronePosition.Z;
+                        if (dx * dx + dy * dy + dz * dz < 0.25) // 0.5m radius
+                            continue;
 
-                        // 8 vertices of a small cube centered in the block
-                        groupGeometry.Positions.Add(new Point3D(cx - half, cy - half, cz - half));
-                        groupGeometry.Positions.Add(new Point3D(cx + half, cy - half, cz - half));
-                        groupGeometry.Positions.Add(new Point3D(cx + half, cy + half, cz - half));
-                        groupGeometry.Positions.Add(new Point3D(cx - half, cy + half, cz - half));
-                        groupGeometry.Positions.Add(new Point3D(cx - half, cy - half, cz + half));
-                        groupGeometry.Positions.Add(new Point3D(cx + half, cy - half, cz + half));
-                        groupGeometry.Positions.Add(new Point3D(cx + half, cy + half, cz + half));
-                        groupGeometry.Positions.Add(new Point3D(cx - half, cy + half, cz + half));
+                        // Origin corner with small gap for visual grid lines
+                        double ox = idx[0] * bs + gap;
+                        double oy = idx[1] * bs + gap;
+                        double oz = idx[2] * bs + gap;
+
+                        // 8 vertices of a cube (nearly full block-size)
+                        groupGeometry.Positions.Add(new Point3D(ox,            oy,            oz));
+                        groupGeometry.Positions.Add(new Point3D(ox + cubeSize, oy,            oz));
+                        groupGeometry.Positions.Add(new Point3D(ox + cubeSize, oy + cubeSize, oz));
+                        groupGeometry.Positions.Add(new Point3D(ox,            oy + cubeSize, oz));
+                        groupGeometry.Positions.Add(new Point3D(ox,            oy,            oz + cubeSize));
+                        groupGeometry.Positions.Add(new Point3D(ox + cubeSize, oy,            oz + cubeSize));
+                        groupGeometry.Positions.Add(new Point3D(ox + cubeSize, oy + cubeSize, oz + cubeSize));
+                        groupGeometry.Positions.Add(new Point3D(ox,            oy + cubeSize, oz + cubeSize));
 
                         // 12 triangles (2 per face, 6 faces)
                         int[] faces = {
