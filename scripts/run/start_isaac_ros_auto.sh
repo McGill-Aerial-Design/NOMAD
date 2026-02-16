@@ -336,12 +336,15 @@ launch_ros_http_bridge() {
     log_info "Launching ROS-HTTP bridge..."
 
     # Bridge script is available via volume mount at /workspaces/isaac_ros-dev/edge_core/
+    # Kill any existing bridge processes to prevent duplicates
+    docker exec "$CONTAINER_NAME" bash -c 'pkill -f ros_http_bridge.py 2>/dev/null || true; sleep 1'
+    
     docker exec -i "$CONTAINER_NAME" tee /tmp/launch_bridge.sh > /dev/null << 'BRIDGE_SCRIPT'
 #!/bin/bash
 source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 sleep 5
-python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom
+python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 10 --vio-topic /zed/zed_node/odom
 BRIDGE_SCRIPT
     docker exec "$CONTAINER_NAME" chmod +x /tmp/launch_bridge.sh
 

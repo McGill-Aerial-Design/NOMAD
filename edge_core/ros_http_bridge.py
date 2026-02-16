@@ -36,6 +36,7 @@ import math
 import threading
 import time
 from dataclasses import dataclass, asdict
+from http.client import HTTPConnection
 from typing import Optional
 from urllib.request import Request, urlopen
 from urllib.error import URLError
@@ -129,6 +130,10 @@ class ROSHTTPBridge(Node):
         self._enable_nav_control = enable_nav_control
         self._enable_mesh = enable_mesh and NVBLOX_AVAILABLE
         self._enable_servo = enable_servo
+        
+        # Persistent HTTP connection (keep-alive) for efficiency
+        self._http_conn = HTTPConnection(host, port, timeout=1.0)
+        self._http_lock = threading.Lock()
         
         # QoS for sensor data
         sensor_qos = QoSProfile(
@@ -303,6 +308,26 @@ class ROSHTTPBridge(Node):
         except Exception as e:
             self.get_logger().error(f"cmd_vel processing error: {e}")
     
+    def _http_post(self, path: str, data: bytes, timeout: float = 0.5) -> bool:
+        """Send HTTP POST using persistent connection with keep-alive."""
+        with self._http_lock:
+            try:
+                self._http_conn.request(
+                    "POST", path, body=data,
+                    headers={"Content-Type": "application/json", "Connection": "keep-alive"}
+                )
+                resp = self._http_conn.getresponse()
+                resp.read()  # Drain response to allow connection reuse
+                return resp.status == 200
+            except Exception:
+                # Reconnect on failure
+                try:
+                    self._http_conn.close()
+                    self._http_conn.connect()
+                except Exception:
+                    pass
+                return False
+
     def _send_to_edge_core(self) -> None:
         """Send latest VIO data to edge_core via HTTP."""
         with self._lock:
@@ -318,21 +343,11 @@ class ROSHTTPBridge(Node):
         self._last_send_time = now
         
         try:
-            url = f"{self._base_url}/api/vio/update"
             data = json.dumps(asdict(vio)).encode("utf-8")
-            
-            request = Request(
-                url,
-                data=data,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            
-            with urlopen(request, timeout=0.5) as response:
-                if response.status == 200:
-                    self._vio_send_count += 1
-                else:
-                    self._send_errors += 1
+            if self._http_post("/api/vio/update", data):
+                self._vio_send_count += 1
+            else:
+                self._send_errors += 1
                     
         except URLError as e:
             self._send_errors += 1
@@ -353,22 +368,12 @@ class ROSHTTPBridge(Node):
             return
         
         try:
-            url = f"{self._base_url}/api/nav/velocity"
             data = json.dumps(asdict(cmd)).encode("utf-8")
-            
-            request = Request(
-                url,
-                data=data,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            
-            with urlopen(request, timeout=0.1) as response:  # Tight timeout for control
-                if response.status == 200:
-                    self._cmd_vel_send_count += 1
-                    self._last_cmd_vel_send_time = time.time()
-                else:
-                    self._send_errors += 1
+            if self._http_post("/api/nav/velocity", data, timeout=0.1):
+                self._cmd_vel_send_count += 1
+                self._last_cmd_vel_send_time = time.time()
+            else:
+                self._send_errors += 1
                     
         except URLError as e:
             self._send_errors += 1
@@ -425,19 +430,11 @@ class ROSHTTPBridge(Node):
         self._last_servo_send_time = now
         
         try:
-            url = f"{self._base_url}/api/servo/camera/tilt?angle={angle:.1f}"
-            
-            request = Request(
-                url,
-                data=None,
-                method="POST",
-            )
-            
-            with urlopen(request, timeout=0.5) as response:
-                if response.status == 200:
-                    self._servo_send_count += 1
-                else:
-                    self._send_errors += 1
+            path = f"/api/servo/camera/tilt?angle={angle:.1f}"
+            if self._http_post(path, b""):
+                self._servo_send_count += 1
+            else:
+                self._send_errors += 1
                     
         except URLError as e:
             self._send_errors += 1
@@ -564,27 +561,17 @@ class ROSHTTPBridge(Node):
             return
         
         try:
-            url = f"{self._base_url}/api/task/2/slam/mesh/update"
             data = json.dumps(mesh_data).encode("utf-8")
-            
-            request = Request(
-                url,
-                data=data,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            
-            with urlopen(request, timeout=2.0) as response:  # Longer timeout for mesh data
-                if response.status == 200:
-                    self._mesh_send_count += 1
-                    self._last_mesh_send_time = time.time()
-                    if self._mesh_send_count % 10 == 1:
-                        self.get_logger().info(
-                            f"Mesh sent: {mesh_data.get('total_blocks', 0)} blocks "
-                            f"(mode={mesh_data.get('mode', 'blocks')})"
-                        )
-                else:
-                    self._send_errors += 1
+            if self._http_post("/api/task/2/slam/mesh/update", data, timeout=2.0):
+                self._mesh_send_count += 1
+                self._last_mesh_send_time = time.time()
+                if self._mesh_send_count % 10 == 1:
+                    self.get_logger().info(
+                        f"Mesh sent: {mesh_data.get('total_blocks', 0)} blocks "
+                        f"(mode={mesh_data.get('mode', 'blocks')})"
+                    )
+            else:
+                self._send_errors += 1
                     
         except URLError as e:
             self._send_errors += 1

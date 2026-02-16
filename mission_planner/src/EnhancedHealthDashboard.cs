@@ -783,7 +783,9 @@ namespace NOMAD.MissionPlanner
                 {
                     var status = tailscale["status"]?.ToString() ?? "unknown";
                     var ip = tailscale["ip"]?.ToString() ?? "--";
-                    var peerCount = tailscale["peer_count"]?.Value<int>() ?? 0;
+                    // peer_count and latency_ms may be JSON null -- use nullable types
+                    var peerCount = tailscale["peer_count"]?.Type == JTokenType.Null
+                        ? 0 : (tailscale["peer_count"]?.Value<int>() ?? 0);
                     var latency = tailscale["latency_ms"];
                     
                     bool isConnected = status.Equals("connected", StringComparison.OrdinalIgnoreCase);
