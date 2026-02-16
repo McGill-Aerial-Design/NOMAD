@@ -677,7 +677,47 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 logger.error(f"Task 1 image capture failed: {e}")
                 # Continue to save metadata even if image capture fails
         else:
-            logger.warning("Task 1 capture: Camera service not available")
+            logger.warning("Task 1 capture: Camera service not available, trying RTSP fallback")
+            # Fallback: grab a frame from the RTSP video stream
+            try:
+                rtsp_url = os.environ.get("NOMAD_RTSP_URL", "rtsp://172.17.0.1:8554/primary")
+                cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                if cap.isOpened():
+                    # Read a couple frames to get the latest one (skip buffered)
+                    for _ in range(3):
+                        ret, frame_bgr = cap.read()
+                    cap.release()
+
+                    if ret and frame_bgr is not None:
+                        # Save image with EXIF
+                        temp_path = image_path + ".temp"
+                        cv2.imwrite(temp_path, frame_bgr)
+
+                        exif_dict = {"0th": {}, "Exif": {}, "GPS": {}}
+                        if state.gps_lat is not None and state.gps_lon is not None:
+                            exif_dict["GPS"] = _gps_to_exif(state.gps_lat, state.gps_lon, state.gps_alt)
+                        exif_dict["0th"][piexif.ImageIFD.DateTime] = timestamp.strftime("%Y:%m:%d %H:%M:%S").encode()
+                        heading_str = f"{heading:.1f}" if heading is not None else "N/A"
+                        pitch_str = f"{pitch:.1f}" if pitch is not None else "N/A"
+                        roll_str = f"{roll:.1f}" if roll is not None else "N/A"
+                        description = f"Heading: {heading_str}deg, Pitch: {pitch_str}deg, Roll: {roll_str}deg"
+                        exif_dict["0th"][piexif.ImageIFD.ImageDescription] = description.encode()
+
+                        exif_bytes = piexif.dump(exif_dict)
+                        piexif.insert(exif_bytes, temp_path, image_path)
+                        os.remove(temp_path)
+
+                        image_saved = True
+                        metadata["photo_path"] = image_path
+                        logger.info(f"Task 1 image captured via RTSP fallback: {image_path}")
+                    else:
+                        logger.warning("Task 1 capture: RTSP stream returned no frame")
+                else:
+                    cap.release()
+                    logger.warning("Task 1 capture: Could not open RTSP stream")
+            except Exception as e:
+                logger.error(f"Task 1 RTSP fallback capture failed: {e}")
         
         # Save metadata.json
         try:
