@@ -394,7 +394,20 @@ def create_app(state_manager: StateManager) -> FastAPI:
         if not health_monitor:
             return {"error": "Health monitor not initialized"}
         
-        return health_monitor.health.to_dict()
+        result = health_monitor.health.to_dict()
+        
+        # Include VIO health from external source (ros_http_bridge)
+        external_vio = request.app.state.external_vio_state
+        if external_vio:
+            confidence_0_1 = external_vio.get("confidence", 0)
+            result["vio"] = {
+                "health": "healthy" if confidence_0_1 > 0.5 else "degraded",
+                "tracking_confidence": confidence_0_1,
+                "message_rate_hz": external_vio.get("message_rate_hz", 30.0),
+                "source": external_vio.get("source", "unknown"),
+            }
+        
+        return result
 
     # ==================== Status Endpoints ====================
 

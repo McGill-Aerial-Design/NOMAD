@@ -274,18 +274,28 @@ class JetsonHealthMonitor:
             pass
         
         # Try sysfs for Jetson GPU info
+        # Paths vary by Jetson model -- try Orin Nano first, then older models
+        load_candidates = [
+            "/sys/devices/platform/bus@0/17000000.gpu/load",   # Orin Nano
+            "/sys/devices/gpu.0/load",                          # TX2/Xavier
+        ]
+        freq_candidates = [
+            "/sys/devices/platform/bus@0/17000000.gpu/devfreq/17000000.gpu/cur_freq",  # Orin Nano
+            "/sys/devices/gpu.0/devfreq/17000000.gp10b/cur_freq",                      # TX2/Xavier
+        ]
+        
         try:
-            # Read from sysfs for Jetson
-            load_path = "/sys/devices/gpu.0/load"
-            freq_path = "/sys/devices/gpu.0/devfreq/17000000.gp10b/cur_freq"
-            
-            if os.path.exists(load_path):
-                with open(load_path, "r") as f:
-                    result["load"] = float(f.read().strip()) / 10.0
+            for load_path in load_candidates:
+                if os.path.exists(load_path):
+                    with open(load_path, "r") as f:
+                        result["load"] = float(f.read().strip()) / 10.0
+                    break
                     
-            if os.path.exists(freq_path):
-                with open(freq_path, "r") as f:
-                    result["freq"] = float(f.read().strip()) / 1_000_000.0
+            for freq_path in freq_candidates:
+                if os.path.exists(freq_path):
+                    with open(freq_path, "r") as f:
+                        result["freq"] = float(f.read().strip()) / 1_000_000.0
+                    break
                     
         except Exception:
             pass

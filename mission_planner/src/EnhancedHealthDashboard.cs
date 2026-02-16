@@ -738,6 +738,23 @@ namespace NOMAD.MissionPlanner
                     _lblModemSignal.Text = "";
                 }
                 
+                // VIO Status (from /health/detailed or /health)
+                var vio = data["vio"];
+                if (vio != null && vio.Type != JTokenType.Null)
+                {
+                    var vioHealth = vio["health"]?.ToString() ?? "unknown";
+                    var vioConf = vio["tracking_confidence"]?.Value<float>() ?? 0;
+                    var vioRate = vio["message_rate_hz"]?.Value<float>() ?? 0;
+                    _lblVioStatus.Text = $"Status: {vioHealth}\nConfidence: {vioConf:F1}\nRate: {vioRate:F0} Hz";
+                    _lblVioStatus.ForeColor = vioHealth == "healthy" ? Color.LimeGreen :
+                        (vioHealth == "degraded" ? Color.Orange : Color.Red);
+                }
+                else
+                {
+                    _lblVioStatus.Text = "Status: No Data\nConfidence: --\nRate: -- Hz";
+                    _lblVioStatus.ForeColor = Color.Gray;
+                }
+
                 // Update history
                 UpdateHistory(cpuTemp, gpuTemp, cpuLoad, gpuLoad, memUsed);
                 
