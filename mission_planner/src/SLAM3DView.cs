@@ -612,6 +612,11 @@ namespace NOMAD.MissionPlanner
                     return;
 
                 double bs = meshData.BlockSize > 0 ? meshData.BlockSize : 0.05;
+                // Render cubes at voxel_size (bs/8) for fine detail.
+                // block_size is 8*voxel_size in nvblox, so cubes appear huge
+                // if drawn at block_size. Use voxel-scale cubes centered in
+                // each block for a point-cloud-like look.
+                double cubeSize = bs / 8.0;  // voxel_size
 
                 // Merge incoming blocks into persisted map
                 bool hasNewBlocks = false;
@@ -666,19 +671,21 @@ namespace NOMAD.MissionPlanner
 
                     foreach (var idx in kvp.Value)
                     {
-                        double ox = idx[0] * bs;
-                        double oy = idx[1] * bs;
-                        double oz = idx[2] * bs;
+                        // Position at block center
+                        double cx = idx[0] * bs + bs * 0.5;
+                        double cy = idx[1] * bs + bs * 0.5;
+                        double cz = idx[2] * bs + bs * 0.5;
+                        double half = cubeSize * 0.5;
 
-                        // 8 vertices of a cube
-                        groupGeometry.Positions.Add(new Point3D(ox,      oy,      oz));
-                        groupGeometry.Positions.Add(new Point3D(ox + bs, oy,      oz));
-                        groupGeometry.Positions.Add(new Point3D(ox + bs, oy + bs, oz));
-                        groupGeometry.Positions.Add(new Point3D(ox,      oy + bs, oz));
-                        groupGeometry.Positions.Add(new Point3D(ox,      oy,      oz + bs));
-                        groupGeometry.Positions.Add(new Point3D(ox + bs, oy,      oz + bs));
-                        groupGeometry.Positions.Add(new Point3D(ox + bs, oy + bs, oz + bs));
-                        groupGeometry.Positions.Add(new Point3D(ox,      oy + bs, oz + bs));
+                        // 8 vertices of a small cube centered in the block
+                        groupGeometry.Positions.Add(new Point3D(cx - half, cy - half, cz - half));
+                        groupGeometry.Positions.Add(new Point3D(cx + half, cy - half, cz - half));
+                        groupGeometry.Positions.Add(new Point3D(cx + half, cy + half, cz - half));
+                        groupGeometry.Positions.Add(new Point3D(cx - half, cy + half, cz - half));
+                        groupGeometry.Positions.Add(new Point3D(cx - half, cy - half, cz + half));
+                        groupGeometry.Positions.Add(new Point3D(cx + half, cy - half, cz + half));
+                        groupGeometry.Positions.Add(new Point3D(cx + half, cy + half, cz + half));
+                        groupGeometry.Positions.Add(new Point3D(cx - half, cy + half, cz + half));
 
                         // 12 triangles (2 per face, 6 faces)
                         int[] faces = {
