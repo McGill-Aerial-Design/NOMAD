@@ -168,7 +168,14 @@ start_edge_core() {
     export NOMAD_DEBUG=true
     export NOMAD_LOG_DIR="$NOMAD_DIR/data/mission_logs"
     
-    nohup python3 -m edge_core.main > $LOG_DIR/edge_core.log 2>&1 &
+    # Use venv Python if available (has pydantic, fastapi, etc.)
+    PYTHON_BIN="python3"
+    if [ -f "$NOMAD_DIR/venv/bin/python3" ]; then
+        PYTHON_BIN="$NOMAD_DIR/venv/bin/python3"
+        log_info "Using venv Python: $PYTHON_BIN"
+    fi
+    
+    nohup $PYTHON_BIN -m edge_core.main > $LOG_DIR/edge_core.log 2>&1 &
     EDGE_PID=$!
     sleep 3
     
