@@ -11,10 +11,10 @@
     cuda_stream_type: 2
 
     # ==============================================================
-    # VOXEL SIZE - 5cm for indoor navigation accuracy
-    # Memory managed via 8m radius + block deallocation
+    # VOXEL SIZE - 15cm for Mission Planner 3D visualization
+    # Larger voxels = fewer blocks + less GPU memory + clearer map
     # ==============================================================
-    voxel_size: 0.05  # 5cm voxels
+    voxel_size: 0.15  # 15cm voxels
     
     # static_tsdf for 3D mesh generation
     mapping_type: "static_tsdf"

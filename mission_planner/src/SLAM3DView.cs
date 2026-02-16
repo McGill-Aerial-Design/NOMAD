@@ -655,20 +655,21 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         private void UpdateMeshVisualVoxels(MeshDataModel meshData)
         {
-            // Use 15cm display grid for manageable geometry count
-            double displaySize = 0.15;
-            double half = displaySize * 0.5;
+            // Use native voxel size from nvblox (set in nvblox config)
+            double vs = meshData.VoxelSize > 0 ? meshData.VoxelSize : 0.05;
+            double half = vs * 0.5;
 
-            // Merge incoming voxels into persisted map (quantized to display grid)
+            // Merge incoming voxels into persisted map
             bool hasNew = false;
             foreach (var voxel in meshData.Voxels)
             {
                 if (voxel.Position == null || voxel.Position.Count < 3)
                     continue;
 
-                int qx = (int)Math.Round(voxel.Position[0] / displaySize);
-                int qy = (int)Math.Round(voxel.Position[1] / displaySize);
-                int qz = (int)Math.Round(voxel.Position[2] / displaySize);
+                // Quantize to voxel grid for deduplication
+                int qx = (int)Math.Round(voxel.Position[0] / vs);
+                int qy = (int)Math.Round(voxel.Position[1] / vs);
+                int qz = (int)Math.Round(voxel.Position[2] / vs);
                 string key = $"{qx},{qy},{qz}";
 
                 uint colorKey;
@@ -696,7 +697,7 @@ namespace NOMAD.MissionPlanner
 
             if (!hasNew) return;
 
-            RebuildMeshGeometry(displaySize, half);
+            RebuildMeshGeometry(vs, half);
         }
 
         /// <summary>
@@ -708,16 +709,13 @@ namespace NOMAD.MissionPlanner
         {
             _meshModelGroup.Children.Clear();
 
-            // Group by quantized color (reduce to 32 colors max to batch geometry)
+            // Group by color for batched geometry
             var colorGroups = new Dictionary<uint, List<string>>();
             foreach (var kvp in _persistedBlocks)
             {
-                // Quantize color to reduce unique material count (4-bit per channel)
-                uint c = kvp.Value;
-                uint qc = ((c >> 20) << 20) | (((c >> 12) & 0xF0) << 8) | ((c >> 4) & 0xF0);
-                if (!colorGroups.ContainsKey(qc))
-                    colorGroups[qc] = new List<string>();
-                colorGroups[qc].Add(kvp.Key);
+                if (!colorGroups.ContainsKey(kvp.Value))
+                    colorGroups[kvp.Value] = new List<string>();
+                colorGroups[kvp.Value].Add(kvp.Key);
             }
 
             foreach (var cg in colorGroups)
