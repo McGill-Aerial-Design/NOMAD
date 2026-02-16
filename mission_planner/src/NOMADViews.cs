@@ -36,6 +36,7 @@ namespace NOMAD.MissionPlanner
         protected static readonly Color SUCCESS_COLOR = NOMADTheme.SUCCESS;
         protected static readonly Color WARNING_COLOR = NOMADTheme.WARNING;
         protected static readonly Color ERROR_COLOR = NOMADTheme.ERROR;
+        protected static readonly Color INFO_COLOR = NOMADTheme.INFO;
         protected static readonly Color TEXT_PRIMARY = NOMADTheme.TEXT_PRIMARY;
         protected static readonly Color TEXT_SECONDARY = NOMADTheme.TEXT_SECONDARY;
 
