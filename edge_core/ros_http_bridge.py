@@ -69,6 +69,14 @@ except ImportError:
     NVBLOX_AVAILABLE = False
     logger.warning("nvblox_msgs not available - mesh bridge disabled")
 
+# visualization_msgs for per-voxel colored marker data
+try:
+    from visualization_msgs.msg import Marker
+    MARKER_AVAILABLE = True
+except ImportError:
+    MARKER_AVAILABLE = False
+    logger.warning("visualization_msgs not available - per-voxel mesh disabled")
+
 
 @dataclass
 class VIOData:
@@ -191,15 +199,27 @@ class ROSHTTPBridge(Node):
             self.get_logger().info(f"Subscribed to cmd_vel: {cmd_vel_topic}")
         
         # Subscribe to mesh for 3D visualization
-        if self._enable_mesh:
+        # Prefer color_layer_marker (per-voxel) over raw Mesh (per-block)
+        self._use_voxel_marker = False
+        if self._enable_mesh and MARKER_AVAILABLE:
+            voxel_topic = "/nvblox_node/color_layer_marker"
+            self.create_subscription(
+                Marker,
+                voxel_topic,
+                self._handle_voxel_marker,
+                mesh_qos,
+            )
+            self._use_voxel_marker = True
+            self.get_logger().info(f"Subscribed to per-voxel marker: {voxel_topic}")
+        if self._enable_mesh and NVBLOX_AVAILABLE:
             self.create_subscription(
                 Mesh,
                 mesh_topic,
                 self._handle_mesh,
                 mesh_qos,
             )
-            self.get_logger().info(f"Subscribed to mesh: {mesh_topic}")
-        elif enable_mesh and not NVBLOX_AVAILABLE:
+            self.get_logger().info(f"Subscribed to mesh (fallback): {mesh_topic}")
+        elif enable_mesh and not NVBLOX_AVAILABLE and not MARKER_AVAILABLE:
             self.get_logger().warning("Mesh requested but nvblox_msgs not available")
         
         # Subscribe to servo angle for nozzle control
@@ -446,16 +466,15 @@ class ROSHTTPBridge(Node):
     
     def _handle_mesh(self, msg) -> None:
         """
-        Handle mesh data from nvblox for 3D visualization.
+        Handle mesh data from nvblox for 3D visualization (block-only fallback).
 
-        Uses block-only mode: sends block indices + average color per block
-        instead of full vertex/triangle meshes. This dramatically reduces
-        CPU load on the Jetson and bandwidth over the network.
-
-        The Mission Planner renders each block as a colored cube at
-        position = index * block_size.
+        Only used when color_layer_marker is not available.
+        Sends block indices + average color per block.
         """
         if not self._enable_mesh:
+            return
+        # Skip block mode if we have per-voxel marker data
+        if self._use_voxel_marker:
             return
 
         try:
@@ -513,6 +532,70 @@ class ROSHTTPBridge(Node):
         except Exception as e:
             self.get_logger().error(f"Mesh processing error: {e}")
     
+    def _handle_voxel_marker(self, msg: 'Marker') -> None:
+        """
+        Handle per-voxel colored data from nvblox color_layer_marker topic.
+        
+        This gives individual voxel positions + colors (Marker type CUBE_LIST),
+        producing a much finer 3D map than the block-only approach.
+        """
+        if not self._enable_mesh:
+            return
+        try:
+            now = time.time()
+            # Rate limit: 1 Hz for voxel data (heavier payload than blocks)
+            if now - self._last_mesh_send_time < 1.0:
+                return
+
+            if msg.type != 6:  # CUBE_LIST
+                return
+
+            n_pts = len(msg.points)
+            if n_pts == 0:
+                return
+
+            voxel_size = msg.scale.x  # All 3 scales should be equal
+            has_colors = len(msg.colors) == n_pts
+
+            # Cap at 5000 voxels per update to limit bandwidth (~200KB)
+            limit = min(n_pts, 5000)
+
+            voxels = []
+            for i in range(limit):
+                p = msg.points[i]
+                entry = {"p": [round(p.x, 4), round(p.y, 4), round(p.z, 4)]}
+                if has_colors:
+                    c = msg.colors[i]
+                    entry["c"] = [
+                        int(c.r * 255),
+                        int(c.g * 255),
+                        int(c.b * 255),
+                    ]
+                voxels.append(entry)
+
+            camera_pose = self._get_camera_pose()
+
+            mesh_data = {
+                "voxels": voxels,
+                "voxel_size": round(voxel_size, 4),
+                "mode": "voxels",
+                "total_voxels": n_pts,
+                "sent_voxels": limit,
+                "timestamp": now,
+                "frame_id": msg.header.frame_id,
+                "clear": False,
+            }
+
+            if camera_pose:
+                mesh_data["drone_position"] = camera_pose["position"]
+                mesh_data["drone_attitude"] = camera_pose["attitude"]
+
+            self._mesh_recv_count += 1
+            self._send_mesh_to_edge_core(mesh_data)
+
+        except Exception as e:
+            self.get_logger().error(f"Voxel marker processing error: {e}")
+
     def _get_camera_pose(self) -> Optional[dict]:
         """
         Get camera pose from TF.

@@ -2198,8 +2198,8 @@ wait
             request.app.state.slam_mesh_data = {
                 "mesh": mesh_data,
                 "received_at": datetime.now(timezone.utc).isoformat(),
-                "block_count": len(mesh_data.get("blocks", [])),
-                "total_blocks": mesh_data.get("total_blocks", len(mesh_data.get("blocks", []))),
+                "block_count": len(mesh_data.get("blocks", mesh_data.get("voxels", []))),
+                "total_blocks": mesh_data.get("total_blocks", mesh_data.get("total_voxels", 0)),
                 "mode": mesh_data.get("mode", "blocks"),
             }
             
@@ -2209,7 +2209,7 @@ wait
             if "drone_attitude" in mesh_data and mesh_data["drone_attitude"]:
                 request.app.state.slam_mesh_data["drone_attitude"] = mesh_data["drone_attitude"]
             
-            return {"status": "ok", "blocks_received": len(mesh_data.get("blocks", []))}
+            return {"status": "ok", "items_received": len(mesh_data.get("blocks", mesh_data.get("voxels", [])))}
             
         except Exception as e:
             logger.error(f"SLAM mesh update error: {e}")

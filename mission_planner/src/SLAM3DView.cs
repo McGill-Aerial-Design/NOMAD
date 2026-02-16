@@ -79,6 +79,23 @@ namespace NOMAD.MissionPlanner
         public string FrameId { get; set; }
         [JsonProperty("clear")]
         public bool Clear { get; set; }
+        // Per-voxel mode (mode == "voxels")
+        [JsonProperty("voxels")]
+        public List<VoxelModel> Voxels { get; set; }
+        [JsonProperty("voxel_size")]
+        public double VoxelSize { get; set; }
+        [JsonProperty("total_voxels")]
+        public int TotalVoxels { get; set; }
+    }
+
+    public class VoxelModel
+    {
+        /// <summary>Position [x, y, z] in meters.</summary>
+        [JsonProperty("p")]
+        public List<double> Position { get; set; }
+        /// <summary>Color [R, G, B] (0-255).</summary>
+        [JsonProperty("c")]
+        public List<int> Color { get; set; }
     }
 
     public class MeshBlockModel
@@ -585,11 +602,12 @@ namespace NOMAD.MissionPlanner
                 // Update stats
                 if (data.Mesh != null)
                 {
-                    _totalBlocks = data.Mesh.TotalBlocks;
+                    _totalBlocks = data.Mesh.TotalBlocks > 0 ? data.Mesh.TotalBlocks : data.Mesh.TotalVoxels;
                 }
 
+                string mode = data.Mesh?.Mode == "voxels" ? "voxels" : "blocks";
                 UpdateStatusSafe($"Status: Connected | Updates: {_meshUpdateCount}");
-                UpdateStatsSafe($"Mesh: {_totalBlocks:N0} blocks");
+                UpdateStatsSafe($"Mesh: {_totalBlocks:N0} {mode} ({_persistedBlocks.Count:N0} cached)");
             }
             catch (Exception ex)
             {
@@ -608,13 +626,128 @@ namespace NOMAD.MissionPlanner
                     _persistedBlocks.Clear();
                 }
 
-                if (meshData?.Blocks == null || meshData.Blocks.Count == 0)
-                    return;
+                // Route to the appropriate renderer based on mode
+                if (meshData?.Mode == "voxels" && meshData.Voxels != null && meshData.Voxels.Count > 0)
+                {
+                    UpdateMeshVisualVoxels(meshData);
+                }
+                else if (meshData?.Blocks != null && meshData.Blocks.Count > 0)
+                {
+                    UpdateMeshVisualBlocks(meshData);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Mesh update error: {ex.Message}");
+            }
+        }
 
+        /// <summary>
+        /// Render per-voxel colored cubes. Each voxel has its own position and color
+        /// from the nvblox color_layer_marker (CUBE_LIST).
+        /// This produces a fine-grained solid 3D map.
+        /// </summary>
+        private void UpdateMeshVisualVoxels(MeshDataModel meshData)
+        {
+            double vs = meshData.VoxelSize > 0 ? meshData.VoxelSize : 0.05;
+            double half = vs * 0.5;
+
+            // Merge incoming voxels into persisted map
+            // Key: quantized position string; Value: color key
+            bool hasNew = false;
+            foreach (var voxel in meshData.Voxels)
+            {
+                if (voxel.Position == null || voxel.Position.Count < 3)
+                    continue;
+
+                // Quantize to voxel grid to deduplicate
+                int qx = (int)Math.Round(voxel.Position[0] / vs);
+                int qy = (int)Math.Round(voxel.Position[1] / vs);
+                int qz = (int)Math.Round(voxel.Position[2] / vs);
+                string key = $"{qx},{qy},{qz}";
+
+                uint colorKey;
+                if (voxel.Color != null && voxel.Color.Count >= 3)
+                    colorKey = ((uint)voxel.Color[0] << 16) | ((uint)voxel.Color[1] << 8) | (uint)voxel.Color[2];
+                else
+                    colorKey = (150u << 16) | (150u << 8) | 160u;
+
+                if (!_persistedBlocks.ContainsKey(key) || _persistedBlocks[key] != colorKey)
+                {
+                    _persistedBlocks[key] = colorKey;
+                    hasNew = true;
+                }
+            }
+
+            if (!hasNew) return;
+
+            _meshModelGroup.Children.Clear();
+
+            // Group by color for batched geometry
+            var colorGroups = new Dictionary<uint, List<string>>();
+            foreach (var kvp in _persistedBlocks)
+            {
+                if (!colorGroups.ContainsKey(kvp.Value))
+                    colorGroups[kvp.Value] = new List<string>();
+                colorGroups[kvp.Value].Add(kvp.Key);
+            }
+
+            foreach (var cg in colorGroups)
+            {
+                uint ck = cg.Key;
+                byte r = (byte)((ck >> 16) & 0xFF);
+                byte g = (byte)((ck >> 8) & 0xFF);
+                byte b = (byte)(ck & 0xFF);
+
+                var geom = new MeshGeometry3D();
+                int offset = 0;
+
+                foreach (var key in cg.Value)
+                {
+                    string[] parts = key.Split(',');
+                    double cx = int.Parse(parts[0]) * vs;
+                    double cy = int.Parse(parts[1]) * vs;
+                    double cz = int.Parse(parts[2]) * vs;
+
+                    // 8 vertices of cube centered on voxel position
+                    geom.Positions.Add(new Point3D(cx - half, cy - half, cz - half));
+                    geom.Positions.Add(new Point3D(cx + half, cy - half, cz - half));
+                    geom.Positions.Add(new Point3D(cx + half, cy + half, cz - half));
+                    geom.Positions.Add(new Point3D(cx - half, cy + half, cz - half));
+                    geom.Positions.Add(new Point3D(cx - half, cy - half, cz + half));
+                    geom.Positions.Add(new Point3D(cx + half, cy - half, cz + half));
+                    geom.Positions.Add(new Point3D(cx + half, cy + half, cz + half));
+                    geom.Positions.Add(new Point3D(cx - half, cy + half, cz + half));
+
+                    int[] faces = {
+                        0,1,2, 0,2,3,
+                        4,6,5, 4,7,6,
+                        0,4,5, 0,5,1,
+                        2,6,7, 2,7,3,
+                        0,3,7, 0,7,4,
+                        1,5,6, 1,6,2,
+                    };
+                    foreach (int fi in faces)
+                        geom.TriangleIndices.Add(offset + fi);
+                    offset += 8;
+                }
+
+                var mat = new DiffuseMaterial(new SolidColorBrush(
+                    Color.FromArgb(230, r, g, b)
+                ));
+                var model = new GeometryModel3D(geom, mat);
+                model.BackMaterial = mat;
+                _meshModelGroup.Children.Add(model);
+            }
+        }
+
+        /// <summary>
+        /// Render block-only cubes (fallback when per-voxel data is not available).
+        /// </summary>
+        private void UpdateMeshVisualBlocks(MeshDataModel meshData)
+        {
                 double bs = meshData.BlockSize > 0 ? meshData.BlockSize : 0.05;
-                // Render full block-size cubes with a small gap for grid lines.
-                // This gives a solid wall/floor look instead of sparse points.
-                double cubeSize = bs * 0.96; // 96% fill -- 2% gap per side for visual grid
+                double cubeSize = bs * 0.96;
                 double gap = (bs - cubeSize) * 0.5;
 
                 // Merge incoming blocks into persisted map
@@ -629,7 +762,7 @@ namespace NOMAD.MissionPlanner
                     if (block.Color != null && block.Color.Count >= 3)
                         colorKey = ((uint)block.Color[0] << 16) | ((uint)block.Color[1] << 8) | (uint)block.Color[2];
                     else
-                        colorKey = (150u << 16) | (150u << 8) | 160u; // default gray
+                        colorKey = (150u << 16) | (150u << 8) | 160u;
 
                     if (!_persistedBlocks.ContainsKey(key) || _persistedBlocks[key] != colorKey)
                     {
@@ -638,24 +771,19 @@ namespace NOMAD.MissionPlanner
                     }
                 }
 
-                // Only rebuild geometry when new blocks arrived
                 if (!hasNewBlocks)
                     return;
 
                 _meshModelGroup.Children.Clear();
 
-                // Rebuild from persisted map grouped by color
                 var colorGroups = new Dictionary<uint, List<int[]>>();
-
                 foreach (var kvp in _persistedBlocks)
                 {
                     string[] parts = kvp.Key.Split(',');
                     int[] idx = { int.Parse(parts[0]), int.Parse(parts[1]), int.Parse(parts[2]) };
-                    uint ck = kvp.Value;
-
-                    if (!colorGroups.ContainsKey(ck))
-                        colorGroups[ck] = new List<int[]>();
-                    colorGroups[ck].Add(idx);
+                    if (!colorGroups.ContainsKey(kvp.Value))
+                        colorGroups[kvp.Value] = new List<int[]>();
+                    colorGroups[kvp.Value].Add(idx);
                 }
 
                 foreach (var kvp in colorGroups)
@@ -670,22 +798,10 @@ namespace NOMAD.MissionPlanner
 
                     foreach (var idx in kvp.Value)
                     {
-                        // Skip blocks within ~0.5m of the drone so it stays visible
-                        double bcx = idx[0] * bs + bs * 0.5;
-                        double bcy = idx[1] * bs + bs * 0.5;
-                        double bcz = idx[2] * bs + bs * 0.5;
-                        double dx = bcx - _dronePosition.X;
-                        double dy = bcy - _dronePosition.Y;
-                        double dz = bcz - _dronePosition.Z;
-                        if (dx * dx + dy * dy + dz * dz < 0.25) // 0.5m radius
-                            continue;
-
-                        // Origin corner with small gap for visual grid lines
                         double ox = idx[0] * bs + gap;
                         double oy = idx[1] * bs + gap;
                         double oz = idx[2] * bs + gap;
 
-                        // 8 vertices of a cube (nearly full block-size)
                         groupGeometry.Positions.Add(new Point3D(ox,            oy,            oz));
                         groupGeometry.Positions.Add(new Point3D(ox + cubeSize, oy,            oz));
                         groupGeometry.Positions.Add(new Point3D(ox + cubeSize, oy + cubeSize, oz));
@@ -695,18 +811,16 @@ namespace NOMAD.MissionPlanner
                         groupGeometry.Positions.Add(new Point3D(ox + cubeSize, oy + cubeSize, oz + cubeSize));
                         groupGeometry.Positions.Add(new Point3D(ox,            oy + cubeSize, oz + cubeSize));
 
-                        // 12 triangles (2 per face, 6 faces)
                         int[] faces = {
-                            0,1,2, 0,2,3, // bottom
-                            4,6,5, 4,7,6, // top
-                            0,4,5, 0,5,1, // front
-                            2,6,7, 2,7,3, // back
-                            0,3,7, 0,7,4, // left
-                            1,5,6, 1,6,2, // right
+                            0,1,2, 0,2,3,
+                            4,6,5, 4,7,6,
+                            0,4,5, 0,5,1,
+                            2,6,7, 2,7,3,
+                            0,3,7, 0,7,4,
+                            1,5,6, 1,6,2,
                         };
                         foreach (int fi in faces)
                             groupGeometry.TriangleIndices.Add(gOffset + fi);
-
                         gOffset += 8;
                     }
 
@@ -717,11 +831,6 @@ namespace NOMAD.MissionPlanner
                     model.BackMaterial = material;
                     _meshModelGroup.Children.Add(model);
                 }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Mesh update error: {ex.Message}");
-            }
         }
         
         private void UpdateDroneVisual()
