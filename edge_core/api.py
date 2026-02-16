@@ -570,14 +570,9 @@ def create_app(state_manager: StateManager) -> FastAPI:
             "lon": float(building_lon) if building_lon else None,
         }
         
-        # Validate we have required data
         if not state.gps_fix:
-            return Task1CaptureResponse(
-                success=False,
-                timestamp=datetime.now(timezone.utc).isoformat(),
-                error="No GPS fix - cannot capture position"
-            )
-        
+            logger.warning("Task 1 capture: No GPS fix - position data will be unavailable")
+
         # Create capture record with timestamp
         timestamp = datetime.now(timezone.utc)
         timestamp_str = timestamp.strftime('%Y%m%d_%H%M%S')

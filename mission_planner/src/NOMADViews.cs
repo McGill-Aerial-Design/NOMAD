@@ -282,23 +282,40 @@ namespace NOMAD.MissionPlanner
                         if (!string.IsNullOrEmpty(result.Data))
                         {
                             var data = Newtonsoft.Json.Linq.JObject.Parse(result.Data);
-                            var imageName = data["image_name"]?.ToString();
-                            
-                            // Extract enhanced metadata (with fallback for backward compatibility)
-                            var timestamp = data["timestamp"]?.ToString() ?? DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ssZ");
-                            var headingDeg = data["heading_deg"]?.ToString() ?? "N/A";
-                            var pitchDeg = data["pitch_deg"]?.ToString() ?? "N/A";
-                            var rollDeg = data["roll_deg"]?.ToString() ?? "N/A";
-                            var gimbalPitch = data["gimbal_pitch_deg"]?.ToString() ?? "N/A";
-                            var gimbalYaw = data["gimbal_yaw_deg"]?.ToString() ?? "N/A";
-                            var buildingLocation = data["building_location"]?.ToString() ?? "N/A";
-                            var captureFolder = data["capture_folder"]?.ToString() ?? "N/A";
-                            
-                            var position = data["position"];
+
+                            // Helper: JValue(null).ToString() returns "" not null, so ?? doesn't catch it
+                            string Val(string key) {
+                                var t = data[key];
+                                return t != null && t.Type != Newtonsoft.Json.Linq.JTokenType.Null ? t.ToString() : null;
+                            }
+
+                            // Check API-level success (distinct from HTTP success)
+                            var apiSuccess = (bool?)data["success"] ?? false;
+                            if (!apiSuccess)
+                            {
+                                var error = Val("error") ?? "Unknown error";
+                                _txtResult.Text = $"[FAIL] {error}";
+                                _txtResult.ForeColor = ERROR_COLOR;
+                                return;
+                            }
+
+                            var imageName = Val("image_name");
+
+                            // Extract enhanced metadata
+                            var timestamp = Val("timestamp") ?? DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ssZ");
+                            var headingDeg = Val("heading_deg") ?? "N/A";
+                            var pitchDeg = Val("pitch_deg") ?? "N/A";
+                            var rollDeg = Val("roll_deg") ?? "N/A";
+                            var gimbalPitch = Val("gimbal_pitch_deg") ?? "N/A";
+                            var gimbalYaw = Val("gimbal_yaw_deg") ?? "N/A";
+                            var buildingLocation = Val("building_location") ?? "N/A";
+                            var captureFolder = Val("capture_folder") ?? "N/A";
+
+                            var position = data["position"] as Newtonsoft.Json.Linq.JObject;
                             var latStr = position?["lat"]?.ToString() ?? "N/A";
                             var lonStr = position?["lon"]?.ToString() ?? "N/A";
                             var altStr = position?["alt"]?.ToString() ?? "N/A";
-                            
+
                             // Format comprehensive metadata display
                             var metadataText = new StringBuilder();
                             metadataText.AppendLine("[OK] Capture Successful");
@@ -314,16 +331,18 @@ namespace NOMAD.MissionPlanner
                             
                             if (!string.IsNullOrEmpty(imageName))
                             {
-                                // Construct download URL
-                                string imageUrl = $"http://{_config.EffectiveIP}:{_config.JetsonPort}/api/task/1/images/{imageName}";
+                                // Construct download URL (use folder-based endpoint)
+                                var folderName = Path.GetFileName(captureFolder.TrimEnd('/'));
+                                string imageUrl = $"http://{_config.EffectiveIP}:{_config.JetsonPort}/api/task/1/images/{folderName}/{imageName}";
                                 
                                 // Download image
                                 var imageBytes = await JetsonApiService.GetByteArrayAsync(imageUrl);
                                 
-                                // Save to local directory
+                                // Save to local directory (use folder name to avoid overwriting)
                                 var task1Dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NOMAD", "Task1");
                                 Directory.CreateDirectory(task1Dir);
-                                var localPath = Path.Combine(task1Dir, imageName);
+                                var localImageName = $"{folderName}_{imageName}";
+                                var localPath = Path.Combine(task1Dir, localImageName);
                                 File.WriteAllBytes(localPath, imageBytes);
 
                                 // Save metadata JSON file
@@ -1190,70 +1209,33 @@ namespace NOMAD.MissionPlanner
             mainLayout.SetColumnSpan(_statusPanel, 2);
 
             // ============================================================
-            // LEFT COLUMN: Boundary point grids
+            // LEFT COLUMN: Boundary point grids + Import/Export
             // ============================================================
             var leftScroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(3) };
-            var leftContent = new FlowLayoutPanel
-            {
-                FlowDirection = FlowDirection.TopDown,
-                WrapContents = false,
-                AutoSize = true,
-                Dock = DockStyle.Top,
-            };
-            leftContent.SizeChanged += (s, e) => { leftContent.Width = leftScroll.ClientSize.Width - 8; };
-            leftScroll.Resize += (s, e) => { leftContent.Width = leftScroll.ClientSize.Width - 8; };
 
-            // -- Soft Boundary --
-            var softCard = CreateCard("SOFT BOUNDARY (Warning)");
-            softCard.Dock = DockStyle.Top;
-            softCard.Height = 200;
-            softCard.Margin = new Padding(0, 0, 0, 3);
+            // Dock.Top stacking: add in REVERSE order (last added = top)
+            // 3) Import/Export card (bottom)
+            var importCard = CreateCard("IMPORT / EXPORT");
+            importCard.Dock = DockStyle.Top;
+            importCard.Height = 105;
+            importCard.Margin = new Padding(0, 3, 0, 0);
 
-            _dgvSoftBoundary = CreateBoundaryGrid();
-            _dgvSoftBoundary.Location = new Point(10, 40);
-            _dgvSoftBoundary.Size = new Size(200, 110);
-            _dgvSoftBoundary.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            _dgvSoftBoundary.CellValueChanged += (s, e) => SaveBoundaryFromGrid(_dgvSoftBoundary, _missionConfig.SoftBoundary);
-            softCard.Controls.Add(_dgvSoftBoundary);
+            var lblImport = new Label { Text = "Import:", Font = new Font("Segoe UI", 7.5f, FontStyle.Bold), ForeColor = TEXT_SECONDARY, Location = new Point(10, 42), AutoSize = true };
+            importCard.Controls.Add(lblImport);
+            var btnImportKml = CreateButton("KML", ACCENT_COLOR, 48, 22); btnImportKml.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnImportKml.Location = new Point(60, 39); btnImportKml.Click += BtnImportKml_Click; importCard.Controls.Add(btnImportKml);
+            var btnImportCSV = CreateButton("Coords", ACCENT_COLOR, 55, 22); btnImportCSV.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnImportCSV.Location = new Point(112, 39); btnImportCSV.Click += BtnImportGoogleMaps_Click; importCard.Controls.Add(btnImportCSV);
+            var btnGetFromMP = CreateButton("MP Fence", ACCENT_COLOR, 65, 22); btnGetFromMP.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnGetFromMP.Location = new Point(171, 39); btnGetFromMP.Click += BtnGetFromMP_Click; importCard.Controls.Add(btnGetFromMP);
+            var lblExport = new Label { Text = "Export:", Font = new Font("Segoe UI", 7.5f, FontStyle.Bold), ForeColor = TEXT_SECONDARY, Location = new Point(10, 68), AutoSize = true };
+            importCard.Controls.Add(lblExport);
+            var btnExportToMPFence = CreateButton("To MP", SUCCESS_COLOR, 55, 22); btnExportToMPFence.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnExportToMPFence.Location = new Point(60, 65); btnExportToMPFence.Click += BtnExportToMPFence_Click; importCard.Controls.Add(btnExportToMPFence);
+            var btnExportFenFile = CreateButton("Save .fen", SUCCESS_COLOR, 65, 22); btnExportFenFile.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnExportFenFile.Location = new Point(119, 65); btnExportFenFile.Click += BtnExportPolyFile_Click; importCard.Controls.Add(btnExportFenFile);
+            leftScroll.Controls.Add(importCard);
 
-            // Buttons to the right of the grid
-            var softBtnX = 10;
-            var btnPasteSoft = CreateButton("Paste", ACCENT_COLOR, 65, 24);
-            btnPasteSoft.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold);
-            btnPasteSoft.Location = new Point(softBtnX, 158);
-            btnPasteSoft.Click += (s, e) => PasteCoordinates(_dgvSoftBoundary, _missionConfig.SoftBoundary, "soft");
-            softCard.Controls.Add(btnPasteSoft);
-
-            var btnAddSoft = CreateButton("+ Add", SUCCESS_COLOR, 55, 24);
-            btnAddSoft.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold);
-            btnAddSoft.Location = new Point(80, 158);
-            btnAddSoft.Click += (s, e) => AddManualPoint(_dgvSoftBoundary, _missionConfig.SoftBoundary);
-            softCard.Controls.Add(btnAddSoft);
-
-            var btnClearSoft = CreateButton("Clear", ERROR_COLOR, 50, 24);
-            btnClearSoft.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold);
-            btnClearSoft.Location = new Point(140, 158);
-            btnClearSoft.Click += (s, e) => ClearBoundary(_dgvSoftBoundary, _missionConfig.SoftBoundary);
-            softCard.Controls.Add(btnClearSoft);
-
-            var lblSoftCount = new Label
-            {
-                Name = "lblSoftCount",
-                Text = $"{_missionConfig.SoftBoundary.Vertices.Count} pts",
-                Font = new Font("Segoe UI", 8),
-                ForeColor = Color.Yellow,
-                Location = new Point(200, 162),
-                AutoSize = true,
-            };
-            softCard.Controls.Add(lblSoftCount);
-
-            leftContent.Controls.Add(softCard);
-
-            // -- Hard Boundary --
+            // 2) Hard Boundary (middle)
             var hardCard = CreateCard("HARD BOUNDARY (Kill)");
             hardCard.Dock = DockStyle.Top;
             hardCard.Height = 200;
-            hardCard.Margin = new Padding(0, 0, 0, 3);
+            hardCard.Margin = new Padding(0, 3, 0, 0);
 
             _dgvHardBoundary = CreateBoundaryGrid();
             _dgvHardBoundary.Location = new Point(10, 40);
@@ -1261,359 +1243,156 @@ namespace NOMAD.MissionPlanner
             _dgvHardBoundary.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             _dgvHardBoundary.CellValueChanged += (s, e) => SaveBoundaryFromGrid(_dgvHardBoundary, _missionConfig.HardBoundary);
             hardCard.Controls.Add(_dgvHardBoundary);
-
-            var btnPasteHard = CreateButton("Paste", ACCENT_COLOR, 65, 24);
-            btnPasteHard.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold);
-            btnPasteHard.Location = new Point(10, 158);
-            btnPasteHard.Click += (s, e) => PasteCoordinates(_dgvHardBoundary, _missionConfig.HardBoundary, "hard");
-            hardCard.Controls.Add(btnPasteHard);
-
-            var btnAddHard = CreateButton("+ Add", SUCCESS_COLOR, 55, 24);
-            btnAddHard.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold);
-            btnAddHard.Location = new Point(80, 158);
-            btnAddHard.Click += (s, e) => AddManualPoint(_dgvHardBoundary, _missionConfig.HardBoundary);
-            hardCard.Controls.Add(btnAddHard);
-
-            var btnClearHard = CreateButton("Clear", ERROR_COLOR, 50, 24);
-            btnClearHard.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold);
-            btnClearHard.Location = new Point(140, 158);
-            btnClearHard.Click += (s, e) => ClearBoundary(_dgvHardBoundary, _missionConfig.HardBoundary);
-            hardCard.Controls.Add(btnClearHard);
-
-            var lblHardCount = new Label
-            {
-                Name = "lblHardCount",
-                Text = $"{_missionConfig.HardBoundary.Vertices.Count} pts",
-                Font = new Font("Segoe UI", 8),
-                ForeColor = Color.Red,
-                Location = new Point(200, 162),
-                AutoSize = true,
-            };
+            var btnPasteHard = CreateButton("Paste", ACCENT_COLOR, 65, 24); btnPasteHard.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnPasteHard.Location = new Point(10, 158); btnPasteHard.Click += (s, e) => PasteCoordinates(_dgvHardBoundary, _missionConfig.HardBoundary, "hard"); hardCard.Controls.Add(btnPasteHard);
+            var btnAddHard = CreateButton("+ Add", SUCCESS_COLOR, 55, 24); btnAddHard.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnAddHard.Location = new Point(80, 158); btnAddHard.Click += (s, e) => AddManualPoint(_dgvHardBoundary, _missionConfig.HardBoundary); hardCard.Controls.Add(btnAddHard);
+            var btnClearHard = CreateButton("Clear", ERROR_COLOR, 50, 24); btnClearHard.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnClearHard.Location = new Point(140, 158); btnClearHard.Click += (s, e) => ClearBoundary(_dgvHardBoundary, _missionConfig.HardBoundary); hardCard.Controls.Add(btnClearHard);
+            var lblHardCount = new Label { Name = "lblHardCount", Text = $"{_missionConfig.HardBoundary.Vertices.Count} pts", Font = new Font("Segoe UI", 8), ForeColor = Color.Red, Location = new Point(200, 162), AutoSize = true };
             hardCard.Controls.Add(lblHardCount);
+            leftScroll.Controls.Add(hardCard);
 
-            leftContent.Controls.Add(hardCard);
+            // 1) Soft Boundary (top - added last so it docks on top)
+            var softCard = CreateCard("SOFT BOUNDARY (Warning)");
+            softCard.Dock = DockStyle.Top;
+            softCard.Height = 200;
+            softCard.Margin = new Padding(0, 0, 0, 0);
 
-            // -- Import / Export --
-            var importCard = CreateCard("IMPORT / EXPORT");
-            importCard.Dock = DockStyle.Top;
-            importCard.Height = 105;
-            importCard.Margin = new Padding(0, 0, 0, 3);
+            _dgvSoftBoundary = CreateBoundaryGrid();
+            _dgvSoftBoundary.Location = new Point(10, 40);
+            _dgvSoftBoundary.Size = new Size(200, 110);
+            _dgvSoftBoundary.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            _dgvSoftBoundary.CellValueChanged += (s, e) => SaveBoundaryFromGrid(_dgvSoftBoundary, _missionConfig.SoftBoundary);
+            softCard.Controls.Add(_dgvSoftBoundary);
+            var btnPasteSoft = CreateButton("Paste", ACCENT_COLOR, 65, 24); btnPasteSoft.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnPasteSoft.Location = new Point(10, 158); btnPasteSoft.Click += (s, e) => PasteCoordinates(_dgvSoftBoundary, _missionConfig.SoftBoundary, "soft"); softCard.Controls.Add(btnPasteSoft);
+            var btnAddSoft = CreateButton("+ Add", SUCCESS_COLOR, 55, 24); btnAddSoft.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnAddSoft.Location = new Point(80, 158); btnAddSoft.Click += (s, e) => AddManualPoint(_dgvSoftBoundary, _missionConfig.SoftBoundary); softCard.Controls.Add(btnAddSoft);
+            var btnClearSoft = CreateButton("Clear", ERROR_COLOR, 50, 24); btnClearSoft.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnClearSoft.Location = new Point(140, 158); btnClearSoft.Click += (s, e) => ClearBoundary(_dgvSoftBoundary, _missionConfig.SoftBoundary); softCard.Controls.Add(btnClearSoft);
+            var lblSoftCount = new Label { Name = "lblSoftCount", Text = $"{_missionConfig.SoftBoundary.Vertices.Count} pts", Font = new Font("Segoe UI", 8), ForeColor = Color.Yellow, Location = new Point(200, 162), AutoSize = true };
+            softCard.Controls.Add(lblSoftCount);
+            leftScroll.Controls.Add(softCard);
 
-            var lblImport = new Label { Text = "Import:", Font = new Font("Segoe UI", 7.5f, FontStyle.Bold), ForeColor = TEXT_SECONDARY, Location = new Point(10, 42), AutoSize = true };
-            importCard.Controls.Add(lblImport);
-
-            var btnImportKml = CreateButton("KML", ACCENT_COLOR, 48, 22);
-            btnImportKml.Font = new Font("Segoe UI", 7, FontStyle.Bold);
-            btnImportKml.Location = new Point(60, 39);
-            btnImportKml.Click += BtnImportKml_Click;
-            importCard.Controls.Add(btnImportKml);
-
-            var btnImportCSV = CreateButton("Coords", ACCENT_COLOR, 55, 22);
-            btnImportCSV.Font = new Font("Segoe UI", 7, FontStyle.Bold);
-            btnImportCSV.Location = new Point(112, 39);
-            btnImportCSV.Click += BtnImportGoogleMaps_Click;
-            importCard.Controls.Add(btnImportCSV);
-
-            var btnGetFromMP = CreateButton("MP Fence", ACCENT_COLOR, 65, 22);
-            btnGetFromMP.Font = new Font("Segoe UI", 7, FontStyle.Bold);
-            btnGetFromMP.Location = new Point(171, 39);
-            btnGetFromMP.Click += BtnGetFromMP_Click;
-            importCard.Controls.Add(btnGetFromMP);
-
-            var lblExport = new Label { Text = "Export:", Font = new Font("Segoe UI", 7.5f, FontStyle.Bold), ForeColor = TEXT_SECONDARY, Location = new Point(10, 68), AutoSize = true };
-            importCard.Controls.Add(lblExport);
-
-            var btnExportToMPFence = CreateButton("To MP", SUCCESS_COLOR, 55, 22);
-            btnExportToMPFence.Font = new Font("Segoe UI", 7, FontStyle.Bold);
-            btnExportToMPFence.Location = new Point(60, 65);
-            btnExportToMPFence.Click += BtnExportToMPFence_Click;
-            importCard.Controls.Add(btnExportToMPFence);
-
-            var btnExportFenFile = CreateButton("Save .fen", SUCCESS_COLOR, 65, 22);
-            btnExportFenFile.Font = new Font("Segoe UI", 7, FontStyle.Bold);
-            btnExportFenFile.Location = new Point(119, 65);
-            btnExportFenFile.Click += BtnExportPolyFile_Click;
-            importCard.Controls.Add(btnExportFenFile);
-
-            leftContent.Controls.Add(importCard);
-
-            leftScroll.Controls.Add(leftContent);
             mainLayout.Controls.Add(leftScroll, 0, 1);
 
             // ============================================================
             // RIGHT COLUMN: Settings, return point, actions, presets
             // ============================================================
             var rightScroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(3) };
-            var rightContent = new FlowLayoutPanel
-            {
-                FlowDirection = FlowDirection.TopDown,
-                WrapContents = false,
-                AutoSize = true,
-                Dock = DockStyle.Top,
-            };
-            rightContent.SizeChanged += (s, e) => { rightContent.Width = rightScroll.ClientSize.Width - 8; };
-            rightScroll.Resize += (s, e) => { rightContent.Width = rightScroll.ClientSize.Width - 8; };
 
-            // -- Monitoring Settings --
-            var settingsCard = CreateCard("MONITORING");
-            settingsCard.Dock = DockStyle.Top;
-            settingsCard.Height = 110;
-            settingsCard.Margin = new Padding(0, 0, 0, 3);
+            // Dock.Top stacking: add in REVERSE order
+            // 5) Presets (bottom)
+            var presetCard = CreateCard("PRESETS");
+            presetCard.Dock = DockStyle.Top;
+            presetCard.Height = 80;
+            presetCard.Margin = new Padding(0, 3, 0, 0);
 
-            var lblTask = new Label { Text = "Task:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(10, 40), AutoSize = true };
-            settingsCard.Controls.Add(lblTask);
+            _cmbPresets = new ComboBox { Location = new Point(10, 40), Size = new Size(150, 22), DropDownStyle = ComboBoxStyle.DropDownList, BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White, Font = new Font("Segoe UI", 8) };
+            RefreshPresetCombo();
+            presetCard.Controls.Add(_cmbPresets);
+            var btnLoadPreset = CreateButton("Load", SUCCESS_COLOR, 45, 22); btnLoadPreset.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnLoadPreset.Location = new Point(165, 40); btnLoadPreset.Click += LoadSelectedPreset; presetCard.Controls.Add(btnLoadPreset);
+            var btnSavePreset = CreateButton("Save", ACCENT_COLOR, 45, 22); btnSavePreset.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnSavePreset.Location = new Point(215, 40); btnSavePreset.Click += SaveCurrentAsPreset; presetCard.Controls.Add(btnSavePreset);
+            var btnDeletePreset = CreateButton("Del", ERROR_COLOR, 35, 22); btnDeletePreset.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnDeletePreset.Location = new Point(265, 40); btnDeletePreset.Click += DeleteSelectedPreset; presetCard.Controls.Add(btnDeletePreset);
+            rightScroll.Controls.Add(presetCard);
 
-            _cmbTask = new ComboBox
-            {
-                Location = new Point(50, 37), Size = new Size(170, 22),
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White,
-                Font = new Font("Segoe UI", 8),
-            };
-            _cmbTask.Items.AddRange(new object[] { "Task 1 - Outdoor", "Task 2 - Indoor" });
-            _cmbTask.SelectedIndex = _missionConfig.CurrentTask - 1;
-            _cmbTask.SelectedIndexChanged += (s, e) => { _missionConfig.CurrentTask = _cmbTask.SelectedIndex + 1; _missionConfig.Save(); };
-            settingsCard.Controls.Add(_cmbTask);
-
-            _chkEnableMonitoring = new CheckBox
-            {
-                Text = "Real-time Monitor",
-                ForeColor = Color.White, Font = new Font("Segoe UI", 8),
-                Location = new Point(10, 65), AutoSize = true,
-                Checked = _monitor?.IsMonitoring ?? false,
-            };
-            _chkEnableMonitoring.CheckedChanged += (s, e) => { if (_chkEnableMonitoring.Checked) _monitor?.StartMonitoring(); else _monitor?.StopMonitoring(); };
-            settingsCard.Controls.Add(_chkEnableMonitoring);
-
-            var lblMaxAlt = new Label { Text = "Max Alt:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(10, 88), AutoSize = true };
-            settingsCard.Controls.Add(lblMaxAlt);
-
-            _nudMaxAlt = new NumericUpDown
-            {
-                Location = new Point(65, 85), Size = new Size(60, 22),
-                Minimum = 10, Maximum = 150,
-                Value = (decimal)_missionConfig.MaxAltitudeAglMeters,
-                BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White,
-            };
-            _nudMaxAlt.ValueChanged += (s, e) => { _missionConfig.MaxAltitudeAglMeters = (double)_nudMaxAlt.Value; _missionConfig.Save(); };
-            settingsCard.Controls.Add(_nudMaxAlt);
-
-            var lblMeters = new Label { Text = "m AGL", Font = new Font("Segoe UI", 7), ForeColor = TEXT_SECONDARY, Location = new Point(128, 89), AutoSize = true };
-            settingsCard.Controls.Add(lblMeters);
-
-            rightContent.Controls.Add(settingsCard);
-
-            // -- Return Location --
-            var returnCard = CreateCard("RETURN LOCATION");
-            returnCard.Dock = DockStyle.Top;
-            returnCard.Height = 100;
-            returnCard.Margin = new Padding(0, 0, 0, 3);
-
-            var lblRetLat = new Label { Text = "Lat:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(10, 40), AutoSize = true };
-            returnCard.Controls.Add(lblRetLat);
-            _txtReturnLat = new TextBox
-            {
-                Location = new Point(35, 37), Size = new Size(95, 22),
-                BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White,
-                Font = new Font("Segoe UI", 8),
-            };
-            returnCard.Controls.Add(_txtReturnLat);
-
-            var lblRetLon = new Label { Text = "Lon:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(135, 40), AutoSize = true };
-            returnCard.Controls.Add(lblRetLon);
-            _txtReturnLon = new TextBox
-            {
-                Location = new Point(162, 37), Size = new Size(95, 22),
-                BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White,
-                Font = new Font("Segoe UI", 8),
-            };
-            returnCard.Controls.Add(_txtReturnLon);
-
-            // Load saved return point
-            if (_missionConfig.ReturnPoint != null)
-            {
-                _txtReturnLat.Text = _missionConfig.ReturnPoint.Lat.ToString("F7");
-                _txtReturnLon.Text = _missionConfig.ReturnPoint.Lon.ToString("F7");
-            }
-
-            var btnReturnCurrent = CreateButton("Use Current", ACCENT_COLOR, 85, 22);
-            btnReturnCurrent.Font = new Font("Segoe UI", 7, FontStyle.Bold);
-            btnReturnCurrent.Location = new Point(10, 68);
-            btnReturnCurrent.Click += (s, e) =>
-            {
-                double lat = MainV2.comPort?.MAV?.cs?.lat ?? 0;
-                double lon = MainV2.comPort?.MAV?.cs?.lng ?? 0;
-                if (lat != 0 || lon != 0)
-                {
-                    _txtReturnLat.Text = lat.ToString("F7");
-                    _txtReturnLon.Text = lon.ToString("F7");
-                    SaveReturnPoint();
-                }
-                else
-                    CustomMessageBox.Show("No GPS position available.", "Warning");
-            };
-            returnCard.Controls.Add(btnReturnCurrent);
-
-            var btnReturnSave = CreateButton("Save", SUCCESS_COLOR, 50, 22);
-            btnReturnSave.Font = new Font("Segoe UI", 7, FontStyle.Bold);
-            btnReturnSave.Location = new Point(100, 68);
-            btnReturnSave.Click += (s, e) => SaveReturnPoint();
-            returnCard.Controls.Add(btnReturnSave);
-
-            var btnReturnCentroid = CreateButton("Use Centroid", INFO_COLOR, 85, 22);
-            btnReturnCentroid.Font = new Font("Segoe UI", 7, FontStyle.Bold);
-            btnReturnCentroid.Location = new Point(155, 68);
-            btnReturnCentroid.Click += (s, e) =>
-            {
-                var boundary = _missionConfig.HardBoundary?.Vertices?.Count > 0
-                    ? _missionConfig.HardBoundary : _missionConfig.SoftBoundary;
-                if (boundary?.Vertices?.Count >= 3)
-                {
-                    double cLat = 0, cLon = 0;
-                    foreach (var v in boundary.Vertices) { cLat += v.Lat; cLon += v.Lon; }
-                    cLat /= boundary.Vertices.Count; cLon /= boundary.Vertices.Count;
-                    _txtReturnLat.Text = cLat.ToString("F7");
-                    _txtReturnLon.Text = cLon.ToString("F7");
-                    SaveReturnPoint();
-                }
-                else
-                    CustomMessageBox.Show("No boundary defined to compute centroid.", "Warning");
-            };
-            returnCard.Controls.Add(btnReturnCentroid);
-
-            rightContent.Controls.Add(returnCard);
-
-            // -- Violation Actions --
-            var actionCard = CreateCard("VIOLATION ACTIONS");
-            actionCard.Dock = DockStyle.Top;
-            actionCard.Height = 105;
-            actionCard.Margin = new Padding(0, 0, 0, 3);
-
-            var lblSoftAction = new Label { Text = "Soft:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(10, 40), AutoSize = true };
-            actionCard.Controls.Add(lblSoftAction);
-
-            _cmbSoftAction = new ComboBox
-            {
-                Location = new Point(42, 37), Size = new Size(145, 22),
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White,
-                Font = new Font("Segoe UI", 8),
-            };
-            _cmbSoftAction.Items.AddRange(new object[] { "Warn (Audio)", "Warn (Visual)", "Warn (Both)", "Return to Boundary" });
-            var softActionMap = new Dictionary<string, int> { { "warn_audio", 0 }, { "warn_visual", 1 }, { "warn_both", 2 }, { "return_to_boundary", 3 } };
-            _cmbSoftAction.SelectedIndex = softActionMap.TryGetValue(_missionConfig.Failsafe.SoftBoundaryAction ?? "", out int softIdx) ? softIdx : 2;
-            _cmbSoftAction.SelectedIndexChanged += (s, e) =>
-            {
-                _missionConfig.Failsafe.SoftBoundaryAction = _cmbSoftAction.SelectedItem.ToString().ToLower().Replace(" ", "_").Replace("(", "").Replace(")", "");
-                _missionConfig.Save();
-            };
-            actionCard.Controls.Add(_cmbSoftAction);
-
-            var lblHardAction = new Label { Text = "Hard:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(10, 65), AutoSize = true };
-            actionCard.Controls.Add(lblHardAction);
-
-            _cmbHardAction = new ComboBox
-            {
-                Location = new Point(42, 62), Size = new Size(145, 22),
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White,
-                Font = new Font("Segoe UI", 8),
-            };
-            _cmbHardAction.Items.AddRange(new object[] { "Warn and Kill", "Auto Kill", "Warn Only" });
-            var hardActionMap = new Dictionary<string, int> { { "warn_and_kill", 0 }, { "auto_kill", 1 }, { "warn_only", 2 } };
-            _cmbHardAction.SelectedIndex = hardActionMap.TryGetValue(_missionConfig.Failsafe.HardBoundaryAction ?? "", out int hardIdx) ? hardIdx : 0;
-            _cmbHardAction.SelectedIndexChanged += (s, e) =>
-            {
-                _missionConfig.Failsafe.HardBoundaryAction = _cmbHardAction.SelectedItem.ToString().ToLower().Replace(" ", "_");
-                _missionConfig.Save();
-            };
-            actionCard.Controls.Add(_cmbHardAction);
-
-            var lblKillDelay = new Label { Text = "Kill:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(195, 65), AutoSize = true };
-            actionCard.Controls.Add(lblKillDelay);
-
-            _nudKillDelay = new NumericUpDown
-            {
-                Location = new Point(222, 62), Size = new Size(45, 22),
-                Minimum = 1, Maximum = 30,
-                Value = _missionConfig.Failsafe.HardBoundaryKillDelaySec,
-                BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White,
-            };
-            _nudKillDelay.ValueChanged += (s, e) => { _missionConfig.Failsafe.HardBoundaryKillDelaySec = (int)_nudKillDelay.Value; _missionConfig.Save(); };
-            actionCard.Controls.Add(_nudKillDelay);
-
-            var lblSec = new Label { Text = "s", Font = new Font("Segoe UI", 7), ForeColor = TEXT_SECONDARY, Location = new Point(270, 67), AutoSize = true };
-            actionCard.Controls.Add(lblSec);
-
-            rightContent.Controls.Add(actionCard);
-
-            // -- Building Location --
+            // 4) Building Location
             var buildingCard = CreateCard("BUILDING LOCATION");
             buildingCard.Dock = DockStyle.Top;
             buildingCard.Height = 80;
-            buildingCard.Margin = new Padding(0, 0, 0, 3);
+            buildingCard.Margin = new Padding(0, 3, 0, 0);
 
             var lblBuildingLat = new Label { Text = "Lat:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(10, 42), AutoSize = true };
             buildingCard.Controls.Add(lblBuildingLat);
             _txtBuildingLat = new TextBox { Location = new Point(35, 39), Size = new Size(95, 22), BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White, Font = new Font("Segoe UI", 8) };
             buildingCard.Controls.Add(_txtBuildingLat);
-
             var lblBuildingLon = new Label { Text = "Lon:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(135, 42), AutoSize = true };
             buildingCard.Controls.Add(lblBuildingLon);
             _txtBuildingLon = new TextBox { Location = new Point(162, 39), Size = new Size(95, 22), BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White, Font = new Font("Segoe UI", 8) };
             buildingCard.Controls.Add(_txtBuildingLon);
+            var btnSaveBuilding = CreateButton("Save", SUCCESS_COLOR, 40, 22); btnSaveBuilding.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnSaveBuilding.Location = new Point(10, 65); btnSaveBuilding.Click += SaveBuildingLocation; buildingCard.Controls.Add(btnSaveBuilding);
+            var btnShowBuilding = CreateButton("Show", ACCENT_COLOR, 45, 22); btnShowBuilding.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnShowBuilding.Location = new Point(55, 65); btnShowBuilding.Click += ShowBuildingOnMap; buildingCard.Controls.Add(btnShowBuilding);
+            rightScroll.Controls.Add(buildingCard);
 
-            var btnSaveBuilding = CreateButton("Save", SUCCESS_COLOR, 40, 22);
-            btnSaveBuilding.Font = new Font("Segoe UI", 7, FontStyle.Bold);
-            btnSaveBuilding.Location = new Point(10, 65);
-            btnSaveBuilding.Click += SaveBuildingLocation;
-            buildingCard.Controls.Add(btnSaveBuilding);
+            // 3) Violation Actions
+            var actionCard = CreateCard("VIOLATION ACTIONS");
+            actionCard.Dock = DockStyle.Top;
+            actionCard.Height = 105;
+            actionCard.Margin = new Padding(0, 3, 0, 0);
 
-            var btnShowBuilding = CreateButton("Show", ACCENT_COLOR, 45, 22);
-            btnShowBuilding.Font = new Font("Segoe UI", 7, FontStyle.Bold);
-            btnShowBuilding.Location = new Point(55, 65);
-            btnShowBuilding.Click += ShowBuildingOnMap;
-            buildingCard.Controls.Add(btnShowBuilding);
+            var lblSoftAction = new Label { Text = "Soft:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(10, 40), AutoSize = true };
+            actionCard.Controls.Add(lblSoftAction);
+            _cmbSoftAction = new ComboBox { Location = new Point(42, 37), Size = new Size(145, 22), DropDownStyle = ComboBoxStyle.DropDownList, BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White, Font = new Font("Segoe UI", 8) };
+            _cmbSoftAction.Items.AddRange(new object[] { "Warn (Audio)", "Warn (Visual)", "Warn (Both)", "Return to Boundary" });
+            var softActionMap = new Dictionary<string, int> { { "warn_audio", 0 }, { "warn_visual", 1 }, { "warn_both", 2 }, { "return_to_boundary", 3 } };
+            _cmbSoftAction.SelectedIndex = softActionMap.TryGetValue(_missionConfig.Failsafe.SoftBoundaryAction ?? "", out int softIdx) ? softIdx : 2;
+            _cmbSoftAction.SelectedIndexChanged += (s, e) => { _missionConfig.Failsafe.SoftBoundaryAction = _cmbSoftAction.SelectedItem.ToString().ToLower().Replace(" ", "_").Replace("(", "").Replace(")", ""); _missionConfig.Save(); };
+            actionCard.Controls.Add(_cmbSoftAction);
+            var lblHardAction = new Label { Text = "Hard:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(10, 65), AutoSize = true };
+            actionCard.Controls.Add(lblHardAction);
+            _cmbHardAction = new ComboBox { Location = new Point(42, 62), Size = new Size(145, 22), DropDownStyle = ComboBoxStyle.DropDownList, BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White, Font = new Font("Segoe UI", 8) };
+            _cmbHardAction.Items.AddRange(new object[] { "Warn and Kill", "Auto Kill", "Warn Only" });
+            var hardActionMap = new Dictionary<string, int> { { "warn_and_kill", 0 }, { "auto_kill", 1 }, { "warn_only", 2 } };
+            _cmbHardAction.SelectedIndex = hardActionMap.TryGetValue(_missionConfig.Failsafe.HardBoundaryAction ?? "", out int hardIdx) ? hardIdx : 0;
+            _cmbHardAction.SelectedIndexChanged += (s, e) => { _missionConfig.Failsafe.HardBoundaryAction = _cmbHardAction.SelectedItem.ToString().ToLower().Replace(" ", "_"); _missionConfig.Save(); };
+            actionCard.Controls.Add(_cmbHardAction);
+            var lblKillDelay = new Label { Text = "Kill:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(195, 65), AutoSize = true };
+            actionCard.Controls.Add(lblKillDelay);
+            _nudKillDelay = new NumericUpDown { Location = new Point(222, 62), Size = new Size(45, 22), Minimum = 1, Maximum = 30, Value = _missionConfig.Failsafe.HardBoundaryKillDelaySec, BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White };
+            _nudKillDelay.ValueChanged += (s, e) => { _missionConfig.Failsafe.HardBoundaryKillDelaySec = (int)_nudKillDelay.Value; _missionConfig.Save(); };
+            actionCard.Controls.Add(_nudKillDelay);
+            var lblSec = new Label { Text = "s", Font = new Font("Segoe UI", 7), ForeColor = TEXT_SECONDARY, Location = new Point(270, 67), AutoSize = true };
+            actionCard.Controls.Add(lblSec);
+            rightScroll.Controls.Add(actionCard);
 
-            rightContent.Controls.Add(buildingCard);
+            // 2) Return Location
+            var returnCard = CreateCard("RETURN LOCATION");
+            returnCard.Dock = DockStyle.Top;
+            returnCard.Height = 100;
+            returnCard.Margin = new Padding(0, 3, 0, 0);
 
-            // -- Presets --
-            var presetCard = CreateCard("PRESETS");
-            presetCard.Dock = DockStyle.Top;
-            presetCard.Height = 80;
-            presetCard.Margin = new Padding(0, 0, 0, 3);
-
-            _cmbPresets = new ComboBox
+            var lblRetLat = new Label { Text = "Lat:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(10, 40), AutoSize = true };
+            returnCard.Controls.Add(lblRetLat);
+            _txtReturnLat = new TextBox { Location = new Point(35, 37), Size = new Size(95, 22), BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White, Font = new Font("Segoe UI", 8) };
+            returnCard.Controls.Add(_txtReturnLat);
+            var lblRetLon = new Label { Text = "Lon:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(135, 40), AutoSize = true };
+            returnCard.Controls.Add(lblRetLon);
+            _txtReturnLon = new TextBox { Location = new Point(162, 37), Size = new Size(95, 22), BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White, Font = new Font("Segoe UI", 8) };
+            returnCard.Controls.Add(_txtReturnLon);
+            if (_missionConfig.ReturnPoint != null)
             {
-                Location = new Point(10, 40), Size = new Size(150, 22),
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White,
-                Font = new Font("Segoe UI", 8),
-            };
-            RefreshPresetCombo();
-            presetCard.Controls.Add(_cmbPresets);
+                _txtReturnLat.Text = _missionConfig.ReturnPoint.Lat.ToString("F7");
+                _txtReturnLon.Text = _missionConfig.ReturnPoint.Lon.ToString("F7");
+            }
+            var btnReturnCurrent = CreateButton("Use Current", ACCENT_COLOR, 85, 22); btnReturnCurrent.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnReturnCurrent.Location = new Point(10, 68);
+            btnReturnCurrent.Click += (s, e) => { double lat = MainV2.comPort?.MAV?.cs?.lat ?? 0; double lon = MainV2.comPort?.MAV?.cs?.lng ?? 0; if (lat != 0 || lon != 0) { _txtReturnLat.Text = lat.ToString("F7"); _txtReturnLon.Text = lon.ToString("F7"); SaveReturnPoint(); } else CustomMessageBox.Show("No GPS position available.", "Warning"); };
+            returnCard.Controls.Add(btnReturnCurrent);
+            var btnReturnSave = CreateButton("Save", SUCCESS_COLOR, 50, 22); btnReturnSave.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnReturnSave.Location = new Point(100, 68); btnReturnSave.Click += (s, e) => SaveReturnPoint(); returnCard.Controls.Add(btnReturnSave);
+            var btnReturnCentroid = CreateButton("Use Centroid", INFO_COLOR, 85, 22); btnReturnCentroid.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnReturnCentroid.Location = new Point(155, 68);
+            btnReturnCentroid.Click += (s, e) => { var boundary = _missionConfig.HardBoundary?.Vertices?.Count > 0 ? _missionConfig.HardBoundary : _missionConfig.SoftBoundary; if (boundary?.Vertices?.Count >= 3) { double cLat = 0, cLon = 0; foreach (var v in boundary.Vertices) { cLat += v.Lat; cLon += v.Lon; } cLat /= boundary.Vertices.Count; cLon /= boundary.Vertices.Count; _txtReturnLat.Text = cLat.ToString("F7"); _txtReturnLon.Text = cLon.ToString("F7"); SaveReturnPoint(); } else CustomMessageBox.Show("No boundary defined.", "Warning"); };
+            returnCard.Controls.Add(btnReturnCentroid);
+            rightScroll.Controls.Add(returnCard);
 
-            var btnLoadPreset = CreateButton("Load", SUCCESS_COLOR, 45, 22);
-            btnLoadPreset.Font = new Font("Segoe UI", 7, FontStyle.Bold);
-            btnLoadPreset.Location = new Point(165, 40);
-            btnLoadPreset.Click += LoadSelectedPreset;
-            presetCard.Controls.Add(btnLoadPreset);
+            // 1) Monitoring Settings (top - added last)
+            var settingsCard = CreateCard("MONITORING");
+            settingsCard.Dock = DockStyle.Top;
+            settingsCard.Height = 110;
+            settingsCard.Margin = new Padding(0, 0, 0, 0);
 
-            var btnSavePreset = CreateButton("Save", ACCENT_COLOR, 45, 22);
-            btnSavePreset.Font = new Font("Segoe UI", 7, FontStyle.Bold);
-            btnSavePreset.Location = new Point(215, 40);
-            btnSavePreset.Click += SaveCurrentAsPreset;
-            presetCard.Controls.Add(btnSavePreset);
+            var lblTask = new Label { Text = "Task:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(10, 40), AutoSize = true };
+            settingsCard.Controls.Add(lblTask);
+            _cmbTask = new ComboBox { Location = new Point(50, 37), Size = new Size(170, 22), DropDownStyle = ComboBoxStyle.DropDownList, BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White, Font = new Font("Segoe UI", 8) };
+            _cmbTask.Items.AddRange(new object[] { "Task 1 - Outdoor", "Task 2 - Indoor" });
+            _cmbTask.SelectedIndex = _missionConfig.CurrentTask - 1;
+            _cmbTask.SelectedIndexChanged += (s, e) => { _missionConfig.CurrentTask = _cmbTask.SelectedIndex + 1; _missionConfig.Save(); };
+            settingsCard.Controls.Add(_cmbTask);
+            _chkEnableMonitoring = new CheckBox { Text = "Real-time Monitor", ForeColor = Color.White, Font = new Font("Segoe UI", 8), Location = new Point(10, 65), AutoSize = true, Checked = _monitor?.IsMonitoring ?? false };
+            _chkEnableMonitoring.CheckedChanged += (s, e) => { if (_chkEnableMonitoring.Checked) _monitor?.StartMonitoring(); else _monitor?.StopMonitoring(); };
+            settingsCard.Controls.Add(_chkEnableMonitoring);
+            var lblMaxAlt = new Label { Text = "Max Alt:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(10, 88), AutoSize = true };
+            settingsCard.Controls.Add(lblMaxAlt);
+            _nudMaxAlt = new NumericUpDown { Location = new Point(65, 85), Size = new Size(60, 22), Minimum = 10, Maximum = 150, Value = (decimal)_missionConfig.MaxAltitudeAglMeters, BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White };
+            _nudMaxAlt.ValueChanged += (s, e) => { _missionConfig.MaxAltitudeAglMeters = (double)_nudMaxAlt.Value; _missionConfig.Save(); };
+            settingsCard.Controls.Add(_nudMaxAlt);
+            var lblMeters = new Label { Text = "m AGL", Font = new Font("Segoe UI", 7), ForeColor = TEXT_SECONDARY, Location = new Point(128, 89), AutoSize = true };
+            settingsCard.Controls.Add(lblMeters);
+            rightScroll.Controls.Add(settingsCard);
 
-            var btnDeletePreset = CreateButton("Del", ERROR_COLOR, 35, 22);
-            btnDeletePreset.Font = new Font("Segoe UI", 7, FontStyle.Bold);
-            btnDeletePreset.Location = new Point(265, 40);
-            btnDeletePreset.Click += DeleteSelectedPreset;
-            presetCard.Controls.Add(btnDeletePreset);
-
-            rightContent.Controls.Add(presetCard);
-
-            rightScroll.Controls.Add(rightContent);
             mainLayout.Controls.Add(rightScroll, 1, 1);
 
             this.Controls.Add(mainLayout);

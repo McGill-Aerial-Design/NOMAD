@@ -49,43 +49,64 @@ namespace NOMAD.MissionPlanner
     /// </summary>
     public class SLAMMeshData
     {
+        [JsonProperty("available")]
         public bool Available { get; set; }
+        [JsonProperty("error")]
         public string Error { get; set; }
+        [JsonProperty("timestamp")]
         public string Timestamp { get; set; }
+        [JsonProperty("mesh")]
         public MeshDataModel Mesh { get; set; }
+        [JsonProperty("drone_position")]
         public DronePositionModel DronePosition { get; set; }
+        [JsonProperty("drone_attitude")]
         public DroneAttitudeModel DroneAttitude { get; set; }
     }
 
     public class MeshDataModel
     {
+        [JsonProperty("blocks")]
         public List<MeshBlockModel> Blocks { get; set; }
+        [JsonProperty("block_size")]
         public double BlockSize { get; set; }
+        [JsonProperty("total_blocks")]
         public int TotalBlocks { get; set; }
+        [JsonProperty("mode")]
         public string Mode { get; set; }
+        [JsonProperty("timestamp")]
         public double Timestamp { get; set; }
+        [JsonProperty("frame_id")]
         public string FrameId { get; set; }
+        [JsonProperty("clear")]
         public bool Clear { get; set; }
     }
 
     public class MeshBlockModel
     {
+        [JsonProperty("index")]
         public List<int> Index { get; set; }
         /// <summary>Block-only mode: average [R, G, B] color (0-255).</summary>
+        [JsonProperty("color")]
         public List<int> Color { get; set; }
     }
 
     public class DronePositionModel
     {
+        [JsonProperty("x")]
         public double X { get; set; }
+        [JsonProperty("y")]
         public double Y { get; set; }
+        [JsonProperty("z")]
         public double Z { get; set; }
     }
 
     public class DroneAttitudeModel
     {
+        [JsonProperty("roll")]
         public double Roll { get; set; }
+        [JsonProperty("pitch")]
         public double Pitch { get; set; }
+        [JsonProperty("yaw")]
         public double Yaw { get; set; }
     }
 
