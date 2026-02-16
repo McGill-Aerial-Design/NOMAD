@@ -233,98 +233,134 @@ namespace NOMAD.MissionPlanner
 
         private Panel CreateNotificationItemPanel(Notification notification)
         {
+            // Fonts
+            var titleFont = new Font("Segoe UI", 8.5f, FontStyle.Bold);
+            var messageFont = new Font("Segoe UI", 8f);
+            var timeFont = new Font("Segoe UI", 7f);
+            var badgeFont = new Font("Segoe UI", 7f, FontStyle.Bold);
+
+            // Layout constants
+            const int severityW = 4;
+            const int padL = 10;
+            const int padR = 10;
+            const int padY = 6;
+            const int badgeW = 32;
+            const int badgeH = 16;
+            const int gapX = 6;
+            int textX = severityW + padL + badgeW + gapX;
+
+            var message = notification.Message;
+            if (message.Length > 120) message = message.Substring(0, 117) + "...";
+            var timeText = notification.TimestampFormatted;
+
+            // Use a temporary large width for initial measurement — the labels will
+            // anchor left+right so they stretch to fill the panel at runtime.
+            int measureW = 600;
+
+            var titleSize = TextRenderer.MeasureText(notification.Title, titleFont, new Size(measureW, 0),
+                TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl);
+            var msgSize = TextRenderer.MeasureText(message, messageFont, new Size(measureW, 0),
+                TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl);
+            var timeSize = TextRenderer.MeasureText(timeText, timeFont);
+
+            int titleY = padY;
+            int msgY = titleY + titleSize.Height + 1;
+            int textBottom = msgY + msgSize.Height;
+            int badgeY = padY;
+            int timeY = badgeY + badgeH + 2;
+            int leftBottom = Math.Max(timeY + timeSize.Height, badgeY + badgeH);
+            int panelH = Math.Max(textBottom, leftBottom) + padY;
+            panelH = Math.Max(panelH, 36);
+
             var panel = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 52,
+                Height = panelH,
                 BackColor = Color.FromArgb(35, 35, 38),
                 Margin = new Padding(0, 0, 0, 2),
-                Padding = new Padding(8, 6, 8, 6),
+                Padding = new Padding(0),
                 Tag = notification,
             };
 
-            // Severity indicator bar
-            var severityBar = new Panel
+            // Severity indicator bar (left edge)
+            panel.Controls.Add(new Panel
             {
-                Width = 4,
+                Width = severityW,
                 Dock = DockStyle.Left,
                 BackColor = GetSeverityColor(notification.Severity),
-            };
-            panel.Controls.Add(severityBar);
+            });
 
-            // Category icon/badge
-            var categoryBadge = new Label
+            // Category badge (fixed position)
+            panel.Controls.Add(new Label
             {
                 Text = GetCategoryAbbreviation(notification.Category),
-                Font = new Font("Segoe UI", 7, FontStyle.Bold),
+                Font = badgeFont,
                 ForeColor = TEXT_PRIMARY,
                 BackColor = GetCategoryColor(notification.Category),
                 AutoSize = false,
-                Size = new Size(28, 16),
+                Size = new Size(badgeW, badgeH),
                 TextAlign = ContentAlignment.MiddleCenter,
-                Location = new Point(12, 6),
-            };
-            panel.Controls.Add(categoryBadge);
+                Location = new Point(severityW + padL, badgeY),
+            });
 
-            // Timestamp
-            var lblTime = new Label
+            // Timestamp (below badge, fixed position)
+            panel.Controls.Add(new Label
             {
-                Text = notification.TimestampFormatted,
-                Font = new Font("Segoe UI", 7),
+                Text = timeText,
+                Font = timeFont,
                 ForeColor = TEXT_MUTED,
-                Location = new Point(45, 6),
                 AutoSize = true,
-            };
-            panel.Controls.Add(lblTime);
+                Location = new Point(severityW + padL, timeY),
+            });
 
-            // Title
+            // Title — anchored left+right so it stretches with panel width
             var lblTitle = new Label
             {
                 Text = notification.Title,
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                Font = titleFont,
                 ForeColor = GetSeverityColor(notification.Severity),
-                Location = new Point(12, 22),
-                AutoSize = true,
-                MaximumSize = new Size(this.Width - 30, 0),
+                Location = new Point(textX, titleY),
+                Size = new Size(panel.Width > 0 ? panel.Width - textX - padR : measureW, titleSize.Height),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                AutoSize = false,
+                AutoEllipsis = true,
             };
             panel.Controls.Add(lblTitle);
 
-            // Message (truncated if needed)
-            var message = notification.Message;
-            if (message.Length > 60)
-            {
-                message = message.Substring(0, 57) + "...";
-            }
+            // Message — anchored left+right so it stretches with panel width
             var lblMessage = new Label
             {
                 Text = message,
-                Font = new Font("Segoe UI", 8),
+                Font = messageFont,
                 ForeColor = TEXT_SECONDARY,
-                Location = new Point(12, 36),
-                AutoSize = true,
-                MaximumSize = new Size(this.Width - 30, 0),
+                Location = new Point(textX, msgY),
+                Size = new Size(panel.Width > 0 ? panel.Width - textX - padR : measureW, msgSize.Height),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                AutoSize = false,
+                AutoEllipsis = true,
             };
             panel.Controls.Add(lblMessage);
 
             // Hover effect
-            panel.MouseEnter += (s, e) => panel.BackColor = Color.FromArgb(45, 45, 50);
-            panel.MouseLeave += (s, e) => panel.BackColor = Color.FromArgb(35, 35, 38);
+            var normalBg = Color.FromArgb(35, 35, 38);
+            var hoverBg = Color.FromArgb(45, 45, 50);
+            EventHandler enterHandler = (s, e) => panel.BackColor = hoverBg;
+            EventHandler leaveHandler = (s, e) => panel.BackColor = normalBg;
+            panel.MouseEnter += enterHandler;
+            panel.MouseLeave += leaveHandler;
 
-            // Click to mark as read
-            panel.Click += (s, e) =>
+            // Click to mark as read (panel + all children)
+            EventHandler clickHandler = (s, e) =>
             {
                 notification.IsRead = true;
                 UpdateUnreadCount();
             };
-
-            // Apply click handler to all children
+            panel.Click += clickHandler;
             foreach (Control child in panel.Controls)
             {
-                child.Click += (s, e) =>
-                {
-                    notification.IsRead = true;
-                    UpdateUnreadCount();
-                };
+                child.MouseEnter += enterHandler;
+                child.MouseLeave += leaveHandler;
+                child.Click += clickHandler;
             }
 
             return panel;

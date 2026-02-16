@@ -309,6 +309,11 @@ namespace NOMAD.MissionPlanner
         };
 
         /// <summary>
+        /// Return point for geofence breach (centroid used if null).
+        /// </summary>
+        public GpsPoint ReturnPoint { get; set; }
+
+        /// <summary>
         /// Maximum altitude AGL (400ft = 122m default).
         /// </summary>
         public double MaxAltitudeAglMeters { get; set; } = 122.0;
