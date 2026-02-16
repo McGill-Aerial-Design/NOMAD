@@ -250,6 +250,11 @@ def set_nav_controller(app: FastAPI, controller: "NavController") -> None:
     app.state.nav_controller = controller
 
 
+def set_camera_service(app: FastAPI, camera_service: Any) -> None:
+    """Register ZED camera service with API via app.state."""
+    app.state.camera_service = camera_service
+
+
 def create_app(state_manager: StateManager) -> FastAPI:
     """
     Create the FastAPI application for Edge Core.
@@ -309,6 +314,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
     app.state.nav_controller = None
     app.state.tailscale_manager = None
     app.state.network_monitor = None
+    app.state.camera_service = None
     
     # VIO state from external sources (ROS bridge)
     app.state.external_vio_state: Optional[dict] = None

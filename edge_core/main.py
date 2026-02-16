@@ -26,12 +26,13 @@ sys.path.insert (
     0, str(Path(__file__).resolve().parent.parent / "tailscale" / "src" )
 )
 
-from .api import ( create_app, 
-                  set_isaac_bridge, 
+from .api import ( create_app,
+                  set_isaac_bridge,
                   set_health_monitor,
                   set_tailscale_manager,
                   set_network_monitor,
                   set_nav_controller,
+                  set_camera_service,
 )
 
 from .logging_service import cleanup_old_logs

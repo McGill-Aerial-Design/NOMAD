@@ -42,8 +42,8 @@ DEFAULT_TOPIC = "/zed/zed_node/rgb/image_rect_color"
 # Stream settings
 DEFAULT_WIDTH = 1280
 DEFAULT_HEIGHT = 720
-DEFAULT_FPS = 15  # Orin Nano achieves ~10-15fps with nvblox running
-DEFAULT_BITRATE = 4  # Mbps
+DEFAULT_FPS = 30  # Match ZED camera target FPS (ZED_FPS=30 in jetson.env)
+DEFAULT_BITRATE = 6  # Mbps - increased for 30fps quality
 
 
 @dataclass
