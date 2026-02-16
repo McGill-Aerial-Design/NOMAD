@@ -236,7 +236,7 @@ class ROSHTTPBridge(Node):
             self.get_logger().info("Mesh forwarding ENABLED - forwarding nvblox mesh to Edge Core")
     
     def _handle_vio(self, msg: Odometry) -> None:
-        """Handle VIO odometry from Isaac ROS VSLAM."""
+        """Handle VIO odometry from ZED ROS2 driver."""
         try:
             pose = msg.pose.pose
             twist = msg.twist.twist
@@ -249,20 +249,20 @@ class ROSHTTPBridge(Node):
                 pose.orientation.w,
             )
             
-            # Convert from camera frame to NED frame
-            # ZED: X-right, Y-down, Z-forward
-            # NED: X-north, Y-east, Z-down
+            # Convert from ROS REP 103 frame to NED frame
+            # ZED ROS2 driver: X-forward, Y-left, Z-up (ENU-like body frame)
+            # NED: X-north(forward), Y-east(right), Z-down
             vio = VIOData(
                 timestamp=time.time(),
-                x=pose.position.z,   # Forward -> North
-                y=pose.position.x,   # Right -> East
-                z=-pose.position.y,  # Up -> Down (negate)
+                x=pose.position.x,    # Forward -> North
+                y=-pose.position.y,   # Left -> East (negate)
+                z=-pose.position.z,   # Up -> Down (negate)
                 roll=roll,
-                pitch=pitch,
-                yaw=yaw,
-                vx=twist.linear.z,
-                vy=twist.linear.x,
-                vz=-twist.linear.y,
+                pitch=-pitch,
+                yaw=-yaw,             # CCW -> CW heading
+                vx=twist.linear.x,
+                vy=-twist.linear.y,
+                vz=-twist.linear.z,
                 confidence=1.0,
                 source="isaac_ros",
             )

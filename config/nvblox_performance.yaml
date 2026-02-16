@@ -1,8 +1,8 @@
 # ==============================================================
 # NOMAD nvblox 3D LOW-LATENCY Configuration
 # 
-# Optimized for SPEED + 3D on Jetson Orin Nano (8GB RAM)
-# 5cm voxels for navigation accuracy, 3D ESDF, 15m persistent radius
+# Optimized for SPEED + 3D on Jetson Orin Nano (8GB shared RAM)
+# 10cm voxels, 8m radius to stay within GPU memory budget
 # ==============================================================
 
 /**:
@@ -11,9 +11,10 @@
     cuda_stream_type: 2
 
     # ==============================================================
-    # VOXEL SIZE - 5cm for autonomous navigation accuracy
+    # VOXEL SIZE - 10cm for Orin Nano memory budget
+    # (5cm = 8x more blocks, causes GPU OOM after ~10s)
     # ==============================================================
-    voxel_size: 0.05  # 5cm voxels - higher resolution for indoor mapping
+    voxel_size: 0.10  # 10cm voxels - good enough for indoor nav
     
     # static_tsdf for 3D mesh generation
     mapping_type: "static_tsdf"
@@ -23,19 +24,19 @@
 
     # ==============================================================
     # SPEED SETTINGS with 3D enabled
-    # Balanced for Orin Nano: leave headroom for ZED video streaming
+    # Conservative rates to stay within Orin Nano budget
     # ==============================================================
     tick_period_ms: 10
-    integrate_depth_rate_hz: 15.0    # reduced from 30 to share GPU with ZED
-    integrate_color_rate_hz: 10.0    # reduced from 15 for more headroom
+    integrate_depth_rate_hz: 10.0    # reduced from 15 - less GPU pressure
+    integrate_color_rate_hz: 5.0     # reduced from 10 - color is optional
     integrate_lidar_rate_hz: 0.0
-    update_mesh_rate_hz: 5.0         # reduced from 10 (mesh is visualization only)
-    update_esdf_rate_hz: 10.0        # reduced from 15 (still responsive for nav)
-    publish_layer_rate_hz: 10.0      # reduced from 15
-    publish_debug_vis_rate_hz: 2.0   # reduced from 5
-    decay_tsdf_rate_hz: 0.0        # DISABLE TSDF decay - causes flashing
-    decay_dynamic_occupancy_rate_hz: 0.0  # DISABLE dynamic decay
-    clear_map_outside_radius_rate_hz: 0.5 # slow map clearing
+    update_mesh_rate_hz: 2.0         # reduced from 5 - mesh is viz only
+    update_esdf_rate_hz: 5.0         # reduced from 10 - still responsive
+    publish_layer_rate_hz: 5.0       # reduced from 10
+    publish_debug_vis_rate_hz: 1.0   # reduced from 2
+    decay_tsdf_rate_hz: 1.0          # slow decay to free old blocks
+    decay_dynamic_occupancy_rate_hz: 0.0
+    clear_map_outside_radius_rate_hz: 1.0  # more aggressive map clearing
 
     # Misc
     num_cameras: 1
@@ -64,22 +65,22 @@
     maximum_input_queue_length: 2  # minimal buffering
 
     # ==============================================================
-    # Map clearing - 15m radius around drone
+    # Map clearing - 8m radius around drone (fits in GPU memory)
     # ==============================================================
-    map_clearing_radius_m: 15.0  # 15m radius for saved area
+    map_clearing_radius_m: 8.0  # 8m radius - prevents GPU OOM
     map_clearing_frame_id: "base_link"
 
     # QoS settings
     input_qos: "SYSTEM_DEFAULT"
 
-    # Visualization - 15m view area
-    esdf_slice_bounds_visualization_side_length: 15.0
-    workspace_height_bounds_visualization_side_length: 15.0
+    # Visualization - 8m view area
+    esdf_slice_bounds_visualization_side_length: 8.0
+    workspace_height_bounds_visualization_side_length: 8.0
     layer_visualization_exclusion_height_m: 3.0
-    layer_visualization_exclusion_radius_m: 15.0
-    max_back_projection_distance: 10.0
+    layer_visualization_exclusion_radius_m: 8.0
+    max_back_projection_distance: 8.0
     back_projection_subsampling: 4  # heavy subsampling for speed
-    layer_streamer_bandwidth_limit_mbps: 30.0  # higher limit for larger map
+    layer_streamer_bandwidth_limit_mbps: 30.0
 
     # Multi-mapper settings
     multi_mapper:
@@ -91,12 +92,12 @@
       do_depth_preprocessing: false
       depth_preprocessing_num_dilations: 1
       
-      # Integration distances - 15m range
-      projective_integrator_max_integration_distance_m: 15.0
-      projective_integrator_truncation_distance_vox: 4.0  # larger = more stable
+      # Integration distances - 8m range (fits GPU memory)
+      projective_integrator_max_integration_distance_m: 8.0
+      projective_integrator_truncation_distance_vox: 4.0
       projective_integrator_weighting_mode: "inverse_square_tsdf_distance_penalty"
-      projective_integrator_max_weight: 10.0  # HIGHER weight = more stable map
-      projective_tsdf_integrator_invalid_depth_decay_factor: -1.0  # disable invalid decay
+      projective_integrator_max_weight: 10.0
+      projective_tsdf_integrator_invalid_depth_decay_factor: -1.0
       
       # Occupancy settings
       free_region_occupancy_probability: 0.45
@@ -105,7 +106,7 @@
       occupied_region_half_width_m: 0.12
       
       # View calculator
-      raycast_subsampling_factor: 8  # moderate subsampling
+      raycast_subsampling_factor: 8
       
       # Workspace bounds
       workspace_bounds_type: "height_bounds"
@@ -113,22 +114,22 @@
       workspace_bounds_max_height_m: 2.5
       
       # ESDF integrator
-      esdf_integrator_min_weight: 0.5  # require more weight before showing
+      esdf_integrator_min_weight: 0.5
       esdf_integrator_max_site_distance_vox: 2.0
       esdf_integrator_max_distance_m: 2.0
       
       # Mesh - STABLE settings
-      mesh_integrator_min_weight: 1.0  # HIGHER = only show confident voxels
+      mesh_integrator_min_weight: 1.0
       mesh_integrator_weld_vertices: true
       
-      # MINIMAL DECAY - for stable map (value MUST be < 1.0)
-      tsdf_decay_factor: 0.99  # very slow decay
-      tsdf_decayed_weight_threshold: 0.001  # high threshold before decay kicks in
+      # Decay - enable to free GPU memory for old blocks
+      tsdf_decay_factor: 0.95  # moderate decay to reclaim memory
+      tsdf_decayed_weight_threshold: 0.001
       exclude_last_view_from_decay: true
       tsdf_set_free_distance_on_decayed: false
       tsdf_decayed_free_distance_vox: 4.0
-      decay_integrator_deallocate_decayed_blocks: false  # keep blocks in memory
+      decay_integrator_deallocate_decayed_blocks: true  # FREE old blocks to prevent OOM
       
-      # Streaming - 15m radius
+      # Streaming - 8m radius
       layer_streamer_exclusion_height_m: 3.0
-      layer_streamer_exclusion_radius_m: 15.0
+      layer_streamer_exclusion_radius_m: 8.0
