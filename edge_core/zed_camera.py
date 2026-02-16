@@ -173,7 +173,12 @@ class ZEDCameraService:
     def current_fps(self) -> float:
         """Get current camera FPS."""
         return self._current_fps
-    
+
+    @property
+    def zed_handle(self):
+        """Get the raw pyzed.sl.Camera handle for direct sensor access (e.g. calibration)."""
+        return self._zed if self._is_initialized else None
+
     def start(self) -> bool:
         """
         Start the ZED camera service.

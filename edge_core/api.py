@@ -2531,7 +2531,7 @@ wait
     # ==================== Sensor Calibration Endpoints ====================
 
     @app.post("/api/calibration/magnetometer/start", tags=["Calibration"])
-    async def start_magnetometer_calibration():
+    async def start_magnetometer_calibration(request: Request):
         """
         Start magnetometer calibration data collection.
 
@@ -2553,7 +2553,13 @@ wait
                     **session.get_status(),
                 }
 
-            session = start_mag_calibration()
+            # Pass existing ZED camera handle to avoid opening a second instance
+            zed_cam = None
+            camera_service = request.app.state.camera_service
+            if camera_service and hasattr(camera_service, 'zed_handle'):
+                zed_cam = camera_service.zed_handle
+
+            session = start_mag_calibration(zed_camera=zed_cam)
             if session.state == CalibrationState.FAILED:
                 raise HTTPException(
                     status_code=500,
@@ -2663,7 +2669,7 @@ wait
             raise HTTPException(status_code=500, detail=str(e))
 
     @app.get("/api/calibration/imu/check", tags=["Calibration"])
-    async def check_imu_health():
+    async def check_imu_health(request: Request):
         """
         Run a quick IMU health check.
 
@@ -2679,8 +2685,14 @@ wait
             from starlette.concurrency import run_in_threadpool
             from .sensor_calibration import IMUCalibrationCheck
 
+            # Pass existing ZED camera handle to avoid opening a second instance
+            zed_cam = None
+            camera_service = request.app.state.camera_service
+            if camera_service and hasattr(camera_service, 'zed_handle'):
+                zed_cam = camera_service.zed_handle
+
             # Run blocking 5s check in threadpool
-            result = await run_in_threadpool(IMUCalibrationCheck.run_check, None, 5.0)
+            result = await run_in_threadpool(IMUCalibrationCheck.run_check, zed_cam, 5.0)
             return result.to_dict()
         except Exception as e:
             logger.error(f"IMU check error: {e}")
