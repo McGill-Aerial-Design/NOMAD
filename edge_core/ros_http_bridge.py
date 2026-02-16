@@ -249,20 +249,20 @@ class ROSHTTPBridge(Node):
                 pose.orientation.w,
             )
             
-            # Convert from ROS REP 103 frame to NED frame
-            # ZED ROS2 driver: X-forward, Y-left, Z-up (ENU-like body frame)
+            # Convert from ZED camera frame to NED frame
+            # ZED odom: X-right, Y-down, Z-forward (camera/OpenCV convention)
             # NED: X-north(forward), Y-east(right), Z-down
             vio = VIOData(
                 timestamp=time.time(),
-                x=pose.position.x,    # Forward -> North
-                y=-pose.position.y,   # Left -> East (negate)
-                z=-pose.position.z,   # Up -> Down (negate)
+                x=pose.position.z,   # Forward -> North
+                y=pose.position.x,   # Right -> East
+                z=pose.position.y,   # Down -> Down (ZED Y-down = NED Z-down)
                 roll=roll,
-                pitch=-pitch,
-                yaw=-yaw,             # CCW -> CW heading
-                vx=twist.linear.x,
-                vy=-twist.linear.y,
-                vz=-twist.linear.z,
+                pitch=pitch,
+                yaw=yaw,
+                vx=twist.linear.z,
+                vy=twist.linear.x,
+                vz=twist.linear.y,
                 confidence=1.0,
                 source="isaac_ros",
             )
