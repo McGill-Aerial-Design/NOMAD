@@ -42,7 +42,7 @@ DEFAULT_TOPIC = "/zed/zed_node/rgb/image_rect_color"
 # Stream settings
 DEFAULT_WIDTH = 1280
 DEFAULT_HEIGHT = 720
-DEFAULT_FPS = 30
+DEFAULT_FPS = 15  # Orin Nano achieves ~10-15fps with nvblox running
 DEFAULT_BITRATE = 4  # Mbps
 
 
