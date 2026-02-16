@@ -175,21 +175,37 @@ class VideoStreamManager:
         Copies the simple video bridge script to the container and launches it.
         Returns True if successful.
         """
+        result = self._start_internal()
+        return result[0]
+    
+    def start_with_reason(self) -> tuple:
+        """
+        Start the video streaming pipeline with failure reason.
+        
+        Returns:
+            Tuple of (success: bool, message: str)
+        """
+        return self._start_internal()
+    
+    def _start_internal(self) -> tuple:
+        """Internal start implementation returning (success, message)."""
         with self._lock:
             if self._started and self.is_relay_running():
                 logger.info("Simple video bridge already running")
-                return True
+                return (True, "Already running")
             
             if not self.is_container_running():
-                logger.warning("Cannot start video: container not running")
-                return False
+                msg = f"Docker container '{self.container_name}' is not running. Start Isaac ROS first."
+                logger.warning(msg)
+                return (False, msg)
             
             # Copy simple bridge script to container
             script_name = "simple_video_bridge.py"
             script_path = os.path.join(os.path.dirname(__file__), "ros", script_name)
             if not os.path.exists(script_path):
-                logger.error(f"Simple video bridge not found: {script_path}")
-                return False
+                msg = f"Bridge script not found: {script_path}"
+                logger.error(msg)
+                return (False, msg)
             
             try:
                 subprocess.run(
@@ -200,8 +216,9 @@ class VideoStreamManager:
                 )
                 logger.info(f"Copied {script_name} to container")
             except subprocess.CalledProcessError as e:
-                logger.error(f"Failed to copy bridge script: {e}")
-                return False
+                msg = f"Failed to copy bridge script to container: {e.stderr or e}"
+                logger.error(msg)
+                return (False, msg)
             
             # Kill any existing bridge processes
             try:
@@ -214,7 +231,6 @@ class VideoStreamManager:
                 pass  # OK if nothing to kill
             
             # Start the simple video bridge
-            # Bitrate in kbps for x264enc (multiply by 1000 for bps equivalent)
             cmd = [
                 "docker", "exec", "-d", self.container_name,
                 "bash", "-c",
@@ -232,22 +248,46 @@ class VideoStreamManager:
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
                 if result.returncode != 0:
-                    logger.error(f"Failed to start bridge: {result.stderr}")
-                    return False
+                    msg = f"Docker exec failed: {result.stderr.strip() or 'unknown error'}"
+                    logger.error(msg)
+                    return (False, msg)
+            except subprocess.TimeoutExpired:
+                msg = "Bridge start command timed out after 10s"
+                logger.error(msg)
+                return (False, msg)
             except Exception as e:
-                logger.error(f"Error starting bridge: {e}")
-                return False
+                msg = f"Error starting bridge: {e}"
+                logger.error(msg)
+                return (False, msg)
             
             # Wait for bridge to be ready
-            for i in range(10):
+            for i in range(15):  # Wait up to 15 seconds
                 time.sleep(1)
                 if self.is_relay_running():
                     self._started = True
                     logger.info(f"{script_name} started successfully")
-                    return True
+                    return (True, "Started successfully")
             
-            logger.error("Simple video bridge did not start in time")
-            return False
+            # Bridge didn't respond - check if the process is still running
+            try:
+                check = subprocess.run(
+                    ["docker", "exec", self.container_name, "pgrep", "-f", "simple_video_bridge"],
+                    capture_output=True, text=True, timeout=5
+                )
+                if check.returncode != 0:
+                    # Process died - get the log
+                    log_result = subprocess.run(
+                        ["docker", "exec", self.container_name, "tail", "-20", "/tmp/video_bridge.log"],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    msg = f"Bridge process crashed. Log: {log_result.stdout.strip()[-200:]}"
+                else:
+                    msg = "Bridge process is running but HTTP health check not responding after 15s"
+            except Exception:
+                msg = "Bridge did not start in time and could not check process status"
+            
+            logger.error(msg)
+            return (False, msg)
 
     def stop(self) -> bool:
         """Stop the video streaming pipeline."""

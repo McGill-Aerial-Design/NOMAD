@@ -2044,9 +2044,9 @@ wait
         if not mgr:
             raise HTTPException(status_code=503, detail="Video stream manager not initialized")
         
-        success = mgr.start()
+        success, reason = mgr.start_with_reason()
         if not success:
-            raise HTTPException(status_code=500, detail="Failed to start video stream")
+            raise HTTPException(status_code=500, detail=f"Failed to start video stream: {reason}")
         
         return {
             "success": True,
@@ -2080,9 +2080,13 @@ wait
         if not mgr:
             raise HTTPException(status_code=503, detail="Video stream manager not initialized")
         
-        success = mgr.restart()
+        mgr.stop()
+        import asyncio
+        await asyncio.sleep(2)
+        
+        success, reason = mgr.start_with_reason()
         if not success:
-            raise HTTPException(status_code=500, detail="Failed to restart video stream")
+            raise HTTPException(status_code=500, detail=f"Failed to restart video stream: {reason}")
         
         return {
             "success": True,
