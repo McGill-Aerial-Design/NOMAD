@@ -186,8 +186,10 @@ namespace NOMAD.MissionPlanner
         // Material cache to avoid recreating WPF resources every frame
         private Dictionary<uint, Material> _materialCache = new Dictionary<uint, Material>();
 
-        // Dirty tracking: only rebuild mesh when new voxels arrive
+        // Dirty tracking: only rebuild mesh when significant changes arrive
         private bool _meshDirty = false;
+        private int _lastRenderedCount = 0;
+        private const int MinNewVoxelsForRebuild = 100; // Only rebuild after 100+ new voxels
 
         // ==================== Constructor ====================
         
@@ -635,6 +637,7 @@ namespace NOMAD.MissionPlanner
                     _persistedBlocks.Clear();
                     _materialCache.Clear();
                     _meshDirty = false;
+                    _lastRenderedCount = 0;
                 }
 
                 // Route to the appropriate renderer based on mode
@@ -700,7 +703,14 @@ namespace NOMAD.MissionPlanner
             }
 
             if (!_meshDirty) return;
+
+            // Only rebuild when enough new voxels accumulated to justify the cost
+            int newSinceLastRender = _persistedBlocks.Count - _lastRenderedCount;
+            if (newSinceLastRender < MinNewVoxelsForRebuild && _lastRenderedCount > 0)
+                return;
+
             _meshDirty = false;
+            _lastRenderedCount = _persistedBlocks.Count;
 
             // Full rebuild: one MeshGeometry3D per unique color (single draw call per color)
             // With 4-bit quantization, max ~4096 unique colors, typically 20-50 in practice
@@ -1042,6 +1052,7 @@ namespace NOMAD.MissionPlanner
                 _persistedBlocks.Clear();
                 _materialCache.Clear();
                 _meshDirty = false;
+                _lastRenderedCount = 0;
                 var emptyGroup = new Model3DGroup();
                 _trajectoryVisual.Content = emptyGroup;
             }));
