@@ -1032,54 +1032,71 @@ namespace NOMAD.MissionPlanner
             _btnRefreshSaved.Enabled = false;
             _txtSavedCal.Text = "Loading...";
 
-            try
+            const int maxRetries = 2;
+            Exception lastEx = null;
+
+            for (int attempt = 0; attempt <= maxRetries; attempt++)
             {
-                var resp = await JetsonApiService.GetAsync("/api/calibration/magnetometer/saved");
-                var body = await resp.Content.ReadAsStringAsync();
-                var data = JObject.Parse(body);
-
-                bool available = (bool?)data["available"] ?? false;
-                if (available)
+                try
                 {
-                    float fitness = (float?)data["fitness"] ?? 0;
-                    var hardIron = data["hard_iron"];
-                    var softIron = data["soft_iron"];
+                    var resp = await JetsonApiService.GetAsync("/api/calibration/magnetometer/saved");
+                    var body = await resp.Content.ReadAsStringAsync();
+                    var data = JObject.Parse(body);
 
-                    _lblSavedStatus.Text = $"Calibration available (fitness: {fitness:P1})";
-                    _lblSavedStatus.ForeColor = fitness > 0.9f ? NOMADTheme.SUCCESS
-                        : fitness > 0.7f ? NOMADTheme.WARNING : NOMADTheme.ERROR;
+                    bool available = (bool?)data["available"] ?? false;
+                    if (available)
+                    {
+                        float fitness = (float?)data["fitness"] ?? 0;
+                        var hardIron = data["hard_iron"];
+                        var softIron = data["soft_iron"];
 
-                    _txtSavedCal.ForeColor = NOMADTheme.TEXT_PRIMARY;
-                    _txtSavedCal.Text =
-                        $"=== Saved Magnetometer Calibration ===\r\n\r\n" +
-                        $"Timestamp:      {data["timestamp"]}\r\n" +
-                        $"Fitness:        {fitness:F4}\r\n" +
-                        $"Samples Used:   {data["samples_used"]}\r\n" +
-                        $"Duration:       {data["duration_s"]}s\r\n\r\n" +
-                        $"Hard-Iron Offset (uT):\r\n" +
-                        $"  X: {hardIron?[0]}\r\n" +
-                        $"  Y: {hardIron?[1]}\r\n" +
-                        $"  Z: {hardIron?[2]}\r\n\r\n" +
-                        $"Soft-Iron Correction Matrix:\r\n" +
-                        $"  [{FormatRow(softIron?[0])}]\r\n" +
-                        $"  [{FormatRow(softIron?[1])}]\r\n" +
-                        $"  [{FormatRow(softIron?[2])}]\r\n";
+                        _lblSavedStatus.Text = $"Calibration available (fitness: {fitness:P1})";
+                        _lblSavedStatus.ForeColor = fitness > 0.9f ? NOMADTheme.SUCCESS
+                            : fitness > 0.7f ? NOMADTheme.WARNING : NOMADTheme.ERROR;
+
+                        _txtSavedCal.ForeColor = NOMADTheme.TEXT_PRIMARY;
+                        _txtSavedCal.Text =
+                            $"=== Saved Magnetometer Calibration ===\r\n\r\n" +
+                            $"Timestamp:      {data["timestamp"]}\r\n" +
+                            $"Fitness:        {fitness:F4}\r\n" +
+                            $"Samples Used:   {data["samples_used"]}\r\n" +
+                            $"Duration:       {data["duration_s"]}s\r\n\r\n" +
+                            $"Hard-Iron Offset (uT):\r\n" +
+                            $"  X: {hardIron?[0]}\r\n" +
+                            $"  Y: {hardIron?[1]}\r\n" +
+                            $"  Z: {hardIron?[2]}\r\n\r\n" +
+                            $"Soft-Iron Correction Matrix:\r\n" +
+                            $"  [{FormatRow(softIron?[0])}]\r\n" +
+                            $"  [{FormatRow(softIron?[1])}]\r\n" +
+                            $"  [{FormatRow(softIron?[2])}]\r\n";
+                    }
+                    else
+                    {
+                        _lblSavedStatus.Text = "No calibration saved";
+                        _lblSavedStatus.ForeColor = NOMADTheme.WARNING;
+                        _txtSavedCal.ForeColor = NOMADTheme.TEXT_SECONDARY;
+                        _txtSavedCal.Text = data["message"]?.ToString() ?? "No magnetometer calibration found on the Jetson.";
+                    }
+
+                    _btnRefreshSaved.Enabled = true;
+                    return; // success
                 }
-                else
+                catch (Exception ex)
                 {
-                    _lblSavedStatus.Text = "No calibration saved";
-                    _lblSavedStatus.ForeColor = NOMADTheme.WARNING;
-                    _txtSavedCal.ForeColor = NOMADTheme.TEXT_SECONDARY;
-                    _txtSavedCal.Text = data["message"]?.ToString() ?? "No magnetometer calibration found on the Jetson.";
+                    lastEx = ex;
+                    if (attempt < maxRetries)
+                        await Task.Delay(1000);
                 }
             }
-            catch (Exception ex)
-            {
-                _lblSavedStatus.Text = "Error loading calibration";
-                _lblSavedStatus.ForeColor = NOMADTheme.ERROR;
-                _txtSavedCal.ForeColor = NOMADTheme.ERROR;
-                _txtSavedCal.Text = $"Error: {ex.Message}";
-            }
+
+            // All retries exhausted
+            _lblSavedStatus.Text = "Error loading calibration";
+            _lblSavedStatus.ForeColor = NOMADTheme.ERROR;
+            _txtSavedCal.ForeColor = NOMADTheme.ERROR;
+            string msg = lastEx is TaskCanceledException
+                ? "Connection timed out. Verify the Jetson is reachable."
+                : lastEx?.Message ?? "Unknown error";
+            _txtSavedCal.Text = $"Error: {msg}";
 
             _btnRefreshSaved.Enabled = true;
         }
