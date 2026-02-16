@@ -57,10 +57,14 @@ class VideoStreamNode(Node):
         # Build GStreamer pipeline: appsrc -> openh264enc (software) -> RTSP
         # Use openh264enc available in Isaac ROS container
         # Bitrate is in bps for openh264enc
+        # Use variable framerate (0/1) so we don't duplicate frames when
+        # ZED publishes slower than target (e.g. ~8fps under nvblox load)
         pipeline_str = (
             f'appsrc name=source is-live=true format=time do-timestamp=true '
-            f'caps=video/x-raw,format=BGR,width={width},height={height},framerate={fps}/1 ! '
+            f'caps=video/x-raw,format=BGR,width={width},height={height},framerate=0/1 ! '
             f'videoconvert ! '
+            f'videorate ! '
+            f'video/x-raw,framerate={fps}/1 ! '
             f'openh264enc bitrate={bitrate * 1000} num-slices=4 ! '
             f'video/x-h264,profile=baseline ! '
             f'h264parse ! '
@@ -131,8 +135,10 @@ class VideoStreamNode(Node):
             # Recreate GStreamer pipeline with new topic
             pipeline_str = (
                 f'appsrc name=source is-live=true format=time do-timestamp=true '
-                f'caps=video/x-raw,format=BGR,width={self.width},height={self.height},framerate={self.fps}/1 ! '
+                f'caps=video/x-raw,format=BGR,width={self.width},height={self.height},framerate=0/1 ! '
                 f'videoconvert ! '
+                f'videorate ! '
+                f'video/x-raw,framerate={self.fps}/1 ! '
                 f'openh264enc bitrate={self.bitrate * 1000} num-slices=4 ! '
                 f'video/x-h264,profile=baseline ! '
                 f'h264parse ! '

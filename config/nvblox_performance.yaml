@@ -23,15 +23,16 @@
 
     # ==============================================================
     # SPEED SETTINGS with 3D enabled
+    # Balanced for Orin Nano: leave headroom for ZED video streaming
     # ==============================================================
     tick_period_ms: 10
-    integrate_depth_rate_hz: 30.0
-    integrate_color_rate_hz: 15.0  # reduced color for some visualization
+    integrate_depth_rate_hz: 15.0    # reduced from 30 to share GPU with ZED
+    integrate_color_rate_hz: 10.0    # reduced from 15 for more headroom
     integrate_lidar_rate_hz: 0.0
-    update_mesh_rate_hz: 10.0      # stable mesh rate
-    update_esdf_rate_hz: 15.0      # ESDF rate
-    publish_layer_rate_hz: 15.0
-    publish_debug_vis_rate_hz: 5.0
+    update_mesh_rate_hz: 5.0         # reduced from 10 (mesh is visualization only)
+    update_esdf_rate_hz: 10.0        # reduced from 15 (still responsive for nav)
+    publish_layer_rate_hz: 10.0      # reduced from 15
+    publish_debug_vis_rate_hz: 2.0   # reduced from 5
     decay_tsdf_rate_hz: 0.0        # DISABLE TSDF decay - causes flashing
     decay_dynamic_occupancy_rate_hz: 0.0  # DISABLE dynamic decay
     clear_map_outside_radius_rate_hz: 0.5 # slow map clearing
