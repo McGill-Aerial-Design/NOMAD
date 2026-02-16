@@ -622,102 +622,80 @@ def create_app(state_manager: StateManager) -> FastAPI:
         metadata_path = os.path.join(capture_folder, metadata_filename)
         image_saved = False
 
-        # Capture image from ZED camera if available
+        # Helper: embed EXIF data (GPS, timestamp, AHRS) into a saved JPEG
+        def _embed_exif(temp_path: str, final_path: str) -> None:
+            exif_dict = {"0th": {}, "Exif": {}, "GPS": {}}
+            if state.gps_lat is not None and state.gps_lon is not None:
+                exif_dict["GPS"] = _gps_to_exif(state.gps_lat, state.gps_lon, state.gps_alt)
+            exif_dict["0th"][piexif.ImageIFD.DateTime] = timestamp.strftime("%Y:%m:%d %H:%M:%S").encode()
+            heading_str = f"{heading:.1f}" if heading is not None else "N/A"
+            pitch_str = f"{pitch:.1f}" if pitch is not None else "N/A"
+            roll_str = f"{roll:.1f}" if roll is not None else "N/A"
+            description = f"Heading: {heading_str}deg, Pitch: {pitch_str}deg, Roll: {roll_str}deg"
+            exif_dict["0th"][piexif.ImageIFD.ImageDescription] = description.encode()
+            exif_bytes = piexif.dump(exif_dict)
+            piexif.insert(exif_bytes, temp_path, final_path)
+            os.remove(temp_path)
+
+        # ------------------------------------------------------------------
+        # Capture strategy (ordered by preference):
+        #   1. ZED SDK camera_service (direct, highest quality)
+        #   2. RTSP stream grab (always available when video bridge is running)
+        # ------------------------------------------------------------------
+        image_bgr = None
+
+        # Strategy 1: ZED SDK direct capture
         camera_service = request.app.state.camera_service
         if camera_service:
             try:
                 frame = camera_service.get_frame()
                 if frame and frame.left_image is not None:
-                    # Convert from BGRA to BGR if needed (ZED often returns BGRA)
                     if frame.left_image.shape[2] == 4:
                         image_bgr = cv2.cvtColor(frame.left_image, cv2.COLOR_BGRA2BGR)
                     else:
                         image_bgr = frame.left_image
-
-                    # Save image temporarily to embed EXIF
-                    temp_path = image_path + ".temp"
-                    cv2.imwrite(temp_path, image_bgr)
-
-                    # Prepare EXIF data
-                    exif_dict = {
-                        "0th": {},
-                        "Exif": {},
-                        "GPS": {},
-                    }
-
-                    # Embed GPS coordinates in EXIF
-                    if state.gps_lat is not None and state.gps_lon is not None:
-                        exif_dict["GPS"] = _gps_to_exif(state.gps_lat, state.gps_lon, state.gps_alt)
-
-                    # Embed timestamp in EXIF DateTime
-                    exif_dict["0th"][piexif.ImageIFD.DateTime] = timestamp.strftime("%Y:%m:%d %H:%M:%S").encode()
-
-                    # Embed heading and AHRS data in ImageDescription
-                    heading_str = f"{heading:.1f}" if heading is not None else "N/A"
-                    pitch_str = f"{pitch:.1f}" if pitch is not None else "N/A"
-                    roll_str = f"{roll:.1f}" if roll is not None else "N/A"
-                    description = f"Heading: {heading_str}deg, Pitch: {pitch_str}deg, Roll: {roll_str}deg"
-                    exif_dict["0th"][piexif.ImageIFD.ImageDescription] = description.encode()
-
-                    # Dump EXIF data and save final image
-                    exif_bytes = piexif.dump(exif_dict)
-                    piexif.insert(exif_bytes, temp_path, image_path)
-
-                    # Remove temporary file
-                    os.remove(temp_path)
-
-                    image_saved = True
-                    logger.info(f"Task 1 image with EXIF saved: {image_path}")
-
-                    # Update metadata with photo path
-                    metadata["photo_path"] = image_path
+                    logger.info("Task 1 capture: frame from ZED SDK")
                 else:
-                    logger.warning("Task 1 capture: Camera frame not available")
+                    logger.warning("Task 1 capture: ZED SDK returned no frame, falling through to RTSP")
             except Exception as e:
-                logger.error(f"Task 1 image capture failed: {e}")
-                # Continue to save metadata even if image capture fails
-        else:
-            logger.warning("Task 1 capture: Camera service not available, trying RTSP fallback")
-            # Fallback: grab a frame from the RTSP video stream
+                logger.warning(f"Task 1 capture: ZED SDK failed ({e}), falling through to RTSP")
+
+        # Strategy 2: RTSP stream grab (primary path when no SDK)
+        if image_bgr is None:
             try:
                 rtsp_url = os.environ.get("NOMAD_RTSP_URL", "rtsp://172.17.0.1:8554/primary")
                 cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 if cap.isOpened():
-                    # Read a couple frames to get the latest one (skip buffered)
+                    # Flush stale buffered frames and grab the freshest one
+                    ret = False
                     for _ in range(3):
-                        ret, frame_bgr = cap.read()
+                        ret, image_bgr = cap.read()
                     cap.release()
-
-                    if ret and frame_bgr is not None:
-                        # Save image with EXIF
-                        temp_path = image_path + ".temp"
-                        cv2.imwrite(temp_path, frame_bgr)
-
-                        exif_dict = {"0th": {}, "Exif": {}, "GPS": {}}
-                        if state.gps_lat is not None and state.gps_lon is not None:
-                            exif_dict["GPS"] = _gps_to_exif(state.gps_lat, state.gps_lon, state.gps_alt)
-                        exif_dict["0th"][piexif.ImageIFD.DateTime] = timestamp.strftime("%Y:%m:%d %H:%M:%S").encode()
-                        heading_str = f"{heading:.1f}" if heading is not None else "N/A"
-                        pitch_str = f"{pitch:.1f}" if pitch is not None else "N/A"
-                        roll_str = f"{roll:.1f}" if roll is not None else "N/A"
-                        description = f"Heading: {heading_str}deg, Pitch: {pitch_str}deg, Roll: {roll_str}deg"
-                        exif_dict["0th"][piexif.ImageIFD.ImageDescription] = description.encode()
-
-                        exif_bytes = piexif.dump(exif_dict)
-                        piexif.insert(exif_bytes, temp_path, image_path)
-                        os.remove(temp_path)
-
-                        image_saved = True
-                        metadata["photo_path"] = image_path
-                        logger.info(f"Task 1 image captured via RTSP fallback: {image_path}")
+                    if ret and image_bgr is not None:
+                        logger.info("Task 1 capture: frame from RTSP stream")
                     else:
+                        image_bgr = None
                         logger.warning("Task 1 capture: RTSP stream returned no frame")
                 else:
                     cap.release()
-                    logger.warning("Task 1 capture: Could not open RTSP stream")
+                    logger.warning("Task 1 capture: could not open RTSP stream")
             except Exception as e:
-                logger.error(f"Task 1 RTSP fallback capture failed: {e}")
+                logger.error(f"Task 1 capture: RTSP grab failed: {e}")
+
+        # Save captured frame with EXIF metadata
+        if image_bgr is not None:
+            try:
+                temp_path = image_path + ".temp"
+                cv2.imwrite(temp_path, image_bgr)
+                _embed_exif(temp_path, image_path)
+                image_saved = True
+                metadata["photo_path"] = image_path
+                logger.info(f"Task 1 image saved: {image_path}")
+            except Exception as e:
+                logger.error(f"Task 1 image save/EXIF failed: {e}")
+        else:
+            logger.warning("Task 1 capture: no image source available")
         
         # Save metadata.json
         try:
