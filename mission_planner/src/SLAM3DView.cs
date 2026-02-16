@@ -185,8 +185,12 @@ namespace NOMAD.MissionPlanner
 
         // Material cache to avoid recreating WPF resources every frame
         private Dictionary<uint, Material> _materialCache = new Dictionary<uint, Material>();
-        private int _lastRebuildCount = 0; // Track voxel count at last geometry rebuild
-        private const int RebuildThreshold = 50; // Only rebuild when 50+ new voxels added
+
+        // Shared unit cube geometry (frozen, reused by all voxels via Transform)
+        private MeshGeometry3D _sharedCubeMesh;
+
+        // Tracks which voxel keys have already been added to the scene
+        private HashSet<string> _renderedVoxelKeys = new HashSet<string>();
 
         // ==================== Constructor ====================
         
@@ -633,7 +637,7 @@ namespace NOMAD.MissionPlanner
                     _meshModelGroup.Children.Clear();
                     _persistedBlocks.Clear();
                     _materialCache.Clear();
-                    _lastRebuildCount = 0;
+                    _renderedVoxelKeys.Clear();
                 }
 
                 // Route to the appropriate renderer based on mode
@@ -653,140 +657,153 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Render per-voxel colored cubes. Each voxel has its own position and color
-        /// from the nvblox color_layer_marker (CUBE_LIST).
-        /// This produces a fine-grained solid 3D map.
+        /// Render per-voxel colored cubes incrementally. Uses a shared frozen cube mesh
+        /// with TranslateTransform3D per voxel -- avoids rebuilding all geometry each update.
         /// </summary>
         private void UpdateMeshVisualVoxels(MeshDataModel meshData)
         {
-            // Use native voxel size from nvblox (set in nvblox config)
-            double vs = meshData.VoxelSize > 0 ? meshData.VoxelSize : 0.05;
-            double half = vs * 0.5;
+            double vs = meshData.VoxelSize > 0 ? meshData.VoxelSize : 0.15;
 
-            // Merge incoming voxels into persisted map
-            bool hasNew = false;
+            // Lazily create shared unit cube mesh (centered at origin, size=1)
+            if (_sharedCubeMesh == null)
+            {
+                var cube = new MeshGeometry3D();
+                double h = 0.5;
+                cube.Positions.Add(new Point3D(-h, -h, -h));
+                cube.Positions.Add(new Point3D(+h, -h, -h));
+                cube.Positions.Add(new Point3D(+h, +h, -h));
+                cube.Positions.Add(new Point3D(-h, +h, -h));
+                cube.Positions.Add(new Point3D(-h, -h, +h));
+                cube.Positions.Add(new Point3D(+h, -h, +h));
+                cube.Positions.Add(new Point3D(+h, +h, +h));
+                cube.Positions.Add(new Point3D(-h, +h, +h));
+                int[] faces = {
+                    0,1,2, 0,2,3, 4,6,5, 4,7,6,
+                    0,4,5, 0,5,1, 2,6,7, 2,7,3,
+                    0,3,7, 0,7,4, 1,5,6, 1,6,2
+                };
+                foreach (int fi in faces)
+                    cube.TriangleIndices.Add(fi);
+                cube.Freeze();
+                _sharedCubeMesh = cube;
+            }
+
+            int addedCount = 0;
             foreach (var voxel in meshData.Voxels)
             {
                 if (voxel.Position == null || voxel.Position.Count < 3)
                     continue;
 
-                // Quantize to voxel grid for deduplication
                 int qx = (int)Math.Round(voxel.Position[0] / vs);
                 int qy = (int)Math.Round(voxel.Position[1] / vs);
                 int qz = (int)Math.Round(voxel.Position[2] / vs);
                 string key = $"{qx},{qy},{qz}";
 
+                // Skip if already rendered
+                if (_renderedVoxelKeys.Contains(key))
+                    continue;
+
+                // Compute color key
                 uint colorKey;
                 if (voxel.Color != null && voxel.Color.Count >= 3)
                     colorKey = ((uint)voxel.Color[0] << 16) | ((uint)voxel.Color[1] << 8) | (uint)voxel.Color[2];
                 else
                     colorKey = (150u << 16) | (150u << 8) | 160u;
 
-                if (!_persistedBlocks.ContainsKey(key) || _persistedBlocks[key] != colorKey)
+                _persistedBlocks[key] = colorKey;
+                _renderedVoxelKeys.Add(key);
+
+                // Get or create cached frozen material
+                Material mat;
+                if (!_materialCache.TryGetValue(colorKey, out mat))
                 {
-                    _persistedBlocks[key] = colorKey;
-                    hasNew = true;
+                    byte r = (byte)((colorKey >> 16) & 0xFF);
+                    byte g = (byte)((colorKey >> 8) & 0xFF);
+                    byte b = (byte)(colorKey & 0xFF);
+                    if (r == 0 && g == 0 && b == 0) { r = 150; g = 150; b = 160; }
+                    var brush = new SolidColorBrush(Color.FromArgb(230, r, g, b));
+                    brush.Freeze();
+                    mat = new DiffuseMaterial(brush);
+                    ((DiffuseMaterial)mat).Freeze();
+                    _materialCache[colorKey] = mat;
                 }
+
+                // Create a model using the shared cube mesh + scale + translate
+                double cx = qx * vs;
+                double cy = qy * vs;
+                double cz = qz * vs;
+                var transformGroup = new Transform3DGroup();
+                transformGroup.Children.Add(new ScaleTransform3D(vs, vs, vs));
+                transformGroup.Children.Add(new TranslateTransform3D(cx, cy, cz));
+                transformGroup.Freeze();
+
+                var model = new GeometryModel3D(_sharedCubeMesh, mat);
+                model.BackMaterial = mat;
+                model.Transform = transformGroup;
+                model.Freeze();
+                _meshModelGroup.Children.Add(model);
+                addedCount++;
             }
 
-            // Evict oldest entries if over cap
+            // Evict oldest if over cap (full rebuild needed in that case)
             if (_persistedBlocks.Count > MaxPersistedVoxels)
             {
                 int toRemove = _persistedBlocks.Count - MaxPersistedVoxels;
                 var keysToRemove = _persistedBlocks.Keys.Take(toRemove).ToList();
                 foreach (var k in keysToRemove)
+                {
                     _persistedBlocks.Remove(k);
-                hasNew = true;
+                    _renderedVoxelKeys.Remove(k);
+                }
+                // Must do full rebuild since we can't remove individual children by key easily
+                RebuildAllVoxels(vs);
             }
-
-            if (!hasNew) return;
-
-            // Only rebuild geometry when enough new voxels accumulated
-            // This prevents rebuilding 5000+ cube geometry every second
-            int newSinceRebuild = _persistedBlocks.Count - _lastRebuildCount;
-            if (newSinceRebuild < RebuildThreshold && _lastRebuildCount > 0)
-                return;
-
-            _lastRebuildCount = _persistedBlocks.Count;
-            RebuildMeshGeometry(vs, half);
         }
 
         /// <summary>
-        /// Rebuild the 3D mesh from persisted voxel data.
-        /// Uses a single large MeshGeometry3D per color group and freezes
-        /// all WPF objects to minimize GC pressure and memory leaks.
+        /// Full rebuild of voxel scene (only called during eviction).
         /// </summary>
-        private void RebuildMeshGeometry(double displaySize, double half)
+        private void RebuildAllVoxels(double vs)
         {
             _meshModelGroup.Children.Clear();
+            _renderedVoxelKeys.Clear();
 
-            // Group by color for batched geometry
-            var colorGroups = new Dictionary<uint, List<string>>();
             foreach (var kvp in _persistedBlocks)
             {
-                if (!colorGroups.ContainsKey(kvp.Value))
-                    colorGroups[kvp.Value] = new List<string>();
-                colorGroups[kvp.Value].Add(kvp.Key);
-            }
+                string[] parts = kvp.Key.Split(',');
+                int qx = int.Parse(parts[0]);
+                int qy = int.Parse(parts[1]);
+                int qz = int.Parse(parts[2]);
+                uint colorKey = kvp.Value;
 
-            foreach (var cg in colorGroups)
-            {
-                uint ck = cg.Key;
-                byte r = (byte)((ck >> 16) & 0xFF);
-                byte g = (byte)((ck >> 8) & 0xFF);
-                byte b = (byte)(ck & 0xFF);
-                if (r == 0 && g == 0 && b == 0) { r = 150; g = 150; b = 160; }
-
-                var geom = new MeshGeometry3D();
-                int offset = 0;
-
-                foreach (var key in cg.Value)
-                {
-                    string[] parts = key.Split(',');
-                    double cx = int.Parse(parts[0]) * displaySize;
-                    double cy = int.Parse(parts[1]) * displaySize;
-                    double cz = int.Parse(parts[2]) * displaySize;
-
-                    geom.Positions.Add(new Point3D(cx - half, cy - half, cz - half));
-                    geom.Positions.Add(new Point3D(cx + half, cy - half, cz - half));
-                    geom.Positions.Add(new Point3D(cx + half, cy + half, cz - half));
-                    geom.Positions.Add(new Point3D(cx - half, cy + half, cz - half));
-                    geom.Positions.Add(new Point3D(cx - half, cy - half, cz + half));
-                    geom.Positions.Add(new Point3D(cx + half, cy - half, cz + half));
-                    geom.Positions.Add(new Point3D(cx + half, cy + half, cz + half));
-                    geom.Positions.Add(new Point3D(cx - half, cy + half, cz + half));
-
-                    int[] faces = {
-                        0,1,2, 0,2,3,
-                        4,6,5, 4,7,6,
-                        0,4,5, 0,5,1,
-                        2,6,7, 2,7,3,
-                        0,3,7, 0,7,4,
-                        1,5,6, 1,6,2,
-                    };
-                    foreach (int fi in faces)
-                        geom.TriangleIndices.Add(offset + fi);
-                    offset += 8;
-                }
-
-                // Freeze geometry to prevent WPF from tracking changes (major memory saving)
-                geom.Freeze();
-
-                // Get or create cached frozen material
                 Material mat;
-                if (!_materialCache.TryGetValue(ck, out mat))
+                if (!_materialCache.TryGetValue(colorKey, out mat))
                 {
+                    byte r = (byte)((colorKey >> 16) & 0xFF);
+                    byte g = (byte)((colorKey >> 8) & 0xFF);
+                    byte b = (byte)(colorKey & 0xFF);
+                    if (r == 0 && g == 0 && b == 0) { r = 150; g = 150; b = 160; }
                     var brush = new SolidColorBrush(Color.FromArgb(230, r, g, b));
                     brush.Freeze();
                     mat = new DiffuseMaterial(brush);
                     ((DiffuseMaterial)mat).Freeze();
-                    _materialCache[ck] = mat;
+                    _materialCache[colorKey] = mat;
                 }
 
-                var model = new GeometryModel3D(geom, mat);
+                double cx = qx * vs;
+                double cy = qy * vs;
+                double cz = qz * vs;
+                var transformGroup = new Transform3DGroup();
+                transformGroup.Children.Add(new ScaleTransform3D(vs, vs, vs));
+                transformGroup.Children.Add(new TranslateTransform3D(cx, cy, cz));
+                transformGroup.Freeze();
+
+                var model = new GeometryModel3D(_sharedCubeMesh, mat);
                 model.BackMaterial = mat;
+                model.Transform = transformGroup;
                 model.Freeze();
                 _meshModelGroup.Children.Add(model);
+                _renderedVoxelKeys.Add(kvp.Key);
             }
         }
 
@@ -1059,7 +1076,7 @@ namespace NOMAD.MissionPlanner
                 _meshModelGroup.Children.Clear();
                 _persistedBlocks.Clear();
                 _materialCache.Clear();
-                _lastRebuildCount = 0;
+                _renderedVoxelKeys.Clear();
                 var emptyGroup = new Model3DGroup();
                 _trajectoryVisual.Content = emptyGroup;
             }));
