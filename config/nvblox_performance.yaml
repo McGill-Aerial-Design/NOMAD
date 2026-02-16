@@ -11,10 +11,10 @@
     cuda_stream_type: 2
 
     # ==============================================================
-    # VOXEL SIZE - 10cm for Orin Nano memory budget
-    # (5cm = 8x more blocks, causes GPU OOM after ~10s)
+    # VOXEL SIZE - 5cm for indoor navigation accuracy
+    # Memory managed via 8m radius + block deallocation
     # ==============================================================
-    voxel_size: 0.10  # 10cm voxels - good enough for indoor nav
+    voxel_size: 0.05  # 5cm voxels
     
     # static_tsdf for 3D mesh generation
     mapping_type: "static_tsdf"
