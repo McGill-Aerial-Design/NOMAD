@@ -30,6 +30,8 @@ Environment="NOMAD_SIM_MODE=false"
 Environment="PYTHONUNBUFFERED=1"
 # Use %h systemd specifier for home directory to support user-agnostic deployment
 Environment="PYTHONPATH=%h/NOMAD"
+# User-local libs (libturbojpeg for ZED SDK) + CUDA
+Environment="LD_LIBRARY_PATH=%h/.local/lib:/usr/local/cuda/lib64"
 
 # Main command - run orchestrator with uvicorn
 ExecStart=/usr/bin/python3 -m uvicorn edge_core.main:app --host 0.0.0.0 --port 8000 --log-level info
