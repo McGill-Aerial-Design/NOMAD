@@ -58,10 +58,11 @@ class VideoStreamNode(Node):
         # Use openh264enc available in Isaac ROS container
         # Bitrate is in bps for openh264enc
         # appsrc is-live=true + do-timestamp=true: frames are timestamped on arrival
-        # max-buffers=2 + drop=true: drop old frames if encoder can't keep up (low latency)
+        # max-buffers=2: limit appsrc internal queue to 2 frames
+        # queue leaky=downstream: drop old frames if encoder can't keep up (low latency)
         pipeline_str = (
             f'appsrc name=source is-live=true format=time do-timestamp=true '
-            f'max-buffers=2 drop=true '
+            f'max-buffers=2 '
             f'caps=video/x-raw,format=BGR,width={width},height={height},framerate={fps}/1 ! '
             f'queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! '
             f'videoconvert ! '
@@ -135,7 +136,7 @@ class VideoStreamNode(Node):
             # Recreate GStreamer pipeline with new topic
             pipeline_str = (
                 f'appsrc name=source is-live=true format=time do-timestamp=true '
-                f'max-buffers=2 drop=true '
+                f'max-buffers=2 '
                 f'caps=video/x-raw,format=BGR,width={self.width},height={self.height},framerate={self.fps}/1 ! '
                 f'queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! '
                 f'videoconvert ! '
