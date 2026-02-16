@@ -953,14 +953,23 @@ namespace NOMAD.MissionPlanner
         {
             _fpvCamera.Position = _dronePosition;
             
-            // Calculate look direction from yaw
             double yaw = _droneYaw;
             double pitch = _dronePitch;
+            double roll = _droneRoll;
+
+            // Look direction from yaw + pitch
             _fpvCamera.LookDirection = new Vector3D(
                 Math.Cos(yaw) * Math.Cos(pitch),
                 Math.Sin(yaw) * Math.Cos(pitch),
                 -Math.Sin(pitch)
             );
+
+            // Up direction rotated by roll around the look axis
+            // Default up is (0,0,1); roll rotates it in the plane perpendicular to look
+            double upX = -Math.Cos(yaw) * Math.Sin(pitch) * Math.Cos(roll) - Math.Sin(yaw) * Math.Sin(roll);
+            double upY = -Math.Sin(yaw) * Math.Sin(pitch) * Math.Cos(roll) + Math.Cos(yaw) * Math.Sin(roll);
+            double upZ = Math.Cos(pitch) * Math.Cos(roll);
+            _fpvCamera.UpDirection = new Vector3D(upX, upY, upZ);
         }
 
         private void RestoreDroneVisual()
