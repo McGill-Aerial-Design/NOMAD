@@ -185,12 +185,23 @@ install_dependencies() {
         fi
     " 2>/dev/null
 
+    # Check ROS deps and GStreamer deps separately so GStreamer is never skipped
+    local ros_deps_ok=false
+    local gst_deps_ok=false
     if docker exec "$CONTAINER_NAME" dpkg -l ros-humble-zed-msgs 2>/dev/null | grep -q '^ii'; then
+        ros_deps_ok=true
         log_info "ROS dependencies already installed"
+    fi
+    if docker exec "$CONTAINER_NAME" test -f /usr/lib/aarch64-linux-gnu/girepository-1.0/Gst-1.0.typelib 2>/dev/null; then
+        gst_deps_ok=true
+        log_info "GStreamer dependencies already installed"
+    fi
+
+    if [ "$ros_deps_ok" = true ] && [ "$gst_deps_ok" = true ]; then
         return 0
     fi
 
-    log_info "Installing ROS2 apt dependencies..."
+    log_info "Installing missing dependencies..."
     docker exec "$CONTAINER_NAME" bash -c "
         apt-get update -qq
         apt-get install -y --no-install-recommends \

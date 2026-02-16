@@ -225,7 +225,7 @@ start_video_bridge() {
             break
         fi
         sleep 1
-        ((count++))
+        count=$((count + 1))
     done
     
     if [ $count -eq $max_wait ]; then
@@ -243,7 +243,7 @@ start_video_bridge() {
             break
         fi
         sleep 1
-        ((count++))
+        count=$((count + 1))
     done
     
     if [ $count -eq $max_wait ]; then
@@ -289,7 +289,7 @@ start_video_bridge() {
             log_warn "Unexpected response: HTTP $http_code - $body"
         fi
         
-        ((retry++))
+        retry=$((retry + 1))
     done
     
     if [ "$success" = false ]; then
