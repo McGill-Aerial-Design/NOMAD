@@ -180,6 +180,11 @@ namespace NOMAD.MissionPlanner
         
         // Persisted block map: key = "ix,iy,iz", value = color key
         private Dictionary<string, uint> _persistedBlocks = new Dictionary<string, uint>();
+        private const int MaxPersistedVoxels = 15000; // Cap to prevent unbounded growth
+
+        // Material cache to avoid recreating WPF resources every frame
+        private Dictionary<uint, Material> _materialCache = new Dictionary<uint, Material>();
+        private bool _geometryDirty = false;
 
         // ==================== Constructor ====================
         
@@ -497,8 +502,8 @@ namespace NOMAD.MissionPlanner
                         await FetchAndUpdateMesh();
                     }
                     
-                    // Target ~10 Hz update rate
-                    await Task.Delay(100, ct);
+                    // Target 2 Hz update rate (500ms) to reduce GC pressure
+                    await Task.Delay(500, ct);
                 }
                 catch (OperationCanceledException)
                 {
@@ -624,6 +629,7 @@ namespace NOMAD.MissionPlanner
                 {
                     _meshModelGroup.Children.Clear();
                     _persistedBlocks.Clear();
+                    _materialCache.Clear();
                 }
 
                 // Route to the appropriate renderer based on mode
@@ -649,21 +655,20 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         private void UpdateMeshVisualVoxels(MeshDataModel meshData)
         {
-            double vs = meshData.VoxelSize > 0 ? meshData.VoxelSize : 0.05;
-            double half = vs * 0.5;
+            // Use 15cm display grid for manageable geometry count
+            double displaySize = 0.15;
+            double half = displaySize * 0.5;
 
-            // Merge incoming voxels into persisted map
-            // Key: quantized position string; Value: color key
+            // Merge incoming voxels into persisted map (quantized to display grid)
             bool hasNew = false;
             foreach (var voxel in meshData.Voxels)
             {
                 if (voxel.Position == null || voxel.Position.Count < 3)
                     continue;
 
-                // Quantize to voxel grid to deduplicate
-                int qx = (int)Math.Round(voxel.Position[0] / vs);
-                int qy = (int)Math.Round(voxel.Position[1] / vs);
-                int qz = (int)Math.Round(voxel.Position[2] / vs);
+                int qx = (int)Math.Round(voxel.Position[0] / displaySize);
+                int qy = (int)Math.Round(voxel.Position[1] / displaySize);
+                int qz = (int)Math.Round(voxel.Position[2] / displaySize);
                 string key = $"{qx},{qy},{qz}";
 
                 uint colorKey;
@@ -679,17 +684,40 @@ namespace NOMAD.MissionPlanner
                 }
             }
 
+            // Evict oldest entries if over cap
+            if (_persistedBlocks.Count > MaxPersistedVoxels)
+            {
+                int toRemove = _persistedBlocks.Count - MaxPersistedVoxels;
+                var keysToRemove = _persistedBlocks.Keys.Take(toRemove).ToList();
+                foreach (var k in keysToRemove)
+                    _persistedBlocks.Remove(k);
+                hasNew = true;
+            }
+
             if (!hasNew) return;
 
+            RebuildMeshGeometry(displaySize, half);
+        }
+
+        /// <summary>
+        /// Rebuild the 3D mesh from persisted voxel data.
+        /// Uses a single large MeshGeometry3D per color group and freezes
+        /// all WPF objects to minimize GC pressure and memory leaks.
+        /// </summary>
+        private void RebuildMeshGeometry(double displaySize, double half)
+        {
             _meshModelGroup.Children.Clear();
 
-            // Group by color for batched geometry
+            // Group by quantized color (reduce to 32 colors max to batch geometry)
             var colorGroups = new Dictionary<uint, List<string>>();
             foreach (var kvp in _persistedBlocks)
             {
-                if (!colorGroups.ContainsKey(kvp.Value))
-                    colorGroups[kvp.Value] = new List<string>();
-                colorGroups[kvp.Value].Add(kvp.Key);
+                // Quantize color to reduce unique material count (4-bit per channel)
+                uint c = kvp.Value;
+                uint qc = ((c >> 20) << 20) | (((c >> 12) & 0xF0) << 8) | ((c >> 4) & 0xF0);
+                if (!colorGroups.ContainsKey(qc))
+                    colorGroups[qc] = new List<string>();
+                colorGroups[qc].Add(kvp.Key);
             }
 
             foreach (var cg in colorGroups)
@@ -698,6 +726,7 @@ namespace NOMAD.MissionPlanner
                 byte r = (byte)((ck >> 16) & 0xFF);
                 byte g = (byte)((ck >> 8) & 0xFF);
                 byte b = (byte)(ck & 0xFF);
+                if (r == 0 && g == 0 && b == 0) { r = 150; g = 150; b = 160; }
 
                 var geom = new MeshGeometry3D();
                 int offset = 0;
@@ -705,11 +734,10 @@ namespace NOMAD.MissionPlanner
                 foreach (var key in cg.Value)
                 {
                     string[] parts = key.Split(',');
-                    double cx = int.Parse(parts[0]) * vs;
-                    double cy = int.Parse(parts[1]) * vs;
-                    double cz = int.Parse(parts[2]) * vs;
+                    double cx = int.Parse(parts[0]) * displaySize;
+                    double cy = int.Parse(parts[1]) * displaySize;
+                    double cz = int.Parse(parts[2]) * displaySize;
 
-                    // 8 vertices of cube centered on voxel position
                     geom.Positions.Add(new Point3D(cx - half, cy - half, cz - half));
                     geom.Positions.Add(new Point3D(cx + half, cy - half, cz - half));
                     geom.Positions.Add(new Point3D(cx + half, cy + half, cz - half));
@@ -732,11 +760,23 @@ namespace NOMAD.MissionPlanner
                     offset += 8;
                 }
 
-                var mat = new DiffuseMaterial(new SolidColorBrush(
-                    Color.FromArgb(230, r, g, b)
-                ));
+                // Freeze geometry to prevent WPF from tracking changes (major memory saving)
+                geom.Freeze();
+
+                // Get or create cached frozen material
+                Material mat;
+                if (!_materialCache.TryGetValue(ck, out mat))
+                {
+                    var brush = new SolidColorBrush(Color.FromArgb(230, r, g, b));
+                    brush.Freeze();
+                    mat = new DiffuseMaterial(brush);
+                    ((DiffuseMaterial)mat).Freeze();
+                    _materialCache[ck] = mat;
+                }
+
                 var model = new GeometryModel3D(geom, mat);
                 model.BackMaterial = mat;
+                model.Freeze();
                 _meshModelGroup.Children.Add(model);
             }
         }
@@ -994,7 +1034,7 @@ namespace NOMAD.MissionPlanner
             {
                 _meshModelGroup.Children.Clear();
                 _persistedBlocks.Clear();
-                // Clear trajectory visual immediately
+                _materialCache.Clear();
                 var emptyGroup = new Model3DGroup();
                 _trajectoryVisual.Content = emptyGroup;
             }));
