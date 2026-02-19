@@ -215,9 +215,9 @@ python -m edge_core.main --host 0.0.0.0 --port 8000
 | ArduPilot Integration | ✅ Ready | ✅ Ready |
 | ELRS Telemetry | ✅ Ready | ✅ Ready |
 | Edge Core API | ✅ Ready | ✅ Ready |
-| Tailscale VPN | N/A | ✅ Ready |
+| Tailscale VPN |  ✅ Ready | ✅ Ready |
 | ZED 2i Camera | ✅ Ready | ✅ Ready |
-| YOLO Detection | N/A | ⏳ In Progress |
+| YOLO Detection | ⏳ In Progress | ⏳ In Progress |
 | Mission Planner Plugin | ✅ Ready | ✅ Ready |
 | Embedded Video | ✅ Ready | ✅ Ready |
 | Remote Terminal | ✅ Ready | ✅ Ready |
