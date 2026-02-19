@@ -145,7 +145,14 @@
     <Compile Include="NOMADPlugin.cs" />
     <Compile Include="NOMADSettingsForm.cs" />
     <Compile Include="NOMADTheme.cs" />
-    <Compile Include="NOMADViews.cs" />
+    <Compile Include="NOMADViewBase.cs" />
+    <Compile Include="NOMADTask1View.cs" />
+    <Compile Include="NOMADTask2View.cs" />
+    <Compile Include="NOMADVideoView.cs" />
+    <Compile Include="NOMADTerminalView.cs" />
+    <Compile Include="NOMADHealthView.cs" />
+    <Compile Include="NOMADLinksView.cs" />
+    <Compile Include="NOMADBoundaryView.cs" />
     <Compile Include="NotificationPanel.cs" />
     <Compile Include="NotificationService.cs" />
     <Compile Include="ServiceControlPanel.cs" />

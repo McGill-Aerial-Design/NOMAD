@@ -9,8 +9,10 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
+using System.IO;
 using System.Linq;
-using System.Net.Http;
+using System.Net.WebSockets;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -42,25 +44,6 @@ namespace NOMAD.MissionPlanner
         ThirdPerson,
         /// <summary>Free orbit camera controlled by user.</summary>
         FreeOrbit
-    }
-
-    /// <summary>
-    /// Data model for SLAM mesh received from Jetson API.
-    /// </summary>
-    public class SLAMMeshData
-    {
-        [JsonProperty("available")]
-        public bool Available { get; set; }
-        [JsonProperty("error")]
-        public string Error { get; set; }
-        [JsonProperty("timestamp")]
-        public string Timestamp { get; set; }
-        [JsonProperty("mesh")]
-        public MeshDataModel Mesh { get; set; }
-        [JsonProperty("drone_position")]
-        public DronePositionModel DronePosition { get; set; }
-        [JsonProperty("drone_attitude")]
-        public DroneAttitudeModel DroneAttitude { get; set; }
     }
 
     public class MeshDataModel
@@ -107,25 +90,6 @@ namespace NOMAD.MissionPlanner
         public List<int> Color { get; set; }
     }
 
-    public class DronePositionModel
-    {
-        [JsonProperty("x")]
-        public double X { get; set; }
-        [JsonProperty("y")]
-        public double Y { get; set; }
-        [JsonProperty("z")]
-        public double Z { get; set; }
-    }
-
-    public class DroneAttitudeModel
-    {
-        [JsonProperty("roll")]
-        public double Roll { get; set; }
-        [JsonProperty("pitch")]
-        public double Pitch { get; set; }
-        [JsonProperty("yaw")]
-        public double Yaw { get; set; }
-    }
 
     /// <summary>
     /// 3D SLAM visualization control using Helix Toolkit.
@@ -136,6 +100,12 @@ namespace NOMAD.MissionPlanner
         // ==================== Fields ====================
         private readonly NOMADConfig _config;
         private CancellationTokenSource _updateCts;
+        
+        // WebSocket streaming (30Hz)
+        private ClientWebSocket _webSocket;
+        private int _wsReconnectDelayMs = 1000;
+        private const int MaxWsReconnectDelayMs = 10000;
+        private volatile bool _disposed;
         
         // WPF hosting
         private ElementHost _elementHost;
@@ -190,6 +160,19 @@ namespace NOMAD.MissionPlanner
         private bool _meshDirty = false;
         private int _lastRenderedCount = 0;
         private const int MinNewVoxelsForRebuild = 100; // Only rebuild after 100+ new voxels
+
+        // Occupancy set for fast neighbor lookups (adjacent-face culling)
+        private HashSet<long> _occupancySet = new HashSet<long>();
+
+        // Pack three ints into a single long key for O(1) neighbor lookup.
+        // Each axis masked to 20 bits; valid range per axis: [-1048576, 1048575].
+        private static long PackKey(int x, int y, int z)
+        {
+            long lx = (long)(x + 0x100000) & 0xFFFFF;
+            long ly = (long)(y + 0x100000) & 0xFFFFF;
+            long lz = (long)(z + 0x100000) & 0xFFFFF;
+            return (lx << 40) | (ly << 20) | lz;
+        }
 
         // ==================== Constructor ====================
         
@@ -427,32 +410,38 @@ namespace NOMAD.MissionPlanner
         {
             var gridBuilder = new MeshBuilder();
             
-            // Create grid lines
-            double gridSize = 20;
-            int gridLines = 40;
+            // Create lightweight grid lines -- 20 lines instead of 82 pipes
+            double gridSize = 10;
+            int gridLines = 20;
             double spacing = gridSize * 2 / gridLines;
             
             for (int i = 0; i <= gridLines; i++)
             {
                 double pos = -gridSize + i * spacing;
                 
-                // X lines
+                // X lines -- thin cylinders with 4 segments (minimal)
                 gridBuilder.AddPipe(
                     new Point3D(pos, -gridSize, 0),
                     new Point3D(pos, gridSize, 0),
-                    0, 0.01, 8
+                    0, 0.005, 4
                 );
                 
                 // Y lines
                 gridBuilder.AddPipe(
                     new Point3D(-gridSize, pos, 0),
                     new Point3D(gridSize, pos, 0),
-                    0, 0.01, 8
+                    0, 0.005, 4
                 );
             }
             
-            var gridMaterial = new DiffuseMaterial(new SolidColorBrush(Color.FromArgb(60, 100, 100, 100)));
-            var gridModel = new GeometryModel3D(gridBuilder.ToMesh(), gridMaterial);
+            var gridMesh = gridBuilder.ToMesh();
+            gridMesh.Freeze();
+            var gridBrush = new SolidColorBrush(Color.FromArgb(40, 100, 100, 100));
+            gridBrush.Freeze();
+            var gridMaterial = new DiffuseMaterial(gridBrush);
+            gridMaterial.Freeze();
+            var gridModel = new GeometryModel3D(gridMesh, gridMaterial);
+            gridModel.Freeze();
             
             _gridVisual = new ModelVisual3D { Content = gridModel };
             _viewport.Children.Add(_gridVisual);
@@ -489,141 +478,184 @@ namespace NOMAD.MissionPlanner
             _viewport.Children.Add(_trajectoryVisual);
         }
 
-        // ==================== Update Loop ====================
+        // ==================== Update Loops ====================
         
         private void StartUpdateLoop()
         {
             _updateCts = new CancellationTokenSource();
-            Task.Run(() => MeshUpdateLoop(_updateCts.Token));
+            Task.Run(() => WebSocketStreamLoop(_updateCts.Token));
         }
-        
-        private async Task MeshUpdateLoop(CancellationToken ct)
+
+        /// <summary>
+        /// Connects to ws://jetson:8000/ws/slam and receives 30Hz frames.
+        /// Frame types: "pose" (drone only) and "mesh" (mesh + drone).
+        /// Reconnects with exponential backoff on disconnect.
+        /// </summary>
+        private async Task WebSocketStreamLoop(CancellationToken ct)
         {
             while (!ct.IsCancellationRequested)
             {
                 try
                 {
-                    if (_chkAutoUpdate?.Checked == true)
+                    _webSocket = new ClientWebSocket();
+                    _webSocket.Options.KeepAliveInterval = TimeSpan.FromSeconds(5);
+
+                    string baseUrl = JetsonApiService.BaseUrl ?? "http://100.85.121.98:8000";
+                    string wsUrl = baseUrl.Replace("https://", "wss://").Replace("http://", "ws://")
+                        .TrimEnd('/') + "/ws/slam";
+
+                    UpdateStatusSafe("Connecting...");
+                    await _webSocket.ConnectAsync(new Uri(wsUrl), ct);
+                    UpdateStatusSafe("Status: Connected (30Hz)");
+                    _wsReconnectDelayMs = 1000;
+
+                    var buffer = new byte[64 * 1024];
+                    var messageBuffer = new MemoryStream();
+
+                    while (_webSocket.State == WebSocketState.Open && !ct.IsCancellationRequested)
                     {
-                        await FetchAndUpdateMesh();
+                        messageBuffer.SetLength(0);
+                        WebSocketReceiveResult result;
+                        do
+                        {
+                            result = await _webSocket.ReceiveAsync(
+                                new ArraySegment<byte>(buffer), ct);
+                            if (result.MessageType == WebSocketMessageType.Close)
+                                break;
+                            messageBuffer.Write(buffer, 0, result.Count);
+                        } while (!result.EndOfMessage);
+
+                        if (result.MessageType == WebSocketMessageType.Close)
+                            break;
+
+                        if (_chkAutoUpdate?.Checked != true)
+                            continue;
+
+                        string json = Encoding.UTF8.GetString(
+                            messageBuffer.GetBuffer(), 0, (int)messageBuffer.Length);
+                        var frame = JObject.Parse(json);
+                        string frameType = frame["type"]?.ToString() ?? "pose";
+
+                        // Skip frames with no position data
+                        if (frame["x"] == null)
+                            continue;
+
+                        _dronePosition = new Point3D(
+                            frame["x"]?.Value<double>() ?? 0,
+                            frame["y"]?.Value<double>() ?? 0,
+                            frame["z"]?.Value<double>() ?? 0);
+                        _droneRoll = frame["roll"]?.Value<double>() ?? 0;
+                        _dronePitch = frame["pitch"]?.Value<double>() ?? 0;
+                        _droneYaw = frame["yaw"]?.Value<double>() ?? 0;
+
+                        if (frameType == "mesh")
+                        {
+                            var meshToken = frame["mesh"];
+                            if (meshToken != null)
+                            {
+                                var meshData = meshToken.ToObject<MeshDataModel>();
+                                ProcessMeshAndPoseOnUiThread(meshData);
+                            }
+                            else
+                            {
+                                UpdatePoseVisualsOnUiThread();
+                            }
+                        }
+                        else
+                        {
+                            UpdatePoseVisualsOnUiThread();
+                        }
                     }
-                    
-                    // 0.5 Hz update rate (2s) to reduce CPU/GC pressure
-                    await Task.Delay(2000, ct);
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException) { break; }
+                catch (WebSocketException ex)
                 {
-                    break;
+                    UpdateStatusSafe($"WebSocket error: {ex.Message}");
                 }
                 catch (Exception ex)
                 {
-                    UpdateStatusSafe($"Error: {ex.Message}");
-                    await Task.Delay(1000, ct); // Back off on error
+                    UpdateStatusSafe($"Stream error: {ex.Message}");
                 }
-            }
-        }
-        
-        private async Task FetchAndUpdateMesh()
-        {
-            try
-            {
-                var response = await JetsonApiService.GetStringAsync("/api/task/2/slam/mesh");
-                var data = JsonConvert.DeserializeObject<SLAMMeshData>(response);
-                
-                if (data == null)
+                finally
                 {
-                    UpdateStatusSafe("Received null data");
-                    return;
-                }
-                
-                if (!data.Available)
-                {
-                    UpdateStatusSafe($"SLAM unavailable: {data.Error ?? "Unknown"}");
-                    return;
-                }
-                
-                // Update mesh on UI thread
-                if (this.InvokeRequired)
-                {
-                    this.BeginInvoke(new Action(() => ProcessMeshData(data)));
-                }
-                else
-                {
-                    ProcessMeshData(data);
-                }
-            }
-            catch (HttpRequestException ex)
-            {
-                UpdateStatusSafe($"Connection error: {ex.Message}");
-            }
-            catch (TaskCanceledException)
-            {
-                UpdateStatusSafe("Request timeout");
-            }
-            catch (Exception ex)
-            {
-                UpdateStatusSafe($"Fetch error: {ex.Message}");
-            }
-        }
-        
-        private void ProcessMeshData(SLAMMeshData data)
-        {
-            try
-            {
-                // Update drone position
-                if (data.DronePosition != null)
-                {
-                    _dronePosition = new Point3D(
-                        data.DronePosition.X,
-                        data.DronePosition.Y,
-                        data.DronePosition.Z
-                    );
-                    
-                    // Add to trajectory
-                    _trajectoryPoints.Add(_dronePosition);
-                    if (_trajectoryPoints.Count > MaxTrajectoryPoints)
+                    if (_webSocket != null)
                     {
-                        _trajectoryPoints.RemoveAt(0);
+                        try { _webSocket.Dispose(); } catch { }
+                        _webSocket = null;
                     }
-                }
-                
-                if (data.DroneAttitude != null)
-                {
-                    _droneYaw = data.DroneAttitude.Yaw;
-                    _dronePitch = data.DroneAttitude.Pitch;
-                    _droneRoll = data.DroneAttitude.Roll;
-                }
-                
-                // Update 3D visuals on WPF dispatcher
-                _elementHost.Invoke(new Action(() =>
-                {
-                    UpdateDroneVisual();
-                    UpdateTrajectoryVisual();
-                    UpdateCameras();
-                    
-                    if (data.Mesh != null)
-                    {
-                        UpdateMeshVisual(data.Mesh);
-                    }
-                }));
-                
-                _meshUpdateCount++;
-                _lastUpdateTime = DateTime.Now;
-                
-                // Update stats
-                if (data.Mesh != null)
-                {
-                    _totalBlocks = data.Mesh.TotalBlocks > 0 ? data.Mesh.TotalBlocks : data.Mesh.TotalVoxels;
                 }
 
-                string mode = data.Mesh?.Mode == "voxels" ? "voxels" : "blocks";
-                UpdateStatusSafe($"Status: Connected | Updates: {_meshUpdateCount}");
-                UpdateStatsSafe($"Mesh: {_totalBlocks:N0} {mode} ({_persistedBlocks.Count:N0} cached)");
+                if (ct.IsCancellationRequested) break;
+
+                UpdateStatusSafe($"Reconnecting in {_wsReconnectDelayMs / 1000}s...");
+                try { await Task.Delay(_wsReconnectDelayMs, ct); }
+                catch (OperationCanceledException) { break; }
+
+                _wsReconnectDelayMs = Math.Min(_wsReconnectDelayMs * 2, MaxWsReconnectDelayMs);
             }
-            catch (Exception ex)
+        }
+
+        private void UpdatePoseVisualsOnUiThread()
+        {
+            if (_disposed || !IsHandleCreated) return;
+            try
             {
-                UpdateStatusSafe($"Process error: {ex.Message}");
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (_disposed || _elementHost == null) return;
+                    _elementHost.Invoke(new Action(() =>
+                    {
+                        AddTrajectoryPoint(_dronePosition);
+                        UpdateDroneVisual();
+                        UpdateTrajectoryVisual();
+                        UpdateCameras();
+                    }));
+                }));
             }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+        }
+
+        private void AddTrajectoryPoint(Point3D position)
+        {
+            if (_trajectoryPoints.Count == 0 ||
+                (position - _trajectoryPoints[_trajectoryPoints.Count - 1]).Length > 0.05)
+            {
+                _trajectoryPoints.Add(position);
+                if (_trajectoryPoints.Count > MaxTrajectoryPoints)
+                    _trajectoryPoints.RemoveAt(0);
+            }
+        }
+
+        private void ProcessMeshAndPoseOnUiThread(MeshDataModel meshData)
+        {
+            if (_disposed || !IsHandleCreated) return;
+            try
+            {
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (_disposed || _elementHost == null) return;
+                    _elementHost.Invoke(new Action(() =>
+                    {
+                        AddTrajectoryPoint(_dronePosition);
+                        UpdateDroneVisual();
+                        UpdateTrajectoryVisual();
+                        UpdateCameras();
+                        if (meshData != null)
+                            UpdateMeshVisual(meshData);
+                    }));
+
+                    _meshUpdateCount++;
+                    _lastUpdateTime = DateTime.Now;
+                    if (meshData != null)
+                        _totalBlocks = meshData.TotalBlocks > 0 ? meshData.TotalBlocks : meshData.TotalVoxels;
+                    string mode = meshData?.Mode == "voxels" ? "voxels" : "blocks";
+                    UpdateStatusSafe($"Status: Connected (30Hz) | Updates: {_meshUpdateCount}");
+                    UpdateStatsSafe($"Mesh: {_totalBlocks:N0} {mode} ({_persistedBlocks.Count:N0} cached)");
+                }));
+            }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
         }
         
         private void UpdateMeshVisual(MeshDataModel meshData)
@@ -635,6 +667,7 @@ namespace NOMAD.MissionPlanner
                 {
                     _meshModelGroup.Children.Clear();
                     _persistedBlocks.Clear();
+                    _occupancySet.Clear();
                     _materialCache.Clear();
                     _meshDirty = false;
                     _lastRenderedCount = 0;
@@ -658,6 +691,7 @@ namespace NOMAD.MissionPlanner
 
         /// <summary>
         /// Accept voxels into the persisted map. Rebuild is deferred until enough accumulate.
+        /// Uses adjacent-face culling: only renders faces not touching another voxel (Minecraft-style).
         /// </summary>
         private void UpdateMeshVisualVoxels(MeshDataModel meshData)
         {
@@ -673,7 +707,7 @@ namespace NOMAD.MissionPlanner
                 int qz = (int)Math.Round(voxel.Position[2] / vs);
                 string key = $"{qx},{qy},{qz}";
 
-                // Quantize color to 4-bit per channel (16 levels) to reduce unique colors
+                // Flat color: quantize to 4-bit per channel (16 levels)
                 uint colorKey;
                 if (voxel.Color != null && voxel.Color.Count >= 3)
                 {
@@ -688,6 +722,7 @@ namespace NOMAD.MissionPlanner
                 if (!_persistedBlocks.ContainsKey(key) || _persistedBlocks[key] != colorKey)
                 {
                     _persistedBlocks[key] = colorKey;
+                    _occupancySet.Add(PackKey(qx, qy, qz));
                     _meshDirty = true;
                 }
             }
@@ -698,22 +733,26 @@ namespace NOMAD.MissionPlanner
                 int toRemove = _persistedBlocks.Count - MaxPersistedVoxels;
                 var keysToRemove = _persistedBlocks.Keys.Take(toRemove).ToList();
                 foreach (var k in keysToRemove)
+                {
                     _persistedBlocks.Remove(k);
+                    string[] p = k.Split(',');
+                    _occupancySet.Remove(PackKey(int.Parse(p[0]), int.Parse(p[1]), int.Parse(p[2])));
+                }
                 _meshDirty = true;
             }
 
             if (!_meshDirty) return;
 
-            // Only rebuild when enough new voxels accumulated to justify the cost
+            // Only defer rebuild when voxels are purely additive (count grew)
+            // Always rebuild immediately on eviction (count shrank) or color changes
             int newSinceLastRender = _persistedBlocks.Count - _lastRenderedCount;
-            if (newSinceLastRender < MinNewVoxelsForRebuild && _lastRenderedCount > 0)
+            if (newSinceLastRender > 0 && newSinceLastRender < MinNewVoxelsForRebuild && _lastRenderedCount > 0)
                 return;
 
             _meshDirty = false;
             _lastRenderedCount = _persistedBlocks.Count;
 
-            // Full rebuild: one MeshGeometry3D per unique color (single draw call per color)
-            // With 4-bit quantization, max ~4096 unique colors, typically 20-50 in practice
+            // Group by color for batched draw calls
             _meshModelGroup.Children.Clear();
 
             var colorGroups = new Dictionary<uint, List<string>>();
@@ -725,6 +764,7 @@ namespace NOMAD.MissionPlanner
             }
 
             double half = vs * 0.5;
+
             foreach (var cg in colorGroups)
             {
                 uint ck = cg.Key;
@@ -733,42 +773,106 @@ namespace NOMAD.MissionPlanner
                 byte cb = (byte)(ck & 0xFF);
                 if (cr == 0 && cg2 == 0 && cb == 0) { cr = 144; cg2 = 144; cb = 160; }
 
-                var geom = new MeshGeometry3D();
+                var positions = new Point3DCollection();
+                var indices = new Int32Collection();
                 int offset = 0;
 
                 foreach (var key in cg.Value)
                 {
                     string[] parts = key.Split(',');
-                    double cx = int.Parse(parts[0]) * vs;
-                    double cy = int.Parse(parts[1]) * vs;
-                    double cz = int.Parse(parts[2]) * vs;
+                    int ix = int.Parse(parts[0]);
+                    int iy = int.Parse(parts[1]);
+                    int iz = int.Parse(parts[2]);
+                    double cx = ix * vs;
+                    double cy = iy * vs;
+                    double cz = iz * vs;
 
-                    // 8 vertices per cube
-                    geom.Positions.Add(new Point3D(cx - half, cy - half, cz - half));
-                    geom.Positions.Add(new Point3D(cx + half, cy - half, cz - half));
-                    geom.Positions.Add(new Point3D(cx + half, cy + half, cz - half));
-                    geom.Positions.Add(new Point3D(cx - half, cy + half, cz - half));
-                    geom.Positions.Add(new Point3D(cx - half, cy - half, cz + half));
-                    geom.Positions.Add(new Point3D(cx + half, cy - half, cz + half));
-                    geom.Positions.Add(new Point3D(cx + half, cy + half, cz + half));
-                    geom.Positions.Add(new Point3D(cx - half, cy + half, cz + half));
-
-                    // 12 triangles (6 faces)
-                    int[] faces = {
-                        0,1,2, 0,2,3, 4,6,5, 4,7,6,
-                        0,4,5, 0,5,1, 2,6,7, 2,7,3,
-                        0,3,7, 0,7,4, 1,5,6, 1,6,2
-                    };
-                    foreach (int fi in faces)
-                        geom.TriangleIndices.Add(offset + fi);
-                    offset += 8;
+                    // Check each face: only emit if neighbor is absent
+                    // +X face
+                    if (!_occupancySet.Contains(PackKey(ix+1, iy, iz)))
+                    {
+                        positions.Add(new Point3D(cx+half, cy-half, cz-half));
+                        positions.Add(new Point3D(cx+half, cy+half, cz-half));
+                        positions.Add(new Point3D(cx+half, cy+half, cz+half));
+                        positions.Add(new Point3D(cx+half, cy-half, cz+half));
+                        indices.Add(offset); indices.Add(offset+1); indices.Add(offset+2);
+                        indices.Add(offset); indices.Add(offset+2); indices.Add(offset+3);
+                        offset += 4;
+                    }
+                    // -X face
+                    if (!_occupancySet.Contains(PackKey(ix-1, iy, iz)))
+                    {
+                        positions.Add(new Point3D(cx-half, cy-half, cz-half));
+                        positions.Add(new Point3D(cx-half, cy-half, cz+half));
+                        positions.Add(new Point3D(cx-half, cy+half, cz+half));
+                        positions.Add(new Point3D(cx-half, cy+half, cz-half));
+                        indices.Add(offset); indices.Add(offset+1); indices.Add(offset+2);
+                        indices.Add(offset); indices.Add(offset+2); indices.Add(offset+3);
+                        offset += 4;
+                    }
+                    // +Y face
+                    if (!_occupancySet.Contains(PackKey(ix, iy+1, iz)))
+                    {
+                        positions.Add(new Point3D(cx-half, cy+half, cz-half));
+                        positions.Add(new Point3D(cx-half, cy+half, cz+half));
+                        positions.Add(new Point3D(cx+half, cy+half, cz+half));
+                        positions.Add(new Point3D(cx+half, cy+half, cz-half));
+                        indices.Add(offset); indices.Add(offset+1); indices.Add(offset+2);
+                        indices.Add(offset); indices.Add(offset+2); indices.Add(offset+3);
+                        offset += 4;
+                    }
+                    // -Y face
+                    if (!_occupancySet.Contains(PackKey(ix, iy-1, iz)))
+                    {
+                        positions.Add(new Point3D(cx-half, cy-half, cz-half));
+                        positions.Add(new Point3D(cx+half, cy-half, cz-half));
+                        positions.Add(new Point3D(cx+half, cy-half, cz+half));
+                        positions.Add(new Point3D(cx-half, cy-half, cz+half));
+                        indices.Add(offset); indices.Add(offset+1); indices.Add(offset+2);
+                        indices.Add(offset); indices.Add(offset+2); indices.Add(offset+3);
+                        offset += 4;
+                    }
+                    // +Z face (top)
+                    if (!_occupancySet.Contains(PackKey(ix, iy, iz+1)))
+                    {
+                        positions.Add(new Point3D(cx-half, cy-half, cz+half));
+                        positions.Add(new Point3D(cx+half, cy-half, cz+half));
+                        positions.Add(new Point3D(cx+half, cy+half, cz+half));
+                        positions.Add(new Point3D(cx-half, cy+half, cz+half));
+                        indices.Add(offset); indices.Add(offset+1); indices.Add(offset+2);
+                        indices.Add(offset); indices.Add(offset+2); indices.Add(offset+3);
+                        offset += 4;
+                    }
+                    // -Z face (bottom)
+                    if (!_occupancySet.Contains(PackKey(ix, iy, iz-1)))
+                    {
+                        positions.Add(new Point3D(cx-half, cy-half, cz-half));
+                        positions.Add(new Point3D(cx-half, cy+half, cz-half));
+                        positions.Add(new Point3D(cx+half, cy+half, cz-half));
+                        positions.Add(new Point3D(cx+half, cy-half, cz-half));
+                        indices.Add(offset); indices.Add(offset+1); indices.Add(offset+2);
+                        indices.Add(offset); indices.Add(offset+2); indices.Add(offset+3);
+                        offset += 4;
+                    }
                 }
+
+                if (positions.Count == 0) continue;
+
+                positions.Freeze();
+                indices.Freeze();
+
+                var geom = new MeshGeometry3D
+                {
+                    Positions = positions,
+                    TriangleIndices = indices,
+                };
                 geom.Freeze();
 
+                // Opaque DiffuseMaterial: responds to scene lighting for natural shading
                 Material mat;
                 if (!_materialCache.TryGetValue(ck, out mat))
                 {
-                    var brush = new SolidColorBrush(Color.FromArgb(230, cr, cg2, cb));
+                    var brush = new SolidColorBrush(Color.FromArgb(255, cr, cg2, cb));
                     brush.Freeze();
                     mat = new DiffuseMaterial(brush);
                     ((DiffuseMaterial)mat).Freeze();
@@ -784,12 +888,12 @@ namespace NOMAD.MissionPlanner
 
         /// <summary>
         /// Render block-only cubes (fallback when per-voxel data is not available).
+        /// Uses adjacent-face culling.
         /// </summary>
         private void UpdateMeshVisualBlocks(MeshDataModel meshData)
         {
                 double bs = meshData.BlockSize > 0 ? meshData.BlockSize : 0.05;
-                double cubeSize = bs * 0.96;
-                double gap = (bs - cubeSize) * 0.5;
+                double half = bs * 0.48; // slightly smaller than half for a tiny gap
 
                 // Merge incoming blocks into persisted map
                 bool hasNewBlocks = false;
@@ -808,6 +912,7 @@ namespace NOMAD.MissionPlanner
                     if (!_persistedBlocks.ContainsKey(key) || _persistedBlocks[key] != colorKey)
                     {
                         _persistedBlocks[key] = colorKey;
+                        _occupancySet.Add(PackKey(block.Index[0], block.Index[1], block.Index[2]));
                         hasNewBlocks = true;
                     }
                 }
@@ -834,42 +939,106 @@ namespace NOMAD.MissionPlanner
                     byte g = (byte)((ck >> 8) & 0xFF);
                     byte b = (byte)(ck & 0xFF);
 
-                    var groupGeometry = new MeshGeometry3D();
+                    var positions = new Point3DCollection();
+                    var indices = new Int32Collection();
                     int gOffset = 0;
 
                     foreach (var idx in kvp.Value)
                     {
-                        double ox = idx[0] * bs + gap;
-                        double oy = idx[1] * bs + gap;
-                        double oz = idx[2] * bs + gap;
+                        int ix = idx[0], iy = idx[1], iz = idx[2];
+                        double cx = ix * bs;
+                        double cy = iy * bs;
+                        double cz = iz * bs;
 
-                        groupGeometry.Positions.Add(new Point3D(ox,            oy,            oz));
-                        groupGeometry.Positions.Add(new Point3D(ox + cubeSize, oy,            oz));
-                        groupGeometry.Positions.Add(new Point3D(ox + cubeSize, oy + cubeSize, oz));
-                        groupGeometry.Positions.Add(new Point3D(ox,            oy + cubeSize, oz));
-                        groupGeometry.Positions.Add(new Point3D(ox,            oy,            oz + cubeSize));
-                        groupGeometry.Positions.Add(new Point3D(ox + cubeSize, oy,            oz + cubeSize));
-                        groupGeometry.Positions.Add(new Point3D(ox + cubeSize, oy + cubeSize, oz + cubeSize));
-                        groupGeometry.Positions.Add(new Point3D(ox,            oy + cubeSize, oz + cubeSize));
-
-                        int[] faces = {
-                            0,1,2, 0,2,3,
-                            4,6,5, 4,7,6,
-                            0,4,5, 0,5,1,
-                            2,6,7, 2,7,3,
-                            0,3,7, 0,7,4,
-                            1,5,6, 1,6,2,
-                        };
-                        foreach (int fi in faces)
-                            groupGeometry.TriangleIndices.Add(gOffset + fi);
-                        gOffset += 8;
+                        // Adjacent-face culling: only emit faces where no neighbor exists
+                        if (!_occupancySet.Contains(PackKey(ix+1, iy, iz)))
+                        {
+                            positions.Add(new Point3D(cx+half, cy-half, cz-half));
+                            positions.Add(new Point3D(cx+half, cy+half, cz-half));
+                            positions.Add(new Point3D(cx+half, cy+half, cz+half));
+                            positions.Add(new Point3D(cx+half, cy-half, cz+half));
+                            indices.Add(gOffset); indices.Add(gOffset+1); indices.Add(gOffset+2);
+                            indices.Add(gOffset); indices.Add(gOffset+2); indices.Add(gOffset+3);
+                            gOffset += 4;
+                        }
+                        if (!_occupancySet.Contains(PackKey(ix-1, iy, iz)))
+                        {
+                            positions.Add(new Point3D(cx-half, cy-half, cz-half));
+                            positions.Add(new Point3D(cx-half, cy-half, cz+half));
+                            positions.Add(new Point3D(cx-half, cy+half, cz+half));
+                            positions.Add(new Point3D(cx-half, cy+half, cz-half));
+                            indices.Add(gOffset); indices.Add(gOffset+1); indices.Add(gOffset+2);
+                            indices.Add(gOffset); indices.Add(gOffset+2); indices.Add(gOffset+3);
+                            gOffset += 4;
+                        }
+                        if (!_occupancySet.Contains(PackKey(ix, iy+1, iz)))
+                        {
+                            positions.Add(new Point3D(cx-half, cy+half, cz-half));
+                            positions.Add(new Point3D(cx-half, cy+half, cz+half));
+                            positions.Add(new Point3D(cx+half, cy+half, cz+half));
+                            positions.Add(new Point3D(cx+half, cy+half, cz-half));
+                            indices.Add(gOffset); indices.Add(gOffset+1); indices.Add(gOffset+2);
+                            indices.Add(gOffset); indices.Add(gOffset+2); indices.Add(gOffset+3);
+                            gOffset += 4;
+                        }
+                        if (!_occupancySet.Contains(PackKey(ix, iy-1, iz)))
+                        {
+                            positions.Add(new Point3D(cx-half, cy-half, cz-half));
+                            positions.Add(new Point3D(cx+half, cy-half, cz-half));
+                            positions.Add(new Point3D(cx+half, cy-half, cz+half));
+                            positions.Add(new Point3D(cx-half, cy-half, cz+half));
+                            indices.Add(gOffset); indices.Add(gOffset+1); indices.Add(gOffset+2);
+                            indices.Add(gOffset); indices.Add(gOffset+2); indices.Add(gOffset+3);
+                            gOffset += 4;
+                        }
+                        if (!_occupancySet.Contains(PackKey(ix, iy, iz+1)))
+                        {
+                            positions.Add(new Point3D(cx-half, cy-half, cz+half));
+                            positions.Add(new Point3D(cx+half, cy-half, cz+half));
+                            positions.Add(new Point3D(cx+half, cy+half, cz+half));
+                            positions.Add(new Point3D(cx-half, cy+half, cz+half));
+                            indices.Add(gOffset); indices.Add(gOffset+1); indices.Add(gOffset+2);
+                            indices.Add(gOffset); indices.Add(gOffset+2); indices.Add(gOffset+3);
+                            gOffset += 4;
+                        }
+                        if (!_occupancySet.Contains(PackKey(ix, iy, iz-1)))
+                        {
+                            positions.Add(new Point3D(cx-half, cy-half, cz-half));
+                            positions.Add(new Point3D(cx-half, cy+half, cz-half));
+                            positions.Add(new Point3D(cx+half, cy+half, cz-half));
+                            positions.Add(new Point3D(cx+half, cy-half, cz-half));
+                            indices.Add(gOffset); indices.Add(gOffset+1); indices.Add(gOffset+2);
+                            indices.Add(gOffset); indices.Add(gOffset+2); indices.Add(gOffset+3);
+                            gOffset += 4;
+                        }
                     }
 
-                    var material = new DiffuseMaterial(new SolidColorBrush(
-                        Color.FromArgb(220, r, g, b)
-                    ));
-                    var model = new GeometryModel3D(groupGeometry, material);
-                    model.BackMaterial = material;
+                    if (positions.Count == 0) continue;
+
+                    positions.Freeze();
+                    indices.Freeze();
+
+                    var geom = new MeshGeometry3D
+                    {
+                        Positions = positions,
+                        TriangleIndices = indices,
+                    };
+                    geom.Freeze();
+
+                    // Opaque DiffuseMaterial: responds to scene lighting for depth
+                    Material mat;
+                    if (!_materialCache.TryGetValue(ck, out mat))
+                    {
+                        var brush = new SolidColorBrush(Color.FromArgb(255, r, g, b));
+                        brush.Freeze();
+                        mat = new DiffuseMaterial(brush);
+                        ((DiffuseMaterial)mat).Freeze();
+                        _materialCache[ck] = mat;
+                    }
+
+                    var model = new GeometryModel3D(geom, mat);
+                    model.BackMaterial = mat;
+                    model.Freeze();
                     _meshModelGroup.Children.Add(model);
                 }
         }
@@ -902,22 +1071,57 @@ namespace NOMAD.MissionPlanner
             
             try
             {
-                var trajectoryBuilder = new MeshBuilder();
-                
-                // Create tube along trajectory
+                // Build a simple line strip using thin tubes -- only for the last segment
+                // to avoid rebuilding the entire trajectory each frame
+                var positions = new Point3DCollection();
+                var indices = new Int32Collection();
+                int offset = 0;
+                double r = 0.015; // tube radius approximated as flat quads
+
                 for (int i = 1; i < _trajectoryPoints.Count; i++)
                 {
-                    trajectoryBuilder.AddPipe(
-                        _trajectoryPoints[i - 1],
-                        _trajectoryPoints[i],
-                        0, 0.02, 6
-                    );
+                    var p0 = _trajectoryPoints[i - 1];
+                    var p1 = _trajectoryPoints[i];
+                    var dir = p1 - p0;
+                    if (dir.Length < 0.001) continue;
+
+                    // Create a flat quad strip along the segment (2 tris per segment)
+                    var up = new Vector3D(0, 0, 1);
+                    var right = Vector3D.CrossProduct(dir, up);
+                    if (right.Length < 0.001) { up = new Vector3D(0, 1, 0); right = Vector3D.CrossProduct(dir, up); }
+                    right.Normalize();
+                    right *= r;
+
+                    positions.Add(p0 + right);
+                    positions.Add(p0 - right);
+                    positions.Add(p1 - right);
+                    positions.Add(p1 + right);
+
+                    indices.Add(offset); indices.Add(offset+1); indices.Add(offset+2);
+                    indices.Add(offset); indices.Add(offset+2); indices.Add(offset+3);
+                    offset += 4;
                 }
-                
-                var trajectoryMaterial = new DiffuseMaterial(new SolidColorBrush(
-                    Color.FromArgb(180, 255, 200, 0)  // Yellow trajectory
-                ));
-                var trajectoryModel = new GeometryModel3D(trajectoryBuilder.ToMesh(), trajectoryMaterial);
+
+                if (positions.Count == 0) return;
+
+                positions.Freeze();
+                indices.Freeze();
+
+                var geom = new MeshGeometry3D
+                {
+                    Positions = positions,
+                    TriangleIndices = indices,
+                };
+                geom.Freeze();
+
+                var trajectoryBrush = new SolidColorBrush(Color.FromArgb(255, 255, 200, 0));
+                trajectoryBrush.Freeze();
+                var trajectoryMaterial = new DiffuseMaterial(trajectoryBrush);
+                ((DiffuseMaterial)trajectoryMaterial).Freeze();
+
+                var trajectoryModel = new GeometryModel3D(geom, trajectoryMaterial);
+                trajectoryModel.BackMaterial = trajectoryMaterial;
+                trajectoryModel.Freeze();
                 
                 var group = new Model3DGroup();
                 group.Children.Add(trajectoryModel);
@@ -1059,6 +1263,7 @@ namespace NOMAD.MissionPlanner
             {
                 _meshModelGroup.Children.Clear();
                 _persistedBlocks.Clear();
+                _occupancySet.Clear();
                 _materialCache.Clear();
                 _meshDirty = false;
                 _lastRenderedCount = 0;
@@ -1151,9 +1356,18 @@ namespace NOMAD.MissionPlanner
         
         protected override void Dispose(bool disposing)
         {
+            _disposed = true;
             if (disposing)
             {
                 _updateCts?.Cancel();
+                try
+                {
+                    if (_webSocket?.State == WebSocketState.Open)
+                        _webSocket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None).Wait(500);
+                }
+                catch { }
+                try { _webSocket?.Dispose(); } catch { }
+                _webSocket = null;
                 _updateCts?.Dispose();
                 _elementHost?.Dispose();
             }

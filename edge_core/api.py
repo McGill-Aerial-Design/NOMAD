@@ -553,6 +553,88 @@ def create_app(state_manager: StateManager) -> FastAPI:
         except WebSocketDisconnect:
             return
 
+    @app.websocket("/ws/slam")
+    async def ws_slam(websocket: WebSocket):
+        """
+        WebSocket endpoint for real-time SLAM 3D visualization (30Hz pose, mesh on change).
+
+        Pushes two types of messages:
+        - type="pose": drone position/attitude at 30Hz (~100 bytes)
+        - type="mesh": mesh delta when new data arrives (only changed blocks/voxels)
+
+        The client (SLAM3DView) connects once and receives a continuous stream.
+        """
+        await websocket.accept()
+        last_mesh_timestamp = None
+        frame_count = 0
+        # Cache last known pose in mesh frame (ROS: X-forward, Y-left, Z-up)
+        # to avoid mixing with NED-converted VIO which causes offset
+        last_mesh_pose = None
+        try:
+            while True:
+                frame = {"type": "pose", "ts": frame_count}
+                has_pose = False
+
+                # Check for mesh updates first -- mesh-bundled pose is in the
+                # same coordinate frame as the mesh vertices (ROS odom/map frame)
+                has_mesh = False
+                if hasattr(websocket.app.state, 'slam_mesh_data') and websocket.app.state.slam_mesh_data:
+                    stored = websocket.app.state.slam_mesh_data
+                    mesh_ts = stored.get("received_at")
+                    if mesh_ts and mesh_ts != last_mesh_timestamp:
+                        last_mesh_timestamp = mesh_ts
+                        has_mesh = True
+                        frame["type"] = "mesh"
+                        frame["mesh"] = stored.get("mesh")
+                        # Use mesh-bundled drone pose (same frame as mesh vertices)
+                        if stored.get("drone_position"):
+                            dp = stored["drone_position"]
+                            frame["x"] = dp.get("x", 0)
+                            frame["y"] = dp.get("y", 0)
+                            frame["z"] = dp.get("z", 0)
+                            has_pose = True
+                        if stored.get("drone_attitude"):
+                            da = stored["drone_attitude"]
+                            frame["roll"] = da.get("roll", 0)
+                            frame["pitch"] = da.get("pitch", 0)
+                            frame["yaw"] = da.get("yaw", 0)
+                        # Cache this pose for future pose-only frames
+                        if has_pose:
+                            last_mesh_pose = {
+                                "x": frame.get("x", 0),
+                                "y": frame.get("y", 0),
+                                "z": frame.get("z", 0),
+                                "roll": frame.get("roll", 0),
+                                "pitch": frame.get("pitch", 0),
+                                "yaw": frame.get("yaw", 0),
+                            }
+
+                # For pose-only frames, reuse the last mesh-bundled pose
+                # (stays in the same ROS frame as the mesh to avoid offset)
+                if not has_mesh and last_mesh_pose:
+                    frame["x"] = last_mesh_pose["x"]
+                    frame["y"] = last_mesh_pose["y"]
+                    frame["z"] = last_mesh_pose["z"]
+                    frame["roll"] = last_mesh_pose["roll"]
+                    frame["pitch"] = last_mesh_pose["pitch"]
+                    frame["yaw"] = last_mesh_pose["yaw"]
+                    has_pose = True
+
+                # Skip frames when no pose data available at all
+                if not has_pose:
+                    frame_count += 1
+                    await asyncio.sleep(1.0 / 30)
+                    continue
+
+                await websocket.send_json(frame)
+                frame_count += 1
+                await asyncio.sleep(1.0 / 30)  # 30 Hz
+        except WebSocketDisconnect:
+            logger.debug("SLAM WebSocket client disconnected")
+            return
+        except Exception as e:
+            logger.warning(f"SLAM WebSocket error: {e}")
+
     # ==================== Task 1: Recon (Outdoor) ====================
 
     @app.post("/api/task/1/capture", tags=["Task 1"], response_model=Task1CaptureResponse)
