@@ -425,17 +425,12 @@ namespace NOMAD.MissionPlanner
                                         SizeMode = PictureBoxSizeMode.Zoom,
                                         Margin = new Padding(5),
                                         Cursor = Cursors.Hand,
-                                        Tag = new { Path = localPath, Metadata = metadataText.ToString() },
+                                        Tag = new { Path = localPath, JsonPath = jsonPath, Metadata = metadataText.ToString() },
                                     };
                                     
-                                    picBox.Click += (s, evt) =>
+                                    picBox.MouseClick += (s, mevt) =>
                                     {
-                                        try
-                                        {
-                                            dynamic tagData = picBox.Tag;
-                                            System.Diagnostics.Process.Start(tagData.Path);
-                                        }
-                                        catch { }
+                                        ShowImageContextMenu(picBox, mevt.Location);
                                     };
                                     
                                     // Enhanced tooltip with full metadata
@@ -513,6 +508,214 @@ namespace NOMAD.MissionPlanner
             catch { }
         }
         
+        /// <summary>
+        /// Show a context menu on thumbnail click with options to open the image
+        /// or view the AI-generated description.
+        /// </summary>
+        private void ShowImageContextMenu(PictureBox picBox, Point location)
+        {
+            dynamic tagData = picBox.Tag;
+            string imagePath = tagData.Path;
+            string jsonPath = tagData.JsonPath;
+
+            var menu = new ContextMenuStrip();
+            menu.BackColor = Color.FromArgb(35, 35, 38);
+            menu.ForeColor = Color.White;
+            menu.Renderer = new ToolStripProfessionalRenderer(new DarkMenuColorTable());
+
+            var openItem = new ToolStripMenuItem("Open Image in Viewer");
+            openItem.Click += (s, e) =>
+            {
+                try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(imagePath) { UseShellExecute = true }); }
+                catch (Exception ex) { MessageBox.Show($"Failed to open image: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            };
+            menu.Items.Add(openItem);
+
+            var descItem = new ToolStripMenuItem("View AI Description");
+            descItem.Click += (s, e) => ShowAIDescriptionPopup(jsonPath, imagePath);
+            menu.Items.Add(descItem);
+
+            menu.Show(picBox, location);
+        }
+
+        /// <summary>
+        /// Show a modal popup displaying the AI description for a captured image,
+        /// with the ability to copy the text. Polls the JSON metadata file every
+        /// 2 seconds so the description auto-appears when AI processing finishes.
+        /// </summary>
+        private void ShowAIDescriptionPopup(string jsonPath, string imagePath)
+        {
+            string currentDescription = null;
+
+            // Helper: read AI fields from metadata JSON
+            void ReadMetadata(out string desc, out string provider, out string model, out string generatedAt)
+            {
+                desc = null; provider = null; model = null; generatedAt = null;
+                try
+                {
+                    if (File.Exists(jsonPath))
+                    {
+                        var json = File.ReadAllText(jsonPath);
+                        var data = Newtonsoft.Json.Linq.JObject.Parse(json);
+                        desc = data["AiDescription"]?.ToString();
+                        provider = data["AiProvider"]?.ToString();
+                        model = data["AiModel"]?.ToString();
+                        generatedAt = data["AiGeneratedAt"]?.ToString();
+                    }
+                }
+                catch { }
+            }
+
+            ReadMetadata(out var aiDescription, out var aiProvider, out var aiModel, out var aiGeneratedAt);
+            currentDescription = aiDescription;
+
+            var popup = new Form
+            {
+                Text = "AI Description - " + Path.GetFileName(imagePath),
+                Size = new Size(520, 400),
+                StartPosition = FormStartPosition.CenterParent,
+                BackColor = Color.FromArgb(30, 30, 33),
+                ForeColor = Color.White,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                ShowInTaskbar = false,
+            };
+
+            var layout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 3,
+                Padding = new Padding(12),
+            };
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            var header = new Label
+            {
+                Text = !string.IsNullOrEmpty(aiProvider)
+                    ? $"Provider: {aiProvider}  |  Model: {aiModel ?? "N/A"}  |  Generated: {aiGeneratedAt ?? "N/A"}"
+                    : "Waiting for AI description...",
+                AutoSize = true,
+                ForeColor = Color.FromArgb(180, 180, 180),
+                Padding = new Padding(0, 0, 0, 8),
+            };
+            layout.Controls.Add(header, 0, 0);
+
+            var txtDesc = new TextBox
+            {
+                Dock = DockStyle.Fill,
+                Multiline = true,
+                ReadOnly = true,
+                ScrollBars = ScrollBars.Vertical,
+                BackColor = Color.FromArgb(25, 25, 28),
+                ForeColor = Color.FromArgb(220, 220, 220),
+                BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font("Segoe UI", 10),
+                Text = !string.IsNullOrEmpty(aiDescription)
+                    ? aiDescription
+                    : "Waiting for AI to generate description...",
+            };
+            layout.Controls.Add(txtDesc, 0, 1);
+
+            var btnPanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.RightToLeft,
+                AutoSize = true,
+                Padding = new Padding(0, 8, 0, 0),
+            };
+
+            var btnClose = new Button
+            {
+                Text = "Close",
+                Size = new Size(80, 30),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(50, 50, 53),
+                ForeColor = Color.White,
+            };
+            btnClose.Click += (s, e) => popup.Close();
+
+            var btnCopy = new Button
+            {
+                Text = "Copy Text",
+                Size = new Size(90, 30),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(0, 122, 204),
+                ForeColor = Color.White,
+                Enabled = !string.IsNullOrEmpty(aiDescription),
+            };
+            btnCopy.Click += (s, e) =>
+            {
+                try
+                {
+                    if (!string.IsNullOrEmpty(currentDescription))
+                    {
+                        Clipboard.SetText(currentDescription);
+                        btnCopy.Text = "Copied!";
+                        var resetTimer = new System.Windows.Forms.Timer { Interval = 1500 };
+                        resetTimer.Tick += (ts, te) => { btnCopy.Text = "Copy Text"; resetTimer.Stop(); resetTimer.Dispose(); };
+                        resetTimer.Start();
+                    }
+                }
+                catch { }
+            };
+
+            btnPanel.Controls.Add(btnClose);
+            btnPanel.Controls.Add(btnCopy);
+            layout.Controls.Add(btnPanel, 0, 2);
+
+            // Poll timer: re-read JSON every 2s until AI description appears
+            System.Windows.Forms.Timer pollTimer = null;
+            if (string.IsNullOrEmpty(aiDescription))
+            {
+                pollTimer = new System.Windows.Forms.Timer { Interval = 2000 };
+                pollTimer.Tick += (s, e) =>
+                {
+                    ReadMetadata(out var desc, out var prov, out var mod, out var gen);
+                    if (!string.IsNullOrEmpty(desc))
+                    {
+                        currentDescription = desc;
+                        txtDesc.Text = desc;
+                        header.Text = $"Provider: {prov}  |  Model: {mod ?? "N/A"}  |  Generated: {gen ?? "N/A"}";
+                        btnCopy.Enabled = true;
+                        pollTimer.Stop();
+                        pollTimer.Dispose();
+                    }
+                };
+                pollTimer.Start();
+            }
+
+            popup.FormClosed += (s, e) =>
+            {
+                pollTimer?.Stop();
+                pollTimer?.Dispose();
+            };
+
+            popup.Controls.Add(layout);
+            popup.ShowDialog(this);
+        }
+
+        /// <summary>Dark color table for context menu styling.</summary>
+        private class DarkMenuColorTable : ProfessionalColorTable
+        {
+            public override Color MenuBorder => Color.FromArgb(60, 60, 63);
+            public override Color MenuItemSelected => Color.FromArgb(60, 60, 63);
+            public override Color MenuItemSelectedGradientBegin => Color.FromArgb(50, 50, 53);
+            public override Color MenuItemSelectedGradientEnd => Color.FromArgb(50, 50, 53);
+            public override Color MenuItemBorder => Color.FromArgb(70, 70, 73);
+            public override Color MenuStripGradientBegin => Color.FromArgb(35, 35, 38);
+            public override Color MenuStripGradientEnd => Color.FromArgb(35, 35, 38);
+            public override Color ToolStripDropDownBackground => Color.FromArgb(35, 35, 38);
+            public override Color ImageMarginGradientBegin => Color.FromArgb(35, 35, 38);
+            public override Color ImageMarginGradientMiddle => Color.FromArgb(35, 35, 38);
+            public override Color ImageMarginGradientEnd => Color.FromArgb(35, 35, 38);
+            public override Color SeparatorDark => Color.FromArgb(60, 60, 63);
+            public override Color SeparatorLight => Color.FromArgb(60, 60, 63);
+        }
+
         protected override void Dispose(bool disposing)
         {
             if (disposing)

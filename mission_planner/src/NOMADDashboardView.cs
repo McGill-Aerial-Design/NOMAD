@@ -678,9 +678,13 @@ namespace NOMAD.MissionPlanner
         
         public void UpdateData()
         {
+            if (IsDisposed || !IsHandleCreated) return;
+
             if (this.InvokeRequired)
             {
-                this.BeginInvoke((MethodInvoker)delegate { UpdateData(); });
+                try { this.BeginInvoke((MethodInvoker)delegate { UpdateData(); }); }
+                catch (ObjectDisposedException) { }
+                catch (InvalidOperationException) { }
                 return;
             }
             

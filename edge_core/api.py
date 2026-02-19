@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import subprocess
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
@@ -106,17 +107,17 @@ COMMAND_WHITELIST: dict[str, str] = {
     # --- Service restart ---
     "restart_video": "pkill -x mediamtx 2>/dev/null; sleep 1; nohup mediamtx ~/NOMAD/infra/mediamtx.yml > ~/nomad_logs/mediamtx.log 2>&1 & sleep 1; pgrep -x mediamtx > /dev/null && echo restarted || echo failed",
     "restart_mavlink": "pkill -f mavlink-routerd 2>/dev/null; sleep 1; [ -e /dev/ttyACM0 ] && { GCS=$(tailscale status 2>/dev/null | grep -v \"$(hostname)\" | grep -oP '\\d+\\.\\d+\\.\\d+\\.\\d+' | head -1); nohup mavlink-routerd -e \"${GCS:-192.168.1.255}:14550\" -e 127.0.0.1:14550 /dev/ttyACM0 > ~/nomad_logs/mavlink.log 2>&1 & sleep 2; pgrep -f mavlink-routerd > /dev/null && echo restarted || echo failed; } || echo 'no CubePilot'",
-    "restart_edge_core": "sudo systemctl restart nomad",
+    "restart_edge_core": "nohup bash -c 'sleep 2 && sudo systemctl restart nomad' > /dev/null 2>&1 & echo 'restart scheduled'",
     # --- Service start / stop ---
     "start_mediamtx": "pgrep -x mediamtx > /dev/null && echo 'already running' || (nohup mediamtx ~/NOMAD/infra/mediamtx.yml > ~/nomad_logs/mediamtx.log 2>&1 & sleep 1; echo started)",
     "stop_mediamtx": "pkill -x mediamtx 2>&1 && echo stopped || echo 'not running'",
     "start_mavlink": "[ -e /dev/ttyACM0 ] && { pgrep -f mavlink-routerd > /dev/null && echo 'already running' || { GCS=$(tailscale status 2>/dev/null | grep -v \"$(hostname)\" | grep -oP '\\d+\\.\\d+\\.\\d+\\.\\d+' | head -1); nohup mavlink-routerd -e \"${GCS:-192.168.1.255}:14550\" -e 127.0.0.1:14550 /dev/ttyACM0 > ~/nomad_logs/mavlink.log 2>&1 & sleep 2; echo started; }; } || echo 'no CubePilot'",
     "stop_mavlink": "pkill -f mavlink-routerd 2>&1 && echo stopped || echo 'not running'",
     "start_nomad": "sudo systemctl start nomad 2>&1 && echo started || echo failed",
-    "stop_nomad": "sudo systemctl stop nomad 2>&1 && echo stopped || echo failed",
+    "stop_nomad": "nohup bash -c 'sleep 2 && sudo systemctl stop nomad' > /dev/null 2>&1 & echo 'stop scheduled'",
     # --- System commands ---
-    "reboot_jetson": "sudo reboot",
-    "shutdown_jetson": "sudo shutdown -h now",
+    "reboot_jetson": "nohup bash -c 'sleep 2 && sudo reboot' > /dev/null 2>&1 & echo 'reboot scheduled'",
+    "shutdown_jetson": "nohup bash -c 'sleep 2 && sudo shutdown -h now' > /dev/null 2>&1 & echo 'shutdown scheduled'",
     "check_disk": "df -h",
     "check_memory": "free -h",
     "check_processes": "ps aux | head -20",
@@ -251,7 +252,7 @@ def set_nav_controller(app: FastAPI, controller: "NavController") -> None:
 
 
 def set_camera_service(app: FastAPI, camera_service: Any) -> None:
-    """Register ZED camera service with API via app.state."""
+    """Register ZED camera service with API via app.state (unused, kept for compat)."""
     app.state.camera_service = camera_service
 
 
@@ -638,55 +639,32 @@ def create_app(state_manager: StateManager) -> FastAPI:
             os.remove(temp_path)
 
         # ------------------------------------------------------------------
-        # Capture strategy (ordered by preference):
-        #   1. ZED SDK camera_service (direct, highest quality)
-        #   2. RTSP stream grab (always available when video bridge is running)
+        # Capture frame from video bridge HTTP snapshot
         # ------------------------------------------------------------------
         image_bgr = None
 
-        # Strategy 1: ZED SDK direct capture
-        camera_service = request.app.state.camera_service
-        if camera_service:
-            try:
-                frame = camera_service.get_frame()
-                if frame and frame.left_image is not None:
-                    if frame.left_image.shape[2] == 4:
-                        image_bgr = cv2.cvtColor(frame.left_image, cv2.COLOR_BGRA2BGR)
-                    else:
-                        image_bgr = frame.left_image
-                    logger.info("Task 1 capture: frame from ZED SDK")
+        try:
+            import requests as _requests
+            bridge_port = int(os.environ.get("NOMAD_BRIDGE_HTTP_PORT", "9200"))
+            snap_url = f"http://172.17.0.1:{bridge_port}/snapshot"
+            resp = _requests.get(snap_url, timeout=3)
+            if resp.status_code == 200 and resp.headers.get("Content-Type", "").startswith("image/"):
+                import numpy as _np
+                arr = _np.frombuffer(resp.content, dtype=_np.uint8)
+                image_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if image_bgr is not None:
+                    logger.info("Task 1 capture: frame from bridge snapshot")
                 else:
-                    logger.warning("Task 1 capture: ZED SDK returned no frame, falling through to RTSP")
-            except Exception as e:
-                logger.warning(f"Task 1 capture: ZED SDK failed ({e}), falling through to RTSP")
-
-        # Strategy 2: RTSP stream grab (primary path when no SDK)
-        if image_bgr is None:
-            try:
-                rtsp_url = os.environ.get("NOMAD_RTSP_URL", "rtsp://172.17.0.1:8554/primary")
-                cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                if cap.isOpened():
-                    # Flush stale buffered frames and grab the freshest one
-                    ret = False
-                    for _ in range(3):
-                        ret, image_bgr = cap.read()
-                    cap.release()
-                    if ret and image_bgr is not None:
-                        logger.info("Task 1 capture: frame from RTSP stream")
-                    else:
-                        image_bgr = None
-                        logger.warning("Task 1 capture: RTSP stream returned no frame")
-                else:
-                    cap.release()
-                    logger.warning("Task 1 capture: could not open RTSP stream")
-            except Exception as e:
-                logger.error(f"Task 1 capture: RTSP grab failed: {e}")
+                    logger.error("Task 1 capture: bridge snapshot returned invalid image data")
+            else:
+                logger.error(f"Task 1 capture: bridge snapshot returned HTTP {resp.status_code}")
+        except Exception as e:
+            logger.error(f"Task 1 capture: bridge snapshot failed: {e}")
 
         # Save captured frame with EXIF metadata
         if image_bgr is not None:
             try:
-                temp_path = image_path + ".temp"
+                temp_path = image_path + ".tmp.jpg"
                 cv2.imwrite(temp_path, image_bgr)
                 _embed_exif(temp_path, image_path)
                 image_saved = True
@@ -712,13 +690,13 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 json.dump(metadata, f, indent=2)
             
             return Task1CaptureResponse(
-                success=True,
+                success=image_saved,
                 timestamp=timestamp.isoformat(),
                 target_text=(
                     f"Captured at {state.gps_lat:.6f}, {state.gps_lon:.6f}"
                     if state.gps_lat is not None and state.gps_lon is not None
                     else "Captured (GPS coordinates pending)"
-                ),
+                ) if image_saved else "Capture failed: no image from video bridge",
                 position=metadata["gps"],
                 heading_deg=heading,
                 pitch_deg=pitch,
@@ -729,6 +707,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 image_name=image_filename if image_saved else None,
                 metadata_file=metadata_filename,
                 building_location=building_name,
+                error="No image captured from video bridge" if not image_saved else None,
             )
             
         except Exception as e:
@@ -1278,36 +1257,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
             "message": "GUIDED mode requested" if success else "Failed to request GUIDED mode",
         }
 
-    # ==================== Camera Endpoints ====================
-
-    @app.get("/api/camera/status", tags=["Camera"])
-    async def camera_status(request: Request):
-        """Get ZED camera status."""
-        camera_service = request.app.state.camera_service
-        if not camera_service:
-            return {
-                "initialized": False,
-                "tracking": False,
-                "fps": 0,
-            }
-        
-        return {
-            "initialized": camera_service.is_initialized,
-            "tracking": camera_service.is_tracking,
-            "fps": camera_service.current_fps,
-        }
-
-    @app.post("/api/camera/reset_tracking", tags=["Camera"])
-    async def camera_reset_tracking(request: Request):
-        """Reset camera positional tracking."""
-        camera_service = request.app.state.camera_service
-        if not camera_service:
-            raise HTTPException(status_code=503, detail="Camera not initialized")
-        
-        success = camera_service.reset_tracking()
-        return {"success": success}
-
-    # ==================== Terminal Endpoints ====================
+    # ==================== Terminal Endpoints ======================================
 
     @app.post("/api/terminal/run", tags=["Terminal"], response_model=TerminalCommandResponse)
     async def execute_terminal_command(request: TerminalCommandRequest):
@@ -1345,7 +1295,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 )
             else:
                 # For simple commands, use shell=False with list
-                cmd_parts = command_str.split()
+                cmd_parts = shlex.split(command_str)
                 result = subprocess.run(
                     cmd_parts,
                     shell=False,
@@ -2553,11 +2503,9 @@ wait
                     **session.get_status(),
                 }
 
-            # Pass existing ZED camera handle to avoid opening a second instance
+            # ZED camera handle not available (SDK disabled); calibration
+            # will open its own instance if needed.
             zed_cam = None
-            camera_service = request.app.state.camera_service
-            if camera_service and hasattr(camera_service, 'zed_handle'):
-                zed_cam = camera_service.zed_handle
 
             session = start_mag_calibration(zed_camera=zed_cam)
             if session.state == CalibrationState.FAILED:
@@ -2685,11 +2633,9 @@ wait
             from starlette.concurrency import run_in_threadpool
             from .sensor_calibration import IMUCalibrationCheck
 
-            # Pass existing ZED camera handle to avoid opening a second instance
+            # ZED camera handle not available (SDK disabled); calibration
+            # will open its own instance if needed.
             zed_cam = None
-            camera_service = request.app.state.camera_service
-            if camera_service and hasattr(camera_service, 'zed_handle'):
-                zed_cam = camera_service.zed_handle
 
             # Run blocking 5s check in threadpool
             result = await run_in_threadpool(IMUCalibrationCheck.run_check, zed_cam, 5.0)

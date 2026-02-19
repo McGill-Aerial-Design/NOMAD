@@ -229,6 +229,19 @@ class VideoStreamManager:
                 )
             except Exception:
                 pass  # OK if nothing to kill
+
+            # Ensure numpy <2 (cv_bridge is compiled against numpy 1.x ABI)
+            try:
+                subprocess.run(
+                    ["docker", "exec", self.container_name,
+                     "bash", "-c",
+                     "python3 -c 'import numpy; v=int(numpy.__version__.split(\".\")[0]); exit(0 if v<2 else 1)' "
+                     "|| pip3 install -q 'numpy<2' 2>/dev/null"],
+                    capture_output=True,
+                    timeout=30
+                )
+            except Exception:
+                pass  # Best-effort; bridge will fail with clear error if numpy is wrong
             
             # Start the simple video bridge
             cmd = [

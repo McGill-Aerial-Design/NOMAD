@@ -400,6 +400,22 @@ namespace NOMAD.MissionPlanner
             catch { }
             
             _isPlaying = false;
+
+            // Clear video display to prevent painting stale/freed frame data
+            try
+            {
+                var oldImage = _videoBox?.Image;
+                if (_videoBox != null) _videoBox.Image = null;
+                oldImage?.Dispose();
+                if (_fullscreenBox != null && !_fullscreenBox.IsDisposed)
+                {
+                    var oldFull = _fullscreenBox.Image;
+                    _fullscreenBox.Image = null;
+                    oldFull?.Dispose();
+                }
+            }
+            catch { }
+
             _lblStatus.Text = "Stopped";
             _lblStatus.ForeColor = Color.Gray;
         }
@@ -439,15 +455,42 @@ namespace NOMAD.MissionPlanner
             
             try
             {
-                // WORKING METHOD from commit 39f9f48:
-                // Create Bitmap directly from MPBitmap's LockBits pixel data
+                // Copy pixel data into a managed Bitmap.
+                // We MUST NOT wrap frame.LockBits().Scan0 directly because
+                // GStreamer can free that buffer when the pipeline stops,
+                // causing an AccessViolationException in PictureBox.OnPaint.
+                var lockData = frame.LockBits(Rectangle.Empty, null, SkiaSharp.SKColorType.Bgra8888);
                 var displayBitmap = new Bitmap(
                     frame.Width,
                     frame.Height,
-                    4 * frame.Width,  // stride = 4 bytes per pixel (BGRA)
-                    PixelFormat.Format32bppPArgb,
-                    frame.LockBits(Rectangle.Empty, null, SkiaSharp.SKColorType.Bgra8888).Scan0
-                );
+                    PixelFormat.Format32bppPArgb);
+                
+                var bmpData = displayBitmap.LockBits(
+                    new Rectangle(0, 0, frame.Width, frame.Height),
+                    System.Drawing.Imaging.ImageLockMode.WriteOnly,
+                    PixelFormat.Format32bppPArgb);
+                
+                try
+                {
+                    // Source stride: BGRA8888 = 4 bytes per pixel, no padding
+                    // (MPBitmap.LockBits with SKColorType.Bgra8888 gives tightly packed rows)
+                    var srcStride = 4 * frame.Width;
+                    var dstStride = bmpData.Stride;
+                    var rowBytes = Math.Min(srcStride, dstStride);
+                    unsafe
+                    {
+                        byte* src = (byte*)lockData.Scan0;
+                        byte* dst = (byte*)bmpData.Scan0;
+                        for (int y = 0; y < frame.Height; y++)
+                        {
+                            Buffer.MemoryCopy(src + y * srcStride, dst + y * dstStride, dstStride, rowBytes);
+                        }
+                    }
+                }
+                finally
+                {
+                    displayBitmap.UnlockBits(bmpData);
+                }
                 
                 // Update video display
                 var oldImage = _videoBox.Image;

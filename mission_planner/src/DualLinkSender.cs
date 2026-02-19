@@ -147,7 +147,8 @@ namespace NOMAD.MissionPlanner
                     gimbal_pitch_deg = gimbalPitchOverride,
                     lidar_distance_m = lidarDistanceOverride
                 };
-                return await SendHttpPost("/api/task/1/capture", body);
+                // Use long-run client (30s) -- RTSP capture can take 5-10s
+                return await SendHttpPostLongRun("/api/task/1/capture", body);
             }
         }
 

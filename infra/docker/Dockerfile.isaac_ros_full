@@ -82,7 +82,8 @@ ENV LD_LIBRARY_PATH="/usr/local/zed/lib:${LD_LIBRARY_PATH}"
 # ==============================================================
 RUN pip3 install --no-cache-dir \
     transforms3d \
-    pymavlink
+    pymavlink \
+    'numpy<2'
 
 # ==============================================================
 # Workspace

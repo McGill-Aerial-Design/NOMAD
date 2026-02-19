@@ -321,6 +321,19 @@ Agent: [IMMEDIATELY requests next task via py -c "task = input('')"]
 
 **Prevention**: Always use the terminal command `py -c "question = input('...')"` for questions and immediately continue with the task after receiving answers.
 
+### No Fallback Chains -- Pick the Best Approach and Commit
+
+**Rule**: Do NOT implement multi-strategy fallback chains (Strategy 1 -> Strategy 2 -> Strategy 3). Pick the single best approach for a problem and implement it properly. Fallback chains increase code complexity, hide bugs, make debugging harder, and are a sign of lazy engineering.
+
+**Instead of fallbacks**:
+- Analyze the problem fully before coding.
+- Choose the best solution based on reliability, performance, and simplicity.
+- Implement that one solution correctly with proper error handling.
+- If the chosen approach has a prerequisite (e.g., a service must be running), ensure the prerequisite is met rather than coding around its absence.
+
+**Bad**: Try ZED SDK, if that fails try RTSP, if that fails try HTTP snapshot, if that fails return empty.
+**Good**: Use HTTP snapshot from the video bridge (fastest, most reliable, always available when streaming).
+
 ### TaskSync Does NOT Apply to Subagents
 
 The TaskSync protocol (terminal-based task input loop, continuous operation, no session termination) applies **only to the primary agent** running in the main chat. **Subagents** spawned via `runSubagent` are stateless, single-task workers. They should:
@@ -331,4 +344,4 @@ The TaskSync protocol (terminal-based task input loop, continuous operation, no 
 
 ---
 
-*Last Updated: February 5, 2026*
+*Last Updated: February 19, 2026*

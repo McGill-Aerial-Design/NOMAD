@@ -53,6 +53,7 @@ class VideoStreamNode(Node):
         self.frame_count = 0
         self.start_time = time.time()
         self.subscription = None
+        self._latest_jpeg = None  # Cached JPEG bytes for snapshot requests
         
         # Build GStreamer pipeline: appsrc -> openh264enc (software) -> RTSP
         # Use openh264enc available in Isaac ROS container
@@ -190,6 +191,10 @@ class VideoStreamNode(Node):
             if cv_image.shape[1] != self.width or cv_image.shape[0] != self.height:
                 cv_image = cv2.resize(cv_image, (self.width, self.height))
             
+            # Cache the latest frame for snapshot requests
+            _, jpeg = cv2.imencode('.jpg', cv_image, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            self._latest_jpeg = jpeg.tobytes()
+
             # Create GStreamer buffer and push to pipeline
             data = cv_image.tobytes()
             buf = Gst.Buffer.new_wrapped(data)
@@ -251,6 +256,17 @@ class ControlServer(BaseHTTPRequestHandler):
             topics = self._discover_topics()
             self._send_json(200, {'topics': topics, 'count': len(topics)})
         
+        elif parsed.path == '/snapshot':
+            # Return the latest frame as JPEG for fast capture
+            if self.video_node and self.video_node._latest_jpeg:
+                self.send_response(200)
+                self.send_header('Content-Type', 'image/jpeg')
+                self.send_header('Content-Length', str(len(self.video_node._latest_jpeg)))
+                self.end_headers()
+                self.wfile.write(self.video_node._latest_jpeg)
+            else:
+                self._send_json(503, {'error': 'No frame available'})
+
         else:
             self._send_json(404, {'error': 'Not found'})
     

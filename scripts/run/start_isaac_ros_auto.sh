@@ -224,7 +224,7 @@ install_dependencies() {
             gstreamer1.0-plugins-bad \
             gstreamer1.0-rtsp \
             gstreamer1.0-x
-        pip3 install --no-cache-dir requests transforms3d opencv-python-headless 2>/dev/null || true
+        pip3 install --no-cache-dir requests transforms3d 'numpy<2' 2>/dev/null || true
         ldconfig
     " 2>&1 | tail -5
 

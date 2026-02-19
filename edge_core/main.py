@@ -47,7 +47,6 @@ from .api import ( create_app,
                   set_tailscale_manager,
                   set_network_monitor,
                   set_nav_controller,
-                  set_camera_service,
 )
 
 from .logging_service import cleanup_old_logs
@@ -68,14 +67,6 @@ try:
 except ImportError:
     ISAAC_ROS_AVAILABLE = False
     IsaacROSBridge = None  # type: ignore
-
-# Conditional import for ZED camera service (direct SDK access)
-try:
-    from .zed_camera import ZEDCameraService, ZEDConfig, ZEDResolution
-    ZED_SDK_AVAILABLE = True
-except ImportError:
-    ZED_SDK_AVAILABLE = False
-    ZEDCameraService = None  # type: ignore
 
 # Conditional import for servo controller (PWM control)
 try:
@@ -122,9 +113,6 @@ mesh_bridge = None
 # Servo controller for camera tilt and water shooter
 servo_controller_initialized: bool = False
 
-# ZED camera service (direct SDK access for capture + calibration)
-zed_camera_service = None
-
 tailscale_manager = None
 network_monitor = None
 
@@ -139,7 +127,7 @@ app = get_app()
 
 def cleanup() -> None:
     """Cleanup on shutdown."""
-    global time_sync_service, isaac_bridge, health_monitor, nav_controller, servo_controller_initialized, zed_camera_service
+    global time_sync_service, isaac_bridge, health_monitor, nav_controller, servo_controller_initialized
     logger.info("Shutting down Edge Core...")
 
     # Shutdown RC servo bridge
@@ -148,15 +136,6 @@ def cleanup() -> None:
             shutdown_rc_servo_bridge()
         except Exception:
             pass
-
-    # Stop ZED camera service
-    if zed_camera_service:
-        try:
-            zed_camera_service.stop()
-            zed_camera_service = None
-            logger.info("ZED camera service stopped")
-        except Exception as e:
-            logger.error(f"Error stopping ZED camera: {e}")
 
     # Shutdown servo controller (safety - disable PWM outputs)
     if servo_controller_initialized and SERVO_AVAILABLE:
@@ -280,32 +259,8 @@ def run(
     )
     logger.info(f"Video stream manager initialized (auto_start={enable_video_auto_start})")
 
-    # Initialize ZED camera service for direct capture + sensor calibration
-    global zed_camera_service
-    enable_zed = os.environ.get("NOMAD_ENABLE_ZED_SDK", "true").lower() == "true"
-    if enable_zed and ZED_SDK_AVAILABLE:
-        try:
-            zed_config = ZEDConfig(
-                resolution=ZEDResolution.HD720,
-                fps=15,
-                depth_mode="NONE",
-                enable_tracking=False,
-                enable_depth=False,
-            )
-            zed_camera_service = ZEDCameraService(zed_config)
-            if zed_camera_service.start():
-                set_camera_service(app, zed_camera_service)
-                logger.info("ZED camera service started (direct SDK)")
-            else:
-                logger.warning("ZED camera service failed to start - RTSP fallback will be used")
-                zed_camera_service = None
-        except Exception as e:
-            logger.warning(f"ZED camera service init failed: {e} - RTSP fallback will be used")
-            zed_camera_service = None
-    elif not ZED_SDK_AVAILABLE:
-        logger.info("ZED SDK not available - RTSP capture will be used")
-    else:
-        logger.info("ZED SDK disabled (set NOMAD_ENABLE_ZED_SDK=true to enable)")
+    # ZED camera is owned by the ROS2 wrapper inside the Isaac ROS container
+    # (for nvblox, video bridge, etc.). Task 1 captures use the RTSP stream.
 
     # Initialize servo controller for camera tilt and water shooter
     global servo_controller_initialized
@@ -386,11 +341,31 @@ def run(
     mavlink_service.start_health_broadcast(interval=2.0)
     logger.info("Health status broadcast started (2s interval)")
 
-    # Handle shutdown signals
-    def signal_handler(signum: int, frame: Any) -> None:
-        logger.info(f"Received signal {signum}")
+    # Handle shutdown signals -- guard cleanup to run exactly once across
+    # signal handler, try/finally, and atexit paths.
+    import threading
+    _cleanup_lock = threading.Lock()
+    _cleanup_done = False
+
+    def _safe_cleanup() -> None:
+        nonlocal _cleanup_done
+        with _cleanup_lock:
+            if _cleanup_done:
+                return
+            _cleanup_done = True
         cleanup()
-        sys.exit(0)
+
+    # Replace the atexit handler with the guarded version
+    atexit.unregister(cleanup)
+    atexit.register(_safe_cleanup)
+
+    def signal_handler(signum: int, frame: Any) -> None:
+        sig_name = signal.Signals(signum).name
+        logger.info(f"Received signal {sig_name} ({signum}), shutting down...")
+        _safe_cleanup()
+        # Raise SystemExit so uvicorn performs its own graceful shutdown
+        # (close sockets, drain connections) before the process exits.
+        raise SystemExit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
@@ -399,7 +374,7 @@ def run(
     try:
         uvicorn.run(app, host=host, port=port, log_level=log_level)
     finally:
-        cleanup()
+        _safe_cleanup()
 
 
 def main() -> None:

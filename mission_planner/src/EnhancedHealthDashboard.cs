@@ -636,6 +636,8 @@ namespace NOMAD.MissionPlanner
         
         private async void PollHealth()
         {
+            if (IsDisposed || !IsHandleCreated) return;
+
             try
             {
                 // Fetch health/detailed for system metrics
@@ -644,6 +646,8 @@ namespace NOMAD.MissionPlanner
                 var networkTask = JetsonApiService.GetAsync("/network/status");
                 
                 await Task.WhenAll(healthTask, networkTask);
+
+                if (IsDisposed || !IsHandleCreated) return;
                 
                 var healthResponse = await healthTask;
                 var networkResponse = await networkTask;
@@ -660,16 +664,32 @@ namespace NOMAD.MissionPlanner
                         networkData = JObject.Parse(networkJson);
                     }
                     
-                    this.BeginInvoke((Action)(() => UpdateUI(healthData, networkData)));
+                    if (!IsDisposed && IsHandleCreated)
+                        this.BeginInvoke((Action)(() => UpdateUI(healthData, networkData)));
                 }
                 else
                 {
-                    this.BeginInvoke((Action)(() => UpdateStatusError($"HTTP {healthResponse.StatusCode}")));
+                    if (!IsDisposed && IsHandleCreated)
+                        this.BeginInvoke((Action)(() => UpdateStatusError($"HTTP {healthResponse.StatusCode}")));
                 }
+            }
+            catch (ObjectDisposedException)
+            {
+                // Control was disposed during async operation -- safe to ignore
+            }
+            catch (InvalidOperationException)
+            {
+                // Handle became invalid during async operation -- safe to ignore
             }
             catch (Exception ex)
             {
-                this.BeginInvoke((Action)(() => UpdateStatusError(ex.Message)));
+                try
+                {
+                    if (!IsDisposed && IsHandleCreated)
+                        this.BeginInvoke((Action)(() => UpdateStatusError(ex.Message)));
+                }
+                catch (ObjectDisposedException) { }
+                catch (InvalidOperationException) { }
             }
         }
         
