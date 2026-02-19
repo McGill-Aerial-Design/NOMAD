@@ -202,6 +202,10 @@ class VIOUpdateRequest(BaseModel):
     vz: float = 0.0
     confidence: float = 1.0
     source: str = "external"
+    # Raw ROS-frame pose (odom/map) for SLAM 3D visualization
+    ros_x: float = 0.0
+    ros_y: float = 0.0
+    ros_z: float = 0.0
 
 
 class NavVelocityRequest(BaseModel):
@@ -319,6 +323,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
     
     # VIO state from external sources (ROS bridge)
     app.state.external_vio_state: Optional[dict] = None
+    app.state.slam_vio_ros_frame: Optional[dict] = None  # ROS-frame pose for SLAM 3D
     app.state.vio_trajectory: list[dict] = []  # List of {x, y, z, timestamp} points
     app.state.vio_trajectory_max_points: int = 1000  # Keep last N points
     app.state.exclusion_map: list[dict] = []
@@ -567,15 +572,12 @@ def create_app(state_manager: StateManager) -> FastAPI:
         await websocket.accept()
         last_mesh_timestamp = None
         frame_count = 0
-        # Cache last known pose in mesh frame (ROS: X-forward, Y-left, Z-up)
-        # to avoid mixing with NED-converted VIO which causes offset
-        last_mesh_pose = None
         try:
             while True:
                 frame = {"type": "pose", "ts": frame_count}
                 has_pose = False
 
-                # Check for mesh updates first -- mesh-bundled pose is in the
+                # Check for mesh updates -- mesh-bundled pose is in the
                 # same coordinate frame as the mesh vertices (ROS odom/map frame)
                 has_mesh = False
                 if hasattr(websocket.app.state, 'slam_mesh_data') and websocket.app.state.slam_mesh_data:
@@ -586,7 +588,6 @@ def create_app(state_manager: StateManager) -> FastAPI:
                         has_mesh = True
                         frame["type"] = "mesh"
                         frame["mesh"] = stored.get("mesh")
-                        # Use mesh-bundled drone pose (same frame as mesh vertices)
                         if stored.get("drone_position"):
                             dp = stored["drone_position"]
                             frame["x"] = dp.get("x", 0)
@@ -598,27 +599,18 @@ def create_app(state_manager: StateManager) -> FastAPI:
                             frame["roll"] = da.get("roll", 0)
                             frame["pitch"] = da.get("pitch", 0)
                             frame["yaw"] = da.get("yaw", 0)
-                        # Cache this pose for future pose-only frames
-                        if has_pose:
-                            last_mesh_pose = {
-                                "x": frame.get("x", 0),
-                                "y": frame.get("y", 0),
-                                "z": frame.get("z", 0),
-                                "roll": frame.get("roll", 0),
-                                "pitch": frame.get("pitch", 0),
-                                "yaw": frame.get("yaw", 0),
-                            }
 
-                # For pose-only frames, reuse the last mesh-bundled pose
-                # (stays in the same ROS frame as the mesh to avoid offset)
-                if not has_mesh and last_mesh_pose:
-                    frame["x"] = last_mesh_pose["x"]
-                    frame["y"] = last_mesh_pose["y"]
-                    frame["z"] = last_mesh_pose["z"]
-                    frame["roll"] = last_mesh_pose["roll"]
-                    frame["pitch"] = last_mesh_pose["pitch"]
-                    frame["yaw"] = last_mesh_pose["yaw"]
-                    has_pose = True
+                # For pose-only frames, use the ROS-frame VIO (same frame as mesh)
+                if not has_mesh:
+                    ros_vio = websocket.app.state.slam_vio_ros_frame
+                    if ros_vio:
+                        frame["x"] = ros_vio.get("x", 0)
+                        frame["y"] = ros_vio.get("y", 0)
+                        frame["z"] = ros_vio.get("z", 0)
+                        frame["roll"] = ros_vio.get("roll", 0)
+                        frame["pitch"] = ros_vio.get("pitch", 0)
+                        frame["yaw"] = ros_vio.get("yaw", 0)
+                        has_pose = True
 
                 # Skip frames when no pose data available at all
                 if not has_pose:
@@ -1109,7 +1101,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
         This endpoint is called by the ros_http_bridge.py script running
         inside the Isaac ROS container to send VIO data to edge_core.
         """
-        # Store latest state
+        # Store latest state (NED frame for other consumers)
         request.app.state.external_vio_state = {
             "timestamp": vio_request.timestamp,
             "x": vio_request.x,
@@ -1123,6 +1115,17 @@ def create_app(state_manager: StateManager) -> FastAPI:
             "vz": vio_request.vz,
             "confidence": vio_request.confidence,
             "source": vio_request.source,
+        }
+        
+        # Store ROS-frame pose for SLAM 3D WebSocket (same frame as mesh vertices)
+        request.app.state.slam_vio_ros_frame = {
+            "x": vio_request.ros_x,
+            "y": vio_request.ros_y,
+            "z": vio_request.ros_z,
+            "roll": vio_request.roll,
+            "pitch": vio_request.pitch,
+            "yaw": vio_request.yaw,
+            "timestamp": vio_request.timestamp,
         }
         
         # Add to trajectory

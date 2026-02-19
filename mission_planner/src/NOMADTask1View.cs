@@ -490,11 +490,12 @@ namespace NOMAD.MissionPlanner
             var popup = new Form
             {
                 Text = "AI Description - " + Path.GetFileName(imagePath),
-                Size = new Size(520, 400),
+                Size = new Size(560, 440),
+                MinimumSize = new Size(400, 300),
                 StartPosition = FormStartPosition.CenterParent,
                 BackColor = Color.FromArgb(30, 30, 33),
                 ForeColor = Color.White,
-                FormBorderStyle = FormBorderStyle.FixedDialog,
+                FormBorderStyle = FormBorderStyle.Sizable,
                 MaximizeBox = false,
                 MinimizeBox = false,
                 ShowInTaskbar = false,
@@ -505,7 +506,7 @@ namespace NOMAD.MissionPlanner
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
                 RowCount = 3,
-                Padding = new Padding(12),
+                Padding = new Padding(16),
             };
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -518,24 +519,27 @@ namespace NOMAD.MissionPlanner
                     : "Waiting for AI description...",
                 AutoSize = true,
                 ForeColor = Color.FromArgb(180, 180, 180),
-                Padding = new Padding(0, 0, 0, 8),
+                Padding = new Padding(4, 4, 4, 8),
             };
             layout.Controls.Add(header, 0, 0);
 
-            var txtDesc = new TextBox
+            var txtDesc = new RichTextBox
             {
                 Dock = DockStyle.Fill,
-                Multiline = true,
                 ReadOnly = true,
-                ScrollBars = ScrollBars.Vertical,
                 BackColor = Color.FromArgb(25, 25, 28),
                 ForeColor = Color.FromArgb(220, 220, 220),
                 BorderStyle = BorderStyle.FixedSingle,
-                Font = new Font("Segoe UI", 10),
+                Font = new Font("Segoe UI", 10f),
+                WordWrap = true,
+                ScrollBars = RichTextBoxScrollBars.Vertical,
                 Text = !string.IsNullOrEmpty(aiDescription)
                     ? aiDescription
                     : "Waiting for AI to generate description...",
+                Margin = new Padding(4, 0, 4, 0),
             };
+            // Remove the URL-detection underline behavior
+            txtDesc.DetectUrls = false;
             layout.Controls.Add(txtDesc, 0, 1);
 
             var btnPanel = new FlowLayoutPanel

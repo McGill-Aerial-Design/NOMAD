@@ -82,9 +82,9 @@ except ImportError:
 class VIOData:
     """VIO pose data to send to edge_core."""
     timestamp: float
-    x: float
-    y: float
-    z: float
+    x: float      # NED: forward (north)
+    y: float      # NED: right (east)
+    z: float      # NED: down
     roll: float
     pitch: float
     yaw: float
@@ -93,6 +93,10 @@ class VIOData:
     vz: float = 0.0
     confidence: float = 1.0
     source: str = "isaac_ros"
+    # Raw ROS-frame pose (odom/map) for SLAM 3D visualization
+    ros_x: float = 0.0
+    ros_y: float = 0.0
+    ros_z: float = 0.0
 
 
 @dataclass
@@ -285,6 +289,10 @@ class ROSHTTPBridge(Node):
                 vz=twist.linear.y,
                 confidence=1.0,
                 source="isaac_ros",
+                # Also store the raw odom pose for SLAM 3D (same frame as mesh)
+                ros_x=pose.position.x,
+                ros_y=pose.position.y,
+                ros_z=pose.position.z,
             )
             
             with self._lock:
@@ -543,8 +551,8 @@ class ROSHTTPBridge(Node):
             return
         try:
             now = time.time()
-            # Rate limit: 1 Hz for voxel data (heavier payload than blocks)
-            if now - self._last_mesh_send_time < 1.0:
+            # Rate limit: 2 Hz for voxel data (match block rate)
+            if now - self._last_mesh_send_time < 0.5:
                 return
 
             if msg.type != 6:  # CUBE_LIST
@@ -557,8 +565,8 @@ class ROSHTTPBridge(Node):
             voxel_size = msg.scale.x  # All 3 scales should be equal
             has_colors = len(msg.colors) == n_pts
 
-            # Cap at 5000 voxels per update to limit bandwidth (~200KB)
-            limit = min(n_pts, 5000)
+            # Cap at 8000 voxels per update to limit bandwidth (~320KB)
+            limit = min(n_pts, 8000)
 
             voxels = []
             for i in range(limit):

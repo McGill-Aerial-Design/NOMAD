@@ -132,6 +132,7 @@ namespace NOMAD.MissionPlanner
         private double _droneRoll = 0;
         private List<Point3D> _trajectoryPoints = new List<Point3D>();
         private const int MaxTrajectoryPoints = 500;
+        private int _lastTrajectoryRendered = 0; // incremental trajectory rendering
         
         // UI Controls (WinForms)
         private Panel _controlPanel;
@@ -151,7 +152,7 @@ namespace NOMAD.MissionPlanner
         
         // Persisted block map: key = "ix,iy,iz", value = packed ARGB color
         private Dictionary<string, uint> _persistedBlocks = new Dictionary<string, uint>();
-        private const int MaxPersistedVoxels = 2000; // Hard cap: prevents WPF overload
+        private const int MaxPersistedVoxels = 5000; // Hard cap with face-culling keeps triangle count low
 
         // Material cache to avoid recreating WPF resources every frame
         private Dictionary<uint, Material> _materialCache = new Dictionary<uint, Material>();
@@ -159,7 +160,7 @@ namespace NOMAD.MissionPlanner
         // Dirty tracking: only rebuild mesh when significant changes arrive
         private bool _meshDirty = false;
         private int _lastRenderedCount = 0;
-        private const int MinNewVoxelsForRebuild = 100; // Only rebuild after 100+ new voxels
+        private const int MinNewVoxelsForRebuild = 20; // Only rebuild after 20+ new voxels
 
         // Occupancy set for fast neighbor lookups (adjacent-face culling)
         private HashSet<long> _occupancySet = new HashSet<long>();
@@ -623,7 +624,10 @@ namespace NOMAD.MissionPlanner
             {
                 _trajectoryPoints.Add(position);
                 if (_trajectoryPoints.Count > MaxTrajectoryPoints)
+                {
                     _trajectoryPoints.RemoveAt(0);
+                    _lastTrajectoryRendered = 0; // Force full rebuild after eviction
+                }
             }
         }
 
@@ -893,7 +897,7 @@ namespace NOMAD.MissionPlanner
         private void UpdateMeshVisualBlocks(MeshDataModel meshData)
         {
                 double bs = meshData.BlockSize > 0 ? meshData.BlockSize : 0.05;
-                double half = bs * 0.48; // slightly smaller than half for a tiny gap
+                double half = bs * 0.5; // Full size for seamless joins
 
                 // Merge incoming blocks into persisted map
                 bool hasNewBlocks = false;
@@ -1069,14 +1073,16 @@ namespace NOMAD.MissionPlanner
             if (_trajectoryVisual == null || !_chkShowTrajectory.Checked || _trajectoryPoints.Count < 2)
                 return;
             
+            // Skip if no new points since last render
+            if (_trajectoryPoints.Count == _lastTrajectoryRendered)
+                return;
+
             try
             {
-                // Build a simple line strip using thin tubes -- only for the last segment
-                // to avoid rebuilding the entire trajectory each frame
                 var positions = new Point3DCollection();
                 var indices = new Int32Collection();
                 int offset = 0;
-                double r = 0.015; // tube radius approximated as flat quads
+                double r = 0.015;
 
                 for (int i = 1; i < _trajectoryPoints.Count; i++)
                 {
@@ -1085,7 +1091,6 @@ namespace NOMAD.MissionPlanner
                     var dir = p1 - p0;
                     if (dir.Length < 0.001) continue;
 
-                    // Create a flat quad strip along the segment (2 tris per segment)
                     var up = new Vector3D(0, 0, 1);
                     var right = Vector3D.CrossProduct(dir, up);
                     if (right.Length < 0.001) { up = new Vector3D(0, 1, 0); right = Vector3D.CrossProduct(dir, up); }
@@ -1104,6 +1109,8 @@ namespace NOMAD.MissionPlanner
 
                 if (positions.Count == 0) return;
 
+                _lastTrajectoryRendered = _trajectoryPoints.Count;
+
                 positions.Freeze();
                 indices.Freeze();
 
@@ -1114,13 +1121,20 @@ namespace NOMAD.MissionPlanner
                 };
                 geom.Freeze();
 
-                var trajectoryBrush = new SolidColorBrush(Color.FromArgb(255, 255, 200, 0));
-                trajectoryBrush.Freeze();
-                var trajectoryMaterial = new DiffuseMaterial(trajectoryBrush);
-                ((DiffuseMaterial)trajectoryMaterial).Freeze();
+                // Reuse cached material
+                Material mat;
+                uint trajColorKey = 0xFFC800FF; // yellow marker
+                if (!_materialCache.TryGetValue(trajColorKey, out mat))
+                {
+                    var brush = new SolidColorBrush(Color.FromArgb(255, 255, 200, 0));
+                    brush.Freeze();
+                    mat = new DiffuseMaterial(brush);
+                    ((DiffuseMaterial)mat).Freeze();
+                    _materialCache[trajColorKey] = mat;
+                }
 
-                var trajectoryModel = new GeometryModel3D(geom, trajectoryMaterial);
-                trajectoryModel.BackMaterial = trajectoryMaterial;
+                var trajectoryModel = new GeometryModel3D(geom, mat);
+                trajectoryModel.BackMaterial = mat;
                 trajectoryModel.Freeze();
                 
                 var group = new Model3DGroup();
@@ -1271,6 +1285,7 @@ namespace NOMAD.MissionPlanner
                 _trajectoryVisual.Content = emptyGroup;
             }));
             _trajectoryPoints.Clear();
+            _lastTrajectoryRendered = 0;
             _totalBlocks = 0;
             
             try
