@@ -177,6 +177,7 @@ class TerminalExecRequest(BaseModel):
     """Request model for arbitrary terminal command execution."""
     command: str
     timeout: int = 30
+    cwd: Optional[str] = None  # Working directory (persistent cd support)
 
 
 class TerminalCommandResponse(BaseModel):
@@ -186,6 +187,7 @@ class TerminalCommandResponse(BaseModel):
     stderr: str
     return_code: int
     command_executed: Optional[str] = None
+    cwd: Optional[str] = None  # Current working directory after execution
 
 
 class VIOUpdateRequest(BaseModel):
@@ -1471,25 +1473,52 @@ def create_app(state_manager: StateManager) -> FastAPI:
         Intended for the Mission Planner built-in terminal.
         Commands are executed via ``bash -c`` so pipes, redirects, and
         compound statements work as expected.
+        
+        Supports persistent working directory via the ``cwd`` field.
+        The response includes the resolved ``cwd`` after execution so
+        the client can track directory changes across commands.
         """
+        import os
         command_str = request.command.strip()
         if not command_str:
             raise HTTPException(status_code=400, detail="Empty command")
 
+        # Resolve working directory
+        work_dir = request.cwd if request.cwd else os.path.expanduser("~")
+        if not os.path.isdir(work_dir):
+            work_dir = os.path.expanduser("~")
+
         try:
+            # Append pwd to capture the cwd after execution
+            # This handles cd commands naturally since bash runs them in sequence
+            wrapped_cmd = f'{command_str}\necho "__NOMAD_CWD__$(pwd)"'
+            
             result = subprocess.run(
-                ["bash", "-c", command_str],
+                ["bash", "-c", wrapped_cmd],
                 capture_output=True,
                 text=True,
                 timeout=request.timeout,
+                cwd=work_dir,
             )
+
+            # Extract cwd from stdout
+            stdout_lines = result.stdout.split("\n")
+            new_cwd = work_dir
+            clean_stdout_lines = []
+            for line in stdout_lines:
+                if line.startswith("__NOMAD_CWD__"):
+                    new_cwd = line[len("__NOMAD_CWD__"):]
+                else:
+                    clean_stdout_lines.append(line)
+            clean_stdout = "\n".join(clean_stdout_lines)
 
             return TerminalCommandResponse(
                 success=result.returncode == 0,
-                stdout=result.stdout,
+                stdout=clean_stdout,
                 stderr=result.stderr,
                 return_code=result.returncode,
                 command_executed=command_str,
+                cwd=new_cwd,
             )
 
         except subprocess.TimeoutExpired:
@@ -1499,6 +1528,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 stderr=f"Command timed out after {request.timeout}s",
                 return_code=-1,
                 command_executed=command_str,
+                cwd=work_dir,
             )
         except Exception as e:
             return TerminalCommandResponse(
@@ -1507,6 +1537,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 stderr=str(e),
                 return_code=-1,
                 command_executed=command_str,
+                cwd=work_dir,
             )
 
     @app.get("/api/terminal/commands", tags=["Terminal"])

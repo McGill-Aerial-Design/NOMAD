@@ -30,6 +30,7 @@ namespace NOMAD.MissionPlanner
         private NOMADConfig _config;
         private readonly List<string> _commandHistory;
         private int _historyIndex;
+        private string _currentCwd;  // Tracked working directory on Jetson
         
         // UI Controls
         private RichTextBox _txtOutput;
@@ -39,6 +40,7 @@ namespace NOMAD.MissionPlanner
         private ComboBox _cmbQuickCommands;
         private Label _lblStatus;
         private Panel _toolbar;
+        private Label _promptLabel;
         
         // Quick commands
         private readonly Dictionary<string, string> _quickCommands = new Dictionary<string, string>
@@ -49,14 +51,18 @@ namespace NOMAD.MissionPlanner
             { "Tegrastats (1 sample)", "timeout 2 tegrastats --interval 500 2>&1 | head -3" },
             { "Temperature", "cat /sys/devices/virtual/thermal/thermal_zone*/temp 2>/dev/null | awk '{printf \"Zone %d: %.1fC\\n\", NR-1, $1/1000}'" },
             { "Edge Core Status", "pgrep -f edge_core.main && echo 'Edge Core: Running' || echo 'Edge Core: Not running'" },
-            { "Edge Core Logs", "tail -50 ~/nomad.log 2>/dev/null || echo 'No logs found'" },
+            { "Edge Core Logs", "tail -50 ~/nomad_logs/edge_core.log 2>/dev/null || journalctl -u nomad -n 50 --no-pager 2>/dev/null || echo 'No logs found'" },
             { "List Processes", "ps aux --sort=-%cpu | head -15" },
             { "Disk Usage", "df -h / && du -sh ~/NOMAD 2>/dev/null" },
             { "ZED Camera Check", "lsusb | grep -i stereolabs && echo 'ZED Camera: Connected' || echo 'ZED Camera: Not found'" },
             { "Ping Test", "ping -c 3 8.8.8.8" },
             { "Video Stream Check", "pgrep -f gst-launch && echo 'Video Stream: Running' || echo 'Video Stream: Not running'" },
-            { "Start NOMAD", "~/start_nomad_full.sh &" },
-            { "Stop NOMAD", "pkill -f edge_core.main; pkill -f gst-launch; echo 'NOMAD services stopped'" },
+            { "Isaac ROS Status", "docker inspect -f '{{.State.Status}}' nomad_isaac_ros 2>/dev/null || echo 'Container not found'" },
+            { "Git Status", "cd ~/NOMAD && git log --oneline -5 && echo '' && git status -s" },
+            { "Start NOMAD", "cd ~/NOMAD && nohup bash scripts/run/start_nomad_full.sh all > /tmp/nomad_startup.log 2>&1 & echo 'NOMAD starting in background. Check /tmp/nomad_startup.log'" },
+            { "Stop NOMAD", "cd ~/NOMAD && bash scripts/run/restart_nomad.sh 2>/dev/null; pkill -f edge_core.main; pkill -f gst-launch; echo 'NOMAD services stopped'" },
+            { "Restart NOMAD", "cd ~/NOMAD && bash scripts/run/restart_nomad.sh" },
+            { "Pull Latest Code", "cd ~/NOMAD && git pull origin main" },
         };
         
         // ============================================================
@@ -218,6 +224,7 @@ namespace NOMAD.MissionPlanner
                 Font = new Font("Consolas", 10, FontStyle.Bold),
                 AutoSize = true,
             };
+            _promptLabel = promptLabel;
             panel.Controls.Add(promptLabel);
             
             _txtInput = new TextBox
@@ -313,6 +320,7 @@ namespace NOMAD.MissionPlanner
             "pgrep -f edge_core.main", "ps aux --sort=-%cpu | head -15",
             "lsusb", "ping -c 3 8.8.8.8", "whoami", "hostname", "date",
             "cat /proc/uptime", "uname -a", "ls ~/NOMAD", "git -C ~/NOMAD log --oneline -5",
+            "ls", "ls -la", "pwd", "cat", "head", "tail", "grep",
         };
         
         /// <summary>
@@ -325,8 +333,19 @@ namespace NOMAD.MissionPlanner
             // Quick-command entries are always considered safe
             if (_quickCommands.ContainsValue(command)) return true;
             
+            var trimmed = command.Trim();
+            
+            // cd commands are always safe (just changing directory)
+            if (trimmed == "cd" || trimmed.StartsWith("cd ")) return true;
+            
+            // Read-only commands starting with these are safe
+            if (trimmed.StartsWith("ls") || trimmed.StartsWith("pwd") ||
+                trimmed.StartsWith("cat ") || trimmed.StartsWith("head ") ||
+                trimmed.StartsWith("tail ") || trimmed.StartsWith("grep "))
+                return true;
+            
             // Exact match against known safe commands
-            return _safeCommands.Contains(command.Trim());
+            return _safeCommands.Contains(trimmed);
         }
         
         public async Task ExecuteCommand(string command)
@@ -420,7 +439,8 @@ namespace NOMAD.MissionPlanner
             var payload = new
             {
                 command = command,
-                timeout = 30
+                timeout = 30,
+                cwd = _currentCwd
             };
             
             var content = new StringContent(
@@ -435,6 +455,15 @@ namespace NOMAD.MissionPlanner
             if (response.IsSuccessStatusCode)
             {
                 var result = JsonConvert.DeserializeObject<dynamic>(responseBody);
+                
+                // Update tracked cwd from response
+                string newCwd = result.cwd;
+                if (!string.IsNullOrEmpty(newCwd))
+                {
+                    _currentCwd = newCwd;
+                    UpdatePrompt();
+                }
+                
                 return new CommandResult
                 {
                     Success = result.success,
@@ -502,6 +531,24 @@ namespace NOMAD.MissionPlanner
         {
             _txtOutput.Clear();
             PrintWelcome();
+        }
+        
+        private void UpdatePrompt()
+        {
+            if (_promptLabel == null) return;
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(UpdatePrompt));
+                return;
+            }
+            
+            // Shorten path for display: replace home dir with ~
+            string displayPath = _currentCwd ?? "~";
+            string homePrefix = $"/home/{_config.SshUsername}";
+            if (displayPath.StartsWith(homePrefix))
+                displayPath = "~" + displayPath.Substring(homePrefix.Length);
+            
+            _promptLabel.Text = $"{_config.SshUsername}@jetson:{displayPath}$";
         }
         
         private void UpdateStatus(string status, Color color)
