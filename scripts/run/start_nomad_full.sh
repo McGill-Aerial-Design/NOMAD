@@ -163,10 +163,15 @@ start_edge_core() {
     log_info "Starting Edge Core API..."
     
     # Stop systemd-managed instance first (Restart=always would respawn pkilled processes)
+    # Use mask to prevent systemd from restarting the service during manual run
     if systemctl is-active --quiet nomad 2>/dev/null; then
-        log_info "Stopping systemd nomad.service to avoid duplicate processes..."
+        log_info "Masking and stopping systemd nomad.service to prevent duplicates..."
+        sudo systemctl mask nomad 2>/dev/null || true
         sudo systemctl stop nomad 2>/dev/null || true
-        sleep 1
+        sleep 2
+    elif systemctl is-enabled --quiet nomad 2>/dev/null; then
+        log_info "Masking systemd nomad.service to prevent auto-start..."
+        sudo systemctl mask nomad 2>/dev/null || true
     fi
     
     # Kill any remaining edge_core processes (manual starts, orphans)
@@ -426,6 +431,9 @@ cleanup() {
     
     # Stop MAVLink router
     pkill -f "mavlink-routerd" 2>/dev/null || true
+    
+    # Unmask systemd service so it can auto-start on next boot
+    sudo systemctl unmask nomad 2>/dev/null || true
     
     log_ok "All services stopped"
     echo "Goodbye!"
