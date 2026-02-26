@@ -2422,6 +2422,47 @@ wait
             }
         }
 
+    # ---- Video Overlay (YOLO detection bboxes on stream) ----
+    
+    @app.post("/api/video/overlay/enable", tags=["Video"])
+    async def enable_video_overlay():
+        """
+        Enable YOLO detection overlay on the video stream.
+        
+        When enabled, the video bridge draws bounding boxes from the
+        detection pipeline directly onto the RTSP frames in real time.
+        Toggle off with POST /api/video/overlay/disable.
+        """
+        mgr = get_video_stream_manager()
+        if not mgr:
+            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
+        
+        success = mgr.set_overlay(True)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to enable overlay (video bridge not running?)")
+        return {"success": True, "overlay": True}
+    
+    @app.post("/api/video/overlay/disable", tags=["Video"])
+    async def disable_video_overlay():
+        """Disable YOLO detection overlay on the video stream."""
+        mgr = get_video_stream_manager()
+        if not mgr:
+            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
+        
+        success = mgr.set_overlay(False)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to disable overlay")
+        return {"success": True, "overlay": False}
+    
+    @app.get("/api/video/overlay/status", tags=["Video"])
+    async def get_video_overlay_status():
+        """Get current overlay status (enabled/disabled and detection count)."""
+        mgr = get_video_stream_manager()
+        if not mgr:
+            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
+        
+        return mgr.get_overlay_status()
+
     # ==================== SLAM 3D Mesh Endpoints ====================
     # These endpoints stream nvblox 3D mesh data for Mission Planner visualization
     # Mesh data is received from ros_http_bridge running inside the Isaac ROS container

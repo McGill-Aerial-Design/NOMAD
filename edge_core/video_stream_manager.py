@@ -489,6 +489,41 @@ class VideoStreamManager:
         except Exception as e:
             return f"Error getting logs: {e}"
 
+    def set_overlay(self, enabled: bool) -> bool:
+        """
+        Enable or disable the YOLO detection overlay on the video stream.
+        
+        When enabled, the video bridge draws bounding boxes from Edge Core
+        detections directly onto the video frames before encoding to RTSP.
+        """
+        if not self.is_relay_running():
+            logger.warning("Cannot toggle overlay: video bridge not running")
+            return False
+        
+        action = "enable" if enabled else "disable"
+        try:
+            url = f"http://localhost:{self.relay_http_port}/overlay/{action}"
+            req = Request(url, method='POST')
+            with urlopen(req, timeout=5) as response:
+                data = json.loads(response.read().decode())
+            return data.get("success", False)
+        except Exception as e:
+            logger.error(f"Error toggling overlay: {e}")
+            return False
+
+    def get_overlay_status(self) -> dict:
+        """Get current overlay status from the video bridge."""
+        if not self.is_relay_running():
+            return {"enabled": False, "detection_count": 0}
+        
+        try:
+            url = f"http://localhost:{self.relay_http_port}/overlay/status"
+            with urlopen(url, timeout=5) as response:
+                return json.loads(response.read().decode())
+        except Exception as e:
+            logger.error(f"Error getting overlay status: {e}")
+            return {"enabled": False, "detection_count": 0}
+
 
 # Global instance
 _video_stream_manager: Optional[VideoStreamManager] = None

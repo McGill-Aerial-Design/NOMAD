@@ -30,6 +30,7 @@ import threading
 import time
 import subprocess
 import json
+import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -54,6 +55,14 @@ class VideoStreamNode(Node):
         self.start_time = time.time()
         self.subscription = None
         self._latest_jpeg = None  # Cached JPEG bytes for snapshot requests
+        
+        # Detection overlay state
+        self._overlay_enabled = False
+        self._detections = []  # Current detections from Edge Core
+        self._detections_lock = threading.Lock()
+        self._edge_core_url = "http://172.17.0.1:8000"
+        self._overlay_thread = None
+        self._overlay_stop = threading.Event()
         
         # Build GStreamer pipeline: appsrc -> openh264enc (software) -> RTSP
         # Use openh264enc available in Isaac ROS container
@@ -191,6 +200,10 @@ class VideoStreamNode(Node):
             if cv_image.shape[1] != self.width or cv_image.shape[0] != self.height:
                 cv_image = cv2.resize(cv_image, (self.width, self.height))
             
+            # Draw detection overlay (bounding boxes) if enabled
+            if self._overlay_enabled:
+                self.draw_detections(cv_image)
+            
             # Cache the latest frame for snapshot requests
             _, jpeg = cv2.imencode('.jpg', cv_image, [cv2.IMWRITE_JPEG_QUALITY, 90])
             self._latest_jpeg = jpeg.tobytes()
@@ -219,9 +232,140 @@ class VideoStreamNode(Node):
     def cleanup(self):
         """Clean shutdown."""
         self.get_logger().info('Stopping video bridge...')
+        self.stop_overlay()
         if hasattr(self, 'pipeline') and self.pipeline:
             self.pipeline.set_state(Gst.State.NULL)
         self.get_logger().info('Stopped')
+    
+    # ---- Detection overlay ----
+    
+    # Color map: label substring -> BGR color
+    _LABEL_COLORS = {
+        'red': (0, 0, 255),
+        'blue': (255, 140, 0),
+        'green': (0, 200, 0),
+        'yellow': (0, 255, 255),
+        'orange': (0, 165, 255),
+    }
+    _DEFAULT_COLOR = (0, 255, 0)  # Green fallback
+    
+    def _color_for_label(self, label: str):
+        """Return BGR color tuple for a given detection label."""
+        label_lower = label.lower()
+        for key, color in self._LABEL_COLORS.items():
+            if key in label_lower:
+                return color
+        return self._DEFAULT_COLOR
+    
+    def draw_detections(self, frame):
+        """
+        Draw detection bounding boxes onto the frame (in-place).
+        
+        Detections come from Edge Core API with bbox_x/y/w/h in original
+        camera pixels. The frame may be resized, so coords are scaled
+        to match self.width x self.height.
+        """
+        import cv2
+        
+        with self._detections_lock:
+            detections = list(self._detections)
+        
+        if not detections:
+            return
+        
+        h, w = frame.shape[:2]
+        
+        for det in detections:
+            if not isinstance(det, dict):
+                continue
+            try:
+                bx = float(det.get('bbox_x', 0) or 0)
+                by = float(det.get('bbox_y', 0) or 0)
+                bw = float(det.get('bbox_w', 0) or 0)
+                bh = float(det.get('bbox_h', 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if bw <= 0 or bh <= 0:
+                continue
+            
+            # Scale bbox to output frame size if source resolution differs
+            # (original frame is typically same res, but handle mismatch)
+            src_w = det.get('_src_w', w)
+            src_h = det.get('_src_h', h)
+            sx = w / src_w if src_w > 0 else 1.0
+            sy = h / src_h if src_h > 0 else 1.0
+            
+            x1 = int(bx * sx)
+            y1 = int(by * sy)
+            x2 = int((bx + bw) * sx)
+            y2 = int((by + bh) * sy)
+            
+            label = str(det.get('label', 'unknown') or 'unknown')
+            try:
+                conf = float(det.get('confidence', 0.0) or 0.0)
+            except (TypeError, ValueError):
+                conf = 0.0
+            color = self._color_for_label(label)
+            
+            # Draw bounding box
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            
+            # Draw label background + text
+            text = f"{label} {conf:.0%}"
+            (tw, th), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            cv2.rectangle(frame, (x1, y1 - th - baseline - 4), (x1 + tw + 4, y1), color, -1)
+            cv2.putText(frame, text, (x1 + 2, y1 - baseline - 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+        
+        # Detection count badge in top-left
+        count = len(detections)
+        badge = f"YOLO: {count} target{'s' if count != 1 else ''}"
+        cv2.putText(frame, badge, (10, 25),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2, cv2.LINE_AA)
+    
+    def _fetch_detections_loop(self):
+        """Background thread: poll Edge Core /api/detections at ~5 Hz."""
+        while not self._overlay_stop.is_set():
+            try:
+                url = f"{self._edge_core_url}/api/detections"
+                req = urllib.request.Request(url, method='GET')
+                req.add_header('Accept', 'application/json')
+                with urllib.request.urlopen(req, timeout=2) as resp:
+                    data = json.loads(resp.read().decode())
+                    # API returns {"current": {"detections": [...]}, ...}
+                    current = data.get('current', {})
+                    dets = current.get('detections', []) if isinstance(current, dict) else []
+                    with self._detections_lock:
+                        self._detections = dets
+            except Exception:
+                # Edge Core unreachable -- clear detections so overlay disappears
+                with self._detections_lock:
+                    self._detections = []
+            self._overlay_stop.wait(0.2)  # 5 Hz
+    
+    def start_overlay(self):
+        """Enable detection overlay on the video stream."""
+        if self._overlay_enabled:
+            return
+        self._overlay_enabled = True
+        self._overlay_stop.clear()
+        self._overlay_thread = threading.Thread(
+            target=self._fetch_detections_loop, daemon=True, name='overlay-fetch')
+        self._overlay_thread.start()
+        self.get_logger().info("Detection overlay enabled")
+    
+    def stop_overlay(self):
+        """Disable detection overlay."""
+        if not self._overlay_enabled:
+            return
+        self._overlay_enabled = False
+        self._overlay_stop.set()
+        if self._overlay_thread:
+            self._overlay_thread.join(timeout=2)
+            self._overlay_thread = None
+        with self._detections_lock:
+            self._detections = []
+        self.get_logger().info("Detection overlay disabled")
 
 
 class ControlServer(BaseHTTPRequestHandler):
@@ -267,6 +411,16 @@ class ControlServer(BaseHTTPRequestHandler):
             else:
                 self._send_json(503, {'error': 'No frame available'})
 
+        elif parsed.path == '/overlay/status':
+            det_count = 0
+            if self.video_node:
+                with self.video_node._detections_lock:
+                    det_count = len(self.video_node._detections)
+            self._send_json(200, {
+                'enabled': self.video_node._overlay_enabled if self.video_node else False,
+                'detection_count': det_count,
+            })
+
         else:
             self._send_json(404, {'error': 'Not found'})
     
@@ -291,6 +445,20 @@ class ControlServer(BaseHTTPRequestHandler):
                 })
             else:
                 self._send_json(500, {'success': False, 'message': 'Failed to switch topic'})
+        
+        elif parsed.path == '/overlay/enable':
+            if self.video_node:
+                self.video_node.start_overlay()
+                self._send_json(200, {'success': True, 'overlay': True})
+            else:
+                self._send_json(503, {'success': False, 'message': 'No video node'})
+        
+        elif parsed.path == '/overlay/disable':
+            if self.video_node:
+                self.video_node.stop_overlay()
+                self._send_json(200, {'success': True, 'overlay': False})
+            else:
+                self._send_json(503, {'success': False, 'message': 'No video node'})
         
         else:
             self._send_json(404, {'error': 'Not found'})
