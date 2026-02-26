@@ -188,8 +188,13 @@ namespace NOMAD.MissionPlanner
                         // Wait for GStreamer to fully release native resources
                         await System.Threading.Tasks.Task.Delay(500);
                         StartStream();
-                        _lblStatus.Text = $"Latency: {_latencyMs}ms";
+                        _lblStatus.Text = $"Latency: {_latencyMs}ms ({(_latencyMs <= 100 ? "low-latency" : "smooth")})";
                         _lblStatus.ForeColor = Color.Cyan;
+                    }
+                    else
+                    {
+                        _lblStatus.Text = $"Latency set to {_latencyMs}ms (applied on Play)";
+                        _lblStatus.ForeColor = Color.DarkCyan;
                     }
                 }
                 finally
@@ -358,24 +363,36 @@ namespace NOMAD.MissionPlanner
             // Requirements:
             // 1. appsink MUST be named "outsink" (Mission Planner looks for this)
             // 2. format=BGRA (32-bit matches Windows Forms bitmap creation)
-            // 3. sync=false (no clock sync for live streaming)
-            // 4. decodebin3 handles H264 decoding automatically
+            // 3. decodebin3 handles H264 decoding automatically
+            //
+            // Latency control:
+            //   - rtspsrc latency: jitter buffer in ms (how much RTP data to buffer)
+            //   - queue: buffer depth controls smoothness vs latency tradeoff
+            //   - sync: when true, frames display at their PTS; when false, push ASAP
+            //   Low latency (<100ms): minimal buffer, sync=false, drop old frames
+            //   High latency (>100ms): larger buffer for smoother playback
+            
+            // Queue depth scales with latency to allow smoother playback at higher settings
+            int queueBuffers = _latencyMs <= 100 ? 1 : Math.Min(_latencyMs / 50, 10);
+            string leaky = _latencyMs <= 100 ? "leaky=2" : "leaky=0";
+            // Enable clock sync for higher latency (smooth, even playback)
+            string syncVal = _latencyMs <= 100 ? "false" : "true";
             
             if (_streamUrl.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
             {
                 var port = ExtractUdpPort(_streamUrl);
                 return $"udpsrc port={port} buffer-size=90000 ! " +
                        $"application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264 ! " +
-                       $"decodebin3 ! queue max-size-buffers=1 leaky=2 ! " +
+                       $"decodebin3 ! queue max-size-buffers={queueBuffers} {leaky} ! " +
                        $"videoconvert ! video/x-raw,format=BGRA ! " +
-                       $"appsink name=outsink sync=false";
+                       $"appsink name=outsink sync={syncVal}";
             }
             
-            // RTSP with decodebin3 - proven working pipeline
+            // RTSP pipeline - latency controls the rtspsrc jitter buffer
             return $"rtspsrc location={_streamUrl} latency={_latencyMs} udp-reconnect=1 timeout=0 do-retransmission=false ! " +
-                   $"application/x-rtp ! decodebin3 ! queue max-size-buffers=1 leaky=2 ! " +
+                   $"application/x-rtp ! decodebin3 ! queue max-size-buffers={queueBuffers} {leaky} ! " +
                    $"videoconvert ! video/x-raw,format=BGRA ! " +
-                   $"appsink name=outsink sync=false";
+                   $"appsink name=outsink sync={syncVal}";
         }
         
         public void StartStream()
