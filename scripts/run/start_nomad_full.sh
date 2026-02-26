@@ -162,56 +162,61 @@ start_mediamtx() {
 start_edge_core() {
     log_info "Starting Edge Core API..."
     
-    # Check if systemd service is available and we have sudo access
-    local use_systemd=false
-    if systemctl list-unit-files nomad.service > /dev/null 2>&1; then
-        # Test if we can restart via systemd (requires sudo)
-        if sudo -n systemctl restart nomad 2>/dev/null; then
-            use_systemd=true
-            log_info "Restarted Edge Core via systemd (nomad.service)"
+    # Check if Edge Core is already running and healthy (e.g., via systemd)
+    if curl -s http://localhost:$API_PORT/health > /dev/null 2>&1; then
+        local existing_pid=$(pgrep -f "edge_core.main" | head -1)
+        log_ok "Edge Core already running and healthy (PID: $existing_pid)"
+        
+        # If user wants to force restart with latest code, try systemd first
+        if [ "${FORCE_RESTART:-}" = "true" ]; then
+            log_info "FORCE_RESTART set, restarting Edge Core..."
+        else
+            log_info "Using existing Edge Core (set FORCE_RESTART=true to override)"
+            return 0
         fi
     fi
     
-    if [ "$use_systemd" = true ]; then
-        # Wait for systemd-managed Edge Core to be ready
-        log_info "Waiting for Edge Core API to be ready (systemd)..."
-        for i in {1..30}; do
-            if curl -s http://localhost:$API_PORT/health > /dev/null; then
-                local svc_pid=$(systemctl show nomad --property=MainPID --value 2>/dev/null)
-                log_ok "Edge Core running via systemd at http://localhost:$API_PORT (PID: $svc_pid)"
+    # Try systemd restart if available (preferred - handles Restart=always properly)
+    if systemctl list-unit-files nomad.service > /dev/null 2>&1; then
+        if sudo -n systemctl restart nomad 2>/dev/null; then
+            log_info "Restarted Edge Core via systemd (nomad.service)"
+            log_info "Waiting for Edge Core API to be ready (systemd)..."
+            for i in {1..30}; do
+                if curl -s http://localhost:$API_PORT/health > /dev/null; then
+                    local svc_pid=$(systemctl show nomad --property=MainPID --value 2>/dev/null)
+                    log_ok "Edge Core running via systemd at http://localhost:$API_PORT (PID: $svc_pid)"
+                    return 0
+                fi
+                sleep 1
+            done
+            log_fail "Edge Core (systemd) failed to start!"
+            sudo -n journalctl -u nomad -n 20 --no-pager 2>/dev/null || true
+            return 1
+        else
+            # No sudo access - check if systemd service is already running
+            if systemctl is-active --quiet nomad 2>/dev/null; then
+                log_warn "systemd nomad.service is active (no sudo to restart)."
+                log_warn "To deploy latest code: sudo systemctl restart nomad"
+                log_warn "Using existing systemd-managed Edge Core."
                 return 0
             fi
-            sleep 1
-        done
-        log_fail "Edge Core (systemd) failed to start!"
-        sudo -n journalctl -u nomad -n 20 --no-pager 2>/dev/null || true
-        return 1
+        fi
     fi
     
-    # Fallback: manual start (no sudo / no systemd service installed)
-    log_info "Using manual Edge Core start (no sudo for systemd)..."
+    # Manual start (no systemd service or systemd not managing Edge Core)
+    log_info "Starting Edge Core manually..."
     
     # Kill any existing edge_core processes
     pkill -f "edge_core.main" 2>/dev/null || true
     sleep 2
     
-    # Verify no edge_core is still running
     if pgrep -f "edge_core.main" > /dev/null 2>&1; then
         log_warn "Edge Core still running after kill, sending SIGKILL..."
         pkill -9 -f "edge_core.main" 2>/dev/null || true
         sleep 1
     fi
     
-    # Check if systemd will respawn (port conflict)
-    if pgrep -f "edge_core.main" > /dev/null 2>&1; then
-        log_fail "Cannot stop existing Edge Core (likely systemd Restart=always)."
-        log_fail "Ask admin to run: sudo systemctl stop nomad && sudo systemctl disable nomad"
-        log_fail "Or grant passwordless sudo: echo 'mad ALL=(ALL) NOPASSWD: /usr/bin/systemctl' | sudo tee /etc/sudoers.d/nomad"
-        return 1
-    fi
-    
     cd $NOMAD_DIR
-    # Use HOME environment variable for user-agnostic Python local bin path
     export PATH=${HOME}/.local/bin:$PATH
     export NOMAD_DEBUG=true
     export NOMAD_LOG_DIR="$NOMAD_DIR/data/mission_logs"
