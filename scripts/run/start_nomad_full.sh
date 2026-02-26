@@ -30,6 +30,8 @@ RTSP_PORT=8554
 # Use HOME environment variable for user-agnostic paths (default: /home/mad)
 LOG_DIR=${HOME}/nomad_logs
 TASK_MODE="${1:-all}"
+# Track whether this script started Edge Core (vs reusing systemd)
+SCRIPT_OWNS_EDGE_CORE=false
 
 # Colors
 RED='\033[0;31m'
@@ -179,6 +181,7 @@ start_edge_core() {
     # Try systemd restart if available (preferred - handles Restart=always properly)
     if systemctl list-unit-files nomad.service > /dev/null 2>&1; then
         if sudo -n systemctl restart nomad 2>/dev/null; then
+            SCRIPT_OWNS_EDGE_CORE=true
             log_info "Restarted Edge Core via systemd (nomad.service)"
             log_info "Waiting for Edge Core API to be ready (systemd)..."
             for i in {1..30}; do
@@ -230,6 +233,7 @@ start_edge_core() {
     
     nohup $PYTHON_BIN -m edge_core.main > $LOG_DIR/edge_core.log 2>&1 &
     EDGE_PID=$!
+    SCRIPT_OWNS_EDGE_CORE=true
     sleep 3
     
     # Wait for Edge Core to be ready (max 30 seconds)
@@ -450,8 +454,12 @@ cleanup() {
     echo ""
     log_info "Shutting down NOMAD services..."
     
-    # Stop Edge Core API (manual instance)
-    pkill -f "edge_core.main" 2>/dev/null || true
+    # Only kill Edge Core if this script started it (not a pre-existing systemd instance)
+    if [ "$SCRIPT_OWNS_EDGE_CORE" = true ]; then
+        pkill -f "edge_core.main" 2>/dev/null || true
+    else
+        log_info "Leaving pre-existing Edge Core running (managed by systemd)"
+    fi
     
     # Stop video bridge inside Docker container
     docker exec nomad_isaac_ros pkill -f "simple_video_bridge" 2>/dev/null || true
@@ -469,5 +477,14 @@ trap cleanup EXIT INT TERM
 
 main "$@"
 
-# Keep script running to allow Ctrl+C cleanup
-wait 2>/dev/null || true
+# Keep script running to allow Ctrl+C cleanup.
+# 'wait' returns immediately if no child processes were spawned (e.g., Edge Core
+# was reused from systemd), so use 'sleep infinity' to block indefinitely.
+# The trap on INT/TERM will still fire on Ctrl+C or kill.
+if [ "$SCRIPT_OWNS_EDGE_CORE" = true ]; then
+    wait 2>/dev/null || true
+else
+    # No child to wait for -- block until signal
+    sleep infinity &
+    wait $! 2>/dev/null || true
+fi
