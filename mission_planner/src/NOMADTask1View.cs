@@ -490,8 +490,8 @@ namespace NOMAD.MissionPlanner
             var popup = new Form
             {
                 Text = "AI Description - " + Path.GetFileName(imagePath),
-                Size = new Size(560, 440),
-                MinimumSize = new Size(400, 300),
+                Size = new Size(680, 520),
+                MinimumSize = new Size(500, 380),
                 StartPosition = FormStartPosition.CenterParent,
                 BackColor = Color.FromArgb(30, 30, 33),
                 ForeColor = Color.White,
@@ -506,7 +506,7 @@ namespace NOMAD.MissionPlanner
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
                 RowCount = 3,
-                Padding = new Padding(16),
+                Padding = new Padding(20),
             };
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -536,7 +536,7 @@ namespace NOMAD.MissionPlanner
                 Text = !string.IsNullOrEmpty(aiDescription)
                     ? aiDescription
                     : "Waiting for AI to generate description...",
-                Margin = new Padding(4, 0, 4, 0),
+                Margin = new Padding(8, 4, 8, 4),
             };
             // Remove the URL-detection underline behavior
             txtDesc.DetectUrls = false;

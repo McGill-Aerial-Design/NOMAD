@@ -4,9 +4,9 @@
 /**:
   ros__parameters:
     object_detection:
-      # Relative path to ONNX model (assumes CWD is NOMAD root or adjust as needed)
-      # For containerized deployments, this allows portable model paths
-      custom_onnx_file: './best.onnx'  # Path to ONNX model
+      # ONNX model path -- inside the Isaac ROS container, the NOMAD repo
+      # is mounted at /workspaces/isaac_ros-dev/ via docker volume
+      custom_onnx_file: '/workspaces/isaac_ros-dev/config/models/best.onnx'
       custom_onnx_input_size: 512                    # Model input resolution
       custom_class_count: 6                          # Number of target classes
 

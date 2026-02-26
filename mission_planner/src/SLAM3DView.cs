@@ -90,6 +90,19 @@ namespace NOMAD.MissionPlanner
         public List<int> Color { get; set; }
     }
 
+    /// <summary>
+    /// Represents a detected object marker in the 3D SLAM view.
+    /// </summary>
+    public class DetectionMarker3D
+    {
+        public string Label { get; set; }
+        public double X { get; set; }
+        public double Y { get; set; }
+        public double Z { get; set; }
+        public double Confidence { get; set; }
+        public int SeenCount { get; set; }
+    }
+
 
     /// <summary>
     /// 3D SLAM visualization control using Helix Toolkit.
@@ -118,6 +131,10 @@ namespace NOMAD.MissionPlanner
         private Model3D _droneModelContent; // Stored to restore after hiding in FPV
         private ModelVisual3D _gridVisual;
         private ModelVisual3D _trajectoryVisual;
+        private ModelVisual3D _detectionMarkersVisual;
+        
+        // Detection marker state
+        private List<DetectionMarker3D> _detectionMarkers = new List<DetectionMarker3D>();
         
         // Cameras
         private PerspectiveCamera _fpvCamera;
@@ -403,6 +420,9 @@ namespace NOMAD.MissionPlanner
             // Add trajectory
             CreateTrajectoryVisual();
             
+            // Add detection markers layer
+            CreateDetectionMarkersVisual();
+            
             // Host in WinForms
             _elementHost.Child = _viewport;
         }
@@ -479,6 +499,115 @@ namespace NOMAD.MissionPlanner
             _viewport.Children.Add(_trajectoryVisual);
         }
 
+        private void CreateDetectionMarkersVisual()
+        {
+            var group = new Model3DGroup();
+            _detectionMarkersVisual = new ModelVisual3D { Content = group };
+            _viewport.Children.Add(_detectionMarkersVisual);
+        }
+
+        /// <summary>
+        /// Get WPF color for a circle detection label.
+        /// Maps the YOLO26 class names to their actual circle colors.
+        /// </summary>
+        private static Color GetDetectionColor(string label)
+        {
+            if (string.IsNullOrEmpty(label)) return Colors.White;
+            
+            string lower = label.ToLowerInvariant();
+            if (lower.Contains("red")) return Color.FromRgb(220, 40, 40);
+            if (lower.Contains("blue")) return Color.FromRgb(40, 100, 220);
+            if (lower.Contains("green")) return Color.FromRgb(40, 200, 40);
+            if (lower.Contains("yellow")) return Color.FromRgb(240, 220, 40);
+            if (lower.Contains("black")) return Color.FromRgb(50, 50, 50);
+            if (lower.Contains("white")) return Color.FromRgb(240, 240, 240);
+            return Color.FromRgb(200, 100, 200); // Purple for unknown
+        }
+
+        /// <summary>
+        /// Rebuild all detection markers in the 3D view.
+        /// Each detected circle target is shown as a colored sphere at its 3D position.
+        /// Uses a dirty flag set when new detection data arrives from the WebSocket.
+        /// </summary>
+        private bool _detectionsDirty = false;
+        
+        private void UpdateDetectionMarkers()
+        {
+            if (_detectionMarkersVisual == null)
+                return;
+            
+            // Only rebuild when data actually changed
+            if (!_detectionsDirty)
+                return;
+            _detectionsDirty = false;
+            
+            // Handle empty / cleared detections
+            if (_detectionMarkers == null || _detectionMarkers.Count == 0)
+            {
+                _detectionMarkersVisual.Content = new Model3DGroup();
+                return;
+            }
+            
+            var group = new Model3DGroup();
+            
+            foreach (var det in _detectionMarkers)
+            {
+                var color = GetDetectionColor(det.Label);
+                
+                // Sphere radius scales with confidence (0.03-0.08m)
+                double radius = 0.03 + det.Confidence * 0.05;
+                
+                var builder = new MeshBuilder();
+                builder.AddSphere(
+                    new Point3D(det.X, det.Y, det.Z),
+                    radius, 8, 8);
+                
+                var mesh = builder.ToMesh();
+                mesh.Freeze();
+                
+                var brush = new SolidColorBrush(color);
+                brush.Freeze();
+                var material = new DiffuseMaterial(brush);
+                material.Freeze();
+                
+                // Add emissive glow for visibility
+                var emissiveBrush = new SolidColorBrush(
+                    Color.FromArgb(80, color.R, color.G, color.B));
+                emissiveBrush.Freeze();
+                var emissive = new EmissiveMaterial(emissiveBrush);
+                emissive.Freeze();
+                
+                var materialGroup = new MaterialGroup();
+                materialGroup.Children.Add(material);
+                materialGroup.Children.Add(emissive);
+                materialGroup.Freeze();
+                
+                var model = new GeometryModel3D(mesh, materialGroup);
+                model.Freeze();
+                group.Children.Add(model);
+                
+                // Add a thin vertical line from floor to marker for depth perception
+                var lineBuilder = new MeshBuilder();
+                lineBuilder.AddPipe(
+                    new Point3D(det.X, det.Y, 0),
+                    new Point3D(det.X, det.Y, det.Z),
+                    0, 0.003, 4);
+                var lineMesh = lineBuilder.ToMesh();
+                lineMesh.Freeze();
+                
+                var lineColor = Color.FromArgb(60, color.R, color.G, color.B);
+                var lineBrush = new SolidColorBrush(lineColor);
+                lineBrush.Freeze();
+                var lineMaterial = new DiffuseMaterial(lineBrush);
+                lineMaterial.Freeze();
+                var lineModel = new GeometryModel3D(lineMesh, lineMaterial);
+                lineModel.Freeze();
+                group.Children.Add(lineModel);
+            }
+            
+            _detectionMarkersVisual.Content = group;
+        }
+
         // ==================== Update Loops ====================
         
         private void StartUpdateLoop()
@@ -549,6 +678,33 @@ namespace NOMAD.MissionPlanner
                         _dronePitch = frame["pitch"]?.Value<double>() ?? 0;
                         _droneYaw = frame["yaw"]?.Value<double>() ?? 0;
 
+                        // Parse detection markers if present (~5Hz from server)
+                        var detectionsToken = frame["detections"] as JArray;
+                        if (detectionsToken != null)
+                        {
+                            var markers = new List<DetectionMarker3D>();
+                            foreach (var d in detectionsToken)
+                            {
+                                markers.Add(new DetectionMarker3D
+                                {
+                                    Label = d["label"]?.ToString() ?? "",
+                                    X = d["x"]?.Value<double>() ?? 0,
+                                    Y = d["y"]?.Value<double>() ?? 0,
+                                    Z = d["z"]?.Value<double>() ?? 0,
+                                    Confidence = d["confidence"]?.Value<double>() ?? 0,
+                                    SeenCount = d["seen_count"]?.Value<int>() ?? 1,
+                                });
+                            }
+                            _detectionMarkers = markers;
+                            _detectionsDirty = true;
+                        }
+                        else if (frame.ContainsKey("detections"))
+                        {
+                            // Server explicitly sent null/empty detections -- clear markers
+                            _detectionMarkers = new List<DetectionMarker3D>();
+                            _detectionsDirty = true;
+                        }
+
                         if (frameType == "mesh")
                         {
                             var meshToken = frame["mesh"];
@@ -609,6 +765,7 @@ namespace NOMAD.MissionPlanner
                         AddTrajectoryPoint(_dronePosition);
                         UpdateDroneVisual();
                         UpdateTrajectoryVisual();
+                        UpdateDetectionMarkers();
                         UpdateCameras();
                     }));
                 }));
@@ -644,6 +801,7 @@ namespace NOMAD.MissionPlanner
                         AddTrajectoryPoint(_dronePosition);
                         UpdateDroneVisual();
                         UpdateTrajectoryVisual();
+                        UpdateDetectionMarkers();
                         UpdateCameras();
                         if (meshData != null)
                             UpdateMeshVisual(meshData);

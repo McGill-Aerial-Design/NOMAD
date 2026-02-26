@@ -328,6 +328,12 @@ def create_app(state_manager: StateManager) -> FastAPI:
     app.state.vio_trajectory_max_points: int = 1000  # Keep last N points
     app.state.exclusion_map: list[dict] = []
 
+    # Object detection state (YOLO26 circle detection via ZED custom OD)
+    app.state.detected_objects: list[dict] = []  # Current frame detections
+    app.state.detection_history: list[dict] = []  # Persistent detected targets with 3D positions
+    app.state.detection_history_max: int = 200  # Max persistent detections to keep
+    app.state.detection_last_update: float = 0.0
+
     # ==================== Root / Health ====================
 
     @app.get("/", tags=["System"])
@@ -618,6 +624,28 @@ def create_app(state_manager: StateManager) -> FastAPI:
                     await asyncio.sleep(1.0 / 30)
                     continue
 
+                # Include detection markers every 6th frame (~5Hz) to avoid bloat
+                if frame_count % 6 == 0:
+                    det_history = websocket.app.state.detection_history
+                    if det_history:
+                        # Cap to 50 most recent detections to limit payload size
+                        capped = det_history[-50:] if len(det_history) > 50 else det_history
+                        frame["detections"] = [
+                            {
+                                "label": d.get("label", ""),
+                                "x": d.get("x", 0),
+                                "y": d.get("y", 0),
+                                "z": d.get("z", 0),
+                                "confidence": d.get("confidence", 0),
+                                "seen_count": d.get("seen_count", 1),
+                            }
+                            for d in capped
+                            if d.get("x") is not None
+                        ]
+                    else:
+                        # Explicitly signal empty detections so client can clear markers
+                        frame["detections"] = []
+
                 await websocket.send_json(frame)
                 frame_count += 1
                 await asyncio.sleep(1.0 / 30)  # 30 Hz
@@ -690,6 +718,27 @@ def create_app(state_manager: StateManager) -> FastAPI:
             "building_location": building_location,
             "photo_path": None,  # Will be set after photo capture
         }
+        
+        # Include current object detections in metadata for AI description
+        det_history = request.app.state.detection_history
+        if det_history:
+            # Group detections by label for concise summary
+            det_summary = {}
+            for det in det_history:
+                label = det.get("label", "unknown")
+                if label not in det_summary:
+                    det_summary[label] = {"count": 0, "positions": []}
+                det_summary[label]["count"] += 1
+                if det.get("x") is not None:
+                    det_summary[label]["positions"].append({
+                        "x": round(det["x"], 2),
+                        "y": round(det["y"], 2),
+                        "z": round(det["z"], 2),
+                    })
+            metadata["detected_targets"] = {
+                "total_count": len(det_history),
+                "by_class": det_summary,
+            }
         
         image_filename = "photo.jpg"
         metadata_filename = "metadata.json"
@@ -1995,6 +2044,140 @@ wait
             count = len(request.app.state.exclusion_map)
             request.app.state.exclusion_map = []
             return {"success": True, "cleared": count}
+
+    # ==================== Object Detection Endpoints ====================
+    # YOLO26 circle detection via ZED custom OD pipeline
+    # Detections are received from ros_http_bridge and served to Mission Planner
+
+    @app.post("/api/detections/update", tags=["Detections"])
+    async def update_detections(request: Request):
+        """
+        Receive object detections from ROS-HTTP bridge.
+        
+        Called by ros_http_bridge at ~5Hz with current frame detections.
+        Stores current detections and adds new unique targets to history.
+        """
+        import time as _time
+        body = await request.json()
+        detections = body.get("detections", [])
+        
+        request.app.state.detected_objects = detections
+        request.app.state.detection_last_update = _time.time()
+        
+        # Add to persistent history (deduplicate by proximity)
+        history = request.app.state.detection_history
+        for det in detections:
+            x_val = det.get("x")
+            y_val = det.get("y")
+            z_val = det.get("z")
+            if x_val is None or y_val is None or z_val is None:
+                continue
+            
+            # Validate finite coordinates
+            try:
+                if not (isinstance(x_val, (int, float)) and isinstance(y_val, (int, float)) and isinstance(z_val, (int, float))):
+                    continue
+                import math as _math
+                if not (_math.isfinite(x_val) and _math.isfinite(y_val) and _math.isfinite(z_val)):
+                    continue
+            except (TypeError, ValueError):
+                continue
+            
+            # Check if this detection is near an existing history entry (within 0.5m)
+            is_duplicate = False
+            for existing in history:
+                dx = x_val - existing["x"]
+                dy = y_val - existing["y"]
+                dz = z_val - existing["z"]
+                dist = (dx*dx + dy*dy + dz*dz) ** 0.5
+                if dist < 0.5 and det.get("label") == existing.get("label"):
+                    # Always increment seen_count for matched duplicates
+                    existing["seen_count"] = existing.get("seen_count", 1) + 1
+                    # Update position/confidence if this detection is higher confidence
+                    if det.get("confidence", 0) > existing.get("confidence", 0):
+                        existing.update(det)
+                        existing["seen_count"] = existing.get("seen_count", 1)  # preserve after update
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                det["seen_count"] = 1
+                det["first_seen"] = _time.time()
+                history.append(det)
+                # Trim to max size
+                if len(history) > request.app.state.detection_history_max:
+                    history.pop(0)
+        
+        return {"accepted": len(detections), "history_size": len(history)}
+
+    @app.get("/api/detections", tags=["Detections"])
+    async def get_detections(request: Request):
+        """
+        Get current object detections and persistent detection history.
+        
+        Returns both the latest frame detections and the full history
+        of unique detected objects with 3D positions.
+        """
+        import time as _time
+        current = request.app.state.detected_objects
+        history = request.app.state.detection_history
+        last_update = request.app.state.detection_last_update
+        
+        return {
+            "current": {
+                "count": len(current),
+                "detections": current,
+                "age_seconds": _time.time() - last_update if last_update > 0 else None,
+            },
+            "history": {
+                "count": len(history),
+                "detections": history,
+            },
+        }
+
+    @app.get("/api/detections/summary", tags=["Detections"])
+    async def get_detection_summary(request: Request):
+        """
+        Get a summary of detected objects grouped by class label.
+        
+        Useful for Task 1 AI description to know which targets are present.
+        """
+        history = request.app.state.detection_history
+        
+        # Group by label
+        by_label = {}
+        for det in history:
+            label = det.get("label", "unknown")
+            if label not in by_label:
+                by_label[label] = {
+                    "count": 0,
+                    "avg_confidence": 0.0,
+                    "positions": [],
+                }
+            entry = by_label[label]
+            entry["count"] += 1
+            entry["avg_confidence"] += det.get("confidence", 0)
+            if det.get("x") is not None:
+                entry["positions"].append({
+                    "x": det["x"], "y": det["y"], "z": det["z"],
+                })
+        
+        # Compute averages
+        for label, entry in by_label.items():
+            if entry["count"] > 0:
+                entry["avg_confidence"] /= entry["count"]
+        
+        return {
+            "total_unique_targets": len(history),
+            "by_class": by_label,
+        }
+
+    @app.delete("/api/detections/history", tags=["Detections"])
+    async def clear_detection_history(request: Request):
+        """Clear the persistent detection history."""
+        count = len(request.app.state.detection_history)
+        request.app.state.detection_history = []
+        return {"cleared": count}
 
     # ==================== Video Streaming Endpoints ====================
     # Isaac ROS H.264 video streaming with dynamic topic switching

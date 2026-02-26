@@ -77,6 +77,14 @@ except ImportError:
     MARKER_AVAILABLE = False
     logger.warning("visualization_msgs not available - per-voxel mesh disabled")
 
+# ZED object detection messages (custom circle detection via YOLO26)
+try:
+    from zed_interfaces.msg import ObjectsStamped
+    ZED_OD_AVAILABLE = True
+except ImportError:
+    ZED_OD_AVAILABLE = False
+    logger.warning("zed_interfaces not available - object detection bridge disabled")
+
 
 @dataclass
 class VIOData:
@@ -110,6 +118,25 @@ class VelocityCommand:
     source: str = "nav2"
 
 
+@dataclass
+class DetectedObject:
+    """Detected object from ZED custom OD (YOLO26 circle detection)."""
+    timestamp: float
+    label: str           # Class label (e.g. 'red_circle')
+    label_id: int        # Class ID
+    confidence: float    # 0-1
+    # 3D position in camera/map frame (meters)
+    x: float
+    y: float
+    z: float
+    # 3D bounding box dimensions
+    width: float = 0.0
+    height: float = 0.0
+    depth: float = 0.0
+    # Tracking state: 0=OFF, 1=OK, 2=SEARCHING, 3=TERMINATE
+    tracking_state: int = 0
+
+
 class ROSHTTPBridge(Node):
     """
     ROS2 node that bridges topics to NOMAD Edge Core HTTP API.
@@ -128,10 +155,12 @@ class ROSHTTPBridge(Node):
         cmd_vel_topic: str = "/cmd_vel",         # Nav2 velocity commands
         mesh_topic: str = "/nvblox_node/mesh",   # Nvblox 3D mesh
         servo_topic: str = "/nomad/servo/nozzle_angle",  # Nozzle servo angle
+        detection_topic: str = "/zed/zed_node/obj_det/objects",  # ZED custom OD
         send_rate_hz: float = 30.0,
         enable_nav_control: bool = True,         # Enable velocity command forwarding
         enable_mesh: bool = True,                # Enable mesh forwarding
         enable_servo: bool = True,               # Enable servo control forwarding
+        enable_detections: bool = True,          # Enable object detection forwarding
     ):
         super().__init__("nomad_ros_http_bridge")
         
@@ -142,6 +171,7 @@ class ROSHTTPBridge(Node):
         self._enable_nav_control = enable_nav_control
         self._enable_mesh = enable_mesh and NVBLOX_AVAILABLE
         self._enable_servo = enable_servo
+        self._enable_detections = enable_detections and ZED_OD_AVAILABLE
         
         # Persistent HTTP connection (keep-alive) for efficiency
         self._http_conn = HTTPConnection(host, port, timeout=1.0)
@@ -176,6 +206,10 @@ class ROSHTTPBridge(Node):
         self._mesh_send_count = 0
         self._servo_recv_count = 0
         self._servo_send_count = 0
+        self._detection_recv_count = 0
+        self._detection_send_count = 0
+        self._last_detection_send_time = 0.0
+        self._latest_detections: list[DetectedObject] = []
         self._send_errors = 0
         self._last_send_time = 0.0
         self._last_cmd_vel_send_time = 0.0
@@ -235,6 +269,18 @@ class ROSHTTPBridge(Node):
                 sensor_qos,
             )
             self.get_logger().info(f"Subscribed to servo angle: {servo_topic}")
+        
+        # Subscribe to ZED custom object detections (YOLO26 circle detection)
+        if self._enable_detections:
+            self.create_subscription(
+                ObjectsStamped,
+                detection_topic,
+                self._handle_detections,
+                sensor_qos,
+            )
+            self.get_logger().info(f"Subscribed to detections: {detection_topic}")
+        elif enable_detections and not ZED_OD_AVAILABLE:
+            self.get_logger().warning("Detections requested but zed_interfaces not available")
         
         # TF2 buffer for camera pose lookup
         self._tf_buffer = None
@@ -472,6 +518,88 @@ class ROSHTTPBridge(Node):
             self._send_errors += 1
             self.get_logger().error(f"Servo send error: {e}")
     
+    def _handle_detections(self, msg) -> None:
+        """
+        Handle ZED custom object detections (YOLO26 circle detection).
+        
+        The ZED SDK runs the ONNX model with TensorRT, detects colored circles,
+        and provides 3D positions via stereo depth. This handler converts the
+        zed_interfaces/ObjectsStamped message into DetectedObject dataclasses
+        and forwards them to Edge Core.
+        """
+        if not self._enable_detections:
+            return
+        
+        try:
+            detections = []
+            for obj in msg.objects:
+                # Filter by tracking state -- only keep active detections
+                if obj.tracking_state == 3:  # TERMINATE
+                    continue
+                
+                # Validate position is finite (ZED can return NaN for failed depth)
+                pos_x = obj.position[0]
+                pos_y = obj.position[1]
+                pos_z = obj.position[2]
+                if not (math.isfinite(pos_x) and math.isfinite(pos_y) and math.isfinite(pos_z)):
+                    continue
+                
+                det = DetectedObject(
+                    timestamp=time.time(),
+                    label=obj.label,
+                    label_id=obj.label_id,
+                    confidence=obj.confidence / 100.0,  # ZED uses 1-99 scale
+                    x=pos_x,
+                    y=pos_y,
+                    z=pos_z,
+                    width=obj.dimensions_3d[0] if len(obj.dimensions_3d) >= 3 else 0.0,
+                    height=obj.dimensions_3d[1] if len(obj.dimensions_3d) >= 3 else 0.0,
+                    depth=obj.dimensions_3d[2] if len(obj.dimensions_3d) >= 3 else 0.0,
+                    tracking_state=obj.tracking_state,
+                )
+                detections.append(det)
+            
+            with self._lock:
+                self._latest_detections = detections
+                self._detection_recv_count += 1
+            
+            if detections:
+                self._send_detections_to_edge_core(detections)
+                
+        except Exception as e:
+            self.get_logger().error(f"Detection processing error: {e}")
+    
+    def _send_detections_to_edge_core(self, detections: list) -> None:
+        """
+        Send object detections to Edge Core via HTTP POST.
+        
+        Rate limited to 5 Hz to avoid overwhelming the API while
+        keeping detection data fresh for SLAM visualization.
+        """
+        now = time.time()
+        if now - self._last_detection_send_time < 0.2:  # 5 Hz max
+            return
+        self._last_detection_send_time = now
+        
+        try:
+            payload = {
+                "detections": [asdict(d) for d in detections],
+                "count": len(detections),
+            }
+            data = json.dumps(payload).encode("utf-8")
+            if self._http_post("/api/detections/update", data):
+                self._detection_send_count += 1
+            else:
+                self._send_errors += 1
+                    
+        except URLError as e:
+            self._send_errors += 1
+            if self._send_errors % 100 == 1:
+                self.get_logger().warning(f"Failed to send detections: {e}")
+        except Exception as e:
+            self._send_errors += 1
+            self.get_logger().error(f"Detection send error: {e}")
+    
     def _handle_mesh(self, msg) -> None:
         """
         Handle mesh data from nvblox for 3D visualization (block-only fallback).
@@ -706,10 +834,13 @@ class ROSHTTPBridge(Node):
             "mesh_sent": self._mesh_send_count,
             "servo_received": self._servo_recv_count,
             "servo_sent": self._servo_send_count,
+            "detection_received": self._detection_recv_count,
+            "detection_sent": self._detection_send_count,
             "send_errors": self._send_errors,
             "nav_control_enabled": self._enable_nav_control,
             "mesh_enabled": self._enable_mesh,
             "servo_enabled": self._enable_servo,
+            "detections_enabled": self._enable_detections,
         }
 
 
@@ -732,6 +863,10 @@ def main():
                         help="Servo nozzle angle topic (Float32, 0-180 degrees)")
     parser.add_argument("--disable-servo", action="store_true",
                         help="Disable servo angle forwarding")
+    parser.add_argument("--detection-topic", default="/zed/zed_node/obj_det/objects",
+                        help="ZED custom object detection topic (ObjectsStamped)")
+    parser.add_argument("--disable-detections", action="store_true",
+                        help="Disable object detection forwarding")
     args = parser.parse_args()
     
     rclpy.init()
@@ -743,10 +878,12 @@ def main():
         cmd_vel_topic=args.cmd_vel_topic,
         mesh_topic=args.mesh_topic,
         servo_topic=args.servo_topic,
+        detection_topic=args.detection_topic,
         send_rate_hz=args.rate,
         enable_nav_control=not args.disable_nav,
         enable_mesh=not args.disable_mesh,
         enable_servo=not args.disable_servo,
+        enable_detections=not args.disable_detections,
     )
     
     try:

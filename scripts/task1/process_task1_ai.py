@@ -93,12 +93,30 @@ class AIProvider(ABC):
         pitch = ahrs.get('pitch_deg', 0.0)
         roll = ahrs.get('roll_deg', 0.0)
         
+        # Build detection context from YOLO26 circle detection results
+        detection_context = ""
+        detected_targets = metadata.get('detected_targets', {})
+        if detected_targets:
+            total = detected_targets.get('total_count', 0)
+            by_class = detected_targets.get('by_class', {})
+            detection_lines = [f"\nOBJECT DETECTION RESULTS (YOLO26 - {total} targets detected):"]
+            for label, info in by_class.items():
+                count = info.get('count', 0)
+                positions = info.get('positions', [])
+                pos_str = ""
+                if positions:
+                    pos_strs = [f"({p['x']:.1f}, {p['y']:.1f}, {p['z']:.1f})m" for p in positions[:5]]
+                    pos_str = f" at positions: {', '.join(pos_strs)}"
+                detection_lines.append(f"  - {label}: {count} detected{pos_str}")
+            detection_context = "\n".join(detection_lines)
+        
         prompt = f"""Analyze this outdoor reconnaissance photo with the following context:
 
 GPS Location: {lat:.6f}, {lon:.6f} at {alt:.1f}m altitude
 Aircraft Heading: {heading:.1f} degrees (0=North, 90=East, 180=South, 270=West)
 Aircraft Attitude: Pitch {pitch:.1f} degrees, Roll {roll:.1f} degrees
 Building Location: {building}
+{detection_context}
 
 Please provide a detailed description including:
 
@@ -117,7 +135,14 @@ Please provide a detailed description including:
    - Describe the viewing angle relative to the building
    - Identify any direct visual line-of-sight to the building
 
-4. COMPETITION RELEVANCE:
+4. TARGET DETECTION ANALYSIS:
+   - Confirm or correct the automated detection results listed above
+   - Describe the colored circles/targets visible in the image
+   - Count each color of target circle visible and their approximate positions
+   - Note any targets that may have been missed by automated detection
+   - Identify which targets appear to be new vs previously seen
+
+5. COMPETITION RELEVANCE:
    - Assess image quality and suitability for evidence submission
    - Note any potential target areas or points of interest
    - Suggest optimal capture angles if this location is revisited

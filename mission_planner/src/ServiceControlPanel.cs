@@ -697,7 +697,7 @@ namespace NOMAD.MissionPlanner
             if (result.Success)
             {
                 LogMessage("Isaac ROS startup initiated");
-                LogMessage("Container starting, ZED + Nvblox launching...");
+                LogMessage("Container starting with ROS2 environment...");
                 LogMessage("Full startup takes 30-60 seconds");
                 
                 // Show non-blocking message on UI thread
@@ -710,9 +710,9 @@ namespace NOMAD.MissionPlanner
                             "Isaac ROS startup initiated!\n\n" +
                             "The following will start automatically:\n" +
                             "1. Docker container\n" +
-                            "2. ROS2 dependencies installation\n" +
-                            "3. ZED + Nvblox VSLAM\n" +
-                            "4. ROS-HTTP bridge to Edge Core\n\n" +
+                            "2. ROS2 dependencies installation\n\n" +
+                            "Note: Nvblox VSLAM must be launched separately\n" +
+                            "using the Nvblox controls in this panel.\n\n" +
                             "Full startup takes 30-60 seconds.\n" +
                             "Status will update automatically.",
                             "Isaac ROS Starting",
