@@ -11,9 +11,12 @@ extern alias MPDrawing;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using MissionPlanner.Utilities;
 using Newtonsoft.Json.Linq;
@@ -41,6 +44,17 @@ namespace NOMAD.MissionPlanner
         private PictureBox _fullscreenBox;
         private MPBitmap _lastFrame;
         private List<(string Name, string Display)> _topics = new List<(string, string)>();
+        
+        // Detection overlay
+        private CheckBox _chkDetections;
+        private bool _overlayEnabled;
+        private volatile List<DetectionBox> _currentDetections = new List<DetectionBox>();
+        private CancellationTokenSource _detectionPollCts;
+        private volatile int _sourceFrameWidth;
+        private volatile int _sourceFrameHeight;
+        // Cached GDI objects for overlay rendering (avoid per-frame allocation)
+        private Font _overlayFont;
+        private Font _overlayBadgeFont;
         
         /// <summary>
         /// Creates an embedded video player.
@@ -185,7 +199,27 @@ namespace NOMAD.MissionPlanner
                 }
             };
 
-            ctrlPanel.Controls.AddRange(new Control[] { btnPlay, btnStop, btnFull, btnVLC, btnSnap, lblTopic, _cmbTopic, btnRefresh, lblLat, _trkLatency, _lblLatencyValue, btnApplyLatency });
+            // Detection overlay checkbox
+            _chkDetections = new CheckBox
+            {
+                Text = "YOLO",
+                Location = new Point(340, 33),
+                AutoSize = true,
+                ForeColor = Color.FromArgb(255, 180, 60),
+                BackColor = Color.Transparent,
+                Font = new Font("Segoe UI", 8, FontStyle.Bold),
+                Checked = false,
+            };
+            _chkDetections.CheckedChanged += (s, e) =>
+            {
+                _overlayEnabled = _chkDetections.Checked;
+                if (_overlayEnabled)
+                    StartDetectionPolling();
+                else
+                    StopDetectionPolling();
+            };
+
+            ctrlPanel.Controls.AddRange(new Control[] { btnPlay, btnStop, btnFull, btnVLC, btnSnap, lblTopic, _cmbTopic, btnRefresh, lblLat, _trkLatency, _lblLatencyValue, btnApplyLatency, _chkDetections });
             
             Controls.Add(_videoBox);
             Controls.Add(_lblStatus);
@@ -494,6 +528,15 @@ namespace NOMAD.MissionPlanner
                 
                 // Update video display
                 var oldImage = _videoBox.Image;
+                
+                // Track source frame dimensions for bbox normalization
+                _sourceFrameWidth = frame.Width;
+                _sourceFrameHeight = frame.Height;
+                
+                // Draw detection bounding boxes if overlay is enabled
+                if (_overlayEnabled)
+                    DrawDetectionOverlay(displayBitmap);
+                
                 _videoBox.Image = displayBitmap;
                 oldImage?.Dispose();
                 
@@ -616,12 +659,199 @@ namespace NOMAD.MissionPlanner
         {
             if (disposing)
             {
+                StopDetectionPolling();
                 StopStream();
                 _lastFrame?.Dispose();
+                _overlayFont?.Dispose();
+                _overlayBadgeFont?.Dispose();
                 if (_fullscreenForm != null && !_fullscreenForm.IsDisposed)
                     _fullscreenForm.Close();
             }
             base.Dispose(disposing);
+        }
+        
+        // ==================== Detection Overlay ====================
+        
+        /// <summary>
+        /// Represents a single detected object bounding box for overlay rendering.
+        /// </summary>
+        private class DetectionBox
+        {
+            public string Label;
+            public float Confidence;
+            /// <summary>Normalized bounding box [0-1] relative to source frame size.</summary>
+            public float NormX, NormY, NormW, NormH;
+        }
+        
+        private void StartDetectionPolling()
+        {
+            StopDetectionPolling();
+            _detectionPollCts = new CancellationTokenSource();
+            var ct = _detectionPollCts.Token;
+            Task.Run(async () =>
+            {
+                while (!ct.IsCancellationRequested)
+                {
+                    try
+                    {
+                        var json = await JetsonApiService.ApiClient.GetStringAsync(
+                            $"{_apiBaseUrl}/api/detections");
+                        var data = JObject.Parse(json);
+                        var current = data["current"]?["detections"] as JArray;
+                        
+                        if (current != null && current.Count > 0)
+                        {
+                            var boxes = new List<DetectionBox>();
+                            int fw = _sourceFrameWidth;
+                            int fh = _sourceFrameHeight;
+                            foreach (var d in current)
+                            {
+                                // Use 2D bbox fields exclusively (pixel coords from ZED)
+                                float bx = d["bbox_x"]?.Value<float>() ?? 0;
+                                float by = d["bbox_y"]?.Value<float>() ?? 0;
+                                float bw = d["bbox_w"]?.Value<float>() ?? 0;
+                                float bh = d["bbox_h"]?.Value<float>() ?? 0;
+                                
+                                // Skip detections with no valid 2D bbox
+                                if (bw <= 0 || bh <= 0) continue;
+                                
+                                // Normalize pixel coords to [0-1] using source frame dimensions
+                                if (fw > 0 && fh > 0)
+                                {
+                                    bx /= fw;
+                                    by /= fh;
+                                    bw /= fw;
+                                    bh /= fh;
+                                }
+                                
+                                boxes.Add(new DetectionBox
+                                {
+                                    Label = d["label"]?.ToString() ?? "",
+                                    Confidence = d["confidence"]?.Value<float>() ?? 0,
+                                    NormX = bx,
+                                    NormY = by,
+                                    NormW = bw,
+                                    NormH = bh,
+                                });
+                            }
+                            _currentDetections = boxes;
+                        }
+                        else
+                        {
+                            _currentDetections = new List<DetectionBox>();
+                        }
+                    }
+                    catch
+                    {
+                        // Silently ignore poll failures
+                    }
+                    
+                    // Poll at ~5Hz
+                    try { await Task.Delay(200, ct); } catch (OperationCanceledException) { break; }
+                }
+            }, ct);
+        }
+        
+        private void StopDetectionPolling()
+        {
+            try
+            {
+                _detectionPollCts?.Cancel();
+                _detectionPollCts?.Dispose();
+            }
+            catch { }
+            _detectionPollCts = null;
+            _currentDetections = new List<DetectionBox>();
+        }
+        
+        /// <summary>
+        /// Get the overlay color for a detection class label.
+        /// </summary>
+        private static Color GetDetectionOverlayColor(string label)
+        {
+            if (string.IsNullOrEmpty(label)) return Color.White;
+            string lower = label.ToLowerInvariant();
+            if (lower.Contains("red")) return Color.FromArgb(255, 60, 60);
+            if (lower.Contains("blue")) return Color.FromArgb(60, 120, 255);
+            if (lower.Contains("green")) return Color.FromArgb(60, 220, 60);
+            if (lower.Contains("yellow")) return Color.FromArgb(255, 230, 50);
+            if (lower.Contains("black")) return Color.FromArgb(160, 160, 160);
+            if (lower.Contains("white")) return Color.FromArgb(255, 255, 255);
+            return Color.FromArgb(220, 120, 255);
+        }
+        
+        /// <summary>
+        /// Draw detection bounding boxes and labels onto a bitmap.
+        /// </summary>
+        private void DrawDetectionOverlay(Bitmap bmp)
+        {
+            // Take a snapshot reference (volatile read is safe for reference types)
+            var detections = _currentDetections;
+            if (detections == null || detections.Count == 0) return;
+            
+            int w = bmp.Width;
+            int h = bmp.Height;
+            
+            // Lazy-init cached fonts
+            if (_overlayFont == null)
+                _overlayFont = new Font("Segoe UI", 9, FontStyle.Bold);
+            if (_overlayBadgeFont == null)
+                _overlayBadgeFont = new Font("Segoe UI", 8, FontStyle.Bold);
+            
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+                
+                foreach (var det in detections)
+                {
+                    // Convert normalized coords to pixel coords
+                    float px = det.NormX * w;
+                    float py = det.NormY * h;
+                    float pw = det.NormW * w;
+                    float ph = det.NormH * h;
+                    
+                    // Skip invalid boxes
+                    if (pw < 2 || ph < 2) continue;
+                    
+                    var color = GetDetectionOverlayColor(det.Label);
+                    
+                    // Draw bounding box
+                    using (var pen = new Pen(color, 2.0f))
+                    {
+                        g.DrawRectangle(pen, px, py, pw, ph);
+                    }
+                    
+                    // Draw label background + text
+                    string labelText = $"{det.Label} {det.Confidence:P0}";
+                    var textSize = g.MeasureString(labelText, _overlayFont);
+                    float labelY = py - textSize.Height - 2;
+                    if (labelY < 0) labelY = py + ph + 2;
+                    
+                    // Semi-transparent background
+                    using (var bgBrush = new SolidBrush(Color.FromArgb(180, 0, 0, 0)))
+                    {
+                        g.FillRectangle(bgBrush, px, labelY, textSize.Width + 4, textSize.Height);
+                    }
+                    
+                    using (var textBrush = new SolidBrush(color))
+                    {
+                        g.DrawString(labelText, _overlayFont, textBrush, px + 2, labelY);
+                    }
+                }
+                
+                // Draw detection count badge in top-right corner
+                string badge = $"{detections.Count} detections";
+                using (var bgBrush = new SolidBrush(Color.FromArgb(160, 0, 0, 0)))
+                using (var textBrush = new SolidBrush(Color.FromArgb(255, 180, 60)))
+                {
+                    var textSize = g.MeasureString(badge, _overlayBadgeFont);
+                    float bx = w - textSize.Width - 8;
+                    float by = 4;
+                    g.FillRectangle(bgBrush, bx - 2, by, textSize.Width + 6, textSize.Height + 2);
+                    g.DrawString(badge, _overlayBadgeFont, textBrush, bx, by + 1);
+                }
+            }
         }
     }
 }

@@ -133,6 +133,11 @@ class DetectedObject:
     width: float = 0.0
     height: float = 0.0
     depth: float = 0.0
+    # 2D bounding box in pixel coordinates (from ZED image plane)
+    bbox_x: float = 0.0   # top-left x
+    bbox_y: float = 0.0   # top-left y
+    bbox_w: float = 0.0   # width in pixels
+    bbox_h: float = 0.0   # height in pixels
     # Tracking state: 0=OFF, 1=OK, 2=SEARCHING, 3=TERMINATE
     tracking_state: int = 0
 
@@ -544,6 +549,23 @@ class ROSHTTPBridge(Node):
                 if not (math.isfinite(pos_x) and math.isfinite(pos_y) and math.isfinite(pos_z)):
                     continue
                 
+                # Extract 2D bounding box from ZED corners
+                # bounding_box_2d has 4 KeyPoint2Df: TL, TR, BR, BL
+                bbox_x = 0.0
+                bbox_y = 0.0
+                bbox_w = 0.0
+                bbox_h = 0.0
+                if hasattr(obj, 'bounding_box_2d') and len(obj.bounding_box_2d) >= 4:
+                    corners = obj.bounding_box_2d
+                    # Use min/max over all 4 corners for robustness
+                    xs = [c.kp[0] for c in corners if hasattr(c, 'kp')]
+                    ys = [c.kp[1] for c in corners if hasattr(c, 'kp')]
+                    if xs and ys:
+                        bbox_x = min(xs)
+                        bbox_y = min(ys)
+                        bbox_w = max(xs) - bbox_x
+                        bbox_h = max(ys) - bbox_y
+                
                 det = DetectedObject(
                     timestamp=time.time(),
                     label=obj.label,
@@ -555,6 +577,10 @@ class ROSHTTPBridge(Node):
                     width=obj.dimensions_3d[0] if len(obj.dimensions_3d) >= 3 else 0.0,
                     height=obj.dimensions_3d[1] if len(obj.dimensions_3d) >= 3 else 0.0,
                     depth=obj.dimensions_3d[2] if len(obj.dimensions_3d) >= 3 else 0.0,
+                    bbox_x=bbox_x,
+                    bbox_y=bbox_y,
+                    bbox_w=bbox_w,
+                    bbox_h=bbox_h,
                     tracking_state=obj.tracking_state,
                 )
                 detections.append(det)
