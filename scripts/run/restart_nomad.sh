@@ -5,12 +5,14 @@
 
 echo "Stopping all NOMAD services..."
 
-# Stop systemd service first (mask prevents Restart=always from respawning)
+# Stop systemd service first if we have sudo
 if systemctl is-active --quiet nomad 2>/dev/null; then
-    echo "  Masking and stopping systemd nomad.service..."
-    sudo systemctl mask nomad 2>/dev/null || true
-    sudo systemctl stop nomad 2>/dev/null || true
-    sleep 2
+    if sudo -n systemctl stop nomad 2>/dev/null; then
+        echo "  Stopped systemd nomad.service"
+        sleep 2
+    else
+        echo "  [WARN] Cannot stop systemd service (no sudo). Duplicates may occur."
+    fi
 fi
 
 # Kill all NOMAD processes

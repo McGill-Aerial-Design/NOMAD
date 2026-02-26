@@ -162,19 +162,36 @@ start_mediamtx() {
 start_edge_core() {
     log_info "Starting Edge Core API..."
     
-    # Stop systemd-managed instance first (Restart=always would respawn pkilled processes)
-    # Use mask to prevent systemd from restarting the service during manual run
-    if systemctl is-active --quiet nomad 2>/dev/null; then
-        log_info "Masking and stopping systemd nomad.service to prevent duplicates..."
-        sudo systemctl mask nomad 2>/dev/null || true
-        sudo systemctl stop nomad 2>/dev/null || true
-        sleep 2
-    elif systemctl is-enabled --quiet nomad 2>/dev/null; then
-        log_info "Masking systemd nomad.service to prevent auto-start..."
-        sudo systemctl mask nomad 2>/dev/null || true
+    # Check if systemd service is available and we have sudo access
+    local use_systemd=false
+    if systemctl list-unit-files nomad.service > /dev/null 2>&1; then
+        # Test if we can restart via systemd (requires sudo)
+        if sudo -n systemctl restart nomad 2>/dev/null; then
+            use_systemd=true
+            log_info "Restarted Edge Core via systemd (nomad.service)"
+        fi
     fi
     
-    # Kill any remaining edge_core processes (manual starts, orphans)
+    if [ "$use_systemd" = true ]; then
+        # Wait for systemd-managed Edge Core to be ready
+        log_info "Waiting for Edge Core API to be ready (systemd)..."
+        for i in {1..30}; do
+            if curl -s http://localhost:$API_PORT/health > /dev/null; then
+                local svc_pid=$(systemctl show nomad --property=MainPID --value 2>/dev/null)
+                log_ok "Edge Core running via systemd at http://localhost:$API_PORT (PID: $svc_pid)"
+                return 0
+            fi
+            sleep 1
+        done
+        log_fail "Edge Core (systemd) failed to start!"
+        sudo -n journalctl -u nomad -n 20 --no-pager 2>/dev/null || true
+        return 1
+    fi
+    
+    # Fallback: manual start (no sudo / no systemd service installed)
+    log_info "Using manual Edge Core start (no sudo for systemd)..."
+    
+    # Kill any existing edge_core processes
     pkill -f "edge_core.main" 2>/dev/null || true
     sleep 2
     
@@ -183,6 +200,14 @@ start_edge_core() {
         log_warn "Edge Core still running after kill, sending SIGKILL..."
         pkill -9 -f "edge_core.main" 2>/dev/null || true
         sleep 1
+    fi
+    
+    # Check if systemd will respawn (port conflict)
+    if pgrep -f "edge_core.main" > /dev/null 2>&1; then
+        log_fail "Cannot stop existing Edge Core (likely systemd Restart=always)."
+        log_fail "Ask admin to run: sudo systemctl stop nomad && sudo systemctl disable nomad"
+        log_fail "Or grant passwordless sudo: echo 'mad ALL=(ALL) NOPASSWD: /usr/bin/systemctl' | sudo tee /etc/sudoers.d/nomad"
+        return 1
     fi
     
     cd $NOMAD_DIR
@@ -420,7 +445,7 @@ cleanup() {
     echo ""
     log_info "Shutting down NOMAD services..."
     
-    # Stop Edge Core API
+    # Stop Edge Core API (manual instance)
     pkill -f "edge_core.main" 2>/dev/null || true
     
     # Stop video bridge inside Docker container
@@ -431,9 +456,6 @@ cleanup() {
     
     # Stop MAVLink router
     pkill -f "mavlink-routerd" 2>/dev/null || true
-    
-    # Unmask systemd service so it can auto-start on next boot
-    sudo systemctl unmask nomad 2>/dev/null || true
     
     log_ok "All services stopped"
     echo "Goodbye!"
