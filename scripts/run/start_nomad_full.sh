@@ -17,7 +17,9 @@
 # API URL: http://<JETSON_IP>:8000
 # =============================================================================
 
-set -e
+# Do NOT use set -e -- individual service failures should not silently kill
+# the entire startup. Each function handles its own errors and logs them.
+# set -e  (intentionally disabled)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NOMAD_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
@@ -159,8 +161,24 @@ start_mediamtx() {
 
 start_edge_core() {
     log_info "Starting Edge Core API..."
+    
+    # Stop systemd-managed instance first (Restart=always would respawn pkilled processes)
+    if systemctl is-active --quiet nomad 2>/dev/null; then
+        log_info "Stopping systemd nomad.service to avoid duplicate processes..."
+        sudo systemctl stop nomad 2>/dev/null || true
+        sleep 1
+    fi
+    
+    # Kill any remaining edge_core processes (manual starts, orphans)
     pkill -f "edge_core.main" 2>/dev/null || true
-    sleep 1
+    sleep 2
+    
+    # Verify no edge_core is still running
+    if pgrep -f "edge_core.main" > /dev/null 2>&1; then
+        log_warn "Edge Core still running after kill, sending SIGKILL..."
+        pkill -9 -f "edge_core.main" 2>/dev/null || true
+        sleep 1
+    fi
     
     cd $NOMAD_DIR
     # Use HOME environment variable for user-agnostic Python local bin path
@@ -362,6 +380,7 @@ except: pass
 # -----------------------------------------------------------------------------
 
 main() {
+    local failures=0
     check_prerequisites
     
     # NOTE: All task branches currently start the same set of services.
@@ -369,36 +388,23 @@ main() {
     #   task1: skip Isaac ROS / VIO (GPS-only)
     #   task2: skip MAVLink GPS forwarding, enable VIO-only mode
     # Keeping the branches separate now to make that refactor straightforward.
-    case "$TASK_MODE" in
-        task1)
-            log_info "Starting Task 1 (GPS-based) services..."
-            start_mavlink_router
-            start_mediamtx
-            start_edge_core
-            start_isaac_ros
-            start_video_bridge
-            ;;
-        task2)
-            log_info "Starting Task 2 (VIO-based) services..."
-            start_mavlink_router
-            start_mediamtx
-            start_edge_core
-            start_isaac_ros
-            start_video_bridge
-            ;;
-        all|*)
-            log_info "Starting all services (Isaac ROS + Dynamic Video)..."
-            start_mavlink_router
-            start_mediamtx
-            start_edge_core
-            start_isaac_ros
-            start_video_bridge
-            ;;
-    esac
+    
+    log_info "Starting services for mode: $TASK_MODE"
+    
+    start_mavlink_router || { log_fail "MAVLink Router failed to start"; failures=$((failures + 1)); }
+    start_mediamtx || { log_fail "MediaMTX failed to start"; failures=$((failures + 1)); }
+    start_edge_core || { log_fail "Edge Core failed to start"; failures=$((failures + 1)); }
+    start_isaac_ros || { log_warn "Isaac ROS failed to start (may not be needed)"; }
+    start_video_bridge || { log_fail "Video Bridge failed to start"; failures=$((failures + 1)); }
     
     print_status
     
-    log_ok "NOMAD startup complete!"
+    if [ $failures -gt 0 ]; then
+        log_warn "NOMAD startup completed with $failures service failure(s)"
+        echo "Check logs in $LOG_DIR for details"
+    else
+        log_ok "NOMAD startup complete!"
+    fi
     echo ""
     echo "Press Ctrl+C to stop all services"
     echo ""
