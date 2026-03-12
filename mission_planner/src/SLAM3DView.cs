@@ -62,7 +62,7 @@ namespace NOMAD.MissionPlanner
         public string FrameId { get; set; }
         [JsonProperty("clear")]
         public bool Clear { get; set; }
-        // Per-voxel mode (mode == "voxels")
+        // Per-voxel mode (mode == "voxel")
         [JsonProperty("voxels")]
         public List<VoxelModel> Voxels { get; set; }
         [JsonProperty("voxel_size")]
@@ -933,7 +933,7 @@ namespace NOMAD.MissionPlanner
                     _lastUpdateTime = DateTime.Now;
                     if (meshData != null)
                         _totalBlocks = meshData.TotalBlocks > 0 ? meshData.TotalBlocks : meshData.TotalVoxels;
-                    string mode = meshData?.Mode == "voxels" ? "voxels" : "blocks";
+                    string mode = (meshData?.Mode == "voxel" || meshData?.Mode == "voxels") ? "voxels" : "blocks";
                     UpdateStatusSafe($"Status: Connected (30Hz) | Updates: {_meshUpdateCount}");
                     UpdateStatsSafe($"Mesh: {_totalBlocks:N0} {mode} ({_persistedBlocks.Count:N0} cached)");
                 }));
@@ -973,7 +973,7 @@ namespace NOMAD.MissionPlanner
                 }
 
                 // Route to the appropriate renderer based on mode
-                if (meshData?.Mode == "voxels" && meshData.Voxels != null && meshData.Voxels.Count > 0)
+                if ((meshData?.Mode == "voxel" || meshData?.Mode == "voxels") && meshData.Voxels != null && meshData.Voxels.Count > 0)
                 {
                     UpdateMeshVisualVoxels(meshData);
                 }
