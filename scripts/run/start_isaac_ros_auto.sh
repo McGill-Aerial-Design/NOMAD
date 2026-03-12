@@ -294,14 +294,22 @@ if [ -f "$NOMAD_CFG" ] && [ -f "$NVBLOX_BASE" ]; then
 else
     echo "NOMAD config or nvblox base not found, using defaults"
 fi
-ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2
+# Use custom NOMAD launch file with YOLO object detection enabled
+NOMAD_LAUNCH=/workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py
+if [ -f "$NOMAD_LAUNCH" ]; then
+    echo "Launching with NOMAD custom OD launch file"
+    ros2 launch "$NOMAD_LAUNCH"
+else
+    echo "NOMAD launch file not found, falling back to stock launch (no OD)"
+    ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2
+fi
 LAUNCH_SCRIPT
         docker exec "$CONTAINER_NAME" chmod +x /tmp/launch_zed_nvblox.sh
 
         docker exec -d "$CONTAINER_NAME" bash -c \
             "bash /tmp/launch_zed_nvblox.sh > /tmp/zed_nvblox.log 2>&1 & echo \$! > /tmp/zed_nvblox.pid"
 
-        log_info "ZED + nvblox launched (logs: /tmp/zed_nvblox.log inside container)"
+        log_info "ZED + nvblox + OD launched (logs: /tmp/zed_nvblox.log inside container)"
     else
         log_warn "nvblox not available -- launching ZED wrapper only"
         launch_zed_only
@@ -327,6 +335,34 @@ LAUNCH_SCRIPT
         "bash /tmp/launch_zed_only.sh > /tmp/zed_nvblox.log 2>&1 & echo \$! > /tmp/zed_nvblox.pid"
 
     log_info "ZED wrapper launched (logs: /tmp/zed_nvblox.log inside container)"
+}
+
+# =========================================================================
+# Video Bridge (subscribes to ROS image topics, pushes H264 to MediaMTX)
+# =========================================================================
+launch_video_bridge() {
+    log_info "Launching video bridge..."
+
+    # Kill any existing video bridge to prevent duplicates
+    docker exec "$CONTAINER_NAME" bash -c 'pkill -f simple_video_bridge.py 2>/dev/null || true; sleep 1'
+
+    docker exec -i "$CONTAINER_NAME" tee /tmp/launch_video_bridge.sh > /dev/null << 'VIDEO_SCRIPT'
+#!/bin/bash
+source /opt/ros/humble/setup.bash 2>/dev/null
+source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
+export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH
+sleep 8  # Wait for ZED image topics to be publishing
+python3 /workspaces/isaac_ros-dev/edge_core/ros/simple_video_bridge.py \
+    --source-topic /zed/zed_node/rgb/image_rect_color \
+    --width 1280 --height 720 --fps 30 --bitrate 2000 \
+    --http-port 9200
+VIDEO_SCRIPT
+    docker exec "$CONTAINER_NAME" chmod +x /tmp/launch_video_bridge.sh
+
+    docker exec -d "$CONTAINER_NAME" bash -c \
+        "nohup /tmp/launch_video_bridge.sh > /tmp/video_bridge.log 2>&1 & echo \$! > /tmp/video_bridge.pid"
+
+    log_info "Video bridge launched (logs: /tmp/video_bridge.log inside container)"
 }
 
 # =========================================================================
@@ -433,6 +469,7 @@ case "${1:-start}" in
         [ "$ZED_READY" = false ] && log_warn "ZED topics not detected after 30s, continuing..."
 
         launch_ros_http_bridge
+        launch_video_bridge
         log_info "Isaac ROS startup complete!"
         show_status
         ;;

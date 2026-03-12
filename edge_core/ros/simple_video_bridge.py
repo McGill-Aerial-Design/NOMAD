@@ -287,6 +287,8 @@ class VideoStreamNode(Node):
         'green': (0, 200, 0),
         'yellow': (0, 255, 255),
         'orange': (0, 165, 255),
+        'white': (255, 255, 255),
+        'black': (80, 80, 80),
     }
     _DEFAULT_COLOR = (0, 255, 0)  # Green fallback
     
