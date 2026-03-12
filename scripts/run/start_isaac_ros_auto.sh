@@ -379,7 +379,9 @@ launch_ros_http_bridge() {
 #!/bin/bash
 source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
-sleep 5
+# Wait for ZED node to fully start and DDS discovery to complete
+# (ZED + nvblox take ~20-30s to init)
+sleep 30
 python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 10 --vio-topic /zed/zed_node/odom
 BRIDGE_SCRIPT
     docker exec "$CONTAINER_NAME" chmod +x /tmp/launch_bridge.sh
