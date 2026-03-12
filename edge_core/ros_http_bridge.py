@@ -811,9 +811,11 @@ class ROSHTTPBridge(Node):
                 self._mesh_send_count += 1
                 self._last_mesh_send_time = time.time()
                 if self._mesh_send_count % 10 == 1:
+                    count = mesh_data.get('total_voxels', mesh_data.get('total_blocks', 0))
+                    unit = "voxels" if mesh_data.get('mode') == 'voxel' else "blocks"
                     self.get_logger().info(
-                        f"Mesh sent: {mesh_data.get('total_blocks', 0)} blocks "
-                        f"(mode={mesh_data.get('mode', 'blocks')})"
+                        f"Mesh sent: {count} {unit} "
+                        f"(mode={mesh_data.get('mode', 'block')})"
                     )
             else:
                 self._send_errors += 1
