@@ -106,10 +106,6 @@ nav_controller: NavController | None = None
 # Isaac ROS bridge (Task 2 only - requires ROS2 environment)
 isaac_bridge: "IsaacROSBridge | None" = None
 
-# ROS mesh bridge for nvblox 3D visualization (not auto-started; mesh data
-# is received via ros_http_bridge endpoints in api.py)
-mesh_bridge = None
-
 # Servo controller for camera tilt and water shooter
 servo_controller_initialized: bool = False
 

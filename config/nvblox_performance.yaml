@@ -2,7 +2,7 @@
 # NOMAD nvblox 3D LOW-LATENCY Configuration
 # 
 # Optimized for SPEED + 3D on Jetson Orin Nano (8GB shared RAM)
-# 10cm voxels, 8m radius to stay within GPU memory budget
+# 15cm voxels, 8m radius to stay within GPU memory budget
 # ==============================================================
 
 /**:

@@ -41,12 +41,18 @@ namespace NOMAD.MissionPlanner
         private ComboBox _cmbTopic;
         private Form _fullscreenForm;
         private PictureBox _fullscreenBox;
-        private MPBitmap _lastFrame;
+        private Bitmap _lastFrame;
         private List<(string Name, string Display)> _topics = new List<(string, string)>();
         
         // Detection overlay (server-side toggle via API)
         private CheckBox _chkDetections;
         private bool _overlayEnabled;
+        
+        // Stream lifecycle serialization - prevents overlapping native GStreamer teardown/startup
+        private readonly SemaphoreSlim _lifecycleLock = new SemaphoreSlim(1, 1);
+        private int _streamGeneration;
+        private volatile bool _stopping;
+        private bool _suppressTopicChange;
         
         /// <summary>
         /// Creates an embedded video player.
@@ -176,10 +182,7 @@ namespace NOMAD.MissionPlanner
                 {
                     if (_isPlaying)
                     {
-                        StopStream();
-                        // Wait for GStreamer to fully release native resources
-                        await System.Threading.Tasks.Task.Delay(500);
-                        StartStream();
+                        await RestartStreamAsync();
                         _lblStatus.Text = $"Latency: {_latencyMs}ms ({(_latencyMs <= 100 ? "low-latency" : "smooth")})";
                         _lblStatus.ForeColor = Color.Cyan;
                     }
@@ -252,11 +255,19 @@ namespace NOMAD.MissionPlanner
         
         private void PopulateTopics()
         {
-            _cmbTopic.Items.Clear();
-            foreach (var (_, display) in _topics)
-                _cmbTopic.Items.Add(display);
-            if (_cmbTopic.Items.Count > 0)
-                _cmbTopic.SelectedIndex = 0;
+            _suppressTopicChange = true;
+            try
+            {
+                _cmbTopic.Items.Clear();
+                foreach (var (_, display) in _topics)
+                    _cmbTopic.Items.Add(display);
+                if (_cmbTopic.Items.Count > 0)
+                    _cmbTopic.SelectedIndex = 0;
+            }
+            finally
+            {
+                _suppressTopicChange = false;
+            }
         }
         
         private async System.Threading.Tasks.Task RefreshTopicsAsync(bool autoSelectRgb = false)
@@ -298,7 +309,9 @@ namespace NOMAD.MissionPlanner
                     
                     if (rgbIndex >= 0)
                     {
+                        _suppressTopicChange = true;
                         _cmbTopic.SelectedIndex = rgbIndex;
+                        _suppressTopicChange = false;
                         // Switch to the RGB topic on the server
                         await SwitchTopicAsync();
                     }
@@ -313,6 +326,7 @@ namespace NOMAD.MissionPlanner
         
         private async System.Threading.Tasks.Task SwitchTopicAsync()
         {
+            if (_suppressTopicChange) return;
             if (_cmbTopic.SelectedIndex < 0 || _cmbTopic.SelectedIndex >= _topics.Count) return;
             
             var (name, display) = _topics[_cmbTopic.SelectedIndex];
@@ -321,6 +335,15 @@ namespace NOMAD.MissionPlanner
             
             try
             {
+                var wasPlaying = _isPlaying;
+                
+                // Stop client stream FIRST to prevent GStreamer from crashing
+                // when the server restarts its RTSP pipeline during the topic switch.
+                // Without this, GStreamer's ThreadStart tries to read caps from a
+                // dying RTSP connection and hits AccessViolationException.
+                if (wasPlaying)
+                    StopStream();
+                
                 var resp = await JetsonApiService.ApiClient.PostAsync($"{_apiBaseUrl}/api/video/source?topic={Uri.EscapeDataString(name)}", null);
                 if (!resp.IsSuccessStatusCode)
                 {
@@ -329,12 +352,10 @@ namespace NOMAD.MissionPlanner
                     return;
                 }
                 
-                // Brief delay then restart stream to pick up new topic
-                await System.Threading.Tasks.Task.Delay(300);
-                if (_isPlaying)
+                // Wait for server pipeline to fully restart before reconnecting
+                await System.Threading.Tasks.Task.Delay(500);
+                if (wasPlaying && !IsDisposed)
                 {
-                    StopStream();
-                    await System.Threading.Tasks.Task.Delay(200);
                     StartStream();
                 }
                 
@@ -396,6 +417,27 @@ namespace NOMAD.MissionPlanner
                    $"appsink name=outsink sync={syncVal}";
         }
         
+        /// <summary>
+        /// Serialized stop-then-start that prevents overlapping native GStreamer teardown/startup.
+        /// All restart paths (latency change, topic switch) must use this method.
+        /// </summary>
+        private async System.Threading.Tasks.Task RestartStreamAsync()
+        {
+            await _lifecycleLock.WaitAsync();
+            try
+            {
+                StopStream();
+                // Wait for GStreamer native thread to fully exit before restarting
+                await System.Threading.Tasks.Task.Delay(500);
+                if (!IsDisposed)
+                    StartStream();
+            }
+            finally
+            {
+                _lifecycleLock.Release();
+            }
+        }
+        
         public void StartStream()
         {
             if (_isPlaying) return;
@@ -407,17 +449,23 @@ namespace NOMAD.MissionPlanner
                 return;
             }
             
+            GStreamer gst = null;
             try
             {
+                _stopping = false;
+                _streamGeneration++;
+                
                 System.Diagnostics.Debug.WriteLine($"NOMAD Video: Starting stream to {_streamUrl}");
-                _gst = new GStreamer();
-                _gst.OnNewImage += OnGstNewImage;
+                gst = new GStreamer();
+                gst.OnNewImage += OnGstNewImage;
                 
                 var pipeline = BuildGStreamerPipeline();
                 System.Diagnostics.Debug.WriteLine($"NOMAD Video: Pipeline: {pipeline}");
                 
-                _gst.Start(pipeline);
+                gst.Start(pipeline);
+                _gst = gst;
                 _isPlaying = true;
+                gst = null; // Ownership transferred to _gst
                 _lblStatus.Text = "Connecting...";
                 _lblStatus.ForeColor = Color.Yellow;
             }
@@ -427,31 +475,48 @@ namespace NOMAD.MissionPlanner
                 _lblStatus.Text = $"Error: {ex.Message}";
                 _lblStatus.ForeColor = Color.Red;
             }
+            finally
+            {
+                // Clean up partially-started instance on failure
+                if (gst != null)
+                {
+                    try { gst.OnNewImage -= OnGstNewImage; } catch { }
+                    try { gst.Stop(); } catch { }
+                    try { (gst as IDisposable)?.Dispose(); } catch { }
+                }
+            }
         }
         
         public void StopStream()
         {
             if (!_isPlaying && _gst == null) return;
             
+            _stopping = true;
+            _streamGeneration++; // Invalidate all pending frame callbacks
+            
+            // Capture and clear reference to prevent double-stop on the same instance
+            var gst = _gst;
+            _gst = null;
+            _isPlaying = false;
+            
             try
             {
-                if (_gst != null)
+                if (gst != null)
                 {
-                    // Unhook event first to prevent callbacks during shutdown
-                    try { _gst.OnNewImage -= OnGstNewImage; } catch { }
+                    // Unhook event first to prevent new callbacks during shutdown
+                    try { gst.OnNewImage -= OnGstNewImage; } catch { }
                     
                     // Stop GStreamer pipeline
-                    try { _gst.Stop(); } catch { }
+                    try { gst.Stop(); } catch { }
                     
-                    // Give GStreamer time to release resources
-                    System.Threading.Thread.Sleep(100);
+                    // Give GStreamer native thread time to fully exit
+                    System.Threading.Thread.Sleep(300);
                     
-                    _gst = null;
+                    // Dispose if supported to release native resources deterministically
+                    try { (gst as IDisposable)?.Dispose(); } catch { }
                 }
             }
             catch { }
-            
-            _isPlaying = false;
 
             // Clear video display to prevent painting stale/freed frame data
             try
@@ -475,57 +540,35 @@ namespace NOMAD.MissionPlanner
         private int _frameCount = 0;
         
         /// <summary>
-        /// GStreamer frame callback - invoked on background thread.
-        /// Uses MPBitmap.LockBits() to access raw pixel data directly (PROVEN WORKING from commit 39f9f48).
+        /// GStreamer frame callback - invoked on GStreamer's background thread.
+        /// Copies pixel data into a managed Bitmap on THIS thread (while native buffer is valid),
+        /// then marshals only the managed copy to UI thread via BeginInvoke.
+        /// This prevents use-after-free when the native frame buffer is recycled or freed.
         /// </summary>
         private void OnGstNewImage(object sender, MPBitmap frame)
         {
-            if (frame == null)
-            {
-                System.Diagnostics.Debug.WriteLine("NOMAD Video: Received null frame");
-                return;
-            }
+            if (frame == null || frame.Width <= 0 || frame.Height <= 0) return;
+            if (_stopping) return;
             
-            if (frame.Width <= 0 || frame.Height <= 0)
-            {
-                System.Diagnostics.Debug.WriteLine($"NOMAD Video: Invalid frame: {frame.Width}x{frame.Height}");
-                return;
-            }
-            
+            var generation = _streamGeneration;
             _frameCount++;
             if (_frameCount % 30 == 1)
                 System.Diagnostics.Debug.WriteLine($"NOMAD Video: Frame #{_frameCount} - {frame.Width}x{frame.Height}");
             
-            // Marshal to UI thread
-            if (InvokeRequired)
-            {
-                BeginInvoke(new Action(() => OnGstNewImage(sender, frame)));
-                return;
-            }
-            
-            if (IsDisposed || _videoBox == null) return;
-            
+            // Copy pixel data on the GStreamer callback thread while the native buffer is valid.
+            // We MUST NOT defer this to BeginInvoke because GStreamer may free the buffer
+            // after this callback returns, causing AccessViolationException.
+            Bitmap displayBitmap;
             try
             {
-                // Copy pixel data into a managed Bitmap.
-                // We MUST NOT wrap frame.LockBits().Scan0 directly because
-                // GStreamer can free that buffer when the pipeline stops,
-                // causing an AccessViolationException in PictureBox.OnPaint.
                 var lockData = frame.LockBits(Rectangle.Empty, null, SkiaSharp.SKColorType.Bgra8888);
-                var displayBitmap = new Bitmap(
-                    frame.Width,
-                    frame.Height,
-                    PixelFormat.Format32bppPArgb);
-                
+                displayBitmap = new Bitmap(frame.Width, frame.Height, PixelFormat.Format32bppPArgb);
                 var bmpData = displayBitmap.LockBits(
                     new Rectangle(0, 0, frame.Width, frame.Height),
                     System.Drawing.Imaging.ImageLockMode.WriteOnly,
                     PixelFormat.Format32bppPArgb);
-                
                 try
                 {
-                    // Source stride: BGRA8888 = 4 bytes per pixel, no padding
-                    // (MPBitmap.LockBits with SKColorType.Bgra8888 gives tightly packed rows)
                     var srcStride = 4 * frame.Width;
                     var dstStride = bmpData.Stride;
                     var rowBytes = Math.Min(srcStride, dstStride);
@@ -543,16 +586,43 @@ namespace NOMAD.MissionPlanner
                 {
                     displayBitmap.UnlockBits(bmpData);
                 }
-                
-                // Update video display
+            }
+            catch
+            {
+                return; // Frame became invalid during copy - pipeline likely tearing down
+            }
+            
+            var width = frame.Width;
+            var height = frame.Height;
+            
+            // Marshal only the fully-managed bitmap to the UI thread
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => UpdateVideoDisplay(displayBitmap, width, height, generation)));
+                return;
+            }
+            
+            UpdateVideoDisplay(displayBitmap, width, height, generation);
+        }
+        
+        /// <summary>
+        /// Updates PictureBox and fullscreen with a managed bitmap. Called on UI thread only.
+        /// Rejects stale frames from previous stream sessions via generation check.
+        /// </summary>
+        private void UpdateVideoDisplay(Bitmap displayBitmap, int width, int height, int generation)
+        {
+            if (IsDisposed || _videoBox == null || generation != _streamGeneration || _stopping)
+            {
+                displayBitmap.Dispose();
+                return;
+            }
+            
+            try
+            {
                 var oldImage = _videoBox.Image;
-                
-                // Detection overlay is rendered server-side (burned into RTSP stream)
-                
                 _videoBox.Image = displayBitmap;
                 oldImage?.Dispose();
                 
-                // Update fullscreen if active
                 if (_fullscreenBox != null && !_fullscreenBox.IsDisposed)
                 {
                     var oldFull = _fullscreenBox.Image;
@@ -560,15 +630,14 @@ namespace NOMAD.MissionPlanner
                     oldFull?.Dispose();
                 }
                 
-                // Store for snapshots
+                // Store managed copy for snapshots (not native frame)
                 var oldLastFrame = _lastFrame;
-                _lastFrame = (MPBitmap)frame.Clone();
+                _lastFrame = (Bitmap)displayBitmap.Clone();
                 oldLastFrame?.Dispose();
                 
-                // Update status periodically
                 if (_frameCount % 30 == 1)
                 {
-                    _lblStatus.Text = $"Streaming {frame.Width}x{frame.Height}";
+                    _lblStatus.Text = $"Streaming {width}x{height}";
                     _lblStatus.ForeColor = Color.LimeGreen;
                 }
             }
@@ -684,6 +753,7 @@ namespace NOMAD.MissionPlanner
                 }
                 StopStream();
                 _lastFrame?.Dispose();
+                _lifecycleLock.Dispose();
                 if (_fullscreenForm != null && !_fullscreenForm.IsDisposed)
                     _fullscreenForm.Close();
             }

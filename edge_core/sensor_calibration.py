@@ -762,6 +762,378 @@ def stop_mag_calibration() -> Optional[MagCalibrationResult]:
     return _mag_session.stop()
 
 
+# ==================== IMU Heading (6-Position) Calibration ====================
+
+# The 6 canonical orientations and the expected gravity axis for each.
+# (label, description, expected_accel_sign) where expected is the dominant axis.
+IMU_POSITIONS = [
+    ("front",  "Place camera lens pointing DOWN (front facing ground)", (0, 0, -1)),
+    ("back",   "Place camera lens pointing UP (front facing sky)",      (0, 0, +1)),
+    ("left",   "Place camera on its RIGHT side (left side facing up)",  (+1, 0, 0)),
+    ("right",  "Place camera on its LEFT side (right side facing up)",  (-1, 0, 0)),
+    ("up",     "Place camera upright (top facing up, normal position)", (0, -1, 0)),
+    ("down",   "Place camera upside-down (top facing ground)",          (0, +1, 0)),
+]
+
+
+@dataclass
+class IMUHeadingCalibrationResult:
+    """Result of 6-position IMU heading calibration."""
+    accel_bias: Tuple[float, float, float]    # (x, y, z) bias in m/s^2
+    accel_scale: Tuple[float, float, float]   # (x, y, z) scale factors
+    gyro_bias: Tuple[float, float, float]     # (x, y, z) gyro bias in rad/s
+    positions_collected: int
+    fitness: float          # 0-1, quality of fit
+    timestamp: str
+    duration_s: float
+
+    def to_dict(self) -> dict:
+        return {
+            "accel_bias": list(self.accel_bias),
+            "accel_scale": list(self.accel_scale),
+            "gyro_bias": list(self.gyro_bias),
+            "positions_collected": self.positions_collected,
+            "fitness": self.fitness,
+            "timestamp": self.timestamp,
+            "duration_s": self.duration_s,
+        }
+
+
+class IMUHeadingCalibration:
+    """
+    6-position IMU accelerometer calibration for heading accuracy.
+
+    The user places the camera in 6 orientations (front, back, left, right,
+    up, down) and collects data at each. This provides known gravity vectors
+    in all 6 axis-aligned directions, allowing computation of per-axis
+    accelerometer scale factors and biases.
+
+    These corrections improve the gravity-compensated acceleration and
+    attitude estimation, which directly improves heading accuracy.
+    """
+
+    def __init__(self, collect_duration: float = 3.0):
+        self._collect_duration = collect_duration
+        self._state = CalibrationState.IDLE
+        self._current_position = 0  # Index into IMU_POSITIONS
+        self._position_data: dict = {}  # position_label -> (accel_samples, gyro_samples)
+        self._start_time: Optional[float] = None
+        self._error: Optional[str] = None
+        self._result: Optional[IMUHeadingCalibrationResult] = None
+        self._lock = threading.RLock()
+        self._zed = None
+        self._owns_camera = False
+
+    @property
+    def state(self) -> CalibrationState:
+        return self._state
+
+    @property
+    def current_position(self) -> int:
+        return self._current_position
+
+    @property
+    def result(self) -> Optional[IMUHeadingCalibrationResult]:
+        return self._result
+
+    @property
+    def error(self) -> Optional[str]:
+        return self._error
+
+    def start(self, zed_camera=None) -> bool:
+        """Begin a new 6-position calibration session."""
+        with self._lock:
+            self._state = CalibrationState.COLLECTING
+            self._current_position = 0
+            self._position_data.clear()
+            self._result = None
+            self._error = None
+            self._start_time = time.time()
+
+            if zed_camera:
+                self._zed = zed_camera
+                self._owns_camera = False
+            else:
+                self._owns_camera = True
+                if not self._open_camera():
+                    self._state = CalibrationState.FAILED
+                    return False
+
+            logger.info("IMU heading calibration started (6-position)")
+            return True
+
+    def collect_position(self) -> dict:
+        """
+        Collect data for the current position.
+
+        Returns dict with success, position label, and sample count.
+        The camera must be held still in the instructed orientation.
+        """
+        if self._state != CalibrationState.COLLECTING:
+            return {"success": False, "error": "Not in collecting state"}
+
+        if self._current_position >= len(IMU_POSITIONS):
+            return {"success": False, "error": "All positions already collected"}
+
+        label, description, _ = IMU_POSITIONS[self._current_position]
+
+        try:
+            import pyzed.sl as sl
+
+            accel_samples = []
+            gyro_samples = []
+            sensors_data = sl.SensorsData()
+            start = time.time()
+
+            logger.info(f"Collecting position '{label}': {description}")
+
+            while time.time() - start < self._collect_duration:
+                if self._zed.get_sensors_data(sensors_data, sl.TIME_REFERENCE.CURRENT) == sl.ERROR_CODE.SUCCESS:
+                    imu = sensors_data.get_imu_data()
+
+                    accel = None
+                    try:
+                        accel = imu.get_linear_acceleration_uncalibrated()
+                    except AttributeError:
+                        pass
+                    if accel is None:
+                        accel = imu.get_linear_acceleration()
+
+                    gyro = imu.get_angular_velocity()
+
+                    if accel is not None:
+                        accel_samples.append((float(accel[0]), float(accel[1]), float(accel[2])))
+                    if gyro is not None:
+                        gyro_samples.append((float(gyro[0]), float(gyro[1]), float(gyro[2])))
+
+                time.sleep(0.01)
+
+            if len(accel_samples) < 50:
+                return {"success": False, "error": f"Too few samples: {len(accel_samples)}"}
+
+            self._position_data[label] = (accel_samples, gyro_samples)
+            self._current_position += 1
+
+            logger.info(f"Position '{label}' collected: {len(accel_samples)} accel, {len(gyro_samples)} gyro samples")
+
+            return {
+                "success": True,
+                "position": label,
+                "samples": len(accel_samples),
+                "positions_remaining": len(IMU_POSITIONS) - self._current_position,
+            }
+
+        except ImportError:
+            self._error = "ZED SDK not installed"
+            return {"success": False, "error": self._error}
+        except Exception as e:
+            self._error = str(e)
+            return {"success": False, "error": self._error}
+
+    def compute(self) -> Optional[IMUHeadingCalibrationResult]:
+        """Compute calibration from all collected positions."""
+        if len(self._position_data) < 6:
+            self._error = f"Need 6 positions, only have {len(self._position_data)}"
+            self._state = CalibrationState.FAILED
+            return None
+
+        self._state = CalibrationState.COMPUTING
+
+        try:
+            # Expected gravity at each position (9.81 * direction_sign)
+            GRAVITY = 9.80665
+            all_accel = []
+            all_expected = []
+            all_gyro = []
+
+            for i, (label, _, expected_sign) in enumerate(IMU_POSITIONS):
+                if label not in self._position_data:
+                    self._error = f"Missing position: {label}"
+                    self._state = CalibrationState.FAILED
+                    return None
+
+                accel_samples, gyro_samples = self._position_data[label]
+                accel_arr = np.array(accel_samples)
+                accel_mean = np.mean(accel_arr, axis=0)
+
+                expected = np.array(expected_sign, dtype=np.float64) * GRAVITY
+                all_accel.append(accel_mean)
+                all_expected.append(expected)
+
+                if gyro_samples:
+                    gyro_arr = np.array(gyro_samples)
+                    all_gyro.append(np.mean(gyro_arr, axis=0))
+
+            measured = np.array(all_accel)   # (6, 3)
+            expected = np.array(all_expected) # (6, 3)
+
+            # Per-axis least-squares: measured_i = scale_i * expected_i + bias_i
+            scale = np.ones(3)
+            bias = np.zeros(3)
+
+            for axis in range(3):
+                m = measured[:, axis]
+                e = expected[:, axis]
+                # Solve: m = scale * e + bias
+                A = np.column_stack([e, np.ones(6)])
+                params, _, _, _ = np.linalg.lstsq(A, m, rcond=None)
+                scale[axis] = params[0]
+                bias[axis] = params[1]
+
+            # Gyro bias: average of all positions (should read ~0 when stationary)
+            gyro_bias = np.mean(all_gyro, axis=0) if all_gyro else np.zeros(3)
+
+            # Fitness: how well calibrated readings match expected gravity
+            corrected = (measured - bias) / scale
+            errors = np.linalg.norm(corrected - expected, axis=1)
+            mean_error = np.mean(errors)
+            fitness = max(0.0, 1.0 - mean_error / GRAVITY)
+
+            duration = time.time() - self._start_time if self._start_time else 0.0
+
+            result = IMUHeadingCalibrationResult(
+                accel_bias=(round(float(bias[0]), 6), round(float(bias[1]), 6), round(float(bias[2]), 6)),
+                accel_scale=(round(float(scale[0]), 6), round(float(scale[1]), 6), round(float(scale[2]), 6)),
+                gyro_bias=(round(float(gyro_bias[0]), 6), round(float(gyro_bias[1]), 6), round(float(gyro_bias[2]), 6)),
+                positions_collected=len(self._position_data),
+                fitness=round(float(fitness), 4),
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                duration_s=round(duration, 1),
+            )
+
+            self._result = result
+            self._state = CalibrationState.COMPLETE
+            self._save_calibration(result)
+            logger.info(f"IMU heading calibration complete: fitness={result.fitness:.3f}")
+            return result
+
+        except Exception as e:
+            self._error = f"Computation error: {e}"
+            logger.error(self._error)
+            self._state = CalibrationState.FAILED
+            return None
+
+    def cancel(self):
+        """Cancel the calibration."""
+        if self._owns_camera and self._zed:
+            try:
+                self._zed.close()
+            except Exception:
+                pass
+            self._zed = None
+        self._state = CalibrationState.IDLE
+        self._position_data.clear()
+
+    def get_status(self) -> dict:
+        """Get current calibration status."""
+        positions_done = list(self._position_data.keys())
+        next_pos = None
+        next_instruction = None
+        if self._current_position < len(IMU_POSITIONS):
+            label, desc, _ = IMU_POSITIONS[self._current_position]
+            next_pos = label
+            next_instruction = desc
+
+        status = {
+            "state": self._state.value,
+            "current_step": self._current_position + 1,
+            "total_steps": len(IMU_POSITIONS),
+            "positions_done": positions_done,
+            "next_position": next_pos,
+            "next_instruction": next_instruction,
+        }
+        if self._start_time:
+            status["elapsed_s"] = round(time.time() - self._start_time, 1)
+        if self._error:
+            status["error"] = self._error
+        if self._result:
+            status["result"] = self._result.to_dict()
+        return status
+
+    def _open_camera(self) -> bool:
+        """Open ZED camera for sensor-only access."""
+        try:
+            import pyzed.sl as sl
+
+            self._zed = sl.Camera()
+            init_params = sl.InitParameters()
+            init_params.depth_mode = sl.DEPTH_MODE.NONE
+            init_params.camera_resolution = sl.RESOLUTION.VGA
+            init_params.camera_fps = 15
+
+            status = self._zed.open(init_params)
+            if status != sl.ERROR_CODE.SUCCESS:
+                self._error = f"Failed to open ZED camera: {status}"
+                return False
+
+            return True
+        except ImportError:
+            self._error = "ZED SDK (pyzed) not installed"
+            return False
+        except Exception as e:
+            self._error = f"Camera open error: {e}"
+            return False
+
+    def _save_calibration(self, result: IMUHeadingCalibrationResult):
+        """Save calibration to file."""
+        CALIBRATION_DIR.mkdir(parents=True, exist_ok=True)
+        cal_file = CALIBRATION_DIR / "imu_heading_cal.json"
+
+        cal_data = {
+            "type": "imu_heading",
+            "version": "1.0",
+            "camera": "ZED 2i",
+            **result.to_dict(),
+        }
+
+        with open(cal_file, "w") as f:
+            json.dump(cal_data, f, indent=2)
+
+        logger.info(f"IMU heading calibration saved to {cal_file}")
+
+
+def load_imu_heading_calibration() -> Optional[IMUHeadingCalibrationResult]:
+    """Load saved IMU heading calibration from disk."""
+    cal_file = CALIBRATION_DIR / "imu_heading_cal.json"
+    if not cal_file.exists():
+        return None
+
+    try:
+        with open(cal_file) as f:
+            data = json.load(f)
+        return IMUHeadingCalibrationResult(
+            accel_bias=tuple(data["accel_bias"]),
+            accel_scale=tuple(data["accel_scale"]),
+            gyro_bias=tuple(data["gyro_bias"]),
+            positions_collected=data["positions_collected"],
+            fitness=data["fitness"],
+            timestamp=data["timestamp"],
+            duration_s=data["duration_s"],
+        )
+    except Exception as e:
+        logger.error(f"Failed to load IMU heading calibration: {e}")
+        return None
+
+
+_imu_heading_session: Optional[IMUHeadingCalibration] = None
+
+
+def get_imu_heading_session() -> Optional[IMUHeadingCalibration]:
+    """Get the global IMU heading calibration session."""
+    global _imu_heading_session
+    return _imu_heading_session
+
+
+def start_imu_heading_calibration(zed_camera=None) -> IMUHeadingCalibration:
+    """Start a new 6-position IMU heading calibration session."""
+    global _imu_heading_session
+    _imu_heading_session = IMUHeadingCalibration()
+    success = _imu_heading_session.start(zed_camera)
+    if not success:
+        logger.error(f"Failed to start IMU heading calibration: {_imu_heading_session.error}")
+    return _imu_heading_session
+
+
 # ==================== CLI Entry Point ====================
 
 def main():

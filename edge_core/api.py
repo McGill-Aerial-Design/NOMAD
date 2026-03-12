@@ -8,6 +8,7 @@ Target: Python 3.13 | NVIDIA Jetson Orin Nano
 """
 
 import asyncio
+import hmac
 import json
 import logging
 import os
@@ -544,9 +545,21 @@ def create_app(state_manager: StateManager) -> FastAPI:
             raise HTTPException(status_code=504, detail="Ping timed out")
 
 
+    async def _validate_ws_token(websocket: WebSocket) -> bool:
+        """Validate API key token on WebSocket connect. Returns True if authorised."""
+        if _NOMAD_API_KEY is None:
+            return True
+        token = websocket.query_params.get("token", "")
+        if not hmac.compare_digest(token, _NOMAD_API_KEY):
+            await websocket.close(code=4003, reason="Unauthorized")
+            return False
+        return True
+
     @app.websocket("/ws/state")
     async def ws_state(websocket: WebSocket):
         """WebSocket endpoint for real-time state updates (10Hz)."""
+        if not await _validate_ws_token(websocket):
+            return
         await websocket.accept()
         try:
             while True:
@@ -577,6 +590,8 @@ def create_app(state_manager: StateManager) -> FastAPI:
 
         The client (SLAM3DView) connects once and receives a continuous stream.
         """
+        if not await _validate_ws_token(websocket):
+            return
         await websocket.accept()
         last_mesh_timestamp = None
         frame_count = 0
@@ -608,8 +623,9 @@ def create_app(state_manager: StateManager) -> FastAPI:
                             frame["pitch"] = da.get("pitch", 0)
                             frame["yaw"] = da.get("yaw", 0)
 
-                # For pose-only frames, use the ROS-frame VIO (same frame as mesh)
-                if not has_mesh:
+                # Fall back to ROS-frame VIO for pose (used for pose-only frames
+                # AND for mesh frames that lack drone_position)
+                if not has_pose:
                     ros_vio = websocket.app.state.slam_vio_ros_frame
                     if ros_vio:
                         frame["x"] = ros_vio.get("x", 0)
@@ -621,7 +637,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
                         has_pose = True
 
                 # Skip frames when no pose data available at all
-                if not has_pose:
+                if not has_pose and not has_mesh:
                     frame_count += 1
                     await asyncio.sleep(1.0 / 30)
                     continue
@@ -1779,8 +1795,8 @@ def create_app(state_manager: StateManager) -> FastAPI:
             # Run in background
             process = subprocess.Popen(
                 ["bash", script_path, "start"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
             
@@ -1889,11 +1905,13 @@ wait
                 capture_output=True, timeout=10, check=True,
             )
             # Run in background
-            subprocess.run(
+            result = subprocess.run(
                 ["docker", "exec", "-d", container, "bash", "-c",
                  "bash /tmp/launch_nvblox_bridge.sh > /tmp/zed_nvblox.log 2>&1"],
                 capture_output=True, timeout=10,
             )
+            if result.returncode != 0:
+                return {"success": False, "error": f"Launch failed: {result.stderr.decode()}"}
             return {
                 "success": True,
                 "message": "nvblox + ROS-HTTP bridge launching. ZED init takes ~15s.",
@@ -2478,9 +2496,33 @@ wait
         
         Posted by: ros_http_bridge.py (inside Isaac ROS container)
         """
+        # Size check -- reject payloads over 5 MB
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > 5 * 1024 * 1024:
+            return JSONResponse({"error": "Payload too large"}, status_code=413)
+
         try:
             mesh_data = await request.json()
-            
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+        # Validate required field: mode
+        mode = mesh_data.get("mode")
+        if mode not in ("block", "voxel"):
+            return JSONResponse({"error": "mode must be 'block' or 'voxel'"}, status_code=400)
+
+        # Validate required list for the chosen mode
+        if mode == "block" and not isinstance(mesh_data.get("blocks"), list):
+            return JSONResponse({"error": "blocks must be a list"}, status_code=400)
+        if mode == "voxel" and not isinstance(mesh_data.get("voxels"), list):
+            return JSONResponse({"error": "voxels must be a list"}, status_code=400)
+
+        # Validate optional numeric fields
+        for field in ("block_size", "voxel_size"):
+            if field in mesh_data and not isinstance(mesh_data[field], (int, float)):
+                return JSONResponse({"error": f"{field} must be a number"}, status_code=400)
+
+        try:
             # Store in app state
             if not hasattr(request.app.state, 'slam_mesh_data'):
                 request.app.state.slam_mesh_data = {}
@@ -2498,6 +2540,9 @@ wait
                 request.app.state.slam_mesh_data["drone_position"] = mesh_data["drone_position"]
             if "drone_attitude" in mesh_data and mesh_data["drone_attitude"]:
                 request.app.state.slam_mesh_data["drone_attitude"] = mesh_data["drone_attitude"]
+
+            # Increment version counter for delta tracking
+            request.app.state.slam_mesh_version = getattr(request.app.state, "slam_mesh_version", 0) + 1
             
             return {"status": "ok", "items_received": len(mesh_data.get("blocks", mesh_data.get("voxels", [])))}
             
@@ -2553,104 +2598,32 @@ wait
                 if stored.get("drone_attitude"):
                     result["drone_attitude"] = stored["drone_attitude"]
                 
-                # Fallback to external VIO state if mesh didn't include pose
+                # Fallback to ROS-frame VIO if mesh didn't include pose
+                # (must use slam_vio_ros_frame, not external_vio_state which is NED)
                 if "drone_position" not in result:
-                    external_vio = request.app.state.external_vio_state
-                    if external_vio:
+                    ros_vio = request.app.state.slam_vio_ros_frame
+                    if ros_vio:
                         result["drone_position"] = {
-                            "x": external_vio.get("x", 0),
-                            "y": external_vio.get("y", 0),
-                            "z": external_vio.get("z", 0),
+                            "x": ros_vio.get("x", 0),
+                            "y": ros_vio.get("y", 0),
+                            "z": ros_vio.get("z", 0),
                         }
                         result["drone_attitude"] = {
-                            "roll": external_vio.get("roll", 0),
-                            "pitch": external_vio.get("pitch", 0),
-                            "yaw": external_vio.get("yaw", 0),
+                            "roll": ros_vio.get("roll", 0),
+                            "pitch": ros_vio.get("pitch", 0),
+                            "yaw": ros_vio.get("yaw", 0),
                         }
                 
                 return result
             
-            # Fallback: try ros_mesh_bridge (for when running natively with ROS2)
-            try:
-                from .ros_mesh_bridge import get_mesh_bridge
-                
-                bridge = get_mesh_bridge()
-                if not bridge or not bridge.is_available():
-                    # Return empty mesh with error status
-                    return {
-                        "available": False,
-                        "error": "Mesh bridge not initialized or nvblox not running",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "mesh": None,
-                        "drone_position": None,
-                        "drone_attitude": None,
-                    }
-                
-                if format == "summary":
-                    summary = bridge.get_mesh_summary()
-                    if not summary:
-                        return {
-                            "available": True,
-                            "error": "No mesh data available yet",
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                        }
-                    
-                    # Add drone pose to summary
-                    external_vio = request.app.state.external_vio_state
-                    if external_vio:
-                        summary["drone_position"] = {
-                            "x": external_vio.get("x", 0),
-                            "y": external_vio.get("y", 0),
-                            "z": external_vio.get("z", 0),
-                        }
-                        summary["drone_attitude"] = {
-                            "roll": external_vio.get("roll", 0),
-                            "pitch": external_vio.get("pitch", 0),
-                            "yaw": external_vio.get("yaw", 0),
-                        }
-                    return summary
-                
-                # Full mesh data
-                mesh = bridge.get_latest_mesh()
-                if not mesh:
-                    return {
-                        "available": True,
-                        "error": "No mesh data available yet",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "mesh": None,
-                    }
-                
-                # Get drone position from VIO
-                external_vio = request.app.state.external_vio_state
-                drone_position = None
-                drone_attitude = None
-                
-                if external_vio:
-                    drone_position = {
-                        "x": external_vio.get("x", 0),
-                        "y": external_vio.get("y", 0),
-                        "z": external_vio.get("z", 0),
-                    }
-                    drone_attitude = {
-                        "roll": external_vio.get("roll", 0),
-                        "pitch": external_vio.get("pitch", 0),
-                        "yaw": external_vio.get("yaw", 0),
-                    }
-                
-                return {
-                    "available": True,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "mesh": mesh,
-                    "drone_position": drone_position,
-                    "drone_attitude": drone_attitude,
-                }
-            
-            except ImportError:
-                return {
-                    "available": False,
-                    "error": "Mesh bridge module not available",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }
+            return {
+                "available": False,
+                "error": "No mesh data available",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "mesh": None,
+                "drone_position": None,
+                "drone_attitude": None,
+            }
         except Exception as e:
             logger.error(f"SLAM mesh endpoint error: {e}")
             return {
@@ -2664,54 +2637,48 @@ wait
         """
         Get incremental mesh updates (delta) since last request.
         
-        More efficient than full mesh for continuous updates.
-        Only returns mesh blocks that have changed since the last delta request.
+        Uses a version counter on app.state that is bumped on each
+        POST to /mesh/update.  Pass ?since=N with the last known version
+        to receive only newer data.
         
         Returns:
-            - changed_blocks: List of mesh blocks that changed
-            - timestamp: When the delta was generated
-            - block_count: Number of changed blocks
+            - changed: Whether new data is available
+            - version: Current mesh version counter
+            - mesh: Full mesh payload (only when changed is True)
         """
         try:
-            from .ros_mesh_bridge import get_mesh_bridge
-            
-            bridge = get_mesh_bridge()
-            if not bridge or not bridge.is_available():
-                return {
-                    "available": False,
-                    "error": "Mesh bridge not initialized",
-                }
-            
-            delta = bridge.get_mesh_delta()
-            if not delta:
-                return {
-                    "available": True,
-                    "has_changes": False,
-                    "changed_blocks": [],
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }
-            
-            # Add drone position
-            external_vio = request.app.state.external_vio_state
-            if external_vio:
-                delta["drone_position"] = {
-                    "x": external_vio.get("x", 0),
-                    "y": external_vio.get("y", 0),
-                    "z": external_vio.get("z", 0),
-                }
-                delta["drone_attitude"] = {
-                    "roll": external_vio.get("roll", 0),
-                    "pitch": external_vio.get("pitch", 0),
-                    "yaw": external_vio.get("yaw", 0),
-                }
-            
-            delta["available"] = True
-            delta["has_changes"] = True
-            return delta
-            
-        except Exception as e:
-            logger.error(f"SLAM mesh delta error: {e}")
-            return {"available": False, "error": str(e)}
+            since = int(request.query_params.get("since", 0))
+        except (ValueError, TypeError):
+            since = 0
+
+        current_version = getattr(request.app.state, "slam_mesh_version", 0)
+
+        if since >= current_version:
+            return {
+                "available": True,
+                "changed": False,
+                "version": current_version,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+        mesh_state = getattr(request.app.state, "slam_mesh_data", None)
+        if not mesh_state:
+            return {
+                "available": True,
+                "changed": False,
+                "version": current_version,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+        return {
+            "available": True,
+            "changed": True,
+            "version": current_version,
+            "mesh": mesh_state.get("mesh"),
+            "drone_position": mesh_state.get("drone_position"),
+            "drone_attitude": mesh_state.get("drone_attitude"),
+            "timestamp": mesh_state.get("received_at", datetime.now(timezone.utc).isoformat()),
+        }
 
     @app.get("/api/task/2/slam/status", tags=["Task 2", "SLAM"])
     async def get_slam_status(request: Request):
@@ -2733,37 +2700,11 @@ wait
                 "last_update": stored.get("received_at"),
             }
         
-        # Fallback: try ros_mesh_bridge
-        try:
-            from .ros_mesh_bridge import get_mesh_bridge
-            
-            bridge = get_mesh_bridge()
-            if not bridge:
-                return {
-                    "available": False,
-                    "running": False,
-                    "error": "No mesh data available - nvblox may not be running",
-                }
-            
-            status = bridge.get_status()
-            return {
-                "available": bridge.is_available(),
-                "running": bridge.is_running(),
-                "source": "ros_mesh_bridge",
-                **status,
-            }
-        except ImportError:
-            return {
-                "available": False,
-                "running": False,
-                "error": "No mesh data available",
-            }
-        except Exception as e:
-            return {
-                "available": False,
-                "running": False,
-                "error": str(e),
-            }
+        return {
+            "available": False,
+            "running": False,
+            "error": "No mesh data available",
+        }
 
     @app.post("/api/task/2/slam/clear", tags=["Task 2", "SLAM"])
     async def clear_slam_mesh(request: Request):
@@ -2773,9 +2714,8 @@ wait
         This clears the cached mesh data. Note: This does NOT clear the
         nvblox map itself - use the nvblox reset service for that.
         
-        Instead of nulling slam_mesh_data (which causes the GET endpoint
-        to fall through to the unavailable ros_mesh_bridge fallback),
-        we replace it with a valid cleared state containing an empty
+        Instead of nulling slam_mesh_data, we replace it with a valid
+        cleared state containing an empty
         block list and clear=True so clients can clear their local caches.
         """
         # Preserve block_size from the previous mesh data if available
@@ -2801,16 +2741,6 @@ wait
             "total_blocks": 0,
             "mode": "blocks",
         }
-        
-        # Also try to clear ros_mesh_bridge if available
-        try:
-            from .ros_mesh_bridge import get_mesh_bridge
-            
-            bridge = get_mesh_bridge()
-            if bridge:
-                bridge.clear_mesh()
-        except:
-            pass
         
         return {
             "success": True,
@@ -2982,6 +2912,126 @@ wait
             return result.to_dict()
         except Exception as e:
             logger.error(f"IMU check error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # ==================== IMU Heading (6-Position) Calibration ====================
+
+    @app.post("/api/calibration/imu/heading/start", tags=["Calibration"])
+    async def start_imu_heading_calibration_endpoint():
+        """
+        Start a 6-position IMU heading calibration.
+
+        The user must place the camera in 6 orientations (front, back,
+        left, right, up, down) and collect data at each position.
+        Call /collect for each position, then /compute to finish.
+        """
+        try:
+            from .sensor_calibration import start_imu_heading_calibration, get_imu_heading_session, CalibrationState
+
+            session = get_imu_heading_session()
+            if session and session.state == CalibrationState.COLLECTING:
+                return {"success": True, "message": "Session already active", **session.get_status()}
+
+            session = start_imu_heading_calibration()
+            if session.state == CalibrationState.FAILED:
+                raise HTTPException(status_code=500, detail=f"Failed to start: {session.error}")
+
+            return {"success": True, "message": "IMU heading calibration started", **session.get_status()}
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"IMU heading cal start error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/api/calibration/imu/heading/status", tags=["Calibration"])
+    async def get_imu_heading_calibration_status():
+        """Get IMU heading calibration progress."""
+        try:
+            from .sensor_calibration import get_imu_heading_session
+            session = get_imu_heading_session()
+            if not session:
+                return {"state": "idle", "message": "No session active"}
+            return session.get_status()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/calibration/imu/heading/collect", tags=["Calibration"])
+    async def collect_imu_heading_position():
+        """
+        Collect data for the current position.
+
+        The camera must be held still in the instructed orientation.
+        Data is collected for ~3 seconds. Call this once per position.
+        Returns the next position instruction.
+        """
+        try:
+            from starlette.concurrency import run_in_threadpool
+            from .sensor_calibration import get_imu_heading_session
+
+            session = get_imu_heading_session()
+            if not session:
+                raise HTTPException(status_code=400, detail="No calibration session active")
+
+            result = await run_in_threadpool(session.collect_position)
+            if result.get("success"):
+                return {**result, **session.get_status()}
+            else:
+                raise HTTPException(status_code=400, detail=result.get("error", "Collection failed"))
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"IMU heading collect error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/calibration/imu/heading/compute", tags=["Calibration"])
+    async def compute_imu_heading_calibration():
+        """
+        Compute IMU heading calibration from 6 collected positions.
+
+        Must have collected all 6 positions first.
+        Results are saved to config/calibration/imu_heading_cal.json.
+        """
+        try:
+            from starlette.concurrency import run_in_threadpool
+            from .sensor_calibration import get_imu_heading_session
+
+            session = get_imu_heading_session()
+            if not session:
+                raise HTTPException(status_code=400, detail="No calibration session active")
+
+            result = await run_in_threadpool(session.compute)
+            if result:
+                return {"success": True, "message": "Calibration complete", "result": result.to_dict()}
+            else:
+                return {"success": False, "message": f"Calibration failed: {session.error}"}
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"IMU heading compute error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/calibration/imu/heading/cancel", tags=["Calibration"])
+    async def cancel_imu_heading_calibration():
+        """Cancel ongoing IMU heading calibration."""
+        try:
+            from .sensor_calibration import get_imu_heading_session
+            session = get_imu_heading_session()
+            if session:
+                session.cancel()
+            return {"success": True, "message": "Calibration cancelled"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/api/calibration/imu/heading/saved", tags=["Calibration"])
+    async def get_saved_imu_heading_calibration():
+        """Get the saved IMU heading calibration from disk."""
+        try:
+            from .sensor_calibration import load_imu_heading_calibration
+            cal = load_imu_heading_calibration()
+            if cal:
+                return {"available": True, **cal.to_dict()}
+            return {"available": False, "message": "No IMU heading calibration saved"}
+        except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
     # ==================== Admin Endpoints ====================

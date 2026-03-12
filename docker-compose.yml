@@ -88,39 +88,47 @@ services:
         export LD_LIBRARY_PATH=/usr/local/zed/lib:$$LD_LIBRARY_PATH;
         echo '[init] Isaac ROS container ready.';
 
-        echo '[init] Applying NOMAD nvblox config...';
-        NOMAD_CFG=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml;
-        NVBLOX_BASE=$$(python3 -c \"from ament_index_python.packages import get_package_share_directory; print(get_package_share_directory('nvblox_examples_bringup'))\" 2>/dev/null)/config/nvblox/nvblox_base.yaml;
-        if [ -f \"$$NOMAD_CFG\" ] && [ -f \"$$NVBLOX_BASE\" ]; then
-          cp \"$$NOMAD_CFG\" \"$$NVBLOX_BASE\";
-          echo '[init] NOMAD config applied (voxel_size=0.05, esdf=3d)';
-        fi;
-
         sed -i 's/pub_downscale_factor: 2\\.0/pub_downscale_factor: 1.0/' /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null;
 
-        echo '[init] Launching nvblox...';
-        ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2 > /tmp/zed_nvblox.log 2>&1 &
+        echo '[init] Launching nvblox via NOMAD wrapper...';
+        ros2 launch /workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py \
+          nvblox_params_file:=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml > /tmp/zed_nvblox.log 2>&1 &
         NVBLOX_PID=$$!;
         echo $$NVBLOX_PID > /tmp/zed_nvblox.pid;
 
         echo '[init] Waiting for ZED topics before starting bridge...';
+        ZED_READY=false;
         for i in $$(seq 1 30); do
-          if ros2 topic list 2>/dev/null | grep -q '/zed/zed_node/.*image'; then
-            echo \"[init] ZED ready after $${i}s\";
+          if ros2 topic list 2>/dev/null | grep -q 'zed.*image' && \
+             ros2 topic list 2>/dev/null | grep -q 'zed.*odom'; then
+            echo "[init] ZED camera and odometry ready after $${i} iterations";
+            ZED_READY=true;
             break;
           fi;
-          sleep 1;
+          echo "[init] Waiting for ZED topics... ($$i/30)";
+          sleep 2;
         done;
+
+        if [ "$$ZED_READY" = "false" ]; then
+          echo '[init] ERROR: ZED not ready after 60 seconds. Check camera connection.';
+        fi;
+
+        echo '[init] Launching video bridge...';
+        python3 /workspaces/isaac_ros-dev/edge_core/ros/simple_video_bridge.py > /tmp/video_bridge.log 2>&1 &
+        VIDEO_BRIDGE_PID=$$!;
+        echo $$VIDEO_BRIDGE_PID > /tmp/video_bridge.pid;
 
         echo '[init] Launching ROS-HTTP bridge...';
         python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom > /tmp/ros_bridge.log 2>&1 &
-        echo $$! > /tmp/ros_bridge.pid;
+        BRIDGE_PID=$$!;
+        echo $$BRIDGE_PID > /tmp/ros_bridge.pid;
 
         echo '[init] All services launched.';
-        wait $$NVBLOX_PID
+        wait -n $$NVBLOX_PID $$BRIDGE_PID 2>/dev/null || wait $$NVBLOX_PID;
+        echo '[init] Process exited, container will restart'
       "
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'source /opt/ros/humble/setup.bash 2>/dev/null; ros2 topic list > /dev/null 2>&1 || exit 1'"]
+      test: ["CMD-SHELL", "bash -c 'source /opt/ros/humble/setup.bash 2>/dev/null; ros2 topic list 2>/dev/null | grep -q zed && curl -sf http://localhost:8000/api/health || exit 1'"]
       interval: 30s
       timeout: 10s
       retries: 3

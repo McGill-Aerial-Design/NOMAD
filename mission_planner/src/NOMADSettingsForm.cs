@@ -27,6 +27,7 @@ namespace NOMAD.MissionPlanner
         // Connection Tab
         private TextBox _txtJetsonIP;
         private NumericUpDown _numPort;
+        private TextBox _txtJetsonApiKey;
         private TextBox _txtTailscaleIP;
         private CheckBox _chkUseTailscale;
         private TextBox _txtSshUsername;
@@ -226,6 +227,11 @@ namespace NOMAD.MissionPlanner
 
             AddLabel(tab, "API Port:", 20, y);
             _numPort = AddNumericUpDown(tab, 150, y, 80, 1, 65535, 8000);
+            y += 30;
+
+            AddLabel(tab, "API Key:", 20, y);
+            _txtJetsonApiKey = AddTextBox(tab, 150, y, 180);
+            _txtJetsonApiKey.UseSystemPasswordChar = true;
             y += 30;
 
             AddLabel(tab, "Tailscale IP:", 20, y);
@@ -677,6 +683,7 @@ namespace NOMAD.MissionPlanner
             // Connection
             _txtJetsonIP.Text = Config.JetsonIP;
             _numPort.Value = Config.JetsonPort;
+            _txtJetsonApiKey.Text = Config.JetsonApiKey;
             _txtTailscaleIP.Text = Config.TailscaleIP;
             _chkUseTailscale.Checked = Config.UseTailscale;
             _txtSshUsername.Text = Config.SshUsername;
@@ -758,6 +765,7 @@ namespace NOMAD.MissionPlanner
             // Connection
             Config.JetsonIP = _txtJetsonIP.Text.Trim();
             Config.JetsonPort = (int)_numPort.Value;
+            Config.JetsonApiKey = _txtJetsonApiKey.Text.Trim();
             Config.TailscaleIP = _txtTailscaleIP.Text.Trim();
             Config.UseTailscale = _chkUseTailscale.Checked;
             Config.SshUsername = _txtSshUsername.Text.Trim();

@@ -143,23 +143,21 @@ namespace NOMAD.MissionPlanner
                 max_tokens = 1000
             };
 
-            var request = new HttpRequestMessage(HttpMethod.Post, "https://openrouter.ai/api/v1/chat/completions")
-            {
-                Content = new StringContent(
-                    JsonConvert.SerializeObject(requestBody),
-                    Encoding.UTF8,
-                    "application/json")
-            };
+            var requestJson = JsonConvert.SerializeObject(requestBody);
 
-            request.Headers.Add("Authorization", $"Bearer {_config.OpenRouterApiKey}");
-            request.Headers.Add("HTTP-Referer", "https://github.com/McGill-Aerial-Design/NOMAD");
-            request.Headers.Add("X-Title", "NOMAD Task 1 Image Analysis");
-
-            // Send request with retry
+            // Send request with retry - must create a fresh HttpRequestMessage per attempt
             for (int attempt = 0; attempt < 3; attempt++)
             {
                 try
                 {
+                    using var request = new HttpRequestMessage(HttpMethod.Post, "https://openrouter.ai/api/v1/chat/completions")
+                    {
+                        Content = new StringContent(requestJson, Encoding.UTF8, "application/json")
+                    };
+                    request.Headers.Add("Authorization", $"Bearer {_config.OpenRouterApiKey}");
+                    request.Headers.Add("HTTP-Referer", "https://github.com/McGill-Aerial-Design/NOMAD");
+                    request.Headers.Add("X-Title", "NOMAD Task 1 Image Analysis");
+
                     var response = await _httpClient.SendAsync(request);
 
                     if (response.IsSuccessStatusCode)

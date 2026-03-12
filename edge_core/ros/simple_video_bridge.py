@@ -184,15 +184,24 @@ class VideoStreamNode(Node):
             import cv2
             
             # Convert ROS image to OpenCV BGR format
-            # Handle BGRA8 encoding from ZED cameras which can cause cv_bridge issues
+            # Handle different encodings: color, alpha, depth, confidence, grayscale
             encoding = msg.encoding.lower()
             if encoding in ('bgra8', 'rgba8', '8uc4'):
-                # Manual conversion: avoid cv_bridge desired_encoding issues with alpha channels
+                # Alpha channel color images (e.g., ZED cameras)
                 cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
                 if encoding == 'rgba8':
                     cv_image = cv2.cvtColor(cv_image, cv2.COLOR_RGBA2BGR)
                 else:
                     cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGRA2BGR)
+            elif encoding in ('16uc1', 'mono16', '32fc1'):
+                # Depth or confidence: single-channel numeric data
+                # Needs normalization + colormap to produce visible frames
+                cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+                cv_image = self._normalize_depth_image(cv_image, encoding)
+            elif encoding in ('mono8', '8uc1'):
+                # Grayscale: convert to BGR for the encoder
+                cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+                cv_image = cv2.cvtColor(cv_image, cv2.COLOR_GRAY2BGR)
             else:
                 cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
             
@@ -228,6 +237,38 @@ class VideoStreamNode(Node):
         except Exception as e:
             if self.frame_count % 100 == 0:  # Don't spam errors
                 self.get_logger().error(f'Frame processing error: {e}')
+    
+    def _normalize_depth_image(self, image, encoding):
+        """Normalize 16-bit or 32-bit depth/confidence image to visible BGR with colormap.
+        
+        Depth images (16UC1, 32FC1, mono16) are single-channel numeric data that appear
+        black when displayed directly. This applies percentile normalization and a Turbo
+        colormap to produce a visually meaningful false-color representation.
+        """
+        import cv2
+        
+        img = image.astype(np.float32) if encoding != '32fc1' else image.copy()
+        
+        # Mask invalid values (0, NaN, inf)
+        valid_mask = np.isfinite(img) & (img > 0)
+        
+        if not valid_mask.any():
+            return np.zeros((image.shape[0], image.shape[1], 3), dtype=np.uint8)
+        
+        # Percentile clipping for robust normalization across varying depth ranges
+        min_val = np.percentile(img[valid_mask], 2)
+        max_val = np.percentile(img[valid_mask], 98)
+        
+        if max_val <= min_val:
+            max_val = min_val + 1.0
+        
+        normalized = np.clip((img - min_val) / (max_val - min_val) * 255.0, 0, 255).astype(np.uint8)
+        normalized[~valid_mask] = 0
+        
+        # Turbo colormap gives good visual contrast for depth data
+        colored = cv2.applyColorMap(normalized, cv2.COLORMAP_TURBO)
+        
+        return colored
     
     def cleanup(self):
         """Clean shutdown."""

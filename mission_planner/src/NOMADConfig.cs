@@ -32,6 +32,12 @@ namespace NOMAD.MissionPlanner
         public int JetsonPort { get; set; } = 8000;
 
         /// <summary>
+        /// Jetson API key (must match NOMAD_API_KEY on the Jetson).
+        /// Leave empty for no authentication (development mode).
+        /// </summary>
+        public string JetsonApiKey { get; set; } = "";
+
+        /// <summary>
         /// Full Jetson Base URL (computed property).
         /// </summary>
         [JsonIgnore]
@@ -469,6 +475,7 @@ namespace NOMAD.MissionPlanner
             // Copy all properties from defaults
             JetsonIP = defaults.JetsonIP;
             JetsonPort = defaults.JetsonPort;
+            JetsonApiKey = defaults.JetsonApiKey;
             TailscaleIP = defaults.TailscaleIP;
             UseTailscale = defaults.UseTailscale;
             VideoUrl = defaults.VideoUrl;

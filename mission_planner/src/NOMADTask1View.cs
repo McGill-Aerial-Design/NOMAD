@@ -24,6 +24,7 @@ namespace NOMAD.MissionPlanner
         private TextBox _txtResult;
         private EmbeddedVideoPlayer _videoPlayer;
         private FlowLayoutPanel _galleryPanel;
+        private PayloadControlPanel _payloadControl;
         
         public NOMADTask1View(DualLinkSender sender, NOMADConfig config, JetsonConnectionManager jetsonConnectionManager = null)
         {
@@ -81,13 +82,14 @@ namespace NOMAD.MissionPlanner
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 3,
+                RowCount = 4,
                 Margin = Padding.Empty,
                 Padding = Padding.Empty,
             };
             rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));   // GPS status
-            rightLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50));     // Capture
-            rightLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50));     // Gallery
+            rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 105));  // Payload controls
+            rightLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50));    // Capture
+            rightLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50));    // Gallery
 
             // --- GPS Status ---
             var gpsCard = CreateCard("GPS STATUS");
@@ -114,6 +116,12 @@ namespace NOMAD.MissionPlanner
             gpsCard.Controls.Add(_lblPosition);
 
             rightLayout.Controls.Add(gpsCard, 0, 0);
+
+            // --- Payload Controls ---
+            _payloadControl = new PayloadControlPanel(_config);
+            _payloadControl.Dock = DockStyle.Fill;
+            _payloadControl.Margin = new Padding(5);
+            rightLayout.Controls.Add(_payloadControl, 0, 1);
 
             // --- Capture Card ---
             var captureCard = CreateCard("SNAPSHOT CAPTURE");
@@ -147,7 +155,7 @@ namespace NOMAD.MissionPlanner
                 _txtResult.Height = captureCard.ClientSize.Height - 110;
             };
 
-            rightLayout.Controls.Add(captureCard, 0, 1);
+            rightLayout.Controls.Add(captureCard, 0, 2);
 
             // --- Gallery Card ---
             var galleryCard = CreateCard("CAPTURED IMAGES");
@@ -171,7 +179,7 @@ namespace NOMAD.MissionPlanner
                 _galleryPanel.Height = galleryCard.ClientSize.Height - 60;
             };
 
-            rightLayout.Controls.Add(galleryCard, 0, 2);
+            rightLayout.Controls.Add(galleryCard, 0, 3);
 
             mainLayout.Controls.Add(rightLayout, 1, 0);
 
@@ -643,6 +651,7 @@ namespace NOMAD.MissionPlanner
             if (disposing)
             {
                 _videoPlayer?.Dispose();
+                _payloadControl?.Dispose();
             }
             base.Dispose(disposing);
         }

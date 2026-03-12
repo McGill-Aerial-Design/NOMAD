@@ -144,11 +144,11 @@ Key parameters for the Orin Nano:
 
 | Parameter | Value | Notes |
 |-----------|-------|-------|
-| `voxel_size` | 0.12 m | Balance of speed vs resolution |
-| `map_clearing_radius_m` | 15.0 m | Mapping radius around the drone |
-| `projective_integrator_max_integration_distance_m` | 15.0 m | Max depth integration range |
-| `update_mesh_rate_hz` | 10.0 | Mesh output rate |
-| `update_esdf_rate_hz` | 15.0 | Distance field update rate |
+| `voxel_size` | 0.15 m | Balance of speed vs resolution |
+| `map_clearing_radius_m` | 8.0 m | Mapping radius around the drone |
+| `projective_integrator_max_integration_distance_m` | 8.0 m | Max depth integration range |
+| `update_mesh_rate_hz` | 2.0 | Mesh output rate |
+| `update_esdf_rate_hz` | 5.0 | Distance field update rate |
 | `esdf_mode` | "3d" | Full volumetric mapping |
 | `mapping_type` | "static_tsdf" | Best for mesh generation |
 | `back_projection_subsampling` | 4 | Heavy subsampling for speed |

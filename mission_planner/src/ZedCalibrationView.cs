@@ -63,6 +63,18 @@ namespace NOMAD.MissionPlanner
         private Button _btnRefreshSaved;
         private Label _lblSavedStatus;
 
+        // === IMU Heading Calibration Tab ===
+        private Label _lblHeadingStep;
+        private Label _lblHeadingInstruction;
+        private Button _btnHeadingStart;
+        private Button _btnHeadingCollect;
+        private Button _btnHeadingCancel;
+        private Label _lblHeadingStatus;
+        private ProgressBar _headingProgressBar;
+        private TextBox _txtHeadingResult;
+        private Panel[] _positionIndicators;
+        private bool _isHeadingCalibrating = false;
+
         // Polling timer for mag calibration status
         private Timer _pollTimer;
         private bool _isMagCalibrating = false;
@@ -113,6 +125,15 @@ namespace NOMAD.MissionPlanner
             };
             BuildSavedCalibrationTab(savedTab);
             _tabControl.TabPages.Add(savedTab);
+
+            // --- Tab 4: IMU Heading Calibration ---
+            var headingTab = new TabPage("IMU Heading Cal")
+            {
+                BackColor = NOMADTheme.BG_DARK,
+                Padding = new Padding(15),
+            };
+            BuildImuHeadingTab(headingTab);
+            _tabControl.TabPages.Add(headingTab);
 
             this.Controls.Add(_tabControl);
 
@@ -607,6 +628,431 @@ namespace NOMAD.MissionPlanner
             };
             yOffset += 23;
             return lbl;
+        }
+
+        // ============================================================
+        // IMU Heading (6-Position) Calibration Tab
+        // ============================================================
+
+        private static readonly string[] _positionLabels = { "Front", "Back", "Left", "Right", "Up", "Down" };
+        private static readonly string[] _positionDescriptions = {
+            "Lens pointing DOWN (front facing ground)",
+            "Lens pointing UP (front facing sky)",
+            "Camera on its RIGHT side (left side up)",
+            "Camera on its LEFT side (right side up)",
+            "Upright position (top up, normal)",
+            "Upside-down (top facing ground)",
+        };
+
+        private void BuildImuHeadingTab(TabPage tab)
+        {
+            var layout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 4,
+            };
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 80));  // Instructions + status
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 80));  // Position indicators
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 120)); // Current step + buttons
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));  // Results
+
+            // Row 0: Instructions
+            var instrCard = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = NOMADTheme.CARD_BG,
+                Padding = new Padding(15),
+            };
+            var instrTitle = new Label
+            {
+                Text = "6-POSITION IMU HEADING CALIBRATION",
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                ForeColor = NOMADTheme.ACCENT,
+                Location = new Point(15, 10),
+                AutoSize = true,
+            };
+            instrCard.Controls.Add(instrTitle);
+
+            _lblHeadingStatus = new Label
+            {
+                Text = "Calibrate accelerometer by placing camera in 6 orientations. Press START to begin.",
+                Font = new Font("Segoe UI", 10),
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
+                Location = new Point(15, 35),
+                Size = new Size(600, 35),
+            };
+            instrCard.Controls.Add(_lblHeadingStatus);
+            layout.Controls.Add(instrCard, 0, 0);
+
+            // Row 1: Position indicators (6 boxes)
+            var posPanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.LeftToRight,
+                BackColor = NOMADTheme.CARD_BG,
+                Padding = new Padding(10, 10, 10, 5),
+            };
+            _positionIndicators = new Panel[6];
+            for (int i = 0; i < 6; i++)
+            {
+                var box = new Panel
+                {
+                    Size = new Size(90, 55),
+                    BackColor = Color.FromArgb(40, 40, 45),
+                    Margin = new Padding(3),
+                };
+                var lbl = new Label
+                {
+                    Text = _positionLabels[i],
+                    Dock = DockStyle.Fill,
+                    Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                    ForeColor = NOMADTheme.TEXT_MUTED,
+                    TextAlign = ContentAlignment.MiddleCenter,
+                };
+                box.Controls.Add(lbl);
+                _positionIndicators[i] = box;
+                posPanel.Controls.Add(box);
+            }
+            layout.Controls.Add(posPanel, 0, 1);
+
+            // Row 2: Current step + buttons
+            var stepCard = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = NOMADTheme.CARD_BG,
+                Padding = new Padding(15),
+            };
+
+            _lblHeadingStep = new Label
+            {
+                Text = "Step 0 / 6",
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
+                Location = new Point(15, 8),
+                AutoSize = true,
+            };
+            stepCard.Controls.Add(_lblHeadingStep);
+
+            _lblHeadingInstruction = new Label
+            {
+                Text = "Press START to begin calibration.",
+                Font = new Font("Segoe UI", 10),
+                ForeColor = NOMADTheme.WARNING,
+                Location = new Point(15, 32),
+                Size = new Size(500, 22),
+            };
+            stepCard.Controls.Add(_lblHeadingInstruction);
+
+            _headingProgressBar = new ProgressBar
+            {
+                Location = new Point(15, 58),
+                Size = new Size(400, 18),
+                Maximum = 6,
+                Style = ProgressBarStyle.Continuous,
+            };
+            stepCard.Controls.Add(_headingProgressBar);
+
+            _btnHeadingStart = new Button
+            {
+                Text = "START",
+                Size = new Size(100, 32),
+                Location = new Point(15, 82),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = NOMADTheme.BTN_START,
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                Cursor = Cursors.Hand,
+            };
+            _btnHeadingStart.FlatAppearance.BorderSize = 0;
+            _btnHeadingStart.Click += BtnHeadingStart_Click;
+            stepCard.Controls.Add(_btnHeadingStart);
+
+            _btnHeadingCollect = new Button
+            {
+                Text = "COLLECT POSITION",
+                Size = new Size(150, 32),
+                Location = new Point(125, 82),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = NOMADTheme.ACCENT,
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                Cursor = Cursors.Hand,
+                Enabled = false,
+            };
+            _btnHeadingCollect.FlatAppearance.BorderSize = 0;
+            _btnHeadingCollect.Click += BtnHeadingCollect_Click;
+            stepCard.Controls.Add(_btnHeadingCollect);
+
+            _btnHeadingCancel = new Button
+            {
+                Text = "CANCEL",
+                Size = new Size(80, 32),
+                Location = new Point(285, 82),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = NOMADTheme.BTN_STOP,
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                Cursor = Cursors.Hand,
+                Enabled = false,
+            };
+            _btnHeadingCancel.FlatAppearance.BorderSize = 0;
+            _btnHeadingCancel.Click += BtnHeadingCancel_Click;
+            stepCard.Controls.Add(_btnHeadingCancel);
+
+            layout.Controls.Add(stepCard, 0, 2);
+
+            // Row 3: Results
+            _txtHeadingResult = new TextBox
+            {
+                Dock = DockStyle.Fill,
+                Multiline = true,
+                ReadOnly = true,
+                ScrollBars = ScrollBars.Vertical,
+                BackColor = Color.FromArgb(25, 25, 28),
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
+                Font = new Font("Consolas", 9),
+                BorderStyle = BorderStyle.FixedSingle,
+                Text = "Calibration results will appear here.",
+            };
+            layout.Controls.Add(_txtHeadingResult, 0, 3);
+
+            tab.Controls.Add(layout);
+        }
+
+        // ============================================================
+        // IMU Heading Calibration Logic
+        // ============================================================
+
+        private async void BtnHeadingStart_Click(object sender, EventArgs e)
+        {
+            _btnHeadingStart.Enabled = false;
+            _btnHeadingCancel.Enabled = false;
+            _lblHeadingStatus.Text = "Starting IMU heading calibration...";
+            _lblHeadingStatus.ForeColor = NOMADTheme.WARNING;
+            _txtHeadingResult.Text = "";
+
+            try
+            {
+                var resp = await JetsonApiService.PostAsync("/api/calibration/imu/heading/start");
+                var body = await resp.Content.ReadAsStringAsync();
+                var data = JObject.Parse(body);
+
+                if (resp.IsSuccessStatusCode)
+                {
+                    _isHeadingCalibrating = true;
+                    UpdateHeadingUI(data);
+                    _btnHeadingStart.Enabled = false;
+                    _btnHeadingCollect.Enabled = true;
+                    _btnHeadingCancel.Enabled = true;
+                    _lblHeadingStatus.Text = "Place camera in the instructed orientation, then press COLLECT POSITION.";
+                    _lblHeadingStatus.ForeColor = NOMADTheme.SUCCESS;
+                }
+                else
+                {
+                    _lblHeadingStatus.Text = $"Failed: {data["detail"]}";
+                    _lblHeadingStatus.ForeColor = NOMADTheme.ERROR;
+                    _btnHeadingStart.Enabled = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                _lblHeadingStatus.Text = $"Error: {ex.Message}";
+                _lblHeadingStatus.ForeColor = NOMADTheme.ERROR;
+                _btnHeadingStart.Enabled = true;
+            }
+        }
+
+        private async void BtnHeadingCollect_Click(object sender, EventArgs e)
+        {
+            _btnHeadingCollect.Enabled = false;
+            _btnHeadingCollect.Text = "Collecting...";
+            _lblHeadingStatus.Text = "Hold camera STILL for 3 seconds...";
+            _lblHeadingStatus.ForeColor = NOMADTheme.WARNING;
+
+            try
+            {
+                var resp = await JetsonApiService.LongRunClient.PostAsync(
+                    $"{JetsonApiService.BaseUrl}/api/calibration/imu/heading/collect", null);
+                var body = await resp.Content.ReadAsStringAsync();
+                var data = JObject.Parse(body);
+
+                if (resp.IsSuccessStatusCode)
+                {
+                    UpdateHeadingUI(data);
+
+                    int remaining = (int?)data["positions_remaining"] ?? 0;
+                    if (remaining == 0)
+                    {
+                        // All positions collected -- compute
+                        _lblHeadingStatus.Text = "All positions collected. Computing calibration...";
+                        _lblHeadingStatus.ForeColor = NOMADTheme.WARNING;
+                        _btnHeadingCollect.Text = "COLLECT POSITION";
+                        _btnHeadingCollect.Enabled = false;
+
+                        await ComputeHeadingCalibration();
+                    }
+                    else
+                    {
+                        _lblHeadingStatus.Text = $"Position captured. {remaining} remaining. Place camera in next orientation.";
+                        _lblHeadingStatus.ForeColor = NOMADTheme.SUCCESS;
+                        _btnHeadingCollect.Enabled = true;
+                        _btnHeadingCollect.Text = "COLLECT POSITION";
+                    }
+                }
+                else
+                {
+                    var detail = data["detail"]?.ToString() ?? "Collection failed";
+                    _lblHeadingStatus.Text = $"Error: {detail}";
+                    _lblHeadingStatus.ForeColor = NOMADTheme.ERROR;
+                    _btnHeadingCollect.Enabled = true;
+                    _btnHeadingCollect.Text = "COLLECT POSITION";
+                }
+            }
+            catch (Exception ex)
+            {
+                _lblHeadingStatus.Text = $"Error: {ex.Message}";
+                _lblHeadingStatus.ForeColor = NOMADTheme.ERROR;
+                _btnHeadingCollect.Enabled = true;
+                _btnHeadingCollect.Text = "COLLECT POSITION";
+            }
+        }
+
+        private async System.Threading.Tasks.Task ComputeHeadingCalibration()
+        {
+            try
+            {
+                var resp = await JetsonApiService.LongRunClient.PostAsync(
+                    $"{JetsonApiService.BaseUrl}/api/calibration/imu/heading/compute", null);
+                var body = await resp.Content.ReadAsStringAsync();
+                var data = JObject.Parse(body);
+
+                bool success = (bool?)data["success"] ?? false;
+                if (success)
+                {
+                    var result = data["result"];
+                    float fitness = (float?)result?["fitness"] ?? 0;
+
+                    _lblHeadingStatus.Text = $"Calibration COMPLETE (fitness: {fitness:P1})";
+                    _lblHeadingStatus.ForeColor = fitness > 0.95f ? NOMADTheme.SUCCESS : NOMADTheme.WARNING;
+
+                    _txtHeadingResult.ForeColor = NOMADTheme.SUCCESS;
+                    _txtHeadingResult.Text =
+                        $"=== IMU Heading Calibration Complete ===\r\n\r\n" +
+                        $"Fitness:          {fitness:F4}\r\n" +
+                        $"Duration:         {result?["duration_s"]}s\r\n\r\n" +
+                        $"Accel Bias (m/s^2):\r\n" +
+                        $"  X: {result?["accel_bias"]?[0]}\r\n" +
+                        $"  Y: {result?["accel_bias"]?[1]}\r\n" +
+                        $"  Z: {result?["accel_bias"]?[2]}\r\n\r\n" +
+                        $"Accel Scale:\r\n" +
+                        $"  X: {result?["accel_scale"]?[0]}\r\n" +
+                        $"  Y: {result?["accel_scale"]?[1]}\r\n" +
+                        $"  Z: {result?["accel_scale"]?[2]}\r\n\r\n" +
+                        $"Gyro Bias (rad/s):\r\n" +
+                        $"  X: {result?["gyro_bias"]?[0]}\r\n" +
+                        $"  Y: {result?["gyro_bias"]?[1]}\r\n" +
+                        $"  Z: {result?["gyro_bias"]?[2]}\r\n\r\n" +
+                        $"Saved to: config/calibration/imu_heading_cal.json";
+                }
+                else
+                {
+                    var msg = data["message"]?.ToString() ?? "Unknown error";
+                    _lblHeadingStatus.Text = $"Calibration failed: {msg}";
+                    _lblHeadingStatus.ForeColor = NOMADTheme.ERROR;
+                    _txtHeadingResult.ForeColor = NOMADTheme.ERROR;
+                    _txtHeadingResult.Text = msg;
+                }
+            }
+            catch (Exception ex)
+            {
+                _lblHeadingStatus.Text = $"Compute error: {ex.Message}";
+                _lblHeadingStatus.ForeColor = NOMADTheme.ERROR;
+                _txtHeadingResult.Text = ex.Message;
+            }
+
+            _isHeadingCalibrating = false;
+            _btnHeadingStart.Enabled = true;
+            _btnHeadingCollect.Enabled = false;
+            _btnHeadingCancel.Enabled = false;
+        }
+
+        private async void BtnHeadingCancel_Click(object sender, EventArgs e)
+        {
+            _isHeadingCalibrating = false;
+            _btnHeadingCancel.Enabled = false;
+            _btnHeadingCollect.Enabled = false;
+
+            try
+            {
+                await JetsonApiService.PostAsync("/api/calibration/imu/heading/cancel");
+            }
+            catch { }
+
+            _lblHeadingStatus.Text = "Calibration cancelled.";
+            _lblHeadingStatus.ForeColor = NOMADTheme.TEXT_SECONDARY;
+            ResetHeadingIndicators();
+            _headingProgressBar.Value = 0;
+            _lblHeadingStep.Text = "Step 0 / 6";
+            _lblHeadingInstruction.Text = "Press START to begin calibration.";
+            _btnHeadingStart.Enabled = true;
+        }
+
+        private void UpdateHeadingUI(JObject data)
+        {
+            int step = (int?)data["current_step"] ?? 0;
+            int total = (int?)data["total_steps"] ?? 6;
+            string nextPos = data["next_position"]?.ToString();
+            string nextInstr = data["next_instruction"]?.ToString();
+
+            _lblHeadingStep.Text = $"Step {step} / {total}";
+            _headingProgressBar.Value = Math.Min(step, total);
+
+            if (!string.IsNullOrEmpty(nextInstr))
+                _lblHeadingInstruction.Text = nextInstr;
+            else if (step >= total)
+                _lblHeadingInstruction.Text = "All positions collected.";
+
+            // Update position indicators
+            var done = data["positions_done"] as JArray;
+            if (done != null)
+            {
+                for (int i = 0; i < 6 && i < _positionIndicators.Length; i++)
+                {
+                    bool collected = false;
+                    foreach (var d in done)
+                    {
+                        if (string.Equals(d.ToString(), _positionLabels[i], StringComparison.OrdinalIgnoreCase))
+                        {
+                            collected = true;
+                            break;
+                        }
+                    }
+
+                    bool isCurrent = string.Equals(nextPos, _positionLabels[i], StringComparison.OrdinalIgnoreCase);
+                    _positionIndicators[i].BackColor = collected ? Color.FromArgb(30, 100, 30)
+                        : isCurrent ? Color.FromArgb(100, 80, 0)
+                        : Color.FromArgb(40, 40, 45);
+
+                    if (_positionIndicators[i].Controls.Count > 0)
+                    {
+                        _positionIndicators[i].Controls[0].ForeColor = collected ? NOMADTheme.SUCCESS
+                            : isCurrent ? NOMADTheme.WARNING
+                            : NOMADTheme.TEXT_MUTED;
+                    }
+                }
+            }
+        }
+
+        private void ResetHeadingIndicators()
+        {
+            if (_positionIndicators == null) return;
+            for (int i = 0; i < _positionIndicators.Length; i++)
+            {
+                _positionIndicators[i].BackColor = Color.FromArgb(40, 40, 45);
+                if (_positionIndicators[i].Controls.Count > 0)
+                    _positionIndicators[i].Controls[0].ForeColor = NOMADTheme.TEXT_MUTED;
+            }
         }
 
         // ============================================================

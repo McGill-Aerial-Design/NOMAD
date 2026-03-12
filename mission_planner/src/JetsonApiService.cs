@@ -71,6 +71,15 @@ namespace NOMAD.MissionPlanner
                     Timeout = TimeSpan.FromSeconds(30)
                 };
 
+                // Set API key header if configured
+                if (!string.IsNullOrEmpty(config.JetsonApiKey))
+                {
+                    _apiClient.DefaultRequestHeaders.Remove("X-API-Key");
+                    _apiClient.DefaultRequestHeaders.Add("X-API-Key", config.JetsonApiKey);
+                    _longRunClient.DefaultRequestHeaders.Remove("X-API-Key");
+                    _longRunClient.DefaultRequestHeaders.Add("X-API-Key", config.JetsonApiKey);
+                }
+
                 _initialized = true;
             }
         }
@@ -126,6 +135,19 @@ namespace NOMAD.MissionPlanner
             {
                 EnsureInitialized();
                 return _config.EffectiveBaseUrl;
+            }
+        }
+
+        /// <summary>
+        /// Gets the configured Jetson API key, or null if not set.
+        /// </summary>
+        public static string ApiKey
+        {
+            get
+            {
+                EnsureInitialized();
+                var key = _config.JetsonApiKey;
+                return string.IsNullOrEmpty(key) ? null : key;
             }
         }
 

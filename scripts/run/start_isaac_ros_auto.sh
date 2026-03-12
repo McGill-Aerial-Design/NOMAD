@@ -285,11 +285,11 @@ export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH
 sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
     /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null
 # Overlay NOMAD nvblox config onto installed base config
-# voxel_size=0.05, ESDF 3D, 15m clearing radius
+# voxel_size=0.15, ESDF 3D, 8m clearing radius
 NOMAD_CFG=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml
 NVBLOX_BASE=$(python3 -c "from ament_index_python.packages import get_package_share_directory; print(get_package_share_directory('nvblox_examples_bringup'))" 2>/dev/null)/config/nvblox/nvblox_base.yaml
 if [ -f "$NOMAD_CFG" ] && [ -f "$NVBLOX_BASE" ]; then
-    echo "Applying NOMAD nvblox config (voxel_size=0.05, esdf=3d, 15m radius)"
+    echo "Applying NOMAD nvblox config (voxel_size=0.15, esdf=3d, 8m radius)"
     cp "$NOMAD_CFG" "$NVBLOX_BASE"
 else
     echo "NOMAD config or nvblox base not found, using defaults"

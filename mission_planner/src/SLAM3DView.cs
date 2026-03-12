@@ -69,6 +69,8 @@ namespace NOMAD.MissionPlanner
         public double VoxelSize { get; set; }
         [JsonProperty("total_voxels")]
         public int TotalVoxels { get; set; }
+        [JsonProperty("removed")]
+        public List<RemovedVoxelModel> Removed { get; set; }
     }
 
     public class VoxelModel
@@ -79,6 +81,16 @@ namespace NOMAD.MissionPlanner
         /// <summary>Color [R, G, B] (0-255).</summary>
         [JsonProperty("c")]
         public List<int> Color { get; set; }
+    }
+
+    public class RemovedVoxelModel
+    {
+        [JsonProperty("x")]
+        public int X { get; set; }
+        [JsonProperty("y")]
+        public int Y { get; set; }
+        [JsonProperty("z")]
+        public int Z { get; set; }
     }
 
     public class MeshBlockModel
@@ -119,6 +131,9 @@ namespace NOMAD.MissionPlanner
         private int _wsReconnectDelayMs = 1000;
         private const int MaxWsReconnectDelayMs = 10000;
         private volatile bool _disposed;
+        private volatile bool _autoUpdateEnabled = true;
+        private readonly object _poseLock = new object();
+        private const int MaxWebSocketMessageSize = 10 * 1024 * 1024; // 10MB
         
         // WPF hosting
         private ElementHost _elementHost;
@@ -147,6 +162,12 @@ namespace NOMAD.MissionPlanner
         private double _droneYaw = 0;
         private double _dronePitch = 0;
         private double _droneRoll = 0;
+        
+        // Cached drone transforms (P3-8)
+        private Transform3DGroup _droneTransformGroup;
+        private AxisAngleRotation3D _droneRotX, _droneRotY, _droneRotZ;
+        private TranslateTransform3D _droneTranslation;
+        
         private List<Point3D> _trajectoryPoints = new List<Point3D>();
         private const int MaxTrajectoryPoints = 500;
         private int _lastTrajectoryRendered = 0; // incremental trajectory rendering
@@ -167,8 +188,9 @@ namespace NOMAD.MissionPlanner
         private int _totalBlocks = 0;
         private DateTime _lastUpdateTime = DateTime.MinValue;
         
-        // Persisted block map: key = "ix,iy,iz", value = packed ARGB color
-        private Dictionary<string, uint> _persistedBlocks = new Dictionary<string, uint>();
+        // Persisted block map: key = packed long (ix,iy,iz), value = packed ARGB color
+        private Dictionary<long, uint> _persistedBlocks = new Dictionary<long, uint>();
+        private Queue<long> _voxelInsertionOrder = new Queue<long>();
         private const int MaxPersistedVoxels = 5000; // Hard cap with face-culling keeps triangle count low
 
         // Material cache to avoid recreating WPF resources every frame
@@ -178,6 +200,10 @@ namespace NOMAD.MissionPlanner
         private bool _meshDirty = false;
         private int _lastRenderedCount = 0;
         private const int MinNewVoxelsForRebuild = 20; // Only rebuild after 20+ new voxels
+
+        // Time-based debounce for mesh rebuilds (P3-7)
+        private DateTime _lastMeshRebuild = DateTime.MinValue;
+        private static readonly TimeSpan MinRebuildInterval = TimeSpan.FromMilliseconds(250);
 
         // Occupancy set for fast neighbor lookups (adjacent-face culling)
         private HashSet<long> _occupancySet = new HashSet<long>();
@@ -190,6 +216,20 @@ namespace NOMAD.MissionPlanner
             long ly = (long)(y + 0x100000) & 0xFFFFF;
             long lz = (long)(z + 0x100000) & 0xFFFFF;
             return (lx << 40) | (ly << 20) | lz;
+        }
+
+        // Pack three grid indices into a single long for dictionary keys.
+        // Each axis uses 16 bits with +32768 offset; valid range: [-32768, 32767].
+        private static long PackVoxelKey(int ix, int iy, int iz)
+        {
+            return ((long)(ix + 32768) << 32) | ((long)(iy + 32768) << 16) | (long)(iz + 32768);
+        }
+
+        private static void UnpackVoxelKey(long key, out int ix, out int iy, out int iz)
+        {
+            iz = (int)((key & 0xFFFF) - 32768);
+            iy = (int)(((key >> 16) & 0xFFFF) - 32768);
+            ix = (int)(((key >> 32) & 0xFFFF) - 32768);
         }
 
         // ==================== Constructor ====================
@@ -311,6 +351,7 @@ namespace NOMAD.MissionPlanner
                 AutoSize = true,
                 Checked = true,
             };
+            _chkAutoUpdate.CheckedChanged += (s, e) => _autoUpdateEnabled = _chkAutoUpdate.Checked;
             _controlPanel.Controls.Add(_chkAutoUpdate);
             
             // Status labels
@@ -357,11 +398,17 @@ namespace NOMAD.MissionPlanner
             };
             
             // Initialize cameras
+            // --------------------------------------------------------
+            // Frame convention:
+            // SLAM data arrives in ROS optical frame: X-right, Y-down, Z-forward.
+            // WPF 3D coordinate system: X-right, Y-up, Z-toward-viewer.
+            // Conversion: WPF_X = ROS_X, WPF_Y = -ROS_Y, WPF_Z = -ROS_Z
+            // --------------------------------------------------------
             _tpvCamera = new PerspectiveCamera
             {
-                Position = new Point3D(-5, -5, 5),
-                LookDirection = new Vector3D(5, 5, -3),
-                UpDirection = new Vector3D(0, 0, 1),
+                Position = new Point3D(0, 5, 10),
+                LookDirection = new Vector3D(0, -3, -8),
+                UpDirection = new Vector3D(0, 1, 0),
                 FieldOfView = 60,
                 NearPlaneDistance = 0.1,
                 FarPlaneDistance = 1000,
@@ -370,8 +417,8 @@ namespace NOMAD.MissionPlanner
             _fpvCamera = new PerspectiveCamera
             {
                 Position = new Point3D(0, 0, 0),
-                LookDirection = new Vector3D(1, 0, 0),
-                UpDirection = new Vector3D(0, 0, 1),
+                LookDirection = new Vector3D(0, 0, -1),
+                UpDirection = new Vector3D(0, 1, 0),
                 FieldOfView = 90,
                 NearPlaneDistance = 0.01,
                 FarPlaneDistance = 500,
@@ -379,9 +426,9 @@ namespace NOMAD.MissionPlanner
             
             _orbitCamera = new PerspectiveCamera
             {
-                Position = new Point3D(-10, -10, 8),
-                LookDirection = new Vector3D(10, 10, -5),
-                UpDirection = new Vector3D(0, 0, 1),
+                Position = new Point3D(8, 6, 10),
+                LookDirection = new Vector3D(-8, -4, -10),
+                UpDirection = new Vector3D(0, 1, 0),
                 FieldOfView = 45,
                 NearPlaneDistance = 0.1,
                 FarPlaneDistance = 1000,
@@ -472,21 +519,40 @@ namespace NOMAD.MissionPlanner
         {
             var droneBuilder = new MeshBuilder();
             
-            // Small arrow only - proportional to mesh voxels
+            // Arrow points along -Z in WPF (which is +Z forward in ROS optical frame)
             droneBuilder.AddArrow(
-                new Point3D(-0.04, 0, 0),
-                new Point3D(0.08, 0, 0),
+                new Point3D(0, 0, 0.04),
+                new Point3D(0, 0, -0.08),
                 0.015, 3
             );
             
-            // Create material - bright cyan for visibility
-            var droneMaterial = new DiffuseMaterial(new SolidColorBrush(Color.FromRgb(0, 220, 220)));
-            var droneModel = new GeometryModel3D(droneBuilder.ToMesh(), droneMaterial);
+            // Create material - bright cyan for visibility (P3-11: frozen)
+            var droneMesh = droneBuilder.ToMesh();
+            droneMesh.Freeze();
+            var droneBrush = new SolidColorBrush(Color.FromRgb(0, 220, 220));
+            droneBrush.Freeze();
+            var droneMaterial = new DiffuseMaterial(droneBrush);
+            droneMaterial.Freeze();
+            var droneModel = new GeometryModel3D(droneMesh, droneMaterial);
+            droneModel.Freeze();
             
             var droneGroup = new Model3DGroup();
             droneGroup.Children.Add(droneModel);
             
+            // Initialize cached transforms (P3-8)
+            _droneRotZ = new AxisAngleRotation3D(new Vector3D(0, 0, 1), 0);
+            _droneRotX = new AxisAngleRotation3D(new Vector3D(1, 0, 0), 0);
+            _droneRotY = new AxisAngleRotation3D(new Vector3D(0, 1, 0), 0);
+            _droneTranslation = new TranslateTransform3D(0, 0, 0);
+            
+            _droneTransformGroup = new Transform3DGroup();
+            _droneTransformGroup.Children.Add(new RotateTransform3D(_droneRotZ));
+            _droneTransformGroup.Children.Add(new RotateTransform3D(_droneRotX));
+            _droneTransformGroup.Children.Add(new RotateTransform3D(_droneRotY));
+            _droneTransformGroup.Children.Add(_droneTranslation);
+            
             _droneVisual = new ModelVisual3D { Content = droneGroup };
+            _droneVisual.Transform = _droneTransformGroup;
             _droneModelContent = droneGroup;
             _viewport.Children.Add(_droneVisual);
         }
@@ -554,12 +620,16 @@ namespace NOMAD.MissionPlanner
             {
                 var color = GetDetectionColor(det.Label);
                 
+                // ROS-to-WPF frame conversion for detection position
+                double wx = det.X, wy = -det.Y, wz = -det.Z;
+                
                 // Sphere radius scales with confidence (0.03-0.08m)
-                double radius = 0.03 + det.Confidence * 0.05;
+                double conf = Math.Max(0.0, Math.Min(1.0, det.Confidence));
+                double radius = 0.03 + conf * 0.05;
                 
                 var builder = new MeshBuilder();
                 builder.AddSphere(
-                    new Point3D(det.X, det.Y, det.Z),
+                    new Point3D(wx, wy, wz),
                     radius, 8, 8);
                 
                 var mesh = builder.ToMesh();
@@ -589,8 +659,8 @@ namespace NOMAD.MissionPlanner
                 // Add a thin vertical line from floor to marker for depth perception
                 var lineBuilder = new MeshBuilder();
                 lineBuilder.AddPipe(
-                    new Point3D(det.X, det.Y, 0),
-                    new Point3D(det.X, det.Y, det.Z),
+                    new Point3D(wx, 0, wz),
+                    new Point3D(wx, wy, wz),
                     0, 0.003, 4);
                 var lineMesh = lineBuilder.ToMesh();
                 lineMesh.Freeze();
@@ -633,6 +703,8 @@ namespace NOMAD.MissionPlanner
                     string baseUrl = JetsonApiService.BaseUrl ?? "http://100.85.121.98:8000";
                     string wsUrl = baseUrl.Replace("https://", "wss://").Replace("http://", "ws://")
                         .TrimEnd('/') + "/ws/slam";
+                    if (JetsonApiService.ApiKey != null)
+                        wsUrl += $"?token={Uri.EscapeDataString(JetsonApiService.ApiKey)}";
 
                     UpdateStatusSafe("Connecting...");
                     await _webSocket.ConnectAsync(new Uri(wsUrl), ct);
@@ -645,20 +717,45 @@ namespace NOMAD.MissionPlanner
                     while (_webSocket.State == WebSocketState.Open && !ct.IsCancellationRequested)
                     {
                         messageBuffer.SetLength(0);
-                        WebSocketReceiveResult result;
+                        WebSocketReceiveResult result = null;
+                        bool timedOut = false;
+                        bool oversized = false;
                         do
                         {
-                            result = await _webSocket.ReceiveAsync(
+                            var receiveTask = _webSocket.ReceiveAsync(
                                 new ArraySegment<byte>(buffer), ct);
+                            var timeoutTask = Task.Delay(30000, ct);
+                            var completed = await Task.WhenAny(receiveTask, timeoutTask);
+                            if (completed == timeoutTask)
+                            {
+                                System.Diagnostics.Debug.WriteLine("SLAM3D: WebSocket receive timeout, reconnecting...");
+                                timedOut = true;
+                                break;
+                            }
+                            result = await receiveTask;
                             if (result.MessageType == WebSocketMessageType.Close)
                                 break;
-                            messageBuffer.Write(buffer, 0, result.Count);
-                        } while (!result.EndOfMessage);
+                            if (!oversized)
+                            {
+                                messageBuffer.Write(buffer, 0, result.Count);
+                                if (messageBuffer.Length > MaxWebSocketMessageSize)
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"SLAM3D: Message too large ({messageBuffer.Length} bytes), skipping");
+                                    oversized = true;
+                                }
+                            }
+                        } while (result != null && !result.EndOfMessage);
 
-                        if (result.MessageType == WebSocketMessageType.Close)
+                        if (timedOut)
                             break;
 
-                        if (_chkAutoUpdate?.Checked != true)
+                        if (result == null || result.MessageType == WebSocketMessageType.Close)
+                            break;
+
+                        if (oversized)
+                            continue;
+
+                        if (!_autoUpdateEnabled)
                             continue;
 
                         string json = Encoding.UTF8.GetString(
@@ -670,13 +767,16 @@ namespace NOMAD.MissionPlanner
                         if (frame["x"] == null)
                             continue;
 
-                        _dronePosition = new Point3D(
-                            frame["x"]?.Value<double>() ?? 0,
-                            frame["y"]?.Value<double>() ?? 0,
-                            frame["z"]?.Value<double>() ?? 0);
-                        _droneRoll = frame["roll"]?.Value<double>() ?? 0;
-                        _dronePitch = frame["pitch"]?.Value<double>() ?? 0;
-                        _droneYaw = frame["yaw"]?.Value<double>() ?? 0;
+                        lock (_poseLock)
+                        {
+                            _dronePosition = new Point3D(
+                                frame["x"]?.Value<double>() ?? 0,
+                                frame["y"]?.Value<double>() ?? 0,
+                                frame["z"]?.Value<double>() ?? 0);
+                            _droneRoll = frame["roll"]?.Value<double>() ?? 0;
+                            _dronePitch = frame["pitch"]?.Value<double>() ?? 0;
+                            _droneYaw = frame["yaw"]?.Value<double>() ?? 0;
+                        }
 
                         // Parse detection markers if present (~5Hz from server)
                         var detectionsToken = frame["detections"] as JArray;
@@ -685,12 +785,16 @@ namespace NOMAD.MissionPlanner
                             var markers = new List<DetectionMarker3D>();
                             foreach (var d in detectionsToken)
                             {
+                                var dx = d["x"]?.Value<double?>();
+                                var dy = d["y"]?.Value<double?>();
+                                var dz = d["z"]?.Value<double?>();
+                                if (dx == null || dy == null || dz == null) continue;
                                 markers.Add(new DetectionMarker3D
                                 {
                                     Label = d["label"]?.ToString() ?? "",
-                                    X = d["x"]?.Value<double>() ?? 0,
-                                    Y = d["y"]?.Value<double>() ?? 0,
-                                    Z = d["z"]?.Value<double>() ?? 0,
+                                    X = dx.Value,
+                                    Y = dy.Value,
+                                    Z = dz.Value,
                                     Confidence = d["confidence"]?.Value<double>() ?? 0,
                                     SeenCount = d["seen_count"]?.Value<int>() ?? 1,
                                 });
@@ -755,6 +859,15 @@ namespace NOMAD.MissionPlanner
         private void UpdatePoseVisualsOnUiThread()
         {
             if (_disposed || !IsHandleCreated) return;
+            Point3D pos;
+            double yaw, pitch, roll;
+            lock (_poseLock)
+            {
+                pos = _dronePosition;
+                yaw = _droneYaw;
+                pitch = _dronePitch;
+                roll = _droneRoll;
+            }
             try
             {
                 this.BeginInvoke(new Action(() =>
@@ -762,11 +875,11 @@ namespace NOMAD.MissionPlanner
                     if (_disposed || _elementHost == null) return;
                     _elementHost.Invoke(new Action(() =>
                     {
-                        AddTrajectoryPoint(_dronePosition);
-                        UpdateDroneVisual();
+                        AddTrajectoryPoint(pos);
+                        UpdateDroneVisual(pos, yaw, pitch, roll);
                         UpdateTrajectoryVisual();
                         UpdateDetectionMarkers();
-                        UpdateCameras();
+                        UpdateCameras(pos, yaw, pitch, roll);
                     }));
                 }));
             }
@@ -791,6 +904,15 @@ namespace NOMAD.MissionPlanner
         private void ProcessMeshAndPoseOnUiThread(MeshDataModel meshData)
         {
             if (_disposed || !IsHandleCreated) return;
+            Point3D pos;
+            double yaw, pitch, roll;
+            lock (_poseLock)
+            {
+                pos = _dronePosition;
+                yaw = _droneYaw;
+                pitch = _dronePitch;
+                roll = _droneRoll;
+            }
             try
             {
                 this.BeginInvoke(new Action(() =>
@@ -798,11 +920,11 @@ namespace NOMAD.MissionPlanner
                     if (_disposed || _elementHost == null) return;
                     _elementHost.Invoke(new Action(() =>
                     {
-                        AddTrajectoryPoint(_dronePosition);
-                        UpdateDroneVisual();
+                        AddTrajectoryPoint(pos);
+                        UpdateDroneVisual(pos, yaw, pitch, roll);
                         UpdateTrajectoryVisual();
                         UpdateDetectionMarkers();
-                        UpdateCameras();
+                        UpdateCameras(pos, yaw, pitch, roll);
                         if (meshData != null)
                             UpdateMeshVisual(meshData);
                     }));
@@ -829,10 +951,25 @@ namespace NOMAD.MissionPlanner
                 {
                     _meshModelGroup.Children.Clear();
                     _persistedBlocks.Clear();
+                    _voxelInsertionOrder.Clear();
                     _occupancySet.Clear();
                     _materialCache.Clear();
                     _meshDirty = false;
                     _lastRenderedCount = 0;
+                }
+
+                // Handle voxel removals (P2-7)
+                if (meshData?.Removed != null && meshData.Removed.Count > 0)
+                {
+                    foreach (var r in meshData.Removed)
+                    {
+                        var key = PackVoxelKey(r.X, r.Y, r.Z);
+                        if (_persistedBlocks.Remove(key))
+                        {
+                            _occupancySet.Remove(PackKey(r.X, r.Y, r.Z));
+                            _meshDirty = true;
+                        }
+                    }
                 }
 
                 // Route to the appropriate renderer based on mode
@@ -843,6 +980,18 @@ namespace NOMAD.MissionPlanner
                 else if (meshData?.Blocks != null && meshData.Blocks.Count > 0)
                 {
                     UpdateMeshVisualBlocks(meshData);
+                }
+                else if (_meshDirty)
+                {
+                    // Removals-only frame: rebuild with existing persisted data
+                    double vs = meshData?.VoxelSize > 0 ? meshData.VoxelSize :
+                               (meshData?.BlockSize > 0 ? meshData.BlockSize : 0.15);
+                    UpdateMeshVisualVoxels(new MeshDataModel
+                    {
+                        Mode = "voxels",
+                        Voxels = new List<VoxelModel>(),
+                        VoxelSize = vs,
+                    });
                 }
             }
             catch (Exception ex)
@@ -867,38 +1016,46 @@ namespace NOMAD.MissionPlanner
                 int qx = (int)Math.Round(voxel.Position[0] / vs);
                 int qy = (int)Math.Round(voxel.Position[1] / vs);
                 int qz = (int)Math.Round(voxel.Position[2] / vs);
-                string key = $"{qx},{qy},{qz}";
+                long key = PackVoxelKey(qx, qy, qz);
 
                 // Flat color: quantize to 4-bit per channel (16 levels)
                 uint colorKey;
                 if (voxel.Color != null && voxel.Color.Count >= 3)
                 {
-                    byte r = (byte)((voxel.Color[0] >> 4) << 4);
-                    byte g = (byte)((voxel.Color[1] >> 4) << 4);
-                    byte b = (byte)((voxel.Color[2] >> 4) << 4);
+                    byte r = (byte)(((voxel.Color[0] >> 4) & 0x0F) * 17);
+                    byte g = (byte)(((voxel.Color[1] >> 4) & 0x0F) * 17);
+                    byte b = (byte)(((voxel.Color[2] >> 4) & 0x0F) * 17);
                     colorKey = ((uint)r << 16) | ((uint)g << 8) | (uint)b;
                 }
                 else
-                    colorKey = (144u << 16) | (144u << 8) | 160u;
+                    colorKey = uint.MaxValue;
 
                 if (!_persistedBlocks.ContainsKey(key) || _persistedBlocks[key] != colorKey)
                 {
+                    if (!_persistedBlocks.ContainsKey(key))
+                        _voxelInsertionOrder.Enqueue(key);
                     _persistedBlocks[key] = colorKey;
                     _occupancySet.Add(PackKey(qx, qy, qz));
                     _meshDirty = true;
                 }
             }
 
-            // Evict oldest entries if over cap
+            // Evict oldest entries via FIFO queue
             if (_persistedBlocks.Count > MaxPersistedVoxels)
             {
                 int toRemove = _persistedBlocks.Count - MaxPersistedVoxels;
-                var keysToRemove = _persistedBlocks.Keys.Take(toRemove).ToList();
-                foreach (var k in keysToRemove)
+                for (int i = 0; i < toRemove && _voxelInsertionOrder.Count > 0; i++)
                 {
-                    _persistedBlocks.Remove(k);
-                    string[] p = k.Split(',');
-                    _occupancySet.Remove(PackKey(int.Parse(p[0]), int.Parse(p[1]), int.Parse(p[2])));
+                    long evictKey = _voxelInsertionOrder.Dequeue();
+                    if (_persistedBlocks.Remove(evictKey))
+                    {
+                        UnpackVoxelKey(evictKey, out int ex, out int ey, out int ez);
+                        _occupancySet.Remove(PackKey(ex, ey, ez));
+                    }
+                    else
+                    {
+                        i--; // key was already removed (color update replaced it), skip
+                    }
                 }
                 _meshDirty = true;
             }
@@ -911,17 +1068,22 @@ namespace NOMAD.MissionPlanner
             if (newSinceLastRender > 0 && newSinceLastRender < MinNewVoxelsForRebuild && _lastRenderedCount > 0)
                 return;
 
+            // Time-based debounce: max ~4 rebuilds/sec (P3-7)
+            if (DateTime.UtcNow - _lastMeshRebuild < MinRebuildInterval)
+                return;
+
+            _lastMeshRebuild = DateTime.UtcNow;
             _meshDirty = false;
             _lastRenderedCount = _persistedBlocks.Count;
 
             // Group by color for batched draw calls
             _meshModelGroup.Children.Clear();
 
-            var colorGroups = new Dictionary<uint, List<string>>();
+            var colorGroups = new Dictionary<uint, List<long>>();
             foreach (var kvp in _persistedBlocks)
             {
                 if (!colorGroups.ContainsKey(kvp.Value))
-                    colorGroups[kvp.Value] = new List<string>();
+                    colorGroups[kvp.Value] = new List<long>();
                 colorGroups[kvp.Value].Add(kvp.Key);
             }
 
@@ -933,7 +1095,7 @@ namespace NOMAD.MissionPlanner
                 byte cr = (byte)((ck >> 16) & 0xFF);
                 byte cg2 = (byte)((ck >> 8) & 0xFF);
                 byte cb = (byte)(ck & 0xFF);
-                if (cr == 0 && cg2 == 0 && cb == 0) { cr = 144; cg2 = 144; cb = 160; }
+                if (ck == uint.MaxValue) { cr = 144; cg2 = 144; cb = 160; }
 
                 var positions = new Point3DCollection();
                 var indices = new Int32Collection();
@@ -941,10 +1103,7 @@ namespace NOMAD.MissionPlanner
 
                 foreach (var key in cg.Value)
                 {
-                    string[] parts = key.Split(',');
-                    int ix = int.Parse(parts[0]);
-                    int iy = int.Parse(parts[1]);
-                    int iz = int.Parse(parts[2]);
+                    UnpackVoxelKey(key, out int ix, out int iy, out int iz);
                     double cx = ix * vs;
                     double cy = iy * vs;
                     double cz = iz * vs;
@@ -1042,7 +1201,6 @@ namespace NOMAD.MissionPlanner
                 }
 
                 var model = new GeometryModel3D(geom, mat);
-                model.BackMaterial = mat;
                 model.Freeze();
                 _meshModelGroup.Children.Add(model);
             }
@@ -1064,15 +1222,22 @@ namespace NOMAD.MissionPlanner
                     if (block.Index == null || block.Index.Count < 3)
                         continue;
 
-                    string key = $"{block.Index[0]},{block.Index[1]},{block.Index[2]}";
+                    long key = PackVoxelKey(block.Index[0], block.Index[1], block.Index[2]);
                     uint colorKey;
                     if (block.Color != null && block.Color.Count >= 3)
-                        colorKey = ((uint)block.Color[0] << 16) | ((uint)block.Color[1] << 8) | (uint)block.Color[2];
+                    {
+                        byte r = (byte)(((block.Color[0] >> 4) & 0x0F) * 17);
+                        byte g = (byte)(((block.Color[1] >> 4) & 0x0F) * 17);
+                        byte b = (byte)(((block.Color[2] >> 4) & 0x0F) * 17);
+                        colorKey = ((uint)r << 16) | ((uint)g << 8) | (uint)b;
+                    }
                     else
-                        colorKey = (150u << 16) | (150u << 8) | 160u;
+                        colorKey = uint.MaxValue;
 
                     if (!_persistedBlocks.ContainsKey(key) || _persistedBlocks[key] != colorKey)
                     {
+                        if (!_persistedBlocks.ContainsKey(key))
+                            _voxelInsertionOrder.Enqueue(key);
                         _persistedBlocks[key] = colorKey;
                         _occupancySet.Add(PackKey(block.Index[0], block.Index[1], block.Index[2]));
                         hasNewBlocks = true;
@@ -1087,8 +1252,8 @@ namespace NOMAD.MissionPlanner
                 var colorGroups = new Dictionary<uint, List<int[]>>();
                 foreach (var kvp in _persistedBlocks)
                 {
-                    string[] parts = kvp.Key.Split(',');
-                    int[] idx = { int.Parse(parts[0]), int.Parse(parts[1]), int.Parse(parts[2]) };
+                    UnpackVoxelKey(kvp.Key, out int bx, out int by, out int bz);
+                    int[] idx = { bx, by, bz };
                     if (!colorGroups.ContainsKey(kvp.Value))
                         colorGroups[kvp.Value] = new List<int[]>();
                     colorGroups[kvp.Value].Add(idx);
@@ -1100,6 +1265,7 @@ namespace NOMAD.MissionPlanner
                     byte r = (byte)((ck >> 16) & 0xFF);
                     byte g = (byte)((ck >> 8) & 0xFF);
                     byte b = (byte)(ck & 0xFF);
+                    if (ck == uint.MaxValue) { r = 144; g = 144; b = 160; }
 
                     var positions = new Point3DCollection();
                     var indices = new Int32Collection();
@@ -1199,31 +1365,22 @@ namespace NOMAD.MissionPlanner
                     }
 
                     var model = new GeometryModel3D(geom, mat);
-                    model.BackMaterial = mat;
                     model.Freeze();
                     _meshModelGroup.Children.Add(model);
                 }
         }
         
-        private void UpdateDroneVisual()
+        private void UpdateDroneVisual(Point3D pos, double yaw, double pitch, double roll)
         {
             if (_droneVisual == null) return;
             
-            var transform = new Transform3DGroup();
-            
-            // Rotation (yaw, pitch, roll -> ZYX Euler)
-            var rotZ = new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(0, 0, 1), _droneYaw * 180 / Math.PI));
-            var rotY = new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(0, 1, 0), _dronePitch * 180 / Math.PI));
-            var rotX = new RotateTransform3D(new AxisAngleRotation3D(new Vector3D(1, 0, 0), _droneRoll * 180 / Math.PI));
-            
-            transform.Children.Add(rotX);
-            transform.Children.Add(rotY);
-            transform.Children.Add(rotZ);
-            
-            // Translation
-            transform.Children.Add(new TranslateTransform3D(_dronePosition.X, _dronePosition.Y, _dronePosition.Z));
-            
-            _droneVisual.Transform = transform;
+            // Update cached transforms -- ROS-to-WPF conversion applied here
+            _droneRotZ.Angle = roll * 180.0 / Math.PI;
+            _droneRotX.Angle = -pitch * 180.0 / Math.PI;
+            _droneRotY.Angle = -yaw * 180.0 / Math.PI;
+            _droneTranslation.OffsetX = pos.X;
+            _droneTranslation.OffsetY = -pos.Y;
+            _droneTranslation.OffsetZ = -pos.Z;
         }
         
         private void UpdateTrajectoryVisual()
@@ -1244,14 +1401,17 @@ namespace NOMAD.MissionPlanner
 
                 for (int i = 1; i < _trajectoryPoints.Count; i++)
                 {
-                    var p0 = _trajectoryPoints[i - 1];
-                    var p1 = _trajectoryPoints[i];
+                    // Convert stored ROS points to WPF frame at render time
+                    var rosP0 = _trajectoryPoints[i - 1];
+                    var rosP1 = _trajectoryPoints[i];
+                    var p0 = new Point3D(rosP0.X, -rosP0.Y, -rosP0.Z);
+                    var p1 = new Point3D(rosP1.X, -rosP1.Y, -rosP1.Z);
                     var dir = p1 - p0;
                     if (dir.Length < 0.001) continue;
 
-                    var up = new Vector3D(0, 0, 1);
+                    var up = new Vector3D(0, 1, 0); // WPF Y-up
                     var right = Vector3D.CrossProduct(dir, up);
-                    if (right.Length < 0.001) { up = new Vector3D(0, 1, 0); right = Vector3D.CrossProduct(dir, up); }
+                    if (right.Length < 0.001) { right = Vector3D.CrossProduct(dir, new Vector3D(1, 0, 0)); }
                     right.Normalize();
                     right *= r;
 
@@ -1305,18 +1465,18 @@ namespace NOMAD.MissionPlanner
             }
         }
         
-        private void UpdateCameras()
+        private void UpdateCameras(Point3D pos, double yaw, double pitch, double roll)
         {
             switch (_currentViewMode)
             {
                 case CameraViewMode.FirstPerson:
-                    UpdateFPVCamera();
+                    UpdateFPVCamera(pos, yaw, pitch, roll);
                     // Hide drone arrow in FPV so it doesn't obscure the view
                     if (_droneVisual != null)
                         _droneVisual.Content = new Model3DGroup();
                     break;
                 case CameraViewMode.ThirdPerson:
-                    UpdateTPVCamera();
+                    UpdateTPVCamera(pos, yaw);
                     RestoreDroneVisual();
                     break;
                 case CameraViewMode.FreeOrbit:
@@ -1325,27 +1485,34 @@ namespace NOMAD.MissionPlanner
             }
         }
         
-        private void UpdateFPVCamera()
+        private void UpdateFPVCamera(Point3D pos, double yaw, double pitch, double roll)
         {
-            _fpvCamera.Position = _dronePosition;
-            
-            double yaw = _droneYaw;
-            double pitch = _dronePitch;
-            double roll = _droneRoll;
+            // ROS-to-WPF frame conversion
+            var wpfPos = new Point3D(pos.X, -pos.Y, -pos.Z);
+            _fpvCamera.Position = wpfPos;
 
-            // Look direction from yaw + pitch
-            _fpvCamera.LookDirection = new Vector3D(
-                Math.Cos(yaw) * Math.Cos(pitch),
-                Math.Sin(yaw) * Math.Cos(pitch),
-                -Math.Sin(pitch)
+            // In WPF Y-up frame, negate yaw (Y-down -> Y-up changes rotation sense)
+            // Forward in ROS = (0,0,1) maps to (0,0,-1) in WPF
+            // Rotate by yaw around WPF Y-up, then pitch around X-right
+            double cosY = Math.Cos(-yaw), sinY = Math.Sin(-yaw);
+            double cosP = Math.Cos(pitch), sinP = Math.Sin(pitch);
+
+            var lookDir = new Vector3D(
+                -sinY * cosP,
+                -sinP,
+                -cosY * cosP
             );
+            _fpvCamera.LookDirection = lookDir;
 
-            // Up direction rotated by roll around the look axis
-            // Default up is (0,0,1); roll rotates it in the plane perpendicular to look
-            double upX = -Math.Cos(yaw) * Math.Sin(pitch) * Math.Cos(roll) - Math.Sin(yaw) * Math.Sin(roll);
-            double upY = -Math.Sin(yaw) * Math.Sin(pitch) * Math.Cos(roll) + Math.Cos(yaw) * Math.Sin(roll);
-            double upZ = Math.Cos(pitch) * Math.Cos(roll);
-            _fpvCamera.UpDirection = new Vector3D(upX, upY, upZ);
+            // Up direction: compute via cross products for guaranteed orthogonality
+            double cosR = Math.Cos(roll), sinR = Math.Sin(roll);
+            var right = Vector3D.CrossProduct(lookDir, new Vector3D(0, 1, 0));
+            if (right.Length < 0.001) right = new Vector3D(1, 0, 0);
+            right.Normalize();
+            var baseUp = Vector3D.CrossProduct(right, lookDir);
+            baseUp.Normalize();
+            // Apply roll around look direction
+            _fpvCamera.UpDirection = baseUp * cosR + right * sinR;
         }
 
         private void RestoreDroneVisual()
@@ -1357,23 +1524,20 @@ namespace NOMAD.MissionPlanner
             }
         }
         
-        private void UpdateTPVCamera()
+        private void UpdateTPVCamera(Point3D pos, double yaw)
         {
-            // Camera behind and above drone
-            double distance = 5.0;
-            double height = 3.0;
-            double yaw = _droneYaw;
-            
-            double camX = _dronePosition.X - distance * Math.Cos(yaw);
-            double camY = _dronePosition.Y - distance * Math.Sin(yaw);
-            double camZ = _dronePosition.Z + height;
-            
-            _tpvCamera.Position = new Point3D(camX, camY, camZ);
-            _tpvCamera.LookDirection = new Vector3D(
-                _dronePosition.X - camX,
-                _dronePosition.Y - camY,
-                _dronePosition.Z - camZ
+            // ROS-to-WPF frame conversion
+            var wpfPos = new Point3D(pos.X, -pos.Y, -pos.Z);
+            double distance = 3.0, height = 1.5;
+            double cosY = Math.Cos(-yaw), sinY = Math.Sin(-yaw);
+            // Behind the drone in WPF frame (forward is -Z in WPF)
+            var camPos = new Point3D(
+                wpfPos.X + sinY * distance,
+                wpfPos.Y + height,
+                wpfPos.Z + cosY * distance
             );
+            _tpvCamera.Position = camPos;
+            _tpvCamera.LookDirection = wpfPos - camPos;
         }
 
         // ==================== Event Handlers ====================
@@ -1392,6 +1556,17 @@ namespace NOMAD.MissionPlanner
             // Update camera
             _elementHost.Invoke(new Action(() =>
             {
+                // When switching to FreeOrbit, seed from current active camera
+                if (_currentViewMode == CameraViewMode.FreeOrbit)
+                {
+                    var prevCam = _viewport.Camera as PerspectiveCamera;
+                    if (prevCam != null)
+                    {
+                        _orbitCamera.Position = prevCam.Position;
+                        _orbitCamera.LookDirection = prevCam.LookDirection;
+                        _orbitCamera.UpDirection = prevCam.UpDirection;
+                    }
+                }
                 _viewport.Camera = _currentViewMode switch
                 {
                     CameraViewMode.FirstPerson => _fpvCamera,
@@ -1416,13 +1591,13 @@ namespace NOMAD.MissionPlanner
         {
             _elementHost.Invoke(new Action(() =>
             {
-                // Reset orbit camera
-                _orbitCamera.Position = new Point3D(-10, -10, 8);
-                _orbitCamera.LookDirection = new Vector3D(10, 10, -5);
+                // Reset orbit camera (WPF Y-up frame)
+                _orbitCamera.Position = new Point3D(8, 6, 10);
+                _orbitCamera.LookDirection = new Vector3D(-8, -4, -10);
                 
-                // Reset TPV
-                _tpvCamera.Position = new Point3D(-5, -5, 5);
-                _tpvCamera.LookDirection = new Vector3D(5, 5, -3);
+                // Reset TPV (WPF Y-up frame)
+                _tpvCamera.Position = new Point3D(0, 5, 10);
+                _tpvCamera.LookDirection = new Vector3D(0, -3, -8);
                 
                 _viewport.ZoomExtents();
             }));

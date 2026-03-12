@@ -138,10 +138,10 @@ depth:
 # nvblox_config.yaml
 nvblox_node:
   ros__parameters:
-    voxel_size: 0.05  # 5cm resolution for indoor
+    voxel_size: 0.15  # 15cm - revised from 0.05 for Orin Nano performance
     esdf_mode: '3D'
     mapping_type: 'static_tsdf'  # Indoor static environment
-    max_integration_distance: 5.0
+    max_integration_distance: 8.0
     max_obstacle_distance: 2.0  # Important for costmap
 ```
 
