@@ -713,23 +713,24 @@ class ROSHTTPBridge(Node):
             return
         try:
             now = time.time()
-            # Rate limit: 2 Hz for voxel data (match block rate)
-            if now - self._last_mesh_send_time < 0.5:
-                return
 
             if msg.type != 6:  # CUBE_LIST
                 return
 
             n_pts = len(msg.points)
+            
+            # Track empty markers for fallback logic (DO THIS BEFORE rate limiting)
+            # so we count ALL empty messages, not just the ones that pass the rate limit
             if n_pts == 0:
-                # Track consecutive empty markers; after 20, fall back to block mode
                 self._voxel_empty_count += 1
                 if self._voxel_empty_count == 20:
                     self._use_voxel_marker = False
                     self.get_logger().warning(
-                        "color_layer_marker has been empty for 20 messages -- "
+                        "color_layer_marker has been empty for 20 consecutive messages -- "
                         "falling back to /nvblox_node/mesh (block mode)"
                     )
+                # Return AFTER tracking, but before rate limit check
+                # (so we don't skip block mesh if voxels are temporarily empty)
                 return
 
             # Got real points -- reset empty counter and re-enable voxel mode
@@ -737,6 +738,10 @@ class ROSHTTPBridge(Node):
             if not self._use_voxel_marker:
                 self._use_voxel_marker = True
                 self.get_logger().info("color_layer_marker has data -- switching back to voxel mode")
+
+            # Now apply rate limit only for sending (not for tracking empty)
+            if now - self._last_mesh_send_time < 0.5:
+                return
 
             voxel_size = msg.scale.x  # All 3 scales should be equal
             has_colors = len(msg.colors) == n_pts
