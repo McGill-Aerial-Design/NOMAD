@@ -209,6 +209,10 @@ class VIOUpdateRequest(BaseModel):
     ros_x: float = 0.0
     ros_y: float = 0.0
     ros_z: float = 0.0
+    # Raw ROS-frame orientation (same frame as mesh vertices)
+    ros_roll: float = 0.0
+    ros_pitch: float = 0.0
+    ros_yaw: float = 0.0
 
 
 class NavVelocityRequest(BaseModel):
@@ -1189,9 +1193,9 @@ def create_app(state_manager: StateManager) -> FastAPI:
             "x": vio_request.ros_x,
             "y": vio_request.ros_y,
             "z": vio_request.ros_z,
-            "roll": vio_request.roll,
-            "pitch": vio_request.pitch,
-            "yaw": vio_request.yaw,
+            "roll": vio_request.ros_roll,
+            "pitch": vio_request.ros_pitch,
+            "yaw": vio_request.ros_yaw,
             "timestamp": vio_request.timestamp,
         }
         

@@ -105,6 +105,10 @@ class VIOData:
     ros_x: float = 0.0
     ros_y: float = 0.0
     ros_z: float = 0.0
+    # Raw ROS-frame orientation (from odom topic, same frame as mesh)
+    ros_roll: float = 0.0
+    ros_pitch: float = 0.0
+    ros_yaw: float = 0.0
 
 
 @dataclass
@@ -345,6 +349,9 @@ class ROSHTTPBridge(Node):
                 ros_x=pose.position.x,
                 ros_y=pose.position.y,
                 ros_z=pose.position.z,
+                ros_roll=roll,
+                ros_pitch=pitch,
+                ros_yaw=yaw,
             )
             
             with self._lock:
@@ -775,45 +782,20 @@ class ROSHTTPBridge(Node):
 
     def _get_camera_pose(self) -> Optional[dict]:
         """
-        Get camera pose from TF.
-        Returns position (x, y, z) and attitude (roll, pitch, yaw) in the reference frame.
+        Get camera pose from latest VIO odometry data.
+        Returns position (x, y, z) and attitude (roll, pitch, yaw) in the odom frame.
+        Uses the raw odom pose directly (same coordinate frame as the mesh).
         """
-        if not self._tf_buffer or not TF2_AVAILABLE:
+        with self._lock:
+            vio = self._latest_vio
+
+        if vio is None:
             return None
-        
-        try:
-            # Try to get transform from reference frame to camera frame
-            # Use latest available time
-            transform = self._tf_buffer.lookup_transform(
-                self._reference_frame,
-                self._camera_frame,
-                rclpy.time.Time(),  # Use latest
-                timeout=rclpy.duration.Duration(seconds=0.1)
-            )
-            
-            # Extract position
-            pos = transform.transform.translation
-            
-            # Extract rotation and convert to Euler
-            rot = transform.transform.rotation
-            roll, pitch, yaw = self._quat_to_euler(rot.x, rot.y, rot.z, rot.w)
-            
-            return {
-                "position": {"x": pos.x, "y": pos.y, "z": pos.z},
-                "attitude": {"roll": roll, "pitch": pitch, "yaw": yaw}
-            }
-            
-        except TransformException as e:
-            # TF not available yet or frames don't exist - this is normal during startup
-            # Try alternate reference frame
-            if self._reference_frame == "odom":
-                self._reference_frame = "map"  # Try map frame next time
-            elif self._reference_frame == "map":
-                self._reference_frame = "odom"  # Try odom frame next time
-            return None
-        except Exception as e:
-            self.get_logger().debug(f"TF lookup failed: {e}")
-            return None
+
+        return {
+            "position": {"x": vio.ros_x, "y": vio.ros_y, "z": vio.ros_z},
+            "attitude": {"roll": vio.ros_roll, "pitch": vio.ros_pitch, "yaw": vio.ros_yaw}
+        }
     
     def _send_mesh_to_edge_core(self, mesh_data: dict) -> None:
         """Send mesh data to edge_core via HTTP."""
