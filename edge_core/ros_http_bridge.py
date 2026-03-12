@@ -209,6 +209,7 @@ class ROSHTTPBridge(Node):
         self._cmd_vel_send_count = 0
         self._mesh_recv_count = 0
         self._mesh_send_count = 0
+        self._voxel_empty_count = 0  # consecutive empty voxel markers; fall back to block mode after threshold
         self._servo_recv_count = 0
         self._servo_send_count = 0
         self._detection_recv_count = 0
@@ -714,7 +715,21 @@ class ROSHTTPBridge(Node):
 
             n_pts = len(msg.points)
             if n_pts == 0:
+                # Track consecutive empty markers; after 20, fall back to block mode
+                self._voxel_empty_count += 1
+                if self._voxel_empty_count == 20:
+                    self._use_voxel_marker = False
+                    self.get_logger().warning(
+                        "color_layer_marker has been empty for 20 messages -- "
+                        "falling back to /nvblox_node/mesh (block mode)"
+                    )
                 return
+
+            # Got real points -- reset empty counter and re-enable voxel mode
+            self._voxel_empty_count = 0
+            if not self._use_voxel_marker:
+                self._use_voxel_marker = True
+                self.get_logger().info("color_layer_marker has data -- switching back to voxel mode")
 
             voxel_size = msg.scale.x  # All 3 scales should be equal
             has_colors = len(msg.colors) == n_pts
