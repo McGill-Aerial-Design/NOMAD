@@ -1013,6 +1013,16 @@ class IMUHeadingCalibration:
             self._state = CalibrationState.FAILED
             return None
 
+        finally:
+            # Always release the ZED camera after calibration completes or fails
+            # so the Isaac ROS container can open it for nvblox/OD.
+            if self._owns_camera and self._zed:
+                try:
+                    self._zed.close()
+                except Exception:
+                    pass
+                self._zed = None
+
     def cancel(self):
         """Cancel the calibration."""
         if self._owns_camera and self._zed:
