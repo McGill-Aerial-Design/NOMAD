@@ -676,7 +676,7 @@ class ROSHTTPBridge(Node):
             mesh_data = {
                 "blocks": blocks,
                 "block_size": block_size,
-                "mode": "blocks",
+                "mode": "block",
                 "total_blocks": len(blocks),
                 "timestamp": now,
                 "frame_id": msg.header.frame_id if hasattr(msg, 'header') else "map",
@@ -740,7 +740,7 @@ class ROSHTTPBridge(Node):
             mesh_data = {
                 "voxels": voxels,
                 "voxel_size": round(voxel_size, 4),
-                "mode": "voxels",
+                "mode": "voxel",
                 "total_voxels": n_pts,
                 "sent_voxels": limit,
                 "timestamp": now,
