@@ -350,8 +350,8 @@ class ROSHTTPBridge(Node):
                 ros_y=pose.position.y,
                 ros_z=pose.position.z,
                 ros_roll=roll,
-                ros_pitch=pitch,
-                ros_yaw=yaw,
+                ros_pitch=-pitch,  # Frame conversion: Y-axis flipped (down->up in GL)
+                ros_yaw=-yaw,      # Frame conversion: Z-axis flipped (forward->backward in GL)
             )
             
             with self._lock:

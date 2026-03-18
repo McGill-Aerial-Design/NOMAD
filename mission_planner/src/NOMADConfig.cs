@@ -350,6 +350,28 @@ namespace NOMAD.MissionPlanner
         public bool AudioAlerts { get; set; } = true;
 
         // ============================================================
+        // Drone Geometry & SLAM 3D Configuration
+        // ============================================================
+
+        /// <summary>Drone body length in cm (nose to tail).</summary>
+        public float DroneLengthCm { get; set; } = 45.0f;
+
+        /// <summary>Drone body width in cm (arm tip to arm tip).</summary>
+        public float DroneWidthCm { get; set; } = 45.0f;
+
+        /// <summary>Drone body height in cm (top to bottom).</summary>
+        public float DroneHeightCm { get; set; } = 15.0f;
+
+        /// <summary>Camera forward offset from drone center in cm.</summary>
+        public float CameraForwardOffsetCm { get; set; } = 10.0f;
+
+        /// <summary>Camera downward offset from drone center in cm.</summary>
+        public float CameraDownOffsetCm { get; set; } = 5.0f;
+
+        /// <summary>Heading offset in degrees to compensate for magnetometer calibration.</summary>
+        public float SlamHeadingOffsetDeg { get; set; } = 0.0f;
+
+        // ============================================================
         // GPIO/Payload Configuration
         // ============================================================
 
@@ -505,6 +527,12 @@ namespace NOMAD.MissionPlanner
             TempWarningC = defaults.TempWarningC;
             TempCriticalC = defaults.TempCriticalC;
             AudioAlerts = defaults.AudioAlerts;
+            DroneLengthCm = defaults.DroneLengthCm;
+            DroneWidthCm = defaults.DroneWidthCm;
+            DroneHeightCm = defaults.DroneHeightCm;
+            CameraForwardOffsetCm = defaults.CameraForwardOffsetCm;
+            CameraDownOffsetCm = defaults.CameraDownOffsetCm;
+            SlamHeadingOffsetDeg = defaults.SlamHeadingOffsetDeg;
         }
     }
 }

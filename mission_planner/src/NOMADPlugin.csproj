@@ -64,17 +64,17 @@
     <Reference Include="System.Xaml" />
   </ItemGroup>
 
-  <!-- Helix Toolkit for 3D SLAM visualization -->
+  <!-- OpenTK for cross-platform 3D SLAM visualization (ships with Mission Planner) -->
   <ItemGroup>
-    <PackageReference Include="HelixToolkit.Wpf" Version="2.20.2">
-      <PrivateAssets>none</PrivateAssets>
-    </PackageReference>
+    <Reference Include="OpenTK">
+      <HintPath>C:\Program Files (x86)\Mission Planner\OpenTK.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="OpenTK.GLControl">
+      <HintPath>C:\Program Files (x86)\Mission Planner\OpenTK.GLControl.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
   </ItemGroup>
-
-  <!-- Copy NuGet package DLLs to output -->
-  <PropertyGroup>
-    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
-  </PropertyGroup>
   
   <ItemGroup>
     <!-- Mission Planner References -->
