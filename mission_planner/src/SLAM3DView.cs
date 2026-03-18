@@ -963,10 +963,12 @@ namespace NOMAD.MissionPlanner
                 {
                     foreach (var r in meshData.Removed)
                     {
-                        var key = PackVoxelKey(r.X, r.Y, r.Z);
+                        // Negate Y and Z: ROS odom (Y-down, Z-forward) → WPF (Y-up, Z-toward viewer)
+                        int rx = r.X, ry = -r.Y, rz = -r.Z;
+                        var key = PackVoxelKey(rx, ry, rz);
                         if (_persistedBlocks.Remove(key))
                         {
-                            _occupancySet.Remove(PackKey(r.X, r.Y, r.Z));
+                            _occupancySet.Remove(PackKey(rx, ry, rz));
                             _meshDirty = true;
                         }
                     }
@@ -1013,9 +1015,11 @@ namespace NOMAD.MissionPlanner
                 if (voxel.Position == null || voxel.Position.Count < 3)
                     continue;
 
+                // Negate Y and Z before quantising: converts ROS odom (Y-down, Z-forward)
+                // into WPF grid space (Y-up, Z-toward viewer) so all grid ops stay consistent.
                 int qx = (int)Math.Round(voxel.Position[0] / vs);
-                int qy = (int)Math.Round(voxel.Position[1] / vs);
-                int qz = (int)Math.Round(voxel.Position[2] / vs);
+                int qy = (int)Math.Round(-voxel.Position[1] / vs);
+                int qz = (int)Math.Round(-voxel.Position[2] / vs);
                 long key = PackVoxelKey(qx, qy, qz);
 
                 // Flat color: quantize to 4-bit per channel (16 levels)
@@ -1222,7 +1226,12 @@ namespace NOMAD.MissionPlanner
                     if (block.Index == null || block.Index.Count < 3)
                         continue;
 
-                    long key = PackVoxelKey(block.Index[0], block.Index[1], block.Index[2]);
+                    // Negate Y and Z: ROS odom (Y-down, Z-forward) → WPF grid (Y-up, Z-toward viewer)
+                    int bix = block.Index[0];
+                    int biy = -block.Index[1];
+                    int biz = -block.Index[2];
+
+                    long key = PackVoxelKey(bix, biy, biz);
                     uint colorKey;
                     if (block.Color != null && block.Color.Count >= 3)
                     {
@@ -1239,7 +1248,7 @@ namespace NOMAD.MissionPlanner
                         if (!_persistedBlocks.ContainsKey(key))
                             _voxelInsertionOrder.Enqueue(key);
                         _persistedBlocks[key] = colorKey;
-                        _occupancySet.Add(PackKey(block.Index[0], block.Index[1], block.Index[2]));
+                        _occupancySet.Add(PackKey(bix, biy, biz));
                         hasNewBlocks = true;
                     }
                 }
@@ -1374,10 +1383,16 @@ namespace NOMAD.MissionPlanner
         {
             if (_droneVisual == null) return;
             
-            // Update cached transforms -- ROS-to-WPF conversion applied here
-            _droneRotZ.Angle = roll * 180.0 / Math.PI;
-            _droneRotX.Angle = -pitch * 180.0 / Math.PI;
-            _droneRotY.Angle = -yaw * 180.0 / Math.PI;
+            // In ZED odom (X-right, Y-down, Z-forward), _quat_to_euler gives:
+            //   roll  = rotation around X = physical camera tilt (elevation, up/down)
+            //   pitch = rotation around Y = physical heading (left/right pan)
+            //   yaw   = rotation around Z = physical optical roll
+            // WPF frame is Y-up, Z-toward viewer, so Y and Z senses are inverted.
+            // Transform3DGroup order [RotZ, RotX, RotY] = extrinsic ZXY = intrinsic YXZ
+            // (heading first, then elevation, then optical roll) when values are assigned:
+            _droneRotY.Angle = -pitch * 180.0 / Math.PI;  // heading (pan) → WPF Y rotation
+            _droneRotX.Angle = roll * 180.0 / Math.PI;    // elevation (tilt) → WPF X rotation
+            _droneRotZ.Angle = -yaw * 180.0 / Math.PI;    // optical roll → WPF Z rotation
             _droneTranslation.OffsetX = pos.X;
             _droneTranslation.OffsetY = -pos.Y;
             _droneTranslation.OffsetZ = -pos.Z;
@@ -1476,7 +1491,7 @@ namespace NOMAD.MissionPlanner
                         _droneVisual.Content = new Model3DGroup();
                     break;
                 case CameraViewMode.ThirdPerson:
-                    UpdateTPVCamera(pos, yaw);
+                    UpdateTPVCamera(pos, pitch);  // pitch = physical heading in ZED odom frame
                     RestoreDroneVisual();
                     break;
                 case CameraViewMode.FreeOrbit:
@@ -1491,11 +1506,11 @@ namespace NOMAD.MissionPlanner
             var wpfPos = new Point3D(pos.X, -pos.Y, -pos.Z);
             _fpvCamera.Position = wpfPos;
 
-            // In WPF Y-up frame, negate yaw (Y-down -> Y-up changes rotation sense)
-            // Forward in ROS = (0,0,1) maps to (0,0,-1) in WPF
-            // Rotate by yaw around WPF Y-up, then pitch around X-right
-            double cosY = Math.Cos(-yaw), sinY = Math.Sin(-yaw);
-            double cosP = Math.Cos(pitch), sinP = Math.Sin(pitch);
+            // In ZED odom: pitch=heading, roll=elevation, yaw=optical roll.
+            // WPF: Y-up, Z-toward-viewer.  Forward = (0,0,-1) in WPF.
+            // lookDir formula: heading around Y-up, elevation around X-right.
+            double cosY = Math.Cos(-pitch), sinY = Math.Sin(-pitch);   // heading (negated: odom Y-down → WPF Y-up)
+            double cosP = Math.Cos(-roll),  sinP = Math.Sin(-roll);    // elevation (negated for WPF sign convention)
 
             var lookDir = new Vector3D(
                 -sinY * cosP,
@@ -1504,8 +1519,8 @@ namespace NOMAD.MissionPlanner
             );
             _fpvCamera.LookDirection = lookDir;
 
-            // Up direction: compute via cross products for guaranteed orthogonality
-            double cosR = Math.Cos(roll), sinR = Math.Sin(roll);
+            // Up direction: optical roll around look-direction
+            double cosR = Math.Cos(yaw), sinR = Math.Sin(yaw);  // yaw = physical optical roll
             var right = Vector3D.CrossProduct(lookDir, new Vector3D(0, 1, 0));
             if (right.Length < 0.001) right = new Vector3D(1, 0, 0);
             right.Normalize();
@@ -1524,12 +1539,13 @@ namespace NOMAD.MissionPlanner
             }
         }
         
-        private void UpdateTPVCamera(Point3D pos, double yaw)
+        private void UpdateTPVCamera(Point3D pos, double heading)
         {
             // ROS-to-WPF frame conversion
             var wpfPos = new Point3D(pos.X, -pos.Y, -pos.Z);
             double distance = 3.0, height = 1.5;
-            double cosY = Math.Cos(-yaw), sinY = Math.Sin(-yaw);
+            // heading is the physical heading (ros_pitch in ZED odom), negated for WPF Y-up
+            double cosY = Math.Cos(-heading), sinY = Math.Sin(-heading);
             // Behind the drone in WPF frame (forward is -Z in WPF)
             var camPos = new Point3D(
                 wpfPos.X + sinY * distance,

@@ -767,12 +767,25 @@ def stop_mag_calibration() -> Optional[MagCalibrationResult]:
 # The 6 canonical orientations and the expected gravity axis for each.
 # (label, description, expected_accel_sign) where expected is the dominant axis.
 IMU_POSITIONS = [
-    ("front",  "Place camera lens pointing DOWN (front facing ground)", (0, 0, -1)),
-    ("back",   "Place camera lens pointing UP (front facing sky)",      (0, 0, +1)),
-    ("left",   "Place camera on its RIGHT side (left side facing up)",  (+1, 0, 0)),
-    ("right",  "Place camera on its LEFT side (right side facing up)",  (-1, 0, 0)),
-    ("up",     "Place camera upright (top facing up, normal position)", (0, -1, 0)),
-    ("down",   "Place camera upside-down (top facing ground)",          (0, +1, 0)),
+    # (label, user instruction, expected_accel_sign)
+    # expected_accel_sign = the direction the accelerometer reads when stationary in this pose.
+    # ZED IMU frame: X=right, Y=down, Z=forward.
+    # Accelerometer measures the reaction force that counteracts gravity (anti-gravity direction).
+    # When a face is pointing DOWN, gravity acts along that axis, so the accel reads the OPPOSITE.
+    #
+    #   Pose               Camera-frame gravity    Accel reads
+    #   front (Z down)     +Z                      -Z  →  (0, 0, -1)
+    #   back  (Z up)       -Z                      +Z  →  (0, 0, +1)
+    #   left  (X down)     +X                      -X  →  (-1, 0, 0)   ← right side resting on table
+    #   right (-X down)    -X                      +X  →  (+1, 0, 0)   ← left side resting on table
+    #   up    (Y down)     +Y                      -Y  →  (0, -1, 0)   ← normal upright position
+    #   down  (-Y down)    -Y                      +Y  →  (0, +1, 0)   ← upside down
+    ("front",  "Place camera lens pointing DOWN (front facing ground)", (0,  0, -1)),
+    ("back",   "Place camera lens pointing UP (front facing sky)",      (0,  0, +1)),
+    ("left",   "Place camera on its RIGHT side (left side facing up)",  (-1, 0,  0)),
+    ("right",  "Place camera on its LEFT side (right side facing up)",  (+1, 0,  0)),
+    ("up",     "Place camera upright (top facing up, normal position)", (0, -1,  0)),
+    ("down",   "Place camera upside-down (top facing ground)",          (0, +1,  0)),
 ]
 
 

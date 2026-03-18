@@ -634,15 +634,11 @@ namespace NOMAD.MissionPlanner
         // IMU Heading (6-Position) Calibration Tab
         // ============================================================
 
+        // Must match the lowercase labels in sensor_calibration.py IMU_POSITIONS (case-insensitive compare).
+        // ZED IMU frame: X=right, Y=down, Z=forward.
+        // "Left"  = camera resting on its RIGHT side → +X faces down  → accel reads (-1, 0, 0)
+        // "Right" = camera resting on its LEFT side  → -X faces down  → accel reads (+1, 0, 0)
         private static readonly string[] _positionLabels = { "Front", "Back", "Left", "Right", "Up", "Down" };
-        private static readonly string[] _positionDescriptions = {
-            "Lens pointing DOWN (front facing ground)",
-            "Lens pointing UP (front facing sky)",
-            "Camera on its RIGHT side (left side up)",
-            "Camera on its LEFT side (right side up)",
-            "Upright position (top up, normal)",
-            "Upside-down (top facing ground)",
-        };
 
         private void BuildImuHeadingTab(TabPage tab)
         {
