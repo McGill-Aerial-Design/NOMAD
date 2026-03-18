@@ -202,14 +202,16 @@ namespace NOMAD.MissionPlanner
         // ==================== Coordinate Conversion ====================
 
         /// <summary>
-        /// Convert position from ZED odom frame (X-right, Y-down, Z-forward)
+        /// Convert position from ROS odom frame (X-forward, Y-left, Z-up)
         /// to OpenGL frame (X-right, Y-up, Z-toward-viewer).
+        /// Mapping chosen to keep heading and mesh conventions consistent:
+        ///   gx = -y, gy = z, gz = -x
         /// </summary>
         private static void ZedToGL(float x, float y, float z, out float gx, out float gy, out float gz)
         {
-            gx = x;
-            gy = -y;
-            gz = -z;
+            gx = -y;
+            gy = z;
+            gz = -x;
         }
 
         // ==================== Constructor ====================
@@ -524,25 +526,122 @@ namespace NOMAD.MissionPlanner
             {
                 case CameraViewMode.FirstPerson:
                 {
-                    // Camera looks from camera position in servo-tilted direction
-                    float elevRad = MathHelper.DegreesToRadians(servoDeg - 90f);
+                    // FPV attitude: heading from yaw, elevation from pitch+servo,
+                    // and horizon bank from roll via dynamic camera up-vector.
+                    float pitchRad = -pitchRaw;
+                    float rollRad = rollRaw;
+                    float elevRad = MathHelper.DegreesToRadians(servoDeg - 90f) + pitchRad;
+
                     float cosH = (float)Math.Cos(headingRad), sinH = (float)Math.Sin(headingRad);
                     float cosE = (float)Math.Cos(elevRad), sinE = (float)Math.Sin(elevRad);
+                    float cosR = (float)Math.Cos(rollRad), sinR = (float)Math.Sin(rollRad);
 
                     eyeX = glX; eyeY = glY; eyeZ = glZ;
-                    tgtX = glX + sinH * cosE;
-                    tgtY = glY + sinE;
-                    tgtZ = glZ - cosH * cosE;
+
+                    // Forward direction from heading + elevation.
+                    float fwdX = sinH * cosE;
+                    float fwdY = sinE;
+                    float fwdZ = -cosH * cosE;
+
+                    tgtX = glX + fwdX;
+                    tgtY = glY + fwdY;
+                    tgtZ = glZ + fwdZ;
+
+                    // Build no-roll camera basis from forward + reference up, then bank around forward axis.
+                    float refUpX = 0f, refUpY = 1f, refUpZ = 0f;
+                    if (Math.Abs(fwdY) > 0.98f)
+                    {
+                        // Near-vertical forward; switch reference axis to avoid cross-product degeneracy.
+                        refUpX = 1f; refUpY = 0f; refUpZ = 0f;
+                    }
+
+                    float rightX = (fwdY * refUpZ) - (fwdZ * refUpY);
+                    float rightY = (fwdZ * refUpX) - (fwdX * refUpZ);
+                    float rightZ = (fwdX * refUpY) - (fwdY * refUpX);
+                    float rightLen = (float)Math.Sqrt(rightX * rightX + rightY * rightY + rightZ * rightZ);
+                    if (rightLen > 1e-6f)
+                    {
+                        rightX /= rightLen;
+                        rightY /= rightLen;
+                        rightZ /= rightLen;
+
+                        float upNoRollX = rightY * fwdZ - rightZ * fwdY;
+                        float upNoRollY = rightZ * fwdX - rightX * fwdZ;
+                        float upNoRollZ = rightX * fwdY - rightY * fwdX;
+
+                        float upNoRollLen = (float)Math.Sqrt(upNoRollX * upNoRollX + upNoRollY * upNoRollY + upNoRollZ * upNoRollZ);
+                        if (upNoRollLen > 1e-6f)
+                        {
+                            upNoRollX /= upNoRollLen;
+                            upNoRollY /= upNoRollLen;
+                            upNoRollZ /= upNoRollLen;
+                        }
+
+                        upX = upNoRollX * cosR + rightX * sinR;
+                        upY = upNoRollY * cosR + rightY * sinR;
+                        upZ = upNoRollZ * cosR + rightZ * sinR;
+
+                        float upLen = (float)Math.Sqrt(upX * upX + upY * upY + upZ * upZ);
+                        if (upLen > 1e-6f)
+                        {
+                            upX /= upLen;
+                            upY /= upLen;
+                            upZ /= upLen;
+                        }
+                    }
                     break;
                 }
                 case CameraViewMode.ThirdPerson:
                 {
                     float dist = 3f, height = 1.5f;
+
+                    // Use the same attitude convention as FPV so TPV reflects pitch/roll as well.
+                    float pitchRad = -pitchRaw;
+                    float rollRad = rollRaw;
                     float cosH = (float)Math.Cos(headingRad), sinH = (float)Math.Sin(headingRad);
-                    // Behind the drone
-                    eyeX = glX - sinH * dist;
-                    eyeY = glY + height;
-                    eyeZ = glZ + cosH * dist;
+                    float cosP = (float)Math.Cos(pitchRad), sinP = (float)Math.Sin(pitchRad);
+                    float cosR = (float)Math.Cos(rollRad), sinR = (float)Math.Sin(rollRad);
+
+                    // Drone forward from heading + pitch.
+                    float fwdX = sinH * cosP;
+                    float fwdY = sinP;
+                    float fwdZ = -cosH * cosP;
+
+                    // Build camera basis and bank it with roll.
+                    float refUpX = 0f, refUpY = 1f, refUpZ = 0f;
+                    if (Math.Abs(fwdY) > 0.98f)
+                    {
+                        refUpX = 1f; refUpY = 0f; refUpZ = 0f;
+                    }
+
+                    float rightX = (fwdY * refUpZ) - (fwdZ * refUpY);
+                    float rightY = (fwdZ * refUpX) - (fwdX * refUpZ);
+                    float rightZ = (fwdX * refUpY) - (fwdY * refUpX);
+                    float rightLen = (float)Math.Sqrt(rightX * rightX + rightY * rightY + rightZ * rightZ);
+                    if (rightLen > 1e-6f)
+                    {
+                        rightX /= rightLen; rightY /= rightLen; rightZ /= rightLen;
+                    }
+
+                    float upNoRollX = rightY * fwdZ - rightZ * fwdY;
+                    float upNoRollY = rightZ * fwdX - rightX * fwdZ;
+                    float upNoRollZ = rightX * fwdY - rightY * fwdX;
+                    float upNoRollLen = (float)Math.Sqrt(upNoRollX * upNoRollX + upNoRollY * upNoRollY + upNoRollZ * upNoRollZ);
+                    if (upNoRollLen > 1e-6f)
+                    {
+                        upNoRollX /= upNoRollLen; upNoRollY /= upNoRollLen; upNoRollZ /= upNoRollLen;
+                    }
+
+                    upX = upNoRollX * cosR + rightX * sinR;
+                    upY = upNoRollY * cosR + rightY * sinR;
+                    upZ = upNoRollZ * cosR + rightZ * sinR;
+
+                    // Place camera behind forward direction and above drone in its rolled up direction.
+                    eyeX = glX - fwdX * dist + upX * height;
+                    eyeY = glY - fwdY * dist + upY * height;
+                    eyeZ = glZ - fwdZ * dist + upZ * height;
+
+                    // Keep drone centered while still reflecting its orientation in world motion.
                     tgtX = glX; tgtY = glY; tgtZ = glZ;
                     break;
                 }
@@ -714,7 +813,8 @@ namespace NOMAD.MissionPlanner
             //   pitch (Y-rotation) = rotation about lateral axis (nose up/down)
             //   yaw (Z-rotation) = rotation about vertical axis (heading)
             // After position frame conversion (x,y,z)->(x,-y,-z), apply rotations correctly:
-            float headingDeg = (float)(-yawRaw * 180.0 / Math.PI) + _config.SlamHeadingOffsetDeg;
+            // Model geometry alignment: reverse yaw direction and add 180° so model nose matches true heading.
+            float headingDeg = (float)(yawRaw * 180.0 / Math.PI) + _config.SlamHeadingOffsetDeg + 180f;
             float bodyPitchDeg = (float)(pitchRaw * 180.0 / Math.PI);
             float bodyRollDeg = (float)(rollRaw * 180.0 / Math.PI);
             // NOTE: Servo angle affects camera gimbal only, applied separately below
@@ -734,13 +834,13 @@ namespace NOMAD.MissionPlanner
             GL.Color3(0f, 0.86f, 0.86f); // cyan
 
             // Central body wireframe
-            DrawWireBox(0, 0, 0, lenM * 0.4f, hgtM, widM * 0.3f);
+            DrawWireBox(0, 0, 0, widM * 0.3f, hgtM, lenM * 0.4f);
 
             // Front-left arm
-            float frontX = lenM * 0.35f;
-            float frontZ = widM * 0.4f;
+            float frontX = widM * 0.4f;
+            float frontZ = lenM * 0.35f;
             GL.Begin(PrimitiveType.Lines);
-            GL.Vertex3(0, 0, 0); GL.Vertex3(frontX, 0, -frontZ);
+            GL.Vertex3(0, 0, 0); GL.Vertex3(-frontX, 0, frontZ);
             GL.End();
 
             // Front-right arm
@@ -749,16 +849,16 @@ namespace NOMAD.MissionPlanner
             GL.End();
 
             // Rear arm
-            float rearX = -lenM * 0.4f;
+            float rearZ = -lenM * 0.4f;
             GL.Begin(PrimitiveType.Lines);
-            GL.Vertex3(0, 0, 0); GL.Vertex3(rearX, 0, 0);
+            GL.Vertex3(0, 0, 0); GL.Vertex3(0, 0, rearZ);
             GL.End();
 
             // Motor discs
             float motorR = Math.Min(lenM, widM) * 0.15f;
-            DrawMotorDisc(frontX, 0, -frontZ, motorR);
             DrawMotorDisc(frontX, 0, frontZ, motorR);
-            DrawMotorDisc(rearX, 0, 0, motorR);
+            DrawMotorDisc(-frontX, 0, frontZ, motorR);
+            DrawMotorDisc(0, 0, rearZ, motorR);
 
             // Forward direction indicator (red) - points along +Z (forward in body frame)
             GL.Color3(1f, 0.3f, 0.3f);
@@ -774,10 +874,10 @@ namespace NOMAD.MissionPlanner
             float camDown = _config.CameraDownOffsetCm / 100f;
 
             GL.PushMatrix();
-            GL.Translate(camFwd, -camDown, 0);
-            // Servo tilts camera: rotation around Z (lateral axis in body frame)
+            GL.Translate(0, -camDown, camFwd);
+            // Servo tilts camera: rotation around X (lateral axis in body frame)
             // servo=90 is level, >90 tilts up
-            GL.Rotate(servoDeg - 90f, 0f, 0f, 1f);
+            GL.Rotate(90f - servoDeg, 1f, 0f, 0f);
 
             // Camera box (yellow)
             GL.Color3(0.9f, 0.85f, 0.2f);
@@ -788,7 +888,7 @@ namespace NOMAD.MissionPlanner
             GL.Color3(0.2f, 1f, 0.2f);
             GL.Begin(PrimitiveType.Lines);
             GL.Vertex3(0, 0, 0);
-            GL.Vertex3(0.15f, 0, 0);
+            GL.Vertex3(0, 0, 0.15f);
             GL.End();
 
             GL.PopMatrix(); // camera mount
@@ -1063,7 +1163,7 @@ namespace NOMAD.MissionPlanner
                 {
                     foreach (var r in meshData.Removed)
                     {
-                        int rx = r.X, ry = -r.Y, rz = -r.Z;
+                        int rx = -r.Y, ry = r.Z, rz = -r.X;
                         var key = PackVoxelKey(rx, ry, rz);
                         if (_persistedBlocks.Remove(key))
                         {
@@ -1101,9 +1201,9 @@ namespace NOMAD.MissionPlanner
             {
                 if (voxel.Position == null || voxel.Position.Count < 3) continue;
 
-                int qx = (int)Math.Round(voxel.Position[0] / vs);
-                int qy = (int)Math.Round(-voxel.Position[1] / vs);
-                int qz = (int)Math.Round(-voxel.Position[2] / vs);
+                int qx = (int)Math.Round(-voxel.Position[1] / vs);
+                int qy = (int)Math.Round(voxel.Position[2] / vs);
+                int qz = (int)Math.Round(-voxel.Position[0] / vs);
                 long key = PackVoxelKey(qx, qy, qz);
 
                 // Full 8-bit color (no quantization!)
@@ -1140,9 +1240,9 @@ namespace NOMAD.MissionPlanner
             {
                 if (block.Index == null || block.Index.Count < 3) continue;
 
-                int bix = block.Index[0];
-                int biy = -block.Index[1];
-                int biz = -block.Index[2];
+                int bix = -block.Index[1];
+                int biy = block.Index[2];
+                int biz = -block.Index[0];
                 long key = PackVoxelKey(bix, biy, biz);
 
                 uint colorKey;
@@ -1256,12 +1356,29 @@ namespace NOMAD.MissionPlanner
 
                         lock (_poseLock)
                         {
-                            _dronePosX = frame["x"]?.Value<float>() ?? 0;
-                            _dronePosY = frame["y"]?.Value<float>() ?? 0;
-                            _dronePosZ = frame["z"]?.Value<float>() ?? 0;
-                            _droneRollRaw = frame["roll"]?.Value<float>() ?? 0;
-                            _dronePitchRaw = frame["pitch"]?.Value<float>() ?? 0;
-                            _droneYawRaw = frame["yaw"]?.Value<float>() ?? 0;
+                            var xToken = frame["x"];
+                            if (xToken != null && (xToken.Type == JTokenType.Integer || xToken.Type == JTokenType.Float))
+                                _dronePosX = xToken.Value<float>();
+
+                            var yToken = frame["y"];
+                            if (yToken != null && (yToken.Type == JTokenType.Integer || yToken.Type == JTokenType.Float))
+                                _dronePosY = yToken.Value<float>();
+
+                            var zToken = frame["z"];
+                            if (zToken != null && (zToken.Type == JTokenType.Integer || zToken.Type == JTokenType.Float))
+                                _dronePosZ = zToken.Value<float>();
+
+                            var rollToken = frame["roll"];
+                            if (rollToken != null && (rollToken.Type == JTokenType.Integer || rollToken.Type == JTokenType.Float))
+                                _droneRollRaw = rollToken.Value<float>();
+
+                            var pitchToken = frame["pitch"];
+                            if (pitchToken != null && (pitchToken.Type == JTokenType.Integer || pitchToken.Type == JTokenType.Float))
+                                _dronePitchRaw = pitchToken.Value<float>();
+
+                            var yawToken = frame["yaw"];
+                            if (yawToken != null && (yawToken.Type == JTokenType.Integer || yawToken.Type == JTokenType.Float))
+                                _droneYawRaw = yawToken.Value<float>();
                         }
 
                         // Trajectory

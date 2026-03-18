@@ -224,6 +224,7 @@ class ROSHTTPBridge(Node):
         self._last_send_time = 0.0
         self._last_cmd_vel_send_time = 0.0
         self._last_mesh_send_time = 0.0
+        self._mesh_send_interval_s = 0.1  # 10 Hz mesh update cap
         self._last_servo_send_time = 0.0
         self._last_servo_angle = -1.0
         
@@ -350,8 +351,8 @@ class ROSHTTPBridge(Node):
                 ros_y=pose.position.y,
                 ros_z=pose.position.z,
                 ros_roll=roll,
-                ros_pitch=-pitch,  # Frame conversion: Y-axis flipped (down->up in GL)
-                ros_yaw=-yaw,      # Frame conversion: Z-axis flipped (forward->backward in GL)
+                ros_pitch=pitch,
+                ros_yaw=yaw,
             )
             
             with self._lock:
@@ -648,9 +649,9 @@ class ROSHTTPBridge(Node):
             return
 
         try:
-            # Rate limit mesh updates (max 2 Hz to avoid overwhelming)
+            # Rate limit mesh updates (max 10 Hz to avoid overwhelming)
             now = time.time()
-            if now - self._last_mesh_send_time < 0.5:  # 2 Hz max
+            if now - self._last_mesh_send_time < self._mesh_send_interval_s:  # 10 Hz max
                 return
 
             block_size = msg.block_size_m if hasattr(msg, 'block_size_m') else 0.2
@@ -740,7 +741,7 @@ class ROSHTTPBridge(Node):
                 self.get_logger().info("color_layer_marker has data -- switching back to voxel mode")
 
             # Now apply rate limit only for sending (not for tracking empty)
-            if now - self._last_mesh_send_time < 0.5:
+            if now - self._last_mesh_send_time < self._mesh_send_interval_s:
                 return
 
             voxel_size = msg.scale.x  # All 3 scales should be equal

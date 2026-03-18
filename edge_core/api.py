@@ -602,7 +602,8 @@ def create_app(state_manager: StateManager) -> FastAPI:
         try:
             while True:
                 frame = {"type": "pose", "ts": frame_count}
-                has_pose = False
+                has_position = False
+                has_attitude = False
 
                 # Check for mesh updates -- mesh-bundled pose is in the
                 # same coordinate frame as the mesh vertices (ROS odom/map frame)
@@ -620,25 +621,31 @@ def create_app(state_manager: StateManager) -> FastAPI:
                             frame["x"] = dp.get("x", 0)
                             frame["y"] = dp.get("y", 0)
                             frame["z"] = dp.get("z", 0)
-                            has_pose = True
+                            has_position = True
                         if stored.get("drone_attitude"):
                             da = stored["drone_attitude"]
                             frame["roll"] = da.get("roll", 0)
                             frame["pitch"] = da.get("pitch", 0)
                             frame["yaw"] = da.get("yaw", 0)
+                            has_attitude = True
 
                 # Fall back to ROS-frame VIO for pose (used for pose-only frames
-                # AND for mesh frames that lack drone_position)
-                if not has_pose:
+                # and for mesh frames that only include one of position/attitude)
+                if not has_position or not has_attitude:
                     ros_vio = websocket.app.state.slam_vio_ros_frame
                     if ros_vio:
-                        frame["x"] = ros_vio.get("x", 0)
-                        frame["y"] = ros_vio.get("y", 0)
-                        frame["z"] = ros_vio.get("z", 0)
-                        frame["roll"] = ros_vio.get("roll", 0)
-                        frame["pitch"] = ros_vio.get("pitch", 0)
-                        frame["yaw"] = ros_vio.get("yaw", 0)
-                        has_pose = True
+                        if not has_position:
+                            frame["x"] = ros_vio.get("x", 0)
+                            frame["y"] = ros_vio.get("y", 0)
+                            frame["z"] = ros_vio.get("z", 0)
+                            has_position = True
+                        if not has_attitude:
+                            frame["roll"] = ros_vio.get("roll", 0)
+                            frame["pitch"] = ros_vio.get("pitch", 0)
+                            frame["yaw"] = ros_vio.get("yaw", 0)
+                            has_attitude = True
+
+                has_pose = has_position or has_attitude
 
                 # Skip frames when no pose data available at all
                 if not has_pose and not has_mesh:
