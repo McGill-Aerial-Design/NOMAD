@@ -11,10 +11,10 @@
     cuda_stream_type: 2
 
     # ==============================================================
-    # VOXEL SIZE - 15cm for Mission Planner 3D visualization
-    # Larger voxels = fewer blocks + less GPU memory + clearer map
+    # VOXEL SIZE - 5cm for detailed Mission Planner 3D visualization
+    # Smaller = more detail but more GPU memory
     # ==============================================================
-    voxel_size: 0.15  # 15cm voxels
+    voxel_size: 0.05  # 5cm voxels
     
     # static_tsdf for 3D mesh generation
     mapping_type: "static_tsdf"
@@ -76,8 +76,9 @@
     # Visualization - 8m view area
     esdf_slice_bounds_visualization_side_length: 8.0
     workspace_height_bounds_visualization_side_length: 8.0
-    layer_visualization_exclusion_height_m: 3.0
+    layer_visualization_exclusion_height_m: 50.0
     layer_visualization_exclusion_radius_m: 8.0
+    layer_visualization_min_tsdf_weight: 0.0001  # publish all voxels including weak block-edge ones
     max_back_projection_distance: 8.0
     back_projection_subsampling: 4  # heavy subsampling for speed
     layer_streamer_bandwidth_limit_mbps: 30.0
@@ -110,8 +111,8 @@
       
       # Workspace bounds
       workspace_bounds_type: "height_bounds"
-      workspace_bounds_min_height_m: -0.5
-      workspace_bounds_max_height_m: 2.5
+      workspace_bounds_min_height_m: -50.0
+      workspace_bounds_max_height_m: 50.0
       
       # ESDF integrator
       esdf_integrator_min_weight: 0.5
@@ -131,5 +132,5 @@
       decay_integrator_deallocate_decayed_blocks: true  # FREE old blocks to prevent OOM
       
       # Streaming - 8m radius
-      layer_streamer_exclusion_height_m: 3.0
+      layer_streamer_exclusion_height_m: 50.0
       layer_streamer_exclusion_radius_m: 8.0

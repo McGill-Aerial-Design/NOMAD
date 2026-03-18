@@ -321,7 +321,19 @@ class ROSHTTPBridge(Node):
         try:
             pose = msg.pose.pose
             twist = msg.twist.twist
-            
+
+            # Check pose covariance — high values indicate tracking degradation
+            # (e.g. obstructed camera). Diagonal elements [0,7,14] = x,y,z variance.
+            cov = msg.pose.covariance
+            pos_var = max(cov[0], cov[7], cov[14])  # largest positional variance
+            if pos_var > 0.1:  # reject if > 10cm std dev uncertainty
+                self.get_logger().warn(
+                    f"VIO rejected: high covariance ({pos_var:.4f})", throttle_duration_sec=5.0)
+                return
+
+            # Derive confidence from covariance (lower variance = higher confidence)
+            confidence = max(0.0, min(1.0, 1.0 - pos_var * 10.0))
+
             # Quaternion to Euler
             roll, pitch, yaw = self._quat_to_euler(
                 pose.orientation.x,
@@ -329,7 +341,7 @@ class ROSHTTPBridge(Node):
                 pose.orientation.z,
                 pose.orientation.w,
             )
-            
+
             # Convert from ZED camera frame to NED frame
             # ZED odom: X-right, Y-down, Z-forward (camera/OpenCV convention)
             # NED: X-north(forward), Y-east(right), Z-down
@@ -344,7 +356,7 @@ class ROSHTTPBridge(Node):
                 vx=twist.linear.z,
                 vy=twist.linear.x,
                 vz=twist.linear.y,
-                confidence=1.0,
+                confidence=confidence,
                 source="isaac_ros",
                 # Also store the raw odom pose for SLAM 3D (same frame as mesh)
                 ros_x=pose.position.x,
@@ -354,11 +366,11 @@ class ROSHTTPBridge(Node):
                 ros_pitch=pitch,
                 ros_yaw=yaw,
             )
-            
+
             with self._lock:
                 self._latest_vio = vio
                 self._vio_recv_count += 1
-                
+
         except Exception as e:
             self.get_logger().error(f"VIO processing error: {e}")
     
@@ -747,8 +759,8 @@ class ROSHTTPBridge(Node):
             voxel_size = msg.scale.x  # All 3 scales should be equal
             has_colors = len(msg.colors) == n_pts
 
-            # Cap at 8000 voxels per update to limit bandwidth (~320KB)
-            limit = min(n_pts, 8000)
+            # Cap at 30000 voxels per update to limit bandwidth (~1.2MB)
+            limit = min(n_pts, 30000)
 
             voxels = []
             for i in range(limit):
