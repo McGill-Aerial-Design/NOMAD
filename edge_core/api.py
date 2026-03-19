@@ -213,6 +213,8 @@ class VIOUpdateRequest(BaseModel):
     ros_roll: float = 0.0
     ros_pitch: float = 0.0
     ros_yaw: float = 0.0
+    # Coordinate frame for ros_* pose fields (ZED optical frame by default)
+    frame_id: str = "ros_optical"
 
 
 class NavVelocityRequest(BaseModel):
@@ -1210,7 +1212,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
             "pitch": vio_request.ros_pitch,
             "yaw": vio_request.ros_yaw,
             "timestamp": vio_request.timestamp,
-            "frame_id": vio_request.frame_id,  # Always "ros_optical"
+            "frame_id": getattr(vio_request, "frame_id", "ros_optical"),
         }
         
         # Add to trajectory
