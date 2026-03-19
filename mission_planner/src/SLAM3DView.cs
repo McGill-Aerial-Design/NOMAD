@@ -94,6 +94,9 @@ namespace NOMAD.MissionPlanner
         public double Z { get; set; }
         public double Confidence { get; set; }
         public int SeenCount { get; set; }
+        public string HsvColor { get; set; }
+        public bool ColorMatch { get; set; } = true;
+        public bool NeedsReview { get; set; }
     }
 
     // ==================== SLAM 3D View ====================
@@ -125,6 +128,11 @@ namespace NOMAD.MissionPlanner
         // ---- Servo polling ----
         private float _servoAngleDeg = 90.0f;
         private System.Windows.Forms.Timer _servoTimer;
+
+        // ---- Perception/status polling ----
+        private System.Windows.Forms.Timer _statusTimer;
+        private bool _statusPollInFlight;
+        private const float ScanStopThresholdMps = 0.10f;
 
         // ---- Drone pose (raw from WS, ZED optical/odom frame) ----
         private float _dronePosX, _dronePosY, _dronePosZ;
@@ -175,6 +183,7 @@ namespace NOMAD.MissionPlanner
         private Panel _controlPanel;
         private Button _btnToggleCamera, _btnResetView, _btnClearMesh;
         private Label _lblStatus, _lblStats;
+        private Label _lblPerceptionStatus;
         private CheckBox _chkShowGrid, _chkShowTrajectory, _chkAutoUpdate;
         private NumericUpDown _numLength, _numWidth, _numHeight, _numHeadingOffset;
         private int _meshUpdateCount;
@@ -226,6 +235,7 @@ namespace NOMAD.MissionPlanner
             InitializeComponents();
             StartUpdateLoop();
             StartServoPolling();
+            StartPerceptionStatusPolling();
         }
 
         // ==================== UI Initialization ====================
@@ -364,6 +374,17 @@ namespace NOMAD.MissionPlanner
                 Font = new Font("Consolas", 9),
             };
             _controlPanel.Controls.Add(_lblStats);
+
+            y += 18;
+            _lblPerceptionStatus = new Label
+            {
+                Text = "HSV: -- | Servo: -- | ScanStopScan: --",
+                Location = new Point(10, y),
+                ForeColor = Color.FromArgb(150, 150, 150),
+                AutoSize = true,
+                Font = new Font("Consolas", 9),
+            };
+            _controlPanel.Controls.Add(_lblPerceptionStatus);
 
             mainLayout.Controls.Add(_controlPanel, 0, 1);
             Controls.Add(mainLayout);
@@ -1488,6 +1509,9 @@ namespace NOMAD.MissionPlanner
                                     X = dx.Value, Y = dy.Value, Z = dz.Value,
                                     Confidence = d["confidence"]?.Value<double>() ?? 0,
                                     SeenCount = d["seen_count"]?.Value<int>() ?? 1,
+                                    HsvColor = d["hsv_color"]?.ToString(),
+                                    ColorMatch = d["color_match"]?.Value<bool?>() ?? true,
+                                    NeedsReview = d["needs_review"]?.Value<bool>() ?? false,
                                 });
                             }
                             lock (_poseLock) { _detectionMarkers = markers; }
@@ -1563,6 +1587,122 @@ namespace NOMAD.MissionPlanner
                 catch { }
             };
             _servoTimer.Start();
+        }
+
+        private void StartPerceptionStatusPolling()
+        {
+            _statusTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            _statusTimer.Tick += async (s, e) =>
+            {
+                if (_statusPollInFlight) return;
+                _statusPollInFlight = true;
+                try
+                {
+                    await PollPerceptionStatusAsync();
+                }
+                finally
+                {
+                    _statusPollInFlight = false;
+                }
+            };
+            _statusTimer.Start();
+        }
+
+        private async Task PollPerceptionStatusAsync()
+        {
+            string hsvText = "HSV: --";
+            string servoText = "Servo: --";
+            string scanText = "ScanStopScan: --";
+
+            try
+            {
+                var detectionsResponse = await JetsonApiService.GetAsync("/api/detections");
+                if (detectionsResponse.IsSuccessStatusCode)
+                {
+                    var detectionsJson = await detectionsResponse.Content.ReadAsStringAsync();
+                    var detectionsObj = JObject.Parse(detectionsJson);
+                    var current = detectionsObj["current"]? ["detections"] as JArray;
+                    int total = current?.Count ?? 0;
+                    int mismatches = 0;
+                    string sampleMismatch = null;
+
+                    if (current != null)
+                    {
+                        foreach (var det in current)
+                        {
+                            bool needsReview = det["needs_review"]?.Value<bool>() ?? false;
+                            bool colorMatch = det["color_match"]?.Value<bool?>() ?? true;
+                            string hsvColor = det["hsv_color"]?.ToString() ?? string.Empty;
+                            if (needsReview || (!colorMatch && !string.IsNullOrEmpty(hsvColor)))
+                            {
+                                mismatches++;
+                                if (sampleMismatch == null)
+                                {
+                                    string label = det["label"]?.ToString() ?? "unknown";
+                                    sampleMismatch = string.IsNullOrEmpty(hsvColor) ? label : $"{label}->{hsvColor}";
+                                }
+                            }
+                        }
+                    }
+
+                    if (total == 0)
+                        hsvText = "HSV: No detections";
+                    else if (mismatches > 0)
+                        hsvText = sampleMismatch == null
+                            ? $"HSV: {mismatches}/{total} mismatch"
+                            : $"HSV: {mismatches}/{total} mismatch ({sampleMismatch})";
+                    else
+                        hsvText = $"HSV: OK ({total})";
+                }
+            }
+            catch { }
+
+            try
+            {
+                var servoResponse = await JetsonApiService.GetAsync("/api/servo/status");
+                if (servoResponse.IsSuccessStatusCode)
+                {
+                    var servoJson = await servoResponse.Content.ReadAsStringAsync();
+                    var servoObj = JObject.Parse(servoJson);
+                    bool available = servoObj["available"]?.Value<bool>() ?? false;
+                    var camTilt = servoObj["servos"]?["camera_tilt"];
+                    bool enabled = camTilt?["enabled"]?.Value<bool>() ?? false;
+                    float angle = camTilt?["angle"]?.Value<float>() ?? _servoAngleDeg;
+                    servoText = available
+                        ? $"Servo: {(enabled ? "Enabled" : "Disabled")} {angle:F1} deg"
+                        : "Servo: Not available";
+                }
+            }
+            catch { }
+
+            try
+            {
+                var poseResponse = await JetsonApiService.GetAsync("/api/vio/pose");
+                if (poseResponse.IsSuccessStatusCode)
+                {
+                    var poseJson = await poseResponse.Content.ReadAsStringAsync();
+                    var poseObj = JObject.Parse(poseJson);
+                    bool valid = poseObj["valid"]?.Value<bool?>() ?? true;
+                    if (valid)
+                    {
+                        float vx = poseObj["vx"]?.Value<float>() ?? 0f;
+                        float vy = poseObj["vy"]?.Value<float>() ?? 0f;
+                        float vz = poseObj["vz"]?.Value<float>() ?? 0f;
+                        float speed = (float)Math.Sqrt(vx * vx + vy * vy + vz * vz);
+                        bool moving = speed > ScanStopThresholdMps;
+                        scanText = moving
+                            ? $"ScanStopScan: HOLD ({speed:F2} m/s)"
+                            : $"ScanStopScan: SCAN ({speed:F2} m/s)";
+                    }
+                    else
+                    {
+                        scanText = "ScanStopScan: No VIO";
+                    }
+                }
+            }
+            catch { }
+
+            UpdatePerceptionStatusSafe($"{hsvText} | {servoText} | {scanText}");
         }
 
         // ==================== Event Handlers ====================
@@ -1650,6 +1790,15 @@ namespace NOMAD.MissionPlanner
                 _lblStats.Text = text;
         }
 
+        private void UpdatePerceptionStatusSafe(string text)
+        {
+            if (_lblPerceptionStatus == null) return;
+            if (_lblPerceptionStatus.InvokeRequired)
+                _lblPerceptionStatus.BeginInvoke(new Action(() => { if (_lblPerceptionStatus != null) _lblPerceptionStatus.Text = text; }));
+            else
+                _lblPerceptionStatus.Text = text;
+        }
+
         // ==================== Cleanup ====================
 
         protected override void Dispose(bool disposing)
@@ -1661,6 +1810,8 @@ namespace NOMAD.MissionPlanner
                 _renderTimer?.Dispose();
                 _servoTimer?.Stop();
                 _servoTimer?.Dispose();
+                _statusTimer?.Stop();
+                _statusTimer?.Dispose();
                 _updateCts?.Cancel();
                 try
                 {

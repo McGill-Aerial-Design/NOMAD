@@ -48,6 +48,13 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped, Twist
 from std_msgs.msg import Float32, Float32MultiArray
 
+# sensor_msgs for HSV color verification (TD-005)
+try:
+    from sensor_msgs.msg import Image
+    IMAGE_AVAILABLE = True
+except ImportError:
+    IMAGE_AVAILABLE = False
+
 # TF2 for camera pose lookup
 try:
     from tf2_ros import Buffer, TransformListener, TransformException
@@ -144,6 +151,10 @@ class DetectedObject:
     bbox_h: float = 0.0   # height in pixels
     # Tracking state: 0=OFF, 1=OK, 2=SEARCHING, 3=TERMINATE
     tracking_state: int = 0
+    # HSV color verification (TD-005)
+    hsv_color: str = ""          # HSV-derived color label (e.g. 'red', 'blue')
+    color_match: bool = True     # True if YOLO and HSV agree
+    needs_review: bool = False   # True if YOLO and HSV disagree
 
 
 class ROSHTTPBridge(Node):
@@ -293,6 +304,26 @@ class ROSHTTPBridge(Node):
         elif enable_detections and not ZED_OD_AVAILABLE:
             self.get_logger().warning("Detections requested but zed_interfaces not available")
         
+        # Subscribe to camera image for HSV color verification (TD-005)
+        self._latest_image = None  # Raw image bytes (RGB8)
+        self._image_width = 0
+        self._image_height = 0
+        self._image_lock = threading.Lock()
+        if self._enable_detections and IMAGE_AVAILABLE:
+            image_topic = "/zed/zed_node/rgb/image_rect_color"
+            image_qos = QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1,
+            )
+            self.create_subscription(
+                Image,
+                image_topic,
+                self._handle_image,
+                image_qos,
+            )
+            self.get_logger().info(f"Subscribed to camera image for HSV verification: {image_topic}")
+
         # TF2 buffer for camera pose lookup
         self._tf_buffer = None
         self._tf_listener = None
@@ -307,6 +338,24 @@ class ROSHTTPBridge(Node):
         self._camera_frame = "zed_camera_link"
         self._reference_frame = "odom"  # Or "map" depending on your setup
         
+        # Thermal-aware detection rate throttling (RM-005)
+        self._gpu_temp_c = 0.0
+        self._last_thermal_check = 0.0
+        self._thermal_check_interval = 2.0   # check every 2s
+        self._thermal_throttle_temp = 85.0   # °C threshold
+        self._thermal_recover_temp = 75.0    # °C to resume normal rate
+        self._detection_throttled = False
+
+        # VIO tracking loss detection (VO-005)
+        self._vio_healthy_time = 0.0        # last time VIO was healthy
+        self._vio_loss_servo_leveled = False # True if we already sent level command
+        self._vio_loss_timeout_s = 3.0      # seconds of bad VIO before leveling servo
+
+        # Scan-stop-scan state (VO-004)
+        self._drone_velocity_mps = 0.0      # current drone velocity magnitude
+        self._scan_stop_enabled = True      # enable scan-stop-scan protocol
+        self._scan_stop_vel_threshold = 0.1 # m/s threshold for "stopped"
+
         # Timer to send data to edge_core
         self.create_timer(self._send_interval, self._send_to_edge_core)
         
@@ -329,10 +378,32 @@ class ROSHTTPBridge(Node):
             if pos_var > 0.1:  # reject if > 10cm std dev uncertainty
                 self.get_logger().warn(
                     f"VIO rejected: high covariance ({pos_var:.4f})", throttle_duration_sec=5.0)
+
+                # VO-005: Auto-level servo on sustained tracking loss
+                now = time.time()
+                if (self._vio_healthy_time > 0 and
+                        now - self._vio_healthy_time > self._vio_loss_timeout_s and
+                        not self._vio_loss_servo_leveled):
+                    self.get_logger().warn(
+                        "VO-005: VIO tracking lost for >3s - leveling servo to 90° "
+                        "to re-acquire tracking"
+                    )
+                    self._send_servo_to_edge_core(90.0)
+                    self._vio_loss_servo_leveled = True
                 return
+
+            # VIO is healthy - reset tracking loss state
+            self._vio_healthy_time = time.time()
+            self._vio_loss_servo_leveled = False
 
             # Derive confidence from covariance (lower variance = higher confidence)
             confidence = max(0.0, min(1.0, 1.0 - pos_var * 10.0))
+
+            # Track drone velocity for scan-stop-scan (VO-004)
+            vel_mag = math.sqrt(
+                twist.linear.x ** 2 + twist.linear.y ** 2 + twist.linear.z ** 2
+            )
+            self._drone_velocity_mps = vel_mag
 
             # Quaternion to Euler
             roll, pitch, yaw = self._quat_to_euler(
@@ -486,31 +557,46 @@ class ROSHTTPBridge(Node):
     def _handle_servo_angle(self, msg: Float32) -> None:
         """
         Handle servo angle from a ROS node for autonomous nozzle control.
-        
+
         The nozzle servo is controlled via the Edge Core HTTP API.
         A ROS node (e.g. a fire detection pipeline) publishes a Float32
         angle to /nomad/servo/nozzle_angle, and this bridge forwards it
         to Edge Core which drives the physical servo on GPIO Pin 15.
-        
+
         Float32 value: angle in degrees (0-180, where 90 is center).
+
+        VO-004: Scan-stop-scan protocol - only allow tilt when drone
+        velocity is below threshold (hovering). During translational
+        motion, servo is held level (90°) to prevent VIO drift.
         """
         if not self._enable_servo:
             return
-        
+
         try:
             angle = float(msg.data)
             self._servo_recv_count += 1
-            
+
             # Clamp to valid range
             angle = max(0.0, min(180.0, angle))
-            
+
+            # VO-004: Scan-stop-scan - block tilt during translational motion
+            if self._scan_stop_enabled and abs(angle - 90.0) > 2.0:
+                if self._drone_velocity_mps > self._scan_stop_vel_threshold:
+                    # Drone is moving - force level
+                    self.get_logger().info(
+                        f"VO-004: Servo tilt blocked (vel={self._drone_velocity_mps:.2f} m/s > "
+                        f"{self._scan_stop_vel_threshold} m/s) - holding level",
+                        throttle_duration_sec=5.0,
+                    )
+                    angle = 90.0
+
             # Skip if angle hasn't changed significantly (avoid flooding)
             if abs(angle - self._last_servo_angle) < 0.5:
                 return
-            
+
             self._last_servo_angle = angle
             self._send_servo_to_edge_core(angle)
-            
+
         except Exception as e:
             self.get_logger().error(f"Servo angle processing error: {e}")
     
@@ -544,32 +630,161 @@ class ROSHTTPBridge(Node):
             self._send_errors += 1
             self.get_logger().error(f"Servo send error: {e}")
     
+    def _handle_image(self, msg: 'Image') -> None:
+        """Store latest camera image for HSV color verification (TD-005)."""
+        try:
+            with self._image_lock:
+                self._latest_image = bytes(msg.data)
+                self._image_width = msg.width
+                self._image_height = msg.height
+        except Exception:
+            pass
+
+    # HSV color ranges for circle detection classes (TD-005)
+    # Each entry maps a color name to (H_low, H_high, S_min, V_min) in OpenCV HSV
+    # H: 0-179, S: 0-255, V: 0-255
+    _HSV_RANGES = {
+        "red":    [(0, 10, 80, 50), (170, 179, 80, 50)],   # red wraps around 0/180
+        "blue":   [(100, 130, 80, 50)],
+        "green":  [(35, 85, 80, 50)],
+        "yellow": [(20, 35, 80, 50)],
+        "white":  [(0, 179, 0, 200)],   # low saturation, high value
+        "black":  [(0, 179, 0, 0)],     # special: V < 50
+    }
+
+    def _verify_hsv_color(self, bbox_x: float, bbox_y: float,
+                          bbox_w: float, bbox_h: float) -> str:
+        """
+        Analyze HSV color distribution within a bounding box (TD-005).
+
+        Returns the dominant color name from HSV analysis, or "" if
+        image data is unavailable.
+        """
+        with self._image_lock:
+            image = self._latest_image
+            img_w = self._image_width
+            img_h = self._image_height
+
+        if image is None or img_w == 0 or img_h == 0:
+            return ""
+
+        # Convert bbox to integer pixel coordinates (clamped to image bounds)
+        x1 = max(0, int(bbox_x))
+        y1 = max(0, int(bbox_y))
+        x2 = min(img_w, int(bbox_x + bbox_w))
+        y2 = min(img_h, int(bbox_y + bbox_h))
+        if x2 <= x1 or y2 <= y1:
+            return ""
+
+        # Use center 50% of bbox to avoid edge noise
+        cx = (x1 + x2) // 2
+        cy = (y1 + y2) // 2
+        hw = max(1, (x2 - x1) // 4)
+        hh = max(1, (y2 - y1) // 4)
+        x1 = max(0, cx - hw)
+        y1 = max(0, cy - hh)
+        x2 = min(img_w, cx + hw)
+        y2 = min(img_h, cy + hh)
+
+        # Extract RGB pixels from the flat byte array (row-major, 3 channels)
+        # and convert to HSV for color classification
+        total_pixels = 0
+        color_votes = {}
+        step = 3  # RGB8 encoding
+        row_stride = img_w * step
+
+        for row in range(y1, y2, 2):  # sample every other pixel for speed
+            for col in range(x1, x2, 2):
+                idx = row * row_stride + col * step
+                if idx + 2 >= len(image):
+                    continue
+                r, g, b = image[idx], image[idx + 1], image[idx + 2]
+
+                # RGB to HSV (OpenCV convention: H 0-179, S 0-255, V 0-255)
+                r_f, g_f, b_f = r / 255.0, g / 255.0, b / 255.0
+                c_max = max(r_f, g_f, b_f)
+                c_min = min(r_f, g_f, b_f)
+                delta = c_max - c_min
+
+                # Value (0-255)
+                v = int(c_max * 255)
+
+                # Saturation (0-255)
+                s = int((delta / c_max) * 255) if c_max > 0 else 0
+
+                # Hue (0-179)
+                if delta == 0:
+                    h = 0
+                elif c_max == r_f:
+                    h = int(30.0 * (((g_f - b_f) / delta) % 6))
+                elif c_max == g_f:
+                    h = int(30.0 * (((b_f - r_f) / delta) + 2))
+                else:
+                    h = int(30.0 * (((r_f - g_f) / delta) + 4))
+                h = h % 180
+
+                total_pixels += 1
+
+                # Check black first (low value)
+                if v < 50:
+                    color_votes["black"] = color_votes.get("black", 0) + 1
+                    continue
+
+                # Check white (low saturation, high value)
+                if s < 40 and v > 200:
+                    color_votes["white"] = color_votes.get("white", 0) + 1
+                    continue
+
+                # Check chromatic colors by hue range
+                for color_name, ranges in self._HSV_RANGES.items():
+                    if color_name in ("white", "black"):
+                        continue
+                    for rng in ranges:
+                        h_lo, h_hi, s_min, v_min = rng
+                        if h_lo <= h <= h_hi and s >= s_min and v >= v_min:
+                            color_votes[color_name] = color_votes.get(color_name, 0) + 1
+                            break
+
+        if not color_votes or total_pixels == 0:
+            return ""
+
+        # Return the color with the most votes
+        return max(color_votes, key=lambda k: color_votes[k])
+
     def _handle_detections(self, msg) -> None:
         """
         Handle ZED custom object detections (YOLO26 circle detection).
-        
+
         The ZED SDK runs the ONNX model with TensorRT, detects colored circles,
         and provides 3D positions via stereo depth. This handler converts the
         zed_interfaces/ObjectsStamped message into DetectedObject dataclasses
         and forwards them to Edge Core.
+
+        TD-003: Uses image capture timestamp from message header, not inference
+        completion time, to avoid TF lookup errors due to inference latency.
         """
         if not self._enable_detections:
             return
-        
+
         try:
+            # TD-003: Use image capture timestamp from message header
+            capture_timestamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            if capture_timestamp <= 0:
+                capture_timestamp = time.time()  # fallback if header is empty
+
             detections = []
             for obj in msg.objects:
                 # Filter by tracking state -- only keep active detections
                 if obj.tracking_state == 3:  # TERMINATE
                     continue
-                
+
                 # Validate position is finite (ZED can return NaN for failed depth)
                 pos_x = obj.position[0]
                 pos_y = obj.position[1]
                 pos_z = obj.position[2]
                 if not (math.isfinite(pos_x) and math.isfinite(pos_y) and math.isfinite(pos_z)):
                     continue
-                
+
                 # Extract 2D bounding box from ZED corners
                 # bounding_box_2d has 4 KeyPoint2Df: TL, TR, BR, BL
                 bbox_x = 0.0
@@ -586,9 +801,27 @@ class ROSHTTPBridge(Node):
                         bbox_y = min(ys)
                         bbox_w = max(xs) - bbox_x
                         bbox_h = max(ys) - bbox_y
-                
+
+                # HSV color verification (TD-005)
+                hsv_color = ""
+                color_match = True
+                needs_review = False
+                if bbox_w > 0 and bbox_h > 0:
+                    hsv_color = self._verify_hsv_color(bbox_x, bbox_y, bbox_w, bbox_h)
+                    if hsv_color:
+                        # Extract base color from YOLO label (e.g. 'red_circle' -> 'red')
+                        yolo_color = obj.label.replace("_circle", "").lower()
+                        color_match = (hsv_color == yolo_color)
+                        needs_review = not color_match
+                        if needs_review:
+                            self.get_logger().info(
+                                f"TD-005: Color mismatch - YOLO={yolo_color} HSV={hsv_color} "
+                                f"conf={obj.confidence}% - flagged for review",
+                                throttle_duration_sec=2.0,
+                            )
+
                 det = DetectedObject(
-                    timestamp=time.time(),
+                    timestamp=capture_timestamp,
                     label=obj.label,
                     label_id=obj.label_id,
                     confidence=obj.confidence / 100.0,  # ZED uses 1-99 scale
@@ -603,6 +836,9 @@ class ROSHTTPBridge(Node):
                     bbox_w=bbox_w,
                     bbox_h=bbox_h,
                     tracking_state=obj.tracking_state,
+                    hsv_color=hsv_color,
+                    color_match=color_match,
+                    needs_review=needs_review,
                 )
                 detections.append(det)
             
@@ -616,15 +852,43 @@ class ROSHTTPBridge(Node):
         except Exception as e:
             self.get_logger().error(f"Detection processing error: {e}")
     
+    def _read_gpu_temp(self) -> float:
+        """Read GPU temperature from sysfs (RM-005). Returns 0 on failure."""
+        try:
+            with open("/sys/devices/virtual/thermal/thermal_zone1/temp", "r") as f:
+                return float(f.read().strip()) / 1000.0
+        except Exception:
+            return 0.0
+
     def _send_detections_to_edge_core(self, detections: list) -> None:
         """
         Send object detections to Edge Core via HTTP POST.
-        
-        Rate limited to 5 Hz to avoid overwhelming the API while
-        keeping detection data fresh for SLAM visualization.
+
+        Rate limited to 5 Hz normally, throttled to 3 Hz when GPU temp
+        exceeds 85°C (RM-005). Resumes normal rate when temp drops below 75°C.
         """
         now = time.time()
-        if now - self._last_detection_send_time < 0.2:  # 5 Hz max
+
+        # RM-005: Check GPU temperature periodically
+        if now - self._last_thermal_check > self._thermal_check_interval:
+            self._last_thermal_check = now
+            self._gpu_temp_c = self._read_gpu_temp()
+            if self._gpu_temp_c >= self._thermal_throttle_temp and not self._detection_throttled:
+                self._detection_throttled = True
+                self.get_logger().warn(
+                    f"RM-005: GPU temp {self._gpu_temp_c:.0f}°C >= {self._thermal_throttle_temp}°C "
+                    "- throttling detection rate to 3 Hz"
+                )
+            elif self._gpu_temp_c <= self._thermal_recover_temp and self._detection_throttled:
+                self._detection_throttled = False
+                self.get_logger().info(
+                    f"RM-005: GPU temp {self._gpu_temp_c:.0f}°C <= {self._thermal_recover_temp}°C "
+                    "- resuming normal 5 Hz detection rate"
+                )
+
+        # Apply rate limit: 5 Hz normal, 3 Hz when throttled (RM-005)
+        min_interval = 0.333 if self._detection_throttled else 0.2
+        if now - self._last_detection_send_time < min_interval:
             return
         self._last_detection_send_time = now
         
