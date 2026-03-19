@@ -120,7 +120,6 @@ namespace NOMAD.MissionPlanner
         private CancellationTokenSource _updateCts;
         private int _wsReconnectDelayMs = 1000;
         private const int MaxWsReconnectDelayMs = 10000;
-        private volatile bool _disposed;
         private volatile bool _autoUpdateEnabled = true;
         private readonly object _poseLock = new object();
         private const int MaxWebSocketMessageSize = 10 * 1024 * 1024;
@@ -167,7 +166,6 @@ namespace NOMAD.MissionPlanner
 
         // ---- Detection markers ----
         private List<DetectionMarker3D> _detectionMarkers = new List<DetectionMarker3D>();
-        private bool _detectionsDirty;
 
         // ---- Camera ----
         private CameraViewMode _currentViewMode = CameraViewMode.ThirdPerson;
@@ -1515,12 +1513,10 @@ namespace NOMAD.MissionPlanner
                                 });
                             }
                             lock (_poseLock) { _detectionMarkers = markers; }
-                            _detectionsDirty = true;
                         }
                         else if (frame.ContainsKey("detections"))
                         {
                             lock (_poseLock) { _detectionMarkers = new List<DetectionMarker3D>(); }
-                            _detectionsDirty = true;
                         }
 
                         if (frameType == "mesh")
@@ -1803,7 +1799,6 @@ namespace NOMAD.MissionPlanner
 
         protected override void Dispose(bool disposing)
         {
-            _disposed = true;
             if (disposing)
             {
                 _renderTimer?.Stop();

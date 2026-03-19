@@ -231,8 +231,10 @@ namespace NOMAD.MissionPlanner
         private const int LATENCY_HISTORY_SIZE = 20;
 
         // UDP listeners for monitoring
+#pragma warning disable CS0649
         private UdpClient _lteMonitor;
         private UdpClient _radioMasterMonitor;
+#pragma warning restore CS0649
 
         // ============================================================
         // Events

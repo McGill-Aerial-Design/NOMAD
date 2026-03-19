@@ -72,7 +72,6 @@ namespace NOMAD.MissionPlanner
         // UI Controls
         private Panel _keyboardPanel;
         private Panel _keyboardBorderPanel;  // Outer panel with border
-        private Panel _statusPanel;
         private CheckBox _chkEnable;
         private Label _lblStatus;
         private Label _lblVelocity;

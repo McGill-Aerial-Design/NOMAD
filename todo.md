@@ -248,13 +248,13 @@ Full audit of the requirements document against codebase. Audited 2026-03-19.
 
 ---
 
-## REQ-4: Target Detection (TD-001 to TD-007) — 4/7 PASS
+## REQ-4: Target Detection (TD-001 to TD-007) — 5/7 PASS
 
 - [x] **TD-001**: Full TF chain for 3D positioning (ZED SDK internal)
 - [~] **TD-002**: Median depth in bbox (ZED SDK config-dependent — needs verification)
-- [ ] **TD-003**: Detection timestamp = image capture time, not inference publish time
-  - Verify `msg.header.stamp` in ObjectsStamped is image acquisition time
-  - If not, correlate with image topic timestamps
+- [x] **TD-003**: Detection timestamp = image capture time, not inference publish time
+  - `ros_http_bridge.py:800-810` uses `msg.header.stamp` (image acquisition time)
+  - Falls back to `time.time()` if header stamp is empty
 - [x] **TD-004**: 5 Hz normal / 3 Hz throttled — `ros_http_bridge.py:890`
 - [x] **TD-005**: HSV + YOLO dual verification, `needs_review` flag — `ros_http_bridge.py:643-754`
 - [x] **TD-006**: Dedup within 0.5m, keep higher confidence — `api.py:2146-2161`

@@ -573,7 +573,7 @@ namespace NOMAD.MissionPlanner
                 
                 _videoInitialized = true;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 _lblVideoStatus = new Label
                 {
@@ -772,7 +772,7 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// Updates Jetson health indicators from real API data.
         /// </summary>
-        private async void UpdateJetsonHealth()
+        private void UpdateJetsonHealth()
         {
             try
             {

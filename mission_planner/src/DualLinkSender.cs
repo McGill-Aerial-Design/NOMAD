@@ -227,18 +227,18 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         /// <param name="source">EKF source to switch to (1=GPS, 2=Vision, 3=OptFlow)</param>
         /// <returns>Command result</returns>
-        public async Task<CommandResult> SetEkfSource(EkfSource source)
+        public Task<CommandResult> SetEkfSource(EkfSource source)
         {
             try
             {
                 if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen)
                 {
-                    return new CommandResult
+                    return Task.FromResult(new CommandResult
                     {
                         Success = false,
                         Message = "MAVLink not connected",
                         Method = "MAVLink"
-                    };
+                    });
                 }
 
                 // Send MAV_CMD_SET_EKF_SOURCE_SET (42007)
@@ -259,21 +259,21 @@ namespace NOMAD.MissionPlanner
                     _ => $"Unknown ({(int)source})"
                 };
 
-                return new CommandResult
+                return Task.FromResult(new CommandResult
                 {
                     Success = true,
                     Message = $"EKF source switched to {sourceName}",
                     Method = "MAVLink"
-                };
+                });
             }
             catch (Exception ex)
             {
-                return new CommandResult
+                return Task.FromResult(new CommandResult
                 {
                     Success = false,
                     Message = $"EKF source switch failed: {ex.Message}",
                     Method = "MAVLink"
-                };
+                });
             }
         }
 

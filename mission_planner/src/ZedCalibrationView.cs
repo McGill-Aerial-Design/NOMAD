@@ -73,7 +73,6 @@ namespace NOMAD.MissionPlanner
         private ProgressBar _headingProgressBar;
         private TextBox _txtHeadingResult;
         private Panel[] _positionIndicators;
-        private bool _isHeadingCalibrating = false;
 
         // Polling timer for mag calibration status
         private Timer _pollTimer;
@@ -836,7 +835,6 @@ namespace NOMAD.MissionPlanner
 
                 if (resp.IsSuccessStatusCode)
                 {
-                    _isHeadingCalibrating = true;
                     UpdateHeadingUI(data);
                     _btnHeadingStart.Enabled = false;
                     _btnHeadingCollect.Enabled = true;
@@ -967,7 +965,6 @@ namespace NOMAD.MissionPlanner
                 _txtHeadingResult.Text = ex.Message;
             }
 
-            _isHeadingCalibrating = false;
             _btnHeadingStart.Enabled = true;
             _btnHeadingCollect.Enabled = false;
             _btnHeadingCancel.Enabled = false;
@@ -975,7 +972,6 @@ namespace NOMAD.MissionPlanner
 
         private async void BtnHeadingCancel_Click(object sender, EventArgs e)
         {
-            _isHeadingCalibrating = false;
             _btnHeadingCancel.Enabled = false;
             _btnHeadingCollect.Enabled = false;
 
