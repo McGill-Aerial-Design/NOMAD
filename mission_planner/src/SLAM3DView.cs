@@ -7,6 +7,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
@@ -159,6 +160,9 @@ namespace NOMAD.MissionPlanner
         private const int MinNewVoxelsForRebuild = 20;
         private DateTime _lastMeshRebuild = DateTime.MinValue;
         private static readonly TimeSpan MinRebuildInterval = TimeSpan.FromMilliseconds(250);
+        private bool _pendingMeshUpdate = false;  // P3-7: Flag to mark queued updates during debounce
+        private long _lastMeshRebuildStamp = -1;  // Stopwatch ticks (monotonic)
+        private const bool EnableMeshDebounceDebugLog = false;
 
         // ---- Trajectory ----
         private List<float[]> _trajectoryPoints = new List<float[]>(); // each [x,y,z] in ZED frame
@@ -501,6 +505,10 @@ namespace NOMAD.MissionPlanner
             try
             {
                 _glControl.MakeCurrent();
+                
+                // P3-7: Process any pending mesh updates if debounce window has elapsed
+                ProcessPendingMeshUpdate();
+                
                 GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
                 GL.MatrixMode(MatrixMode.Modelview);
@@ -1057,6 +1065,7 @@ namespace NOMAD.MissionPlanner
         private void RebuildVoxelMesh()
         {
             _lastMeshRebuild = DateTime.UtcNow;
+            _lastMeshRebuildStamp = Stopwatch.GetTimestamp();
             _meshDirty = false;
             _lastRenderedCount = _persistedBlocks.Count;
 
@@ -1140,6 +1149,7 @@ namespace NOMAD.MissionPlanner
             _voxelVerts = verts.ToArray();
             _voxelIndices = indices.ToArray();
             _voxelIndexCount = indices.Count;
+            LogMeshDebounce($"REBUILD complete: cached={_persistedBlocks.Count} verts={_voxelVerts.Length} indices={_voxelIndexCount} at={_lastMeshRebuild:O}");
         }
 
         private static void AddQuad(List<float> verts, List<int> indices, ref int offset,
@@ -1160,6 +1170,47 @@ namespace NOMAD.MissionPlanner
 
         // ==================== Mesh Data Processing ====================
 
+        private void LogMeshDebounce(string message)
+        {
+            if (!EnableMeshDebounceDebugLog) return;
+            Debug.WriteLine($"[SLAM3D][P3-7] {message}");
+        }
+
+        private static long ElapsedMsSince(long startStamp)
+        {
+            if (startStamp < 0) return long.MaxValue;
+            long elapsedTicks = Stopwatch.GetTimestamp() - startStamp;
+            return (elapsedTicks * 1000) / Stopwatch.Frequency;
+        }
+
+        // P3-7: Process pending mesh updates after debounce window expires
+        private void ProcessPendingMeshUpdate()
+        {
+            if (!_pendingMeshUpdate) return;
+
+            if (!_meshDirty)
+            {
+                _pendingMeshUpdate = false;
+                return;
+            }
+            
+            long elapsedMs = ElapsedMsSince(_lastMeshRebuildStamp);
+            long debounceMs = (long)MinRebuildInterval.TotalMilliseconds;
+            
+            if (elapsedMs >= debounceMs)
+            {
+                // Debounce window has expired and updates are pending: rebuild now
+                LogMeshDebounce($"ALLOW pending rebuild: elapsed={elapsedMs}ms dirty={_meshDirty} pending={_pendingMeshUpdate} voxels={_persistedBlocks.Count}");
+                FillGaps();
+                RebuildVoxelMesh();
+                _pendingMeshUpdate = false;
+            }
+            else
+            {
+                LogMeshDebounce($"BLOCK pending rebuild: elapsed={elapsedMs}ms < {debounceMs}ms dirty={_meshDirty} pending={_pendingMeshUpdate}");
+            }
+        }
+
         private void UpdateMeshVisual(MeshDataModel meshData)
         {
             try
@@ -1174,6 +1225,7 @@ namespace NOMAD.MissionPlanner
                     _voxelIndices = null;
                     _voxelIndexCount = 0;
                     _meshDirty = false;
+                    _pendingMeshUpdate = false;
                     _lastRenderedCount = 0;
                 }
 
@@ -1204,8 +1256,9 @@ namespace NOMAD.MissionPlanner
 
                 if (_meshDirty)
                 {
-                    FillGaps();
-                    RebuildVoxelMesh();
+                    // Queue rebuild work; timing gate is enforced in ProcessPendingMeshUpdate().
+                    _pendingMeshUpdate = true;
+                    LogMeshDebounce($"QUEUE mesh update: dirty=true pending=true mode={meshData?.Mode ?? "?"} voxels={meshData?.Voxels?.Count ?? 0} blocks={meshData?.Blocks?.Count ?? 0}");
                 }
             }
             catch (Exception ex)
@@ -1760,6 +1813,7 @@ namespace NOMAD.MissionPlanner
             _voxelIndices = null;
             _voxelIndexCount = 0;
             _meshDirty = false;
+            _pendingMeshUpdate = false;
             _lastRenderedCount = 0;
             _trajectoryPoints.Clear();
             _totalBlocks = 0;
