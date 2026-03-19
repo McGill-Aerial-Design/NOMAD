@@ -387,9 +387,9 @@ class ROSHTTPBridge(Node):
             # (e.g. obstructed camera). Diagonal elements [0,7,14] = x,y,z variance.
             cov = msg.pose.covariance
             pos_var = max(cov[0], cov[7], cov[14])  # largest positional variance
-            if pos_var > 0.1:  # reject if > 10cm std dev uncertainty
+            if pos_var > 0.1:
                 self.get_logger().warn(
-                    f"VIO rejected: high covariance ({pos_var:.4f})", throttle_duration_sec=5.0)
+                    f"VIO degraded: high covariance ({pos_var:.4f})", throttle_duration_sec=5.0)
 
                 # VO-005: Auto-level servo on sustained tracking loss
                 now = time.time()
@@ -402,7 +402,8 @@ class ROSHTTPBridge(Node):
                     )
                     self._send_servo_to_edge_core(90.0)
                     self._vio_loss_servo_leveled = True
-                return
+                # Keep forwarding pose for SLAM visualization continuity even when
+                # covariance is degraded; consumers can down-weight via confidence.
 
             # VIO is healthy - reset tracking loss state
             self._vio_healthy_time = time.time()
