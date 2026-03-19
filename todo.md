@@ -187,3 +187,144 @@
 - **File**: `edge_core/api.py` (line 1778)
 - **Problem**: stdout/stderr pipes can fill, blocking the child process.
 - [x] Redirect to DEVNULL (fire-and-forget process)
+
+---
+---
+
+# Requirements Audit (Sections 2-9)
+
+Full audit of the requirements document against codebase. Audited 2026-03-19.
+
+## Legend
+- [x] Implemented and verified in code
+- [ ] Missing — needs implementation
+- [~] Partially implemented — needs finishing
+
+---
+
+## REQ-1: TF Tree and Servo Integration (TF-001 to TF-007) — ALL PASS
+
+- [x] **TF-001**: servo_mount -> camera_link at >= 50 Hz — `edge_core/ros/servo_tf_publisher.py:91`
+- [x] **TF-002**: Feedback angle when available — `servo_tf_publisher.py:177`
+- [x] **TF-003**: Fallback to commanded angle with warning — `servo_tf_publisher.py:181-189`
+- [x] **TF-004**: Static base_link -> servo_mount (10cm fwd, 5cm down) — `servo_tf_publisher.py:60-63`
+  - **ACTION NEEDED**: Physically measure real mounting offsets and update constants
+- [x] **TF-005**: ZED factory calibration (launch passes `camera: zed2`) — `nomad_zed_nvblox.launch.py:70`
+- [x] **TF-006**: Pure Y-axis rotation, zero translation — `servo_tf_publisher.py:143-158`
+- [x] **TF-007**: TF latency < 20ms (50 Hz interval)
+
+---
+
+## REQ-2: Nvblox 3D Mapping (NV-001 to NV-008) — 7/8 PASS
+
+- [x] **NV-001**: Full TF chain (`use_tf_transforms: true`) — both configs
+- [x] **NV-002**: Outdoor voxel_size = 0.05 — `config/nvblox_performance.yaml:17`
+- [x] **NV-003**: Indoor voxel_size = 0.03 — `config/nvblox_indoor.yaml:25`
+- [x] **NV-004**: Depth rate limited (10 Hz outdoor, 15 Hz indoor)
+- [x] **NV-005**: 3D ESDF (`esdf_mode: "3d"`) — both configs
+- [x] **NV-006**: Correct TF prevents phantom geometry (depends on TF-*)
+- [x] **NV-007**: TSDF decay + block deallocation — both configs
+- [x] **NV-008**: 2D ESDF slice -> OBSTACLE_DISTANCE MAVLink for ArduPilot
+  - `edge_core/ros/obstacle_distance_bridge.py` — subscribes to occupancy grid,
+    raycasts 72 sectors, sends to Edge Core API
+  - `edge_core/mavlink_interface.py:send_obstacle_distance()` — forwards to ArduPilot
+  - `edge_core/api.py:POST /api/obstacle_distance` — API endpoint
+  - `config/launch/nomad_zed_nvblox.launch.py` — auto-launched with nvblox
+  - Supports sector exclusion for spray approach (SP-005)
+
+---
+
+## REQ-3: Visual Odometry (VO-001 to VO-007) — 5/7 PASS
+
+- [x] **VO-001**: Outdoor uses Cube GPS/IMU EKF (architecture-level)
+- [x] **VO-002**: Indoor uses cuVSLAM/ZED VIO — `ros_http_bridge.py`
+- [x] **VO-003**: Servo TF published for tilt compensation — `servo_tf_publisher.py`
+- [x] **VO-004**: Scan-stop-scan protocol — `ros_http_bridge.py:354-357, 568-590`
+- [x] **VO-005**: Tracking loss -> level servo after 3s — `ros_http_bridge.py:349-392`
+- [x] **VO-006**: Drift < 5cm per tilt cycle — per-cycle measurement added
+  - `edge_core/ros_http_bridge.py` — records position at tilt start/end,
+    logs warning if drift > 5cm, exposes stats via `get_stats()["tilt_drift"]`
+- [x] **VO-007**: ZED IMU independent of tilt (handled by ZED ROS wrapper)
+
+---
+
+## REQ-4: Target Detection (TD-001 to TD-007) — 4/7 PASS
+
+- [x] **TD-001**: Full TF chain for 3D positioning (ZED SDK internal)
+- [~] **TD-002**: Median depth in bbox (ZED SDK config-dependent — needs verification)
+- [ ] **TD-003**: Detection timestamp = image capture time, not inference publish time
+  - Verify `msg.header.stamp` in ObjectsStamped is image acquisition time
+  - If not, correlate with image topic timestamps
+- [x] **TD-004**: 5 Hz normal / 3 Hz throttled — `ros_http_bridge.py:890`
+- [x] **TD-005**: HSV + YOLO dual verification, `needs_review` flag — `ros_http_bridge.py:643-754`
+- [x] **TD-006**: Dedup within 0.5m, keep higher confidence — `api.py:2146-2161`
+- [ ] **TD-007**: Target position relative to building geometry (wall face, corner dist)
+  - Low priority — Task 1 specific, requires building model loader
+
+---
+
+## REQ-5: Autonomous Spray (SP-001 to SP-008) — ALL IMPL (needs integration testing)
+
+- [x] **SP-001**: Trigger from > 2m distance — `spray_controller.py:trigger()` validates distance
+- [x] **SP-002**: Fully autonomous state machine — `spray_controller.py:_run_sequence()`
+  - States: IDLE -> APPROACH -> AIM -> SPRAY -> VERIFY -> UPLOAD -> COMPLETE
+- [x] **SP-003**: Visual servoing (drone lateral + servo pitch) — `spray_controller.py:_aim_at_target()`
+- [x] **SP-004**: Ballistic drop compensation — `spray_controller.py:BALLISTIC_DROP_TABLE`
+  - Interpolates drop angle based on engagement distance
+- [x] **SP-005**: Sector exclusion — `spray_controller.py:_update_excluded_sector()`
+  - Excludes 30-deg sector centered on target from OBSTACLE_DISTANCE
+- [x] **SP-006**: Ground target descent — `spray_controller.py:_approach_target()`
+  - Vertical descent, hover at 1.2m, min alt 0.8m enforced
+- [x] **SP-007**: Photo + HSV verify + upload — `spray_controller.py:_capture_and_upload()`
+  - Filename: `Task_2_MAD_target_<n>.jpg`
+  - **ACTION NEEDED**: Wire up Google Drive upload callback
+- [x] **SP-008**: Re-spray once on fail — `spray_controller.py:MAX_SPRAY_ATTEMPTS=2`
+- API endpoints: `POST /api/spray/trigger`, `POST /api/spray/abort`, `GET /api/spray/status`
+
+---
+
+## REQ-6: Compute Resources (RM-001 to RM-005) — ALL PASS
+
+- [x] **RM-001**: GPU memory monitoring — `health_monitor.py`
+- [x] **RM-002**: INT8 TensorRT, 640x480 (external config)
+- [x] **RM-003**: ZED depth max 15 Hz, 720p (launch params)
+- [x] **RM-004**: CPU monitoring — `health_monitor.py`
+- [x] **RM-005**: Thermal throttle at 85C -> 3Hz, resume at 75C — `ros_http_bridge.py:341-890`
+
+---
+
+## REQ-7: Operational Mode Manager (Section 9) — IMPLEMENTED
+
+- [x] **Mode system**: `edge_core/operational_mode.py`
+  - `OperationalModeManager` with `switch_mode()` method
+  - Coordinates servo, VIO source, nvblox config, obstacle buffer
+  - API: `GET /api/mode`, `POST /api/mode/set?mode=outdoor_transit`
+  - Validates drone is hovering before nvblox config switches
+  - Supports nvblox restart callback for config changes
+
+| Mode | Servo | VIO Source | Nvblox Config | Obstacle Buffer |
+|------|-------|-----------|---------------|-----------------|
+| outdoor_transit | Fixed 90 deg | Cube GPS EKF | performance.yaml (5cm, 8m) | 2m horizontal |
+| outdoor_survey | Sweep -45/+30 | Cube GPS EKF | performance.yaml | 2m horizontal |
+| indoor_nav | Fixed 90 deg (scan-stop) | cuVSLAM/ZED VIO | indoor.yaml (3cm, 5m) | 0.7m h+v |
+| spray_approach | Visual servo | Mode-dependent | keep current | Sector exclusion |
+| emergency | N/A (RC kill) | N/A | keep current | Bypassed |
+
+- **nvblox config switching requires node restart** (~2-3s blind window)
+  - `switch_mode()` checks groundspeed < 0.2 m/s before allowing
+  - **ACTION NEEDED**: Wire up `set_nvblox_restart_fn()` in `main.py`
+  - **ACTION NEEDED**: Mission Planner mode selector UI
+
+---
+
+## Remaining Integration Work
+
+1. **Wire up `main.py`** — Initialize `OperationalModeManager`, `SprayController`,
+   set callbacks (nvblox restart, photo capture, HSV verify, Google Drive upload)
+2. **Google Drive upload** — Implement upload callback for SP-007
+   (service account or OAuth, upload to shared drive)
+3. **Mission Planner UI** — Mode selector dropdown, spray trigger button,
+   drift stats display, obstacle distance visualization
+4. **TD-007** — Building geometry output (low priority, Task 1 specific)
+5. **Ballistic drop table** — Calibrate with real nozzle measurements
+6. **Field testing** — All new features need Jetson deployment and flight testing

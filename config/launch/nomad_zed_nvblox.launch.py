@@ -62,6 +62,22 @@ def generate_launch_description():
         output='screen',
     )
 
+    # Obstacle distance bridge: converts nvblox 2D ESDF slice to
+    # MAVLink OBSTACLE_DISTANCE for ArduPilot obstacle avoidance (NV-008)
+    obstacle_distance_bridge = ExecuteProcess(
+        cmd=[
+            'python3',
+            '/workspaces/isaac_ros-dev/edge_core/ros/obstacle_distance_bridge.py',
+            '--host', '172.17.0.1',
+            '--port', '8000',
+            '--rate', '5.0',
+            '--buffer', '2.0',
+            '--topic', '/nvblox_node/static_map_slice',
+        ],
+        name='obstacle_distance_bridge',
+        output='screen',
+    )
+
     return LaunchDescription([
         enable_od_arg,
         IncludeLaunchDescription(
@@ -73,4 +89,5 @@ def generate_launch_description():
             }.items(),
         ),
         servo_tf_publisher,
+        obstacle_distance_bridge,
     ])

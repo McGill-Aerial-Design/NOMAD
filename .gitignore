@@ -154,6 +154,10 @@ recordings/
 !.env.example
 !*.env.example
 
+# Google Cloud credentials
+nomad-*.json
+client_secret_*.json
+
 # Tailscale auth keys
 config/env/*.env
 !config/env/*.env.example

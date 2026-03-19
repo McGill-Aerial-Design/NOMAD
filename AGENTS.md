@@ -291,7 +291,14 @@ The Jetson connects via Tailscale VPN for:
 | Navigation Architecture | `docs/JETSON_NAV_ARCHITECTURE.md` |
 | Isaac ROS + nvblox Setup | `docs/ISAAC_ROS_NVBLOX_SETUP.md` |
 | Servo Control | `docs/SERVO_CONTROL.md` |
+| **TODO / Requirements Audit** | **`TODO.md`** |
 | This Quick Reference | `AGENTS.md` |
+
+> **IMPORTANT**: Always check `TODO.md` before starting work. It contains:
+> - The SLAM3DView rewrite task list (P0-P3, mostly complete)
+> - A full requirements audit (REQ-1 to REQ-7) with detailed implementation notes
+> - Priority-ordered list of missing features (NV-008, operational modes, spray sequence)
+> - nvblox config switching notes (requires node restart, 2-3s blind window)
 
 ---
 

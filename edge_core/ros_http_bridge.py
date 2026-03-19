@@ -356,6 +356,14 @@ class ROSHTTPBridge(Node):
         self._scan_stop_enabled = True      # enable scan-stop-scan protocol
         self._scan_stop_vel_threshold = 0.1 # m/s threshold for "stopped"
 
+        # VO-006: Per-tilt-cycle drift tracking
+        self._tilt_active = False           # True while servo is tilted (not level)
+        self._tilt_start_pos = None         # (x, y, z) NED at tilt start
+        self._tilt_cycle_count = 0
+        self._tilt_total_drift_m = 0.0
+        self._tilt_max_drift_m = 0.0
+        self._tilt_drift_warning_threshold = 0.05  # 5cm per cycle (VO-006)
+
         # Timer to send data to edge_core
         self.create_timer(self._send_interval, self._send_to_edge_core)
         
@@ -578,6 +586,35 @@ class ROSHTTPBridge(Node):
 
             # Clamp to valid range
             angle = max(0.0, min(180.0, angle))
+
+            # VO-006: Track tilt cycle start/end for drift measurement
+            is_tilted = abs(angle - 90.0) > 2.0
+            if is_tilted and not self._tilt_active:
+                # Tilt cycle starting - record position
+                self._tilt_active = True
+                if self._latest_vio is not None:
+                    self._tilt_start_pos = (
+                        self._latest_vio.x,
+                        self._latest_vio.y,
+                        self._latest_vio.z,
+                    )
+            elif not is_tilted and self._tilt_active:
+                # Tilt cycle ending - measure drift
+                self._tilt_active = False
+                if self._tilt_start_pos is not None and self._latest_vio is not None:
+                    dx = self._latest_vio.x - self._tilt_start_pos[0]
+                    dy = self._latest_vio.y - self._tilt_start_pos[1]
+                    dz = self._latest_vio.z - self._tilt_start_pos[2]
+                    drift = math.sqrt(dx * dx + dy * dy + dz * dz)
+                    self._tilt_cycle_count += 1
+                    self._tilt_total_drift_m += drift
+                    self._tilt_max_drift_m = max(self._tilt_max_drift_m, drift)
+                    if drift > self._tilt_drift_warning_threshold:
+                        self.get_logger().warn(
+                            f"VO-006: Tilt cycle #{self._tilt_cycle_count} drift "
+                            f"{drift:.3f}m > {self._tilt_drift_warning_threshold}m threshold"
+                        )
+                self._tilt_start_pos = None
 
             # VO-004: Scan-stop-scan - block tilt during translational motion
             if self._scan_stop_enabled and abs(angle - 90.0) > 2.0:
@@ -1148,6 +1185,16 @@ class ROSHTTPBridge(Node):
             "mesh_enabled": self._enable_mesh,
             "servo_enabled": self._enable_servo,
             "detections_enabled": self._enable_detections,
+            # VO-006: tilt cycle drift stats
+            "tilt_drift": {
+                "cycles": self._tilt_cycle_count,
+                "total_drift_m": round(self._tilt_total_drift_m, 4),
+                "max_drift_m": round(self._tilt_max_drift_m, 4),
+                "avg_drift_m": round(
+                    self._tilt_total_drift_m / self._tilt_cycle_count, 4
+                ) if self._tilt_cycle_count > 0 else 0.0,
+                "tilt_active": self._tilt_active,
+            },
         }
 
 

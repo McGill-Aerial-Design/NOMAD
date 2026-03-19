@@ -327,7 +327,10 @@ def create_app(state_manager: StateManager) -> FastAPI:
     app.state.tailscale_manager = None
     app.state.network_monitor = None
     app.state.camera_service = None
-    
+    app.state.mode_manager = None
+    app.state.spray_controller = None
+    app.state.excluded_sectors: set = set()  # SP-005: sectors excluded from obstacle avoidance
+
     # VIO state from external sources (ROS bridge)
     app.state.external_vio_state: Optional[dict] = None
     app.state.slam_vio_ros_frame: Optional[dict] = None  # ROS-frame pose for SLAM 3D
@@ -1419,6 +1422,135 @@ def create_app(state_manager: StateManager) -> FastAPI:
             "success": success,
             "message": "GUIDED mode requested" if success else "Failed to request GUIDED mode",
         }
+
+    # ==================== Spray Controller (SP-001 to SP-008) =====================
+
+    @app.get("/api/spray/status", tags=["Spray"])
+    async def get_spray_status(request: Request):
+        """Get current spray sequence status."""
+        spray_ctrl = getattr(request.app.state, 'spray_controller', None)
+        if not spray_ctrl:
+            return {"state": "idle", "error": "Spray controller not initialized"}
+        return spray_ctrl.status.to_dict()
+
+    @app.post("/api/spray/trigger", tags=["Spray"])
+    async def trigger_spray(request: Request):
+        """
+        Trigger autonomous spray sequence on a target (SP-001).
+
+        Requires target_id, x, y, z coordinates. Drone must be > 2m
+        from target in the plane parallel to the target.
+
+        The sequence runs fully autonomously (SP-002):
+        APPROACH -> AIM -> SPRAY -> VERIFY -> UPLOAD -> COMPLETE
+        """
+        spray_ctrl = getattr(request.app.state, 'spray_controller', None)
+        if not spray_ctrl:
+            raise HTTPException(status_code=503, detail="Spray controller not initialized")
+
+        body = await request.json()
+        from .spray_controller import SprayTarget
+        target = SprayTarget(
+            target_id=body.get("target_id", 0),
+            x=body.get("x", 0.0),
+            y=body.get("y", 0.0),
+            z=body.get("z", 0.0),
+            label=body.get("label", ""),
+            confidence=body.get("confidence", 0.0),
+            is_ground=body.get("is_ground", False),
+        )
+
+        result = spray_ctrl.trigger(target)
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result.get("error"))
+        return result
+
+    @app.post("/api/spray/abort", tags=["Spray"])
+    async def abort_spray(request: Request):
+        """Abort the current spray sequence."""
+        spray_ctrl = getattr(request.app.state, 'spray_controller', None)
+        if not spray_ctrl:
+            raise HTTPException(status_code=503, detail="Spray controller not initialized")
+        return spray_ctrl.abort()
+
+    # ==================== Operational Mode (Section 9) ============================
+
+    @app.get("/api/mode", tags=["Mode"])
+    async def get_operational_mode(request: Request):
+        """Get current operational mode and available modes."""
+        mode_mgr = getattr(request.app.state, 'mode_manager', None)
+        if not mode_mgr:
+            return {
+                "current_mode": "outdoor_transit",
+                "available_modes": [],
+                "error": "Mode manager not initialized",
+            }
+        return {
+            "status": mode_mgr.status.to_dict(),
+            "available_modes": mode_mgr.get_available_modes(),
+        }
+
+    @app.post("/api/mode/set", tags=["Mode"])
+    async def set_operational_mode(request: Request, mode: str = Query(...)):
+        """
+        Switch operational mode.
+
+        Coordinates servo, VIO source, nvblox config, and obstacle avoidance.
+        Drone must be hovering for modes that require nvblox restart.
+
+        Valid modes: outdoor_transit, outdoor_survey, indoor_nav,
+                     spray_approach, emergency
+        """
+        mode_mgr = getattr(request.app.state, 'mode_manager', None)
+        if not mode_mgr:
+            raise HTTPException(status_code=503, detail="Mode manager not initialized")
+        result = mode_mgr.switch_mode(mode)
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result.get("error", "Switch failed"))
+        return result
+
+    # ==================== Obstacle Distance (NV-008) =============================
+
+    @app.post("/api/obstacle_distance", tags=["Navigation"])
+    async def receive_obstacle_distance(request: Request):
+        """
+        Receive obstacle distances from the ROS obstacle_distance_bridge
+        and forward to ArduPilot via MAVLink OBSTACLE_DISTANCE message.
+
+        Called by obstacle_distance_bridge.py at ~5 Hz with 72 angular
+        sectors of distance data (5-degree increments).
+        """
+        body = await request.json()
+        distances = body.get("distances", [])
+        if len(distances) != 72:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Expected 72 distances, got {len(distances)}",
+            )
+
+        # SP-005: Override excluded sectors to max_distance so obstacle
+        # avoidance ignores the sector containing the spray target
+        excluded = getattr(request.app.state, "excluded_sectors", set())
+        if excluded:
+            max_dist = body.get("max_distance", 2000)
+            distances = list(distances)
+            for idx in excluded:
+                if 0 <= idx < 72:
+                    distances[idx] = max_dist
+
+        mavlink_svc = request.app.state.mavlink_service
+        if not mavlink_svc:
+            raise HTTPException(status_code=503, detail="MAVLink service not available")
+
+        success = mavlink_svc.send_obstacle_distance(
+            distances=distances,
+            increment=body.get("increment", 5),
+            min_distance=body.get("min_distance", 20),
+            max_distance=body.get("max_distance", 2000),
+            angle_offset=body.get("angle_offset", 0),
+            frame=body.get("frame", 0),
+        )
+        return {"success": success}
 
     # ==================== Terminal Endpoints ======================================
 
@@ -3190,6 +3322,47 @@ wait
                 "commit": "unknown",
                 "has_changes": False,
             }
+
+    @app.post("/api/admin/upload-gdrive-token", tags=["Admin"])
+    async def upload_gdrive_token(request: Request):
+        """
+        Receive Google Drive OAuth2 token JSON from Mission Planner
+        and save to ~/.nomad/gdrive_token.json on the Jetson.
+
+        The token is generated via the one-time OAuth2 setup flow
+        (python edge_core/gdrive_upload.py --setup <client_secret.json>)
+        and contains a refresh_token for headless use.
+        """
+        body = await request.body()
+        if not body:
+            raise HTTPException(status_code=400, detail="Empty request body")
+
+        try:
+            token_data = json.loads(body)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid JSON")
+
+        if "token" not in token_data and "refresh_token" not in token_data:
+            raise HTTPException(
+                status_code=400,
+                detail="Missing required token fields (token or refresh_token)",
+            )
+
+        token_dir = os.path.expanduser("~/.nomad")
+        os.makedirs(token_dir, exist_ok=True)
+        token_path = os.path.join(token_dir, "gdrive_token.json")
+
+        try:
+            with open(token_path, "w") as f:
+                json.dump(token_data, f, indent=2)
+            os.chmod(token_path, 0o600)
+            logger.info(f"Google Drive token saved to {token_path}")
+            return {
+                "success": True,
+                "path": token_path,
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to save token: {e}")
 
     # ==================== Servo Control Endpoints ====================
     # Control camera tilt servo and water shooter via PWM

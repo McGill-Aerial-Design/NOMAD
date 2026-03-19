@@ -15,6 +15,7 @@ import atexit
 import logging
 import os
 import signal
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,9 @@ from .api import ( create_app,
                   set_network_monitor,
                   set_nav_controller,
 )
+from .operational_mode import init_mode_manager, OperationalModeManager
+from .spray_controller import SprayController, SprayTarget
+from .gdrive_upload import upload_to_gdrive
 
 from .logging_service import cleanup_old_logs
 from .video_stream_manager import init_video_stream_manager
@@ -112,6 +116,12 @@ servo_controller_initialized: bool = False
 tailscale_manager = None
 network_monitor = None
 
+# Operational mode manager (Section 9)
+mode_manager: "OperationalModeManager | None" = None
+
+# Spray controller (SP-001 to SP-008)
+spray_controller: "SprayController | None" = None
+
 def get_app():
     """Get or create the FastAPI application."""
     return create_app(state_manager)
@@ -123,8 +133,16 @@ app = get_app()
 
 def cleanup() -> None:
     """Cleanup on shutdown."""
-    global time_sync_service, isaac_bridge, health_monitor, nav_controller, servo_controller_initialized
+    global time_sync_service, isaac_bridge, health_monitor, nav_controller, servo_controller_initialized, spray_controller
     logger.info("Shutting down Edge Core...")
+
+    # Abort any active spray sequence
+    if spray_controller and spray_controller.is_active:
+        try:
+            spray_controller.abort()
+        except Exception:
+            pass
+    spray_controller = None
 
     # Shutdown RC servo bridge
     if RC_SERVO_BRIDGE_AVAILABLE:
@@ -332,6 +350,138 @@ def run(
     nav_controller.start()
     set_nav_controller(app, nav_controller)
     logger.info("Navigation controller started (velocity watchdog: 0.5s timeout)")
+
+    # Initialize operational mode manager (Section 9)
+    global mode_manager, spray_controller
+    servo_ctrl = get_servo_controller() if servo_controller_initialized and SERVO_AVAILABLE else None
+    mode_manager = init_mode_manager(
+        servo_controller=servo_ctrl,
+        state_manager=state_manager,
+    )
+    app.state.mode_manager = mode_manager
+
+    # nvblox restart callback: kill composable node, overlay correct config, relaunch
+    def _restart_nvblox(config_name: str) -> bool:
+        """Restart nvblox inside Isaac ROS container with a different config."""
+        container = "nomad_isaac_ros"
+        if config_name == "indoor":
+            src_cfg = "/workspaces/isaac_ros-dev/config/nvblox_indoor.yaml"
+        else:
+            src_cfg = "/workspaces/isaac_ros-dev/config/nvblox_performance.yaml"
+        try:
+            # Kill existing nvblox launch (the PID written by start script)
+            subprocess.run(
+                ["docker", "exec", container, "bash", "-c",
+                 "kill $(cat /tmp/zed_nvblox.pid 2>/dev/null) 2>/dev/null; sleep 2"],
+                timeout=10, capture_output=True,
+            )
+            # Overlay config onto installed nvblox_base.yaml and relaunch
+            relaunch_script = (
+                "source /opt/ros/humble/setup.bash 2>/dev/null; "
+                "source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null; "
+                "export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH; "
+                f'NVBLOX_BASE=$(python3 -c "from ament_index_python.packages import get_package_share_directory; '
+                f"print(get_package_share_directory('nvblox_examples_bringup'))\" 2>/dev/null)/config/nvblox/nvblox_base.yaml; "
+                f"cp {src_cfg} $NVBLOX_BASE; "
+                'NOMAD_LAUNCH=/workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py; '
+                'if [ -f "$NOMAD_LAUNCH" ]; then '
+                '  ros2 launch "$NOMAD_LAUNCH" & echo $! > /tmp/zed_nvblox.pid; '
+                'else '
+                '  ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2 & echo $! > /tmp/zed_nvblox.pid; '
+                'fi'
+            )
+            result = subprocess.run(
+                ["docker", "exec", "-d", container, "bash", "-c", relaunch_script],
+                timeout=15, capture_output=True,
+            )
+            success = result.returncode == 0
+            if success:
+                logger.info(f"nvblox restarted with config: {config_name}")
+            else:
+                logger.error(f"nvblox restart failed: {result.stderr.decode()}")
+            return success
+        except Exception as e:
+            logger.error(f"nvblox restart error: {e}")
+            return False
+
+    mode_manager.set_nvblox_restart_fn(_restart_nvblox)
+    logger.info("Operational mode manager initialized")
+
+    # Initialize spray controller (SP-001 to SP-008)
+    spray_controller = SprayController(
+        nav_controller=nav_controller,
+        servo_controller=servo_ctrl,
+        state_manager=state_manager,
+        mode_manager=mode_manager,
+    )
+    app.state.spray_controller = spray_controller
+
+    # Wire spray callbacks
+    # set_capture_photo_fn: capture frame from video bridge HTTP snapshot
+    def _capture_photo() -> str | None:
+        """Capture a frame from the ZED video bridge and save to a temp file."""
+        try:
+            import requests as _requests
+            import numpy as _np
+            bridge_port = int(os.environ.get("NOMAD_BRIDGE_HTTP_PORT", "9200"))
+            snap_url = f"http://172.17.0.1:{bridge_port}/snapshot"
+            resp = _requests.get(snap_url, timeout=3)
+            if resp.status_code == 200 and resp.headers.get("Content-Type", "").startswith("image"):
+                import cv2
+                arr = _np.frombuffer(resp.content, dtype=_np.uint8)
+                img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if img is not None:
+                    import tempfile
+                    fd, path = tempfile.mkstemp(suffix=".jpg", prefix="spray_capture_")
+                    os.close(fd)
+                    cv2.imwrite(path, img)
+                    return path
+        except Exception as e:
+            logger.error(f"Photo capture failed: {e}")
+        return None
+
+    spray_controller.set_capture_photo_fn(_capture_photo)
+
+    # set_verify_hsv_fn: check if target region shifted from purple to blue
+    def _verify_hsv(photo_path: str) -> bool:
+        """Analyze sprayed target for purple-to-blue color shift."""
+        try:
+            import cv2
+            import numpy as _np
+            img = cv2.imread(photo_path)
+            if img is None:
+                return False
+            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+            # Center 30% of image (where target should be after aiming)
+            h, w = hsv.shape[:2]
+            cx, cy = w // 2, h // 2
+            rw, rh = w // 6, h // 6
+            roi = hsv[cy - rh:cy + rh, cx - rw:cx + rw]
+            # Blue range in OpenCV HSV: H 100-130, S > 80, V > 50
+            blue_mask = cv2.inRange(roi, _np.array([100, 80, 50]), _np.array([130, 255, 255]))
+            blue_ratio = _np.count_nonzero(blue_mask) / max(blue_mask.size, 1)
+            passed = blue_ratio > 0.15  # 15% blue pixels indicates successful spray
+            logger.info(f"HSV verify: blue_ratio={blue_ratio:.2f} passed={passed}")
+            return passed
+        except Exception as e:
+            logger.error(f"HSV verification failed: {e}")
+            return False
+
+    spray_controller.set_verify_hsv_fn(_verify_hsv)
+
+    # set_upload_fn: upload photo to Google Drive
+    spray_controller.set_upload_fn(
+        lambda local_path, filename: upload_to_gdrive(local_path, filename)
+    )
+
+    # set_excluded_sectors_fn: store on app.state for obstacle distance endpoint
+    app.state.excluded_sectors: set[int] = set()
+
+    def _set_excluded_sectors(sectors: set[int]) -> None:
+        app.state.excluded_sectors = sectors
+
+    spray_controller.set_excluded_sectors_fn(_set_excluded_sectors)
+    logger.info("Spray controller initialized with callbacks")
 
     # Start health status broadcast (every 2 seconds)
     mavlink_service.start_health_broadcast(interval=2.0)

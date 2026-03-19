@@ -8,6 +8,7 @@ using System.Drawing;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Net.Http;
 using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
@@ -15,6 +16,7 @@ using System.Windows.Forms;
 using MissionPlanner;
 using MissionPlanner.Utilities;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace NOMAD.MissionPlanner
 {
@@ -29,15 +31,27 @@ namespace NOMAD.MissionPlanner
         private Button _btnResetVio;
         private SLAM3DView _slam3DView;
         private TabControl _tabControl;
-        
+
+        // Mode selector controls
+        private ComboBox _cmbMode;
+        private Label _lblModeStatus;
+        private Label _lblNvbloxWarning;
+        private System.Threading.Timer _modePollTimer;
+
+        // Spray controls
+        private Button _btnSprayTarget;
+        private Button _btnAbortSpray;
+        private Label _lblSprayStatus;
+
         public NOMADTask2View(DualLinkSender sender, NOMADConfig config, JetsonConnectionManager jetsonConnectionManager = null)
         {
             _sender = sender;
             _config = config;
             _jetsonConnectionManager = jetsonConnectionManager;
             InitializeUI();
+            StartModePolling();
         }
-        
+
         private void InitializeUI()
         {
             // Use TabControl to switch between Status view and 3D SLAM view
@@ -45,13 +59,13 @@ namespace NOMAD.MissionPlanner
             {
                 Dock = DockStyle.Fill,
             };
-            
+
             // Tab 1: Status & Controls
             var statusTab = new TabPage("Status & Controls")
             {
                 BackColor = NOMADTheme.BG_DARK,
             };
-            
+
             var statusLayout = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -60,7 +74,7 @@ namespace NOMAD.MissionPlanner
                 AutoScroll = true,
                 Padding = new Padding(10),
             };
-            
+
             // Description
             var descLabel = new Label
             {
@@ -75,11 +89,11 @@ namespace NOMAD.MissionPlanner
                 Margin = new Padding(0, 0, 0, 20),
             };
             statusLayout.Controls.Add(descLabel);
-            
+
             // VIO Status Card
             var vioCard = CreateCard("VIO STATUS");
             vioCard.Size = new Size(600, 100);
-            
+
             _lblVioStatus = new Label
             {
                 Text = "VIO: Inactive",
@@ -89,18 +103,103 @@ namespace NOMAD.MissionPlanner
                 AutoSize = true,
             };
             vioCard.Controls.Add(_lblVioStatus);
-            
+
             _btnResetVio = CreateButton("Reset VIO Origin", SUCCESS_COLOR, 180, 35);
             _btnResetVio.Location = new Point(400, 45);
             _btnResetVio.Click += async (s, e) => await _sender.ResetVioOriginAsync();
             vioCard.Controls.Add(_btnResetVio);
-            
+
             statusLayout.Controls.Add(vioCard);
-            
+
+            // ==================== Operational Mode Card ====================
+            var modeCard = CreateCard("OPERATIONAL MODE");
+            modeCard.Size = new Size(600, 140);
+
+            var lblModeTitle = new Label
+            {
+                Text = "Mode:",
+                Font = new Font("Segoe UI", 10),
+                ForeColor = TEXT_SECONDARY,
+                Location = new Point(15, 45),
+                AutoSize = true,
+            };
+            modeCard.Controls.Add(lblModeTitle);
+
+            _cmbMode = new ComboBox
+            {
+                Location = new Point(65, 42),
+                Size = new Size(180, 25),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                BackColor = NOMADTheme.INPUT_BG,
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 10),
+            };
+            _cmbMode.Items.AddRange(new object[]
+            {
+                "outdoor_transit",
+                "outdoor_survey",
+                "indoor_nav",
+                "spray_approach",
+                "emergency",
+            });
+            _cmbMode.SelectedIndex = 0;
+            _cmbMode.SelectedIndexChanged += async (s, e) => await SetMode(_cmbMode.SelectedItem?.ToString());
+            modeCard.Controls.Add(_cmbMode);
+
+            _lblModeStatus = new Label
+            {
+                Text = "Current: outdoor_transit",
+                Font = new Font("Consolas", 9),
+                ForeColor = TEXT_PRIMARY,
+                Location = new Point(260, 45),
+                AutoSize = true,
+            };
+            modeCard.Controls.Add(_lblModeStatus);
+
+            _lblNvbloxWarning = new Label
+            {
+                Text = "",
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                ForeColor = WARNING_COLOR,
+                Location = new Point(15, 80),
+                AutoSize = true,
+                Visible = false,
+            };
+            modeCard.Controls.Add(_lblNvbloxWarning);
+
+            statusLayout.Controls.Add(modeCard);
+
+            // ==================== Spray Controller Card ====================
+            var sprayCard = CreateCard("SPRAY CONTROLLER");
+            sprayCard.Size = new Size(600, 130);
+
+            _btnSprayTarget = CreateButton("Spray Target", ACCENT_COLOR, 140, 35);
+            _btnSprayTarget.Location = new Point(15, 45);
+            _btnSprayTarget.Click += async (s, e) => await TriggerSpray();
+            sprayCard.Controls.Add(_btnSprayTarget);
+
+            _btnAbortSpray = CreateButton("Abort", ERROR_COLOR, 80, 35);
+            _btnAbortSpray.Location = new Point(165, 45);
+            _btnAbortSpray.Click += async (s, e) => await AbortSpray();
+            sprayCard.Controls.Add(_btnAbortSpray);
+
+            _lblSprayStatus = new Label
+            {
+                Text = "State: idle",
+                Font = new Font("Consolas", 9),
+                ForeColor = TEXT_PRIMARY,
+                Location = new Point(15, 90),
+                AutoSize = true,
+                MaximumSize = new Size(560, 0),
+            };
+            sprayCard.Controls.Add(_lblSprayStatus);
+
+            statusLayout.Controls.Add(sprayCard);
+
             // Exclusion Map Card
             var mapCard = CreateCard("TARGET EXCLUSION MAP");
             mapCard.Size = new Size(600, 130);
-            
+
             _lblTargetCount = new Label
             {
                 Text = "Targets tracked: 0",
@@ -110,7 +209,7 @@ namespace NOMAD.MissionPlanner
                 AutoSize = true,
             };
             mapCard.Controls.Add(_lblTargetCount);
-            
+
             _btnResetMap = CreateButton("RESET EXCLUSION MAP", ERROR_COLOR, 250, 45);
             _btnResetMap.Location = new Point(15, 80);
             _btnResetMap.Click += async (s, e) =>
@@ -128,9 +227,9 @@ namespace NOMAD.MissionPlanner
                 }
             };
             mapCard.Controls.Add(_btnResetMap);
-            
+
             statusLayout.Controls.Add(mapCard);
-            
+
             // WASD Control hint
             var wasdLabel = new Label
             {
@@ -141,16 +240,16 @@ namespace NOMAD.MissionPlanner
                 Margin = new Padding(0, 20, 0, 0),
             };
             statusLayout.Controls.Add(wasdLabel);
-            
+
             statusTab.Controls.Add(statusLayout);
             _tabControl.TabPages.Add(statusTab);
-            
+
             // Tab 2: 3D SLAM View
             var slam3DTab = new TabPage("3D SLAM View")
             {
                 BackColor = NOMADTheme.BG_DARK,
             };
-            
+
             try
             {
                 _slam3DView = new SLAM3DView(_config);
@@ -172,21 +271,264 @@ namespace NOMAD.MissionPlanner
                 };
                 slam3DTab.Controls.Add(errorLabel);
             }
-            
+
             _tabControl.TabPages.Add(slam3DTab);
-            
+
             this.Controls.Add(_tabControl);
         }
-        
+
+        #region Mode Polling
+
+        private void StartModePolling()
+        {
+            _modePollTimer = new System.Threading.Timer(
+                _ => PollModeAndSpray(),
+                null,
+                TimeSpan.FromSeconds(1),
+                TimeSpan.FromSeconds(2)
+            );
+        }
+
+        private async void PollModeAndSpray()
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+
+            try
+            {
+                var modeTask = JetsonApiService.GetAsync("/api/mode");
+                var sprayTask = JetsonApiService.GetAsync("/api/spray/status");
+
+                await Task.WhenAll(modeTask, sprayTask);
+
+                if (IsDisposed || !IsHandleCreated) return;
+
+                var modeResp = await modeTask;
+                var sprayResp = await sprayTask;
+
+                JObject modeData = null;
+                JObject sprayData = null;
+
+                if (modeResp.IsSuccessStatusCode)
+                {
+                    var json = await modeResp.Content.ReadAsStringAsync();
+                    modeData = JObject.Parse(json);
+                }
+
+                if (sprayResp.IsSuccessStatusCode)
+                {
+                    var json = await sprayResp.Content.ReadAsStringAsync();
+                    sprayData = JObject.Parse(json);
+                }
+
+                if (!IsDisposed && IsHandleCreated)
+                {
+                    this.BeginInvoke((Action)(() => UpdateModeAndSprayUI(modeData, sprayData)));
+                }
+            }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+            catch (Exception)
+            {
+                // Connection lost — ignore until next poll
+            }
+        }
+
+        private void UpdateModeAndSprayUI(JObject modeData, JObject sprayData)
+        {
+            try
+            {
+                // Update mode status
+                if (modeData != null)
+                {
+                    var status = modeData["status"];
+                    if (status != null)
+                    {
+                        var currentMode = status["current_mode"]?.ToString() ?? "unknown";
+                        _lblModeStatus.Text = $"Current: {currentMode}";
+
+                        var nvbloxRestarting = status["nvblox_restarting"]?.Value<bool>() ?? false;
+                        if (nvbloxRestarting)
+                        {
+                            _lblNvbloxWarning.Text = "nvblox restarting -- obstacle avoidance offline";
+                            _lblNvbloxWarning.Visible = true;
+                        }
+                        else
+                        {
+                            _lblNvbloxWarning.Visible = false;
+                        }
+                    }
+                }
+
+                // Update spray status
+                if (sprayData != null)
+                {
+                    var state = sprayData["state"]?.ToString() ?? "idle";
+                    var sprayCount = sprayData["spray_count"]?.Value<int>() ?? 0;
+                    var verified = sprayData["verification_passed"]?.Value<bool>() ?? false;
+                    var error = sprayData["error"]?.ToString();
+
+                    var statusText = $"State: {state}";
+                    if (state != "idle")
+                    {
+                        statusText += $"  |  Sprays: {sprayCount}  |  Verified: {(verified ? "YES" : "no")}";
+                    }
+                    if (!string.IsNullOrEmpty(error))
+                    {
+                        statusText += $"  |  Error: {error}";
+                    }
+                    _lblSprayStatus.Text = statusText;
+
+                    bool active = state != "idle" && state != "complete" && state != "failed" && state != "aborted";
+                    _btnSprayTarget.Enabled = !active;
+                    _btnAbortSpray.Enabled = active;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Mode/Spray UI update error: {ex.Message}");
+            }
+        }
+
+        #endregion
+
+        #region Mode Actions
+
+        private async Task SetMode(string mode)
+        {
+            if (string.IsNullOrEmpty(mode)) return;
+
+            try
+            {
+                var response = await JetsonApiService.PostAsync($"/api/mode/set?mode={mode}");
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var body = await response.Content.ReadAsStringAsync();
+                    _lblModeStatus.Text = $"Switch failed: {response.StatusCode}";
+                    _lblModeStatus.ForeColor = ERROR_COLOR;
+
+                    try
+                    {
+                        var err = JObject.Parse(body);
+                        var detail = err["detail"]?.ToString();
+                        if (!string.IsNullOrEmpty(detail))
+                            _lblModeStatus.Text = $"Failed: {detail}";
+                    }
+                    catch { }
+                }
+                else
+                {
+                    _lblModeStatus.ForeColor = TEXT_PRIMARY;
+                }
+            }
+            catch (Exception ex)
+            {
+                _lblModeStatus.Text = $"Error: {ex.Message}";
+                _lblModeStatus.ForeColor = ERROR_COLOR;
+            }
+        }
+
+        #endregion
+
+        #region Spray Actions
+
+        /// <summary>
+        /// Trigger spray on the first available detection from the detection list.
+        /// </summary>
+        private async Task TriggerSpray()
+        {
+            try
+            {
+                _btnSprayTarget.Enabled = false;
+
+                // Fetch latest detections to find a target
+                var detectResp = await JetsonApiService.GetAsync("/api/task/2/detections");
+                if (!detectResp.IsSuccessStatusCode)
+                {
+                    _lblSprayStatus.Text = "No detections available";
+                    _btnSprayTarget.Enabled = true;
+                    return;
+                }
+
+                var detectJson = await detectResp.Content.ReadAsStringAsync();
+                var detections = JArray.Parse(detectJson);
+                if (detections.Count == 0)
+                {
+                    _lblSprayStatus.Text = "No detections — cannot spray";
+                    _btnSprayTarget.Enabled = true;
+                    return;
+                }
+
+                // Use first detection
+                var det = detections[0];
+                var payload = new JObject
+                {
+                    ["target_id"] = det["target_id"] ?? det["id"] ?? 0,
+                    ["x"] = det["x"] ?? 0,
+                    ["y"] = det["y"] ?? 0,
+                    ["z"] = det["z"] ?? 0,
+                    ["label"] = det["label"] ?? "",
+                };
+
+                var content = new StringContent(payload.ToString(), Encoding.UTF8, "application/json");
+                var response = await JetsonApiService.PostAsync("/api/spray/trigger", content);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    _lblSprayStatus.Text = "Spray triggered...";
+                }
+                else
+                {
+                    var body = await response.Content.ReadAsStringAsync();
+                    try
+                    {
+                        var err = JObject.Parse(body);
+                        _lblSprayStatus.Text = $"Spray failed: {err["detail"]?.ToString() ?? body}";
+                    }
+                    catch
+                    {
+                        _lblSprayStatus.Text = $"Spray failed: HTTP {response.StatusCode}";
+                    }
+                    _btnSprayTarget.Enabled = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                _lblSprayStatus.Text = $"Error: {ex.Message}";
+                _btnSprayTarget.Enabled = true;
+            }
+        }
+
+        private async Task AbortSpray()
+        {
+            try
+            {
+                _btnAbortSpray.Enabled = false;
+                await JetsonApiService.PostAsync("/api/spray/abort");
+                _lblSprayStatus.Text = "Spray aborted";
+            }
+            catch (Exception ex)
+            {
+                _lblSprayStatus.Text = $"Abort error: {ex.Message}";
+            }
+            finally
+            {
+                _btnAbortSpray.Enabled = true;
+            }
+        }
+
+        #endregion
+
         public void UpdateData()
         {
             // VIO status updates would come from Jetson API
         }
-        
+
         protected override void Dispose(bool disposing)
         {
             if (disposing)
             {
+                _modePollTimer?.Dispose();
                 _slam3DView?.Dispose();
             }
             base.Dispose(disposing);

@@ -733,3 +733,58 @@ class MavlinkService:
             logging.getLogger(__name__).debug(f"Position target error: {e}")
             return False
 
+    def send_obstacle_distance(
+        self,
+        distances: list[int],
+        increment: int = 5,
+        min_distance: int = 20,
+        max_distance: int = 2000,
+        angle_offset: int = 0,
+        frame: int = 0,
+    ) -> bool:
+        """
+        Send OBSTACLE_DISTANCE message to ArduPilot (NV-008).
+
+        Provides proximity sensor data for obstacle avoidance. ArduPilot uses
+        this to avoid obstacles in the horizontal plane during autonomous flight.
+
+        Args:
+            distances: List of distances in centimeters for each angular sector.
+                       Length must be 72 for 5-degree increments.
+                       Use max_distance (or 0) for no obstacle detected.
+            increment: Angular width of each sector in degrees (default: 5).
+            min_distance: Minimum valid distance in cm (default: 20).
+            max_distance: Maximum valid distance in cm (default: 2000 = 20m).
+            angle_offset: Starting angle in degrees (default: 0 = forward).
+            frame: MAV_FRAME (0 = BODY_FRD, default).
+
+        Returns:
+            True if message sent successfully.
+        """
+        if self._conn is None:
+            return False
+
+        try:
+            # Pad or truncate to exactly 72 values
+            dist_array = list(distances[:72])
+            while len(dist_array) < 72:
+                dist_array.append(max_distance)
+
+            self._conn.mav.obstacle_distance_send(
+                int(time.time() * 1e3) & 0xFFFFFFFF,  # time_usec (ms, truncated)
+                0,                    # sensor_type: MAV_DISTANCE_SENSOR_UNKNOWN
+                dist_array,           # distances[72] in cm
+                increment,            # angular width per sector
+                min_distance,         # min distance cm
+                max_distance,         # max distance cm
+                float(increment),     # increment_f (float version)
+                float(angle_offset),  # angle_offset (float)
+                frame,                # MAV_FRAME
+            )
+            return True
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).debug(f"Obstacle distance error: {e}")
+            return False
+

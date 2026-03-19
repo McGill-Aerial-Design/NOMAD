@@ -82,7 +82,13 @@ namespace NOMAD.MissionPlanner
         // Alerts
         private ListBox _lstAlerts;
         private readonly List<string> _alerts = new List<string>();
-        
+
+        // VIO Drift Stats (VO-006)
+        private Label _lblDriftCycles;
+        private Label _lblDriftAvg;
+        private Label _lblDriftMax;
+        private Label _lblDriftWarning;
+
         // ============================================================
         // Constructor
         // ============================================================
@@ -503,7 +509,62 @@ namespace NOMAD.MissionPlanner
             vioGroup.Controls.Add(_lblVioStatus);
             
             panel.Controls.Add(vioGroup);
-            
+            yOffset += 80;
+
+            // VIO Tilt Drift Stats (VO-006)
+            var driftGroup = new GroupBox
+            {
+                Text = "VIO Tilt Drift",
+                ForeColor = Color.FromArgb(100, 200, 255),
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                Location = new Point(10, yOffset),
+                Size = new Size(300, 80),
+                BackColor = Color.FromArgb(40, 40, 43),
+            };
+
+            _lblDriftCycles = new Label
+            {
+                Text = "Cycles: --",
+                Font = new Font("Consolas", 9),
+                ForeColor = Color.White,
+                Location = new Point(15, 20),
+                AutoSize = true,
+            };
+            driftGroup.Controls.Add(_lblDriftCycles);
+
+            _lblDriftAvg = new Label
+            {
+                Text = "Avg: --",
+                Font = new Font("Consolas", 9),
+                ForeColor = Color.White,
+                Location = new Point(120, 20),
+                AutoSize = true,
+            };
+            driftGroup.Controls.Add(_lblDriftAvg);
+
+            _lblDriftMax = new Label
+            {
+                Text = "Max: --",
+                Font = new Font("Consolas", 9),
+                ForeColor = Color.White,
+                Location = new Point(15, 42),
+                AutoSize = true,
+            };
+            driftGroup.Controls.Add(_lblDriftMax);
+
+            _lblDriftWarning = new Label
+            {
+                Text = "",
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                ForeColor = Color.Orange,
+                Location = new Point(120, 42),
+                AutoSize = true,
+                Visible = false,
+            };
+            driftGroup.Controls.Add(_lblDriftWarning);
+
+            panel.Controls.Add(driftGroup);
+
             return panel;
         }
         
@@ -644,28 +705,38 @@ namespace NOMAD.MissionPlanner
                 var healthTask = JetsonApiService.GetAsync("/health/detailed");
                 // Fetch network/status for detailed network info
                 var networkTask = JetsonApiService.GetAsync("/network/status");
-                
-                await Task.WhenAll(healthTask, networkTask);
+                // Fetch isaac/status for VIO drift stats
+                var isaacTask = JetsonApiService.GetAsync("/api/isaac/status");
+
+                await Task.WhenAll(healthTask, networkTask, isaacTask);
 
                 if (IsDisposed || !IsHandleCreated) return;
-                
+
                 var healthResponse = await healthTask;
                 var networkResponse = await networkTask;
-                
+                var isaacResponse = await isaacTask;
+
                 if (healthResponse.IsSuccessStatusCode)
                 {
                     var healthJson = await healthResponse.Content.ReadAsStringAsync();
                     var healthData = JObject.Parse(healthJson);
-                    
+
                     JObject networkData = null;
                     if (networkResponse.IsSuccessStatusCode)
                     {
                         var networkJson = await networkResponse.Content.ReadAsStringAsync();
                         networkData = JObject.Parse(networkJson);
                     }
-                    
+
+                    JObject isaacData = null;
+                    if (isaacResponse.IsSuccessStatusCode)
+                    {
+                        var isaacJson = await isaacResponse.Content.ReadAsStringAsync();
+                        isaacData = JObject.Parse(isaacJson);
+                    }
+
                     if (!IsDisposed && IsHandleCreated)
-                        this.BeginInvoke((Action)(() => UpdateUI(healthData, networkData)));
+                        this.BeginInvoke((Action)(() => UpdateUI(healthData, networkData, isaacData)));
                 }
                 else
                 {
@@ -702,7 +773,7 @@ namespace NOMAD.MissionPlanner
         // UI Updates
         // ============================================================
         
-        private void UpdateUI(JObject data, JObject networkData = null)
+        private void UpdateUI(JObject data, JObject networkData = null, JObject isaacData = null)
         {
             try
             {
@@ -784,6 +855,9 @@ namespace NOMAD.MissionPlanner
                 // Draw graph
                 DrawGraph();
                 
+                // VIO Tilt Drift Stats (VO-006)
+                UpdateDriftStats(isaacData);
+
                 // Check alerts
                 CheckAlerts(cpuTemp, gpuTemp, memUsed, diskUsed);
             }
@@ -1003,6 +1077,64 @@ namespace NOMAD.MissionPlanner
             return value.Length <= maxLength ? value : value.Substring(0, maxLength - 3) + "...";
         }
         
+        private void UpdateDriftStats(JObject isaacData)
+        {
+            try
+            {
+                if (isaacData == null)
+                {
+                    _lblDriftCycles.Text = "Cycles: --";
+                    _lblDriftAvg.Text = "Avg: --";
+                    _lblDriftMax.Text = "Max: --";
+                    _lblDriftWarning.Visible = false;
+                    return;
+                }
+
+                // Look for tilt_drift in bridge_stats or stats
+                var bridgeStats = isaacData["bridge_stats"] ?? isaacData["stats"];
+                var tiltDrift = bridgeStats?["tilt_drift"];
+
+                if (tiltDrift == null || tiltDrift.Type == JTokenType.Null)
+                {
+                    _lblDriftCycles.Text = "Cycles: 0";
+                    _lblDriftAvg.Text = "Avg: --";
+                    _lblDriftMax.Text = "Max: --";
+                    _lblDriftWarning.Visible = false;
+                    return;
+                }
+
+                var cycles = tiltDrift["cycles"]?.Value<int>() ?? 0;
+                var avgDrift = tiltDrift["avg_drift_m"]?.Value<float>() ?? 0f;
+                var maxDrift = tiltDrift["max_drift_m"]?.Value<float>() ?? 0f;
+
+                _lblDriftCycles.Text = $"Cycles: {cycles}";
+                _lblDriftAvg.Text = $"Avg: {avgDrift * 100f:F1}cm";
+                _lblDriftMax.Text = $"Max: {maxDrift * 100f:F1}cm";
+
+                // VO-006: Warn if max drift > 5cm
+                if (maxDrift > 0.05f)
+                {
+                    _lblDriftWarning.Text = "DRIFT HIGH";
+                    _lblDriftWarning.ForeColor = Color.Red;
+                    _lblDriftWarning.Visible = true;
+                }
+                else if (cycles > 0)
+                {
+                    _lblDriftWarning.Text = "OK";
+                    _lblDriftWarning.ForeColor = Color.LimeGreen;
+                    _lblDriftWarning.Visible = true;
+                }
+                else
+                {
+                    _lblDriftWarning.Visible = false;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Drift stats error: {ex.Message}");
+            }
+        }
+
         private void UpdateOverallStatus(string status)
         {
             switch (status.ToLower())
