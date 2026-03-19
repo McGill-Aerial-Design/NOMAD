@@ -24,16 +24,16 @@
 
     # ==============================================================
     # SPEED SETTINGS with 3D enabled
-    # Conservative rates to stay within Orin Nano budget
+    # High-rate settings for smoother world-view updates in Mission Planner
     # ==============================================================
     tick_period_ms: 10
-    integrate_depth_rate_hz: 10.0    # reduced from 15 - less GPU pressure
-    integrate_color_rate_hz: 5.0     # reduced from 10 - color is optional
+    integrate_depth_rate_hz: 30.0    # target 30Hz world updates
+    integrate_color_rate_hz: 10.0    # keep color lower than depth to reduce GPU load
     integrate_lidar_rate_hz: 0.0
-    update_mesh_rate_hz: 2.0         # reduced from 5 - mesh is viz only
-    update_esdf_rate_hz: 5.0         # reduced from 10 - still responsive
-    publish_layer_rate_hz: 5.0       # reduced from 10
-    publish_debug_vis_rate_hz: 1.0   # reduced from 2
+    update_mesh_rate_hz: 30.0        # target 30Hz mesh updates
+    update_esdf_rate_hz: 15.0        # keep ESDF responsive without maxing GPU
+    publish_layer_rate_hz: 30.0      # target 30Hz layer publishing
+    publish_debug_vis_rate_hz: 2.0
     decay_tsdf_rate_hz: 1.0          # slow decay to free old blocks
     decay_dynamic_occupancy_rate_hz: 0.0
     clear_map_outside_radius_rate_hz: 1.0  # more aggressive map clearing

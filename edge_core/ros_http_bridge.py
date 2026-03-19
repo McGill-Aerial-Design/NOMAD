@@ -237,7 +237,9 @@ class ROSHTTPBridge(Node):
         self._last_send_time = 0.0
         self._last_cmd_vel_send_time = 0.0
         self._last_mesh_send_time = 0.0
-        self._mesh_send_interval_s = 0.1  # 10 Hz mesh update cap
+        # Keep mesh forwarding capped by the configured bridge rate (default 30 Hz).
+        # A fixed 10 Hz cap causes visible lag in world-view updates.
+        self._mesh_send_interval_s = self._send_interval
         self._last_servo_send_time = 0.0
         self._last_servo_angle = -1.0
         
@@ -516,12 +518,6 @@ class ROSHTTPBridge(Node):
         
         if vio is None:
             return
-        
-        # Rate limit
-        now = time.time()
-        if now - self._last_send_time < self._send_interval:
-            return
-        self._last_send_time = now
         
         try:
             data = json.dumps(asdict(vio)).encode("utf-8")
@@ -941,7 +937,6 @@ class ROSHTTPBridge(Node):
                 self._detection_send_count += 1
             else:
                 self._send_errors += 1
-                    
         except URLError as e:
             self._send_errors += 1
             if self._send_errors % 100 == 1:
