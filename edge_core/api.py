@@ -605,6 +605,8 @@ def create_app(state_manager: StateManager) -> FastAPI:
         await websocket.accept()
         last_mesh_timestamp = None
         frame_count = 0
+        target_interval = 1.0 / 30.0
+        next_tick = asyncio.get_running_loop().time()
         try:
             while True:
                 frame = {"type": "pose", "ts": frame_count, "frame_id": "ros_optical"}
@@ -657,7 +659,13 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 # Skip frames when no pose data available at all
                 if not has_pose and not has_mesh:
                     frame_count += 1
-                    await asyncio.sleep(1.0 / 30)
+                    next_tick += target_interval
+                    now = asyncio.get_running_loop().time()
+                    sleep_for = next_tick - now
+                    if sleep_for > 0:
+                        await asyncio.sleep(sleep_for)
+                    else:
+                        next_tick = now
                     continue
 
                 # Include detection markers every 6th frame (~5Hz) to avoid bloat
@@ -684,7 +692,14 @@ def create_app(state_manager: StateManager) -> FastAPI:
 
                 await websocket.send_json(frame)
                 frame_count += 1
-                await asyncio.sleep(1.0 / 30)  # 30 Hz
+                next_tick += target_interval
+                now = asyncio.get_running_loop().time()
+                sleep_for = next_tick - now
+                if sleep_for > 0:
+                    await asyncio.sleep(sleep_for)
+                else:
+                    # If we fall behind, resync to avoid accumulating drift.
+                    next_tick = now
         except WebSocketDisconnect:
             logger.debug("SLAM WebSocket client disconnected")
             return
@@ -3601,3 +3616,4 @@ wait
             raise HTTPException(status_code=500, detail=str(e))
 
     return app
+
