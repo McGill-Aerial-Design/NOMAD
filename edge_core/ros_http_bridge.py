@@ -1250,11 +1250,26 @@ def main():
         rclpy.spin(bridge)
     except KeyboardInterrupt:
         pass
+    except Exception:
+        # Launch system shutdown can raise ExternalShutdownException from rclpy.
+        pass
     finally:
-        stats = bridge.get_stats()
-        logger.info(f"Bridge stats: {stats}")
-        bridge.destroy_node()
-        rclpy.shutdown()
+        try:
+            stats = bridge.get_stats()
+            logger.info(f"Bridge stats: {stats}")
+        except Exception:
+            pass
+
+        try:
+            bridge.destroy_node()
+        except Exception:
+            pass
+
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

@@ -1955,6 +1955,43 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 "success": False,
                 "error": f"Script not found: {script_path}",
             }
+
+        # Avoid duplicate startup attempts while stack is already running.
+        try:
+            container_running = False
+            nvblox_running = False
+            bridge_running = False
+
+            result = subprocess.run(
+                ["docker", "ps", "--filter", "name=nomad_isaac_ros", "--format", "{{.Status}}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            container_running = bool(result.stdout.strip())
+
+            if container_running:
+                result = subprocess.run(
+                    ["docker", "exec", "nomad_isaac_ros", "bash", "-c",
+                     "ps aux | grep -v grep | grep -c component_container 2>/dev/null || echo 0"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                nvblox_running = int(result.stdout.strip() or "0") > 0
+
+                result = subprocess.run(
+                    ["docker", "exec", "nomad_isaac_ros", "bash", "-c",
+                     "ps aux | grep -v grep | grep -c ros_http_bridge 2>/dev/null || echo 0"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                bridge_running = int(result.stdout.strip() or "0") > 0
+
+            if container_running and nvblox_running and bridge_running:
+                return {
+                    "success": True,
+                    "message": "Isaac ROS stack already running. Skipping duplicate start.",
+                    "already_running": True,
+                }
+        except Exception:
+            # Fall through to normal startup path on probe failures.
+            pass
         
         try:
             # Run in background

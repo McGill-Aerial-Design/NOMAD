@@ -275,10 +275,14 @@ launch_zed_nvblox() {
     if docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP; $WS_SETUP; ros2 pkg list 2>/dev/null | grep -q nvblox_examples_bringup"; then
         log_info "Launching ZED + nvblox (camera:=zed2)..."
 
+        # Kill any existing launch/container processes first to avoid duplicate
+        # camera initialization and Argus resource contention.
+        docker exec "$CONTAINER_NAME" bash -c 'pkill -f "/tmp/launch_zed_nvblox.sh|nomad_zed_nvblox.launch.py|zed_example.launch.py|component_container_mt" 2>/dev/null || true; sleep 2'
+
         # Write launch script via stdin to avoid quoting issues with $() and nested "
         docker exec -i "$CONTAINER_NAME" tee /tmp/launch_zed_nvblox.sh > /dev/null << 'LAUNCH_SCRIPT'
 #!/bin/bash
-source /opt/ros/humble/setup.bash 2>/dev/null
+source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH
 # Patch ZED publish resolution to native 720p
@@ -321,7 +325,7 @@ launch_zed_only() {
 
     docker exec -i "$CONTAINER_NAME" tee /tmp/launch_zed_only.sh > /dev/null << 'LAUNCH_SCRIPT'
 #!/bin/bash
-source /opt/ros/humble/setup.bash 2>/dev/null
+source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH
 # Patch ZED publish resolution to native 720p
