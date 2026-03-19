@@ -1058,11 +1058,19 @@ class ROSHTTPBridge(Node):
             voxel_size = msg.scale.x  # All 3 scales should be equal
             has_colors = len(msg.colors) == n_pts
 
-            # Cap at 30000 voxels per update to limit bandwidth (~1.2MB)
-            limit = min(n_pts, 30000)
+            # Cap payload size so large voxel messages do not starve pose/world cadence.
+            # 8k voxels is a good balance between detail and real-time responsiveness.
+            limit = min(n_pts, 8000)
 
             voxels = []
-            for i in range(limit):
+            if limit == n_pts:
+                sample_indices = range(limit)
+            else:
+                # Evenly subsample across the marker to preserve spatial coverage.
+                stride = n_pts / float(limit)
+                sample_indices = (int(i * stride) for i in range(limit))
+
+            for i in sample_indices:
                 p = msg.points[i]
                 entry = {"p": [round(p.x, 4), round(p.y, 4), round(p.z, 4)]}
                 if has_colors:
