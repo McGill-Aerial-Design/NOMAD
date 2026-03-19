@@ -33,7 +33,7 @@ fi
 ZED_WRAPPER_BRANCH="humble-v4.1.4"
 
 # Standard ROS2 setup for the official Isaac ROS image
-ROS_SETUP="source /opt/ros/humble/setup.bash 2>/dev/null"
+ROS_SETUP="source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash 2>/dev/null"
 WS_SETUP="source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null || true"
 
 # Colors
@@ -377,7 +377,7 @@ launch_ros_http_bridge() {
     
     docker exec -i "$CONTAINER_NAME" tee /tmp/launch_bridge.sh > /dev/null << 'BRIDGE_SCRIPT'
 #!/bin/bash
-source /opt/ros/humble/setup.bash 2>/dev/null
+source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 # Wait for ZED node to fully start and DDS discovery to complete
 # (ZED + nvblox take ~20-30s to init)
