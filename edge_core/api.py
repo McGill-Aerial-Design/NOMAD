@@ -596,6 +596,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
         - type="mesh": mesh delta when new data arrives (only changed blocks/voxels)
 
         The client (SLAM3DView) connects once and receives a continuous stream.
+        All poses are in "ros_optical" frame (ZED camera: X-right, Y-down, Z-forward).
         """
         if not await _validate_ws_token(websocket):
             return
@@ -604,7 +605,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
         frame_count = 0
         try:
             while True:
-                frame = {"type": "pose", "ts": frame_count}
+                frame = {"type": "pose", "ts": frame_count, "frame_id": "ros_optical"}
                 has_position = False
                 has_attitude = False
 
@@ -634,6 +635,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
 
                 # Fall back to ROS-frame VIO for pose (used for pose-only frames
                 # and for mesh frames that only include one of position/attitude)
+                # frame_id is always "ros_optical" for all pose data
                 if not has_position or not has_attitude:
                     ros_vio = websocket.app.state.slam_vio_ros_frame
                     if ros_vio:
@@ -1199,6 +1201,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
         }
         
         # Store ROS-frame pose for SLAM 3D WebSocket (same frame as mesh vertices)
+        # Always in "ros_optical" frame (ZED camera: X-right, Y-down, Z-forward)
         request.app.state.slam_vio_ros_frame = {
             "x": vio_request.ros_x,
             "y": vio_request.ros_y,
@@ -1207,6 +1210,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
             "pitch": vio_request.ros_pitch,
             "yaw": vio_request.ros_yaw,
             "timestamp": vio_request.timestamp,
+            "frame_id": vio_request.frame_id,  # Always "ros_optical"
         }
         
         # Add to trajectory

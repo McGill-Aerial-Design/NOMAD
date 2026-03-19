@@ -1458,6 +1458,15 @@ namespace NOMAD.MissionPlanner
                         var frame = JObject.Parse(json);
                         string frameType = frame["type"]?.ToString() ?? "pose";
 
+                        // Validate frame_id (should be "ros_optical" for all SLAM data)
+                        // Default to "ros_optical" if missing (backward compatibility)
+                        string frameId = frame["frame_id"]?.ToString() ?? "ros_optical";
+                        if (frameId != "ros_optical")
+                        {
+                            // Non-breaking: log unexpected frame but continue processing
+                            System.Diagnostics.Debug.WriteLine($"[SLAM3D] Unexpected frame_id: {frameId} (expected ros_optical)");
+                        }
+
                         if (frame["x"] == null) continue;
 
                         lock (_poseLock)

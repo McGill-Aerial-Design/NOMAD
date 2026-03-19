@@ -109,6 +109,7 @@ class VIOData:
     confidence: float = 1.0
     source: str = "isaac_ros"
     # Raw ROS-frame pose (odom/map) for SLAM 3D visualization
+    # Always in "ros_optical" frame (ZED camera frame: X-right, Y-down, Z-forward)
     ros_x: float = 0.0
     ros_y: float = 0.0
     ros_z: float = 0.0
@@ -116,6 +117,7 @@ class VIOData:
     ros_roll: float = 0.0
     ros_pitch: float = 0.0
     ros_yaw: float = 0.0
+    frame_id: str = "ros_optical"  # Explicit frame identifier for all ros_* fields
 
 
 @dataclass
@@ -1001,7 +1003,7 @@ class ROSHTTPBridge(Node):
                 "mode": "block",
                 "total_blocks": len(blocks),
                 "timestamp": now,
-                "frame_id": msg.header.frame_id if hasattr(msg, 'header') else "map",
+                "frame_id": "ros_optical",  # Same frame as mesh vertices and drone_position/attitude
                 "clear": msg.clear if hasattr(msg, 'clear') else False,
             }
 
@@ -1085,7 +1087,7 @@ class ROSHTTPBridge(Node):
                 "total_voxels": n_pts,
                 "sent_voxels": limit,
                 "timestamp": now,
-                "frame_id": msg.header.frame_id,
+                "frame_id": "ros_optical",  # Same frame as mesh vertices and drone_position/attitude
                 "clear": False,
             }
 
