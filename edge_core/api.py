@@ -668,8 +668,9 @@ def create_app(state_manager: StateManager) -> FastAPI:
                         next_tick = now
                     continue
 
-                # Include detection markers every 6th frame (~5Hz) to avoid bloat
-                if frame_count % 6 == 0:
+                # Include detection markers every 30th frame (~1Hz) to keep
+                # SLAM pose/mesh stream responsive under heavy load.
+                if frame_count % 30 == 0:
                     det_history = websocket.app.state.detection_history
                     if det_history:
                         # Cap to 50 most recent detections to limit payload size
