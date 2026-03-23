@@ -6,7 +6,8 @@ Converts nvblox 2D ESDF distance slice into MAVLink OBSTACLE_DISTANCE messages
 for ArduPilot's proximity-based obstacle avoidance.
 
 Subscribes to:
-- /nvblox_node/static_map_slice (nav_msgs/OccupancyGrid) - 2D occupancy slice at drone altitude
+- /nvblox_node/combined_dynamic_map_slice (nav_msgs/OccupancyGrid) - combined static+dynamic
+  occupancy slice at drone altitude (includes fast-decaying dynamic obstacles like people)
 
 Sends to:
 - Edge Core API POST /api/obstacle_distance - forwarded to ArduPilot via pymavlink
@@ -69,7 +70,7 @@ class ObstacleDistanceBridge(Node):
         port: int = 8000,
         send_rate_hz: float = 5.0,
         obstacle_buffer_m: float = 2.0,
-        map_slice_topic: str = "/nvblox_node/static_map_slice",
+        map_slice_topic: str = "/nvblox_node/combined_dynamic_map_slice",
     ):
         super().__init__("nomad_obstacle_distance_bridge")
 
@@ -291,8 +292,8 @@ def main():
                         help="Send rate in Hz (default: 5)")
     parser.add_argument("--buffer", type=float, default=2.0,
                         help="Obstacle buffer distance in meters (default: 2.0)")
-    parser.add_argument("--topic", default="/nvblox_node/static_map_slice",
-                        help="Occupancy grid topic")
+    parser.add_argument("--topic", default="/nvblox_node/combined_dynamic_map_slice",
+                        help="Occupancy grid topic (combined static+dynamic)")
     args = parser.parse_args()
 
     rclpy.init()

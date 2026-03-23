@@ -345,6 +345,97 @@ def create_app(state_manager: StateManager) -> FastAPI:
     app.state.detection_history: list[dict] = []  # Persistent detected targets with 3D positions
     app.state.detection_history_max: int = 200  # Max persistent detections to keep
     app.state.detection_last_update: float = 0.0
+    app.state.yolo26_enabled: bool = True  # Desired ZED OD mode for circle detection
+
+    def _launch_nvblox_bridge_with_od(enable_od: bool) -> dict:
+        """
+        Launch nvblox + ROS-HTTP bridge with explicit object detection mode.
+
+        This always uses NOMAD's custom launch file so behavior stays consistent
+        with the startup script used on Jetson.
+        """
+        container = "nomad_isaac_ros"
+
+        # Verify container is running
+        try:
+            result = subprocess.run(
+                ["docker", "ps", "--filter", f"name={container}", "--format", "{{.Names}}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if container not in result.stdout:
+                return {"success": False, "error": "Container not running"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+        od_value = "true" if enable_od else "false"
+        mode_text = "enabled" if enable_od else "disabled"
+        launch_script = f"""#!/bin/bash
+set -e
+source /opt/ros/humble/setup.bash 2>/dev/null
+source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
+export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH
+
+# Kill previous instances
+pkill -f '/tmp/launch_nvblox_bridge.sh|nomad_zed_nvblox.launch.py|zed_example.launch.py|component_container' 2>/dev/null || true
+pkill -f ros_http_bridge 2>/dev/null || true
+sleep 2
+
+# Overlay NOMAD nvblox config
+NOMAD_CFG=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml
+NVBLOX_BASE=$(python3 -c "from ament_index_python.packages import get_package_share_directory; print(get_package_share_directory('nvblox_examples_bringup'))" 2>/dev/null)/config/nvblox/nvblox_base.yaml
+if [ -f "$NOMAD_CFG" ] && [ -f "$NVBLOX_BASE" ]; then
+    cp "$NOMAD_CFG" "$NVBLOX_BASE"
+    echo "Applied NOMAD nvblox config"
+fi
+
+# Patch ZED publish resolution
+sed -i 's/pub_downscale_factor: 2\\.0/pub_downscale_factor: 1.0/' \
+    /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null
+
+# Launch nvblox with NOMAD custom launch (no fallback chain)
+NOMAD_LAUNCH=/workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py
+if [ ! -f "$NOMAD_LAUNCH" ]; then
+    echo "ERROR: NOMAD launch file not found at $NOMAD_LAUNCH"
+    exit 2
+fi
+
+ros2 launch "$NOMAD_LAUNCH" enable_od:={od_value} &
+echo $! > /tmp/zed_nvblox.pid
+
+# Wait for topics then launch bridge
+sleep 12
+python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom &
+echo $! > /tmp/ros_bridge.pid
+
+wait
+"""
+
+        try:
+            # Write launch script into container
+            subprocess.run(
+                ["docker", "exec", container, "bash", "-c",
+                 f"cat > /tmp/launch_nvblox_bridge.sh << 'EOFSCRIPT'\n{launch_script}\nEOFSCRIPT\nchmod +x /tmp/launch_nvblox_bridge.sh"],
+                capture_output=True, text=True, timeout=10, check=True,
+            )
+
+            # Run in background
+            result = subprocess.run(
+                ["docker", "exec", "-d", container, "bash", "-c",
+                 "bash /tmp/launch_nvblox_bridge.sh > /tmp/zed_nvblox.log 2>&1"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                return {"success": False, "error": f"Launch failed: {result.stderr.strip()}"}
+
+            return {
+                "success": True,
+                "message": f"nvblox + ROS-HTTP bridge launching with YOLO26 {mode_text}. ZED init takes ~15s.",
+                "yolo26_enabled": enable_od,
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     # ==================== Root / Health ====================
 
@@ -2039,7 +2130,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
             }
 
     @app.post("/api/isaac/launch-nvblox", tags=["Isaac ROS"])
-    async def isaac_launch_nvblox():
+    async def isaac_launch_nvblox(request: Request):
         """
         Launch nvblox + ROS-HTTP bridge inside a running container.
 
@@ -2048,78 +2139,11 @@ def create_app(state_manager: StateManager) -> FastAPI:
         packages are already built.  Kills any existing nvblox / bridge
         processes first, applies NOMAD config overlay, then launches both.
         """
-        container = "nomad_isaac_ros"
-
-        # Verify container is running
-        try:
-            result = subprocess.run(
-                ["docker", "ps", "--filter", f"name={container}", "--format", "{{.Names}}"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if container not in result.stdout:
-                return {"success": False, "error": "Container not running"}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-        # Bridge script is available via volume mount at /workspaces/isaac_ros-dev/edge_core/
-
-        # Build inline launch script
-        launch_script = r"""#!/bin/bash
-set -e
-source /opt/ros/humble/setup.bash 2>/dev/null
-source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
-export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH
-
-# Kill previous instances
-pkill -f 'ros2 launch.*nvblox' 2>/dev/null || true
-pkill -f component_container 2>/dev/null || true
-pkill -f ros_http_bridge 2>/dev/null || true
-sleep 2
-
-# Overlay NOMAD nvblox config
-NOMAD_CFG=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml
-NVBLOX_BASE=$(python3 -c "from ament_index_python.packages import get_package_share_directory; print(get_package_share_directory('nvblox_examples_bringup'))" 2>/dev/null)/config/nvblox/nvblox_base.yaml
-if [ -f "$NOMAD_CFG" ] && [ -f "$NVBLOX_BASE" ]; then
-    cp "$NOMAD_CFG" "$NVBLOX_BASE"
-    echo "Applied NOMAD nvblox config"
-fi
-
-# Patch ZED publish resolution
-sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
-    /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null
-
-# Launch nvblox
-ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2 &
-echo $! > /tmp/zed_nvblox.pid
-
-# Wait for topics then launch bridge
-sleep 10
-python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom &
-echo $! > /tmp/ros_bridge.pid
-
-wait
-"""
-        try:
-            # Write launch script into container
-            subprocess.run(
-                ["docker", "exec", container, "bash", "-c",
-                 f"cat > /tmp/launch_nvblox_bridge.sh << 'EOFSCRIPT'\n{launch_script}\nEOFSCRIPT\nchmod +x /tmp/launch_nvblox_bridge.sh"],
-                capture_output=True, timeout=10, check=True,
-            )
-            # Run in background
-            result = subprocess.run(
-                ["docker", "exec", "-d", container, "bash", "-c",
-                 "bash /tmp/launch_nvblox_bridge.sh > /tmp/zed_nvblox.log 2>&1"],
-                capture_output=True, timeout=10,
-            )
-            if result.returncode != 0:
-                return {"success": False, "error": f"Launch failed: {result.stderr.decode()}"}
-            return {
-                "success": True,
-                "message": "nvblox + ROS-HTTP bridge launching. ZED init takes ~15s.",
-            }
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        result = _launch_nvblox_bridge_with_od(enable_od=True)
+        if result.get("success"):
+            request.app.state.yolo26_enabled = True
+            request.app.state.detection_last_update = 0.0
+        return result
 
     @app.post("/api/isaac/stop-nvblox", tags=["Isaac ROS"])
     async def isaac_stop_nvblox():
@@ -2300,6 +2324,51 @@ wait
     # YOLO26 circle detection via ZED custom OD pipeline
     # Detections are received from ros_http_bridge and served to Mission Planner
 
+    @app.post("/api/detections/start", tags=["Detections"])
+    async def start_detections(request: Request):
+        """
+        Start YOLO26 circle detection by relaunching nvblox with OD enabled.
+
+        This keeps launch behavior consistent with NOMAD's custom launch file.
+        """
+        result = _launch_nvblox_bridge_with_od(enable_od=True)
+        if result.get("success"):
+            request.app.state.yolo26_enabled = True
+            request.app.state.detection_last_update = 0.0
+            request.app.state.detected_objects = []
+        return result
+
+    @app.post("/api/detections/stop", tags=["Detections"])
+    async def stop_detections(request: Request):
+        """
+        Stop YOLO26 detection by relaunching nvblox with OD disabled.
+
+        nvblox mapping remains available; only custom object detection is disabled.
+        """
+        result = _launch_nvblox_bridge_with_od(enable_od=False)
+        if result.get("success"):
+            request.app.state.yolo26_enabled = False
+            request.app.state.detection_last_update = 0.0
+            request.app.state.detected_objects = []
+        return result
+
+    @app.get("/api/detections/status", tags=["Detections"])
+    async def get_detections_status(request: Request):
+        """Get YOLO26 runtime status for Mission Planner service control polling."""
+        import time as _time
+
+        last_update = request.app.state.detection_last_update
+        age_seconds = _time.time() - last_update if last_update > 0 else None
+        fresh_stream = age_seconds is not None and age_seconds <= 3.0
+
+        return {
+            "yolo26_enabled": bool(getattr(request.app.state, "yolo26_enabled", True)),
+            "fresh_stream": fresh_stream,
+            "age_seconds": age_seconds,
+            "current_count": len(request.app.state.detected_objects),
+            "history_count": len(request.app.state.detection_history),
+        }
+
     @app.post("/api/detections/update", tags=["Detections"])
     async def update_detections(request: Request):
         """
@@ -2314,6 +2383,7 @@ wait
         
         request.app.state.detected_objects = detections
         request.app.state.detection_last_update = _time.time()
+        request.app.state.yolo26_enabled = True
         
         # Add to persistent history (deduplicate by proximity)
         history = request.app.state.detection_history

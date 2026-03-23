@@ -371,6 +371,9 @@ namespace NOMAD.MissionPlanner
         /// <summary>Heading offset in degrees to compensate for magnetometer calibration.</summary>
         public float SlamHeadingOffsetDeg { get; set; } = 0.0f;
 
+        /// <summary>SLAM 3D camera field of view in degrees.</summary>
+        public float SlamCameraFovDeg { get; set; } = 60.0f;
+
         // ============================================================
         // GPIO/Payload Configuration
         // ============================================================
@@ -476,6 +479,12 @@ namespace NOMAD.MissionPlanner
             {
                 SshUsername = "mad";
             }
+
+            // Keep FOV within a practical range for 3D view usability.
+            if (SlamCameraFovDeg < 30.0f || SlamCameraFovDeg > 140.0f)
+            {
+                SlamCameraFovDeg = 60.0f;
+            }
         }
 
         /// <summary>
@@ -533,6 +542,7 @@ namespace NOMAD.MissionPlanner
             CameraForwardOffsetCm = defaults.CameraForwardOffsetCm;
             CameraDownOffsetCm = defaults.CameraDownOffsetCm;
             SlamHeadingOffsetDeg = defaults.SlamHeadingOffsetDeg;
+            SlamCameraFovDeg = defaults.SlamCameraFovDeg;
         }
     }
 }

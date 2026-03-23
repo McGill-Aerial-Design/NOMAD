@@ -64,6 +64,8 @@ def generate_launch_description():
 
     # Obstacle distance bridge: converts nvblox 2D ESDF slice to
     # MAVLink OBSTACLE_DISTANCE for ArduPilot obstacle avoidance (NV-008)
+    # Uses combined_dynamic_map_slice which merges static geometry with
+    # the fast-decaying dynamic occupancy layer (people, moving obstacles)
     obstacle_distance_bridge = ExecuteProcess(
         cmd=[
             'python3',
@@ -72,7 +74,7 @@ def generate_launch_description():
             '--port', '8000',
             '--rate', '5.0',
             '--buffer', '2.0',
-            '--topic', '/nvblox_node/static_map_slice',
+            '--topic', '/nvblox_node/combined_dynamic_map_slice',
         ],
         name='obstacle_distance_bridge',
         output='screen',

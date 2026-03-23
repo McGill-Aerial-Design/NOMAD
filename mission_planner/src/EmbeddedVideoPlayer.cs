@@ -47,6 +47,7 @@ namespace NOMAD.MissionPlanner
         // Detection overlay (server-side toggle via API)
         private CheckBox _chkDetections;
         private bool _overlayEnabled;
+        private bool _syncingOverlayState;
         
         // Stream lifecycle serialization - prevents overlapping native GStreamer teardown/startup
         private readonly SemaphoreSlim _lifecycleLock = new SemaphoreSlim(1, 1);
@@ -71,6 +72,8 @@ namespace NOMAD.MissionPlanner
                 {
                     await RefreshTopicsAsync(autoSelectRgb: true);
                 }
+
+                await SyncOverlayStatusAsync();
             };
         }
         
@@ -212,6 +215,8 @@ namespace NOMAD.MissionPlanner
             };
             _chkDetections.CheckedChanged += async (s, e) =>
             {
+                if (_syncingOverlayState) return;
+
                 _overlayEnabled = _chkDetections.Checked;
                 // Toggle server-side overlay (bbox burn-in on RTSP stream)
                 try
@@ -220,11 +225,21 @@ namespace NOMAD.MissionPlanner
                     var resp = await JetsonApiService.ApiClient.PostAsync(
                         $"{_apiBaseUrl}/api/video/overlay/{action}", null);
                     if (!resp.IsSuccessStatusCode)
+                    {
                         _lblStatus.Text = $"Overlay toggle failed: {resp.StatusCode}";
+                        _syncingOverlayState = true;
+                        _chkDetections.Checked = !_overlayEnabled;
+                        _syncingOverlayState = false;
+                        _overlayEnabled = _chkDetections.Checked;
+                    }
                 }
                 catch (Exception ex)
                 {
                     _lblStatus.Text = $"Overlay error: {ex.Message}";
+                    _syncingOverlayState = true;
+                    _chkDetections.Checked = !_overlayEnabled;
+                    _syncingOverlayState = false;
+                    _overlayEnabled = _chkDetections.Checked;
                 }
             };
 
@@ -237,6 +252,26 @@ namespace NOMAD.MissionPlanner
             // Initialize with default topic
             _topics.Add(("/zed/zed_node/rgb/image_rect_color", "RGB Color"));
             PopulateTopics();
+        }
+
+        private async System.Threading.Tasks.Task SyncOverlayStatusAsync()
+        {
+            try
+            {
+                var json = await JetsonApiService.ApiClient.GetStringAsync($"{_apiBaseUrl}/api/video/overlay/status");
+                var data = JObject.Parse(json);
+                var enabled = data["enabled"]?.Value<bool>() ?? false;
+
+                _syncingOverlayState = true;
+                _chkDetections.Checked = enabled;
+                _syncingOverlayState = false;
+                _overlayEnabled = enabled;
+            }
+            catch
+            {
+                // Keep local default if status probe fails.
+                _syncingOverlayState = false;
+            }
         }
         
         private Button CreateButton(string text, int x, int y, int width, Color color)

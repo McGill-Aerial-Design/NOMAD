@@ -83,6 +83,7 @@ namespace NOMAD.MissionPlanner
         private ComboBox _cmbDefaultTab;
         private CheckBox _chkDarkMode;
         private CheckBox _chkUseELRS;
+        private NumericUpDown _numSlamFov;
         
         // Alerts Tab
         private NumericUpDown _numTempWarning;
@@ -466,6 +467,14 @@ namespace NOMAD.MissionPlanner
             y += 30;
 
             _chkUseELRS = AddCheckBox(tab, "Use ELRS/MAVLink instead of HTTP", 20, y, Color.Orange);
+            y += 40;
+
+            AddSectionLabel(tab, "SLAM 3D View", ref y);
+
+            AddLabel(tab, "Camera FOV (deg):", 20, y);
+            _numSlamFov = AddNumericUpDown(tab, 150, y, 70, 30, 140, 60);
+            y += 24;
+            AddLabel(tab, "Lower = zoom in, higher = wider view", 20, y, Color.Gray);
 
             return tab;
         }
@@ -775,6 +784,7 @@ namespace NOMAD.MissionPlanner
             SetComboBoxValue(_cmbDefaultTab, Config.DefaultTab);
             _chkDebugMode.Checked = Config.DebugMode;
             _chkUseELRS.Checked = Config.UseELRS;
+            _numSlamFov.Value = (decimal)Math.Max(30f, Math.Min(140f, Config.SlamCameraFovDeg));
             
             // Alerts
             _numTempWarning.Value = (decimal)Config.TempWarningC;
@@ -857,6 +867,7 @@ namespace NOMAD.MissionPlanner
             Config.DefaultTab = _cmbDefaultTab.SelectedItem?.ToString() ?? "Dashboard";
             Config.DebugMode = _chkDebugMode.Checked;
             Config.UseELRS = _chkUseELRS.Checked;
+            Config.SlamCameraFovDeg = (float)_numSlamFov.Value;
             
             // Alerts
             Config.TempWarningC = (float)_numTempWarning.Value;

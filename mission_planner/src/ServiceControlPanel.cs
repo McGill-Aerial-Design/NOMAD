@@ -43,6 +43,11 @@ namespace NOMAD.MissionPlanner
         private Button _btnNvbloxLaunch;
         private Button _btnNvbloxStop;
 
+        // YOLO26 detection (Task 1 circles)
+        private Label _lblYolo26Status;
+        private Button _btnYolo26Start;
+        private Button _btnYolo26Stop;
+
         // Video bridges
         private Label _lblVideoBridgesStatus;
         private Button _btnStartBridges;
@@ -110,6 +115,9 @@ namespace NOMAD.MissionPlanner
 
             // === Nvblox + Bridge (with Launch/Stop) ===
             AddNvbloxRow(ref yOffset);
+
+            // === YOLO26 Detection (with Start/Stop) ===
+            AddYolo26Row(ref yOffset);
 
             // === Video Bridges ===
             AddServiceRow("Video Bridges", ref _lblVideoBridgesStatus, ref _btnStartBridges, ref yOffset, "Start");
@@ -380,6 +388,55 @@ namespace NOMAD.MissionPlanner
             yOffset += 35;
         }
 
+        private void AddYolo26Row(ref int yOffset)
+        {
+            int leftCol = 15;
+
+            var lblName = new Label
+            {
+                Text = "YOLO26 Circles:",
+                Location = new Point(leftCol, yOffset + 3),
+                Size = new Size(120, 20),
+                ForeColor = Color.LightGray
+            };
+            this.Controls.Add(lblName);
+
+            _lblYolo26Status = new Label
+            {
+                Text = "Checking...",
+                Location = new Point(140, yOffset + 3),
+                Size = new Size(90, 20),
+                ForeColor = Color.Yellow
+            };
+            this.Controls.Add(_lblYolo26Status);
+
+            _btnYolo26Start = new Button
+            {
+                Text = "Start",
+                Location = new Point(235, yOffset),
+                Size = new Size(70, 25),
+                BackColor = Color.FromArgb(0, 120, 60),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+            _btnYolo26Start.Click += async (s, e) => await StartYolo26Async();
+            this.Controls.Add(_btnYolo26Start);
+
+            _btnYolo26Stop = new Button
+            {
+                Text = "Stop",
+                Location = new Point(310, yOffset),
+                Size = new Size(70, 25),
+                BackColor = Color.FromArgb(150, 50, 50),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+            _btnYolo26Stop.Click += async (s, e) => await StopYolo26Async();
+            this.Controls.Add(_btnYolo26Stop);
+
+            yOffset += 35;
+        }
+
         private async void PollServicesAsync()
         {
             try
@@ -458,6 +515,43 @@ namespace NOMAD.MissionPlanner
                 {
                     UpdateStatusLabel(_lblIsaacRosStatus, false, "Not Running");
                     UpdateStatusLabel(_lblNvbloxStatus, false, "Offline");
+                }
+
+                // YOLO26 detection status
+                var yoloResult = await _sender.GetYolo26StatusAsync();
+                if (yoloResult.Success)
+                {
+                    try
+                    {
+                        var yoloData = JObject.Parse(yoloResult.Data);
+                        var enabled = yoloData["yolo26_enabled"]?.Value<bool>() ?? false;
+                        var fresh = yoloData["fresh_stream"]?.Value<bool>() ?? false;
+                        var count = yoloData["current_count"]?.Value<int>() ?? 0;
+                        var ageSeconds = yoloData["age_seconds"]?.Value<double?>();
+
+                        if (enabled && fresh)
+                        {
+                            string suffix = count == 1 ? " target" : " targets";
+                            UpdateStatusLabel(_lblYolo26Status, true, $"Running ({count}{suffix})");
+                        }
+                        else if (enabled)
+                        {
+                            string staleText = ageSeconds.HasValue ? $"{ageSeconds.Value:F1}s" : "no stream";
+                            UpdateStatusLabel(_lblYolo26Status, false, $"Enabled ({staleText})");
+                        }
+                        else
+                        {
+                            UpdateStatusLabel(_lblYolo26Status, false, "Stopped");
+                        }
+                    }
+                    catch
+                    {
+                        UpdateStatusLabel(_lblYolo26Status, false, "Parse Error");
+                    }
+                }
+                else
+                {
+                    UpdateStatusLabel(_lblYolo26Status, false, "Offline");
                 }
                 
                 // Check VIO status
@@ -644,6 +738,7 @@ namespace NOMAD.MissionPlanner
             UpdateStatusLabel(_lblMavlinkStatus, false, "Restarting...");
             UpdateStatusLabel(_lblMediamtxStatus, false, "Restarting...");
             UpdateStatusLabel(_lblIsaacRosStatus, false, "Restarting...");
+            UpdateStatusLabel(_lblYolo26Status, false, "Restarting...");
             UpdateStatusLabel(_lblVideoBridgesStatus, false, "Restarting...");
             
             // Use SSH instead of HTTP API (since we're killing edge_core)
@@ -810,6 +905,40 @@ namespace NOMAD.MissionPlanner
             else
             {
                 LogMessage($"Failed to stop nvblox: {result.Message}");
+            }
+        }
+
+        private async Task StartYolo26Async()
+        {
+            LogMessage("Starting YOLO26 circle detection...");
+            UpdateStatusLabel(_lblYolo26Status, false, "Starting...");
+
+            var result = await _sender.StartYolo26Async();
+            if (result.Success)
+            {
+                LogMessage("YOLO26 startup initiated (~15s for ZED init)");
+            }
+            else
+            {
+                LogMessage($"Failed to start YOLO26: {result.Message}");
+                UpdateStatusLabel(_lblYolo26Status, false, "Start Failed");
+            }
+        }
+
+        private async Task StopYolo26Async()
+        {
+            LogMessage("Stopping YOLO26 circle detection...");
+            UpdateStatusLabel(_lblYolo26Status, false, "Stopping...");
+
+            var result = await _sender.StopYolo26Async();
+            if (result.Success)
+            {
+                LogMessage("YOLO26 stopped (nvblox remains active)");
+                UpdateStatusLabel(_lblYolo26Status, false, "Stopped");
+            }
+            else
+            {
+                LogMessage($"Failed to stop YOLO26: {result.Message}");
             }
         }
 

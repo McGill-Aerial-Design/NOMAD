@@ -123,6 +123,8 @@ namespace NOMAD.MissionPlanner
         private const int MaxWsReconnectDelayMs = 10000;
         private volatile bool _autoUpdateEnabled = true;
         private readonly object _poseLock = new object();
+        private readonly object _meshLock = new object();
+        private readonly object _trajectoryLock = new object();
         private const int MaxWebSocketMessageSize = 10 * 1024 * 1024;
 
         // ---- Servo polling ----
@@ -137,6 +139,11 @@ namespace NOMAD.MissionPlanner
         // ---- Drone pose (raw from WS, ZED optical/odom frame) ----
         private float _dronePosX, _dronePosY, _dronePosZ;
         private float _droneRollRaw, _dronePitchRaw, _droneYawRaw;
+        private float _renderPosX, _renderPosY, _renderPosZ;
+        private float _renderRollRaw, _renderPitchRaw, _renderYawRaw;
+        private bool _renderPoseInitialized;
+        private long _lastPoseBlendStamp = -1;
+        private const float PoseBlendRateHz = 12.0f;
 
         // ---- Voxel storage ----
         private Dictionary<long, uint> _persistedBlocks = new Dictionary<long, uint>();
@@ -162,7 +169,7 @@ namespace NOMAD.MissionPlanner
         private static readonly TimeSpan MinRebuildInterval = TimeSpan.FromMilliseconds(250);
         private bool _pendingMeshUpdate = false;  // P3-7: Flag to mark queued updates during debounce
         private long _lastMeshRebuildStamp = -1;  // Stopwatch ticks (monotonic)
-        private const bool EnableMeshDebounceDebugLog = false;
+        private const bool EnableMeshDebounceDebugLog = true;
 
         // ---- Trajectory ----
         private List<float[]> _trajectoryPoints = new List<float[]>(); // each [x,y,z] in ZED frame
@@ -187,7 +194,7 @@ namespace NOMAD.MissionPlanner
         private Label _lblStatus, _lblStats;
         private Label _lblPerceptionStatus;
         private CheckBox _chkShowGrid, _chkShowTrajectory, _chkAutoUpdate;
-        private NumericUpDown _numLength, _numWidth, _numHeight, _numHeadingOffset;
+        private NumericUpDown _numLength, _numWidth, _numHeight, _numHeadingOffset, _numFov;
         private int _meshUpdateCount;
         private int _totalBlocks;
         private DateTime _lastUpdateTime = DateTime.MinValue;
@@ -354,6 +361,18 @@ namespace NOMAD.MissionPlanner
             _numHeadingOffset = CreateNumericUpDown(x, y, 55, -180, 180, (decimal)_config.SlamHeadingOffsetDeg);
             _numHeadingOffset.ValueChanged += (s, e) => { _config.SlamHeadingOffsetDeg = (float)_numHeadingOffset.Value; _config.Save(); };
             _controlPanel.Controls.Add(_numHeadingOffset);
+            x += 63;
+
+            _controlPanel.Controls.Add(CreateLabel("FOV:", x, y + 3));
+            x += 30;
+            _numFov = CreateNumericUpDown(x, y, 50, 30, 140, (decimal)GetClampedFovDegrees());
+            _numFov.ValueChanged += (s, e) =>
+            {
+                _config.SlamCameraFovDeg = (float)_numFov.Value;
+                _config.Save();
+                _glControl?.Invalidate();
+            };
+            _controlPanel.Controls.Add(_numFov);
 
             // Third row: status
             y += 28;
@@ -453,6 +472,22 @@ namespace NOMAD.MissionPlanner
             };
         }
 
+        private float GetClampedFovDegrees()
+        {
+            return Math.Max(30f, Math.Min(140f, _config.SlamCameraFovDeg));
+        }
+
+        private void ApplyProjectionMatrix(int width, int height)
+        {
+            GL.MatrixMode(MatrixMode.Projection);
+            GL.LoadIdentity();
+            float aspect = (float)width / height;
+            var proj = Matrix4.CreatePerspectiveFieldOfView(
+                MathHelper.DegreesToRadians(GetClampedFovDegrees()), aspect, 0.05f, 500f);
+            GL.LoadMatrix(ref proj);
+            GL.MatrixMode(MatrixMode.Modelview);
+        }
+
         // ==================== OpenGL Setup ====================
 
         private void GlControl_Load(object sender, EventArgs e)
@@ -486,14 +521,7 @@ namespace NOMAD.MissionPlanner
             int w = Math.Max(1, _glControl.Width);
             int h = Math.Max(1, _glControl.Height);
             GL.Viewport(0, 0, w, h);
-
-            GL.MatrixMode(MatrixMode.Projection);
-            GL.LoadIdentity();
-            float aspect = (float)w / h;
-            var proj = Matrix4.CreatePerspectiveFieldOfView(
-                MathHelper.DegreesToRadians(60f), aspect, 0.05f, 500f);
-            GL.LoadMatrix(ref proj);
-            GL.MatrixMode(MatrixMode.Modelview);
+            ApplyProjectionMatrix(w, h);
         }
 
         // ==================== Main Render ====================
@@ -505,9 +533,12 @@ namespace NOMAD.MissionPlanner
             try
             {
                 _glControl.MakeCurrent();
+                ApplyProjectionMatrix(Math.Max(1, _glControl.Width), Math.Max(1, _glControl.Height));
                 
                 // P3-7: Process any pending mesh updates if debounce window has elapsed
                 ProcessPendingMeshUpdate();
+
+                BlendRenderPose();
                 
                 GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
@@ -531,19 +562,72 @@ namespace NOMAD.MissionPlanner
 
         // ==================== Camera ====================
 
-        private void SetupCamera()
+        private void BlendRenderPose()
         {
-            float posX, posY, posZ, rollRaw, pitchRaw, yawRaw, servoDeg;
+            float srcX, srcY, srcZ, srcRoll, srcPitch, srcYaw;
             lock (_poseLock)
             {
-                posX = _dronePosX;
-                posY = _dronePosY;
-                posZ = _dronePosZ;
-                rollRaw = _droneRollRaw;
-                pitchRaw = _dronePitchRaw;
-                yawRaw = _droneYawRaw;
-                servoDeg = _servoAngleDeg;
+                srcX = _dronePosX;
+                srcY = _dronePosY;
+                srcZ = _dronePosZ;
+                srcRoll = _droneRollRaw;
+                srcPitch = _dronePitchRaw;
+                srcYaw = _droneYawRaw;
             }
+
+            long nowStamp = Stopwatch.GetTimestamp();
+            if (!_renderPoseInitialized)
+            {
+                _renderPosX = srcX;
+                _renderPosY = srcY;
+                _renderPosZ = srcZ;
+                _renderRollRaw = srcRoll;
+                _renderPitchRaw = srcPitch;
+                _renderYawRaw = srcYaw;
+                _renderPoseInitialized = true;
+                _lastPoseBlendStamp = nowStamp;
+                return;
+            }
+
+            double dtSec = 0.0;
+            if (_lastPoseBlendStamp > 0)
+                dtSec = (double)(nowStamp - _lastPoseBlendStamp) / Stopwatch.Frequency;
+            _lastPoseBlendStamp = nowStamp;
+
+            float alpha = 1.0f;
+            if (dtSec > 0)
+            {
+                alpha = (float)(1.0 - Math.Exp(-PoseBlendRateHz * dtSec));
+                alpha = Math.Max(0.02f, Math.Min(1.0f, alpha));
+            }
+
+            _renderPosX += (srcX - _renderPosX) * alpha;
+            _renderPosY += (srcY - _renderPosY) * alpha;
+            _renderPosZ += (srcZ - _renderPosZ) * alpha;
+            _renderRollRaw = BlendAngleRadians(_renderRollRaw, srcRoll, alpha);
+            _renderPitchRaw = BlendAngleRadians(_renderPitchRaw, srcPitch, alpha);
+            _renderYawRaw = BlendAngleRadians(_renderYawRaw, srcYaw, alpha);
+        }
+
+        private static float BlendAngleRadians(float current, float target, float alpha)
+        {
+            float delta = target - current;
+            float pi = (float)Math.PI;
+            while (delta > pi) delta -= pi * 2.0f;
+            while (delta < -pi) delta += pi * 2.0f;
+            return current + delta * alpha;
+        }
+
+        private void SetupCamera()
+        {
+            float posX = _renderPosX;
+            float posY = _renderPosY;
+            float posZ = _renderPosZ;
+            float rollRaw = _renderRollRaw;
+            float pitchRaw = _renderPitchRaw;
+            float yawRaw = _renderYawRaw;
+            float servoDeg;
+            lock (_poseLock) { servoDeg = _servoAngleDeg; }
 
             // Convert drone pos to GL frame
             ZedToGL(posX, posY, posZ, out float glX, out float glY, out float glZ);
@@ -828,13 +912,14 @@ namespace NOMAD.MissionPlanner
         {
             if (_currentViewMode == CameraViewMode.FirstPerson) return;
 
-            float posX, posY, posZ, rollRaw, pitchRaw, yawRaw, servoDeg;
-            lock (_poseLock)
-            {
-                posX = _dronePosX; posY = _dronePosY; posZ = _dronePosZ;
-                rollRaw = _droneRollRaw; pitchRaw = _dronePitchRaw; yawRaw = _droneYawRaw;
-                servoDeg = _servoAngleDeg;
-            }
+            float posX = _renderPosX;
+            float posY = _renderPosY;
+            float posZ = _renderPosZ;
+            float rollRaw = _renderRollRaw;
+            float pitchRaw = _renderPitchRaw;
+            float yawRaw = _renderYawRaw;
+            float servoDeg;
+            lock (_poseLock) { servoDeg = _servoAngleDeg; }
 
             ZedToGL(posX, posY, posZ, out float glX, out float glY, out float glZ);
 
@@ -968,13 +1053,18 @@ namespace NOMAD.MissionPlanner
 
         private void DrawTrajectory()
         {
-            if (_trajectoryPoints.Count < 2) return;
+            List<float[]> points;
+            lock (_trajectoryLock)
+            {
+                if (_trajectoryPoints.Count < 2) return;
+                points = new List<float[]>(_trajectoryPoints);
+            }
 
             GL.Disable(EnableCap.Lighting);
             GL.Color3(1f, 0.78f, 0f); // gold
             GL.LineWidth(2f);
             GL.Begin(PrimitiveType.LineStrip);
-            foreach (var pt in _trajectoryPoints)
+            foreach (var pt in points)
             {
                 ZedToGL(pt[0], pt[1], pt[2], out float gx, out float gy, out float gz);
                 GL.Vertex3(gx, gy, gz);
@@ -1186,28 +1276,31 @@ namespace NOMAD.MissionPlanner
         // P3-7: Process pending mesh updates after debounce window expires
         private void ProcessPendingMeshUpdate()
         {
-            if (!_pendingMeshUpdate) return;
+            lock (_meshLock)
+            {
+                if (!_pendingMeshUpdate) return;
 
-            if (!_meshDirty)
-            {
-                _pendingMeshUpdate = false;
-                return;
-            }
-            
-            long elapsedMs = ElapsedMsSince(_lastMeshRebuildStamp);
-            long debounceMs = (long)MinRebuildInterval.TotalMilliseconds;
-            
-            if (elapsedMs >= debounceMs)
-            {
-                // Debounce window has expired and updates are pending: rebuild now
-                LogMeshDebounce($"ALLOW pending rebuild: elapsed={elapsedMs}ms dirty={_meshDirty} pending={_pendingMeshUpdate} voxels={_persistedBlocks.Count}");
-                FillGaps();
-                RebuildVoxelMesh();
-                _pendingMeshUpdate = false;
-            }
-            else
-            {
-                LogMeshDebounce($"BLOCK pending rebuild: elapsed={elapsedMs}ms < {debounceMs}ms dirty={_meshDirty} pending={_pendingMeshUpdate}");
+                if (!_meshDirty)
+                {
+                    _pendingMeshUpdate = false;
+                    return;
+                }
+
+                long elapsedMs = ElapsedMsSince(_lastMeshRebuildStamp);
+                long debounceMs = (long)MinRebuildInterval.TotalMilliseconds;
+
+                if (elapsedMs >= debounceMs)
+                {
+                    // Debounce window has expired and updates are pending: rebuild now
+                    LogMeshDebounce($"ALLOW pending rebuild: elapsed={elapsedMs}ms dirty={_meshDirty} pending={_pendingMeshUpdate} voxels={_persistedBlocks.Count}");
+                    FillGaps();
+                    RebuildVoxelMesh();
+                    _pendingMeshUpdate = false;
+                }
+                else
+                {
+                    LogMeshDebounce($"BLOCK pending rebuild: elapsed={elapsedMs}ms < {debounceMs}ms dirty={_meshDirty} pending={_pendingMeshUpdate}");
+                }
             }
         }
 
@@ -1215,50 +1308,53 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                if (meshData?.Clear == true)
+                lock (_meshLock)
                 {
-                    _persistedBlocks.Clear();
-                    _voxelInsertionOrder.Clear();
-                    _occupancySet.Clear();
-                    _voxelLastSeen.Clear();
-                    _voxelVerts = null;
-                    _voxelIndices = null;
-                    _voxelIndexCount = 0;
-                    _meshDirty = false;
-                    _pendingMeshUpdate = false;
-                    _lastRenderedCount = 0;
-                }
-
-                // Handle removals
-                if (meshData?.Removed != null)
-                {
-                    foreach (var r in meshData.Removed)
+                    if (meshData?.Clear == true)
                     {
-                        int rx = -r.Y, ry = r.Z, rz = -r.X;
-                        var key = PackVoxelKey(rx, ry, rz);
-                        if (_persistedBlocks.Remove(key))
+                        _persistedBlocks.Clear();
+                        _voxelInsertionOrder.Clear();
+                        _occupancySet.Clear();
+                        _voxelLastSeen.Clear();
+                        _voxelVerts = null;
+                        _voxelIndices = null;
+                        _voxelIndexCount = 0;
+                        _meshDirty = false;
+                        _pendingMeshUpdate = false;
+                        _lastRenderedCount = 0;
+                    }
+
+                    // Handle removals
+                    if (meshData?.Removed != null)
+                    {
+                        foreach (var r in meshData.Removed)
                         {
-                            _occupancySet.Remove(PackKey(rx, ry, rz));
-                            _meshDirty = true;
+                            int rx = -r.Y, ry = r.Z, rz = -r.X;
+                            var key = PackVoxelKey(rx, ry, rz);
+                            if (_persistedBlocks.Remove(key))
+                            {
+                                _occupancySet.Remove(PackKey(rx, ry, rz));
+                                _meshDirty = true;
+                            }
                         }
                     }
-                }
 
-                if ((meshData?.Mode == "voxel" || meshData?.Mode == "voxels") &&
-                    meshData.Voxels != null && meshData.Voxels.Count > 0)
-                {
-                    ProcessVoxels(meshData);
-                }
-                else if (meshData?.Blocks != null && meshData.Blocks.Count > 0)
-                {
-                    ProcessBlocks(meshData);
-                }
+                    if ((meshData?.Mode == "voxel" || meshData?.Mode == "voxels") &&
+                        meshData.Voxels != null && meshData.Voxels.Count > 0)
+                    {
+                        ProcessVoxels(meshData);
+                    }
+                    else if (meshData?.Blocks != null && meshData.Blocks.Count > 0)
+                    {
+                        ProcessBlocks(meshData);
+                    }
 
-                if (_meshDirty)
-                {
-                    // Queue rebuild work; timing gate is enforced in ProcessPendingMeshUpdate().
-                    _pendingMeshUpdate = true;
-                    LogMeshDebounce($"QUEUE mesh update: dirty=true pending=true mode={meshData?.Mode ?? "?"} voxels={meshData?.Voxels?.Count ?? 0} blocks={meshData?.Blocks?.Count ?? 0}");
+                    if (_meshDirty)
+                    {
+                        // Queue rebuild work; timing gate is enforced in ProcessPendingMeshUpdate().
+                        _pendingMeshUpdate = true;
+                        LogMeshDebounce($"QUEUE mesh update: dirty=true pending=true mode={meshData?.Mode ?? "?"} voxels={meshData?.Voxels?.Count ?? 0} blocks={meshData?.Blocks?.Count ?? 0}");
+                    }
                 }
             }
             catch (Exception ex)
@@ -1522,6 +1618,7 @@ namespace NOMAD.MissionPlanner
 
                         if (frame["x"] == null) continue;
 
+                        float latestX, latestY, latestZ;
                         lock (_poseLock)
                         {
                             var xToken = frame["x"];
@@ -1547,10 +1644,14 @@ namespace NOMAD.MissionPlanner
                             var yawToken = frame["yaw"];
                             if (yawToken != null && (yawToken.Type == JTokenType.Integer || yawToken.Type == JTokenType.Float))
                                 _droneYawRaw = yawToken.Value<float>();
+
+                            latestX = _dronePosX;
+                            latestY = _dronePosY;
+                            latestZ = _dronePosZ;
                         }
 
                         // Trajectory
-                        AddTrajectoryPoint(_dronePosX, _dronePosY, _dronePosZ);
+                        AddTrajectoryPoint(latestX, latestY, latestZ);
 
                         // Detection markers
                         var detectionsToken = frame["detections"] as JArray;
@@ -1594,8 +1695,10 @@ namespace NOMAD.MissionPlanner
                                 if (meshData != null)
                                     _totalBlocks = meshData.TotalBlocks > 0 ? meshData.TotalBlocks : meshData.TotalVoxels;
                                 string mode = (meshData?.Mode == "voxel" || meshData?.Mode == "voxels") ? "voxels" : "blocks";
+                                int cachedVoxels;
+                                lock (_meshLock) { cachedVoxels = _persistedBlocks.Count; }
                                 UpdateStatusSafe($"Status: Connected (30Hz) | Updates: {_meshUpdateCount}");
-                                UpdateStatsSafe($"Mesh: {_totalBlocks:N0} {mode} ({_persistedBlocks.Count:N0} cached)");
+                                UpdateStatsSafe($"Mesh: {_totalBlocks:N0} {mode} ({cachedVoxels:N0} cached)");
                             }
                         }
                     }
@@ -1619,7 +1722,13 @@ namespace NOMAD.MissionPlanner
 
         private void AddTrajectoryPoint(float x, float y, float z)
         {
-            _trajectoryPoints.Add(new float[] { x, y, z });
+            lock (_trajectoryLock)
+            {
+                _trajectoryPoints.Add(new float[] { x, y, z });
+                int overflow = _trajectoryPoints.Count - MaxTrajectoryPoints;
+                if (overflow > 0)
+                    _trajectoryPoints.RemoveRange(0, overflow);
+            }
         }
 
         // ==================== Servo Polling ====================
@@ -1778,11 +1887,8 @@ namespace NOMAD.MissionPlanner
             // Seed orbit camera from current drone position when entering orbit
             if (_currentViewMode == CameraViewMode.FreeOrbit)
             {
-                lock (_poseLock)
-                {
-                    ZedToGL(_dronePosX, _dronePosY, _dronePosZ,
-                        out _orbitCenterX, out _orbitCenterY, out _orbitCenterZ);
-                }
+                ZedToGL(_renderPosX, _renderPosY, _renderPosZ,
+                    out _orbitCenterX, out _orbitCenterY, out _orbitCenterZ);
             }
 
             string modeName = _currentViewMode switch
@@ -1805,17 +1911,23 @@ namespace NOMAD.MissionPlanner
 
         private async void BtnClearMesh_Click(object sender, EventArgs e)
         {
-            _persistedBlocks.Clear();
-            _voxelInsertionOrder.Clear();
-            _occupancySet.Clear();
-            _voxelLastSeen.Clear();
-            _voxelVerts = null;
-            _voxelIndices = null;
-            _voxelIndexCount = 0;
-            _meshDirty = false;
-            _pendingMeshUpdate = false;
-            _lastRenderedCount = 0;
-            _trajectoryPoints.Clear();
+            lock (_meshLock)
+            {
+                _persistedBlocks.Clear();
+                _voxelInsertionOrder.Clear();
+                _occupancySet.Clear();
+                _voxelLastSeen.Clear();
+                _voxelVerts = null;
+                _voxelIndices = null;
+                _voxelIndexCount = 0;
+                _meshDirty = false;
+                _pendingMeshUpdate = false;
+                _lastRenderedCount = 0;
+            }
+            lock (_trajectoryLock)
+            {
+                _trajectoryPoints.Clear();
+            }
             _totalBlocks = 0;
 
             try
