@@ -277,7 +277,8 @@ launch_zed_nvblox() {
 
         # Kill any existing launch/container processes first to avoid duplicate
         # camera initialization and Argus resource contention.
-        docker exec "$CONTAINER_NAME" bash -c 'pkill -f "/tmp/launch_zed_nvblox.sh|nomad_zed_nvblox.launch.py|zed_example.launch.py|component_container_mt" 2>/dev/null || true; sleep 2'
+        # Kill processes from ALL launch paths (startup script AND API-triggered launches)
+        docker exec "$CONTAINER_NAME" bash -c 'pkill -f "launch_nvblox_bridge\.sh|launch_zed_nvblox\.sh" 2>/dev/null || true; pkill -f "nomad_zed_nvblox\.launch\.py|zed_example\.launch\.py" 2>/dev/null || true; pkill -f "component_container" 2>/dev/null || true; pkill -f ros_http_bridge 2>/dev/null || true; sleep 2'
 
         # Write launch script via stdin to avoid quoting issues with $() and nested "
         docker exec -i "$CONTAINER_NAME" tee /tmp/launch_zed_nvblox.sh > /dev/null << 'LAUNCH_SCRIPT'

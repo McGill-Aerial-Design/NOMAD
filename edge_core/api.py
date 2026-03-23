@@ -387,31 +387,42 @@ def create_app(state_manager: StateManager) -> FastAPI:
 
         od_value = "true" if enable_od else "false"
         mode_text = "enabled" if enable_od else "disabled"
-        
+
         # Build launch script with OD config merge
-        launch_script = """#!/bin/bash
+        # od_value is interpolated into the heredoc so the script knows whether to enable OD
+        launch_script = f"""#!/bin/bash
 set -e
 source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH
-# FIRST: Overlay NOMAD custom object detection config (ZED SDK YOLO26 circles)
-# This MUST happen before killing the old ZED node, so it reloads with new config
+
+# Kill ALL previous nvblox/ZED/bridge processes from ANY launch path.
+# Match both component_container and component_container_mt variants.
+pkill -f 'launch_nvblox_bridge\\.sh|launch_zed_nvblox\\.sh' 2>/dev/null || true
+pkill -f 'nomad_zed_nvblox\\.launch\\.py|zed_example\\.launch\\.py' 2>/dev/null || true
+pkill -f 'component_container' 2>/dev/null || true
+pkill -f ros_http_bridge 2>/dev/null || true
+sleep 2
+
+ENABLE_OD={od_value}
 CUSTOM_OD=/workspaces/isaac_ros-dev/config/custom_circle_detection.yaml
 ZED_COMMON=/workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/sensors/zed_common.yaml
-if [ -f "$CUSTOM_OD" ] && [ -f "$ZED_COMMON" ]; then
+
+# Only merge YOLO26 OD config when object detection is enabled
+if [ "$ENABLE_OD" = "true" ] && [ -f "$CUSTOM_OD" ] && [ -f "$ZED_COMMON" ]; then
     python3 << 'PYEOF2'
 import yaml
 custom_path = "/workspaces/isaac_ros-dev/config/custom_circle_detection.yaml"
 common_path = "/workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/sensors/zed_common.yaml"
 try:
     with open(common_path, 'r') as f:
-        common = yaml.safe_load(f) or {}
+        common = yaml.safe_load(f) or {{}}
     with open(custom_path, 'r') as f:
-        custom = yaml.safe_load(f) or {}
+        custom = yaml.safe_load(f) or {{}}
 
     # Extract the object_detection block from custom config
     od_params = None
-    if '/**' in custom and 'ros__parameters' in custom.get('/**', {}):
+    if '/**' in custom and 'ros__parameters' in custom.get('/**', {{}}):
         od_params = custom['/**']['ros__parameters'].get('object_detection')
     elif 'ros__parameters' in custom:
         od_params = custom['ros__parameters'].get('object_detection')
@@ -425,16 +436,16 @@ try:
         for key in common:
             if isinstance(common[key], dict) and 'ros__parameters' in common[key]:
                 common[key]['ros__parameters']['object_detection'] = od_params
-                print(f"Injected object_detection into '{key}' namespace")
+                print(f"Injected object_detection into '{{key}}' namespace")
                 injected = True
                 break
 
         # Fallback: if no namespaced ros__parameters found, create under /**
         if not injected:
             if '/**' not in common:
-                common['/**'] = {}
+                common['/**'] = {{}}
             if 'ros__parameters' not in common['/**']:
-                common['/**']['ros__parameters'] = {}
+                common['/**']['ros__parameters'] = {{}}
             common['/**']['ros__parameters']['object_detection'] = od_params
             print("Injected object_detection into new '/**' namespace")
 
@@ -444,14 +455,30 @@ try:
 except Exception as e:
     print("Custom OD merge ERROR: " + str(e))
 PYEOF2
+elif [ "$ENABLE_OD" = "false" ] && [ -f "$ZED_COMMON" ]; then
+    # Remove any previous object_detection config so ZED starts without OD
+    python3 << 'PYEOF3'
+import yaml
+common_path = "/workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/sensors/zed_common.yaml"
+try:
+    with open(common_path, 'r') as f:
+        common = yaml.safe_load(f) or {{}}
+    removed = False
+    for key in common:
+        if isinstance(common[key], dict) and 'ros__parameters' in common[key]:
+            if 'object_detection' in common[key]['ros__parameters']:
+                del common[key]['ros__parameters']['object_detection']
+                removed = True
+    if removed:
+        with open(common_path, 'w') as f:
+            yaml.safe_dump(common, f, default_flow_style=False, sort_keys=False)
+        print("Removed object_detection config (OD disabled)")
+    else:
+        print("No object_detection config to remove")
+except Exception as e:
+    print("OD removal warning: " + str(e))
+PYEOF3
 fi
-
-
-# Kill previous nvblox containers/processes. Do NOT match this launcher script itself.
-pkill -f 'nomad_zed_nvblox.launch.py|zed_example.launch.py|component_container' 2>/dev/null || true
-pkill -f ros_http_bridge 2>/dev/null || true
-sleep 2
-
 
 # Overlay NOMAD nvblox config
 NOMAD_CFG=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml
@@ -462,17 +489,17 @@ if [ -f "$NOMAD_CFG" ] && [ -f "$NVBLOX_BASE" ]; then
 fi
 
 # Patch ZED publish resolution
-sed -i 's/pub_downscale_factor: 2\\.0/pub_downscale_factor: 1.0/' \
+sed -i 's/pub_downscale_factor: 2\\.0/pub_downscale_factor: 1.0/' \\
     /workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/sensors/zed_common.yaml 2>/dev/null
 
-# Launch nvblox with NOMAD custom launch (no fallback chain)
+# Launch nvblox with NOMAD custom launch
 NOMAD_LAUNCH=/workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py
 if [ ! -f "$NOMAD_LAUNCH" ]; then
     echo "ERROR: NOMAD launch file not found at $NOMAD_LAUNCH"
     exit 2
 fi
 
-ros2 launch "$NOMAD_LAUNCH" enable_od:=true &
+ros2 launch "$NOMAD_LAUNCH" &
 echo $! > /tmp/zed_nvblox.pid
 
 # Wait for topics then launch bridge
@@ -2313,7 +2340,12 @@ wait
         """
         container = "nomad_isaac_ros"
         try:
-            for proc in ["ros_http_bridge", "component_container", "ros2 launch.*nvblox"]:
+            for proc in [
+                "launch_nvblox_bridge\\.sh|launch_zed_nvblox\\.sh",
+                "nomad_zed_nvblox\\.launch\\.py|zed_example\\.launch\\.py",
+                "component_container",
+                "ros_http_bridge",
+            ]:
                 subprocess.run(
                     ["docker", "exec", container, "pkill", "-f", proc],
                     capture_output=True, timeout=5,

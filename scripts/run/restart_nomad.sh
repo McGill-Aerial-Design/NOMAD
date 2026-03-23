@@ -19,8 +19,12 @@ fi
 pkill -f "start_nomad_full.sh" 2>/dev/null || true
 pkill -f "edge_core.main" 2>/dev/null || true
 pkill -f "mavlink-routerd" 2>/dev/null || true
+# Kill ALL processes inside the Isaac ROS container (both launch paths)
+docker exec nomad_isaac_ros pkill -f "launch_nvblox_bridge\.sh|launch_zed_nvblox\.sh" 2>/dev/null || true
 docker exec nomad_isaac_ros pkill -f "simple_video_bridge" 2>/dev/null || true
+docker exec nomad_isaac_ros pkill -f "ros_http_bridge" 2>/dev/null || true
 docker exec nomad_isaac_ros pkill -f "ros2 launch" 2>/dev/null || true
+docker exec nomad_isaac_ros pkill -f "component_container" 2>/dev/null || true
 docker exec nomad_isaac_ros pkill -f "zed_node" 2>/dev/null || true
 pkill -f "gst-launch" 2>/dev/null || true
 
