@@ -333,6 +333,11 @@ def create_app(state_manager: StateManager) -> FastAPI:
     app.state.spray_controller = None
     app.state.excluded_sectors: set = set()  # SP-005: sectors excluded from obstacle avoidance
 
+    # Nav2 goal state (Jetson-side obstacle avoidance via nav2 stack)
+    app.state.nav2_pending_goal = None        # Goal waiting to be picked up by bridge
+    app.state.nav2_current_status = {"status": "idle"}  # Latest feedback from bridge
+    app.state.nav2_last_result = None         # Last completed goal result
+
     # VIO state from external sources (ROS bridge)
     app.state.external_vio_state: Optional[dict] = None
     app.state.slam_vio_ros_frame: Optional[dict] = None  # ROS-frame pose for SLAM 3D
@@ -389,54 +394,64 @@ set -e
 source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH
+# FIRST: Overlay NOMAD custom object detection config (ZED SDK YOLO26 circles)
+# This MUST happen before killing the old ZED node, so it reloads with new config
+CUSTOM_OD=/workspaces/isaac_ros-dev/config/custom_circle_detection.yaml
+ZED_COMMON=/workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/sensors/zed_common.yaml
+if [ -f "$CUSTOM_OD" ] && [ -f "$ZED_COMMON" ]; then
+    python3 << 'PYEOF2'
+import yaml
+custom_path = "/workspaces/isaac_ros-dev/config/custom_circle_detection.yaml"
+common_path = "/workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/sensors/zed_common.yaml"
+try:
+    with open(common_path, 'r') as f:
+        common = yaml.safe_load(f) or {}
+    with open(custom_path, 'r') as f:
+        custom = yaml.safe_load(f) or {}
+
+    # Extract the object_detection block from custom config
+    od_params = None
+    if '/**' in custom and 'ros__parameters' in custom.get('/**', {}):
+        od_params = custom['/**']['ros__parameters'].get('object_detection')
+    elif 'ros__parameters' in custom:
+        od_params = custom['ros__parameters'].get('object_detection')
+
+    if od_params is None:
+        print("WARNING: No object_detection section found in custom config")
+    else:
+        # Find the existing namespace key in zed_common.yaml and inject there
+        # ZED common.yaml may use '/**:', '/zed/zed_node:', or bare 'ros__parameters:'
+        injected = False
+        for key in common:
+            if isinstance(common[key], dict) and 'ros__parameters' in common[key]:
+                common[key]['ros__parameters']['object_detection'] = od_params
+                print(f"Injected object_detection into '{key}' namespace")
+                injected = True
+                break
+
+        # Fallback: if no namespaced ros__parameters found, create under /**
+        if not injected:
+            if '/**' not in common:
+                common['/**'] = {}
+            if 'ros__parameters' not in common['/**']:
+                common['/**']['ros__parameters'] = {}
+            common['/**']['ros__parameters']['object_detection'] = od_params
+            print("Injected object_detection into new '/**' namespace")
+
+    with open(common_path, 'w') as f:
+        yaml.safe_dump(common, f, default_flow_style=False, sort_keys=False)
+    print("Applied custom YOLO26 OD config with custom_onnx_file")
+except Exception as e:
+    print("Custom OD merge ERROR: " + str(e))
+PYEOF2
+fi
+
 
 # Kill previous nvblox containers/processes. Do NOT match this launcher script itself.
 pkill -f 'nomad_zed_nvblox.launch.py|zed_example.launch.py|component_container' 2>/dev/null || true
 pkill -f ros_http_bridge 2>/dev/null || true
 sleep 2
 
-# Overlay NOMAD custom object detection config (ZED SDK YOLO26 circles)
-CUSTOM_OD=/workspaces/isaac_ros-dev/config/custom_circle_detection.yaml
-ZED_COMMON=/workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml
-if [ -f "$CUSTOM_OD" ] && [ -f "$ZED_COMMON" ]; then
-    # Use grep to find if object_detection exists, then replace the entire section
-    if grep -q "^    object_detection:" "$ZED_COMMON" 2>/dev/null; then
-        # Extract object_detection section from custom config and insert into common.yaml
-        python3 << 'PYEOF'
-import yaml
-custom_path = "/workspaces/isaac_ros-dev/config/custom_circle_detection.yaml"
-common_path = "/workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml"
-try:
-    with open(common_path, 'r') as f:
-        common = yaml.safe_load(f) or {}
-    with open(custom_path, 'r') as f:
-        custom = yaml.safe_load(f) or {}
-    
-    # Deep merge: preserve common structure but override object_detection
-    if '/**' in custom and 'ros__parameters' in custom['/**']:
-        if '/**' not in common:
-            common['/**'] = {}
-        if 'ros__parameters' not in common['/**']:
-            common['/**']['ros__parameters'] = {}
-        # Copy entire object_detection from custom
-        if 'object_detection' in custom['/**']['ros__parameters']:
-            common['/**']['ros__parameters']['object_detection'] = custom['/**']['ros__parameters']['object_detection']
-    
-    # Also try alternate key path (top-level ros__parameters)
-    if 'ros__parameters' in custom:
-        if 'ros__parameters' not in common:
-            common['ros__parameters'] = {}
-        if 'object_detection' in custom['ros__parameters']:
-            common['ros__parameters']['object_detection'] = custom['ros__parameters']['object_detection']
-    
-    with open(common_path, 'w') as f:
-        yaml.safe_dump(common, f, default_flow_style=False, sort_keys=False)
-    print("Applied custom YOLO26 OD config with custom_onnx_file")
-except Exception as e:
-    print("Custom OD merge warning: " + str(e))
-PYEOF
-    fi
-fi
 
 # Overlay NOMAD nvblox config
 NOMAD_CFG=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml
@@ -447,8 +462,8 @@ if [ -f "$NOMAD_CFG" ] && [ -f "$NVBLOX_BASE" ]; then
 fi
 
 # Patch ZED publish resolution
-sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
-    /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null
+sed -i 's/pub_downscale_factor: 2\\.0/pub_downscale_factor: 1.0/' \
+    /workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/sensors/zed_common.yaml 2>/dev/null
 
 # Launch nvblox with NOMAD custom launch (no fallback chain)
 NOMAD_LAUNCH=/workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py
@@ -1591,6 +1606,96 @@ wait
             "success": success,
             "message": "GUIDED mode requested" if success else "Failed to request GUIDED mode",
         }
+
+    # ==================== Nav2 Obstacle Avoidance (Jetson-side) ====================
+    # ArduPlane has no onboard obstacle avoidance. Nav2 runs on the Jetson with
+    # nvblox costmap and generates obstacle-avoiding /cmd_vel. The nav2_goal_bridge
+    # (ROS2 node inside the container) polls these endpoints to receive goals and
+    # report feedback/results back.
+
+    @app.get("/api/nav2/status", tags=["Nav2"])
+    async def nav2_status(request: Request):
+        """Get current Nav2 navigation status and feedback."""
+        return {
+            "status": request.app.state.nav2_current_status,
+            "pending_goal": request.app.state.nav2_pending_goal is not None,
+            "last_result": request.app.state.nav2_last_result,
+        }
+
+    @app.post("/api/nav2/goal", tags=["Nav2"])
+    async def nav2_send_goal(request: Request):
+        """
+        Send a navigation goal to Nav2 for obstacle-avoiding autonomous flight.
+
+        Goal types:
+        - navigate_to_pose: Single pose {x, y, z, yaw} in odom frame
+        - navigate_through_poses: List of poses to follow as one path
+        - follow_waypoints: List of waypoints (stops at each)
+        - cancel: Cancel current navigation
+
+        Example (navigate_to_pose):
+            {"type": "navigate_to_pose", "pose": {"x": 2.0, "y": 1.0, "z": 0.0, "yaw": 0.0}}
+
+        Example (follow_waypoints):
+            {"type": "follow_waypoints", "waypoints": [
+                {"x": 1.0, "y": 0.0, "yaw": 0.0},
+                {"x": 2.0, "y": 1.0, "yaw": 1.57}
+            ]}
+        """
+        body = await request.json()
+        goal_type = body.get("type", "navigate_to_pose")
+
+        if goal_type == "cancel":
+            request.app.state.nav2_pending_goal = {"type": "cancel", "id": f"cancel_{datetime.now(timezone.utc).timestamp():.0f}"}
+            return {"success": True, "message": "Cancel requested"}
+
+        import uuid
+        goal_id = str(uuid.uuid4())[:8]
+
+        goal = {"id": goal_id, "type": goal_type}
+        if goal_type == "navigate_to_pose":
+            goal["pose"] = body.get("pose", {})
+        elif goal_type == "navigate_through_poses":
+            goal["poses"] = body.get("poses", [])
+        elif goal_type == "follow_waypoints":
+            goal["waypoints"] = body.get("waypoints", [])
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown goal type: {goal_type}")
+
+        request.app.state.nav2_pending_goal = goal
+        request.app.state.nav2_current_status = {"status": "pending", "goal_id": goal_id}
+        return {"success": True, "goal_id": goal_id, "type": goal_type}
+
+    @app.get("/api/nav2/pending", tags=["Nav2"])
+    async def nav2_pending(request: Request):
+        """
+        Poll for pending navigation goal (called by nav2_goal_bridge inside container).
+        Returns the goal and clears it so it's only dispatched once.
+        """
+        goal = request.app.state.nav2_pending_goal
+        if goal:
+            request.app.state.nav2_pending_goal = None
+            return {"goal": goal}
+        return {"goal": None}
+
+    @app.post("/api/nav2/feedback", tags=["Nav2"])
+    async def nav2_feedback(request: Request):
+        """Receive navigation feedback from nav2_goal_bridge."""
+        body = await request.json()
+        request.app.state.nav2_current_status = body
+        return {"success": True}
+
+    @app.post("/api/nav2/result", tags=["Nav2"])
+    async def nav2_result(request: Request):
+        """Receive navigation result from nav2_goal_bridge."""
+        body = await request.json()
+        request.app.state.nav2_last_result = body
+        request.app.state.nav2_current_status = {
+            "status": body.get("status", "unknown"),
+            "goal_id": body.get("goal_id"),
+            "message": body.get("message"),
+        }
+        return {"success": True}
 
     # ==================== Spray Controller (SP-001 to SP-008) =====================
 

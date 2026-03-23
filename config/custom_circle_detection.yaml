@@ -4,6 +4,10 @@
 /**:
   ros__parameters:
     object_detection:
+      # Force ZED SDK custom-YOLO ONNX path and mode.
+      od_enabled: true
+      object_tracking_enabled: true
+      model: 'CUSTOM_YOLOLIKE_BOX_OBJECTS'
       # ONNX model path -- inside the Isaac ROS container, the NOMAD repo
       # is mounted at /workspaces/isaac_ros-dev/ via docker volume
       custom_onnx_file: '/workspaces/isaac_ros-dev/config/models/best.onnx'
