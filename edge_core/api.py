@@ -377,14 +377,14 @@ source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH
 
-# Kill previous instances
-pkill -f '/tmp/launch_nvblox_bridge.sh|nomad_zed_nvblox.launch.py|zed_example.launch.py|component_container' 2>/dev/null || true
+# Kill previous nvblox containers/processes. Do NOT match this launcher script itself.
+pkill -f 'nomad_zed_nvblox.launch.py|zed_example.launch.py|component_container' 2>/dev/null || true
 pkill -f ros_http_bridge 2>/dev/null || true
 sleep 2
 
 # Overlay NOMAD nvblox config
 NOMAD_CFG=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml
-NVBLOX_BASE=$(python3 -c "from ament_index_python.packages import get_package_share_directory; print(get_package_share_directory('nvblox_examples_bringup'))" 2>/dev/null)/config/nvblox/nvblox_base.yaml
+NVBLOX_BASE=$(python3 -c "from ament_index_python.packages import get_package_share_directory; print(get_package_share_directory('nvblox_examples_bringup'))" 2>/dev/null || true)/config/nvblox/nvblox_base.yaml
 if [ -f "$NOMAD_CFG" ] && [ -f "$NVBLOX_BASE" ]; then
     cp "$NOMAD_CFG" "$NVBLOX_BASE"
     echo "Applied NOMAD nvblox config"
