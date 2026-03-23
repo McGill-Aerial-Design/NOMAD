@@ -369,9 +369,22 @@ def create_app(state_manager: StateManager) -> FastAPI:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+        # Re-bind ZED camera to uvcvideo driver (may be needed after previous kill)
+        # This ensures /dev/video* devices are available in container
+        try:
+            subprocess.run(
+                ["docker", "exec", container, "bash", "-c",
+                 "for dev in /sys/bus/usb/devices/*/idVendor; do dir=$(dirname $dev); vid=$(cat $dev 2>/dev/null); if [ \"$vid\" = \"2b03\" ]; then for iface in $dir/*:*/bInterfaceClass; do idir=$(dirname $iface); cls=$(cat $iface 2>/dev/null); iname=$(basename $idir); if [ \"$cls\" = \"0e\" ] && [ ! -e $idir/driver ]; then echo $iname > /sys/bus/usb/drivers/uvcvideo/bind 2>/dev/null || true; fi; done; fi; done; sleep 1"],
+                capture_output=True, timeout=10,
+            )
+        except Exception:
+            pass  # Non-fatal if rebinding fails
+
         od_value = "true" if enable_od else "false"
         mode_text = "enabled" if enable_od else "disabled"
-        launch_script = f"""#!/bin/bash
+        
+        # Build launch script with OD config merge
+        launch_script = """#!/bin/bash
 set -e
 source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
@@ -382,6 +395,49 @@ pkill -f 'nomad_zed_nvblox.launch.py|zed_example.launch.py|component_container' 
 pkill -f ros_http_bridge 2>/dev/null || true
 sleep 2
 
+# Overlay NOMAD custom object detection config (ZED SDK YOLO26 circles)
+CUSTOM_OD=/workspaces/isaac_ros-dev/config/custom_circle_detection.yaml
+ZED_COMMON=/workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml
+if [ -f "$CUSTOM_OD" ] && [ -f "$ZED_COMMON" ]; then
+    # Use grep to find if object_detection exists, then replace the entire section
+    if grep -q "^    object_detection:" "$ZED_COMMON" 2>/dev/null; then
+        # Extract object_detection section from custom config and insert into common.yaml
+        python3 << 'PYEOF'
+import yaml
+custom_path = "/workspaces/isaac_ros-dev/config/custom_circle_detection.yaml"
+common_path = "/workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml"
+try:
+    with open(common_path, 'r') as f:
+        common = yaml.safe_load(f) or {}
+    with open(custom_path, 'r') as f:
+        custom = yaml.safe_load(f) or {}
+    
+    # Deep merge: preserve common structure but override object_detection
+    if '/**' in custom and 'ros__parameters' in custom['/**']:
+        if '/**' not in common:
+            common['/**'] = {}
+        if 'ros__parameters' not in common['/**']:
+            common['/**']['ros__parameters'] = {}
+        # Copy entire object_detection from custom
+        if 'object_detection' in custom['/**']['ros__parameters']:
+            common['/**']['ros__parameters']['object_detection'] = custom['/**']['ros__parameters']['object_detection']
+    
+    # Also try alternate key path (top-level ros__parameters)
+    if 'ros__parameters' in custom:
+        if 'ros__parameters' not in common:
+            common['ros__parameters'] = {}
+        if 'object_detection' in custom['ros__parameters']:
+            common['ros__parameters']['object_detection'] = custom['ros__parameters']['object_detection']
+    
+    with open(common_path, 'w') as f:
+        yaml.safe_dump(common, f, default_flow_style=False, sort_keys=False)
+    print("Applied custom YOLO26 OD config with custom_onnx_file")
+except Exception as e:
+    print("Custom OD merge warning: " + str(e))
+PYEOF
+    fi
+fi
+
 # Overlay NOMAD nvblox config
 NOMAD_CFG=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml
 NVBLOX_BASE=$(python3 -c "from ament_index_python.packages import get_package_share_directory; print(get_package_share_directory('nvblox_examples_bringup'))" 2>/dev/null || true)/config/nvblox/nvblox_base.yaml
@@ -391,7 +447,7 @@ if [ -f "$NOMAD_CFG" ] && [ -f "$NVBLOX_BASE" ]; then
 fi
 
 # Patch ZED publish resolution
-sed -i 's/pub_downscale_factor: 2\\.0/pub_downscale_factor: 1.0/' \
+sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
     /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null
 
 # Launch nvblox with NOMAD custom launch (no fallback chain)
@@ -401,7 +457,7 @@ if [ ! -f "$NOMAD_LAUNCH" ]; then
     exit 2
 fi
 
-ros2 launch "$NOMAD_LAUNCH" enable_od:={od_value} &
+ros2 launch "$NOMAD_LAUNCH" enable_od:=true &
 echo $! > /tmp/zed_nvblox.pid
 
 # Wait for topics then launch bridge

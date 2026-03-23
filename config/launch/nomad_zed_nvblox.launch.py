@@ -85,6 +85,17 @@ def generate_launch_description():
         output='screen',
     )
 
+    # Parameter loader: applies custom YOLO26 config to ZED node after launch
+    # This enables the custom ONNX object detection pipeline with circle detection
+    param_loader = ExecuteProcess(
+        cmd=[
+            'bash', '-c',
+            'sleep 5 && ros2 param load /zed/zed_node /workspaces/isaac_ros-dev/config/custom_circle_detection.yaml 2>/dev/null || true',
+        ],
+        name='zed_od_param_loader',
+        output='screen',
+    )
+
     return LaunchDescription([
         enable_od_arg,
         IncludeLaunchDescription(
@@ -93,6 +104,7 @@ def generate_launch_description():
                 'camera': 'zed2',
             }.items(),
         ),
+        param_loader,
         servo_tf_publisher,
         obstacle_distance_bridge,
     ])

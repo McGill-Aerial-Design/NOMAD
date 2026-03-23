@@ -40,6 +40,8 @@ services:
     volumes:
       # Isaac ROS workspace (source + build artifacts persist here)
       - /home/mad/workspaces/isaac_ros-dev:/workspaces/isaac_ros-dev
+      # ZED SDK runtime libraries (required for camera initialization)
+      - /usr/local/zed:/usr/local/zed:ro
       # Device access
       - /dev:/dev
       # udev database (required for ZED SDK USB device detection)
