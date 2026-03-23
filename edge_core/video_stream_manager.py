@@ -560,20 +560,38 @@ def init_video_stream_manager(
     _video_stream_manager = VideoStreamManager(container_name=container_name, **kwargs)
     
     if auto_start:
-        # Start in background thread to not block startup
+        # Start in background thread to not block startup.
+        # This is a SAFETY NET — the primary bridge launch is done by
+        # start_isaac_ros_auto.sh after ZED topics are confirmed ready.
+        # We wait long enough for that to happen first, then only start
+        # a bridge if none is already running.
         def _delayed_start():
-            # Wait for container to be ready
-            for i in range(45):  # Wait up to 90 seconds
+            # Wait for container to be running
+            for i in range(45):
                 if _video_stream_manager.is_container_running():
-                    logger.info("Container ready, starting simple video bridge...")
-                    time.sleep(5)  # Wait for ZED to initialize
-                    _video_stream_manager.start()
+                    break
+                time.sleep(2)
+            else:
+                logger.warning("Container not ready after 90s, video bridge not started")
+                return
+
+            # Wait for the primary bridge (started by start_isaac_ros_auto.sh)
+            # to come online. ZED takes 15-30s to init, plus bridge has sleep 8.
+            # Check periodically — if it's already running, we're done.
+            logger.info("Waiting for video bridge (started by Isaac ROS startup)...")
+            for i in range(30):  # Wait up to 60 seconds
+                if _video_stream_manager.is_relay_running():
+                    _video_stream_manager._started = True
+                    logger.info("Video bridge already running (started by Isaac ROS startup)")
                     return
                 time.sleep(2)
-            logger.warning("Container not ready, simple video bridge not started")
-        
+
+            # Safety net: primary bridge didn't start, launch one ourselves
+            logger.warning("Video bridge not detected after 60s, starting as safety net...")
+            _video_stream_manager.start()
+
         thread = threading.Thread(target=_delayed_start, daemon=True)
         thread.start()
-        logger.info("Simple video bridge auto-start scheduled")
+        logger.info("Video bridge auto-start safety net scheduled")
     
     return _video_stream_manager

@@ -53,6 +53,7 @@ class VideoStreamNode(Node):
         self.source_topic = source_topic
         self.frame_count = 0
         self.start_time = time.time()
+        self.last_frame_time = 0.0  # Timestamp of most recent frame
         self.subscription = None
         self._latest_jpeg = None  # Cached JPEG bytes for snapshot requests
         
@@ -227,6 +228,7 @@ class VideoStreamNode(Node):
             
             # Stats
             self.frame_count += 1
+            self.last_frame_time = time.time()
             if self.frame_count % 300 == 0:  # Every 10 seconds at 30fps
                 elapsed = time.time() - self.start_time
                 fps = self.frame_count / elapsed if elapsed > 0 else 0
@@ -426,13 +428,26 @@ class ControlServer(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         
         if parsed.path == '/health':
-            self._send_json(200, {'healthy': True, 'streaming': True})
-        
+            # Report streaming only if frames arrived recently (within 5s)
+            receiving_frames = (
+                self.video_node is not None
+                and self.video_node.last_frame_time > 0
+                and (time.time() - self.video_node.last_frame_time) < 5.0
+            )
+            self._send_json(200, {'healthy': True, 'streaming': receiving_frames})
+
         elif parsed.path == '/status':
+            now = time.time()
+            receiving_frames = (
+                self.video_node is not None
+                and self.video_node.last_frame_time > 0
+                and (now - self.video_node.last_frame_time) < 5.0
+            )
+            elapsed = now - self.video_node.start_time if self.video_node else 1
             status = {
-                'streaming': True,
+                'streaming': receiving_frames,
                 'source_topic': self.video_node.source_topic if self.video_node else '',
-                'fps': self.video_node.frame_count / max(time.time() - self.video_node.start_time, 1) if self.video_node else 0,
+                'fps': self.video_node.frame_count / max(elapsed, 1) if self.video_node else 0,
                 'frame_count': self.video_node.frame_count if self.video_node else 0,
                 'error_count': 0,
                 'rtsp_url': 'rtsp://localhost:8554/primary',
