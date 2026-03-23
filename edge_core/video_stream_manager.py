@@ -190,8 +190,13 @@ class VideoStreamManager:
     def _start_internal(self) -> tuple:
         """Internal start implementation returning (success, message)."""
         with self._lock:
-            if self._started and self.is_relay_running():
-                logger.info("Simple video bridge already running")
+            # Check if a bridge is already running (from any launch path:
+            # start_isaac_ros_auto.sh, auto_start thread, or prior API call).
+            # Don't kill a working bridge just because _started is False
+            # (e.g., after Edge Core restart).
+            if self.is_relay_running():
+                self._started = True
+                logger.info("Simple video bridge already running, adopting existing instance")
                 return (True, "Already running")
             
             if not self.is_container_running():

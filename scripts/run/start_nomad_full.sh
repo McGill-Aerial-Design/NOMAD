@@ -434,7 +434,10 @@ main() {
     start_mediamtx || { log_fail "MediaMTX failed to start"; failures=$((failures + 1)); }
     start_edge_core || { log_fail "Edge Core failed to start"; failures=$((failures + 1)); }
     start_isaac_ros || { log_warn "Isaac ROS failed to start (may not be needed)"; }
-    start_video_bridge || { log_fail "Video Bridge failed to start"; failures=$((failures + 1)); }
+    # Video bridge is launched by start_isaac_ros_auto.sh (after ZED topics are ready)
+    # and Edge Core's auto_start thread provides a safety net. Do NOT start it here
+    # too — killing a working bridge resets DDS discovery, causing 0fps + missing topics.
+    log_info "Video bridge managed by Isaac ROS startup + Edge Core auto-start"
     
     print_status
     
