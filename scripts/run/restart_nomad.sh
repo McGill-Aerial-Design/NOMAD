@@ -27,6 +27,10 @@ docker exec nomad_isaac_ros pkill -f "ros2 launch" 2>/dev/null || true
 docker exec nomad_isaac_ros pkill -f "component_container" 2>/dev/null || true
 docker exec nomad_isaac_ros pkill -f "zed_node" 2>/dev/null || true
 pkill -f "gst-launch" 2>/dev/null || true
+# Clean up stale FastRTPS/DDS shared memory lock files inside container.
+# pkill doesn't give ROS2 nodes time to release SHM ports, so leftover locks
+# prevent the next launch from acquiring them (RTPS_TRANSPORT_SHM errors).
+docker exec nomad_isaac_ros bash -c 'rm -f /dev/shm/fastrtps_* 2>/dev/null' || true
 
 # Wait and verify cleanup
 sleep 2

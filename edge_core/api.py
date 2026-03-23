@@ -403,6 +403,9 @@ pkill -f 'nomad_zed_nvblox\\.launch\\.py|zed_example\\.launch\\.py' 2>/dev/null 
 pkill -f 'component_container' 2>/dev/null || true
 pkill -f ros_http_bridge 2>/dev/null || true
 sleep 2
+# Clean up stale FastRTPS/DDS shared memory locks left by killed processes.
+# Without this, new ROS2 nodes fail with RTPS_TRANSPORT_SHM port lock errors.
+rm -f /dev/shm/fastrtps_* 2>/dev/null || true
 
 ENABLE_OD={od_value}
 CUSTOM_OD=/workspaces/isaac_ros-dev/config/custom_circle_detection.yaml
@@ -2350,6 +2353,11 @@ wait
                     ["docker", "exec", container, "pkill", "-f", proc],
                     capture_output=True, timeout=5,
                 )
+            # Clean stale FastRTPS SHM locks so next launch succeeds
+            subprocess.run(
+                ["docker", "exec", container, "bash", "-c", "rm -f /dev/shm/fastrtps_* 2>/dev/null"],
+                capture_output=True, timeout=5,
+            )
             return {"success": True, "message": "nvblox and bridge stopped"}
         except Exception as e:
             return {"success": False, "error": str(e)}
