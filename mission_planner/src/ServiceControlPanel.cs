@@ -405,7 +405,7 @@ namespace NOMAD.MissionPlanner
             {
                 Text = "Checking...",
                 Location = new Point(140, yOffset + 3),
-                Size = new Size(90, 20),
+                Size = new Size(160, 20),
                 ForeColor = Color.Yellow
             };
             this.Controls.Add(_lblYolo26Status);
@@ -413,8 +413,8 @@ namespace NOMAD.MissionPlanner
             _btnYolo26Start = new Button
             {
                 Text = "Start",
-                Location = new Point(235, yOffset),
-                Size = new Size(70, 25),
+                Location = new Point(300, yOffset),
+                Size = new Size(50, 25),
                 BackColor = Color.FromArgb(0, 120, 60),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat
@@ -425,8 +425,8 @@ namespace NOMAD.MissionPlanner
             _btnYolo26Stop = new Button
             {
                 Text = "Stop",
-                Location = new Point(310, yOffset),
-                Size = new Size(70, 25),
+                Location = new Point(355, yOffset),
+                Size = new Size(50, 25),
                 BackColor = Color.FromArgb(150, 50, 50),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat

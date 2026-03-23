@@ -27,6 +27,7 @@
 import os
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, ExecuteProcess
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from ament_index_python.packages import get_package_share_directory
@@ -37,8 +38,12 @@ def generate_launch_description():
     zed_example_launch = os.path.join(
         nvblox_bringup_dir, 'launch', 'zed_example.launch.py'
     )
+    zed_launch = os.path.join(
+        nvblox_bringup_dir, 'launch', 'sensors', 'zed.launch.py'
+    )
 
-    # Custom OD config path (mounted inside the container)
+    # Custom OD config path (ZED SDK YOLO26 circle detection)
+    # This file configures the ZED node's custom_onnx_file and class parameters
     custom_od_config = '/workspaces/isaac_ros-dev/config/custom_circle_detection.yaml'
 
     enable_od_arg = DeclareLaunchArgument(
@@ -86,8 +91,6 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(zed_example_launch),
             launch_arguments={
                 'camera': 'zed2',
-                'od_enabled': LaunchConfiguration('enable_od'),
-                'custom_object_detection_config_path': custom_od_config,
             }.items(),
         ),
         servo_tf_publisher,
