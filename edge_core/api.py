@@ -397,8 +397,9 @@ source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH
 
 # Kill ALL previous nvblox/ZED/bridge processes from ANY launch path.
-# Match both component_container and component_container_mt variants.
-pkill -f 'launch_nvblox_bridge\\.sh|launch_zed_nvblox\\.sh' 2>/dev/null || true
+# Do NOT kill launcher scripts by name — this script IS launch_nvblox_bridge.sh
+# and pkill would match our own process. Kill the actual ROS2 processes instead;
+# wrapper scripts will exit when their children die.
 pkill -f 'nomad_zed_nvblox\\.launch\\.py|zed_example\\.launch\\.py' 2>/dev/null || true
 pkill -f 'component_container' 2>/dev/null || true
 pkill -f ros_http_bridge 2>/dev/null || true
