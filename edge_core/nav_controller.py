@@ -147,10 +147,12 @@ class NavController:
         mavlink_service: "MavlinkService",
         state_manager: "StateManager",
         on_status_change: Optional[Callable[[NavStatus], None]] = None,
+        nav2_enabled: bool = False,
     ):
         self._mavlink = mavlink_service
         self._state_manager = state_manager
         self._on_status_change = on_status_change
+        self._nav2_enabled = nav2_enabled
         
         self._status = NavStatus()
         self._lock = threading.RLock()
@@ -168,7 +170,8 @@ class NavController:
         self._vio_confidence = 0.0
         self._vio_healthy = False
         
-        logger.info("NavController initialized")
+        mode_desc = "nav2 mode" if nav2_enabled else "API mode"
+        logger.info(f"NavController initialized ({mode_desc})")
     
     @property
     def status(self) -> NavStatus:

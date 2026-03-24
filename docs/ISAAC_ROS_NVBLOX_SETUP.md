@@ -136,22 +136,111 @@ Use `camera:=zed2` for ZED 2i cameras (confirmed by NVIDIA -- zed2i uses the zed
 
 ---
 
+## Nav2 Dependencies
+
+Nav2 (Navigation2) is a mandatory dependency for autonomous navigation and mission planning. The following packages are automatically installed by both the startup script and Docker image:
+
+### Required Nav2 Packages
+
+| Package | Purpose |
+|---------|----------|
+| `ros-humble-navigation2` | Core navigation stack (costmaps, planners, controllers) |
+| `ros-humble-nav2-bringup` | Bringup utilities and launch files |
+| `ros-humble-nav2-msgs` | Message definitions for nav2 bridge compatibility |
+
+### Installation Verification
+
+To verify Nav2 packages are installed inside the container:
+
+```bash
+# Enter container
+docker exec -it nomad_isaac_ros bash
+
+# Check packages
+dpkg -l | grep ros-humble-navigation2
+dpkg -l | grep ros-humble-nav2
+
+# Or check via ROS2
+source /opt/ros/humble/setup.bash
+ros2 pkg list | grep -i nav2
+```
+
+Expected packages in output:
+- `nav2_behavior_tree`
+- `nav2_bringup`
+- `nav2_costmap_2d`
+- `nav2_dynamic_params`
+- `nav2_lifecycle_manager`
+- `nav2_map_server`
+- `nav2_navfn_planner`
+- `nav2_util`
+
+### Integration with ROS-HTTP Bridge
+
+Nav2 messages are bridged to the Edge Core API via the ROS-HTTP bridge. This enables remote mission planning from the Ground Station:
+
+```python
+# Edge Core will expose nav2 topics if bridge is running
+ros2 topic list | grep nav2  # Inside container
+
+# Ground Station can poll status via API
+GET /api/nav/status
+```
+
+If Nav2 packages are missing, the bridge will fail to initialize nav2 message types and navigation commands will not work.
+
+---
+
 ## nvblox Configuration
 
-### Performance config: `config/nvblox_performance.yaml`
+### nvblox Configuration Profiles
 
-Key parameters for the Orin Nano:
+Two primary configurations are available depending on the mission:
+
+#### Performance config: `config/nvblox_performance.yaml`
+
+Optimized for **Task 1 (outdoor)** and **real-time 3D visualization** in Mission Planner.
 
 | Parameter | Value | Notes |
 |-----------|-------|-------|
-| `voxel_size` | 0.15 m | Balance of speed vs resolution |
-| `map_clearing_radius_m` | 8.0 m | Mapping radius around the drone |
+| `voxel_size` | 0.05 m | 5cm voxels for detailed Mission Planner 3D view |
+| `map_clearing_radius_m` | 8.0 m | 8m radius mapping around drone (GPU memory fit on Orin Nano) |
 | `projective_integrator_max_integration_distance_m` | 8.0 m | Max depth integration range |
-| `update_mesh_rate_hz` | 2.0 | Mesh output rate |
-| `update_esdf_rate_hz` | 5.0 | Distance field update rate |
+| `integrate_depth_rate_hz` | 30.0 | Target 30Hz depth integration |
+| `update_mesh_rate_hz` | 30.0 | Target 30Hz mesh updates for responsive visualization |
+| `update_esdf_rate_hz` | 15.0 | ESDF distance field responsive updates |
 | `esdf_mode` | "3d" | Full volumetric mapping |
 | `mapping_type` | "static_tsdf" | Best for mesh generation |
 | `back_projection_subsampling` | 4 | Heavy subsampling for speed |
+| `publish_layer_rate_hz` | 30.0 | 30Hz layer publishing to Mission Planner |
+
+#### Indoor config: `config/nvblox_indoor.yaml`
+
+Optimized for **Task 2 (indoor fire extinguishing)** with high-resolution obstacle mapping.
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| `voxel_size` | 0.03 m | 3cm voxels for fine obstacle detection through doorways |
+| `map_clearing_radius_m` | 5.0 m | Tighter 5m radius (indoor spaces) |
+| `integrate_depth_rate_hz` | 15.0 | Safety-critical rate limit for tight indoor spaces |
+| `update_mesh_rate_hz` | 3.0 | Fast mesh for close obstacle detection |
+| `update_esdf_rate_hz` | 10.0 | Responsive obstacle avoidance distance field |
+| `mapping_type` | "dynamic" | Dynamic occupancy for moving obstacles (people) |
+| `decay_dynamic_occupancy_rate_hz` | 10.0 | Fast decay for moving obstacles |
+
+#### Switching Profiles
+
+The active config is determined by which yaml file is copied to the nvblox base config:
+
+```bash
+# Use performance (outdoor) profile
+cp config/nvblox_performance.yaml /opt/ros/humble/.../nvblox_base.yaml
+
+# Use indoor profile (requires nvblox container restart, ~2-3s blind window)
+cp config/nvblox_indoor.yaml /opt/ros/humble/.../nvblox_base.yaml
+```
+
+The `start_isaac_ros_auto.sh` script applies `nvblox_performance.yaml` by default.
 
 To use this config when launching nvblox manually:
 

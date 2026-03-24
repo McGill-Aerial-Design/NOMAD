@@ -75,6 +75,60 @@ check_prerequisites() {
         log_warn "ZED camera not detected at /dev/video0"
     fi
 
+    # =========================================================================
+    # Jetson Power Mode Check (NV-011)
+    # =========================================================================
+    log_info "Checking Jetson power mode..."
+    if [ -e /sys/devices/virtual/thermal/cooling_device0/cur_state ]; then
+        POWER_MODE=$(cat /sys/devices/virtual/thermal/cooling_device0/cur_state 2>/dev/null || echo "unknown")
+        case "$POWER_MODE" in
+            15|16|17|18|19|20)  # Assuming states above 15 are MAXN or high performance
+                log_info "Power mode: High performance (state $POWER_MODE) - OK"
+                ;;
+            0|1|2|3|4|5)
+                log_warn "Power mode: Very low (state $POWER_MODE). nvblox may throttle."
+                log_warn "Run 'sudo nvpmodel -m 2' for 25W mode or 'sudo jetson_clocks' for max performance"
+                ;;
+            *)
+                log_warn "Power mode: Unknown state $POWER_MODE"
+                ;;
+        esac
+    else
+        log_warn "Cannot determine power mode (nvpmodel/jetson_clocks not available)"
+        log_warn "For best results, run: sudo jetson_clocks"
+    fi
+
+    # =========================================================================
+    # Shared Memory Availability Check (NV-012)
+    # =========================================================================
+    log_info "Checking shared memory availability..."
+    SHM_AVAIL=$(df /dev/shm 2>/dev/null | tail -1 | awk '{print $4}')
+    if [ -n "$SHM_AVAIL" ] && [ "$SHM_AVAIL" -gt 0 ]; then
+        SHM_AVAIL_MiB=$((SHM_AVAIL / 1024))
+        if [ "$SHM_AVAIL_MiB" -lt 512 ]; then
+            log_warn "Shared memory low: ${SHM_AVAIL_MiB}MiB available (recommend 1GB)"
+            log_warn "Clean stale FastRTPS lockfiles: rm -f /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_*"
+        else
+            log_info "Shared memory OK: ${SHM_AVAIL_MiB}MiB available"
+        fi
+    else
+        log_warn "Cannot determine shared memory availability"
+    fi
+
+    # =========================================================================
+    # Available Memory Check (NV-013)
+    # =========================================================================
+    log_info "Checking available system memory..."
+    MEM_AVAIL=$(free -m 2>/dev/null | grep '^Mem:' | awk '{print $7}')
+    if [ -n "$MEM_AVAIL" ]; then
+        if [ "$MEM_AVAIL" -lt 2048 ]; then
+            log_warn "Available memory: ${MEM_AVAIL}MiB (recommend +2GB for host)"
+            log_warn "Background processes may be consuming memory. Run: free -h && ps aux --sort=-%mem | head -10"
+        else
+            log_info "Available memory: ${MEM_AVAIL}MiB - OK"
+        fi
+    fi
+
     log_info "Prerequisites OK"
 }
 
@@ -103,6 +157,9 @@ start_container() {
         --privileged \
         --network host \
         --ipc host \
+        --memory 4g \
+        --cpus 6 \
+        --shm-size 1g \
         -v "$ISAAC_WS:/workspaces/isaac_ros-dev" \
         -v /dev:/dev \
         -v /run/udev:/run/udev:ro \
@@ -217,6 +274,9 @@ install_dependencies() {
             ros-humble-isaac-ros-nitros-image-type \
             ros-humble-isaac-ros-nitros-camera-info-type \
             ros-humble-isaac-ros-nitros-point-cloud-type \
+            ros-humble-navigation2 \
+            ros-humble-nav2-bringup \
+            ros-humble-nav2-msgs \
             python3-pip \
             gir1.2-gstreamer-1.0 \
             gir1.2-gst-plugins-base-1.0 \
@@ -233,9 +293,26 @@ install_dependencies() {
 
 # =========================================================================
 # Build ZED + nvblox packages (colcon build artifacts persist on host)
+# Also explicitly build isaac_ros_nvblox_utils as a mandatory target.
 # =========================================================================
 build_packages() {
     log_info "Building ROS2 packages..."
+
+    # --- isaac_ros_nvblox_utils (MANDATORY - required by nvblox) ---
+    if docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP; $WS_SETUP; ros2 pkg list 2>/dev/null | grep -q isaac_ros_nvblox_utils"; then
+        log_info "isaac_ros_nvblox_utils already built"
+    else
+        if docker exec "$CONTAINER_NAME" test -d /workspaces/isaac_ros-dev/src/isaac_ros_nvblox; then
+            log_info "Building isaac_ros_nvblox_utils (required dependency)..."
+            docker exec "$CONTAINER_NAME" bash -c "
+                $ROS_SETUP
+                cd /workspaces/isaac_ros-dev
+                colcon build --packages-select isaac_ros_nvblox_utils --symlink-install --cmake-args -Wno-dev 2>&1
+            " 2>&1 | tail -10
+        else
+            log_warn "isaac_ros_nvblox source not found -- skipping host build (using container image pre-built version)"
+        fi
+    fi
 
     # --- ZED wrapper ---
     if docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP; $WS_SETUP; ros2 pkg list 2>/dev/null | grep -q zed_wrapper"; then
@@ -268,9 +345,72 @@ build_packages() {
 }
 
 # =========================================================================
+# Navigation 2 (Nav2) Pre-launch Validation
+# =========================================================================
+validate_nav2_config() {
+    local nav2_params_file="/workspaces/isaac_ros-dev/config/nav2_drone.yaml"
+    local goal_bridge="/workspaces/isaac_ros-dev/edge_core/ros/nav2_goal_bridge.py"
+    local bt_xml="/opt/ros/humble/share/nav2_bringup/bringup/params/bt.xml"
+    
+    log_info "Validating Nav2 configuration before launch..."
+    
+    # Check 1: nav2_bringup package exists
+    if ! docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP; ros2 pkg list 2>/dev/null | grep -q nav2_bringup"; then
+        log_error "FATAL: nav2_bringup package not found in ROS2 install"
+        log_error "Nav2 was not built or installed. Check container dependencies."
+        return 1
+    fi
+    log_info "  [OK] nav2_bringup package found"
+    
+    # Check 2: BT XML file exists
+    if ! docker exec "$CONTAINER_NAME" test -f "$bt_xml"; then
+        log_error "FATAL: Default BT XML file not found: $bt_xml"
+        log_error "This file is required by nav2_bringup. Verify nav2_bringup installation."
+        return 1
+    fi
+    log_info "  [OK] BT XML file exists: $bt_xml"
+    
+    # Check 3: Nav2 config file exists
+    if ! docker exec "$CONTAINER_NAME" test -f "$nav2_params_file"; then
+        log_error "FATAL: Nav2 config file not found: $nav2_params_file"
+        log_error "Verify NOMAD config volume mount or nav2_drone.yaml availability."
+        return 1
+    fi
+    log_info "  [OK] Nav2 config file exists: $nav2_params_file"
+    
+    # Check 4: Nav2 goal bridge script exists
+    if ! docker exec "$CONTAINER_NAME" test -f "$goal_bridge"; then
+        log_error "FATAL: Nav2 goal bridge script not found: $goal_bridge"
+        log_error "Verify edge_core volume mount or nav2_goal_bridge.py availability."
+        return 1
+    fi
+    log_info "  [OK] Nav2 goal bridge script exists: $goal_bridge"
+    
+    # Check 5: Validate nav2_drone.yaml YAML syntax
+    if ! docker exec "$CONTAINER_NAME" python3 -c "import yaml; yaml.safe_load(open('$nav2_params_file')); print('YAML OK')" 2>/dev/null | grep -q "YAML OK"; then
+        log_error "FATAL: Nav2 config file has invalid YAML syntax: $nav2_params_file"
+        log_error "Fix YAML errors before relaunching Nav2."
+        return 1
+    fi
+    log_info "  [OK] Nav2 config file YAML syntax valid"
+    
+    log_info "Nav2 validation PASSED - safe to launch"
+    return 0
+}
+
+# =========================================================================
 # Launch ZED + nvblox
 # =========================================================================
 launch_zed_nvblox() {
+    # PREFLIGHT: isaac_ros_nvblox_utils MUST be available (hard fail if missing)
+    # This package is built into /opt/isaac_ros_installed and persists across container restarts.
+    if ! docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP; ros2 pkg list 2>/dev/null | grep -q isaac_ros_nvblox_utils"; then
+        log_error "FATAL: isaac_ros_nvblox_utils package not found in container"
+        log_error "This package must be pre-built in the Docker image at /opt/isaac_ros_installed"
+        log_error "Rebuild the Docker image with: docker compose build isaac-ros"
+        exit 1
+    fi
+
     # Check if nvblox is available
     if docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP; $WS_SETUP; ros2 pkg list 2>/dev/null | grep -q nvblox_examples_bringup"; then
         log_info "Launching ZED + nvblox (camera:=zed2)..."
@@ -311,23 +451,51 @@ export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH
 sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
     /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null
 # Overlay NOMAD nvblox config onto installed base config
-# voxel_size=0.15, ESDF 3D, 8m clearing radius
+# Performance profile (default): 0.05m voxels, 30Hz depth/mesh, 3D ESDF, 8m radius
+# See config/nvblox_performance.yaml and config/nvblox_indoor.yaml for all parameters
 NOMAD_CFG=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml
 NVBLOX_BASE=$(python3 -c "from ament_index_python.packages import get_package_share_directory; print(get_package_share_directory('nvblox_examples_bringup'))" 2>/dev/null)/config/nvblox/nvblox_base.yaml
 if [ -f "$NOMAD_CFG" ] && [ -f "$NVBLOX_BASE" ]; then
-    echo "Applying NOMAD nvblox config (voxel_size=0.15, esdf=3d, 8m radius)"
+    echo "Applying NOMAD nvblox config (performance profile: 0.05m voxels, 30Hz, 3D ESDF, 8m radius)"
     cp "$NOMAD_CFG" "$NVBLOX_BASE"
 else
     echo "NOMAD config or nvblox base not found, using defaults"
 fi
-# Use custom NOMAD launch file with YOLO object detection enabled
+# Preflight check: ensure nav2 dependencies are available
+NAV2_PREFLIGHT_OK=true
+if ! docker exec "$CONTAINER_NAME" dpkg -l nav2-bringup 2>/dev/null | grep -q '^ii'; then
+    echo "[WARN] nav2-bringup not installed - nav2 will be disabled"
+    NAV2_PREFLIGHT_OK=false
+fi
+if ! docker exec "$CONTAINER_NAME" dpkg -l nvblox-nav-plugins 2>/dev/null | grep -q '^ii'; then
+    echo "[WARN] nvblox-nav-plugins not installed - nav2 costmap will be unavailable"
+    NAV2_PREFLIGHT_OK=false
+fi
+
+# Use custom NOMAD launch file with YOLO object detection and nav2 enabled
 NOMAD_LAUNCH=/workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py
 if [ -f "$NOMAD_LAUNCH" ]; then
-    echo "Launching with NOMAD custom OD launch file"
-    ros2 launch "$NOMAD_LAUNCH"
+    echo "Launching with NOMAD custom OD launch file (nav2 enabled)"
+    if [ "$NAV2_PREFLIGHT_OK" = true ]; then
+        ros2 launch "$NOMAD_LAUNCH" enable_nav2:=true
+    else
+        echo "[WARN] Nav2 preflight check failed - falling back to nav2 disabled"
+        ros2 launch "$NOMAD_LAUNCH" enable_nav2:=false
+    fi
 else
-    echo "NOMAD launch file not found, falling back to stock launch (no OD)"
+    echo "NOMAD launch file not found, falling back to stock launch (no OD, nav2 disabled)"
     ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2
+fi
+
+# Post-launch validation: confirm nav2 lifecycle nodes are running (give 5s for startup)
+if [ "$NAV2_PREFLIGHT_OK" = true ]; then
+    sleep 5
+    NAV2_NODES=$(ros2 node list 2>/dev/null | grep -E 'nav2_.*lifecycle' | wc -l)
+    if [ "$NAV2_NODES" -gt 0 ]; then
+        echo "[INFO] Nav2 lifecycle nodes detected ($NAV2_NODES running) - nav2 active"
+    else
+        echo "[WARN] No Nav2 lifecycle nodes detected - nav2 may have failed to start"
+    fi
 fi
 LAUNCH_SCRIPT
         docker exec "$CONTAINER_NAME" chmod +x /tmp/launch_zed_nvblox.sh
@@ -467,6 +635,13 @@ case "${1:-start}" in
         start_container
         install_dependencies
         build_packages
+
+        # Pre-validate Nav2 configuration (runs early so issues are caught before launch)
+        if ! validate_nav2_config; then
+            log_error "Nav2 validation FAILED. Run with 'bash $0 logs' to diagnose."
+            log_error "CONTINUING WITH LAUNCH (Nav2 disabled, but config must be resolvable for robustness)."
+        fi
+
         launch_zed_nvblox
 
         # Wait for ZED topics

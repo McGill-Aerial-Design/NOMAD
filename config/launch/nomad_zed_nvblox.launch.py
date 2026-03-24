@@ -59,8 +59,8 @@ def generate_launch_description():
 
     enable_nav2_arg = DeclareLaunchArgument(
         'enable_nav2',
-        default_value='false',
-        description='Enable Nav2 stack for Jetson-side obstacle avoidance (disabled to prevent crashes)',
+        default_value='true',
+        description='Enable Nav2 stack for Jetson-side obstacle avoidance with nvblox costmap (set to false to disable for testing/debug)',
     )
 
     # Servo TF publisher: publishes servo_mount -> camera_link at 50 Hz
@@ -88,7 +88,7 @@ def generate_launch_description():
             '--port', '8000',
             '--rate', '5.0',
             '--buffer', '2.0',
-            '--topic', '/nvblox_node/static_map_slice',
+            '--topic', '/nvblox_node/combined_dynamic_map_slice',
         ],
         name='obstacle_distance_bridge',
         output='screen',

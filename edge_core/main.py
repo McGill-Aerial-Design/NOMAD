@@ -261,6 +261,15 @@ def run(
     else:
         logger.info("Isaac ROS bridge disabled (set NOMAD_ENABLE_ISAAC_ROS=true to enable)")
 
+    # Nav2 integration flag: controls whether navigation controller bridges ROS nav2 commands
+    # Set NOMAD_ENABLE_NAV2=false to disable nav2 integration (default: true when Isaac ROS enabled)
+    # This flag can be used to disable nav2 in production for safety/testing
+    enable_nav2 = os.environ.get("NOMAD_ENABLE_NAV2", "true" if enable_isaac else "false").lower() == "true"
+    if enable_nav2:
+        logger.info("Nav2 integration enabled (NOMAD_ENABLE_NAV2=true or implicit from NOMAD_ENABLE_ISAAC_ROS)")
+    else:
+        logger.info("Nav2 integration disabled (set NOMAD_ENABLE_NAV2=true to enable)")
+
     # Mesh bridge is not auto-started; mesh data arrives via ros_http_bridge
     # (POST /api/task/2/slam/mesh/update -> GET /api/task/2/slam/mesh)
 
@@ -345,11 +354,16 @@ def run(
     logger.info("MAVLink service started")
 
     # Start navigation controller with velocity watchdog (SAFETY: 0.5s timeout)
+    # For nav2-enabled systems, this bridges ROS velocity commands to MAVLink
+    # For nav2-disabled systems, this provides API-based navigation (e.g., GPS targets, velocity commands)
     # This ensures commands timeout and vehicle stops if connection is lost
-    nav_controller = NavController(mavlink_service, state_manager)
+    nav_controller = NavController(mavlink_service, state_manager, nav2_enabled=enable_nav2)
     nav_controller.start()
     set_nav_controller(app, nav_controller)
-    logger.info("Navigation controller started (velocity watchdog: 0.5s timeout)")
+    if enable_nav2:
+        logger.info("Navigation controller started (nav2 mode, velocity watchdog: 0.5s timeout)")
+    else:
+        logger.info("Navigation controller started (API mode, velocity watchdog: 0.5s timeout)")
 
     # Initialize operational mode manager (Section 9)
     global mode_manager, spray_controller

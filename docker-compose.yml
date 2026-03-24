@@ -37,8 +37,37 @@ services:
     network_mode: host
     privileged: true
     ipc: host
+    # ============================================================
+    # RESOURCE LIMITS (Jetson Orin Nano 8GB shared DRAM)
+    # ============================================================
+    # memory: "4g"
+    #   Conservative allocation for Orin Nano shared DRAM model.
+    #   Leaves ~4GB for host OS (ZED SDK, MediaMTX, system daemons).
+    #   If host runs out of memory, kernel will OOM-kill processes.
+    #   
+    #   TO ENABLE: Uncomment the lines below and run:
+    #     docker compose down && docker compose up -d
+    #
+    # cpus: "6"
+    #   Leaves 2 cores (25% of 8-core ARM A78) for host system.
+    #   nvblox + ZED + ROS2 typically use 4-6 cores under load.
+    #
+    # shm_size: "1g"
+    #   Limits /dev/shm for IPC (FastRTPS zero-copy transports).
+    #   Default 8GB on Orin Nano; reduced to 1GB to prevent
+    #   unintended shared memory bloat from dropped ROS2 messages.
+    #
+    # See docs/JETSON_DEPLOYMENT.md § Resource Requirements
+    # ============================================================
+    # UNCOMMENT BELOW TO ENFORCE LIMITS (requires careful testing)
+    # memory: "4g"
+    # cpus: "6"
+    # shm_size: "1g"
     volumes:
-      # Isaac ROS workspace (source + build artifacts persist here)
+      # Isaac ROS workspace (source + build artifacts persist here on host)
+      # CRITICAL: This mount does NOT override /opt/isaac_ros_installed (container layer)
+      # The pre-built isaac_ros_nvblox_utils package in /opt/isaac_ros_installed persists
+      # independently and is always available via ROS_PACKAGE_PATH overlay.
       - /home/mad/workspaces/isaac_ros-dev:/workspaces/isaac_ros-dev
       # ZED SDK runtime libraries (required for camera initialization)
       - /usr/local/zed:/usr/local/zed:ro
