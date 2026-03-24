@@ -186,6 +186,10 @@ class ROSHTTPBridge(Node):
     ):
         super().__init__("nomad_ros_http_bridge")
         
+        # Validate send_rate_hz to prevent divide-by-zero
+        if send_rate_hz <= 0:
+            raise ValueError(f"send_rate_hz must be positive, got {send_rate_hz}")
+        
         self._host = host
         self._port = port
         self._base_url = f"http://{host}:{port}"
@@ -503,7 +507,9 @@ class ROSHTTPBridge(Node):
                 resp = self._http_conn.getresponse()
                 resp.read()  # Drain response to allow connection reuse
                 return resp.status == 200
-            except Exception:
+            except Exception as e:
+                # Log HTTP error before silent failure
+                self.get_logger().warning(f"HTTP POST to {path} failed: {e}")
                 # Reconnect on failure
                 try:
                     self._http_conn.close()
@@ -1227,7 +1233,11 @@ def main():
                         help="ZED custom object detection topic (ObjectsStamped)")
     parser.add_argument("--disable-detections", action="store_true",
                         help="Disable object detection forwarding")
+    
+    # Parse args and validate send_rate_hz early
     args = parser.parse_args()
+    if args.rate <= 0:
+        parser.error(f"--rate must be positive, got {args.rate}")
     
     rclpy.init()
     
@@ -1250,9 +1260,12 @@ def main():
         rclpy.spin(bridge)
     except KeyboardInterrupt:
         pass
-    except Exception:
+    except Exception as e:
+        # Log exception with traceback before swallowing
         # Launch system shutdown can raise ExternalShutdownException from rclpy.
-        pass
+        import traceback
+        logger.error(f"ros_http_bridge crashed: {e}")
+        logger.error(f"Traceback:\n{traceback.format_exc()}")
     finally:
         try:
             stats = bridge.get_stats()

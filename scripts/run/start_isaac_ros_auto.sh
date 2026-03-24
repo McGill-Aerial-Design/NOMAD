@@ -342,32 +342,10 @@ LAUNCH_SCRIPT
 }
 
 # =========================================================================
-# Video Bridge (subscribes to ROS image topics, pushes H264 to MediaMTX)
+# Video Bridge (REMOVED - now launched by Edge Core via /api/video/start)
+# (Previously subscribed to ROS image topics and pushed H264 to MediaMTX)
+# Single owner: Edge Core's VideoStreamManager prevents flapping/duplicates
 # =========================================================================
-launch_video_bridge() {
-    log_info "Launching video bridge..."
-
-    # Kill any existing video bridge to prevent duplicates
-    docker exec "$CONTAINER_NAME" bash -c 'pkill -f simple_video_bridge.py 2>/dev/null || true; sleep 1'
-
-    docker exec -i "$CONTAINER_NAME" tee /tmp/launch_video_bridge.sh > /dev/null << 'VIDEO_SCRIPT'
-#!/bin/bash
-source /opt/ros/humble/setup.bash 2>/dev/null
-source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
-export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH
-sleep 8  # Wait for ZED image topics to be publishing
-python3 /workspaces/isaac_ros-dev/edge_core/ros/simple_video_bridge.py \
-    --source-topic /zed/zed_node/rgb/image_rect_color \
-    --width 1280 --height 720 --fps 30 --bitrate 2000 \
-    --http-port 9200
-VIDEO_SCRIPT
-    docker exec "$CONTAINER_NAME" chmod +x /tmp/launch_video_bridge.sh
-
-    docker exec -d "$CONTAINER_NAME" bash -c \
-        "nohup /tmp/launch_video_bridge.sh > /tmp/video_bridge.log 2>&1 & echo \$! > /tmp/video_bridge.pid"
-
-    log_info "Video bridge launched (logs: /tmp/video_bridge.log inside container)"
-}
 
 # =========================================================================
 # ROS-HTTP Bridge (relays ROS2 data to Edge Core API)
@@ -394,6 +372,16 @@ BRIDGE_SCRIPT
         "nohup /tmp/launch_bridge.sh > /tmp/ros_bridge.log 2>&1 & echo \$! > /tmp/ros_bridge.pid"
 
     log_info "ROS-HTTP bridge launched (logs: /tmp/ros_bridge.log inside container)"
+    
+    # Validate process startup: wait briefly and check PID
+    sleep 2
+    BRIDGE_PID=$(docker exec "$CONTAINER_NAME" cat /tmp/ros_bridge.pid 2>/dev/null)
+    if [ -z "$BRIDGE_PID" ] || ! docker exec "$CONTAINER_NAME" kill -0 "$BRIDGE_PID" 2>/dev/null; then
+        log_error "Failed: ros_http_bridge did not start. Check logs:"
+        docker exec "$CONTAINER_NAME" tail -20 /tmp/ros_bridge.log
+        return 1
+    fi
+    log_info "ros_http_bridge PID $BRIDGE_PID confirmed running"
 }
 
 # =========================================================================
@@ -475,8 +463,7 @@ case "${1:-start}" in
         [ "$ZED_READY" = false ] && log_warn "ZED topics not detected after 30s, continuing..."
 
         launch_ros_http_bridge
-        launch_video_bridge
-        log_info "Isaac ROS startup complete!"
+        log_info "Isaac ROS startup complete! (Video bridge will be started by Edge Core /api/video/start)"
         show_status
         ;;
     stop)    stop_services ;;
