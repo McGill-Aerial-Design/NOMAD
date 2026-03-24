@@ -60,7 +60,7 @@ def generate_launch_description():
     enable_nav2_arg = DeclareLaunchArgument(
         'enable_nav2',
         default_value='false',
-        description='Enable Nav2 stack for Jetson-side obstacle avoidance',
+        description='Enable Nav2 stack for Jetson-side obstacle avoidance (disabled to prevent crashes)',
     )
 
     # Servo TF publisher: publishes servo_mount -> camera_link at 50 Hz
@@ -129,6 +129,7 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(zed_example_launch),
             launch_arguments={
                 'camera': 'zed2',
+                'enable_od': 'false',  # Disable OD to prevent parameter duplication crash
             }.items(),
         ),
         servo_tf_publisher,
