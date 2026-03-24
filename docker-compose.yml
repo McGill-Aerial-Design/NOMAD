@@ -153,7 +153,7 @@ services:
 
         echo '[init] All services launched.';
         wait -n $$NVBLOX_PID $$BRIDGE_PID 2>/dev/null || wait $$NVBLOX_PID;
-        echo '[init] Process exited, container will restart'
+          echo '[init] Process exited, container will restart';
       "
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'source /opt/ros/humble/setup.bash 2>/dev/null; ros2 topic list 2>/dev/null | grep -q zed && curl -sf http://localhost:8000/api/health || exit 1'"]
