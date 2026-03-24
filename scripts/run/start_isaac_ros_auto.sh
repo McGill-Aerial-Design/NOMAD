@@ -284,6 +284,26 @@ launch_zed_nvblox() {
         # Write launch script via stdin to avoid quoting issues with $() and nested "
         docker exec -i "$CONTAINER_NAME" tee /tmp/launch_zed_nvblox.sh > /dev/null << 'LAUNCH_SCRIPT'
 #!/bin/bash
+# Bind uvcvideo driver to ZED camera USB interfaces
+echo "[init] Binding uvcvideo driver to ZED camera..."
+for dev in /sys/bus/usb/devices/*/idVendor; do
+  dir=$(dirname $dev)
+  vid=$(cat $dev 2>/dev/null)
+  if [ "$vid" = "2b03" ]; then
+    for iface in $dir/*:*/bInterfaceClass; do
+      idir=$(dirname $iface)
+      cls=$(cat $iface 2>/dev/null)
+      iname=$(basename $idir)
+      if [ "$cls" = "0e" ] && [ ! -e $idir/driver ]; then
+        echo "[init] Binding uvcvideo to $iname (Video class)"
+        echo $iname > /sys/bus/usb/drivers/uvcvideo/bind 2>/dev/null || true
+      fi
+    done
+  fi
+done
+sleep 1
+ls /dev/video* 2>/dev/null && echo "[init] Video devices ready." || echo "[init] Warning: No /dev/video devices found."
+
 source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH
