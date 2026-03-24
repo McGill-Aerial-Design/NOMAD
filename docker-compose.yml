@@ -115,10 +115,7 @@ services:
           echo '[init] ERROR: ZED not ready after 60 seconds. Check camera connection.';
         fi;
 
-        echo '[init] Launching video bridge...';
-        python3 /workspaces/isaac_ros-dev/edge_core/ros/simple_video_bridge.py > /tmp/video_bridge.log 2>&1 &
-        VIDEO_BRIDGE_PID=$$!;
-        echo $$VIDEO_BRIDGE_PID > /tmp/video_bridge.pid;
+        echo '[init] Note: Video bridge will be launched by Edge Core (VideoStreamManager) via /api/video/start';
 
         echo '[init] Launching ROS-HTTP bridge...';
         python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom > /tmp/ros_bridge.log 2>&1 &

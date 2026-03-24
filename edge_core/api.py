@@ -2179,15 +2179,28 @@ wait
             pass
 
         if container_running:
+            # Check if nvblox launch script is running (primary detection)
             try:
                 result = subprocess.run(
                     ["docker", "exec", "nomad_isaac_ros", "bash", "-c",
-                     "ps aux | grep -v grep | grep -c component_container 2>/dev/null || echo 0"],
+                     "ps aux | grep -v grep | grep -c /tmp/launch_nvblox_bridge.sh 2>/dev/null || echo 0"],
                     capture_output=True, text=True, timeout=5,
                 )
                 nvblox_running = int(result.stdout.strip()) > 0
             except Exception:
                 pass
+            
+            # Fallback: Check if nvblox map topic exists (only present when nvblox is active)
+            if not nvblox_running:
+                try:
+                    result = subprocess.run(
+                        ["docker", "exec", "nomad_isaac_ros", "bash", "-c",
+                         "ros2 topic list 2>/dev/null | grep -q /zed/zed_node/map && echo 1 || echo 0"],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    nvblox_running = result.stdout.strip() == "1"
+                except Exception:
+                    pass
             try:
                 result = subprocess.run(
                     ["docker", "exec", "nomad_isaac_ros", "bash", "-c",
@@ -2201,7 +2214,8 @@ wait
         isaac_bridge = request.app.state.isaac_bridge
         if not isaac_bridge:
             # No Python-side bridge, but the external ROS-HTTP bridge may be active
-            external_bridge_active = container_running and nvblox_running and bridge_running
+            # NOTE: available requires container + bridge, NOT nvblox (supports ZED-only operation)
+            external_bridge_active = container_running and bridge_running
             return {
                 "available": external_bridge_active,
                 "backend": "ros_http_bridge" if external_bridge_active else "not_initialized",
