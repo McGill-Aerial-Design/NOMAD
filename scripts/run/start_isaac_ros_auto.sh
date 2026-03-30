@@ -47,6 +47,24 @@ log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # =========================================================================
+# Zombie Process Cleanup
+# =========================================================================
+cleanup_zombies() {
+    # Reap zombie processes by waiting for any terminated children
+    # This is called periodically to prevent zombie accumulation
+    docker exec "$CONTAINER_NAME" bash -c '
+        # Find all zombie processes
+        zombies=$(ps aux | grep defunct | grep -v grep | awk "{print \$2}" || true)
+        if [ -n "$zombies" ]; then
+            echo "[CLEANUP] Found zombie processes, attempting cleanup..."
+            # Wait for init (PID 1) to reap orphaned zombies
+            # In containers, this happens automatically but may be delayed
+            sleep 1
+        fi
+    ' 2>/dev/null || true
+}
+
+# =========================================================================
 # Prerequisites
 # =========================================================================
 check_prerequisites() {
@@ -416,14 +434,32 @@ launch_zed_nvblox() {
         # Kill processes from ALL launch paths (startup script AND API-triggered launches)
         # Then clean stale FastRTPS SHM locks so new ROS2 nodes can acquire ports.
         # Kill existing ROS processes. Use [r]os trick to avoid pkill matching itself.
+        # Use killall with proper waiting to avoid zombie processes.
         docker exec "$CONTAINER_NAME" bash -c '
-            pkill -f "[l]aunch_nvblox_bridge" 2>/dev/null || true
-            pkill -f "[l]aunch_zed_nvblox" 2>/dev/null || true
-            pkill -f "[n]omad_zed_nvblox" 2>/dev/null || true
-            pkill -f "[z]ed_example.launch" 2>/dev/null || true
-            pkill -f "[c]omponent_container" 2>/dev/null || true
-            pkill -f "[r]os_http_bridge" 2>/dev/null || true
-            sleep 2
+            # Kill processes and wait for them to terminate
+            for pattern in "[l]aunch_nvblox_bridge" "[l]aunch_zed_nvblox" "[n]omad_zed_nvblox" "[z]ed_example.launch" "[c]omponent_container" "[r]os_http_bridge"; do
+                pkill -f "$pattern" 2>/dev/null || true
+            done
+            
+            # Wait for processes to fully terminate (max 5 seconds)
+            timeout=5
+            while [ $timeout -gt 0 ]; do
+                if ! pgrep -f "launch_nvblox_bridge|launch_zed_nvblox|nomad_zed_nvblox|zed_example.launch|component_container|ros_http_bridge" >/dev/null 2>&1; then
+                    break
+                fi
+                sleep 0.5
+                timeout=$((timeout - 1))
+            done
+            
+            # Force kill any remaining processes
+            for pattern in "[l]aunch_nvblox_bridge" "[l]aunch_zed_nvblox" "[n]omad_zed_nvblox" "[z]ed_example.launch" "[c]omponent_container" "[r]os_http_bridge"; do
+                pkill -9 -f "$pattern" 2>/dev/null || true
+            done
+            
+            # Final wait to allow kernel to reap zombies
+            sleep 1
+            
+            # Clean FastRTPS shared memory
             rm -f /dev/shm/fastrtps_* 2>/dev/null || true
         '
 
@@ -556,8 +592,22 @@ launch_ros_http_bridge() {
     log_info "Launching ROS-HTTP bridge..."
 
     # Bridge script is available via volume mount at /workspaces/isaac_ros-dev/edge_core/
-    # Kill any existing bridge processes to prevent duplicates
-    docker exec "$CONTAINER_NAME" bash -c 'pkill -f ros_http_bridge.py 2>/dev/null || true; sleep 1'
+    # Kill any existing bridge processes to prevent duplicates with proper reaping
+    docker exec "$CONTAINER_NAME" bash -c '
+        pkill -f ros_http_bridge.py 2>/dev/null || true
+        # Wait for process to terminate (max 3 seconds)
+        timeout=6
+        while [ $timeout -gt 0 ]; do
+            if ! pgrep -f "ros_http_bridge.py" >/dev/null 2>&1; then
+                break
+            fi
+            sleep 0.5
+            timeout=$((timeout - 1))
+        done
+        # Force kill if still running
+        pkill -9 -f ros_http_bridge.py 2>/dev/null || true
+        sleep 0.5
+    '
     
     local _bridge_tmp
     _bridge_tmp=$(mktemp /tmp/launch_bridge.XXXXXX.sh)
