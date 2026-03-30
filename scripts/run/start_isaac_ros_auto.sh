@@ -417,7 +417,17 @@ launch_zed_nvblox() {
         # camera initialization and Argus resource contention.
         # Kill processes from ALL launch paths (startup script AND API-triggered launches)
         # Then clean stale FastRTPS SHM locks so new ROS2 nodes can acquire ports.
-        docker exec "$CONTAINER_NAME" bash -c 'pkill -f "launch_nvblox_bridge\.sh|launch_zed_nvblox\.sh" 2>/dev/null || true; pkill -f "nomad_zed_nvblox\.launch\.py|zed_example\.launch\.py" 2>/dev/null || true; pkill -f "component_container" 2>/dev/null || true; pkill -f ros_http_bridge 2>/dev/null || true; sleep 2; rm -f /dev/shm/fastrtps_* 2>/dev/null || true'
+        # Kill existing ROS processes. Use [r]os trick to avoid pkill matching itself.
+        docker exec "$CONTAINER_NAME" bash -c '
+            pkill -f "[l]aunch_nvblox_bridge" 2>/dev/null || true
+            pkill -f "[l]aunch_zed_nvblox" 2>/dev/null || true
+            pkill -f "[n]omad_zed_nvblox" 2>/dev/null || true
+            pkill -f "[z]ed_example.launch" 2>/dev/null || true
+            pkill -f "[c]omponent_container" 2>/dev/null || true
+            pkill -f "[r]os_http_bridge" 2>/dev/null || true
+            sleep 2
+            rm -f /dev/shm/fastrtps_* 2>/dev/null || true
+        '
 
         # Write launch script to host temp file, then copy into container.
         # (heredoc + docker exec -i fails when run under nohup/background)
