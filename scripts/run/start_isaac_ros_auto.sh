@@ -451,24 +451,24 @@ export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH
 sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
     /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null
 # Overlay NOMAD nvblox config onto installed base config
-# Performance profile (default): 0.05m voxels, 30Hz depth/mesh, 3D ESDF, 8m radius
-# See config/nvblox_performance.yaml and config/nvblox_indoor.yaml for all parameters
+# Performance profile: 0.10m voxels, 10-15Hz rates, 2D ESDF, 8m radius
+# Tuned for Orin Nano 8GB — see config/nvblox_performance.yaml
 NOMAD_CFG=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml
 NVBLOX_BASE=$(python3 -c "from ament_index_python.packages import get_package_share_directory; print(get_package_share_directory('nvblox_examples_bringup'))" 2>/dev/null)/config/nvblox/nvblox_base.yaml
 if [ -f "$NOMAD_CFG" ] && [ -f "$NVBLOX_BASE" ]; then
-    echo "Applying NOMAD nvblox config (performance profile: 0.05m voxels, 30Hz, 3D ESDF, 8m radius)"
+    echo "Applying NOMAD nvblox config (performance profile: 0.10m voxels, 10-15Hz, 2D ESDF, 8m radius)"
     cp "$NOMAD_CFG" "$NVBLOX_BASE"
 else
     echo "NOMAD config or nvblox base not found, using defaults"
 fi
 # Preflight check: ensure nav2 dependencies are available
 NAV2_PREFLIGHT_OK=true
-if ! docker exec "$CONTAINER_NAME" dpkg -l nav2-bringup 2>/dev/null | grep -q '^ii'; then
-    echo "[WARN] nav2-bringup not installed - nav2 will be disabled"
+if ! dpkg -l ros-humble-nav2-bringup 2>/dev/null | grep -q '^ii'; then
+    echo "[WARN] ros-humble-nav2-bringup not installed - nav2 will be disabled"
     NAV2_PREFLIGHT_OK=false
 fi
-if ! docker exec "$CONTAINER_NAME" dpkg -l nvblox-nav-plugins 2>/dev/null | grep -q '^ii'; then
-    echo "[WARN] nvblox-nav-plugins not installed - nav2 costmap will be unavailable"
+if ! ros2 pkg list 2>/dev/null | grep -q nvblox_nav2; then
+    echo "[WARN] nvblox nav2 plugins not found - nav2 costmap will be unavailable"
     NAV2_PREFLIGHT_OK=false
 fi
 

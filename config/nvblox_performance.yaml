@@ -1,8 +1,8 @@
 # ==============================================================
-# NOMAD nvblox 3D LOW-LATENCY Configuration
-# 
-# Optimized for SPEED + 3D on Jetson Orin Nano (8GB shared RAM)
-# 15cm voxels, 8m radius to stay within GPU memory budget
+# NOMAD nvblox 3D Configuration
+#
+# Tuned for Jetson Orin Nano (8GB shared CPU+GPU RAM)
+# 10cm voxels, 2D ESDF, 10Hz rates, 8m radius — stable under memory pressure
 # ==============================================================
 
 /**:
@@ -11,32 +11,32 @@
     cuda_stream_type: 2
 
     # ==============================================================
-    # VOXEL SIZE - 5cm for detailed Mission Planner 3D visualization
-    # Smaller = more detail but more GPU memory
+    # VOXEL SIZE - 10cm balances detail vs GPU memory on 8GB shared
+    # 5cm OOMs on Orin Nano; 15cm is too coarse for target placement
     # ==============================================================
-    voxel_size: 0.05  # 5cm voxels
-    
+    voxel_size: 0.10  # 10cm voxels
+
     # static_tsdf for 3D mesh generation
     mapping_type: "static_tsdf"
-    
-    # 3D ESDF for full volumetric mapping
-    esdf_mode: "3d"
+
+    # 2D ESDF — 3D ESDF doubles GPU memory usage, not needed for drone nav
+    esdf_mode: "2d"
 
     # ==============================================================
-    # SPEED SETTINGS with 3D enabled
-    # High-rate settings for smoother world-view updates in Mission Planner
+    # RATE SETTINGS — conservative for 8GB Orin Nano
+    # 30Hz was causing OOM; 10-15Hz is stable and still responsive
     # ==============================================================
-    tick_period_ms: 10
-    integrate_depth_rate_hz: 30.0    # target 30Hz world updates
-    integrate_color_rate_hz: 10.0    # keep color lower than depth to reduce GPU load
+    tick_period_ms: 30
+    integrate_depth_rate_hz: 15.0    # 15Hz depth integration
+    integrate_color_rate_hz: 5.0     # color is less critical
     integrate_lidar_rate_hz: 0.0
-    update_mesh_rate_hz: 30.0        # target 30Hz mesh updates
-    update_esdf_rate_hz: 15.0        # keep ESDF responsive without maxing GPU
-    publish_layer_rate_hz: 30.0      # target 30Hz layer publishing
-    publish_debug_vis_rate_hz: 2.0
+    update_mesh_rate_hz: 10.0        # 10Hz mesh updates
+    update_esdf_rate_hz: 10.0        # 10Hz ESDF
+    publish_layer_rate_hz: 10.0      # 10Hz layer publishing
+    publish_debug_vis_rate_hz: 1.0
     decay_tsdf_rate_hz: 1.0          # slow decay to free old blocks
     decay_dynamic_occupancy_rate_hz: 0.0
-    clear_map_outside_radius_rate_hz: 1.0  # more aggressive map clearing
+    clear_map_outside_radius_rate_hz: 1.0
 
     # Misc
     num_cameras: 1
