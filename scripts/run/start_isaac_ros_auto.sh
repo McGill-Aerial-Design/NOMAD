@@ -442,9 +442,11 @@ done
 sleep 1
 ls /dev/video* 2>/dev/null && echo "[init] Video devices ready." || echo "[init] Warning: No /dev/video devices found."
 
+# Set LD_LIBRARY_PATH BEFORE sourcing setup.bash so ROS libraries are found
+export LD_LIBRARY_PATH=/opt/ros/humble/lib:/usr/local/zed/lib:${LD_LIBRARY_PATH:-}
 source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
-export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH
+export EGL_PLATFORM=device
 # Patch ZED publish resolution to native 720p
 sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
     /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null
@@ -513,9 +515,10 @@ launch_zed_only() {
 
     docker exec -i "$CONTAINER_NAME" tee /tmp/launch_zed_only.sh > /dev/null << 'LAUNCH_SCRIPT'
 #!/bin/bash
+export LD_LIBRARY_PATH=/opt/ros/humble/lib:/usr/local/zed/lib:${LD_LIBRARY_PATH:-}
 source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
-export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH
+export EGL_PLATFORM=device
 # Patch ZED publish resolution to native 720p
 sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
     /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null
@@ -547,6 +550,7 @@ launch_ros_http_bridge() {
     
     docker exec -i "$CONTAINER_NAME" tee /tmp/launch_bridge.sh > /dev/null << 'BRIDGE_SCRIPT'
 #!/bin/bash
+export LD_LIBRARY_PATH=/opt/ros/humble/lib:/usr/local/zed/lib:${LD_LIBRARY_PATH:-}
 source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 # Wait for ZED node to fully start and DDS discovery to complete
