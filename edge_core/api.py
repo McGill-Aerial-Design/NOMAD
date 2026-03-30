@@ -2250,26 +2250,28 @@ wait
             pass
 
         if container_running:
-            # Check if nvblox launch script is running (primary detection)
+            # Check if nvblox is running by looking for nvblox_node topics
+            # These topics only exist when nvblox is actively running
             try:
                 result = subprocess.run(
                     ["docker", "exec", "nomad_isaac_ros", "bash", "-c",
-                     "ps aux | grep -v grep | grep -c /tmp/launch_nvblox_bridge.sh 2>/dev/null || echo 0"],
-                    capture_output=True, text=True, timeout=5,
+                     "source /opt/ros/humble/setup.bash 2>/dev/null; "
+                     "ros2 topic list 2>/dev/null | grep -q /nvblox_node/mesh && echo 1 || echo 0"],
+                    capture_output=True, text=True, timeout=8,
                 )
-                nvblox_running = int(result.stdout.strip()) > 0
+                nvblox_running = result.stdout.strip() == "1"
             except Exception:
                 pass
             
-            # Fallback: Check if nvblox map topic exists (only present when nvblox is active)
+            # Fallback: Check if component_container_mt with nvblox is running
             if not nvblox_running:
                 try:
                     result = subprocess.run(
                         ["docker", "exec", "nomad_isaac_ros", "bash", "-c",
-                         "ros2 topic list 2>/dev/null | grep -q /zed/zed_node/map && echo 1 || echo 0"],
+                         "ps aux | grep -v grep | grep -c 'nvblox_container\\|launch_zed_nvblox' 2>/dev/null || echo 0"],
                         capture_output=True, text=True, timeout=5,
                     )
-                    nvblox_running = result.stdout.strip() == "1"
+                    nvblox_running = int(result.stdout.strip()) > 0
                 except Exception:
                     pass
             try:
