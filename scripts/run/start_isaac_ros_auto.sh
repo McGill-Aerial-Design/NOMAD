@@ -419,8 +419,11 @@ launch_zed_nvblox() {
         # Then clean stale FastRTPS SHM locks so new ROS2 nodes can acquire ports.
         docker exec "$CONTAINER_NAME" bash -c 'pkill -f "launch_nvblox_bridge\.sh|launch_zed_nvblox\.sh" 2>/dev/null || true; pkill -f "nomad_zed_nvblox\.launch\.py|zed_example\.launch\.py" 2>/dev/null || true; pkill -f "component_container" 2>/dev/null || true; pkill -f ros_http_bridge 2>/dev/null || true; sleep 2; rm -f /dev/shm/fastrtps_* 2>/dev/null || true'
 
-        # Write launch script via stdin to avoid quoting issues with $() and nested "
-        docker exec -i "$CONTAINER_NAME" tee /tmp/launch_zed_nvblox.sh > /dev/null << 'LAUNCH_SCRIPT'
+        # Write launch script to host temp file, then copy into container.
+        # (heredoc + docker exec -i fails when run under nohup/background)
+        local _launch_tmp
+        _launch_tmp=$(mktemp /tmp/launch_zed_nvblox.XXXXXX.sh)
+        cat > "$_launch_tmp" << 'LAUNCH_SCRIPT'
 #!/bin/bash
 # Bind uvcvideo driver to ZED camera USB interfaces
 echo "[init] Binding uvcvideo driver to ZED camera..."
@@ -498,6 +501,8 @@ if [ "$NAV2_PREFLIGHT_OK" = true ]; then
     fi
 fi
 LAUNCH_SCRIPT
+        docker cp "$_launch_tmp" "$CONTAINER_NAME:/tmp/launch_zed_nvblox.sh"
+        rm -f "$_launch_tmp"
         docker exec "$CONTAINER_NAME" chmod +x /tmp/launch_zed_nvblox.sh
 
         docker exec -d "$CONTAINER_NAME" bash -c \
@@ -513,7 +518,9 @@ LAUNCH_SCRIPT
 launch_zed_only() {
     log_info "Launching ZED wrapper only (camera_model:=zed2i)..."
 
-    docker exec -i "$CONTAINER_NAME" tee /tmp/launch_zed_only.sh > /dev/null << 'LAUNCH_SCRIPT'
+    local _zed_tmp
+    _zed_tmp=$(mktemp /tmp/launch_zed_only.XXXXXX.sh)
+    cat > "$_zed_tmp" << 'LAUNCH_SCRIPT'
 #!/bin/bash
 export LD_LIBRARY_PATH=/opt/ros/humble/lib:/usr/local/zed/lib:${LD_LIBRARY_PATH:-}
 source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash 2>/dev/null
@@ -524,6 +531,8 @@ sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
     /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null
 ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i
 LAUNCH_SCRIPT
+    docker cp "$_zed_tmp" "$CONTAINER_NAME:/tmp/launch_zed_only.sh"
+    rm -f "$_zed_tmp"
     docker exec "$CONTAINER_NAME" chmod +x /tmp/launch_zed_only.sh
 
     docker exec -d "$CONTAINER_NAME" bash -c \
@@ -548,7 +557,9 @@ launch_ros_http_bridge() {
     # Kill any existing bridge processes to prevent duplicates
     docker exec "$CONTAINER_NAME" bash -c 'pkill -f ros_http_bridge.py 2>/dev/null || true; sleep 1'
     
-    docker exec -i "$CONTAINER_NAME" tee /tmp/launch_bridge.sh > /dev/null << 'BRIDGE_SCRIPT'
+    local _bridge_tmp
+    _bridge_tmp=$(mktemp /tmp/launch_bridge.XXXXXX.sh)
+    cat > "$_bridge_tmp" << 'BRIDGE_SCRIPT'
 #!/bin/bash
 export LD_LIBRARY_PATH=/opt/ros/humble/lib:/usr/local/zed/lib:${LD_LIBRARY_PATH:-}
 source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash 2>/dev/null
@@ -558,6 +569,8 @@ source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 sleep 30
 python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom
 BRIDGE_SCRIPT
+    docker cp "$_bridge_tmp" "$CONTAINER_NAME:/tmp/launch_bridge.sh"
+    rm -f "$_bridge_tmp"
     docker exec "$CONTAINER_NAME" chmod +x /tmp/launch_bridge.sh
 
     docker exec -d "$CONTAINER_NAME" bash -c \
