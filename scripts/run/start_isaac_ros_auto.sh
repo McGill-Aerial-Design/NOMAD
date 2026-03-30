@@ -487,20 +487,13 @@ if ! ros2 pkg list 2>/dev/null | grep -q nvblox_nav2; then
     NAV2_PREFLIGHT_OK=false
 fi
 
-# Use custom NOMAD launch file with YOLO object detection and nav2 enabled
-NOMAD_LAUNCH=/workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py
-if [ -f "$NOMAD_LAUNCH" ]; then
-    echo "Launching with NOMAD custom OD launch file (nav2 enabled)"
-    if [ "$NAV2_PREFLIGHT_OK" = true ]; then
-        ros2 launch "$NOMAD_LAUNCH" enable_nav2:=true
-    else
-        echo "[WARN] Nav2 preflight check failed - falling back to nav2 disabled"
-        ros2 launch "$NOMAD_LAUNCH" enable_nav2:=false
-    fi
-else
-    echo "NOMAD launch file not found, falling back to stock launch (no OD, nav2 disabled)"
-    ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2
-fi
+# Use stock nvblox launch (ZED + nvblox only).
+# The NOMAD custom launch (nomad_zed_nvblox.launch.py) adds servo TF,
+# obstacle bridge, and Nav2 — but those require Edge Core at 172.17.0.1:8000.
+# If any helper process dies, ros2 launch kills the entire launch group.
+# TODO: Make NOMAD launch resilient to Edge Core being unavailable.
+echo "Launching stock ZED + nvblox (no Nav2, no helpers)"
+ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2
 
 # Post-launch validation: confirm nav2 lifecycle nodes are running (give 5s for startup)
 if [ "$NAV2_PREFLIGHT_OK" = true ]; then
