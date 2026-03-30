@@ -487,13 +487,13 @@ if ! ros2 pkg list 2>/dev/null | grep -q nvblox_nav2; then
     NAV2_PREFLIGHT_OK=false
 fi
 
-# Use stock nvblox launch (ZED + nvblox only).
-# The NOMAD custom launch (nomad_zed_nvblox.launch.py) adds servo TF,
-# obstacle bridge, and Nav2 — but those require Edge Core at 172.17.0.1:8000.
-# If any helper process dies, ros2 launch kills the entire launch group.
-# TODO: Make NOMAD launch resilient to Edge Core being unavailable.
-echo "Launching stock ZED + nvblox (no Nav2, no helpers)"
-ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2
+# Launch ZED camera standalone (no nvblox composable container).
+# Running ZED + nvblox in the same component_container_mt causes CUDA
+# conflicts (cudaErrorIllegalAddress). ZED standalone provides all topics
+# needed for HSV detection: images, depth, odom, camera_info.
+# TODO: Launch nvblox in a separate process once CUDA conflict is resolved.
+echo "Launching ZED camera standalone..."
+ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i
 
 # Post-launch validation: confirm nav2 lifecycle nodes are running (give 5s for startup)
 if [ "$NAV2_PREFLIGHT_OK" = true ]; then
