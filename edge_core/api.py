@@ -345,12 +345,12 @@ def create_app(state_manager: StateManager) -> FastAPI:
     app.state.vio_trajectory_max_points: int = 1000  # Keep last N points
     app.state.exclusion_map: list[dict] = []
 
-    # Object detection state (YOLO26 circle detection via ZED custom OD)
+    # Object detection state (HSV circle detection via ZED custom OD)
     app.state.detected_objects: list[dict] = []  # Current frame detections
     app.state.detection_history: list[dict] = []  # Persistent detected targets with 3D positions
     app.state.detection_history_max: int = 200  # Max persistent detections to keep
     app.state.detection_last_update: float = 0.0
-    app.state.yolo26_enabled: bool = True  # Desired ZED OD mode for circle detection
+    app.state.detection_enabled: bool = True  # Desired ZED OD mode for circle detection
 
     def _launch_nvblox_bridge_with_od(enable_od: bool) -> dict:
         """
@@ -412,7 +412,7 @@ ENABLE_OD={od_value}
 CUSTOM_OD=/workspaces/isaac_ros-dev/config/custom_circle_detection.yaml
 ZED_COMMON=/workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/sensors/zed_common.yaml
 
-# Only merge YOLO26 OD config when object detection is enabled
+# Only merge custom OD config when object detection is enabled
 if [ "$ENABLE_OD" = "true" ] && [ -f "$CUSTOM_OD" ] && [ -f "$ZED_COMMON" ]; then
     python3 << 'PYEOF2'
 import yaml
@@ -455,7 +455,7 @@ try:
 
     with open(common_path, 'w') as f:
         yaml.safe_dump(common, f, default_flow_style=False, sort_keys=False)
-    print("Applied custom YOLO26 OD config with custom_onnx_file")
+    print("Applied custom OD config with custom_onnx_file")
 except Exception as e:
     print("Custom OD merge ERROR: " + str(e))
 PYEOF2
@@ -533,8 +533,8 @@ wait
 
             return {
                 "success": True,
-                "message": f"nvblox + ROS-HTTP bridge launching with YOLO26 {mode_text}. ZED init takes ~15s.",
-                "yolo26_enabled": enable_od,
+                "message": f"nvblox + ROS-HTTP bridge launching with circle detection {mode_text}. ZED init takes ~15s.",
+                "detection_enabled": enable_od,
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -2420,7 +2420,7 @@ wait
         """
         result = _launch_nvblox_bridge_with_od(enable_od=True)
         if result.get("success"):
-            request.app.state.yolo26_enabled = True
+            request.app.state.detection_enabled = True
             request.app.state.detection_last_update = 0.0
         return result
 
@@ -2610,19 +2610,19 @@ wait
             return {"success": True, "cleared": count}
 
     # ==================== Object Detection Endpoints ====================
-    # YOLO26 circle detection via ZED custom OD pipeline
+    # HSV circle detection via ZED custom OD pipeline
     # Detections are received from ros_http_bridge and served to Mission Planner
 
     @app.post("/api/detections/start", tags=["Detections"])
     async def start_detections(request: Request):
         """
-        Start YOLO26 circle detection by relaunching nvblox with OD enabled.
+        Start HSV circle detection by relaunching nvblox with OD enabled.
 
         This keeps launch behavior consistent with NOMAD's custom launch file.
         """
         result = _launch_nvblox_bridge_with_od(enable_od=True)
         if result.get("success"):
-            request.app.state.yolo26_enabled = True
+            request.app.state.detection_enabled = True
             request.app.state.detection_last_update = 0.0
             request.app.state.detected_objects = []
         return result
@@ -2630,20 +2630,20 @@ wait
     @app.post("/api/detections/stop", tags=["Detections"])
     async def stop_detections(request: Request):
         """
-        Stop YOLO26 detection by relaunching nvblox with OD disabled.
+        Stop HSV detection by relaunching nvblox with OD disabled.
 
         nvblox mapping remains available; only custom object detection is disabled.
         """
         result = _launch_nvblox_bridge_with_od(enable_od=False)
         if result.get("success"):
-            request.app.state.yolo26_enabled = False
+            request.app.state.detection_enabled = False
             request.app.state.detection_last_update = 0.0
             request.app.state.detected_objects = []
         return result
 
     @app.get("/api/detections/status", tags=["Detections"])
     async def get_detections_status(request: Request):
-        """Get YOLO26 runtime status for Mission Planner service control polling."""
+        """Get circle detection runtime status for Mission Planner service control polling."""
         import time as _time
 
         last_update = request.app.state.detection_last_update
@@ -2651,7 +2651,7 @@ wait
         fresh_stream = age_seconds is not None and age_seconds <= 3.0
 
         return {
-            "yolo26_enabled": bool(getattr(request.app.state, "yolo26_enabled", True)),
+            "detection_enabled": bool(getattr(request.app.state, "detection_enabled", True)),
             "fresh_stream": fresh_stream,
             "age_seconds": age_seconds,
             "current_count": len(request.app.state.detected_objects),
@@ -2672,7 +2672,7 @@ wait
         
         request.app.state.detected_objects = detections
         request.app.state.detection_last_update = _time.time()
-        request.app.state.yolo26_enabled = True
+        request.app.state.detection_enabled = True
         
         # Add to persistent history (deduplicate by proximity)
         history = request.app.state.detection_history

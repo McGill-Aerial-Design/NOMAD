@@ -94,7 +94,7 @@ except ImportError:
     MARKER_AVAILABLE = False
     logger.warning("visualization_msgs not available - per-voxel mesh disabled")
 
-# ZED object detection messages (custom circle detection via YOLO26)
+# ZED object detection messages (custom circle detection via HSV)
 try:
     from zed_interfaces.msg import ObjectsStamped
     ZED_OD_AVAILABLE = True
@@ -143,7 +143,7 @@ class VelocityCommand:
 
 @dataclass
 class DetectedObject:
-    """Detected object from ZED custom OD (YOLO26 circle detection)."""
+    """Detected object from HSV circle detection."""
     timestamp: float
     label: str           # Class label (e.g. 'red_circle')
     label_id: int        # Class ID
@@ -163,14 +163,14 @@ class DetectedObject:
     bbox_h: float = 0.0   # height in pixels
     # Tracking state: 0=OFF, 1=OK, 2=SEARCHING, 3=TERMINATE
     tracking_state: int = 0
-    # HSV color verification (TD-005)
+    # HSV color verification
     hsv_color: str = ""          # HSV-derived color label (e.g. 'red', 'blue')
-    color_match: bool = True     # True if YOLO and HSV agree
-    needs_review: bool = False   # True if YOLO and HSV disagree
+    color_match: bool = True     # True if color is verified
+    needs_review: bool = False   # True if color verification failed
 
 
 def _hsv_color_to_id(color: str) -> int:
-    """Map HSV color name to a class ID matching YOLO26 convention."""
+    """Map HSV color name to a class ID."""
     return {"black": 0, "blue": 1, "green": 2, "red": 3, "white": 4, "yellow": 5}.get(color, -1)
 
 
@@ -315,7 +315,7 @@ class ROSHTTPBridge(Node):
             )
             self.get_logger().info(f"Subscribed to servo angle: {servo_topic}")
         
-        # Subscribe to ZED custom object detections (YOLO26 circle detection)
+        # Subscribe to ZED custom object detections (HSV circle detection)
         if self._enable_detections:
             self.create_subscription(
                 ObjectsStamped,
@@ -327,8 +327,8 @@ class ROSHTTPBridge(Node):
         elif enable_detections and not ZED_OD_AVAILABLE:
             self.get_logger().warning("Detections requested but zed_interfaces not available")
         
-        # Subscribe to camera image for HSV color verification (TD-005) and
-        # standalone HSV circle detection (no YOLO26 dependency)
+        # Subscribe to camera image for HSV color verification and
+        # standalone HSV circle detection
         self._latest_image = None  # Raw image bytes (RGB8)
         self._image_width = 0
         self._image_height = 0
@@ -356,7 +356,7 @@ class ROSHTTPBridge(Node):
             )
             self.get_logger().info(f"Subscribed to camera image: {image_topic}")
             if self._enable_hsv_circles:
-                self.get_logger().info("HSV circle detection ENABLED (standalone, no YOLO26)")
+                self.get_logger().info("HSV circle detection ENABLED (standalone)")
             else:
                 self.get_logger().warning("HSV circle detection disabled (cv2 not available)")
 
@@ -749,9 +749,9 @@ class ROSHTTPBridge(Node):
         """
         Run standalone HSV circle detection on the camera image.
 
-        This replaces YOLO26 for circle detection. Uses OpenCV HoughCircles
-        to find circles, then classifies their color using HSV analysis.
-        Results are sent to Edge Core as DetectedObject entries.
+        Uses OpenCV HoughCircles to find circles, then classifies their
+        color using HSV analysis. Results are sent to Edge Core as
+        DetectedObject entries.
         """
         if not CV2_AVAILABLE:
             return
@@ -797,7 +797,17 @@ class ROSHTTPBridge(Node):
             ], dtype=np.float32)
 
             # Import and run the HSV circle detector
-            from edge_core.hsv_circle_detector import detect_circles_hsv
+            # Use try-except to handle both installed package and standalone script scenarios
+            try:
+                from edge_core.hsv_circle_detector import detect_circles_hsv
+            except ImportError:
+                # Fallback: try direct import when running in container without edge_core package
+                import sys
+                import os
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                if script_dir not in sys.path:
+                    sys.path.insert(0, script_dir)
+                from hsv_circle_detector import detect_circles_hsv
 
             circles = detect_circles_hsv(
                 image_bgr,
@@ -964,14 +974,12 @@ class ROSHTTPBridge(Node):
 
     def _handle_detections(self, msg) -> None:
         """
-        Handle ZED custom object detections (YOLO26 circle detection).
+        Handle ZED custom object detections (HSV circle detection).
 
-        The ZED SDK runs the ONNX model with TensorRT, detects colored circles,
-        and provides 3D positions via stereo depth. This handler converts the
-        zed_interfaces/ObjectsStamped message into DetectedObject dataclasses
-        and forwards them to Edge Core.
+        Converts the zed_interfaces/ObjectsStamped message into DetectedObject
+        dataclasses and forwards them to Edge Core.
 
-        TD-003: Uses image capture timestamp from message header, not inference
+        Uses image capture timestamp from message header, not inference
         completion time, to avoid TF lookup errors due to inference latency.
         """
         if not self._enable_detections:

@@ -670,32 +670,6 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Start YOLO26 circle detection (Task 1) on Jetson.
-        /// Relaunches nvblox stack with custom OD enabled.
-        /// </summary>
-        public async Task<CommandResult> StartYolo26Async()
-        {
-            return await SendHttpPostLongRun("/api/detections/start", null);
-        }
-
-        /// <summary>
-        /// Stop YOLO26 circle detection while keeping nvblox active.
-        /// Relaunches nvblox stack with custom OD disabled.
-        /// </summary>
-        public async Task<CommandResult> StopYolo26Async()
-        {
-            return await SendHttpPostLongRun("/api/detections/stop", null);
-        }
-
-        /// <summary>
-        /// Get YOLO26 detection status (enabled + freshness + detection count).
-        /// </summary>
-        public async Task<CommandResult> GetYolo26StatusAsync()
-        {
-            return await SendHttpGet("/api/detections/status");
-        }
-
-        /// <summary>
         /// Get Isaac ROS logs.
         /// </summary>
         public async Task<CommandResult> GetIsaacRosLogsAsync(string logType = "all")
