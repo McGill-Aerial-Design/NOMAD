@@ -298,19 +298,19 @@ install_dependencies() {
 build_packages() {
     log_info "Building ROS2 packages..."
 
-    # --- isaac_ros_nvblox_utils (MANDATORY - required by nvblox) ---
-    if docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP; $WS_SETUP; ros2 pkg list 2>/dev/null | grep -q isaac_ros_nvblox_utils"; then
-        log_info "isaac_ros_nvblox_utils already built"
+    # --- nvblox_ros (check it's available) ---
+    if docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP; $WS_SETUP; ros2 pkg list 2>/dev/null | grep -q nvblox_ros"; then
+        log_info "nvblox_ros already built"
     else
         if docker exec "$CONTAINER_NAME" test -d /workspaces/isaac_ros-dev/src/isaac_ros_nvblox; then
-            log_info "Building isaac_ros_nvblox_utils (required dependency)..."
+            log_info "Building nvblox packages (first time may take 10-30 minutes)..."
             docker exec "$CONTAINER_NAME" bash -c "
                 $ROS_SETUP
                 cd /workspaces/isaac_ros-dev
-                colcon build --packages-select isaac_ros_nvblox_utils --symlink-install --cmake-args -Wno-dev 2>&1
+                colcon build --packages-up-to nvblox_examples_bringup --symlink-install --cmake-args -Wno-dev 2>&1
             " 2>&1 | tail -10
         else
-            log_warn "isaac_ros_nvblox source not found -- skipping host build (using container image pre-built version)"
+            log_warn "nvblox source not found -- skipping build"
         fi
     fi
 
@@ -350,7 +350,7 @@ build_packages() {
 validate_nav2_config() {
     local nav2_params_file="/workspaces/isaac_ros-dev/config/nav2_drone.yaml"
     local goal_bridge="/workspaces/isaac_ros-dev/edge_core/ros/nav2_goal_bridge.py"
-    local bt_xml="/opt/ros/humble/share/nav2_bringup/bringup/params/bt.xml"
+    local bt_xml="/opt/ros/humble/share/nav2_bt_navigator/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml"
     
     log_info "Validating Nav2 configuration before launch..."
     
@@ -402,12 +402,10 @@ validate_nav2_config() {
 # Launch ZED + nvblox
 # =========================================================================
 launch_zed_nvblox() {
-    # PREFLIGHT: isaac_ros_nvblox_utils MUST be available (hard fail if missing)
-    # This package is built into /opt/isaac_ros_installed and persists across container restarts.
-    if ! docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP; ros2 pkg list 2>/dev/null | grep -q isaac_ros_nvblox_utils"; then
-        log_error "FATAL: isaac_ros_nvblox_utils package not found in container"
-        log_error "This package must be pre-built in the Docker image at /opt/isaac_ros_installed"
-        log_error "Rebuild the Docker image with: docker compose build isaac-ros"
+    # PREFLIGHT: nvblox_ros MUST be available (hard fail if missing)
+    if ! docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP; $WS_SETUP; ros2 pkg list 2>/dev/null | grep -q nvblox_ros"; then
+        log_error "FATAL: nvblox_ros package not found in container"
+        log_error "Build it with: colcon build --packages-up-to nvblox_examples_bringup"
         exit 1
     fi
 
