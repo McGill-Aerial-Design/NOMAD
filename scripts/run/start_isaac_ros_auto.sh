@@ -29,8 +29,8 @@ else
     IMAGE_NAME="isaac_ros_dev-aarch64"
 fi
 
-# ZED ROS2 wrapper branch matching ZED SDK 4.1
-ZED_WRAPPER_BRANCH="humble-v4.1.4"
+# ZED ROS2 wrapper branch matching ZED SDK 5.2
+ZED_WRAPPER_BRANCH="v5.2.0"
 
 # Standard ROS2 setup for the official Isaac ROS image
 ROS_SETUP="source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash 2>/dev/null"
@@ -487,13 +487,10 @@ if ! ros2 pkg list 2>/dev/null | grep -q nvblox_nav2; then
     NAV2_PREFLIGHT_OK=false
 fi
 
-# Launch ZED camera standalone (no nvblox composable container).
-# Running ZED + nvblox in the same component_container_mt causes CUDA
-# conflicts (cudaErrorIllegalAddress). ZED standalone provides all topics
-# needed for HSV detection: images, depth, odom, camera_info.
-# TODO: Launch nvblox in a separate process once CUDA conflict is resolved.
-echo "Launching ZED camera standalone..."
-ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i
+# Launch ZED + nvblox using the official example launch file.
+# With ZED SDK 5.2, the CUDA conflict (cudaErrorIllegalAddress) should be resolved.
+echo "Launching ZED + nvblox (zed_example.launch.py camera:=zed2)..."
+ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2
 
 # Post-launch validation: confirm nav2 lifecycle nodes are running (give 5s for startup)
 if [ "$NAV2_PREFLIGHT_OK" = true ]; then
