@@ -48,12 +48,22 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped, Twist
 from std_msgs.msg import Float32, Float32MultiArray
 
-# sensor_msgs for HSV color verification (TD-005)
+# sensor_msgs for HSV color verification (TD-005) and HSV circle detection
 try:
     from sensor_msgs.msg import Image
     IMAGE_AVAILABLE = True
 except ImportError:
     IMAGE_AVAILABLE = False
+
+# OpenCV + numpy for standalone HSV circle detection
+try:
+    import cv2
+    import numpy as np
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+    logger = logging.getLogger("ros_http_bridge")
+    # logger not yet created, will warn later
 
 # TF2 for camera pose lookup
 try:
@@ -157,6 +167,11 @@ class DetectedObject:
     hsv_color: str = ""          # HSV-derived color label (e.g. 'red', 'blue')
     color_match: bool = True     # True if YOLO and HSV agree
     needs_review: bool = False   # True if YOLO and HSV disagree
+
+
+def _hsv_color_to_id(color: str) -> int:
+    """Map HSV color name to a class ID matching YOLO26 convention."""
+    return {"black": 0, "blue": 1, "green": 2, "red": 3, "white": 4, "yellow": 5}.get(color, -1)
 
 
 class ROSHTTPBridge(Node):
@@ -312,12 +327,21 @@ class ROSHTTPBridge(Node):
         elif enable_detections and not ZED_OD_AVAILABLE:
             self.get_logger().warning("Detections requested but zed_interfaces not available")
         
-        # Subscribe to camera image for HSV color verification (TD-005)
+        # Subscribe to camera image for HSV color verification (TD-005) and
+        # standalone HSV circle detection (no YOLO26 dependency)
         self._latest_image = None  # Raw image bytes (RGB8)
         self._image_width = 0
         self._image_height = 0
         self._image_lock = threading.Lock()
-        if self._enable_detections and IMAGE_AVAILABLE:
+
+        # HSV circle detection state
+        self._enable_hsv_circles = CV2_AVAILABLE and IMAGE_AVAILABLE
+        self._hsv_circle_interval = 0.5  # Run HSV circle detection at 2 Hz
+        self._last_hsv_circle_time = 0.0
+        self._hsv_circle_send_count = 0
+
+        # Subscribe to camera image for both HSV verification and circle detection
+        if IMAGE_AVAILABLE:
             image_topic = "/zed/zed_node/rgb/image_rect_color"
             image_qos = QoSProfile(
                 reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -330,7 +354,31 @@ class ROSHTTPBridge(Node):
                 self._handle_image,
                 image_qos,
             )
-            self.get_logger().info(f"Subscribed to camera image for HSV verification: {image_topic}")
+            self.get_logger().info(f"Subscribed to camera image: {image_topic}")
+            if self._enable_hsv_circles:
+                self.get_logger().info("HSV circle detection ENABLED (standalone, no YOLO26)")
+            else:
+                self.get_logger().warning("HSV circle detection disabled (cv2 not available)")
+
+        # Subscribe to depth image for 3D position of HSV-detected circles
+        self._latest_depth = None
+        self._depth_lock = threading.Lock()
+        if IMAGE_AVAILABLE and self._enable_hsv_circles:
+            depth_topic = "/zed/zed_node/depth/depth_registered"
+            self.create_subscription(
+                Image,
+                depth_topic,
+                self._handle_depth,
+                image_qos,
+            )
+            self.get_logger().info(f"Subscribed to depth image: {depth_topic}")
+
+        # ZED camera intrinsics (will be populated from camera_info if available)
+        # Default ZED 2i HD720 intrinsics as fallback
+        self._camera_fx = 528.0
+        self._camera_fy = 528.0
+        self._camera_cx = 640.0
+        self._camera_cy = 360.0
 
         # TF2 buffer for camera pose lookup
         self._tf_buffer = None
@@ -673,14 +721,135 @@ class ROSHTTPBridge(Node):
             self.get_logger().error(f"Servo send error: {e}")
     
     def _handle_image(self, msg: 'Image') -> None:
-        """Store latest camera image for HSV color verification (TD-005)."""
+        """Store latest camera image for HSV color verification and circle detection."""
         try:
             with self._image_lock:
                 self._latest_image = bytes(msg.data)
                 self._image_width = msg.width
                 self._image_height = msg.height
+
+            # Run standalone HSV circle detection at configured rate
+            if self._enable_hsv_circles:
+                now = time.time()
+                if now - self._last_hsv_circle_time >= self._hsv_circle_interval:
+                    self._last_hsv_circle_time = now
+                    self._run_hsv_circle_detection(msg)
         except Exception:
             pass
+
+    def _handle_depth(self, msg: 'Image') -> None:
+        """Store latest depth image for 3D position of HSV-detected circles."""
+        try:
+            with self._depth_lock:
+                self._latest_depth = msg
+        except Exception:
+            pass
+
+    def _run_hsv_circle_detection(self, img_msg: 'Image') -> None:
+        """
+        Run standalone HSV circle detection on the camera image.
+
+        This replaces YOLO26 for circle detection. Uses OpenCV HoughCircles
+        to find circles, then classifies their color using HSV analysis.
+        Results are sent to Edge Core as DetectedObject entries.
+        """
+        if not CV2_AVAILABLE:
+            return
+
+        try:
+            # Convert ROS Image to numpy BGR
+            w = img_msg.width
+            h = img_msg.height
+            encoding = img_msg.encoding if hasattr(img_msg, 'encoding') else 'rgb8'
+
+            img_data = np.frombuffer(bytes(img_msg.data), dtype=np.uint8)
+
+            if 'bgra' in encoding.lower():
+                img_data = img_data.reshape((h, w, 4))
+                image_bgr = cv2.cvtColor(img_data, cv2.COLOR_BGRA2BGR)
+            elif 'bgr' in encoding.lower():
+                img_data = img_data.reshape((h, w, 3))
+                image_bgr = img_data
+            elif 'rgba' in encoding.lower():
+                img_data = img_data.reshape((h, w, 4))
+                image_bgr = cv2.cvtColor(img_data, cv2.COLOR_RGBA2BGR)
+            else:
+                # Assume RGB8
+                img_data = img_data.reshape((h, w, 3))
+                image_bgr = cv2.cvtColor(img_data, cv2.COLOR_RGB2BGR)
+
+            # Get depth image for 3D projection
+            depth_np = None
+            with self._depth_lock:
+                depth_msg = self._latest_depth
+            if depth_msg is not None:
+                try:
+                    depth_data = np.frombuffer(bytes(depth_msg.data), dtype=np.float32)
+                    depth_np = depth_data.reshape((depth_msg.height, depth_msg.width))
+                except Exception:
+                    depth_np = None
+
+            # Build camera matrix
+            cam_matrix = np.array([
+                [self._camera_fx, 0, self._camera_cx],
+                [0, self._camera_fy, self._camera_cy],
+                [0, 0, 1],
+            ], dtype=np.float32)
+
+            # Import and run the HSV circle detector
+            from edge_core.hsv_circle_detector import detect_circles_hsv
+
+            circles = detect_circles_hsv(
+                image_bgr,
+                depth_image=depth_np,
+                camera_matrix=cam_matrix,
+                min_radius=8,
+                max_radius=min(w, h) // 3,
+                min_color_confidence=0.20,
+            )
+
+            if not circles:
+                return
+
+            # Convert to DetectedObject format for Edge Core compatibility
+            capture_time = time.time()
+            detections = []
+            for circ in circles:
+                label = f"{circ.color}_circle"
+                det = DetectedObject(
+                    timestamp=capture_time,
+                    label=label,
+                    label_id=_hsv_color_to_id(circ.color),
+                    confidence=circ.confidence,
+                    x=circ.x if circ.x is not None else 0.0,
+                    y=circ.y if circ.y is not None else 0.0,
+                    z=circ.z if circ.z is not None else 0.0,
+                    bbox_x=float(circ.bbox_x),
+                    bbox_y=float(circ.bbox_y),
+                    bbox_w=float(circ.bbox_w),
+                    bbox_h=float(circ.bbox_h),
+                    tracking_state=1,  # OK
+                    hsv_color=circ.color,
+                    color_match=True,
+                    needs_review=False,
+                )
+                detections.append(det)
+
+            with self._lock:
+                self._latest_detections = detections
+                self._detection_recv_count += 1
+
+            self._send_detections_to_edge_core(detections)
+            self._hsv_circle_send_count += 1
+
+            if self._hsv_circle_send_count % 20 == 1:
+                colors = [c.color for c in circles]
+                self.get_logger().info(
+                    f"HSV circle detection: {len(circles)} targets ({', '.join(colors)})"
+                )
+
+        except Exception as e:
+            self.get_logger().error(f"HSV circle detection error: {e}")
 
     # HSV color ranges for circle detection classes (TD-005)
     # Each entry maps a color name to (H_low, H_high, S_min, V_min) in OpenCV HSV
@@ -1197,6 +1366,8 @@ class ROSHTTPBridge(Node):
             "mesh_enabled": self._enable_mesh,
             "servo_enabled": self._enable_servo,
             "detections_enabled": self._enable_detections,
+            "hsv_circles_enabled": self._enable_hsv_circles,
+            "hsv_circles_sent": self._hsv_circle_send_count,
             # VO-006: tilt cycle drift stats
             "tilt_drift": {
                 "cycles": self._tilt_cycle_count,

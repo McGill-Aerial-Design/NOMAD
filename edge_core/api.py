@@ -984,6 +984,36 @@ wait
                 "total_count": len(det_history),
                 "by_class": det_summary,
             }
+
+        # Extract building geometry from nvblox 3D map and compute
+        # target placements relative to building faces (decimeter precision)
+        try:
+            from .building_geometry import (
+                extract_building_geometry,
+                generate_target_descriptions,
+            )
+
+            mesh_state = getattr(request.app.state, 'slam_mesh_data', None)
+            if mesh_state:
+                building = extract_building_geometry(
+                    mesh_state,
+                    heading_deg=heading if heading is not None else 0.0,
+                )
+                if building:
+                    metadata["building_geometry"] = building.to_dict()
+
+                    # Generate target descriptions relative to building
+                    if det_history:
+                        descriptions = generate_target_descriptions(
+                            det_history, building
+                        )
+                        metadata["target_descriptions"] = descriptions
+                        logger.info(
+                            f"Task 1: Generated {len(descriptions)} target descriptions "
+                            f"from {building.voxel_count} voxels"
+                        )
+        except Exception as e:
+            logger.warning(f"Task 1: Building geometry extraction failed: {e}")
         
         image_filename = "photo.jpg"
         metadata_filename = "metadata.json"
@@ -1307,6 +1337,47 @@ wait
                 status_code=500,
                 detail=f"Failed to save description: {str(e)}"
             )
+
+    # ==================== Task 1: Building Geometry ====================
+
+    @app.get("/api/task/1/building_geometry", tags=["Task 1"])
+    async def get_building_geometry(request: Request):
+        """
+        Extract building geometry from the current nvblox 3D map.
+
+        Returns building bounding box, face dimensions (N/S/E/W/roof/ground),
+        and target placements relative to building faces with decimeter precision.
+        Uses the drone's compass heading to orient faces to cardinal directions.
+        """
+        try:
+            from .building_geometry import (
+                extract_building_geometry,
+                generate_target_descriptions,
+            )
+        except ImportError as e:
+            raise HTTPException(status_code=500, detail=f"building_geometry module not available: {e}")
+
+        mesh_state = getattr(request.app.state, 'slam_mesh_data', None)
+        if not mesh_state:
+            raise HTTPException(status_code=404, detail="No nvblox mesh data available")
+
+        state = request.app.state.state_manager.get_state()
+        heading = state.heading_deg if state.heading_deg is not None else 0.0
+
+        building = extract_building_geometry(mesh_state, heading_deg=heading)
+        if not building:
+            raise HTTPException(status_code=422, detail="Insufficient voxel data for geometry extraction")
+
+        result = building.to_dict()
+
+        # Include target placements if detections are available
+        det_history = request.app.state.detection_history
+        if det_history:
+            descriptions = generate_target_descriptions(det_history, building)
+            result["target_descriptions"] = descriptions
+            result["target_count"] = len(descriptions)
+
+        return result
 
     # ==================== Task 2: Extinguish (Indoor) ====================
 
