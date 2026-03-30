@@ -157,8 +157,6 @@ start_container() {
         --privileged \
         --network host \
         --ipc host \
-        --memory 4g \
-        --cpus 6 \
         --shm-size 1g \
         -v "$ISAAC_WS:/workspaces/isaac_ros-dev" \
         -v /dev:/dev \
@@ -454,6 +452,10 @@ for dev in /sys/bus/usb/devices/*/idVendor; do
 done
 sleep 1
 ls /dev/video* 2>/dev/null && echo "[init] Video devices ready." || echo "[init] Warning: No /dev/video devices found."
+
+# Disable ZED object detection — SDK 4.2 OD crashes with composable nodes
+sed -i 's/od_enabled: true/od_enabled: false/' \
+    /workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/sensors/zed_common.yaml 2>/dev/null || true
 
 # Set LD_LIBRARY_PATH BEFORE sourcing setup.bash so ROS libraries are found
 export LD_LIBRARY_PATH=/opt/ros/humble/lib:/usr/local/zed/lib:${LD_LIBRARY_PATH:-}
