@@ -352,6 +352,94 @@ def create_app(state_manager: StateManager) -> FastAPI:
     app.state.detection_history_max: int = 200  # Max persistent detections to keep
     app.state.detection_last_update: float = 0.0
     app.state.detection_enabled: bool = True  # Desired ZED OD mode for circle detection
+    app.state.isaac_runtime_cache = {
+        "timestamp": 0.0,
+        "container_running": False,
+        "nvblox_running": False,
+        "bridge_running": False,
+    }
+
+    def _docker_exec_pgrep(container: str, pattern: str, timeout_s: int = 5) -> Optional[bool]:
+        """Return process-match state inside container, or None on probe failure."""
+        try:
+            result = subprocess.run(
+                ["docker", "exec", container, "pgrep", "-f", pattern],
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+            )
+            return result.returncode == 0
+        except Exception:
+            return None
+
+    def _probe_isaac_runtime_state(force_refresh: bool = False) -> dict[str, bool]:
+        """Probe Isaac ROS container/bridge process state with short cache grace."""
+        now = time.time()
+        cache = getattr(app.state, "isaac_runtime_cache", {}) or {}
+        cache_age_s = now - float(cache.get("timestamp", 0.0))
+        cache_max_stale_s = 20.0
+
+        # Throttle probe frequency to avoid expensive docker exec churn.
+        if not force_refresh and cache and cache_age_s < 1.5:
+            return {
+                "container_running": bool(cache.get("container_running", False)),
+                "nvblox_running": bool(cache.get("nvblox_running", False)),
+                "bridge_running": bool(cache.get("bridge_running", False)),
+            }
+
+        container_probe: Optional[bool] = None
+        try:
+            result = subprocess.run(
+                ["docker", "ps", "--filter", "name=nomad_isaac_ros", "--format", "{{.Status}}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            container_probe = bool(result.stdout.strip())
+        except Exception:
+            container_probe = None
+
+        if container_probe is None and cache_age_s < cache_max_stale_s:
+            container_running = bool(cache.get("container_running", False))
+        else:
+            container_running = bool(container_probe)
+
+        nvblox_running = False
+        bridge_running = False
+        if container_running:
+            nvblox_probe = _docker_exec_pgrep(
+                "nomad_isaac_ros",
+                "component_container_mt|component_container|zed_example.launch.py|nomad_zed_nvblox.launch.py",
+                timeout_s=5,
+            )
+            bridge_probe = _docker_exec_pgrep(
+                "nomad_isaac_ros",
+                "ros_http_bridge.py|ros_http_bridge",
+                timeout_s=5,
+            )
+
+            if nvblox_probe is None and cache_age_s < cache_max_stale_s:
+                nvblox_running = bool(cache.get("nvblox_running", False))
+            else:
+                nvblox_running = bool(nvblox_probe)
+
+            if bridge_probe is None and cache_age_s < cache_max_stale_s:
+                bridge_running = bool(cache.get("bridge_running", False))
+            else:
+                bridge_running = bool(bridge_probe)
+
+        app.state.isaac_runtime_cache = {
+            "timestamp": now,
+            "container_running": container_running,
+            "nvblox_running": nvblox_running,
+            "bridge_running": bridge_running,
+        }
+
+        return {
+            "container_running": container_running,
+            "nvblox_running": nvblox_running,
+            "bridge_running": bridge_running,
+        }
 
     def _launch_nvblox_bridge_with_od(enable_od: bool) -> dict:
         """
@@ -2235,7 +2323,7 @@ wait
                     ["pgrep", "-f", "mavlink-routerd"],
                     capture_output=True,
                     text=True,
-                    timeout=2,
+                    timeout=5,
                 )
                 process_running = process_result.returncode == 0
             except Exception:
@@ -2273,10 +2361,10 @@ wait
             process_running = False
             try:
                 process_result = subprocess.run(
-                    ["pgrep", "-x", "mediamtx"],
+                    ["pgrep", "-f", "mediamtx"],
                     capture_output=True,
                     text=True,
-                    timeout=2,
+                    timeout=5,
                 )
                 process_running = process_result.returncode == 0
             except Exception:
@@ -2295,6 +2383,11 @@ wait
             "status": "active",
             "running": True,
         }
+
+        runtime_state = _probe_isaac_runtime_state(force_refresh=True)
+        container_running = runtime_state["container_running"]
+        nvblox_running = runtime_state["nvblox_running"]
+        bridge_running = runtime_state["bridge_running"]
         
         # Isaac ROS status
         isaac_bridge = request.app.state.isaac_bridge
@@ -2302,39 +2395,19 @@ wait
             services["isaac_ros"] = {
                 "status": "active",
                 "running": True,
+                "container_running": container_running,
+                "nvblox_running": nvblox_running,
+                "bridge_running": bridge_running,
                 **isaac_bridge.get_status(),
             }
         else:
-            container_running = False
-            bridge_running = False
-            try:
-                result = subprocess.run(
-                    ["docker", "ps", "--filter", "name=nomad_isaac_ros", "--format", "{{.Status}}"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                container_running = bool(result.stdout.strip())
-            except Exception:
-                pass
-
-            if container_running:
-                try:
-                    result = subprocess.run(
-                        ["docker", "exec", "nomad_isaac_ros", "bash", "-c",
-                         "ps aux | grep -v grep | grep -c ros_http_bridge 2>/dev/null || echo 0"],
-                        capture_output=True,
-                        text=True,
-                        timeout=5,
-                    )
-                    bridge_running = int(result.stdout.strip()) > 0
-                except Exception:
-                    pass
-
             external_bridge_active = container_running and bridge_running
             services["isaac_ros"] = {
                 "status": "active" if external_bridge_active else "not_initialized",
                 "running": external_bridge_active,
+                "container_running": container_running,
+                "nvblox_running": nvblox_running,
+                "bridge_running": bridge_running,
                 "message": "Active via external ROS-HTTP bridge" if external_bridge_active
                            else "Isaac ROS bridge not enabled",
             }
@@ -2358,24 +2431,11 @@ wait
                 "trajectory_points": len(vio_trajectory),
             }
         
-        # Check for Isaac ROS Docker container
-        try:
-            result = subprocess.run(
-                ["docker", "ps", "--filter", "name=nomad_isaac_ros", "--format", "{{.Status}}"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            container_status = result.stdout.strip()
-            services["isaac_ros_container"] = {
-                "status": container_status if container_status else "not_running",
-                "running": bool(container_status),
-            }
-        except Exception:
-            services["isaac_ros_container"] = {
-                "status": "docker_unavailable",
-                "running": False,
-            }
+        # Isaac ROS container summary (from shared probe)
+        services["isaac_ros_container"] = {
+            "status": "running" if container_running else "not_running",
+            "running": container_running,
+        }
         
         return services
 
@@ -2403,39 +2463,10 @@ wait
         Returns information about the perception backend,
         VIO state, and exclusion map status.
         """
-        # Check container status first
-        container_running = False
-        nvblox_running = False
-        bridge_running = False
-        try:
-            result = subprocess.run(
-                ["docker", "ps", "--filter", "name=nomad_isaac_ros", "--format", "{{.Status}}"],
-                capture_output=True, text=True, timeout=5,
-            )
-            container_running = bool(result.stdout.strip())
-        except Exception:
-            pass
-
-        if container_running:
-            # Process-based check: robust against stale ROS topic-daemon state.
-            try:
-                result = subprocess.run(
-                    ["docker", "exec", "nomad_isaac_ros", "bash", "-c",
-                     "ps aux | grep -v grep | grep -c 'component_container_mt\\|component_container\\|zed_example.launch.py\\|nomad_zed_nvblox.launch.py' 2>/dev/null || echo 0"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                nvblox_running = int(result.stdout.strip() or "0") > 0
-            except Exception:
-                pass
-            try:
-                result = subprocess.run(
-                    ["docker", "exec", "nomad_isaac_ros", "bash", "-c",
-                     "ps aux | grep -v grep | grep -c ros_http_bridge 2>/dev/null || echo 0"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                bridge_running = int(result.stdout.strip()) > 0
-            except Exception:
-                pass
+        runtime_state = _probe_isaac_runtime_state(force_refresh=True)
+        container_running = runtime_state["container_running"]
+        nvblox_running = runtime_state["nvblox_running"]
+        bridge_running = runtime_state["bridge_running"]
 
         isaac_bridge = request.app.state.isaac_bridge
         if not isaac_bridge:

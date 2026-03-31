@@ -214,6 +214,25 @@ start_edge_core() {
         else
             # No sudo access - check if systemd service is already running
             if systemctl is-active --quiet nomad 2>/dev/null; then
+                local svc_pid=$(systemctl show nomad --property=MainPID --value 2>/dev/null)
+                if [[ "$svc_pid" =~ ^[0-9]+$ ]] && [ "$svc_pid" -gt 1 ] && kill -0 "$svc_pid" 2>/dev/null; then
+                    log_warn "No sudo for systemctl restart; recycling nomad.service process PID $svc_pid"
+                    if kill "$svc_pid" 2>/dev/null; then
+                        log_info "Waiting for systemd to auto-restart Edge Core..."
+                        for i in {1..30}; do
+                            if curl -s http://localhost:$API_PORT/health > /dev/null; then
+                                local new_pid=$(systemctl show nomad --property=MainPID --value 2>/dev/null)
+                                log_ok "Edge Core reloaded via systemd auto-restart (PID: ${new_pid:-unknown})"
+                                return 0
+                            fi
+                            sleep 1
+                        done
+                        log_warn "Edge Core did not become healthy after process recycle"
+                    else
+                        log_warn "Could not signal nomad.service process PID $svc_pid"
+                    fi
+                fi
+
                 log_warn "systemd nomad.service is active (no sudo to restart)."
                 log_warn "To deploy latest code: sudo systemctl restart nomad"
                 log_warn "Using existing systemd-managed Edge Core."

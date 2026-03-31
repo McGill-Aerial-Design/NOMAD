@@ -169,7 +169,8 @@ namespace NOMAD.MissionPlanner
         private static readonly TimeSpan MinRebuildInterval = TimeSpan.FromMilliseconds(250);
         private bool _pendingMeshUpdate = false;  // P3-7: Flag to mark queued updates during debounce
         private long _lastMeshRebuildStamp = -1;  // Stopwatch ticks (monotonic)
-        private const bool EnableMeshDebounceDebugLog = true;
+        // Use readonly (not const) so the compiler does not fold branches in LogMeshDebounce.
+        private static readonly bool EnableMeshDebounceDebugLog = true;
 
         // ---- Trajectory ----
         private List<float[]> _trajectoryPoints = new List<float[]>(); // each [x,y,z] in ZED frame
