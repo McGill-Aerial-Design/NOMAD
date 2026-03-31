@@ -2330,14 +2330,12 @@ wait
                 process_running = False
 
             cubepilot_present = os.path.exists("/dev/ttyACM0")
-            mavlink_running = systemd_running or process_running
-
-            if mavlink_running:
-                mavlink_status = "active"
-            elif not cubepilot_present:
+            if not cubepilot_present:
                 mavlink_status = "no_cubepilot"
+                mavlink_running = False
             else:
-                mavlink_status = systemd_status
+                mavlink_running = systemd_running or process_running
+                mavlink_status = "active" if mavlink_running else systemd_status
 
             services["mavlink_router"] = {
                 "status": mavlink_status,
