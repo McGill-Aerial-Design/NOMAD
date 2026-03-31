@@ -1,0 +1,6 @@
+# Keep Linux-executed scripts compatible on Jetson.
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Preserve native Windows endings for PowerShell scripts.
+*.ps1 text eol=crlf

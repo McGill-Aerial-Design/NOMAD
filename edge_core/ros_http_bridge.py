@@ -214,9 +214,14 @@ class ROSHTTPBridge(Node):
         self._enable_servo = enable_servo
         self._enable_detections = enable_detections and ZED_OD_AVAILABLE
         
-        # Persistent HTTP connection (keep-alive) for efficiency
-        self._http_conn = HTTPConnection(host, port, timeout=1.0)
+        # Persistent HTTP connection (keep-alive) for efficiency.
+        # Keep a short default timeout and override per-request in _http_post.
+        self._http_timeout_default_s = 0.5
+        self._http_conn = HTTPConnection(host, port, timeout=self._http_timeout_default_s)
         self._http_lock = threading.Lock()
+        # Throttle repeated HTTP error logs per endpoint to reduce log spam under backpressure.
+        self._http_warn_interval_s = 2.0
+        self._last_http_error_log: dict[str, float] = {}
         
         # QoS for sensor data
         sensor_qos = QoSProfile(
@@ -254,6 +259,10 @@ class ROSHTTPBridge(Node):
         self._latest_detections: list[DetectedObject] = []
         self._send_errors = 0
         self._last_send_time = 0.0
+        # Back off VIO POSTs briefly on repeated failures to avoid overwhelming Edge Core.
+        self._vio_send_backoff_s = 0.0
+        self._vio_backoff_until = 0.0
+        self._vio_backoff_max_s = 1.0
         self._last_cmd_vel_send_time = 0.0
         self._last_mesh_send_time = 0.0
         # Keep mesh forwarding capped by the configured bridge rate (default 30 Hz).
@@ -547,27 +556,59 @@ class ROSHTTPBridge(Node):
     def _http_post(self, path: str, data: bytes, timeout: float = 0.5) -> bool:
         """Send HTTP POST using persistent connection with keep-alive."""
         with self._http_lock:
+            effective_timeout = max(0.05, timeout)
             try:
+                self._http_conn.timeout = effective_timeout
                 self._http_conn.request(
                     "POST", path, body=data,
                     headers={"Content-Type": "application/json", "Connection": "keep-alive"}
                 )
                 resp = self._http_conn.getresponse()
                 resp.read()  # Drain response to allow connection reuse
-                return resp.status == 200
+                if resp.status == 200:
+                    return True
+
+                now = time.time()
+                last_warn = self._last_http_error_log.get(path, 0.0)
+                if now - last_warn >= self._http_warn_interval_s:
+                    self.get_logger().warning(
+                        f"HTTP POST to {path} returned status {resp.status}"
+                    )
+                    self._last_http_error_log[path] = now
+                return False
             except Exception as e:
-                # Log HTTP error before silent failure
-                self.get_logger().warning(f"HTTP POST to {path} failed: {e}")
-                # Reconnect on failure
+                now = time.time()
+                last_warn = self._last_http_error_log.get(path, 0.0)
+                if now - last_warn >= self._http_warn_interval_s:
+                    self.get_logger().warning(
+                        f"HTTP POST to {path} failed (timeout={effective_timeout:.2f}s): {e}"
+                    )
+                    self._last_http_error_log[path] = now
+
+                # Recreate connection on failure (more reliable than reconnecting same object).
                 try:
                     self._http_conn.close()
-                    self._http_conn.connect()
+                except Exception:
+                    pass
+                try:
+                    self._http_conn = HTTPConnection(
+                        self._host, self._port, timeout=self._http_timeout_default_s
+                    )
                 except Exception:
                     pass
                 return False
+            finally:
+                try:
+                    self._http_conn.timeout = self._http_timeout_default_s
+                except Exception:
+                    pass
 
     def _send_to_edge_core(self) -> None:
         """Send latest VIO data to edge_core via HTTP."""
+        now = time.time()
+        if now < self._vio_backoff_until:
+            return
+
         with self._lock:
             vio = self._latest_vio
         
@@ -576,10 +617,16 @@ class ROSHTTPBridge(Node):
         
         try:
             data = json.dumps(asdict(vio)).encode("utf-8")
-            if self._http_post("/api/vio/update", data):
+            if self._http_post("/api/vio/update", data, timeout=0.15):
                 self._vio_send_count += 1
+                self._vio_send_backoff_s = 0.0
             else:
                 self._send_errors += 1
+                self._vio_send_backoff_s = (
+                    0.05 if self._vio_send_backoff_s <= 0.0
+                    else min(self._vio_backoff_max_s, self._vio_send_backoff_s * 2.0)
+                )
+                self._vio_backoff_until = now + self._vio_send_backoff_s
                     
         except URLError as e:
             self._send_errors += 1
@@ -707,7 +754,7 @@ class ROSHTTPBridge(Node):
         
         try:
             path = f"/api/servo/camera/tilt?angle={angle:.1f}"
-            if self._http_post(path, b""):
+            if self._http_post(path, b"", timeout=0.2):
                 self._servo_send_count += 1
             else:
                 self._send_errors += 1
@@ -1117,7 +1164,7 @@ class ROSHTTPBridge(Node):
                 "count": len(detections),
             }
             data = json.dumps(payload).encode("utf-8")
-            if self._http_post("/api/detections/update", data):
+            if self._http_post("/api/detections/update", data, timeout=0.25):
                 self._detection_send_count += 1
             else:
                 self._send_errors += 1

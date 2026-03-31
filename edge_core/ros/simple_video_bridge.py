@@ -20,6 +20,7 @@ Target: Jetson Orin Nano / Isaac ROS Docker container
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 import gi
@@ -56,6 +57,7 @@ class VideoStreamNode(Node):
         self.last_frame_time = 0.0  # Timestamp of most recent frame
         self.subscription = None
         self._latest_jpeg = None  # Cached JPEG bytes for snapshot requests
+        self._last_snapshot_encode_time = 0.0
         
         # Detection overlay state
         self._overlay_enabled = False
@@ -79,7 +81,7 @@ class VideoStreamNode(Node):
             f'videoconvert ! '
             f'openh264enc bitrate={bitrate * 1000} num-slices=4 ! '
             f'video/x-h264,profile=baseline ! '
-            f'h264parse ! '
+            f'h264parse config-interval=1 ! '
             f'rtspclientsink location=rtsp://172.17.0.1:8554/primary protocols=tcp'
         )
         
@@ -115,12 +117,18 @@ class VideoStreamNode(Node):
         """Subscribe to a ROS2 image topic."""
         if self.subscription:
             self.destroy_subscription(self.subscription)
+
+        image_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=5,
+        )
         
         self.subscription = self.create_subscription(
             Image,
             topic,
             self.image_callback,
-            10  # QoS depth
+            image_qos
         )
         self.source_topic = topic
         self.get_logger().info(f'Subscribed to: {topic}')
@@ -129,51 +137,18 @@ class VideoStreamNode(Node):
         """
         Switch to a different ROS2 image topic.
         
-        Restarts the entire GStreamer pipeline to ensure fresh RTSP connection
-        to MediaMTX. This prevents rtspclientsink disconnection issues.
-        Brief interruption (~500ms) but ensures reliable streaming.
+        Keeps the existing GStreamer pipeline alive and only switches
+        the ROS subscription. This avoids multi-second RTSP interruptions.
         """
         try:
             self.get_logger().info(f'Switching topic: {self.source_topic} -> {new_topic}')
-            
-            # Stop the current pipeline
-            if hasattr(self, 'pipeline') and self.pipeline:
-                self.pipeline.set_state(Gst.State.NULL)
-                time.sleep(0.2)  # Wait for clean shutdown
-            
-            # Update topic
-            self.source_topic = new_topic
-            
-            # Recreate GStreamer pipeline with new topic
-            pipeline_str = (
-                f'appsrc name=source is-live=true format=time do-timestamp=true '
-                f'max-buffers=2 '
-                f'caps=video/x-raw,format=BGR,width={self.width},height={self.height},framerate={self.fps}/1 ! '
-                f'queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! '
-                f'videoconvert ! '
-                f'openh264enc bitrate={self.bitrate * 1000} num-slices=4 ! '
-                f'video/x-h264,profile=baseline ! '
-                f'h264parse ! '
-                f'rtspclientsink location=rtsp://172.17.0.1:8554/primary protocols=tcp'
-            )
-            
-            self.pipeline = Gst.parse_launch(pipeline_str)
-            self.appsrc = self.pipeline.get_by_name('source')
-            
-            # Start new pipeline
-            ret = self.pipeline.set_state(Gst.State.PLAYING)
-            if ret == Gst.StateChangeReturn.FAILURE:
-                self.get_logger().error('Failed to restart pipeline after topic switch')
-                return False
-            
+
             # Update ROS subscription
             self._subscribe_to_topic(new_topic)
             
-            # Reset counters
-            self.frame_count = 0
-            self.start_time = time.time()
+            # Keep counters/encoder state so the RTSP stream remains continuous.
             
-            self.get_logger().info(f'Successfully switched to: {new_topic} (pipeline restarted)')
+            self.get_logger().info(f'Successfully switched to: {new_topic} (pipeline preserved)')
             return True
         except Exception as e:
             self.get_logger().error(f'Failed to switch topic: {e}')
@@ -214,9 +189,13 @@ class VideoStreamNode(Node):
             if self._overlay_enabled:
                 self.draw_detections(cv_image)
             
-            # Cache the latest frame for snapshot requests
-            _, jpeg = cv2.imencode('.jpg', cv_image, [cv2.IMWRITE_JPEG_QUALITY, 90])
-            self._latest_jpeg = jpeg.tobytes()
+            # Cache snapshots at a low rate; per-frame JPEG encoding hurts FPS.
+            now = time.time()
+            if (now - self._last_snapshot_encode_time) >= 0.5:
+                ok, jpeg = cv2.imencode('.jpg', cv_image, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                if ok:
+                    self._latest_jpeg = jpeg.tobytes()
+                    self._last_snapshot_encode_time = now
 
             # Create GStreamer buffer and push to pipeline
             data = cv_image.tobytes()
@@ -426,6 +405,14 @@ class ControlServer(BaseHTTPRequestHandler):
     def do_GET(self):
         """Handle GET requests."""
         parsed = urlparse(self.path)
+
+        pipeline_playing = False
+        if self.video_node and getattr(self.video_node, 'pipeline', None):
+            try:
+                state = self.video_node.pipeline.get_state(0)[1]
+                pipeline_playing = state == Gst.State.PLAYING
+            except Exception:
+                pipeline_playing = False
         
         if parsed.path == '/health':
             # Report streaming only if frames arrived recently (within 5s)
@@ -434,7 +421,11 @@ class ControlServer(BaseHTTPRequestHandler):
                 and self.video_node.last_frame_time > 0
                 and (time.time() - self.video_node.last_frame_time) < 5.0
             )
-            self._send_json(200, {'healthy': True, 'streaming': receiving_frames})
+            self._send_json(200, {
+                'healthy': pipeline_playing,
+                'streaming': receiving_frames,
+                'pipeline_playing': pipeline_playing,
+            })
 
         elif parsed.path == '/status':
             now = time.time()
@@ -443,13 +434,20 @@ class ControlServer(BaseHTTPRequestHandler):
                 and self.video_node.last_frame_time > 0
                 and (now - self.video_node.last_frame_time) < 5.0
             )
+            last_frame_age = (
+                (now - self.video_node.last_frame_time)
+                if self.video_node and self.video_node.last_frame_time > 0
+                else None
+            )
             elapsed = now - self.video_node.start_time if self.video_node else 1
             status = {
                 'streaming': receiving_frames,
+                'pipeline_playing': pipeline_playing,
                 'source_topic': self.video_node.source_topic if self.video_node else '',
                 'fps': self.video_node.frame_count / max(elapsed, 1) if self.video_node else 0,
                 'frame_count': self.video_node.frame_count if self.video_node else 0,
                 'error_count': 0,
+                'last_frame_age_s': last_frame_age,
                 'rtsp_url': 'rtsp://localhost:8554/primary',
             }
             self._send_json(200, status)

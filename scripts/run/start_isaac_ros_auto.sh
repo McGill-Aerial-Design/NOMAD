@@ -153,24 +153,49 @@ check_prerequisites() {
 # =========================================================================
 # Container lifecycle
 # =========================================================================
+container_uses_init() {
+    local init_enabled
+    init_enabled=$(docker inspect -f '{{.HostConfig.Init}}' "$CONTAINER_NAME" 2>/dev/null || echo "false")
+    [ "$init_enabled" = "true" ]
+}
+
+container_has_usb_sys_mount() {
+    docker inspect -f '{{range .Mounts}}{{.Destination}} {{end}}' "$CONTAINER_NAME" 2>/dev/null | grep -q '/sys/bus/usb'
+}
+
 start_container() {
     log_info "Starting Isaac ROS container..."
 
-    if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-        log_info "Container already running"
-        return 0
-    fi
-
     if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-        log_info "Container exists but stopped, starting..."
-        docker start "$CONTAINER_NAME"
-        sleep 2
-        return 0
+        if ! container_uses_init || ! container_has_usb_sys_mount; then
+            log_warn "Container missing required runtime settings; recreating"
+            if ! container_uses_init; then
+                log_warn "  Reason: init reaper not enabled"
+            fi
+            if ! container_has_usb_sys_mount; then
+                log_warn "  Reason: /sys/bus/usb not mounted"
+            fi
+            if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+                docker stop "$CONTAINER_NAME" 2>/dev/null || true
+            fi
+            docker rm "$CONTAINER_NAME" 2>/dev/null || true
+        else
+            if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+                log_info "Container already running"
+                return 0
+            fi
+
+            log_info "Container exists but stopped, starting..."
+            docker start "$CONTAINER_NAME"
+            sleep 2
+            return 0
+        fi
     fi
 
     log_info "Creating new container from $IMAGE_NAME ..."
     docker run -d \
         --name "$CONTAINER_NAME" \
+        --init \
         --runtime nvidia \
         --privileged \
         --network host \
@@ -178,6 +203,7 @@ start_container() {
         --shm-size 1g \
         -v "$ISAAC_WS:/workspaces/isaac_ros-dev" \
         -v /dev:/dev \
+        -v /sys/bus/usb:/sys/bus/usb \
         -v /run/udev:/run/udev:ro \
         -v /tmp/.X11-unix:/tmp/.X11-unix \
         -v /tmp/argus_socket:/tmp/argus_socket \
@@ -444,7 +470,7 @@ launch_zed_nvblox() {
             # Wait for processes to fully terminate (max 5 seconds)
             timeout=5
             while [ $timeout -gt 0 ]; do
-                if ! pgrep -f "launch_nvblox_bridge|launch_zed_nvblox|nomad_zed_nvblox|zed_example.launch|component_container|ros_http_bridge" >/dev/null 2>&1; then
+                if ! pgrep -f "[l]aunch_nvblox_bridge|[l]aunch_zed_nvblox|[n]omad_zed_nvblox|[z]ed_example\.launch|[c]omponent_container|[r]os_http_bridge" >/dev/null 2>&1; then
                     break
                 fi
                 sleep 0.5
@@ -489,6 +515,40 @@ done
 sleep 1
 ls /dev/video* 2>/dev/null && echo "[init] Video devices ready." || echo "[init] Warning: No /dev/video devices found."
 
+# Camera preflight with retry/rebind attempts.
+cam_ready=false
+for attempt in 1 2 3; do
+    if grep -q '^2b03$' /sys/bus/usb/devices/*/idVendor 2>/dev/null && ls /dev/video* >/dev/null 2>&1; then
+        cam_ready=true
+        echo "[init] ZED camera detected (attempt $attempt)."
+        break
+    fi
+
+    echo "[init] ZED camera not detected (attempt $attempt/3). Rebinding USB video interfaces..."
+    for dev in /sys/bus/usb/devices/*/idVendor; do
+        dir=$(dirname $dev)
+        vid=$(cat $dev 2>/dev/null)
+        if [ "$vid" = "2b03" ]; then
+            for iface in $dir/*:*/bInterfaceClass; do
+                idir=$(dirname $iface)
+                cls=$(cat $iface 2>/dev/null)
+                iname=$(basename $idir)
+                if [ "$cls" = "0e" ]; then
+                    echo $iname > /sys/bus/usb/drivers/uvcvideo/unbind 2>/dev/null || true
+                    sleep 0.1
+                    echo $iname > /sys/bus/usb/drivers/uvcvideo/bind 2>/dev/null || true
+                fi
+            done
+        fi
+    done
+    sleep 2
+done
+
+if [ "$cam_ready" != "true" ]; then
+    echo "[fatal] ZED camera not detected after retries; aborting nvblox launch"
+    exit 3
+fi
+
 # Disable ZED object detection — SDK 4.2 OD crashes with composable nodes
 sed -i 's/od_enabled: true/od_enabled: false/' \
     /workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/sensors/zed_common.yaml 2>/dev/null || true
@@ -505,12 +565,25 @@ sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
 # Performance profile: 0.10m voxels, 10-15Hz rates, 2D ESDF, 8m radius
 # Tuned for Orin Nano 8GB — see config/nvblox_performance.yaml
 NOMAD_CFG=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml
-NVBLOX_BASE=$(python3 -c "from ament_index_python.packages import get_package_share_directory; print(get_package_share_directory('nvblox_examples_bringup'))" 2>/dev/null)/config/nvblox/nvblox_base.yaml
-if [ -f "$NOMAD_CFG" ] && [ -f "$NVBLOX_BASE" ]; then
+NVBLOX_BASE_A=$(python3 -c "from ament_index_python.packages import get_package_share_directory; print(get_package_share_directory(\"nvblox_examples_bringup\"))" 2>/dev/null)/config/nvblox/nvblox_base.yaml
+NVBLOX_BASE_B=/workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/nvblox/nvblox_base.yaml
+NVBLOX_BASE=""
+for cand in "$NVBLOX_BASE_A" "$NVBLOX_BASE_B"; do
+    if [ -f "$cand" ]; then
+        NVBLOX_BASE="$cand"
+        break
+    fi
+done
+if [ -f "$NOMAD_CFG" ] && [ -n "$NVBLOX_BASE" ]; then
     echo "Applying NOMAD nvblox config (performance profile: 0.10m voxels, 10-15Hz, 2D ESDF, 8m radius)"
-    cp "$NOMAD_CFG" "$NVBLOX_BASE"
+        cp "$NOMAD_CFG" "$NVBLOX_BASE"
+        echo "Overlay checksums:"
+        sha256sum "$NOMAD_CFG" "$NVBLOX_BASE" 2>/dev/null || true
 else
-    echo "NOMAD config or nvblox base not found, using defaults"
+        echo "NOMAD config or nvblox base not found, using defaults"
+        echo "  NOMAD_CFG=$NOMAD_CFG"
+        echo "  NVBLOX_BASE_A=$NVBLOX_BASE_A"
+        echo "  NVBLOX_BASE_B=$NVBLOX_BASE_B"
 fi
 # Preflight check: ensure nav2 dependencies are available
 NAV2_PREFLIGHT_OK=true
@@ -594,18 +667,18 @@ launch_ros_http_bridge() {
     # Bridge script is available via volume mount at /workspaces/isaac_ros-dev/edge_core/
     # Kill any existing bridge processes to prevent duplicates with proper reaping
     docker exec "$CONTAINER_NAME" bash -c '
-        pkill -f ros_http_bridge.py 2>/dev/null || true
+        pkill -f "[r]os_http_bridge\.py" 2>/dev/null || true
         # Wait for process to terminate (max 3 seconds)
         timeout=6
         while [ $timeout -gt 0 ]; do
-            if ! pgrep -f "ros_http_bridge.py" >/dev/null 2>&1; then
+            if ! pgrep -f "[r]os_http_bridge\.py" >/dev/null 2>&1; then
                 break
             fi
             sleep 0.5
             timeout=$((timeout - 1))
         done
         # Force kill if still running
-        pkill -9 -f ros_http_bridge.py 2>/dev/null || true
+        pkill -9 -f "[r]os_http_bridge\.py" 2>/dev/null || true
         sleep 0.5
     '
     
@@ -616,6 +689,8 @@ launch_ros_http_bridge() {
 export LD_LIBRARY_PATH=/opt/ros/humble/lib:/usr/local/zed/lib:${LD_LIBRARY_PATH:-}
 source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
+# Ensure package imports (for example, edge_core.*) resolve when launching by script path.
+export PYTHONPATH=/workspaces/isaac_ros-dev:${PYTHONPATH:-}
 # Wait for ZED node to fully start and DDS discovery to complete
 # (ZED + nvblox take ~20-30s to init)
 sleep 30

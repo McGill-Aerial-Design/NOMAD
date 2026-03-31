@@ -157,14 +157,38 @@ class VideoStreamManager:
             logger.error(f"Error checking container status: {e}")
             return False
 
-    def is_relay_running(self) -> bool:
+    def _get_relay_status_data(self, timeout_s: float = 2.0) -> Optional[Dict[str, Any]]:
+        """Fetch bridge /status JSON, or None if unavailable."""
+        try:
+            url = f"http://localhost:{self.relay_http_port}/status"
+            with urlopen(url, timeout=timeout_s) as response:
+                return json.loads(response.read().decode())
+        except Exception:
+            return None
+
+    def is_relay_running(self, require_recent_frames: bool = False) -> bool:
         """Check if the simple video bridge is running inside the container."""
         try:
             # Check if the HTTP API is responsive
             url = f"http://localhost:{self.relay_http_port}/health"
             with urlopen(url, timeout=2) as response:
                 data = json.loads(response.read().decode())
-                return data.get("healthy", False)
+                healthy = data.get("healthy", False)
+                pipeline_playing = data.get("pipeline_playing", healthy)
+                if not (healthy and pipeline_playing):
+                    return False
+
+                if not require_recent_frames:
+                    return True
+
+                status = self._get_relay_status_data(timeout_s=2.0)
+                if not status:
+                    return False
+
+                age = status.get("last_frame_age_s")
+                if age is None:
+                    return False
+                return age < 10.0
         except Exception:
             return False
 
@@ -194,10 +218,14 @@ class VideoStreamManager:
             # start_isaac_ros_auto.sh, auto_start thread, or prior API call).
             # Don't kill a working bridge just because _started is False
             # (e.g., after Edge Core restart).
-            if self.is_relay_running():
+            if self.is_relay_running(require_recent_frames=True):
                 self._started = True
                 logger.info("Simple video bridge already running, adopting existing instance")
                 return (True, "Already running")
+            elif self.is_relay_running(require_recent_frames=False):
+                logger.warning(
+                    "Simple video bridge process is alive but not receiving fresh frames; restarting bridge"
+                )
             
             if not self.is_container_running():
                 msg = f"Docker container '{self.container_name}' is not running. Start Isaac ROS first."
@@ -253,6 +281,7 @@ class VideoStreamManager:
                 "docker", "exec", "-d", self.container_name,
                 "bash", "-c",
                 f"source /opt/ros/humble/setup.bash 2>/dev/null; source /opt/ros/humble/install/setup.bash 2>/dev/null; "
+                f"source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null; "
                 f"python3 /tmp/{script_name} "
                 f"--source-topic '{self.default_topic}' "
                 f"--width {self.width} "
@@ -278,10 +307,11 @@ class VideoStreamManager:
                 logger.error(msg)
                 return (False, msg)
             
-            # Wait for bridge to be ready
-            for i in range(15):  # Wait up to 15 seconds
+            # Wait for bridge to be ready. Give it a bit more time because
+            # ROS graph discovery and encoder startup can be delayed on Jetson.
+            for i in range(25):  # Wait up to 25 seconds
                 time.sleep(1)
-                if self.is_relay_running():
+                if self.is_relay_running(require_recent_frames=True):
                     self._started = True
                     logger.info(f"{script_name} started successfully")
                     return (True, "Started successfully")
@@ -300,7 +330,7 @@ class VideoStreamManager:
                     )
                     msg = f"Bridge process crashed. Log: {log_result.stdout.strip()[-200:]}"
                 else:
-                    msg = "Bridge process is running but HTTP health check not responding after 15s"
+                    msg = "Bridge process is running but no fresh frames were received within 25s"
             except Exception:
                 msg = "Bridge did not start in time and could not check process status"
             
@@ -353,7 +383,7 @@ class VideoStreamManager:
                 url = f"http://localhost:{self.relay_http_port}/switch?topic={quote(topic, safe='')}"
                 req = Request(url, method='POST')
                 
-                with urlopen(req, timeout=10) as response:  # Longer timeout for encoder restart
+                with urlopen(req, timeout=5) as response:
                     data = json.loads(response.read().decode())
                     
                 if data.get("success"):
@@ -586,9 +616,23 @@ def init_video_stream_manager(
                     return
                 time.sleep(2)
 
-            # Safety net: primary bridge didn't start, launch one ourselves
+            # Safety net: primary bridge didn't start, launch one ourselves.
+            # Retry a few times to survive transient startup races.
             logger.warning("Video bridge not detected after 60s, starting as safety net...")
-            _video_stream_manager.start()
+            max_attempts = 3
+            for attempt in range(1, max_attempts + 1):
+                ok, msg = _video_stream_manager.start_with_reason()
+                if ok:
+                    logger.info(f"Video bridge safety net started on attempt {attempt}/{max_attempts}")
+                    return
+
+                logger.warning(
+                    f"Video bridge safety net attempt {attempt}/{max_attempts} failed: {msg}"
+                )
+                if attempt < max_attempts:
+                    time.sleep(10)
+
+            logger.error("Video bridge safety net failed after all retry attempts")
 
         thread = threading.Thread(target=_delayed_start, daemon=True)
         thread.start()

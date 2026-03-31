@@ -8,10 +8,11 @@
 #   - MediaMTX RTSP (video streaming)
 #   - Isaac ROS + ZED (Task 2 VIO) - optional
 #
-# Usage: ./start_nomad_full.sh [task1|task2|all]
+# Usage: ./start_nomad_full.sh [task1|task2|all|healthcheck]
 #   task1 - Start only services needed for Task 1 (GPS-based)
 #   task2 - Start services for Task 2 (VIO-based) including Isaac ROS
 #   all   - Start everything (default)
+#   healthcheck - Check runtime health without starting/stopping services
 #
 # Stream URL: rtsp://<JETSON_IP>:8554/primary
 # API URL: http://<JETSON_IP>:8000
@@ -44,6 +45,21 @@ log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_ok() { echo -e "${GREEN}[OK]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_fail() { echo -e "${RED}[FAIL]${NC} $1"; }
+
+# Prevent overlapping full-start runs that can cause duplicate child processes.
+# Healthcheck mode is read-only and does not require this lock.
+if [ "$TASK_MODE" != "healthcheck" ]; then
+    LOCK_FILE="/tmp/nomad_start_nomad_full.lock"
+    if command -v flock >/dev/null 2>&1; then
+        exec 9>"$LOCK_FILE"
+        if ! flock -n 9; then
+            log_warn "Another start_nomad_full.sh instance is already running (lock: $LOCK_FILE)"
+            exit 1
+        fi
+    else
+        log_warn "flock not found; single-instance lock disabled"
+    fi
+fi
 
 mkdir -p $LOG_DIR
 
@@ -415,10 +431,71 @@ except: pass
 }
 
 # -----------------------------------------------------------------------------
+# Healthcheck (no service mutation)
+# -----------------------------------------------------------------------------
+
+run_healthcheck() {
+    local failures=0
+
+    echo ""
+    echo "=========================================="
+    echo "  NOMAD Healthcheck"
+    echo "=========================================="
+
+    if curl -s http://localhost:$API_PORT/health > /dev/null 2>&1; then
+        log_ok "Edge Core API reachable"
+    else
+        log_fail "Edge Core API unreachable at http://localhost:$API_PORT/health"
+        failures=$((failures + 1))
+    fi
+
+    if pgrep -x mediamtx > /dev/null 2>&1; then
+        log_ok "MediaMTX process running"
+    else
+        log_fail "MediaMTX process not running"
+        failures=$((failures + 1))
+    fi
+
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^nomad_isaac_ros$'; then
+        log_ok "Isaac ROS container running"
+        if docker exec nomad_isaac_ros pgrep -f "[r]os_http_bridge\\.py" > /dev/null 2>&1; then
+            log_ok "ROS-HTTP bridge running"
+        else
+            log_warn "ROS-HTTP bridge not running"
+            failures=$((failures + 1))
+        fi
+    else
+        log_warn "Isaac ROS container not running"
+    fi
+
+    local video_status
+    video_status=$(curl -s http://localhost:$API_PORT/api/video/status 2>/dev/null || echo "")
+    if echo "$video_status" | grep -q '"streaming":true'; then
+        log_ok "Video stream active"
+    else
+        log_warn "Video stream inactive"
+    fi
+
+    echo "=========================================="
+    if [ $failures -gt 0 ]; then
+        log_fail "Healthcheck failed with $failures critical issue(s)"
+        return 1
+    fi
+
+    log_ok "Healthcheck passed"
+    return 0
+}
+
+# -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
 
 main() {
+    if [ "$TASK_MODE" = "healthcheck" ]; then
+        run_healthcheck
+        return $?
+    fi
+
     local failures=0
     check_prerequisites
     
@@ -476,9 +553,17 @@ cleanup() {
     log_ok "All services stopped"
     echo "Goodbye!"
 }
-trap cleanup EXIT INT TERM
+
+if [ "$TASK_MODE" != "healthcheck" ]; then
+    trap cleanup EXIT INT TERM
+fi
 
 main "$@"
+main_rc=$?
+
+if [ "$TASK_MODE" = "healthcheck" ]; then
+    exit $main_rc
+fi
 
 # Keep script running to allow Ctrl+C cleanup.
 # 'wait' returns immediately if no child processes were spawned (e.g., Edge Core

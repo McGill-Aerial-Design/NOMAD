@@ -15,6 +15,7 @@ import os
 import re
 import shlex
 import subprocess
+import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -408,6 +409,40 @@ sleep 2
 # Without this, new ROS2 nodes fail with RTPS_TRANSPORT_SHM port lock errors.
 rm -f /dev/shm/fastrtps_* 2>/dev/null || true
 
+# Camera preflight with retry/rebind attempts.
+cam_ready=false
+for attempt in 1 2 3; do
+    if grep -q '^2b03$' /sys/bus/usb/devices/*/idVendor 2>/dev/null && ls /dev/video* >/dev/null 2>&1; then
+        cam_ready=true
+        echo "ZED camera detected (attempt $attempt)"
+        break
+    fi
+
+    echo "ZED camera not detected (attempt $attempt/3), rebinding USB video interfaces"
+    for dev in /sys/bus/usb/devices/*/idVendor; do
+        dir=$(dirname $dev)
+        vid=$(cat $dev 2>/dev/null)
+        if [ "$vid" = "2b03" ]; then
+            for iface in $dir/*:*/bInterfaceClass; do
+                idir=$(dirname $iface)
+                cls=$(cat $iface 2>/dev/null)
+                iname=$(basename $idir)
+                if [ "$cls" = "0e" ]; then
+                    echo $iname > /sys/bus/usb/drivers/uvcvideo/unbind 2>/dev/null || true
+                    sleep 0.1
+                    echo $iname > /sys/bus/usb/drivers/uvcvideo/bind 2>/dev/null || true
+                fi
+            done
+        fi
+    done
+    sleep 2
+done
+
+if [ "$cam_ready" != "true" ]; then
+    echo "ERROR: ZED camera not detected after retries"
+    exit 3
+fi
+
 ENABLE_OD={od_value}
 CUSTOM_OD=/workspaces/isaac_ros-dev/config/custom_circle_detection.yaml
 ZED_COMMON=/workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/sensors/zed_common.yaml
@@ -486,10 +521,24 @@ fi
 
 # Overlay NOMAD nvblox config
 NOMAD_CFG=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml
-NVBLOX_BASE=$(python3 -c "from ament_index_python.packages import get_package_share_directory; print(get_package_share_directory('nvblox_examples_bringup'))" 2>/dev/null || true)/config/nvblox/nvblox_base.yaml
-if [ -f "$NOMAD_CFG" ] && [ -f "$NVBLOX_BASE" ]; then
+NVBLOX_BASE_A=$(python3 -c "from ament_index_python.packages import get_package_share_directory; print(get_package_share_directory(\"nvblox_examples_bringup\"))" 2>/dev/null || true)/config/nvblox/nvblox_base.yaml
+NVBLOX_BASE_B=/workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/nvblox/nvblox_base.yaml
+NVBLOX_BASE=""
+for cand in "$NVBLOX_BASE_A" "$NVBLOX_BASE_B"; do
+    if [ -f "$cand" ]; then
+        NVBLOX_BASE="$cand"
+        break
+    fi
+done
+if [ -f "$NOMAD_CFG" ] && [ -n "$NVBLOX_BASE" ]; then
     cp "$NOMAD_CFG" "$NVBLOX_BASE"
-    echo "Applied NOMAD nvblox config"
+        echo "Applied NOMAD nvblox config to $NVBLOX_BASE"
+        sha256sum "$NOMAD_CFG" "$NVBLOX_BASE" 2>/dev/null || true
+else
+        echo "WARNING: Could not resolve nvblox base config path"
+        echo "  NOMAD_CFG=$NOMAD_CFG"
+        echo "  NVBLOX_BASE_A=$NVBLOX_BASE_A"
+        echo "  NVBLOX_BASE_B=$NVBLOX_BASE_B"
 fi
 
 # Patch ZED publish resolution
@@ -503,11 +552,18 @@ if [ ! -f "$NOMAD_LAUNCH" ]; then
     exit 2
 fi
 
-ros2 launch "$NOMAD_LAUNCH" &
+ros2 launch "$NOMAD_LAUNCH" enable_nav2:=false &
 echo $! > /tmp/zed_nvblox.pid
 
+# Wait for launch process to stabilize before starting bridge.
+sleep 10
+if ! kill -0 "$(cat /tmp/zed_nvblox.pid 2>/dev/null)" 2>/dev/null; then
+    echo "ERROR: ZED/nvblox launch exited early"
+    exit 4
+fi
+
 # Wait for topics then launch bridge
-sleep 12
+sleep 2
 python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom &
 echo $! > /tmp/ros_bridge.pid
 
@@ -530,6 +586,42 @@ wait
             )
             if result.returncode != 0:
                 return {"success": False, "error": f"Launch failed: {result.stderr.strip()}"}
+
+            # Validate launch stayed alive long enough to be meaningful.
+            launch_ok = False
+            for _ in range(12):
+                time.sleep(1)
+                probe = subprocess.run(
+                    ["docker", "exec", container, "bash", "-c",
+                     "test -f /tmp/zed_nvblox.pid && kill -0 $(cat /tmp/zed_nvblox.pid) 2>/dev/null"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if probe.returncode == 0:
+                    launch_ok = True
+                    break
+
+            if not launch_ok:
+                log_tail = subprocess.run(
+                    ["docker", "exec", container, "tail", "-80", "/tmp/zed_nvblox.log"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                snippet = (log_tail.stdout or log_tail.stderr or "")[-600:]
+                return {
+                    "success": False,
+                    "error": "nvblox launch did not stay alive (likely camera or launch config issue)",
+                    "logs": snippet,
+                }
+
+            cam_err = subprocess.run(
+                ["docker", "exec", container, "bash", "-c",
+                 "grep -q 'CAMERA NOT DETECTED' /tmp/zed_nvblox.log"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if cam_err.returncode == 0:
+                return {
+                    "success": False,
+                    "error": "ZED camera not detected inside container",
+                }
 
             return {
                 "success": True,
@@ -2123,15 +2215,46 @@ wait
         
         # Check mavlink-router
         try:
-            result = subprocess.run(
-                ["systemctl", "is-active", "mavlink-router"],
-                capture_output=True,
-                text=True,
-                timeout=2,
-            )
+            systemd_status = "inactive"
+            systemd_running = False
+            try:
+                result = subprocess.run(
+                    ["systemctl", "is-active", "mavlink-router"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+                systemd_status = result.stdout.strip() or "inactive"
+                systemd_running = result.returncode == 0
+            except Exception:
+                pass
+
+            process_running = False
+            try:
+                process_result = subprocess.run(
+                    ["pgrep", "-f", "mavlink-routerd"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+                process_running = process_result.returncode == 0
+            except Exception:
+                process_running = False
+
+            cubepilot_present = os.path.exists("/dev/ttyACM0")
+            mavlink_running = systemd_running or process_running
+
+            if mavlink_running:
+                mavlink_status = "active"
+            elif not cubepilot_present:
+                mavlink_status = "no_cubepilot"
+            else:
+                mavlink_status = systemd_status
+
             services["mavlink_router"] = {
-                "status": result.stdout.strip(),
-                "running": result.returncode == 0,
+                "status": mavlink_status,
+                "running": mavlink_running,
+                "cubepilot_present": cubepilot_present,
             }
         except Exception as e:
             services["mavlink_router"] = {"status": "error", "error": str(e)}
@@ -2144,9 +2267,25 @@ wait
                 text=True,
                 timeout=2,
             )
+            systemd_status = result.stdout.strip() or "inactive"
+            systemd_running = result.returncode == 0
+
+            process_running = False
+            try:
+                process_result = subprocess.run(
+                    ["pgrep", "-x", "mediamtx"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+                process_running = process_result.returncode == 0
+            except Exception:
+                process_running = False
+
+            mediamtx_running = systemd_running or process_running
             services["mediamtx"] = {
-                "status": result.stdout.strip(),
-                "running": result.returncode == 0,
+                "status": "active" if mediamtx_running else systemd_status,
+                "running": mediamtx_running,
             }
         except Exception as e:
             services["mediamtx"] = {"status": "error", "error": str(e)}
@@ -2166,10 +2305,38 @@ wait
                 **isaac_bridge.get_status(),
             }
         else:
+            container_running = False
+            bridge_running = False
+            try:
+                result = subprocess.run(
+                    ["docker", "ps", "--filter", "name=nomad_isaac_ros", "--format", "{{.Status}}"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                container_running = bool(result.stdout.strip())
+            except Exception:
+                pass
+
+            if container_running:
+                try:
+                    result = subprocess.run(
+                        ["docker", "exec", "nomad_isaac_ros", "bash", "-c",
+                         "ps aux | grep -v grep | grep -c ros_http_bridge 2>/dev/null || echo 0"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                    bridge_running = int(result.stdout.strip()) > 0
+                except Exception:
+                    pass
+
+            external_bridge_active = container_running and bridge_running
             services["isaac_ros"] = {
-                "status": "not_initialized",
-                "running": False,
-                "message": "Isaac ROS bridge not enabled",
+                "status": "active" if external_bridge_active else "not_initialized",
+                "running": external_bridge_active,
+                "message": "Active via external ROS-HTTP bridge" if external_bridge_active
+                           else "Isaac ROS bridge not enabled",
             }
         
         # VIO status
@@ -2250,30 +2417,16 @@ wait
             pass
 
         if container_running:
-            # Check if nvblox is running by looking for nvblox_node topics
-            # These topics only exist when nvblox is actively running
+            # Process-based check: robust against stale ROS topic-daemon state.
             try:
                 result = subprocess.run(
                     ["docker", "exec", "nomad_isaac_ros", "bash", "-c",
-                     "source /opt/ros/humble/setup.bash 2>/dev/null; "
-                     "ros2 topic list 2>/dev/null | grep -q /nvblox_node/mesh && echo 1 || echo 0"],
-                    capture_output=True, text=True, timeout=8,
+                     "ps aux | grep -v grep | grep -c 'component_container_mt\\|component_container\\|zed_example.launch.py\\|nomad_zed_nvblox.launch.py' 2>/dev/null || echo 0"],
+                    capture_output=True, text=True, timeout=5,
                 )
-                nvblox_running = result.stdout.strip() == "1"
+                nvblox_running = int(result.stdout.strip() or "0") > 0
             except Exception:
                 pass
-            
-            # Fallback: Check if component_container_mt with nvblox is running
-            if not nvblox_running:
-                try:
-                    result = subprocess.run(
-                        ["docker", "exec", "nomad_isaac_ros", "bash", "-c",
-                         "ps aux | grep -v grep | grep -c 'nvblox_container\\|launch_zed_nvblox' 2>/dev/null || echo 0"],
-                        capture_output=True, text=True, timeout=5,
-                    )
-                    nvblox_running = int(result.stdout.strip()) > 0
-                except Exception:
-                    pass
             try:
                 result = subprocess.run(
                     ["docker", "exec", "nomad_isaac_ros", "bash", "-c",
@@ -2409,7 +2562,10 @@ wait
             }
 
     @app.post("/api/isaac/launch-nvblox", tags=["Isaac ROS"])
-    async def isaac_launch_nvblox(request: Request):
+    async def isaac_launch_nvblox(
+        request: Request,
+        enable_od: bool = Query(default=False, description="Enable ZED object detection (less stable on current stack)")
+    ):
         """
         Launch nvblox + ROS-HTTP bridge inside a running container.
 
@@ -2418,9 +2574,9 @@ wait
         packages are already built.  Kills any existing nvblox / bridge
         processes first, applies NOMAD config overlay, then launches both.
         """
-        result = _launch_nvblox_bridge_with_od(enable_od=True)
+        result = _launch_nvblox_bridge_with_od(enable_od=enable_od)
         if result.get("success"):
-            request.app.state.detection_enabled = True
+            request.app.state.detection_enabled = enable_od
             request.app.state.detection_last_update = 0.0
         return result
 

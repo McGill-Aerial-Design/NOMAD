@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Newtonsoft.Json.Linq;
@@ -19,6 +20,21 @@ namespace NOMAD.MissionPlanner
         private readonly DualLinkSender _sender;
         private readonly System.Threading.Timer _pollTimer;
         private readonly int _pollIntervalMs;
+        private int _isPolling = 0;
+        private int _pollCycle = 0;
+
+        // Track transient failures so we can avoid UI flapping and log spam.
+        private int _servicesFailStreak = 0;
+        private int _isaacFailStreak = 0;
+        private int _vioFailStreak = 0;
+        private int _videoFailStreak = 0;
+        private int _slamFailStreak = 0;
+
+        private static bool ShouldLogStreak(int streak)
+        {
+            // Ignore one-off timeouts/cancels. Log only when persistent.
+            return streak >= 5 && (streak == 5 || streak % 10 == 0);
+        }
         
         // Service status indicators
         private Label _lblMavlinkStatus;
@@ -58,7 +74,9 @@ namespace NOMAD.MissionPlanner
         public ServiceControlPanel(DualLinkSender sender, int pollIntervalMs = 3000)
         {
             _sender = sender ?? throw new ArgumentNullException(nameof(sender));
-            _pollIntervalMs = pollIntervalMs;
+            // Service Control performs multiple network calls per cycle.
+            // Clamp to a sane minimum to avoid timeout churn under load.
+            _pollIntervalMs = Math.Max(5000, pollIntervalMs);
             
             InitializeUI();
             
@@ -69,6 +87,8 @@ namespace NOMAD.MissionPlanner
                 TimeSpan.FromSeconds(2),
                 TimeSpan.FromMilliseconds(_pollIntervalMs)
             );
+
+            LogMessage("Service poller v2 active (stability patch loaded)");
         }
         
         private void InitializeUI()
@@ -382,183 +402,271 @@ namespace NOMAD.MissionPlanner
 
         private async void PollServicesAsync()
         {
+            // Prevent overlapping async polls (Timer can fire again before prior await chain completes).
+            if (Interlocked.Exchange(ref _isPolling, 1) == 1)
+                return;
+
             try
             {
-                // Check Edge Core (via health endpoint)
-                var healthResult = await _sender.GetHealthAsync();
-                UpdateStatusLabel(_lblEdgeCoreStatus, healthResult.Success);
-                
-                // Check MAVLink Router service status (is the service running?)
-                var mavlinkServiceResult = await _sender.GetServiceStatusAsync("mavlink-router");
-                bool mavlinkServiceActive = mavlinkServiceResult.Success &&
-                    mavlinkServiceResult.Data?.Trim().Equals("active", StringComparison.OrdinalIgnoreCase) == true;
-                
-                if (healthResult.Success && mavlinkServiceActive)
+                int cycle = Interlocked.Increment(ref _pollCycle);
+                bool pollIsaac = (cycle == 1) || (cycle % 2 == 0);
+                bool pollVio = (cycle == 1) || (cycle % 2 == 0);
+                bool pollVideoAndSlam = (cycle == 1) || (cycle % 3 == 0);
+                bool servicesFresh = false;
+                bool isaacRunningFromServices = false;
+
+                // Primary source of truth for service states.
+                var servicesResult = await _sender.GetServicesStatusAsync();
+                if (servicesResult.Success)
                 {
                     try
                     {
-                        var healthData = JObject.Parse(healthResult.Data);
-                        var fcConnected = healthData["connected"]?.Value<bool>() ?? false;
-                        string mavStatus = fcConnected ? "Running (FC linked)" : "Running (no FC)";
-                        UpdateStatusLabel(_lblMavlinkStatus, true, mavStatus);
+                        var services = JObject.Parse(servicesResult.Data);
+
+                        bool edgeRunning = services["edge_core"]?["running"]?.Value<bool>() ?? false;
+                        UpdateStatusLabel(_lblEdgeCoreStatus, edgeRunning, edgeRunning ? "Running" : "Stopped");
+
+                        bool mavRunning = services["mavlink_router"]?["running"]?.Value<bool>() ?? false;
+                        string mavRaw = services["mavlink_router"]?["status"]?.Value<string>() ?? string.Empty;
+                        string mavText;
+                        if (mavRunning)
+                        {
+                            mavText = "Running";
+                        }
+                        else if (mavRaw.Equals("no_cubepilot", StringComparison.OrdinalIgnoreCase))
+                        {
+                            mavText = "No CubePilot";
+                        }
+                        else
+                        {
+                            mavText = !string.IsNullOrWhiteSpace(mavRaw) ? $"Stopped ({mavRaw})" : "Stopped";
+                        }
+                        UpdateStatusLabel(_lblMavlinkStatus, mavRunning, mavText);
+
+                        bool mediamtxRunning = services["mediamtx"]?["running"]?.Value<bool>() ?? false;
+                        UpdateStatusLabel(_lblMediamtxStatus, mediamtxRunning, mediamtxRunning ? "Running" : "Stopped");
+
+                        bool isaacRunning = services["isaac_ros"]?["running"]?.Value<bool>() ?? false;
+                        string isaacMessage = services["isaac_ros"]?["message"]?.Value<string>();
+                        string isaacText = isaacRunning
+                            ? "Running"
+                            : (string.IsNullOrWhiteSpace(isaacMessage) ? "Not Running" : isaacMessage);
+                        UpdateStatusLabel(_lblIsaacRosStatus, isaacRunning, isaacText);
+                        isaacRunningFromServices = isaacRunning;
+
+                        servicesFresh = true;
+                        _servicesFailStreak = 0;
                     }
-                    catch
+                    catch (Exception parseEx)
                     {
-                        UpdateStatusLabel(_lblMavlinkStatus, true, "Running");
+                        _servicesFailStreak++;
+                        if (ShouldLogStreak(_servicesFailStreak))
+                            LogMessage($"Services parse warning (streak {_servicesFailStreak}): {parseEx.Message}");
                     }
-                }
-                else if (mavlinkServiceActive)
-                {
-                    UpdateStatusLabel(_lblMavlinkStatus, true, "Running (no FC)");
-                }
-                else if (healthResult.Success)
-                {
-                    UpdateStatusLabel(_lblMavlinkStatus, false, "Service Stopped");
                 }
                 else
                 {
-                    UpdateStatusLabel(_lblMavlinkStatus, false, "Offline");
+                    _servicesFailStreak++;
+                    if (ShouldLogStreak(_servicesFailStreak))
+                        LogMessage($"Services poll warning (streak {_servicesFailStreak}): {servicesResult.Message}");
                 }
-                
-                // Check MediaMTX
-                var mediamtxResult = await _sender.GetServiceStatusAsync("mediamtx");
-                bool mediamtxActive = mediamtxResult.Success && 
-                    mediamtxResult.Data?.Trim().Equals("active", StringComparison.OrdinalIgnoreCase) == true;
-                UpdateStatusLabel(_lblMediamtxStatus, mediamtxActive);
+
+                // If the primary snapshot is unavailable, keep last-known labels and
+                // skip the rest of endpoint-specific probes this cycle.
+                if (!servicesFresh)
+                {
+                    UpdateStatusPendingIfChecking(_lblIsaacRosStatus, "Waiting...");
+                    UpdateStatusPendingIfChecking(_lblNvbloxStatus, "Waiting...");
+                    UpdateStatusPendingIfChecking(_lblVioStatus, "Waiting...");
+                    UpdateStatusPendingIfChecking(_lblVideoBridgesStatus, "Waiting...");
+                    UpdateStatusPendingIfChecking(_lblSlamStatus, "Waiting...");
+                    UpdateLabel(_lblLastUpdate, $"Last update: {DateTime.Now:HH:mm:ss} (partial/stale)");
+                    return;
+                }
                 
                 // Check Isaac ROS status (container + nvblox + bridge)
-                var isaacResult = await _sender.GetIsaacStatusAsync();
-                if (isaacResult.Success)
+                if (pollIsaac)
                 {
-                    try
+                    var isaacResult = await _sender.GetIsaacStatusAsync();
+                    if (isaacResult.Success)
                     {
-                        var isaacData = JObject.Parse(isaacResult.Data);
-                        var containerRunning = isaacData["container_running"]?.Value<bool>() ?? false;
-                        var nvbloxRunning = isaacData["nvblox_running"]?.Value<bool>() ?? false;
-                        var bridgeRunning = isaacData["bridge_running"]?.Value<bool>() ?? false;
+                        try
+                        {
+                            var isaacData = JObject.Parse(isaacResult.Data);
+                            var containerRunning = isaacData["container_running"]?.Value<bool>() ?? false;
+                            var nvbloxRunning = isaacData["nvblox_running"]?.Value<bool>() ?? false;
+                            var bridgeRunning = isaacData["bridge_running"]?.Value<bool>() ?? false;
 
-                        UpdateStatusLabel(_lblIsaacRosStatus, containerRunning, containerRunning ? "Running" : "Not Running");
+                            UpdateStatusLabel(_lblIsaacRosStatus, containerRunning, containerRunning ? "Running" : "Not Running");
 
-                        if (nvbloxRunning && bridgeRunning)
-                            UpdateStatusLabel(_lblNvbloxStatus, true, "Running");
-                        else if (nvbloxRunning)
-                            UpdateStatusLabel(_lblNvbloxStatus, false, "No Bridge");
-                        else if (containerRunning)
-                            UpdateStatusLabel(_lblNvbloxStatus, false, "Stopped");
-                        else
-                            UpdateStatusLabel(_lblNvbloxStatus, false, "No Container");
+                            if (nvbloxRunning && bridgeRunning)
+                                UpdateStatusLabel(_lblNvbloxStatus, true, "Running");
+                            else if (nvbloxRunning)
+                                UpdateStatusLabel(_lblNvbloxStatus, false, "No Bridge");
+                            else if (containerRunning)
+                                UpdateStatusLabel(_lblNvbloxStatus, false, "Stopped");
+                            else
+                                UpdateStatusLabel(_lblNvbloxStatus, false, "No Container");
+
+                            _isaacFailStreak = 0;
+                        }
+                        catch (Exception parseEx)
+                        {
+                            _isaacFailStreak++;
+                            if (ShouldLogStreak(_isaacFailStreak))
+                                LogMessage($"Isaac status parse warning (streak {_isaacFailStreak}): {parseEx.Message}");
+                        }
                     }
-                    catch
+                    else
                     {
-                        UpdateStatusLabel(_lblIsaacRosStatus, false, "Not Running");
-                        UpdateStatusLabel(_lblNvbloxStatus, false, "Unknown");
+                        _isaacFailStreak++;
+                        if (ShouldLogStreak(_isaacFailStreak))
+                            LogMessage($"Isaac status warning (streak {_isaacFailStreak}): {isaacResult.Message}");
                     }
-                }
-                else
-                {
-                    UpdateStatusLabel(_lblIsaacRosStatus, false, "Not Running");
-                    UpdateStatusLabel(_lblNvbloxStatus, false, "Offline");
                 }
                 
                 // Check VIO status
-                var vioResult = await _sender.GetVioStatusAsync();
-                if (vioResult.Success)
+                if (pollVio)
                 {
-                    try
+                    var vioResult = await _sender.GetVioStatusAsync();
+                    if (vioResult.Success)
                     {
-                        var vioData = JObject.Parse(vioResult.Data);
-                        var health = vioData["health"]?.Value<string>() ?? "unknown";
-                        var source = vioData["source"]?.Value<string>() ?? "none";
-                        var confidence = vioData["tracking_confidence"]?.Value<double>() ?? 0;
-                        
-                        bool healthy = health == "healthy";
-                        string statusText = $"{health} ({source})";
-                        if (confidence > 0)
-                            statusText += $" {confidence:P0}";
-                        
-                        UpdateStatusLabel(_lblVioStatus, healthy, statusText);
+                        try
+                        {
+                            var vioData = JObject.Parse(vioResult.Data);
+                            var health = vioData["health"]?.Value<string>() ?? "unknown";
+                            var source = vioData["source"]?.Value<string>() ?? "none";
+                            var confidence = vioData["tracking_confidence"]?.Value<double>() ?? 0;
+                            
+                            bool healthy = health == "healthy";
+                            string statusText = $"{health} ({source})";
+                            if (health.Equals("unknown", StringComparison.OrdinalIgnoreCase) && isaacRunningFromServices)
+                                statusText = "warming up (isaac_ros)";
+                            if (confidence > 0)
+                                statusText += $" {confidence:P0}";
+                            
+                            UpdateStatusLabel(_lblVioStatus, healthy, statusText);
+                            _vioFailStreak = 0;
+                        }
+                        catch (Exception parseEx)
+                        {
+                            _vioFailStreak++;
+                            if (ShouldLogStreak(_vioFailStreak))
+                                LogMessage($"VIO parse warning (streak {_vioFailStreak}): {parseEx.Message}");
+                        }
                     }
-                    catch
+                    else
                     {
-                        UpdateStatusLabel(_lblVioStatus, false, "Error");
+                        _vioFailStreak++;
+                        if (ShouldLogStreak(_vioFailStreak))
+                            LogMessage($"VIO status warning (streak {_vioFailStreak}): {vioResult.Message}");
                     }
-                }
-                else
-                {
-                    UpdateStatusLabel(_lblVioStatus, false, "Unavailable");
-                }
-                
-                // Get trajectory points
-                var trajResult = await _sender.GetVioTrajectoryAsync(10);
-                if (trajResult.Success)
-                {
-                    try
+
+                    // Get trajectory points less aggressively (same cadence as VIO poll)
+                    var trajResult = await _sender.GetVioTrajectoryAsync(10);
+                    if (trajResult.Success)
                     {
-                        var trajData = JObject.Parse(trajResult.Data);
-                        var totalPoints = trajData["total_points"]?.Value<int>() ?? 0;
-                        UpdateLabel(_lblVioTrajectoryPoints, $"{totalPoints} points");
+                        try
+                        {
+                            var trajData = JObject.Parse(trajResult.Data);
+                            var totalPoints = trajData["total_points"]?.Value<int>() ?? 0;
+                            UpdateLabel(_lblVioTrajectoryPoints, $"{totalPoints} points");
+                        }
+                        catch { }
                     }
-                    catch { }
                 }
                 
                 // Video bridge status (single bridge configuration)
-                var bridgesResult = await _sender.GetVideoBridgesStatusAsync();
-                if (bridgesResult.Success)
+                if (pollVideoAndSlam)
                 {
-                    try
+                    var bridgesResult = await _sender.GetVideoBridgesStatusAsync();
+                    if (bridgesResult.Success)
                     {
-                        var data = JObject.Parse(bridgesResult.Data);
-                        var primary = data["bridges"]?["primary"]?["state"]?.ToString() ?? "stopped";
-                        // Only check primary bridge (we simplified to single bridge)
-                        bool isStreaming = primary == "playing";
-                        var fps = data["bridges"]?["primary"]?["fps"]?.Value<float>() ?? 0;
-                        string statusText = isStreaming ? $"Streaming ({fps:F1} fps)" : "Stopped";
-                        UpdateStatusLabel(_lblVideoBridgesStatus, isStreaming, statusText);
+                        try
+                        {
+                            var data = JObject.Parse(bridgesResult.Data);
+                            var primary = data["bridges"]?["primary"]?["state"]?.ToString() ?? "stopped";
+                            // Only check primary bridge (we simplified to single bridge)
+                            bool isStreaming = primary == "playing";
+                            var fps = data["bridges"]?["primary"]?["fps"]?.Value<float>() ?? 0;
+                            string statusText = isStreaming ? $"Streaming ({fps:F1} fps)" : "Stopped";
+                            UpdateStatusLabel(_lblVideoBridgesStatus, isStreaming, statusText);
+                            _videoFailStreak = 0;
+                        }
+                        catch (Exception parseEx)
+                        {
+                            _videoFailStreak++;
+                            if (ShouldLogStreak(_videoFailStreak))
+                                LogMessage($"Video status parse warning (streak {_videoFailStreak}): {parseEx.Message}");
+                        }
                     }
-                    catch { UpdateStatusLabel(_lblVideoBridgesStatus, false, "Parse Error"); }
-                }
-                else
-                {
-                    UpdateStatusLabel(_lblVideoBridgesStatus, false, "Offline");
-                }
+                    else
+                    {
+                        _videoFailStreak++;
+                        if (ShouldLogStreak(_videoFailStreak))
+                            LogMessage($"Video status warning (streak {_videoFailStreak}): {bridgesResult.Message}");
+                    }
 
-                // SLAM status
-                var slamResult = await _sender.GetSlamStatusAsync();
-                if (slamResult.Success)
-                {
-                    try
+                    // SLAM status
+                    var slamResult = await _sender.GetSlamStatusAsync();
+                    if (slamResult.Success)
                     {
-                        var data = JObject.Parse(slamResult.Data);
-                        var available = data["available"]?.Value<bool>() ?? false;
-                        var running = data["running"]?.Value<bool>() ?? false;
-                        if (running)
+                        try
                         {
-                            var blocks = data["block_count"]?.Value<int>() ?? 0;
-                            UpdateStatusLabel(_lblSlamStatus, true, $"Active ({blocks} blocks)");
+                            var data = JObject.Parse(slamResult.Data);
+                            var available = data["available"]?.Value<bool>() ?? false;
+                            var running = data["running"]?.Value<bool>() ?? false;
+                            if (running)
+                            {
+                                var blocks = data["block_count"]?.Value<int>() ?? 0;
+                                UpdateStatusLabel(_lblSlamStatus, true, $"Active ({blocks} blocks)");
+                            }
+                            else if (available)
+                            {
+                                UpdateStatusLabel(_lblSlamStatus, false, "Available (no data)");
+                            }
+                            else
+                            {
+                                var error = (string)data["error"];
+                                if (isaacRunningFromServices &&
+                                    string.Equals(error, "No mesh data available", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    UpdateStatusLabel(_lblSlamStatus, false, "Waiting for mesh");
+                                }
+                                else
+                                {
+                                    UpdateStatusLabel(_lblSlamStatus, false, error ?? "Inactive");
+                                }
+                            }
+
+                            _slamFailStreak = 0;
                         }
-                        else if (available)
+                        catch (Exception parseEx)
                         {
-                            UpdateStatusLabel(_lblSlamStatus, false, "Available (no data)");
-                        }
-                        else
-                        {
-                            var error = (string)data["error"];
-                            UpdateStatusLabel(_lblSlamStatus, false, error ?? "Inactive");
+                            _slamFailStreak++;
+                            if (ShouldLogStreak(_slamFailStreak))
+                                LogMessage($"SLAM status parse warning (streak {_slamFailStreak}): {parseEx.Message}");
                         }
                     }
-                    catch { UpdateStatusLabel(_lblSlamStatus, false, "Error"); }
-                }
-                else
-                {
-                    UpdateStatusLabel(_lblSlamStatus, false, "Unavailable");
+                    else
+                    {
+                        _slamFailStreak++;
+                        if (ShouldLogStreak(_slamFailStreak))
+                            LogMessage($"SLAM status warning (streak {_slamFailStreak}): {slamResult.Message}");
+                    }
                 }
                 
                 // Update timestamp
-                UpdateLabel(_lblLastUpdate, $"Last update: {DateTime.Now:HH:mm:ss}");
+                var suffix = servicesFresh ? string.Empty : " (partial/stale)";
+                UpdateLabel(_lblLastUpdate, $"Last update: {DateTime.Now:HH:mm:ss}{suffix}");
             }
             catch (Exception ex)
             {
                 LogMessage($"Poll error: {ex.Message}");
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _isPolling, 0);
             }
         }
         
@@ -576,6 +684,28 @@ namespace NOMAD.MissionPlanner
                 
                 label.Text = customText ?? (isOk ? "Running" : "Stopped");
                 label.ForeColor = isOk ? Color.LimeGreen : Color.OrangeRed;
+            }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+        }
+
+        private void UpdateStatusPendingIfChecking(Label label, string text)
+        {
+            if (label == null || label.IsDisposed) return;
+
+            try
+            {
+                if (label.InvokeRequired)
+                {
+                    label.BeginInvoke(new Action(() => UpdateStatusPendingIfChecking(label, text)));
+                    return;
+                }
+
+                if (string.Equals(label.Text, "Checking...", StringComparison.OrdinalIgnoreCase))
+                {
+                    label.Text = text;
+                    label.ForeColor = Color.Goldenrod;
+                }
             }
             catch (ObjectDisposedException) { }
             catch (InvalidOperationException) { }
