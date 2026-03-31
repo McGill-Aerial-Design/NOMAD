@@ -1186,7 +1186,12 @@ class ROSHTTPBridge(Node):
 
         Primary mode: extract actual triangle vertices, indices, and per-vertex
         colors from the nvblox Mesh message for smooth surface rendering.
-        Falls back to block-averaged colors if triangle extraction fails.
+
+        nvblox_msgs/MeshBlock stores data as FLAT arrays:
+          vertices: float32[]  — [x0, y0, z0, x1, y1, z1, ...] (stride 3)
+          triangles: uint16[]  — [i0, i1, i2, ...] (stride 3)
+          colors: float32[]    — [r0, g0, b0, a0, r1, g1, b1, a1, ...] (stride 4, RGBA 0-1)
+          normals: float32[]   — [nx, ny, nz, ...] (stride 3)
         """
         if not self._enable_mesh:
             return
@@ -1196,60 +1201,116 @@ class ROSHTTPBridge(Node):
             if now - self._last_mesh_send_time < self._mesh_send_interval_s:
                 return
 
-            block_size = msg.block_size_m if hasattr(msg, 'block_size_m') else 0.2
+            # nvblox_msgs/Mesh field name varies: 'block_size' or 'block_size_m'
+            if hasattr(msg, 'block_size') and msg.block_size > 0:
+                block_size = msg.block_size
+            elif hasattr(msg, 'block_size_m') and msg.block_size_m > 0:
+                block_size = msg.block_size_m
+            else:
+                block_size = 0.2
 
-            # Triangle mesh mode: extract actual vertices, triangles, and colors
-            # from nvblox MeshBlock data for smooth surface rendering.
+            # One-time diagnostic: log the structure of the first non-empty block
+            if not hasattr(self, '_mesh_structure_logged'):
+                self._mesh_structure_logged = True
+                n_blocks = len(msg.blocks) if hasattr(msg, 'blocks') else 0
+                n_indices = len(msg.block_indices) if hasattr(msg, 'block_indices') else 0
+                self.get_logger().info(
+                    f"Mesh msg structure: block_size={block_size}, "
+                    f"blocks={n_blocks}, block_indices={n_indices}, "
+                    f"clear={getattr(msg, 'clear', '?')}, "
+                    f"header.frame_id={msg.header.frame_id if hasattr(msg, 'header') else '?'}"
+                )
+                for bi, blk in enumerate(msg.blocks[:3]):
+                    attrs = [a for a in dir(blk) if not a.startswith('_')]
+                    vlen = len(blk.vertices) if hasattr(blk, 'vertices') else -1
+                    tlen = len(blk.triangles) if hasattr(blk, 'triangles') else -1
+                    clen = len(blk.colors) if hasattr(blk, 'colors') else -1
+                    # Check if vertices are objects (Point32) or flat floats
+                    v_sample = None
+                    if vlen > 0:
+                        v0 = blk.vertices[0]
+                        v_sample = f"type={type(v0).__name__}, hasattr_x={hasattr(v0, 'x')}, val={v0}"
+                    self.get_logger().info(
+                        f"  block[{bi}]: verts={vlen}, tris={tlen}, colors={clen}, "
+                        f"attrs={attrs[:15]}, v_sample={v_sample}"
+                    )
+
             all_vertices = []
             all_indices = []
             all_colors = []
             vertex_offset = 0
             blocks_processed = 0
 
-            for i, ros_block in enumerate(msg.blocks[:500]):  # Cap blocks per message
+            for ros_block in msg.blocks[:500]:  # Cap blocks per message
                 if not hasattr(ros_block, 'vertices') or not ros_block.vertices:
                     continue
                 if not hasattr(ros_block, 'triangles') or not ros_block.triangles:
                     continue
 
-                # Extract vertices (Point32: x, y, z)
+                raw_verts = ros_block.vertices
+                raw_tris = ros_block.triangles
+                raw_colors = ros_block.colors if hasattr(ros_block, 'colors') else []
+
+                # Detect format: Point32 objects vs flat float32 array
+                # If first element is a float/int, it's a flat array (stride 3).
+                # If it has .x attribute, it's a Point32 list.
                 block_verts = []
-                for v in ros_block.vertices:
-                    if hasattr(v, 'x'):
+                if len(raw_verts) > 0 and hasattr(raw_verts[0], 'x'):
+                    # Point32 objects
+                    for v in raw_verts:
                         block_verts.append([round(float(v.x), 4),
                                             round(float(v.y), 4),
                                             round(float(v.z), 4)])
-                    else:
-                        block_verts.append([round(float(v[0]), 4),
-                                            round(float(v[1]), 4),
-                                            round(float(v[2]), 4)])
+                elif len(raw_verts) >= 3:
+                    # Flat float32 array: [x0, y0, z0, x1, y1, z1, ...]
+                    for vi in range(0, len(raw_verts) - 2, 3):
+                        block_verts.append([round(float(raw_verts[vi]), 4),
+                                            round(float(raw_verts[vi + 1]), 4),
+                                            round(float(raw_verts[vi + 2]), 4)])
 
                 if not block_verts:
                     continue
 
-                # Extract triangle indices (flat array: [i0, i1, i2, ...])
-                tri_indices = list(ros_block.triangles)
+                # Triangle indices: always a flat uint16/int array
+                tri_indices = [int(t) for t in raw_tris]
                 if len(tri_indices) < 3:
                     continue
 
-                # Extract per-vertex colors (ColorRGBA: r, g, b, a in 0-1)
+                # Extract per-vertex colors
                 block_colors = []
-                has_colors = hasattr(ros_block, 'colors') and ros_block.colors
-                if has_colors and len(ros_block.colors) == len(block_verts):
-                    for c in ros_block.colors:
-                        if hasattr(c, 'r'):
+                if raw_colors and len(raw_colors) > 0:
+                    if hasattr(raw_colors[0], 'r'):
+                        # ColorRGBA objects
+                        for c in raw_colors:
                             block_colors.append([int(c.r * 255),
                                                  int(c.g * 255),
                                                  int(c.b * 255)])
-                        else:
-                            block_colors.append([int(c[0]), int(c[1]), int(c[2])])
+                    else:
+                        # Flat float32 array: [r0, g0, b0, a0, r1, g1, b1, a1, ...]
+                        # RGBA stride 4, values in 0.0-1.0
+                        for ci in range(0, len(raw_colors) - 3, 4):
+                            block_colors.append([int(float(raw_colors[ci]) * 255),
+                                                 int(float(raw_colors[ci + 1]) * 255),
+                                                 int(float(raw_colors[ci + 2]) * 255)])
+
+                # Validate triangle indices against vertex count
+                max_idx = max(tri_indices) if tri_indices else 0
+                if max_idx >= len(block_verts):
+                    continue  # Invalid indices, skip this block
 
                 # Offset triangle indices for the global vertex array
                 for idx in tri_indices:
-                    all_indices.append(int(idx) + vertex_offset)
+                    all_indices.append(idx + vertex_offset)
 
                 all_vertices.extend(block_verts)
-                all_colors.extend(block_colors)
+                if block_colors:
+                    # Pad or trim to match vertex count
+                    while len(block_colors) < len(block_verts):
+                        block_colors.append([128, 128, 140])  # default gray
+                    all_colors.extend(block_colors[:len(block_verts)])
+                else:
+                    all_colors.extend([[128, 128, 140]] * len(block_verts))
+
                 vertex_offset += len(block_verts)
                 blocks_processed += 1
 
@@ -1260,28 +1321,12 @@ class ROSHTTPBridge(Node):
             # Subsample if too large (cap at ~20k vertices to keep payload manageable)
             max_vertices = 20000
             if len(all_vertices) > max_vertices:
-                # Keep every Nth vertex and remap indices
-                stride = len(all_vertices) / float(max_vertices)
-                keep_set = set(int(i * stride) for i in range(max_vertices))
-                old_to_new = {}
-                new_verts = []
-                new_colors = []
-                new_idx = 0
-                for old_idx in sorted(keep_set):
-                    old_to_new[old_idx] = new_idx
-                    new_verts.append(all_vertices[old_idx])
-                    if old_idx < len(all_colors):
-                        new_colors.append(all_colors[old_idx])
-                    new_idx += 1
-                # Rebuild triangles using only kept vertices
+                ratio = max_vertices / float(len(all_vertices))
+                # Subsample triangles: keep ratio of triangles, which keeps their vertices
                 new_indices = []
-                for ti in range(0, len(all_indices), 3):
-                    if ti + 2 < len(all_indices):
-                        i0, i1, i2 = all_indices[ti], all_indices[ti+1], all_indices[ti+2]
-                        if i0 in old_to_new and i1 in old_to_new and i2 in old_to_new:
-                            new_indices.extend([old_to_new[i0], old_to_new[i1], old_to_new[i2]])
-                all_vertices = new_verts
-                all_colors = new_colors
+                for ti in range(0, len(all_indices) - 2, 3):
+                    if (ti // 3) % max(1, int(1.0 / ratio)) == 0:
+                        new_indices.extend(all_indices[ti:ti + 3])
                 all_indices = new_indices
 
             camera_pose = self._get_camera_pose()
@@ -1290,7 +1335,7 @@ class ROSHTTPBridge(Node):
                 "mode": "triangle",
                 "vertices": all_vertices,       # [[x,y,z], ...]
                 "indices": all_indices,          # [i0, i1, i2, ...] (flat, every 3 = triangle)
-                "colors": all_colors if all_colors else None,  # [[r,g,b], ...] per vertex
+                "colors": all_colors,            # [[r,g,b], ...] per vertex (always populated)
                 "total_vertices": len(all_vertices),
                 "total_triangles": len(all_indices) // 3,
                 "block_size": block_size,
@@ -1309,7 +1354,7 @@ class ROSHTTPBridge(Node):
             self._send_mesh_to_edge_core(mesh_data)
 
         except Exception as e:
-            self.get_logger().error(f"Mesh processing error: {e}")
+            self.get_logger().error(f"Mesh processing error: {e}", exc_info=True)
     
     def _handle_voxel_marker(self, msg: 'Marker') -> None:
         """
