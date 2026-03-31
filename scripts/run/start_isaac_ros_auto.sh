@@ -558,9 +558,10 @@ export LD_LIBRARY_PATH=/opt/ros/humble/lib:/usr/local/zed/lib:${LD_LIBRARY_PATH:
 source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 export EGL_PLATFORM=device
-# Patch ZED publish resolution to native 720p
-sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
-    /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null
+# Keep ZED at 360p (default downscale 2.0) to save GPU memory.
+# 720p causes cudaErrorIllegalAddress when nvblox allocates GPU memory.
+# sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
+#     /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null
 # Overlay NOMAD nvblox config onto installed base config
 # Performance profile: 0.10m voxels, 10-15Hz rates, 2D ESDF, 8m radius
 # Tuned for Orin Nano 8GB — see config/nvblox_performance.yaml
@@ -596,10 +597,11 @@ if ! ros2 pkg list 2>/dev/null | grep -q nvblox_nav2; then
     NAV2_PREFLIGHT_OK=false
 fi
 
-# Launch ZED + nvblox using the official example launch file.
-# With ZED SDK 5.2, the CUDA conflict (cudaErrorIllegalAddress) should be resolved.
-echo "Launching ZED + nvblox (zed_example.launch.py camera:=zed2)..."
-ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2
+# Launch ZED + nvblox using NOMAD custom launch file.
+# Includes: optical frame alias TF, servo TF publisher, obstacle distance bridge.
+# Uses blocking CUDA stream (type 0) to prevent cudaErrorIllegalAddress on 8GB Jetson.
+echo "Launching ZED + nvblox (nomad_zed_nvblox.launch.py)..."
+ros2 launch /workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py
 
 # Post-launch validation: confirm nav2 lifecycle nodes are running (give 5s for startup)
 if [ "$NAV2_PREFLIGHT_OK" = true ]; then
@@ -637,9 +639,10 @@ export LD_LIBRARY_PATH=/opt/ros/humble/lib:/usr/local/zed/lib:${LD_LIBRARY_PATH:
 source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 export EGL_PLATFORM=device
-# Patch ZED publish resolution to native 720p
-sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
-    /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null
+# Keep ZED at 360p (default downscale 2.0) to save GPU memory.
+# 720p causes cudaErrorIllegalAddress when nvblox allocates GPU memory.
+# sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
+#     /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null
 ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i
 LAUNCH_SCRIPT
     docker cp "$_zed_tmp" "$CONTAINER_NAME:/tmp/launch_zed_only.sh"

@@ -84,7 +84,7 @@
     # At 10cm voxels, 4m radius is ~64k voxels
     # ==============================================================
     map_clearing_radius_m: 4.0
-    map_clearing_frame_id: "base_link"
+    map_clearing_frame_id: "zed_camera_link"
 
     # QoS settings
     input_qos: "SYSTEM_DEFAULT"

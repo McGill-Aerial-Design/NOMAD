@@ -13,8 +13,9 @@
 # and publishes 3D detections to /zed/zed_node/obj_det/objects.
 #
 # TF Tree (complete chain):
-#   map -> odom -> base_link -> servo_mount -> camera_link
-#                                              -> zed2i_left_camera_optical_frame
+#   map -> odom -> zed_camera_link -> zed_camera_center -> zed_left_camera_frame
+#                                                          -> zed_left_camera_frame_optical
+#                                                             -> zed_left_camera_optical_frame (alias)
 #
 # NOTE: ZED SDK object detection params (od_enabled, custom_onnx_file, model, etc.)
 # are read at initialization time and are NOT dynamically reconfigurable.
@@ -39,6 +40,7 @@ from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, Exec
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 
@@ -62,6 +64,11 @@ def generate_launch_description():
         default_value='false',
         description='Enable Nav2 stack for Jetson-side obstacle avoidance with nvblox costmap (set to false to disable for testing/debug)',
     )
+
+    # NOTE: Do NOT patch pub_downscale_factor to 1.0 (720p).
+    # ZED 360p (default downscale 2.0) uses ~75% less GPU memory than 720p.
+    # On 8GB Jetson Orin Nano, 720p depth causes cudaErrorIllegalAddress
+    # when nvblox allocates GPU memory for depth integration.
 
     # Servo TF publisher: publishes servo_mount -> camera_link at 50 Hz
     # reflecting the current servo pitch angle (TF-001)
@@ -122,6 +129,22 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_nav2')),
     )
 
+    # Static TF alias: ZED URDF uses "zed_left_camera_frame_optical" but
+    # the ZED node publishes images with frame_id "zed_left_camera_optical_frame".
+    # nvblox needs to look up the image frame in TF, so we bridge the gap
+    # with an identity transform.
+    optical_frame_alias = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='optical_frame_alias',
+        arguments=[
+            '--x', '0', '--y', '0', '--z', '0',
+            '--roll', '0', '--pitch', '0', '--yaw', '0',
+            '--frame-id', 'zed_left_camera_frame_optical',
+            '--child-frame-id', 'zed_left_camera_optical_frame',
+        ],
+    )
+
     return LaunchDescription([
         enable_od_arg,
         enable_nav2_arg,
@@ -132,6 +155,7 @@ def generate_launch_description():
                 'enable_od': 'false',  # Disable OD to prevent parameter duplication crash
             }.items(),
         ),
+        optical_frame_alias,
         servo_tf_publisher,
         obstacle_distance_bridge,
         nav2_launch,
