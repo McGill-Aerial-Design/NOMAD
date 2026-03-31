@@ -1,22 +1,18 @@
 #!/usr/bin/env python3
 """
-Simple Video Bridge for NOMAD - Reliable Implementation
+Simple Video Bridge for NOMAD
 
 Streams ROS2 camera topics to RTSP via MediaMTX using software H.264 encoding.
+Optimized for Jetson Orin Nano (no hardware encoder).
 
-Features:
-- Software encoding (x264enc with zerolatency tuning, openh264enc fallback)
-- Fixed RTSP URL: rtsp://localhost:8554/primary
-- Dynamic topic switching via HTTP API
-- Auto-discovery of available ROS2 image topics
-- MediaMTX for multi-viewer streaming (VLC, phone, Mission Planner)
-- Pipeline watchdog with automatic recovery
-- Proper frame pacing and keyframe control
+Key optimizations:
+- Dedicated encoder thread decoupled from ROS callbacks
+- 848x480 default (55% fewer pixels than 720p) — plenty for monitoring
+- 15fps default — smooth enough, half the CPU of 30fps
+- Minimal copies in the hot path
 
 Architecture:
-    ROS2 Image Topic -> x264enc (software, zerolatency) -> RTSP -> MediaMTX
-
-Target: Jetson Orin Nano / Isaac ROS Docker container
+    ROS2 Image Topic -> [encoder thread] -> x264enc (software) -> RTSP -> MediaMTX
 """
 
 import rclpy
@@ -36,18 +32,14 @@ import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
-# Initialize GStreamer
 Gst.init(None)
 
 
 def _probe_encoder():
-    """Probe which H.264 software encoder is available.
+    """Probe available H.264 software encoder.
 
-    Tries x264enc first (better quality, proper keyframe control),
-    falls back to openh264enc.  Returns a tuple of
-    (element_name, extra_pipeline_fragment) or raises if none found.
+    Returns (element_name, pipeline_fragment_template).
     """
-    # x264enc: best software H.264 on Linux
     for name, fragment in [
         (
             "x264enc",
@@ -62,12 +54,11 @@ def _probe_encoder():
             "! video/x-h264,profile=baseline",
         ),
     ]:
-        factory = Gst.ElementFactory.find(name)
-        if factory is not None:
+        if Gst.ElementFactory.find(name) is not None:
             return name, fragment
 
     raise RuntimeError(
-        "No H.264 software encoder found. Install gstreamer1.0-plugins-ugly (x264enc) "
+        "No H.264 encoder found. Need gstreamer1.0-plugins-ugly (x264enc) "
         "or gstreamer1.0-plugins-bad (openh264enc)."
     )
 
@@ -75,11 +66,10 @@ def _probe_encoder():
 class VideoStreamNode(Node):
     """ROS2 node that streams images to RTSP via GStreamer."""
 
-    # Minimum interval between pipeline restart attempts (seconds)
     _MIN_RESTART_INTERVAL = 5.0
 
-    def __init__(self, source_topic: str, width: int = 1280, height: int = 720,
-                 fps: int = 30, bitrate: int = 2000, rtsp_path: str = "primary"):
+    def __init__(self, source_topic: str, width: int = 848, height: int = 480,
+                 fps: int = 15, bitrate: int = 1500, rtsp_path: str = "primary"):
         super().__init__('simple_video_bridge')
 
         self.bridge = CvBridge()
@@ -97,17 +87,23 @@ class VideoStreamNode(Node):
         self._latest_jpeg = None
         self._last_snapshot_encode_time = 0.0
 
-        # Frame pacing: enforce max fps to prevent encoder overload
+        # --- Threaded encoder: ROS callback drops frame into _pending_frame,
+        # encoder thread picks it up at its own pace. ---
+        self._pending_frame = None  # numpy array or None
+        self._frame_event = threading.Event()
+        self._encode_stop = threading.Event()
+
+        # Frame pacing
         self._min_frame_interval = 1.0 / fps
         self._last_push_time = 0.0
-        self._pts_counter = 0  # Monotonic PTS for the encoder
+        self._pts_counter = 0
 
         # Pipeline recovery
         self._pipeline_ok = True
         self._last_restart_time = 0.0
         self._restart_lock = threading.Lock()
 
-        # Detection overlay state
+        # Detection overlay
         self._overlay_enabled = False
         self._detections = []
         self._detections_lock = threading.Lock()
@@ -115,7 +111,7 @@ class VideoStreamNode(Node):
         self._overlay_thread = None
         self._overlay_stop = threading.Event()
 
-        # Probe available encoder
+        # Probe encoder
         self._encoder_name, self._encoder_fragment = _probe_encoder()
         self.get_logger().info(f'Using encoder: {self._encoder_name}')
 
@@ -124,19 +120,25 @@ class VideoStreamNode(Node):
         self.appsrc = None
         self._build_and_start_pipeline()
 
-        # Subscribe to ROS2 image topic
+        # Subscribe to ROS2
         self._subscribe_to_topic(source_topic)
 
-        # Start GStreamer bus watchdog
+        # Start encoder thread (picks frames from _pending_frame, pushes to GStreamer)
+        self._encode_thread = threading.Thread(target=self._encode_loop, daemon=True,
+                                               name='encode-loop')
+        self._encode_thread.start()
+
+        # Start bus watchdog
         self._bus_thread = threading.Thread(target=self._bus_watch_loop, daemon=True)
         self._bus_thread.start()
 
         self.get_logger().info('Video bridge ready!')
 
+    # ---- Pipeline management ----
+
     def _build_pipeline_string(self) -> str:
-        """Build the GStreamer pipeline string."""
         width, height, fps, bitrate = self.width, self.height, self.fps, self.bitrate
-        keyint = fps * 2  # IDR every 2 seconds for reliable stream recovery
+        keyint = fps * 2
         threads = min(4, max(1, __import__('os').cpu_count() or 2))
 
         encoder_str = self._encoder_fragment.format(
@@ -146,22 +148,19 @@ class VideoStreamNode(Node):
             threads=threads,
         )
 
-        pipeline_str = (
+        return (
             f'appsrc name=source is-live=true format=time '
             f'max-buffers=1 block=false '
             f'caps=video/x-raw,format=BGR,width={width},height={height},framerate={fps}/1 ! '
             f'queue max-size-buffers=1 max-size-time=0 max-size-bytes=0 leaky=downstream ! '
-            f'videoconvert ! '
+            f'videoconvert n-threads={threads} ! '
             f'{encoder_str} ! '
             f'h264parse config-interval=-1 ! '
             f'rtspclientsink location=rtsp://172.17.0.1:8554/{self.rtsp_path} protocols=tcp '
             f'latency=0'
         )
-        return pipeline_str
 
     def _build_and_start_pipeline(self):
-        """Build and start the GStreamer pipeline."""
-        # Tear down existing pipeline
         if self.pipeline is not None:
             self.pipeline.set_state(Gst.State.NULL)
             self.pipeline = None
@@ -170,11 +169,10 @@ class VideoStreamNode(Node):
         pipeline_str = self._build_pipeline_string()
 
         self.get_logger().info('Starting GStreamer pipeline')
-        self.get_logger().info(f'  Topic: {self.source_topic}')
         self.get_logger().info(f'  Resolution: {self.width}x{self.height}@{self.fps}fps')
         self.get_logger().info(f'  Encoder: {self._encoder_name}')
         self.get_logger().info(f'  Bitrate: {self.bitrate}kbps')
-        self.get_logger().info(f'  RTSP: rtsp://localhost:8554/{self.rtsp_path}')
+        self.get_logger().info(f'  Pipeline: {pipeline_str}')
 
         try:
             self.pipeline = Gst.parse_launch(pipeline_str)
@@ -182,12 +180,11 @@ class VideoStreamNode(Node):
 
             ret = self.pipeline.set_state(Gst.State.PLAYING)
             if ret == Gst.StateChangeReturn.FAILURE:
-                self.get_logger().error('Failed to start GStreamer pipeline')
                 raise RuntimeError('GStreamer pipeline failed to start')
 
             self._pipeline_ok = True
             self._pts_counter = 0
-            self.get_logger().info('GStreamer pipeline started successfully')
+            self.get_logger().info('GStreamer pipeline started')
 
         except Exception as e:
             self.get_logger().error(f'Pipeline error: {e}')
@@ -195,23 +192,21 @@ class VideoStreamNode(Node):
             raise
 
     def _restart_pipeline(self):
-        """Restart the GStreamer pipeline after an error."""
         with self._restart_lock:
             now = time.time()
             if now - self._last_restart_time < self._MIN_RESTART_INTERVAL:
                 return
             self._last_restart_time = now
 
-        self.get_logger().warn('Restarting GStreamer pipeline due to error...')
+        self.get_logger().warn('Restarting GStreamer pipeline...')
         try:
             self._build_and_start_pipeline()
-            self.get_logger().info('Pipeline restarted successfully')
+            self.get_logger().info('Pipeline restarted')
         except Exception as e:
             self.get_logger().error(f'Pipeline restart failed: {e}')
             self._pipeline_ok = False
 
     def _bus_watch_loop(self):
-        """Monitor GStreamer bus for errors and trigger recovery."""
         while True:
             if self.pipeline is None:
                 time.sleep(1)
@@ -228,7 +223,6 @@ class VideoStreamNode(Node):
             )
 
             if msg is None:
-                # Check for stale pipeline (no frames pushed for 10s while we should be streaming)
                 if (self.last_frame_time > 0
                         and time.time() - self.last_frame_time > 15.0
                         and self._pipeline_ok):
@@ -237,27 +231,23 @@ class VideoStreamNode(Node):
                     self._restart_pipeline()
                 continue
 
-            msg_type = msg.type
-            if msg_type == Gst.MessageType.ERROR:
-                err, debug = msg.parse_error()
-                self.get_logger().error(f'GStreamer error: {err.message} | debug: {debug}')
+            if msg.type == Gst.MessageType.ERROR:
+                err, _debug = msg.parse_error()
+                self.get_logger().error(f'GStreamer error: {err.message}')
                 self.error_count += 1
                 self._pipeline_ok = False
                 self._restart_pipeline()
-            elif msg_type == Gst.MessageType.EOS:
-                self.get_logger().warn('GStreamer pipeline received EOS, restarting')
+            elif msg.type == Gst.MessageType.EOS:
+                self.get_logger().warn('EOS received, restarting')
                 self._pipeline_ok = False
                 self._restart_pipeline()
 
+    # ---- ROS subscription ----
+
     def _subscribe_to_topic(self, topic: str):
-        """Subscribe to a ROS2 image topic."""
         if self.subscription:
             self.destroy_subscription(self.subscription)
 
-        # BEST_EFFORT + KEEP_LAST(1): drop frames rather than queue them.
-        # Camera publishers (ZED, realsense) use BEST_EFFORT by default.
-        # Using RELIABLE here would cause backpressure when the encoder
-        # can't keep up, leading to stale frames and timestamp jumps.
         image_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
@@ -266,43 +256,30 @@ class VideoStreamNode(Node):
         )
 
         self.subscription = self.create_subscription(
-            Image,
-            topic,
-            self.image_callback,
-            image_qos
-        )
+            Image, topic, self.image_callback, image_qos)
         self.source_topic = topic
         self.get_logger().info(f'Subscribed to: {topic}')
 
     def switch_topic(self, new_topic: str) -> bool:
-        """Switch to a different ROS2 image topic.
-
-        Keeps the existing GStreamer pipeline alive and only switches
-        the ROS subscription.
-        """
         try:
             self.get_logger().info(f'Switching topic: {self.source_topic} -> {new_topic}')
             self._subscribe_to_topic(new_topic)
-            self.get_logger().info(f'Successfully switched to: {new_topic}')
             return True
         except Exception as e:
             self.get_logger().error(f'Failed to switch topic: {e}')
             return False
 
+    # ---- Frame handling ----
+
     def image_callback(self, msg: Image):
-        """Process incoming ROS2 images and push to GStreamer."""
-        if not self._pipeline_ok or self.appsrc is None:
+        """Receive ROS image — minimal work, just stash for encoder thread."""
+        now = time.time()
+        if now - self._last_push_time < self._min_frame_interval * 0.8:
             return
 
         try:
             import cv2
 
-            # Frame pacing: skip frames that arrive faster than target fps
-            now = time.time()
-            if now - self._last_push_time < self._min_frame_interval * 0.8:
-                return
-
-            # Convert ROS image to OpenCV BGR format
             encoding = msg.encoding.lower()
             if encoding in ('bgra8', 'rgba8', '8uc4'):
                 cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
@@ -319,28 +296,63 @@ class VideoStreamNode(Node):
             else:
                 cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
 
-            # Resize if needed
+            # Resize to target (this is fast if already the right size)
             if cv_image.shape[1] != self.width or cv_image.shape[0] != self.height:
-                cv_image = cv2.resize(cv_image, (self.width, self.height))
+                cv_image = cv2.resize(cv_image, (self.width, self.height),
+                                      interpolation=cv2.INTER_NEAREST)
 
-            # Draw detection overlay if enabled
+            # Overlay detections if enabled
             if self._overlay_enabled:
                 self.draw_detections(cv_image)
 
-            # Cache snapshots at a low rate
-            if (now - self._last_snapshot_encode_time) >= 0.5:
-                ok, jpeg = cv2.imencode('.jpg', cv_image, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                if ok:
-                    self._latest_jpeg = jpeg.tobytes()
-                    self._last_snapshot_encode_time = now
+            # Ensure contiguous C-order for zero-copy tobytes
+            if not cv_image.flags['C_CONTIGUOUS']:
+                cv_image = np.ascontiguousarray(cv_image)
 
-            # Create GStreamer buffer with monotonic PTS
-            data = cv_image.tobytes()
+            # Drop frame into single slot for encoder thread
+            self._pending_frame = cv_image
+            self._frame_event.set()
+            self._last_push_time = now
+
+        except Exception as e:
+            if self.frame_count % 100 == 0:
+                self.get_logger().error(f'Frame error: {e}')
+
+    def _encode_loop(self):
+        """Encoder thread: picks up frames and pushes to GStreamer pipeline."""
+        frame_duration = Gst.SECOND // self.fps
+
+        while not self._encode_stop.is_set():
+            # Wait for a frame (with timeout so we can check stop flag)
+            if not self._frame_event.wait(timeout=1.0):
+                continue
+            self._frame_event.clear()
+
+            # Grab the latest frame (atomic swap)
+            frame = self._pending_frame
+            self._pending_frame = None
+            if frame is None:
+                continue
+
+            if not self._pipeline_ok or self.appsrc is None:
+                continue
+
+            now = time.time()
+
+            # Snapshot caching (every 2s, low priority)
+            if (now - self._last_snapshot_encode_time) >= 2.0:
+                try:
+                    import cv2
+                    ok, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    if ok:
+                        self._latest_jpeg = jpeg.tobytes()
+                        self._last_snapshot_encode_time = now
+                except Exception:
+                    pass
+
+            # Push to GStreamer
+            data = frame.tobytes()
             buf = Gst.Buffer.new_wrapped(data)
-
-            # Set monotonic timestamps so the encoder gets clean, regular timing
-            # instead of relying on wall-clock do-timestamp which jitters.
-            frame_duration = Gst.SECOND // self.fps
             buf.pts = self._pts_counter * frame_duration
             buf.duration = frame_duration
             self._pts_counter += 1
@@ -348,55 +360,42 @@ class VideoStreamNode(Node):
             ret = self.appsrc.emit('push-buffer', buf)
 
             if ret != Gst.FlowReturn.OK:
-                self.get_logger().warn(f'Buffer push returned: {ret}')
-                if ret == Gst.FlowReturn.FLUSHING or ret == Gst.FlowReturn.ERROR:
+                if ret in (Gst.FlowReturn.FLUSHING, Gst.FlowReturn.ERROR):
                     self._pipeline_ok = False
-                return
+                continue
 
-            # Stats
-            self._last_push_time = now
             self.frame_count += 1
             self.last_frame_time = now
             if self.frame_count % 300 == 0:
                 elapsed = now - self.start_time
                 fps = self.frame_count / elapsed if elapsed > 0 else 0
                 self.get_logger().info(
-                    f'Streaming: {self.frame_count} frames, {fps:.1f} fps avg'
-                )
+                    f'Streaming: {self.frame_count} frames, {fps:.1f} fps avg')
 
-        except Exception as e:
-            if self.frame_count % 100 == 0:
-                self.get_logger().error(f'Frame processing error: {e}')
+    # ---- Depth normalization ----
 
     def _normalize_depth_image(self, image, encoding):
-        """Normalize depth/confidence image to visible BGR with colormap."""
         import cv2
-
         img = image.astype(np.float32) if encoding != '32fc1' else image.copy()
-
         valid_mask = np.isfinite(img) & (img > 0)
-
         if not valid_mask.any():
             return np.zeros((image.shape[0], image.shape[1], 3), dtype=np.uint8)
-
         min_val = np.percentile(img[valid_mask], 2)
         max_val = np.percentile(img[valid_mask], 98)
-
         if max_val <= min_val:
             max_val = min_val + 1.0
-
         normalized = np.clip((img - min_val) / (max_val - min_val) * 255.0, 0, 255).astype(np.uint8)
         normalized[~valid_mask] = 0
-
-        colored = cv2.applyColorMap(normalized, cv2.COLORMAP_TURBO)
-        return colored
+        return cv2.applyColorMap(normalized, cv2.COLORMAP_TURBO)
 
     def cleanup(self):
-        """Clean shutdown."""
         self.get_logger().info('Stopping video bridge...')
+        self._encode_stop.set()
+        self._frame_event.set()  # wake encoder thread
         self.stop_overlay()
+        if self._encode_thread.is_alive():
+            self._encode_thread.join(timeout=3)
         if self.pipeline is not None:
-            # Send EOS so the encoder flushes cleanly
             self.appsrc.emit('end-of-stream')
             self.pipeline.get_bus().timed_pop_filtered(2 * Gst.SECOND, Gst.MessageType.EOS)
             self.pipeline.set_state(Gst.State.NULL)
@@ -405,35 +404,27 @@ class VideoStreamNode(Node):
     # ---- Detection overlay ----
 
     _LABEL_COLORS = {
-        'red': (0, 0, 255),
-        'blue': (255, 140, 0),
-        'green': (0, 200, 0),
-        'yellow': (0, 255, 255),
-        'orange': (0, 165, 255),
-        'white': (255, 255, 255),
-        'black': (80, 80, 80),
+        'red': (0, 0, 255), 'blue': (255, 140, 0), 'green': (0, 200, 0),
+        'yellow': (0, 255, 255), 'orange': (0, 165, 255),
+        'white': (255, 255, 255), 'black': (80, 80, 80),
     }
     _DEFAULT_COLOR = (0, 255, 0)
 
     def _color_for_label(self, label: str):
-        label_lower = label.lower()
+        ll = label.lower()
         for key, color in self._LABEL_COLORS.items():
-            if key in label_lower:
+            if key in ll:
                 return color
         return self._DEFAULT_COLOR
 
     def draw_detections(self, frame):
-        """Draw detection bounding boxes onto the frame (in-place)."""
         import cv2
-
         with self._detections_lock:
             detections = list(self._detections)
-
         if not detections:
             return
 
         h, w = frame.shape[:2]
-
         for det in detections:
             if not isinstance(det, dict):
                 continue
@@ -447,15 +438,10 @@ class VideoStreamNode(Node):
             if bw <= 0 or bh <= 0:
                 continue
 
-            src_w = det.get('_src_w', w)
-            src_h = det.get('_src_h', h)
-            sx = w / src_w if src_w > 0 else 1.0
-            sy = h / src_h if src_h > 0 else 1.0
-
-            x1 = int(bx * sx)
-            y1 = int(by * sy)
-            x2 = int((bx + bw) * sx)
-            y2 = int((by + bh) * sy)
+            sx = w / (det.get('_src_w', w) or w)
+            sy = h / (det.get('_src_h', h) or h)
+            x1, y1 = int(bx * sx), int(by * sy)
+            x2, y2 = int((bx + bw) * sx), int((by + bh) * sy)
 
             label = str(det.get('label', 'unknown') or 'unknown')
             try:
@@ -465,20 +451,17 @@ class VideoStreamNode(Node):
             color = self._color_for_label(label)
 
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-
             text = f"{label} {conf:.0%}"
-            (tw, th), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            cv2.rectangle(frame, (x1, y1 - th - baseline - 4), (x1 + tw + 4, y1), color, -1)
+            (tw, th_), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            cv2.rectangle(frame, (x1, y1 - th_ - baseline - 4), (x1 + tw + 4, y1), color, -1)
             cv2.putText(frame, text, (x1 + 2, y1 - baseline - 2),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
-        count = len(detections)
-        badge = f"YOLO: {count} target{'s' if count != 1 else ''}"
+        badge = f"YOLO: {len(detections)} target{'s' if len(detections) != 1 else ''}"
         cv2.putText(frame, badge, (10, 25),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2, cv2.LINE_AA)
 
     def _fetch_detections_loop(self):
-        """Background thread: poll Edge Core /api/detections at ~5 Hz."""
         while not self._overlay_stop.is_set():
             try:
                 url = f"{self._edge_core_url}/api/detections"
@@ -496,7 +479,6 @@ class VideoStreamNode(Node):
             self._overlay_stop.wait(0.2)
 
     def start_overlay(self):
-        """Enable detection overlay on the video stream."""
         if self._overlay_enabled:
             return
         self._overlay_enabled = True
@@ -507,7 +489,6 @@ class VideoStreamNode(Node):
         self.get_logger().info("Detection overlay enabled")
 
     def stop_overlay(self):
-        """Disable detection overlay."""
         if not self._overlay_enabled:
             return
         self._overlay_enabled = False
@@ -521,8 +502,6 @@ class VideoStreamNode(Node):
 
 
 class ControlServer(BaseHTTPRequestHandler):
-    """HTTP server for video bridge control."""
-
     video_node = None
 
     def log_message(self, format, *args):
@@ -565,7 +544,7 @@ class ControlServer(BaseHTTPRequestHandler):
                 else None
             )
             elapsed = now - self.video_node.start_time if self.video_node else 1
-            status = {
+            self._send_json(200, {
                 'streaming': receiving_frames,
                 'pipeline_playing': pipeline_playing,
                 'source_topic': self.video_node.source_topic if self.video_node else '',
@@ -575,8 +554,7 @@ class ControlServer(BaseHTTPRequestHandler):
                 'last_frame_age_s': last_frame_age,
                 'rtsp_url': f'rtsp://localhost:8554/{self.video_node.rtsp_path}' if self.video_node else '',
                 'encoder': self.video_node._encoder_name if self.video_node else '',
-            }
-            self._send_json(200, status)
+            })
 
         elif parsed.path == '/topics':
             topics = self._discover_topics()
@@ -611,17 +589,11 @@ class ControlServer(BaseHTTPRequestHandler):
         if parsed.path == '/switch':
             query = parse_qs(parsed.query)
             new_topic = query.get('topic', [''])[0]
-
             if not new_topic:
                 self._send_json(400, {'success': False, 'message': 'Missing topic parameter'})
                 return
-
             if self.video_node and self.video_node.switch_topic(new_topic):
-                self._send_json(200, {
-                    'success': True,
-                    'message': f'Switched to {new_topic}',
-                    'topic': new_topic
-                })
+                self._send_json(200, {'success': True, 'topic': new_topic})
             else:
                 self._send_json(500, {'success': False, 'message': 'Failed to switch topic'})
 
@@ -659,11 +631,7 @@ class ControlServer(BaseHTTPRequestHandler):
         try:
             result = subprocess.run(
                 ['ros2', 'topic', 'list', '-t'],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-
+                capture_output=True, text=True, timeout=10)
             topics = []
             for line in result.stdout.splitlines():
                 parts = line.split()
@@ -671,49 +639,35 @@ class ControlServer(BaseHTTPRequestHandler):
                     topic, type_ = parts[0], parts[1].strip('[]')
                     if 'Image' in type_ and 'sensor_msgs' in type_:
                         topics.append(topic)
-
             return sorted(topics)
-
         except Exception:
             return []
 
 
 def run_http_server(video_node: VideoStreamNode, port: int = 9200):
-    """Run HTTP control server in background thread."""
     ControlServer.video_node = video_node
     server = HTTPServer(('0.0.0.0', port), ControlServer)
-
-    def serve():
-        video_node.get_logger().info(f'HTTP control server started on port {port}')
-        server.serve_forever()
-
-    thread = threading.Thread(target=serve, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    video_node.get_logger().info(f'HTTP control server on port {port}')
     return server
 
 
 def main(args=None):
-    """Main entry point."""
     import argparse
     import signal
     import sys
 
     parser = argparse.ArgumentParser(description='Simple Video Bridge for NOMAD')
     parser.add_argument('--source-topic', type=str,
-                       default='/zed/zed_node/rgb/image_rect_color',
-                       help='Initial ROS2 image topic to stream')
-    parser.add_argument('--width', type=int, default=1280,
-                       help='Output video width')
-    parser.add_argument('--height', type=int, default=720,
-                       help='Output video height')
-    parser.add_argument('--fps', type=int, default=30,
-                       help='Target framerate')
-    parser.add_argument('--bitrate', type=int, default=2000,
+                       default='/zed/zed_node/rgb/image_rect_color')
+    parser.add_argument('--width', type=int, default=848)
+    parser.add_argument('--height', type=int, default=480)
+    parser.add_argument('--fps', type=int, default=15)
+    parser.add_argument('--bitrate', type=int, default=1500,
                        help='H264 bitrate in kbps')
-    parser.add_argument('--http-port', type=int, default=9200,
-                       help='HTTP control server port')
-    parser.add_argument('--rtsp-path', type=str, default='primary',
-                       help='RTSP path on MediaMTX (e.g. primary, secondary)')
+    parser.add_argument('--http-port', type=int, default=9200)
+    parser.add_argument('--rtsp-path', type=str, default='primary')
 
     parsed_args = parser.parse_args()
 

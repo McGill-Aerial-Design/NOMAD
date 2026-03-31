@@ -39,11 +39,11 @@ DEFAULT_RELAY_HTTP_PORT = 9200
 DEFAULT_RTSP_URL = "rtsp://172.17.0.1:8554/primary"
 DEFAULT_TOPIC = "/zed/zed_node/rgb/image_rect_color"
 
-# Stream settings
-DEFAULT_WIDTH = 1280
-DEFAULT_HEIGHT = 720
-DEFAULT_FPS = 30  # Match ZED camera target FPS (ZED_FPS=30 in jetson.env)
-DEFAULT_BITRATE = 4000  # kbps - good quality for 720p30
+# Stream settings — tuned for Orin Nano (no hardware encoder)
+DEFAULT_WIDTH = 848
+DEFAULT_HEIGHT = 480
+DEFAULT_FPS = 15
+DEFAULT_BITRATE = 1500  # kbps — sufficient for 480p15
 
 
 @dataclass
