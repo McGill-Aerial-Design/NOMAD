@@ -265,6 +265,8 @@ class ROSHTTPBridge(Node):
         self._vio_backoff_max_s = 1.0
         self._last_cmd_vel_send_time = 0.0
         self._last_mesh_send_time = 0.0
+        self._last_empty_mesh_send_time = 0.0
+        self._empty_mesh_send_interval_s = 2.0
         # Keep mesh forwarding capped by the configured bridge rate (default 30 Hz).
         # A fixed 10 Hz cap causes visible lag in world-view updates.
         self._mesh_send_interval_s = self._send_interval
@@ -1217,7 +1219,8 @@ class ROSHTTPBridge(Node):
                 blocks.append(block_entry)
 
             if not blocks:
-                return  # Skip empty meshes
+                self._send_empty_mesh_heartbeat(mode="block", timestamp=now)
+                return
 
             # Get camera pose from TF
             camera_pose = self._get_camera_pose()
@@ -1271,6 +1274,7 @@ class ROSHTTPBridge(Node):
                         "color_layer_marker has been empty for 20 consecutive messages -- "
                         "falling back to /nvblox_node/mesh (block mode)"
                     )
+                self._send_empty_mesh_heartbeat(mode="voxel", timestamp=now)
                 # Return AFTER tracking, but before rate limit check
                 # (so we don't skip block mesh if voxels are temporarily empty)
                 return
@@ -1379,6 +1383,33 @@ class ROSHTTPBridge(Node):
         except Exception as e:
             self._send_errors += 1
             self.get_logger().error(f"Mesh send error: {e}")
+
+    def _send_empty_mesh_heartbeat(self, mode: str, timestamp: float) -> None:
+        """Send sparse heartbeat updates so SLAM status does not remain stuck at 'no data'."""
+        if not self._enable_mesh:
+            return
+
+        if timestamp - self._last_empty_mesh_send_time < self._empty_mesh_send_interval_s:
+            return
+
+        mesh_data = {
+            "mode": mode,
+            "timestamp": timestamp,
+            "frame_id": "ros_optical",
+            "clear": False,
+        }
+        if mode == "voxel":
+            mesh_data.update({"voxels": [], "voxel_size": 0.0, "total_voxels": 0, "sent_voxels": 0})
+        else:
+            mesh_data.update({"blocks": [], "block_size": 0.0, "total_blocks": 0})
+
+        camera_pose = self._get_camera_pose()
+        if camera_pose:
+            mesh_data["drone_position"] = camera_pose["position"]
+            mesh_data["drone_attitude"] = camera_pose["attitude"]
+
+        self._send_mesh_to_edge_core(mesh_data)
+        self._last_empty_mesh_send_time = timestamp
     
     def _quat_to_euler(
         self, x: float, y: float, z: float, w: float

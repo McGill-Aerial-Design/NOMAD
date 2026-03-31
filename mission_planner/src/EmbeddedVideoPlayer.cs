@@ -416,11 +416,13 @@ namespace NOMAD.MissionPlanner
         
         private string BuildGStreamerPipeline()
         {
-            // FROM WORKING COMMIT 98fea60 - Uses decodebin3 for automatic codec detection
+            // Use explicit H264 depay/parse/decode and force RTSP over TCP.
+            // This avoids UDP packet-loss corruption loops where avdec_h264 repeatedly
+            // reinitializes and shows heavy artifacts.
             // Requirements:
             // 1. appsink MUST be named "outsink" (Mission Planner looks for this)
             // 2. format=BGRA (32-bit matches Windows Forms bitmap creation)
-            // 3. decodebin3 handles H264 decoding automatically
+            // 3. Keep a deterministic decode path for stability on lossy links
             //
             // Latency control:
             //   - rtspsrc latency: jitter buffer in ms (how much RTP data to buffer)
@@ -445,9 +447,10 @@ namespace NOMAD.MissionPlanner
                        $"appsink name=outsink sync={syncVal}";
             }
             
-            // RTSP pipeline - latency controls the rtspsrc jitter buffer
-            return $"rtspsrc location={_streamUrl} latency={_latencyMs} udp-reconnect=1 timeout=0 do-retransmission=false ! " +
-                   $"application/x-rtp ! decodebin3 ! queue max-size-buffers={queueBuffers} {leaky} ! " +
+                 // RTSP pipeline - force TCP transport to eliminate UDP loss artifacts.
+                 return $"rtspsrc location={_streamUrl} protocols=tcp latency={_latencyMs} do-retransmission=false ! " +
+                     $"application/x-rtp,media=video,encoding-name=H264 ! rtph264depay ! h264parse disable-passthrough=true ! avdec_h264 ! " +
+                     $"queue max-size-buffers={queueBuffers} {leaky} ! " +
                    $"videoconvert ! video/x-raw,format=BGRA ! " +
                    $"appsink name=outsink sync={syncVal}";
         }
