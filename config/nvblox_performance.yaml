@@ -38,7 +38,7 @@
     # ==============================================================
     tick_period_ms: 50
     integrate_depth_rate_hz: 5.0     # conservative depth integration
-    integrate_color_rate_hz: 0.0     # disabled to save GPU memory
+    integrate_color_rate_hz: 1.0     # needed for mesh vertex generation
     integrate_lidar_rate_hz: 0.0
     update_mesh_rate_hz: 5.0         # mesh for MissionPlanner 3D view
     update_esdf_rate_hz: 5.0         # ESDF for obstacle avoidance
@@ -65,9 +65,10 @@
     publish_esdf_distance_slice: true
 
     # ==============================================================
-    # Color DISABLED to save GPU memory (~30% reduction)
+    # Color enabled — needed for mesh vertex generation in nvblox.
+    # Mesh marching cubes requires color integration to tag vertices.
     # ==============================================================
-    use_color: false
+    use_color: true
     use_depth: true
     use_lidar: false
 
@@ -131,7 +132,9 @@
       esdf_integrator_max_distance_m: 2.0
 
       # Mesh - triangle surface generation (streamed to Mission Planner)
-      mesh_integrator_min_weight: 0.5
+      # Min weight must be very low for dynamic mode — background TSDF accumulates
+      # weight slowly with the blocking CUDA stream
+      mesh_integrator_min_weight: 0.0001
       mesh_integrator_weld_vertices: true
 
       # Decay - enable to free GPU memory for old blocks
