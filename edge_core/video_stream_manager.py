@@ -5,15 +5,15 @@ Manages the simple video bridge running inside the Isaac ROS Docker container
 for low-latency ROS-to-RTSP streaming using software H.264 encoding.
 
 Architecture:
-    ZED Camera (ROS2) -> x264enc (software, ultrafast) -> RTSP -> MediaMTX -> Mission Planner
+    ZED Camera (ROS2) -> x264enc (software, zerolatency) -> RTSP -> MediaMTX -> Viewers
 
 Key Features:
-- Software H.264 encoding (x264enc ultrafast preset) for minimal CPU usage
+- Software H.264 encoding (x264enc zerolatency, openh264enc fallback)
 - Single persistent stream with dynamic topic switching
 - Fixed RTSP URL (never changes when switching topics)
 - HTTP API control for topic switching and status
 - Multiple viewer support via MediaMTX
-- Adaptive bitrate for choppy network conditions
+- Pipeline watchdog with automatic error recovery
 - Auto-discovery of available ROS2 image topics
 
 Runs on Jetson Edge Core host, controls the bridge inside Docker container.
@@ -43,7 +43,7 @@ DEFAULT_TOPIC = "/zed/zed_node/rgb/image_rect_color"
 DEFAULT_WIDTH = 1280
 DEFAULT_HEIGHT = 720
 DEFAULT_FPS = 30  # Match ZED camera target FPS (ZED_FPS=30 in jetson.env)
-DEFAULT_BITRATE = 6  # Mbps - increased for 30fps quality
+DEFAULT_BITRATE = 4000  # kbps - good quality for 720p30
 
 
 @dataclass
@@ -59,7 +59,7 @@ class StreamStatus:
     uptime_s: float
     width: int
     height: int
-    bitrate_mbps: int
+    bitrate_kbps: int
     
     def to_dict(self) -> dict:
         return asdict(self)
@@ -108,7 +108,7 @@ class VideoStreamManager:
     This class controls the simple video bridge running inside the Isaac ROS
     Docker container. The bridge:
     - Subscribes to ROS2 image topics from ZED camera
-    - Encodes video using x264enc software encoder (ultrafast preset)
+    - Encodes video using x264enc software encoder (zerolatency tuning)
     - Streams to MediaMTX RTSP server at fixed URL
     
     Topic switching is done via HTTP API to the bridge, which changes its
@@ -287,7 +287,7 @@ class VideoStreamManager:
                 f"--width {self.width} "
                 f"--height {self.height} "
                 f"--fps {self.fps} "
-                f"--bitrate {self.bitrate * 1000} "
+                f"--bitrate {self.bitrate} "
                 f"--http-port {self.relay_http_port} "
                 f"> /tmp/video_bridge.log 2>&1"
             ]
@@ -478,7 +478,7 @@ class VideoStreamManager:
             uptime_s=0.0,
             width=self.width,
             height=self.height,
-            bitrate_mbps=self.bitrate,
+            bitrate_kbps=self.bitrate,
         )
         
         if not self.is_relay_running():
@@ -500,7 +500,7 @@ class VideoStreamManager:
                 uptime_s=0.0,     # Not tracked in new bridge
                 width=self.width,
                 height=self.height,
-                bitrate_mbps=self.bitrate,
+                bitrate_kbps=self.bitrate,
             )
             
         except Exception as e:
