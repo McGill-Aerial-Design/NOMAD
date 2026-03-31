@@ -59,6 +59,18 @@ namespace NOMAD.MissionPlanner
         public int TotalVoxels { get; set; }
         [JsonProperty("removed")]
         public List<RemovedVoxelModel> Removed { get; set; }
+
+        // Triangle mesh mode fields
+        [JsonProperty("vertices")]
+        public List<List<double>> Vertices { get; set; }
+        [JsonProperty("indices")]
+        public List<int> Indices { get; set; }
+        [JsonProperty("colors")]
+        public List<List<int>> Colors { get; set; }
+        [JsonProperty("total_vertices")]
+        public int TotalVertices { get; set; }
+        [JsonProperty("total_triangles")]
+        public int TotalTriangles { get; set; }
     }
 
     public class VoxelModel
@@ -160,6 +172,12 @@ namespace NOMAD.MissionPlanner
         private float[] _voxelVerts;   // interleaved: pos(3) + color(3) + normal(3) = 9 floats/vert
         private int[] _voxelIndices;
         private int _voxelIndexCount;
+
+        // ---- Triangle mesh data (from nvblox triangle mode) ----
+        private float[] _triMeshVerts;   // interleaved: pos(3) + color(3) + normal(3) = 9 floats/vert
+        private int[] _triMeshIndices;
+        private int _triMeshIndexCount;
+        private bool _hasTriangleMesh;   // true when triangle mesh is the active render mode
 
         // ---- Mesh rebuild tracking ----
         private bool _meshDirty;
@@ -877,6 +895,14 @@ namespace NOMAD.MissionPlanner
 
         private void DrawVoxels()
         {
+            // Triangle mesh mode: render smooth nvblox surfaces
+            if (_hasTriangleMesh && _triMeshVerts != null && _triMeshIndexCount > 0)
+            {
+                DrawTriangleMesh();
+                return;
+            }
+
+            // Voxel/block cube mode (fallback)
             if (_voxelVerts == null || _voxelIndexCount == 0) return;
 
             GL.Enable(EnableCap.Lighting);
@@ -894,6 +920,39 @@ namespace NOMAD.MissionPlanner
                 GL.ColorPointer(3, ColorPointerType.Float, stride, basePtr + 3 * sizeof(float));
                 GL.NormalPointer(NormalPointerType.Float, stride, basePtr + 6 * sizeof(float));
                 GL.DrawElements(PrimitiveType.Triangles, _voxelIndexCount,
+                    DrawElementsType.UnsignedInt, idxHandle.AddrOfPinnedObject());
+            }
+            finally
+            {
+                idxHandle.Free();
+                vertHandle.Free();
+            }
+
+            GL.DisableClientState(ArrayCap.NormalArray);
+            GL.DisableClientState(ArrayCap.ColorArray);
+            GL.DisableClientState(ArrayCap.VertexArray);
+        }
+
+        /// <summary>
+        /// Render smooth triangle mesh from nvblox (same interleaved format as voxel cubes).
+        /// </summary>
+        private void DrawTriangleMesh()
+        {
+            GL.Enable(EnableCap.Lighting);
+            GL.EnableClientState(ArrayCap.VertexArray);
+            GL.EnableClientState(ArrayCap.ColorArray);
+            GL.EnableClientState(ArrayCap.NormalArray);
+
+            int stride = 9 * sizeof(float);
+            var vertHandle = GCHandle.Alloc(_triMeshVerts, GCHandleType.Pinned);
+            var idxHandle = GCHandle.Alloc(_triMeshIndices, GCHandleType.Pinned);
+            try
+            {
+                IntPtr basePtr = vertHandle.AddrOfPinnedObject();
+                GL.VertexPointer(3, VertexPointerType.Float, stride, basePtr);
+                GL.ColorPointer(3, ColorPointerType.Float, stride, basePtr + 3 * sizeof(float));
+                GL.NormalPointer(NormalPointerType.Float, stride, basePtr + 6 * sizeof(float));
+                GL.DrawElements(PrimitiveType.Triangles, _triMeshIndexCount,
                     DrawElementsType.UnsignedInt, idxHandle.AddrOfPinnedObject());
             }
             finally
@@ -1320,12 +1379,16 @@ namespace NOMAD.MissionPlanner
                         _voxelVerts = null;
                         _voxelIndices = null;
                         _voxelIndexCount = 0;
+                        _triMeshVerts = null;
+                        _triMeshIndices = null;
+                        _triMeshIndexCount = 0;
+                        _hasTriangleMesh = false;
                         _meshDirty = false;
                         _pendingMeshUpdate = false;
                         _lastRenderedCount = 0;
                     }
 
-                    // Handle removals
+                    // Handle removals (voxel/block mode only)
                     if (meshData?.Removed != null)
                     {
                         foreach (var r in meshData.Removed)
@@ -1340,17 +1403,26 @@ namespace NOMAD.MissionPlanner
                         }
                     }
 
-                    if ((meshData?.Mode == "voxel" || meshData?.Mode == "voxels") &&
+                    // Triangle mesh mode: direct vertex/index data from nvblox
+                    if (meshData?.Mode == "triangle" &&
+                        meshData.Vertices != null && meshData.Vertices.Count > 0 &&
+                        meshData.Indices != null && meshData.Indices.Count >= 3)
+                    {
+                        ProcessTriangleMesh(meshData);
+                    }
+                    else if ((meshData?.Mode == "voxel" || meshData?.Mode == "voxels") &&
                         meshData.Voxels != null && meshData.Voxels.Count > 0)
                     {
+                        _hasTriangleMesh = false;
                         ProcessVoxels(meshData);
                     }
                     else if (meshData?.Blocks != null && meshData.Blocks.Count > 0)
                     {
+                        _hasTriangleMesh = false;
                         ProcessBlocks(meshData);
                     }
 
-                    if (_meshDirty)
+                    if (_meshDirty && !_hasTriangleMesh)
                     {
                         // Queue rebuild work; timing gate is enforced in ProcessPendingMeshUpdate().
                         _pendingMeshUpdate = true;
@@ -1469,6 +1541,118 @@ namespace NOMAD.MissionPlanner
         private void EvictOldVoxels()
         {
             // Rendering optimization disabled: keep full voxel history.
+        }
+
+        /// <summary>
+        /// Process triangle mesh data from nvblox.
+        /// Builds GL vertex/index arrays directly from the triangle vertices and indices.
+        /// No voxel quantization needed — smooth surface rendering.
+        /// </summary>
+        private void ProcessTriangleMesh(MeshDataModel meshData)
+        {
+            var srcVerts = meshData.Vertices;
+            var srcIndices = meshData.Indices;
+            var srcColors = meshData.Colors;
+            bool hasColors = srcColors != null && srcColors.Count == srcVerts.Count;
+
+            // Build interleaved vertex array: pos(3) + color(3) + normal(3) = 9 floats/vert
+            var verts = new float[srcVerts.Count * 9];
+            int vi = 0;
+
+            for (int i = 0; i < srcVerts.Count; i++)
+            {
+                var sv = srcVerts[i];
+                if (sv == null || sv.Count < 3) { vi += 9; continue; }
+
+                // Convert from ROS optical frame to GL frame: gx=-y, gy=z, gz=-x
+                float rx = (float)sv[0], ry = (float)sv[1], rz = (float)sv[2];
+                verts[vi + 0] = -ry;   // gx
+                verts[vi + 1] = rz;    // gy
+                verts[vi + 2] = -rx;   // gz
+
+                // Color (default to light gray if no color)
+                if (hasColors && srcColors[i] != null && srcColors[i].Count >= 3)
+                {
+                    verts[vi + 3] = Math.Min(255, Math.Max(0, srcColors[i][0])) / 255f;
+                    verts[vi + 4] = Math.Min(255, Math.Max(0, srcColors[i][1])) / 255f;
+                    verts[vi + 5] = Math.Min(255, Math.Max(0, srcColors[i][2])) / 255f;
+                }
+                else
+                {
+                    verts[vi + 3] = 0.56f;
+                    verts[vi + 4] = 0.56f;
+                    verts[vi + 5] = 0.63f;
+                }
+
+                // Normal placeholder (computed per-triangle below)
+                verts[vi + 6] = 0; verts[vi + 7] = 1; verts[vi + 8] = 0;
+                vi += 9;
+            }
+
+            // Copy indices
+            var indices = srcIndices.ToArray();
+
+            // Compute per-face normals and accumulate to vertices for smooth shading
+            // Reset normals to zero first
+            for (int i = 0; i < srcVerts.Count; i++)
+            {
+                verts[i * 9 + 6] = 0;
+                verts[i * 9 + 7] = 0;
+                verts[i * 9 + 8] = 0;
+            }
+
+            for (int t = 0; t + 2 < indices.Length; t += 3)
+            {
+                int i0 = indices[t], i1 = indices[t + 1], i2 = indices[t + 2];
+                if (i0 < 0 || i0 >= srcVerts.Count ||
+                    i1 < 0 || i1 >= srcVerts.Count ||
+                    i2 < 0 || i2 >= srcVerts.Count)
+                    continue;
+
+                // Triangle vertices in GL space
+                float ax = verts[i0 * 9], ay = verts[i0 * 9 + 1], az = verts[i0 * 9 + 2];
+                float bx = verts[i1 * 9], by = verts[i1 * 9 + 1], bz = verts[i1 * 9 + 2];
+                float cx = verts[i2 * 9], cy = verts[i2 * 9 + 1], cz = verts[i2 * 9 + 2];
+
+                // Cross product (b-a) x (c-a)
+                float e1x = bx - ax, e1y = by - ay, e1z = bz - az;
+                float e2x = cx - ax, e2y = cy - ay, e2z = cz - az;
+                float nx = e1y * e2z - e1z * e2y;
+                float ny = e1z * e2x - e1x * e2z;
+                float nz = e1x * e2y - e1y * e2x;
+
+                // Accumulate to each vertex (will normalize after)
+                verts[i0 * 9 + 6] += nx; verts[i0 * 9 + 7] += ny; verts[i0 * 9 + 8] += nz;
+                verts[i1 * 9 + 6] += nx; verts[i1 * 9 + 7] += ny; verts[i1 * 9 + 8] += nz;
+                verts[i2 * 9 + 6] += nx; verts[i2 * 9 + 7] += ny; verts[i2 * 9 + 8] += nz;
+            }
+
+            // Normalize accumulated normals
+            for (int i = 0; i < srcVerts.Count; i++)
+            {
+                int ni = i * 9 + 6;
+                float nx = verts[ni], ny = verts[ni + 1], nz = verts[ni + 2];
+                float len = (float)Math.Sqrt(nx * nx + ny * ny + nz * nz);
+                if (len > 1e-6f)
+                {
+                    verts[ni] = nx / len;
+                    verts[ni + 1] = ny / len;
+                    verts[ni + 2] = nz / len;
+                }
+                else
+                {
+                    verts[ni] = 0; verts[ni + 1] = 1; verts[ni + 2] = 0;
+                }
+            }
+
+            // Atomic swap for render thread
+            _triMeshVerts = verts;
+            _triMeshIndices = indices;
+            _triMeshIndexCount = indices.Length;
+            _hasTriangleMesh = true;
+            _currentMeshMode = "triangle";
+
+            LogMeshDebounce($"TRIANGLE mesh: {srcVerts.Count} verts, {indices.Length / 3} triangles");
         }
 
         /// <summary>
@@ -1693,13 +1877,24 @@ namespace NOMAD.MissionPlanner
 
                                 _meshUpdateCount++;
                                 _lastUpdateTime = DateTime.Now;
-                                if (meshData != null)
-                                    _totalBlocks = meshData.TotalBlocks > 0 ? meshData.TotalBlocks : meshData.TotalVoxels;
-                                string mode = (meshData?.Mode == "voxel" || meshData?.Mode == "voxels") ? "voxels" : "blocks";
-                                int cachedVoxels;
-                                lock (_meshLock) { cachedVoxels = _persistedBlocks.Count; }
+                                string statsText;
+                                if (meshData?.Mode == "triangle")
+                                {
+                                    _totalBlocks = meshData.TotalVertices;
+                                    int triCount = meshData.TotalTriangles;
+                                    statsText = $"Mesh: {_totalBlocks:N0} verts, {triCount:N0} tris (triangle)";
+                                }
+                                else
+                                {
+                                    if (meshData != null)
+                                        _totalBlocks = meshData.TotalBlocks > 0 ? meshData.TotalBlocks : meshData.TotalVoxels;
+                                    string mode = (meshData?.Mode == "voxel" || meshData?.Mode == "voxels") ? "voxels" : "blocks";
+                                    int cachedVoxels;
+                                    lock (_meshLock) { cachedVoxels = _persistedBlocks.Count; }
+                                    statsText = $"Mesh: {_totalBlocks:N0} {mode} ({cachedVoxels:N0} cached)";
+                                }
                                 UpdateStatusSafe($"Status: Connected (30Hz) | Updates: {_meshUpdateCount}");
-                                UpdateStatsSafe($"Mesh: {_totalBlocks:N0} {mode} ({cachedVoxels:N0} cached)");
+                                UpdateStatsSafe(statsText);
                             }
                         }
                     }
@@ -1921,6 +2116,10 @@ namespace NOMAD.MissionPlanner
                 _voxelVerts = null;
                 _voxelIndices = null;
                 _voxelIndexCount = 0;
+                _triMeshVerts = null;
+                _triMeshIndices = null;
+                _triMeshIndexCount = 0;
+                _hasTriangleMesh = false;
                 _meshDirty = false;
                 _pendingMeshUpdate = false;
                 _lastRenderedCount = 0;

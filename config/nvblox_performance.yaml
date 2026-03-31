@@ -119,9 +119,9 @@
       esdf_integrator_max_site_distance_vox: 2.0
       esdf_integrator_max_distance_m: 2.0
       
-      # Mesh - STABLE settings
-      mesh_integrator_min_weight: 1.0
-      mesh_integrator_weld_vertices: true
+      # Mesh - triangle surface generation (streamed to Mission Planner)
+      mesh_integrator_min_weight: 0.5  # lower threshold for more surface coverage
+      mesh_integrator_weld_vertices: true  # reduce vertex count by sharing edges
       
       # Decay - enable to free GPU memory for old blocks
       tsdf_decay_factor: 0.95  # moderate decay to reclaim memory

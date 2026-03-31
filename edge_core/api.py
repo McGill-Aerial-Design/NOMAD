@@ -3254,14 +3254,19 @@ wait
 
         # Validate required field: mode
         mode = mesh_data.get("mode")
-        if mode not in ("block", "voxel"):
-            return JSONResponse({"error": "mode must be 'block' or 'voxel'"}, status_code=400)
+        if mode not in ("block", "voxel", "triangle"):
+            return JSONResponse({"error": "mode must be 'block', 'voxel', or 'triangle'"}, status_code=400)
 
         # Validate required list for the chosen mode
         if mode == "block" and not isinstance(mesh_data.get("blocks"), list):
             return JSONResponse({"error": "blocks must be a list"}, status_code=400)
         if mode == "voxel" and not isinstance(mesh_data.get("voxels"), list):
             return JSONResponse({"error": "voxels must be a list"}, status_code=400)
+        if mode == "triangle":
+            if not isinstance(mesh_data.get("vertices"), list):
+                return JSONResponse({"error": "vertices must be a list"}, status_code=400)
+            if not isinstance(mesh_data.get("indices"), list):
+                return JSONResponse({"error": "indices must be a list"}, status_code=400)
 
         # Validate optional numeric fields
         for field in ("block_size", "voxel_size"):
@@ -3273,12 +3278,21 @@ wait
             if not hasattr(request.app.state, 'slam_mesh_data'):
                 request.app.state.slam_mesh_data = {}
             
+            # Compute item count based on mode
+            if mode == "triangle":
+                item_count = mesh_data.get("total_vertices", len(mesh_data.get("vertices", [])))
+                total_items = mesh_data.get("total_triangles", 0)
+            else:
+                item_count = len(mesh_data.get("blocks", mesh_data.get("voxels", [])))
+                total_items = mesh_data.get("total_blocks", mesh_data.get("total_voxels", 0))
+
             request.app.state.slam_mesh_data = {
                 "mesh": mesh_data,
                 "received_at": datetime.now(timezone.utc).isoformat(),
-                "block_count": len(mesh_data.get("blocks", mesh_data.get("voxels", []))),
-                "total_blocks": mesh_data.get("total_blocks", mesh_data.get("total_voxels", 0)),
-                "mode": mesh_data.get("mode", "blocks"),
+                "block_count": item_count,
+                "total_blocks": total_items,
+                "total_triangles": mesh_data.get("total_triangles", 0),
+                "mode": mode,
             }
             
             # Store drone pose from mesh data (from TF lookup in ros_http_bridge)
@@ -3290,7 +3304,7 @@ wait
             # Increment version counter for delta tracking
             request.app.state.slam_mesh_version = getattr(request.app.state, "slam_mesh_version", 0) + 1
             
-            return {"status": "ok", "items_received": len(mesh_data.get("blocks", mesh_data.get("voxels", [])))}
+            return {"status": "ok", "items_received": item_count, "mode": mode}
             
         except Exception as e:
             logger.error(f"SLAM mesh update error: {e}")

@@ -210,7 +210,7 @@ class ROSHTTPBridge(Node):
         self._base_url = f"http://{host}:{port}"
         self._send_interval = 1.0 / send_rate_hz
         self._enable_nav_control = enable_nav_control
-        self._enable_mesh = enable_mesh and NVBLOX_AVAILABLE
+        self._enable_mesh = enable_mesh and (NVBLOX_AVAILABLE or MARKER_AVAILABLE)
         self._enable_servo = enable_servo
         self._enable_detections = enable_detections and ZED_OD_AVAILABLE
         
@@ -293,8 +293,19 @@ class ROSHTTPBridge(Node):
             self.get_logger().info(f"Subscribed to cmd_vel: {cmd_vel_topic}")
         
         # Subscribe to mesh for 3D visualization
-        # Prefer color_layer_marker (per-voxel) over raw Mesh (per-block)
+        # Prefer triangle mesh from /nvblox_node/mesh (smooth surfaces) over
+        # color_layer_marker (cube voxels). The voxel marker is kept as fallback
+        # if the triangle mesh topic stops producing data.
         self._use_voxel_marker = False
+        self._triangle_recv_count = 0  # track if triangle mesh is producing data
+        if self._enable_mesh and NVBLOX_AVAILABLE:
+            self.create_subscription(
+                Mesh,
+                mesh_topic,
+                self._handle_mesh,
+                mesh_qos,
+            )
+            self.get_logger().info(f"Subscribed to triangle mesh (primary): {mesh_topic}")
         if self._enable_mesh and MARKER_AVAILABLE:
             voxel_topic = "/nvblox_node/color_layer_marker"
             self.create_subscription(
@@ -303,16 +314,7 @@ class ROSHTTPBridge(Node):
                 self._handle_voxel_marker,
                 mesh_qos,
             )
-            self._use_voxel_marker = True
-            self.get_logger().info(f"Subscribed to per-voxel marker: {voxel_topic}")
-        if self._enable_mesh and NVBLOX_AVAILABLE:
-            self.create_subscription(
-                Mesh,
-                mesh_topic,
-                self._handle_mesh,
-                mesh_qos,
-            )
-            self.get_logger().info(f"Subscribed to mesh (fallback): {mesh_topic}")
+            self.get_logger().info(f"Subscribed to per-voxel marker (fallback): {voxel_topic}")
         elif enable_mesh and not NVBLOX_AVAILABLE and not MARKER_AVAILABLE:
             self.get_logger().warning("Mesh requested but nvblox_msgs not available")
         
@@ -1180,68 +1182,130 @@ class ROSHTTPBridge(Node):
     
     def _handle_mesh(self, msg) -> None:
         """
-        Handle mesh data from nvblox for 3D visualization (block-only fallback).
+        Handle mesh data from nvblox for 3D visualization.
 
-        Only used when color_layer_marker is not available.
-        Sends block indices + average color per block.
+        Primary mode: extract actual triangle vertices, indices, and per-vertex
+        colors from the nvblox Mesh message for smooth surface rendering.
+        Falls back to block-averaged colors if triangle extraction fails.
         """
         if not self._enable_mesh:
             return
-        # Skip block mode if we have per-voxel marker data
-        if self._use_voxel_marker:
-            return
 
         try:
-            # Rate limit mesh updates (max 10 Hz to avoid overwhelming)
             now = time.time()
-            if now - self._last_mesh_send_time < self._mesh_send_interval_s:  # 10 Hz max
+            if now - self._last_mesh_send_time < self._mesh_send_interval_s:
                 return
 
             block_size = msg.block_size_m if hasattr(msg, 'block_size_m') else 0.2
 
-            # Block-only mode: extract index + average color per block
-            blocks = []
-            for i, idx in enumerate(msg.block_indices[:2000]):
-                block_entry = {
-                    "index": [int(idx.x), int(idx.y), int(idx.z)],
-                }
+            # Triangle mesh mode: extract actual vertices, triangles, and colors
+            # from nvblox MeshBlock data for smooth surface rendering.
+            all_vertices = []
+            all_indices = []
+            all_colors = []
+            vertex_offset = 0
+            blocks_processed = 0
 
-                # Compute average color from block vertices if available
-                if i < len(msg.blocks) and hasattr(msg.blocks[i], 'colors') and msg.blocks[i].colors:
-                    colors = msg.blocks[i].colors
-                    if colors:
-                        n = len(colors)
-                        avg_r = int(sum(c.r for c in colors) / n * 255)
-                        avg_g = int(sum(c.g for c in colors) / n * 255)
-                        avg_b = int(sum(c.b for c in colors) / n * 255)
-                        block_entry["color"] = [avg_r, avg_g, avg_b]
+            for i, ros_block in enumerate(msg.blocks[:500]):  # Cap blocks per message
+                if not hasattr(ros_block, 'vertices') or not ros_block.vertices:
+                    continue
+                if not hasattr(ros_block, 'triangles') or not ros_block.triangles:
+                    continue
 
-                blocks.append(block_entry)
+                # Extract vertices (Point32: x, y, z)
+                block_verts = []
+                for v in ros_block.vertices:
+                    if hasattr(v, 'x'):
+                        block_verts.append([round(float(v.x), 4),
+                                            round(float(v.y), 4),
+                                            round(float(v.z), 4)])
+                    else:
+                        block_verts.append([round(float(v[0]), 4),
+                                            round(float(v[1]), 4),
+                                            round(float(v[2]), 4)])
 
-            if not blocks:
-                self._send_empty_mesh_heartbeat(mode="block", timestamp=now)
+                if not block_verts:
+                    continue
+
+                # Extract triangle indices (flat array: [i0, i1, i2, ...])
+                tri_indices = list(ros_block.triangles)
+                if len(tri_indices) < 3:
+                    continue
+
+                # Extract per-vertex colors (ColorRGBA: r, g, b, a in 0-1)
+                block_colors = []
+                has_colors = hasattr(ros_block, 'colors') and ros_block.colors
+                if has_colors and len(ros_block.colors) == len(block_verts):
+                    for c in ros_block.colors:
+                        if hasattr(c, 'r'):
+                            block_colors.append([int(c.r * 255),
+                                                 int(c.g * 255),
+                                                 int(c.b * 255)])
+                        else:
+                            block_colors.append([int(c[0]), int(c[1]), int(c[2])])
+
+                # Offset triangle indices for the global vertex array
+                for idx in tri_indices:
+                    all_indices.append(int(idx) + vertex_offset)
+
+                all_vertices.extend(block_verts)
+                all_colors.extend(block_colors)
+                vertex_offset += len(block_verts)
+                blocks_processed += 1
+
+            if not all_vertices or not all_indices:
+                self._send_empty_mesh_heartbeat(mode="triangle", timestamp=now)
                 return
 
-            # Get camera pose from TF
+            # Subsample if too large (cap at ~20k vertices to keep payload manageable)
+            max_vertices = 20000
+            if len(all_vertices) > max_vertices:
+                # Keep every Nth vertex and remap indices
+                stride = len(all_vertices) / float(max_vertices)
+                keep_set = set(int(i * stride) for i in range(max_vertices))
+                old_to_new = {}
+                new_verts = []
+                new_colors = []
+                new_idx = 0
+                for old_idx in sorted(keep_set):
+                    old_to_new[old_idx] = new_idx
+                    new_verts.append(all_vertices[old_idx])
+                    if old_idx < len(all_colors):
+                        new_colors.append(all_colors[old_idx])
+                    new_idx += 1
+                # Rebuild triangles using only kept vertices
+                new_indices = []
+                for ti in range(0, len(all_indices), 3):
+                    if ti + 2 < len(all_indices):
+                        i0, i1, i2 = all_indices[ti], all_indices[ti+1], all_indices[ti+2]
+                        if i0 in old_to_new and i1 in old_to_new and i2 in old_to_new:
+                            new_indices.extend([old_to_new[i0], old_to_new[i1], old_to_new[i2]])
+                all_vertices = new_verts
+                all_colors = new_colors
+                all_indices = new_indices
+
             camera_pose = self._get_camera_pose()
 
-            # Create lightweight mesh data payload
             mesh_data = {
-                "blocks": blocks,
+                "mode": "triangle",
+                "vertices": all_vertices,       # [[x,y,z], ...]
+                "indices": all_indices,          # [i0, i1, i2, ...] (flat, every 3 = triangle)
+                "colors": all_colors if all_colors else None,  # [[r,g,b], ...] per vertex
+                "total_vertices": len(all_vertices),
+                "total_triangles": len(all_indices) // 3,
                 "block_size": block_size,
-                "mode": "block",
-                "total_blocks": len(blocks),
+                "blocks_processed": blocks_processed,
                 "timestamp": now,
-                "frame_id": "ros_optical",  # Same frame as mesh vertices and drone_position/attitude
+                "frame_id": "ros_optical",
                 "clear": msg.clear if hasattr(msg, 'clear') else False,
             }
 
-            # Add camera pose if available
             if camera_pose:
                 mesh_data["drone_position"] = camera_pose["position"]
                 mesh_data["drone_attitude"] = camera_pose["attitude"]
 
             self._mesh_recv_count += 1
+            self._triangle_recv_count += 1
             self._send_mesh_to_edge_core(mesh_data)
 
         except Exception as e:
@@ -1250,11 +1314,14 @@ class ROSHTTPBridge(Node):
     def _handle_voxel_marker(self, msg: 'Marker') -> None:
         """
         Handle per-voxel colored data from nvblox color_layer_marker topic.
-        
-        This gives individual voxel positions + colors (Marker type CUBE_LIST),
-        producing a much finer 3D map than the block-only approach.
+
+        This is a fallback path: only used when triangle mesh from
+        /nvblox_node/mesh is not producing data (e.g. nvblox_msgs unavailable).
         """
         if not self._enable_mesh:
+            return
+        # Skip voxel mode if triangle mesh is actively producing data
+        if self._triangle_recv_count > 0 and not self._use_voxel_marker:
             return
         try:
             now = time.time()
@@ -1263,7 +1330,7 @@ class ROSHTTPBridge(Node):
                 return
 
             n_pts = len(msg.points)
-            
+
             # Track empty markers for fallback logic (DO THIS BEFORE rate limiting)
             # so we count ALL empty messages, not just the ones that pass the rate limit
             if n_pts == 0:
@@ -1272,7 +1339,7 @@ class ROSHTTPBridge(Node):
                     self._use_voxel_marker = False
                     self.get_logger().warning(
                         "color_layer_marker has been empty for 20 consecutive messages -- "
-                        "falling back to /nvblox_node/mesh (block mode)"
+                        "falling back to /nvblox_node/mesh (triangle mode)"
                     )
                 self._send_empty_mesh_heartbeat(mode="voxel", timestamp=now)
                 # Return AFTER tracking, but before rate limit check
@@ -1367,12 +1434,20 @@ class ROSHTTPBridge(Node):
                 self._mesh_send_count += 1
                 self._last_mesh_send_time = time.time()
                 if self._mesh_send_count % 10 == 1:
-                    count = mesh_data.get('total_voxels', mesh_data.get('total_blocks', 0))
-                    unit = "voxels" if mesh_data.get('mode') == 'voxel' else "blocks"
-                    self.get_logger().info(
-                        f"Mesh sent: {count} {unit} "
-                        f"(mode={mesh_data.get('mode', 'block')})"
-                    )
+                    mode = mesh_data.get('mode', 'block')
+                    if mode == 'triangle':
+                        count = mesh_data.get('total_vertices', 0)
+                        tri_count = mesh_data.get('total_triangles', 0)
+                        self.get_logger().info(
+                            f"Mesh sent: {count} vertices, {tri_count} triangles "
+                            f"(mode=triangle, blocks={mesh_data.get('blocks_processed', 0)})"
+                        )
+                    else:
+                        count = mesh_data.get('total_voxels', mesh_data.get('total_blocks', 0))
+                        unit = "voxels" if mode == 'voxel' else "blocks"
+                        self.get_logger().info(
+                            f"Mesh sent: {count} {unit} (mode={mode})"
+                        )
             else:
                 self._send_errors += 1
                     
@@ -1398,7 +1473,10 @@ class ROSHTTPBridge(Node):
             "frame_id": "ros_optical",
             "clear": False,
         }
-        if mode == "voxel":
+        if mode == "triangle":
+            mesh_data.update({"vertices": [], "indices": [], "colors": None,
+                              "total_vertices": 0, "total_triangles": 0})
+        elif mode == "voxel":
             mesh_data.update({"voxels": [], "voxel_size": 0.0, "total_voxels": 0, "sent_voxels": 0})
         else:
             mesh_data.update({"blocks": [], "block_size": 0.0, "total_blocks": 0})
