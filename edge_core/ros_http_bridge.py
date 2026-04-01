@@ -8,7 +8,7 @@ ROS2 topics to the NOMAD Edge Core HTTP API running on the host.
 It subscribes to:
 - /zed/zed_node/odom (VIO odometry pose from ZED wrapper)
 - /cmd_vel (Twist velocity commands from nav2/nvblox for autonomous navigation)
-- /nvblox_node/color_layer_marker (3D voxel markers from nvblox) - optional
+- /nvblox_node/tsdf_layer_marker (3D voxel markers from nvblox) - optional
 - /nomad/servo/nozzle_angle (Float32 servo angle for nozzle control)
 
 And sends data to NOMAD Edge Core via HTTP POST requests.
@@ -229,7 +229,7 @@ class ROSHTTPBridge(Node):
         port: int = 8000,
         vio_topic: str = "/zed/zed_node/odom",  # Default to ZED odom
         cmd_vel_topic: str = "/cmd_vel",         # Nav2 velocity commands
-        mesh_topic: str = "/nvblox_node/color_layer_marker",   # Nvblox voxel marker topic
+        mesh_topic: str = "/nvblox_node/tsdf_layer_marker",   # Nvblox TSDF voxel marker topic
         servo_topic: str = "/nomad/servo/nozzle_angle",  # Nozzle servo angle
         detection_topic: str = "/zed/zed_node/obj_det/objects",  # ZED custom OD
         send_rate_hz: float = 30.0,
@@ -259,7 +259,7 @@ class ROSHTTPBridge(Node):
         self._send_interval = 1.0 / send_rate_hz
         self._enable_nav_control = enable_nav_control
         self._enable_mesh = enable_mesh and MARKER_AVAILABLE
-        self._mesh_topic = (mesh_topic or "/nvblox_node/color_layer_marker").strip() or "/nvblox_node/color_layer_marker"
+        self._mesh_topic = (mesh_topic or "/nvblox_node/tsdf_layer_marker").strip() or "/nvblox_node/tsdf_layer_marker"
         self._enable_servo = enable_servo
         self._enable_detections = enable_detections and ZED_OD_AVAILABLE
 
@@ -2055,7 +2055,7 @@ def main():
                         help="VIO odometry topic")
     parser.add_argument("--cmd-vel-topic", default="/cmd_vel",
                         help="Navigation velocity command topic")
-    parser.add_argument("--mesh-topic", default="/nvblox_node/color_layer_marker",
+    parser.add_argument("--mesh-topic", default="/nvblox_node/tsdf_layer_marker",
                         help="Nvblox voxel marker topic (visualization_msgs/Marker)")
     parser.add_argument("--rate", type=float, default=30.0, help="Send rate Hz")
     parser.add_argument("--disable-nav", action="store_true",

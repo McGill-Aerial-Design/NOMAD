@@ -1110,6 +1110,30 @@ else
         echo "  NVBLOX_BASE_B=$NVBLOX_BASE_B"
 fi
 
+# Ensure NITROS is enabled for ZED SDK 5.x (zero-copy depth transport to nvblox).
+# The nvblox_examples zed_common.yaml may omit disable_nitros, causing the ZED
+# wrapper to default to NITROS disabled.  This patches the debug section.
+python3 << 'PYEOF_NITROS'
+import yaml
+common_path = "/workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/sensors/zed_common.yaml"
+try:
+    with open(common_path, 'r') as f:
+        common = yaml.safe_load(f) or {{}}
+    for key in common:
+        if isinstance(common[key], dict) and 'ros__parameters' in common[key]:
+            params = common[key]['ros__parameters']
+            if 'debug' not in params:
+                params['debug'] = {{}}
+            params['debug']['disable_nitros'] = False
+            params['debug']['debug_nitros'] = False
+            break
+    with open(common_path, 'w') as f:
+        yaml.safe_dump(common, f, default_flow_style=False, sort_keys=False)
+    print("Ensured NITROS enabled (disable_nitros: false)")
+except Exception as e:
+    print("NITROS config warning: " + str(e))
+PYEOF_NITROS
+
 # NOTE: Do NOT patch pub_downscale_factor to 1.0 (720p).
 # ZED 360p (default downscale 2.0) uses ~75% less GPU memory than 720p.
 # On 8GB Jetson Orin Nano, 720p depth causes cudaErrorIllegalAddress
