@@ -139,12 +139,12 @@ COMMAND_WHITELIST: dict[str, str] = {
     "status_nomad": "systemctl is-active nomad",
     # --- Service restart ---
     "restart_video": "pkill -x mediamtx 2>/dev/null; sleep 1; nohup mediamtx ~/NOMAD/infra/mediamtx.yml > ~/nomad_logs/mediamtx.log 2>&1 & sleep 1; pgrep -x mediamtx > /dev/null && echo restarted || echo failed",
-    "restart_mavlink": "pkill -f mavlink-routerd 2>/dev/null; sleep 1; [ -e /dev/ttyACM0 ] && { GCS=$(tailscale status 2>/dev/null | grep -v \"$(hostname)\" | grep -oP '\\d+\\.\\d+\\.\\d+\\.\\d+' | head -1); nohup mavlink-routerd -e \"${GCS:-192.168.1.255}:14550\" -e 127.0.0.1:14550 /dev/ttyACM0 > ~/nomad_logs/mavlink.log 2>&1 & sleep 2; pgrep -f mavlink-routerd > /dev/null && echo restarted || echo failed; } || echo 'no CubePilot'",
+    "restart_mavlink": "pkill -9 mavlink-routerd 2>/dev/null; sleep 3; for i in {1..5}; do lsof -i :14550 2>/dev/null || break; [ $i -lt 5 ] && sleep 1; done; [ -e /dev/ttyACM0 ] && { GCS=${GCS_IP:-100.76.127.17}; nohup mavlink-routerd -e \"${GCS}:14550\" -e 127.0.0.1:14550 /dev/ttyACM0 > ~/nomad_logs/mavlink.log 2>&1 & sleep 2; pgrep -f mavlink-routerd > /dev/null && echo restarted || (cat ~/nomad_logs/mavlink.log; echo failed); } || echo 'no CubePilot'",
     "restart_edge_core": "nohup bash -c 'sleep 2 && sudo systemctl restart nomad' > /dev/null 2>&1 & echo 'restart scheduled'",
     # --- Service start / stop ---
     "start_mediamtx": "pgrep -x mediamtx > /dev/null && echo 'already running' || (nohup mediamtx ~/NOMAD/infra/mediamtx.yml > ~/nomad_logs/mediamtx.log 2>&1 & sleep 1; echo started)",
     "stop_mediamtx": "pkill -x mediamtx 2>&1 && echo stopped || echo 'not running'",
-    "start_mavlink": "[ -e /dev/ttyACM0 ] && { pgrep -f mavlink-routerd > /dev/null && echo 'already running' || { GCS=$(tailscale status 2>/dev/null | grep -v \"$(hostname)\" | grep -oP '\\d+\\.\\d+\\.\\d+\\.\\d+' | head -1); nohup mavlink-routerd -e \"${GCS:-192.168.1.255}:14550\" -e 127.0.0.1:14550 /dev/ttyACM0 > ~/nomad_logs/mavlink.log 2>&1 & sleep 2; echo started; }; } || echo 'no CubePilot'",
+    "start_mavlink": "[ -e /dev/ttyACM0 ] && { pgrep -f mavlink-routerd > /dev/null && echo 'already running' || { GCS=${GCS_IP:-100.76.127.17}; nohup mavlink-routerd -e \"${GCS}:14550\" -e 127.0.0.1:14550 /dev/ttyACM0 > ~/nomad_logs/mavlink.log 2>&1 & sleep 2; pgrep -f mavlink-routerd > /dev/null && echo started || (cat ~/nomad_logs/mavlink.log; echo failed); }; } || echo 'no CubePilot'",
     "stop_mavlink": "pkill -f mavlink-routerd 2>&1 && echo stopped || echo 'not running'",
     "start_nomad": "sudo systemctl start nomad 2>&1 && echo started || echo failed",
     "stop_nomad": "nohup bash -c 'sleep 2 && sudo systemctl stop nomad' > /dev/null 2>&1 & echo 'stop scheduled'",
@@ -960,7 +960,11 @@ def create_app(state_manager: StateManager) -> FastAPI:
 set -e
 source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
-export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH
+# ZED SDK 5.x ROS2 wrapper links against GXF Isaac libraries that live outside
+# the default ROS library path.  Add all GXF lib dirs and the arch-specific
+# ROS lib dir so the component_container can dlopen the camera plugin.
+GXF_LIB_DIRS=$(find /opt/ros/humble/share -path '*/gxf/lib' -type d 2>/dev/null | tr '\\n' ':')
+export LD_LIBRARY_PATH=/usr/local/zed/lib:/opt/ros/humble/lib/aarch64-linux-gnu:${{GXF_LIB_DIRS}}$LD_LIBRARY_PATH
 
 # Kill ALL previous nvblox/ZED/bridge processes from ANY launch path.
 # Do NOT kill launcher scripts by name — this script IS launch_nvblox_bridge.sh

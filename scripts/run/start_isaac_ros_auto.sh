@@ -233,7 +233,7 @@ start_container() {
         -e NVIDIA_DRIVER_CAPABILITIES=all \
         -e EGL_PLATFORM=device \
         -e ROS_DOMAIN_ID=0 \
-        -e LD_LIBRARY_PATH=/usr/local/zed/lib:/opt/ros/humble/lib \
+        -e LD_LIBRARY_PATH=/usr/local/zed/lib:/opt/ros/humble/lib:/opt/ros/humble/lib/aarch64-linux-gnu \
         -e CMAKE_PREFIX_PATH=/usr/local/zed \
         -w /workspaces/isaac_ros-dev \
         "$IMAGE_NAME" \
@@ -582,7 +582,8 @@ sed -i 's/od_enabled: true/od_enabled: false/' \
     /workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/sensors/zed_common.yaml 2>/dev/null || true
 
 # Set LD_LIBRARY_PATH BEFORE sourcing setup.bash so ROS libraries are found
-export LD_LIBRARY_PATH=/opt/ros/humble/lib:/usr/local/zed/lib:${LD_LIBRARY_PATH:-}
+GXF_LIB_DIRS=$(find /opt/ros/humble/share -path '*/gxf/lib' -type d 2>/dev/null | tr '\n' ':')
+export LD_LIBRARY_PATH=/opt/ros/humble/lib:/opt/ros/humble/lib/aarch64-linux-gnu:/usr/local/zed/lib:${GXF_LIB_DIRS}${LD_LIBRARY_PATH:-}
 source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 export EGL_PLATFORM=device
@@ -667,7 +668,8 @@ launch_zed_only() {
     _zed_tmp=$(mktemp /tmp/launch_zed_only.XXXXXX.sh)
     cat > "$_zed_tmp" << 'LAUNCH_SCRIPT'
 #!/bin/bash
-export LD_LIBRARY_PATH=/opt/ros/humble/lib:/usr/local/zed/lib:${LD_LIBRARY_PATH:-}
+GXF_LIB_DIRS=$(find /opt/ros/humble/share -path '*/gxf/lib' -type d 2>/dev/null | tr '\n' ':')
+export LD_LIBRARY_PATH=/opt/ros/humble/lib:/opt/ros/humble/lib/aarch64-linux-gnu:/usr/local/zed/lib:${GXF_LIB_DIRS}${LD_LIBRARY_PATH:-}
 source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 export EGL_PLATFORM=device
@@ -721,7 +723,8 @@ launch_ros_http_bridge() {
     _bridge_tmp=$(mktemp /tmp/launch_bridge.XXXXXX.sh)
     cat > "$_bridge_tmp" << 'BRIDGE_SCRIPT'
 #!/bin/bash
-export LD_LIBRARY_PATH=/opt/ros/humble/lib:/usr/local/zed/lib:${LD_LIBRARY_PATH:-}
+GXF_LIB_DIRS=$(find /opt/ros/humble/share -path '*/gxf/lib' -type d 2>/dev/null | tr '\n' ':')
+export LD_LIBRARY_PATH=/opt/ros/humble/lib:/opt/ros/humble/lib/aarch64-linux-gnu:/usr/local/zed/lib:${GXF_LIB_DIRS}${LD_LIBRARY_PATH:-}
 source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 # Ensure package imports (for example, edge_core.*) resolve when launching by script path.
