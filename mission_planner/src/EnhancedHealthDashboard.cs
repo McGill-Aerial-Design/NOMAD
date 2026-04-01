@@ -1288,7 +1288,7 @@ namespace NOMAD.MissionPlanner
                 }
 
                 // X-axis labels (time ago)
-                int totalSeconds = HISTORY_LENGTH * (_pollIntervalMs / 1000);
+                int totalSeconds = HISTORY_LENGTH * (_config.HealthPollInterval / 1000);
                 for (int i = 0; i <= 4; i++)
                 {
                     int x = rect.Left + rect.Width * i / 4;

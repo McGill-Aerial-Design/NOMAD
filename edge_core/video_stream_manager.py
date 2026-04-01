@@ -263,19 +263,6 @@ class VideoStreamManager:
             except Exception:
                 pass  # OK if nothing to kill
 
-            # Ensure numpy <2 (cv_bridge is compiled against numpy 1.x ABI)
-            try:
-                subprocess.run(
-                    ["docker", "exec", self.container_name,
-                     "bash", "-c",
-                     "python3 -c 'import numpy; v=int(numpy.__version__.split(\".\")[0]); exit(0 if v<2 else 1)' "
-                     "|| pip3 install -q 'numpy<2' 2>/dev/null"],
-                    capture_output=True,
-                    timeout=30
-                )
-            except Exception:
-                pass  # Best-effort; bridge will fail with clear error if numpy is wrong
-            
             # Start the simple video bridge
             cmd = [
                 "docker", "exec", "-d", self.container_name,
@@ -307,11 +294,14 @@ class VideoStreamManager:
                 logger.error(msg)
                 return (False, msg)
             
-            # Wait for bridge to be ready. Give it a bit more time because
-            # ROS graph discovery and encoder startup can be delayed on Jetson.
-            for i in range(25):  # Wait up to 25 seconds
+            # Wait for bridge HTTP API and GStreamer pipeline to be ready.
+            # We do NOT require fresh frames here — the ZED topic may not be
+            # publishing yet (e.g. container just started). Frames will arrive
+            # once ROS graph discovery completes. Checking pipeline_playing is
+            # sufficient to confirm the bridge process is healthy and encoding.
+            for i in range(15):  # Wait up to 15 seconds
                 time.sleep(1)
-                if self.is_relay_running(require_recent_frames=True):
+                if self.is_relay_running(require_recent_frames=False):
                     self._started = True
                     logger.info(f"{script_name} started successfully")
                     return (True, "Started successfully")
