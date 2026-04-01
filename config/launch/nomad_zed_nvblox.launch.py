@@ -62,7 +62,7 @@ def generate_launch_description():
     enable_nav2_arg = DeclareLaunchArgument(
         'enable_nav2',
         default_value='false',
-        description='Enable Nav2 stack for Jetson-side obstacle avoidance with nvblox costmap (set to false to disable for testing/debug)',
+        description='Enable Nav2 stack for Jetson-side obstacle avoidance with nvblox costmap (disabled by default to prevent duplicate instances from repeated launches)',
     )
 
     enable_foxglove_arg = DeclareLaunchArgument(

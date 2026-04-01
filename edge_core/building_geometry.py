@@ -665,3 +665,229 @@ def generate_target_descriptions(
         descriptions.append(placement.describe())
 
     return descriptions
+
+
+# ---------------------------------------------------------------------------
+# Visualization
+# ---------------------------------------------------------------------------
+
+def draw_building_visualization(
+    mesh_data: dict,
+    building_geom: dict,
+    targets: List[dict],
+    image_size: Tuple[int, int] = (800, 600),
+) -> Optional[np.ndarray]:
+    """
+    Draw a top-down and side view visualization of the building and targets.
+    
+    Creates a debug image showing:
+    - Top-down view (XZ plane) with building footprint and target positions
+    - Side view (XY plane) showing building height and target elevations
+    - Building dimensions and face labels
+    - Detected targets with color-coded markers
+    
+    Args:
+        mesh_data: The slam_mesh_data dict from Edge Core state
+        building_geom: Building geometry dict (from BuildingGeometry.to_dict())
+        targets: List of detected targets with x, y, z, color fields
+        image_size: Output image dimensions (width, height)
+        
+    Returns:
+        BGR image with visualization, or None if insufficient data
+    """
+    import cv2
+    import numpy as np
+    
+    if not building_geom or "bbox" not in building_geom:
+        return None
+    
+    width, height = image_size
+    img = np.zeros((height, width, 3), dtype=np.uint8)
+    img[:] = (30, 30, 30)  # Dark gray background
+    
+    bbox = building_geom["bbox"]
+    dims = building_geom.get("dimensions", {})
+    faces = building_geom.get("faces", {})
+    
+    # Extract bounds
+    min_x, min_y, min_z = bbox["min"]
+    max_x, max_y, max_z = bbox["max"]
+    
+    # Compute scale to fit building in view with margin
+    margin = 50
+    half_w = (width - margin * 2) // 2
+    half_h = (height - margin * 2) // 2
+    
+    # Top view takes left half, side view takes right half
+    top_cx = margin + half_w // 2
+    top_cy = height // 2
+    side_cx = width // 2 + margin + half_w // 2
+    side_cy = height // 2
+    
+    # Calculate scale for both views
+    building_w = max(max_x - min_x, 0.1)
+    building_h = max(max_y - min_y, 0.1)  # Y is vertical
+    building_d = max(max_z - min_z, 0.1)
+    
+    # Scale to fit in half the image
+    scale_top = min((half_w - 40) / building_w, (half_h * 2 - 80) / building_d)
+    scale_side = min((half_w - 40) / building_d, (half_h * 2 - 80) / building_h)
+    
+    scale_top = min(scale_top, 80)  # Cap scale
+    scale_side = min(scale_side, 80)
+    
+    # Color map for targets
+    TARGET_COLORS = {
+        "red": (0, 0, 255),
+        "blue": (255, 0, 0),
+        "green": (0, 255, 0),
+        "yellow": (0, 255, 255),
+        "white": (255, 255, 255),
+        "black": (128, 128, 128),
+        "unknown": (150, 150, 150),
+    }
+    
+    # Draw separator line
+    cv2.line(img, (width // 2, 0), (width // 2, height), (60, 60, 60), 2)
+    
+    # --- TOP-DOWN VIEW (left half) ---
+    cv2.putText(img, "TOP VIEW (XZ)", (margin, 25),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 1, cv2.LINE_AA)
+    cv2.putText(img, "N", (top_cx, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 200, 100), 1)
+    cv2.arrowedLine(img, (top_cx, 70), (top_cx, 55), (100, 200, 100), 2)
+    
+    # Draw building footprint (XZ plane)
+    def world_to_top(wx, wz):
+        px = int(top_cx + (wx - (min_x + max_x) / 2) * scale_top)
+        py = int(top_cy - (wz - (min_z + max_z) / 2) * scale_top)  # Z forward = up
+        return px, py
+    
+    p1 = world_to_top(min_x, min_z)
+    p2 = world_to_top(max_x, min_z)
+    p3 = world_to_top(max_x, max_z)
+    p4 = world_to_top(min_x, max_z)
+    
+    pts = np.array([p1, p2, p3, p4], dtype=np.int32)
+    cv2.fillPoly(img, [pts], (50, 80, 50))
+    cv2.polylines(img, [pts], True, (100, 200, 100), 2)
+    
+    # Label faces in top view
+    face_label_colors = {
+        "north": (100, 200, 100),
+        "south": (100, 200, 100),
+        "east": (200, 100, 100),
+        "west": (200, 100, 100),
+    }
+    for fname, face in faces.items():
+        if fname in ("roof", "ground"):
+            continue
+        color = face_label_colors.get(fname, (150, 150, 150))
+        # Calculate label position
+        if fname == "north":
+            lx, ly = world_to_top((min_x + max_x) / 2, max_z)
+            ly -= 15
+        elif fname == "south":
+            lx, ly = world_to_top((min_x + max_x) / 2, min_z)
+            ly += 20
+        elif fname == "east":
+            lx, ly = world_to_top(max_x, (min_z + max_z) / 2)
+            lx += 5
+        elif fname == "west":
+            lx, ly = world_to_top(min_x, (min_z + max_z) / 2)
+            lx -= 30
+        else:
+            continue
+        cv2.putText(img, fname[0].upper(), (lx, ly),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+    
+    # Draw dimension labels
+    dim_w = dims.get("width_m", building_w)
+    dim_d = dims.get("height_m", building_d)  # "height" in geometry is Z extent
+    cv2.putText(img, f"{dim_w:.1f}m", (top_cx - 20, top_cy + int(scale_top * building_d / 2) + 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1, cv2.LINE_AA)
+    cv2.putText(img, f"{dim_d:.1f}m", (top_cx + int(scale_top * building_w / 2) + 10, top_cy),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1, cv2.LINE_AA)
+    
+    # --- SIDE VIEW (right half) ---
+    cv2.putText(img, "SIDE VIEW (ZY)", (width // 2 + margin, 25),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 1, cv2.LINE_AA)
+    
+    # Draw building side view (ZY plane)
+    def world_to_side(wz, wy):
+        px = int(side_cx + (wz - (min_z + max_z) / 2) * scale_side)
+        py = int(side_cy + (wy - (min_y + max_y) / 2) * scale_side)  # Y down = down on screen
+        return px, py
+    
+    s1 = world_to_side(min_z, min_y)  # top-left
+    s2 = world_to_side(max_z, min_y)  # top-right
+    s3 = world_to_side(max_z, max_y)  # bottom-right
+    s4 = world_to_side(min_z, max_y)  # bottom-left
+    
+    pts_side = np.array([s1, s2, s3, s4], dtype=np.int32)
+    cv2.fillPoly(img, [pts_side], (50, 50, 80))
+    cv2.polylines(img, [pts_side], True, (100, 100, 200), 2)
+    
+    # Label roof and ground
+    cv2.putText(img, "ROOF", ((s1[0] + s2[0]) // 2 - 20, s1[1] - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (100, 100, 200), 1)
+    cv2.putText(img, "GROUND", ((s3[0] + s4[0]) // 2 - 30, s3[1] + 15),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (100, 100, 200), 1)
+    
+    # Draw height dimension
+    dim_h = dims.get("depth_m", building_h)  # "depth" is Y extent (vertical)
+    cv2.putText(img, f"{dim_h:.1f}m", (s4[0] - 45, side_cy),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1, cv2.LINE_AA)
+    
+    # --- DRAW TARGETS ---
+    for i, target in enumerate(targets):
+        x = target.get("x")
+        y = target.get("y")
+        z = target.get("z")
+        
+        if x is None or y is None or z is None:
+            continue
+            
+        color_name = target.get("color", target.get("label", "unknown"))
+        if "_circle" in color_name:
+            color_name = color_name.replace("_circle", "")
+        color = TARGET_COLORS.get(color_name.lower(), (150, 150, 150))
+        
+        letter = chr(ord('A') + i) if i < 26 else str(i)
+        
+        # Draw in top view
+        tx, ty = world_to_top(x, z)
+        cv2.circle(img, (tx, ty), 8, color, -1)
+        cv2.circle(img, (tx, ty), 8, (255, 255, 255), 1)
+        cv2.putText(img, letter, (tx - 4, ty + 4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
+        
+        # Draw in side view
+        sx, sy = world_to_side(z, y)
+        cv2.circle(img, (sx, sy), 8, color, -1)
+        cv2.circle(img, (sx, sy), 8, (255, 255, 255), 1)
+        cv2.putText(img, letter, (sx - 4, sy + 4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
+    
+    # --- LEGEND ---
+    legend_y = height - 80
+    cv2.putText(img, f"Targets: {len(targets)}", (margin, legend_y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+    cv2.putText(img, f"Voxels: {building_geom.get('voxel_count', 0)}", (margin, legend_y + 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+    cv2.putText(img, f"Heading: {building_geom.get('heading_deg', 0):.0f} deg", (margin, legend_y + 40),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+    
+    # Target legend (colors)
+    leg_x = width // 2 + margin
+    for i, (cname, cval) in enumerate(TARGET_COLORS.items()):
+        if cname == "unknown":
+            continue
+        row = i // 3
+        col = i % 3
+        lx = leg_x + col * 80
+        ly = legend_y + row * 18
+        cv2.circle(img, (lx, ly - 4), 6, cval, -1)
+        cv2.putText(img, cname, (lx + 10, ly),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (180, 180, 180), 1)
+    
+    return img

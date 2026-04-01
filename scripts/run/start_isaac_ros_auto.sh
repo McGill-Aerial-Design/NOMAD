@@ -610,6 +610,12 @@ launch_zed_nvblox() {
         _launch_tmp=$(mktemp /tmp/launch_zed_nvblox.XXXXXX.sh)
         cat > "$_launch_tmp" << 'LAUNCH_SCRIPT'
 #!/bin/bash
+# Clean up old ROS/nav2 processes before launching new ones
+echo "[init] Cleaning up old ROS/nav2 processes..."
+pkill -f '[c]ontroller_server|[p]lanner_server|[n]av2_.*lifecycle' 2>/dev/null || true
+pkill -f '[r]os2 launch' | grep -v $$ 2>/dev/null || true
+sleep 1
+
 # Bind uvcvideo driver to ZED camera USB interfaces
 echo "[init] Binding uvcvideo driver to ZED camera..."
 for dev in /sys/bus/usb/devices/*/idVendor; do
@@ -748,20 +754,15 @@ fi
 # Launch ZED + nvblox using NOMAD custom launch file.
 # Includes: optical frame alias TF, servo TF publisher, obstacle distance bridge.
 # Uses blocking CUDA stream (type 0) to prevent cudaErrorIllegalAddress on 8GB Jetson.
-echo "Launching ZED + nvblox (nomad_zed_nvblox.launch.py)..."
-ros2 launch /workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py &
+# Nav2 is disabled by default; enable with: enable_nav2:=true
+echo "Launching ZED + nvblox (nomad_zed_nvblox.launch.py) with nav2 disabled..."
+ros2 launch /workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py enable_nav2:=false &
 LAUNCH_PID=$!
 
-# Post-launch validation: confirm nav2 lifecycle nodes are running (give 5s for startup)
-if [ "$NAV2_PREFLIGHT_OK" = true ]; then
-    sleep 5
-    NAV2_NODES=$(ros2 node list 2>/dev/null | grep -E 'nav2_.*lifecycle' | wc -l)
-    if [ "$NAV2_NODES" -gt 0 ]; then
-        echo "[INFO] Nav2 lifecycle nodes detected ($NAV2_NODES running) - nav2 active"
-    else
-        echo "[WARN] No Nav2 lifecycle nodes detected - nav2 may have failed to start"
-    fi
-fi
+# Post-launch validation: nav2 is disabled by default and will not start
+# To enable nav2, restart with: ./start_nomad_full.sh task2 ENABLE_NAV2=true
+echo "[INFO] Nav2 is disabled by default (prevents duplicate instances)"
+echo "[INFO] To enable nav2, use: ros2 launch ... enable_nav2:=true"
 
 # Keep script long-running while launch remains active.
 wait "$LAUNCH_PID"

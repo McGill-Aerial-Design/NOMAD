@@ -96,6 +96,9 @@ class Task1CaptureResponse(BaseModel):
     image_name: Optional[str] = None
     metadata_file: Optional[str] = None
     building_location: Optional[str] = None
+    detections_overlay: Optional[str] = None  # Path to detection overlay image
+    building_viz: Optional[str] = None  # Path to building 3D visualization
+    detection_count: Optional[int] = None  # Number of detected targets
     error: Optional[str] = None
 
 
@@ -1796,6 +1799,98 @@ wait
                 image_saved = True
                 metadata["photo_path"] = image_path
                 logger.info(f"Task 1 image saved: {image_path}")
+                
+                # Save debug image with circle detection overlay
+                try:
+                    from .hsv_circle_detector import draw_detection_overlay, DetectedCircle
+                    
+                    # Convert detection history to DetectedCircle objects for overlay
+                    # Detection history has: bbox_x, bbox_y, bbox_w, bbox_h (pixel coords)
+                    # or cx, cy, radius if from direct HSV detection
+                    overlay_dets = []
+                    for det in det_history:
+                        # Calculate pixel center from bbox if available
+                        bbox_x = det.get("bbox_x", 0)
+                        bbox_y = det.get("bbox_y", 0)
+                        bbox_w = det.get("bbox_w", 60)
+                        bbox_h = det.get("bbox_h", 60)
+                        
+                        # Use explicit cx/cy if available, otherwise compute from bbox
+                        cx = det.get("cx")
+                        cy = det.get("cy")
+                        if cx is None or cy is None:
+                            cx = int(bbox_x + bbox_w / 2)
+                            cy = int(bbox_y + bbox_h / 2)
+                        
+                        # Compute radius from bbox if not explicitly provided
+                        radius = det.get("radius")
+                        if radius is None:
+                            radius = int(max(bbox_w, bbox_h) / 2)
+                        
+                        # Extract color from label (e.g., "red_circle" -> "red")
+                        color = det.get("hsv_color", "")
+                        if not color:
+                            label = det.get("label", "unknown")
+                            color = label.replace("_circle", "") if "_circle" in label else label
+                        
+                        overlay_dets.append(DetectedCircle(
+                            cx=int(cx),
+                            cy=int(cy),
+                            radius=int(radius),
+                            color=color,
+                            confidence=det.get("confidence", 0.5),
+                            ellipse_half_w=det.get("ellipse_half_w", int(bbox_w / 2)),
+                            ellipse_half_h=det.get("ellipse_half_h", int(bbox_h / 2)),
+                            ellipse_angle=det.get("ellipse_angle", 0.0),
+                            aspect_ratio=det.get("aspect_ratio", 1.0),
+                            circularity=det.get("circularity", 1.0),
+                            solidity=det.get("solidity", 1.0),
+                            x=det.get("x"),
+                            y=det.get("y"),
+                            z=det.get("z"),
+                            bbox_x=int(bbox_x),
+                            bbox_y=int(bbox_y),
+                            bbox_w=int(bbox_w),
+                            bbox_h=int(bbox_h),
+                            detection_method=det.get("detection_method", "history"),
+                        ))
+                    
+                    debug_img = image_bgr.copy()
+                    debug_img = draw_detection_overlay(debug_img, overlay_dets)
+                    
+                    # Add timestamp and detection count to debug image
+                    import numpy as np
+                    info_text = f"Task 1 Capture: {timestamp_str} | {len(overlay_dets)} detection(s)"
+                    cv2.rectangle(debug_img, (0, debug_img.shape[0] - 35), (len(info_text) * 12 + 10, debug_img.shape[0]), (0, 0, 0), -1)
+                    cv2.putText(debug_img, info_text, (5, debug_img.shape[0] - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1, cv2.LINE_AA)
+                    
+                    debug_path = os.path.join(capture_folder, "detections_overlay.jpg")
+                    cv2.imwrite(debug_path, debug_img)
+                    metadata["detections_overlay_path"] = debug_path
+                    logger.info(f"Task 1 detection overlay saved: {debug_path}")
+                except Exception as overlay_err:
+                    logger.warning(f"Task 1 detection overlay failed: {overlay_err}")
+                
+                # Save building geometry visualization if available
+                try:
+                    from .building_geometry import draw_building_visualization
+                    building_geom = metadata.get("building_geometry")
+                    if building_geom and mesh_state:
+                        building_viz = draw_building_visualization(
+                            mesh_state, 
+                            building_geom, 
+                            det_history,
+                            image_size=(800, 600)
+                        )
+                        if building_viz is not None:
+                            viz_path = os.path.join(capture_folder, "building_3d_snapshot.jpg")
+                            cv2.imwrite(viz_path, building_viz)
+                            metadata["building_viz_path"] = viz_path
+                            logger.info(f"Task 1 building visualization saved: {viz_path}")
+                except Exception as viz_err:
+                    logger.warning(f"Task 1 building visualization failed: {viz_err}")
+                    
             except Exception as e:
                 logger.error(f"Task 1 image save/EXIF failed: {e}")
         else:
@@ -1833,6 +1928,9 @@ wait
                 image_name=image_filename if image_saved else None,
                 metadata_file=metadata_filename,
                 building_location=building_name,
+                detections_overlay=metadata.get("detections_overlay_path"),
+                building_viz=metadata.get("building_viz_path"),
+                detection_count=len(det_history) if det_history else 0,
                 error="No image captured from video bridge" if not image_saved else None,
             )
             
@@ -1931,7 +2029,10 @@ wait
             raise HTTPException(status_code=400, detail="Invalid folder name format")
         
         # Security: Validate filename - whitelist allowed files
-        allowed_files = ['photo.jpg', 'metadata.json', 'description.txt']
+        allowed_files = [
+            'photo.jpg', 'metadata.json', 'description.txt',
+            'detections_overlay.jpg', 'building_3d_snapshot.jpg'
+        ]
         if filename not in allowed_files:
             raise HTTPException(
                 status_code=400,

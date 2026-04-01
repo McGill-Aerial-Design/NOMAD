@@ -96,6 +96,10 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=all
     command: >
       bash -c "
+        echo '[init] Cleaning up old ROS processes...';
+        pkill -f 'controller_server|planner_server|nav2' 2>/dev/null || true;
+        sleep 1;
+
         echo '[init] Binding uvcvideo driver to ZED camera...';
         for dev in /sys/bus/usb/devices/*/idVendor; do
           dir=$$(dirname $$dev);
@@ -122,9 +126,9 @@ services:
         # NOTE: Do NOT patch pub_downscale_factor to 1.0.
         # 360p (downscale 2.0) prevents cudaErrorIllegalAddress on 8GB Orin Nano.
 
-        echo '[init] Launching nvblox via NOMAD wrapper...';
+        echo '[init] Launching nvblox via NOMAD wrapper (nav2 disabled by default)...';
         ros2 launch /workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py \
-          nvblox_params_file:=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml > /tmp/zed_nvblox.log 2>&1 &
+          enable_nav2:=false nvblox_params_file:=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml > /tmp/zed_nvblox.log 2>&1 &
         NVBLOX_PID=$$!;
         echo $$NVBLOX_PID > /tmp/zed_nvblox.pid;
 
