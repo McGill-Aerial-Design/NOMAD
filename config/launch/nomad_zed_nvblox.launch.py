@@ -65,6 +65,12 @@ def generate_launch_description():
         description='Enable Nav2 stack for Jetson-side obstacle avoidance with nvblox costmap (set to false to disable for testing/debug)',
     )
 
+    enable_foxglove_arg = DeclareLaunchArgument(
+        'enable_foxglove',
+        default_value='false',
+        description='Enable Foxglove bridge for ROS2 topic visualization in Foxglove Studio (WebSocket on port 8765)',
+    )
+
     # NOTE: Do NOT patch pub_downscale_factor to 1.0 (720p).
     # ZED 360p (default downscale 2.0) uses ~75% less GPU memory than 720p.
     # On 8GB Jetson Orin Nano, 720p depth causes cudaErrorIllegalAddress
@@ -129,6 +135,21 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_nav2')),
     )
 
+    # Foxglove bridge: exposes all ROS2 topics via WebSocket for Foxglove Studio
+    # Connect Foxglove Studio to ws://<jetson-ip>:8765
+    foxglove_bridge = ExecuteProcess(
+        cmd=[
+            'ros2', 'run', 'foxglove_bridge', 'foxglove_bridge',
+            '--ros-args',
+            '-p', 'port:=8765',
+            '-p', 'address:=0.0.0.0',
+            '-p', 'send_buffer_limit:=10000000',
+        ],
+        name='foxglove_bridge',
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('enable_foxglove')),
+    )
+
     # Static TF alias: ZED URDF uses "zed_left_camera_frame_optical" but
     # the ZED node publishes images with frame_id "zed_left_camera_optical_frame".
     # nvblox needs to look up the image frame in TF, so we bridge the gap
@@ -148,6 +169,7 @@ def generate_launch_description():
     return LaunchDescription([
         enable_od_arg,
         enable_nav2_arg,
+        enable_foxglove_arg,
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(zed_example_launch),
             launch_arguments={
@@ -160,4 +182,5 @@ def generate_launch_description():
         obstacle_distance_bridge,
         nav2_launch,
         nav2_goal_bridge,
+        foxglove_bridge,
     ])

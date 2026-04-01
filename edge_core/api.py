@@ -383,6 +383,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
     app.state.detection_history_max: int = 200  # Max persistent detections to keep
     app.state.detection_last_update: float = 0.0
     app.state.detection_enabled: bool = True  # Desired ZED OD mode for circle detection
+    app.state.foxglove_enabled: bool = False  # Foxglove bridge running state
     app.state.isaac_runtime_cache = {
         "timestamp": 0.0,
         "container_running": False,
@@ -2973,8 +2974,131 @@ wait
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    # ==================== Foxglove Bridge ====================
+    # The foxglove_bridge ROS2 package exposes all ROS2 topics via WebSocket
+    # so Foxglove Studio can visualize them. Default port 8765.
+    # This runs independently of nvblox — start/stop without relaunching.
+
+    @app.post("/api/isaac/foxglove/start", tags=["Isaac ROS"])
+    async def foxglove_start(
+        request: Request,
+        port: int = Query(default=8765, description="WebSocket port for Foxglove Studio"),
+    ):
+        """
+        Start Foxglove bridge inside the Isaac ROS container.
+
+        Opens a WebSocket server that Foxglove Studio can connect to for
+        visualizing ROS2 topics (pointclouds, meshes, TF, images, etc.).
+
+        Connect Foxglove Studio to: ws://<jetson-ip>:<port>
+        """
+        container = "nomad_isaac_ros"
+        try:
+            # Check if already running
+            probe = subprocess.run(
+                ["docker", "exec", container, "bash", "-c",
+                 "pgrep -f foxglove_bridge"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if probe.returncode == 0:
+                return {
+                    "success": True,
+                    "message": f"Foxglove bridge already running on port {port}",
+                    "already_running": True,
+                    "url": f"ws://100.85.121.98:{port}",
+                }
+
+            # Launch foxglove_bridge in background
+            # Try ros2 launch first (installed package), fall back to ros2 run
+            launch_cmd = f"""#!/bin/bash
+source /opt/ros/humble/setup.bash 2>/dev/null
+source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
+
+# Check if foxglove_bridge package is available
+if ! ros2 pkg list 2>/dev/null | grep -q foxglove_bridge; then
+    echo "Installing foxglove_bridge..."
+    apt-get update -qq && apt-get install -y -qq ros-humble-foxglove-bridge 2>&1
+fi
+
+ros2 run foxglove_bridge foxglove_bridge --ros-args \\
+    -p port:={port} \\
+    -p address:=0.0.0.0 \\
+    -p capabilities:='["clientPublish","connectionGraph","assets"]' \\
+    -p send_buffer_limit:=10000000
+"""
+            subprocess.run(
+                ["docker", "exec", container, "bash", "-c",
+                 f"cat > /tmp/start_foxglove.sh << 'EOFSCRIPT'\n{launch_cmd}\nEOFSCRIPT\nchmod +x /tmp/start_foxglove.sh"],
+                capture_output=True, text=True, timeout=10, check=True,
+            )
+
+            subprocess.run(
+                ["docker", "exec", "-d", container, "bash", "-c",
+                 "bash /tmp/start_foxglove.sh > /tmp/foxglove_bridge.log 2>&1"],
+                capture_output=True, text=True, timeout=10,
+            )
+
+            # Wait briefly for startup
+            time.sleep(3)
+            verify = subprocess.run(
+                ["docker", "exec", container, "bash", "-c",
+                 "pgrep -f foxglove_bridge"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if verify.returncode == 0:
+                request.app.state.foxglove_enabled = True
+                return {
+                    "success": True,
+                    "message": f"Foxglove bridge started on port {port}",
+                    "url": f"ws://100.85.121.98:{port}",
+                }
+            else:
+                log_tail = subprocess.run(
+                    ["docker", "exec", container, "tail", "-20", "/tmp/foxglove_bridge.log"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                return {
+                    "success": False,
+                    "error": "Foxglove bridge failed to start",
+                    "logs": (log_tail.stdout or log_tail.stderr or "")[-400:],
+                }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @app.post("/api/isaac/foxglove/stop", tags=["Isaac ROS"])
+    async def foxglove_stop(request: Request):
+        """Stop Foxglove bridge."""
+        container = "nomad_isaac_ros"
+        try:
+            subprocess.run(
+                ["docker", "exec", container, "pkill", "-f", "foxglove_bridge"],
+                capture_output=True, timeout=5,
+            )
+            request.app.state.foxglove_enabled = False
+            return {"success": True, "message": "Foxglove bridge stopped"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @app.get("/api/isaac/foxglove/status", tags=["Isaac ROS"])
+    async def foxglove_status(request: Request):
+        """Check if Foxglove bridge is running."""
+        container = "nomad_isaac_ros"
+        try:
+            probe = subprocess.run(
+                ["docker", "exec", container, "bash", "-c",
+                 "pgrep -f foxglove_bridge"],
+                capture_output=True, text=True, timeout=5,
+            )
+            running = probe.returncode == 0
+            return {
+                "running": running,
+                "url": "ws://100.85.121.98:8765" if running else None,
+            }
+        except Exception as e:
+            return {"running": False, "error": str(e)}
+
     @app.get("/api/isaac/logs", tags=["Isaac ROS"])
-    async def isaac_logs(log_type: str = Query(default="all", description="Log type: all, zed, bridge")):
+    async def isaac_logs(log_type: str = Query(default="all", description="Log type: all, zed, bridge, foxglove")):
         """Get Isaac ROS container logs."""
         try:
             if log_type == "zed":
@@ -2987,6 +3111,13 @@ wait
             elif log_type == "bridge":
                 result = subprocess.run(
                     ["docker", "exec", "nomad_isaac_ros", "tail", "-50", "/tmp/ros_bridge.log"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+            elif log_type == "foxglove":
+                result = subprocess.run(
+                    ["docker", "exec", "nomad_isaac_ros", "tail", "-50", "/tmp/foxglove_bridge.log"],
                     capture_output=True,
                     text=True,
                     timeout=5,

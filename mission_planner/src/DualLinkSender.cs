@@ -721,6 +721,42 @@ namespace NOMAD.MissionPlanner
         }
 
         // ============================================================
+        // Foxglove Bridge Control
+        // ============================================================
+
+        /// <summary>
+        /// Get Foxglove bridge status (running, url).
+        /// </summary>
+        public async Task<CommandResult> GetFoxgloveStatusAsync()
+        {
+            return await SendHttpGet("/api/isaac/foxglove/status");
+        }
+
+        /// <summary>
+        /// Start Foxglove bridge inside the Isaac ROS container.
+        /// </summary>
+        public async Task<CommandResult> StartFoxgloveAsync(int port = 8765)
+        {
+            return await SendHttpPostLongRun($"/api/isaac/foxglove/start?port={port}", null);
+        }
+
+        /// <summary>
+        /// Stop Foxglove bridge.
+        /// </summary>
+        public async Task<CommandResult> StopFoxgloveAsync()
+        {
+            return await SendHttpPost("/api/isaac/foxglove/stop", null);
+        }
+
+        /// <summary>
+        /// Get Foxglove bridge logs.
+        /// </summary>
+        public async Task<CommandResult> GetFoxgloveLogsAsync()
+        {
+            return await SendHttpGetLongRun("/api/isaac/logs?log_type=foxglove", 15);
+        }
+
+        // ============================================================
         // HTTP Communication
         // ============================================================
 

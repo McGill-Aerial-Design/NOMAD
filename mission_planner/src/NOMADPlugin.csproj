@@ -130,6 +130,7 @@
     <Compile Include="EkfSourceControlPanel.cs" />
     <Compile Include="EmbeddedVideoPlayer.cs" />
     <Compile Include="EnhancedHealthDashboard.cs" />
+    <Compile Include="FoxglovePanel.cs" />
     <Compile Include="EnhancedWASDControl.cs" />
     <Compile Include="JetsonConnectionManager.cs" />
     <Compile Include="JetsonApiService.cs" />
