@@ -32,10 +32,10 @@ CIRCLE_COLORS = ["red", "blue", "green", "yellow", "white", "black"]
 # High saturation minimums to reject skin, wood, natural surfaces.
 # Competition targets are vivid/saturated colors, not subtle tones.
 HSV_RANGES = {
-    "red":    [(0, 10, 120, 70), (170, 179, 120, 70)],
-    "blue":   [(100, 130, 100, 50)],
-    "green":  [(38, 82, 100, 50)],
-    "yellow": [(20, 37, 120, 90)],
+    "red":    [(0, 10, 140, 80), (170, 179, 140, 80)],
+    "blue":   [(100, 130, 130, 60)],
+    "green":  [(38, 82, 130, 60)],
+    "yellow": [(20, 37, 140, 100)],
     "white":  [],
     "black":  [],
 }
@@ -512,7 +512,7 @@ def detect_circles_hsv(
         _project_to_3d(det, depth_image, camera_matrix)
 
     # Filter out low-confidence detections to reduce false positives
-    min_final_confidence = 0.15
+    min_final_confidence = 0.40
     merged = [d for d in merged if d.confidence >= min_final_confidence]
 
     merged.sort(key=lambda d: d.confidence, reverse=True)
