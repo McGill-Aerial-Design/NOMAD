@@ -11,10 +11,12 @@ import asyncio
 import hmac
 import json
 import logging
+import math
 import os
 import re
 import shlex
 import subprocess
+import threading
 import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
@@ -32,6 +34,25 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 from .state import StateManager
+
+try:
+    from .ipc import (
+        DEFAULT_ROS_HIGH_RATE_ENDPOINT,
+        HIGH_RATE_MSG_TYPE_CMD_VEL,
+        HIGH_RATE_MSG_TYPE_VIO,
+        IPCMessage,
+        ZMQSubscriber,
+    )
+    IPC_AVAILABLE = True
+    IPC_IMPORT_ERROR = ""
+except Exception as e:
+    IPC_AVAILABLE = False
+    IPC_IMPORT_ERROR = str(e)
+    DEFAULT_ROS_HIGH_RATE_ENDPOINT = "tcp://127.0.0.1:5557"
+    HIGH_RATE_MSG_TYPE_VIO = "ROS_VIO_UPDATE"
+    HIGH_RATE_MSG_TYPE_CMD_VEL = "ROS_CMD_VEL"
+    IPCMessage = Any  # type: ignore
+    ZMQSubscriber = Any  # type: ignore
 
 if TYPE_CHECKING:
     from .health_monitor import JetsonHealthMonitor
@@ -344,6 +365,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
     app.state.slam_vio_ros_frame: Optional[dict] = None  # ROS-frame pose for SLAM 3D
     app.state.vio_trajectory: list[dict] = []  # List of {x, y, z, timestamp} points
     app.state.vio_trajectory_max_points: int = 1000  # Keep last N points
+    app.state.vio_state_lock = threading.Lock()
     app.state.exclusion_map: list[dict] = []
 
     # Object detection state (HSV circle detection via ZED custom OD)
@@ -358,6 +380,300 @@ def create_app(state_manager: StateManager) -> FastAPI:
         "nvblox_running": False,
         "bridge_running": False,
     }
+    app.state.high_rate_zmq_enabled = (
+        os.environ.get("NOMAD_HIGH_RATE_ZMQ_ENABLED", "1").strip().lower()
+        not in ("0", "false", "no")
+    )
+    app.state.high_rate_zmq_sub_mode = os.environ.get(
+        "NOMAD_HIGH_RATE_ZMQ_SUB_MODE",
+        "bind",
+    ).strip().lower()
+    if app.state.high_rate_zmq_sub_mode not in ("bind", "connect"):
+        logger.warning(
+            "Invalid NOMAD_HIGH_RATE_ZMQ_SUB_MODE='%s'; falling back to 'bind'",
+            app.state.high_rate_zmq_sub_mode,
+        )
+        app.state.high_rate_zmq_sub_mode = "bind"
+    configured_high_rate_zmq_endpoint = os.environ.get(
+        "NOMAD_HIGH_RATE_ZMQ_ENDPOINT",
+        "",
+    ).strip()
+    if configured_high_rate_zmq_endpoint:
+        app.state.high_rate_zmq_endpoint = configured_high_rate_zmq_endpoint
+    elif app.state.high_rate_zmq_sub_mode == "bind":
+        try:
+            scheme, endpoint_rest = DEFAULT_ROS_HIGH_RATE_ENDPOINT.split("://", 1)
+            _, default_port = endpoint_rest.rsplit(":", 1)
+            app.state.high_rate_zmq_endpoint = f"{scheme}://0.0.0.0:{default_port}"
+        except Exception:
+            app.state.high_rate_zmq_endpoint = "tcp://0.0.0.0:5557"
+    else:
+        app.state.high_rate_zmq_endpoint = DEFAULT_ROS_HIGH_RATE_ENDPOINT
+    app.state.high_rate_zmq_stop_event = threading.Event()
+    app.state.high_rate_zmq_thread = None
+    app.state.high_rate_zmq_warn_interval_s = 2.0
+    app.state.high_rate_zmq_last_warn: dict[str, float] = {}
+    cmd_vel_max_age_raw = os.environ.get("NOMAD_CMD_VEL_MAX_AGE_S", "0.5").strip()
+    try:
+        app.state.nav_cmd_vel_max_age_s = float(cmd_vel_max_age_raw)
+        if app.state.nav_cmd_vel_max_age_s <= 0.0:
+            raise ValueError("max age must be positive")
+    except Exception:
+        app.state.nav_cmd_vel_max_age_s = 0.5
+        logger.warning(
+            "Invalid NOMAD_CMD_VEL_MAX_AGE_S='%s'; falling back to %.2fs",
+            cmd_vel_max_age_raw,
+            app.state.nav_cmd_vel_max_age_s,
+        )
+    app.state.nav_cmd_vel_last_timestamp_by_source: dict[str, float] = {}
+    app.state.nav_cmd_vel_order_lock = threading.Lock()
+    app.state.vio_last_timestamp_by_source: dict[str, float] = {}
+
+    def _high_rate_warn(key: str, message: str) -> None:
+        """Throttle repeated high-rate ZMQ warning logs."""
+        now = time.time()
+        last = app.state.high_rate_zmq_last_warn.get(key, 0.0)
+        if now - last >= app.state.high_rate_zmq_warn_interval_s:
+            logger.warning(message)
+            app.state.high_rate_zmq_last_warn[key] = now
+
+    def _apply_vio_update_from_request(vio_request: VIOUpdateRequest) -> int:
+        """Apply VIO update to shared app state and return trajectory length."""
+        with app.state.vio_state_lock:
+            source = (vio_request.source or "external").strip() or "external"
+            last_timestamp = app.state.vio_last_timestamp_by_source.get(source)
+            if last_timestamp is not None and vio_request.timestamp <= last_timestamp:
+                return len(app.state.vio_trajectory)
+            app.state.vio_last_timestamp_by_source[source] = vio_request.timestamp
+
+            # Store latest state (NED frame for other consumers)
+            app.state.external_vio_state = {
+                "timestamp": vio_request.timestamp,
+                "x": vio_request.x,
+                "y": vio_request.y,
+                "z": vio_request.z,
+                "roll": vio_request.roll,
+                "pitch": vio_request.pitch,
+                "yaw": vio_request.yaw,
+                "vx": vio_request.vx,
+                "vy": vio_request.vy,
+                "vz": vio_request.vz,
+                "confidence": vio_request.confidence,
+                "source": source,
+            }
+
+            # Store ROS-frame pose for SLAM 3D WebSocket (same frame as mesh vertices)
+            # Always in "ros_optical" frame (ZED camera: X-right, Y-down, Z-forward)
+            app.state.slam_vio_ros_frame = {
+                "x": vio_request.ros_x,
+                "y": vio_request.ros_y,
+                "z": vio_request.ros_z,
+                "roll": vio_request.ros_roll,
+                "pitch": vio_request.ros_pitch,
+                "yaw": vio_request.ros_yaw,
+                "timestamp": vio_request.timestamp,
+                "frame_id": getattr(vio_request, "frame_id", "ros_optical"),
+            }
+
+            # Add to trajectory
+            app.state.vio_trajectory.append({
+                "x": vio_request.x,
+                "y": vio_request.y,
+                "z": vio_request.z,
+                "timestamp": vio_request.timestamp,
+            })
+
+            # Trim trajectory if too long
+            if len(app.state.vio_trajectory) > app.state.vio_trajectory_max_points:
+                app.state.vio_trajectory = app.state.vio_trajectory[-app.state.vio_trajectory_max_points:]
+
+            return len(app.state.vio_trajectory)
+
+    def _get_vio_snapshot(include_trajectory: bool = False) -> dict[str, Any]:
+        """Read VIO state under one lock to avoid mixed-frame snapshots."""
+        with app.state.vio_state_lock:
+            external_vio_state = (
+                dict(app.state.external_vio_state)
+                if app.state.external_vio_state else None
+            )
+            slam_vio_ros_frame = (
+                dict(app.state.slam_vio_ros_frame)
+                if app.state.slam_vio_ros_frame else None
+            )
+            vio_trajectory = list(app.state.vio_trajectory) if include_trajectory else None
+        return {
+            "external_vio_state": external_vio_state,
+            "slam_vio_ros_frame": slam_vio_ros_frame,
+            "vio_trajectory": vio_trajectory,
+        }
+
+    def _dispatch_nav_velocity(nav_request: NavVelocityRequest) -> bool:
+        """Forward velocity command to NavController using existing API semantics."""
+        nav_controller = app.state.nav_controller
+        if not nav_controller:
+            raise RuntimeError("Navigation controller not initialized")
+
+        source = (nav_request.source or "nav2").strip() or "nav2"
+        cmd_timestamp = float(nav_request.timestamp)
+        if not math.isfinite(cmd_timestamp):
+            raise ValueError("Rejected cmd_vel with non-finite timestamp")
+
+        now = time.time()
+        max_age_s = app.state.nav_cmd_vel_max_age_s
+        age_s = now - cmd_timestamp
+        if age_s > max_age_s:
+            raise ValueError(
+                f"Rejected stale cmd_vel from source '{source}': "
+                f"age={age_s:.3f}s exceeds max_age={max_age_s:.3f}s"
+            )
+        if cmd_timestamp > now + max_age_s:
+            raise ValueError(
+                f"Rejected cmd_vel from source '{source}': "
+                f"timestamp is too far in the future (max_skew={max_age_s:.3f}s)"
+            )
+
+        with app.state.nav_cmd_vel_order_lock:
+            last_timestamp = app.state.nav_cmd_vel_last_timestamp_by_source.get(source)
+            if last_timestamp is not None and cmd_timestamp <= last_timestamp:
+                raise ValueError(
+                    f"Rejected non-monotonic cmd_vel from source '{source}': "
+                    f"timestamp={cmd_timestamp:.6f} <= last_timestamp={last_timestamp:.6f}"
+                )
+
+            accepted = nav_controller.send_velocity(
+                vx=nav_request.vx,
+                vy=nav_request.vy,
+                vz=nav_request.vz,
+                yaw_rate=nav_request.yaw_rate,
+                source=source,
+            )
+            if accepted:
+                app.state.nav_cmd_vel_last_timestamp_by_source[source] = cmd_timestamp
+
+            return accepted
+
+    def _handle_high_rate_ipc_message(message: IPCMessage) -> None:
+        """Handle a single high-rate IPC message from ros_http_bridge."""
+        if message.msg_type == HIGH_RATE_MSG_TYPE_VIO:
+            try:
+                vio_request = VIOUpdateRequest(**message.data)
+            except Exception as e:
+                _high_rate_warn("vio-parse", f"Invalid high-rate VIO payload: {e}")
+                return
+            _apply_vio_update_from_request(vio_request)
+            return
+
+        if message.msg_type == HIGH_RATE_MSG_TYPE_CMD_VEL:
+            try:
+                nav_request = NavVelocityRequest(**message.data)
+            except Exception as e:
+                _high_rate_warn("cmd-parse", f"Invalid high-rate cmd_vel payload: {e}")
+                return
+            try:
+                _dispatch_nav_velocity(nav_request)
+            except ValueError as e:
+                _high_rate_warn("cmd-gate", f"Dropping high-rate cmd_vel: {e}")
+            except RuntimeError as e:
+                _high_rate_warn("cmd-nav", f"Ignoring high-rate cmd_vel: {e}")
+            except Exception as e:
+                _high_rate_warn("cmd-send", f"High-rate cmd_vel dispatch failed: {e}")
+
+    def _high_rate_zmq_listener_loop(stop_event: threading.Event) -> None:
+        """Background loop receiving high-rate telemetry from ros_http_bridge over ZMQ."""
+        if not IPC_AVAILABLE:
+            logger.warning(
+                f"High-rate ZMQ listener disabled: IPC unavailable ({IPC_IMPORT_ERROR})"
+            )
+            return
+
+        endpoint = app.state.high_rate_zmq_endpoint
+        socket_mode = app.state.high_rate_zmq_sub_mode
+        logger.info(
+            f"High-rate ZMQ listener starting on {endpoint} ({socket_mode})"
+        )
+
+        subscriber: Optional[ZMQSubscriber] = None
+        try:
+            while not stop_event.is_set():
+                try:
+                    if subscriber is None:
+                        subscriber = ZMQSubscriber(
+                            endpoint=endpoint,
+                            timeout_ms=500,
+                            socket_mode=socket_mode,
+                            rcv_hwm=1,
+                            conflate=True,
+                            linger_ms=0,
+                        )
+                        subscriber.start()
+                        logger.info(
+                            f"High-rate ZMQ listener ready on {endpoint} ({socket_mode})"
+                        )
+
+                    message = subscriber.receive()
+                    if message is None:
+                        continue
+
+                    _handle_high_rate_ipc_message(message)
+                except Exception as e:
+                    _high_rate_warn(
+                        "listener-loop",
+                        f"High-rate ZMQ listener error on {endpoint}: {e}",
+                    )
+                    if subscriber is not None:
+                        try:
+                            subscriber.stop()
+                        except Exception:
+                            pass
+                        subscriber = None
+                    if stop_event.wait(1.0):
+                        break
+        finally:
+            if subscriber is not None:
+                try:
+                    subscriber.stop()
+                except Exception:
+                    pass
+            logger.info("High-rate ZMQ listener stopped")
+
+    def _start_high_rate_zmq_listener() -> None:
+        """Start background high-rate ZMQ listener thread."""
+        if not app.state.high_rate_zmq_enabled:
+            logger.info("High-rate ZMQ listener disabled by NOMAD_HIGH_RATE_ZMQ_ENABLED")
+            return
+
+        thread = app.state.high_rate_zmq_thread
+        if thread and thread.is_alive():
+            return
+
+        stop_event = app.state.high_rate_zmq_stop_event
+        stop_event.clear()
+        thread = threading.Thread(
+            target=_high_rate_zmq_listener_loop,
+            args=(stop_event,),
+            name="high-rate-zmq-listener",
+            daemon=True,
+        )
+        app.state.high_rate_zmq_thread = thread
+        thread.start()
+
+    def _stop_high_rate_zmq_listener() -> None:
+        """Stop background high-rate ZMQ listener thread."""
+        app.state.high_rate_zmq_stop_event.set()
+        thread = app.state.high_rate_zmq_thread
+        if thread and thread.is_alive():
+            thread.join(timeout=2.0)
+        app.state.high_rate_zmq_thread = None
+
+    @app.on_event("startup")
+    async def _startup_high_rate_zmq_listener() -> None:
+        """Start high-rate ZMQ listener on API startup."""
+        _start_high_rate_zmq_listener()
+
+    @app.on_event("shutdown")
+    async def _shutdown_high_rate_zmq_listener() -> None:
+        """Stop high-rate ZMQ listener on API shutdown."""
+        _stop_high_rate_zmq_listener()
 
     def _docker_exec_pgrep(container: str, pattern: str, timeout_s: int = 5) -> Optional[bool]:
         """Return process-match state inside container, or None on probe failure."""
@@ -787,7 +1103,7 @@ wait
                 response["status"] = "warning"
         
         # Add VIO health from external source (ros_http_bridge) if available
-        external_vio = request.app.state.external_vio_state
+        external_vio = _get_vio_snapshot()["external_vio_state"]
         if external_vio:
             confidence_0_1 = external_vio.get("confidence", 0)
             response["vio"] = {
@@ -808,7 +1124,7 @@ wait
         result = health_monitor.health.to_dict()
         
         # Include VIO health from external source (ros_http_bridge)
-        external_vio = request.app.state.external_vio_state
+        external_vio = _get_vio_snapshot()["external_vio_state"]
         if external_vio:
             confidence_0_1 = external_vio.get("confidence", 0)
             result["vio"] = {
@@ -953,7 +1269,7 @@ wait
                 health_monitor = websocket.app.state.health_monitor
                 if health_monitor:
                     data["jetson_health"] = health_monitor.health.to_dict()
-                external_vio = websocket.app.state.external_vio_state
+                external_vio = _get_vio_snapshot()["external_vio_state"]
                 if external_vio:
                     data["vio_status"] = external_vio
                 
@@ -1015,7 +1331,7 @@ wait
                 # and for mesh frames that only include one of position/attitude)
                 # frame_id is always "ros_optical" for all pose data
                 if not has_position or not has_attitude:
-                    ros_vio = websocket.app.state.slam_vio_ros_frame
+                    ros_vio = _get_vio_snapshot()["slam_vio_ros_frame"]
                     if ros_vio:
                         if not has_position:
                             frame["x"] = ros_vio.get("x", 0)
@@ -1617,7 +1933,7 @@ wait
     async def vio_status(request: Request):
         """Get VIO pipeline status."""
         # Check for external VIO state first (confidence on 0-1 scale)
-        external_vio_state = request.app.state.external_vio_state
+        external_vio_state = _get_vio_snapshot()["external_vio_state"]
         if external_vio_state:
             # External VIO confidence is 0-1 scale
             confidence_0_1 = external_vio_state.get("confidence", 0)
@@ -1647,53 +1963,13 @@ wait
         This endpoint is called by the ros_http_bridge.py script running
         inside the Isaac ROS container to send VIO data to edge_core.
         """
-        # Store latest state (NED frame for other consumers)
-        request.app.state.external_vio_state = {
-            "timestamp": vio_request.timestamp,
-            "x": vio_request.x,
-            "y": vio_request.y,
-            "z": vio_request.z,
-            "roll": vio_request.roll,
-            "pitch": vio_request.pitch,
-            "yaw": vio_request.yaw,
-            "vx": vio_request.vx,
-            "vy": vio_request.vy,
-            "vz": vio_request.vz,
-            "confidence": vio_request.confidence,
-            "source": vio_request.source,
-        }
-        
-        # Store ROS-frame pose for SLAM 3D WebSocket (same frame as mesh vertices)
-        # Always in "ros_optical" frame (ZED camera: X-right, Y-down, Z-forward)
-        request.app.state.slam_vio_ros_frame = {
-            "x": vio_request.ros_x,
-            "y": vio_request.ros_y,
-            "z": vio_request.ros_z,
-            "roll": vio_request.ros_roll,
-            "pitch": vio_request.ros_pitch,
-            "yaw": vio_request.ros_yaw,
-            "timestamp": vio_request.timestamp,
-            "frame_id": getattr(vio_request, "frame_id", "ros_optical"),
-        }
-        
-        # Add to trajectory
-        request.app.state.vio_trajectory.append({
-            "x": vio_request.x,
-            "y": vio_request.y,
-            "z": vio_request.z,
-            "timestamp": vio_request.timestamp,
-        })
-        
-        # Trim trajectory if too long
-        if len(request.app.state.vio_trajectory) > request.app.state.vio_trajectory_max_points:
-            request.app.state.vio_trajectory = request.app.state.vio_trajectory[-request.app.state.vio_trajectory_max_points:]
-        
-        return {"success": True, "trajectory_points": len(request.app.state.vio_trajectory)}
+        trajectory_points = _apply_vio_update_from_request(vio_request)
+        return {"success": True, "trajectory_points": trajectory_points}
 
     @app.get("/api/vio/pose", tags=["VIO"])
     async def vio_pose(request: Request):
         """Get current VIO pose (position and orientation)."""
-        external_vio_state = request.app.state.external_vio_state
+        external_vio_state = _get_vio_snapshot()["external_vio_state"]
         if external_vio_state:
             return external_vio_state
         
@@ -1725,7 +2001,8 @@ wait
         Returns a list of (x, y, z) points representing the drone's path.
         Use max_points to limit the response size.
         """
-        trajectory = request.app.state.vio_trajectory
+        with request.app.state.vio_state_lock:
+            trajectory = list(request.app.state.vio_trajectory)
         points = trajectory[-max_points:] if trajectory else []
         return {
             "total_points": len(trajectory),
@@ -1736,15 +2013,17 @@ wait
     @app.delete("/api/vio/trajectory", tags=["VIO"])
     async def vio_clear_trajectory(request: Request):
         """Clear the VIO trajectory history."""
-        count = len(request.app.state.vio_trajectory)
-        request.app.state.vio_trajectory = []
+        with request.app.state.vio_state_lock:
+            count = len(request.app.state.vio_trajectory)
+            request.app.state.vio_trajectory = []
         return {"success": True, "cleared_points": count}
 
     @app.post("/api/vio/reset_origin", tags=["VIO"])
     async def vio_reset_origin(request: Request):
         """Reset VIO tracking origin to current position."""
         # Clear trajectory on reset
-        request.app.state.vio_trajectory = []
+        with request.app.state.vio_state_lock:
+            request.app.state.vio_trajectory = []
         
         vio_pipeline = None  # Deprecated: VIO handled via ros_http_bridge
         if not vio_pipeline:
@@ -1805,17 +2084,12 @@ wait
         - vz: Vertical velocity (m/s, positive = up)
         - yaw_rate: Yaw rate (rad/s, positive = CCW)
         """
-        nav_controller = request.app.state.nav_controller
-        if not nav_controller:
-            raise HTTPException(status_code=503, detail="Navigation controller not initialized")
-        
-        success = nav_controller.send_velocity(
-            vx=nav_request.vx,
-            vy=nav_request.vy,
-            vz=nav_request.vz,
-            yaw_rate=nav_request.yaw_rate,
-            source=nav_request.source,
-        )
+        try:
+            success = _dispatch_nav_velocity(nav_request)
+        except ValueError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        except RuntimeError as e:
+            raise HTTPException(status_code=503, detail=str(e))
         
         return {
             "success": success,
@@ -2412,8 +2686,9 @@ wait
             }
         
         # VIO status
-        external_vio_state = request.app.state.external_vio_state
-        vio_trajectory = request.app.state.vio_trajectory
+        vio_snapshot = _get_vio_snapshot(include_trajectory=True)
+        external_vio_state = vio_snapshot["external_vio_state"]
+        vio_trajectory = vio_snapshot["vio_trajectory"] or []
         
         if external_vio_state:
             services["vio"] = {
@@ -3187,15 +3462,15 @@ wait
             }
         }
 
-    # ---- Video Overlay (YOLO detection bboxes on stream) ----
+    # ---- Video Overlay (HSV detection bboxes on stream) ----
     
     @app.post("/api/video/overlay/enable", tags=["Video"])
     async def enable_video_overlay():
         """
-        Enable YOLO detection overlay on the video stream.
-        
+        Enable HSV circle detection overlay on the video stream.
+
         When enabled, the video bridge draws bounding boxes from the
-        detection pipeline directly onto the RTSP frames in real time.
+        HSV circle detection pipeline directly onto the RTSP frames in real time.
         Toggle off with POST /api/video/overlay/disable.
         """
         mgr = get_video_stream_manager()
@@ -3209,7 +3484,7 @@ wait
     
     @app.post("/api/video/overlay/disable", tags=["Video"])
     async def disable_video_overlay():
-        """Disable YOLO detection overlay on the video stream."""
+        """Disable HSV circle detection overlay on the video stream."""
         mgr = get_video_stream_manager()
         if not mgr:
             raise HTTPException(status_code=503, detail="Video stream manager not initialized")
@@ -3362,7 +3637,7 @@ wait
                 # Fallback to ROS-frame VIO if mesh didn't include pose
                 # (must use slam_vio_ros_frame, not external_vio_state which is NED)
                 if "drone_position" not in result:
-                    ros_vio = request.app.state.slam_vio_ros_frame
+                    ros_vio = _get_vio_snapshot()["slam_vio_ros_frame"]
                     if ros_vio:
                         result["drone_position"] = {
                             "x": ros_vio.get("x", 0),

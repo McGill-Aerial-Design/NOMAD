@@ -425,7 +425,7 @@ class VideoStreamNode(Node):
             return
 
         h, w = frame.shape[:2]
-        for det in detections:
+        for i, det in enumerate(detections):
             if not isinstance(det, dict):
                 continue
             try:
@@ -450,14 +450,28 @@ class VideoStreamNode(Node):
                 conf = 0.0
             color = self._color_for_label(label)
 
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            text = f"{label} {conf:.0%}"
+            # Draw ellipse for HSV circle detections, rectangle for others
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
+            rx = (x2 - x1) // 2
+            ry = (y2 - y1) // 2
+            if 'circle' in label.lower() and rx > 0 and ry > 0:
+                cv2.ellipse(frame, (cx, cy), (rx, ry), 0, 0, 360, color, 2)
+                cv2.drawMarker(frame, (cx, cy), color, cv2.MARKER_CROSS, 10, 1)
+            else:
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+
+            letter = chr(ord('A') + i) if i < 26 else str(i)
+            hsv_color = det.get('hsv_color', '')
+            display_color = hsv_color if hsv_color else label.replace('_circle', '')
+            text = f"{letter}: {display_color} {conf:.0%}"
             (tw, th_), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            cv2.rectangle(frame, (x1, y1 - th_ - baseline - 4), (x1 + tw + 4, y1), color, -1)
-            cv2.putText(frame, text, (x1 + 2, y1 - baseline - 2),
+            ty = max(th_ + baseline + 4, y1)
+            cv2.rectangle(frame, (x1, ty - th_ - baseline - 4), (x1 + tw + 4, ty), color, -1)
+            cv2.putText(frame, text, (x1 + 2, ty - baseline - 2),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
-        badge = f"YOLO: {len(detections)} target{'s' if len(detections) != 1 else ''}"
+        badge = f"HSV: {len(detections)} target{'s' if len(detections) != 1 else ''}"
         cv2.putText(frame, badge, (10, 25),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2, cv2.LINE_AA)
 

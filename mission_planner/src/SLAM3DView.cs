@@ -163,6 +163,7 @@ namespace NOMAD.MissionPlanner
         private int _meshGeneration = 0; // incremented each mesh update
         private const int VoxelMaxAge = 10; // expire after N updates without being re-seen
         private Queue<long> _voxelInsertionOrder = new Queue<long>();
+        private HashSet<long> _queuedForEviction = new HashSet<long>();
         private HashSet<long> _occupancySet = new HashSet<long>();
         private const int MaxPersistedVoxels = 5000;
         private double _currentVoxelSize = 0.05;
@@ -239,6 +240,33 @@ namespace NOMAD.MissionPlanner
             iz = (int)((key & 0xFFFF) - 32768);
             iy = (int)(((key >> 16) & 0xFFFF) - 32768);
             ix = (int)(((key >> 32) & 0xFFFF) - 32768);
+        }
+
+        private void ClearEvictionTracking()
+        {
+            _voxelInsertionOrder.Clear();
+            _queuedForEviction.Clear();
+        }
+
+        private void QueueForEviction(long key)
+        {
+            if (_queuedForEviction.Add(key))
+                _voxelInsertionOrder.Enqueue(key);
+        }
+
+        private void UnqueueForEviction(long key)
+        {
+            if (!_queuedForEviction.Remove(key) || _voxelInsertionOrder.Count == 0)
+                return;
+
+            var rebuilt = new Queue<long>(_voxelInsertionOrder.Count);
+            while (_voxelInsertionOrder.Count > 0)
+            {
+                long queued = _voxelInsertionOrder.Dequeue();
+                if (queued != key)
+                    rebuilt.Enqueue(queued);
+            }
+            _voxelInsertionOrder = rebuilt;
         }
 
         // ==================== Coordinate Conversion ====================
@@ -1462,7 +1490,7 @@ namespace NOMAD.MissionPlanner
                     if (meshData?.Clear == true)
                     {
                         _persistedBlocks.Clear();
-                        _voxelInsertionOrder.Clear();
+                        ClearEvictionTracking();
                         _occupancySet.Clear();
                         _voxelLastSeen.Clear();
                         _voxelVerts = null;
@@ -1486,6 +1514,7 @@ namespace NOMAD.MissionPlanner
                             var key = PackVoxelKey(rx, ry, rz);
                             if (_persistedBlocks.Remove(key))
                             {
+                                UnqueueForEviction(key);
                                 _occupancySet.Remove(PackKey(rx, ry, rz));
                                 _meshDirty = true;
                             }
@@ -1534,7 +1563,7 @@ namespace NOMAD.MissionPlanner
             if (_currentMeshMode != "voxel")
             {
                 _persistedBlocks.Clear();
-                _voxelInsertionOrder.Clear();
+                ClearEvictionTracking();
                 _occupancySet.Clear();
                 _voxelLastSeen.Clear();
                 _currentMeshMode = "voxel";
@@ -1568,7 +1597,7 @@ namespace NOMAD.MissionPlanner
                 if (!_persistedBlocks.ContainsKey(key) || _persistedBlocks[key] != colorKey)
                 {
                     if (!_persistedBlocks.ContainsKey(key))
-                        _voxelInsertionOrder.Enqueue(key);
+                        QueueForEviction(key);
                     _persistedBlocks[key] = colorKey;
                     _occupancySet.Add(PackKey(qx, qy, qz));
                     _meshDirty = true;
@@ -1587,12 +1616,13 @@ namespace NOMAD.MissionPlanner
             if (_currentMeshMode != "block")
             {
                 _persistedBlocks.Clear();
-                _voxelInsertionOrder.Clear();
+                ClearEvictionTracking();
                 _occupancySet.Clear();
                 _voxelLastSeen.Clear();
                 _currentMeshMode = "block";
             }
             _currentVoxelSize = bs;
+            _meshGeneration++;
 
             foreach (var block in meshData.Blocks)
             {
@@ -1617,7 +1647,7 @@ namespace NOMAD.MissionPlanner
                 if (!_persistedBlocks.ContainsKey(key) || _persistedBlocks[key] != colorKey)
                 {
                     if (!_persistedBlocks.ContainsKey(key))
-                        _voxelInsertionOrder.Enqueue(key);
+                        QueueForEviction(key);
                     _persistedBlocks[key] = colorKey;
                     _occupancySet.Add(PackKey(bix, biy, biz));
                     _meshDirty = true;
@@ -1629,7 +1659,18 @@ namespace NOMAD.MissionPlanner
 
         private void EvictOldVoxels()
         {
-            // Rendering optimization disabled: keep full voxel history.
+            while (_persistedBlocks.Count > MaxPersistedVoxels && _voxelInsertionOrder.Count > 0)
+            {
+                long key = _voxelInsertionOrder.Dequeue();
+                _queuedForEviction.Remove(key);
+                if (_persistedBlocks.Remove(key))
+                {
+                    _voxelLastSeen.Remove(key);
+                    UnpackVoxelKey(key, out int ix, out int iy, out int iz);
+                    _occupancySet.Remove(PackKey(ix, iy, iz));
+                    _meshDirty = true;
+                }
+            }
         }
 
         /// <summary>
@@ -1764,10 +1805,17 @@ namespace NOMAD.MissionPlanner
 
             foreach (var kvp in fills)
             {
+                if (!_persistedBlocks.ContainsKey(kvp.Key))
+                    QueueForEviction(kvp.Key);
                 _persistedBlocks[kvp.Key] = kvp.Value;
                 UnpackVoxelKey(kvp.Key, out int fx, out int fy, out int fz);
                 _occupancySet.Add(PackKey(fx, fy, fz));
             }
+
+            // Gap filling can add many synthetic cells in block mode.
+            // Re-apply the memory cap after fills are inserted.
+            if (_currentMeshMode == "block")
+                EvictOldVoxels();
         }
 
         private void CheckAndFill(Dictionary<long, uint> fills, int ix, int iy, int iz,
@@ -1807,15 +1855,31 @@ namespace NOMAD.MissionPlanner
                     expired.Add(kvp.Key);
             }
 
+            bool compactEvictionQueue = false;
+
             foreach (var key in expired)
             {
                 _voxelLastSeen.Remove(key);
                 if (_persistedBlocks.Remove(key))
                 {
+                    if (_queuedForEviction.Remove(key))
+                        compactEvictionQueue = true;
                     UnpackVoxelKey(key, out int ix, out int iy, out int iz);
                     _occupancySet.Remove(PackKey(ix, iy, iz));
                     _meshDirty = true;
                 }
+            }
+
+            if (compactEvictionQueue && _voxelInsertionOrder.Count > 0)
+            {
+                var rebuilt = new Queue<long>(_voxelInsertionOrder.Count);
+                while (_voxelInsertionOrder.Count > 0)
+                {
+                    long queued = _voxelInsertionOrder.Dequeue();
+                    if (_queuedForEviction.Contains(queued))
+                        rebuilt.Enqueue(queued);
+                }
+                _voxelInsertionOrder = rebuilt;
             }
         }
 
@@ -2199,7 +2263,7 @@ namespace NOMAD.MissionPlanner
             lock (_meshLock)
             {
                 _persistedBlocks.Clear();
-                _voxelInsertionOrder.Clear();
+                ClearEvictionTracking();
                 _occupancySet.Clear();
                 _voxelLastSeen.Clear();
                 _voxelVerts = null;

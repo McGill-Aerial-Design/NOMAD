@@ -33,8 +33,10 @@ import argparse
 import json
 import logging
 import math
+import os
 import threading
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, asdict
 from http.client import HTTPConnection
 from typing import Optional
@@ -77,6 +79,34 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("ros_http_bridge")
+
+try:
+    from ipc import (  # type: ignore
+        DEFAULT_ROS_HIGH_RATE_ENDPOINT,
+        HIGH_RATE_MSG_TYPE_CMD_VEL,
+        HIGH_RATE_MSG_TYPE_VIO,
+        IPCMessage,
+        ZMQPublisher,
+    )
+    IPC_AVAILABLE = True
+    IPC_IMPORT_ERROR = ""
+except Exception as e_import:
+    try:
+        from edge_core.ipc import (
+            DEFAULT_ROS_HIGH_RATE_ENDPOINT,
+            HIGH_RATE_MSG_TYPE_CMD_VEL,
+            HIGH_RATE_MSG_TYPE_VIO,
+            IPCMessage,
+            ZMQPublisher,
+        )
+        IPC_AVAILABLE = True
+        IPC_IMPORT_ERROR = ""
+    except Exception as e_pkg_import:
+        IPC_AVAILABLE = False
+        IPC_IMPORT_ERROR = f"{e_import}; {e_pkg_import}"
+        DEFAULT_ROS_HIGH_RATE_ENDPOINT = "tcp://127.0.0.1:5557"
+        HIGH_RATE_MSG_TYPE_VIO = "ROS_VIO_UPDATE"
+        HIGH_RATE_MSG_TYPE_CMD_VEL = "ROS_CMD_VEL"
 
 # Try to import nvblox_msgs for mesh data
 try:
@@ -198,6 +228,9 @@ class ROSHTTPBridge(Node):
         enable_mesh: bool = True,                # Enable mesh forwarding
         enable_servo: bool = True,               # Enable servo control forwarding
         enable_detections: bool = True,          # Enable object detection forwarding
+        high_rate_transport: str = "both",      # High-rate stream transport: zmq/http/both
+        high_rate_zmq_endpoint: Optional[str] = None,
+        high_rate_zmq_pub_mode: str = "connect",
     ):
         super().__init__("nomad_ros_http_bridge")
         
@@ -213,6 +246,41 @@ class ROSHTTPBridge(Node):
         self._enable_mesh = enable_mesh and (NVBLOX_AVAILABLE or MARKER_AVAILABLE)
         self._enable_servo = enable_servo
         self._enable_detections = enable_detections and ZED_OD_AVAILABLE
+
+        self._high_rate_transport = high_rate_transport.strip().lower()
+        if self._high_rate_transport not in ("zmq", "http", "both"):
+            raise ValueError(
+                f"high_rate_transport must be one of zmq/http/both, got {high_rate_transport}"
+            )
+        self._use_high_rate_http = self._high_rate_transport in ("http", "both")
+        self._use_high_rate_zmq = self._high_rate_transport in ("zmq", "both")
+        self._high_rate_zmq_pub_mode = high_rate_zmq_pub_mode.strip().lower()
+        if self._high_rate_zmq_pub_mode not in ("bind", "connect"):
+            raise ValueError(
+                "high_rate_zmq_pub_mode must be one of bind/connect, "
+                f"got {high_rate_zmq_pub_mode}"
+            )
+
+        configured_zmq_endpoint = (high_rate_zmq_endpoint or "").strip()
+        if not configured_zmq_endpoint:
+            configured_zmq_endpoint = os.environ.get(
+                "NOMAD_HIGH_RATE_ZMQ_ENDPOINT",
+                "",
+            ).strip()
+
+        if configured_zmq_endpoint:
+            self._high_rate_zmq_endpoint = configured_zmq_endpoint
+        elif self._high_rate_zmq_pub_mode == "connect":
+            try:
+                scheme, endpoint_rest = DEFAULT_ROS_HIGH_RATE_ENDPOINT.split("://", 1)
+                _, default_port = endpoint_rest.rsplit(":", 1)
+                self._high_rate_zmq_endpoint = f"{scheme}://{host}:{default_port}"
+            except Exception:
+                self._high_rate_zmq_endpoint = f"tcp://{host}:5557"
+        else:
+            self._high_rate_zmq_endpoint = DEFAULT_ROS_HIGH_RATE_ENDPOINT
+
+        self._zmq_publisher: Optional[ZMQPublisher] = None
         
         # Persistent HTTP connection (keep-alive) for efficiency.
         # Keep a short default timeout and override per-request in _http_post.
@@ -222,6 +290,18 @@ class ROSHTTPBridge(Node):
         # Throttle repeated HTTP error logs per endpoint to reduce log spam under backpressure.
         self._http_warn_interval_s = 2.0
         self._last_http_error_log: dict[str, float] = {}
+        self._last_zmq_error_log = 0.0
+        self._zmq_restart_backoff_s = 0.0
+        self._zmq_restart_backoff_min_s = 0.5
+        self._zmq_restart_backoff_max_s = 8.0
+        self._zmq_restart_retry_after = 0.0
+
+        if self._use_high_rate_zmq:
+            self._start_high_rate_publisher()
+            if self._zmq_publisher is None:
+                self._activate_high_rate_http_fallback(
+                    "high-rate ZMQ publisher is unavailable at startup"
+                )
         
         # QoS for sensor data
         sensor_qos = QoSProfile(
@@ -246,8 +326,12 @@ class ROSHTTPBridge(Node):
         # Stats
         self._vio_recv_count = 0
         self._vio_send_count = 0
+        self._vio_send_zmq_count = 0
+        self._vio_send_http_count = 0
         self._cmd_vel_recv_count = 0
         self._cmd_vel_send_count = 0
+        self._cmd_vel_send_zmq_count = 0
+        self._cmd_vel_send_http_count = 0
         self._mesh_recv_count = 0
         self._mesh_send_count = 0
         self._voxel_empty_count = 0  # consecutive empty voxel markers; fall back to block mode after threshold
@@ -440,6 +524,19 @@ class ROSHTTPBridge(Node):
 
         # Timer to send data to edge_core
         self.create_timer(self._send_interval, self._send_to_edge_core)
+
+        self.get_logger().info(
+            f"High-rate transport mode: {self._high_rate_transport}"
+        )
+        if self._use_high_rate_zmq:
+            self.get_logger().info(
+                f"High-rate ZMQ endpoint: {self._high_rate_zmq_endpoint}"
+            )
+            self.get_logger().info(
+                f"High-rate ZMQ socket mode: {self._high_rate_zmq_pub_mode}"
+            )
+        if self._use_high_rate_http:
+            self.get_logger().info("High-rate HTTP forwarding enabled")
         
         self.get_logger().info(f"ROS-HTTP Bridge started -> {self._base_url}")
         if enable_nav_control:
@@ -562,7 +659,13 @@ class ROSHTTPBridge(Node):
         except Exception as e:
             self.get_logger().error(f"cmd_vel processing error: {e}")
     
-    def _http_post(self, path: str, data: bytes, timeout: float = 0.5) -> bool:
+    def _http_post(
+        self,
+        path: str,
+        data: bytes,
+        timeout: float = 0.5,
+        accepted_statuses: tuple[int, ...] = (200,),
+    ) -> bool:
         """Send HTTP POST using persistent connection with keep-alive."""
         with self._http_lock:
             effective_timeout = max(0.05, timeout)
@@ -574,7 +677,7 @@ class ROSHTTPBridge(Node):
                 )
                 resp = self._http_conn.getresponse()
                 resp.read()  # Drain response to allow connection reuse
-                if resp.status == 200:
+                if resp.status in accepted_statuses:
                     return True
 
                 now = time.time()
@@ -612,21 +715,164 @@ class ROSHTTPBridge(Node):
                 except Exception:
                     pass
 
+    def _schedule_high_rate_zmq_restart(self) -> float:
+        """Increase restart backoff after a ZMQ failure and return delay."""
+        self._zmq_restart_backoff_s = (
+            self._zmq_restart_backoff_min_s
+            if self._zmq_restart_backoff_s <= 0.0
+            else min(
+                self._zmq_restart_backoff_max_s,
+                self._zmq_restart_backoff_s * 2.0,
+            )
+        )
+        self._zmq_restart_retry_after = time.time() + self._zmq_restart_backoff_s
+        return self._zmq_restart_backoff_s
+
+    def _start_high_rate_publisher(self) -> None:
+        """Start high-rate ZMQ publisher (best effort, non-fatal on failure)."""
+        if not self._use_high_rate_zmq:
+            return
+        if self._zmq_publisher is not None:
+            return
+        if not IPC_AVAILABLE:
+            self.get_logger().warning(
+                f"High-rate ZMQ transport unavailable: IPC import failed ({IPC_IMPORT_ERROR})"
+            )
+            self._activate_high_rate_http_fallback(
+                "high-rate ZMQ transport dependencies are unavailable"
+            )
+            return
+
+        now = time.time()
+        if now < self._zmq_restart_retry_after:
+            return
+
+        try:
+            publisher = ZMQPublisher(
+                endpoint=self._high_rate_zmq_endpoint,
+                socket_mode=self._high_rate_zmq_pub_mode,
+                snd_hwm=1,
+                linger_ms=0,
+            )
+            publisher.start()
+            self._zmq_publisher = publisher
+            self._zmq_restart_backoff_s = 0.0
+            self._zmq_restart_retry_after = 0.0
+            self.get_logger().info(
+                "High-rate ZMQ publisher started on "
+                f"{self._high_rate_zmq_endpoint} ({self._high_rate_zmq_pub_mode})"
+            )
+        except Exception as e:
+            self._zmq_publisher = None
+            backoff_s = self._schedule_high_rate_zmq_restart()
+            now = time.time()
+            if now - self._last_zmq_error_log >= self._http_warn_interval_s:
+                self.get_logger().warning(
+                    "Failed to start high-rate ZMQ publisher "
+                    f"({self._high_rate_zmq_endpoint}): {e}; retrying in {backoff_s:.2f}s"
+                )
+                self._last_zmq_error_log = now
+            self._activate_high_rate_http_fallback(
+                "high-rate ZMQ publisher failed to start"
+            )
+
+    def _activate_high_rate_http_fallback(self, reason: str) -> None:
+        """Enable HTTP transport when ZMQ-only mode would drop high-rate data."""
+        if self._use_high_rate_http:
+            return
+        self._use_high_rate_http = True
+        self.get_logger().warning(f"High-rate HTTP fallback enabled: {reason}")
+
+    def _effective_high_rate_transport(self) -> str:
+        """Return the currently active high-rate transport mode."""
+        if self._use_high_rate_http and self._use_high_rate_zmq:
+            return "both"
+        if self._use_high_rate_zmq:
+            return "zmq"
+        if self._use_high_rate_http:
+            return "http"
+        return "none"
+
+    def _stop_high_rate_publisher(self) -> None:
+        """Stop high-rate ZMQ publisher cleanly."""
+        if self._zmq_publisher is None:
+            return
+
+        try:
+            self._zmq_publisher.stop()
+        except Exception as e:
+            self.get_logger().warning(f"Failed to stop high-rate ZMQ publisher cleanly: {e}")
+        finally:
+            self._zmq_publisher = None
+
+    def _send_high_rate_zmq(self, msg_type: str, payload: dict) -> bool:
+        """Publish high-rate telemetry via ZMQ IPC."""
+        if not self._use_high_rate_zmq:
+            return False
+
+        if self._zmq_publisher is None:
+            self._start_high_rate_publisher()
+            if self._zmq_publisher is None:
+                self._activate_high_rate_http_fallback(
+                    "high-rate ZMQ publisher is unavailable at runtime"
+                )
+                return False
+
+        try:
+            self._zmq_publisher.send(
+                IPCMessage(
+                    msg_type=msg_type,
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    data=payload,
+                )
+            )
+            return True
+        except Exception as e:
+            self._activate_high_rate_http_fallback(
+                "high-rate ZMQ publish errors detected"
+            )
+            try:
+                self._stop_high_rate_publisher()
+            except Exception:
+                pass
+            backoff_s = self._schedule_high_rate_zmq_restart()
+            now = time.time()
+            if now - self._last_zmq_error_log >= self._http_warn_interval_s:
+                self.get_logger().warning(
+                    f"High-rate ZMQ publish failed ({msg_type}): {e}; "
+                    f"retrying publisher start in {backoff_s:.2f}s"
+                )
+                self._last_zmq_error_log = now
+            return False
+
     def _send_to_edge_core(self) -> None:
-        """Send latest VIO data to edge_core via HTTP."""
+        """Send latest VIO data to edge_core via configured high-rate transport."""
+        with self._lock:
+            vio = self._latest_vio
+
+        if vio is None:
+            return
+
+        payload = asdict(vio)
+
+        if self._use_high_rate_zmq:
+            if self._send_high_rate_zmq(HIGH_RATE_MSG_TYPE_VIO, payload):
+                self._vio_send_zmq_count += 1
+                self._vio_send_count += 1
+            else:
+                self._send_errors += 1
+
+        if not self._use_high_rate_http:
+            return
+
         now = time.time()
         if now < self._vio_backoff_until:
             return
 
-        with self._lock:
-            vio = self._latest_vio
-        
-        if vio is None:
-            return
-        
         try:
-            data = json.dumps(asdict(vio)).encode("utf-8")
+            data = json.dumps(payload).encode("utf-8")
             if self._http_post("/api/vio/update", data, timeout=0.15):
+                self._vio_send_http_count += 1
                 self._vio_send_count += 1
                 self._vio_send_backoff_s = 0.0
             else:
@@ -636,7 +882,7 @@ class ROSHTTPBridge(Node):
                     else min(self._vio_backoff_max_s, self._vio_send_backoff_s * 2.0)
                 )
                 self._vio_backoff_until = now + self._vio_send_backoff_s
-                    
+
         except URLError as e:
             self._send_errors += 1
             if self._send_errors % 100 == 1:
@@ -654,10 +900,38 @@ class ROSHTTPBridge(Node):
         """
         if not self._enable_nav_control:
             return
+
+        payload = asdict(cmd)
+        zmq_sent = False
+
+        if self._use_high_rate_zmq:
+            if self._send_high_rate_zmq(HIGH_RATE_MSG_TYPE_CMD_VEL, payload):
+                self._cmd_vel_send_zmq_count += 1
+                self._cmd_vel_send_count += 1
+                self._last_cmd_vel_send_time = time.time()
+                zmq_sent = True
+            else:
+                self._send_errors += 1
+
+        # Keep ZMQ as the primary path. In explicit "both" mode, also send
+        # HTTP as a secondary path with the same payload so API-side monotonic
+        # dedupe can safely drop duplicates.
+        if zmq_sent and self._high_rate_transport != "both":
+            return
+
+        if not self._use_high_rate_http:
+            return
         
         try:
-            data = json.dumps(asdict(cmd)).encode("utf-8")
-            if self._http_post("/api/nav/velocity", data, timeout=0.1):
+            data = json.dumps(payload).encode("utf-8")
+            accepted_http_statuses = (200, 409) if (zmq_sent and self._high_rate_transport == "both") else (200,)
+            if self._http_post(
+                "/api/nav/velocity",
+                data,
+                timeout=0.1,
+                accepted_statuses=accepted_http_statuses,
+            ):
+                self._cmd_vel_send_http_count += 1
                 self._cmd_vel_send_count += 1
                 self._last_cmd_vel_send_time = time.time()
             else:
@@ -871,7 +1145,11 @@ class ROSHTTPBridge(Node):
                 camera_matrix=cam_matrix,
                 min_radius=8,
                 max_radius=min(w, h) // 3,
-                min_color_confidence=0.20,
+                min_color_confidence=0.35,
+                min_circularity=0.55,
+                min_solidity=0.75,
+                min_aspect_ratio=0.40,
+                min_contour_area=300,
             )
 
             if not circles:
@@ -1559,6 +1837,16 @@ class ROSHTTPBridge(Node):
 
         self._send_mesh_to_edge_core(mesh_data)
         self._last_empty_mesh_send_time = timestamp
+
+    def destroy_node(self) -> bool:
+        """Destroy ROS node and cleanup transport resources."""
+        self._stop_high_rate_publisher()
+        with self._http_lock:
+            try:
+                self._http_conn.close()
+            except Exception:
+                pass
+        return super().destroy_node()
     
     def _quat_to_euler(
         self, x: float, y: float, z: float, w: float
@@ -1588,8 +1876,12 @@ class ROSHTTPBridge(Node):
         return {
             "vio_received": self._vio_recv_count,
             "vio_sent": self._vio_send_count,
+            "vio_sent_zmq": self._vio_send_zmq_count,
+            "vio_sent_http": self._vio_send_http_count,
             "cmd_vel_received": self._cmd_vel_recv_count,
             "cmd_vel_sent": self._cmd_vel_send_count,
+            "cmd_vel_sent_zmq": self._cmd_vel_send_zmq_count,
+            "cmd_vel_sent_http": self._cmd_vel_send_http_count,
             "mesh_received": self._mesh_recv_count,
             "mesh_sent": self._mesh_send_count,
             "servo_received": self._servo_recv_count,
@@ -1597,6 +1889,9 @@ class ROSHTTPBridge(Node):
             "detection_received": self._detection_recv_count,
             "detection_sent": self._detection_send_count,
             "send_errors": self._send_errors,
+            "high_rate_transport_requested": self._high_rate_transport,
+            "high_rate_transport_effective": self._effective_high_rate_transport(),
+            "high_rate_zmq_pub_mode": self._high_rate_zmq_pub_mode,
             "nav_control_enabled": self._enable_nav_control,
             "mesh_enabled": self._enable_mesh,
             "servo_enabled": self._enable_servo,
@@ -1620,7 +1915,7 @@ def main():
     parser = argparse.ArgumentParser(description="ROS2-HTTP Bridge for NOMAD")
     parser.add_argument("--host", default="172.17.0.1", help="Edge Core host")
     parser.add_argument("--port", type=int, default=8000, help="Edge Core port")
-    parser.add_argument("--vio-topic", default="/visual_slam/tracking/odometry",
+    parser.add_argument("--vio-topic", default="/zed/zed_node/odom",
                         help="VIO odometry topic")
     parser.add_argument("--cmd-vel-topic", default="/cmd_vel",
                         help="Navigation velocity command topic")
@@ -1639,6 +1934,23 @@ def main():
                         help="ZED custom object detection topic (ObjectsStamped)")
     parser.add_argument("--disable-detections", action="store_true",
                         help="Disable object detection forwarding")
+    parser.add_argument(
+        "--high-rate-transport",
+        default="both",
+        choices=["zmq", "http", "both"],
+        help="Transport for high-rate VIO/cmd_vel streams",
+    )
+    parser.add_argument(
+        "--high-rate-zmq-endpoint",
+        default=None,
+        help="Optional ZMQ endpoint override for high-rate VIO/cmd_vel IPC",
+    )
+    parser.add_argument(
+        "--high-rate-zmq-pub-mode",
+        default=os.environ.get("NOMAD_HIGH_RATE_ZMQ_PUB_MODE", "connect"),
+        choices=["bind", "connect"],
+        help="ZMQ PUB socket mode for high-rate IPC",
+    )
     
     # Parse args and validate send_rate_hz early
     args = parser.parse_args()
@@ -1660,6 +1972,9 @@ def main():
         enable_mesh=not args.disable_mesh,
         enable_servo=not args.disable_servo,
         enable_detections=not args.disable_detections,
+        high_rate_transport=args.high_rate_transport,
+        high_rate_zmq_endpoint=args.high_rate_zmq_endpoint,
+        high_rate_zmq_pub_mode=args.high_rate_zmq_pub_mode,
     )
     
     try:

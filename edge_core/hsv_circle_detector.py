@@ -32,17 +32,17 @@ CIRCLE_COLORS = ["red", "blue", "green", "yellow", "white", "black"]
 # High saturation minimums to reject skin, wood, natural surfaces.
 # Competition targets are vivid/saturated colors, not subtle tones.
 HSV_RANGES = {
-    "red":    [(0, 8, 120, 70), (172, 179, 120, 70)],
-    "blue":   [(100, 128, 100, 50)],
+    "red":    [(0, 10, 120, 70), (170, 179, 120, 70)],
+    "blue":   [(100, 130, 100, 50)],
     "green":  [(38, 82, 100, 50)],
-    "yellow": [(20, 35, 130, 100)],
+    "yellow": [(20, 37, 120, 90)],
     "white":  [],
     "black":  [],
 }
 
-WHITE_S_MAX = 30       # very low saturation only
-WHITE_V_MIN = 210      # very bright only
-BLACK_V_MAX = 35       # very dark only — tighter to avoid shadows/dark objects
+WHITE_S_MAX = 25       # very low saturation only — tighter to avoid light-colored surfaces
+WHITE_V_MIN = 215      # very bright only
+BLACK_V_MAX = 30       # very dark only — tighter to avoid shadows/dark objects
 
 # Skin tone exclusion: skin in HSV is roughly H=0-20, S=40-170, V=80-255
 # We reject any "red" contour where most pixels fall in this range
@@ -264,9 +264,11 @@ def _contour_detect(
                 if skin_ratio > 0.40:
                     continue
 
-            # Composite confidence
-            size_factor = min(1.0, eq_radius / 25.0)
-            confidence = color_conf * (0.4 + 0.3 * circularity + 0.3 * solidity) * (0.5 + 0.5 * size_factor)
+            # Composite confidence — weight circularity and solidity heavily
+            # since competition targets are well-defined circles/ellipses
+            size_factor = min(1.0, eq_radius / 20.0)
+            shape_score = 0.25 + 0.35 * circularity + 0.25 * solidity + 0.15 * aspect
+            confidence = color_conf * shape_score * (0.5 + 0.5 * size_factor)
 
             mean_hsv = np.mean(masked_hsv, axis=0)
 
@@ -508,6 +510,10 @@ def detect_circles_hsv(
 
     for det in merged:
         _project_to_3d(det, depth_image, camera_matrix)
+
+    # Filter out low-confidence detections to reduce false positives
+    min_final_confidence = 0.15
+    merged = [d for d in merged if d.confidence >= min_final_confidence]
 
     merged.sort(key=lambda d: d.confidence, reverse=True)
     return merged

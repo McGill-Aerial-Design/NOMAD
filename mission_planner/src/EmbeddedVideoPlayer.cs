@@ -205,7 +205,7 @@ namespace NOMAD.MissionPlanner
             // Detection overlay checkbox
             _chkDetections = new CheckBox
             {
-                Text = "YOLO",
+                Text = "HSV",
                 Location = new Point(340, 33),
                 AutoSize = true,
                 ForeColor = Color.FromArgb(255, 180, 60),

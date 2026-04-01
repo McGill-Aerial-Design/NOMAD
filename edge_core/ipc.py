@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 # Default IPC endpoints
 DEFAULT_VISION_HEARTBEAT_ENDPOINT = "tcp://127.0.0.1:5555"
 DEFAULT_VISION_DATA_ENDPOINT = "tcp://127.0.0.1:5556"
+DEFAULT_ROS_HIGH_RATE_ENDPOINT = "tcp://127.0.0.1:5557"
+
+# High-rate telemetry message types used by ros_http_bridge/api IPC path
+HIGH_RATE_MSG_TYPE_VIO = "ROS_VIO_UPDATE"
+HIGH_RATE_MSG_TYPE_CMD_VEL = "ROS_CMD_VEL"
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,27 +79,54 @@ class ZMQPublisher:
         self,
         endpoint: str = DEFAULT_VISION_HEARTBEAT_ENDPOINT,
         topic: str = "",
+        socket_mode: str = "bind",
+        snd_hwm: int | None = None,
+        conflate: bool = False,
+        linger_ms: int = 0,
     ) -> None:
         """
         Initialize the publisher.
 
         Args:
-            endpoint: ZMQ endpoint to bind to
+            endpoint: ZMQ endpoint to bind/connect
             topic: Topic prefix for messages (empty = all)
+            socket_mode: "bind" (default) or "connect"
+            snd_hwm: Optional send high-water mark for backpressure control
+            conflate: Keep only latest message in queue when supported
+            linger_ms: Socket linger timeout in milliseconds
         """
         self.endpoint = endpoint
         self.topic = topic
+        self.socket_mode = socket_mode.strip().lower()
+        if self.socket_mode not in ("bind", "connect"):
+            raise ValueError(
+                f"socket_mode must be 'bind' or 'connect', got {socket_mode}"
+            )
+        self.snd_hwm = snd_hwm
+        self.conflate = conflate
+        self.linger_ms = linger_ms
         self._context: Any = None  # zmq.Context
         self._socket: Any = None  # zmq.Socket
 
     def start(self) -> None:
-        """Start the publisher and bind to endpoint."""
+        """Start the publisher and bind/connect to endpoint."""
         self._context = zmq.Context()
         self._socket = self._context.socket(zmq.PUB)
-        self._socket.bind(self.endpoint)
+        self._socket.setsockopt(zmq.LINGER, self.linger_ms)
+        if self.snd_hwm is not None:
+            self._socket.setsockopt(zmq.SNDHWM, max(1, int(self.snd_hwm)))
+        if self.conflate and hasattr(zmq, "CONFLATE"):
+            self._socket.setsockopt(zmq.CONFLATE, 1)
+
+        if self.socket_mode == "bind":
+            self._socket.bind(self.endpoint)
+            logger.info(f"ZMQ Publisher bound to {self.endpoint}")
+        else:
+            self._socket.connect(self.endpoint)
+            logger.info(f"ZMQ Publisher connected to {self.endpoint}")
+
         # Allow time for subscribers to connect
         time.sleep(0.1)
-        logger.info(f"ZMQ Publisher bound to {self.endpoint}")
 
     def stop(self) -> None:
         """Stop the publisher and cleanup."""
@@ -143,29 +175,55 @@ class ZMQSubscriber:
         endpoint: str = DEFAULT_VISION_HEARTBEAT_ENDPOINT,
         topic: str = "",
         timeout_ms: int = 1000,
+        socket_mode: str = "connect",
+        rcv_hwm: int | None = None,
+        conflate: bool = False,
+        linger_ms: int = 0,
     ) -> None:
         """
         Initialize the subscriber.
 
         Args:
-            endpoint: ZMQ endpoint to connect to
+            endpoint: ZMQ endpoint to connect/bind
             topic: Topic filter (empty = all)
             timeout_ms: Receive timeout in milliseconds
+            socket_mode: "connect" (default) or "bind"
+            rcv_hwm: Optional receive high-water mark for backpressure control
+            conflate: Keep only latest message in queue when supported
+            linger_ms: Socket linger timeout in milliseconds
         """
         self.endpoint = endpoint
         self.topic = topic
         self.timeout_ms = timeout_ms
+        self.socket_mode = socket_mode.strip().lower()
+        if self.socket_mode not in ("bind", "connect"):
+            raise ValueError(
+                f"socket_mode must be 'bind' or 'connect', got {socket_mode}"
+            )
+        self.rcv_hwm = rcv_hwm
+        self.conflate = conflate
+        self.linger_ms = linger_ms
         self._context: Any = None  # zmq.Context
         self._socket: Any = None  # zmq.Socket
 
     def start(self) -> None:
-        """Start the subscriber and connect to endpoint."""
+        """Start the subscriber and connect/bind to endpoint."""
         self._context = zmq.Context()
         self._socket = self._context.socket(zmq.SUB)
-        self._socket.connect(self.endpoint)
+        self._socket.setsockopt(zmq.LINGER, self.linger_ms)
         self._socket.setsockopt_string(zmq.SUBSCRIBE, self.topic)
         self._socket.setsockopt(zmq.RCVTIMEO, self.timeout_ms)
-        logger.info(f"ZMQ Subscriber connected to {self.endpoint}")
+        if self.rcv_hwm is not None:
+            self._socket.setsockopt(zmq.RCVHWM, max(1, int(self.rcv_hwm)))
+        if self.conflate and hasattr(zmq, "CONFLATE"):
+            self._socket.setsockopt(zmq.CONFLATE, 1)
+
+        if self.socket_mode == "bind":
+            self._socket.bind(self.endpoint)
+            logger.info(f"ZMQ Subscriber bound to {self.endpoint}")
+        else:
+            self._socket.connect(self.endpoint)
+            logger.info(f"ZMQ Subscriber connected to {self.endpoint}")
 
     def stop(self) -> None:
         """Stop the subscriber and cleanup."""
