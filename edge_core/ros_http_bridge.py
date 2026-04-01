@@ -158,12 +158,12 @@ class VIOData:
     vz: float = 0.0
     confidence: float = 1.0
     source: str = "isaac_ros"
-    # Raw ROS-frame pose (odom/map) for SLAM 3D visualization
-    # Always in "ros_optical" frame (ZED camera frame: X-right, Y-down, Z-forward)
+    # Raw camera pose in odom frame (ZED odom topic, X-right, Y-down, Z-forward).
+    # This is the camera position, NOT the drone body. _get_drone_body_pose()
+    # removes the servo pitch and mounting offset to get the true body pose.
     ros_x: float = 0.0
     ros_y: float = 0.0
     ros_z: float = 0.0
-    # Raw ROS-frame orientation (from odom topic, same frame as mesh)
     ros_roll: float = 0.0
     ros_pitch: float = 0.0
     ros_yaw: float = 0.0
@@ -500,6 +500,17 @@ class ROSHTTPBridge(Node):
         # Camera frame to track (zed2_base_link matches camera:=zed2 launch param)
         self._camera_frame = "zed_camera_link"
         self._reference_frame = "odom"  # Or "map" depending on your setup
+
+        # Camera gimbal (servo) angle for drone body pose computation.
+        # The ZED odom gives the camera pose which includes the servo tilt.
+        # To get the true drone body pose, we subtract the servo rotation
+        # and mounting offset from the camera pose.
+        # Same physical offsets as servo_tf_publisher.py (TF-004).
+        self._gimbal_pitch_rad = 0.0         # Current servo pitch in radians (0 = level)
+        self._gimbal_angle_deg = 90.0        # Raw servo angle in degrees (90 = level)
+        self._gimbal_mount_offset = (0.10, 0.0, -0.05)  # (x, y, z) base_link -> servo_mount in body frame
+        self._gimbal_last_poll = 0.0
+        self._gimbal_poll_interval = 0.2     # Poll servo angle every 200ms
         
         # Thermal-aware detection rate throttling (RM-005)
         self._gpu_temp_c = 0.0
@@ -854,6 +865,9 @@ class ROSHTTPBridge(Node):
 
     def _send_to_edge_core(self) -> None:
         """Send latest VIO data to edge_core via configured high-rate transport."""
+        # Poll gimbal angle for drone body pose computation (non-blocking, cached)
+        self._poll_gimbal_angle()
+
         with self._lock:
             vio = self._latest_vio
 
@@ -1543,7 +1557,7 @@ class ROSHTTPBridge(Node):
                     ]
                 voxels.append(entry)
 
-            camera_pose = self._get_camera_pose()
+            drone_pose = self._get_drone_body_pose()
 
             mesh_data = {
                 "voxels": voxels,
@@ -1556,9 +1570,9 @@ class ROSHTTPBridge(Node):
                 "clear": False,
             }
 
-            if camera_pose:
-                mesh_data["drone_position"] = camera_pose["position"]
-                mesh_data["drone_attitude"] = camera_pose["attitude"]
+            if drone_pose:
+                mesh_data["drone_position"] = drone_pose["position"]
+                mesh_data["drone_attitude"] = drone_pose["attitude"]
 
             self._mesh_recv_count += 1
             self._send_mesh_to_edge_core(mesh_data)
@@ -1566,11 +1580,45 @@ class ROSHTTPBridge(Node):
         except Exception as e:
             self.get_logger().error(f"Voxel marker processing error: {e}")
 
-    def _get_camera_pose(self) -> Optional[dict]:
+    def _poll_gimbal_angle(self) -> None:
+        """Poll camera gimbal servo angle from Edge Core API.
+
+        Caches the result so the fast-path (_get_drone_body_pose) never blocks
+        on HTTP.  Called from the periodic send timer, not from ROS callbacks.
         """
-        Get camera pose from latest VIO odometry data.
-        Returns position (x, y, z) and attitude (roll, pitch, yaw) in the odom frame.
-        Uses the raw odom pose directly (same coordinate frame as the mesh).
+        now = time.time()
+        if now - self._gimbal_last_poll < self._gimbal_poll_interval:
+            return
+        self._gimbal_last_poll = now
+
+        try:
+            url = f"{self._base_url}/api/servo/camera/tilt"
+            req = Request(url)
+            with urlopen(req, timeout=0.3) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            angle = float(data.get("feedback_angle") or data.get("angle", 90.0))
+            angle = max(0.0, min(180.0, angle))
+            self._gimbal_angle_deg = angle
+            # 90 deg = level forward (pitch = 0)
+            self._gimbal_pitch_rad = math.radians(angle - 90.0)
+        except Exception:
+            pass  # Keep last known angle
+
+    def _get_drone_body_pose(self) -> Optional[dict]:
+        """
+        Compute the drone body (base_link) pose from the camera odom pose.
+
+        The ZED odom topic reports the *camera* position/orientation, which
+        includes the servo gimbal tilt and mounting offset.  To show the
+        correct drone position in the SLAM 3D view, we reverse-transform:
+
+            T_body = T_camera * inv(T_servo) * inv(T_mount)
+
+        The mount offset and servo pitch match servo_tf_publisher.py so the
+        drone marker sits at the airframe, not at the camera.
+
+        Returns position (x, y, z) and attitude (roll, pitch, yaw) in the
+        odom frame — same coordinate frame as the nvblox mesh.
         """
         with self._lock:
             vio = self._latest_vio
@@ -1578,9 +1626,57 @@ class ROSHTTPBridge(Node):
         if vio is None:
             return None
 
+        # Camera pose in odom frame (from ZED odom topic)
+        cx, cy, cz = vio.ros_x, vio.ros_y, vio.ros_z
+        c_roll, c_pitch, c_yaw = vio.ros_roll, vio.ros_pitch, vio.ros_yaw
+
+        # Remove servo pitch from camera orientation to get drone body orientation.
+        # Camera orientation = body orientation * servo_pitch_rotation
+        # => body pitch = camera pitch - servo pitch
+        servo_pitch = self._gimbal_pitch_rad
+        body_roll = c_roll
+        body_pitch = c_pitch - servo_pitch
+        body_yaw = c_yaw
+
+        # Compute the mount offset vector rotated into the odom frame,
+        # then subtract it from the camera position to get body position.
+        # Mount offset is in body frame: (forward, lateral, down).
+        mx, my, mz = self._gimbal_mount_offset
+
+        # Rotation matrix from body orientation (simplified: roll≈0 for a drone)
+        cos_p = math.cos(body_pitch)
+        sin_p = math.sin(body_pitch)
+        cos_y = math.cos(body_yaw)
+        sin_y = math.sin(body_yaw)
+        cos_r = math.cos(body_roll)
+        sin_r = math.sin(body_roll)
+
+        # Full rotation of mount offset from body frame to odom frame
+        # R = Rz(yaw) * Ry(pitch) * Rx(roll) applied to (mx, my, mz)
+        # Then add servo pitch rotation on top for camera offset
+        #
+        # But we want: body_pos = camera_pos - R_body * (mount_offset)
+        # because camera_pos = body_pos + R_body * mount_offset (no servo
+        # contribution to translation since servo is pure rotation at pivot)
+        ox = (cos_y * cos_p) * mx + (cos_y * sin_p * sin_r - sin_y * cos_r) * my + (cos_y * sin_p * cos_r + sin_y * sin_r) * mz
+        oy = (sin_y * cos_p) * mx + (sin_y * sin_p * sin_r + cos_y * cos_r) * my + (sin_y * sin_p * cos_r - cos_y * sin_r) * mz
+        oz = (-sin_p) * mx + (cos_p * sin_r) * my + (cos_p * cos_r) * mz
+
+        body_x = cx - ox
+        body_y = cy - oy
+        body_z = cz - oz
+
         return {
-            "position": {"x": vio.ros_x, "y": vio.ros_y, "z": vio.ros_z},
-            "attitude": {"roll": vio.ros_roll, "pitch": vio.ros_pitch, "yaw": vio.ros_yaw}
+            "position": {
+                "x": round(body_x, 4),
+                "y": round(body_y, 4),
+                "z": round(body_z, 4),
+            },
+            "attitude": {
+                "roll": round(body_roll, 4),
+                "pitch": round(body_pitch, 4),
+                "yaw": round(body_yaw, 4),
+            },
         }
     
     def _send_mesh_to_edge_core(self, mesh_data: dict) -> None:
@@ -1667,10 +1763,10 @@ class ROSHTTPBridge(Node):
         else:
             mesh_data.update({"blocks": [], "block_size": 0.0, "total_blocks": 0})
 
-        camera_pose = self._get_camera_pose()
-        if camera_pose:
-            mesh_data["drone_position"] = camera_pose["position"]
-            mesh_data["drone_attitude"] = camera_pose["attitude"]
+        drone_pose = self._get_drone_body_pose()
+        if drone_pose:
+            mesh_data["drone_position"] = drone_pose["position"]
+            mesh_data["drone_attitude"] = drone_pose["attitude"]
 
         self._send_mesh_to_edge_core(mesh_data)
         self._last_empty_mesh_send_time = timestamp
