@@ -215,8 +215,12 @@ namespace NOMAD.MissionPlanner
         private Label _lblStatus, _lblStats;
         private Label _lblPerceptionStatus;
         private CheckBox _chkShowGrid, _chkShowTrajectory, _chkAutoUpdate;
-        private ComboBox _combDroneType;
+        private ComboBox _combDroneType, _combMeshMode;
         private NumericUpDown _numLength, _numWidth, _numHeight, _numHeadingOffset, _numFov;
+        private string _meshOutputMode = "block";
+        private bool _meshModeApplyInFlight;
+        private bool _meshModeRefreshInFlight;
+        private bool _meshModeSelectionInternal;
         private int _meshUpdateCount;
         private int _totalBlocks;
         private DateTime _lastUpdateTime = DateTime.MinValue;
@@ -294,6 +298,7 @@ namespace NOMAD.MissionPlanner
             StartUpdateLoop();
             StartServoPolling();
             StartPerceptionStatusPolling();
+            _ = RefreshMeshModeFromServerAsync(updateStatus: false);
         }
 
         // ==================== UI Initialization ====================
@@ -379,6 +384,23 @@ namespace NOMAD.MissionPlanner
             _chkAutoUpdate = CreateCheckBox("Auto", x, y + 4, true);
             _chkAutoUpdate.CheckedChanged += (s, e) => _autoUpdateEnabled = _chkAutoUpdate.Checked;
             _controlPanel.Controls.Add(_chkAutoUpdate);
+            x += 55;
+
+            _controlPanel.Controls.Add(CreateLabel("Mesh:", x, y + 6));
+            x += 38;
+            _combMeshMode = new ComboBox
+            {
+                Location = new Point(x, y + 2),
+                Size = new Size(78, 22),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                ForeColor = Color.White,
+                BackColor = Color.FromArgb(60, 60, 60),
+                Font = new Font("Segoe UI", 8.5f),
+            };
+            _combMeshMode.Items.AddRange(new[] { "Block", "Voxel" });
+            _combMeshMode.SelectedIndexChanged += CombMeshMode_SelectedIndexChanged;
+            _combMeshMode.SelectedIndex = 0;
+            _controlPanel.Controls.Add(_combMeshMode);
 
             // Second row: drone config
             y += 34;
@@ -1746,6 +1768,7 @@ namespace NOMAD.MissionPlanner
                     await _webSocket.ConnectAsync(new Uri(wsUrl), ct);
                     UpdateStatusSafe("Status: Connected (30Hz)");
                     _wsReconnectDelayMs = 1000;
+                    _ = RefreshMeshModeFromServerAsync(updateStatus: false);
 
                     var buffer = new byte[64 * 1024];
                     var messageBuffer = new MemoryStream();
@@ -2087,6 +2110,46 @@ namespace NOMAD.MissionPlanner
             _orbitCenterX = _orbitCenterY = _orbitCenterZ = 0;
         }
 
+        private async void CombMeshMode_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (_combMeshMode == null || _meshModeSelectionInternal || _meshModeApplyInFlight)
+                return;
+
+            string selectedMode = (_combMeshMode.SelectedItem?.ToString() ?? "Block").Equals("Voxel", StringComparison.OrdinalIgnoreCase)
+                ? "voxel"
+                : "block";
+
+            if (selectedMode == _meshOutputMode)
+                return;
+
+            _meshModeApplyInFlight = true;
+            _combMeshMode.Enabled = false;
+            try
+            {
+                var response = await JetsonApiService.PostAsync($"/api/task/2/slam/mesh/mode?mode={selectedMode}");
+                if (response.IsSuccessStatusCode)
+                {
+                    _meshOutputMode = selectedMode;
+                    UpdateStatusSafe($"Status: Mesh mode set to {selectedMode}");
+                }
+                else
+                {
+                    SetMeshModeSelection(_meshOutputMode);
+                    UpdateStatusSafe($"Status: Mesh mode change failed ({(int)response.StatusCode})");
+                }
+            }
+            catch (Exception ex)
+            {
+                SetMeshModeSelection(_meshOutputMode);
+                UpdateStatusSafe($"Status: Mesh mode change failed ({ex.Message})");
+            }
+            finally
+            {
+                _combMeshMode.Enabled = true;
+                _meshModeApplyInFlight = false;
+            }
+        }
+
         private async void BtnClearMesh_Click(object sender, EventArgs e)
         {
             lock (_meshLock)
@@ -2146,6 +2209,70 @@ namespace NOMAD.MissionPlanner
                 _lblPerceptionStatus.BeginInvoke(new Action(() => { if (_lblPerceptionStatus != null) _lblPerceptionStatus.Text = text; }));
             else
                 _lblPerceptionStatus.Text = text;
+        }
+
+        private static string NormalizeMeshMode(string mode)
+        {
+            return string.Equals(mode, "voxel", StringComparison.OrdinalIgnoreCase) ? "voxel" : "block";
+        }
+
+        private void SetMeshModeSelection(string mode)
+        {
+            if (_combMeshMode == null)
+                return;
+
+            string target = NormalizeMeshMode(mode) == "voxel" ? "Voxel" : "Block";
+            string current = _combMeshMode.SelectedItem?.ToString() ?? "";
+            if (string.Equals(current, target, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            _meshModeSelectionInternal = true;
+            try
+            {
+                _combMeshMode.SelectedItem = target;
+            }
+            finally
+            {
+                _meshModeSelectionInternal = false;
+            }
+        }
+
+        private async Task RefreshMeshModeFromServerAsync(bool updateStatus)
+        {
+            if (_meshModeRefreshInFlight)
+                return;
+
+            _meshModeRefreshInFlight = true;
+            try
+            {
+                var response = await JetsonApiService.GetAsync("/api/task/2/slam/mesh/mode");
+                if (!response.IsSuccessStatusCode)
+                    return;
+
+                var body = await response.Content.ReadAsStringAsync();
+                var obj = JObject.Parse(body);
+                string mode = NormalizeMeshMode(obj["mesh_output_mode"]?.ToString());
+                _meshOutputMode = mode;
+
+                if (_combMeshMode != null)
+                {
+                    if (_combMeshMode.InvokeRequired)
+                        _combMeshMode.BeginInvoke(new Action(() => SetMeshModeSelection(mode)));
+                    else
+                        SetMeshModeSelection(mode);
+                }
+
+                if (updateStatus)
+                    UpdateStatusSafe($"Status: Mesh mode is {mode}");
+            }
+            catch
+            {
+                // Keep last-known mode when endpoint is unavailable.
+            }
+            finally
+            {
+                _meshModeRefreshInFlight = false;
+            }
         }
 
         // ==================== Cleanup ====================

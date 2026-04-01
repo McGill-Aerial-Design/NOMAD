@@ -353,6 +353,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
     _INTERNAL_BRIDGE_ALLOWED_ROUTES: set[tuple[str, str]] = {
         ("POST", "/api/vio/update"),
         ("POST", "/api/task/2/slam/mesh/update"),
+        ("GET", "/api/task/2/slam/mesh/mode"),
         ("POST", "/api/detections/update"),
         ("POST", "/api/nav/velocity"),
         ("POST", "/api/servo/camera/tilt"),
@@ -435,6 +436,14 @@ def create_app(state_manager: StateManager) -> FastAPI:
     # VIO state from external sources (ROS bridge)
     app.state.external_vio_state: Optional[dict] = None
     app.state.slam_vio_ros_frame: Optional[dict] = None  # ROS-frame pose for SLAM 3D
+    configured_mesh_mode = (os.environ.get("NOMAD_SLAM_MESH_OUTPUT_MODE") or "block").strip().lower()
+    if configured_mesh_mode not in ("block", "voxel"):
+        logger.warning(
+            "Invalid NOMAD_SLAM_MESH_OUTPUT_MODE='%s'; defaulting to 'block'",
+            configured_mesh_mode,
+        )
+        configured_mesh_mode = "block"
+    app.state.slam_mesh_output_mode: str = configured_mesh_mode
     app.state.vio_trajectory: list[dict] = []  # List of {x, y, z, timestamp} points
     app.state.vio_trajectory_max_points: int = 1000  # Keep last N points
     app.state.vio_state_lock = threading.Lock()
@@ -4179,6 +4188,36 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
     # ==================== SLAM 3D Mesh Endpoints ====================
     # These endpoints stream nvblox 3D mesh data for Mission Planner visualization
     # Mesh data is received from ros_http_bridge running inside the Isaac ROS container
+
+    @app.get("/api/task/2/slam/mesh/mode", tags=["Task 2", "SLAM"])
+    async def get_slam_mesh_mode(request: Request):
+        """Get current runtime mesh output mode requested by Edge Core."""
+        mode = str(getattr(request.app.state, "slam_mesh_output_mode", "block")).strip().lower()
+        if mode not in ("block", "voxel"):
+            mode = "block"
+            request.app.state.slam_mesh_output_mode = mode
+        return {
+            "mesh_output_mode": mode,
+            "supported_modes": ["block", "voxel"],
+            "runtime_toggle": True,
+        }
+
+    @app.post("/api/task/2/slam/mesh/mode", tags=["Task 2", "SLAM"])
+    async def set_slam_mesh_mode(request: Request, mode: str = Query(..., description="Mesh output mode: block or voxel")):
+        """Set runtime mesh output mode for ros_http_bridge without restart."""
+        normalized = (mode or "").strip().lower()
+        if normalized not in ("block", "voxel"):
+            raise HTTPException(status_code=400, detail="mode must be 'block' or 'voxel'")
+
+        previous = str(getattr(request.app.state, "slam_mesh_output_mode", "block")).strip().lower()
+        request.app.state.slam_mesh_output_mode = normalized
+        return {
+            "success": True,
+            "mesh_output_mode": normalized,
+            "previous_mesh_output_mode": previous,
+            "applies_without_restart": True,
+            "bridge_poll_interval_s": 1.0,
+        }
     
     @app.post("/api/task/2/slam/mesh/update", tags=["Task 2", "SLAM"])
     async def update_slam_mesh(request: Request):

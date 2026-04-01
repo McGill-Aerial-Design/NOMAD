@@ -8,7 +8,7 @@ ROS2 topics to the NOMAD Edge Core HTTP API running on the host.
 It subscribes to:
 - /zed/zed_node/odom (VIO odometry pose from ZED wrapper)
 - /cmd_vel (Twist velocity commands from nav2/nvblox for autonomous navigation)
-- /nvblox_node/color_layer_marker (3D colored voxel markers from nvblox) - optional
+- /nvblox_node/color_layer_marker (3D colored markers from nvblox) - optional
 - /nomad/servo/nozzle_angle (Float32 servo angle for nozzle control)
 
 And sends data to NOMAD Edge Core via HTTP POST requests.
@@ -229,7 +229,8 @@ class ROSHTTPBridge(Node):
         port: int = 8000,
         vio_topic: str = "/zed/zed_node/odom",  # Default to ZED odom
         cmd_vel_topic: str = "/cmd_vel",         # Nav2 velocity commands
-        mesh_topic: str = "/nvblox_node/color_layer_marker",   # Nvblox colored voxel marker topic
+        mesh_topic: str = "/nvblox_node/color_layer_marker",   # Nvblox marker topic
+        mesh_output_mode: str = "block",         # Runtime-selectable output mode: block|voxel
         servo_topic: str = "/nomad/servo/nozzle_angle",  # Nozzle servo angle
         detection_topic: str = "/zed/zed_node/obj_det/objects",  # ZED custom OD
         send_rate_hz: float = 30.0,
@@ -260,6 +261,11 @@ class ROSHTTPBridge(Node):
         self._enable_nav_control = enable_nav_control
         self._enable_mesh = enable_mesh and MARKER_AVAILABLE
         self._mesh_topic = (mesh_topic or "/nvblox_node/color_layer_marker").strip() or "/nvblox_node/color_layer_marker"
+        self._mesh_output_mode = (mesh_output_mode or "block").strip().lower()
+        if self._mesh_output_mode not in ("block", "voxel"):
+            raise ValueError(
+                f"mesh_output_mode must be one of block/voxel, got {mesh_output_mode}"
+            )
         self._enable_servo = enable_servo
         self._enable_detections = enable_detections and ZED_OD_AVAILABLE
 
@@ -530,6 +536,8 @@ class ROSHTTPBridge(Node):
         self._gimbal_mount_offset = (0.10, 0.0, -0.05)  # (x, y, z) base_link -> servo_mount in body frame
         self._gimbal_last_poll = 0.0
         self._gimbal_poll_interval = 0.5     # Poll servo angle every 500ms
+        self._mesh_mode_last_poll = 0.0
+        self._mesh_mode_poll_interval = 1.0  # Poll runtime mesh output mode every 1s
         
         # Thermal-aware detection rate throttling (RM-005)
         self._gpu_temp_c = 0.0
@@ -561,6 +569,8 @@ class ROSHTTPBridge(Node):
         self.create_timer(self._send_interval, self._send_to_edge_core)
         # Poll gimbal angle on its own timer to avoid blocking VIO send timer work.
         self.create_timer(self._gimbal_poll_interval, self._poll_gimbal_angle)
+        # Poll runtime mesh output mode from Edge Core (block|voxel) without restart.
+        self.create_timer(self._mesh_mode_poll_interval, self._poll_mesh_output_mode)
 
         self.get_logger().info(
             f"High-rate transport mode: {self._high_rate_transport}"
@@ -580,6 +590,10 @@ class ROSHTTPBridge(Node):
             self.get_logger().info("Navigation control ENABLED - forwarding cmd_vel to Edge Core")
         if self._enable_mesh:
             self.get_logger().info("Mesh forwarding ENABLED - forwarding nvblox mesh to Edge Core")
+            self.get_logger().info(
+                f"Mesh output mode: {self._mesh_output_mode} "
+                "(runtime toggle via /api/task/2/slam/mesh/mode)"
+            )
     
     def _handle_vio(self, msg: Odometry) -> None:
         """Handle VIO odometry from ZED ROS2 driver."""
@@ -1659,7 +1673,7 @@ class ROSHTTPBridge(Node):
     
 
     def _handle_voxel_marker(self, msg: 'Marker') -> None:
-        """Handle per-voxel colored data from nvblox color_layer_marker topic."""
+        """Handle nvblox CUBE_LIST marker data and forward as block/voxel payloads."""
         if not self._enable_mesh:
             return
         try:
@@ -1676,30 +1690,30 @@ class ROSHTTPBridge(Node):
                 self._voxel_empty_count += 1
                 if self._voxel_empty_count == 20:
                     self.get_logger().warning(
-                        "color_layer_marker has been empty for 20 consecutive messages"
+                        f"{self._mesh_topic} has been empty for 20 consecutive messages"
                     )
-                self._send_empty_mesh_heartbeat(mode="voxel", timestamp=now)
+                empty_mode = self._mesh_output_mode if self._mesh_output_mode in ("block", "voxel") else "block"
+                self._send_empty_mesh_heartbeat(mode=empty_mode, timestamp=now)
                 # Return AFTER tracking, but before rate limit check
                 # (so we don't skip block mesh if voxels are temporarily empty)
                 return
 
-            # Got real points -- reset empty counter and re-enable voxel mode
+            # Got real points -- reset empty counter
             self._voxel_empty_count = 0
-            if not self._use_voxel_marker:
-                self._use_voxel_marker = True
-                self.get_logger().info("color_layer_marker has data -- switching back to voxel mode")
 
             # Now apply rate limit only for sending (not for tracking empty)
             if now - self._last_mesh_send_time < self._mesh_send_interval_s:
                 return
 
-            voxel_size = msg.scale.x  # All 3 scales should be equal
+            voxel_size = msg.scale.x if msg.scale.x > 0.0 else 0.05
             has_colors = len(msg.colors) == n_pts
+            active_mode = self._mesh_output_mode if self._mesh_output_mode in ("block", "voxel") else "block"
 
             # Cap payload size so large voxel messages do not starve pose/world cadence.
             # 8k voxels is a good balance between detail and real-time responsiveness.
             limit = min(n_pts, 8000)
 
+            blocks_acc = {}
             voxels = []
             if limit == n_pts:
                 sample_indices = range(limit)
@@ -1710,28 +1724,81 @@ class ROSHTTPBridge(Node):
 
             for i in sample_indices:
                 p = msg.points[i]
-                entry = {"p": [round(p.x, 4), round(p.y, 4), round(p.z, 4)]}
+
+                if active_mode == "voxel":
+                    entry = {"p": [round(p.x, 4), round(p.y, 4), round(p.z, 4)]}
+                    if has_colors:
+                        c = msg.colors[i]
+                        entry["c"] = [
+                            int(max(0.0, min(1.0, c.r)) * 255.0),
+                            int(max(0.0, min(1.0, c.g)) * 255.0),
+                            int(max(0.0, min(1.0, c.b)) * 255.0),
+                        ]
+                    voxels.append(entry)
+                    continue
+
+                # Quantize marker points into block indices so downstream
+                # consumers can stay in compact block mode.
+                bix = int(math.floor((p.x / voxel_size) + 0.5))
+                biy = int(math.floor((p.y / voxel_size) + 0.5))
+                biz = int(math.floor((p.z / voxel_size) + 0.5))
+                key = (bix, biy, biz)
+
                 if has_colors:
                     c = msg.colors[i]
-                    entry["c"] = [
-                        int(c.r * 255),
-                        int(c.g * 255),
-                        int(c.b * 255),
-                    ]
-                voxels.append(entry)
+
+                    r = int(max(0.0, min(1.0, c.r)) * 255.0)
+                    g = int(max(0.0, min(1.0, c.g)) * 255.0)
+                    b = int(max(0.0, min(1.0, c.b)) * 255.0)
+
+                    bucket = blocks_acc.get(key)
+                    if bucket is None:
+                        blocks_acc[key] = [r, g, b, 1]
+                    else:
+                        bucket[0] += r
+                        bucket[1] += g
+                        bucket[2] += b
+                        bucket[3] += 1
+                elif key not in blocks_acc:
+                    blocks_acc[key] = None
 
             drone_pose = self._get_drone_body_pose()
 
-            mesh_data = {
-                "voxels": voxels,
-                "voxel_size": round(voxel_size, 4),
-                "mode": "voxel",
-                "total_voxels": n_pts,
-                "sent_voxels": limit,
-                "timestamp": now,
-                "frame_id": "ros_optical",  # Same frame as mesh vertices and drone_position/attitude
-                "clear": False,
-            }
+            if active_mode == "voxel":
+                mesh_data = {
+                    "voxels": voxels,
+                    "voxel_size": round(voxel_size, 4),
+                    "mode": "voxel",
+                    "total_voxels": n_pts,
+                    "sent_voxels": len(voxels),
+                    "timestamp": now,
+                    "frame_id": "ros_optical",  # Same frame as mesh vertices and drone_position/attitude
+                    "clear": False,
+                }
+            else:
+                blocks = []
+                for (bix, biy, biz), color_acc in blocks_acc.items():
+                    block_entry = {"index": [bix, biy, biz]}
+                    if color_acc is not None and color_acc[3] > 0:
+                        count = color_acc[3]
+                        block_entry["color"] = [
+                            int(color_acc[0] / count),
+                            int(color_acc[1] / count),
+                            int(color_acc[2] / count),
+                        ]
+                    blocks.append(block_entry)
+
+                mesh_data = {
+                    "blocks": blocks,
+                    "block_size": round(voxel_size, 4),
+                    "mode": "block",
+                    "total_blocks": len(blocks_acc),
+                    "source_voxels": n_pts,
+                    "sampled_voxels": limit,
+                    "timestamp": now,
+                    "frame_id": "ros_optical",  # Same frame as mesh vertices and drone_position/attitude
+                    "clear": False,
+                }
 
             if drone_pose:
                 mesh_data["drone_position"] = drone_pose["position"]
@@ -1742,6 +1809,34 @@ class ROSHTTPBridge(Node):
 
         except Exception as e:
             self.get_logger().error(f"Voxel marker processing error: {e}")
+
+    def _poll_mesh_output_mode(self) -> None:
+        """Poll Edge Core for runtime mesh output mode (block|voxel)."""
+        now = time.time()
+        if now - self._mesh_mode_last_poll < self._mesh_mode_poll_interval:
+            return
+        self._mesh_mode_last_poll = now
+
+        try:
+            url = f"{self._base_url}/api/task/2/slam/mesh/mode"
+            headers = self._build_internal_headers()
+            req = Request(url, headers=headers)
+            with urlopen(req, timeout=0.1) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+
+            mode = str(data.get("mesh_output_mode", "")).strip().lower()
+            if mode not in ("block", "voxel"):
+                return
+
+            if mode != self._mesh_output_mode:
+                previous = self._mesh_output_mode
+                self._mesh_output_mode = mode
+                self.get_logger().info(
+                    f"Mesh output mode changed at runtime: {previous} -> {mode}"
+                )
+        except Exception:
+            # Keep last known mode on transient API/network errors.
+            pass
 
     def _poll_gimbal_angle(self) -> None:
         """Poll camera gimbal servo angle from Edge Core API.
@@ -2030,6 +2125,7 @@ class ROSHTTPBridge(Node):
             "high_rate_zmq_pub_mode": self._high_rate_zmq_pub_mode,
             "nav_control_enabled": self._enable_nav_control,
             "mesh_enabled": self._enable_mesh,
+            "mesh_output_mode": self._mesh_output_mode,
             "servo_enabled": self._enable_servo,
             "detections_enabled": self._enable_detections,
             "hsv_circles_enabled": self._enable_hsv_circles,
@@ -2056,7 +2152,9 @@ def main():
     parser.add_argument("--cmd-vel-topic", default="/cmd_vel",
                         help="Navigation velocity command topic")
     parser.add_argument("--mesh-topic", default="/nvblox_node/color_layer_marker",
-                        help="Nvblox colored voxel marker topic (visualization_msgs/Marker)")
+                        help="Nvblox marker topic (visualization_msgs/Marker CUBE_LIST)")
+    parser.add_argument("--mesh-output-mode", default="block", choices=["block", "voxel"],
+                        help="Mesh payload mode sent to Edge Core (runtime-toggleable via API)")
     parser.add_argument("--rate", type=float, default=30.0, help="Send rate Hz")
     parser.add_argument("--disable-nav", action="store_true",
                         help="Disable navigation control (cmd_vel forwarding)")
@@ -2101,6 +2199,7 @@ def main():
         vio_topic=args.vio_topic,
         cmd_vel_topic=args.cmd_vel_topic,
         mesh_topic=args.mesh_topic,
+        mesh_output_mode=args.mesh_output_mode,
         servo_topic=args.servo_topic,
         detection_topic=args.detection_topic,
         send_rate_hz=args.rate,
