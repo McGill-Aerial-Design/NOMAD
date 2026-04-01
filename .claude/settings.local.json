@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(ssh:*)",
-      "Bash(scp:*)"
+      "Bash(scp:*)",
+      "Bash(python:*)"
     ]
   }
 }

@@ -30,6 +30,7 @@ DEFAULT_ROS_HIGH_RATE_ENDPOINT = "tcp://127.0.0.1:5557"
 # High-rate telemetry message types used by ros_http_bridge/api IPC path
 HIGH_RATE_MSG_TYPE_VIO = "ROS_VIO_UPDATE"
 HIGH_RATE_MSG_TYPE_CMD_VEL = "ROS_CMD_VEL"
+HIGH_RATE_MSG_TYPE_DETECTIONS = "ROS_DETECTIONS"
 
 
 @dataclass(frozen=True, slots=True)

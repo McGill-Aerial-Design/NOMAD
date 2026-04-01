@@ -8,7 +8,7 @@ ROS2 topics to the NOMAD Edge Core HTTP API running on the host.
 It subscribes to:
 - /visual_slam/tracking/odometry (VIO pose from Isaac ROS VSLAM)
 - /cmd_vel (Twist velocity commands from nav2/nvblox for autonomous navigation)
-- /nvblox_node/mesh (3D mesh from Nvblox) - optional
+- /nvblox_node/color_layer_marker (3D voxel cubes from Nvblox) - optional
 - /nvblox_node/map_slice (2D occupancy slice) - for visualization
 - /nomad/servo/nozzle_angle (Float32 servo angle for nozzle control)
 
@@ -67,6 +67,13 @@ except ImportError:
     logger = logging.getLogger("ros_http_bridge")
     # logger not yet created, will warn later
 
+# msgpack for efficient mesh serialization (3-10x faster, 2-5x smaller than JSON)
+try:
+    import msgpack
+    MSGPACK_AVAILABLE = True
+except ImportError:
+    MSGPACK_AVAILABLE = False
+
 # TF2 for camera pose lookup
 try:
     from tf2_ros import Buffer, TransformListener, TransformException
@@ -84,6 +91,7 @@ try:
     from ipc import (  # type: ignore
         DEFAULT_ROS_HIGH_RATE_ENDPOINT,
         HIGH_RATE_MSG_TYPE_CMD_VEL,
+        HIGH_RATE_MSG_TYPE_DETECTIONS,
         HIGH_RATE_MSG_TYPE_VIO,
         IPCMessage,
         ZMQPublisher,
@@ -95,6 +103,7 @@ except Exception as e_import:
         from edge_core.ipc import (
             DEFAULT_ROS_HIGH_RATE_ENDPOINT,
             HIGH_RATE_MSG_TYPE_CMD_VEL,
+            HIGH_RATE_MSG_TYPE_DETECTIONS,
             HIGH_RATE_MSG_TYPE_VIO,
             IPCMessage,
             ZMQPublisher,
@@ -107,10 +116,11 @@ except Exception as e_import:
         DEFAULT_ROS_HIGH_RATE_ENDPOINT = "tcp://127.0.0.1:5557"
         HIGH_RATE_MSG_TYPE_VIO = "ROS_VIO_UPDATE"
         HIGH_RATE_MSG_TYPE_CMD_VEL = "ROS_CMD_VEL"
+        HIGH_RATE_MSG_TYPE_DETECTIONS = "ROS_DETECTIONS"
 
 # Try to import nvblox_msgs for mesh data
 try:
-    from nvblox_msgs.msg import Mesh, MeshBlock
+    from nvblox_msgs.msg import Mesh, MeshBlock  # noqa: F401 (kept for future use)
     NVBLOX_AVAILABLE = True
 except ImportError:
     NVBLOX_AVAILABLE = False
@@ -228,7 +238,7 @@ class ROSHTTPBridge(Node):
         enable_mesh: bool = True,                # Enable mesh forwarding
         enable_servo: bool = True,               # Enable servo control forwarding
         enable_detections: bool = True,          # Enable object detection forwarding
-        high_rate_transport: str = "both",      # High-rate stream transport: zmq/http/both
+        high_rate_transport: str = "zmq",       # High-rate stream transport: zmq/http/both (zmq preferred, HTTP fallback auto-activates)
         high_rate_zmq_endpoint: Optional[str] = None,
         high_rate_zmq_pub_mode: str = "connect",
     ):
@@ -354,14 +364,21 @@ class ROSHTTPBridge(Node):
         # Keep mesh forwarding capped by the configured bridge rate (default 30 Hz).
         # A fixed 10 Hz cap causes visible lag in world-view updates.
         self._mesh_send_interval_s = self._send_interval
-        # Accumulated mesh block cache: nvblox sends incremental updates
-        # (only changed blocks per message). We accumulate all blocks here
-        # keyed by (x,y,z) block index so we can send the full mesh each time.
-        self._mesh_block_cache: dict[tuple[int, int, int], dict] = {}
-        self._mesh_block_size = 0.2  # updated from first message
         self._last_servo_send_time = 0.0
         self._last_servo_angle = -1.0
-        
+
+        # Background mesh sender: decouples ROS callback from HTTP blocking.
+        # Uses a threading.Event + single-slot pattern so only the latest
+        # mesh payload is sent; stale data is discarded automatically.
+        self._mesh_pending_data: Optional[bytes] = None
+        self._mesh_pending_lock = threading.Lock()
+        self._mesh_send_event = threading.Event()
+        self._mesh_sender_stop = threading.Event()
+        self._mesh_sender_thread = threading.Thread(
+            target=self._mesh_sender_loop, daemon=True, name="mesh-sender"
+        )
+        self._mesh_sender_thread.start()
+
         # Subscribe to VIO odometry
         self.create_subscription(
             Odometry,
@@ -381,20 +398,8 @@ class ROSHTTPBridge(Node):
             )
             self.get_logger().info(f"Subscribed to cmd_vel: {cmd_vel_topic}")
         
-        # Subscribe to mesh for 3D visualization
-        # Prefer triangle mesh from /nvblox_node/mesh (smooth surfaces) over
-        # color_layer_marker (cube voxels). The voxel marker is kept as fallback
-        # if the triangle mesh topic stops producing data.
-        self._use_voxel_marker = False
-        self._triangle_recv_count = 0  # track if triangle mesh is producing data
-        if self._enable_mesh and NVBLOX_AVAILABLE:
-            self.create_subscription(
-                Mesh,
-                mesh_topic,
-                self._handle_mesh,
-                mesh_qos,
-            )
-            self.get_logger().info(f"Subscribed to triangle mesh (primary): {mesh_topic}")
+        # Subscribe to voxel marker for 3D visualization (cube rendering)
+        self._use_voxel_marker = True
         if self._enable_mesh and MARKER_AVAILABLE:
             voxel_topic = "/nvblox_node/color_layer_marker"
             self.create_subscription(
@@ -403,7 +408,7 @@ class ROSHTTPBridge(Node):
                 self._handle_voxel_marker,
                 mesh_qos,
             )
-            self.get_logger().info(f"Subscribed to per-voxel marker (fallback): {voxel_topic}")
+            self.get_logger().info(f"Subscribed to per-voxel marker: {voxel_topic}")
         elif enable_mesh and not NVBLOX_AVAILABLE and not MARKER_AVAILABLE:
             self.get_logger().warning("Mesh requested but nvblox_msgs not available")
         
@@ -665,6 +670,7 @@ class ROSHTTPBridge(Node):
         data: bytes,
         timeout: float = 0.5,
         accepted_statuses: tuple[int, ...] = (200,),
+        content_type: str = "application/json",
     ) -> bool:
         """Send HTTP POST using persistent connection with keep-alive."""
         with self._http_lock:
@@ -673,7 +679,7 @@ class ROSHTTPBridge(Node):
                 self._http_conn.timeout = effective_timeout
                 self._http_conn.request(
                     "POST", path, body=data,
-                    headers={"Content-Type": "application/json", "Connection": "keep-alive"}
+                    headers={"Content-Type": content_type, "Connection": "keep-alive"}
                 )
                 resp = self._http_conn.getresponse()
                 resp.read()  # Drain response to allow connection reuse
@@ -751,7 +757,8 @@ class ROSHTTPBridge(Node):
             publisher = ZMQPublisher(
                 endpoint=self._high_rate_zmq_endpoint,
                 socket_mode=self._high_rate_zmq_pub_mode,
-                snd_hwm=1,
+                snd_hwm=2,
+                conflate=True,
                 linger_ms=0,
             )
             publisher.start()
@@ -1450,11 +1457,21 @@ class ROSHTTPBridge(Node):
                 "detections": [asdict(d) for d in detections],
                 "count": len(detections),
             }
-            data = json.dumps(payload).encode("utf-8")
-            if self._http_post("/api/detections/update", data, timeout=0.25):
-                self._detection_send_count += 1
-            else:
-                self._send_errors += 1
+
+            # Try ZMQ first (non-blocking, ~50us), fall back to HTTP
+            zmq_ok = False
+            if self._use_high_rate_zmq:
+                zmq_ok = self._send_high_rate_zmq(HIGH_RATE_MSG_TYPE_DETECTIONS, payload)
+                if zmq_ok:
+                    self._detection_send_count += 1
+
+            # HTTP fallback (or dual-send in "both" mode)
+            if not zmq_ok or self._high_rate_transport == "both":
+                data = json.dumps(payload).encode("utf-8")
+                if self._http_post("/api/detections/update", data, timeout=0.25):
+                    self._detection_send_count += 1
+                else:
+                    self._send_errors += 1
         except URLError as e:
             self._send_errors += 1
             if self._send_errors % 100 == 1:
@@ -1463,214 +1480,10 @@ class ROSHTTPBridge(Node):
             self._send_errors += 1
             self.get_logger().error(f"Detection send error: {e}")
     
-    def _parse_mesh_block(self, ros_block) -> Optional[dict]:
-        """Parse a single nvblox MeshBlock into a dict of vertices, triangles, colors."""
-        # Check that vertices exist - explicit len() check instead of truthiness for ROS arrays
-        if not hasattr(ros_block, 'vertices') or len(ros_block.vertices) == 0:
-            return None
-        # Check that triangles exist - explicit len() check
-        if not hasattr(ros_block, 'triangles') or len(ros_block.triangles) == 0:
-            return None
 
-        raw_verts = ros_block.vertices
-        raw_tris = ros_block.triangles
-        raw_colors = ros_block.colors if hasattr(ros_block, 'colors') else []
-
-        # Detect format: Point32 objects vs flat float32 array
-        block_verts = []
-        if len(raw_verts) > 0 and hasattr(raw_verts[0], 'x'):
-            for v in raw_verts:
-                block_verts.append([round(float(v.x), 4),
-                                    round(float(v.y), 4),
-                                    round(float(v.z), 4)])
-        elif len(raw_verts) >= 3:
-            for vi in range(0, len(raw_verts) - 2, 3):
-                block_verts.append([round(float(raw_verts[vi]), 4),
-                                    round(float(raw_verts[vi + 1]), 4),
-                                    round(float(raw_verts[vi + 2]), 4)])
-
-        if not block_verts:
-            return None
-
-        tri_indices = [int(t) for t in raw_tris]
-        if len(tri_indices) < 3:
-            return None
-
-        # Extract per-vertex colors
-        block_colors = []
-        if raw_colors and len(raw_colors) > 0:
-            if hasattr(raw_colors[0], 'r'):
-                for c in raw_colors:
-                    block_colors.append([int(c.r * 255),
-                                         int(c.g * 255),
-                                         int(c.b * 255)])
-            else:
-                for ci in range(0, len(raw_colors) - 3, 4):
-                    block_colors.append([int(float(raw_colors[ci]) * 255),
-                                         int(float(raw_colors[ci + 1]) * 255),
-                                         int(float(raw_colors[ci + 2]) * 255)])
-
-        # Validate triangle indices against vertex count
-        max_idx = max(tri_indices) if tri_indices else 0
-        if max_idx >= len(block_verts):
-            return None
-
-        # Pad colors to match vertex count
-        if block_colors:
-            while len(block_colors) < len(block_verts):
-                block_colors.append([128, 128, 140])
-            block_colors = block_colors[:len(block_verts)]
-        else:
-            block_colors = [[128, 128, 140]] * len(block_verts)
-
-        return {"vertices": block_verts, "triangles": tri_indices, "colors": block_colors}
-
-    def _handle_mesh(self, msg) -> None:
-        """
-        Handle mesh data from nvblox for 3D visualization.
-
-        nvblox publishes mesh INCREMENTALLY: each message contains only
-        changed blocks.  We accumulate all blocks in _mesh_block_cache
-        keyed by (x,y,z) block index and send the full mesh each time.
-
-        nvblox_msgs/MeshBlock stores data as:
-          vertices: Point32[] or float32[] (stride 3)
-          triangles: int32[]  (stride 3)
-          colors: ColorRGBA[] or float32[] (stride 4, RGBA 0-1)
-        """
-        if not self._enable_mesh:
-            return
-
-        try:
-            now = time.time()
-            if now - self._last_mesh_send_time < self._mesh_send_interval_s:
-                return
-
-            # nvblox_msgs/Mesh field name varies: 'block_size' or 'block_size_m'
-            if hasattr(msg, 'block_size') and msg.block_size > 0:
-                block_size = msg.block_size
-            elif hasattr(msg, 'block_size_m') and msg.block_size_m > 0:
-                block_size = msg.block_size_m
-            else:
-                block_size = 0.2
-            self._mesh_block_size = block_size
-
-            # One-time diagnostic
-            if not hasattr(self, '_mesh_structure_logged'):
-                self._mesh_structure_logged = True
-                n_blocks = len(msg.blocks) if hasattr(msg, 'blocks') else 0
-                n_indices = len(msg.block_indices) if hasattr(msg, 'block_indices') else 0
-                self.get_logger().info(
-                    f"Mesh msg structure: block_size={block_size}, "
-                    f"blocks={n_blocks}, block_indices={n_indices}, "
-                    f"clear={getattr(msg, 'clear', '?')}, "
-                    f"header.frame_id={msg.header.frame_id if hasattr(msg, 'header') else '?'}"
-                )
-
-            # If clear flag is set, wipe the cache (full map rebuild)
-            if getattr(msg, 'clear', False):
-                self._mesh_block_cache.clear()
-
-            # Update cache with blocks from this message
-            blocks_updated = 0
-            for i, ros_block in enumerate(msg.blocks):
-                # Get block index from the parallel block_indices list
-                if i >= len(msg.block_indices):
-                    break
-                idx = msg.block_indices[i]
-                key = (idx.x, idx.y, idx.z)
-
-                parsed = self._parse_mesh_block(ros_block)
-                if parsed is not None:
-                    # Non-empty block: add/update in cache
-                    self._mesh_block_cache[key] = parsed
-                    blocks_updated += 1
-                # Empty block in a clear message means "this block exists but
-                # has no mesh yet" -- keep existing cache entry if present,
-                # otherwise ignore.
-
-            # Log first time we accumulate data
-            if blocks_updated > 0 and not hasattr(self, '_mesh_accum_logged'):
-                self._mesh_accum_logged = True
-                self.get_logger().info(
-                    f"Mesh accumulation: {blocks_updated} blocks updated, "
-                    f"{len(self._mesh_block_cache)} total cached blocks"
-                )
-
-            # Flatten the accumulated cache into a single mesh
-            if not self._mesh_block_cache:
-                self._send_empty_mesh_heartbeat(mode="triangle", timestamp=now)
-                return
-
-            all_vertices = []
-            all_indices = []
-            all_colors = []
-            vertex_offset = 0
-
-            for block_data in self._mesh_block_cache.values():
-                bv = block_data["vertices"]
-                bt = block_data["triangles"]
-                bc = block_data["colors"]
-
-                for idx in bt:
-                    all_indices.append(idx + vertex_offset)
-
-                all_vertices.extend(bv)
-                all_colors.extend(bc)
-                vertex_offset += len(bv)
-
-            if not all_vertices or not all_indices:
-                self._send_empty_mesh_heartbeat(mode="triangle", timestamp=now)
-                return
-
-            # Subsample if too large (cap at ~20k vertices)
-            max_vertices = 20000
-            if len(all_vertices) > max_vertices:
-                ratio = max_vertices / float(len(all_vertices))
-                new_indices = []
-                for ti in range(0, len(all_indices) - 2, 3):
-                    if (ti // 3) % max(1, int(1.0 / ratio)) == 0:
-                        new_indices.extend(all_indices[ti:ti + 3])
-                all_indices = new_indices
-
-            camera_pose = self._get_camera_pose()
-
-            mesh_data = {
-                "mode": "triangle",
-                "vertices": all_vertices,
-                "indices": all_indices,
-                "colors": all_colors,
-                "total_vertices": len(all_vertices),
-                "total_triangles": len(all_indices) // 3,
-                "block_size": block_size,
-                "blocks_processed": len(self._mesh_block_cache),
-                "timestamp": now,
-                "frame_id": "ros_optical",
-                "clear": False,
-            }
-
-            if camera_pose:
-                mesh_data["drone_position"] = camera_pose["position"]
-                mesh_data["drone_attitude"] = camera_pose["attitude"]
-
-            self._mesh_recv_count += 1
-            self._triangle_recv_count += 1
-            self._send_mesh_to_edge_core(mesh_data)
-
-        except Exception as e:
-            self.get_logger().error(f"Mesh processing error: {e}", exc_info=True)
-    
     def _handle_voxel_marker(self, msg: 'Marker') -> None:
-        """
-        Handle per-voxel colored data from nvblox color_layer_marker topic.
-
-        This is a fallback path: only used when triangle mesh from
-        /nvblox_node/mesh is not producing data (e.g. nvblox_msgs unavailable).
-        """
+        """Handle per-voxel colored data from nvblox color_layer_marker topic."""
         if not self._enable_mesh:
-            return
-        # Skip voxel mode if triangle mesh is actively producing data
-        if self._triangle_recv_count > 0 and not self._use_voxel_marker:
             return
         try:
             now = time.time()
@@ -1685,10 +1498,8 @@ class ROSHTTPBridge(Node):
             if n_pts == 0:
                 self._voxel_empty_count += 1
                 if self._voxel_empty_count == 20:
-                    self._use_voxel_marker = False
                     self.get_logger().warning(
-                        "color_layer_marker has been empty for 20 consecutive messages -- "
-                        "falling back to /nvblox_node/mesh (triangle mode)"
+                        "color_layer_marker has been empty for 20 consecutive messages"
                     )
                 self._send_empty_mesh_heartbeat(mode="voxel", timestamp=now)
                 # Return AFTER tracking, but before rate limit check
@@ -1773,40 +1584,69 @@ class ROSHTTPBridge(Node):
         }
     
     def _send_mesh_to_edge_core(self, mesh_data: dict) -> None:
-        """Send mesh data to edge_core via HTTP."""
+        """Queue mesh data for background send to edge_core (non-blocking).
+
+        Serializes JSON on the caller thread (ROS callback) and hands off
+        the bytes to the background mesh sender. If the sender is still
+        busy with a previous payload, the old one is replaced — only the
+        latest mesh matters.
+        """
         if not self._enable_mesh:
             return
-        
+
         try:
-            data = json.dumps(mesh_data).encode("utf-8")
-            if self._http_post("/api/task/2/slam/mesh/update", data, timeout=2.0):
-                self._mesh_send_count += 1
-                self._last_mesh_send_time = time.time()
-                if self._mesh_send_count % 10 == 1:
-                    mode = mesh_data.get('mode', 'block')
-                    if mode == 'triangle':
-                        count = mesh_data.get('total_vertices', 0)
-                        tri_count = mesh_data.get('total_triangles', 0)
-                        self.get_logger().info(
-                            f"Mesh sent: {count} vertices, {tri_count} triangles "
-                            f"(mode=triangle, blocks={mesh_data.get('blocks_processed', 0)})"
-                        )
-                    else:
-                        count = mesh_data.get('total_voxels', mesh_data.get('total_blocks', 0))
+            if MSGPACK_AVAILABLE:
+                data = msgpack.packb(mesh_data, use_bin_type=True)
+                ctype = "application/msgpack"
+            else:
+                data = json.dumps(mesh_data).encode("utf-8")
+                ctype = "application/json"
+        except Exception as e:
+            self._send_errors += 1
+            self.get_logger().error(f"Mesh serialize error: {e}")
+            return
+
+        with self._mesh_pending_lock:
+            self._mesh_pending_data = data
+            self._mesh_pending_ctype = ctype
+            self._mesh_pending_meta = mesh_data.get('mode', 'block'), mesh_data.get('total_voxels', mesh_data.get('total_blocks', 0))
+        self._mesh_send_event.set()
+
+    def _mesh_sender_loop(self) -> None:
+        """Background thread that sends queued mesh data via HTTP."""
+        while not self._mesh_sender_stop.is_set():
+            # Wait for data or stop signal
+            self._mesh_send_event.wait(timeout=1.0)
+            if self._mesh_sender_stop.is_set():
+                break
+            self._mesh_send_event.clear()
+
+            # Grab the latest payload (atomic swap)
+            with self._mesh_pending_lock:
+                data = self._mesh_pending_data
+                ctype = getattr(self, '_mesh_pending_ctype', 'application/json')
+                meta = getattr(self, '_mesh_pending_meta', ('block', 0))
+                self._mesh_pending_data = None
+
+            if data is None:
+                continue
+
+            try:
+                if self._http_post("/api/task/2/slam/mesh/update", data, timeout=2.0, content_type=ctype):
+                    self._mesh_send_count += 1
+                    self._last_mesh_send_time = time.time()
+                    if self._mesh_send_count % 10 == 1:
+                        mode, count = meta
                         unit = "voxels" if mode == 'voxel' else "blocks"
                         self.get_logger().info(
                             f"Mesh sent: {count} {unit} (mode={mode})"
                         )
-            else:
+                else:
+                    self._send_errors += 1
+            except Exception as e:
                 self._send_errors += 1
-                    
-        except URLError as e:
-            self._send_errors += 1
-            if self._send_errors % 50 == 1:
-                self.get_logger().warning(f"Failed to send mesh: {e}")
-        except Exception as e:
-            self._send_errors += 1
-            self.get_logger().error(f"Mesh send error: {e}")
+                if self._send_errors % 50 == 1:
+                    self.get_logger().warning(f"Failed to send mesh: {e}")
 
     def _send_empty_mesh_heartbeat(self, mode: str, timestamp: float) -> None:
         """Send sparse heartbeat updates so SLAM status does not remain stuck at 'no data'."""
@@ -1822,10 +1662,7 @@ class ROSHTTPBridge(Node):
             "frame_id": "ros_optical",
             "clear": False,
         }
-        if mode == "triangle":
-            mesh_data.update({"vertices": [], "indices": [], "colors": None,
-                              "total_vertices": 0, "total_triangles": 0})
-        elif mode == "voxel":
+        if mode == "voxel":
             mesh_data.update({"voxels": [], "voxel_size": 0.0, "total_voxels": 0, "sent_voxels": 0})
         else:
             mesh_data.update({"blocks": [], "block_size": 0.0, "total_blocks": 0})
@@ -1841,6 +1678,11 @@ class ROSHTTPBridge(Node):
     def destroy_node(self) -> bool:
         """Destroy ROS node and cleanup transport resources."""
         self._stop_high_rate_publisher()
+        # Stop background mesh sender
+        self._mesh_sender_stop.set()
+        self._mesh_send_event.set()  # wake up the thread so it exits
+        if self._mesh_sender_thread.is_alive():
+            self._mesh_sender_thread.join(timeout=3.0)
         with self._http_lock:
             try:
                 self._http_conn.close()
@@ -1936,9 +1778,9 @@ def main():
                         help="Disable object detection forwarding")
     parser.add_argument(
         "--high-rate-transport",
-        default="both",
+        default="zmq",
         choices=["zmq", "http", "both"],
-        help="Transport for high-rate VIO/cmd_vel streams",
+        help="Transport for high-rate VIO/cmd_vel/detection streams (zmq preferred, HTTP fallback auto-activates)",
     )
     parser.add_argument(
         "--high-rate-zmq-endpoint",

@@ -35,10 +35,18 @@ from starlette.responses import JSONResponse
 
 from .state import StateManager
 
+# msgpack for efficient mesh deserialization (optional)
+try:
+    import msgpack
+    MSGPACK_AVAILABLE = True
+except ImportError:
+    MSGPACK_AVAILABLE = False
+
 try:
     from .ipc import (
         DEFAULT_ROS_HIGH_RATE_ENDPOINT,
         HIGH_RATE_MSG_TYPE_CMD_VEL,
+        HIGH_RATE_MSG_TYPE_DETECTIONS,
         HIGH_RATE_MSG_TYPE_VIO,
         IPCMessage,
         ZMQSubscriber,
@@ -51,6 +59,7 @@ except Exception as e:
     DEFAULT_ROS_HIGH_RATE_ENDPOINT = "tcp://127.0.0.1:5557"
     HIGH_RATE_MSG_TYPE_VIO = "ROS_VIO_UPDATE"
     HIGH_RATE_MSG_TYPE_CMD_VEL = "ROS_CMD_VEL"
+    HIGH_RATE_MSG_TYPE_DETECTIONS = "ROS_DETECTIONS"
     IPCMessage = Any  # type: ignore
     ZMQSubscriber = Any  # type: ignore
 
@@ -552,6 +561,51 @@ def create_app(state_manager: StateManager) -> FastAPI:
 
             return accepted
 
+    def _apply_detections_update(detections: list) -> None:
+        """Apply detection update to app state (shared by HTTP and ZMQ paths)."""
+        import time as _time
+        import math as _math
+
+        app.state.detected_objects = detections
+        app.state.detection_last_update = _time.time()
+        app.state.detection_enabled = True
+
+        history = app.state.detection_history
+        for det in detections:
+            x_val = det.get("x")
+            y_val = det.get("y")
+            z_val = det.get("z")
+            if x_val is None or y_val is None or z_val is None:
+                continue
+            try:
+                if not (isinstance(x_val, (int, float)) and isinstance(y_val, (int, float)) and isinstance(z_val, (int, float))):
+                    continue
+                if not (_math.isfinite(x_val) and _math.isfinite(y_val) and _math.isfinite(z_val)):
+                    continue
+            except (TypeError, ValueError):
+                continue
+
+            is_duplicate = False
+            for existing in history:
+                dx = x_val - existing["x"]
+                dy = y_val - existing["y"]
+                dz = z_val - existing["z"]
+                dist = (dx*dx + dy*dy + dz*dz) ** 0.5
+                if dist < 0.5 and det.get("label") == existing.get("label"):
+                    existing["seen_count"] = existing.get("seen_count", 1) + 1
+                    if det.get("confidence", 0) > existing.get("confidence", 0):
+                        existing.update(det)
+                        existing["seen_count"] = existing.get("seen_count", 1)
+                    is_duplicate = True
+                    break
+
+            if not is_duplicate:
+                det["seen_count"] = 1
+                det["first_seen"] = _time.time()
+                history.append(det)
+                if len(history) > app.state.detection_history_max:
+                    history.pop(0)
+
     def _handle_high_rate_ipc_message(message: IPCMessage) -> None:
         """Handle a single high-rate IPC message from ros_http_bridge."""
         if message.msg_type == HIGH_RATE_MSG_TYPE_VIO:
@@ -577,6 +631,14 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 _high_rate_warn("cmd-nav", f"Ignoring high-rate cmd_vel: {e}")
             except Exception as e:
                 _high_rate_warn("cmd-send", f"High-rate cmd_vel dispatch failed: {e}")
+            return
+
+        if message.msg_type == HIGH_RATE_MSG_TYPE_DETECTIONS:
+            try:
+                detections = message.data.get("detections", [])
+                _apply_detections_update(detections)
+            except Exception as e:
+                _high_rate_warn("det-zmq", f"High-rate detection update failed: {e}")
 
     def _high_rate_zmq_listener_loop(stop_event: threading.Event) -> None:
         """Background loop receiving high-rate telemetry from ros_http_bridge over ZMQ."""
@@ -3123,62 +3185,15 @@ wait
     async def update_detections(request: Request):
         """
         Receive object detections from ROS-HTTP bridge.
-        
+
         Called by ros_http_bridge at ~5Hz with current frame detections.
         Stores current detections and adds new unique targets to history.
+        Also receivable via ZMQ IPC (preferred low-latency path).
         """
-        import time as _time
         body = await request.json()
         detections = body.get("detections", [])
-        
-        request.app.state.detected_objects = detections
-        request.app.state.detection_last_update = _time.time()
-        request.app.state.detection_enabled = True
-        
-        # Add to persistent history (deduplicate by proximity)
+        _apply_detections_update(detections)
         history = request.app.state.detection_history
-        for det in detections:
-            x_val = det.get("x")
-            y_val = det.get("y")
-            z_val = det.get("z")
-            if x_val is None or y_val is None or z_val is None:
-                continue
-            
-            # Validate finite coordinates
-            try:
-                if not (isinstance(x_val, (int, float)) and isinstance(y_val, (int, float)) and isinstance(z_val, (int, float))):
-                    continue
-                import math as _math
-                if not (_math.isfinite(x_val) and _math.isfinite(y_val) and _math.isfinite(z_val)):
-                    continue
-            except (TypeError, ValueError):
-                continue
-            
-            # Check if this detection is near an existing history entry (within 0.5m)
-            is_duplicate = False
-            for existing in history:
-                dx = x_val - existing["x"]
-                dy = y_val - existing["y"]
-                dz = z_val - existing["z"]
-                dist = (dx*dx + dy*dy + dz*dz) ** 0.5
-                if dist < 0.5 and det.get("label") == existing.get("label"):
-                    # Always increment seen_count for matched duplicates
-                    existing["seen_count"] = existing.get("seen_count", 1) + 1
-                    # Update position/confidence if this detection is higher confidence
-                    if det.get("confidence", 0) > existing.get("confidence", 0):
-                        existing.update(det)
-                        existing["seen_count"] = existing.get("seen_count", 1)  # preserve after update
-                    is_duplicate = True
-                    break
-            
-            if not is_duplicate:
-                det["seen_count"] = 1
-                det["first_seen"] = _time.time()
-                history.append(det)
-                # Trim to max size
-                if len(history) > request.app.state.detection_history_max:
-                    history.pop(0)
-        
         return {"accepted": len(detections), "history_size": len(history)}
 
     @app.get("/api/detections", tags=["Detections"])
@@ -3524,26 +3539,25 @@ wait
             return JSONResponse({"error": "Payload too large"}, status_code=413)
 
         try:
-            mesh_data = await request.json()
+            content_type = request.headers.get("content-type", "application/json")
+            if "msgpack" in content_type and MSGPACK_AVAILABLE:
+                raw = await request.body()
+                mesh_data = msgpack.unpackb(raw, raw=False)
+            else:
+                mesh_data = await request.json()
         except Exception:
-            return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+            return JSONResponse({"error": "Invalid payload"}, status_code=400)
 
         # Validate required field: mode
         mode = mesh_data.get("mode")
-        if mode not in ("block", "voxel", "triangle"):
-            return JSONResponse({"error": "mode must be 'block', 'voxel', or 'triangle'"}, status_code=400)
+        if mode not in ("block", "voxel"):
+            return JSONResponse({"error": "mode must be 'block' or 'voxel'"}, status_code=400)
 
         # Validate required list for the chosen mode
         if mode == "block" and not isinstance(mesh_data.get("blocks"), list):
             return JSONResponse({"error": "blocks must be a list"}, status_code=400)
         if mode == "voxel" and not isinstance(mesh_data.get("voxels"), list):
             return JSONResponse({"error": "voxels must be a list"}, status_code=400)
-        if mode == "triangle":
-            if not isinstance(mesh_data.get("vertices"), list):
-                return JSONResponse({"error": "vertices must be a list"}, status_code=400)
-            if not isinstance(mesh_data.get("indices"), list):
-                return JSONResponse({"error": "indices must be a list"}, status_code=400)
-
         # Validate optional numeric fields
         for field in ("block_size", "voxel_size"):
             if field in mesh_data and not isinstance(mesh_data[field], (int, float)):
@@ -3555,19 +3569,14 @@ wait
                 request.app.state.slam_mesh_data = {}
             
             # Compute item count based on mode
-            if mode == "triangle":
-                item_count = mesh_data.get("total_vertices", len(mesh_data.get("vertices", [])))
-                total_items = mesh_data.get("total_triangles", 0)
-            else:
-                item_count = len(mesh_data.get("blocks", mesh_data.get("voxels", [])))
-                total_items = mesh_data.get("total_blocks", mesh_data.get("total_voxels", 0))
+            item_count = len(mesh_data.get("blocks", mesh_data.get("voxels", [])))
+            total_items = mesh_data.get("total_blocks", mesh_data.get("total_voxels", 0))
 
             request.app.state.slam_mesh_data = {
                 "mesh": mesh_data,
                 "received_at": datetime.now(timezone.utc).isoformat(),
                 "block_count": item_count,
                 "total_blocks": total_items,
-                "total_triangles": mesh_data.get("total_triangles", 0),
                 "mode": mode,
             }
             
@@ -3601,7 +3610,7 @@ wait
             format: 'full' for complete mesh data, 'summary' for metadata only
         
         Returns:
-            - mesh: The mesh data with vertices, triangles, and optional colors
+            - mesh: The mesh data with voxels/blocks and optional colors
             - drone_position: Current VIO position
             - drone_attitude: Current VIO orientation (roll, pitch, yaw)
             - timestamp: ISO format timestamp
@@ -3731,8 +3740,7 @@ wait
                 "running": True,
                 "source": "ros_http_bridge",
                 "block_count": stored.get("block_count", 0),
-                "total_vertices": stored.get("total_vertices", 0),
-                "total_triangles": stored.get("total_triangles", 0),
+                "total_voxels": stored.get("total_blocks", 0),
                 "last_update": stored.get("received_at"),
             }
         
