@@ -615,6 +615,38 @@ else
         echo "  NVBLOX_BASE_A=$NVBLOX_BASE_A"
         echo "  NVBLOX_BASE_B=$NVBLOX_BASE_B"
 fi
+
+# ZED SDK 5.2 publishes RGB on /zed/zed_node/rgb/color/rect/*, while
+# older nvblox launch files still remap to /zed/zed_node/rgb/image_rect_color
+# and /zed/zed_node/rgb/camera_info. Patch remaps in-place so color
+# integration and downstream consumers receive RGB frames.
+python3 << 'PYEOF_RGB_REMAP'
+from pathlib import Path
+
+launch_path = Path(
+    "/workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/"
+    "nvblox_examples_bringup/launch/zed_nvblox_split.launch.py"
+)
+
+if not launch_path.exists():
+    print("WARNING: nvblox split launch not found: " + str(launch_path))
+else:
+    text = launch_path.read_text()
+    text_new = text.replace(
+        "'/zed/zed_node/rgb/image_rect_color'",
+        "'/zed/zed_node/rgb/color/rect/image'",
+    )
+    text_new = text_new.replace(
+        "'/zed/zed_node/rgb/camera_info'",
+        "'/zed/zed_node/rgb/color/rect/camera_info'",
+    )
+    if text_new != text:
+        launch_path.write_text(text_new)
+        print("Patched nvblox RGB remaps to ZED SDK 5.2 topics")
+    else:
+        print("nvblox RGB remaps already set")
+PYEOF_RGB_REMAP
+
 # Preflight check: ensure nav2 dependencies are available
 NAV2_PREFLIGHT_OK=true
 if ! dpkg -l ros-humble-nav2-bringup 2>/dev/null | grep -q '^ii'; then

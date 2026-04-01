@@ -457,7 +457,7 @@ class ROSHTTPBridge(Node):
 
         # Subscribe to camera image for both HSV verification and circle detection
         if IMAGE_AVAILABLE:
-            image_topic = "/zed/zed_node/rgb/image_rect_color"
+            image_topic = "/zed/zed_node/rgb/color/rect/image"
             image_qos = QoSProfile(
                 reliability=ReliabilityPolicy.BEST_EFFORT,
                 history=HistoryPolicy.KEEP_LAST,
@@ -471,7 +471,7 @@ class ROSHTTPBridge(Node):
             )
             self.get_logger().info(f"Subscribed to camera image: {image_topic}")
 
-            camera_info_topic = "/zed/zed_node/rgb/camera_info"
+            camera_info_topic = "/zed/zed_node/rgb/color/rect/camera_info"
             self.create_subscription(
                 CameraInfo,
                 camera_info_topic,

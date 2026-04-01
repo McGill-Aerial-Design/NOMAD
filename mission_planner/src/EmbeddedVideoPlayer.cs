@@ -250,7 +250,7 @@ namespace NOMAD.MissionPlanner
             Controls.Add(ctrlPanel);
             
             // Initialize with default topic
-            _topics.Add(("/zed/zed_node/rgb/image_rect_color", "RGB Color"));
+            _topics.Add(("/zed/zed_node/rgb/color/rect/image", "RGB Color"));
             PopulateTopics();
         }
 
@@ -329,16 +329,18 @@ namespace NOMAD.MissionPlanner
                 }
                 
                 if (_topics.Count == 0)
-                    _topics.Add(("/zed/zed_node/rgb/image_rect_color", "RGB Color"));
+                    _topics.Add(("/zed/zed_node/rgb/color/rect/image", "RGB Color"));
                 
                 PopulateTopics();
                 _lblStatus.Text = $"Found {_topics.Count} topics";
                 _lblStatus.ForeColor = Color.LimeGreen;
                 
-                // Auto-select rgb/image_rect_color topic if requested
+                // Auto-select RGB color topic if requested (prefer SDK 5.2 path)
                 if (autoSelectRgb && _topics.Count > 0)
                 {
                     int rgbIndex = _topics.FindIndex(t => 
+                        t.Name.IndexOf("rgb/color/rect/image", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        t.Name.IndexOf("rgb_color_rect_image", StringComparison.OrdinalIgnoreCase) >= 0 ||
                         t.Name.IndexOf("rgb/image_rect_color", StringComparison.OrdinalIgnoreCase) >= 0 ||
                         t.Name.IndexOf("rgb_image_rect_color", StringComparison.OrdinalIgnoreCase) >= 0);
                     

@@ -37,7 +37,7 @@ logger = logging.getLogger("edge_core.video_stream_manager")
 DEFAULT_CONTAINER_NAME = "nomad_isaac_ros"
 DEFAULT_RELAY_HTTP_PORT = 9200
 DEFAULT_RTSP_URL = "rtsp://172.17.0.1:8554/primary"
-DEFAULT_TOPIC = "/zed/zed_node/rgb/image_rect_color"
+DEFAULT_TOPIC = "/zed/zed_node/rgb/color/rect/image"
 
 # Stream settings — tuned for Orin Nano (no hardware encoder)
 DEFAULT_WIDTH = 848
@@ -84,7 +84,7 @@ def trim_topic_name(topic: str) -> str:
     - /camera/ -> cam:
     
     Examples:
-        /zed/zed_node/rgb/image_rect_color -> zed: rgb/image_rect_color
+        /zed/zed_node/rgb/color/rect/image -> zed: rgb/color/rect/image
         /zed/zed_node/left/image_rect_color -> zed: left/image_rect_color
         /zed/zed_node/depth/depth_registered -> zed: depth/depth_registered
     """
