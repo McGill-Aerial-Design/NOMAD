@@ -178,6 +178,7 @@ def generate_launch_description():
             launch_arguments={
                 'camera': 'zed2',
                 'enable_od': 'false',  # Disable OD to prevent parameter duplication crash
+                'run_rviz': 'false',   # Headless Jetson — no display for rviz
             }.items(),
         ),
         optical_frame_alias,
