@@ -119,7 +119,8 @@ services:
         export LD_LIBRARY_PATH=/usr/local/zed/lib:$$LD_LIBRARY_PATH;
         echo '[init] Isaac ROS container ready.';
 
-        sed -i 's/pub_downscale_factor: 2\\.0/pub_downscale_factor: 1.0/' /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null;
+        # NOTE: Do NOT patch pub_downscale_factor to 1.0.
+        # 360p (downscale 2.0) prevents cudaErrorIllegalAddress on 8GB Orin Nano.
 
         echo '[init] Launching nvblox via NOMAD wrapper...';
         ros2 launch /workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py \

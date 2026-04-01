@@ -629,9 +629,10 @@ else
         echo "  NVBLOX_BASE_B=$NVBLOX_BASE_B"
 fi
 
-# Patch ZED publish resolution
-sed -i 's/pub_downscale_factor: 2\\.0/pub_downscale_factor: 1.0/' \\
-    /workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/sensors/zed_common.yaml 2>/dev/null
+# NOTE: Do NOT patch pub_downscale_factor to 1.0 (720p).
+# ZED 360p (default downscale 2.0) uses ~75% less GPU memory than 720p.
+# On 8GB Jetson Orin Nano, 720p depth causes cudaErrorIllegalAddress
+# when nvblox allocates GPU memory for depth integration.
 
 # Launch nvblox with NOMAD custom launch
 NOMAD_LAUNCH=/workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py

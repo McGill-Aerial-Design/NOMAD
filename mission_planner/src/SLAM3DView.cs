@@ -213,6 +213,7 @@ namespace NOMAD.MissionPlanner
         private Label _lblStatus, _lblStats;
         private Label _lblPerceptionStatus;
         private CheckBox _chkShowGrid, _chkShowTrajectory, _chkAutoUpdate;
+        private ComboBox _combDroneType;
         private NumericUpDown _numLength, _numWidth, _numHeight, _numHeadingOffset, _numFov;
         private int _meshUpdateCount;
         private int _totalBlocks;
@@ -374,6 +375,27 @@ namespace NOMAD.MissionPlanner
             _numHeight.ValueChanged += (s, e) => { _config.DroneHeightCm = (float)_numHeight.Value; _config.Save(); };
             _controlPanel.Controls.Add(_numHeight);
             x += 55;
+
+            _controlPanel.Controls.Add(CreateLabel("Type:", x, y + 3));
+            x += 35;
+            _combDroneType = new ComboBox
+            {
+                Location = new Point(x, y),
+                Size = new Size(85, 20),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                ForeColor = Color.White,
+                BackColor = Color.FromArgb(60, 60, 60),
+            };
+            _combDroneType.Items.AddRange(new[] { "Tricopter", "Quadcopter" });
+            _combDroneType.SelectedItem = _config.DroneFrameType;
+            _combDroneType.SelectedIndexChanged += (s, e) =>
+            {
+                _config.DroneFrameType = _combDroneType.SelectedItem?.ToString() ?? "Tricopter";
+                _config.Save();
+                _glControl?.Invalidate();
+            };
+            _controlPanel.Controls.Add(_combDroneType);
+            x += 90;
 
             _controlPanel.Controls.Add(CreateLabel("Hdg Offset:", x, y + 3));
             x += 68;
@@ -1006,6 +1028,51 @@ namespace NOMAD.MissionPlanner
             GL.Rotate(bodyPitchDeg, 1f, 0f, 0f);
             GL.Rotate(bodyRollDeg, 0f, 0f, 1f);
 
+            // Draw drone body based on selected frame type
+            if (_config.DroneFrameType == "Quadcopter")
+            {
+                DrawQuadropterBody(lenM, widM, hgtM);
+            }
+            else
+            {
+                DrawTricopterBody(lenM, widM, hgtM);
+            }
+
+            // --- Camera servo mount ---
+            float camFwd = _config.CameraForwardOffsetCm / 100f;
+            float camDown = _config.CameraDownOffsetCm / 100f;
+
+            GL.PushMatrix();
+            GL.Translate(0, -camDown, camFwd);
+            // Servo tilts camera: rotation around X (lateral axis in body frame)
+            // servo=90 is level, >90 tilts up
+            GL.Rotate(90f - servoDeg, 1f, 0f, 0f);
+
+            // Camera box (yellow)
+            GL.Color3(0.9f, 0.85f, 0.2f);
+            float camW = 0.04f, camH = 0.025f, camD = 0.03f;
+            DrawWireBox(camW * 0.3f, 0, 0, camW, camH, camD);
+
+            // Camera look direction (green)
+            GL.Color3(0.2f, 1f, 0.2f);
+            GL.Begin(PrimitiveType.Lines);
+            GL.Vertex3(0, 0, 0);
+            GL.Vertex3(0, 0, 0.15f);
+            GL.End();
+
+            GL.PopMatrix(); // camera mount
+
+            // --- Avoidance envelope ---
+            float envPad = 0.1f;
+            GL.Color4(0f, 0.86f, 0.86f, 0.2f);
+            DrawWireBox(0, 0, 0, lenM + envPad * 2, hgtM + envPad * 2, widM + envPad * 2);
+
+            GL.Enable(EnableCap.Lighting);
+            GL.PopMatrix(); // drone body
+        }
+
+        private void DrawTricopterBody(float lenM, float widM, float hgtM)
+        {
             // --- Tricopter body: 2 front motors, 1 rear motor ---
             GL.Color3(0f, 0.86f, 0.86f); // cyan
 
@@ -1044,38 +1111,60 @@ namespace NOMAD.MissionPlanner
             GL.Vertex3(0, 0, lenM * 0.6f);
             GL.End();
             GL.LineWidth(1f);
+        }
 
-            // --- Camera servo mount ---
-            float camFwd = _config.CameraForwardOffsetCm / 100f;
-            float camDown = _config.CameraDownOffsetCm / 100f;
+        private void DrawQuadropterBody(float lenM, float widM, float hgtM)
+        {
+            // --- Quadcopter body: 4 motors in X configuration ---
+            GL.Color3(1f, 0.65f, 0f); // orange
 
-            GL.PushMatrix();
-            GL.Translate(0, -camDown, camFwd);
-            // Servo tilts camera: rotation around X (lateral axis in body frame)
-            // servo=90 is level, >90 tilts up
-            GL.Rotate(90f - servoDeg, 1f, 0f, 0f);
+            // Central body wireframe
+            DrawWireBox(0, 0, 0, widM * 0.3f, hgtM, lenM * 0.3f);
 
-            // Camera box (yellow)
-            GL.Color3(0.9f, 0.85f, 0.2f);
-            float camW = 0.04f, camH = 0.025f, camD = 0.03f;
-            DrawWireBox(camW * 0.3f, 0, 0, camW, camH, camD);
-
-            // Camera look direction (green)
-            GL.Color3(0.2f, 1f, 0.2f);
+            // Front-left arm
+            float armAngle = 45f * (float)Math.PI / 180f;
+            float frontLeftX = -widM * 0.4f * (float)Math.Cos(armAngle);
+            float frontLeftZ = lenM * 0.35f * (float)Math.Sin(armAngle);
             GL.Begin(PrimitiveType.Lines);
-            GL.Vertex3(0, 0, 0);
-            GL.Vertex3(0, 0, 0.15f);
+            GL.Vertex3(0, 0, 0); GL.Vertex3(frontLeftX, 0, frontLeftZ);
             GL.End();
 
-            GL.PopMatrix(); // camera mount
+            // Front-right arm
+            float frontRightX = widM * 0.4f * (float)Math.Cos(armAngle);
+            float frontRightZ = lenM * 0.35f * (float)Math.Sin(armAngle);
+            GL.Begin(PrimitiveType.Lines);
+            GL.Vertex3(0, 0, 0); GL.Vertex3(frontRightX, 0, frontRightZ);
+            GL.End();
 
-            // --- Avoidance envelope ---
-            float envPad = 0.1f;
-            GL.Color4(0f, 0.86f, 0.86f, 0.2f);
-            DrawWireBox(0, 0, 0, lenM + envPad * 2, hgtM + envPad * 2, widM + envPad * 2);
+            // Rear-left arm
+            float rearLeftX = -widM * 0.4f * (float)Math.Cos(armAngle);
+            float rearLeftZ = -lenM * 0.35f * (float)Math.Sin(armAngle);
+            GL.Begin(PrimitiveType.Lines);
+            GL.Vertex3(0, 0, 0); GL.Vertex3(rearLeftX, 0, rearLeftZ);
+            GL.End();
 
-            GL.Enable(EnableCap.Lighting);
-            GL.PopMatrix(); // drone body
+            // Rear-right arm
+            float rearRightX = widM * 0.4f * (float)Math.Cos(armAngle);
+            float rearRightZ = -lenM * 0.35f * (float)Math.Sin(armAngle);
+            GL.Begin(PrimitiveType.Lines);
+            GL.Vertex3(0, 0, 0); GL.Vertex3(rearRightX, 0, rearRightZ);
+            GL.End();
+
+            // Motor discs (4 motors)
+            float motorR = Math.Min(lenM, widM) * 0.15f;
+            DrawMotorDisc(frontLeftX, 0, frontLeftZ, motorR);
+            DrawMotorDisc(frontRightX, 0, frontRightZ, motorR);
+            DrawMotorDisc(rearLeftX, 0, rearLeftZ, motorR);
+            DrawMotorDisc(rearRightX, 0, rearRightZ, motorR);
+
+            // Forward direction indicator (red) - points along +Z (forward in body frame)
+            GL.Color3(1f, 0.3f, 0.3f);
+            GL.LineWidth(2f);
+            GL.Begin(PrimitiveType.Lines);
+            GL.Vertex3(0, 0, 0);
+            GL.Vertex3(0, 0, lenM * 0.6f);
+            GL.End();
+            GL.LineWidth(1f);
         }
 
         private static void DrawWireBox(float cx, float cy, float cz, float sx, float sy, float sz)

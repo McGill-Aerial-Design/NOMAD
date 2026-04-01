@@ -368,6 +368,9 @@ namespace NOMAD.MissionPlanner
         /// <summary>Camera downward offset from drone center in cm.</summary>
         public float CameraDownOffsetCm { get; set; } = 5.0f;
 
+        /// <summary>Drone frame type for 3D visualization: "Tricopter" or "Quadcopter".</summary>
+        public string DroneFrameType { get; set; } = "Tricopter";
+
         /// <summary>Heading offset in degrees to compensate for magnetometer calibration.</summary>
         public float SlamHeadingOffsetDeg { get; set; } = 0.0f;
 
