@@ -84,8 +84,26 @@ namespace NOMAD.MissionPlanner
     {
         [JsonProperty("index")]
         public List<int> Index { get; set; }
+        [JsonProperty("i")]
+        private List<int> CompactIndex
+        {
+            set
+            {
+                if ((Index == null || Index.Count == 0) && value != null)
+                    Index = value;
+            }
+        }
         [JsonProperty("color")]
         public List<int> Color { get; set; }
+        [JsonProperty("c")]
+        private List<int> CompactColor
+        {
+            set
+            {
+                if ((Color == null || Color.Count == 0) && value != null)
+                    Color = value;
+            }
+        }
     }
 
     public class DetectionMarker3D

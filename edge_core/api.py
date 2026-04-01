@@ -1188,7 +1188,7 @@ fi
 
 # Wait for topics then launch bridge
 sleep 2
-python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom &
+python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --mesh-topic /nvblox_node/color_layer_marker &
 echo $! > /tmp/ros_bridge.pid
 
 wait

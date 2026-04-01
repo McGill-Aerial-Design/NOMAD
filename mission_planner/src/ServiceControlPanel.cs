@@ -94,21 +94,24 @@ namespace NOMAD.MissionPlanner
         private void InitializeUI()
         {
             this.BackColor = Color.FromArgb(45, 45, 48);
-            this.Size = new Size(420, 550);
+            this.Dock = DockStyle.Fill;
+            this.Size = new Size(920, 650);
+            this.MinimumSize = new Size(860, 550);
             this.AutoScroll = true;
             
             int yOffset = 10;
             int leftCol = 15;
-            int rightCol = 280;
+            int rightCol = 790;
             
             // Title
             var lblTitle = new Label
             {
                 Text = "NOMAD Service Control",
                 Location = new Point(leftCol, yOffset),
-                Size = new Size(390, 25),
+                Size = new Size(880, 25),
                 Font = new Font("Segoe UI", 12, FontStyle.Bold),
-                ForeColor = Color.White
+                ForeColor = Color.White,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
             };
             this.Controls.Add(lblTitle);
             yOffset += 35;
@@ -145,7 +148,8 @@ namespace NOMAD.MissionPlanner
             {
                 BorderStyle = BorderStyle.Fixed3D,
                 Location = new Point(leftCol, yOffset),
-                Size = new Size(380, 2)
+                Size = new Size(870, 2),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
             };
             this.Controls.Add(separator);
             yOffset += 15;
@@ -175,9 +179,10 @@ namespace NOMAD.MissionPlanner
             _lblVioStatus = new Label
             {
                 Text = "Unknown",
-                Location = new Point(100, yOffset),
-                Size = new Size(150, 20),
-                ForeColor = Color.Yellow
+                Location = new Point(140, yOffset),
+                Size = new Size(620, 20),
+                ForeColor = Color.Yellow,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
             };
             this.Controls.Add(_lblVioStatus);
             
@@ -188,7 +193,8 @@ namespace NOMAD.MissionPlanner
                 Size = new Size(100, 25),
                 BackColor = Color.FromArgb(60, 60, 65),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
             };
             _btnVioReset.Click += async (s, e) => await ResetVioOriginAsync();
             this.Controls.Add(_btnVioReset);
@@ -207,9 +213,10 @@ namespace NOMAD.MissionPlanner
             _lblVioTrajectoryPoints = new Label
             {
                 Text = "0 points",
-                Location = new Point(100, yOffset),
-                Size = new Size(150, 20),
-                ForeColor = Color.White
+                Location = new Point(140, yOffset),
+                Size = new Size(620, 20),
+                ForeColor = Color.White,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
             };
             this.Controls.Add(_lblVioTrajectoryPoints);
             
@@ -220,7 +227,8 @@ namespace NOMAD.MissionPlanner
                 Size = new Size(100, 25),
                 BackColor = Color.FromArgb(60, 60, 65),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
             };
             _btnClearTrajectory.Click += async (s, e) => await ClearTrajectoryAsync();
             this.Controls.Add(_btnClearTrajectory);
@@ -231,9 +239,10 @@ namespace NOMAD.MissionPlanner
             {
                 Text = "Last update: Never",
                 Location = new Point(leftCol, yOffset),
-                Size = new Size(380, 20),
+                Size = new Size(870, 20),
                 ForeColor = Color.Gray,
-                Font = new Font("Segoe UI", 8)
+                Font = new Font("Segoe UI", 8),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
             };
             this.Controls.Add(_lblLastUpdate);
             yOffset += 25;
@@ -252,13 +261,14 @@ namespace NOMAD.MissionPlanner
             _txtLog = new TextBox
             {
                 Location = new Point(leftCol, yOffset),
-                Size = new Size(380, 100),
+                Size = new Size(870, 220),
                 Multiline = true,
                 ScrollBars = ScrollBars.Vertical,
                 ReadOnly = true,
                 BackColor = Color.FromArgb(30, 30, 30),
                 ForeColor = Color.LightGreen,
-                Font = new Font("Consolas", 8)
+                Font = new Font("Consolas", 8),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
             };
             this.Controls.Add(_txtLog);
         }
@@ -266,7 +276,7 @@ namespace NOMAD.MissionPlanner
         private void AddServiceRow(string serviceName, ref Label statusLabel, ref Button actionButton, ref int yOffset, string buttonText = "Restart")
         {
             int leftCol = 15;
-            int rightCol = 280;
+            int rightCol = 790;
             
             var lblName = new Label
             {
@@ -281,8 +291,9 @@ namespace NOMAD.MissionPlanner
             {
                 Text = "Checking...",
                 Location = new Point(140, yOffset + 3),
-                Size = new Size(120, 20),
-                ForeColor = Color.Yellow
+                Size = new Size(620, 20),
+                ForeColor = Color.Yellow,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
             };
             this.Controls.Add(statusLabel);
             
@@ -293,7 +304,8 @@ namespace NOMAD.MissionPlanner
                 Size = new Size(100, 25),
                 BackColor = Color.FromArgb(60, 60, 65),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
             };
             this.Controls.Add(actionButton);
             
@@ -305,6 +317,8 @@ namespace NOMAD.MissionPlanner
         private void AddIsaacRosRow(ref int yOffset)
         {
             int leftCol = 15;
+            int startCol = 715;
+            int stopCol = 790;
             
             var lblName = new Label
             {
@@ -319,19 +333,21 @@ namespace NOMAD.MissionPlanner
             {
                 Text = "Checking...",
                 Location = new Point(140, yOffset + 3),
-                Size = new Size(90, 20),
-                ForeColor = Color.Yellow
+                Size = new Size(560, 20),
+                ForeColor = Color.Yellow,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
             };
             this.Controls.Add(_lblIsaacRosStatus);
             
             _btnIsaacRosStart = new Button
             {
                 Text = "Start",
-                Location = new Point(235, yOffset),
+                Location = new Point(startCol, yOffset),
                 Size = new Size(70, 25),
                 BackColor = Color.FromArgb(0, 120, 60),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
             };
             _btnIsaacRosStart.Click += async (s, e) => await StartIsaacRosAsync();
             this.Controls.Add(_btnIsaacRosStart);
@@ -339,11 +355,12 @@ namespace NOMAD.MissionPlanner
             _btnIsaacRosStop = new Button
             {
                 Text = "Stop",
-                Location = new Point(310, yOffset),
+                Location = new Point(stopCol, yOffset),
                 Size = new Size(70, 25),
                 BackColor = Color.FromArgb(150, 50, 50),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
             };
             _btnIsaacRosStop.Click += async (s, e) => await StopIsaacRosAsync();
             this.Controls.Add(_btnIsaacRosStop);
@@ -354,6 +371,8 @@ namespace NOMAD.MissionPlanner
         private void AddNvbloxRow(ref int yOffset)
         {
             int leftCol = 15;
+            int launchCol = 715;
+            int stopCol = 790;
 
             var lblName = new Label
             {
@@ -368,19 +387,21 @@ namespace NOMAD.MissionPlanner
             {
                 Text = "Checking...",
                 Location = new Point(140, yOffset + 3),
-                Size = new Size(90, 20),
-                ForeColor = Color.Yellow
+                Size = new Size(560, 20),
+                ForeColor = Color.Yellow,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
             };
             this.Controls.Add(_lblNvbloxStatus);
 
             _btnNvbloxLaunch = new Button
             {
                 Text = "Launch",
-                Location = new Point(235, yOffset),
+                Location = new Point(launchCol, yOffset),
                 Size = new Size(70, 25),
                 BackColor = Color.FromArgb(0, 120, 60),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
             };
             _btnNvbloxLaunch.Click += async (s, e) => await LaunchNvbloxAsync();
             this.Controls.Add(_btnNvbloxLaunch);
@@ -388,11 +409,12 @@ namespace NOMAD.MissionPlanner
             _btnNvbloxStop = new Button
             {
                 Text = "Stop",
-                Location = new Point(310, yOffset),
+                Location = new Point(stopCol, yOffset),
                 Size = new Size(70, 25),
                 BackColor = Color.FromArgb(150, 50, 50),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
             };
             _btnNvbloxStop.Click += async (s, e) => await StopNvbloxAsync();
             this.Controls.Add(_btnNvbloxStop);

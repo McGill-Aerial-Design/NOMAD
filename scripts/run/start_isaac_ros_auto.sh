@@ -261,6 +261,45 @@ clone_zed_wrapper() {
     log_info "ZED ROS2 wrapper cloned"
 }
 
+get_installed_zed_sdk_version() {
+    docker exec "$CONTAINER_NAME" bash -c '
+        if [ ! -f /usr/local/zed/include/sl/Camera.hpp ]; then
+            exit 1
+        fi
+
+        major=$(grep -m1 "^#define ZED_SDK_MAJOR_VERSION " /usr/local/zed/include/sl/Camera.hpp | awk "{print \$3}")
+        minor=$(grep -m1 "^#define ZED_SDK_MINOR_VERSION " /usr/local/zed/include/sl/Camera.hpp | awk "{print \$3}")
+        patch=$(grep -m1 "^#define ZED_SDK_PATCH_VERSION " /usr/local/zed/include/sl/Camera.hpp | awk "{print \$3}")
+
+        if [ -n "$major" ] && [ -n "$minor" ] && [ -n "$patch" ]; then
+            echo "$major.$minor.$patch"
+            exit 0
+        fi
+
+        exit 1
+    ' 2>/dev/null
+}
+
+zed_component_sdk_abi_ok() {
+    docker exec "$CONTAINER_NAME" bash -c '
+        comp="/workspaces/isaac_ros-dev/install/zed_components/lib/libzed_camera_component.so"
+        if [ ! -f "$comp" ]; then
+            exit 1
+        fi
+
+        GXF_LIB_DIRS=$(find /opt/ros/humble/share -path "*/gxf/lib" -type d 2>/dev/null | tr "\n" ":")
+        export LD_LIBRARY_PATH=/usr/local/zed/lib:/opt/ros/humble/lib:/opt/ros/humble/lib/aarch64-linux-gnu:${GXF_LIB_DIRS}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+
+        # Detect ZED SDK ABI mismatches (common cause: wrapper built for SDK 5.x
+        # but runtime still has SDK 4.x, or vice versa).
+        if ldd -r "$comp" 2>&1 | grep -q "undefined symbol: _ZN2sl"; then
+            exit 1
+        fi
+
+        exit 0
+    '
+}
+
 # =========================================================================
 # Install runtime dependencies inside the container
 # Per the guide these get wiped on every container restart so we re-install.
@@ -269,7 +308,26 @@ install_dependencies() {
     log_info "Installing runtime dependencies inside container..."
 
     # --- ZED SDK ---
-    if ! docker exec "$CONTAINER_NAME" test -f /usr/local/zed/lib/libsl_zed.so 2>/dev/null; then
+    local reinstall_zed_sdk=true
+    local detected_zed_version=""
+
+    if docker exec "$CONTAINER_NAME" test -f /usr/local/zed/lib/libsl_zed.so 2>/dev/null; then
+        detected_zed_version="$(get_installed_zed_sdk_version || true)"
+        detected_zed_version="${detected_zed_version//$'\r'/}"
+
+        if [ "$detected_zed_version" = "$ZED_SDK_VERSION" ]; then
+            reinstall_zed_sdk=false
+            log_info "ZED SDK already installed ($detected_zed_version)"
+        elif [ -n "$detected_zed_version" ]; then
+            log_warn "Detected ZED SDK $detected_zed_version, expected $ZED_SDK_VERSION"
+            log_warn "Reinstalling ZED SDK to fix wrapper/runtime ABI mismatch"
+        else
+            log_warn "Detected ZED SDK but could not parse version from headers"
+            log_warn "Reinstalling ZED SDK to ensure compatibility"
+        fi
+    fi
+
+    if [ "$reinstall_zed_sdk" = true ]; then
         log_info "Installing ZED SDK ${ZED_SDK_VERSION} inside container..."
         docker exec "$CONTAINER_NAME" bash -c "
             apt-get update -qq
@@ -281,24 +339,35 @@ install_dependencies() {
             ldconfig
         " 2>&1 | tail -5
 
-        if docker exec "$CONTAINER_NAME" test -f /usr/local/zed/lib/libsl_zed.so 2>/dev/null; then
-            log_info "ZED SDK installed successfully"
+        detected_zed_version="$(get_installed_zed_sdk_version || true)"
+        detected_zed_version="${detected_zed_version//$'\r'/}"
+
+        if [ "$detected_zed_version" = "$ZED_SDK_VERSION" ]; then
+            log_info "ZED SDK installed successfully ($detected_zed_version)"
         else
-            log_error "ZED SDK installation failed"
+            if [ -z "$detected_zed_version" ]; then
+                log_error "ZED SDK installation failed: unable to detect installed version"
+            else
+                log_error "ZED SDK installation mismatch: expected $ZED_SDK_VERSION, got $detected_zed_version"
+            fi
             return 1
         fi
-    else
-        log_info "ZED SDK already installed"
     fi
 
     # --- apt deps (per the guide, needed after every container restart) ---
     # Always fix pip cmake (it overrides system cmake and breaks colcon)
     docker exec "$CONTAINER_NAME" bash -c "pip3 uninstall -y cmake 2>/dev/null || true" 2>/dev/null
-    # Always fix numpy _core/include symlink (NITROS packages expect numpy 2.x paths)
+    # Keep numpy include layout compatible across numpy variants where either
+    # core/include or _core/include may be present.
     docker exec "$CONTAINER_NAME" bash -c "
-        if [ ! -e /usr/local/lib/python3.10/dist-packages/numpy/_core/include ]; then
-            ln -sf /usr/local/lib/python3.10/dist-packages/numpy/core/include \
-                   /usr/local/lib/python3.10/dist-packages/numpy/_core/include 2>/dev/null || true
+        NUMPY_BASE=/usr/local/lib/python3.10/dist-packages/numpy
+        if [ -d \"\$NUMPY_BASE/_core/include\" ] && [ ! -e \"\$NUMPY_BASE/core/include\" ]; then
+            mkdir -p \"\$NUMPY_BASE/core\" 2>/dev/null || true
+            ln -sf \"\$NUMPY_BASE/_core/include\" \"\$NUMPY_BASE/core/include\" 2>/dev/null || true
+        fi
+        if [ -d \"\$NUMPY_BASE/core/include\" ] && [ ! -e \"\$NUMPY_BASE/_core/include\" ]; then
+            mkdir -p \"\$NUMPY_BASE/_core\" 2>/dev/null || true
+            ln -sf \"\$NUMPY_BASE/core/include\" \"\$NUMPY_BASE/_core/include\" 2>/dev/null || true
         fi
     " 2>/dev/null
 
@@ -401,15 +470,33 @@ build_packages() {
     ensure_nvblox_built
 
     # --- ZED wrapper ---
+    local rebuild_zed=false
     if docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP; $WS_SETUP; ros2 pkg list 2>/dev/null | grep -q zed_wrapper"; then
-        log_info "ZED wrapper already built"
+        if zed_component_sdk_abi_ok; then
+            log_info "ZED wrapper already built and ABI-compatible"
+        else
+            log_warn "ZED wrapper detected but ABI check failed; rebuilding zed interfaces/components"
+            rebuild_zed=true
+        fi
     else
-        log_info "Building ZED wrapper (first time may take several minutes)..."
+        rebuild_zed=true
+    fi
+
+    if [ "$rebuild_zed" = true ]; then
+        log_info "Building ZED interfaces/components (may take several minutes)..."
         docker exec "$CONTAINER_NAME" bash -c "
             $ROS_SETUP
             cd /workspaces/isaac_ros-dev
-            colcon build --packages-up-to zed_wrapper --symlink-install --cmake-args -Wno-dev 2>&1
-        " 2>&1 | tail -10
+            colcon build --packages-select zed_interfaces zed_components zed_wrapper --symlink-install --cmake-args -Wno-dev 2>&1
+        " 2>&1 | tail -20
+
+        if ! zed_component_sdk_abi_ok; then
+            log_error "ZED component ABI check failed after rebuild"
+            log_error "Inspect with: docker exec $CONTAINER_NAME bash -c 'ldd -r /workspaces/isaac_ros-dev/install/zed_components/lib/libzed_camera_component.so | grep -E \"undefined symbol|not found\"'"
+            return 1
+        fi
+
+        log_info "ZED wrapper/components rebuilt and ABI check passed"
     fi
 
 }
@@ -764,7 +851,7 @@ export PYTHONPATH=/workspaces/isaac_ros-dev:${PYTHONPATH:-}
 # Wait for ZED node to fully start and DDS discovery to complete
 # (ZED + nvblox take ~20-30s to init)
 sleep 30
-python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --high-rate-transport both
+python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --mesh-topic /nvblox_node/color_layer_marker --high-rate-transport both
 BRIDGE_SCRIPT
     docker cp "$_bridge_tmp" "$CONTAINER_NAME:/tmp/launch_bridge.sh"
     rm -f "$_bridge_tmp"
