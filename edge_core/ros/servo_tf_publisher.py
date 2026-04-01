@@ -3,8 +3,12 @@
 Servo TF Publisher for NOMAD.
 
 Publishes the dynamic transform from servo_mount -> camera_link at 50 Hz,
-reflecting the current servo pitch angle. This is critical for nvblox and
-VIO to correctly account for camera tilt.
+reflecting the current servo pitch angle, AND publishes odom -> base_link
+by subscribing to ZED odom and applying the inverse of the servo + mount
+transforms to recover the drone body pose.
+
+This bridges the gap between the ZED TF tree (odom -> zed_camera_link -> ...)
+and the NOMAD kinematic chain (base_link -> servo_mount -> camera_link).
 
 Requirements satisfied:
 - TF-001: Publishes servo_mount -> camera_link at >= 50 Hz
@@ -13,14 +17,19 @@ Requirements satisfied:
 - TF-007: Latency < 20ms (polls servo at 50 Hz = 20ms interval)
 
 TF Tree (with this node):
-  map -> odom -> base_link -> servo_mount -> camera_link -> zed2i_left_camera_optical_frame
+  odom -> base_link -> servo_mount -> camera_link
+       -> zed_camera_link -> zed_camera_center -> ...   (published by ZED driver)
+
+The ZED driver publishes odom -> zed_camera_link (camera pose from VIO).
+This node computes odom -> base_link (drone body pose) by removing the
+servo pitch and mounting offset from the camera pose.
 
 The base_link -> servo_mount transform is a static TF (mounting offset).
 The servo_mount -> camera_link transform is the dynamic joint driven by servo angle.
-The camera_link -> zed2i_left_camera_optical_frame is published by the ZED driver.
 
 Usage (inside Isaac ROS container):
     python3 servo_tf_publisher.py --host 172.17.0.1 --port 8000
+    python3 servo_tf_publisher.py --host 172.17.0.1 --port 8000 --odom-topic /zed/zed_node/odom
 """
 
 from __future__ import annotations
@@ -37,8 +46,10 @@ from urllib.error import URLError
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 from geometry_msgs.msg import TransformStamped
+from nav_msgs.msg import Odometry
 from tf2_ros import TransformBroadcaster, StaticTransformBroadcaster
 
 logging.basicConfig(
@@ -50,9 +61,11 @@ logger = logging.getLogger("servo_tf_publisher")
 
 class ServoTFPublisher(Node):
     """
-    Publishes dynamic TF for servo tilt and static TF for mounting offset.
+    Publishes dynamic TF for servo tilt, static TF for mounting offset,
+    and odom -> base_link by inverting the camera odom pose.
 
     Dynamic: servo_mount -> camera_link (pitch rotation from servo angle)
+    Dynamic: odom -> base_link (drone body pose from ZED odom inverse)
     Static:  base_link -> servo_mount (physical mounting offset)
     """
 
@@ -68,6 +81,7 @@ class ServoTFPublisher(Node):
         port: int = 8000,
         publish_rate_hz: float = 50.0,
         poll_rate_hz: float = 10.0,
+        odom_topic: str = "/zed/zed_node/odom",
     ):
         super().__init__("nomad_servo_tf_publisher")
 
@@ -81,6 +95,10 @@ class ServoTFPublisher(Node):
         self._using_feedback = False  # True if reading from encoder
         self._feedback_warned = False
 
+        # Latest camera odom pose (from ZED)
+        self._odom_lock = threading.Lock()
+        self._latest_odom: Optional[Odometry] = None
+
         # TF broadcasters
         self._tf_broadcaster = TransformBroadcaster(self)
         self._static_tf_broadcaster = StaticTransformBroadcaster(self)
@@ -88,9 +106,23 @@ class ServoTFPublisher(Node):
         # Publish static transform: base_link -> servo_mount
         self._publish_static_mount_tf()
 
-        # Timer: publish dynamic TF at 50 Hz (TF-001)
+        # Subscribe to ZED odom for computing odom -> base_link
+        sensor_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        self.create_subscription(
+            Odometry,
+            odom_topic,
+            self._handle_odom,
+            sensor_qos,
+        )
+        self.get_logger().info(f"Subscribed to odom: {odom_topic}")
+
+        # Timer: publish dynamic TFs at 50 Hz (TF-001)
         publish_period = 1.0 / publish_rate_hz
-        self.create_timer(publish_period, self._publish_servo_tf)
+        self.create_timer(publish_period, self._publish_all_tf)
 
         # Timer: poll servo angle from Edge Core API at 10 Hz
         poll_period = 1.0 / poll_rate_hz
@@ -100,6 +132,11 @@ class ServoTFPublisher(Node):
             f"Servo TF publisher started: {publish_rate_hz} Hz TF, "
             f"{poll_rate_hz} Hz servo poll -> {self._base_url}"
         )
+
+    def _handle_odom(self, msg: Odometry) -> None:
+        """Cache latest ZED odom for base_link transform computation."""
+        with self._odom_lock:
+            self._latest_odom = msg
 
     def _publish_static_mount_tf(self) -> None:
         """Publish static transform: base_link -> servo_mount (TF-004)."""
@@ -121,6 +158,11 @@ class ServoTFPublisher(Node):
             f"Static TF published: base_link -> servo_mount "
             f"({self.MOUNT_OFFSET_X}, {self.MOUNT_OFFSET_Y}, {self.MOUNT_OFFSET_Z})"
         )
+
+    def _publish_all_tf(self) -> None:
+        """Publish all dynamic TFs at 50 Hz."""
+        self._publish_servo_tf()
+        self._publish_odom_base_link_tf()
 
     def _publish_servo_tf(self) -> None:
         """
@@ -156,6 +198,90 @@ class ServoTFPublisher(Node):
         t.transform.rotation.y = qy
         t.transform.rotation.z = 0.0
         t.transform.rotation.w = qw
+
+        self._tf_broadcaster.sendTransform(t)
+
+    def _publish_odom_base_link_tf(self) -> None:
+        """
+        Publish dynamic transform: odom -> base_link.
+
+        Computed from the ZED camera odom pose by removing the servo pitch
+        rotation and mounting offset.  This connects the servo kinematic
+        chain (base_link -> servo_mount -> camera_link) to the odom frame
+        so that any node can look up odom -> servo_mount or odom -> base_link.
+
+        Math:
+          camera_pos = body_pos + R_body * mount_offset
+          camera_rot = body_rot * R_servo
+          =>
+          body_rot = camera_rot * inv(R_servo)
+          body_pos = camera_pos - R_body * mount_offset
+        """
+        with self._odom_lock:
+            odom = self._latest_odom
+        if odom is None:
+            return
+
+        pose = odom.pose.pose
+
+        # Camera quaternion from ZED odom
+        qx = pose.orientation.x
+        qy = pose.orientation.y
+        qz = pose.orientation.z
+        qw = pose.orientation.w
+
+        # Servo inverse quaternion (negative pitch about Y axis)
+        with self._servo_lock:
+            angle_deg = self._servo_angle_deg
+        servo_pitch = math.radians(angle_deg - 90.0)
+        # inv(R_servo) = rotation by -servo_pitch about Y
+        sq_y = math.sin(-servo_pitch / 2.0)
+        sq_w = math.cos(-servo_pitch / 2.0)
+
+        # body_quat = camera_quat * inv(servo_quat)
+        # Quaternion multiplication: q1 * q2
+        bqx = qw * 0.0    + qx * sq_w + qy * 0.0  - qz * sq_y
+        bqy = qw * sq_y   - qx * 0.0  + qy * sq_w + qz * 0.0
+        bqz = qw * 0.0    + qx * sq_y + qy * 0.0  + qz * sq_w
+        bqw = qw * sq_w   - qx * 0.0  - qy * sq_y - qz * 0.0
+
+        # Normalize
+        n = math.sqrt(bqx * bqx + bqy * bqy + bqz * bqz + bqw * bqw)
+        if n > 1e-9:
+            bqx /= n
+            bqy /= n
+            bqz /= n
+            bqw /= n
+
+        # Rotate mount offset by body quaternion: R_body * mount_offset
+        mx, my, mz = self.MOUNT_OFFSET_X, self.MOUNT_OFFSET_Y, self.MOUNT_OFFSET_Z
+        # Quaternion-vector rotation: q * v * q_conj
+        # Using the formula directly:
+        # t = 2 * cross(q.xyz, v)
+        # result = v + q.w * t + cross(q.xyz, t)
+        tx = 2.0 * (bqy * mz - bqz * my)
+        ty = 2.0 * (bqz * mx - bqx * mz)
+        tz = 2.0 * (bqx * my - bqy * mx)
+        ox = mx + bqw * tx + (bqy * tz - bqz * ty)
+        oy = my + bqw * ty + (bqz * tx - bqx * tz)
+        oz = mz + bqw * tz + (bqx * ty - bqy * tx)
+
+        # body_pos = camera_pos - R_body * mount_offset
+        body_x = pose.position.x - ox
+        body_y = pose.position.y - oy
+        body_z = pose.position.z - oz
+
+        t = TransformStamped()
+        t.header.stamp = self.get_clock().now().to_msg()
+        t.header.frame_id = "odom"
+        t.child_frame_id = "base_link"
+        t.transform.translation.x = body_x
+        t.transform.translation.y = body_y
+        t.transform.translation.z = body_z
+        t.transform.rotation.x = bqx
+        t.transform.rotation.y = bqy
+        t.transform.rotation.z = bqz
+        t.transform.rotation.w = bqw
 
         self._tf_broadcaster.sendTransform(t)
 
@@ -209,6 +335,8 @@ def main():
                         help="TF publish rate in Hz (default: 50)")
     parser.add_argument("--poll-rate", type=float, default=10.0,
                         help="Servo angle poll rate in Hz (default: 10)")
+    parser.add_argument("--odom-topic", default="/zed/zed_node/odom",
+                        help="ZED odom topic for computing odom -> base_link")
     args = parser.parse_args()
 
     rclpy.init()
@@ -218,6 +346,7 @@ def main():
         port=args.port,
         publish_rate_hz=args.tf_rate,
         poll_rate_hz=args.poll_rate,
+        odom_topic=args.odom_topic,
     )
 
     try:
