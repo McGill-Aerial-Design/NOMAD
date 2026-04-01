@@ -16,6 +16,7 @@
 # =============================================================================
 
 set -e
+set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -31,6 +32,8 @@ fi
 
 # ZED ROS2 wrapper branch matching ZED SDK 5.2
 ZED_WRAPPER_BRANCH="v5.2.0"
+ZED_SDK_VERSION="5.2.3"
+ZED_SDK_L4T_TARGET="l4t36.4"
 
 # Standard ROS2 setup for the official Isaac ROS image
 ROS_SETUP="source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash 2>/dev/null"
@@ -97,7 +100,22 @@ check_prerequisites() {
     # Jetson Power Mode Check (NV-011)
     # =========================================================================
     log_info "Checking Jetson power mode..."
-    if [ -e /sys/devices/virtual/thermal/cooling_device0/cur_state ]; then
+    if command -v nvpmodel &> /dev/null; then
+        NVP_OUT="$(nvpmodel -q 2>/dev/null || true)"
+        POWER_MODE_LINE="$(printf '%s\n' "$NVP_OUT" | grep -m1 -E 'NV Power Mode|Power Mode' | sed 's/^[[:space:]]*//' || true)"
+
+        if [ -n "$POWER_MODE_LINE" ]; then
+            if printf '%s\n' "$POWER_MODE_LINE" | grep -qiE 'MAXN|25W'; then
+                log_info "Power mode: High performance ($POWER_MODE_LINE) - OK"
+            else
+                log_warn "Power mode may be limited ($POWER_MODE_LINE). nvblox may throttle."
+                log_warn "Run 'sudo nvpmodel -m 2' for 25W mode or 'sudo jetson_clocks' for max performance"
+            fi
+        else
+            log_warn "nvpmodel is available but power mode could not be parsed"
+            log_warn "For best results, run: sudo nvpmodel -m 2 && sudo jetson_clocks"
+        fi
+    elif [ -e /sys/devices/virtual/thermal/cooling_device0/cur_state ]; then
         POWER_MODE=$(cat /sys/devices/virtual/thermal/cooling_device0/cur_state 2>/dev/null || echo "unknown")
         case "$POWER_MODE" in
             15|16|17|18|19|20)  # Assuming states above 15 are MAXN or high performance
@@ -252,11 +270,11 @@ install_dependencies() {
 
     # --- ZED SDK ---
     if ! docker exec "$CONTAINER_NAME" test -f /usr/local/zed/lib/libsl_zed.so 2>/dev/null; then
-        log_info "Installing ZED SDK 4.2 inside container..."
+        log_info "Installing ZED SDK ${ZED_SDK_VERSION} inside container..."
         docker exec "$CONTAINER_NAME" bash -c "
             apt-get update -qq
             apt-get install -y --no-install-recommends zstd wget
-            wget -q 'https://download.stereolabs.com/zedsdk/4.2/l4t36.4/jetsons' -O /tmp/zed_installer.run
+            wget -q 'https://download.stereolabs.com/zedsdk/${ZED_SDK_VERSION}/${ZED_SDK_L4T_TARGET}/jetsons' -O /tmp/zed_installer.run
             chmod +x /tmp/zed_installer.run
             /tmp/zed_installer.run -- silent skip_od_module
             rm -f /tmp/zed_installer.run
@@ -287,7 +305,25 @@ install_dependencies() {
     # Check ROS deps and GStreamer deps separately so GStreamer is never skipped
     local ros_deps_ok=false
     local gst_deps_ok=false
-    if docker exec "$CONTAINER_NAME" dpkg -l ros-humble-zed-msgs 2>/dev/null | grep -q '^ii'; then
+    if docker exec "$CONTAINER_NAME" bash -c "
+        dpkg -s \
+            ros-humble-zed-msgs \
+            ros-humble-nmea-msgs \
+            ros-humble-robot-localization \
+            ros-humble-point-cloud-transport \
+            ros-humble-tf2-ros \
+            ros-humble-tf2-tools \
+            ros-humble-cv-bridge \
+            ros-humble-isaac-ros-managed-nitros \
+            ros-humble-isaac-ros-nitros \
+            ros-humble-isaac-ros-nitros-image-type \
+            ros-humble-isaac-ros-nitros-camera-info-type \
+            ros-humble-isaac-ros-nitros-point-cloud-type \
+            ros-humble-navigation2 \
+            ros-humble-nav2-bringup \
+            ros-humble-nav2-msgs \
+            >/dev/null 2>&1
+    "; then
         ros_deps_ok=true
         log_info "ROS dependencies already installed"
     fi
@@ -337,24 +373,32 @@ install_dependencies() {
 # Build ZED + nvblox packages (colcon build artifacts persist on host)
 # Also explicitly build isaac_ros_nvblox_utils as a mandatory target.
 # =========================================================================
+ensure_nvblox_built() {
+    local pkg_check_cmd="$ROS_SETUP; $WS_SETUP; ros2 pkg list 2>/dev/null | grep -q nvblox_ros"
+
+    if docker exec "$CONTAINER_NAME" bash -c "$pkg_check_cmd"; then
+        log_info "nvblox_ros already built"
+        return 0
+    fi
+
+    if ! docker exec "$CONTAINER_NAME" test -d /workspaces/isaac_ros-dev/src/isaac_ros_nvblox; then
+        log_warn "nvblox source not found at src/isaac_ros_nvblox -- skipping"
+        log_warn "Clone it with: cd ~/workspaces/isaac_ros-dev/src && git clone --branch release-3.2 https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nvblox.git"
+        return 0
+    fi
+
+    log_info "Building nvblox packages (first time may take 10-30 minutes)..."
+    docker exec "$CONTAINER_NAME" bash -c "
+        $ROS_SETUP
+        cd /workspaces/isaac_ros-dev
+        colcon build --packages-up-to nvblox_examples_bringup --symlink-install --cmake-args -Wno-dev 2>&1
+    " 2>&1 | tail -15
+}
+
 build_packages() {
     log_info "Building ROS2 packages..."
 
-    # --- nvblox_ros (check it's available) ---
-    if docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP; $WS_SETUP; ros2 pkg list 2>/dev/null | grep -q nvblox_ros"; then
-        log_info "nvblox_ros already built"
-    else
-        if docker exec "$CONTAINER_NAME" test -d /workspaces/isaac_ros-dev/src/isaac_ros_nvblox; then
-            log_info "Building nvblox packages (first time may take 10-30 minutes)..."
-            docker exec "$CONTAINER_NAME" bash -c "
-                $ROS_SETUP
-                cd /workspaces/isaac_ros-dev
-                colcon build --packages-up-to nvblox_examples_bringup --symlink-install --cmake-args -Wno-dev 2>&1
-            " 2>&1 | tail -10
-        else
-            log_warn "nvblox source not found -- skipping build"
-        fi
-    fi
+    ensure_nvblox_built
 
     # --- ZED wrapper ---
     if docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP; $WS_SETUP; ros2 pkg list 2>/dev/null | grep -q zed_wrapper"; then
@@ -368,22 +412,6 @@ build_packages() {
         " 2>&1 | tail -10
     fi
 
-    # --- nvblox ---
-    if docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP; $WS_SETUP; ros2 pkg list 2>/dev/null | grep -q nvblox_ros"; then
-        log_info "nvblox already built"
-    else
-        if docker exec "$CONTAINER_NAME" test -d /workspaces/isaac_ros-dev/src/isaac_ros_nvblox; then
-            log_info "Building nvblox (first time may take 10-30 minutes)..."
-            docker exec "$CONTAINER_NAME" bash -c "
-                $ROS_SETUP
-                cd /workspaces/isaac_ros-dev
-                colcon build --symlink-install --packages-up-to nvblox_examples_bringup --cmake-args -Wno-dev 2>&1
-            " 2>&1 | tail -15
-        else
-            log_warn "nvblox source not found at src/isaac_ros_nvblox -- skipping"
-            log_warn "Clone it with: cd ~/workspaces/isaac_ros-dev/src && git clone --branch release-3.2 https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nvblox.git"
-        fi
-    fi
 }
 
 # =========================================================================
@@ -398,7 +426,7 @@ validate_nav2_config() {
     
     # Check 1: nav2_bringup package exists
     if ! docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP; ros2 pkg list 2>/dev/null | grep -q nav2_bringup"; then
-        log_error "FATAL: nav2_bringup package not found in ROS2 install"
+        log_error "Nav2 validation error: nav2_bringup package not found in ROS2 install"
         log_error "Nav2 was not built or installed. Check container dependencies."
         return 1
     fi
@@ -406,7 +434,7 @@ validate_nav2_config() {
     
     # Check 2: BT XML file exists
     if ! docker exec "$CONTAINER_NAME" test -f "$bt_xml"; then
-        log_error "FATAL: Default BT XML file not found: $bt_xml"
+        log_error "Nav2 validation error: default BT XML file not found: $bt_xml"
         log_error "This file is required by nav2_bringup. Verify nav2_bringup installation."
         return 1
     fi
@@ -414,7 +442,7 @@ validate_nav2_config() {
     
     # Check 3: Nav2 config file exists
     if ! docker exec "$CONTAINER_NAME" test -f "$nav2_params_file"; then
-        log_error "FATAL: Nav2 config file not found: $nav2_params_file"
+        log_error "Nav2 validation error: config file not found: $nav2_params_file"
         log_error "Verify NOMAD config volume mount or nav2_drone.yaml availability."
         return 1
     fi
@@ -422,7 +450,7 @@ validate_nav2_config() {
     
     # Check 4: Nav2 goal bridge script exists
     if ! docker exec "$CONTAINER_NAME" test -f "$goal_bridge"; then
-        log_error "FATAL: Nav2 goal bridge script not found: $goal_bridge"
+        log_error "Nav2 validation error: goal bridge script not found: $goal_bridge"
         log_error "Verify edge_core volume mount or nav2_goal_bridge.py availability."
         return 1
     fi
@@ -430,7 +458,7 @@ validate_nav2_config() {
     
     # Check 5: Validate nav2_drone.yaml YAML syntax
     if ! docker exec "$CONTAINER_NAME" python3 -c "import yaml; yaml.safe_load(open('$nav2_params_file')); print('YAML OK')" 2>/dev/null | grep -q "YAML OK"; then
-        log_error "FATAL: Nav2 config file has invalid YAML syntax: $nav2_params_file"
+        log_error "Nav2 validation error: config file has invalid YAML syntax: $nav2_params_file"
         log_error "Fix YAML errors before relaunching Nav2."
         return 1
     fi
@@ -468,7 +496,7 @@ launch_zed_nvblox() {
             done
             
             # Wait for processes to fully terminate (max 5 seconds)
-            timeout=5
+            timeout=10
             while [ $timeout -gt 0 ]; do
                 if ! pgrep -f "[l]aunch_nvblox_bridge|[l]aunch_zed_nvblox|[n]omad_zed_nvblox|[z]ed_example\.launch|[c]omponent_container|[r]os_http_bridge" >/dev/null 2>&1; then
                     break
@@ -549,7 +577,7 @@ if [ "$cam_ready" != "true" ]; then
     exit 3
 fi
 
-# Disable ZED object detection — SDK 4.2 OD crashes with composable nodes
+# Disable ZED object detection to avoid known instability with composable nodes in this pipeline
 sed -i 's/od_enabled: true/od_enabled: false/' \
     /workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/sensors/zed_common.yaml 2>/dev/null || true
 
@@ -563,7 +591,7 @@ export EGL_PLATFORM=device
 # sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
 #     /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null
 # Overlay NOMAD nvblox config onto installed base config
-# Performance profile: 0.10m voxels, 10-15Hz rates, 2D ESDF, 8m radius
+# Performance profile: 0.10m voxels, 5.0Hz rates, 2D ESDF, 5.0m radius
 # Tuned for Orin Nano 8GB — see config/nvblox_performance.yaml
 NOMAD_CFG=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml
 NVBLOX_BASE_A=$(python3 -c "from ament_index_python.packages import get_package_share_directory; print(get_package_share_directory(\"nvblox_examples_bringup\"))" 2>/dev/null)/config/nvblox/nvblox_base.yaml
@@ -576,7 +604,7 @@ for cand in "$NVBLOX_BASE_A" "$NVBLOX_BASE_B"; do
     fi
 done
 if [ -f "$NOMAD_CFG" ] && [ -n "$NVBLOX_BASE" ]; then
-    echo "Applying NOMAD nvblox config (performance profile: 0.10m voxels, 10-15Hz, 2D ESDF, 8m radius)"
+    echo "Applying NOMAD nvblox config (performance profile: 0.10m voxels, 5.0Hz, 2D ESDF, 5.0m radius)"
         cp "$NOMAD_CFG" "$NVBLOX_BASE"
         echo "Overlay checksums:"
         sha256sum "$NOMAD_CFG" "$NVBLOX_BASE" 2>/dev/null || true
@@ -601,7 +629,8 @@ fi
 # Includes: optical frame alias TF, servo TF publisher, obstacle distance bridge.
 # Uses blocking CUDA stream (type 0) to prevent cudaErrorIllegalAddress on 8GB Jetson.
 echo "Launching ZED + nvblox (nomad_zed_nvblox.launch.py)..."
-ros2 launch /workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py
+ros2 launch /workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py &
+LAUNCH_PID=$!
 
 # Post-launch validation: confirm nav2 lifecycle nodes are running (give 5s for startup)
 if [ "$NAV2_PREFLIGHT_OK" = true ]; then
@@ -613,6 +642,9 @@ if [ "$NAV2_PREFLIGHT_OK" = true ]; then
         echo "[WARN] No Nav2 lifecycle nodes detected - nav2 may have failed to start"
     fi
 fi
+
+# Keep script long-running while launch remains active.
+wait "$LAUNCH_PID"
 LAUNCH_SCRIPT
         docker cp "$_launch_tmp" "$CONTAINER_NAME:/tmp/launch_zed_nvblox.sh"
         rm -f "$_launch_tmp"
@@ -621,7 +653,7 @@ LAUNCH_SCRIPT
         docker exec -d "$CONTAINER_NAME" bash -c \
             "bash /tmp/launch_zed_nvblox.sh > /tmp/zed_nvblox.log 2>&1 & echo \$! > /tmp/zed_nvblox.pid"
 
-        log_info "ZED + nvblox + OD launched (logs: /tmp/zed_nvblox.log inside container)"
+        log_info "ZED + nvblox launched (OD disabled by default in this path; logs: /tmp/zed_nvblox.log inside container)"
     else
         log_warn "nvblox not available -- launching ZED wrapper only"
         launch_zed_only
@@ -697,26 +729,44 @@ export PYTHONPATH=/workspaces/isaac_ros-dev:${PYTHONPATH:-}
 # Wait for ZED node to fully start and DDS discovery to complete
 # (ZED + nvblox take ~20-30s to init)
 sleep 30
-python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom
+python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --high-rate-transport both
 BRIDGE_SCRIPT
     docker cp "$_bridge_tmp" "$CONTAINER_NAME:/tmp/launch_bridge.sh"
     rm -f "$_bridge_tmp"
     docker exec "$CONTAINER_NAME" chmod +x /tmp/launch_bridge.sh
 
-    docker exec -d "$CONTAINER_NAME" bash -c \
-        "nohup /tmp/launch_bridge.sh > /tmp/ros_bridge.log 2>&1 & echo \$! > /tmp/ros_bridge.pid"
+    local bridge_env_args=()
+    if [ -n "${NOMAD_API_KEY:-}" ]; then
+        bridge_env_args+=("-e" "NOMAD_API_KEY=$NOMAD_API_KEY")
+    fi
+    if [ -n "${NOMAD_INTERNAL_TOKEN:-}" ]; then
+        bridge_env_args+=("-e" "NOMAD_INTERNAL_TOKEN=$NOMAD_INTERNAL_TOKEN")
+    fi
 
-    log_info "ROS-HTTP bridge launched (logs: /tmp/ros_bridge.log inside container)"
-    
-    # Validate process startup: wait briefly and check PID
+    if [ ${#bridge_env_args[@]} -gt 0 ]; then
+        docker exec "${bridge_env_args[@]}" -d "$CONTAINER_NAME" bash -c \
+            "nohup /tmp/launch_bridge.sh > /tmp/ros_bridge.log 2>&1 & echo \$! > /tmp/ros_bridge.pid"
+    else
+        docker exec -d "$CONTAINER_NAME" bash -c \
+            "nohup /tmp/launch_bridge.sh > /tmp/ros_bridge.log 2>&1 & echo \$! > /tmp/ros_bridge.pid"
+    fi
+
+    log_info "ROS-HTTP bridge launcher started (logs: /tmp/ros_bridge.log inside container)"
+
+    # Validate launcher startup quickly. The real bridge process starts after
+    # the warmup sleep inside /tmp/launch_bridge.sh.
     sleep 2
-    BRIDGE_PID=$(docker exec "$CONTAINER_NAME" cat /tmp/ros_bridge.pid 2>/dev/null)
-    if [ -z "$BRIDGE_PID" ] || ! docker exec "$CONTAINER_NAME" kill -0 "$BRIDGE_PID" 2>/dev/null; then
-        log_error "Failed: ros_http_bridge did not start. Check logs:"
+    BRIDGE_LAUNCHER_PID=$(docker exec "$CONTAINER_NAME" cat /tmp/ros_bridge.pid 2>/dev/null)
+    if [ -z "$BRIDGE_LAUNCHER_PID" ] || ! docker exec "$CONTAINER_NAME" kill -0 "$BRIDGE_LAUNCHER_PID" 2>/dev/null; then
+        log_error "Failed: ROS-HTTP bridge launcher did not start. Check logs:"
         docker exec "$CONTAINER_NAME" tail -20 /tmp/ros_bridge.log
         return 1
     fi
-    log_info "ros_http_bridge PID $BRIDGE_PID confirmed running"
+    if docker exec "$CONTAINER_NAME" pgrep -f "[r]os_http_bridge\.py" >/dev/null 2>&1; then
+        log_info "ros_http_bridge.py process detected"
+    else
+        log_info "ROS-HTTP bridge launcher PID $BRIDGE_LAUNCHER_PID is running; ros_http_bridge.py will start after warmup (~30s)"
+    fi
 }
 
 # =========================================================================
@@ -739,7 +789,7 @@ show_status() {
         echo -e "${GREEN}Container: Running${NC}"
         echo ""
         echo "Processes inside container:"
-        docker exec "$CONTAINER_NAME" ps aux 2>/dev/null | grep -E "ros2|python3|nvblox|zed" | head -10
+        docker exec "$CONTAINER_NAME" ps aux 2>/dev/null | grep -E "ros2|python3|nvblox|zed" | head -10 || true
         echo ""
         echo "ROS2 Topics (sample):"
         docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP; $WS_SETUP; ros2 topic list 2>/dev/null | head -15" || echo "(ROS not ready)"
@@ -784,7 +834,7 @@ case "${1:-start}" in
         # Pre-validate Nav2 configuration (runs early so issues are caught before launch)
         if ! validate_nav2_config; then
             log_error "Nav2 validation FAILED. Run with 'bash $0 logs' to diagnose."
-            log_error "CONTINUING WITH LAUNCH (Nav2 disabled, but config must be resolvable for robustness)."
+            log_error "CONTINUING WITH LAUNCH (validation warning only; this check does not force-disable Nav2)."
         fi
 
         launch_zed_nvblox

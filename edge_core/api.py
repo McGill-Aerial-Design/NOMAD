@@ -9,6 +9,7 @@ Target: Python 3.13 | NVIDIA Jetson Orin Nano
 
 import asyncio
 import hmac
+import ipaddress
 import json
 import logging
 import math
@@ -248,6 +249,18 @@ class VIOUpdateRequest(BaseModel):
     frame_id: str = "ros_optical"
 
 
+class VIOAreaSaveRequest(BaseModel):
+    """Request model for saving a VIO relocalization area map."""
+    file_path: str
+    wait_for_completion: bool = True
+    timeout_s: float = 30.0
+
+
+class VIOAreaLoadRequest(BaseModel):
+    """Request model for loading a VIO relocalization area map."""
+    file_path: str
+
+
 class NavVelocityRequest(BaseModel):
     """Request model for navigation velocity command from ROS nav2/nvblox."""
     timestamp: float
@@ -321,10 +334,11 @@ def create_app(state_manager: StateManager) -> FastAPI:
     # CORS: restrict to GCS origin when configured, otherwise allow all (development)
     gcs_origin = os.environ.get("GCS_ORIGIN")
     allowed_origins = [gcs_origin] if gcs_origin else ["*"]
+    allow_credentials = bool(gcs_origin and gcs_origin != "*")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
-        allow_credentials=True,
+        allow_credentials=allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -332,15 +346,63 @@ def create_app(state_manager: StateManager) -> FastAPI:
     # API key authentication middleware
     # If NOMAD_API_KEY is set, require X-API-Key header on non-exempt endpoints.
     # If NOMAD_API_KEY is not set, skip authentication (development mode).
-    _NOMAD_API_KEY = os.environ.get("NOMAD_API_KEY")
+    _NOMAD_API_KEY = (os.environ.get("NOMAD_API_KEY") or "").strip() or None
     _AUTH_EXEMPT_PATHS = {"/", "/health", "/docs", "/redoc", "/openapi.json"}
+    _INTERNAL_BRIDGE_TOKEN_HEADER = "X-NOMAD-Internal-Token"
+    _INTERNAL_BRIDGE_TOKEN = (os.environ.get("NOMAD_INTERNAL_TOKEN") or "").strip() or None
+    _INTERNAL_BRIDGE_ALLOWED_ROUTES: set[tuple[str, str]] = {
+        ("POST", "/api/vio/update"),
+        ("POST", "/api/task/2/slam/mesh/update"),
+        ("POST", "/api/detections/update"),
+        ("POST", "/api/nav/velocity"),
+        ("POST", "/api/servo/camera/tilt"),
+    }
+    _INTERNAL_BRIDGE_MIN_TOKEN_LEN = 32
+
+    if _INTERNAL_BRIDGE_TOKEN is not None and len(_INTERNAL_BRIDGE_TOKEN) < _INTERNAL_BRIDGE_MIN_TOKEN_LEN:
+        logger.warning(
+            "NOMAD_INTERNAL_TOKEN is shorter than %d chars; disabling internal bridge bypass",
+            _INTERNAL_BRIDGE_MIN_TOKEN_LEN,
+        )
+        _INTERNAL_BRIDGE_TOKEN = None
+
+    if _NOMAD_API_KEY is not None and _INTERNAL_BRIDGE_TOKEN is None:
+        logger.warning("NOMAD_INTERNAL_TOKEN is not configured; internal bridge bypass disabled")
+
+    def _is_loopback_client(request: Request) -> bool:
+        client_host = ""
+        if request.client is not None and request.client.host is not None:
+            client_host = request.client.host.strip().lower()
+        if client_host in {"127.0.0.1", "::1", "localhost"}:
+            return True
+        if client_host.startswith("::ffff:"):
+            client_host = client_host.split("::ffff:", 1)[1]
+        try:
+            return ipaddress.ip_address(client_host).is_loopback
+        except ValueError:
+            return False
+
+    def _is_internal_bridge_request(request: Request, request_path: str) -> bool:
+        if _INTERNAL_BRIDGE_TOKEN is None:
+            return False
+        if (request.method.upper(), request_path) not in _INTERNAL_BRIDGE_ALLOWED_ROUTES:
+            return False
+        if not _is_loopback_client(request):
+            return False
+        provided_token = request.headers.get(_INTERNAL_BRIDGE_TOKEN_HEADER) or ""
+        if not provided_token:
+            return False
+        return hmac.compare_digest(provided_token, _INTERNAL_BRIDGE_TOKEN)
 
     class APIKeyMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
             if _NOMAD_API_KEY is None:
                 # Development mode - no authentication
                 return await call_next(request)
-            if request.url.path in _AUTH_EXEMPT_PATHS:
+            request_path = request.url.path.rstrip("/") or "/"
+            if request_path in _AUTH_EXEMPT_PATHS:
+                return await call_next(request)
+            if _is_internal_bridge_request(request, request_path):
                 return await call_next(request)
             provided_key = request.headers.get("X-API-Key")
             if provided_key != _NOMAD_API_KEY:
@@ -360,6 +422,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
     app.state.tailscale_manager = None
     app.state.network_monitor = None
     app.state.camera_service = None
+    app.state.mavlink_service = None
     app.state.mode_manager = None
     app.state.spray_controller = None
     app.state.excluded_sectors: set = set()  # SP-005: sectors excluded from obstacle avoidance
@@ -381,15 +444,19 @@ def create_app(state_manager: StateManager) -> FastAPI:
     app.state.detected_objects: list[dict] = []  # Current frame detections
     app.state.detection_history: list[dict] = []  # Persistent detected targets with 3D positions
     app.state.detection_history_max: int = 200  # Max persistent detections to keep
+    app.state.detection_state_lock = threading.Lock()
     app.state.detection_last_update: float = 0.0
+    app.state.detection_last_source_timestamp = None
     app.state.detection_enabled: bool = True  # Desired ZED OD mode for circle detection
     app.state.foxglove_enabled: bool = False  # Foxglove bridge running state
+    app.state.foxglove_port: int = 8765
     app.state.isaac_runtime_cache = {
         "timestamp": 0.0,
         "container_running": False,
         "nvblox_running": False,
         "bridge_running": False,
     }
+    app.state.isaac_startup_last_initiated = 0.0
     app.state.high_rate_zmq_enabled = (
         os.environ.get("NOMAD_HIGH_RATE_ZMQ_ENABLED", "1").strip().lower()
         not in ("0", "false", "no")
@@ -562,50 +629,78 @@ def create_app(state_manager: StateManager) -> FastAPI:
 
             return accepted
 
-    def _apply_detections_update(detections: list) -> None:
+    def _apply_detections_update(detections: list, source_timestamp: Optional[Any] = None) -> None:
         """Apply detection update to app state (shared by HTTP and ZMQ paths)."""
         import time as _time
         import math as _math
 
-        app.state.detected_objects = detections
-        app.state.detection_last_update = _time.time()
-        app.state.detection_enabled = True
+        with app.state.detection_state_lock:
+            normalized_source_timestamp: Optional[float] = None
+            if source_timestamp is not None:
+                try:
+                    normalized_source_timestamp = float(source_timestamp)
+                    if not _math.isfinite(normalized_source_timestamp):
+                        normalized_source_timestamp = None
+                except (TypeError, ValueError):
+                    normalized_source_timestamp = None
 
-        history = app.state.detection_history
-        for det in detections:
-            x_val = det.get("x")
-            y_val = det.get("y")
-            z_val = det.get("z")
-            if x_val is None or y_val is None or z_val is None:
-                continue
-            try:
-                if not (isinstance(x_val, (int, float)) and isinstance(y_val, (int, float)) and isinstance(z_val, (int, float))):
+            if normalized_source_timestamp is not None:
+                last_source_timestamp = app.state.detection_last_source_timestamp
+                if (
+                    last_source_timestamp is not None
+                    and _math.isclose(
+                        normalized_source_timestamp,
+                        last_source_timestamp,
+                        rel_tol=0.0,
+                        abs_tol=1e-6,
+                    )
+                ):
+                    return
+                app.state.detection_last_source_timestamp = normalized_source_timestamp
+
+            if isinstance(detections, list):
+                dict_detections = [det for det in detections if isinstance(det, dict)]
+            else:
+                dict_detections = []
+
+            app.state.detected_objects = dict_detections
+            app.state.detection_last_update = _time.time()
+
+            history = app.state.detection_history
+            for det in dict_detections:
+                x_val = det.get("x")
+                y_val = det.get("y")
+                z_val = det.get("z")
+                if x_val is None or y_val is None or z_val is None:
                     continue
-                if not (_math.isfinite(x_val) and _math.isfinite(y_val) and _math.isfinite(z_val)):
+                try:
+                    if not (isinstance(x_val, (int, float)) and isinstance(y_val, (int, float)) and isinstance(z_val, (int, float))):
+                        continue
+                    if not (_math.isfinite(x_val) and _math.isfinite(y_val) and _math.isfinite(z_val)):
+                        continue
+                except (TypeError, ValueError):
                     continue
-            except (TypeError, ValueError):
-                continue
 
-            is_duplicate = False
-            for existing in history:
-                dx = x_val - existing["x"]
-                dy = y_val - existing["y"]
-                dz = z_val - existing["z"]
-                dist = (dx*dx + dy*dy + dz*dz) ** 0.5
-                if dist < 0.5 and det.get("label") == existing.get("label"):
-                    existing["seen_count"] = existing.get("seen_count", 1) + 1
-                    if det.get("confidence", 0) > existing.get("confidence", 0):
-                        existing.update(det)
-                        existing["seen_count"] = existing.get("seen_count", 1)
-                    is_duplicate = True
-                    break
+                is_duplicate = False
+                for existing in history:
+                    dx = x_val - existing["x"]
+                    dy = y_val - existing["y"]
+                    dz = z_val - existing["z"]
+                    dist = (dx*dx + dy*dy + dz*dz) ** 0.5
+                    if dist < 0.5 and det.get("label") == existing.get("label"):
+                        existing["seen_count"] = existing.get("seen_count", 1) + 1
+                        if det.get("confidence", 0) > existing.get("confidence", 0):
+                            existing.update(det)
+                            existing["seen_count"] = existing.get("seen_count", 1)
+                        is_duplicate = True
+                        break
 
-            if not is_duplicate:
-                det["seen_count"] = 1
-                det["first_seen"] = _time.time()
-                history.append(det)
-                if len(history) > app.state.detection_history_max:
-                    history.pop(0)
+                if not is_duplicate:
+                    det["seen_count"] = 1
+                    det["first_seen"] = _time.time()
+                    history.append(det)
+                    if len(history) > app.state.detection_history_max:
+                        history.pop(0)
 
     def _handle_high_rate_ipc_message(message: IPCMessage) -> None:
         """Handle a single high-rate IPC message from ros_http_bridge."""
@@ -637,7 +732,8 @@ def create_app(state_manager: StateManager) -> FastAPI:
         if message.msg_type == HIGH_RATE_MSG_TYPE_DETECTIONS:
             try:
                 detections = message.data.get("detections", [])
-                _apply_detections_update(detections)
+                source_timestamp = message.data.get("source_timestamp")
+                _apply_detections_update(detections, source_timestamp=source_timestamp)
             except Exception as e:
                 _high_rate_warn("det-zmq", f"High-rate detection update failed: {e}")
 
@@ -813,6 +909,8 @@ def create_app(state_manager: StateManager) -> FastAPI:
             "nvblox_running": nvblox_running,
             "bridge_running": bridge_running,
         }
+        if container_running and nvblox_running and bridge_running:
+            app.state.isaac_startup_last_initiated = 0.0
 
         return {
             "container_running": container_running,
@@ -1020,7 +1118,7 @@ if [ ! -f "$NOMAD_LAUNCH" ]; then
     exit 2
 fi
 
-ros2 launch "$NOMAD_LAUNCH" enable_nav2:=false &
+ros2 launch "$NOMAD_LAUNCH" enable_nav2:=true &
 echo $! > /tmp/zed_nvblox.pid
 
 # Wait for launch process to stabilize before starting bridge.
@@ -1424,7 +1522,8 @@ wait
                 # Include detection markers every 30th frame (~1Hz) to keep
                 # SLAM pose/mesh stream responsive under heavy load.
                 if frame_count % 30 == 0:
-                    det_history = websocket.app.state.detection_history
+                    with websocket.app.state.detection_state_lock:
+                        det_history = list(websocket.app.state.detection_history)
                     if det_history:
                         # Cap to 50 most recent detections to limit payload size
                         capped = det_history[-50:] if len(det_history) > 50 else det_history
@@ -1474,8 +1573,8 @@ wait
         state = request.app.state.state_manager.get_state()
         
         # Get values from request or current state
-        heading = task_request.heading_deg if task_request and task_request.heading_deg else state.heading_deg
-        gimbal_pitch = task_request.gimbal_pitch_deg if task_request and task_request.gimbal_pitch_deg else state.gimbal_pitch_deg
+        heading = task_request.heading_deg if task_request and task_request.heading_deg is not None else state.heading_deg
+        gimbal_pitch = task_request.gimbal_pitch_deg if task_request and task_request.gimbal_pitch_deg is not None else state.gimbal_pitch_deg
         gimbal_yaw = state.gimbal_yaw_deg
         pitch = state.pitch_deg
         roll = state.roll_deg
@@ -1525,7 +1624,8 @@ wait
         }
         
         # Include current object detections in metadata for AI description
-        det_history = request.app.state.detection_history
+        with request.app.state.detection_state_lock:
+            det_history = list(request.app.state.detection_history)
         if det_history:
             # Group detections by label for concise summary
             det_summary = {}
@@ -1603,8 +1703,9 @@ wait
 
         try:
             import requests as _requests
+            bridge_host = os.environ.get("NOMAD_BRIDGE_HTTP_HOST", "172.17.0.1").strip() or "172.17.0.1"
             bridge_port = int(os.environ.get("NOMAD_BRIDGE_HTTP_PORT", "9200"))
-            snap_url = f"http://172.17.0.1:{bridge_port}/snapshot"
+            snap_url = f"http://{bridge_host}:{bridge_port}/snapshot"
             resp = _requests.get(snap_url, timeout=3)
             if resp.status_code == 200 and resp.headers.get("Content-Type", "").startswith("image/"):
                 import numpy as _np
@@ -1693,7 +1794,17 @@ wait
         
         # Check if file exists
         if not os.path.exists(image_path):
-            raise HTTPException(status_code=404, detail="Image not found")
+            # Backward-compatible fallback for folder-based captures.
+            if os.path.isdir(image_dir):
+                for folder in sorted(os.listdir(image_dir), reverse=True):
+                    candidate_path = os.path.join(image_dir, folder, filename)
+                    if os.path.isfile(candidate_path):
+                        image_path = candidate_path
+                        break
+                else:
+                    raise HTTPException(status_code=404, detail="Image not found")
+            else:
+                raise HTTPException(status_code=404, detail="Image not found")
         
         return FileResponse(image_path, media_type="image/jpeg")
 
@@ -1931,7 +2042,8 @@ wait
         result = building.to_dict()
 
         # Include target placements if detections are available
-        det_history = request.app.state.detection_history
+        with request.app.state.detection_state_lock:
+            det_history = list(request.app.state.detection_history)
         if det_history:
             descriptions = generate_target_descriptions(det_history, building)
             result["target_descriptions"] = descriptions
@@ -2081,21 +2193,265 @@ wait
             request.app.state.vio_trajectory = []
         return {"success": True, "cleared_points": count}
 
+    def _normalize_vio_area_file_path_or_raise(file_path: str) -> str:
+        """Validate and normalize area-map file paths from API requests."""
+        normalized = (file_path or "").strip()
+        if not normalized:
+            raise HTTPException(status_code=400, detail="file_path is required")
+        return normalized
+
+    def _status_for_vio_area_failure(message: str, default_status: int) -> int:
+        """Map backend failure text to HTTP status while preserving safe defaults."""
+        text = (message or "").strip().lower()
+        if not text:
+            return default_status
+        if "not found" in text or "no such file" in text or "does not exist" in text:
+            return 404
+        if "missing" in text or "invalid" in text or "empty" in text:
+            return 400
+        return default_status
+
+    def _call_ros2_service_in_isaac_container_or_raise(
+        service_name: str,
+        service_type: str,
+        request_payload: dict[str, Any],
+        timeout_s: float = 30.0,
+    ) -> str:
+        """Call a ROS2 service inside the active Isaac container stack."""
+        runtime = _probe_isaac_runtime_state(force_refresh=True)
+        if not runtime.get("container_running", False):
+            raise HTTPException(
+                status_code=503,
+                detail="Isaac ROS container stack is not running",
+            )
+        if not runtime.get("nvblox_running", False):
+            raise HTTPException(
+                status_code=503,
+                detail="Isaac ROS nvblox stack is not running",
+            )
+
+        request_yaml = json.dumps(request_payload)
+        shell_cmd = (
+            "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
+            "source /workspaces/isaac_ros-dev/install/setup.bash >/dev/null 2>&1; "
+            f"ros2 service call {service_name} {service_type} {shlex.quote(request_yaml)}"
+        )
+
+        try:
+            result = subprocess.run(
+                ["docker", "exec", "nomad_isaac_ros", "bash", "-lc", shell_cmd],
+                capture_output=True,
+                text=True,
+                timeout=max(5, int(timeout_s) + 5),
+            )
+        except subprocess.TimeoutExpired:
+            raise HTTPException(
+                status_code=504,
+                detail=f"ROS2 service call timed out: {service_name}",
+            )
+        except Exception as e:
+            logger.error(f"ROS2 service exec failed ({service_name}): {e}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Failed to execute ROS2 service call: {service_name}",
+            )
+
+        output = "\n".join(
+            part for part in [result.stdout.strip(), result.stderr.strip()] if part
+        ).strip()
+        if result.returncode != 0:
+            raise HTTPException(
+                status_code=502,
+                detail=output or f"ROS2 service call failed: {service_name}",
+            )
+
+        success_match = re.search(
+            r"\bsuccess\s*[:=]\s*(true|false)\b",
+            output,
+            flags=re.IGNORECASE,
+        )
+        success = True if not success_match else (success_match.group(1).lower() == "true")
+
+        message_match = re.search(
+            r"message\s*[:=]\s*['\"]?([^\n'\"]+)",
+            output,
+            flags=re.IGNORECASE,
+        )
+        message = message_match.group(1).strip() if message_match else output
+
+        if not success:
+            status = _status_for_vio_area_failure(message or output, default_status=502)
+            raise HTTPException(
+                status_code=status,
+                detail=message or output or f"ROS2 service reported failure: {service_name}",
+            )
+
+        return message or f"ROS2 service call succeeded: {service_name}"
+
+    @app.post("/api/vio/area/save", tags=["VIO"])
+    async def vio_area_save(area_request: VIOAreaSaveRequest, request: Request):
+        """Save relocalization map via direct ZED area map backend or nvblox map service."""
+        file_path = _normalize_vio_area_file_path_or_raise(area_request.file_path)
+        camera_service = request.app.state.camera_service
+
+        if camera_service and hasattr(camera_service, "save_area_map"):
+            backend = "direct_zed_area_map"
+            try:
+                success, message = camera_service.save_area_map(
+                    file_path=file_path,
+                    wait_for_completion=area_request.wait_for_completion,
+                    timeout_s=area_request.timeout_s,
+                )
+            except Exception as e:
+                logger.error(f"Direct camera save_area_map failed: {e}")
+                raise HTTPException(status_code=500, detail=f"Direct camera save failed: {e}")
+
+            if not success:
+                status = _status_for_vio_area_failure(message, default_status=500)
+                raise HTTPException(status_code=status, detail=message or "Failed to save area map")
+        else:
+            backend = "nvblox_map_service"
+            message = _call_ros2_service_in_isaac_container_or_raise(
+                service_name="/nvblox_node/save_map",
+                service_type="nvblox_msgs/srv/FilePath",
+                request_payload={"file_path": file_path},
+                timeout_s=area_request.timeout_s,
+            )
+
+        return {
+            "success": True,
+            "message": message or f"Relocalization map saved via {backend}",
+            "file_path": file_path,
+            "backend": backend,
+        }
+
+    @app.post("/api/vio/area/load", tags=["VIO"])
+    async def vio_area_load(area_request: VIOAreaLoadRequest, request: Request):
+        """Load relocalization map via direct ZED area map backend or nvblox map service."""
+        file_path = _normalize_vio_area_file_path_or_raise(area_request.file_path)
+        camera_service = request.app.state.camera_service
+
+        if camera_service and hasattr(camera_service, "load_area_map"):
+            backend = "direct_zed_area_map"
+            try:
+                success, message = camera_service.load_area_map(file_path)
+            except Exception as e:
+                logger.error(f"Direct camera load_area_map failed: {e}")
+                raise HTTPException(status_code=500, detail=f"Direct camera load failed: {e}")
+
+            if not success:
+                status = _status_for_vio_area_failure(message, default_status=500)
+                raise HTTPException(status_code=status, detail=message or "Failed to load area map")
+        else:
+            backend = "nvblox_map_service"
+            message = _call_ros2_service_in_isaac_container_or_raise(
+                service_name="/nvblox_node/load_map",
+                service_type="nvblox_msgs/srv/FilePath",
+                request_payload={"file_path": file_path},
+            )
+
+        return {
+            "success": True,
+            "message": message or f"Relocalization map loaded via {backend}",
+            "file_path": file_path,
+            "backend": backend,
+        }
+
+    @app.post("/api/vio/area/relocalize", tags=["VIO"])
+    async def vio_area_relocalize(area_request: VIOAreaLoadRequest, request: Request):
+        """Load relocalization map and trigger tracking reset with backend-explicit response."""
+        file_path = _normalize_vio_area_file_path_or_raise(area_request.file_path)
+        camera_service = request.app.state.camera_service
+
+        if camera_service and hasattr(camera_service, "load_area_map"):
+            backend = "direct_zed_area_map"
+            try:
+                load_success, load_message = camera_service.load_area_map(file_path)
+            except Exception as e:
+                logger.error(f"Direct camera relocalize load failed: {e}")
+                raise HTTPException(status_code=500, detail=f"Direct camera relocalize load failed: {e}")
+
+            if not load_success:
+                status = _status_for_vio_area_failure(load_message, default_status=500)
+                raise HTTPException(status_code=status, detail=load_message or "Failed to load area map")
+
+            reset_ok = True
+            reset_message = "Tracking reset not available on direct backend"
+            if hasattr(camera_service, "reset_tracking"):
+                try:
+                    reset_ok = bool(camera_service.reset_tracking())
+                    reset_message = "Tracking reset triggered"
+                except Exception as e:
+                    logger.error(f"Direct camera reset_tracking failed during relocalize: {e}")
+                    raise HTTPException(status_code=500, detail=f"Direct camera reset_tracking failed: {e}")
+
+            if not reset_ok:
+                raise HTTPException(status_code=500, detail="Direct camera reset_tracking returned failure")
+
+            return {
+                "success": True,
+                "message": f"{load_message}; {reset_message}",
+                "file_path": file_path,
+                "backend": backend,
+            }
+
+        backend = "nvblox_map_service"
+        load_message = _call_ros2_service_in_isaac_container_or_raise(
+            service_name="/nvblox_node/load_map",
+            service_type="nvblox_msgs/srv/FilePath",
+            request_payload={"file_path": file_path},
+        )
+        reset_message = _call_ros2_service_in_isaac_container_or_raise(
+            service_name="/zed/zed_node/reset_pos_tracking",
+            service_type="std_srvs/srv/Trigger",
+            request_payload={},
+        )
+
+        return {
+            "success": True,
+            "message": f"{load_message}; {reset_message}",
+            "file_path": file_path,
+            "backend": backend,
+        }
+
     @app.post("/api/vio/reset_origin", tags=["VIO"])
     async def vio_reset_origin(request: Request):
-        """Reset VIO tracking origin to current position."""
+        """Reset VIO tracking origin with backend-explicit status."""
         # Clear trajectory on reset
         with request.app.state.vio_state_lock:
             request.app.state.vio_trajectory = []
-        
-        vio_pipeline = None  # Deprecated: VIO handled via ros_http_bridge
-        if not vio_pipeline:
-            # Just clear trajectory if no VIO pipeline
-            return {
-                "success": True,
-                "reset_counter": 0,
-                "message": "Trajectory cleared (VIO managed by ros_http_bridge)",
-            }
+
+        camera_service = request.app.state.camera_service
+        if camera_service and hasattr(camera_service, "reset_tracking"):
+            backend = "direct_zed_area_map"
+            try:
+                reset_ok = bool(camera_service.reset_tracking())
+                return {
+                    "success": reset_ok,
+                    "reset_counter": 0,
+                    "backend": backend,
+                    "message": (
+                        "Tracking origin reset via direct ZED backend; trajectory cleared"
+                        if reset_ok
+                        else "Failed to reset tracking via direct ZED backend; trajectory cleared"
+                    ),
+                }
+            except Exception as e:
+                logger.error(f"Direct camera reset_tracking failed: {e}")
+                return {
+                    "success": False,
+                    "reset_counter": 0,
+                    "backend": backend,
+                    "message": f"Direct ZED reset_tracking failed; trajectory cleared: {e}",
+                }
+
+        # Keep existing fallback behavior for ros_http_bridge-managed VIO.
+        return {
+            "success": True,
+            "reset_counter": 0,
+            "backend": "nvblox_map_service",
+            "message": "Trajectory cleared (VIO reset managed via ROS bridge fallback)",
+        }
 
     @app.get("/api/vio/calibration", tags=["VIO"])
     async def vio_calibration_status(request: Request):
@@ -2233,6 +2589,18 @@ wait
     # (ROS2 node inside the container) polls these endpoints to receive goals and
     # report feedback/results back.
 
+    async def _parse_request_json_object(request: Request) -> dict[str, Any]:
+        """Parse request JSON and enforce object payloads with controlled 400s."""
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="JSON body must be an object")
+
+        return body
+
     @app.get("/api/nav2/status", tags=["Nav2"])
     async def nav2_status(request: Request):
         """Get current Nav2 navigation status and feedback."""
@@ -2262,7 +2630,7 @@ wait
                 {"x": 2.0, "y": 1.0, "yaw": 1.57}
             ]}
         """
-        body = await request.json()
+        body = await _parse_request_json_object(request)
         goal_type = body.get("type", "navigate_to_pose")
 
         if goal_type == "cancel":
@@ -2301,14 +2669,14 @@ wait
     @app.post("/api/nav2/feedback", tags=["Nav2"])
     async def nav2_feedback(request: Request):
         """Receive navigation feedback from nav2_goal_bridge."""
-        body = await request.json()
+        body = await _parse_request_json_object(request)
         request.app.state.nav2_current_status = body
         return {"success": True}
 
     @app.post("/api/nav2/result", tags=["Nav2"])
     async def nav2_result(request: Request):
         """Receive navigation result from nav2_goal_bridge."""
-        body = await request.json()
+        body = await _parse_request_json_object(request)
         request.app.state.nav2_last_result = body
         request.app.state.nav2_current_status = {
             "status": body.get("status", "unknown"),
@@ -2342,7 +2710,7 @@ wait
         if not spray_ctrl:
             raise HTTPException(status_code=503, detail="Spray controller not initialized")
 
-        body = await request.json()
+        body = await _parse_request_json_object(request)
         from .spray_controller import SprayTarget
         target = SprayTarget(
             target_id=body.get("target_id", 0),
@@ -2414,7 +2782,7 @@ wait
         Called by obstacle_distance_bridge.py at ~5 Hz with 72 angular
         sectors of distance data (5-degree increments).
         """
-        body = await request.json()
+        body = await _parse_request_json_object(request)
         distances = body.get("distances", [])
         if len(distances) != 72:
             raise HTTPException(
@@ -2446,6 +2814,14 @@ wait
         )
         return {"success": success}
 
+    def _require_terminal_api_key() -> None:
+        """Disable terminal command execution unless API key auth is configured."""
+        if not _NOMAD_API_KEY:
+            raise HTTPException(
+                status_code=503,
+                detail="Terminal command execution is disabled until NOMAD_API_KEY is configured",
+            )
+
     # ==================== Terminal Endpoints ======================================
 
     @app.post("/api/terminal/run", tags=["Terminal"], response_model=TerminalCommandResponse)
@@ -2461,6 +2837,8 @@ wait
         - Network troubleshooting
         - Service management
         """
+        _require_terminal_api_key()
+
         # Validate command_name is in whitelist
         if request.command_name not in COMMAND_WHITELIST:
             available = list(COMMAND_WHITELIST.keys())
@@ -2531,6 +2909,8 @@ wait
         The response includes the resolved ``cwd`` after execution so
         the client can track directory changes across commands.
         """
+        _require_terminal_api_key()
+
         import os
         command_str = request.command.strip()
         if not command_str:
@@ -2608,6 +2988,8 @@ wait
         lines: int = Query(50, description="Number of lines"),
     ):
         """Get recent logs for a service."""
+        _require_terminal_api_key()
+
         try:
             result = subprocess.run(
                 ["journalctl", "-u", service, "-n", str(lines), "--no-pager"],
@@ -2847,6 +3229,30 @@ wait
                 "error": f"Script not found: {script_path}",
             }
 
+        startup_guard_window_s = 90.0
+        last_start_ts = float(getattr(app.state, "isaac_startup_last_initiated", 0.0) or 0.0)
+        if last_start_ts > 0.0 and (time.time() - last_start_ts) < startup_guard_window_s:
+            try:
+                runtime_state = _probe_isaac_runtime_state(force_refresh=True)
+                if (
+                    runtime_state["container_running"]
+                    and runtime_state["nvblox_running"]
+                    and runtime_state["bridge_running"]
+                ):
+                    app.state.isaac_startup_last_initiated = 0.0
+                else:
+                    return {
+                        "success": True,
+                        "message": "Isaac ROS startup already in progress. Check status in 30-60 seconds.",
+                        "startup_in_progress": True,
+                    }
+            except Exception:
+                return {
+                    "success": True,
+                    "message": "Isaac ROS startup already in progress. Check status in 30-60 seconds.",
+                    "startup_in_progress": True,
+                }
+
         # Avoid duplicate startup attempts while stack is already running.
         try:
             container_running = False
@@ -2875,6 +3281,7 @@ wait
                 bridge_running = int(result.stdout.strip() or "0") > 0
 
             if container_running and nvblox_running and bridge_running:
+                app.state.isaac_startup_last_initiated = 0.0
                 return {
                     "success": True,
                     "message": "Isaac ROS stack already running. Skipping duplicate start.",
@@ -2892,6 +3299,7 @@ wait
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
+            app.state.isaac_startup_last_initiated = time.time()
             
             # Don't wait for completion - it takes a while
             return {
@@ -2979,6 +3387,42 @@ wait
     # so Foxglove Studio can visualize them. Default port 8765.
     # This runs independently of nvblox — start/stop without relaunching.
 
+    def _strip_host_port(host_value: str) -> str:
+        host_value = (host_value or "").strip()
+        if not host_value:
+            return ""
+        if host_value.startswith("["):
+            end = host_value.find("]")
+            if end > 1:
+                return host_value[1:end]
+        if host_value.count(":") == 1:
+            return host_value.rsplit(":", 1)[0]
+        return host_value
+
+    def _resolve_foxglove_host(request: Request) -> str:
+        forwarded_host = (request.headers.get("x-forwarded-host") or "").split(",", 1)[0]
+        host = _strip_host_port(forwarded_host)
+        if host:
+            return host
+
+        host_header = (request.headers.get("host") or "").split(",", 1)[0]
+        host = _strip_host_port(host_header)
+        if host:
+            return host
+
+        if request.url.hostname:
+            return request.url.hostname
+
+        for env_name in ("FOXGLOVE_WS_HOST", "TAILSCALE_IP", "NOMAD_API_HOST"):
+            env_host = (os.environ.get(env_name) or "").strip()
+            if env_host:
+                return env_host
+
+        return "127.0.0.1"
+
+    def _foxglove_ws_url(request: Request, port: int) -> str:
+        return f"ws://{_resolve_foxglove_host(request)}:{int(port)}"
+
     @app.post("/api/isaac/foxglove/start", tags=["Isaac ROS"])
     async def foxglove_start(
         request: Request,
@@ -3001,11 +3445,13 @@ wait
                 capture_output=True, text=True, timeout=5,
             )
             if probe.returncode == 0:
+                active_port = int(getattr(request.app.state, "foxglove_port", port))
+                request.app.state.foxglove_port = active_port
                 return {
                     "success": True,
-                    "message": f"Foxglove bridge already running on port {port}",
+                    "message": f"Foxglove bridge already running on port {active_port}",
                     "already_running": True,
-                    "url": f"ws://100.85.121.98:{port}",
+                    "url": _foxglove_ws_url(request, active_port),
                 }
 
             # Launch foxglove_bridge in background
@@ -3047,10 +3493,11 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             )
             if verify.returncode == 0:
                 request.app.state.foxglove_enabled = True
+                request.app.state.foxglove_port = int(port)
                 return {
                     "success": True,
                     "message": f"Foxglove bridge started on port {port}",
-                    "url": f"ws://100.85.121.98:{port}",
+                    "url": _foxglove_ws_url(request, int(port)),
                 }
             else:
                 log_tail = subprocess.run(
@@ -3090,9 +3537,10 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 capture_output=True, text=True, timeout=5,
             )
             running = probe.returncode == 0
+            port = int(getattr(request.app.state, "foxglove_port", 8765))
             return {
                 "running": running,
-                "url": "ws://100.85.121.98:8765" if running else None,
+                "url": _foxglove_ws_url(request, port) if running else None,
             }
         except Exception as e:
             return {"running": False, "error": str(e)}
@@ -3276,9 +3724,10 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         """
         result = _launch_nvblox_bridge_with_od(enable_od=True)
         if result.get("success"):
-            request.app.state.detection_enabled = True
-            request.app.state.detection_last_update = 0.0
-            request.app.state.detected_objects = []
+            with request.app.state.detection_state_lock:
+                request.app.state.detection_enabled = True
+                request.app.state.detection_last_update = 0.0
+                request.app.state.detected_objects = []
         return result
 
     @app.post("/api/detections/stop", tags=["Detections"])
@@ -3290,9 +3739,10 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         """
         result = _launch_nvblox_bridge_with_od(enable_od=False)
         if result.get("success"):
-            request.app.state.detection_enabled = False
-            request.app.state.detection_last_update = 0.0
-            request.app.state.detected_objects = []
+            with request.app.state.detection_state_lock:
+                request.app.state.detection_enabled = False
+                request.app.state.detection_last_update = 0.0
+                request.app.state.detected_objects = []
         return result
 
     @app.get("/api/detections/status", tags=["Detections"])
@@ -3300,16 +3750,20 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         """Get circle detection runtime status for Mission Planner service control polling."""
         import time as _time
 
-        last_update = request.app.state.detection_last_update
+        with request.app.state.detection_state_lock:
+            detection_enabled = bool(getattr(request.app.state, "detection_enabled", True))
+            last_update = request.app.state.detection_last_update
+            current_count = len(request.app.state.detected_objects)
+            history_count = len(request.app.state.detection_history)
         age_seconds = _time.time() - last_update if last_update > 0 else None
         fresh_stream = age_seconds is not None and age_seconds <= 3.0
 
         return {
-            "detection_enabled": bool(getattr(request.app.state, "detection_enabled", True)),
+            "detection_enabled": detection_enabled,
             "fresh_stream": fresh_stream,
             "age_seconds": age_seconds,
-            "current_count": len(request.app.state.detected_objects),
-            "history_count": len(request.app.state.detection_history),
+            "current_count": current_count,
+            "history_count": history_count,
         }
 
     @app.post("/api/detections/update", tags=["Detections"])
@@ -3321,11 +3775,23 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         Stores current detections and adds new unique targets to history.
         Also receivable via ZMQ IPC (preferred low-latency path).
         """
-        body = await request.json()
-        detections = body.get("detections", [])
-        _apply_detections_update(detections)
-        history = request.app.state.detection_history
-        return {"accepted": len(detections), "history_size": len(history)}
+        body = await _parse_request_json_object(request)
+        detections = body.get("detections")
+        if not isinstance(detections, list):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid payload: 'detections' must be a list of objects",
+            )
+        if any(not isinstance(det, dict) for det in detections):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid payload: each item in 'detections' must be an object",
+            )
+        source_timestamp = body.get("source_timestamp")
+        _apply_detections_update(detections, source_timestamp=source_timestamp)
+        with request.app.state.detection_state_lock:
+            history_size = len(request.app.state.detection_history)
+        return {"accepted": len(detections), "history_size": history_size}
 
     @app.get("/api/detections", tags=["Detections"])
     async def get_detections(request: Request):
@@ -3336,9 +3802,10 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         of unique detected objects with 3D positions.
         """
         import time as _time
-        current = request.app.state.detected_objects
-        history = request.app.state.detection_history
-        last_update = request.app.state.detection_last_update
+        with request.app.state.detection_state_lock:
+            current = list(request.app.state.detected_objects)
+            history = list(request.app.state.detection_history)
+            last_update = request.app.state.detection_last_update
         
         return {
             "current": {
@@ -3359,7 +3826,8 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         
         Useful for Task 1 AI description to know which targets are present.
         """
-        history = request.app.state.detection_history
+        with request.app.state.detection_state_lock:
+            history = list(request.app.state.detection_history)
         
         # Group by label
         by_label = {}
@@ -3392,8 +3860,9 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
     @app.delete("/api/detections/history", tags=["Detections"])
     async def clear_detection_history(request: Request):
         """Clear the persistent detection history."""
-        count = len(request.app.state.detection_history)
-        request.app.state.detection_history = []
+        with request.app.state.detection_state_lock:
+            count = len(request.app.state.detection_history)
+            request.app.state.detection_history = []
         return {"cleared": count}
 
     # ==================== Video Streaming Endpoints ====================
@@ -3665,17 +4134,20 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         Posted by: ros_http_bridge.py (inside Isaac ROS container)
         """
         # Size check -- reject payloads over 5 MB
-        content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > 5 * 1024 * 1024:
+        max_payload_bytes = 5 * 1024 * 1024
+        try:
+            raw = await request.body()
+        except Exception:
+            return JSONResponse({"error": "Invalid payload"}, status_code=400)
+        if len(raw) > max_payload_bytes:
             return JSONResponse({"error": "Payload too large"}, status_code=413)
 
         try:
             content_type = request.headers.get("content-type", "application/json")
             if "msgpack" in content_type and MSGPACK_AVAILABLE:
-                raw = await request.body()
                 mesh_data = msgpack.unpackb(raw, raw=False)
             else:
-                mesh_data = await request.json()
+                mesh_data = json.loads(raw)
         except Exception:
             return JSONResponse({"error": "Invalid payload"}, status_code=400)
 
@@ -3746,7 +4218,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             - drone_attitude: Current VIO orientation (roll, pitch, yaw)
             - timestamp: ISO format timestamp
             
-        Update Rate: Target 2 Hz for streaming
+        Update Rate: Bounded by configured bridge send rate (default 30 Hz); effective rate may vary
         """
         try:
             # Check for stored mesh data from ros_http_bridge
@@ -3759,7 +4231,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                         "timestamp": stored.get("received_at"),
                         "block_count": stored.get("block_count", 0),
                         "total_blocks": stored.get("total_blocks", 0),
-                        "mode": stored.get("mode", "blocks"),
+                        "mode": "block" if stored.get("mode") == "blocks" else stored.get("mode", "block"),
                     }
                 else:
                     result = {
@@ -3908,14 +4380,15 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 "blocks": [],
                 "block_size": prev_block_size,
                 "total_blocks": 0,
-                "mode": "blocks",
+                "mode": "block",
                 "clear": True,
             },
             "received_at": datetime.now(timezone.utc).isoformat(),
             "block_count": 0,
             "total_blocks": 0,
-            "mode": "blocks",
+            "mode": "block",
         }
+        request.app.state.slam_mesh_version = getattr(request.app.state, "slam_mesh_version", 0) + 1
         
         return {
             "success": True,
@@ -4223,11 +4696,14 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         
         Returns the output of each command.
         """
+        _require_terminal_api_key()
+
         results = {
             "success": True,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "steps": [],
         }
+        errors: list[str] = []
         
         nomad_dir = os.path.expanduser("~/NOMAD")
         
@@ -4239,6 +4715,13 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 capture_output=True,
                 text=True,
                 timeout=30,
+            )
+            stash_output_text = "\n".join(
+                part for part in [stash_result.stdout, stash_result.stderr] if part
+            ).lower()
+            stash_created = (
+                stash_result.returncode == 0
+                and "no local changes to save" not in stash_output_text
             )
             results["steps"].append({
                 "step": "git stash",
@@ -4263,33 +4746,47 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             })
             
             if pull_result.returncode != 0:
+                errors.append("Git pull failed")
+            else:
+                # Step 3: chmod +x scripts
+                chmod_result = subprocess.run(
+                    ["bash", "-c", "find scripts -name '*.sh' -exec chmod +x {} +"],
+                    cwd=nomad_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                results["steps"].append({
+                    "step": "chmod +x scripts/**/*.sh",
+                    "success": chmod_result.returncode == 0,
+                    "output": "Scripts made executable" if chmod_result.returncode == 0 else chmod_result.stdout.strip(),
+                    "error": chmod_result.stderr.strip() if chmod_result.returncode != 0 else None,
+                })
+                if chmod_result.returncode != 0:
+                    chmod_error = chmod_result.stderr.strip() or chmod_result.stdout.strip() or "unknown error"
+                    errors.append(f"chmod +x scripts/**/*.sh failed: {chmod_error}")
+
+            if stash_created:
+                stash_pop_result = subprocess.run(
+                    ["git", "stash", "pop"],
+                    cwd=nomad_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                results["steps"].append({
+                    "step": "git stash pop",
+                    "success": stash_pop_result.returncode == 0,
+                    "output": stash_pop_result.stdout.strip(),
+                    "error": stash_pop_result.stderr.strip() if stash_pop_result.returncode != 0 else None,
+                })
+                if stash_pop_result.returncode != 0:
+                    stash_error = stash_pop_result.stderr.strip() or stash_pop_result.stdout.strip() or "unknown error"
+                    errors.append(f"Git stash pop failed: {stash_error}")
+
+            if errors:
                 results["success"] = False
-                results["error"] = "Git pull failed"
-                return results
-            
-            # Step 3: chmod +x scripts
-            chmod_result = subprocess.run(
-                ["chmod", "+x", "scripts/*.sh"],
-                cwd=nomad_dir,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            # Try with bash -c for glob expansion (recursive)
-            chmod_result = subprocess.run(
-                ["bash", "-c", "find scripts -name '*.sh' -exec chmod +x {} +"],
-                cwd=nomad_dir,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            results["steps"].append({
-                "step": "chmod +x scripts/**/*.sh",
-                "success": chmod_result.returncode == 0,
-                "output": "Scripts made executable" if chmod_result.returncode == 0 else chmod_result.stdout.strip(),
-                "error": chmod_result.stderr.strip() if chmod_result.returncode != 0 else None,
-            })
+                results["error"] = "; ".join(errors)
             
             return results
             
@@ -4309,6 +4806,8 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         
         Returns current branch, commit hash, and any uncommitted changes.
         """
+        _require_terminal_api_key()
+
         nomad_dir = os.path.expanduser("~/NOMAD")
         
         try:
@@ -4365,6 +4864,8 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         (python edge_core/gdrive_upload.py --setup <client_secret.json>)
         and contains a refresh_token for headless use.
         """
+        _require_terminal_api_key()
+
         body = await request.body()
         if not body:
             raise HTTPException(status_code=400, detail="Empty request body")

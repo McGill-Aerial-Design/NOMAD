@@ -4,13 +4,14 @@ NOMAD Edge Core - ZED 2i Camera Interface
 Provides camera streaming and Visual Inertial Odometry (VIO) integration
 for the ZED 2i stereo camera on Jetson Orin Nano.
 
-Target: Python 3.13 | NVIDIA Jetson Orin Nano | ZED SDK 4.x
+Target: Python 3.13 | NVIDIA Jetson Orin Nano | ZED SDK 5.2.3
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -43,15 +44,16 @@ class ZEDPose:
     """
     Pose data from ZED positional tracking.
     
-    Coordinates are in camera frame (right-handed):
-    - X: Right
-    - Y: Down
-    - Z: Forward
+    Coordinates use the configured ZED SDK world frame
+    RIGHT_HANDED_Z_UP_X_FWD (right-handed):
+    - X: Forward
+    - Y: Left
+    - Z: Up
     
     For ArduPilot, we convert to NED frame:
-    - North: Z (Forward)
-    - East: X (Right)
-    - Down: Y (Down)
+    - North: X (Forward)
+    - East: -Y (Right)
+    - Down: -Z (Down)
     """
     timestamp_us: int
     position: Tuple[float, float, float]  # (x, y, z) in meters
@@ -72,15 +74,15 @@ class ZEDPose:
         roll, pitch, yaw = self.euler
         
         # ZED to NED conversion:
-        # NED North = ZED Z (forward)
-        # NED East = ZED X (right)
-        # NED Down = ZED Y (down)
-        north = z
-        east = x
-        down = y
+        # ZED RIGHT_HANDED_Z_UP_X_FWD: X-forward, Y-left, Z-up
+        # NED North = ZED X (forward)
+        # NED East = -ZED Y (right)
+        # NED Down = -ZED Z (down)
+        north = x
+        east = -y
+        down = -z
         
-        # Euler angles: ZED uses right-handed, same convention
-        # Roll, Pitch, Yaw are compatible
+        # Euler angles are passed through as provided by the SDK.
         return (north, east, down, roll, pitch, yaw)
 
 
@@ -133,7 +135,7 @@ class ZEDCameraService:
     
     def __init__(
         self,
-        config: ZEDConfig = None,
+        config: Optional[ZEDConfig] = None,
         on_pose_update: Optional[Callable[[ZEDPose], None]] = None,
         on_frame_update: Optional[Callable[[ZEDFrame], None]] = None,
     ):
@@ -153,6 +155,8 @@ class ZEDCameraService:
         
         self._is_initialized = False
         self._tracking_enabled = False
+        self._is_degraded = False
+        self._degraded_reason: Optional[str] = None
         
         # Performance metrics
         self._fps_counter = 0
@@ -175,6 +179,16 @@ class ZEDCameraService:
         return self._current_fps
 
     @property
+    def is_degraded(self) -> bool:
+        """Whether the camera service is in a degraded state requiring restart."""
+        return self._is_degraded
+
+    @property
+    def degraded_reason(self) -> Optional[str]:
+        """Human-readable degraded-state reason, when available."""
+        return self._degraded_reason
+
+    @property
     def zed_handle(self):
         """Get the raw pyzed.sl.Camera handle for direct sensor access (e.g. calibration)."""
         return self._zed if self._is_initialized else None
@@ -193,6 +207,10 @@ class ZEDCameraService:
         try:
             if not self._initialize_camera():
                 return False
+
+            with self._lock:
+                self._is_degraded = False
+                self._degraded_reason = None
                 
             self._stop_event.clear()
             self._thread = threading.Thread(target=self._run, daemon=True)
@@ -211,6 +229,20 @@ class ZEDCameraService:
         
         if self._thread:
             self._thread.join(timeout=2.0)
+            if self._thread.is_alive():
+                self._mark_degraded("stop_timeout")
+                logger.warning(
+                    "ZED worker thread still active after stop timeout; attempting guarded forced-close and marking service degraded"
+                )
+                forced_close_ok = self._guarded_force_close()
+                if forced_close_ok:
+                    logger.warning("Guarded forced-close completed while worker thread remained active")
+                    self._thread.join(timeout=0.25)
+                    if self._thread and not self._thread.is_alive():
+                        self._thread = None
+                else:
+                    logger.error("Guarded forced-close failed; manual restart is required")
+                return
             self._thread = None
             
         self._close_camera()
@@ -247,13 +279,123 @@ class ZEDCameraService:
             transform = sl.Transform()
             transform.set_identity()
             
-            self._zed.reset_positional_tracking(transform)
+            status = self._zed.reset_positional_tracking(transform)
+            if status != sl.ERROR_CODE.SUCCESS:
+                logger.error(f"Failed to reset tracking: {status}")
+                return False
+
             logger.info("Positional tracking reset")
             return True
             
         except Exception as e:
             logger.error(f"Failed to reset tracking: {e}")
             return False
+
+    def save_area_map(
+        self,
+        file_path: str,
+        wait_for_completion: bool = True,
+        timeout_s: float = 30.0,
+    ) -> Tuple[bool, str]:
+        """Save positional tracking area map for later relocalization."""
+        if not self._is_initialized or not self._zed:
+            return False, "Camera service is not initialized"
+        if not self._tracking_enabled:
+            return False, "Positional tracking must be enabled before saving an area map"
+        if not file_path:
+            return False, "file_path is required"
+
+        map_path = os.path.abspath(file_path)
+        try:
+            os.makedirs(os.path.dirname(map_path) or ".", exist_ok=True)
+        except Exception as e:
+            return False, f"Failed to prepare area map directory: {e}"
+
+        try:
+            import pyzed.sl as sl
+
+            status = self._zed.save_area_map(map_path)
+            if status != sl.ERROR_CODE.SUCCESS:
+                message = f"Failed to start area map export: {status}"
+                logger.error(message)
+                return False, message
+
+            if not wait_for_completion:
+                return True, f"Area map export started: {map_path}"
+
+            if not hasattr(self._zed, "get_area_export_state"):
+                return True, f"Area map export requested: {map_path}"
+
+            deadline = time.time() + max(timeout_s, 0.0)
+            while time.time() <= deadline:
+                export_state = self._zed.get_area_export_state()
+                export_state_text = str(export_state).upper()
+                if "SUCCESS" in export_state_text:
+                    logger.info(f"Area map saved: {map_path}")
+                    return True, f"Area map saved: {map_path}"
+                if "FAIL" in export_state_text or "ERROR" in export_state_text:
+                    message = f"Area map export failed: {export_state}"
+                    logger.error(message)
+                    return False, message
+                time.sleep(0.1)
+
+            message = f"Timed out waiting for area map export after {timeout_s:.1f}s"
+            logger.error(message)
+            return False, message
+
+        except Exception as e:
+            logger.error(f"Failed to save area map: {e}")
+            return False, f"Failed to save area map: {e}"
+
+    def load_area_map(self, file_path: str) -> Tuple[bool, str]:
+        """Load an area map and re-enable tracking for relocalization."""
+        if not self._is_initialized or not self._zed:
+            return False, "Camera service is not initialized"
+        if not file_path:
+            return False, "file_path is required"
+
+        map_path = os.path.abspath(file_path)
+        if not os.path.isfile(map_path):
+            return False, f"Area map file not found: {map_path}"
+
+        was_tracking_enabled = self._tracking_enabled
+
+        try:
+            import pyzed.sl as sl
+
+            if was_tracking_enabled:
+                self._zed.disable_positional_tracking()
+                self._tracking_enabled = False
+
+            tracking_params = sl.PositionalTrackingParameters()
+            tracking_params.enable_area_memory = True
+            tracking_params.enable_pose_smoothing = True
+            tracking_params.set_floor_as_origin = False
+            tracking_params.area_file_path = map_path
+
+            status = self._zed.enable_positional_tracking(tracking_params)
+            if status != sl.ERROR_CODE.SUCCESS:
+                if was_tracking_enabled and not self._tracking_enabled:
+                    if self.enable_tracking(True):
+                        logger.warning("Restored positional tracking after area map load failure")
+                    else:
+                        logger.error("Failed to restore positional tracking after area map load failure")
+                message = f"Failed to load area map for relocalization: {status}"
+                logger.error(message)
+                return False, message
+
+            self._tracking_enabled = True
+            logger.info(f"Area map loaded for relocalization: {map_path}")
+            return True, f"Area map loaded for relocalization: {map_path}"
+
+        except Exception as e:
+            if was_tracking_enabled and not self._tracking_enabled:
+                if self.enable_tracking(True):
+                    logger.warning("Restored positional tracking after area map load exception")
+                else:
+                    logger.error("Failed to restore positional tracking after area map load exception")
+            logger.error(f"Failed to load area map: {e}")
+            return False, f"Failed to load area map: {e}"
     
     def enable_tracking(self, enable: bool = True) -> bool:
         """Enable or disable positional tracking."""
@@ -322,8 +464,28 @@ class ZEDCameraService:
                 self._config.depth_mode, sl.DEPTH_MODE.ULTRA
             )
             
-            # Coordinate system for ArduPilot compatibility
-            init_params.coordinate_system = sl.COORDINATE_SYSTEM.RIGHT_HANDED_Z_UP_X_FWD
+            # Resolve coordinate system from configuration (validated against SDK enum).
+            coordinate_system_name = (self._config.coordinate_system or "").strip().upper()
+            try:
+                init_params.coordinate_system = getattr(
+                    sl.COORDINATE_SYSTEM,
+                    coordinate_system_name,
+                )
+            except AttributeError:
+                valid_coordinate_systems = [
+                    name for name in dir(sl.COORDINATE_SYSTEM) if name.isupper()
+                ]
+                logger.error(
+                    "Invalid ZED coordinate system '%s' in ZEDConfig.coordinate_system. Valid values: %s",
+                    self._config.coordinate_system,
+                    ", ".join(valid_coordinate_systems),
+                )
+                return False
+            if coordinate_system_name != "RIGHT_HANDED_Z_UP_X_FWD":
+                logger.warning(
+                    "Configured coordinate system '%s'; ZEDPose.to_ned assumes RIGHT_HANDED_Z_UP_X_FWD.",
+                    coordinate_system_name,
+                )
             init_params.coordinate_units = sl.UNIT.METER
             
             # Serial number (optional)
@@ -371,20 +533,39 @@ class ZEDCameraService:
         except Exception as e:
             logger.error(f"Camera initialization error: {e}")
             return False
+
+    def _mark_degraded(self, reason: str) -> None:
+        with self._lock:
+            self._is_degraded = True
+            self._degraded_reason = reason
+
+    def _guarded_force_close(self) -> bool:
+        """Best-effort close when stop timeout occurs and worker thread is still active."""
+        lock_acquired = self._lock.acquire(timeout=0.25)
+        if not lock_acquired:
+            return False
+        try:
+            self._close_camera()
+            return self._zed is None and not self._is_initialized
+        finally:
+            self._lock.release()
     
     def _close_camera(self) -> None:
         """Close the ZED camera."""
-        if self._zed:
-            try:
-                if self._tracking_enabled:
-                    self._zed.disable_positional_tracking()
-                self._zed.close()
-            except Exception as e:
-                logger.error(f"Error closing camera: {e}")
-            finally:
-                self._zed = None
-                self._is_initialized = False
-                self._tracking_enabled = False
+        with self._lock:
+            if self._zed:
+                try:
+                    if self._tracking_enabled:
+                        self._zed.disable_positional_tracking()
+                    self._zed.close()
+                except Exception as e:
+                    logger.error(f"Error closing camera: {e}")
+            self._zed = None
+            self._is_initialized = False
+            self._tracking_enabled = False
+            self._latest_pose = None
+            self._latest_frame = None
+            self._current_fps = 0.0
     
     def _run(self) -> None:
         """Main camera loop."""
@@ -393,9 +574,11 @@ class ZEDCameraService:
             
             # Pre-allocate objects
             image_left = sl.Mat()
-            image_right = sl.Mat()
             depth = sl.Mat()
             pose = sl.Pose()
+            prev_pose_timestamp_us: Optional[int] = None
+            prev_translation: Optional[Tuple[float, float, float]] = None
+            min_dt_s = 1e-6
             
             while not self._stop_event.is_set():
                 # Grab frame
@@ -424,8 +607,18 @@ class ZEDCameraService:
                         orientation = pose.get_orientation().get()
                         euler = pose.get_euler_angles()
                         
-                        # Calculate velocity (simplified)
-                        velocity = (0.0, 0.0, 0.0)  # Would need previous pose for real velocity
+                        current_position = (translation[0], translation[1], translation[2])
+                        velocity = (0.0, 0.0, 0.0)
+                        if prev_pose_timestamp_us is not None and prev_translation is not None:
+                            dt_s = (timestamp_us - prev_pose_timestamp_us) / 1_000_000.0
+                            if dt_s > min_dt_s:
+                                velocity = (
+                                    (current_position[0] - prev_translation[0]) / dt_s,
+                                    (current_position[1] - prev_translation[1]) / dt_s,
+                                    (current_position[2] - prev_translation[2]) / dt_s,
+                                )
+                        prev_pose_timestamp_us = timestamp_us
+                        prev_translation = current_position
                         
                         tracking_state_map = {
                             sl.POSITIONAL_TRACKING_STATE.OFF: ZEDTrackingState.OFF,
@@ -436,7 +629,7 @@ class ZEDCameraService:
                         
                         zed_pose = ZEDPose(
                             timestamp_us=timestamp_us,
-                            position=(translation[0], translation[1], translation[2]),
+                            position=current_position,
                             orientation=(orientation[0], orientation[1], orientation[2], orientation[3]),
                             euler=(euler[0], euler[1], euler[2]),
                             velocity=velocity,
@@ -448,14 +641,20 @@ class ZEDCameraService:
                             self._latest_pose = zed_pose
                         
                         if self._on_pose_update:
-                            self._on_pose_update(zed_pose)
+                            try:
+                                self._on_pose_update(zed_pose)
+                            except Exception as callback_error:
+                                logger.error(f"Pose update callback error: {callback_error}")
                     
                     # Update latest frame
                     with self._lock:
                         self._latest_frame = frame
                     
                     if self._on_frame_update:
-                        self._on_frame_update(frame)
+                        try:
+                            self._on_frame_update(frame)
+                        except Exception as callback_error:
+                            logger.error(f"Frame update callback error: {callback_error}")
                     
                     # FPS calculation
                     self._fps_counter += 1
@@ -470,3 +669,7 @@ class ZEDCameraService:
                     
         except Exception as e:
             logger.error(f"Camera loop error: {e}")
+            try:
+                self._close_camera()
+            except Exception as close_error:
+                logger.error(f"Camera loop cleanup error: {close_error}")

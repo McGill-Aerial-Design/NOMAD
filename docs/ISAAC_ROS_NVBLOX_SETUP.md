@@ -14,9 +14,9 @@ Host (Jetson Orin Nano, JetPack 6.2)
   |-- Tailscale VPN        (systemd)
   |
   +-- Docker: nomad_isaac_ros  (isaac_ros_dev-aarch64 image)
-        |-- ZED SDK 4.2
+      |-- ZED SDK 5.2.3
         |-- ZED ROS2 wrapper  (camera driver, VIO at 30 Hz)
-        |-- nvblox             (3D reconstruction, mesh at ~7 Hz)
+                |-- nvblox             (3D reconstruction, mesh at 5.0 Hz)
         |-- ROS-HTTP bridge    (relays VIO + mesh to Edge Core)
         +-- Video bridge       (managed by Edge Core VideoStreamManager API)
 ```
@@ -51,8 +51,8 @@ git clone --branch release-3.2 https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_com
 git clone --branch release-3.2 https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nvblox.git
 cd isaac_ros_nvblox && git submodule update --init --depth 1 && cd ..
 
-# ZED ROS2 wrapper (branch must match ZED SDK version)
-git clone --branch humble-v4.1.4 --depth 1 https://github.com/stereolabs/zed-ros2-wrapper.git
+# ZED ROS2 wrapper (v5.2.0 is compatible with ZED SDK 5.2.x)
+git clone --branch v5.2.0 --depth 1 https://github.com/stereolabs/zed-ros2-wrapper.git
 cd zed-ros2-wrapper && git submodule update --init --recursive && cd ..
 ```
 
@@ -116,29 +116,43 @@ If you skipped step 4 and are using the bare `isaac_ros_dev-aarch64` image, the 
 docker exec -it nomad_isaac_ros bash
 
 # Install deps manually (only needed if container was recreated)
-sudo apt update
-sudo apt install -y \
+apt update
+apt install -y \
   ros-humble-zed-msgs \
+    ros-humble-navigation2 \
+    ros-humble-nav2-bringup \
+    ros-humble-nav2-msgs \
   ros-humble-robot-localization \
   ros-humble-point-cloud-transport \
   ros-humble-tf2-ros \
-  ros-humble-tf2-tools
+  ros-humble-tf2-tools \
+  ros-humble-isaac-ros-managed-nitros \
+  ros-humble-isaac-ros-nitros \
+  ros-humble-isaac-ros-nitros-image-type \
+  ros-humble-isaac-ros-nitros-camera-info-type \
+  ros-humble-isaac-ros-nitros-point-cloud-type \
+  gir1.2-gstreamer-1.0 \
+  gir1.2-gst-plugins-base-1.0 \
+  gstreamer1.0-plugins-good \
+  gstreamer1.0-plugins-bad \
+  gstreamer1.0-rtsp \
+  gstreamer1.0-x
 
 # Source workspace
 source /opt/ros/humble/setup.bash
 source /workspaces/isaac_ros-dev/install/setup.bash
 
-# Launch nvblox with ZED
-ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2
+# Launch NOMAD ZED + nvblox stack
+ros2 launch /workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py
 ```
 
-Use `camera:=zed2` for ZED 2i cameras (confirmed by NVIDIA -- zed2i uses the zed2 profile).
+The NOMAD launch file already uses the `zed2` camera profile for ZED 2i.
 
 ---
 
 ## Nav2 Dependencies
 
-Nav2 (Navigation2) is a mandatory dependency for autonomous navigation and mission planning. The following packages are automatically installed by both the startup script and Docker image:
+Nav2 (Navigation2) is required for full autonomous navigation and mission planning features. The following packages are automatically installed by both the startup script and Docker image:
 
 ### Required Nav2 Packages
 
@@ -187,7 +201,7 @@ ros2 topic list | grep nav2  # Inside container
 GET /api/nav/status
 ```
 
-If Nav2 packages are missing, the bridge will fail to initialize nav2 message types and navigation commands will not work.
+If Nav2 packages are missing or Nav2 validation fails, startup may continue in degraded mode (telemetry/VIO/mesh paths can still come up), but nav2 message bridging and autonomous navigation commands will remain unavailable until Nav2 is installed and validated.
 
 ---
 
@@ -203,16 +217,16 @@ Optimized for **Task 1 (outdoor)** and **real-time 3D visualization** in Mission
 
 | Parameter | Value | Notes |
 |-----------|-------|-------|
-| `voxel_size` | 0.05 m | 5cm voxels for detailed Mission Planner 3D view |
-| `map_clearing_radius_m` | 8.0 m | 8m radius mapping around drone (GPU memory fit on Orin Nano) |
-| `projective_integrator_max_integration_distance_m` | 8.0 m | Max depth integration range |
-| `integrate_depth_rate_hz` | 30.0 | Target 30Hz depth integration |
-| `update_mesh_rate_hz` | 30.0 | Target 30Hz mesh updates for responsive visualization |
-| `update_esdf_rate_hz` | 15.0 | ESDF distance field responsive updates |
-| `esdf_mode` | "3d" | Full volumetric mapping |
-| `mapping_type` | "static_tsdf" | Best for mesh generation |
+| `voxel_size` | 0.10 m | 10cm voxels tuned for Orin Nano 8GB stability |
+| `map_clearing_radius_m` | 5.0 m | 5m active mapping radius to reduce GPU memory pressure |
+| `projective_integrator_max_integration_distance_m` | 5.0 m | Max depth integration range |
+| `integrate_depth_rate_hz` | 5.0 | Conservative depth integration rate for stability |
+| `update_mesh_rate_hz` | 5.0 | Mesh updates tuned for stable real-time visualization |
+| `update_esdf_rate_hz` | 5.0 | ESDF update rate for consistent obstacle field updates |
+| `esdf_mode` | "2d" | 2D ESDF mode to reduce compute/memory load |
+| `mapping_type` | "dynamic" | Dynamic mapping mode for robust operation |
 | `back_projection_subsampling` | 4 | Heavy subsampling for speed |
-| `publish_layer_rate_hz` | 30.0 | 30Hz layer publishing to Mission Planner |
+| `publish_layer_rate_hz` | 5.0 | Layer publishing rate tuned for Orin Nano headroom |
 
 #### Indoor config: `config/nvblox_indoor.yaml`
 
@@ -234,10 +248,10 @@ The active config is determined by which yaml file is copied to the nvblox base 
 
 ```bash
 # Use performance (outdoor) profile
-cp config/nvblox_performance.yaml /opt/ros/humble/.../nvblox_base.yaml
+cp /workspaces/isaac_ros-dev/config/nvblox_performance.yaml /workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/nvblox/nvblox_base.yaml
 
 # Use indoor profile (requires nvblox container restart, ~2-3s blind window)
-cp config/nvblox_indoor.yaml /opt/ros/humble/.../nvblox_base.yaml
+cp /workspaces/isaac_ros-dev/config/nvblox_indoor.yaml /workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/nvblox/nvblox_base.yaml
 ```
 
 The `start_isaac_ros_auto.sh` script applies `nvblox_performance.yaml` by default.
@@ -245,14 +259,12 @@ The `start_isaac_ros_auto.sh` script applies `nvblox_performance.yaml` by defaul
 To use this config when launching nvblox manually:
 
 ```bash
-ros2 launch nvblox_examples_bringup zed_example.launch.py \
-    camera:=zed2 \
-    nvblox_params_file:=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml
+ros2 launch /workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py
 ```
 
 ### ZED Resolution
 
-The ZED wrapper defaults to 360p (downscale factor 2.0). The startup script patches this to native 720p automatically. To change manually:
+The ZED wrapper defaults to 360p (downscale factor 2.0). The startup script keeps this default. To switch to native 720p manually:
 
 Edit `install/zed_wrapper/share/zed_wrapper/config/common.yaml`:
 ```yaml
@@ -265,33 +277,36 @@ pub_downscale_factor: 1.0  # 1.0 = native 720p, 2.0 = 360p
 
 | Topic | Rate | Description |
 |-------|------|-------------|
-| `/zed/zed_node/rgb/image_rect_color` | 30 Hz | Camera image (720p BGRA8) |
+| `/zed/zed_node/rgb/image_rect_color` | 30 Hz | Camera image (default 360p via `pub_downscale_factor: 2.0`; optional 720p with `pub_downscale_factor: 1.0`) |
 | `/zed/zed_node/depth/depth_registered` | 30 Hz | Depth map |
 | `/zed/zed_node/odom` | 30 Hz | Visual-inertial odometry |
-| `/nvblox_node/mesh` | ~7 Hz | 3D mesh for visualization |
+| `/nvblox_node/mesh` | 5.0 Hz | 3D mesh for visualization |
 | `/nvblox_node/static_map_slice` | ~1 Hz | 2D occupancy grid |
-| `/nvblox_node/color_layer_marker` | ~7 Hz | Colored voxel markers |
+| `/nvblox_node/color_layer_marker` | 5.0 Hz | Colored voxel markers |
 
 ---
 
 ## Data Flow to Mission Planner
 
+Primary real-time path is the WebSocket stream (`/ws/slam`), fed by marker-based mesh updates plus VIO pose.
+
 ```
-nvblox_node/mesh (ROS2 topic, ~7 Hz)
+/nvblox_node/color_layer_marker (ROS2 Marker CUBE_LIST, 5.0 Hz)
+    + /zed/zed_node/odom (ROS2 topic, 30 Hz)
     |
     v
 ros_http_bridge.py (inside container)
-    |  Mesh updates rate-limited to ~2 Hz
-    |  VIO pose forwarded at up to 30 Hz
+    |  Converts marker data to voxel payloads (mode="voxel")
     |  POST /api/task/2/slam/mesh/update
     v
 Edge Core API (host, port 8000)
-    |  GET /api/task/2/slam/mesh
+    |  WebSocket /ws/slam (primary real-time pose + mesh stream)
+    |  REST GET /api/task/2/slam/mesh (snapshot/fallback)
     v
 Mission Planner Plugin (Windows, over Tailscale VPN)
     |
     v
-SLAM3DView.cs (Helix Toolkit WPF, 10 Hz polling)
+SLAM3DView.cs (Helix Toolkit WPF)
 ```
 
 ---
@@ -343,7 +358,7 @@ Install the apt deps: see "Every Time You Restart" above.
 ### nvblox not producing mesh
 - Verify both depth and odometry topics are being published
 - Check the nvblox node logs for errors
-- Ensure `esdf_mode` is set to `"3d"` in the params file
+- Verify `esdf_mode` in the selected profile (current performance profile uses `"2d"`; set `"3d"` only when using a profile that requires it)
 
 ---
 
@@ -376,4 +391,4 @@ docker image prune
 ---
 
 *Last Updated: February 2026*
-*Isaac ROS Version: 3.2 | ROS2: Humble | JetPack: 6.2 | ZED SDK: 4.2*
+*Isaac ROS Version: 3.2 | ROS2: Humble | JetPack: 6.2 | ZED SDK: 5.2.3*

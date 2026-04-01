@@ -6,10 +6,9 @@ This script runs INSIDE the Isaac ROS Docker container and bridges
 ROS2 topics to the NOMAD Edge Core HTTP API running on the host.
 
 It subscribes to:
-- /visual_slam/tracking/odometry (VIO pose from Isaac ROS VSLAM)
+- /zed/zed_node/odom (VIO odometry pose from ZED wrapper)
 - /cmd_vel (Twist velocity commands from nav2/nvblox for autonomous navigation)
-- /nvblox_node/color_layer_marker (3D voxel cubes from Nvblox) - optional
-- /nvblox_node/map_slice (2D occupancy slice) - for visualization
+- /nvblox_node/color_layer_marker (3D voxel markers from nvblox) - optional
 - /nomad/servo/nozzle_angle (Float32 servo angle for nozzle control)
 
 And sends data to NOMAD Edge Core via HTTP POST requests.
@@ -52,7 +51,7 @@ from std_msgs.msg import Float32, Float32MultiArray
 
 # sensor_msgs for HSV color verification (TD-005) and HSV circle detection
 try:
-    from sensor_msgs.msg import Image
+    from sensor_msgs.msg import CameraInfo, Image
     IMAGE_AVAILABLE = True
 except ImportError:
     IMAGE_AVAILABLE = False
@@ -124,7 +123,7 @@ try:
     NVBLOX_AVAILABLE = True
 except ImportError:
     NVBLOX_AVAILABLE = False
-    logger.warning("nvblox_msgs not available - mesh bridge disabled")
+    logger.warning("nvblox_msgs not available - block mesh path disabled")
 
 # visualization_msgs for per-voxel colored marker data
 try:
@@ -230,7 +229,7 @@ class ROSHTTPBridge(Node):
         port: int = 8000,
         vio_topic: str = "/zed/zed_node/odom",  # Default to ZED odom
         cmd_vel_topic: str = "/cmd_vel",         # Nav2 velocity commands
-        mesh_topic: str = "/nvblox_node/mesh",   # Nvblox 3D mesh
+        mesh_topic: str = "/nvblox_node/color_layer_marker",   # Nvblox voxel marker topic
         servo_topic: str = "/nomad/servo/nozzle_angle",  # Nozzle servo angle
         detection_topic: str = "/zed/zed_node/obj_det/objects",  # ZED custom OD
         send_rate_hz: float = 30.0,
@@ -251,9 +250,16 @@ class ROSHTTPBridge(Node):
         self._host = host
         self._port = port
         self._base_url = f"http://{host}:{port}"
+        self._api_key = (os.environ.get("NOMAD_API_KEY") or "").strip() or None
+        self._internal_token_header = "X-NOMAD-Internal-Token"
+        self._internal_token = (os.environ.get("NOMAD_INTERNAL_TOKEN") or "").strip() or None
+        if self._internal_token is not None and len(self._internal_token) < 32:
+            logger.warning("NOMAD_INTERNAL_TOKEN is shorter than 32 chars; internal token auth disabled")
+            self._internal_token = None
         self._send_interval = 1.0 / send_rate_hz
         self._enable_nav_control = enable_nav_control
-        self._enable_mesh = enable_mesh and (NVBLOX_AVAILABLE or MARKER_AVAILABLE)
+        self._enable_mesh = enable_mesh and MARKER_AVAILABLE
+        self._mesh_topic = (mesh_topic or "/nvblox_node/color_layer_marker").strip() or "/nvblox_node/color_layer_marker"
         self._enable_servo = enable_servo
         self._enable_detections = enable_detections and ZED_OD_AVAILABLE
 
@@ -401,7 +407,7 @@ class ROSHTTPBridge(Node):
         # Subscribe to voxel marker for 3D visualization (cube rendering)
         self._use_voxel_marker = True
         if self._enable_mesh and MARKER_AVAILABLE:
-            voxel_topic = "/nvblox_node/color_layer_marker"
+            voxel_topic = self._mesh_topic
             self.create_subscription(
                 Marker,
                 voxel_topic,
@@ -409,8 +415,8 @@ class ROSHTTPBridge(Node):
                 mesh_qos,
             )
             self.get_logger().info(f"Subscribed to per-voxel marker: {voxel_topic}")
-        elif enable_mesh and not NVBLOX_AVAILABLE and not MARKER_AVAILABLE:
-            self.get_logger().warning("Mesh requested but nvblox_msgs not available")
+        elif enable_mesh and not MARKER_AVAILABLE:
+            self.get_logger().warning("Mesh requested but visualization_msgs not available")
         
         # Subscribe to servo angle for nozzle control
         if self._enable_servo:
@@ -436,9 +442,11 @@ class ROSHTTPBridge(Node):
         
         # Subscribe to camera image for HSV color verification and
         # standalone HSV circle detection
-        self._latest_image = None  # Raw image bytes (RGB8)
+        self._latest_image = None  # Raw image bytes
         self._image_width = 0
         self._image_height = 0
+        self._image_encoding = "rgb8"
+        self._image_step = 0
         self._image_lock = threading.Lock()
 
         # HSV circle detection state
@@ -462,6 +470,16 @@ class ROSHTTPBridge(Node):
                 image_qos,
             )
             self.get_logger().info(f"Subscribed to camera image: {image_topic}")
+
+            camera_info_topic = "/zed/zed_node/rgb/camera_info"
+            self.create_subscription(
+                CameraInfo,
+                camera_info_topic,
+                self._handle_camera_info,
+                image_qos,
+            )
+            self.get_logger().info(f"Subscribed to camera info: {camera_info_topic}")
+
             if self._enable_hsv_circles:
                 self.get_logger().info("HSV circle detection ENABLED (standalone)")
             else:
@@ -486,6 +504,7 @@ class ROSHTTPBridge(Node):
         self._camera_fy = 528.0
         self._camera_cx = 640.0
         self._camera_cy = 360.0
+        self._camera_intrinsics_received = False
 
         # TF2 buffer for camera pose lookup
         self._tf_buffer = None
@@ -510,7 +529,7 @@ class ROSHTTPBridge(Node):
         self._gimbal_angle_deg = 90.0        # Raw servo angle in degrees (90 = level)
         self._gimbal_mount_offset = (0.10, 0.0, -0.05)  # (x, y, z) base_link -> servo_mount in body frame
         self._gimbal_last_poll = 0.0
-        self._gimbal_poll_interval = 0.2     # Poll servo angle every 200ms
+        self._gimbal_poll_interval = 0.5     # Poll servo angle every 500ms
         
         # Thermal-aware detection rate throttling (RM-005)
         self._gpu_temp_c = 0.0
@@ -540,6 +559,8 @@ class ROSHTTPBridge(Node):
 
         # Timer to send data to edge_core
         self.create_timer(self._send_interval, self._send_to_edge_core)
+        # Poll gimbal angle on its own timer to avoid blocking VIO send timer work.
+        self.create_timer(self._gimbal_poll_interval, self._poll_gimbal_angle)
 
         self.get_logger().info(
             f"High-rate transport mode: {self._high_rate_transport}"
@@ -576,8 +597,12 @@ class ROSHTTPBridge(Node):
 
                 # VO-005: Auto-level servo on sustained tracking loss
                 now = time.time()
-                if (self._vio_healthy_time > 0 and
-                        now - self._vio_healthy_time > self._vio_loss_timeout_s and
+                # Edge case: if we have never seen a healthy sample yet, start the timer
+                # from the first degraded sample so sustained loss still triggers leveling.
+                if self._vio_healthy_time <= 0:
+                    self._vio_healthy_time = now
+
+                if (now - self._vio_healthy_time > self._vio_loss_timeout_s and
                         not self._vio_loss_servo_leveled):
                     self.get_logger().warn(
                         "VO-005: VIO tracking lost for >3s - leveling servo to 90° "
@@ -587,10 +612,10 @@ class ROSHTTPBridge(Node):
                     self._vio_loss_servo_leveled = True
                 # Keep forwarding pose for SLAM visualization continuity even when
                 # covariance is degraded; consumers can down-weight via confidence.
-
-            # VIO is healthy - reset tracking loss state
-            self._vio_healthy_time = time.time()
-            self._vio_loss_servo_leveled = False
+            else:
+                # VIO is healthy - reset tracking loss state
+                self._vio_healthy_time = time.time()
+                self._vio_loss_servo_leveled = False
 
             # Derive confidence from covariance (lower variance = higher confidence)
             confidence = max(0.0, min(1.0, 1.0 - pos_var * 10.0))
@@ -601,8 +626,16 @@ class ROSHTTPBridge(Node):
             )
             self._drone_velocity_mps = vel_mag
 
-            # Quaternion to Euler
-            roll, pitch, yaw = self._quat_to_euler(
+            # Keep raw ROS optical attitude for SLAM consumers.
+            ros_roll, ros_pitch, ros_yaw = self._quat_to_euler(
+                pose.orientation.x,
+                pose.orientation.y,
+                pose.orientation.z,
+                pose.orientation.w,
+            )
+
+            # Convert attitude to NED so primary pose fields match position frame.
+            roll, pitch, yaw = self._quat_to_ned_euler(
                 pose.orientation.x,
                 pose.orientation.y,
                 pose.orientation.z,
@@ -629,9 +662,9 @@ class ROSHTTPBridge(Node):
                 ros_x=pose.position.x,
                 ros_y=pose.position.y,
                 ros_z=pose.position.z,
-                ros_roll=roll,
-                ros_pitch=pitch,
-                ros_yaw=yaw,
+                ros_roll=ros_roll,
+                ros_pitch=ros_pitch,
+                ros_yaw=ros_yaw,
             )
 
             with self._lock:
@@ -653,9 +686,21 @@ class ROSHTTPBridge(Node):
         - linear.x: Forward velocity (m/s)
         - linear.y: Left velocity (m/s)
         - linear.z: Up velocity (m/s)
-        - angular.z: Yaw rate (rad/s, CCW positive)
+        - angular.x: Roll rate (rad/s) - ignored by this bridge
+        - angular.y: Pitch rate (rad/s) - ignored by this bridge
+        - angular.z: Yaw rate (rad/s, CCW positive) - forwarded as yaw_rate
         """
         try:
+            angular_epsilon = 1e-3
+            if (
+                abs(msg.angular.x) > angular_epsilon
+                or abs(msg.angular.y) > angular_epsilon
+            ):
+                self.get_logger().warn(
+                    "cmd_vel angular.x/angular.y are ignored (roll/pitch rates unsupported); forwarding angular.z as yaw_rate only",
+                    throttle_duration_sec=5.0,
+                )
+
             cmd = VelocityCommand(
                 timestamp=time.time(),
                 vx=msg.linear.x,    # Forward
@@ -687,10 +732,12 @@ class ROSHTTPBridge(Node):
         with self._http_lock:
             effective_timeout = max(0.05, timeout)
             try:
+                headers = self._build_internal_headers(content_type=content_type, keep_alive=True)
+
                 self._http_conn.timeout = effective_timeout
                 self._http_conn.request(
                     "POST", path, body=data,
-                    headers={"Content-Type": content_type, "Connection": "keep-alive"}
+                    headers=headers
                 )
                 resp = self._http_conn.getresponse()
                 resp.read()  # Drain response to allow connection reuse
@@ -731,6 +778,23 @@ class ROSHTTPBridge(Node):
                     self._http_conn.timeout = self._http_timeout_default_s
                 except Exception:
                     pass
+
+    def _build_internal_headers(
+        self,
+        content_type: Optional[str] = None,
+        keep_alive: bool = False,
+    ) -> dict[str, str]:
+        """Build consistent headers for internal Edge Core API calls."""
+        headers: dict[str, str] = {}
+        if content_type:
+            headers["Content-Type"] = content_type
+        if keep_alive:
+            headers["Connection"] = "keep-alive"
+        if self._internal_token:
+            headers[self._internal_token_header] = self._internal_token
+        if self._api_key:
+            headers["X-API-Key"] = self._api_key
+        return headers
 
     def _schedule_high_rate_zmq_restart(self) -> float:
         """Increase restart backoff after a ZMQ failure and return delay."""
@@ -865,9 +929,6 @@ class ROSHTTPBridge(Node):
 
     def _send_to_edge_core(self) -> None:
         """Send latest VIO data to edge_core via configured high-rate transport."""
-        # Poll gimbal angle for drone body pose computation (non-blocking, cached)
-        self._poll_gimbal_angle()
-
         with self._lock:
             vio = self._latest_vio
 
@@ -1070,6 +1131,34 @@ class ROSHTTPBridge(Node):
         except Exception as e:
             self._send_errors += 1
             self.get_logger().error(f"Servo send error: {e}")
+
+    def _handle_camera_info(self, msg: 'CameraInfo') -> None:
+        """Update camera intrinsics from CameraInfo K matrix when valid."""
+        try:
+            if len(msg.k) < 9:
+                return
+
+            fx = float(msg.k[0])
+            fy = float(msg.k[4])
+            cx = float(msg.k[2])
+            cy = float(msg.k[5])
+
+            if fx <= 0.0 or fy <= 0.0:
+                return
+
+            self._camera_fx = fx
+            self._camera_fy = fy
+            self._camera_cx = cx
+            self._camera_cy = cy
+
+            if not self._camera_intrinsics_received:
+                self._camera_intrinsics_received = True
+                self.get_logger().info(
+                    "Camera intrinsics received from CameraInfo: "
+                    f"fx={fx:.2f}, fy={fy:.2f}, cx={cx:.2f}, cy={cy:.2f}"
+                )
+        except Exception:
+            pass
     
     def _handle_image(self, msg: 'Image') -> None:
         """Store latest camera image for HSV color verification and circle detection."""
@@ -1078,6 +1167,8 @@ class ROSHTTPBridge(Node):
                 self._latest_image = bytes(msg.data)
                 self._image_width = msg.width
                 self._image_height = msg.height
+                self._image_encoding = msg.encoding if hasattr(msg, 'encoding') and msg.encoding else 'rgb8'
+                self._image_step = int(msg.step) if hasattr(msg, 'step') and msg.step else 0
 
             # Run standalone HSV circle detection at configured rate
             if self._enable_hsv_circles:
@@ -1112,21 +1203,37 @@ class ROSHTTPBridge(Node):
             w = img_msg.width
             h = img_msg.height
             encoding = img_msg.encoding if hasattr(img_msg, 'encoding') else 'rgb8'
+            encoding_l = encoding.lower()
 
             img_data = np.frombuffer(bytes(img_msg.data), dtype=np.uint8)
 
-            if 'bgra' in encoding.lower():
-                img_data = img_data.reshape((h, w, 4))
+            if 'bgra' in encoding_l or 'rgba' in encoding_l:
+                channels = 4
+            else:
+                channels = 3
+
+            min_row_stride = w * channels
+            msg_step = int(img_msg.step) if hasattr(img_msg, 'step') and img_msg.step else 0
+            row_stride = msg_step if msg_step >= min_row_stride else min_row_stride
+            required_size = h * row_stride
+
+            if img_data.size < required_size:
+                self.get_logger().warning(
+                    f"HSV image decode skipped: insufficient buffer ({img_data.size} < {required_size})"
+                )
+                return
+
+            img_data = img_data[:required_size].reshape((h, row_stride))
+            img_data = img_data[:, :min_row_stride].reshape((h, w, channels))
+
+            if 'bgra' in encoding_l:
                 image_bgr = cv2.cvtColor(img_data, cv2.COLOR_BGRA2BGR)
-            elif 'bgr' in encoding.lower():
-                img_data = img_data.reshape((h, w, 3))
+            elif 'bgr' in encoding_l:
                 image_bgr = img_data
-            elif 'rgba' in encoding.lower():
-                img_data = img_data.reshape((h, w, 4))
+            elif 'rgba' in encoding_l:
                 image_bgr = cv2.cvtColor(img_data, cv2.COLOR_RGBA2BGR)
             else:
                 # Assume RGB8
-                img_data = img_data.reshape((h, w, 3))
                 image_bgr = cv2.cvtColor(img_data, cv2.COLOR_RGB2BGR)
 
             # Get depth image for 3D projection
@@ -1135,8 +1242,30 @@ class ROSHTTPBridge(Node):
                 depth_msg = self._latest_depth
             if depth_msg is not None:
                 try:
-                    depth_data = np.frombuffer(bytes(depth_msg.data), dtype=np.float32)
-                    depth_np = depth_data.reshape((depth_msg.height, depth_msg.width))
+                    depth_h = int(depth_msg.height)
+                    depth_w = int(depth_msg.width)
+                    if depth_h > 0 and depth_w > 0:
+                        depth_encoding = (getattr(depth_msg, "encoding", "") or "").lower()
+                        if depth_encoding and "32fc1" not in depth_encoding:
+                            raise ValueError(f"Unsupported depth encoding: {depth_msg.encoding}")
+
+                        bytes_per_pixel = 4  # 32FC1
+                        min_row_stride = depth_w * bytes_per_pixel
+                        depth_step = int(depth_msg.step) if hasattr(depth_msg, "step") and depth_msg.step else 0
+                        depth_row_stride = depth_step if depth_step >= min_row_stride else min_row_stride
+                        required_size = depth_h * depth_row_stride
+
+                        depth_raw = bytes(depth_msg.data)
+                        if len(depth_raw) < required_size:
+                            raise ValueError(
+                                f"Insufficient depth buffer ({len(depth_raw)} < {required_size})"
+                            )
+
+                        depth_rows = np.frombuffer(depth_raw[:required_size], dtype=np.uint8).reshape(
+                            (depth_h, depth_row_stride)
+                        )
+                        depth_tight = depth_rows[:, :min_row_stride].copy()
+                        depth_np = depth_tight.view(np.float32).reshape((depth_h, depth_w))
                 except Exception:
                     depth_np = None
 
@@ -1240,6 +1369,8 @@ class ROSHTTPBridge(Node):
             image = self._latest_image
             img_w = self._image_width
             img_h = self._image_height
+            img_encoding = self._image_encoding
+            img_step = self._image_step
 
         if image is None or img_w == 0 or img_h == 0:
             return ""
@@ -1262,19 +1393,37 @@ class ROSHTTPBridge(Node):
         x2 = min(img_w, cx + hw)
         y2 = min(img_h, cy + hh)
 
-        # Extract RGB pixels from the flat byte array (row-major, 3 channels)
-        # and convert to HSV for color classification
+        # Decode channel order/stride from ROS Image metadata for robust HSV checks
         total_pixels = 0
         color_votes = {}
-        step = 3  # RGB8 encoding
-        row_stride = img_w * step
+
+        encoding = (img_encoding or "rgb8").lower()
+        if encoding == "bgr8":
+            channels = 3
+            is_bgr = True
+        elif encoding == "rgba8":
+            channels = 4
+            is_bgr = False
+        elif encoding == "bgra8":
+            channels = 4
+            is_bgr = True
+        else:
+            # Preserve legacy behavior by defaulting to RGB8 semantics.
+            channels = 3
+            is_bgr = False
+
+        min_row_stride = img_w * channels
+        row_stride = img_step if isinstance(img_step, int) and img_step >= min_row_stride else min_row_stride
 
         for row in range(y1, y2, 2):  # sample every other pixel for speed
             for col in range(x1, x2, 2):
-                idx = row * row_stride + col * step
-                if idx + 2 >= len(image):
+                idx = row * row_stride + col * channels
+                if idx + channels - 1 >= len(image):
                     continue
-                r, g, b = image[idx], image[idx + 1], image[idx + 2]
+                if is_bgr:
+                    b, g, r = image[idx], image[idx + 1], image[idx + 2]
+                else:
+                    r, g, b = image[idx], image[idx + 1], image[idx + 2]
 
                 # RGB to HSV (OpenCV convention: H 0-179, S 0-255, V 0-255)
                 r_f, g_f, b_f = r / 255.0, g / 255.0, b / 255.0
@@ -1467,9 +1616,23 @@ class ROSHTTPBridge(Node):
         self._last_detection_send_time = now
         
         try:
+            source_timestamp = None
+            if detections:
+                raw_source_timestamp = getattr(detections[0], "timestamp", None)
+                if raw_source_timestamp is None and isinstance(detections[0], dict):
+                    raw_source_timestamp = detections[0].get("timestamp")
+                try:
+                    if raw_source_timestamp is not None:
+                        source_timestamp = float(raw_source_timestamp)
+                        if not math.isfinite(source_timestamp):
+                            source_timestamp = None
+                except (TypeError, ValueError):
+                    source_timestamp = None
+
             payload = {
                 "detections": [asdict(d) for d in detections],
                 "count": len(detections),
+                "source_timestamp": source_timestamp,
             }
 
             # Try ZMQ first (non-blocking, ~50us), fall back to HTTP
@@ -1584,7 +1747,7 @@ class ROSHTTPBridge(Node):
         """Poll camera gimbal servo angle from Edge Core API.
 
         Caches the result so the fast-path (_get_drone_body_pose) never blocks
-        on HTTP.  Called from the periodic send timer, not from ROS callbacks.
+        on HTTP. Called from a dedicated polling timer, not ROS callbacks.
         """
         now = time.time()
         if now - self._gimbal_last_poll < self._gimbal_poll_interval:
@@ -1593,10 +1756,14 @@ class ROSHTTPBridge(Node):
 
         try:
             url = f"{self._base_url}/api/servo/camera/tilt"
-            req = Request(url)
-            with urlopen(req, timeout=0.3) as resp:
+            headers = self._build_internal_headers()
+            req = Request(url, headers=headers)
+            with urlopen(req, timeout=0.1) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-            angle = float(data.get("feedback_angle") or data.get("angle", 90.0))
+            feedback_angle = data.get("feedback_angle")
+            if feedback_angle is None:
+                feedback_angle = data.get("angle", 90.0)
+            angle = float(feedback_angle)
             angle = max(0.0, min(180.0, angle))
             self._gimbal_angle_deg = angle
             # 90 deg = level forward (pitch = 0)
@@ -1691,12 +1858,9 @@ class ROSHTTPBridge(Node):
             return
 
         try:
-            if MSGPACK_AVAILABLE:
-                data = msgpack.packb(mesh_data, use_bin_type=True)
-                ctype = "application/msgpack"
-            else:
-                data = json.dumps(mesh_data).encode("utf-8")
-                ctype = "application/json"
+            # Keep mesh payload format aligned with API defaults for compatibility.
+            data = json.dumps(mesh_data).encode("utf-8")
+            ctype = "application/json"
         except Exception as e:
             self._send_errors += 1
             self.get_logger().error(f"Mesh serialize error: {e}")
@@ -1808,6 +1972,40 @@ class ROSHTTPBridge(Node):
         yaw = math.atan2(siny_cosp, cosy_cosp)
         
         return roll, pitch, yaw
+
+    def _quat_to_ned_euler(
+        self, x: float, y: float, z: float, w: float
+    ) -> tuple[float, float, float]:
+        """Convert ROS optical-frame quaternion attitude to NED roll/pitch/yaw."""
+        # Quaternion -> rotation matrix in ROS optical basis.
+        r = [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ]
+
+        # Basis transform: optical (x-right, y-down, z-forward) -> NED (x-forward, y-right, z-down)
+        b = (
+            (0.0, 0.0, 1.0),
+            (1.0, 0.0, 0.0),
+            (0.0, 1.0, 0.0),
+        )
+
+        # Change basis for rotation matrix: R_ned = B * R_optical * B^T
+        br = [
+            [sum(b[i][k] * r[k][j] for k in range(3)) for j in range(3)]
+            for i in range(3)
+        ]
+        r_ned = [
+            [sum(br[i][k] * b[j][k] for k in range(3)) for j in range(3)]
+            for i in range(3)
+        ]
+
+        roll = math.atan2(r_ned[2][1], r_ned[2][2])
+        sinp = max(-1.0, min(1.0, -r_ned[2][0]))
+        pitch = math.asin(sinp)
+        yaw = math.atan2(r_ned[1][0], r_ned[0][0])
+        return roll, pitch, yaw
     
     def get_stats(self) -> dict:
         """Get bridge statistics."""
@@ -1857,8 +2055,8 @@ def main():
                         help="VIO odometry topic")
     parser.add_argument("--cmd-vel-topic", default="/cmd_vel",
                         help="Navigation velocity command topic")
-    parser.add_argument("--mesh-topic", default="/nvblox_node/mesh",
-                        help="Nvblox mesh topic")
+    parser.add_argument("--mesh-topic", default="/nvblox_node/color_layer_marker",
+                        help="Nvblox voxel marker topic (visualization_msgs/Marker)")
     parser.add_argument("--rate", type=float, default=30.0, help="Send rate Hz")
     parser.add_argument("--disable-nav", action="store_true",
                         help="Disable navigation control (cmd_vel forwarding)")

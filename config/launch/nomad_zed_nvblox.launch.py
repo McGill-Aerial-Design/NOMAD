@@ -77,7 +77,9 @@ def generate_launch_description():
     # when nvblox allocates GPU memory for depth integration.
 
     # Servo TF publisher: publishes servo_mount -> camera_link at 50 Hz
-    # reflecting the current servo pitch angle (TF-001)
+    # reflecting the current servo pitch angle (TF-001), and also
+    # publishes odom -> base_link by inverting the camera odom pose
+    # so the full TF chain is connected: odom -> base_link -> servo_mount -> camera_link
     servo_tf_publisher = ExecuteProcess(
         cmd=[
             'python3',
@@ -86,6 +88,7 @@ def generate_launch_description():
             '--port', '8000',
             '--tf-rate', '50.0',
             '--poll-rate', '10.0',
+            '--odom-topic', '/zed/zed_node/odom',
         ],
         name='servo_tf_publisher',
         output='screen',
