@@ -1,47 +1,57 @@
 # ==============================================================
-# NOMAD nvblox 3D LOW-LATENCY Configuration
-# 
-# Optimized for SPEED + 3D on Jetson Orin Nano (8GB shared RAM)
-# 15cm voxels, 8m radius to stay within GPU memory budget
+# NOMAD nvblox Configuration
+#
+# Tuned for Jetson Orin Nano (8GB shared CPU+GPU RAM)
+# 10cm voxels, 2D ESDF, dynamic mapping, 5m radius
+#
+# IMPORTANT: ZED + nvblox share 8GB GPU memory. To prevent
+# cudaErrorIllegalAddress crashes:
+# - Use blocking CUDA stream (type 0) for sequential GPU access
+# - Disable color integration (saves ~30% GPU memory)
+# - Keep depth at 360p (pub_downscale_factor: 2.0 default)
+# - Use 5m radius (not 8m) to reduce active voxel count
 # ==============================================================
 
 /**:
   ros__parameters:
-    # CUDA stream setting - non-blocking for lower latency
-    cuda_stream_type: 2
+    # CUDA stream: 0=blocking (sequential GPU access, prevents CUDA conflicts)
+    # Type 2 (non-blocking) causes cudaErrorIllegalAddress when ZED + nvblox
+    # compete for GPU memory on 8GB shared RAM
+    cuda_stream_type: 0
 
     # ==============================================================
-    # VOXEL SIZE - 5cm for detailed Mission Planner 3D visualization
-    # Smaller = more detail but more GPU memory
+    # VOXEL SIZE - 10cm balances detail vs GPU memory on 8GB shared
+    # 5cm OOMs on Orin Nano; 15cm is too coarse for target placement
     # ==============================================================
-    voxel_size: 0.05  # 5cm voxels
-    
-    # static_tsdf for 3D mesh generation
-    mapping_type: "static_tsdf"
-    
-    # 3D ESDF for full volumetric mapping
-    esdf_mode: "3d"
+    voxel_size: 0.10  # 10cm voxels
+
+    # dynamic: depth-based dynamic object detection (people, vehicles)
+    # static_tsdf crashes with cudaErrorIllegalAddress on Jetson Orin Nano
+    mapping_type: "dynamic"
+
+    # 2D ESDF — 3D ESDF doubles GPU memory usage, not needed for drone nav
+    esdf_mode: "2d"
 
     # ==============================================================
-    # SPEED SETTINGS with 3D enabled
-    # High-rate settings for smoother world-view updates in Mission Planner
+    # RATE SETTINGS — conservative for 8GB Orin Nano
+    # Lower rates reduce GPU memory pressure from queued frames
     # ==============================================================
-    tick_period_ms: 10
-    integrate_depth_rate_hz: 30.0    # target 30Hz world updates
-    integrate_color_rate_hz: 10.0    # keep color lower than depth to reduce GPU load
+    tick_period_ms: 50
+    integrate_depth_rate_hz: 5.0     # conservative depth integration
+    integrate_color_rate_hz: 1.0     # needed for mesh vertex generation
     integrate_lidar_rate_hz: 0.0
-    update_mesh_rate_hz: 30.0        # target 30Hz mesh updates
-    update_esdf_rate_hz: 15.0        # keep ESDF responsive without maxing GPU
-    publish_layer_rate_hz: 30.0      # target 30Hz layer publishing
-    publish_debug_vis_rate_hz: 2.0
-    decay_tsdf_rate_hz: 1.0          # slow decay to free old blocks
-    decay_dynamic_occupancy_rate_hz: 0.0
-    clear_map_outside_radius_rate_hz: 1.0  # more aggressive map clearing
+    update_mesh_rate_hz: 5.0         # mesh for MissionPlanner 3D view
+    update_esdf_rate_hz: 5.0         # ESDF for obstacle avoidance
+    publish_layer_rate_hz: 5.0
+    publish_debug_vis_rate_hz: 1.0
+    decay_tsdf_rate_hz: 1.0
+    decay_dynamic_occupancy_rate_hz: 2.0
+    clear_map_outside_radius_rate_hz: 1.0
 
     # Misc
     num_cameras: 1
     use_tf_transforms: true
-    
+
     # Reduce console output
     print_rates_to_console: false
     print_timings_to_console: false
@@ -50,37 +60,39 @@
     print_statistics_on_console_period_ms: 30000
 
     # ==============================================================
-    # ESDF Settings (3D volumetric)
+    # ESDF Settings (2D slice)
     # ==============================================================
     publish_esdf_distance_slice: true
-    
+
     # ==============================================================
-    # 3D visualization enabled
+    # Color enabled — needed for mesh vertex generation in nvblox.
+    # Mesh marching cubes requires color integration to tag vertices.
     # ==============================================================
-    use_color: true   # enable color for 3D mesh
-    use_depth: true   # required for mapping
+    use_color: true
+    use_depth: true
     use_lidar: false
 
-    # Input queue - minimal for low latency
-    maximum_input_queue_length: 2  # minimal buffering
+    # Input queue - minimal to reduce GPU memory pressure
+    maximum_input_queue_length: 1
 
     # ==============================================================
-    # Map clearing - 8m radius around drone (fits in GPU memory)
+    # Map clearing - 5m radius (reduced from 8m to save GPU memory)
+    # At 10cm voxels, 5m radius is ~125k voxels vs ~512k at 8m
     # ==============================================================
-    map_clearing_radius_m: 8.0  # 8m radius - prevents GPU OOM
-    map_clearing_frame_id: "base_link"
+    map_clearing_radius_m: 5.0
+    map_clearing_frame_id: "zed_camera_link"
 
     # QoS settings
     input_qos: "SYSTEM_DEFAULT"
 
-    # Visualization - 8m view area
-    esdf_slice_bounds_visualization_side_length: 8.0
-    workspace_height_bounds_visualization_side_length: 8.0
+    # Visualization - 5m view area
+    esdf_slice_bounds_visualization_side_length: 5.0
+    workspace_height_bounds_visualization_side_length: 5.0
     layer_visualization_exclusion_height_m: 50.0
-    layer_visualization_exclusion_radius_m: 8.0
-    layer_visualization_min_tsdf_weight: 0.0001  # publish all voxels including weak block-edge ones
-    max_back_projection_distance: 8.0
-    back_projection_subsampling: 4  # heavy subsampling for speed
+    layer_visualization_exclusion_radius_m: 5.0
+    layer_visualization_min_tsdf_weight: 0.0001
+    max_back_projection_distance: 5.0
+    back_projection_subsampling: 4
     layer_streamer_bandwidth_limit_mbps: 30.0
 
     # Multi-mapper settings
@@ -88,49 +100,51 @@
       connected_mask_component_size_threshold: 2000
       remove_small_connected_components: true
 
-    # Static mapper - STABLE 3D mapping settings
+    # Static mapper (background layer in dynamic mode)
     static_mapper:
       do_depth_preprocessing: false
       depth_preprocessing_num_dilations: 1
-      
-      # Integration distances - 8m range (fits GPU memory)
-      projective_integrator_max_integration_distance_m: 8.0
+
+      # Integration distances - 5m range
+      projective_integrator_max_integration_distance_m: 5.0
       projective_integrator_truncation_distance_vox: 4.0
       projective_integrator_weighting_mode: "inverse_square_tsdf_distance_penalty"
       projective_integrator_max_weight: 10.0
       projective_tsdf_integrator_invalid_depth_decay_factor: -1.0
-      
+
       # Occupancy settings
       free_region_occupancy_probability: 0.45
       occupied_region_occupancy_probability: 0.55
       unobserved_region_occupancy_probability: 0.5
       occupied_region_half_width_m: 0.12
-      
-      # View calculator
+
+      # View calculator - aggressive subsampling for speed
       raycast_subsampling_factor: 8
-      
+
       # Workspace bounds
       workspace_bounds_type: "height_bounds"
-      workspace_bounds_min_height_m: -50.0
-      workspace_bounds_max_height_m: 50.0
-      
+      workspace_bounds_min_height_m: -5.0
+      workspace_bounds_max_height_m: 5.0
+
       # ESDF integrator
       esdf_integrator_min_weight: 0.5
       esdf_integrator_max_site_distance_vox: 2.0
       esdf_integrator_max_distance_m: 2.0
-      
-      # Mesh - STABLE settings
-      mesh_integrator_min_weight: 1.0
+
+      # Mesh - triangle surface generation (streamed to Mission Planner)
+      # Min weight must be very low for dynamic mode — background TSDF accumulates
+      # weight slowly with the blocking CUDA stream
+      mesh_integrator_min_weight: 0.0001
       mesh_integrator_weld_vertices: true
-      
+
       # Decay - enable to free GPU memory for old blocks
-      tsdf_decay_factor: 0.95  # moderate decay to reclaim memory
+      tsdf_decay_factor: 0.95
       tsdf_decayed_weight_threshold: 0.001
       exclude_last_view_from_decay: true
       tsdf_set_free_distance_on_decayed: false
       tsdf_decayed_free_distance_vox: 4.0
-      decay_integrator_deallocate_decayed_blocks: true  # FREE old blocks to prevent OOM
-      
-      # Streaming - 8m radius
+      decay_integrator_deallocate_decayed_blocks: true
+
+      # Streaming - 5m radius
       layer_streamer_exclusion_height_m: 50.0
-      layer_streamer_exclusion_radius_m: 8.0
+      layer_streamer_exclusion_radius_m: 5.0

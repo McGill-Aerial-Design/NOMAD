@@ -5,7 +5,7 @@
 # isaac_ros_common/scripts/build_image_layers.sh).
 #
 # What this layer adds on top of the official base:
-#   - ZED SDK 4.1 (matching ZED ROS2 wrapper version)
+#   - ZED SDK 5.2.3 (matching ZED ROS2 wrapper version)
 #   - Runtime apt deps that get wiped on container restart
 #   - GStreamer for video bridge (simple_video_bridge.py)
 #   - Python helpers (transforms3d, pymavlink)
@@ -65,9 +65,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ==============================================================
-# ZED SDK 4.2 for L4T 36.4 (JetPack 6.2)
+# ZED SDK 5.2.3 for L4T 36.4 (JetPack 6.2)
 # ==============================================================
-ENV ZED_SDK_URL="https://download.stereolabs.com/zedsdk/4.2/l4t36.4/jetsons"
+ENV ZED_SDK_URL="https://download.stereolabs.com/zedsdk/5.2.3/l4t36.4/jetsons"
 
 RUN curl -L -o /tmp/zed_sdk.run ${ZED_SDK_URL} && \
     chmod +x /tmp/zed_sdk.run && \

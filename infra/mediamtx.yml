@@ -59,6 +59,11 @@ rtspAddress: :8554
 # Disable auth for local/Tailscale access
 rtspAuthMethods: [basic]
 
+# Write queue: buffer outgoing packets to absorb network jitter.
+# Too small = dropped frames on slow clients. Too large = stale video.
+# 256 packets ~= 1-2 seconds at 30fps, good balance.
+writeQueueSize: 256
+
 # ============================================================
 # RTMP Server (disabled)
 # ============================================================

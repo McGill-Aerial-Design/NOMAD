@@ -59,6 +59,7 @@ namespace NOMAD.MissionPlanner
         public int TotalVoxels { get; set; }
         [JsonProperty("removed")]
         public List<RemovedVoxelModel> Removed { get; set; }
+
     }
 
     public class VoxelModel
@@ -83,8 +84,26 @@ namespace NOMAD.MissionPlanner
     {
         [JsonProperty("index")]
         public List<int> Index { get; set; }
+        [JsonProperty("i")]
+        private List<int> CompactIndex
+        {
+            set
+            {
+                if ((Index == null || Index.Count == 0) && value != null)
+                    Index = value;
+            }
+        }
         [JsonProperty("color")]
         public List<int> Color { get; set; }
+        [JsonProperty("c")]
+        private List<int> CompactColor
+        {
+            set
+            {
+                if ((Color == null || Color.Count == 0) && value != null)
+                    Color = value;
+            }
+        }
     }
 
     public class DetectionMarker3D
@@ -151,6 +170,7 @@ namespace NOMAD.MissionPlanner
         private int _meshGeneration = 0; // incremented each mesh update
         private const int VoxelMaxAge = 10; // expire after N updates without being re-seen
         private Queue<long> _voxelInsertionOrder = new Queue<long>();
+        private HashSet<long> _queuedForEviction = new HashSet<long>();
         private HashSet<long> _occupancySet = new HashSet<long>();
         private const int MaxPersistedVoxels = 5000;
         private double _currentVoxelSize = 0.05;
@@ -169,7 +189,8 @@ namespace NOMAD.MissionPlanner
         private static readonly TimeSpan MinRebuildInterval = TimeSpan.FromMilliseconds(250);
         private bool _pendingMeshUpdate = false;  // P3-7: Flag to mark queued updates during debounce
         private long _lastMeshRebuildStamp = -1;  // Stopwatch ticks (monotonic)
-        private const bool EnableMeshDebounceDebugLog = true;
+        // Use readonly (not const) so the compiler does not fold branches in LogMeshDebounce.
+        private static readonly bool EnableMeshDebounceDebugLog = true;
 
         // ---- Trajectory ----
         private List<float[]> _trajectoryPoints = new List<float[]>(); // each [x,y,z] in ZED frame
@@ -194,7 +215,12 @@ namespace NOMAD.MissionPlanner
         private Label _lblStatus, _lblStats;
         private Label _lblPerceptionStatus;
         private CheckBox _chkShowGrid, _chkShowTrajectory, _chkAutoUpdate;
+        private ComboBox _combDroneType, _combMeshMode;
         private NumericUpDown _numLength, _numWidth, _numHeight, _numHeadingOffset, _numFov;
+        private string _meshOutputMode = "block";
+        private bool _meshModeApplyInFlight;
+        private bool _meshModeRefreshInFlight;
+        private bool _meshModeSelectionInternal;
         private int _meshUpdateCount;
         private int _totalBlocks;
         private DateTime _lastUpdateTime = DateTime.MinValue;
@@ -221,6 +247,33 @@ namespace NOMAD.MissionPlanner
             ix = (int)(((key >> 32) & 0xFFFF) - 32768);
         }
 
+        private void ClearEvictionTracking()
+        {
+            _voxelInsertionOrder.Clear();
+            _queuedForEviction.Clear();
+        }
+
+        private void QueueForEviction(long key)
+        {
+            if (_queuedForEviction.Add(key))
+                _voxelInsertionOrder.Enqueue(key);
+        }
+
+        private void UnqueueForEviction(long key)
+        {
+            if (!_queuedForEviction.Remove(key) || _voxelInsertionOrder.Count == 0)
+                return;
+
+            var rebuilt = new Queue<long>(_voxelInsertionOrder.Count);
+            while (_voxelInsertionOrder.Count > 0)
+            {
+                long queued = _voxelInsertionOrder.Dequeue();
+                if (queued != key)
+                    rebuilt.Enqueue(queued);
+            }
+            _voxelInsertionOrder = rebuilt;
+        }
+
         // ==================== Coordinate Conversion ====================
 
         /// <summary>
@@ -245,6 +298,7 @@ namespace NOMAD.MissionPlanner
             StartUpdateLoop();
             StartServoPolling();
             StartPerceptionStatusPolling();
+            _ = RefreshMeshModeFromServerAsync(updateStatus: false);
         }
 
         // ==================== UI Initialization ====================
@@ -330,6 +384,23 @@ namespace NOMAD.MissionPlanner
             _chkAutoUpdate = CreateCheckBox("Auto", x, y + 4, true);
             _chkAutoUpdate.CheckedChanged += (s, e) => _autoUpdateEnabled = _chkAutoUpdate.Checked;
             _controlPanel.Controls.Add(_chkAutoUpdate);
+            x += 55;
+
+            _controlPanel.Controls.Add(CreateLabel("Mesh:", x, y + 6));
+            x += 38;
+            _combMeshMode = new ComboBox
+            {
+                Location = new Point(x, y + 2),
+                Size = new Size(78, 22),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                ForeColor = Color.White,
+                BackColor = Color.FromArgb(60, 60, 60),
+                Font = new Font("Segoe UI", 8.5f),
+            };
+            _combMeshMode.Items.AddRange(new[] { "Block", "Voxel" });
+            _combMeshMode.SelectedIndexChanged += CombMeshMode_SelectedIndexChanged;
+            _combMeshMode.SelectedIndex = 0;
+            _controlPanel.Controls.Add(_combMeshMode);
 
             // Second row: drone config
             y += 34;
@@ -355,6 +426,27 @@ namespace NOMAD.MissionPlanner
             _numHeight.ValueChanged += (s, e) => { _config.DroneHeightCm = (float)_numHeight.Value; _config.Save(); };
             _controlPanel.Controls.Add(_numHeight);
             x += 55;
+
+            _controlPanel.Controls.Add(CreateLabel("Type:", x, y + 3));
+            x += 35;
+            _combDroneType = new ComboBox
+            {
+                Location = new Point(x, y),
+                Size = new Size(85, 20),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                ForeColor = Color.White,
+                BackColor = Color.FromArgb(60, 60, 60),
+            };
+            _combDroneType.Items.AddRange(new[] { "Tricopter", "Quadcopter" });
+            _combDroneType.SelectedItem = _config.DroneFrameType;
+            _combDroneType.SelectedIndexChanged += (s, e) =>
+            {
+                _config.DroneFrameType = _combDroneType.SelectedItem?.ToString() ?? "Tricopter";
+                _config.Save();
+                _glControl?.Invalidate();
+            };
+            _controlPanel.Controls.Add(_combDroneType);
+            x += 90;
 
             _controlPanel.Controls.Add(CreateLabel("Hdg Offset:", x, y + 3));
             x += 68;
@@ -946,6 +1038,51 @@ namespace NOMAD.MissionPlanner
             GL.Rotate(bodyPitchDeg, 1f, 0f, 0f);
             GL.Rotate(bodyRollDeg, 0f, 0f, 1f);
 
+            // Draw drone body based on selected frame type
+            if (_config.DroneFrameType == "Quadcopter")
+            {
+                DrawQuadropterBody(lenM, widM, hgtM);
+            }
+            else
+            {
+                DrawTricopterBody(lenM, widM, hgtM);
+            }
+
+            // --- Camera servo mount ---
+            float camFwd = _config.CameraForwardOffsetCm / 100f;
+            float camDown = _config.CameraDownOffsetCm / 100f;
+
+            GL.PushMatrix();
+            GL.Translate(0, -camDown, camFwd);
+            // Servo tilts camera: rotation around X (lateral axis in body frame)
+            // servo=90 is level, >90 tilts up
+            GL.Rotate(90f - servoDeg, 1f, 0f, 0f);
+
+            // Camera box (yellow)
+            GL.Color3(0.9f, 0.85f, 0.2f);
+            float camW = 0.04f, camH = 0.025f, camD = 0.03f;
+            DrawWireBox(camW * 0.3f, 0, 0, camW, camH, camD);
+
+            // Camera look direction (green)
+            GL.Color3(0.2f, 1f, 0.2f);
+            GL.Begin(PrimitiveType.Lines);
+            GL.Vertex3(0, 0, 0);
+            GL.Vertex3(0, 0, 0.15f);
+            GL.End();
+
+            GL.PopMatrix(); // camera mount
+
+            // --- Avoidance envelope ---
+            float envPad = 0.1f;
+            GL.Color4(0f, 0.86f, 0.86f, 0.2f);
+            DrawWireBox(0, 0, 0, lenM + envPad * 2, hgtM + envPad * 2, widM + envPad * 2);
+
+            GL.Enable(EnableCap.Lighting);
+            GL.PopMatrix(); // drone body
+        }
+
+        private void DrawTricopterBody(float lenM, float widM, float hgtM)
+        {
             // --- Tricopter body: 2 front motors, 1 rear motor ---
             GL.Color3(0f, 0.86f, 0.86f); // cyan
 
@@ -984,38 +1121,60 @@ namespace NOMAD.MissionPlanner
             GL.Vertex3(0, 0, lenM * 0.6f);
             GL.End();
             GL.LineWidth(1f);
+        }
 
-            // --- Camera servo mount ---
-            float camFwd = _config.CameraForwardOffsetCm / 100f;
-            float camDown = _config.CameraDownOffsetCm / 100f;
+        private void DrawQuadropterBody(float lenM, float widM, float hgtM)
+        {
+            // --- Quadcopter body: 4 motors in X configuration ---
+            GL.Color3(1f, 0.65f, 0f); // orange
 
-            GL.PushMatrix();
-            GL.Translate(0, -camDown, camFwd);
-            // Servo tilts camera: rotation around X (lateral axis in body frame)
-            // servo=90 is level, >90 tilts up
-            GL.Rotate(90f - servoDeg, 1f, 0f, 0f);
+            // Central body wireframe
+            DrawWireBox(0, 0, 0, widM * 0.3f, hgtM, lenM * 0.3f);
 
-            // Camera box (yellow)
-            GL.Color3(0.9f, 0.85f, 0.2f);
-            float camW = 0.04f, camH = 0.025f, camD = 0.03f;
-            DrawWireBox(camW * 0.3f, 0, 0, camW, camH, camD);
-
-            // Camera look direction (green)
-            GL.Color3(0.2f, 1f, 0.2f);
+            // Front-left arm
+            float armAngle = 45f * (float)Math.PI / 180f;
+            float frontLeftX = -widM * 0.4f * (float)Math.Cos(armAngle);
+            float frontLeftZ = lenM * 0.35f * (float)Math.Sin(armAngle);
             GL.Begin(PrimitiveType.Lines);
-            GL.Vertex3(0, 0, 0);
-            GL.Vertex3(0, 0, 0.15f);
+            GL.Vertex3(0, 0, 0); GL.Vertex3(frontLeftX, 0, frontLeftZ);
             GL.End();
 
-            GL.PopMatrix(); // camera mount
+            // Front-right arm
+            float frontRightX = widM * 0.4f * (float)Math.Cos(armAngle);
+            float frontRightZ = lenM * 0.35f * (float)Math.Sin(armAngle);
+            GL.Begin(PrimitiveType.Lines);
+            GL.Vertex3(0, 0, 0); GL.Vertex3(frontRightX, 0, frontRightZ);
+            GL.End();
 
-            // --- Avoidance envelope ---
-            float envPad = 0.1f;
-            GL.Color4(0f, 0.86f, 0.86f, 0.2f);
-            DrawWireBox(0, 0, 0, lenM + envPad * 2, hgtM + envPad * 2, widM + envPad * 2);
+            // Rear-left arm
+            float rearLeftX = -widM * 0.4f * (float)Math.Cos(armAngle);
+            float rearLeftZ = -lenM * 0.35f * (float)Math.Sin(armAngle);
+            GL.Begin(PrimitiveType.Lines);
+            GL.Vertex3(0, 0, 0); GL.Vertex3(rearLeftX, 0, rearLeftZ);
+            GL.End();
 
-            GL.Enable(EnableCap.Lighting);
-            GL.PopMatrix(); // drone body
+            // Rear-right arm
+            float rearRightX = widM * 0.4f * (float)Math.Cos(armAngle);
+            float rearRightZ = -lenM * 0.35f * (float)Math.Sin(armAngle);
+            GL.Begin(PrimitiveType.Lines);
+            GL.Vertex3(0, 0, 0); GL.Vertex3(rearRightX, 0, rearRightZ);
+            GL.End();
+
+            // Motor discs (4 motors)
+            float motorR = Math.Min(lenM, widM) * 0.15f;
+            DrawMotorDisc(frontLeftX, 0, frontLeftZ, motorR);
+            DrawMotorDisc(frontRightX, 0, frontRightZ, motorR);
+            DrawMotorDisc(rearLeftX, 0, rearLeftZ, motorR);
+            DrawMotorDisc(rearRightX, 0, rearRightZ, motorR);
+
+            // Forward direction indicator (red) - points along +Z (forward in body frame)
+            GL.Color3(1f, 0.3f, 0.3f);
+            GL.LineWidth(2f);
+            GL.Begin(PrimitiveType.Lines);
+            GL.Vertex3(0, 0, 0);
+            GL.Vertex3(0, 0, lenM * 0.6f);
+            GL.End();
+            GL.LineWidth(1f);
         }
 
         private static void DrawWireBox(float cx, float cy, float cz, float sx, float sy, float sz)
@@ -1313,7 +1472,7 @@ namespace NOMAD.MissionPlanner
                     if (meshData?.Clear == true)
                     {
                         _persistedBlocks.Clear();
-                        _voxelInsertionOrder.Clear();
+                        ClearEvictionTracking();
                         _occupancySet.Clear();
                         _voxelLastSeen.Clear();
                         _voxelVerts = null;
@@ -1324,7 +1483,7 @@ namespace NOMAD.MissionPlanner
                         _lastRenderedCount = 0;
                     }
 
-                    // Handle removals
+                    // Handle removals (voxel/block mode only)
                     if (meshData?.Removed != null)
                     {
                         foreach (var r in meshData.Removed)
@@ -1333,12 +1492,14 @@ namespace NOMAD.MissionPlanner
                             var key = PackVoxelKey(rx, ry, rz);
                             if (_persistedBlocks.Remove(key))
                             {
+                                UnqueueForEviction(key);
                                 _occupancySet.Remove(PackKey(rx, ry, rz));
                                 _meshDirty = true;
                             }
                         }
                     }
 
+                    // Voxel/block cube mode
                     if ((meshData?.Mode == "voxel" || meshData?.Mode == "voxels") &&
                         meshData.Voxels != null && meshData.Voxels.Count > 0)
                     {
@@ -1372,7 +1533,7 @@ namespace NOMAD.MissionPlanner
             if (_currentMeshMode != "voxel")
             {
                 _persistedBlocks.Clear();
-                _voxelInsertionOrder.Clear();
+                ClearEvictionTracking();
                 _occupancySet.Clear();
                 _voxelLastSeen.Clear();
                 _currentMeshMode = "voxel";
@@ -1406,7 +1567,7 @@ namespace NOMAD.MissionPlanner
                 if (!_persistedBlocks.ContainsKey(key) || _persistedBlocks[key] != colorKey)
                 {
                     if (!_persistedBlocks.ContainsKey(key))
-                        _voxelInsertionOrder.Enqueue(key);
+                        QueueForEviction(key);
                     _persistedBlocks[key] = colorKey;
                     _occupancySet.Add(PackKey(qx, qy, qz));
                     _meshDirty = true;
@@ -1425,12 +1586,13 @@ namespace NOMAD.MissionPlanner
             if (_currentMeshMode != "block")
             {
                 _persistedBlocks.Clear();
-                _voxelInsertionOrder.Clear();
+                ClearEvictionTracking();
                 _occupancySet.Clear();
                 _voxelLastSeen.Clear();
                 _currentMeshMode = "block";
             }
             _currentVoxelSize = bs;
+            _meshGeneration++;
 
             foreach (var block in meshData.Blocks)
             {
@@ -1455,7 +1617,7 @@ namespace NOMAD.MissionPlanner
                 if (!_persistedBlocks.ContainsKey(key) || _persistedBlocks[key] != colorKey)
                 {
                     if (!_persistedBlocks.ContainsKey(key))
-                        _voxelInsertionOrder.Enqueue(key);
+                        QueueForEviction(key);
                     _persistedBlocks[key] = colorKey;
                     _occupancySet.Add(PackKey(bix, biy, biz));
                     _meshDirty = true;
@@ -1467,7 +1629,18 @@ namespace NOMAD.MissionPlanner
 
         private void EvictOldVoxels()
         {
-            // Rendering optimization disabled: keep full voxel history.
+            while (_persistedBlocks.Count > MaxPersistedVoxels && _voxelInsertionOrder.Count > 0)
+            {
+                long key = _voxelInsertionOrder.Dequeue();
+                _queuedForEviction.Remove(key);
+                if (_persistedBlocks.Remove(key))
+                {
+                    _voxelLastSeen.Remove(key);
+                    UnpackVoxelKey(key, out int ix, out int iy, out int iz);
+                    _occupancySet.Remove(PackKey(ix, iy, iz));
+                    _meshDirty = true;
+                }
+            }
         }
 
         /// <summary>
@@ -1490,10 +1663,17 @@ namespace NOMAD.MissionPlanner
 
             foreach (var kvp in fills)
             {
+                if (!_persistedBlocks.ContainsKey(kvp.Key))
+                    QueueForEviction(kvp.Key);
                 _persistedBlocks[kvp.Key] = kvp.Value;
                 UnpackVoxelKey(kvp.Key, out int fx, out int fy, out int fz);
                 _occupancySet.Add(PackKey(fx, fy, fz));
             }
+
+            // Gap filling can add many synthetic cells in block mode.
+            // Re-apply the memory cap after fills are inserted.
+            if (_currentMeshMode == "block")
+                EvictOldVoxels();
         }
 
         private void CheckAndFill(Dictionary<long, uint> fills, int ix, int iy, int iz,
@@ -1533,15 +1713,31 @@ namespace NOMAD.MissionPlanner
                     expired.Add(kvp.Key);
             }
 
+            bool compactEvictionQueue = false;
+
             foreach (var key in expired)
             {
                 _voxelLastSeen.Remove(key);
                 if (_persistedBlocks.Remove(key))
                 {
+                    if (_queuedForEviction.Remove(key))
+                        compactEvictionQueue = true;
                     UnpackVoxelKey(key, out int ix, out int iy, out int iz);
                     _occupancySet.Remove(PackKey(ix, iy, iz));
                     _meshDirty = true;
                 }
+            }
+
+            if (compactEvictionQueue && _voxelInsertionOrder.Count > 0)
+            {
+                var rebuilt = new Queue<long>(_voxelInsertionOrder.Count);
+                while (_voxelInsertionOrder.Count > 0)
+                {
+                    long queued = _voxelInsertionOrder.Dequeue();
+                    if (_queuedForEviction.Contains(queued))
+                        rebuilt.Enqueue(queued);
+                }
+                _voxelInsertionOrder = rebuilt;
             }
         }
 
@@ -1572,6 +1768,7 @@ namespace NOMAD.MissionPlanner
                     await _webSocket.ConnectAsync(new Uri(wsUrl), ct);
                     UpdateStatusSafe("Status: Connected (30Hz)");
                     _wsReconnectDelayMs = 1000;
+                    _ = RefreshMeshModeFromServerAsync(updateStatus: false);
 
                     var buffer = new byte[64 * 1024];
                     var messageBuffer = new MemoryStream();
@@ -1692,13 +1889,17 @@ namespace NOMAD.MissionPlanner
 
                                 _meshUpdateCount++;
                                 _lastUpdateTime = DateTime.Now;
-                                if (meshData != null)
-                                    _totalBlocks = meshData.TotalBlocks > 0 ? meshData.TotalBlocks : meshData.TotalVoxels;
-                                string mode = (meshData?.Mode == "voxel" || meshData?.Mode == "voxels") ? "voxels" : "blocks";
-                                int cachedVoxels;
-                                lock (_meshLock) { cachedVoxels = _persistedBlocks.Count; }
+                                string statsText;
+                                {
+                                    if (meshData != null)
+                                        _totalBlocks = meshData.TotalBlocks > 0 ? meshData.TotalBlocks : meshData.TotalVoxels;
+                                    string mode = (meshData?.Mode == "voxel" || meshData?.Mode == "voxels") ? "voxels" : "blocks";
+                                    int cachedVoxels;
+                                    lock (_meshLock) { cachedVoxels = _persistedBlocks.Count; }
+                                    statsText = $"Mesh: {_totalBlocks:N0} {mode} ({cachedVoxels:N0} cached)";
+                                }
                                 UpdateStatusSafe($"Status: Connected (30Hz) | Updates: {_meshUpdateCount}");
-                                UpdateStatsSafe($"Mesh: {_totalBlocks:N0} {mode} ({cachedVoxels:N0} cached)");
+                                UpdateStatsSafe(statsText);
                             }
                         }
                     }
@@ -1909,12 +2110,52 @@ namespace NOMAD.MissionPlanner
             _orbitCenterX = _orbitCenterY = _orbitCenterZ = 0;
         }
 
+        private async void CombMeshMode_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (_combMeshMode == null || _meshModeSelectionInternal || _meshModeApplyInFlight)
+                return;
+
+            string selectedMode = (_combMeshMode.SelectedItem?.ToString() ?? "Block").Equals("Voxel", StringComparison.OrdinalIgnoreCase)
+                ? "voxel"
+                : "block";
+
+            if (selectedMode == _meshOutputMode)
+                return;
+
+            _meshModeApplyInFlight = true;
+            _combMeshMode.Enabled = false;
+            try
+            {
+                var response = await JetsonApiService.PostAsync($"/api/task/2/slam/mesh/mode?mode={selectedMode}");
+                if (response.IsSuccessStatusCode)
+                {
+                    _meshOutputMode = selectedMode;
+                    UpdateStatusSafe($"Status: Mesh mode set to {selectedMode}");
+                }
+                else
+                {
+                    SetMeshModeSelection(_meshOutputMode);
+                    UpdateStatusSafe($"Status: Mesh mode change failed ({(int)response.StatusCode})");
+                }
+            }
+            catch (Exception ex)
+            {
+                SetMeshModeSelection(_meshOutputMode);
+                UpdateStatusSafe($"Status: Mesh mode change failed ({ex.Message})");
+            }
+            finally
+            {
+                _combMeshMode.Enabled = true;
+                _meshModeApplyInFlight = false;
+            }
+        }
+
         private async void BtnClearMesh_Click(object sender, EventArgs e)
         {
             lock (_meshLock)
             {
                 _persistedBlocks.Clear();
-                _voxelInsertionOrder.Clear();
+                ClearEvictionTracking();
                 _occupancySet.Clear();
                 _voxelLastSeen.Clear();
                 _voxelVerts = null;
@@ -1968,6 +2209,70 @@ namespace NOMAD.MissionPlanner
                 _lblPerceptionStatus.BeginInvoke(new Action(() => { if (_lblPerceptionStatus != null) _lblPerceptionStatus.Text = text; }));
             else
                 _lblPerceptionStatus.Text = text;
+        }
+
+        private static string NormalizeMeshMode(string mode)
+        {
+            return string.Equals(mode, "voxel", StringComparison.OrdinalIgnoreCase) ? "voxel" : "block";
+        }
+
+        private void SetMeshModeSelection(string mode)
+        {
+            if (_combMeshMode == null)
+                return;
+
+            string target = NormalizeMeshMode(mode) == "voxel" ? "Voxel" : "Block";
+            string current = _combMeshMode.SelectedItem?.ToString() ?? "";
+            if (string.Equals(current, target, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            _meshModeSelectionInternal = true;
+            try
+            {
+                _combMeshMode.SelectedItem = target;
+            }
+            finally
+            {
+                _meshModeSelectionInternal = false;
+            }
+        }
+
+        private async Task RefreshMeshModeFromServerAsync(bool updateStatus)
+        {
+            if (_meshModeRefreshInFlight)
+                return;
+
+            _meshModeRefreshInFlight = true;
+            try
+            {
+                var response = await JetsonApiService.GetAsync("/api/task/2/slam/mesh/mode");
+                if (!response.IsSuccessStatusCode)
+                    return;
+
+                var body = await response.Content.ReadAsStringAsync();
+                var obj = JObject.Parse(body);
+                string mode = NormalizeMeshMode(obj["mesh_output_mode"]?.ToString());
+                _meshOutputMode = mode;
+
+                if (_combMeshMode != null)
+                {
+                    if (_combMeshMode.InvokeRequired)
+                        _combMeshMode.BeginInvoke(new Action(() => SetMeshModeSelection(mode)));
+                    else
+                        SetMeshModeSelection(mode);
+                }
+
+                if (updateStatus)
+                    UpdateStatusSafe($"Status: Mesh mode is {mode}");
+            }
+            catch
+            {
+                // Keep last-known mode when endpoint is unavailable.
+            }
+            finally
+            {
+                _meshModeRefreshInFlight = false;
+            }
         }
 
         // ==================== Cleanup ====================

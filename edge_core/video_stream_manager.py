@@ -5,15 +5,15 @@ Manages the simple video bridge running inside the Isaac ROS Docker container
 for low-latency ROS-to-RTSP streaming using software H.264 encoding.
 
 Architecture:
-    ZED Camera (ROS2) -> x264enc (software, ultrafast) -> RTSP -> MediaMTX -> Mission Planner
+    ZED Camera (ROS2) -> x264enc (software, zerolatency) -> RTSP -> MediaMTX -> Viewers
 
 Key Features:
-- Software H.264 encoding (x264enc ultrafast preset) for minimal CPU usage
+- Software H.264 encoding (x264enc zerolatency, openh264enc fallback)
 - Single persistent stream with dynamic topic switching
 - Fixed RTSP URL (never changes when switching topics)
 - HTTP API control for topic switching and status
 - Multiple viewer support via MediaMTX
-- Adaptive bitrate for choppy network conditions
+- Pipeline watchdog with automatic error recovery
 - Auto-discovery of available ROS2 image topics
 
 Runs on Jetson Edge Core host, controls the bridge inside Docker container.
@@ -37,13 +37,13 @@ logger = logging.getLogger("edge_core.video_stream_manager")
 DEFAULT_CONTAINER_NAME = "nomad_isaac_ros"
 DEFAULT_RELAY_HTTP_PORT = 9200
 DEFAULT_RTSP_URL = "rtsp://172.17.0.1:8554/primary"
-DEFAULT_TOPIC = "/zed/zed_node/rgb/image_rect_color"
+DEFAULT_TOPIC = "/zed/zed_node/rgb/color/rect/image"
 
-# Stream settings
-DEFAULT_WIDTH = 1280
-DEFAULT_HEIGHT = 720
-DEFAULT_FPS = 30  # Match ZED camera target FPS (ZED_FPS=30 in jetson.env)
-DEFAULT_BITRATE = 6  # Mbps - increased for 30fps quality
+# Stream settings — tuned for Orin Nano (no hardware encoder)
+DEFAULT_WIDTH = 848
+DEFAULT_HEIGHT = 480
+DEFAULT_FPS = 15
+DEFAULT_BITRATE = 1500  # kbps — sufficient for 480p15
 
 
 @dataclass
@@ -59,7 +59,7 @@ class StreamStatus:
     uptime_s: float
     width: int
     height: int
-    bitrate_mbps: int
+    bitrate_kbps: int
     
     def to_dict(self) -> dict:
         return asdict(self)
@@ -84,7 +84,7 @@ def trim_topic_name(topic: str) -> str:
     - /camera/ -> cam:
     
     Examples:
-        /zed/zed_node/rgb/image_rect_color -> zed: rgb/image_rect_color
+        /zed/zed_node/rgb/color/rect/image -> zed: rgb/color/rect/image
         /zed/zed_node/left/image_rect_color -> zed: left/image_rect_color
         /zed/zed_node/depth/depth_registered -> zed: depth/depth_registered
     """
@@ -108,7 +108,7 @@ class VideoStreamManager:
     This class controls the simple video bridge running inside the Isaac ROS
     Docker container. The bridge:
     - Subscribes to ROS2 image topics from ZED camera
-    - Encodes video using x264enc software encoder (ultrafast preset)
+    - Encodes video using x264enc software encoder (zerolatency tuning)
     - Streams to MediaMTX RTSP server at fixed URL
     
     Topic switching is done via HTTP API to the bridge, which changes its
@@ -157,14 +157,38 @@ class VideoStreamManager:
             logger.error(f"Error checking container status: {e}")
             return False
 
-    def is_relay_running(self) -> bool:
+    def _get_relay_status_data(self, timeout_s: float = 2.0) -> Optional[Dict[str, Any]]:
+        """Fetch bridge /status JSON, or None if unavailable."""
+        try:
+            url = f"http://localhost:{self.relay_http_port}/status"
+            with urlopen(url, timeout=timeout_s) as response:
+                return json.loads(response.read().decode())
+        except Exception:
+            return None
+
+    def is_relay_running(self, require_recent_frames: bool = False) -> bool:
         """Check if the simple video bridge is running inside the container."""
         try:
             # Check if the HTTP API is responsive
             url = f"http://localhost:{self.relay_http_port}/health"
             with urlopen(url, timeout=2) as response:
                 data = json.loads(response.read().decode())
-                return data.get("healthy", False)
+                healthy = data.get("healthy", False)
+                pipeline_playing = data.get("pipeline_playing", healthy)
+                if not (healthy and pipeline_playing):
+                    return False
+
+                if not require_recent_frames:
+                    return True
+
+                status = self._get_relay_status_data(timeout_s=2.0)
+                if not status:
+                    return False
+
+                age = status.get("last_frame_age_s")
+                if age is None:
+                    return False
+                return age < 10.0
         except Exception:
             return False
 
@@ -194,10 +218,14 @@ class VideoStreamManager:
             # start_isaac_ros_auto.sh, auto_start thread, or prior API call).
             # Don't kill a working bridge just because _started is False
             # (e.g., after Edge Core restart).
-            if self.is_relay_running():
+            if self.is_relay_running(require_recent_frames=True):
                 self._started = True
                 logger.info("Simple video bridge already running, adopting existing instance")
                 return (True, "Already running")
+            elif self.is_relay_running(require_recent_frames=False):
+                logger.warning(
+                    "Simple video bridge process is alive but not receiving fresh frames; restarting bridge"
+                )
             
             if not self.is_container_running():
                 msg = f"Docker container '{self.container_name}' is not running. Start Isaac ROS first."
@@ -235,30 +263,18 @@ class VideoStreamManager:
             except Exception:
                 pass  # OK if nothing to kill
 
-            # Ensure numpy <2 (cv_bridge is compiled against numpy 1.x ABI)
-            try:
-                subprocess.run(
-                    ["docker", "exec", self.container_name,
-                     "bash", "-c",
-                     "python3 -c 'import numpy; v=int(numpy.__version__.split(\".\")[0]); exit(0 if v<2 else 1)' "
-                     "|| pip3 install -q 'numpy<2' 2>/dev/null"],
-                    capture_output=True,
-                    timeout=30
-                )
-            except Exception:
-                pass  # Best-effort; bridge will fail with clear error if numpy is wrong
-            
             # Start the simple video bridge
             cmd = [
                 "docker", "exec", "-d", self.container_name,
                 "bash", "-c",
                 f"source /opt/ros/humble/setup.bash 2>/dev/null; source /opt/ros/humble/install/setup.bash 2>/dev/null; "
+                f"source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null; "
                 f"python3 /tmp/{script_name} "
                 f"--source-topic '{self.default_topic}' "
                 f"--width {self.width} "
                 f"--height {self.height} "
                 f"--fps {self.fps} "
-                f"--bitrate {self.bitrate * 1000} "
+                f"--bitrate {self.bitrate} "
                 f"--http-port {self.relay_http_port} "
                 f"> /tmp/video_bridge.log 2>&1"
             ]
@@ -278,10 +294,14 @@ class VideoStreamManager:
                 logger.error(msg)
                 return (False, msg)
             
-            # Wait for bridge to be ready
+            # Wait for bridge HTTP API and GStreamer pipeline to be ready.
+            # We do NOT require fresh frames here — the ZED topic may not be
+            # publishing yet (e.g. container just started). Frames will arrive
+            # once ROS graph discovery completes. Checking pipeline_playing is
+            # sufficient to confirm the bridge process is healthy and encoding.
             for i in range(15):  # Wait up to 15 seconds
                 time.sleep(1)
-                if self.is_relay_running():
+                if self.is_relay_running(require_recent_frames=False):
                     self._started = True
                     logger.info(f"{script_name} started successfully")
                     return (True, "Started successfully")
@@ -300,7 +320,7 @@ class VideoStreamManager:
                     )
                     msg = f"Bridge process crashed. Log: {log_result.stdout.strip()[-200:]}"
                 else:
-                    msg = "Bridge process is running but HTTP health check not responding after 15s"
+                    msg = "Bridge process is running but no fresh frames were received within 25s"
             except Exception:
                 msg = "Bridge did not start in time and could not check process status"
             
@@ -353,7 +373,7 @@ class VideoStreamManager:
                 url = f"http://localhost:{self.relay_http_port}/switch?topic={quote(topic, safe='')}"
                 req = Request(url, method='POST')
                 
-                with urlopen(req, timeout=10) as response:  # Longer timeout for encoder restart
+                with urlopen(req, timeout=5) as response:
                     data = json.loads(response.read().decode())
                     
                 if data.get("success"):
@@ -448,7 +468,7 @@ class VideoStreamManager:
             uptime_s=0.0,
             width=self.width,
             height=self.height,
-            bitrate_mbps=self.bitrate,
+            bitrate_kbps=self.bitrate,
         )
         
         if not self.is_relay_running():
@@ -470,7 +490,7 @@ class VideoStreamManager:
                 uptime_s=0.0,     # Not tracked in new bridge
                 width=self.width,
                 height=self.height,
-                bitrate_mbps=self.bitrate,
+                bitrate_kbps=self.bitrate,
             )
             
         except Exception as e:
@@ -496,10 +516,10 @@ class VideoStreamManager:
 
     def set_overlay(self, enabled: bool) -> bool:
         """
-        Enable or disable the YOLO detection overlay on the video stream.
-        
+        Enable or disable the HSV circle detection overlay on the video stream.
+
         When enabled, the video bridge draws bounding boxes from Edge Core
-        detections directly onto the video frames before encoding to RTSP.
+        HSV circle detections directly onto the video frames before encoding to RTSP.
         """
         if not self.is_relay_running():
             logger.warning("Cannot toggle overlay: video bridge not running")
@@ -586,9 +606,23 @@ def init_video_stream_manager(
                     return
                 time.sleep(2)
 
-            # Safety net: primary bridge didn't start, launch one ourselves
+            # Safety net: primary bridge didn't start, launch one ourselves.
+            # Retry a few times to survive transient startup races.
             logger.warning("Video bridge not detected after 60s, starting as safety net...")
-            _video_stream_manager.start()
+            max_attempts = 3
+            for attempt in range(1, max_attempts + 1):
+                ok, msg = _video_stream_manager.start_with_reason()
+                if ok:
+                    logger.info(f"Video bridge safety net started on attempt {attempt}/{max_attempts}")
+                    return
+
+                logger.warning(
+                    f"Video bridge safety net attempt {attempt}/{max_attempts} failed: {msg}"
+                )
+                if attempt < max_attempts:
+                    time.sleep(10)
+
+            logger.error("Video bridge safety net failed after all retry attempts")
 
         thread = threading.Thread(target=_delayed_start, daemon=True)
         thread.start()

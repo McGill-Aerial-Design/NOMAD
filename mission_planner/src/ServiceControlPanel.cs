@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Newtonsoft.Json.Linq;
@@ -19,6 +20,21 @@ namespace NOMAD.MissionPlanner
         private readonly DualLinkSender _sender;
         private readonly System.Threading.Timer _pollTimer;
         private readonly int _pollIntervalMs;
+        private int _isPolling = 0;
+        private int _pollCycle = 0;
+
+        // Track transient failures so we can avoid UI flapping and log spam.
+        private int _servicesFailStreak = 0;
+        private int _isaacFailStreak = 0;
+        private int _vioFailStreak = 0;
+        private int _videoFailStreak = 0;
+        private int _slamFailStreak = 0;
+
+        private static bool ShouldLogStreak(int streak)
+        {
+            // Ignore one-off timeouts/cancels. Log only when persistent.
+            return streak >= 5 && (streak == 5 || streak % 10 == 0);
+        }
         
         // Service status indicators
         private Label _lblMavlinkStatus;
@@ -43,11 +59,6 @@ namespace NOMAD.MissionPlanner
         private Button _btnNvbloxLaunch;
         private Button _btnNvbloxStop;
 
-        // YOLO26 detection (Task 1 circles)
-        private Label _lblYolo26Status;
-        private Button _btnYolo26Start;
-        private Button _btnYolo26Stop;
-
         // Video bridges
         private Label _lblVideoBridgesStatus;
         private Button _btnStartBridges;
@@ -63,7 +74,9 @@ namespace NOMAD.MissionPlanner
         public ServiceControlPanel(DualLinkSender sender, int pollIntervalMs = 3000)
         {
             _sender = sender ?? throw new ArgumentNullException(nameof(sender));
-            _pollIntervalMs = pollIntervalMs;
+            // Service Control performs multiple network calls per cycle.
+            // Clamp to a sane minimum to avoid timeout churn under load.
+            _pollIntervalMs = Math.Max(5000, pollIntervalMs);
             
             InitializeUI();
             
@@ -74,26 +87,31 @@ namespace NOMAD.MissionPlanner
                 TimeSpan.FromSeconds(2),
                 TimeSpan.FromMilliseconds(_pollIntervalMs)
             );
+
+            LogMessage("Service poller v2 active (stability patch loaded)");
         }
         
         private void InitializeUI()
         {
             this.BackColor = Color.FromArgb(45, 45, 48);
-            this.Size = new Size(420, 550);
+            this.Dock = DockStyle.Fill;
+            this.Size = new Size(920, 650);
+            this.MinimumSize = new Size(860, 550);
             this.AutoScroll = true;
             
             int yOffset = 10;
             int leftCol = 15;
-            int rightCol = 280;
+            int rightCol = 790;
             
             // Title
             var lblTitle = new Label
             {
                 Text = "NOMAD Service Control",
                 Location = new Point(leftCol, yOffset),
-                Size = new Size(390, 25),
+                Size = new Size(880, 25),
                 Font = new Font("Segoe UI", 12, FontStyle.Bold),
-                ForeColor = Color.White
+                ForeColor = Color.White,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
             };
             this.Controls.Add(lblTitle);
             yOffset += 35;
@@ -116,9 +134,6 @@ namespace NOMAD.MissionPlanner
             // === Nvblox + Bridge (with Launch/Stop) ===
             AddNvbloxRow(ref yOffset);
 
-            // === YOLO26 Detection (with Start/Stop) ===
-            AddYolo26Row(ref yOffset);
-
             // === Video Bridges ===
             AddServiceRow("Video Bridges", ref _lblVideoBridgesStatus, ref _btnStartBridges, ref yOffset, "Start");
             _btnStartBridges.Click += async (s, e) => await StartVideoBridgesAsync();
@@ -133,7 +148,8 @@ namespace NOMAD.MissionPlanner
             {
                 BorderStyle = BorderStyle.Fixed3D,
                 Location = new Point(leftCol, yOffset),
-                Size = new Size(380, 2)
+                Size = new Size(870, 2),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
             };
             this.Controls.Add(separator);
             yOffset += 15;
@@ -163,9 +179,10 @@ namespace NOMAD.MissionPlanner
             _lblVioStatus = new Label
             {
                 Text = "Unknown",
-                Location = new Point(100, yOffset),
-                Size = new Size(150, 20),
-                ForeColor = Color.Yellow
+                Location = new Point(140, yOffset),
+                Size = new Size(620, 20),
+                ForeColor = Color.Yellow,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
             };
             this.Controls.Add(_lblVioStatus);
             
@@ -176,7 +193,8 @@ namespace NOMAD.MissionPlanner
                 Size = new Size(100, 25),
                 BackColor = Color.FromArgb(60, 60, 65),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
             };
             _btnVioReset.Click += async (s, e) => await ResetVioOriginAsync();
             this.Controls.Add(_btnVioReset);
@@ -195,9 +213,10 @@ namespace NOMAD.MissionPlanner
             _lblVioTrajectoryPoints = new Label
             {
                 Text = "0 points",
-                Location = new Point(100, yOffset),
-                Size = new Size(150, 20),
-                ForeColor = Color.White
+                Location = new Point(140, yOffset),
+                Size = new Size(620, 20),
+                ForeColor = Color.White,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
             };
             this.Controls.Add(_lblVioTrajectoryPoints);
             
@@ -208,7 +227,8 @@ namespace NOMAD.MissionPlanner
                 Size = new Size(100, 25),
                 BackColor = Color.FromArgb(60, 60, 65),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
             };
             _btnClearTrajectory.Click += async (s, e) => await ClearTrajectoryAsync();
             this.Controls.Add(_btnClearTrajectory);
@@ -219,9 +239,10 @@ namespace NOMAD.MissionPlanner
             {
                 Text = "Last update: Never",
                 Location = new Point(leftCol, yOffset),
-                Size = new Size(380, 20),
+                Size = new Size(870, 20),
                 ForeColor = Color.Gray,
-                Font = new Font("Segoe UI", 8)
+                Font = new Font("Segoe UI", 8),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
             };
             this.Controls.Add(_lblLastUpdate);
             yOffset += 25;
@@ -240,13 +261,14 @@ namespace NOMAD.MissionPlanner
             _txtLog = new TextBox
             {
                 Location = new Point(leftCol, yOffset),
-                Size = new Size(380, 100),
+                Size = new Size(870, 220),
                 Multiline = true,
                 ScrollBars = ScrollBars.Vertical,
                 ReadOnly = true,
                 BackColor = Color.FromArgb(30, 30, 30),
                 ForeColor = Color.LightGreen,
-                Font = new Font("Consolas", 8)
+                Font = new Font("Consolas", 8),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
             };
             this.Controls.Add(_txtLog);
         }
@@ -254,7 +276,7 @@ namespace NOMAD.MissionPlanner
         private void AddServiceRow(string serviceName, ref Label statusLabel, ref Button actionButton, ref int yOffset, string buttonText = "Restart")
         {
             int leftCol = 15;
-            int rightCol = 280;
+            int rightCol = 790;
             
             var lblName = new Label
             {
@@ -269,8 +291,9 @@ namespace NOMAD.MissionPlanner
             {
                 Text = "Checking...",
                 Location = new Point(140, yOffset + 3),
-                Size = new Size(120, 20),
-                ForeColor = Color.Yellow
+                Size = new Size(620, 20),
+                ForeColor = Color.Yellow,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
             };
             this.Controls.Add(statusLabel);
             
@@ -281,7 +304,8 @@ namespace NOMAD.MissionPlanner
                 Size = new Size(100, 25),
                 BackColor = Color.FromArgb(60, 60, 65),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
             };
             this.Controls.Add(actionButton);
             
@@ -293,6 +317,8 @@ namespace NOMAD.MissionPlanner
         private void AddIsaacRosRow(ref int yOffset)
         {
             int leftCol = 15;
+            int startCol = 715;
+            int stopCol = 790;
             
             var lblName = new Label
             {
@@ -307,19 +333,21 @@ namespace NOMAD.MissionPlanner
             {
                 Text = "Checking...",
                 Location = new Point(140, yOffset + 3),
-                Size = new Size(90, 20),
-                ForeColor = Color.Yellow
+                Size = new Size(560, 20),
+                ForeColor = Color.Yellow,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
             };
             this.Controls.Add(_lblIsaacRosStatus);
             
             _btnIsaacRosStart = new Button
             {
                 Text = "Start",
-                Location = new Point(235, yOffset),
+                Location = new Point(startCol, yOffset),
                 Size = new Size(70, 25),
                 BackColor = Color.FromArgb(0, 120, 60),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
             };
             _btnIsaacRosStart.Click += async (s, e) => await StartIsaacRosAsync();
             this.Controls.Add(_btnIsaacRosStart);
@@ -327,11 +355,12 @@ namespace NOMAD.MissionPlanner
             _btnIsaacRosStop = new Button
             {
                 Text = "Stop",
-                Location = new Point(310, yOffset),
+                Location = new Point(stopCol, yOffset),
                 Size = new Size(70, 25),
                 BackColor = Color.FromArgb(150, 50, 50),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
             };
             _btnIsaacRosStop.Click += async (s, e) => await StopIsaacRosAsync();
             this.Controls.Add(_btnIsaacRosStop);
@@ -342,6 +371,8 @@ namespace NOMAD.MissionPlanner
         private void AddNvbloxRow(ref int yOffset)
         {
             int leftCol = 15;
+            int launchCol = 715;
+            int stopCol = 790;
 
             var lblName = new Label
             {
@@ -356,19 +387,21 @@ namespace NOMAD.MissionPlanner
             {
                 Text = "Checking...",
                 Location = new Point(140, yOffset + 3),
-                Size = new Size(90, 20),
-                ForeColor = Color.Yellow
+                Size = new Size(560, 20),
+                ForeColor = Color.Yellow,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
             };
             this.Controls.Add(_lblNvbloxStatus);
 
             _btnNvbloxLaunch = new Button
             {
                 Text = "Launch",
-                Location = new Point(235, yOffset),
+                Location = new Point(launchCol, yOffset),
                 Size = new Size(70, 25),
                 BackColor = Color.FromArgb(0, 120, 60),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
             };
             _btnNvbloxLaunch.Click += async (s, e) => await LaunchNvbloxAsync();
             this.Controls.Add(_btnNvbloxLaunch);
@@ -376,11 +409,12 @@ namespace NOMAD.MissionPlanner
             _btnNvbloxStop = new Button
             {
                 Text = "Stop",
-                Location = new Point(310, yOffset),
+                Location = new Point(stopCol, yOffset),
                 Size = new Size(70, 25),
                 BackColor = Color.FromArgb(150, 50, 50),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
             };
             _btnNvbloxStop.Click += async (s, e) => await StopNvbloxAsync();
             this.Controls.Add(_btnNvbloxStop);
@@ -388,271 +422,273 @@ namespace NOMAD.MissionPlanner
             yOffset += 35;
         }
 
-        private void AddYolo26Row(ref int yOffset)
-        {
-            int leftCol = 15;
-
-            var lblName = new Label
-            {
-                Text = "YOLO26 Circles:",
-                Location = new Point(leftCol, yOffset + 3),
-                Size = new Size(120, 20),
-                ForeColor = Color.LightGray
-            };
-            this.Controls.Add(lblName);
-
-            _lblYolo26Status = new Label
-            {
-                Text = "Checking...",
-                Location = new Point(140, yOffset + 3),
-                Size = new Size(160, 20),
-                ForeColor = Color.Yellow
-            };
-            this.Controls.Add(_lblYolo26Status);
-
-            _btnYolo26Start = new Button
-            {
-                Text = "Start",
-                Location = new Point(300, yOffset),
-                Size = new Size(50, 25),
-                BackColor = Color.FromArgb(0, 120, 60),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
-            };
-            _btnYolo26Start.Click += async (s, e) => await StartYolo26Async();
-            this.Controls.Add(_btnYolo26Start);
-
-            _btnYolo26Stop = new Button
-            {
-                Text = "Stop",
-                Location = new Point(355, yOffset),
-                Size = new Size(50, 25),
-                BackColor = Color.FromArgb(150, 50, 50),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
-            };
-            _btnYolo26Stop.Click += async (s, e) => await StopYolo26Async();
-            this.Controls.Add(_btnYolo26Stop);
-
-            yOffset += 35;
-        }
-
         private async void PollServicesAsync()
         {
+            // Prevent overlapping async polls (Timer can fire again before prior await chain completes).
+            if (Interlocked.Exchange(ref _isPolling, 1) == 1)
+                return;
+
             try
             {
-                // Check Edge Core (via health endpoint)
-                var healthResult = await _sender.GetHealthAsync();
-                UpdateStatusLabel(_lblEdgeCoreStatus, healthResult.Success);
-                
-                // Check MAVLink Router service status (is the service running?)
-                var mavlinkServiceResult = await _sender.GetServiceStatusAsync("mavlink-router");
-                bool mavlinkServiceActive = mavlinkServiceResult.Success &&
-                    mavlinkServiceResult.Data?.Trim().Equals("active", StringComparison.OrdinalIgnoreCase) == true;
-                
-                if (healthResult.Success && mavlinkServiceActive)
+                int cycle = Interlocked.Increment(ref _pollCycle);
+                bool pollIsaac = (cycle == 1) || (cycle % 2 == 0);
+                bool pollVio = (cycle == 1) || (cycle % 2 == 0);
+                bool pollVideoAndSlam = (cycle == 1) || (cycle % 3 == 0);
+                bool servicesFresh = false;
+                bool isaacRunningFromServices = false;
+
+                // Primary source of truth for service states.
+                var servicesResult = await _sender.GetServicesStatusAsync();
+                if (servicesResult.Success)
                 {
                     try
                     {
-                        var healthData = JObject.Parse(healthResult.Data);
-                        var fcConnected = healthData["connected"]?.Value<bool>() ?? false;
-                        string mavStatus = fcConnected ? "Running (FC linked)" : "Running (no FC)";
-                        UpdateStatusLabel(_lblMavlinkStatus, true, mavStatus);
+                        var services = JObject.Parse(servicesResult.Data);
+
+                        bool edgeRunning = services["edge_core"]?["running"]?.Value<bool>() ?? false;
+                        UpdateStatusLabel(_lblEdgeCoreStatus, edgeRunning, edgeRunning ? "Running" : "Stopped");
+
+                        bool mavRunning = services["mavlink_router"]?["running"]?.Value<bool>() ?? false;
+                        string mavRaw = services["mavlink_router"]?["status"]?.Value<string>() ?? string.Empty;
+                        string mavText;
+                        if (mavRunning)
+                        {
+                            mavText = "Running";
+                        }
+                        else if (mavRaw.Equals("no_cubepilot", StringComparison.OrdinalIgnoreCase))
+                        {
+                            mavText = "No CubePilot";
+                        }
+                        else
+                        {
+                            mavText = !string.IsNullOrWhiteSpace(mavRaw) ? $"Stopped ({mavRaw})" : "Stopped";
+                        }
+                        UpdateStatusLabel(_lblMavlinkStatus, mavRunning, mavText);
+
+                        bool mediamtxRunning = services["mediamtx"]?["running"]?.Value<bool>() ?? false;
+                        UpdateStatusLabel(_lblMediamtxStatus, mediamtxRunning, mediamtxRunning ? "Running" : "Stopped");
+
+                        bool isaacRunning = services["isaac_ros"]?["running"]?.Value<bool>() ?? false;
+                        string isaacMessage = services["isaac_ros"]?["message"]?.Value<string>();
+                        string isaacText = isaacRunning
+                            ? "Running"
+                            : (string.IsNullOrWhiteSpace(isaacMessage) ? "Not Running" : isaacMessage);
+                        UpdateStatusLabel(_lblIsaacRosStatus, isaacRunning, isaacText);
+                        isaacRunningFromServices = isaacRunning;
+
+                        servicesFresh = true;
+                        _servicesFailStreak = 0;
                     }
-                    catch
+                    catch (Exception parseEx)
                     {
-                        UpdateStatusLabel(_lblMavlinkStatus, true, "Running");
+                        _servicesFailStreak++;
+                        if (ShouldLogStreak(_servicesFailStreak))
+                            LogMessage($"Services parse warning (streak {_servicesFailStreak}): {parseEx.Message}");
                     }
-                }
-                else if (mavlinkServiceActive)
-                {
-                    UpdateStatusLabel(_lblMavlinkStatus, true, "Running (no FC)");
-                }
-                else if (healthResult.Success)
-                {
-                    UpdateStatusLabel(_lblMavlinkStatus, false, "Service Stopped");
                 }
                 else
                 {
-                    UpdateStatusLabel(_lblMavlinkStatus, false, "Offline");
+                    _servicesFailStreak++;
+                    if (ShouldLogStreak(_servicesFailStreak))
+                        LogMessage($"Services poll warning (streak {_servicesFailStreak}): {servicesResult.Message}");
                 }
-                
-                // Check MediaMTX
-                var mediamtxResult = await _sender.GetServiceStatusAsync("mediamtx");
-                bool mediamtxActive = mediamtxResult.Success && 
-                    mediamtxResult.Data?.Trim().Equals("active", StringComparison.OrdinalIgnoreCase) == true;
-                UpdateStatusLabel(_lblMediamtxStatus, mediamtxActive);
+
+                // If the primary snapshot is unavailable, keep last-known labels and
+                // skip the rest of endpoint-specific probes this cycle.
+                if (!servicesFresh)
+                {
+                    UpdateStatusPendingIfChecking(_lblIsaacRosStatus, "Waiting...");
+                    UpdateStatusPendingIfChecking(_lblNvbloxStatus, "Waiting...");
+                    UpdateStatusPendingIfChecking(_lblVioStatus, "Waiting...");
+                    UpdateStatusPendingIfChecking(_lblVideoBridgesStatus, "Waiting...");
+                    UpdateStatusPendingIfChecking(_lblSlamStatus, "Waiting...");
+                    UpdateLabel(_lblLastUpdate, $"Last update: {DateTime.Now:HH:mm:ss} (partial/stale)");
+                    return;
+                }
                 
                 // Check Isaac ROS status (container + nvblox + bridge)
-                var isaacResult = await _sender.GetIsaacStatusAsync();
-                if (isaacResult.Success)
+                if (pollIsaac)
                 {
-                    try
+                    var isaacResult = await _sender.GetIsaacStatusAsync();
+                    if (isaacResult.Success)
                     {
-                        var isaacData = JObject.Parse(isaacResult.Data);
-                        var containerRunning = isaacData["container_running"]?.Value<bool>() ?? false;
-                        var nvbloxRunning = isaacData["nvblox_running"]?.Value<bool>() ?? false;
-                        var bridgeRunning = isaacData["bridge_running"]?.Value<bool>() ?? false;
-
-                        UpdateStatusLabel(_lblIsaacRosStatus, containerRunning, containerRunning ? "Running" : "Not Running");
-
-                        if (nvbloxRunning && bridgeRunning)
-                            UpdateStatusLabel(_lblNvbloxStatus, true, "Running");
-                        else if (nvbloxRunning)
-                            UpdateStatusLabel(_lblNvbloxStatus, false, "No Bridge");
-                        else if (containerRunning)
-                            UpdateStatusLabel(_lblNvbloxStatus, false, "Stopped");
-                        else
-                            UpdateStatusLabel(_lblNvbloxStatus, false, "No Container");
-                    }
-                    catch
-                    {
-                        UpdateStatusLabel(_lblIsaacRosStatus, false, "Not Running");
-                        UpdateStatusLabel(_lblNvbloxStatus, false, "Unknown");
-                    }
-                }
-                else
-                {
-                    UpdateStatusLabel(_lblIsaacRosStatus, false, "Not Running");
-                    UpdateStatusLabel(_lblNvbloxStatus, false, "Offline");
-                }
-
-                // YOLO26 detection status
-                var yoloResult = await _sender.GetYolo26StatusAsync();
-                if (yoloResult.Success)
-                {
-                    try
-                    {
-                        var yoloData = JObject.Parse(yoloResult.Data);
-                        var enabled = yoloData["yolo26_enabled"]?.Value<bool>() ?? false;
-                        var fresh = yoloData["fresh_stream"]?.Value<bool>() ?? false;
-                        var count = yoloData["current_count"]?.Value<int>() ?? 0;
-                        var ageSeconds = yoloData["age_seconds"]?.Value<double?>();
-
-                        if (enabled && fresh)
+                        try
                         {
-                            string suffix = count == 1 ? " target" : " targets";
-                            UpdateStatusLabel(_lblYolo26Status, true, $"Running ({count}{suffix})");
+                            var isaacData = JObject.Parse(isaacResult.Data);
+                            var containerRunning = isaacData["container_running"]?.Value<bool>() ?? false;
+                            var nvbloxRunning = isaacData["nvblox_running"]?.Value<bool>() ?? false;
+                            var bridgeRunning = isaacData["bridge_running"]?.Value<bool>() ?? false;
+
+                            UpdateStatusLabel(_lblIsaacRosStatus, containerRunning, containerRunning ? "Running" : "Not Running");
+
+                            if (nvbloxRunning && bridgeRunning)
+                                UpdateStatusLabel(_lblNvbloxStatus, true, "Running");
+                            else if (nvbloxRunning)
+                                UpdateStatusLabel(_lblNvbloxStatus, false, "No Bridge");
+                            else if (containerRunning)
+                                UpdateStatusLabel(_lblNvbloxStatus, false, "Stopped");
+                            else
+                                UpdateStatusLabel(_lblNvbloxStatus, false, "No Container");
+
+                            _isaacFailStreak = 0;
                         }
-                        else if (enabled)
+                        catch (Exception parseEx)
                         {
-                            string staleText = ageSeconds.HasValue ? $"{ageSeconds.Value:F1}s" : "no stream";
-                            UpdateStatusLabel(_lblYolo26Status, false, $"Enabled ({staleText})");
-                        }
-                        else
-                        {
-                            UpdateStatusLabel(_lblYolo26Status, false, "Stopped");
+                            _isaacFailStreak++;
+                            if (ShouldLogStreak(_isaacFailStreak))
+                                LogMessage($"Isaac status parse warning (streak {_isaacFailStreak}): {parseEx.Message}");
                         }
                     }
-                    catch
+                    else
                     {
-                        UpdateStatusLabel(_lblYolo26Status, false, "Parse Error");
+                        _isaacFailStreak++;
+                        if (ShouldLogStreak(_isaacFailStreak))
+                            LogMessage($"Isaac status warning (streak {_isaacFailStreak}): {isaacResult.Message}");
                     }
-                }
-                else
-                {
-                    UpdateStatusLabel(_lblYolo26Status, false, "Offline");
                 }
                 
                 // Check VIO status
-                var vioResult = await _sender.GetVioStatusAsync();
-                if (vioResult.Success)
+                if (pollVio)
                 {
-                    try
+                    var vioResult = await _sender.GetVioStatusAsync();
+                    if (vioResult.Success)
                     {
-                        var vioData = JObject.Parse(vioResult.Data);
-                        var health = vioData["health"]?.Value<string>() ?? "unknown";
-                        var source = vioData["source"]?.Value<string>() ?? "none";
-                        var confidence = vioData["tracking_confidence"]?.Value<double>() ?? 0;
-                        
-                        bool healthy = health == "healthy";
-                        string statusText = $"{health} ({source})";
-                        if (confidence > 0)
-                            statusText += $" {confidence:P0}";
-                        
-                        UpdateStatusLabel(_lblVioStatus, healthy, statusText);
+                        try
+                        {
+                            var vioData = JObject.Parse(vioResult.Data);
+                            var health = vioData["health"]?.Value<string>() ?? "unknown";
+                            var source = vioData["source"]?.Value<string>() ?? "none";
+                            var confidence = vioData["tracking_confidence"]?.Value<double>() ?? 0;
+                            
+                            bool healthy = health == "healthy";
+                            string statusText = $"{health} ({source})";
+                            if (health.Equals("unknown", StringComparison.OrdinalIgnoreCase) && isaacRunningFromServices)
+                                statusText = "warming up (isaac_ros)";
+                            if (confidence > 0)
+                                statusText += $" {confidence:P0}";
+                            
+                            UpdateStatusLabel(_lblVioStatus, healthy, statusText);
+                            _vioFailStreak = 0;
+                        }
+                        catch (Exception parseEx)
+                        {
+                            _vioFailStreak++;
+                            if (ShouldLogStreak(_vioFailStreak))
+                                LogMessage($"VIO parse warning (streak {_vioFailStreak}): {parseEx.Message}");
+                        }
                     }
-                    catch
+                    else
                     {
-                        UpdateStatusLabel(_lblVioStatus, false, "Error");
+                        _vioFailStreak++;
+                        if (ShouldLogStreak(_vioFailStreak))
+                            LogMessage($"VIO status warning (streak {_vioFailStreak}): {vioResult.Message}");
                     }
-                }
-                else
-                {
-                    UpdateStatusLabel(_lblVioStatus, false, "Unavailable");
-                }
-                
-                // Get trajectory points
-                var trajResult = await _sender.GetVioTrajectoryAsync(10);
-                if (trajResult.Success)
-                {
-                    try
+
+                    // Get trajectory points less aggressively (same cadence as VIO poll)
+                    var trajResult = await _sender.GetVioTrajectoryAsync(10);
+                    if (trajResult.Success)
                     {
-                        var trajData = JObject.Parse(trajResult.Data);
-                        var totalPoints = trajData["total_points"]?.Value<int>() ?? 0;
-                        UpdateLabel(_lblVioTrajectoryPoints, $"{totalPoints} points");
+                        try
+                        {
+                            var trajData = JObject.Parse(trajResult.Data);
+                            var totalPoints = trajData["total_points"]?.Value<int>() ?? 0;
+                            UpdateLabel(_lblVioTrajectoryPoints, $"{totalPoints} points");
+                        }
+                        catch { }
                     }
-                    catch { }
                 }
                 
                 // Video bridge status (single bridge configuration)
-                var bridgesResult = await _sender.GetVideoBridgesStatusAsync();
-                if (bridgesResult.Success)
+                if (pollVideoAndSlam)
                 {
-                    try
+                    var bridgesResult = await _sender.GetVideoBridgesStatusAsync();
+                    if (bridgesResult.Success)
                     {
-                        var data = JObject.Parse(bridgesResult.Data);
-                        var primary = data["bridges"]?["primary"]?["state"]?.ToString() ?? "stopped";
-                        // Only check primary bridge (we simplified to single bridge)
-                        bool isStreaming = primary == "playing";
-                        var fps = data["bridges"]?["primary"]?["fps"]?.Value<float>() ?? 0;
-                        string statusText = isStreaming ? $"Streaming ({fps:F1} fps)" : "Stopped";
-                        UpdateStatusLabel(_lblVideoBridgesStatus, isStreaming, statusText);
+                        try
+                        {
+                            var data = JObject.Parse(bridgesResult.Data);
+                            var primary = data["bridges"]?["primary"]?["state"]?.ToString() ?? "stopped";
+                            // Only check primary bridge (we simplified to single bridge)
+                            bool isStreaming = primary == "playing";
+                            var fps = data["bridges"]?["primary"]?["fps"]?.Value<float>() ?? 0;
+                            string statusText = isStreaming ? $"Streaming ({fps:F1} fps)" : "Stopped";
+                            UpdateStatusLabel(_lblVideoBridgesStatus, isStreaming, statusText);
+                            _videoFailStreak = 0;
+                        }
+                        catch (Exception parseEx)
+                        {
+                            _videoFailStreak++;
+                            if (ShouldLogStreak(_videoFailStreak))
+                                LogMessage($"Video status parse warning (streak {_videoFailStreak}): {parseEx.Message}");
+                        }
                     }
-                    catch { UpdateStatusLabel(_lblVideoBridgesStatus, false, "Parse Error"); }
-                }
-                else
-                {
-                    UpdateStatusLabel(_lblVideoBridgesStatus, false, "Offline");
-                }
+                    else
+                    {
+                        _videoFailStreak++;
+                        if (ShouldLogStreak(_videoFailStreak))
+                            LogMessage($"Video status warning (streak {_videoFailStreak}): {bridgesResult.Message}");
+                    }
 
-                // SLAM status
-                var slamResult = await _sender.GetSlamStatusAsync();
-                if (slamResult.Success)
-                {
-                    try
+                    // SLAM status
+                    var slamResult = await _sender.GetSlamStatusAsync();
+                    if (slamResult.Success)
                     {
-                        var data = JObject.Parse(slamResult.Data);
-                        var available = data["available"]?.Value<bool>() ?? false;
-                        var running = data["running"]?.Value<bool>() ?? false;
-                        if (running)
+                        try
                         {
-                            var blocks = data["block_count"]?.Value<int>() ?? 0;
-                            UpdateStatusLabel(_lblSlamStatus, true, $"Active ({blocks} blocks)");
+                            var data = JObject.Parse(slamResult.Data);
+                            var available = data["available"]?.Value<bool>() ?? false;
+                            var running = data["running"]?.Value<bool>() ?? false;
+                            if (running)
+                            {
+                                var blocks = data["block_count"]?.Value<int>() ?? 0;
+                                UpdateStatusLabel(_lblSlamStatus, true, $"Active ({blocks} blocks)");
+                            }
+                            else if (available)
+                            {
+                                UpdateStatusLabel(_lblSlamStatus, false, "Available (no data)");
+                            }
+                            else
+                            {
+                                var error = (string)data["error"];
+                                if (isaacRunningFromServices &&
+                                    string.Equals(error, "No mesh data available", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    UpdateStatusLabel(_lblSlamStatus, false, "Waiting for mesh");
+                                }
+                                else
+                                {
+                                    UpdateStatusLabel(_lblSlamStatus, false, error ?? "Inactive");
+                                }
+                            }
+
+                            _slamFailStreak = 0;
                         }
-                        else if (available)
+                        catch (Exception parseEx)
                         {
-                            UpdateStatusLabel(_lblSlamStatus, false, "Available (no data)");
-                        }
-                        else
-                        {
-                            var error = (string)data["error"];
-                            UpdateStatusLabel(_lblSlamStatus, false, error ?? "Inactive");
+                            _slamFailStreak++;
+                            if (ShouldLogStreak(_slamFailStreak))
+                                LogMessage($"SLAM status parse warning (streak {_slamFailStreak}): {parseEx.Message}");
                         }
                     }
-                    catch { UpdateStatusLabel(_lblSlamStatus, false, "Error"); }
-                }
-                else
-                {
-                    UpdateStatusLabel(_lblSlamStatus, false, "Unavailable");
+                    else
+                    {
+                        _slamFailStreak++;
+                        if (ShouldLogStreak(_slamFailStreak))
+                            LogMessage($"SLAM status warning (streak {_slamFailStreak}): {slamResult.Message}");
+                    }
                 }
                 
                 // Update timestamp
-                UpdateLabel(_lblLastUpdate, $"Last update: {DateTime.Now:HH:mm:ss}");
+                var suffix = servicesFresh ? string.Empty : " (partial/stale)";
+                UpdateLabel(_lblLastUpdate, $"Last update: {DateTime.Now:HH:mm:ss}{suffix}");
             }
             catch (Exception ex)
             {
                 LogMessage($"Poll error: {ex.Message}");
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _isPolling, 0);
             }
         }
         
@@ -670,6 +706,28 @@ namespace NOMAD.MissionPlanner
                 
                 label.Text = customText ?? (isOk ? "Running" : "Stopped");
                 label.ForeColor = isOk ? Color.LimeGreen : Color.OrangeRed;
+            }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+        }
+
+        private void UpdateStatusPendingIfChecking(Label label, string text)
+        {
+            if (label == null || label.IsDisposed) return;
+
+            try
+            {
+                if (label.InvokeRequired)
+                {
+                    label.BeginInvoke(new Action(() => UpdateStatusPendingIfChecking(label, text)));
+                    return;
+                }
+
+                if (string.Equals(label.Text, "Checking...", StringComparison.OrdinalIgnoreCase))
+                {
+                    label.Text = text;
+                    label.ForeColor = Color.Goldenrod;
+                }
             }
             catch (ObjectDisposedException) { }
             catch (InvalidOperationException) { }
@@ -738,7 +796,6 @@ namespace NOMAD.MissionPlanner
             UpdateStatusLabel(_lblMavlinkStatus, false, "Restarting...");
             UpdateStatusLabel(_lblMediamtxStatus, false, "Restarting...");
             UpdateStatusLabel(_lblIsaacRosStatus, false, "Restarting...");
-            UpdateStatusLabel(_lblYolo26Status, false, "Restarting...");
             UpdateStatusLabel(_lblVideoBridgesStatus, false, "Restarting...");
             
             // Use SSH instead of HTTP API (since we're killing edge_core)
@@ -905,40 +962,6 @@ namespace NOMAD.MissionPlanner
             else
             {
                 LogMessage($"Failed to stop nvblox: {result.Message}");
-            }
-        }
-
-        private async Task StartYolo26Async()
-        {
-            LogMessage("Starting YOLO26 circle detection...");
-            UpdateStatusLabel(_lblYolo26Status, false, "Starting...");
-
-            var result = await _sender.StartYolo26Async();
-            if (result.Success)
-            {
-                LogMessage("YOLO26 startup initiated (~15s for ZED init)");
-            }
-            else
-            {
-                LogMessage($"Failed to start YOLO26: {result.Message}");
-                UpdateStatusLabel(_lblYolo26Status, false, "Start Failed");
-            }
-        }
-
-        private async Task StopYolo26Async()
-        {
-            LogMessage("Stopping YOLO26 circle detection...");
-            UpdateStatusLabel(_lblYolo26Status, false, "Stopping...");
-
-            var result = await _sender.StopYolo26Async();
-            if (result.Success)
-            {
-                LogMessage("YOLO26 stopped (nvblox remains active)");
-                UpdateStatusLabel(_lblYolo26Status, false, "Stopped");
-            }
-            else
-            {
-                LogMessage($"Failed to stop YOLO26: {result.Message}");
             }
         }
 

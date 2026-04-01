@@ -6,10 +6,9 @@ This script runs INSIDE the Isaac ROS Docker container and bridges
 ROS2 topics to the NOMAD Edge Core HTTP API running on the host.
 
 It subscribes to:
-- /visual_slam/tracking/odometry (VIO pose from Isaac ROS VSLAM)
+- /zed/zed_node/odom (VIO odometry pose from ZED wrapper)
 - /cmd_vel (Twist velocity commands from nav2/nvblox for autonomous navigation)
-- /nvblox_node/mesh (3D mesh from Nvblox) - optional
-- /nvblox_node/map_slice (2D occupancy slice) - for visualization
+- /nvblox_node/color_layer_marker (3D colored markers from nvblox) - optional
 - /nomad/servo/nozzle_angle (Float32 servo angle for nozzle control)
 
 And sends data to NOMAD Edge Core via HTTP POST requests.
@@ -33,8 +32,10 @@ import argparse
 import json
 import logging
 import math
+import os
 import threading
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, asdict
 from http.client import HTTPConnection
 from typing import Optional
@@ -48,12 +49,29 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped, Twist
 from std_msgs.msg import Float32, Float32MultiArray
 
-# sensor_msgs for HSV color verification (TD-005)
+# sensor_msgs for HSV color verification (TD-005) and HSV circle detection
 try:
-    from sensor_msgs.msg import Image
+    from sensor_msgs.msg import CameraInfo, Image
     IMAGE_AVAILABLE = True
 except ImportError:
     IMAGE_AVAILABLE = False
+
+# OpenCV + numpy for standalone HSV circle detection
+try:
+    import cv2
+    import numpy as np
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+    logger = logging.getLogger("ros_http_bridge")
+    # logger not yet created, will warn later
+
+# msgpack for efficient mesh serialization (3-10x faster, 2-5x smaller than JSON)
+try:
+    import msgpack
+    MSGPACK_AVAILABLE = True
+except ImportError:
+    MSGPACK_AVAILABLE = False
 
 # TF2 for camera pose lookup
 try:
@@ -68,13 +86,44 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ros_http_bridge")
 
+try:
+    from ipc import (  # type: ignore
+        DEFAULT_ROS_HIGH_RATE_ENDPOINT,
+        HIGH_RATE_MSG_TYPE_CMD_VEL,
+        HIGH_RATE_MSG_TYPE_DETECTIONS,
+        HIGH_RATE_MSG_TYPE_VIO,
+        IPCMessage,
+        ZMQPublisher,
+    )
+    IPC_AVAILABLE = True
+    IPC_IMPORT_ERROR = ""
+except Exception as e_import:
+    try:
+        from edge_core.ipc import (
+            DEFAULT_ROS_HIGH_RATE_ENDPOINT,
+            HIGH_RATE_MSG_TYPE_CMD_VEL,
+            HIGH_RATE_MSG_TYPE_DETECTIONS,
+            HIGH_RATE_MSG_TYPE_VIO,
+            IPCMessage,
+            ZMQPublisher,
+        )
+        IPC_AVAILABLE = True
+        IPC_IMPORT_ERROR = ""
+    except Exception as e_pkg_import:
+        IPC_AVAILABLE = False
+        IPC_IMPORT_ERROR = f"{e_import}; {e_pkg_import}"
+        DEFAULT_ROS_HIGH_RATE_ENDPOINT = "tcp://127.0.0.1:5557"
+        HIGH_RATE_MSG_TYPE_VIO = "ROS_VIO_UPDATE"
+        HIGH_RATE_MSG_TYPE_CMD_VEL = "ROS_CMD_VEL"
+        HIGH_RATE_MSG_TYPE_DETECTIONS = "ROS_DETECTIONS"
+
 # Try to import nvblox_msgs for mesh data
 try:
-    from nvblox_msgs.msg import Mesh, MeshBlock
+    from nvblox_msgs.msg import Mesh, MeshBlock  # noqa: F401 (kept for future use)
     NVBLOX_AVAILABLE = True
 except ImportError:
     NVBLOX_AVAILABLE = False
-    logger.warning("nvblox_msgs not available - mesh bridge disabled")
+    logger.warning("nvblox_msgs not available - block mesh path disabled")
 
 # visualization_msgs for per-voxel colored marker data
 try:
@@ -84,7 +133,7 @@ except ImportError:
     MARKER_AVAILABLE = False
     logger.warning("visualization_msgs not available - per-voxel mesh disabled")
 
-# ZED object detection messages (custom circle detection via YOLO26)
+# ZED object detection messages (custom circle detection via HSV)
 try:
     from zed_interfaces.msg import ObjectsStamped
     ZED_OD_AVAILABLE = True
@@ -108,12 +157,12 @@ class VIOData:
     vz: float = 0.0
     confidence: float = 1.0
     source: str = "isaac_ros"
-    # Raw ROS-frame pose (odom/map) for SLAM 3D visualization
-    # Always in "ros_optical" frame (ZED camera frame: X-right, Y-down, Z-forward)
+    # Raw camera pose in odom frame (ZED odom topic, X-right, Y-down, Z-forward).
+    # This is the camera position, NOT the drone body. _get_drone_body_pose()
+    # removes the servo pitch and mounting offset to get the true body pose.
     ros_x: float = 0.0
     ros_y: float = 0.0
     ros_z: float = 0.0
-    # Raw ROS-frame orientation (from odom topic, same frame as mesh)
     ros_roll: float = 0.0
     ros_pitch: float = 0.0
     ros_yaw: float = 0.0
@@ -133,7 +182,7 @@ class VelocityCommand:
 
 @dataclass
 class DetectedObject:
-    """Detected object from ZED custom OD (YOLO26 circle detection)."""
+    """Detected object from HSV circle detection."""
     timestamp: float
     label: str           # Class label (e.g. 'red_circle')
     label_id: int        # Class ID
@@ -153,10 +202,15 @@ class DetectedObject:
     bbox_h: float = 0.0   # height in pixels
     # Tracking state: 0=OFF, 1=OK, 2=SEARCHING, 3=TERMINATE
     tracking_state: int = 0
-    # HSV color verification (TD-005)
+    # HSV color verification
     hsv_color: str = ""          # HSV-derived color label (e.g. 'red', 'blue')
-    color_match: bool = True     # True if YOLO and HSV agree
-    needs_review: bool = False   # True if YOLO and HSV disagree
+    color_match: bool = True     # True if color is verified
+    needs_review: bool = False   # True if color verification failed
+
+
+def _hsv_color_to_id(color: str) -> int:
+    """Map HSV color name to a class ID."""
+    return {"black": 0, "blue": 1, "green": 2, "red": 3, "white": 4, "yellow": 5}.get(color, -1)
 
 
 class ROSHTTPBridge(Node):
@@ -175,7 +229,8 @@ class ROSHTTPBridge(Node):
         port: int = 8000,
         vio_topic: str = "/zed/zed_node/odom",  # Default to ZED odom
         cmd_vel_topic: str = "/cmd_vel",         # Nav2 velocity commands
-        mesh_topic: str = "/nvblox_node/mesh",   # Nvblox 3D mesh
+        mesh_topic: str = "/nvblox_node/color_layer_marker",   # Nvblox marker topic
+        mesh_output_mode: str = "block",         # Runtime-selectable output mode: block|voxel
         servo_topic: str = "/nomad/servo/nozzle_angle",  # Nozzle servo angle
         detection_topic: str = "/zed/zed_node/obj_det/objects",  # ZED custom OD
         send_rate_hz: float = 30.0,
@@ -183,6 +238,9 @@ class ROSHTTPBridge(Node):
         enable_mesh: bool = True,                # Enable mesh forwarding
         enable_servo: bool = True,               # Enable servo control forwarding
         enable_detections: bool = True,          # Enable object detection forwarding
+        high_rate_transport: str = "zmq",       # High-rate stream transport: zmq/http/both (zmq preferred, HTTP fallback auto-activates)
+        high_rate_zmq_endpoint: Optional[str] = None,
+        high_rate_zmq_pub_mode: str = "connect",
     ):
         super().__init__("nomad_ros_http_bridge")
         
@@ -193,15 +251,79 @@ class ROSHTTPBridge(Node):
         self._host = host
         self._port = port
         self._base_url = f"http://{host}:{port}"
+        self._api_key = (os.environ.get("NOMAD_API_KEY") or "").strip() or None
+        self._internal_token_header = "X-NOMAD-Internal-Token"
+        self._internal_token = (os.environ.get("NOMAD_INTERNAL_TOKEN") or "").strip() or None
+        if self._internal_token is not None and len(self._internal_token) < 32:
+            logger.warning("NOMAD_INTERNAL_TOKEN is shorter than 32 chars; internal token auth disabled")
+            self._internal_token = None
         self._send_interval = 1.0 / send_rate_hz
         self._enable_nav_control = enable_nav_control
-        self._enable_mesh = enable_mesh and NVBLOX_AVAILABLE
+        self._enable_mesh = enable_mesh and MARKER_AVAILABLE
+        self._mesh_topic = (mesh_topic or "/nvblox_node/color_layer_marker").strip() or "/nvblox_node/color_layer_marker"
+        self._mesh_output_mode = (mesh_output_mode or "block").strip().lower()
+        if self._mesh_output_mode not in ("block", "voxel"):
+            raise ValueError(
+                f"mesh_output_mode must be one of block/voxel, got {mesh_output_mode}"
+            )
         self._enable_servo = enable_servo
         self._enable_detections = enable_detections and ZED_OD_AVAILABLE
+
+        self._high_rate_transport = high_rate_transport.strip().lower()
+        if self._high_rate_transport not in ("zmq", "http", "both"):
+            raise ValueError(
+                f"high_rate_transport must be one of zmq/http/both, got {high_rate_transport}"
+            )
+        self._use_high_rate_http = self._high_rate_transport in ("http", "both")
+        self._use_high_rate_zmq = self._high_rate_transport in ("zmq", "both")
+        self._high_rate_zmq_pub_mode = high_rate_zmq_pub_mode.strip().lower()
+        if self._high_rate_zmq_pub_mode not in ("bind", "connect"):
+            raise ValueError(
+                "high_rate_zmq_pub_mode must be one of bind/connect, "
+                f"got {high_rate_zmq_pub_mode}"
+            )
+
+        configured_zmq_endpoint = (high_rate_zmq_endpoint or "").strip()
+        if not configured_zmq_endpoint:
+            configured_zmq_endpoint = os.environ.get(
+                "NOMAD_HIGH_RATE_ZMQ_ENDPOINT",
+                "",
+            ).strip()
+
+        if configured_zmq_endpoint:
+            self._high_rate_zmq_endpoint = configured_zmq_endpoint
+        elif self._high_rate_zmq_pub_mode == "connect":
+            try:
+                scheme, endpoint_rest = DEFAULT_ROS_HIGH_RATE_ENDPOINT.split("://", 1)
+                _, default_port = endpoint_rest.rsplit(":", 1)
+                self._high_rate_zmq_endpoint = f"{scheme}://{host}:{default_port}"
+            except Exception:
+                self._high_rate_zmq_endpoint = f"tcp://{host}:5557"
+        else:
+            self._high_rate_zmq_endpoint = DEFAULT_ROS_HIGH_RATE_ENDPOINT
+
+        self._zmq_publisher: Optional[ZMQPublisher] = None
         
-        # Persistent HTTP connection (keep-alive) for efficiency
-        self._http_conn = HTTPConnection(host, port, timeout=1.0)
+        # Persistent HTTP connection (keep-alive) for efficiency.
+        # Keep a short default timeout and override per-request in _http_post.
+        self._http_timeout_default_s = 0.5
+        self._http_conn = HTTPConnection(host, port, timeout=self._http_timeout_default_s)
         self._http_lock = threading.Lock()
+        # Throttle repeated HTTP error logs per endpoint to reduce log spam under backpressure.
+        self._http_warn_interval_s = 2.0
+        self._last_http_error_log: dict[str, float] = {}
+        self._last_zmq_error_log = 0.0
+        self._zmq_restart_backoff_s = 0.0
+        self._zmq_restart_backoff_min_s = 0.5
+        self._zmq_restart_backoff_max_s = 8.0
+        self._zmq_restart_retry_after = 0.0
+
+        if self._use_high_rate_zmq:
+            self._start_high_rate_publisher()
+            if self._zmq_publisher is None:
+                self._activate_high_rate_http_fallback(
+                    "high-rate ZMQ publisher is unavailable at startup"
+                )
         
         # QoS for sensor data
         sensor_qos = QoSProfile(
@@ -226,8 +348,12 @@ class ROSHTTPBridge(Node):
         # Stats
         self._vio_recv_count = 0
         self._vio_send_count = 0
+        self._vio_send_zmq_count = 0
+        self._vio_send_http_count = 0
         self._cmd_vel_recv_count = 0
         self._cmd_vel_send_count = 0
+        self._cmd_vel_send_zmq_count = 0
+        self._cmd_vel_send_http_count = 0
         self._mesh_recv_count = 0
         self._mesh_send_count = 0
         self._voxel_empty_count = 0  # consecutive empty voxel markers; fall back to block mode after threshold
@@ -239,14 +365,32 @@ class ROSHTTPBridge(Node):
         self._latest_detections: list[DetectedObject] = []
         self._send_errors = 0
         self._last_send_time = 0.0
+        # Back off VIO POSTs briefly on repeated failures to avoid overwhelming Edge Core.
+        self._vio_send_backoff_s = 0.0
+        self._vio_backoff_until = 0.0
+        self._vio_backoff_max_s = 1.0
         self._last_cmd_vel_send_time = 0.0
         self._last_mesh_send_time = 0.0
+        self._last_empty_mesh_send_time = 0.0
+        self._empty_mesh_send_interval_s = 2.0
         # Keep mesh forwarding capped by the configured bridge rate (default 30 Hz).
         # A fixed 10 Hz cap causes visible lag in world-view updates.
         self._mesh_send_interval_s = self._send_interval
         self._last_servo_send_time = 0.0
         self._last_servo_angle = -1.0
-        
+
+        # Background mesh sender: decouples ROS callback from HTTP blocking.
+        # Uses a threading.Event + single-slot pattern so only the latest
+        # mesh payload is sent; stale data is discarded automatically.
+        self._mesh_pending_data: Optional[bytes] = None
+        self._mesh_pending_lock = threading.Lock()
+        self._mesh_send_event = threading.Event()
+        self._mesh_sender_stop = threading.Event()
+        self._mesh_sender_thread = threading.Thread(
+            target=self._mesh_sender_loop, daemon=True, name="mesh-sender"
+        )
+        self._mesh_sender_thread.start()
+
         # Subscribe to VIO odometry
         self.create_subscription(
             Odometry,
@@ -266,29 +410,19 @@ class ROSHTTPBridge(Node):
             )
             self.get_logger().info(f"Subscribed to cmd_vel: {cmd_vel_topic}")
         
-        # Subscribe to mesh for 3D visualization
-        # Prefer color_layer_marker (per-voxel) over raw Mesh (per-block)
-        self._use_voxel_marker = False
+        # Subscribe to voxel marker for 3D visualization (cube rendering)
+        self._use_voxel_marker = True
         if self._enable_mesh and MARKER_AVAILABLE:
-            voxel_topic = "/nvblox_node/color_layer_marker"
+            voxel_topic = self._mesh_topic
             self.create_subscription(
                 Marker,
                 voxel_topic,
                 self._handle_voxel_marker,
                 mesh_qos,
             )
-            self._use_voxel_marker = True
             self.get_logger().info(f"Subscribed to per-voxel marker: {voxel_topic}")
-        if self._enable_mesh and NVBLOX_AVAILABLE:
-            self.create_subscription(
-                Mesh,
-                mesh_topic,
-                self._handle_mesh,
-                mesh_qos,
-            )
-            self.get_logger().info(f"Subscribed to mesh (fallback): {mesh_topic}")
-        elif enable_mesh and not NVBLOX_AVAILABLE and not MARKER_AVAILABLE:
-            self.get_logger().warning("Mesh requested but nvblox_msgs not available")
+        elif enable_mesh and not MARKER_AVAILABLE:
+            self.get_logger().warning("Mesh requested but visualization_msgs not available")
         
         # Subscribe to servo angle for nozzle control
         if self._enable_servo:
@@ -300,7 +434,7 @@ class ROSHTTPBridge(Node):
             )
             self.get_logger().info(f"Subscribed to servo angle: {servo_topic}")
         
-        # Subscribe to ZED custom object detections (YOLO26 circle detection)
+        # Subscribe to ZED custom object detections (HSV circle detection)
         if self._enable_detections:
             self.create_subscription(
                 ObjectsStamped,
@@ -312,13 +446,24 @@ class ROSHTTPBridge(Node):
         elif enable_detections and not ZED_OD_AVAILABLE:
             self.get_logger().warning("Detections requested but zed_interfaces not available")
         
-        # Subscribe to camera image for HSV color verification (TD-005)
-        self._latest_image = None  # Raw image bytes (RGB8)
+        # Subscribe to camera image for HSV color verification and
+        # standalone HSV circle detection
+        self._latest_image = None  # Raw image bytes
         self._image_width = 0
         self._image_height = 0
+        self._image_encoding = "rgb8"
+        self._image_step = 0
         self._image_lock = threading.Lock()
-        if self._enable_detections and IMAGE_AVAILABLE:
-            image_topic = "/zed/zed_node/rgb/image_rect_color"
+
+        # HSV circle detection state
+        self._enable_hsv_circles = CV2_AVAILABLE and IMAGE_AVAILABLE
+        self._hsv_circle_interval = 0.5  # Run HSV circle detection at 2 Hz
+        self._last_hsv_circle_time = 0.0
+        self._hsv_circle_send_count = 0
+
+        # Subscribe to camera image for both HSV verification and circle detection
+        if IMAGE_AVAILABLE:
+            image_topic = "/zed/zed_node/rgb/color/rect/image"
             image_qos = QoSProfile(
                 reliability=ReliabilityPolicy.BEST_EFFORT,
                 history=HistoryPolicy.KEEP_LAST,
@@ -330,7 +475,42 @@ class ROSHTTPBridge(Node):
                 self._handle_image,
                 image_qos,
             )
-            self.get_logger().info(f"Subscribed to camera image for HSV verification: {image_topic}")
+            self.get_logger().info(f"Subscribed to camera image: {image_topic}")
+
+            camera_info_topic = "/zed/zed_node/rgb/color/rect/camera_info"
+            self.create_subscription(
+                CameraInfo,
+                camera_info_topic,
+                self._handle_camera_info,
+                image_qos,
+            )
+            self.get_logger().info(f"Subscribed to camera info: {camera_info_topic}")
+
+            if self._enable_hsv_circles:
+                self.get_logger().info("HSV circle detection ENABLED (standalone)")
+            else:
+                self.get_logger().warning("HSV circle detection disabled (cv2 not available)")
+
+        # Subscribe to depth image for 3D position of HSV-detected circles
+        self._latest_depth = None
+        self._depth_lock = threading.Lock()
+        if IMAGE_AVAILABLE and self._enable_hsv_circles:
+            depth_topic = "/zed/zed_node/depth/depth_registered"
+            self.create_subscription(
+                Image,
+                depth_topic,
+                self._handle_depth,
+                image_qos,
+            )
+            self.get_logger().info(f"Subscribed to depth image: {depth_topic}")
+
+        # ZED camera intrinsics (will be populated from camera_info if available)
+        # Default ZED 2i HD720 intrinsics as fallback
+        self._camera_fx = 528.0
+        self._camera_fy = 528.0
+        self._camera_cx = 640.0
+        self._camera_cy = 360.0
+        self._camera_intrinsics_received = False
 
         # TF2 buffer for camera pose lookup
         self._tf_buffer = None
@@ -345,6 +525,19 @@ class ROSHTTPBridge(Node):
         # Camera frame to track (zed2_base_link matches camera:=zed2 launch param)
         self._camera_frame = "zed_camera_link"
         self._reference_frame = "odom"  # Or "map" depending on your setup
+
+        # Camera gimbal (servo) angle for drone body pose computation.
+        # The ZED odom gives the camera pose which includes the servo tilt.
+        # To get the true drone body pose, we subtract the servo rotation
+        # and mounting offset from the camera pose.
+        # Same physical offsets as servo_tf_publisher.py (TF-004).
+        self._gimbal_pitch_rad = 0.0         # Current servo pitch in radians (0 = level)
+        self._gimbal_angle_deg = 90.0        # Raw servo angle in degrees (90 = level)
+        self._gimbal_mount_offset = (0.10, 0.0, -0.05)  # (x, y, z) base_link -> servo_mount in body frame
+        self._gimbal_last_poll = 0.0
+        self._gimbal_poll_interval = 0.5     # Poll servo angle every 500ms
+        self._mesh_mode_last_poll = 0.0
+        self._mesh_mode_poll_interval = 1.0  # Poll runtime mesh output mode every 1s
         
         # Thermal-aware detection rate throttling (RM-005)
         self._gpu_temp_c = 0.0
@@ -374,12 +567,33 @@ class ROSHTTPBridge(Node):
 
         # Timer to send data to edge_core
         self.create_timer(self._send_interval, self._send_to_edge_core)
+        # Poll gimbal angle on its own timer to avoid blocking VIO send timer work.
+        self.create_timer(self._gimbal_poll_interval, self._poll_gimbal_angle)
+        # Poll runtime mesh output mode from Edge Core (block|voxel) without restart.
+        self.create_timer(self._mesh_mode_poll_interval, self._poll_mesh_output_mode)
+
+        self.get_logger().info(
+            f"High-rate transport mode: {self._high_rate_transport}"
+        )
+        if self._use_high_rate_zmq:
+            self.get_logger().info(
+                f"High-rate ZMQ endpoint: {self._high_rate_zmq_endpoint}"
+            )
+            self.get_logger().info(
+                f"High-rate ZMQ socket mode: {self._high_rate_zmq_pub_mode}"
+            )
+        if self._use_high_rate_http:
+            self.get_logger().info("High-rate HTTP forwarding enabled")
         
         self.get_logger().info(f"ROS-HTTP Bridge started -> {self._base_url}")
         if enable_nav_control:
             self.get_logger().info("Navigation control ENABLED - forwarding cmd_vel to Edge Core")
         if self._enable_mesh:
             self.get_logger().info("Mesh forwarding ENABLED - forwarding nvblox mesh to Edge Core")
+            self.get_logger().info(
+                f"Mesh output mode: {self._mesh_output_mode} "
+                "(runtime toggle via /api/task/2/slam/mesh/mode)"
+            )
     
     def _handle_vio(self, msg: Odometry) -> None:
         """Handle VIO odometry from ZED ROS2 driver."""
@@ -397,8 +611,12 @@ class ROSHTTPBridge(Node):
 
                 # VO-005: Auto-level servo on sustained tracking loss
                 now = time.time()
-                if (self._vio_healthy_time > 0 and
-                        now - self._vio_healthy_time > self._vio_loss_timeout_s and
+                # Edge case: if we have never seen a healthy sample yet, start the timer
+                # from the first degraded sample so sustained loss still triggers leveling.
+                if self._vio_healthy_time <= 0:
+                    self._vio_healthy_time = now
+
+                if (now - self._vio_healthy_time > self._vio_loss_timeout_s and
                         not self._vio_loss_servo_leveled):
                     self.get_logger().warn(
                         "VO-005: VIO tracking lost for >3s - leveling servo to 90° "
@@ -408,10 +626,10 @@ class ROSHTTPBridge(Node):
                     self._vio_loss_servo_leveled = True
                 # Keep forwarding pose for SLAM visualization continuity even when
                 # covariance is degraded; consumers can down-weight via confidence.
-
-            # VIO is healthy - reset tracking loss state
-            self._vio_healthy_time = time.time()
-            self._vio_loss_servo_leveled = False
+            else:
+                # VIO is healthy - reset tracking loss state
+                self._vio_healthy_time = time.time()
+                self._vio_loss_servo_leveled = False
 
             # Derive confidence from covariance (lower variance = higher confidence)
             confidence = max(0.0, min(1.0, 1.0 - pos_var * 10.0))
@@ -422,8 +640,16 @@ class ROSHTTPBridge(Node):
             )
             self._drone_velocity_mps = vel_mag
 
-            # Quaternion to Euler
-            roll, pitch, yaw = self._quat_to_euler(
+            # Keep raw ROS optical attitude for SLAM consumers.
+            ros_roll, ros_pitch, ros_yaw = self._quat_to_euler(
+                pose.orientation.x,
+                pose.orientation.y,
+                pose.orientation.z,
+                pose.orientation.w,
+            )
+
+            # Convert attitude to NED so primary pose fields match position frame.
+            roll, pitch, yaw = self._quat_to_ned_euler(
                 pose.orientation.x,
                 pose.orientation.y,
                 pose.orientation.z,
@@ -450,9 +676,9 @@ class ROSHTTPBridge(Node):
                 ros_x=pose.position.x,
                 ros_y=pose.position.y,
                 ros_z=pose.position.z,
-                ros_roll=roll,
-                ros_pitch=pitch,
-                ros_yaw=yaw,
+                ros_roll=ros_roll,
+                ros_pitch=ros_pitch,
+                ros_yaw=ros_yaw,
             )
 
             with self._lock:
@@ -474,9 +700,21 @@ class ROSHTTPBridge(Node):
         - linear.x: Forward velocity (m/s)
         - linear.y: Left velocity (m/s)
         - linear.z: Up velocity (m/s)
-        - angular.z: Yaw rate (rad/s, CCW positive)
+        - angular.x: Roll rate (rad/s) - ignored by this bridge
+        - angular.y: Pitch rate (rad/s) - ignored by this bridge
+        - angular.z: Yaw rate (rad/s, CCW positive) - forwarded as yaw_rate
         """
         try:
+            angular_epsilon = 1e-3
+            if (
+                abs(msg.angular.x) > angular_epsilon
+                or abs(msg.angular.y) > angular_epsilon
+            ):
+                self.get_logger().warn(
+                    "cmd_vel angular.x/angular.y are ignored (roll/pitch rates unsupported); forwarding angular.z as yaw_rate only",
+                    throttle_duration_sec=5.0,
+                )
+
             cmd = VelocityCommand(
                 timestamp=time.time(),
                 vx=msg.linear.x,    # Forward
@@ -496,43 +734,251 @@ class ROSHTTPBridge(Node):
         except Exception as e:
             self.get_logger().error(f"cmd_vel processing error: {e}")
     
-    def _http_post(self, path: str, data: bytes, timeout: float = 0.5) -> bool:
+    def _http_post(
+        self,
+        path: str,
+        data: bytes,
+        timeout: float = 0.5,
+        accepted_statuses: tuple[int, ...] = (200,),
+        content_type: str = "application/json",
+    ) -> bool:
         """Send HTTP POST using persistent connection with keep-alive."""
         with self._http_lock:
+            effective_timeout = max(0.05, timeout)
             try:
+                headers = self._build_internal_headers(content_type=content_type, keep_alive=True)
+
+                self._http_conn.timeout = effective_timeout
                 self._http_conn.request(
                     "POST", path, body=data,
-                    headers={"Content-Type": "application/json", "Connection": "keep-alive"}
+                    headers=headers
                 )
                 resp = self._http_conn.getresponse()
                 resp.read()  # Drain response to allow connection reuse
-                return resp.status == 200
+                if resp.status in accepted_statuses:
+                    return True
+
+                now = time.time()
+                last_warn = self._last_http_error_log.get(path, 0.0)
+                if now - last_warn >= self._http_warn_interval_s:
+                    self.get_logger().warning(
+                        f"HTTP POST to {path} returned status {resp.status}"
+                    )
+                    self._last_http_error_log[path] = now
+                return False
             except Exception as e:
-                # Log HTTP error before silent failure
-                self.get_logger().warning(f"HTTP POST to {path} failed: {e}")
-                # Reconnect on failure
+                now = time.time()
+                last_warn = self._last_http_error_log.get(path, 0.0)
+                if now - last_warn >= self._http_warn_interval_s:
+                    self.get_logger().warning(
+                        f"HTTP POST to {path} failed (timeout={effective_timeout:.2f}s): {e}"
+                    )
+                    self._last_http_error_log[path] = now
+
+                # Recreate connection on failure (more reliable than reconnecting same object).
                 try:
                     self._http_conn.close()
-                    self._http_conn.connect()
+                except Exception:
+                    pass
+                try:
+                    self._http_conn = HTTPConnection(
+                        self._host, self._port, timeout=self._http_timeout_default_s
+                    )
                 except Exception:
                     pass
                 return False
+            finally:
+                try:
+                    self._http_conn.timeout = self._http_timeout_default_s
+                except Exception:
+                    pass
+
+    def _build_internal_headers(
+        self,
+        content_type: Optional[str] = None,
+        keep_alive: bool = False,
+    ) -> dict[str, str]:
+        """Build consistent headers for internal Edge Core API calls."""
+        headers: dict[str, str] = {}
+        if content_type:
+            headers["Content-Type"] = content_type
+        if keep_alive:
+            headers["Connection"] = "keep-alive"
+        if self._internal_token:
+            headers[self._internal_token_header] = self._internal_token
+        if self._api_key:
+            headers["X-API-Key"] = self._api_key
+        return headers
+
+    def _schedule_high_rate_zmq_restart(self) -> float:
+        """Increase restart backoff after a ZMQ failure and return delay."""
+        self._zmq_restart_backoff_s = (
+            self._zmq_restart_backoff_min_s
+            if self._zmq_restart_backoff_s <= 0.0
+            else min(
+                self._zmq_restart_backoff_max_s,
+                self._zmq_restart_backoff_s * 2.0,
+            )
+        )
+        self._zmq_restart_retry_after = time.time() + self._zmq_restart_backoff_s
+        return self._zmq_restart_backoff_s
+
+    def _start_high_rate_publisher(self) -> None:
+        """Start high-rate ZMQ publisher (best effort, non-fatal on failure)."""
+        if not self._use_high_rate_zmq:
+            return
+        if self._zmq_publisher is not None:
+            return
+        if not IPC_AVAILABLE:
+            self.get_logger().warning(
+                f"High-rate ZMQ transport unavailable: IPC import failed ({IPC_IMPORT_ERROR})"
+            )
+            self._activate_high_rate_http_fallback(
+                "high-rate ZMQ transport dependencies are unavailable"
+            )
+            return
+
+        now = time.time()
+        if now < self._zmq_restart_retry_after:
+            return
+
+        try:
+            publisher = ZMQPublisher(
+                endpoint=self._high_rate_zmq_endpoint,
+                socket_mode=self._high_rate_zmq_pub_mode,
+                snd_hwm=2,
+                conflate=True,
+                linger_ms=0,
+            )
+            publisher.start()
+            self._zmq_publisher = publisher
+            self._zmq_restart_backoff_s = 0.0
+            self._zmq_restart_retry_after = 0.0
+            self.get_logger().info(
+                "High-rate ZMQ publisher started on "
+                f"{self._high_rate_zmq_endpoint} ({self._high_rate_zmq_pub_mode})"
+            )
+        except Exception as e:
+            self._zmq_publisher = None
+            backoff_s = self._schedule_high_rate_zmq_restart()
+            now = time.time()
+            if now - self._last_zmq_error_log >= self._http_warn_interval_s:
+                self.get_logger().warning(
+                    "Failed to start high-rate ZMQ publisher "
+                    f"({self._high_rate_zmq_endpoint}): {e}; retrying in {backoff_s:.2f}s"
+                )
+                self._last_zmq_error_log = now
+            self._activate_high_rate_http_fallback(
+                "high-rate ZMQ publisher failed to start"
+            )
+
+    def _activate_high_rate_http_fallback(self, reason: str) -> None:
+        """Enable HTTP transport when ZMQ-only mode would drop high-rate data."""
+        if self._use_high_rate_http:
+            return
+        self._use_high_rate_http = True
+        self.get_logger().warning(f"High-rate HTTP fallback enabled: {reason}")
+
+    def _effective_high_rate_transport(self) -> str:
+        """Return the currently active high-rate transport mode."""
+        if self._use_high_rate_http and self._use_high_rate_zmq:
+            return "both"
+        if self._use_high_rate_zmq:
+            return "zmq"
+        if self._use_high_rate_http:
+            return "http"
+        return "none"
+
+    def _stop_high_rate_publisher(self) -> None:
+        """Stop high-rate ZMQ publisher cleanly."""
+        if self._zmq_publisher is None:
+            return
+
+        try:
+            self._zmq_publisher.stop()
+        except Exception as e:
+            self.get_logger().warning(f"Failed to stop high-rate ZMQ publisher cleanly: {e}")
+        finally:
+            self._zmq_publisher = None
+
+    def _send_high_rate_zmq(self, msg_type: str, payload: dict) -> bool:
+        """Publish high-rate telemetry via ZMQ IPC."""
+        if not self._use_high_rate_zmq:
+            return False
+
+        if self._zmq_publisher is None:
+            self._start_high_rate_publisher()
+            if self._zmq_publisher is None:
+                self._activate_high_rate_http_fallback(
+                    "high-rate ZMQ publisher is unavailable at runtime"
+                )
+                return False
+
+        try:
+            self._zmq_publisher.send(
+                IPCMessage(
+                    msg_type=msg_type,
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    data=payload,
+                )
+            )
+            return True
+        except Exception as e:
+            self._activate_high_rate_http_fallback(
+                "high-rate ZMQ publish errors detected"
+            )
+            try:
+                self._stop_high_rate_publisher()
+            except Exception:
+                pass
+            backoff_s = self._schedule_high_rate_zmq_restart()
+            now = time.time()
+            if now - self._last_zmq_error_log >= self._http_warn_interval_s:
+                self.get_logger().warning(
+                    f"High-rate ZMQ publish failed ({msg_type}): {e}; "
+                    f"retrying publisher start in {backoff_s:.2f}s"
+                )
+                self._last_zmq_error_log = now
+            return False
 
     def _send_to_edge_core(self) -> None:
-        """Send latest VIO data to edge_core via HTTP."""
+        """Send latest VIO data to edge_core via configured high-rate transport."""
         with self._lock:
             vio = self._latest_vio
-        
+
         if vio is None:
             return
-        
-        try:
-            data = json.dumps(asdict(vio)).encode("utf-8")
-            if self._http_post("/api/vio/update", data):
+
+        payload = asdict(vio)
+
+        if self._use_high_rate_zmq:
+            if self._send_high_rate_zmq(HIGH_RATE_MSG_TYPE_VIO, payload):
+                self._vio_send_zmq_count += 1
                 self._vio_send_count += 1
             else:
                 self._send_errors += 1
-                    
+
+        if not self._use_high_rate_http:
+            return
+
+        now = time.time()
+        if now < self._vio_backoff_until:
+            return
+
+        try:
+            data = json.dumps(payload).encode("utf-8")
+            if self._http_post("/api/vio/update", data, timeout=0.15):
+                self._vio_send_http_count += 1
+                self._vio_send_count += 1
+                self._vio_send_backoff_s = 0.0
+            else:
+                self._send_errors += 1
+                self._vio_send_backoff_s = (
+                    0.05 if self._vio_send_backoff_s <= 0.0
+                    else min(self._vio_backoff_max_s, self._vio_send_backoff_s * 2.0)
+                )
+                self._vio_backoff_until = now + self._vio_send_backoff_s
+
         except URLError as e:
             self._send_errors += 1
             if self._send_errors % 100 == 1:
@@ -550,10 +996,38 @@ class ROSHTTPBridge(Node):
         """
         if not self._enable_nav_control:
             return
+
+        payload = asdict(cmd)
+        zmq_sent = False
+
+        if self._use_high_rate_zmq:
+            if self._send_high_rate_zmq(HIGH_RATE_MSG_TYPE_CMD_VEL, payload):
+                self._cmd_vel_send_zmq_count += 1
+                self._cmd_vel_send_count += 1
+                self._last_cmd_vel_send_time = time.time()
+                zmq_sent = True
+            else:
+                self._send_errors += 1
+
+        # Keep ZMQ as the primary path. In explicit "both" mode, also send
+        # HTTP as a secondary path with the same payload so API-side monotonic
+        # dedupe can safely drop duplicates.
+        if zmq_sent and self._high_rate_transport != "both":
+            return
+
+        if not self._use_high_rate_http:
+            return
         
         try:
-            data = json.dumps(asdict(cmd)).encode("utf-8")
-            if self._http_post("/api/nav/velocity", data, timeout=0.1):
+            data = json.dumps(payload).encode("utf-8")
+            accepted_http_statuses = (200, 409) if (zmq_sent and self._high_rate_transport == "both") else (200,)
+            if self._http_post(
+                "/api/nav/velocity",
+                data,
+                timeout=0.1,
+                accepted_statuses=accepted_http_statuses,
+            ):
+                self._cmd_vel_send_http_count += 1
                 self._cmd_vel_send_count += 1
                 self._last_cmd_vel_send_time = time.time()
             else:
@@ -659,7 +1133,7 @@ class ROSHTTPBridge(Node):
         
         try:
             path = f"/api/servo/camera/tilt?angle={angle:.1f}"
-            if self._http_post(path, b""):
+            if self._http_post(path, b"", timeout=0.2):
                 self._servo_send_count += 1
             else:
                 self._send_errors += 1
@@ -671,16 +1145,219 @@ class ROSHTTPBridge(Node):
         except Exception as e:
             self._send_errors += 1
             self.get_logger().error(f"Servo send error: {e}")
+
+    def _handle_camera_info(self, msg: 'CameraInfo') -> None:
+        """Update camera intrinsics from CameraInfo K matrix when valid."""
+        try:
+            if len(msg.k) < 9:
+                return
+
+            fx = float(msg.k[0])
+            fy = float(msg.k[4])
+            cx = float(msg.k[2])
+            cy = float(msg.k[5])
+
+            if fx <= 0.0 or fy <= 0.0:
+                return
+
+            self._camera_fx = fx
+            self._camera_fy = fy
+            self._camera_cx = cx
+            self._camera_cy = cy
+
+            if not self._camera_intrinsics_received:
+                self._camera_intrinsics_received = True
+                self.get_logger().info(
+                    "Camera intrinsics received from CameraInfo: "
+                    f"fx={fx:.2f}, fy={fy:.2f}, cx={cx:.2f}, cy={cy:.2f}"
+                )
+        except Exception:
+            pass
     
     def _handle_image(self, msg: 'Image') -> None:
-        """Store latest camera image for HSV color verification (TD-005)."""
+        """Store latest camera image for HSV color verification and circle detection."""
         try:
             with self._image_lock:
                 self._latest_image = bytes(msg.data)
                 self._image_width = msg.width
                 self._image_height = msg.height
+                self._image_encoding = msg.encoding if hasattr(msg, 'encoding') and msg.encoding else 'rgb8'
+                self._image_step = int(msg.step) if hasattr(msg, 'step') and msg.step else 0
+
+            # Run standalone HSV circle detection at configured rate
+            if self._enable_hsv_circles:
+                now = time.time()
+                if now - self._last_hsv_circle_time >= self._hsv_circle_interval:
+                    self._last_hsv_circle_time = now
+                    self._run_hsv_circle_detection(msg)
         except Exception:
             pass
+
+    def _handle_depth(self, msg: 'Image') -> None:
+        """Store latest depth image for 3D position of HSV-detected circles."""
+        try:
+            with self._depth_lock:
+                self._latest_depth = msg
+        except Exception:
+            pass
+
+    def _run_hsv_circle_detection(self, img_msg: 'Image') -> None:
+        """
+        Run standalone HSV circle detection on the camera image.
+
+        Uses OpenCV HoughCircles to find circles, then classifies their
+        color using HSV analysis. Results are sent to Edge Core as
+        DetectedObject entries.
+        """
+        if not CV2_AVAILABLE:
+            return
+
+        try:
+            # Convert ROS Image to numpy BGR
+            w = img_msg.width
+            h = img_msg.height
+            encoding = img_msg.encoding if hasattr(img_msg, 'encoding') else 'rgb8'
+            encoding_l = encoding.lower()
+
+            img_data = np.frombuffer(bytes(img_msg.data), dtype=np.uint8)
+
+            if 'bgra' in encoding_l or 'rgba' in encoding_l:
+                channels = 4
+            else:
+                channels = 3
+
+            min_row_stride = w * channels
+            msg_step = int(img_msg.step) if hasattr(img_msg, 'step') and img_msg.step else 0
+            row_stride = msg_step if msg_step >= min_row_stride else min_row_stride
+            required_size = h * row_stride
+
+            if img_data.size < required_size:
+                self.get_logger().warning(
+                    f"HSV image decode skipped: insufficient buffer ({img_data.size} < {required_size})"
+                )
+                return
+
+            img_data = img_data[:required_size].reshape((h, row_stride))
+            img_data = img_data[:, :min_row_stride].reshape((h, w, channels))
+
+            if 'bgra' in encoding_l:
+                image_bgr = cv2.cvtColor(img_data, cv2.COLOR_BGRA2BGR)
+            elif 'bgr' in encoding_l:
+                image_bgr = img_data
+            elif 'rgba' in encoding_l:
+                image_bgr = cv2.cvtColor(img_data, cv2.COLOR_RGBA2BGR)
+            else:
+                # Assume RGB8
+                image_bgr = cv2.cvtColor(img_data, cv2.COLOR_RGB2BGR)
+
+            # Get depth image for 3D projection
+            depth_np = None
+            with self._depth_lock:
+                depth_msg = self._latest_depth
+            if depth_msg is not None:
+                try:
+                    depth_h = int(depth_msg.height)
+                    depth_w = int(depth_msg.width)
+                    if depth_h > 0 and depth_w > 0:
+                        depth_encoding = (getattr(depth_msg, "encoding", "") or "").lower()
+                        if depth_encoding and "32fc1" not in depth_encoding:
+                            raise ValueError(f"Unsupported depth encoding: {depth_msg.encoding}")
+
+                        bytes_per_pixel = 4  # 32FC1
+                        min_row_stride = depth_w * bytes_per_pixel
+                        depth_step = int(depth_msg.step) if hasattr(depth_msg, "step") and depth_msg.step else 0
+                        depth_row_stride = depth_step if depth_step >= min_row_stride else min_row_stride
+                        required_size = depth_h * depth_row_stride
+
+                        depth_raw = bytes(depth_msg.data)
+                        if len(depth_raw) < required_size:
+                            raise ValueError(
+                                f"Insufficient depth buffer ({len(depth_raw)} < {required_size})"
+                            )
+
+                        depth_rows = np.frombuffer(depth_raw[:required_size], dtype=np.uint8).reshape(
+                            (depth_h, depth_row_stride)
+                        )
+                        depth_tight = depth_rows[:, :min_row_stride].copy()
+                        depth_np = depth_tight.view(np.float32).reshape((depth_h, depth_w))
+                except Exception:
+                    depth_np = None
+
+            # Build camera matrix
+            cam_matrix = np.array([
+                [self._camera_fx, 0, self._camera_cx],
+                [0, self._camera_fy, self._camera_cy],
+                [0, 0, 1],
+            ], dtype=np.float32)
+
+            # Import and run the HSV circle detector
+            # Use try-except to handle both installed package and standalone script scenarios
+            try:
+                from edge_core.hsv_circle_detector import detect_circles_hsv
+            except ImportError:
+                # Fallback: try direct import when running in container without edge_core package
+                import sys
+                import os
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                if script_dir not in sys.path:
+                    sys.path.insert(0, script_dir)
+                from hsv_circle_detector import detect_circles_hsv
+
+            circles = detect_circles_hsv(
+                image_bgr,
+                depth_image=depth_np,
+                camera_matrix=cam_matrix,
+                min_radius=8,
+                max_radius=min(w, h) // 3,
+                min_color_confidence=0.35,
+                min_circularity=0.55,
+                min_solidity=0.75,
+                min_aspect_ratio=0.40,
+                min_contour_area=300,
+            )
+
+            if not circles:
+                return
+
+            # Convert to DetectedObject format for Edge Core compatibility
+            capture_time = time.time()
+            detections = []
+            for circ in circles:
+                label = f"{circ.color}_circle"
+                det = DetectedObject(
+                    timestamp=capture_time,
+                    label=label,
+                    label_id=_hsv_color_to_id(circ.color),
+                    confidence=circ.confidence,
+                    x=circ.x if circ.x is not None else 0.0,
+                    y=circ.y if circ.y is not None else 0.0,
+                    z=circ.z if circ.z is not None else 0.0,
+                    bbox_x=float(circ.bbox_x),
+                    bbox_y=float(circ.bbox_y),
+                    bbox_w=float(circ.bbox_w),
+                    bbox_h=float(circ.bbox_h),
+                    tracking_state=1,  # OK
+                    hsv_color=circ.color,
+                    color_match=True,
+                    needs_review=False,
+                )
+                detections.append(det)
+
+            with self._lock:
+                self._latest_detections = detections
+                self._detection_recv_count += 1
+
+            self._send_detections_to_edge_core(detections)
+            self._hsv_circle_send_count += 1
+
+            if self._hsv_circle_send_count % 20 == 1:
+                colors = [c.color for c in circles]
+                self.get_logger().info(
+                    f"HSV circle detection: {len(circles)} targets ({', '.join(colors)})"
+                )
+
+        except Exception as e:
+            self.get_logger().error(f"HSV circle detection error: {e}")
 
     # HSV color ranges for circle detection classes (TD-005)
     # Each entry maps a color name to (H_low, H_high, S_min, V_min) in OpenCV HSV
@@ -706,6 +1383,8 @@ class ROSHTTPBridge(Node):
             image = self._latest_image
             img_w = self._image_width
             img_h = self._image_height
+            img_encoding = self._image_encoding
+            img_step = self._image_step
 
         if image is None or img_w == 0 or img_h == 0:
             return ""
@@ -728,19 +1407,37 @@ class ROSHTTPBridge(Node):
         x2 = min(img_w, cx + hw)
         y2 = min(img_h, cy + hh)
 
-        # Extract RGB pixels from the flat byte array (row-major, 3 channels)
-        # and convert to HSV for color classification
+        # Decode channel order/stride from ROS Image metadata for robust HSV checks
         total_pixels = 0
         color_votes = {}
-        step = 3  # RGB8 encoding
-        row_stride = img_w * step
+
+        encoding = (img_encoding or "rgb8").lower()
+        if encoding == "bgr8":
+            channels = 3
+            is_bgr = True
+        elif encoding == "rgba8":
+            channels = 4
+            is_bgr = False
+        elif encoding == "bgra8":
+            channels = 4
+            is_bgr = True
+        else:
+            # Preserve legacy behavior by defaulting to RGB8 semantics.
+            channels = 3
+            is_bgr = False
+
+        min_row_stride = img_w * channels
+        row_stride = img_step if isinstance(img_step, int) and img_step >= min_row_stride else min_row_stride
 
         for row in range(y1, y2, 2):  # sample every other pixel for speed
             for col in range(x1, x2, 2):
-                idx = row * row_stride + col * step
-                if idx + 2 >= len(image):
+                idx = row * row_stride + col * channels
+                if idx + channels - 1 >= len(image):
                     continue
-                r, g, b = image[idx], image[idx + 1], image[idx + 2]
+                if is_bgr:
+                    b, g, r = image[idx], image[idx + 1], image[idx + 2]
+                else:
+                    r, g, b = image[idx], image[idx + 1], image[idx + 2]
 
                 # RGB to HSV (OpenCV convention: H 0-179, S 0-255, V 0-255)
                 r_f, g_f, b_f = r / 255.0, g / 255.0, b / 255.0
@@ -795,14 +1492,12 @@ class ROSHTTPBridge(Node):
 
     def _handle_detections(self, msg) -> None:
         """
-        Handle ZED custom object detections (YOLO26 circle detection).
+        Handle ZED custom object detections (HSV circle detection).
 
-        The ZED SDK runs the ONNX model with TensorRT, detects colored circles,
-        and provides 3D positions via stereo depth. This handler converts the
-        zed_interfaces/ObjectsStamped message into DetectedObject dataclasses
-        and forwards them to Edge Core.
+        Converts the zed_interfaces/ObjectsStamped message into DetectedObject
+        dataclasses and forwards them to Edge Core.
 
-        TD-003: Uses image capture timestamp from message header, not inference
+        Uses image capture timestamp from message header, not inference
         completion time, to avoid TF lookup errors due to inference latency.
         """
         if not self._enable_detections:
@@ -935,15 +1630,39 @@ class ROSHTTPBridge(Node):
         self._last_detection_send_time = now
         
         try:
+            source_timestamp = None
+            if detections:
+                raw_source_timestamp = getattr(detections[0], "timestamp", None)
+                if raw_source_timestamp is None and isinstance(detections[0], dict):
+                    raw_source_timestamp = detections[0].get("timestamp")
+                try:
+                    if raw_source_timestamp is not None:
+                        source_timestamp = float(raw_source_timestamp)
+                        if not math.isfinite(source_timestamp):
+                            source_timestamp = None
+                except (TypeError, ValueError):
+                    source_timestamp = None
+
             payload = {
                 "detections": [asdict(d) for d in detections],
                 "count": len(detections),
+                "source_timestamp": source_timestamp,
             }
-            data = json.dumps(payload).encode("utf-8")
-            if self._http_post("/api/detections/update", data):
-                self._detection_send_count += 1
-            else:
-                self._send_errors += 1
+
+            # Try ZMQ first (non-blocking, ~50us), fall back to HTTP
+            zmq_ok = False
+            if self._use_high_rate_zmq:
+                zmq_ok = self._send_high_rate_zmq(HIGH_RATE_MSG_TYPE_DETECTIONS, payload)
+                if zmq_ok:
+                    self._detection_send_count += 1
+
+            # HTTP fallback (or dual-send in "both" mode)
+            if not zmq_ok or self._high_rate_transport == "both":
+                data = json.dumps(payload).encode("utf-8")
+                if self._http_post("/api/detections/update", data, timeout=0.25):
+                    self._detection_send_count += 1
+                else:
+                    self._send_errors += 1
         except URLError as e:
             self._send_errors += 1
             if self._send_errors % 100 == 1:
@@ -952,81 +1671,9 @@ class ROSHTTPBridge(Node):
             self._send_errors += 1
             self.get_logger().error(f"Detection send error: {e}")
     
-    def _handle_mesh(self, msg) -> None:
-        """
-        Handle mesh data from nvblox for 3D visualization (block-only fallback).
 
-        Only used when color_layer_marker is not available.
-        Sends block indices + average color per block.
-        """
-        if not self._enable_mesh:
-            return
-        # Skip block mode if we have per-voxel marker data
-        if self._use_voxel_marker:
-            return
-
-        try:
-            # Rate limit mesh updates (max 10 Hz to avoid overwhelming)
-            now = time.time()
-            if now - self._last_mesh_send_time < self._mesh_send_interval_s:  # 10 Hz max
-                return
-
-            block_size = msg.block_size_m if hasattr(msg, 'block_size_m') else 0.2
-
-            # Block-only mode: extract index + average color per block
-            blocks = []
-            for i, idx in enumerate(msg.block_indices[:2000]):
-                block_entry = {
-                    "index": [int(idx.x), int(idx.y), int(idx.z)],
-                }
-
-                # Compute average color from block vertices if available
-                if i < len(msg.blocks) and hasattr(msg.blocks[i], 'colors') and msg.blocks[i].colors:
-                    colors = msg.blocks[i].colors
-                    if colors:
-                        n = len(colors)
-                        avg_r = int(sum(c.r for c in colors) / n * 255)
-                        avg_g = int(sum(c.g for c in colors) / n * 255)
-                        avg_b = int(sum(c.b for c in colors) / n * 255)
-                        block_entry["color"] = [avg_r, avg_g, avg_b]
-
-                blocks.append(block_entry)
-
-            if not blocks:
-                return  # Skip empty meshes
-
-            # Get camera pose from TF
-            camera_pose = self._get_camera_pose()
-
-            # Create lightweight mesh data payload
-            mesh_data = {
-                "blocks": blocks,
-                "block_size": block_size,
-                "mode": "block",
-                "total_blocks": len(blocks),
-                "timestamp": now,
-                "frame_id": "ros_optical",  # Same frame as mesh vertices and drone_position/attitude
-                "clear": msg.clear if hasattr(msg, 'clear') else False,
-            }
-
-            # Add camera pose if available
-            if camera_pose:
-                mesh_data["drone_position"] = camera_pose["position"]
-                mesh_data["drone_attitude"] = camera_pose["attitude"]
-
-            self._mesh_recv_count += 1
-            self._send_mesh_to_edge_core(mesh_data)
-
-        except Exception as e:
-            self.get_logger().error(f"Mesh processing error: {e}")
-    
     def _handle_voxel_marker(self, msg: 'Marker') -> None:
-        """
-        Handle per-voxel colored data from nvblox color_layer_marker topic.
-        
-        This gives individual voxel positions + colors (Marker type CUBE_LIST),
-        producing a much finer 3D map than the block-only approach.
-        """
+        """Handle nvblox CUBE_LIST marker data and forward as block/voxel payloads."""
         if not self._enable_mesh:
             return
         try:
@@ -1036,38 +1683,37 @@ class ROSHTTPBridge(Node):
                 return
 
             n_pts = len(msg.points)
-            
+
             # Track empty markers for fallback logic (DO THIS BEFORE rate limiting)
             # so we count ALL empty messages, not just the ones that pass the rate limit
             if n_pts == 0:
                 self._voxel_empty_count += 1
                 if self._voxel_empty_count == 20:
-                    self._use_voxel_marker = False
                     self.get_logger().warning(
-                        "color_layer_marker has been empty for 20 consecutive messages -- "
-                        "falling back to /nvblox_node/mesh (block mode)"
+                        f"{self._mesh_topic} has been empty for 20 consecutive messages"
                     )
+                empty_mode = self._mesh_output_mode if self._mesh_output_mode in ("block", "voxel") else "block"
+                self._send_empty_mesh_heartbeat(mode=empty_mode, timestamp=now)
                 # Return AFTER tracking, but before rate limit check
                 # (so we don't skip block mesh if voxels are temporarily empty)
                 return
 
-            # Got real points -- reset empty counter and re-enable voxel mode
+            # Got real points -- reset empty counter
             self._voxel_empty_count = 0
-            if not self._use_voxel_marker:
-                self._use_voxel_marker = True
-                self.get_logger().info("color_layer_marker has data -- switching back to voxel mode")
 
             # Now apply rate limit only for sending (not for tracking empty)
             if now - self._last_mesh_send_time < self._mesh_send_interval_s:
                 return
 
-            voxel_size = msg.scale.x  # All 3 scales should be equal
+            voxel_size = msg.scale.x if msg.scale.x > 0.0 else 0.05
             has_colors = len(msg.colors) == n_pts
+            active_mode = self._mesh_output_mode if self._mesh_output_mode in ("block", "voxel") else "block"
 
             # Cap payload size so large voxel messages do not starve pose/world cadence.
             # 8k voxels is a good balance between detail and real-time responsiveness.
             limit = min(n_pts, 8000)
 
+            blocks_acc = {}
             voxels = []
             if limit == n_pts:
                 sample_indices = range(limit)
@@ -1078,32 +1724,85 @@ class ROSHTTPBridge(Node):
 
             for i in sample_indices:
                 p = msg.points[i]
-                entry = {"p": [round(p.x, 4), round(p.y, 4), round(p.z, 4)]}
+
+                if active_mode == "voxel":
+                    entry = {"p": [round(p.x, 4), round(p.y, 4), round(p.z, 4)]}
+                    if has_colors:
+                        c = msg.colors[i]
+                        entry["c"] = [
+                            int(max(0.0, min(1.0, c.r)) * 255.0),
+                            int(max(0.0, min(1.0, c.g)) * 255.0),
+                            int(max(0.0, min(1.0, c.b)) * 255.0),
+                        ]
+                    voxels.append(entry)
+                    continue
+
+                # Quantize marker points into block indices so downstream
+                # consumers can stay in compact block mode.
+                bix = int(math.floor((p.x / voxel_size) + 0.5))
+                biy = int(math.floor((p.y / voxel_size) + 0.5))
+                biz = int(math.floor((p.z / voxel_size) + 0.5))
+                key = (bix, biy, biz)
+
                 if has_colors:
                     c = msg.colors[i]
-                    entry["c"] = [
-                        int(c.r * 255),
-                        int(c.g * 255),
-                        int(c.b * 255),
-                    ]
-                voxels.append(entry)
 
-            camera_pose = self._get_camera_pose()
+                    r = int(max(0.0, min(1.0, c.r)) * 255.0)
+                    g = int(max(0.0, min(1.0, c.g)) * 255.0)
+                    b = int(max(0.0, min(1.0, c.b)) * 255.0)
 
-            mesh_data = {
-                "voxels": voxels,
-                "voxel_size": round(voxel_size, 4),
-                "mode": "voxel",
-                "total_voxels": n_pts,
-                "sent_voxels": limit,
-                "timestamp": now,
-                "frame_id": "ros_optical",  # Same frame as mesh vertices and drone_position/attitude
-                "clear": False,
-            }
+                    bucket = blocks_acc.get(key)
+                    if bucket is None:
+                        blocks_acc[key] = [r, g, b, 1]
+                    else:
+                        bucket[0] += r
+                        bucket[1] += g
+                        bucket[2] += b
+                        bucket[3] += 1
+                elif key not in blocks_acc:
+                    blocks_acc[key] = None
 
-            if camera_pose:
-                mesh_data["drone_position"] = camera_pose["position"]
-                mesh_data["drone_attitude"] = camera_pose["attitude"]
+            drone_pose = self._get_drone_body_pose()
+
+            if active_mode == "voxel":
+                mesh_data = {
+                    "voxels": voxels,
+                    "voxel_size": round(voxel_size, 4),
+                    "mode": "voxel",
+                    "total_voxels": n_pts,
+                    "sent_voxels": len(voxels),
+                    "timestamp": now,
+                    "frame_id": "ros_optical",  # Same frame as mesh vertices and drone_position/attitude
+                    "clear": False,
+                }
+            else:
+                blocks = []
+                for (bix, biy, biz), color_acc in blocks_acc.items():
+                    block_entry = {"index": [bix, biy, biz]}
+                    if color_acc is not None and color_acc[3] > 0:
+                        count = color_acc[3]
+                        block_entry["color"] = [
+                            int(color_acc[0] / count),
+                            int(color_acc[1] / count),
+                            int(color_acc[2] / count),
+                        ]
+                    blocks.append(block_entry)
+
+                mesh_data = {
+                    "blocks": blocks,
+                    "block_size": round(voxel_size, 4),
+                    "mode": "block",
+                    "total_blocks": len(blocks_acc),
+                    "source_voxels": n_pts,
+                    "sampled_voxels": limit,
+                    "timestamp": now,
+                    "frame_id": "ros_optical",  # Same frame as mesh vertices and drone_position/attitude
+                    "clear": False,
+                }
+
+            if drone_pose:
+                mesh_data["drone_position"] = drone_pose["position"]
+                mesh_data["drone_attitude"] = drone_pose["attitude"]
 
             self._mesh_recv_count += 1
             self._send_mesh_to_edge_core(mesh_data)
@@ -1111,11 +1810,77 @@ class ROSHTTPBridge(Node):
         except Exception as e:
             self.get_logger().error(f"Voxel marker processing error: {e}")
 
-    def _get_camera_pose(self) -> Optional[dict]:
+    def _poll_mesh_output_mode(self) -> None:
+        """Poll Edge Core for runtime mesh output mode (block|voxel)."""
+        now = time.time()
+        if now - self._mesh_mode_last_poll < self._mesh_mode_poll_interval:
+            return
+        self._mesh_mode_last_poll = now
+
+        try:
+            url = f"{self._base_url}/api/task/2/slam/mesh/mode"
+            headers = self._build_internal_headers()
+            req = Request(url, headers=headers)
+            with urlopen(req, timeout=0.1) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+
+            mode = str(data.get("mesh_output_mode", "")).strip().lower()
+            if mode not in ("block", "voxel"):
+                return
+
+            if mode != self._mesh_output_mode:
+                previous = self._mesh_output_mode
+                self._mesh_output_mode = mode
+                self.get_logger().info(
+                    f"Mesh output mode changed at runtime: {previous} -> {mode}"
+                )
+        except Exception:
+            # Keep last known mode on transient API/network errors.
+            pass
+
+    def _poll_gimbal_angle(self) -> None:
+        """Poll camera gimbal servo angle from Edge Core API.
+
+        Caches the result so the fast-path (_get_drone_body_pose) never blocks
+        on HTTP. Called from a dedicated polling timer, not ROS callbacks.
         """
-        Get camera pose from latest VIO odometry data.
-        Returns position (x, y, z) and attitude (roll, pitch, yaw) in the odom frame.
-        Uses the raw odom pose directly (same coordinate frame as the mesh).
+        now = time.time()
+        if now - self._gimbal_last_poll < self._gimbal_poll_interval:
+            return
+        self._gimbal_last_poll = now
+
+        try:
+            url = f"{self._base_url}/api/servo/camera/tilt"
+            headers = self._build_internal_headers()
+            req = Request(url, headers=headers)
+            with urlopen(req, timeout=0.1) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            feedback_angle = data.get("feedback_angle")
+            if feedback_angle is None:
+                feedback_angle = data.get("angle", 90.0)
+            angle = float(feedback_angle)
+            angle = max(0.0, min(180.0, angle))
+            self._gimbal_angle_deg = angle
+            # 90 deg = level forward (pitch = 0)
+            self._gimbal_pitch_rad = math.radians(angle - 90.0)
+        except Exception:
+            pass  # Keep last known angle
+
+    def _get_drone_body_pose(self) -> Optional[dict]:
+        """
+        Compute the drone body (base_link) pose from the camera odom pose.
+
+        The ZED odom topic reports the *camera* position/orientation, which
+        includes the servo gimbal tilt and mounting offset.  To show the
+        correct drone position in the SLAM 3D view, we reverse-transform:
+
+            T_body = T_camera * inv(T_servo) * inv(T_mount)
+
+        The mount offset and servo pitch match servo_tf_publisher.py so the
+        drone marker sits at the airframe, not at the camera.
+
+        Returns position (x, y, z) and attitude (roll, pitch, yaw) in the
+        odom frame — same coordinate frame as the nvblox mesh.
         """
         with self._lock:
             vio = self._latest_vio
@@ -1123,38 +1888,162 @@ class ROSHTTPBridge(Node):
         if vio is None:
             return None
 
+        # Camera pose in odom frame (from ZED odom topic)
+        cx, cy, cz = vio.ros_x, vio.ros_y, vio.ros_z
+        c_roll, c_pitch, c_yaw = vio.ros_roll, vio.ros_pitch, vio.ros_yaw
+
+        # Remove servo pitch from camera orientation to get drone body orientation.
+        # Camera orientation = body orientation * servo_pitch_rotation
+        # => body pitch = camera pitch - servo pitch
+        servo_pitch = self._gimbal_pitch_rad
+        body_roll = c_roll
+        body_pitch = c_pitch - servo_pitch
+        body_yaw = c_yaw
+
+        # Compute the mount offset vector rotated into the odom frame,
+        # then subtract it from the camera position to get body position.
+        # Mount offset is in body frame: (forward, lateral, down).
+        mx, my, mz = self._gimbal_mount_offset
+
+        # Rotation matrix from body orientation (simplified: roll≈0 for a drone)
+        cos_p = math.cos(body_pitch)
+        sin_p = math.sin(body_pitch)
+        cos_y = math.cos(body_yaw)
+        sin_y = math.sin(body_yaw)
+        cos_r = math.cos(body_roll)
+        sin_r = math.sin(body_roll)
+
+        # Full rotation of mount offset from body frame to odom frame
+        # R = Rz(yaw) * Ry(pitch) * Rx(roll) applied to (mx, my, mz)
+        # Then add servo pitch rotation on top for camera offset
+        #
+        # But we want: body_pos = camera_pos - R_body * (mount_offset)
+        # because camera_pos = body_pos + R_body * mount_offset (no servo
+        # contribution to translation since servo is pure rotation at pivot)
+        ox = (cos_y * cos_p) * mx + (cos_y * sin_p * sin_r - sin_y * cos_r) * my + (cos_y * sin_p * cos_r + sin_y * sin_r) * mz
+        oy = (sin_y * cos_p) * mx + (sin_y * sin_p * sin_r + cos_y * cos_r) * my + (sin_y * sin_p * cos_r - cos_y * sin_r) * mz
+        oz = (-sin_p) * mx + (cos_p * sin_r) * my + (cos_p * cos_r) * mz
+
+        body_x = cx - ox
+        body_y = cy - oy
+        body_z = cz - oz
+
         return {
-            "position": {"x": vio.ros_x, "y": vio.ros_y, "z": vio.ros_z},
-            "attitude": {"roll": vio.ros_roll, "pitch": vio.ros_pitch, "yaw": vio.ros_yaw}
+            "position": {
+                "x": round(body_x, 4),
+                "y": round(body_y, 4),
+                "z": round(body_z, 4),
+            },
+            "attitude": {
+                "roll": round(body_roll, 4),
+                "pitch": round(body_pitch, 4),
+                "yaw": round(body_yaw, 4),
+            },
         }
     
     def _send_mesh_to_edge_core(self, mesh_data: dict) -> None:
-        """Send mesh data to edge_core via HTTP."""
+        """Queue mesh data for background send to edge_core (non-blocking).
+
+        Serializes JSON on the caller thread (ROS callback) and hands off
+        the bytes to the background mesh sender. If the sender is still
+        busy with a previous payload, the old one is replaced — only the
+        latest mesh matters.
+        """
         if not self._enable_mesh:
             return
-        
+
         try:
+            # Keep mesh payload format aligned with API defaults for compatibility.
             data = json.dumps(mesh_data).encode("utf-8")
-            if self._http_post("/api/task/2/slam/mesh/update", data, timeout=2.0):
-                self._mesh_send_count += 1
-                self._last_mesh_send_time = time.time()
-                if self._mesh_send_count % 10 == 1:
-                    count = mesh_data.get('total_voxels', mesh_data.get('total_blocks', 0))
-                    unit = "voxels" if mesh_data.get('mode') == 'voxel' else "blocks"
-                    self.get_logger().info(
-                        f"Mesh sent: {count} {unit} "
-                        f"(mode={mesh_data.get('mode', 'block')})"
-                    )
-            else:
-                self._send_errors += 1
-                    
-        except URLError as e:
-            self._send_errors += 1
-            if self._send_errors % 50 == 1:
-                self.get_logger().warning(f"Failed to send mesh: {e}")
+            ctype = "application/json"
         except Exception as e:
             self._send_errors += 1
-            self.get_logger().error(f"Mesh send error: {e}")
+            self.get_logger().error(f"Mesh serialize error: {e}")
+            return
+
+        with self._mesh_pending_lock:
+            self._mesh_pending_data = data
+            self._mesh_pending_ctype = ctype
+            self._mesh_pending_meta = mesh_data.get('mode', 'block'), mesh_data.get('total_voxels', mesh_data.get('total_blocks', 0))
+        self._mesh_send_event.set()
+
+    def _mesh_sender_loop(self) -> None:
+        """Background thread that sends queued mesh data via HTTP."""
+        while not self._mesh_sender_stop.is_set():
+            # Wait for data or stop signal
+            self._mesh_send_event.wait(timeout=1.0)
+            if self._mesh_sender_stop.is_set():
+                break
+            self._mesh_send_event.clear()
+
+            # Grab the latest payload (atomic swap)
+            with self._mesh_pending_lock:
+                data = self._mesh_pending_data
+                ctype = getattr(self, '_mesh_pending_ctype', 'application/json')
+                meta = getattr(self, '_mesh_pending_meta', ('block', 0))
+                self._mesh_pending_data = None
+
+            if data is None:
+                continue
+
+            try:
+                if self._http_post("/api/task/2/slam/mesh/update", data, timeout=2.0, content_type=ctype):
+                    self._mesh_send_count += 1
+                    self._last_mesh_send_time = time.time()
+                    if self._mesh_send_count % 10 == 1:
+                        mode, count = meta
+                        unit = "voxels" if mode == 'voxel' else "blocks"
+                        self.get_logger().info(
+                            f"Mesh sent: {count} {unit} (mode={mode})"
+                        )
+                else:
+                    self._send_errors += 1
+            except Exception as e:
+                self._send_errors += 1
+                if self._send_errors % 50 == 1:
+                    self.get_logger().warning(f"Failed to send mesh: {e}")
+
+    def _send_empty_mesh_heartbeat(self, mode: str, timestamp: float) -> None:
+        """Send sparse heartbeat updates so SLAM status does not remain stuck at 'no data'."""
+        if not self._enable_mesh:
+            return
+
+        if timestamp - self._last_empty_mesh_send_time < self._empty_mesh_send_interval_s:
+            return
+
+        mesh_data = {
+            "mode": mode,
+            "timestamp": timestamp,
+            "frame_id": "ros_optical",
+            "clear": False,
+        }
+        if mode == "voxel":
+            mesh_data.update({"voxels": [], "voxel_size": 0.0, "total_voxels": 0, "sent_voxels": 0})
+        else:
+            mesh_data.update({"blocks": [], "block_size": 0.0, "total_blocks": 0})
+
+        drone_pose = self._get_drone_body_pose()
+        if drone_pose:
+            mesh_data["drone_position"] = drone_pose["position"]
+            mesh_data["drone_attitude"] = drone_pose["attitude"]
+
+        self._send_mesh_to_edge_core(mesh_data)
+        self._last_empty_mesh_send_time = timestamp
+
+    def destroy_node(self) -> bool:
+        """Destroy ROS node and cleanup transport resources."""
+        self._stop_high_rate_publisher()
+        # Stop background mesh sender
+        self._mesh_sender_stop.set()
+        self._mesh_send_event.set()  # wake up the thread so it exits
+        if self._mesh_sender_thread.is_alive():
+            self._mesh_sender_thread.join(timeout=3.0)
+        with self._http_lock:
+            try:
+                self._http_conn.close()
+            except Exception:
+                pass
+        return super().destroy_node()
     
     def _quat_to_euler(
         self, x: float, y: float, z: float, w: float
@@ -1178,14 +2067,52 @@ class ROSHTTPBridge(Node):
         yaw = math.atan2(siny_cosp, cosy_cosp)
         
         return roll, pitch, yaw
+
+    def _quat_to_ned_euler(
+        self, x: float, y: float, z: float, w: float
+    ) -> tuple[float, float, float]:
+        """Convert ROS optical-frame quaternion attitude to NED roll/pitch/yaw."""
+        # Quaternion -> rotation matrix in ROS optical basis.
+        r = [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ]
+
+        # Basis transform: optical (x-right, y-down, z-forward) -> NED (x-forward, y-right, z-down)
+        b = (
+            (0.0, 0.0, 1.0),
+            (1.0, 0.0, 0.0),
+            (0.0, 1.0, 0.0),
+        )
+
+        # Change basis for rotation matrix: R_ned = B * R_optical * B^T
+        br = [
+            [sum(b[i][k] * r[k][j] for k in range(3)) for j in range(3)]
+            for i in range(3)
+        ]
+        r_ned = [
+            [sum(br[i][k] * b[j][k] for k in range(3)) for j in range(3)]
+            for i in range(3)
+        ]
+
+        roll = math.atan2(r_ned[2][1], r_ned[2][2])
+        sinp = max(-1.0, min(1.0, -r_ned[2][0]))
+        pitch = math.asin(sinp)
+        yaw = math.atan2(r_ned[1][0], r_ned[0][0])
+        return roll, pitch, yaw
     
     def get_stats(self) -> dict:
         """Get bridge statistics."""
         return {
             "vio_received": self._vio_recv_count,
             "vio_sent": self._vio_send_count,
+            "vio_sent_zmq": self._vio_send_zmq_count,
+            "vio_sent_http": self._vio_send_http_count,
             "cmd_vel_received": self._cmd_vel_recv_count,
             "cmd_vel_sent": self._cmd_vel_send_count,
+            "cmd_vel_sent_zmq": self._cmd_vel_send_zmq_count,
+            "cmd_vel_sent_http": self._cmd_vel_send_http_count,
             "mesh_received": self._mesh_recv_count,
             "mesh_sent": self._mesh_send_count,
             "servo_received": self._servo_recv_count,
@@ -1193,10 +2120,16 @@ class ROSHTTPBridge(Node):
             "detection_received": self._detection_recv_count,
             "detection_sent": self._detection_send_count,
             "send_errors": self._send_errors,
+            "high_rate_transport_requested": self._high_rate_transport,
+            "high_rate_transport_effective": self._effective_high_rate_transport(),
+            "high_rate_zmq_pub_mode": self._high_rate_zmq_pub_mode,
             "nav_control_enabled": self._enable_nav_control,
             "mesh_enabled": self._enable_mesh,
+            "mesh_output_mode": self._mesh_output_mode,
             "servo_enabled": self._enable_servo,
             "detections_enabled": self._enable_detections,
+            "hsv_circles_enabled": self._enable_hsv_circles,
+            "hsv_circles_sent": self._hsv_circle_send_count,
             # VO-006: tilt cycle drift stats
             "tilt_drift": {
                 "cycles": self._tilt_cycle_count,
@@ -1214,12 +2147,14 @@ def main():
     parser = argparse.ArgumentParser(description="ROS2-HTTP Bridge for NOMAD")
     parser.add_argument("--host", default="172.17.0.1", help="Edge Core host")
     parser.add_argument("--port", type=int, default=8000, help="Edge Core port")
-    parser.add_argument("--vio-topic", default="/visual_slam/tracking/odometry",
+    parser.add_argument("--vio-topic", default="/zed/zed_node/odom",
                         help="VIO odometry topic")
     parser.add_argument("--cmd-vel-topic", default="/cmd_vel",
                         help="Navigation velocity command topic")
-    parser.add_argument("--mesh-topic", default="/nvblox_node/mesh",
-                        help="Nvblox mesh topic")
+    parser.add_argument("--mesh-topic", default="/nvblox_node/color_layer_marker",
+                        help="Nvblox marker topic (visualization_msgs/Marker CUBE_LIST)")
+    parser.add_argument("--mesh-output-mode", default="block", choices=["block", "voxel"],
+                        help="Mesh payload mode sent to Edge Core (runtime-toggleable via API)")
     parser.add_argument("--rate", type=float, default=30.0, help="Send rate Hz")
     parser.add_argument("--disable-nav", action="store_true",
                         help="Disable navigation control (cmd_vel forwarding)")
@@ -1233,6 +2168,23 @@ def main():
                         help="ZED custom object detection topic (ObjectsStamped)")
     parser.add_argument("--disable-detections", action="store_true",
                         help="Disable object detection forwarding")
+    parser.add_argument(
+        "--high-rate-transport",
+        default="zmq",
+        choices=["zmq", "http", "both"],
+        help="Transport for high-rate VIO/cmd_vel/detection streams (zmq preferred, HTTP fallback auto-activates)",
+    )
+    parser.add_argument(
+        "--high-rate-zmq-endpoint",
+        default=None,
+        help="Optional ZMQ endpoint override for high-rate VIO/cmd_vel IPC",
+    )
+    parser.add_argument(
+        "--high-rate-zmq-pub-mode",
+        default=os.environ.get("NOMAD_HIGH_RATE_ZMQ_PUB_MODE", "connect"),
+        choices=["bind", "connect"],
+        help="ZMQ PUB socket mode for high-rate IPC",
+    )
     
     # Parse args and validate send_rate_hz early
     args = parser.parse_args()
@@ -1247,6 +2199,7 @@ def main():
         vio_topic=args.vio_topic,
         cmd_vel_topic=args.cmd_vel_topic,
         mesh_topic=args.mesh_topic,
+        mesh_output_mode=args.mesh_output_mode,
         servo_topic=args.servo_topic,
         detection_topic=args.detection_topic,
         send_rate_hz=args.rate,
@@ -1254,6 +2207,9 @@ def main():
         enable_mesh=not args.disable_mesh,
         enable_servo=not args.disable_servo,
         enable_detections=not args.disable_detections,
+        high_rate_transport=args.high_rate_transport,
+        high_rate_zmq_endpoint=args.high_rate_zmq_endpoint,
+        high_rate_zmq_pub_mode=args.high_rate_zmq_pub_mode,
     )
     
     try:

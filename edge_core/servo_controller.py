@@ -195,6 +195,7 @@ int main(int argc, char *argv[]) {
     
     _binary_path = os.path.expanduser("~/.nomad/bin/nomad_servo_pwm")
     _compiled = False
+    _compile_lock = threading.Lock()
     
     def __init__(self, config: ServoConfig):
         self.config = config
@@ -206,33 +207,34 @@ int main(int argc, char *argv[]) {
     @classmethod
     def _ensure_compiled(cls) -> bool:
         """Compile the C PWM helper if not already done."""
-        if cls._compiled and os.path.exists(cls._binary_path):
-            return True
-        
-        src_path = f"{cls._binary_path}.c"
-        try:
-            # Ensure the binary directory exists
-            os.makedirs(os.path.dirname(cls._binary_path), exist_ok=True)
-            
-            with open(src_path, 'w') as f:
-                f.write(cls._C_SOURCE)
-            
-            result = subprocess.run(
-                ['gcc', '-O2', '-o', cls._binary_path, src_path],
-                capture_output=True, text=True, timeout=30
-            )
-            
-            if result.returncode != 0:
-                logger.error(f"Failed to compile servo PWM helper: {result.stderr}")
+        with cls._compile_lock:
+            if cls._compiled and os.path.exists(cls._binary_path):
+                return True
+
+            src_path = f"{cls._binary_path}.c"
+            try:
+                # Ensure the binary directory exists
+                os.makedirs(os.path.dirname(cls._binary_path), exist_ok=True)
+
+                with open(src_path, 'w') as f:
+                    f.write(cls._C_SOURCE)
+
+                result = subprocess.run(
+                    ['gcc', '-O2', '-o', cls._binary_path, src_path],
+                    capture_output=True, text=True, timeout=30
+                )
+
+                if result.returncode != 0:
+                    logger.error(f"Failed to compile servo PWM helper: {result.stderr}")
+                    return False
+
+                cls._compiled = True
+                logger.info(f"Servo PWM helper compiled: {cls._binary_path}")
+                return True
+
+            except Exception as e:
+                logger.error(f"Failed to compile servo PWM helper: {e}")
                 return False
-            
-            cls._compiled = True
-            logger.info(f"Servo PWM helper compiled: {cls._binary_path}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to compile servo PWM helper: {e}")
-            return False
     
     def initialize(self) -> bool:
         """
@@ -306,6 +308,14 @@ int main(int argc, char *argv[]) {
                     f"Exit code: {self._process.poll()}, stderr: {stderr_out}"
                 )
                 self._process.terminate()
+                try:
+                    self._process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    self._process.kill()
+                    try:
+                        self._process.wait(timeout=1)
+                    except Exception:
+                        pass
                 self._process = None
                 return False
             
@@ -318,6 +328,14 @@ int main(int argc, char *argv[]) {
                     f"Servo helper did not start: '{ready_line}', stderr: {stderr_out}"
                 )
                 self._process.terminate()
+                try:
+                    self._process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    self._process.kill()
+                    try:
+                        self._process.wait(timeout=1)
+                    except Exception:
+                        pass
                 self._process = None
                 return False
             
@@ -330,7 +348,15 @@ int main(int argc, char *argv[]) {
             if self._process is not None:
                 try:
                     self._process.terminate()
-                except:
+                    try:
+                        self._process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        self._process.kill()
+                        try:
+                            self._process.wait(timeout=1)
+                        except Exception:
+                            pass
+                except Exception:
                     pass
                 self._process = None
             return False

@@ -1215,27 +1215,30 @@ namespace NOMAD.MissionPlanner
         {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            
-            var rect = _graphBox.ClientRectangle;
-            
+
+            var fullRect = _graphBox.ClientRectangle;
+
             // Background
             g.Clear(Color.FromArgb(20, 20, 20));
-            
-            // Grid lines
-            using (var gridPen = new Pen(Color.FromArgb(40, 40, 40)))
-            {
-                for (int i = 0; i <= 4; i++)
-                {
-                    int y = rect.Height * i / 4;
-                    g.DrawLine(gridPen, 0, y, rect.Width, y);
-                }
-            }
-            
+
+            // Margins for axis labels
+            int leftMargin = 40;
+            int bottomMargin = 25;
+            int topMargin = 5;
+            int rightMargin = 5;
+
+            // Plot area inside margins
+            var rect = new Rectangle(
+                leftMargin, topMargin,
+                fullRect.Width - leftMargin - rightMargin,
+                fullRect.Height - topMargin - bottomMargin);
+
             // Get data based on selection
             Queue<float> data1, data2;
             Color color1, color2;
             string label1, label2;
-            
+            string yAxisLabel;
+
             switch (_cmbGraphType?.SelectedIndex ?? 0)
             {
                 case 0: // Temperature
@@ -1245,6 +1248,7 @@ namespace NOMAD.MissionPlanner
                     color2 = Color.OrangeRed;
                     label1 = "CPU";
                     label2 = "GPU";
+                    yAxisLabel = "°C";
                     break;
                 case 1: // Load
                     data1 = _cpuLoadHistory;
@@ -1253,6 +1257,7 @@ namespace NOMAD.MissionPlanner
                     color2 = Color.LimeGreen;
                     label1 = "CPU";
                     label2 = "GPU";
+                    yAxisLabel = "%";
                     break;
                 default: // Memory
                     data1 = _memoryHistory;
@@ -1261,46 +1266,83 @@ namespace NOMAD.MissionPlanner
                     color2 = Color.MediumPurple;
                     label1 = "Memory";
                     label2 = "";
+                    yAxisLabel = "%";
                     break;
             }
-            
+
+            // Grid lines and Y-axis labels
+            using (var gridPen = new Pen(Color.FromArgb(40, 40, 40)))
+            using (var axisPen = new Pen(Color.FromArgb(80, 80, 80)))
+            using (var axisFont = new Font("Segoe UI", 7))
+            {
+                for (int i = 0; i <= 4; i++)
+                {
+                    int y = rect.Top + rect.Height * i / 4;
+                    g.DrawLine(gridPen, rect.Left, y, rect.Right, y);
+
+                    int value = 100 - (i * 25);
+                    string yText = $"{value}{yAxisLabel}";
+                    var textSize = g.MeasureString(yText, axisFont);
+                    g.DrawString(yText, axisFont, Brushes.Gray,
+                        rect.Left - textSize.Width - 3, y - textSize.Height / 2);
+                }
+
+                // X-axis labels (time ago)
+                int totalSeconds = HISTORY_LENGTH * (_config.HealthPollInterval / 1000);
+                for (int i = 0; i <= 4; i++)
+                {
+                    int x = rect.Left + rect.Width * i / 4;
+                    g.DrawLine(gridPen, x, rect.Top, x, rect.Bottom);
+
+                    int secsAgo = totalSeconds - (totalSeconds * i / 4);
+                    string xText = secsAgo == 0 ? "now" : $"-{secsAgo}s";
+                    var textSize = g.MeasureString(xText, axisFont);
+                    g.DrawString(xText, axisFont, Brushes.Gray,
+                        x - textSize.Width / 2, rect.Bottom + 3);
+                }
+
+                // Axis border lines
+                g.DrawLine(axisPen, rect.Left, rect.Top, rect.Left, rect.Bottom);
+                g.DrawLine(axisPen, rect.Left, rect.Bottom, rect.Right, rect.Bottom);
+            }
+
             // Draw lines
             DrawGraphLine(g, rect, data1, color1, 100);
             if (_cmbGraphType?.SelectedIndex != 2)
             {
                 DrawGraphLine(g, rect, data2, color2, 100);
             }
-            
+
             // Legend
             using (var brush1 = new SolidBrush(color1))
             using (var brush2 = new SolidBrush(color2))
             using (var font = new Font("Segoe UI", 8))
             {
-                g.FillRectangle(brush1, rect.Width - 80, 5, 10, 10);
-                g.DrawString(label1, font, Brushes.White, rect.Width - 65, 3);
-                
+                g.FillRectangle(brush1, fullRect.Width - 80, 5, 10, 10);
+                g.DrawString(label1, font, Brushes.White, fullRect.Width - 65, 3);
+
                 if (!string.IsNullOrEmpty(label2))
                 {
-                    g.FillRectangle(brush2, rect.Width - 80, 20, 10, 10);
-                    g.DrawString(label2, font, Brushes.White, rect.Width - 65, 18);
+                    g.FillRectangle(brush2, fullRect.Width - 80, 20, 10, 10);
+                    g.DrawString(label2, font, Brushes.White, fullRect.Width - 65, 18);
                 }
             }
         }
-        
+
         private void DrawGraphLine(Graphics g, Rectangle rect, Queue<float> data, Color color, float maxValue)
         {
             if (data.Count < 2) return;
-            
+
             var values = data.ToArray();
             var points = new PointF[values.Length];
-            
+
             for (int i = 0; i < values.Length; i++)
             {
-                float x = rect.Width * i / (float)(HISTORY_LENGTH - 1);
-                float y = rect.Height - (rect.Height * values[i] / maxValue);
-                points[i] = new PointF(x, Math.Max(0, Math.Min(rect.Height, y)));
+                float x = rect.Left + rect.Width * i / (float)(HISTORY_LENGTH - 1);
+                float y = rect.Top + rect.Height - (rect.Height * values[i] / maxValue);
+                points[i] = new PointF(x, Math.Max(rect.Top, Math.Min(rect.Bottom, y)));
             }
-            
+
             using (var pen = new Pen(color, 2))
             {
                 g.DrawLines(pen, points);

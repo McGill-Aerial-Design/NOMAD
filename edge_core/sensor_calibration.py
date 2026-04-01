@@ -836,6 +836,7 @@ class IMUHeadingCalibration:
         self._lock = threading.RLock()
         self._zed = None
         self._owns_camera = False
+        self._stop_event = threading.Event()
 
     @property
     def state(self) -> CalibrationState:
@@ -862,6 +863,7 @@ class IMUHeadingCalibration:
             self._result = None
             self._error = None
             self._start_time = time.time()
+            self._stop_event.clear()
 
             if zed_camera:
                 self._zed = zed_camera
@@ -900,8 +902,16 @@ class IMUHeadingCalibration:
 
             logger.info(f"Collecting position '{label}': {description}")
 
-            while time.time() - start < self._collect_duration:
-                if self._zed.get_sensors_data(sensors_data, sl.TIME_REFERENCE.CURRENT) == sl.ERROR_CODE.SUCCESS:
+            while time.time() - start < self._collect_duration and not self._stop_event.is_set():
+                with self._lock:
+                    if self._zed is None:
+                        if self._stop_event.is_set():
+                            break
+                        self._error = "ZED camera not available"
+                        return {"success": False, "error": self._error}
+                    read_status = self._zed.get_sensors_data(sensors_data, sl.TIME_REFERENCE.CURRENT)
+
+                if read_status == sl.ERROR_CODE.SUCCESS:
                     imu = sensors_data.get_imu_data()
 
                     accel = None
@@ -921,11 +931,18 @@ class IMUHeadingCalibration:
 
                 time.sleep(0.01)
 
+            if self._stop_event.is_set():
+                return {"success": False, "error": "Calibration canceled"}
+
             if len(accel_samples) < 50:
                 return {"success": False, "error": f"Too few samples: {len(accel_samples)}"}
 
-            self._position_data[label] = (accel_samples, gyro_samples)
-            self._current_position += 1
+            with self._lock:
+                if self._stop_event.is_set() or self._state != CalibrationState.COLLECTING:
+                    return {"success": False, "error": "Calibration canceled"}
+                self._position_data[label] = (accel_samples, gyro_samples)
+                self._current_position += 1
+                positions_remaining = len(IMU_POSITIONS) - self._current_position
 
             logger.info(f"Position '{label}' collected: {len(accel_samples)} accel, {len(gyro_samples)} gyro samples")
 
@@ -933,7 +950,7 @@ class IMUHeadingCalibration:
                 "success": True,
                 "position": label,
                 "samples": len(accel_samples),
-                "positions_remaining": len(IMU_POSITIONS) - self._current_position,
+                "positions_remaining": positions_remaining,
             }
 
         except ImportError:
@@ -1029,23 +1046,28 @@ class IMUHeadingCalibration:
         finally:
             # Always release the ZED camera after calibration completes or fails
             # so the Isaac ROS container can open it for nvblox/OD.
+            if self._owns_camera:
+                with self._lock:
+                    if self._zed:
+                        try:
+                            self._zed.close()
+                        except Exception:
+                            pass
+                        self._zed = None
+
+    def cancel(self):
+        """Cancel the calibration."""
+        self._stop_event.set()
+        with self._lock:
             if self._owns_camera and self._zed:
                 try:
                     self._zed.close()
                 except Exception:
                     pass
                 self._zed = None
-
-    def cancel(self):
-        """Cancel the calibration."""
-        if self._owns_camera and self._zed:
-            try:
-                self._zed.close()
-            except Exception:
-                pass
-            self._zed = None
-        self._state = CalibrationState.IDLE
-        self._position_data.clear()
+            self._state = CalibrationState.IDLE
+            self._current_position = 0
+            self._position_data.clear()
 
     def get_status(self) -> dict:
         """Get current calibration status."""

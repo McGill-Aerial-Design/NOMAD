@@ -24,6 +24,7 @@ namespace NOMAD.MissionPlanner
         private readonly DualLinkSender _sender;
         private EnhancedHealthDashboard _healthDashboard;
         private ServiceControlPanel _serviceControlPanel;
+        private FoxglovePanel _foxglovePanel;
         private TabControl _tabControl;
         
         public NOMADHealthView(NOMADConfig config, DualLinkSender sender = null)
@@ -80,7 +81,34 @@ namespace NOMAD.MissionPlanner
                     serviceTab.Controls.Add(noSenderLabel);
                 }
                 _tabControl.TabPages.Add(serviceTab);
-                
+
+                // Tab 3: Foxglove Bridge
+                var foxgloveTab = new TabPage("Foxglove")
+                {
+                    BackColor = Color.FromArgb(30, 30, 33),
+                    AutoScroll = true,
+                };
+
+                if (_sender != null)
+                {
+                    _foxglovePanel = new FoxglovePanel(_sender);
+                    _foxglovePanel.Dock = DockStyle.Fill;
+                    foxgloveTab.Controls.Add(_foxglovePanel);
+                }
+                else
+                {
+                    var noSenderLabel = new Label
+                    {
+                        Text = "Foxglove control unavailable - no sender configured.\n\nConnect to Jetson to enable Foxglove bridge.",
+                        Font = new Font("Segoe UI", 11),
+                        ForeColor = WARNING_COLOR,
+                        Dock = DockStyle.Fill,
+                        TextAlign = ContentAlignment.MiddleCenter,
+                    };
+                    foxgloveTab.Controls.Add(noSenderLabel);
+                }
+                _tabControl.TabPages.Add(foxgloveTab);
+
                 this.Controls.Add(_tabControl);
             }
             catch (Exception ex)
@@ -108,6 +136,7 @@ namespace NOMAD.MissionPlanner
             {
                 _healthDashboard?.Dispose();
                 _serviceControlPanel?.Dispose();
+                _foxglovePanel?.Dispose();
             }
             base.Dispose(disposing);
         }

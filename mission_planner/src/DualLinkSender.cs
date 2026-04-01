@@ -9,6 +9,7 @@
 using System;
 using System.Net.Http;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using MissionPlanner;
 using Newtonsoft.Json;
@@ -367,7 +368,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> GetVioStatusAsync()
         {
-            return await SendHttpGet("/api/vio/status");
+            return await SendHttpGetLongRun("/api/vio/status", 12);
         }
 
         /// <summary>
@@ -375,7 +376,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> GetVioTrajectoryAsync(int maxPoints = 100)
         {
-            return await SendHttpGet($"/api/vio/trajectory?max_points={maxPoints}");
+            return await SendHttpGetLongRun($"/api/vio/trajectory?max_points={maxPoints}", 12);
         }
 
         /// <summary>
@@ -391,7 +392,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> GetIsaacStatusAsync()
         {
-            return await SendHttpGet("/api/isaac/status");
+            return await SendHttpGetLongRun("/api/isaac/status", 15);
         }
 
         /// <summary>
@@ -399,7 +400,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> GetServicesStatusAsync()
         {
-            return await SendHttpGet("/api/services/status");
+            return await SendHttpGetLongRun("/api/services/status", 15);
         }
 
         /// <summary>
@@ -670,37 +671,11 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Start YOLO26 circle detection (Task 1) on Jetson.
-        /// Relaunches nvblox stack with custom OD enabled.
-        /// </summary>
-        public async Task<CommandResult> StartYolo26Async()
-        {
-            return await SendHttpPostLongRun("/api/detections/start", null);
-        }
-
-        /// <summary>
-        /// Stop YOLO26 circle detection while keeping nvblox active.
-        /// Relaunches nvblox stack with custom OD disabled.
-        /// </summary>
-        public async Task<CommandResult> StopYolo26Async()
-        {
-            return await SendHttpPostLongRun("/api/detections/stop", null);
-        }
-
-        /// <summary>
-        /// Get YOLO26 detection status (enabled + freshness + detection count).
-        /// </summary>
-        public async Task<CommandResult> GetYolo26StatusAsync()
-        {
-            return await SendHttpGet("/api/detections/status");
-        }
-
-        /// <summary>
         /// Get Isaac ROS logs.
         /// </summary>
         public async Task<CommandResult> GetIsaacRosLogsAsync(string logType = "all")
         {
-            return await SendHttpGet($"/api/isaac/logs?log_type={logType}");
+            return await SendHttpGetLongRun($"/api/isaac/logs?log_type={logType}", 15);
         }
 
         // ============================================================
@@ -712,7 +687,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> GetVideoBridgesStatusAsync()
         {
-            return await SendHttpGet("/api/video/bridges");
+            return await SendHttpGetLongRun("/api/video/bridges", 15);
         }
 
         /// <summary>
@@ -734,7 +709,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> GetSlamStatusAsync()
         {
-            return await SendHttpGet("/api/task/2/slam/status");
+            return await SendHttpGetLongRun("/api/task/2/slam/status", 15);
         }
 
         /// <summary>
@@ -743,6 +718,42 @@ namespace NOMAD.MissionPlanner
         public async Task<CommandResult> ClearSlamAsync()
         {
             return await SendHttpPost("/api/task/2/slam/clear", null);
+        }
+
+        // ============================================================
+        // Foxglove Bridge Control
+        // ============================================================
+
+        /// <summary>
+        /// Get Foxglove bridge status (running, url).
+        /// </summary>
+        public async Task<CommandResult> GetFoxgloveStatusAsync()
+        {
+            return await SendHttpGet("/api/isaac/foxglove/status");
+        }
+
+        /// <summary>
+        /// Start Foxglove bridge inside the Isaac ROS container.
+        /// </summary>
+        public async Task<CommandResult> StartFoxgloveAsync(int port = 8765)
+        {
+            return await SendHttpPostLongRun($"/api/isaac/foxglove/start?port={port}", null);
+        }
+
+        /// <summary>
+        /// Stop Foxglove bridge.
+        /// </summary>
+        public async Task<CommandResult> StopFoxgloveAsync()
+        {
+            return await SendHttpPost("/api/isaac/foxglove/stop", null);
+        }
+
+        /// <summary>
+        /// Get Foxglove bridge logs.
+        /// </summary>
+        public async Task<CommandResult> GetFoxgloveLogsAsync()
+        {
+            return await SendHttpGetLongRun("/api/isaac/logs?log_type=foxglove", 15);
         }
 
         // ============================================================
@@ -777,6 +788,24 @@ namespace NOMAD.MissionPlanner
                     };
                 }
             }
+            catch (TaskCanceledException)
+            {
+                return new CommandResult
+                {
+                    Success = false,
+                    Message = "HTTP request timed out",
+                    Method = "HTTP"
+                };
+            }
+            catch (HttpRequestException ex)
+            {
+                return new CommandResult
+                {
+                    Success = false,
+                    Message = $"HTTP connection failed: {ex.Message}",
+                    Method = "HTTP"
+                };
+            }
             catch (Exception ex)
             {
                 return new CommandResult
@@ -785,6 +814,70 @@ namespace NOMAD.MissionPlanner
                     Message = $"HTTP error: {ex.Message}",
                     Method = "HTTP"
                 };
+            }
+        }
+
+        private async Task<CommandResult> SendHttpGetLongRun(string endpoint, int timeoutSeconds = 15)
+        {
+            CancellationTokenSource cts = null;
+            try
+            {
+                cts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Max(1, timeoutSeconds)));
+                var response = await JetsonApiService.LongRunClient.GetAsync(
+                    $"{JetsonApiService.BaseUrl}{endpoint}",
+                    cts.Token
+                );
+                var responseBody = await response.Content.ReadAsStringAsync();
+
+                if (response.IsSuccessStatusCode)
+                {
+                    return new CommandResult
+                    {
+                        Success = true,
+                        Message = "HTTP GET successful",
+                        Data = responseBody,
+                        Method = "HTTP"
+                    };
+                }
+
+                return new CommandResult
+                {
+                    Success = false,
+                    Message = $"HTTP {(int)response.StatusCode}: {response.ReasonPhrase}",
+                    Data = responseBody,
+                    Method = "HTTP"
+                };
+            }
+            catch (TaskCanceledException)
+            {
+                return new CommandResult
+                {
+                    Success = false,
+                    Message = $"HTTP request timed out ({Math.Max(1, timeoutSeconds)}s)",
+                    Method = "HTTP"
+                };
+            }
+            catch (HttpRequestException ex)
+            {
+                return new CommandResult
+                {
+                    Success = false,
+                    Message = $"HTTP connection failed: {ex.Message}",
+                    Method = "HTTP"
+                };
+            }
+            catch (Exception ex)
+            {
+                return new CommandResult
+                {
+                    Success = false,
+                    Message = $"HTTP error: {ex.Message}",
+                    Method = "HTTP"
+                };
+            }
+            finally
+            {
+                cts?.Dispose();
             }
         }
 

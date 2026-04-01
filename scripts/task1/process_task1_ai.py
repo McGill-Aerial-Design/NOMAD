@@ -84,71 +84,107 @@ class AIProvider(ABC):
         """Build the detailed prompt based on metadata."""
         gps = metadata.get('gps', {})
         ahrs = metadata.get('ahrs', {})
-        building = metadata.get('building_location', 'Unknown')
-        
+        building_loc = metadata.get('building_location', 'Unknown')
+
         lat = gps.get('lat', 0.0)
         lon = gps.get('lon', 0.0)
         alt = gps.get('alt', 0.0)
         heading = ahrs.get('heading_deg', 0.0)
         pitch = ahrs.get('pitch_deg', 0.0)
         roll = ahrs.get('roll_deg', 0.0)
-        
-        # Build detection context from YOLO26 circle detection results
+
+        # Build detection context from HSV circle detection results
         detection_context = ""
         detected_targets = metadata.get('detected_targets', {})
         if detected_targets:
             total = detected_targets.get('total_count', 0)
             by_class = detected_targets.get('by_class', {})
-            detection_lines = [f"\nOBJECT DETECTION RESULTS (YOLO26 - {total} targets detected):"]
+            detection_lines = [f"\nCIRCLE DETECTION RESULTS (HSV - {total} targets detected):"]
             for label, info in by_class.items():
                 count = info.get('count', 0)
                 positions = info.get('positions', [])
                 pos_str = ""
                 if positions:
                     pos_strs = [f"({p['x']:.1f}, {p['y']:.1f}, {p['z']:.1f})m" for p in positions[:5]]
-                    pos_str = f" at positions: {', '.join(pos_strs)}"
-                detection_lines.append(f"  - {label}: {count} detected{pos_str}")
+                    pos_str = f" at 3D positions: {', '.join(pos_strs)}"
+                color = label.replace("_circle", "")
+                detection_lines.append(f"  - {color}: {count} detected{pos_str}")
             detection_context = "\n".join(detection_lines)
-        
-        prompt = f"""Analyze this outdoor reconnaissance photo with the following context:
 
+        # Build building geometry context from nvblox 3D map
+        building_context = ""
+        building_geom = metadata.get('building_geometry', {})
+        if building_geom:
+            dims = building_geom.get('dimensions', {})
+            faces = building_geom.get('faces', {})
+            building_lines = ["\nBUILDING GEOMETRY (from 3D map):"]
+            building_lines.append(
+                f"  Dimensions: {dims.get('width_m', '?')}m wide × "
+                f"{dims.get('height_m', '?')}m deep × "
+                f"{dims.get('depth_m', '?')}m tall"
+            )
+            building_lines.append(f"  Voxel count: {building_geom.get('voxel_count', 0)}")
+            for fname, fdata in faces.items():
+                if fname in ('roof', 'ground'):
+                    continue
+                building_lines.append(
+                    f"  {fname.capitalize()} face: {fdata.get('width_m', '?')}m wide × "
+                    f"{fdata.get('height_m', '?')}m tall"
+                )
+            building_context = "\n".join(building_lines)
+
+        # Include pre-computed target descriptions if available
+        precomputed_desc = ""
+        target_descriptions = metadata.get('target_descriptions', [])
+        if target_descriptions:
+            precomputed_desc = "\nPRE-COMPUTED TARGET PLACEMENTS (from 3D map + detections):\n"
+            for desc in target_descriptions:
+                precomputed_desc += f"  {desc}\n"
+
+        prompt = f"""You are analyzing an outdoor reconnaissance photo for a drone competition.
+Your task is to generate precise target descriptions in a specific format.
+
+CONTEXT:
 GPS Location: {lat:.6f}, {lon:.6f} at {alt:.1f}m altitude
-Aircraft Heading: {heading:.1f} degrees (0=North, 90=East, 180=South, 270=West)
-Aircraft Attitude: Pitch {pitch:.1f} degrees, Roll {roll:.1f} degrees
-Building Location: {building}
+Aircraft Heading: {heading:.1f}° (0=North, 90=East, 180=South, 270=West)
+Aircraft Attitude: Pitch {pitch:.1f}°, Roll {roll:.1f}°
+Building: {building_loc}
 {detection_context}
+{building_context}
+{precomputed_desc}
 
-Please provide a detailed description including:
+INSTRUCTIONS:
+Look at the image carefully and identify ALL colored circular targets visible.
+Targets can be located on:
+- Building walls (north/south/east/west face)
+- The roof of the building
+- The ground near the building
 
-1. SCENE DESCRIPTION:
-   - Identify all visible landmarks (buildings, roads, natural features)
-   - Describe terrain and environment type (urban, rural, industrial, etc.)
-   - Note weather conditions and visibility
+For each target, generate a description in EXACTLY this format:
 
-2. LOCALIZATION FEATURES:
-   - Unique identifying features that could be used for position verification
-   - Street signs, building numbers, or other text visible in the image
-   - Distinctive architectural or natural features
+"Target [LETTER] is on the [location], [position details]. The colour is [colour]."
 
-3. RELATIVE POSITION TO BUILDING:
-   - Estimate the distance and cardinal direction to the reference building
-   - Describe the viewing angle relative to the building
-   - Identify any direct visual line-of-sight to the building
+EXAMPLES of the required format:
+- "Target A is on the north face of the building, 3.2m above ground and 1.6m from the western wall. The colour is blue."
+- "Target B is on the ground, 5.2m away from the west face of the building and 0.2m left of the door when facing it from the outside. The colour is green."
+- "Target C is on the roof of the building, approximately 2.0m from the eastern edge. The colour is red."
+- "Target D is on the south face of the building, 1.0m above ground and 4.5m from the eastern wall. The colour is yellow."
 
-4. TARGET DETECTION ANALYSIS:
-   - Confirm or correct the automated detection results listed above
-   - Describe the colored circles/targets visible in the image
-   - Count each color of target circle visible and their approximate positions
-   - Note any targets that may have been missed by automated detection
-   - Identify which targets appear to be new vs previously seen
+IMPORTANT RULES:
+1. Use the pre-computed target placements above as your primary reference for measurements.
+2. Verify each target is actually visible in the image. If you can see additional targets not in the detection results, add them with your best estimate of position.
+3. If the image contradicts the automated measurements, use what you see in the image.
+4. Heights are measured from ground level. Horizontal distances reference wall edges.
+5. Use decimeter precision (e.g., 3.2m, not 3m or 3.21m).
+6. Colours must be one of: red, blue, green, yellow, white, black.
+7. Assign letters A, B, C, etc. in order of appearance (top-to-bottom, left-to-right).
+8. If the whole face of the building is visible, describe ALL targets on that face.
 
-5. COMPETITION RELEVANCE:
-   - Assess image quality and suitability for evidence submission
-   - Note any potential target areas or points of interest
-   - Suggest optimal capture angles if this location is revisited
+OUTPUT FORMAT:
+First line: Brief scene context (one sentence about which face(s) of the building are visible).
+Then one line per target, each in the exact format shown above.
+Nothing else - no headers, no numbering, no extra commentary."""
 
-Be precise, factual, and concise. Focus on information useful for autonomous navigation and competition scoring."""
-        
         return prompt
 
 
