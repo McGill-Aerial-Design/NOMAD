@@ -751,6 +751,10 @@ if ! ros2 pkg list 2>/dev/null | grep -q nvblox_nav2; then
     NAV2_PREFLIGHT_OK=false
 fi
 
+# Ensure default area-map path exists inside container so FilePath services
+# (save_map/load_map) succeed with the Mission Planner default path.
+mkdir -p /home/mad/NOMAD/data/area_maps 2>/dev/null || true
+
 # Launch ZED + nvblox using NOMAD custom launch file.
 # Includes: optical frame alias TF, servo TF publisher, obstacle distance bridge.
 # Uses blocking CUDA stream (type 0) to prevent cudaErrorIllegalAddress on 8GB Jetson.

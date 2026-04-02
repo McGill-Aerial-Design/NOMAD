@@ -159,6 +159,7 @@ namespace NOMAD.MissionPlanner
         // ---- Drone pose (raw from WS, ZED optical/odom frame) ----
         private float _dronePosX, _dronePosY, _dronePosZ;
         private float _droneRollRaw, _dronePitchRaw, _droneYawRaw;
+        private float _droneVelX, _droneVelY, _droneVelZ;
         private float _renderPosX, _renderPosY, _renderPosZ;
         private float _renderRollRaw, _renderPitchRaw, _renderYawRaw;
         private bool _renderPoseInitialized;
@@ -742,6 +743,9 @@ namespace NOMAD.MissionPlanner
                 DrawDetectionMarkers();
 
                 _glControl.SwapBuffers();
+
+                // Draw HUD overlay (top-right)
+                DrawHudOverlay(e.Graphics);
             }
             catch (Exception ex)
             {
@@ -1372,6 +1376,70 @@ namespace NOMAD.MissionPlanner
             else if (lower.Contains("white")) { r = 0.94f; g = 0.94f; b = 0.94f; }
         }
 
+        /// <summary>
+        /// Draw a HUD overlay in the top-right corner showing pose and velocity.
+        /// </summary>
+        private void DrawHudOverlay(Graphics g)
+        {
+            float rollDeg, pitchDeg, yawDeg, vx, vy, vz;
+            lock (_poseLock)
+            {
+                rollDeg = (float)(_droneRollRaw * 180.0 / Math.PI);
+                pitchDeg = (float)(_dronePitchRaw * 180.0 / Math.PI);
+                yawDeg = (float)(_droneYawRaw * 180.0 / Math.PI);
+                vx = _droneVelX;
+                vy = _droneVelY;
+                vz = _droneVelZ;
+            }
+
+            int right = _glControl.Width - 12;
+            int top = 12;
+            int lineH = 16;
+            int pad = 4;
+
+            string[] lines = new string[7];
+            lines[0] = "POSE (ZED Optical)";
+            lines[1] = $"  Roll:  {rollDeg,8:F2}°";
+            lines[2] = $"  Pitch: {pitchDeg,8:F2}°";
+            lines[3] = $"  Yaw:   {yawDeg,8:F2}°";
+            lines[4] = "VELOCITY (m/s)";
+            lines[5] = $"  Vx: {vx,7:F3}";
+            lines[6] = $"  Vy: {vy,7:F3}  Vz: {vz,7:F3}";
+
+            using (var font = new Font("Consolas", 10f))
+            using (var bgBrush = new SolidBrush(Color.FromArgb(140, 15, 15, 20)))
+            using (var textBrush = new SolidBrush(Color.FromArgb(220, 220, 220)))
+            using (var titleBrush = new SolidBrush(Color.FromArgb(0, 160, 230)))
+            using (var pen = new Pen(Color.FromArgb(80, 80, 83), 1))
+            {
+                // Measure to size the background
+                float maxWidth = 0;
+                foreach (var line in lines)
+                {
+                    var sz = g.MeasureString(line, font);
+                    if (sz.Width > maxWidth) maxWidth = sz.Width;
+                }
+                int boxW = (int)maxWidth + pad * 2;
+                int boxH = lines.Length * lineH + pad * 2;
+
+                int x = right - boxW;
+                int y = top;
+
+                // Background
+                g.FillRectangle(bgBrush, x, y, boxW, boxH);
+                g.DrawRectangle(pen, x, y, boxW, boxH);
+
+                // Text
+                int cy = y + pad;
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    var brush = (i == 0 || i == 4) ? titleBrush : textBrush;
+                    g.DrawString(lines[i], font, brush, x + pad, cy);
+                    cy += lineH;
+                }
+            }
+        }
+
         private static void DrawSphere(float cx, float cy, float cz, float radius, int segments)
         {
             for (int lat = 0; lat < segments; lat++)
@@ -1939,6 +2007,17 @@ namespace NOMAD.MissionPlanner
                             if (yawToken != null && (yawToken.Type == JTokenType.Integer || yawToken.Type == JTokenType.Float))
                                 _droneYawRaw = yawToken.Value<float>();
 
+                            // Velocity (optional, from external VIO state)
+                            var vxToken = frame["vx"];
+                            if (vxToken != null && (vxToken.Type == JTokenType.Integer || vxToken.Type == JTokenType.Float))
+                                _droneVelX = vxToken.Value<float>();
+                            var vyToken = frame["vy"];
+                            if (vyToken != null && (vyToken.Type == JTokenType.Integer || vyToken.Type == JTokenType.Float))
+                                _droneVelY = vyToken.Value<float>();
+                            var vzToken = frame["vz"];
+                            if (vzToken != null && (vzToken.Type == JTokenType.Integer || vzToken.Type == JTokenType.Float))
+                                _droneVelZ = vzToken.Value<float>();
+
                             latestX = _dronePosX;
                             latestY = _dronePosY;
                             latestZ = _dronePosZ;
@@ -2388,6 +2467,12 @@ namespace NOMAD.MissionPlanner
                 return $"{actionName} failed: map service not ready yet (start Isaac ROS + nvblox, then retry)";
             }
 
+            if (!string.IsNullOrWhiteSpace(summary)
+                && summary.IndexOf("FilePath_Response(success=False)", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return $"{actionName} failed: nvblox rejected the request (map not ready yet or file path invalid)";
+            }
+
             return $"{actionName} failed ({summary})";
         }
 
@@ -2396,18 +2481,19 @@ namespace NOMAD.MissionPlanner
             string actionName)
         {
             CommandResult lastResult = null;
+            const int maxServiceReadyAttempts = 6;
 
-            for (int attempt = 1; attempt <= 2; attempt++)
+            for (int attempt = 1; attempt <= maxServiceReadyAttempts; attempt++)
             {
                 lastResult = await command();
                 if (lastResult.Success)
                     return lastResult;
 
                 string summary = SummarizeCommandResult(lastResult);
-                if (!IsServiceUnavailableMessage(summary) || attempt >= 2)
+                if (!IsServiceUnavailableMessage(summary) || attempt >= maxServiceReadyAttempts)
                     return lastResult;
 
-                AppendStatusLogSafe($"{actionName}: service not ready, retrying in 2s...");
+                AppendStatusLogSafe($"{actionName}: service not ready (attempt {attempt}/{maxServiceReadyAttempts}), retrying in 2s...");
                 await Task.Delay(2000);
             }
 

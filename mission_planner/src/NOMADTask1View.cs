@@ -90,7 +90,7 @@ namespace NOMAD.MissionPlanner
             }
             mainLayout.Controls.Add(videoPanel, 0, 0);
 
-            // ========== RIGHT COLUMN: TabControl with Capture and Submit tabs ==========
+            // ========== RIGHT COLUMN: TabControl with Capture/Submit/Configuration tabs ==========
             _tabControl = new TabControl
             {
                 Dock = DockStyle.Fill,
@@ -117,6 +117,17 @@ namespace NOMAD.MissionPlanner
             _uploadPanel.Dock = DockStyle.Fill;
             submitTab.Controls.Add(_uploadPanel);
             _tabControl.TabPages.Add(submitTab);
+
+            // --- Tab 3: Configuration ---
+            var configTab = new TabPage("Configuration")
+            {
+                BackColor = CARD_BG,
+                Padding = new Padding(0),
+            };
+            configTab.Controls.Add(CreateConfigurationSubtab());
+            _tabControl.TabPages.Add(configTab);
+
+            LoadBuildingLocationFields();
 
             mainLayout.Controls.Add(_tabControl, 1, 0);
 
@@ -158,33 +169,7 @@ namespace NOMAD.MissionPlanner
                 BackColor = CARD_BG,
             };
 
-            var controlsTabs = new TabControl
-            {
-                Dock = DockStyle.Fill,
-                Margin = new Padding(5),
-            };
-            StyleTabControl(controlsTabs);
-            controlsTabs.ItemSize = new Size(145, 30);
-
-            var mainControlsTab = new TabPage("Main Controls")
-            {
-                BackColor = CARD_BG,
-                Padding = new Padding(0),
-            };
-            mainControlsTab.Controls.Add(CreateMainControlsSubtab());
-            controlsTabs.TabPages.Add(mainControlsTab);
-
-            var configTab = new TabPage("Configuration")
-            {
-                BackColor = CARD_BG,
-                Padding = new Padding(0),
-            };
-            configTab.Controls.Add(CreateConfigurationSubtab());
-            controlsTabs.TabPages.Add(configTab);
-
-            LoadBuildingLocationFields();
-
-            capturePanel.Controls.Add(controlsTabs);
+            capturePanel.Controls.Add(CreateMainControlsSubtab());
             return capturePanel;
         }
 
@@ -307,29 +292,20 @@ namespace NOMAD.MissionPlanner
             {
                 Dock = DockStyle.Fill,
                 BackColor = CARD_BG,
+                Padding = new Padding(12),
             };
-
-            var layout = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 2,
-                Margin = Padding.Empty,
-                Padding = Padding.Empty,
-            };
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 92));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
             // --- Building Location ---
             var buildingCard = CreateCard("BUILDING LOCATION");
-            buildingCard.Dock = DockStyle.Fill;
+            buildingCard.Dock = DockStyle.Top;
+            buildingCard.Height = 230;
 
             _lblBuildingStatus = new Label
             {
                 Text = GetTask1BuildingLocationText() ?? "Not set",
-                Font = new Font("Segoe UI", 8),
+                Font = new Font("Segoe UI", 9),
                 ForeColor = TEXT_PRIMARY,
-                Location = new Point(10, 22),
+                Location = new Point(16, 34),
                 AutoSize = true,
             };
             buildingCard.Controls.Add(_lblBuildingStatus);
@@ -337,79 +313,71 @@ namespace NOMAD.MissionPlanner
             var lblBuildingLat = new Label
             {
                 Text = "Lat:",
-                Font = new Font("Segoe UI", 8),
+                Font = new Font("Segoe UI", 9),
                 ForeColor = TEXT_PRIMARY,
-                Location = new Point(10, 42),
+                Location = new Point(16, 70),
                 AutoSize = true,
             };
             buildingCard.Controls.Add(lblBuildingLat);
 
             _txtBuildingLat = new TextBox
             {
-                Location = new Point(35, 39),
-                Size = new Size(95, 22),
+                Location = new Point(16, 88),
+                Size = new Size(280, 28),
                 BackColor = Color.FromArgb(50, 50, 53),
                 ForeColor = Color.White,
                 BorderStyle = BorderStyle.FixedSingle,
-                Font = new Font("Segoe UI", 8),
+                Font = new Font("Segoe UI", 9),
             };
             buildingCard.Controls.Add(_txtBuildingLat);
 
             var lblBuildingLon = new Label
             {
                 Text = "Lon:",
-                Font = new Font("Segoe UI", 8),
+                Font = new Font("Segoe UI", 9),
                 ForeColor = TEXT_PRIMARY,
-                Location = new Point(135, 42),
+                Location = new Point(16, 124),
                 AutoSize = true,
             };
             buildingCard.Controls.Add(lblBuildingLon);
 
             _txtBuildingLon = new TextBox
             {
-                Location = new Point(162, 39),
-                Size = new Size(95, 22),
+                Location = new Point(16, 142),
+                Size = new Size(280, 28),
                 BackColor = Color.FromArgb(50, 50, 53),
                 ForeColor = Color.White,
                 BorderStyle = BorderStyle.FixedSingle,
-                Font = new Font("Segoe UI", 8),
+                Font = new Font("Segoe UI", 9),
             };
             buildingCard.Controls.Add(_txtBuildingLon);
 
-            _btnBuildingUseCurrent = CreateButton("Use Current", ACCENT_COLOR, 85, 22);
-            _btnBuildingUseCurrent.Font = new Font("Segoe UI", 7, FontStyle.Bold);
-            _btnBuildingUseCurrent.Location = new Point(10, 65);
+            _btnBuildingUseCurrent = CreateButton("Use Current", ACCENT_COLOR, 120, 30);
+            _btnBuildingUseCurrent.Font = new Font("Segoe UI", 8, FontStyle.Bold);
+            _btnBuildingUseCurrent.Location = new Point(16, 180);
             _btnBuildingUseCurrent.Click += (s, e) => UseCurrentGpsForBuildingLocation();
             buildingCard.Controls.Add(_btnBuildingUseCurrent);
 
-            _btnBuildingSave = CreateButton("Save", SUCCESS_COLOR, 50, 22);
-            _btnBuildingSave.Font = new Font("Segoe UI", 7, FontStyle.Bold);
-            _btnBuildingSave.Location = new Point(100, 65);
+            _btnBuildingSave = CreateButton("Save", SUCCESS_COLOR, 90, 30);
+            _btnBuildingSave.Font = new Font("Segoe UI", 8, FontStyle.Bold);
+            _btnBuildingSave.Location = new Point(146, 180);
             _btnBuildingSave.Click += (s, e) => SaveBuildingLocationFromFields();
             buildingCard.Controls.Add(_btnBuildingSave);
 
-            var btnBuildingClear = CreateButton("Clear", ERROR_COLOR, 50, 22);
-            btnBuildingClear.Font = new Font("Segoe UI", 7, FontStyle.Bold);
-            btnBuildingClear.Location = new Point(155, 65);
+            var btnBuildingClear = CreateButton("Clear", ERROR_COLOR, 90, 30);
+            btnBuildingClear.Font = new Font("Segoe UI", 8, FontStyle.Bold);
+            btnBuildingClear.Location = new Point(246, 180);
             btnBuildingClear.Click += (s, e) => ClearBuildingLocationFields();
             buildingCard.Controls.Add(btnBuildingClear);
 
-            layout.Controls.Add(buildingCard, 0, 0);
-
-            var notesCard = CreateCard("CONFIG NOTES");
-            notesCard.Dock = DockStyle.Fill;
-            var lblNotes = new Label
+            buildingCard.Resize += (s, e) =>
             {
-                Text = "Keep target building coordinates updated for mission context and AI descriptions.",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = TEXT_PRIMARY,
-                Location = new Point(12, 38),
-                Size = new Size(400, 24),
+                int inputWidth = Math.Max(260, buildingCard.ClientSize.Width - 32);
+                _txtBuildingLat.Width = inputWidth;
+                _txtBuildingLon.Width = inputWidth;
             };
-            notesCard.Controls.Add(lblNotes);
-            layout.Controls.Add(notesCard, 0, 1);
 
-            panel.Controls.Add(layout);
+            panel.Controls.Add(buildingCard);
             return panel;
         }
 

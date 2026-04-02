@@ -36,6 +36,7 @@ from .state import StateManager
 # msgpack for efficient mesh deserialization (optional)
 try:
     import msgpack
+
     MSGPACK_AVAILABLE = True
 except ImportError:
     MSGPACK_AVAILABLE = False
@@ -49,6 +50,7 @@ try:
         IPCMessage,
         ZMQSubscriber,
     )
+
     IPC_AVAILABLE = True
     IPC_IMPORT_ERROR = ""
 except Exception as e:
@@ -71,8 +73,10 @@ logger = logging.getLogger("edge_core.api")
 
 # ==================== Request/Response Models ====================
 
+
 class Task2HitRequest(BaseModel):
     """Request model for Task 2 target hit."""
+
     x: float
     y: float
     z: float
@@ -80,9 +84,9 @@ class Task2HitRequest(BaseModel):
 
 class Task1CapturesList(BaseModel):
     """Response model for list of Task 1 captures."""
+
     captures: list[str]
     count: int
-
 
 
 # Whitelist of allowed terminal commands for safety
@@ -120,14 +124,17 @@ COMMAND_WHITELIST: dict[str, str] = {
 
 # ==================== Helper Functions ====================
 
+
 class TerminalCommandRequest(BaseModel):
     """Request model for terminal command execution."""
+
     command_name: str  # Must be a key in COMMAND_WHITELIST
     timeout: int = 10
 
 
 class TerminalExecRequest(BaseModel):
     """Request model for arbitrary terminal command execution."""
+
     command: str
     timeout: int = 30
     cwd: Optional[str] = None  # Working directory (persistent cd support)
@@ -135,6 +142,7 @@ class TerminalExecRequest(BaseModel):
 
 class TerminalCommandResponse(BaseModel):
     """Response model for terminal command."""
+
     success: bool
     stdout: str
     stderr: str
@@ -145,6 +153,7 @@ class TerminalCommandResponse(BaseModel):
 
 class VIOUpdateRequest(BaseModel):
     """Request model for VIO pose update from ROS bridge."""
+
     timestamp: float
     x: float
     y: float
@@ -171,6 +180,7 @@ class VIOUpdateRequest(BaseModel):
 
 class VIOAreaSaveRequest(BaseModel):
     """Request model for saving a VIO relocalization area map."""
+
     file_path: str
     wait_for_completion: bool = True
     timeout_s: float = 30.0
@@ -178,51 +188,34 @@ class VIOAreaSaveRequest(BaseModel):
 
 class VIOAreaLoadRequest(BaseModel):
     """Request model for loading a VIO relocalization area map."""
+
     file_path: str
 
 
 class NavVelocityRequest(BaseModel):
     """Request model for navigation velocity command from ROS nav2/nvblox."""
+
     timestamp: float
-    vx: float       # Forward velocity (m/s)
-    vy: float       # Lateral velocity (m/s)
-    vz: float       # Vertical velocity (m/s)
-    yaw_rate: float # Yaw rate (rad/s)
+    vx: float  # Forward velocity (m/s)
+    vy: float  # Lateral velocity (m/s)
+    vz: float  # Vertical velocity (m/s)
+    yaw_rate: float  # Yaw rate (rad/s)
     source: str = "nav2"
 
 
 class NavPositionRequest(BaseModel):
     """Request model for navigation position target."""
-    x: float        # North position (NED meters)
-    y: float        # East position (NED meters)
-    z: float        # Down position (NED meters)
-    yaw: float      # Heading (radians)
+
+    x: float  # North position (NED meters)
+    y: float  # East position (NED meters)
+    z: float  # Down position (NED meters)
+    yaw: float  # Heading (radians)
     source: str = "nav2"
-
-
-class Task1Target(BaseModel):
-    """A single target for Task 1 submission."""
-    target_number: int
-    description: str
-    image_path: Optional[str] = None
-
-
-class Task1SubmissionRequest(BaseModel):
-    """Request model for Task 1 Google Drive submission."""
-    targets: list[Task1Target]
-    upload_images: bool = True
-
-
-class Task1SubmissionResponse(BaseModel):
-    """Response model for Task 1 submission upload."""
-    success: bool
-    txt_file_id: str = ""
-    image_uploads: list[dict] = []
-    errors: list[str] = []
 
 
 class GDriveUploadRequest(BaseModel):
     """Request model for generic Google Drive file upload."""
+
     local_path: str
     filename: str
     folder_id: Optional[str] = None
@@ -230,6 +223,7 @@ class GDriveUploadRequest(BaseModel):
 
 class GDriveUploadResponse(BaseModel):
     """Response model for Google Drive upload."""
+
     success: bool
     file_id: str = ""
     error: str = ""
@@ -237,6 +231,7 @@ class GDriveUploadResponse(BaseModel):
 
 # ==================== Setter Functions for Dependency Injection ====================
 # These receive app parameter and store services in app.state (thread-safe)
+
 
 def set_health_monitor(app: FastAPI, monitor: "JetsonHealthMonitor") -> None:
     """Register health monitor with API via app.state."""
@@ -285,7 +280,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
         docs_url="/docs",
         redoc_url="/redoc",
     )
-    
+
     # CORS: restrict to GCS origin when configured, otherwise allow all (development)
     gcs_origin = os.environ.get("GCS_ORIGIN")
     allowed_origins = [gcs_origin] if gcs_origin else ["*"]
@@ -297,14 +292,16 @@ def create_app(state_manager: StateManager) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    
+
     # API key authentication middleware
     # If NOMAD_API_KEY is set, require X-API-Key header on non-exempt endpoints.
     # If NOMAD_API_KEY is not set, skip authentication (development mode).
     _NOMAD_API_KEY = (os.environ.get("NOMAD_API_KEY") or "").strip() or None
     _AUTH_EXEMPT_PATHS = {"/", "/health", "/docs", "/redoc", "/openapi.json"}
     _INTERNAL_BRIDGE_TOKEN_HEADER = "X-NOMAD-Internal-Token"
-    _INTERNAL_BRIDGE_TOKEN = (os.environ.get("NOMAD_INTERNAL_TOKEN") or "").strip() or None
+    _INTERNAL_BRIDGE_TOKEN = (
+        os.environ.get("NOMAD_INTERNAL_TOKEN") or ""
+    ).strip() or None
     _INTERNAL_BRIDGE_ALLOWED_ROUTES: set[tuple[str, str]] = {
         ("POST", "/api/vio/update"),
         ("POST", "/api/task/2/slam/mesh/update"),
@@ -315,7 +312,10 @@ def create_app(state_manager: StateManager) -> FastAPI:
     }
     _INTERNAL_BRIDGE_MIN_TOKEN_LEN = 32
 
-    if _INTERNAL_BRIDGE_TOKEN is not None and len(_INTERNAL_BRIDGE_TOKEN) < _INTERNAL_BRIDGE_MIN_TOKEN_LEN:
+    if (
+        _INTERNAL_BRIDGE_TOKEN is not None
+        and len(_INTERNAL_BRIDGE_TOKEN) < _INTERNAL_BRIDGE_MIN_TOKEN_LEN
+    ):
         logger.warning(
             "NOMAD_INTERNAL_TOKEN is shorter than %d chars; disabling internal bridge bypass",
             _INTERNAL_BRIDGE_MIN_TOKEN_LEN,
@@ -323,7 +323,9 @@ def create_app(state_manager: StateManager) -> FastAPI:
         _INTERNAL_BRIDGE_TOKEN = None
 
     if _NOMAD_API_KEY is not None and _INTERNAL_BRIDGE_TOKEN is None:
-        logger.warning("NOMAD_INTERNAL_TOKEN is not configured; internal bridge bypass disabled")
+        logger.warning(
+            "NOMAD_INTERNAL_TOKEN is not configured; internal bridge bypass disabled"
+        )
 
     def _is_loopback_client(request: Request) -> bool:
         client_host = ""
@@ -341,7 +343,10 @@ def create_app(state_manager: StateManager) -> FastAPI:
     def _is_internal_bridge_request(request: Request, request_path: str) -> bool:
         if _INTERNAL_BRIDGE_TOKEN is None:
             return False
-        if (request.method.upper(), request_path) not in _INTERNAL_BRIDGE_ALLOWED_ROUTES:
+        if (
+            request.method.upper(),
+            request_path,
+        ) not in _INTERNAL_BRIDGE_ALLOWED_ROUTES:
             return False
         if not _is_loopback_client(request):
             return False
@@ -369,7 +374,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
             return await call_next(request)
 
     app.add_middleware(APIKeyMiddleware)
-    
+
     # Initialize app.state with all service references (dependency injection)
     app.state.state_manager = state_manager
     app.state.health_monitor = None
@@ -381,17 +386,21 @@ def create_app(state_manager: StateManager) -> FastAPI:
     app.state.mavlink_service = None
     app.state.mode_manager = None
     app.state.spray_controller = None
-    app.state.excluded_sectors: set = set()  # SP-005: sectors excluded from obstacle avoidance
+    app.state.excluded_sectors: set = (
+        set()
+    )  # SP-005: sectors excluded from obstacle avoidance
 
     # Nav2 goal state (Jetson-side obstacle avoidance via nav2 stack)
-    app.state.nav2_pending_goal = None        # Goal waiting to be picked up by bridge
+    app.state.nav2_pending_goal = None  # Goal waiting to be picked up by bridge
     app.state.nav2_current_status = {"status": "idle"}  # Latest feedback from bridge
-    app.state.nav2_last_result = None         # Last completed goal result
+    app.state.nav2_last_result = None  # Last completed goal result
 
     # VIO state from external sources (ROS bridge)
     app.state.external_vio_state: Optional[dict] = None
     app.state.slam_vio_ros_frame: Optional[dict] = None  # ROS-frame pose for SLAM 3D
-    configured_mesh_mode = (os.environ.get("NOMAD_SLAM_MESH_OUTPUT_MODE") or "voxel").strip().lower()
+    configured_mesh_mode = (
+        (os.environ.get("NOMAD_SLAM_MESH_OUTPUT_MODE") or "voxel").strip().lower()
+    )
     if configured_mesh_mode != "voxel":
         logger.warning(
             "Invalid NOMAD_SLAM_MESH_OUTPUT_MODE='%s'; defaulting to 'voxel'",
@@ -406,7 +415,9 @@ def create_app(state_manager: StateManager) -> FastAPI:
 
     # Object detection state (HSV circle detection via ZED custom OD)
     app.state.detected_objects: list[dict] = []  # Current frame detections
-    app.state.detection_history: list[dict] = []  # Persistent detected targets with 3D positions
+    app.state.detection_history: list[
+        dict
+    ] = []  # Persistent detected targets with 3D positions
     app.state.detection_history_max: int = 200  # Max persistent detections to keep
     app.state.detection_state_lock = threading.Lock()
     app.state.detection_last_update: float = 0.0
@@ -421,14 +432,17 @@ def create_app(state_manager: StateManager) -> FastAPI:
         "bridge_running": False,
     }
     app.state.isaac_startup_last_initiated = 0.0
-    app.state.high_rate_zmq_enabled = (
-        os.environ.get("NOMAD_HIGH_RATE_ZMQ_ENABLED", "1").strip().lower()
-        not in ("0", "false", "no")
+    app.state.high_rate_zmq_enabled = os.environ.get(
+        "NOMAD_HIGH_RATE_ZMQ_ENABLED", "1"
+    ).strip().lower() not in ("0", "false", "no")
+    app.state.high_rate_zmq_sub_mode = (
+        os.environ.get(
+            "NOMAD_HIGH_RATE_ZMQ_SUB_MODE",
+            "bind",
+        )
+        .strip()
+        .lower()
     )
-    app.state.high_rate_zmq_sub_mode = os.environ.get(
-        "NOMAD_HIGH_RATE_ZMQ_SUB_MODE",
-        "bind",
-    ).strip().lower()
     if app.state.high_rate_zmq_sub_mode not in ("bind", "connect"):
         logger.warning(
             "Invalid NOMAD_HIGH_RATE_ZMQ_SUB_MODE='%s'; falling back to 'bind'",
@@ -517,16 +531,20 @@ def create_app(state_manager: StateManager) -> FastAPI:
             }
 
             # Add to trajectory
-            app.state.vio_trajectory.append({
-                "x": vio_request.x,
-                "y": vio_request.y,
-                "z": vio_request.z,
-                "timestamp": vio_request.timestamp,
-            })
+            app.state.vio_trajectory.append(
+                {
+                    "x": vio_request.x,
+                    "y": vio_request.y,
+                    "z": vio_request.z,
+                    "timestamp": vio_request.timestamp,
+                }
+            )
 
             # Trim trajectory if too long
             if len(app.state.vio_trajectory) > app.state.vio_trajectory_max_points:
-                app.state.vio_trajectory = app.state.vio_trajectory[-app.state.vio_trajectory_max_points:]
+                app.state.vio_trajectory = app.state.vio_trajectory[
+                    -app.state.vio_trajectory_max_points :
+                ]
 
             return len(app.state.vio_trajectory)
 
@@ -535,13 +553,17 @@ def create_app(state_manager: StateManager) -> FastAPI:
         with app.state.vio_state_lock:
             external_vio_state = (
                 dict(app.state.external_vio_state)
-                if app.state.external_vio_state else None
+                if app.state.external_vio_state
+                else None
             )
             slam_vio_ros_frame = (
                 dict(app.state.slam_vio_ros_frame)
-                if app.state.slam_vio_ros_frame else None
+                if app.state.slam_vio_ros_frame
+                else None
             )
-            vio_trajectory = list(app.state.vio_trajectory) if include_trajectory else None
+            vio_trajectory = (
+                list(app.state.vio_trajectory) if include_trajectory else None
+            )
         return {
             "external_vio_state": external_vio_state,
             "slam_vio_ros_frame": slam_vio_ros_frame,
@@ -593,7 +615,9 @@ def create_app(state_manager: StateManager) -> FastAPI:
 
             return accepted
 
-    def _apply_detections_update(detections: list, source_timestamp: Optional[Any] = None) -> None:
+    def _apply_detections_update(
+        detections: list, source_timestamp: Optional[Any] = None
+    ) -> None:
         """Apply detection update to app state (shared by HTTP and ZMQ paths)."""
         import time as _time
         import math as _math
@@ -610,14 +634,11 @@ def create_app(state_manager: StateManager) -> FastAPI:
 
             if normalized_source_timestamp is not None:
                 last_source_timestamp = app.state.detection_last_source_timestamp
-                if (
-                    last_source_timestamp is not None
-                    and _math.isclose(
-                        normalized_source_timestamp,
-                        last_source_timestamp,
-                        rel_tol=0.0,
-                        abs_tol=1e-6,
-                    )
+                if last_source_timestamp is not None and _math.isclose(
+                    normalized_source_timestamp,
+                    last_source_timestamp,
+                    rel_tol=0.0,
+                    abs_tol=1e-6,
                 ):
                     return
                 app.state.detection_last_source_timestamp = normalized_source_timestamp
@@ -638,9 +659,17 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 if x_val is None or y_val is None or z_val is None:
                     continue
                 try:
-                    if not (isinstance(x_val, (int, float)) and isinstance(y_val, (int, float)) and isinstance(z_val, (int, float))):
+                    if not (
+                        isinstance(x_val, (int, float))
+                        and isinstance(y_val, (int, float))
+                        and isinstance(z_val, (int, float))
+                    ):
                         continue
-                    if not (_math.isfinite(x_val) and _math.isfinite(y_val) and _math.isfinite(z_val)):
+                    if not (
+                        _math.isfinite(x_val)
+                        and _math.isfinite(y_val)
+                        and _math.isfinite(z_val)
+                    ):
                         continue
                 except (TypeError, ValueError):
                     continue
@@ -650,7 +679,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
                     dx = x_val - existing["x"]
                     dy = y_val - existing["y"]
                     dz = z_val - existing["z"]
-                    dist = (dx*dx + dy*dy + dz*dz) ** 0.5
+                    dist = (dx * dx + dy * dy + dz * dz) ** 0.5
                     if dist < 0.5 and det.get("label") == existing.get("label"):
                         existing["seen_count"] = existing.get("seen_count", 1) + 1
                         if det.get("confidence", 0) > existing.get("confidence", 0):
@@ -711,9 +740,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
 
         endpoint = app.state.high_rate_zmq_endpoint
         socket_mode = app.state.high_rate_zmq_sub_mode
-        logger.info(
-            f"High-rate ZMQ listener starting on {endpoint} ({socket_mode})"
-        )
+        logger.info(f"High-rate ZMQ listener starting on {endpoint} ({socket_mode})")
 
         subscriber: Optional[ZMQSubscriber] = None
         try:
@@ -762,7 +789,9 @@ def create_app(state_manager: StateManager) -> FastAPI:
     def _start_high_rate_zmq_listener() -> None:
         """Start background high-rate ZMQ listener thread."""
         if not app.state.high_rate_zmq_enabled:
-            logger.info("High-rate ZMQ listener disabled by NOMAD_HIGH_RATE_ZMQ_ENABLED")
+            logger.info(
+                "High-rate ZMQ listener disabled by NOMAD_HIGH_RATE_ZMQ_ENABLED"
+            )
             return
 
         thread = app.state.high_rate_zmq_thread
@@ -798,7 +827,9 @@ def create_app(state_manager: StateManager) -> FastAPI:
         """Stop high-rate ZMQ listener on API shutdown."""
         _stop_high_rate_zmq_listener()
 
-    def _docker_exec_pgrep(container: str, pattern: str, timeout_s: int = 5) -> Optional[bool]:
+    def _docker_exec_pgrep(
+        container: str, pattern: str, timeout_s: int = 5
+    ) -> Optional[bool]:
         """Return process-match state inside container, or None on probe failure."""
         try:
             result = subprocess.run(
@@ -829,7 +860,14 @@ def create_app(state_manager: StateManager) -> FastAPI:
         container_probe: Optional[bool] = None
         try:
             result = subprocess.run(
-                ["docker", "ps", "--filter", "name=nomad_isaac_ros", "--format", "{{.Status}}"],
+                [
+                    "docker",
+                    "ps",
+                    "--filter",
+                    "name=nomad_isaac_ros",
+                    "--format",
+                    "{{.Status}}",
+                ],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -894,7 +932,14 @@ def create_app(state_manager: StateManager) -> FastAPI:
         # Verify container is running
         try:
             result = subprocess.run(
-                ["docker", "ps", "--filter", f"name={container}", "--format", "{{.Names}}"],
+                [
+                    "docker",
+                    "ps",
+                    "--filter",
+                    f"name={container}",
+                    "--format",
+                    "{{.Names}}",
+                ],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -908,9 +953,16 @@ def create_app(state_manager: StateManager) -> FastAPI:
         # This ensures /dev/video* devices are available in container
         try:
             subprocess.run(
-                ["docker", "exec", container, "bash", "-c",
-                 "for dev in /sys/bus/usb/devices/*/idVendor; do dir=$(dirname $dev); vid=$(cat $dev 2>/dev/null); if [ \"$vid\" = \"2b03\" ]; then for iface in $dir/*:*/bInterfaceClass; do idir=$(dirname $iface); cls=$(cat $iface 2>/dev/null); iname=$(basename $idir); if [ \"$cls\" = \"0e\" ] && [ ! -e $idir/driver ]; then echo $iname > /sys/bus/usb/drivers/uvcvideo/bind 2>/dev/null || true; fi; done; fi; done; sleep 1"],
-                capture_output=True, timeout=10,
+                [
+                    "docker",
+                    "exec",
+                    container,
+                    "bash",
+                    "-c",
+                    'for dev in /sys/bus/usb/devices/*/idVendor; do dir=$(dirname $dev); vid=$(cat $dev 2>/dev/null); if [ "$vid" = "2b03" ]; then for iface in $dir/*:*/bInterfaceClass; do idir=$(dirname $iface); cls=$(cat $iface 2>/dev/null); iname=$(basename $idir); if [ "$cls" = "0e" ] && [ ! -e $idir/driver ]; then echo $iname > /sys/bus/usb/drivers/uvcvideo/bind 2>/dev/null || true; fi; done; fi; done; sleep 1',
+                ],
+                capture_output=True,
+                timeout=10,
             )
         except Exception:
             pass  # Non-fatal if rebinding fails
@@ -1161,28 +1213,57 @@ wait
         try:
             # Write launch script into container
             subprocess.run(
-                ["docker", "exec", container, "bash", "-c",
-                 f"cat > /tmp/launch_nvblox_bridge.sh << 'EOFSCRIPT'\n{launch_script}\nEOFSCRIPT\nchmod +x /tmp/launch_nvblox_bridge.sh"],
-                capture_output=True, text=True, timeout=10, check=True,
+                [
+                    "docker",
+                    "exec",
+                    container,
+                    "bash",
+                    "-c",
+                    f"cat > /tmp/launch_nvblox_bridge.sh << 'EOFSCRIPT'\n{launch_script}\nEOFSCRIPT\nchmod +x /tmp/launch_nvblox_bridge.sh",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
             )
 
             # Run in background
             result = subprocess.run(
-                ["docker", "exec", "-d", container, "bash", "-c",
-                 "bash /tmp/launch_nvblox_bridge.sh > /tmp/zed_nvblox.log 2>&1"],
-                capture_output=True, text=True, timeout=10,
+                [
+                    "docker",
+                    "exec",
+                    "-d",
+                    container,
+                    "bash",
+                    "-c",
+                    "bash /tmp/launch_nvblox_bridge.sh > /tmp/zed_nvblox.log 2>&1",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             if result.returncode != 0:
-                return {"success": False, "error": f"Launch failed: {result.stderr.strip()}"}
+                return {
+                    "success": False,
+                    "error": f"Launch failed: {result.stderr.strip()}",
+                }
 
             # Validate launch stayed alive long enough to be meaningful.
             launch_ok = False
             for _ in range(12):
                 time.sleep(1)
                 probe = subprocess.run(
-                    ["docker", "exec", container, "bash", "-c",
-                     "test -f /tmp/zed_nvblox.pid && kill -0 $(cat /tmp/zed_nvblox.pid) 2>/dev/null"],
-                    capture_output=True, text=True, timeout=5,
+                    [
+                        "docker",
+                        "exec",
+                        container,
+                        "bash",
+                        "-c",
+                        "test -f /tmp/zed_nvblox.pid && kill -0 $(cat /tmp/zed_nvblox.pid) 2>/dev/null",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                 )
                 if probe.returncode == 0:
                     launch_ok = True
@@ -1191,7 +1272,9 @@ wait
             if not launch_ok:
                 log_tail = subprocess.run(
                     ["docker", "exec", container, "tail", "-80", "/tmp/zed_nvblox.log"],
-                    capture_output=True, text=True, timeout=5,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                 )
                 snippet = (log_tail.stdout or log_tail.stderr or "")[-600:]
                 return {
@@ -1201,9 +1284,17 @@ wait
                 }
 
             cam_err = subprocess.run(
-                ["docker", "exec", container, "bash", "-c",
-                 "grep -q 'CAMERA NOT DETECTED' /tmp/zed_nvblox.log"],
-                capture_output=True, text=True, timeout=5,
+                [
+                    "docker",
+                    "exec",
+                    container,
+                    "bash",
+                    "-c",
+                    "grep -q 'CAMERA NOT DETECTED' /tmp/zed_nvblox.log",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if cam_err.returncode == 0:
                 return {
@@ -1237,7 +1328,7 @@ wait
                 "terminal_run": "/api/terminal/run",
                 "terminal_exec": "/api/terminal/exec",
                 "vio": "/api/vio/*",
-            }
+            },
         }
 
     # ==================== Health Endpoints ====================
@@ -1246,12 +1337,12 @@ wait
     async def health_check(request: Request):
         """
         Comprehensive health check endpoint.
-        
+
         Returns system health including CPU/GPU temperatures,
         memory usage, VIO status, and network connectivity.
         """
         state = request.app.state.state_manager.get_state()
-        
+
         # Base health response
         response = {
             "status": "ok" if state.connected else "degraded",
@@ -1260,31 +1351,33 @@ wait
             "flight_mode": state.flight_mode,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        
+
         # Add Jetson health metrics if available
         health_monitor = request.app.state.health_monitor
         if health_monitor:
             health = health_monitor.health
-            response.update({
-                "cpu_temp": health.cpu_temp_c,
-                "cpu_load": health.cpu_load_pct,
-                "gpu_temp": health.gpu_temp_c,
-                "gpu_load": health.gpu_load_pct,
-                "memory_used_pct": health.memory_used_pct,
-                "disk_free_gb": health.disk_free_gb,
-                "power_draw_w": health.power_draw_w,
-                "throttled": health.throttled,
-                "thermal_zone": health.thermal_zone,
-                "tailscale_connected": health.tailscale_connected,
-                "tailscale_ip": health.tailscale_ip,
-            })
-            
+            response.update(
+                {
+                    "cpu_temp": health.cpu_temp_c,
+                    "cpu_load": health.cpu_load_pct,
+                    "gpu_temp": health.gpu_temp_c,
+                    "gpu_load": health.gpu_load_pct,
+                    "memory_used_pct": health.memory_used_pct,
+                    "disk_free_gb": health.disk_free_gb,
+                    "power_draw_w": health.power_draw_w,
+                    "throttled": health.throttled,
+                    "thermal_zone": health.thermal_zone,
+                    "tailscale_connected": health.tailscale_connected,
+                    "tailscale_ip": health.tailscale_ip,
+                }
+            )
+
             # Override status based on thermal state
             if health.thermal_zone == "critical":
                 response["status"] = "critical"
             elif health.thermal_zone == "warning" or health.throttled:
                 response["status"] = "warning"
-        
+
         # Add VIO health from external source (ros_http_bridge) if available
         external_vio = _get_vio_snapshot()["external_vio_state"]
         if external_vio:
@@ -1294,7 +1387,7 @@ wait
                 "tracking_confidence": confidence_0_1,
                 "message_rate_hz": 30.0,
             }
-        
+
         return response
 
     @app.get("/health/detailed", tags=["System"])
@@ -1303,9 +1396,9 @@ wait
         health_monitor = request.app.state.health_monitor
         if not health_monitor:
             return {"error": "Health monitor not initialized"}
-        
+
         result = health_monitor.health.to_dict()
-        
+
         # Include VIO health from external source (ros_http_bridge)
         external_vio = _get_vio_snapshot()["external_vio_state"]
         if external_vio:
@@ -1316,7 +1409,7 @@ wait
                 "message_rate_hz": external_vio.get("message_rate_hz", 30.0),
                 "source": external_vio.get("source", "unknown"),
             }
-        
+
         return result
 
     # ==================== Status Endpoints ====================
@@ -1341,7 +1434,9 @@ wait
         if tailscale_manager:
             info = tailscale_manager.info
             tailscale = {
-                "status": info.status.value if getattr(info, "status", None) else "unknown",
+                "status": info.status.value
+                if getattr(info, "status", None)
+                else "unknown",
                 "ip": getattr(info, "ip_address", None),
                 "hostname": getattr(info, "hostname", "unknown"),
                 "peer_count": getattr(info, "peer_count", None),
@@ -1369,19 +1464,24 @@ wait
             "internet_reachable": internet_reachable,
             "gcs_reachable": gcs_reachable,
         }
-    
+
     @app.post("/network/reconnect", tags=["Network"])
     async def network_reconnect(request: Request):
         """Trigger Tailscale reconnection."""
         tailscale_manager = request.app.state.tailscale_manager
         if not tailscale_manager:
-            raise HTTPException(status_code=503, detail="Tailscale manager not initialized")
-        
+            raise HTTPException(
+                status_code=503, detail="Tailscale manager not initialized"
+            )
+
         ok = await tailscale_manager.reconnect()
         return {
-            "success": ok, 
-            "message": "Tailscale reconnection triggered" if ok else "Failed to trigger reconnection"}
-    
+            "success": ok,
+            "message": "Tailscale reconnection triggered"
+            if ok
+            else "Failed to trigger reconnection",
+        }
+
     @app.get("/network/ping/{host}", tags=["Network"])
     async def network_ping(host: str):
         try:
@@ -1426,7 +1526,6 @@ wait
         except subprocess.TimeoutExpired:
             raise HTTPException(status_code=504, detail="Ping timed out")
 
-
     async def _validate_ws_token(websocket: WebSocket) -> bool:
         """Validate API key token on WebSocket connect. Returns True if authorised."""
         if _NOMAD_API_KEY is None:
@@ -1447,7 +1546,7 @@ wait
             while True:
                 state = websocket.app.state.state_manager.get_state()
                 data = jsonable_encoder(state)
-                
+
                 # Add additional real-time data
                 health_monitor = websocket.app.state.health_monitor
                 if health_monitor:
@@ -1455,7 +1554,7 @@ wait
                 external_vio = _get_vio_snapshot()["external_vio_state"]
                 if external_vio:
                     data["vio_status"] = external_vio
-                
+
                 await websocket.send_json(data)
                 await asyncio.sleep(0.1)  # 10Hz
         except WebSocketDisconnect:
@@ -1489,7 +1588,10 @@ wait
                 # Check for mesh updates -- mesh-bundled pose is in the
                 # same coordinate frame as the mesh vertices (ROS odom/map frame)
                 has_mesh = False
-                if hasattr(websocket.app.state, 'slam_mesh_data') and websocket.app.state.slam_mesh_data:
+                if (
+                    hasattr(websocket.app.state, "slam_mesh_data")
+                    and websocket.app.state.slam_mesh_data
+                ):
                     stored = websocket.app.state.slam_mesh_data
                     mesh_ts = stored.get("received_at")
                     if mesh_ts and mesh_ts != last_mesh_timestamp:
@@ -1527,6 +1629,20 @@ wait
                             frame["yaw"] = ros_vio.get("yaw", 0)
                             has_attitude = True
 
+                # Always include velocity from external VIO state when available
+                external_vio = _get_vio_snapshot()["external_vio_state"]
+                if external_vio:
+                    frame["vx"] = external_vio.get("vx", 0)
+                    frame["vy"] = external_vio.get("vy", 0)
+                    frame["vz"] = external_vio.get("vz", 0)
+
+                # Always include velocity from external VIO state when available
+                external_vio = _get_vio_snapshot()["external_vio_state"]
+                if external_vio:
+                    frame["vx"] = external_vio.get("vx", 0)
+                    frame["vy"] = external_vio.get("vy", 0)
+                    frame["vz"] = external_vio.get("vz", 0)
+
                 has_pose = has_position or has_attitude
 
                 # Skip frames when no pose data available at all
@@ -1548,7 +1664,9 @@ wait
                         det_history = list(websocket.app.state.detection_history)
                     if det_history:
                         # Cap to 50 most recent detections to limit payload size
-                        capped = det_history[-50:] if len(det_history) > 50 else det_history
+                        capped = (
+                            det_history[-50:] if len(det_history) > 50 else det_history
+                        )
                         frame["detections"] = [
                             {
                                 "label": d.get("label", ""),
@@ -1604,17 +1722,17 @@ wait
     async def task1_get_image(filename: str):
         """
         Retrieve a saved Task 1 image (legacy endpoint for backward compatibility).
-        
+
         Returns the image file captured during a Task 1 recon mission.
         For new folder-based structure, use /api/task/1/images/{folder}/{filename}
         """
         image_dir = "./data/task1_captures"
         image_path = os.path.join(image_dir, filename)
-        
+
         # Validate filename to prevent directory traversal
         if ".." in filename or "/" in filename or "\\" in filename:
             raise HTTPException(status_code=400, detail="Invalid filename")
-        
+
         # Check if file exists
         if not os.path.exists(image_path):
             # Backward-compatible fallback for folder-based captures.
@@ -1628,98 +1746,102 @@ wait
                     raise HTTPException(status_code=404, detail="Image not found")
             else:
                 raise HTTPException(status_code=404, detail="Image not found")
-        
+
         return FileResponse(image_path, media_type="image/jpeg")
 
     @app.get("/api/task/1/captures", tags=["Task 1"], response_model=Task1CapturesList)
     async def list_task1_captures():
         """
         List all Task 1 capture folders.
-        
+
         Returns: List of folder names (timestamps) sorted by date descending.
         Example: ["20260202_120000", "20260202_115500", ...]
         """
         base_dir = "./data/task1_captures"
-        
+
         # Create directory if it doesn't exist
         if not os.path.exists(base_dir):
             os.makedirs(base_dir, exist_ok=True)
             return Task1CapturesList(captures=[], count=0)
-        
+
         try:
             # List all directories in task1_captures
             entries = os.listdir(base_dir)
             folders = [
-                entry for entry in entries
+                entry
+                for entry in entries
                 if os.path.isdir(os.path.join(base_dir, entry))
             ]
-            
+
             # Filter to only timestamp-pattern folders (YYYYMMDD_HHMMSS)
-            timestamp_pattern = re.compile(r'^\d{8}_\d{6}$')
+            timestamp_pattern = re.compile(r"^\d{8}_\d{6}$")
             valid_folders = [
-                folder for folder in folders
-                if timestamp_pattern.match(folder)
+                folder for folder in folders if timestamp_pattern.match(folder)
             ]
-            
+
             # Sort by timestamp descending (newest first)
             valid_folders.sort(reverse=True)
-            
+
             return Task1CapturesList(captures=valid_folders, count=len(valid_folders))
-            
+
         except Exception as e:
             logger.error(f"Failed to list Task 1 captures: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to list captures: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to list captures: {str(e)}"
+            )
 
     @app.get("/api/task/1/images/{folder}/{filename}", tags=["Task 1"])
     async def get_task1_image_with_folder(folder: str, filename: str):
         """
         Download specific file from Task 1 capture folder.
-        
+
         Args:
             folder: Folder name (e.g., "20260202_120000")
             filename: File name (e.g., "photo.jpg", "metadata.json")
-        
+
         Returns: File content with appropriate content type
         """
         # Security: Validate folder name matches timestamp pattern
-        timestamp_pattern = re.compile(r'^\d{8}_\d{6}$')
+        timestamp_pattern = re.compile(r"^\d{8}_\d{6}$")
         if not timestamp_pattern.match(folder):
             raise HTTPException(status_code=400, detail="Invalid folder name format")
-        
+
         # Security: Validate filename - whitelist allowed files
         allowed_files = [
-            'photo.jpg', 'metadata.json', 'description.txt',
-            'detections_overlay.jpg', 'building_3d_snapshot.jpg'
+            "photo.jpg",
+            "metadata.json",
+            "description.txt",
+            "detections_overlay.jpg",
+            "building_3d_snapshot.jpg",
         ]
         if filename not in allowed_files:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid filename. Allowed: {', '.join(allowed_files)}"
+                detail=f"Invalid filename. Allowed: {', '.join(allowed_files)}",
             )
-        
+
         # Security: Prevent path traversal
         if ".." in folder or "/" in folder or "\\" in folder:
             raise HTTPException(status_code=400, detail="Invalid folder name")
         if ".." in filename or "/" in filename or "\\" in filename:
             raise HTTPException(status_code=400, detail="Invalid filename")
-        
+
         # Build file path
         base_dir = "./data/task1_captures"
         file_path = os.path.join(base_dir, folder, filename)
-        
+
         # Normalize path and ensure it's within base_dir (additional security)
         base_dir_abs = os.path.abspath(base_dir)
         file_path_abs = os.path.abspath(file_path)
         if not file_path_abs.startswith(base_dir_abs):
             raise HTTPException(status_code=400, detail="Invalid file path")
-        
+
         # Check if file exists
         if not os.path.exists(file_path):
             raise HTTPException(
-                status_code=404,
-                detail=f"File not found: {folder}/{filename}"
+                status_code=404, detail=f"File not found: {folder}/{filename}"
             )
-        
+
         # Determine media type
         media_type = "application/octet-stream"
         if filename.endswith(".jpg") or filename.endswith(".jpeg"):
@@ -1728,7 +1850,7 @@ wait
             media_type = "application/json"
         elif filename.endswith(".txt"):
             media_type = "text/plain"
-        
+
         return FileResponse(file_path, media_type=media_type)
 
     # ==================== Task 1: Target Localizer (ROS 2) ====================
@@ -1783,161 +1905,26 @@ wait
 
     # ==================== Google Drive Upload ====================
 
-    @app.post("/api/gdrive/upload", tags=["Google Drive"], response_model=GDriveUploadResponse)
-    async def gdrive_upload_file(request_body: GDriveUploadRequest):
-        """
-        Upload a single file to Google Drive.
-        
-        Requires Google Drive credentials to be configured on the Jetson:
-        - Run: python -m edge_core.gdrive_upload --setup <client_secret.json>
-        - Set GDRIVE_FOLDER_ID environment variable for target folder
-        """
-        try:
-            from .gdrive_upload import upload_to_gdrive
-        except ImportError as e:
-            logger.error(f"Google Drive module not available: {e}")
-            return GDriveUploadResponse(
-                success=False,
-                error="Google Drive module not available. Install: pip install google-api-python-client google-auth google-auth-oauthlib"
-            )
-        
-        if not os.path.isfile(request_body.local_path):
-            return GDriveUploadResponse(
-                success=False,
-                error=f"File not found: {request_body.local_path}"
-            )
-        
-        try:
-            file_id = upload_to_gdrive(
-                local_path=request_body.local_path,
-                filename=request_body.filename,
-                folder_id=request_body.folder_id,
-            )
-            
-            if file_id:
-                logger.info(f"Uploaded {request_body.filename} to Google Drive: {file_id}")
-                return GDriveUploadResponse(success=True, file_id=file_id)
-            else:
-                return GDriveUploadResponse(
-                    success=False,
-                    error="Upload failed - check Google Drive credentials"
-                )
-        except Exception as e:
-            logger.error(f"Google Drive upload error: {e}")
-            return GDriveUploadResponse(success=False, error=str(e))
-
-    @app.post("/api/task/1/submit", tags=["Task 1"], response_model=Task1SubmissionResponse)
-    async def task1_submit_to_gdrive(submission: Task1SubmissionRequest):
-        """
-        Submit Task 1 targets to Google Drive.
-        
-        Generates Task_1_MAD_targets.txt in ConOps format and uploads it
-        along with any associated images to the configured Google Drive folder.
-        
-        ConOps Format:
-        Target 1: Blue target on the north face of the building, 3.2m above ground...
-        
-        Target 2: Red target on the west face of the building...
-        """
-        try:
-            from .gdrive_upload import upload_to_gdrive
-        except ImportError as e:
-            logger.error(f"Google Drive module not available: {e}")
-            return Task1SubmissionResponse(
-                success=False,
-                errors=["Google Drive module not available"]
-            )
-        
-        errors = []
-        image_uploads = []
-        txt_file_id = ""
-        
-        # Generate Task_1_MAD_targets.txt content
-        txt_content_lines = []
-        for target in sorted(submission.targets, key=lambda t: t.target_number):
-            txt_content_lines.append(f"Target {target.target_number}: {target.description}")
-        
-        txt_content = "\n\n".join(txt_content_lines)
-        
-        # Write temp file
-        temp_txt_path = "/tmp/Task_1_MAD_targets.txt"
-        try:
-            with open(temp_txt_path, "w") as f:
-                f.write(txt_content)
-            
-            # Upload txt file
-            txt_file_id = upload_to_gdrive(
-                local_path=temp_txt_path,
-                filename="Task_1_MAD_targets.txt",
-            )
-            
-            if not txt_file_id:
-                errors.append("Failed to upload Task_1_MAD_targets.txt")
-            else:
-                logger.info(f"Uploaded Task_1_MAD_targets.txt: {txt_file_id}")
-        except Exception as e:
-            errors.append(f"Failed to create/upload txt file: {e}")
-        finally:
-            if os.path.exists(temp_txt_path):
-                os.remove(temp_txt_path)
-        
-        # Upload images if requested
-        if submission.upload_images:
-            for target in submission.targets:
-                if target.image_path and os.path.isfile(target.image_path):
-                    try:
-                        # Use target number in filename for easy correlation
-                        ext = os.path.splitext(target.image_path)[1] or ".jpg"
-                        image_filename = f"Target_{target.target_number}{ext}"
-                        
-                        file_id = upload_to_gdrive(
-                            local_path=target.image_path,
-                            filename=image_filename,
-                        )
-                        
-                        if file_id:
-                            image_uploads.append({
-                                "target_number": target.target_number,
-                                "filename": image_filename,
-                                "file_id": file_id,
-                            })
-                            logger.info(f"Uploaded {image_filename}: {file_id}")
-                        else:
-                            errors.append(f"Failed to upload image for Target {target.target_number}")
-                    except Exception as e:
-                        errors.append(f"Error uploading Target {target.target_number} image: {e}")
-                elif target.image_path:
-                    errors.append(f"Image not found for Target {target.target_number}: {target.image_path}")
-        
-        success = bool(txt_file_id) and len(errors) == 0
-        
-        return Task1SubmissionResponse(
-            success=success,
-            txt_file_id=txt_file_id,
-            image_uploads=image_uploads,
-            errors=errors,
-        )
-
     @app.get("/api/gdrive/status", tags=["Google Drive"])
     async def gdrive_status():
         """
         Check Google Drive upload capability status.
-        
+
         Returns whether credentials are configured and valid.
         """
         try:
             from .gdrive_upload import _get_credentials, _get_token_path
-            
+
             token_path = _get_token_path()
             has_token = os.path.isfile(token_path)
-            
+
             if not has_token:
                 return {
                     "available": False,
                     "message": "No Google Drive token found. Run setup.",
                     "token_path": token_path,
                 }
-            
+
             creds = _get_credentials()
             if creds is None:
                 return {
@@ -1945,9 +1932,9 @@ wait
                     "message": "Token exists but credentials invalid/expired.",
                     "token_path": token_path,
                 }
-            
+
             folder_id = os.environ.get("GDRIVE_FOLDER_ID", "")
-            
+
             return {
                 "available": True,
                 "message": "Google Drive ready",
@@ -1971,13 +1958,13 @@ wait
     async def task2_reset_map(request: Request):
         """
         Reset the exclusion map for Task 2.
-        
+
         Clears all recorded target positions, allowing
         previously sprayed targets to be detected again.
         """
         request.app.state.exclusion_map = []
         logger.info("Task 2 exclusion map reset")
-        
+
         return {
             "success": True,
             "message": "Exclusion map cleared",
@@ -1988,7 +1975,7 @@ wait
     async def task2_target_hit(hit_request: Task2HitRequest, request: Request):
         """
         Register a target hit for Task 2 exclusion map.
-        
+
         Records the 3D position of a sprayed target to prevent
         re-engagement. Uses VIO frame coordinates.
         """
@@ -1998,10 +1985,12 @@ wait
             "z": hit_request.z,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        
+
         request.app.state.exclusion_map.append(target)
-        logger.info(f"Task 2 target hit registered: ({hit_request.x}, {hit_request.y}, {hit_request.z})")
-        
+        logger.info(
+            f"Task 2 target hit registered: ({hit_request.x}, {hit_request.y}, {hit_request.z})"
+        )
+
         return {
             "success": True,
             "target": target,
@@ -2034,7 +2023,7 @@ wait
                 "reset_counter": 0,
                 "source": external_vio_state.get("source", "external"),
             }
-        
+
         return {
             "health": "unknown",
             "tracking_confidence": 0,  # 0-1 scale
@@ -2048,7 +2037,7 @@ wait
     async def vio_update(vio_request: VIOUpdateRequest, request: Request):
         """
         Receive VIO pose update from external source (ROS bridge).
-        
+
         This endpoint is called by the ros_http_bridge.py script running
         inside the Isaac ROS container to send VIO data to edge_core.
         """
@@ -2061,7 +2050,7 @@ wait
         external_vio_state = _get_vio_snapshot()["external_vio_state"]
         if external_vio_state:
             return external_vio_state
-        
+
         isaac_bridge = request.app.state.isaac_bridge
         if isaac_bridge and isaac_bridge.vio_state:
             vio = isaac_bridge.vio_state
@@ -2079,14 +2068,16 @@ wait
                 "confidence": vio.confidence,
                 "source": "isaac_ros",
             }
-        
+
         return {"valid": False, "message": "No VIO data available"}
 
     @app.get("/api/vio/trajectory", tags=["VIO"])
-    async def vio_trajectory(request: Request, max_points: int = Query(default=100, le=1000)):
+    async def vio_trajectory(
+        request: Request, max_points: int = Query(default=100, le=1000)
+    ):
         """
         Get VIO trajectory for visualization.
-        
+
         Returns a list of (x, y, z) points representing the drone's path.
         Use max_points to limit the response size.
         """
@@ -2119,11 +2110,84 @@ wait
         text = (message or "").strip().lower()
         if not text:
             return default_status
+        if "waiting for service to become available" in text:
+            return 503
+        if "success=false" in text or "success = false" in text:
+            return 409
         if "not found" in text or "no such file" in text or "does not exist" in text:
             return 404
         if "missing" in text or "invalid" in text or "empty" in text:
             return 400
         return default_status
+
+    def _sanitize_ros2_service_output(output: str) -> str:
+        """Strip noisy ROS2 CLI/runtime lines and keep actionable output."""
+        cleaned_lines: list[str] = []
+        for raw_line in (output or "").splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            lower = line.lower()
+            if line.startswith("/usr/lib/python") and "runtimewarning" in lower:
+                continue
+            if "jtop.core.jetson_variables" in lower:
+                continue
+            if line.startswith("warn(RuntimeWarning"):
+                continue
+            if "waiting for service to become available" in lower:
+                continue
+
+            cleaned_lines.append(line)
+
+        return "\n".join(cleaned_lines).strip()
+
+    def _ensure_file_path_parent_dir_in_isaac_container_or_raise(
+        service_type: str,
+        request_payload: dict[str, Any],
+    ) -> None:
+        """Ensure parent dir exists for FilePath service calls inside container."""
+        if service_type != "nvblox_msgs/srv/FilePath":
+            return
+
+        file_path = str(request_payload.get("file_path") or "").strip()
+        if not file_path:
+            return
+
+        parent_dir = os.path.dirname(file_path)
+        if not parent_dir:
+            return
+
+        mkdir_cmd = f"mkdir -p {shlex.quote(parent_dir)}"
+        try:
+            mkdir_result = subprocess.run(
+                ["docker", "exec", "nomad_isaac_ros", "bash", "-lc", mkdir_cmd],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except Exception as e:
+            logger.error(f"Failed to prepare map directory in Isaac container: {e}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Failed to prepare map directory in Isaac container: {parent_dir}",
+            )
+
+        if mkdir_result.returncode != 0:
+            detail = (
+                _sanitize_ros2_service_output(
+                    "\n".join(
+                        part
+                        for part in [
+                            (mkdir_result.stdout or "").strip(),
+                            (mkdir_result.stderr or "").strip(),
+                        ]
+                        if part
+                    )
+                )
+                or f"mkdir failed for {parent_dir}"
+            )
+            raise HTTPException(status_code=503, detail=detail)
 
     def _call_ros2_service_in_isaac_container_or_raise(
         service_name: str,
@@ -2143,6 +2207,11 @@ wait
                 status_code=503,
                 detail="Isaac ROS nvblox stack is not running",
             )
+
+        _ensure_file_path_parent_dir_in_isaac_container_or_raise(
+            service_type=service_type,
+            request_payload=request_payload,
+        )
 
         request_yaml = json.dumps(request_payload)
         shell_cmd = (
@@ -2173,6 +2242,7 @@ wait
         output = "\n".join(
             part for part in [result.stdout.strip(), result.stderr.strip()] if part
         ).strip()
+        output = _sanitize_ros2_service_output(output)
         if result.returncode != 0:
             raise HTTPException(
                 status_code=502,
@@ -2184,20 +2254,31 @@ wait
             output,
             flags=re.IGNORECASE,
         )
-        success = True if not success_match else (success_match.group(1).lower() == "true")
+        success = (
+            True if not success_match else (success_match.group(1).lower() == "true")
+        )
 
         message_match = re.search(
             r"message\s*[:=]\s*['\"]?([^\n'\"]+)",
             output,
             flags=re.IGNORECASE,
         )
-        message = message_match.group(1).strip() if message_match else output
+        if message_match:
+            message = message_match.group(1).strip()
+        elif service_type == "nvblox_msgs/srv/FilePath":
+            message = (
+                f"{service_name} returned success={'true' if success else 'false'}"
+            )
+        else:
+            message = output
 
         if not success:
             status = _status_for_vio_area_failure(message or output, default_status=502)
             raise HTTPException(
                 status_code=status,
-                detail=message or output or f"ROS2 service reported failure: {service_name}",
+                detail=message
+                or output
+                or f"ROS2 service reported failure: {service_name}",
             )
 
         return message or f"ROS2 service call succeeded: {service_name}"
@@ -2218,11 +2299,15 @@ wait
                 )
             except Exception as e:
                 logger.error(f"Direct camera save_area_map failed: {e}")
-                raise HTTPException(status_code=500, detail=f"Direct camera save failed: {e}")
+                raise HTTPException(
+                    status_code=500, detail=f"Direct camera save failed: {e}"
+                )
 
             if not success:
                 status = _status_for_vio_area_failure(message, default_status=500)
-                raise HTTPException(status_code=status, detail=message or "Failed to save area map")
+                raise HTTPException(
+                    status_code=status, detail=message or "Failed to save area map"
+                )
         else:
             backend = "nvblox_map_service"
             message = _call_ros2_service_in_isaac_container_or_raise(
@@ -2251,11 +2336,15 @@ wait
                 success, message = camera_service.load_area_map(file_path)
             except Exception as e:
                 logger.error(f"Direct camera load_area_map failed: {e}")
-                raise HTTPException(status_code=500, detail=f"Direct camera load failed: {e}")
+                raise HTTPException(
+                    status_code=500, detail=f"Direct camera load failed: {e}"
+                )
 
             if not success:
                 status = _status_for_vio_area_failure(message, default_status=500)
-                raise HTTPException(status_code=status, detail=message or "Failed to load area map")
+                raise HTTPException(
+                    status_code=status, detail=message or "Failed to load area map"
+                )
         else:
             backend = "nvblox_map_service"
             message = _call_ros2_service_in_isaac_container_or_raise(
@@ -2283,11 +2372,15 @@ wait
                 load_success, load_message = camera_service.load_area_map(file_path)
             except Exception as e:
                 logger.error(f"Direct camera relocalize load failed: {e}")
-                raise HTTPException(status_code=500, detail=f"Direct camera relocalize load failed: {e}")
+                raise HTTPException(
+                    status_code=500, detail=f"Direct camera relocalize load failed: {e}"
+                )
 
             if not load_success:
                 status = _status_for_vio_area_failure(load_message, default_status=500)
-                raise HTTPException(status_code=status, detail=load_message or "Failed to load area map")
+                raise HTTPException(
+                    status_code=status, detail=load_message or "Failed to load area map"
+                )
 
             reset_ok = True
             reset_message = "Tracking reset not available on direct backend"
@@ -2296,11 +2389,19 @@ wait
                     reset_ok = bool(camera_service.reset_tracking())
                     reset_message = "Tracking reset triggered"
                 except Exception as e:
-                    logger.error(f"Direct camera reset_tracking failed during relocalize: {e}")
-                    raise HTTPException(status_code=500, detail=f"Direct camera reset_tracking failed: {e}")
+                    logger.error(
+                        f"Direct camera reset_tracking failed during relocalize: {e}"
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Direct camera reset_tracking failed: {e}",
+                    )
 
             if not reset_ok:
-                raise HTTPException(status_code=500, detail="Direct camera reset_tracking returned failure")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Direct camera reset_tracking returned failure",
+                )
 
             return {
                 "success": True,
@@ -2382,7 +2483,7 @@ wait
     async def nav_status(request: Request):
         """
         Get navigation controller status.
-        
+
         Returns the current navigation mode, health, and commanded velocities.
         This is the Jetson-centric navigation controller that bridges
         ROS2 nav2/nvblox to ArduPilot GUIDED mode.
@@ -2394,7 +2495,7 @@ wait
                 "mode": "disabled",
                 "message": "Navigation controller not initialized",
             }
-        
+
         status = nav_controller.status
         return {
             "available": True,
@@ -2405,12 +2506,12 @@ wait
     async def nav_velocity(nav_request: NavVelocityRequest, request: Request):
         """
         Send velocity command for autonomous navigation.
-        
+
         This is the primary endpoint for Jetson-centric navigation.
         Isaac ROS nav2/nvblox generates /cmd_vel which ros_http_bridge
         forwards here. Edge Core then sends SET_POSITION_TARGET_LOCAL_NED
         to ArduPilot in GUIDED mode.
-        
+
         Velocity convention (ROS REP 103):
         - vx: Forward velocity (m/s, positive = forward)
         - vy: Lateral velocity (m/s, positive = left)
@@ -2423,7 +2524,7 @@ wait
             raise HTTPException(status_code=409, detail=str(e))
         except RuntimeError as e:
             raise HTTPException(status_code=503, detail=str(e))
-        
+
         return {
             "success": success,
             "timestamp": nav_request.timestamp,
@@ -2439,13 +2540,15 @@ wait
     async def nav_position(pos_request: NavPositionRequest, request: Request):
         """
         Send position target for navigation.
-        
+
         Position is in local NED frame relative to VIO origin.
         """
         nav_controller = request.app.state.nav_controller
         if not nav_controller:
-            raise HTTPException(status_code=503, detail="Navigation controller not initialized")
-        
+            raise HTTPException(
+                status_code=503, detail="Navigation controller not initialized"
+            )
+
         success = nav_controller.send_position(
             x=pos_request.x,
             y=pos_request.y,
@@ -2453,7 +2556,7 @@ wait
             yaw=pos_request.yaw,
             source=pos_request.source,
         )
-        
+
         return {
             "success": success,
             "target": {
@@ -2468,14 +2571,16 @@ wait
     async def nav_stop(request: Request):
         """
         Emergency stop - send zero velocity command.
-        
+
         Use this to immediately halt all movement. The vehicle will
         attempt to hold position (requires VIO/GPS).
         """
         nav_controller = request.app.state.nav_controller
         if not nav_controller:
-            raise HTTPException(status_code=503, detail="Navigation controller not initialized")
-        
+            raise HTTPException(
+                status_code=503, detail="Navigation controller not initialized"
+            )
+
         success = nav_controller.stop_movement()
         return {"success": success, "message": "Stop command sent"}
 
@@ -2483,18 +2588,22 @@ wait
     async def nav_enable_guided(request: Request):
         """
         Request ArduPilot to enter GUIDED mode.
-        
+
         GUIDED mode is required for Jetson navigation commands to work.
         This sends a MAVLink mode change request to the flight controller.
         """
         nav_controller = request.app.state.nav_controller
         if not nav_controller:
-            raise HTTPException(status_code=503, detail="Navigation controller not initialized")
-        
+            raise HTTPException(
+                status_code=503, detail="Navigation controller not initialized"
+            )
+
         success = nav_controller.enable_guided_mode()
         return {
             "success": success,
-            "message": "GUIDED mode requested" if success else "Failed to request GUIDED mode",
+            "message": "GUIDED mode requested"
+            if success
+            else "Failed to request GUIDED mode",
         }
 
     # ==================== Nav2 Obstacle Avoidance (Jetson-side) ====================
@@ -2548,10 +2657,14 @@ wait
         goal_type = body.get("type", "navigate_to_pose")
 
         if goal_type == "cancel":
-            request.app.state.nav2_pending_goal = {"type": "cancel", "id": f"cancel_{datetime.now(timezone.utc).timestamp():.0f}"}
+            request.app.state.nav2_pending_goal = {
+                "type": "cancel",
+                "id": f"cancel_{datetime.now(timezone.utc).timestamp():.0f}",
+            }
             return {"success": True, "message": "Cancel requested"}
 
         import uuid
+
         goal_id = str(uuid.uuid4())[:8]
 
         goal = {"id": goal_id, "type": goal_type}
@@ -2562,10 +2675,15 @@ wait
         elif goal_type == "follow_waypoints":
             goal["waypoints"] = body.get("waypoints", [])
         else:
-            raise HTTPException(status_code=400, detail=f"Unknown goal type: {goal_type}")
+            raise HTTPException(
+                status_code=400, detail=f"Unknown goal type: {goal_type}"
+            )
 
         request.app.state.nav2_pending_goal = goal
-        request.app.state.nav2_current_status = {"status": "pending", "goal_id": goal_id}
+        request.app.state.nav2_current_status = {
+            "status": "pending",
+            "goal_id": goal_id,
+        }
         return {"success": True, "goal_id": goal_id, "type": goal_type}
 
     @app.get("/api/nav2/pending", tags=["Nav2"])
@@ -2604,7 +2722,7 @@ wait
     @app.get("/api/spray/status", tags=["Spray"])
     async def get_spray_status(request: Request):
         """Get current spray sequence status."""
-        spray_ctrl = getattr(request.app.state, 'spray_controller', None)
+        spray_ctrl = getattr(request.app.state, "spray_controller", None)
         if not spray_ctrl:
             return {"state": "idle", "error": "Spray controller not initialized"}
         return spray_ctrl.status.to_dict()
@@ -2620,12 +2738,15 @@ wait
         The sequence runs fully autonomously (SP-002):
         APPROACH -> AIM -> SPRAY -> VERIFY -> UPLOAD -> COMPLETE
         """
-        spray_ctrl = getattr(request.app.state, 'spray_controller', None)
+        spray_ctrl = getattr(request.app.state, "spray_controller", None)
         if not spray_ctrl:
-            raise HTTPException(status_code=503, detail="Spray controller not initialized")
+            raise HTTPException(
+                status_code=503, detail="Spray controller not initialized"
+            )
 
         body = await _parse_request_json_object(request)
         from .spray_controller import SprayTarget
+
         target = SprayTarget(
             target_id=body.get("target_id", 0),
             x=body.get("x", 0.0),
@@ -2644,9 +2765,11 @@ wait
     @app.post("/api/spray/abort", tags=["Spray"])
     async def abort_spray(request: Request):
         """Abort the current spray sequence."""
-        spray_ctrl = getattr(request.app.state, 'spray_controller', None)
+        spray_ctrl = getattr(request.app.state, "spray_controller", None)
         if not spray_ctrl:
-            raise HTTPException(status_code=503, detail="Spray controller not initialized")
+            raise HTTPException(
+                status_code=503, detail="Spray controller not initialized"
+            )
         return spray_ctrl.abort()
 
     # ==================== Operational Mode (Section 9) ============================
@@ -2654,7 +2777,7 @@ wait
     @app.get("/api/mode", tags=["Mode"])
     async def get_operational_mode(request: Request):
         """Get current operational mode and available modes."""
-        mode_mgr = getattr(request.app.state, 'mode_manager', None)
+        mode_mgr = getattr(request.app.state, "mode_manager", None)
         if not mode_mgr:
             return {
                 "current_mode": "outdoor_transit",
@@ -2677,12 +2800,14 @@ wait
         Valid modes: outdoor_transit, outdoor_survey, indoor_nav,
                      spray_approach, emergency
         """
-        mode_mgr = getattr(request.app.state, 'mode_manager', None)
+        mode_mgr = getattr(request.app.state, "mode_manager", None)
         if not mode_mgr:
             raise HTTPException(status_code=503, detail="Mode manager not initialized")
         result = mode_mgr.switch_mode(mode)
         if not result["success"]:
-            raise HTTPException(status_code=400, detail=result.get("error", "Switch failed"))
+            raise HTTPException(
+                status_code=400, detail=result.get("error", "Switch failed")
+            )
         return result
 
     # ==================== Obstacle Distance (NV-008) =============================
@@ -2738,7 +2863,9 @@ wait
 
     # ==================== Terminal Endpoints ======================================
 
-    @app.post("/api/terminal/run", tags=["Terminal"], response_model=TerminalCommandResponse)
+    @app.post(
+        "/api/terminal/run", tags=["Terminal"], response_model=TerminalCommandResponse
+    )
     async def execute_terminal_command(request: TerminalCommandRequest):
         """
         Execute a whitelisted shell command on the Jetson.
@@ -2762,7 +2889,7 @@ wait
             )
 
         command_str = COMMAND_WHITELIST[request.command_name]
-        
+
         try:
             # For commands with pipes or redirects, use shell=True
             # (safe because the command itself is whitelisted)
@@ -2784,7 +2911,7 @@ wait
                     text=True,
                     timeout=request.timeout,
                 )
-            
+
             return TerminalCommandResponse(
                 success=result.returncode == 0,
                 stdout=result.stdout,
@@ -2792,7 +2919,7 @@ wait
                 return_code=result.returncode,
                 command_executed=command_str,
             )
-            
+
         except subprocess.TimeoutExpired:
             return TerminalCommandResponse(
                 success=False,
@@ -2810,7 +2937,9 @@ wait
                 command_executed=command_str,
             )
 
-    @app.post("/api/terminal/exec", tags=["Terminal"], response_model=TerminalCommandResponse)
+    @app.post(
+        "/api/terminal/exec", tags=["Terminal"], response_model=TerminalCommandResponse
+    )
     async def exec_terminal_command(request: TerminalExecRequest):
         """
         Execute an arbitrary shell command on the Jetson.
@@ -2818,7 +2947,7 @@ wait
         Intended for the Mission Planner built-in terminal.
         Commands are executed via ``bash -c`` so pipes, redirects, and
         compound statements work as expected.
-        
+
         Supports persistent working directory via the ``cwd`` field.
         The response includes the resolved ``cwd`` after execution so
         the client can track directory changes across commands.
@@ -2826,6 +2955,7 @@ wait
         _require_terminal_api_key()
 
         import os
+
         command_str = request.command.strip()
         if not command_str:
             raise HTTPException(status_code=400, detail="Empty command")
@@ -2839,7 +2969,7 @@ wait
             # Append pwd to capture the cwd after execution
             # This handles cd commands naturally since bash runs them in sequence
             wrapped_cmd = f'{command_str}\necho "__NOMAD_CWD__$(pwd)"'
-            
+
             result = subprocess.run(
                 ["bash", "-c", wrapped_cmd],
                 capture_output=True,
@@ -2854,7 +2984,7 @@ wait
             clean_stdout_lines = []
             for line in stdout_lines:
                 if line.startswith("__NOMAD_CWD__"):
-                    new_cwd = line[len("__NOMAD_CWD__"):]
+                    new_cwd = line[len("__NOMAD_CWD__") :]
                 else:
                     clean_stdout_lines.append(line)
             clean_stdout = "\n".join(clean_stdout_lines)
@@ -2891,7 +3021,7 @@ wait
     async def list_terminal_commands():
         """
         List all available whitelisted terminal commands.
-        
+
         Returns a dictionary mapping command names to their actual shell commands.
         """
         return {"commands": COMMAND_WHITELIST}
@@ -2925,7 +3055,7 @@ wait
     async def services_status(request: Request):
         """
         Get status of all NOMAD services.
-        
+
         Returns status of:
         - mavlink-router: MAVLink routing to CubePilot
         - mediamtx: RTSP video server
@@ -2934,7 +3064,7 @@ wait
         - vio: VIO pipeline status
         """
         services = {}
-        
+
         # Check mavlink-router
         try:
             systemd_status = "inactive"
@@ -2978,7 +3108,7 @@ wait
             }
         except Exception as e:
             services["mavlink_router"] = {"status": "error", "error": str(e)}
-        
+
         # Check mediamtx
         try:
             result = subprocess.run(
@@ -3009,7 +3139,7 @@ wait
             }
         except Exception as e:
             services["mediamtx"] = {"status": "error", "error": str(e)}
-        
+
         # Edge Core is always running (we're responding)
         services["edge_core"] = {
             "status": "active",
@@ -3020,7 +3150,7 @@ wait
         container_running = runtime_state["container_running"]
         nvblox_running = runtime_state["nvblox_running"]
         bridge_running = runtime_state["bridge_running"]
-        
+
         # Isaac ROS status
         isaac_bridge = request.app.state.isaac_bridge
         if isaac_bridge:
@@ -3040,15 +3170,16 @@ wait
                 "container_running": container_running,
                 "nvblox_running": nvblox_running,
                 "bridge_running": bridge_running,
-                "message": "Active via external ROS-HTTP bridge" if external_bridge_active
-                           else "Isaac ROS bridge not enabled",
+                "message": "Active via external ROS-HTTP bridge"
+                if external_bridge_active
+                else "Isaac ROS bridge not enabled",
             }
-        
+
         # VIO status
         vio_snapshot = _get_vio_snapshot(include_trajectory=True)
         external_vio_state = vio_snapshot["external_vio_state"]
         vio_trajectory = vio_snapshot["vio_trajectory"] or []
-        
+
         if external_vio_state:
             services["vio"] = {
                 "status": "active",
@@ -3066,11 +3197,15 @@ wait
 
         # Target localization status (Task 1 target_localizer ROS2 node)
         with request.app.state.detection_state_lock:
-            detection_enabled = bool(getattr(request.app.state, "detection_enabled", True))
+            detection_enabled = bool(
+                getattr(request.app.state, "detection_enabled", True)
+            )
             detection_last_update = request.app.state.detection_last_update
             detection_current_count = len(request.app.state.detected_objects)
             detection_history_count = len(request.app.state.detection_history)
-        age_seconds = time.time() - detection_last_update if detection_last_update > 0 else None
+        age_seconds = (
+            time.time() - detection_last_update if detection_last_update > 0 else None
+        )
         detection_fresh = age_seconds is not None and age_seconds <= 3.0
         services["detections"] = {
             "status": "active" if detection_enabled else "inactive",
@@ -3080,20 +3215,20 @@ wait
             "age_seconds": age_seconds,
             "current_count": detection_current_count,
             "history_count": detection_history_count,
-            "message": (
-                "Running" if detection_enabled else "Stopped"
-            ) + (
+            "message": ("Running" if detection_enabled else "Stopped")
+            + (
                 f" ({detection_current_count} current, {detection_history_count} history)"
-                if detection_enabled else ""
+                if detection_enabled
+                else ""
             ),
         }
-        
+
         # Isaac ROS container summary (from shared probe)
         services["isaac_ros_container"] = {
             "status": "running" if container_running else "not_running",
             "running": container_running,
         }
-        
+
         return services
 
     # ==================== Streaming Endpoints ====================
@@ -3102,7 +3237,7 @@ wait
     async def stream_info():
         """Get RTSP stream information."""
         rtsp_base = os.environ.get("MEDIA_SERVER_URL", "rtsp://localhost:8554")
-        
+
         return {
             "primary_stream": f"{rtsp_base}/zed",
             "secondary_stream": f"{rtsp_base}/gimbal",
@@ -3116,7 +3251,7 @@ wait
     async def isaac_status(request: Request):
         """
         Get Isaac ROS bridge status.
-        
+
         Returns information about the perception backend,
         VIO state, and exclusion map status.
         """
@@ -3132,12 +3267,15 @@ wait
             external_bridge_active = container_running and bridge_running
             return {
                 "available": external_bridge_active,
-                "backend": "ros_http_bridge" if external_bridge_active else "not_initialized",
+                "backend": "ros_http_bridge"
+                if external_bridge_active
+                else "not_initialized",
                 "container_running": container_running,
                 "nvblox_running": nvblox_running,
                 "bridge_running": bridge_running,
-                "message": "Active via external ROS-HTTP bridge" if external_bridge_active
-                           else "Isaac ROS not running",
+                "message": "Active via external ROS-HTTP bridge"
+                if external_bridge_active
+                else "Isaac ROS not running",
             }
 
         return {
@@ -3152,7 +3290,7 @@ wait
     async def isaac_start():
         """
         Start Isaac ROS container and services.
-        
+
         This runs the start_isaac_ros_auto.sh script which:
         1. Starts the Docker container
         2. Installs dependencies
@@ -3160,7 +3298,7 @@ wait
         4. Starts the ROS-HTTP bridge
         """
         script_path = os.path.expanduser("~/NOMAD/scripts/run/start_isaac_ros_auto.sh")
-        
+
         if not os.path.exists(script_path):
             return {
                 "success": False,
@@ -3168,8 +3306,13 @@ wait
             }
 
         startup_guard_window_s = 90.0
-        last_start_ts = float(getattr(app.state, "isaac_startup_last_initiated", 0.0) or 0.0)
-        if last_start_ts > 0.0 and (time.time() - last_start_ts) < startup_guard_window_s:
+        last_start_ts = float(
+            getattr(app.state, "isaac_startup_last_initiated", 0.0) or 0.0
+        )
+        if (
+            last_start_ts > 0.0
+            and (time.time() - last_start_ts) < startup_guard_window_s
+        ):
             try:
                 runtime_state = _probe_isaac_runtime_state(force_refresh=True)
                 if (
@@ -3198,23 +3341,48 @@ wait
             bridge_running = False
 
             result = subprocess.run(
-                ["docker", "ps", "--filter", "name=nomad_isaac_ros", "--format", "{{.Status}}"],
-                capture_output=True, text=True, timeout=5,
+                [
+                    "docker",
+                    "ps",
+                    "--filter",
+                    "name=nomad_isaac_ros",
+                    "--format",
+                    "{{.Status}}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             container_running = bool(result.stdout.strip())
 
             if container_running:
                 result = subprocess.run(
-                    ["docker", "exec", "nomad_isaac_ros", "bash", "-c",
-                     "ps aux | grep -v grep | grep -c component_container 2>/dev/null || echo 0"],
-                    capture_output=True, text=True, timeout=5,
+                    [
+                        "docker",
+                        "exec",
+                        "nomad_isaac_ros",
+                        "bash",
+                        "-c",
+                        "ps aux | grep -v grep | grep -c component_container 2>/dev/null || echo 0",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                 )
                 nvblox_running = int(result.stdout.strip() or "0") > 0
 
                 result = subprocess.run(
-                    ["docker", "exec", "nomad_isaac_ros", "bash", "-c",
-                     "ps aux | grep -v grep | grep -c ros_http_bridge 2>/dev/null || echo 0"],
-                    capture_output=True, text=True, timeout=5,
+                    [
+                        "docker",
+                        "exec",
+                        "nomad_isaac_ros",
+                        "bash",
+                        "-c",
+                        "ps aux | grep -v grep | grep -c ros_http_bridge 2>/dev/null || echo 0",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                 )
                 bridge_running = int(result.stdout.strip() or "0") > 0
 
@@ -3228,7 +3396,7 @@ wait
         except Exception:
             # Fall through to normal startup path on probe failures.
             pass
-        
+
         try:
             # Run in background
             process = subprocess.Popen(
@@ -3238,7 +3406,7 @@ wait
                 start_new_session=True,
             )
             app.state.isaac_startup_last_initiated = time.time()
-            
+
             # Don't wait for completion - it takes a while
             return {
                 "success": True,
@@ -3255,7 +3423,7 @@ wait
     async def isaac_stop():
         """Stop Isaac ROS container and services."""
         script_path = os.path.expanduser("~/NOMAD/scripts/run/start_isaac_ros_auto.sh")
-        
+
         try:
             result = subprocess.run(
                 ["bash", script_path, "stop"],
@@ -3263,7 +3431,7 @@ wait
                 text=True,
                 timeout=30,
             )
-            
+
             return {
                 "success": result.returncode == 0,
                 "stdout": result.stdout,
@@ -3278,7 +3446,10 @@ wait
     @app.post("/api/isaac/launch-nvblox", tags=["Isaac ROS"])
     async def isaac_launch_nvblox(
         request: Request,
-        enable_od: bool = Query(default=False, description="Enable ZED object detection (less stable on current stack)")
+        enable_od: bool = Query(
+            default=False,
+            description="Enable ZED object detection (less stable on current stack)",
+        ),
     ):
         """
         Launch nvblox + ROS-HTTP bridge inside a running container.
@@ -3309,12 +3480,21 @@ wait
             ]:
                 subprocess.run(
                     ["docker", "exec", container, "pkill", "-f", proc],
-                    capture_output=True, timeout=5,
+                    capture_output=True,
+                    timeout=5,
                 )
             # Clean stale FastRTPS SHM locks so next launch succeeds
             subprocess.run(
-                ["docker", "exec", container, "bash", "-c", "rm -f /dev/shm/fastrtps_* 2>/dev/null"],
-                capture_output=True, timeout=5,
+                [
+                    "docker",
+                    "exec",
+                    container,
+                    "bash",
+                    "-c",
+                    "rm -f /dev/shm/fastrtps_* 2>/dev/null",
+                ],
+                capture_output=True,
+                timeout=5,
             )
             return {"success": True, "message": "nvblox and bridge stopped"}
         except Exception as e:
@@ -3338,7 +3518,9 @@ wait
         return host_value
 
     def _resolve_foxglove_host(request: Request) -> str:
-        forwarded_host = (request.headers.get("x-forwarded-host") or "").split(",", 1)[0]
+        forwarded_host = (request.headers.get("x-forwarded-host") or "").split(",", 1)[
+            0
+        ]
         host = _strip_host_port(forwarded_host)
         if host:
             return host
@@ -3364,7 +3546,9 @@ wait
     @app.post("/api/isaac/foxglove/start", tags=["Isaac ROS"])
     async def foxglove_start(
         request: Request,
-        port: int = Query(default=8765, description="WebSocket port for Foxglove Studio"),
+        port: int = Query(
+            default=8765, description="WebSocket port for Foxglove Studio"
+        ),
     ):
         """
         Start Foxglove bridge inside the Isaac ROS container.
@@ -3378,9 +3562,10 @@ wait
         try:
             # Check if already running
             probe = subprocess.run(
-                ["docker", "exec", container, "bash", "-c",
-                 "pgrep -f foxglove_bridge"],
-                capture_output=True, text=True, timeout=5,
+                ["docker", "exec", container, "bash", "-c", "pgrep -f foxglove_bridge"],
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if probe.returncode == 0:
                 active_port = int(getattr(request.app.state, "foxglove_port", port))
@@ -3411,23 +3596,42 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
     -p send_buffer_limit:=10000000
 """
             subprocess.run(
-                ["docker", "exec", container, "bash", "-c",
-                 f"cat > /tmp/start_foxglove.sh << 'EOFSCRIPT'\n{launch_cmd}\nEOFSCRIPT\nchmod +x /tmp/start_foxglove.sh"],
-                capture_output=True, text=True, timeout=10, check=True,
+                [
+                    "docker",
+                    "exec",
+                    container,
+                    "bash",
+                    "-c",
+                    f"cat > /tmp/start_foxglove.sh << 'EOFSCRIPT'\n{launch_cmd}\nEOFSCRIPT\nchmod +x /tmp/start_foxglove.sh",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
             )
 
             subprocess.run(
-                ["docker", "exec", "-d", container, "bash", "-c",
-                 "bash /tmp/start_foxglove.sh > /tmp/foxglove_bridge.log 2>&1"],
-                capture_output=True, text=True, timeout=10,
+                [
+                    "docker",
+                    "exec",
+                    "-d",
+                    container,
+                    "bash",
+                    "-c",
+                    "bash /tmp/start_foxglove.sh > /tmp/foxglove_bridge.log 2>&1",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
 
             # Wait briefly for startup
             time.sleep(3)
             verify = subprocess.run(
-                ["docker", "exec", container, "bash", "-c",
-                 "pgrep -f foxglove_bridge"],
-                capture_output=True, text=True, timeout=5,
+                ["docker", "exec", container, "bash", "-c", "pgrep -f foxglove_bridge"],
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if verify.returncode == 0:
                 request.app.state.foxglove_enabled = True
@@ -3439,8 +3643,17 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 }
             else:
                 log_tail = subprocess.run(
-                    ["docker", "exec", container, "tail", "-20", "/tmp/foxglove_bridge.log"],
-                    capture_output=True, text=True, timeout=5,
+                    [
+                        "docker",
+                        "exec",
+                        container,
+                        "tail",
+                        "-20",
+                        "/tmp/foxglove_bridge.log",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                 )
                 return {
                     "success": False,
@@ -3457,7 +3670,8 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         try:
             subprocess.run(
                 ["docker", "exec", container, "pkill", "-f", "foxglove_bridge"],
-                capture_output=True, timeout=5,
+                capture_output=True,
+                timeout=5,
             )
             request.app.state.foxglove_enabled = False
             return {"success": True, "message": "Foxglove bridge stopped"}
@@ -3470,9 +3684,10 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         container = "nomad_isaac_ros"
         try:
             probe = subprocess.run(
-                ["docker", "exec", container, "bash", "-c",
-                 "pgrep -f foxglove_bridge"],
-                capture_output=True, text=True, timeout=5,
+                ["docker", "exec", container, "bash", "-c", "pgrep -f foxglove_bridge"],
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             running = probe.returncode == 0
             port = int(getattr(request.app.state, "foxglove_port", 8765))
@@ -3484,48 +3699,91 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             return {"running": False, "error": str(e)}
 
     @app.get("/api/isaac/logs", tags=["Isaac ROS"])
-    async def isaac_logs(log_type: str = Query(default="all", description="Log type: all, zed, bridge, foxglove")):
+    async def isaac_logs(
+        log_type: str = Query(
+            default="all", description="Log type: all, zed, bridge, foxglove"
+        ),
+    ):
         """Get Isaac ROS container logs."""
         try:
             if log_type == "zed":
                 result = subprocess.run(
-                    ["docker", "exec", "nomad_isaac_ros", "tail", "-50", "/tmp/zed_nvblox.log"],
+                    [
+                        "docker",
+                        "exec",
+                        "nomad_isaac_ros",
+                        "tail",
+                        "-50",
+                        "/tmp/zed_nvblox.log",
+                    ],
                     capture_output=True,
                     text=True,
                     timeout=5,
                 )
             elif log_type == "bridge":
                 result = subprocess.run(
-                    ["docker", "exec", "nomad_isaac_ros", "tail", "-50", "/tmp/ros_bridge.log"],
+                    [
+                        "docker",
+                        "exec",
+                        "nomad_isaac_ros",
+                        "tail",
+                        "-50",
+                        "/tmp/ros_bridge.log",
+                    ],
                     capture_output=True,
                     text=True,
                     timeout=5,
                 )
             elif log_type == "foxglove":
                 result = subprocess.run(
-                    ["docker", "exec", "nomad_isaac_ros", "tail", "-50", "/tmp/foxglove_bridge.log"],
+                    [
+                        "docker",
+                        "exec",
+                        "nomad_isaac_ros",
+                        "tail",
+                        "-50",
+                        "/tmp/foxglove_bridge.log",
+                    ],
                     capture_output=True,
                     text=True,
                     timeout=5,
                 )
             else:
                 zed_result = subprocess.run(
-                    ["docker", "exec", "nomad_isaac_ros", "tail", "-25", "/tmp/zed_nvblox.log"],
+                    [
+                        "docker",
+                        "exec",
+                        "nomad_isaac_ros",
+                        "tail",
+                        "-25",
+                        "/tmp/zed_nvblox.log",
+                    ],
                     capture_output=True,
                     text=True,
                     timeout=5,
                 )
                 bridge_result = subprocess.run(
-                    ["docker", "exec", "nomad_isaac_ros", "tail", "-25", "/tmp/ros_bridge.log"],
+                    [
+                        "docker",
+                        "exec",
+                        "nomad_isaac_ros",
+                        "tail",
+                        "-25",
+                        "/tmp/ros_bridge.log",
+                    ],
                     capture_output=True,
                     text=True,
                     timeout=5,
                 )
                 return {
-                    "zed_nvblox": zed_result.stdout if zed_result.returncode == 0 else zed_result.stderr,
-                    "ros_bridge": bridge_result.stdout if bridge_result.returncode == 0 else bridge_result.stderr,
+                    "zed_nvblox": zed_result.stdout
+                    if zed_result.returncode == 0
+                    else zed_result.stderr,
+                    "ros_bridge": bridge_result.stdout
+                    if bridge_result.returncode == 0
+                    else bridge_result.stderr,
                 }
-            
+
             return {
                 "log_type": log_type,
                 "logs": result.stdout if result.returncode == 0 else result.stderr,
@@ -3539,11 +3797,11 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         isaac_bridge = request.app.state.isaac_bridge
         if not isaac_bridge:
             raise HTTPException(status_code=503, detail="Isaac bridge not initialized")
-        
+
         vio = isaac_bridge.vio_state
         if not vio:
             return {"valid": False, "message": "No VIO data available"}
-        
+
         return {
             "valid": vio.valid,
             "timestamp": vio.timestamp,
@@ -3560,7 +3818,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         isaac_bridge = request.app.state.isaac_bridge
         if not isaac_bridge:
             raise HTTPException(status_code=503, detail="Isaac bridge not initialized")
-        
+
         detections = isaac_bridge.detections
         return {
             "count": len(detections),
@@ -3579,7 +3837,9 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                         "x": d.world_x,
                         "y": d.world_y,
                         "z": d.world_z,
-                    } if d.world_x is not None else None,
+                    }
+                    if d.world_x is not None
+                    else None,
                 }
                 for d in detections
             ],
@@ -3590,7 +3850,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         """Get exclusion map from Isaac ROS bridge (auto-managed)."""
         isaac_bridge = request.app.state.isaac_bridge
         exclusion_map = request.app.state.exclusion_map
-        
+
         if not isaac_bridge:
             # Fall back to local exclusion map
             return {
@@ -3598,7 +3858,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 "total_targets": len(exclusion_map),
                 "targets": exclusion_map,
             }
-        
+
         exclusion = isaac_bridge.exclusion_map
         return {
             "backend": "isaac_ros",
@@ -3620,7 +3880,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         """Add target to Isaac ROS managed exclusion map."""
         isaac_bridge = request.app.state.isaac_bridge
         exclusion_map = request.app.state.exclusion_map
-        
+
         if isaac_bridge:
             target_id = isaac_bridge.add_to_exclusion_map(
                 x=hit_request.x, y=hit_request.y, z=hit_request.z
@@ -3628,19 +3888,21 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             return {"success": True, "target_id": target_id}
         else:
             # Fall back to local
-            exclusion_map.append({
-                "x": hit_request.x,
-                "y": hit_request.y,
-                "z": hit_request.z,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
+            exclusion_map.append(
+                {
+                    "x": hit_request.x,
+                    "y": hit_request.y,
+                    "z": hit_request.z,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            )
             return {"success": True, "target_id": f"local_{len(exclusion_map)}"}
 
     @app.post("/api/isaac/exclusion_map/clear", tags=["Isaac ROS"])
     async def isaac_clear_exclusion(request: Request):
         """Clear Isaac ROS managed exclusion map."""
         isaac_bridge = request.app.state.isaac_bridge
-        
+
         if isaac_bridge:
             count = isaac_bridge.clear_exclusion_map()
             return {"success": True, "cleared": count}
@@ -3689,7 +3951,9 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         import time as _time
 
         with request.app.state.detection_state_lock:
-            detection_enabled = bool(getattr(request.app.state, "detection_enabled", True))
+            detection_enabled = bool(
+                getattr(request.app.state, "detection_enabled", True)
+            )
             last_update = request.app.state.detection_last_update
             current_count = len(request.app.state.detected_objects)
             history_count = len(request.app.state.detection_history)
@@ -3735,16 +3999,17 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
     async def get_detections(request: Request):
         """
         Get current object detections and persistent detection history.
-        
+
         Returns both the latest frame detections and the full history
         of unique detected objects with 3D positions.
         """
         import time as _time
+
         with request.app.state.detection_state_lock:
             current = list(request.app.state.detected_objects)
             history = list(request.app.state.detection_history)
             last_update = request.app.state.detection_last_update
-        
+
         return {
             "current": {
                 "count": len(current),
@@ -3761,12 +4026,12 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
     async def get_detection_summary(request: Request):
         """
         Get a summary of detected objects grouped by class label.
-        
+
         Useful for Task 1 AI description to know which targets are present.
         """
         with request.app.state.detection_state_lock:
             history = list(request.app.state.detection_history)
-        
+
         # Group by label
         by_label = {}
         for det in history:
@@ -3781,15 +4046,19 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             entry["count"] += 1
             entry["avg_confidence"] += det.get("confidence", 0)
             if det.get("x") is not None:
-                entry["positions"].append({
-                    "x": det["x"], "y": det["y"], "z": det["z"],
-                })
-        
+                entry["positions"].append(
+                    {
+                        "x": det["x"],
+                        "y": det["y"],
+                        "z": det["z"],
+                    }
+                )
+
         # Compute averages
         for label, entry in by_label.items():
             if entry["count"] > 0:
                 entry["avg_confidence"] /= entry["count"]
-        
+
         return {
             "total_unique_targets": len(history),
             "by_class": by_label,
@@ -3805,35 +4074,34 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
 
     # ==================== Video Streaming Endpoints ====================
     # Isaac ROS H.264 video streaming with dynamic topic switching
-    
+
     from .video_stream_manager import get_video_stream_manager
-    
+
     @app.get("/api/video/topics", tags=["Video"])
     async def get_video_topics():
         """
         List available ROS image topics from ZED camera.
-        
+
         Returns topics with both full path and trimmed display names for UI:
         - Full: /zed/zed_node/rgb/color/rect/image
         - Display: zed: rgb/color/rect/image
-        
+
         Use the full name when switching topics via POST /api/video/source.
         """
         mgr = get_video_stream_manager()
         if not mgr:
-            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
-        
+            raise HTTPException(
+                status_code=503, detail="Video stream manager not initialized"
+            )
+
         topics = mgr.list_topics()
-        return {
-            "topics": [t.to_dict() for t in topics],
-            "count": len(topics)
-        }
+        return {"topics": [t.to_dict() for t in topics], "count": len(topics)}
 
     @app.get("/api/video/status", tags=["Video"])
     async def get_video_status():
         """
         Get current video stream status.
-        
+
         Returns:
         - streaming: Whether the stream is active
         - current_topic: The ROS topic currently being streamed
@@ -3844,38 +4112,44 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         """
         mgr = get_video_stream_manager()
         if not mgr:
-            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
-        
+            raise HTTPException(
+                status_code=503, detail="Video stream manager not initialized"
+            )
+
         status = mgr.get_status()
         return status.to_dict()
 
     @app.post("/api/video/source", tags=["Video"])
-    async def switch_video_source(topic: str = Query(..., description="ROS image topic to stream")):
+    async def switch_video_source(
+        topic: str = Query(..., description="ROS image topic to stream"),
+    ):
         """
         Switch the video stream to a different ROS topic.
-        
+
         The RTSP URL stays constant - only the content changes.
         Mission Planner video player does not need to reconnect.
-        
+
         Available topics can be listed via GET /api/video/topics.
-        
+
         Example:
             POST /api/video/source?topic=/zed/zed_node/left/image_rect_color
         """
         mgr = get_video_stream_manager()
         if not mgr:
-            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
-        
+            raise HTTPException(
+                status_code=503, detail="Video stream manager not initialized"
+            )
+
         success = mgr.switch_topic(topic)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to switch video source")
-        
+
         status = mgr.get_status()
         return {
             "success": True,
             "topic": topic,
             "rtsp_url": mgr.get_rtsp_url(),
-            "status": status.to_dict()
+            "status": status.to_dict(),
         }
 
     @app.get("/api/video/source", tags=["Video"])
@@ -3886,34 +4160,38 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         mgr = get_video_stream_manager()
         if not mgr:
             return {"active": False, "topic": None, "rtsp_url": None}
-        
+
         status = mgr.get_status()
         return {
             "active": status.streaming,
             "topic": status.current_topic,
-            "rtsp_url": mgr.get_rtsp_url()
+            "rtsp_url": mgr.get_rtsp_url(),
         }
 
     @app.post("/api/video/start", tags=["Video"])
     async def start_video_stream():
         """
         Start the video streaming pipeline.
-        
+
         Launches the video relay node inside the Isaac ROS container.
         This is typically called automatically on startup.
         """
         mgr = get_video_stream_manager()
         if not mgr:
-            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
-        
+            raise HTTPException(
+                status_code=503, detail="Video stream manager not initialized"
+            )
+
         success, reason = mgr.start_with_reason()
         if not success:
-            raise HTTPException(status_code=500, detail=f"Failed to start video stream: {reason}")
-        
+            raise HTTPException(
+                status_code=500, detail=f"Failed to start video stream: {reason}"
+            )
+
         return {
             "success": True,
             "rtsp_url": mgr.get_rtsp_url(),
-            "message": "Video pipeline started"
+            "message": "Video pipeline started",
         }
 
     @app.post("/api/video/stop", tags=["Video"])
@@ -3923,60 +4201,71 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         """
         mgr = get_video_stream_manager()
         if not mgr:
-            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
-        
+            raise HTTPException(
+                status_code=503, detail="Video stream manager not initialized"
+            )
+
         success = mgr.stop()
         return {
             "success": success,
-            "message": "Video pipeline stopped" if success else "Failed to stop"
+            "message": "Video pipeline stopped" if success else "Failed to stop",
         }
 
     @app.post("/api/video/restart", tags=["Video"])
     async def restart_video_stream():
         """
         Restart the video streaming pipeline.
-        
+
         Useful for recovery from errors or after container restart.
         """
         mgr = get_video_stream_manager()
         if not mgr:
-            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
-        
+            raise HTTPException(
+                status_code=503, detail="Video stream manager not initialized"
+            )
+
         mgr.stop()
         import asyncio
+
         await asyncio.sleep(2)
-        
+
         success, reason = mgr.start_with_reason()
         if not success:
-            raise HTTPException(status_code=500, detail=f"Failed to restart video stream: {reason}")
-        
+            raise HTTPException(
+                status_code=500, detail=f"Failed to restart video stream: {reason}"
+            )
+
         return {
             "success": True,
             "rtsp_url": mgr.get_rtsp_url(),
-            "message": "Video pipeline restarted"
+            "message": "Video pipeline restarted",
         }
 
     @app.post("/api/video/bridges/start", tags=["Video"])
     async def start_video_bridges():
         """
         Start video bridges (legacy endpoint for compatibility).
-        
+
         This is an alias for /api/video/start since we simplified to a single bridge.
         Mission Planner Service Control Panel calls this endpoint.
         """
         return await start_video_stream()
 
     @app.get("/api/video/logs", tags=["Video"])
-    async def get_video_logs(lines: int = Query(50, description="Number of log lines to return")):
+    async def get_video_logs(
+        lines: int = Query(50, description="Number of log lines to return"),
+    ):
         """
         Get recent logs from the video relay process.
-        
+
         Useful for debugging video streaming issues.
         """
         mgr = get_video_stream_manager()
         if not mgr:
-            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
-        
+            raise HTTPException(
+                status_code=503, detail="Video stream manager not initialized"
+            )
+
         logs = mgr.get_logs(lines)
         return {"logs": logs}
 
@@ -3984,21 +4273,23 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
     async def get_video_bridges_status():
         """
         Get status of video bridges in legacy multi-bridge format.
-        
+
         Returns status compatible with Mission Planner Service Control Panel.
         Maps our single video bridge to "primary" bridge.
         "secondary" bridge is marked as unavailable (we simplified to single bridge).
         """
         mgr = get_video_stream_manager()
         if not mgr:
-            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
-        
+            raise HTTPException(
+                status_code=503, detail="Video stream manager not initialized"
+            )
+
         status = mgr.get_status()
-        
+
         # Map our single bridge status to primary/secondary format
         # "playing" = streaming active, "stopped" = not streaming
         primary_state = "playing" if status.streaming else "stopped"
-        
+
         return {
             "bridges": {
                 "primary": {
@@ -4006,17 +4297,17 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                     "topic": status.current_topic if status.streaming else None,
                     "fps": status.fps,
                     "frame_count": status.frame_count,
-                    "error_count": status.error_count
+                    "error_count": status.error_count,
                 },
                 "secondary": {
                     "state": "unavailable",
-                    "reason": "Single bridge configuration"
-                }
+                    "reason": "Single bridge configuration",
+                },
             }
         }
 
     # ---- Video Overlay (ROS2 detection bounding boxes on stream) ----
-    
+
     @app.post("/api/video/overlay/enable", tags=["Video"])
     async def enable_video_overlay():
         """
@@ -4028,32 +4319,41 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         """
         mgr = get_video_stream_manager()
         if not mgr:
-            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
-        
+            raise HTTPException(
+                status_code=503, detail="Video stream manager not initialized"
+            )
+
         success = mgr.set_overlay(True)
         if not success:
-            raise HTTPException(status_code=500, detail="Failed to enable overlay (video bridge not running?)")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to enable overlay (video bridge not running?)",
+            )
         return {"success": True, "overlay": True}
-    
+
     @app.post("/api/video/overlay/disable", tags=["Video"])
     async def disable_video_overlay():
         """Disable ROS2 detection overlay on the video stream."""
         mgr = get_video_stream_manager()
         if not mgr:
-            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
-        
+            raise HTTPException(
+                status_code=503, detail="Video stream manager not initialized"
+            )
+
         success = mgr.set_overlay(False)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to disable overlay")
         return {"success": True, "overlay": False}
-    
+
     @app.get("/api/video/overlay/status", tags=["Video"])
     async def get_video_overlay_status():
         """Get current overlay status (enabled/disabled and detection count)."""
         mgr = get_video_stream_manager()
         if not mgr:
-            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
-        
+            raise HTTPException(
+                status_code=503, detail="Video stream manager not initialized"
+            )
+
         return mgr.get_overlay_status()
 
     # ==================== SLAM 3D Mesh Endpoints ====================
@@ -4072,11 +4372,17 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         }
 
     @app.post("/api/task/2/slam/mesh/mode", tags=["Task 2", "SLAM"])
-    async def set_slam_mesh_mode(request: Request, mode: str = Query(..., description="Mesh output mode: voxel")):
+    async def set_slam_mesh_mode(
+        request: Request, mode: str = Query(..., description="Mesh output mode: voxel")
+    ):
         """Set runtime mesh output mode for ros_http_bridge without restart."""
         normalized = "voxel"
 
-        previous = str(getattr(request.app.state, "slam_mesh_output_mode", "voxel")).strip().lower()
+        previous = (
+            str(getattr(request.app.state, "slam_mesh_output_mode", "voxel"))
+            .strip()
+            .lower()
+        )
         request.app.state.slam_mesh_output_mode = normalized
         return {
             "success": True,
@@ -4085,16 +4391,16 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             "applies_without_restart": False,
             "bridge_poll_interval_s": 0.0,
         }
-    
+
     @app.post("/api/task/2/slam/mesh/update", tags=["Task 2", "SLAM"])
     async def update_slam_mesh(request: Request):
         """
         Receive mesh update from ros_http_bridge (internal use).
-        
+
         This endpoint receives mesh data from the ros_http_bridge running
         inside the Isaac ROS container. The mesh data is stored and served
         to Mission Planner via the GET /api/task/2/slam/mesh endpoint.
-        
+
         Posted by: ros_http_bridge.py (inside Isaac ROS container)
         """
         # Size check -- reject payloads over 5 MB
@@ -4118,7 +4424,9 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         # Validate required field: mode
         mode = mesh_data.get("mode")
         if mode not in ("block", "voxel"):
-            return JSONResponse({"error": "mode must be 'block' or 'voxel'"}, status_code=400)
+            return JSONResponse(
+                {"error": "mode must be 'block' or 'voxel'"}, status_code=400
+            )
 
         # Validate required list for the chosen mode
         if mode == "block" and not isinstance(mesh_data.get("blocks"), list):
@@ -4128,16 +4436,20 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         # Validate optional numeric fields
         for field in ("block_size", "voxel_size"):
             if field in mesh_data and not isinstance(mesh_data[field], (int, float)):
-                return JSONResponse({"error": f"{field} must be a number"}, status_code=400)
+                return JSONResponse(
+                    {"error": f"{field} must be a number"}, status_code=400
+                )
 
         try:
             # Store in app state
-            if not hasattr(request.app.state, 'slam_mesh_data'):
+            if not hasattr(request.app.state, "slam_mesh_data"):
                 request.app.state.slam_mesh_data = {}
-            
+
             # Compute item count based on mode
             item_count = len(mesh_data.get("blocks", mesh_data.get("voxels", [])))
-            total_items = mesh_data.get("total_blocks", mesh_data.get("total_voxels", 0))
+            total_items = mesh_data.get(
+                "total_blocks", mesh_data.get("total_voxels", 0)
+            )
 
             request.app.state.slam_mesh_data = {
                 "mesh": mesh_data,
@@ -4146,49 +4458,60 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 "total_blocks": total_items,
                 "mode": mode,
             }
-            
+
             # Store drone pose from mesh data (from TF lookup in ros_http_bridge)
             if "drone_position" in mesh_data and mesh_data["drone_position"]:
-                request.app.state.slam_mesh_data["drone_position"] = mesh_data["drone_position"]
+                request.app.state.slam_mesh_data["drone_position"] = mesh_data[
+                    "drone_position"
+                ]
             if "drone_attitude" in mesh_data and mesh_data["drone_attitude"]:
-                request.app.state.slam_mesh_data["drone_attitude"] = mesh_data["drone_attitude"]
+                request.app.state.slam_mesh_data["drone_attitude"] = mesh_data[
+                    "drone_attitude"
+                ]
 
             # Increment version counter for delta tracking
-            request.app.state.slam_mesh_version = getattr(request.app.state, "slam_mesh_version", 0) + 1
-            
+            request.app.state.slam_mesh_version = (
+                getattr(request.app.state, "slam_mesh_version", 0) + 1
+            )
+
             return {"status": "ok", "items_received": item_count, "mode": mode}
-            
+
         except Exception as e:
             logger.error(f"SLAM mesh update error: {e}")
             raise HTTPException(status_code=400, detail=str(e))
 
     @app.get("/api/task/2/slam/mesh", tags=["Task 2", "SLAM"])
-    async def get_slam_mesh(request: Request, format: str = Query("full", description="'full' or 'summary'")):
+    async def get_slam_mesh(
+        request: Request, format: str = Query("full", description="'full' or 'summary'")
+    ):
         """
         Get current 3D SLAM mesh from nvblox.
-        
+
         This endpoint returns the real-time 3D occupancy map built by nvblox
         from ZED camera depth data. Used by Mission Planner for 3D visualization.
-        
+
         Mesh data is received from ros_http_bridge running inside the Isaac ROS
         container via POST /api/task/2/slam/mesh/update.
-        
+
         Args:
             format: 'full' for complete mesh data, 'summary' for metadata only
-        
+
         Returns:
             - mesh: The mesh data with voxels/blocks and optional colors
             - drone_position: Current VIO position
             - drone_attitude: Current VIO orientation (roll, pitch, yaw)
             - timestamp: ISO format timestamp
-            
+
         Update Rate: Bounded by configured bridge send rate (default 30 Hz); effective rate may vary
         """
         try:
             # Check for stored mesh data from ros_http_bridge
-            if hasattr(request.app.state, 'slam_mesh_data') and request.app.state.slam_mesh_data:
+            if (
+                hasattr(request.app.state, "slam_mesh_data")
+                and request.app.state.slam_mesh_data
+            ):
                 stored = request.app.state.slam_mesh_data
-                
+
                 if format == "summary":
                     result = {
                         "available": True,
@@ -4203,13 +4526,13 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                         "timestamp": stored.get("received_at"),
                         "mesh": stored.get("mesh"),
                     }
-                
+
                 # Add drone pose from mesh data (TF lookup from ros_http_bridge)
                 if stored.get("drone_position"):
                     result["drone_position"] = stored["drone_position"]
                 if stored.get("drone_attitude"):
                     result["drone_attitude"] = stored["drone_attitude"]
-                
+
                 # Fallback to ROS-frame VIO if mesh didn't include pose
                 # (must use slam_vio_ros_frame, not external_vio_state which is NED)
                 if "drone_position" not in result:
@@ -4225,9 +4548,9 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                             "pitch": ros_vio.get("pitch", 0),
                             "yaw": ros_vio.get("yaw", 0),
                         }
-                
+
                 return result
-            
+
             return {
                 "available": False,
                 "error": "No mesh data available",
@@ -4248,11 +4571,11 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
     async def get_slam_mesh_delta(request: Request):
         """
         Get incremental mesh updates (delta) since last request.
-        
+
         Uses a version counter on app.state that is bumped on each
         POST to /mesh/update.  Pass ?since=N with the last known version
         to receive only newer data.
-        
+
         Returns:
             - changed: Whether new data is available
             - version: Current mesh version counter
@@ -4289,18 +4612,23 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             "mesh": mesh_state.get("mesh"),
             "drone_position": mesh_state.get("drone_position"),
             "drone_attitude": mesh_state.get("drone_attitude"),
-            "timestamp": mesh_state.get("received_at", datetime.now(timezone.utc).isoformat()),
+            "timestamp": mesh_state.get(
+                "received_at", datetime.now(timezone.utc).isoformat()
+            ),
         }
 
     @app.get("/api/task/2/slam/status", tags=["Task 2", "SLAM"])
     async def get_slam_status(request: Request):
         """
         Get nvblox SLAM system status.
-        
+
         Returns status information about the 3D mapping pipeline.
         """
         # Check for stored mesh data from ros_http_bridge first
-        if hasattr(request.app.state, 'slam_mesh_data') and request.app.state.slam_mesh_data:
+        if (
+            hasattr(request.app.state, "slam_mesh_data")
+            and request.app.state.slam_mesh_data
+        ):
             stored = request.app.state.slam_mesh_data
             return {
                 "available": True,
@@ -4310,7 +4638,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 "total_voxels": stored.get("total_blocks", 0),
                 "last_update": stored.get("received_at"),
             }
-        
+
         return {
             "available": False,
             "running": False,
@@ -4320,23 +4648,35 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
     @app.post("/api/task/2/slam/clear", tags=["Task 2", "SLAM"])
     async def clear_slam_mesh(request: Request):
         """
-        Clear the current SLAM mesh.
-        
-        This clears the cached mesh data. Note: This does NOT clear the
-        nvblox map itself - use the nvblox reset service for that.
-        
-        Instead of nulling slam_mesh_data, we replace it with a valid
-        cleared state containing an empty voxel list and clear=True so
-        clients can clear their local caches.
+        Clear the current SLAM mesh and reset the nvblox map.
+
+        This calls the nvblox ROS2 service to clear the actual map,
+        then clears the cached mesh data so clients receive a fresh state.
         """
+        nvblox_cleared = False
+        nvblox_message = ""
+        try:
+            nvblox_message = _call_ros2_service_in_isaac_container_or_raise(
+                service_name="/nvblox_node/remove_all",
+                service_type="std_srvs/srv/Empty",
+                request_payload={},
+                timeout_s=5.0,
+            )
+            nvblox_cleared = True
+            logger.info("nvblox map cleared via /nvblox_node/remove_all")
+        except Exception as e:
+            logger.warning(f"Failed to clear nvblox map: {e}")
+            nvblox_message = str(e)
+
         # Preserve voxel size from the previous mesh data if available.
         prev_voxel_size = 0.05
-        if (hasattr(request.app.state, 'slam_mesh_data')
-                and isinstance(request.app.state.slam_mesh_data, dict)):
+        if hasattr(request.app.state, "slam_mesh_data") and isinstance(
+            request.app.state.slam_mesh_data, dict
+        ):
             prev_mesh = request.app.state.slam_mesh_data.get("mesh")
             if isinstance(prev_mesh, dict):
                 prev_voxel_size = prev_mesh.get("voxel_size", 0.05)
-        
+
         # Replace with a cleared-but-valid state so the GET endpoint
         # still returns available=True and clients see clear=True
         request.app.state.slam_mesh_data = {
@@ -4352,11 +4692,28 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             "total_blocks": 0,
             "mode": "voxel",
         }
-        request.app.state.slam_mesh_version = getattr(request.app.state, "slam_mesh_version", 0) + 1
-        
+        request.app.state.slam_mesh_version = (
+            getattr(request.app.state, "slam_mesh_version", 0) + 1
+        )
+
         return {
             "success": True,
-            "message": "Mesh cache cleared",
+            "nvblox_cleared": nvblox_cleared,
+            "nvblox_message": nvblox_message,
+            "message": "Mesh cache cleared"
+            + (", nvblox map reset" if nvblox_cleared else " (nvblox clear failed)"),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        request.app.state.slam_mesh_version = (
+            getattr(request.app.state, "slam_mesh_version", 0) + 1
+        )
+
+        return {
+            "success": True,
+            "nvblox_cleared": nvblox_cleared,
+            "nvblox_message": nvblox_message,
+            "message": "Mesh cache cleared"
+            + (", nvblox map reset" if nvblox_cleared else " (nvblox clear failed)"),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -4375,7 +4732,11 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         to compute the calibration.
         """
         try:
-            from .sensor_calibration import start_mag_calibration, get_mag_session, CalibrationState
+            from .sensor_calibration import (
+                start_mag_calibration,
+                get_mag_session,
+                CalibrationState,
+            )
 
             session = get_mag_session()
             if session and session.state == CalibrationState.COLLECTING:
@@ -4393,7 +4754,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             if session.state == CalibrationState.FAILED:
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Failed to start calibration: {session.error}"
+                    detail=f"Failed to start calibration: {session.error}",
                 )
 
             return {
@@ -4440,7 +4801,9 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
 
             session = get_mag_session()
             if not session:
-                raise HTTPException(status_code=400, detail="No calibration session active")
+                raise HTTPException(
+                    status_code=400, detail="No calibration session active"
+                )
 
             # Run blocking compute in threadpool to avoid blocking event loop
             result = await run_in_threadpool(stop_mag_calibration)
@@ -4520,7 +4883,9 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             zed_cam = None
 
             # Run blocking 5s check in threadpool
-            result = await run_in_threadpool(IMUCalibrationCheck.run_check, zed_cam, 5.0)
+            result = await run_in_threadpool(
+                IMUCalibrationCheck.run_check, zed_cam, 5.0
+            )
             return result.to_dict()
         except Exception as e:
             logger.error(f"IMU check error: {e}")
@@ -4538,17 +4903,31 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         Call /collect for each position, then /compute to finish.
         """
         try:
-            from .sensor_calibration import start_imu_heading_calibration, get_imu_heading_session, CalibrationState
+            from .sensor_calibration import (
+                start_imu_heading_calibration,
+                get_imu_heading_session,
+                CalibrationState,
+            )
 
             session = get_imu_heading_session()
             if session and session.state == CalibrationState.COLLECTING:
-                return {"success": True, "message": "Session already active", **session.get_status()}
+                return {
+                    "success": True,
+                    "message": "Session already active",
+                    **session.get_status(),
+                }
 
             session = start_imu_heading_calibration()
             if session.state == CalibrationState.FAILED:
-                raise HTTPException(status_code=500, detail=f"Failed to start: {session.error}")
+                raise HTTPException(
+                    status_code=500, detail=f"Failed to start: {session.error}"
+                )
 
-            return {"success": True, "message": "IMU heading calibration started", **session.get_status()}
+            return {
+                "success": True,
+                "message": "IMU heading calibration started",
+                **session.get_status(),
+            }
         except HTTPException:
             raise
         except Exception as e:
@@ -4560,6 +4939,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         """Get IMU heading calibration progress."""
         try:
             from .sensor_calibration import get_imu_heading_session
+
             session = get_imu_heading_session()
             if not session:
                 return {"state": "idle", "message": "No session active"}
@@ -4582,13 +4962,17 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
 
             session = get_imu_heading_session()
             if not session:
-                raise HTTPException(status_code=400, detail="No calibration session active")
+                raise HTTPException(
+                    status_code=400, detail="No calibration session active"
+                )
 
             result = await run_in_threadpool(session.collect_position)
             if result.get("success"):
                 return {**result, **session.get_status()}
             else:
-                raise HTTPException(status_code=400, detail=result.get("error", "Collection failed"))
+                raise HTTPException(
+                    status_code=400, detail=result.get("error", "Collection failed")
+                )
         except HTTPException:
             raise
         except Exception as e:
@@ -4609,13 +4993,22 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
 
             session = get_imu_heading_session()
             if not session:
-                raise HTTPException(status_code=400, detail="No calibration session active")
+                raise HTTPException(
+                    status_code=400, detail="No calibration session active"
+                )
 
             result = await run_in_threadpool(session.compute)
             if result:
-                return {"success": True, "message": "Calibration complete", "result": result.to_dict()}
+                return {
+                    "success": True,
+                    "message": "Calibration complete",
+                    "result": result.to_dict(),
+                }
             else:
-                return {"success": False, "message": f"Calibration failed: {session.error}"}
+                return {
+                    "success": False,
+                    "message": f"Calibration failed: {session.error}",
+                }
         except HTTPException:
             raise
         except Exception as e:
@@ -4627,6 +5020,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         """Cancel ongoing IMU heading calibration."""
         try:
             from .sensor_calibration import get_imu_heading_session
+
             session = get_imu_heading_session()
             if session:
                 session.cancel()
@@ -4639,6 +5033,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         """Get the saved IMU heading calibration from disk."""
         try:
             from .sensor_calibration import load_imu_heading_calibration
+
             cal = load_imu_heading_calibration()
             if cal:
                 return {"available": True, **cal.to_dict()}
@@ -4652,12 +5047,12 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
     async def git_update():
         """
         Update the NOMAD codebase from Git.
-        
+
         Performs:
         1. git stash (save any local changes)
         2. git pull origin main
         3. chmod +x on all .sh scripts (recursive)
-        
+
         Returns the output of each command.
         """
         _require_terminal_api_key()
@@ -4668,9 +5063,9 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             "steps": [],
         }
         errors: list[str] = []
-        
+
         nomad_dir = os.path.expanduser("~/NOMAD")
-        
+
         try:
             # Step 1: git stash
             stash_result = subprocess.run(
@@ -4687,13 +5082,17 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 stash_result.returncode == 0
                 and "no local changes to save" not in stash_output_text
             )
-            results["steps"].append({
-                "step": "git stash",
-                "success": stash_result.returncode == 0,
-                "output": stash_result.stdout.strip(),
-                "error": stash_result.stderr.strip() if stash_result.returncode != 0 else None,
-            })
-            
+            results["steps"].append(
+                {
+                    "step": "git stash",
+                    "success": stash_result.returncode == 0,
+                    "output": stash_result.stdout.strip(),
+                    "error": stash_result.stderr.strip()
+                    if stash_result.returncode != 0
+                    else None,
+                }
+            )
+
             # Step 2: git pull
             pull_result = subprocess.run(
                 ["git", "pull", "origin", "main"],
@@ -4702,13 +5101,17 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 text=True,
                 timeout=60,
             )
-            results["steps"].append({
-                "step": "git pull origin main",
-                "success": pull_result.returncode == 0,
-                "output": pull_result.stdout.strip(),
-                "error": pull_result.stderr.strip() if pull_result.returncode != 0 else None,
-            })
-            
+            results["steps"].append(
+                {
+                    "step": "git pull origin main",
+                    "success": pull_result.returncode == 0,
+                    "output": pull_result.stdout.strip(),
+                    "error": pull_result.stderr.strip()
+                    if pull_result.returncode != 0
+                    else None,
+                }
+            )
+
             if pull_result.returncode != 0:
                 errors.append("Git pull failed")
             else:
@@ -4720,14 +5123,24 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                     text=True,
                     timeout=10,
                 )
-                results["steps"].append({
-                    "step": "chmod +x scripts/**/*.sh",
-                    "success": chmod_result.returncode == 0,
-                    "output": "Scripts made executable" if chmod_result.returncode == 0 else chmod_result.stdout.strip(),
-                    "error": chmod_result.stderr.strip() if chmod_result.returncode != 0 else None,
-                })
+                results["steps"].append(
+                    {
+                        "step": "chmod +x scripts/**/*.sh",
+                        "success": chmod_result.returncode == 0,
+                        "output": "Scripts made executable"
+                        if chmod_result.returncode == 0
+                        else chmod_result.stdout.strip(),
+                        "error": chmod_result.stderr.strip()
+                        if chmod_result.returncode != 0
+                        else None,
+                    }
+                )
                 if chmod_result.returncode != 0:
-                    chmod_error = chmod_result.stderr.strip() or chmod_result.stdout.strip() or "unknown error"
+                    chmod_error = (
+                        chmod_result.stderr.strip()
+                        or chmod_result.stdout.strip()
+                        or "unknown error"
+                    )
                     errors.append(f"chmod +x scripts/**/*.sh failed: {chmod_error}")
 
             if stash_created:
@@ -4738,22 +5151,30 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                     text=True,
                     timeout=30,
                 )
-                results["steps"].append({
-                    "step": "git stash pop",
-                    "success": stash_pop_result.returncode == 0,
-                    "output": stash_pop_result.stdout.strip(),
-                    "error": stash_pop_result.stderr.strip() if stash_pop_result.returncode != 0 else None,
-                })
+                results["steps"].append(
+                    {
+                        "step": "git stash pop",
+                        "success": stash_pop_result.returncode == 0,
+                        "output": stash_pop_result.stdout.strip(),
+                        "error": stash_pop_result.stderr.strip()
+                        if stash_pop_result.returncode != 0
+                        else None,
+                    }
+                )
                 if stash_pop_result.returncode != 0:
-                    stash_error = stash_pop_result.stderr.strip() or stash_pop_result.stdout.strip() or "unknown error"
+                    stash_error = (
+                        stash_pop_result.stderr.strip()
+                        or stash_pop_result.stdout.strip()
+                        or "unknown error"
+                    )
                     errors.append(f"Git stash pop failed: {stash_error}")
 
             if errors:
                 results["success"] = False
                 results["error"] = "; ".join(errors)
-            
+
             return results
-            
+
         except subprocess.TimeoutExpired:
             results["success"] = False
             results["error"] = "Command timed out"
@@ -4767,13 +5188,13 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
     async def git_status():
         """
         Get current Git status and branch info.
-        
+
         Returns current branch, commit hash, and any uncommitted changes.
         """
         _require_terminal_api_key()
 
         nomad_dir = os.path.expanduser("~/NOMAD")
-        
+
         try:
             # Get current branch
             branch_result = subprocess.run(
@@ -4783,7 +5204,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 text=True,
                 timeout=5,
             )
-            
+
             # Get current commit
             commit_result = subprocess.run(
                 ["git", "log", "--oneline", "-1"],
@@ -4792,7 +5213,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 text=True,
                 timeout=5,
             )
-            
+
             # Get status
             status_result = subprocess.run(
                 ["git", "status", "--porcelain"],
@@ -4801,15 +5222,17 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 text=True,
                 timeout=5,
             )
-            
+
             return {
                 "branch": branch_result.stdout.strip(),
                 "commit": commit_result.stdout.strip(),
                 "has_changes": len(status_result.stdout.strip()) > 0,
-                "changes": status_result.stdout.strip().split("\n") if status_result.stdout.strip() else [],
+                "changes": status_result.stdout.strip().split("\n")
+                if status_result.stdout.strip()
+                else [],
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
-            
+
         except Exception as e:
             return {
                 "error": str(e),
@@ -4863,170 +5286,182 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
 
     # ==================== Servo Control Endpoints ====================
     # Control camera tilt servo and water shooter via PWM
-    
+
     @app.get("/api/servo/status", tags=["Servo"])
     async def get_servo_status():
         """
         Get status of all servos.
-        
+
         Returns current angle and enabled state for each servo.
         """
         try:
             from .servo_controller import get_servo_controller
-            
+
             controller = get_servo_controller()
             if not controller or not controller.is_available():
                 return {
                     "available": False,
                     "error": "Servo controller not initialized",
-                    "servos": {}
+                    "servos": {},
                 }
-            
+
             status = controller.get_status()
             status["available"] = True
             return status
-            
+
         except ImportError:
             return {
                 "available": False,
                 "error": "Servo controller module not available",
-                "servos": {}
+                "servos": {},
             }
         except Exception as e:
             logger.error(f"Servo status error: {e}")
-            return {
-                "available": False,
-                "error": str(e),
-                "servos": {}
-            }
-    
+            return {"available": False, "error": str(e), "servos": {}}
+
     @app.post("/api/servo/camera/tilt", tags=["Servo"])
-    async def set_camera_tilt(angle: float = Query(..., ge=0, le=180, description="Tilt angle 0-180 degrees")):
+    async def set_camera_tilt(
+        angle: float = Query(..., ge=0, le=180, description="Tilt angle 0-180 degrees"),
+    ):
         """
         Set camera tilt servo angle.
-        
+
         Args:
             angle: Target angle in degrees
                 - 0 = Looking down
                 - 90 = Level (straight ahead)
                 - 180 = Looking up
-                
+
         Returns:
             Success status and new angle
         """
         try:
             from .servo_controller import get_servo_controller
-            
+
             controller = get_servo_controller()
             if not controller or not controller.is_available():
-                raise HTTPException(status_code=503, detail="Servo controller not available")
-            
+                raise HTTPException(
+                    status_code=503, detail="Servo controller not available"
+                )
+
             success = controller.set_camera_tilt(angle)
-            
+
             if success:
                 return {
                     "status": "ok",
                     "angle": angle,
-                    "message": f"Camera tilt set to {angle} degrees"
+                    "message": f"Camera tilt set to {angle} degrees",
                 }
             else:
                 raise HTTPException(status_code=500, detail="Failed to set camera tilt")
-                
+
         except HTTPException:
             raise
         except Exception as e:
             logger.error(f"Camera tilt error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     @app.get("/api/servo/camera/tilt", tags=["Servo"])
     async def get_camera_tilt():
         """
         Get current camera tilt angle.
-        
+
         Returns:
             Current angle in degrees
         """
         try:
             from .servo_controller import get_servo_controller
-            
+
             controller = get_servo_controller()
             if not controller or not controller.is_available():
                 return {"angle": None, "available": False}
-            
+
             angle = controller.get_camera_tilt()
             return {"angle": angle, "available": angle is not None}
-            
+
         except Exception as e:
             logger.error(f"Get camera tilt error: {e}")
             return {"angle": None, "available": False, "error": str(e)}
-    
+
     @app.post("/api/servo/shooter/trigger", tags=["Servo"])
-    async def trigger_water_shooter(duration_ms: int = Query(200, ge=50, le=2000, description="Trigger duration in milliseconds")):
+    async def trigger_water_shooter(
+        duration_ms: int = Query(
+            200, ge=50, le=2000, description="Trigger duration in milliseconds"
+        ),
+    ):
         """
         Trigger water shooter servo.
-        
+
         Args:
             duration_ms: How long to activate shooter (50-2000ms)
-            
+
         Returns:
             Success status
         """
         try:
             from .servo_controller import get_servo_controller
-            
+
             controller = get_servo_controller()
             if not controller or not controller.is_available():
-                raise HTTPException(status_code=503, detail="Servo controller not available")
-            
+                raise HTTPException(
+                    status_code=503, detail="Servo controller not available"
+                )
+
             success = controller.trigger_water_shooter(duration_ms)
-            
+
             if success:
                 return {
                     "status": "ok",
                     "duration_ms": duration_ms,
-                    "message": f"Water shooter triggered for {duration_ms}ms"
+                    "message": f"Water shooter triggered for {duration_ms}ms",
                 }
             else:
-                raise HTTPException(status_code=500, detail="Failed to trigger water shooter")
-                
+                raise HTTPException(
+                    status_code=500, detail="Failed to trigger water shooter"
+                )
+
         except HTTPException:
             raise
         except Exception as e:
             logger.error(f"Water shooter error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     @app.post("/api/servo/enable", tags=["Servo"])
     async def enable_servos():
         """Enable all servo PWM outputs."""
         try:
             from .servo_controller import get_servo_controller
-            
+
             controller = get_servo_controller()
             if not controller:
-                raise HTTPException(status_code=503, detail="Servo controller not available")
-            
+                raise HTTPException(
+                    status_code=503, detail="Servo controller not available"
+                )
+
             controller.enable_all()
             return {"status": "ok", "message": "All servos enabled"}
-            
+
         except HTTPException:
             raise
         except Exception as e:
             logger.error(f"Enable servos error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     @app.post("/api/servo/disable", tags=["Servo"])
     async def disable_servos():
         """Disable all servo PWM outputs (safety)."""
         try:
             from .servo_controller import get_servo_controller
-            
+
             controller = get_servo_controller()
             if not controller:
-                raise HTTPException(status_code=503, detail="Servo controller not available")
-            
+                raise HTTPException(
+                    status_code=503, detail="Servo controller not available"
+                )
+
             controller.disable_all()
             return {"status": "ok", "message": "All servos disabled"}
-            
+
         except HTTPException:
             raise
         except Exception as e:
@@ -5034,37 +5469,37 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             raise HTTPException(status_code=500, detail=str(e))
 
     # ── RC Servo Bridge ───────────────────────────────────────────────
-    
+
     @app.get("/api/servo/rc/status", tags=["Servo"])
     async def get_rc_servo_status():
         """
         Get RC-to-servo bridge status.
-        
+
         Shows which RC channel is mapped to the nozzle servo,
         the last received RC value, and the last commanded angle.
         """
         try:
             from .rc_servo_bridge import get_rc_servo_bridge
-            
+
             bridge = get_rc_servo_bridge()
             if bridge is None:
                 return {"active": False, "error": "RC servo bridge not initialized"}
-            
+
             return bridge.get_status()
-            
+
         except ImportError:
             return {"active": False, "error": "RC servo bridge module not available"}
         except Exception as e:
             logger.error(f"RC servo status error: {e}")
             return {"active": False, "error": str(e)}
-    
+
     @app.post("/api/servo/rc/channel", tags=["Servo"])
     async def set_rc_servo_channel(
-        channel: int = Query(..., ge=1, le=18, description="RC channel number (1-18)")
+        channel: int = Query(..., ge=1, le=18, description="RC channel number (1-18)"),
     ):
         """
         Change which RC channel controls the servo (runtime).
-        
+
         Args:
             channel: RC channel number (1-18). Common choices:
                 - Channel 6: Knob/potentiometer
@@ -5073,18 +5508,20 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         """
         try:
             from .rc_servo_bridge import get_rc_servo_bridge
-            
+
             bridge = get_rc_servo_bridge()
             if bridge is None:
-                raise HTTPException(status_code=503, detail="RC servo bridge not initialized")
-            
+                raise HTTPException(
+                    status_code=503, detail="RC servo bridge not initialized"
+                )
+
             bridge.set_channel(channel)
             return {
                 "status": "ok",
                 "rc_channel": channel,
-                "message": f"RC servo bridge now using channel {channel}"
+                "message": f"RC servo bridge now using channel {channel}",
             }
-            
+
         except HTTPException:
             raise
         except Exception as e:
@@ -5092,4 +5529,3 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             raise HTTPException(status_code=500, detail=str(e))
 
     return app
-

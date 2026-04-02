@@ -161,6 +161,8 @@
     <Compile Include="SLAM3DView.cs" />
     <Compile Include="SnapshotManager.cs" />
     <Compile Include="AIDescriptionService.cs" />
+    <Compile Include="GoogleDriveUploadService.cs" />
+    <Compile Include="GoogleDriveUploadService.cs" />
     <Compile Include="Task1UploadPanel.cs" />
     <Compile Include="TelemetryInjector.cs" />
     <Compile Include="ZedCalibrationView.cs" />

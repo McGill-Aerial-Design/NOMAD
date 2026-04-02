@@ -409,101 +409,103 @@ namespace NOMAD.MissionPlanner
 
             try
             {
-                // Build submission request
-                var targets = new List<object>();
-                foreach (DataGridViewRow row in _targetGrid.Rows)
+                var gdrive = new GoogleDriveUploadService();
+                if (!gdrive.HasToken())
                 {
-                    var number = int.Parse(row.Cells["Number"].Value?.ToString() ?? "0");
-                    var color = row.Cells["Color"].Value?.ToString() ?? "";
-                    var description = row.Cells["Description"].Value?.ToString() ?? "";
-                    var imagePath = row.Cells["ImagePath"].Value?.ToString() ?? "";
-
-                    // Format description with color prefix if not present
-                    string fullDesc = description;
-                    if (!description.StartsWith(color, StringComparison.OrdinalIgnoreCase))
-                    {
-                        fullDesc = $"{color} target - {description}";
-                    }
-
-                    targets.Add(new
-                    {
-                        target_number = number,
-                        description = fullDesc,
-                        image_path = imagePath,
-                    });
+                    throw new Exception(
+                        "No Google Drive token found.\n\n" +
+                        "Place your gdrive_token.json in ~/.nomad/ or upload it via Settings > Google Drive.");
                 }
 
-                var submission = new
+                // Generate and upload Task_1_MAD_targets.txt
+                var txtContent = GenerateTxtContent();
+                if (string.IsNullOrEmpty(txtContent))
+                    throw new Exception("No targets to upload.");
+
+                var tempTxtPath = Path.Combine(Path.GetTempPath(), "Task_1_MAD_targets.txt");
+                try
                 {
-                    targets = targets,
-                    upload_images = true,
-                };
+                    File.WriteAllText(tempTxtPath, txtContent);
 
-                _lblStatus.Text = "Uploading to Google Drive...";
+                    _lblStatus.Text = "Uploading targets file...";
+                    var txtFileId = await gdrive.UploadFileAsync(tempTxtPath, "Task_1_MAD_targets.txt");
+                    if (string.IsNullOrEmpty(txtFileId))
+                        throw new Exception("Failed to upload Task_1_MAD_targets.txt to Google Drive.");
 
-                // Send to Edge Core API
-                string url = $"http://{_config.EffectiveIP}:{_config.JetsonPort}/api/task/1/submit";
-                var json = JsonConvert.SerializeObject(submission);
+                    // Upload images
+                    var imageResults = new List<(int number, string filename, string fileId)>();
+                    var errors = new List<string>();
 
-                using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(60) })
-                {
-                    var content = new StringContent(json, Encoding.UTF8, "application/json");
-                    var response = await client.PostAsync(url, content);
-                    var responseText = await response.Content.ReadAsStringAsync();
-
-                    if (response.IsSuccessStatusCode)
+                    foreach (DataGridViewRow row in _targetGrid.Rows)
                     {
-                        var result = JsonConvert.DeserializeObject<SubmissionResult>(responseText);
+                        var number = int.Parse(row.Cells["Number"].Value?.ToString() ?? "0");
+                        var imagePath = row.Cells["ImagePath"].Value?.ToString() ?? "";
 
-                        if (result.Success)
+                        if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
                         {
-                            _lblStatus.Text = $"Upload complete! TXT: {result.TxtFileId?.Substring(0, 8) ?? "N/A"}...";
-                            _lblStatus.ForeColor = SUCCESS_COLOR;
+                            _lblStatus.Text = $"Uploading Target {number} image...";
+                            var ext = Path.GetExtension(imagePath) ?? ".jpg";
+                            var filename = $"Target_{number}{ext}";
 
-                            var sb = new StringBuilder();
-                            sb.AppendLine("=== UPLOAD SUCCESSFUL ===");
-                            sb.AppendLine();
-                            sb.AppendLine($"Task_1_MAD_targets.txt uploaded (ID: {result.TxtFileId})");
-                            sb.AppendLine();
-
-                            if (result.ImageUploads?.Count > 0)
+                            var fileId = await gdrive.UploadFileAsync(imagePath, filename);
+                            if (!string.IsNullOrEmpty(fileId))
                             {
-                                sb.AppendLine("Images uploaded:");
-                                foreach (var img in result.ImageUploads)
-                                {
-                                    sb.AppendLine($"  - {img.Filename} (ID: {img.FileId})");
-                                }
+                                imageResults.Add((number, filename, fileId));
                             }
-
-                            if (result.Errors?.Count > 0)
+                            else
                             {
-                                sb.AppendLine();
-                                sb.AppendLine("Warnings:");
-                                foreach (var err in result.Errors)
-                                {
-                                    sb.AppendLine($"  - {err}");
-                                }
+                                errors.Add($"Failed to upload image for Target {number}");
                             }
-
-                            _txtPreview.Text = sb.ToString();
-                            _txtPreview.ForeColor = SUCCESS_COLOR;
-
-                            MessageBox.Show(
-                                $"Successfully uploaded Task 1 submission!\n\nText file ID: {result.TxtFileId}\nImages uploaded: {result.ImageUploads?.Count ?? 0}",
-                                "Upload Complete",
-                                MessageBoxButtons.OK,
-                                MessageBoxIcon.Information
-                            );
                         }
-                        else
+                        else if (!string.IsNullOrEmpty(imagePath))
                         {
-                            throw new Exception(string.Join(", ", result.Errors ?? new List<string> { "Unknown error" }));
+                            errors.Add($"Image not found for Target {number}: {imagePath}");
                         }
                     }
-                    else
+
+                    // Report results
+                    _lblStatus.Text = "Upload complete!";
+                    _lblStatus.ForeColor = SUCCESS_COLOR;
+
+                    var sb = new StringBuilder();
+                    sb.AppendLine("=== UPLOAD SUCCESSFUL ===");
+                    sb.AppendLine();
+                    sb.AppendLine($"Task_1_MAD_targets.txt uploaded (ID: {txtFileId})");
+                    sb.AppendLine();
+
+                    if (imageResults.Count > 0)
                     {
-                        throw new Exception($"HTTP {response.StatusCode}: {responseText}");
+                        sb.AppendLine("Images uploaded:");
+                        foreach (var img in imageResults)
+                        {
+                            sb.AppendLine($"  - {img.filename} (ID: {img.FileId})");
+                        }
                     }
+
+                    if (errors.Count > 0)
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("Warnings:");
+                        foreach (var err in errors)
+                        {
+                            sb.AppendLine($"  - {err}");
+                        }
+                    }
+
+                    _txtPreview.Text = sb.ToString();
+                    _txtPreview.ForeColor = SUCCESS_COLOR;
+
+                    MessageBox.Show(
+                        $"Successfully uploaded Task 1 submission!\n\nText file ID: {txtFileId}\nImages uploaded: {imageResults.Count}",
+                        "Upload Complete",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information
+                    );
+                }
+                finally
+                {
+                    if (File.Exists(tempTxtPath))
+                        File.Delete(tempTxtPath);
                 }
             }
             catch (Exception ex)
@@ -587,32 +589,6 @@ namespace NOMAD.MissionPlanner
             _lblStatus.ForeColor = SUCCESS_COLOR;
         }
 
-        // Response model for submission result
-        private class SubmissionResult
-        {
-            [JsonProperty("success")]
-            public bool Success { get; set; }
-
-            [JsonProperty("txt_file_id")]
-            public string TxtFileId { get; set; }
-
-            [JsonProperty("image_uploads")]
-            public List<ImageUploadResult> ImageUploads { get; set; }
-
-            [JsonProperty("errors")]
-            public List<string> Errors { get; set; }
-        }
-
-        private class ImageUploadResult
-        {
-            [JsonProperty("target_number")]
-            public int TargetNumber { get; set; }
-
-            [JsonProperty("filename")]
-            public string Filename { get; set; }
-
-            [JsonProperty("file_id")]
-            public string FileId { get; set; }
         }
     }
 }
