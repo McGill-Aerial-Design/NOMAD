@@ -1,0 +1,109 @@
+# ============================================================
+# Target Localizer Configuration - AEAC 2026 Task 1
+# ============================================================
+#
+# BEFORE FLIGHT:
+#   1. Update building params with values received Thursday night
+#   2. Set building_orientation by checking satellite imagery or
+#      measuring on-site with a compass
+#   3. If you have a YOLO landmark model, set yolo_model_path
+#   4. Do a quick HSV calibration with the actual target colors
+#      under current lighting conditions (see hsv_tuning below)
+#
+# USAGE:
+#   ros2 launch target_localizer target_localizer.launch.py \
+#       building_lat:=45.3220 building_lon:=-75.7600 \
+#       building_length:=12.0 building_width:=8.0
+#
+# OR load this file directly:
+#   ros2 run target_localizer target_localizer_node \
+#       --ros-args --params-file config/competition.yaml
+# ============================================================
+
+target_localizer:
+  ros__parameters:
+
+    # ---- Building Geometry ----
+    # UPDATE THESE THURSDAY NIGHT with competition-provided values
+    building:
+      center_lat: 45.3220       # Building center GPS latitude
+      center_lon: -75.7600      # Building center GPS longitude
+      length: 10.0              # Long axis dimension (meters)
+      width: 6.0                # Short axis dimension (meters)
+      height: 5.0               # Building height (meters)
+      orientation_deg: 0.0      # Long axis heading (deg CW from north)
+                                # 0 = long axis points north
+                                # 90 = long axis points east
+
+    # ---- Team ----
+    team_name: "MAD"
+    output_dir: "/home/mad/targets"
+
+    # ---- Landmark Detection (YOLO) ----
+    # Leave empty to disable landmark detection
+    # The node still works with corners-only descriptions
+    yolo_model_path: ""         # e.g. "/home/mad/models/landmarks.onnx"
+    landmark_detect_rate_hz: 2.0
+    auto_landmark_detection: true
+
+    # ---- Target Detection ----
+    dedup_radius_m: 0.5         # Targets within this 3D distance are merged
+
+# ============================================================
+# HSV Tuning Guide
+# ============================================================
+#
+# The default HSV ranges in detectors.py are a starting point.
+# To calibrate for competition conditions:
+#
+# 1. Capture images of the actual colored targets at the site
+# 2. Run the HSV tuning script:
+#      python3 hsv_tuner.py --image target_sample.jpg
+# 3. Update the HSV_RANGES dict in detectors.py
+#
+# Key considerations:
+#   - Ottawa in May: overcast skies shift colors toward blue
+#   - Morning vs afternoon sun changes everything
+#   - The targets are solid-color plastic (per Q&A #26),
+#     so colors should be fairly saturated
+#   - Black targets have very low value (V < 60)
+#   - White targets have very low saturation (S < 40) and
+#     high value (V > 180)
+#   - Red wraps around 0/180 in OpenCV HSV, needs two ranges
+#
+# Quick sanity check at the flight line:
+#   ros2 service call /target_localizer/capture_target \
+#       std_srvs/srv/Trigger
+#   Check the annotated image in output_dir
+#
+# ============================================================
+# Operational Checklist
+# ============================================================
+#
+# Thursday night (after receiving building data):
+#   [ ] Update building params in this file or launch args
+#   [ ] Verify building orientation on Google Maps
+#   [ ] Pre-compute expected face labels (which wall is "north")
+#   [ ] Test node launch with updated params
+#
+# Friday morning (before flight):
+#   [ ] Verify GPS fix quality on the Cube
+#   [ ] Check ZED camera feed (RGB + depth)
+#   [ ] Verify servo angle topic is publishing
+#   [ ] Do one test capture at the flight line
+#   [ ] Confirm output_dir exists and is writable
+#   [ ] Confirm Google Drive upload path is ready
+#
+# During flight:
+#   [ ] Fly survey orbit, landmarks auto-register
+#   [ ] Call ~/capture_target at each detected circle
+#   [ ] Monitor ROS logs for duplicate rejections
+#   [ ] After landing, call ~/save_targets
+#   [ ] Review .txt file before uploading to Google Drive
+#   [ ] Upload Task_1_MAD_targets.txt before window closes
+#
+# Emergency fallback:
+#   If the node fails, manually write descriptions using:
+#   - Annotated images in output_dir
+#   - Debug log with raw 3D coordinates
+#   - Building dimensions and your own judgment

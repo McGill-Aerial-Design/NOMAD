@@ -22,9 +22,6 @@ import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
-import cv2
-import piexif
-
 from fastapi import FastAPI, HTTPException, Request, WebSocket, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
@@ -74,34 +71,6 @@ logger = logging.getLogger("edge_core.api")
 
 # ==================== Request/Response Models ====================
 
-class Task1CaptureRequest(BaseModel):
-    """Request model for Task 1 capture."""
-    heading_deg: Optional[float] = None
-    gimbal_pitch_deg: Optional[float] = None
-    lidar_distance_m: Optional[float] = None
-
-
-class Task1CaptureResponse(BaseModel):
-    """Response model for Task 1 capture."""
-    success: bool
-    timestamp: str
-    target_text: Optional[str] = None
-    position: Optional[dict] = None
-    heading_deg: Optional[float] = None
-    pitch_deg: Optional[float] = None
-    roll_deg: Optional[float] = None
-    gimbal_pitch_deg: Optional[float] = None
-    gimbal_yaw_deg: Optional[float] = None
-    capture_folder: Optional[str] = None
-    image_name: Optional[str] = None
-    metadata_file: Optional[str] = None
-    building_location: Optional[str] = None
-    detections_overlay: Optional[str] = None  # Path to detection overlay image
-    building_viz: Optional[str] = None  # Path to building 3D visualization
-    detection_count: Optional[int] = None  # Number of detected targets
-    error: Optional[str] = None
-
-
 class Task2HitRequest(BaseModel):
     """Request model for Task 2 target hit."""
     x: float
@@ -114,20 +83,6 @@ class Task1CapturesList(BaseModel):
     captures: list[str]
     count: int
 
-
-class Task1UploadDescriptionRequest(BaseModel):
-    """Request model for uploading AI-generated description."""
-    folder: str
-    description: str
-    provider: str  # 'gemini' or 'ollama'
-    model: str
-
-
-class Task1UploadDescriptionResponse(BaseModel):
-    """Response model for description upload."""
-    success: bool
-    folder: str
-    message: str
 
 
 # Whitelist of allowed terminal commands for safety
@@ -164,44 +119,6 @@ COMMAND_WHITELIST: dict[str, str] = {
 
 
 # ==================== Helper Functions ====================
-
-def _gps_to_exif(lat: float, lon: float, alt: Optional[float] = None) -> dict:
-    """
-    Convert GPS coordinates to EXIF GPS format.
-    
-    Args:
-        lat: Latitude in decimal degrees
-        lon: Longitude in decimal degrees
-        alt: Altitude in meters (optional)
-    
-    Returns:
-        Dictionary with EXIF GPS tags
-    """
-    def _decimal_to_dms(decimal: float) -> tuple[tuple[int, int], tuple[int, int], tuple[int, int]]:
-        """Convert decimal degrees to degrees, minutes, seconds."""
-        decimal = abs(decimal)
-        degrees = int(decimal)
-        minutes = int((decimal - degrees) * 60)
-        seconds = int(((decimal - degrees) * 60 - minutes) * 60 * 100)
-        return ((degrees, 1), (minutes, 1), (seconds, 100))
-    
-    gps_dict = {}
-    
-    # Latitude
-    gps_dict[piexif.GPSIFD.GPSLatitude] = _decimal_to_dms(lat)
-    gps_dict[piexif.GPSIFD.GPSLatitudeRef] = b'N' if lat >= 0 else b'S'
-    
-    # Longitude
-    gps_dict[piexif.GPSIFD.GPSLongitude] = _decimal_to_dms(lon)
-    gps_dict[piexif.GPSIFD.GPSLongitudeRef] = b'E' if lon >= 0 else b'W'
-    
-    # Altitude (if provided)
-    if alt is not None:
-        gps_dict[piexif.GPSIFD.GPSAltitude] = (int(abs(alt) * 100), 100)
-        gps_dict[piexif.GPSIFD.GPSAltitudeRef] = 0 if alt >= 0 else 1
-    
-    return gps_dict
-
 
 class TerminalCommandRequest(BaseModel):
     """Request model for terminal command execution."""
@@ -281,6 +198,41 @@ class NavPositionRequest(BaseModel):
     z: float        # Down position (NED meters)
     yaw: float      # Heading (radians)
     source: str = "nav2"
+
+
+class Task1Target(BaseModel):
+    """A single target for Task 1 submission."""
+    target_number: int
+    description: str
+    image_path: Optional[str] = None
+
+
+class Task1SubmissionRequest(BaseModel):
+    """Request model for Task 1 Google Drive submission."""
+    targets: list[Task1Target]
+    upload_images: bool = True
+
+
+class Task1SubmissionResponse(BaseModel):
+    """Response model for Task 1 submission upload."""
+    success: bool
+    txt_file_id: str = ""
+    image_uploads: list[dict] = []
+    errors: list[str] = []
+
+
+class GDriveUploadRequest(BaseModel):
+    """Request model for generic Google Drive file upload."""
+    local_path: str
+    filename: str
+    folder_id: Optional[str] = None
+
+
+class GDriveUploadResponse(BaseModel):
+    """Response model for Google Drive upload."""
+    success: bool
+    file_id: str = ""
+    error: str = ""
 
 
 # ==================== Setter Functions for Dependency Injection ====================
@@ -1631,316 +1583,22 @@ wait
 
     # ==================== Task 1: Recon (Outdoor) ====================
 
-    @app.post("/api/task/1/capture", tags=["Task 1"], response_model=Task1CaptureResponse)
-    async def task1_capture(task_request: Task1CaptureRequest = None, request: Request = None):
+    @app.post("/api/task/1/capture", tags=["Task 1"])
+    async def task1_capture():
         """
-        Capture snapshot for Task 1 recon mission.
-        
-        Captures current position, heading, camera image with EXIF metadata,
-        and comprehensive metadata in JSON format.
-        Used for outdoor GPS-based reconnaissance.
+        Trigger target detection for Task 1 recon mission.
+
+        Delegates to the target_localizer ROS 2 node running in the Isaac
+        ROS container. The node captures the current ZED frame, runs HSV
+        circle detection, back-projects to 3D, and generates a description.
         """
-        state = request.app.state.state_manager.get_state()
-        
-        # Get values from request or current state
-        heading = task_request.heading_deg if task_request and task_request.heading_deg is not None else state.heading_deg
-        gimbal_pitch = task_request.gimbal_pitch_deg if task_request and task_request.gimbal_pitch_deg is not None else state.gimbal_pitch_deg
-        gimbal_yaw = state.gimbal_yaw_deg
-        pitch = state.pitch_deg
-        roll = state.roll_deg
-        
-        # Get building location from environment
-        building_name = os.environ.get("TASK1_BUILDING_NAME", "Unknown Building")
-        building_lat = os.environ.get("TASK1_BUILDING_LAT")
-        building_lon = os.environ.get("TASK1_BUILDING_LON")
-        
-        building_location = {
-            "name": building_name,
-            "lat": float(building_lat) if building_lat else None,
-            "lon": float(building_lon) if building_lon else None,
-        }
-        
-        if not state.gps_fix:
-            logger.warning("Task 1 capture: No GPS fix - position data will be unavailable")
-
-        # Create capture record with timestamp
-        timestamp = datetime.now(timezone.utc)
-        timestamp_str = timestamp.strftime('%Y%m%d_%H%M%S')
-        
-        # Create timestamped folder structure: data/task1_captures/YYYYMMDD_HHMMSS/
-        base_dir = "./data/task1_captures"
-        capture_folder = os.path.join(base_dir, timestamp_str)
-        os.makedirs(capture_folder, exist_ok=True)
-        
-        # Prepare metadata
-        metadata = {
-            "timestamp": timestamp.isoformat(),
-            "gps": {
-                "lat": state.gps_lat,
-                "lon": state.gps_lon,
-                "alt": state.gps_alt,
-            },
-            "ahrs": {
-                "heading_deg": heading,
-                "pitch_deg": pitch,
-                "roll_deg": roll,
-            },
-            "gimbal": {
-                "pitch_deg": gimbal_pitch,
-                "yaw_deg": gimbal_yaw,
-            },
-            "building_location": building_location,
-            "photo_path": None,  # Will be set after photo capture
-        }
-        
-        # Include current object detections in metadata for AI description
-        with request.app.state.detection_state_lock:
-            det_history = list(request.app.state.detection_history)
-        if det_history:
-            # Group detections by label for concise summary
-            det_summary = {}
-            for det in det_history:
-                label = det.get("label", "unknown")
-                if label not in det_summary:
-                    det_summary[label] = {"count": 0, "positions": []}
-                det_summary[label]["count"] += 1
-                if det.get("x") is not None:
-                    det_summary[label]["positions"].append({
-                        "x": round(det["x"], 2),
-                        "y": round(det["y"], 2),
-                        "z": round(det["z"], 2),
-                    })
-            metadata["detected_targets"] = {
-                "total_count": len(det_history),
-                "by_class": det_summary,
-            }
-
-        # Extract building geometry from nvblox 3D map and compute
-        # target placements relative to building faces (decimeter precision)
-        try:
-            from .building_geometry import (
-                extract_building_geometry,
-                generate_target_descriptions,
-            )
-
-            mesh_state = getattr(request.app.state, 'slam_mesh_data', None)
-            if mesh_state:
-                building = extract_building_geometry(
-                    mesh_state,
-                    heading_deg=heading if heading is not None else 0.0,
-                )
-                if building:
-                    metadata["building_geometry"] = building.to_dict()
-
-                    # Generate target descriptions relative to building
-                    if det_history:
-                        descriptions = generate_target_descriptions(
-                            det_history, building
-                        )
-                        metadata["target_descriptions"] = descriptions
-                        logger.info(
-                            f"Task 1: Generated {len(descriptions)} target descriptions "
-                            f"from {building.voxel_count} voxels"
-                        )
-        except Exception as e:
-            logger.warning(f"Task 1: Building geometry extraction failed: {e}")
-        
-        image_filename = "photo.jpg"
-        metadata_filename = "metadata.json"
-        image_path = os.path.join(capture_folder, image_filename)
-        metadata_path = os.path.join(capture_folder, metadata_filename)
-        image_saved = False
-
-        # Helper: embed EXIF data (GPS, timestamp, AHRS) into a saved JPEG
-        def _embed_exif(temp_path: str, final_path: str) -> None:
-            exif_dict = {"0th": {}, "Exif": {}, "GPS": {}}
-            if state.gps_lat is not None and state.gps_lon is not None:
-                exif_dict["GPS"] = _gps_to_exif(state.gps_lat, state.gps_lon, state.gps_alt)
-            exif_dict["0th"][piexif.ImageIFD.DateTime] = timestamp.strftime("%Y:%m:%d %H:%M:%S").encode()
-            heading_str = f"{heading:.1f}" if heading is not None else "N/A"
-            pitch_str = f"{pitch:.1f}" if pitch is not None else "N/A"
-            roll_str = f"{roll:.1f}" if roll is not None else "N/A"
-            description = f"Heading: {heading_str}deg, Pitch: {pitch_str}deg, Roll: {roll_str}deg"
-            exif_dict["0th"][piexif.ImageIFD.ImageDescription] = description.encode()
-            exif_bytes = piexif.dump(exif_dict)
-            piexif.insert(exif_bytes, temp_path, final_path)
-            os.remove(temp_path)
-
-        # ------------------------------------------------------------------
-        # Capture frame from video bridge HTTP snapshot
-        # ------------------------------------------------------------------
-        image_bgr = None
-
-        try:
-            import requests as _requests
-            bridge_host = os.environ.get("NOMAD_BRIDGE_HTTP_HOST", "172.17.0.1").strip() or "172.17.0.1"
-            bridge_port = int(os.environ.get("NOMAD_BRIDGE_HTTP_PORT", "9200"))
-            snap_url = f"http://{bridge_host}:{bridge_port}/snapshot"
-            resp = _requests.get(snap_url, timeout=3)
-            if resp.status_code == 200 and resp.headers.get("Content-Type", "").startswith("image/"):
-                import numpy as _np
-                arr = _np.frombuffer(resp.content, dtype=_np.uint8)
-                image_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                if image_bgr is not None:
-                    logger.info("Task 1 capture: frame from bridge snapshot")
-                else:
-                    logger.error("Task 1 capture: bridge snapshot returned invalid image data")
-            else:
-                logger.error(f"Task 1 capture: bridge snapshot returned HTTP {resp.status_code}")
-        except Exception as e:
-            logger.error(f"Task 1 capture: bridge snapshot failed: {e}")
-
-        # Save captured frame with EXIF metadata
-        if image_bgr is not None:
-            try:
-                temp_path = image_path + ".tmp.jpg"
-                cv2.imwrite(temp_path, image_bgr)
-                _embed_exif(temp_path, image_path)
-                image_saved = True
-                metadata["photo_path"] = image_path
-                logger.info(f"Task 1 image saved: {image_path}")
-                
-                # Save debug image with circle detection overlay
-                try:
-                    from .hsv_circle_detector import draw_detection_overlay, DetectedCircle
-                    
-                    # Convert detection history to DetectedCircle objects for overlay
-                    # Detection history has: bbox_x, bbox_y, bbox_w, bbox_h (pixel coords)
-                    # or cx, cy, radius if from direct HSV detection
-                    overlay_dets = []
-                    for det in det_history:
-                        # Calculate pixel center from bbox if available
-                        bbox_x = det.get("bbox_x", 0)
-                        bbox_y = det.get("bbox_y", 0)
-                        bbox_w = det.get("bbox_w", 60)
-                        bbox_h = det.get("bbox_h", 60)
-                        
-                        # Use explicit cx/cy if available, otherwise compute from bbox
-                        cx = det.get("cx")
-                        cy = det.get("cy")
-                        if cx is None or cy is None:
-                            cx = int(bbox_x + bbox_w / 2)
-                            cy = int(bbox_y + bbox_h / 2)
-                        
-                        # Compute radius from bbox if not explicitly provided
-                        radius = det.get("radius")
-                        if radius is None:
-                            radius = int(max(bbox_w, bbox_h) / 2)
-                        
-                        # Extract color from label (e.g., "red_circle" -> "red")
-                        color = det.get("hsv_color", "")
-                        if not color:
-                            label = det.get("label", "unknown")
-                            color = label.replace("_circle", "") if "_circle" in label else label
-                        
-                        overlay_dets.append(DetectedCircle(
-                            cx=int(cx),
-                            cy=int(cy),
-                            radius=int(radius),
-                            color=color,
-                            confidence=det.get("confidence", 0.5),
-                            ellipse_half_w=det.get("ellipse_half_w", int(bbox_w / 2)),
-                            ellipse_half_h=det.get("ellipse_half_h", int(bbox_h / 2)),
-                            ellipse_angle=det.get("ellipse_angle", 0.0),
-                            aspect_ratio=det.get("aspect_ratio", 1.0),
-                            circularity=det.get("circularity", 1.0),
-                            solidity=det.get("solidity", 1.0),
-                            x=det.get("x"),
-                            y=det.get("y"),
-                            z=det.get("z"),
-                            bbox_x=int(bbox_x),
-                            bbox_y=int(bbox_y),
-                            bbox_w=int(bbox_w),
-                            bbox_h=int(bbox_h),
-                            detection_method=det.get("detection_method", "history"),
-                        ))
-                    
-                    debug_img = image_bgr.copy()
-                    debug_img = draw_detection_overlay(debug_img, overlay_dets)
-                    
-                    # Add timestamp and detection count to debug image
-                    import numpy as np
-                    info_text = f"Task 1 Capture: {timestamp_str} | {len(overlay_dets)} detection(s)"
-                    cv2.rectangle(debug_img, (0, debug_img.shape[0] - 35), (len(info_text) * 12 + 10, debug_img.shape[0]), (0, 0, 0), -1)
-                    cv2.putText(debug_img, info_text, (5, debug_img.shape[0] - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1, cv2.LINE_AA)
-                    
-                    debug_path = os.path.join(capture_folder, "detections_overlay.jpg")
-                    cv2.imwrite(debug_path, debug_img)
-                    metadata["detections_overlay_path"] = debug_path
-                    logger.info(f"Task 1 detection overlay saved: {debug_path}")
-                except Exception as overlay_err:
-                    logger.warning(f"Task 1 detection overlay failed: {overlay_err}")
-                
-                # Save building geometry visualization if available
-                try:
-                    from .building_geometry import draw_building_visualization
-                    building_geom = metadata.get("building_geometry")
-                    if building_geom and mesh_state:
-                        building_viz = draw_building_visualization(
-                            mesh_state, 
-                            building_geom, 
-                            det_history,
-                            image_size=(800, 600)
-                        )
-                        if building_viz is not None:
-                            viz_path = os.path.join(capture_folder, "building_3d_snapshot.jpg")
-                            cv2.imwrite(viz_path, building_viz)
-                            metadata["building_viz_path"] = viz_path
-                            logger.info(f"Task 1 building visualization saved: {viz_path}")
-                except Exception as viz_err:
-                    logger.warning(f"Task 1 building visualization failed: {viz_err}")
-                    
-            except Exception as e:
-                logger.error(f"Task 1 image save/EXIF failed: {e}")
-        else:
-            logger.warning("Task 1 capture: no image source available")
-        
-        # Save metadata.json
-        try:
-            with open(metadata_path, "w") as f:
-                json.dump(metadata, f, indent=2)
-            
-            logger.info(f"Task 1 metadata saved: {metadata_path}")
-            
-            # Also save to mission log for backward compatibility
-            log_dir = os.environ.get("NOMAD_LOG_DIR", "./data/mission_logs")
-            os.makedirs(log_dir, exist_ok=True)
-            log_file = os.path.join(log_dir, f"task1_{timestamp_str}.json")
-            with open(log_file, "w") as f:
-                json.dump(metadata, f, indent=2)
-            
-            return Task1CaptureResponse(
-                success=image_saved,
-                timestamp=timestamp.isoformat(),
-                target_text=(
-                    f"Captured at {state.gps_lat:.6f}, {state.gps_lon:.6f}"
-                    if state.gps_lat is not None and state.gps_lon is not None
-                    else "Captured (GPS coordinates pending)"
-                ) if image_saved else "Capture failed: no image from video bridge",
-                position=metadata["gps"],
-                heading_deg=heading,
-                pitch_deg=pitch,
-                roll_deg=roll,
-                gimbal_pitch_deg=gimbal_pitch,
-                gimbal_yaw_deg=gimbal_yaw,
-                capture_folder=capture_folder,
-                image_name=image_filename if image_saved else None,
-                metadata_file=metadata_filename,
-                building_location=building_name,
-                detections_overlay=metadata.get("detections_overlay_path"),
-                building_viz=metadata.get("building_viz_path"),
-                detection_count=len(det_history) if det_history else 0,
-                error="No image captured from video bridge" if not image_saved else None,
-            )
-            
-        except Exception as e:
-            logger.error(f"Task 1 capture failed: {e}")
-            return Task1CaptureResponse(
-                success=False,
-                timestamp=timestamp.isoformat(),
-                error=str(e)
-            )
+        output = _call_ros2_service_in_isaac_container_or_raise(
+            service_name="/target_localizer/capture_target",
+            service_type="std_srvs/srv/Trigger",
+            request_payload={},
+            timeout_s=15.0,
+        )
+        return {"success": True, "output": output}
 
     @app.get("/api/task/1/images/{filename}", tags=["Task 1"])
     async def task1_get_image(filename: str):
@@ -2073,151 +1731,239 @@ wait
         
         return FileResponse(file_path, media_type=media_type)
 
-    @app.post("/api/task/1/upload_description", tags=["Task 1"], response_model=Task1UploadDescriptionResponse)
-    async def upload_task1_description(request: Task1UploadDescriptionRequest):
-        """
-        Upload AI-generated description for a capture.
-        
-        Request body:
-        {
-            "folder": "20260202_120000",
-            "description": "Scene description text...",
-            "provider": "gemini" or "ollama",
-            "model": "gemini-1.5-flash" or "llava:13b"
-        }
-        
-        Saves description.txt to data/task1_captures/{folder}/description.txt
-        Also adds AI metadata to metadata.json (provider, model, timestamp)
-        """
-        # Security: Validate folder name matches timestamp pattern
-        timestamp_pattern = re.compile(r'^\d{8}_\d{6}$')
-        if not timestamp_pattern.match(request.folder):
-            raise HTTPException(status_code=400, detail="Invalid folder name format")
-        
-        # Security: Prevent path traversal
-        if ".." in request.folder or "/" in request.folder or "\\" in request.folder:
-            raise HTTPException(status_code=400, detail="Invalid folder name")
-        
-        # Security: Limit description size (10KB)
-        max_description_size = 10 * 1024  # 10KB
-        if len(request.description.encode('utf-8')) > max_description_size:
-            raise HTTPException(
-                status_code=413,
-                detail=f"Description too large. Maximum size: {max_description_size} bytes"
-            )
-        
-        # Validate provider
-        allowed_providers = ['gemini', 'ollama', 'openrouter']
-        if request.provider not in allowed_providers:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid provider. Allowed: {', '.join(allowed_providers)}"
-            )
-        
-        # Build folder path
-        base_dir = "./data/task1_captures"
-        folder_path = os.path.join(base_dir, request.folder)
-        
-        # Normalize path and ensure it's within base_dir (additional security)
-        base_dir_abs = os.path.abspath(base_dir)
-        folder_path_abs = os.path.abspath(folder_path)
-        if not folder_path_abs.startswith(base_dir_abs):
-            raise HTTPException(status_code=400, detail="Invalid folder path")
-        
-        # Check if folder exists
-        if not os.path.exists(folder_path):
-            raise HTTPException(
-                status_code=404,
-                detail=f"Capture folder not found: {request.folder}"
-            )
-        
-        try:
-            # Save description.txt
-            description_path = os.path.join(folder_path, "description.txt")
-            with open(description_path, "w", encoding="utf-8") as f:
-                f.write(request.description)
-            
-            logger.info(f"Saved description to {description_path}")
-            
-            # Update metadata.json with AI info
-            metadata_path = os.path.join(folder_path, "metadata.json")
-            if os.path.exists(metadata_path):
-                try:
-                    with open(metadata_path, "r", encoding="utf-8") as f:
-                        metadata = json.load(f)
-                    
-                    # Add AI processing metadata
-                    metadata["ai_processing"] = {
-                        "provider": request.provider,
-                        "model": request.model,
-                        "processed_at": datetime.now(timezone.utc).isoformat(),
-                        "description_file": "description.txt",
-                    }
-                    
-                    # Save updated metadata
-                    with open(metadata_path, "w", encoding="utf-8") as f:
-                        json.dump(metadata, f, indent=2)
-                    
-                    logger.info(f"Updated metadata with AI info: {metadata_path}")
-                    
-                except Exception as e:
-                    logger.warning(f"Failed to update metadata.json: {e}")
-                    # Continue - description was saved successfully
-            
-            return Task1UploadDescriptionResponse(
-                success=True,
-                folder=request.folder,
-                message=f"Description saved successfully using {request.provider}/{request.model}"
-            )
-            
-        except Exception as e:
-            logger.error(f"Failed to save description: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to save description: {str(e)}"
-            )
+    # ==================== Task 1: Target Localizer (ROS 2) ====================
 
-    # ==================== Task 1: Building Geometry ====================
-
-    @app.get("/api/task/1/building_geometry", tags=["Task 1"])
-    async def get_building_geometry(request: Request):
+    @app.post("/api/task/1/target/capture", tags=["Task 1"])
+    async def task1_capture_target():
         """
-        Extract building geometry from the current nvblox 3D map.
+        Trigger the target_localizer ROS 2 node to detect and describe targets.
 
-        Returns building bounding box, face dimensions (N/S/E/W/roof/ground),
-        and target placements relative to building faces with decimeter precision.
-        Uses the drone's compass heading to orient faces to cardinal directions.
+        Calls the ~/capture_target service which runs HSV circle detection on
+        the current ZED frame, back-projects to 3D, determines the building face,
+        and generates a ConOps-compliant description.
+        """
+        output = _call_ros2_service_in_isaac_container_or_raise(
+            service_name="/target_localizer/capture_target",
+            service_type="std_srvs/srv/Trigger",
+            request_payload={},
+            timeout_s=15.0,
+        )
+        return {"success": True, "output": output}
+
+    @app.post("/api/task/1/target/save", tags=["Task 1"])
+    async def task1_save_targets():
+        """
+        Save all captured targets to the competition .txt file.
+
+        Calls the ~/save_targets service which writes Task_1_MAD_targets.txt
+        and a debug log to the configured output directory.
+        """
+        output = _call_ros2_service_in_isaac_container_or_raise(
+            service_name="/target_localizer/save_targets",
+            service_type="std_srvs/srv/Trigger",
+            request_payload={},
+            timeout_s=10.0,
+        )
+        return {"success": True, "output": output}
+
+    @app.get("/api/task/1/target/model", tags=["Task 1"])
+    async def task1_print_building_model():
+        """
+        Print the current building model summary (landmark counts, face info).
+
+        Calls the ~/print_model service on the target_localizer node.
+        """
+        output = _call_ros2_service_in_isaac_container_or_raise(
+            service_name="/target_localizer/print_model",
+            service_type="std_srvs/srv/Trigger",
+            request_payload={},
+            timeout_s=10.0,
+        )
+        return {"success": True, "output": output}
+
+    # ==================== Google Drive Upload ====================
+
+    @app.post("/api/gdrive/upload", tags=["Google Drive"], response_model=GDriveUploadResponse)
+    async def gdrive_upload_file(request_body: GDriveUploadRequest):
+        """
+        Upload a single file to Google Drive.
+        
+        Requires Google Drive credentials to be configured on the Jetson:
+        - Run: python -m edge_core.gdrive_upload --setup <client_secret.json>
+        - Set GDRIVE_FOLDER_ID environment variable for target folder
         """
         try:
-            from .building_geometry import (
-                extract_building_geometry,
-                generate_target_descriptions,
-            )
+            from .gdrive_upload import upload_to_gdrive
         except ImportError as e:
-            raise HTTPException(status_code=500, detail=f"building_geometry module not available: {e}")
+            logger.error(f"Google Drive module not available: {e}")
+            return GDriveUploadResponse(
+                success=False,
+                error="Google Drive module not available. Install: pip install google-api-python-client google-auth google-auth-oauthlib"
+            )
+        
+        if not os.path.isfile(request_body.local_path):
+            return GDriveUploadResponse(
+                success=False,
+                error=f"File not found: {request_body.local_path}"
+            )
+        
+        try:
+            file_id = upload_to_gdrive(
+                local_path=request_body.local_path,
+                filename=request_body.filename,
+                folder_id=request_body.folder_id,
+            )
+            
+            if file_id:
+                logger.info(f"Uploaded {request_body.filename} to Google Drive: {file_id}")
+                return GDriveUploadResponse(success=True, file_id=file_id)
+            else:
+                return GDriveUploadResponse(
+                    success=False,
+                    error="Upload failed - check Google Drive credentials"
+                )
+        except Exception as e:
+            logger.error(f"Google Drive upload error: {e}")
+            return GDriveUploadResponse(success=False, error=str(e))
 
-        mesh_state = getattr(request.app.state, 'slam_mesh_data', None)
-        if not mesh_state:
-            raise HTTPException(status_code=404, detail="No nvblox mesh data available")
+    @app.post("/api/task/1/submit", tags=["Task 1"], response_model=Task1SubmissionResponse)
+    async def task1_submit_to_gdrive(submission: Task1SubmissionRequest):
+        """
+        Submit Task 1 targets to Google Drive.
+        
+        Generates Task_1_MAD_targets.txt in ConOps format and uploads it
+        along with any associated images to the configured Google Drive folder.
+        
+        ConOps Format:
+        Target 1: Blue target on the north face of the building, 3.2m above ground...
+        
+        Target 2: Red target on the west face of the building...
+        """
+        try:
+            from .gdrive_upload import upload_to_gdrive
+        except ImportError as e:
+            logger.error(f"Google Drive module not available: {e}")
+            return Task1SubmissionResponse(
+                success=False,
+                errors=["Google Drive module not available"]
+            )
+        
+        errors = []
+        image_uploads = []
+        txt_file_id = ""
+        
+        # Generate Task_1_MAD_targets.txt content
+        txt_content_lines = []
+        for target in sorted(submission.targets, key=lambda t: t.target_number):
+            txt_content_lines.append(f"Target {target.target_number}: {target.description}")
+        
+        txt_content = "\n\n".join(txt_content_lines)
+        
+        # Write temp file
+        temp_txt_path = "/tmp/Task_1_MAD_targets.txt"
+        try:
+            with open(temp_txt_path, "w") as f:
+                f.write(txt_content)
+            
+            # Upload txt file
+            txt_file_id = upload_to_gdrive(
+                local_path=temp_txt_path,
+                filename="Task_1_MAD_targets.txt",
+            )
+            
+            if not txt_file_id:
+                errors.append("Failed to upload Task_1_MAD_targets.txt")
+            else:
+                logger.info(f"Uploaded Task_1_MAD_targets.txt: {txt_file_id}")
+        except Exception as e:
+            errors.append(f"Failed to create/upload txt file: {e}")
+        finally:
+            if os.path.exists(temp_txt_path):
+                os.remove(temp_txt_path)
+        
+        # Upload images if requested
+        if submission.upload_images:
+            for target in submission.targets:
+                if target.image_path and os.path.isfile(target.image_path):
+                    try:
+                        # Use target number in filename for easy correlation
+                        ext = os.path.splitext(target.image_path)[1] or ".jpg"
+                        image_filename = f"Target_{target.target_number}{ext}"
+                        
+                        file_id = upload_to_gdrive(
+                            local_path=target.image_path,
+                            filename=image_filename,
+                        )
+                        
+                        if file_id:
+                            image_uploads.append({
+                                "target_number": target.target_number,
+                                "filename": image_filename,
+                                "file_id": file_id,
+                            })
+                            logger.info(f"Uploaded {image_filename}: {file_id}")
+                        else:
+                            errors.append(f"Failed to upload image for Target {target.target_number}")
+                    except Exception as e:
+                        errors.append(f"Error uploading Target {target.target_number} image: {e}")
+                elif target.image_path:
+                    errors.append(f"Image not found for Target {target.target_number}: {target.image_path}")
+        
+        success = bool(txt_file_id) and len(errors) == 0
+        
+        return Task1SubmissionResponse(
+            success=success,
+            txt_file_id=txt_file_id,
+            image_uploads=image_uploads,
+            errors=errors,
+        )
 
-        state = request.app.state.state_manager.get_state()
-        heading = state.heading_deg if state.heading_deg is not None else 0.0
-
-        building = extract_building_geometry(mesh_state, heading_deg=heading)
-        if not building:
-            raise HTTPException(status_code=422, detail="Insufficient voxel data for geometry extraction")
-
-        result = building.to_dict()
-
-        # Include target placements if detections are available
-        with request.app.state.detection_state_lock:
-            det_history = list(request.app.state.detection_history)
-        if det_history:
-            descriptions = generate_target_descriptions(det_history, building)
-            result["target_descriptions"] = descriptions
-            result["target_count"] = len(descriptions)
-
-        return result
+    @app.get("/api/gdrive/status", tags=["Google Drive"])
+    async def gdrive_status():
+        """
+        Check Google Drive upload capability status.
+        
+        Returns whether credentials are configured and valid.
+        """
+        try:
+            from .gdrive_upload import _get_credentials, _get_token_path
+            
+            token_path = _get_token_path()
+            has_token = os.path.isfile(token_path)
+            
+            if not has_token:
+                return {
+                    "available": False,
+                    "message": "No Google Drive token found. Run setup.",
+                    "token_path": token_path,
+                }
+            
+            creds = _get_credentials()
+            if creds is None:
+                return {
+                    "available": False,
+                    "message": "Token exists but credentials invalid/expired.",
+                    "token_path": token_path,
+                }
+            
+            folder_id = os.environ.get("GDRIVE_FOLDER_ID", "")
+            
+            return {
+                "available": True,
+                "message": "Google Drive ready",
+                "token_path": token_path,
+                "folder_configured": bool(folder_id),
+            }
+        except ImportError:
+            return {
+                "available": False,
+                "message": "Google Drive dependencies not installed",
+            }
+        except Exception as e:
+            return {
+                "available": False,
+                "message": f"Error checking status: {e}",
+            }
 
     # ==================== Task 2: Extinguish (Indoor) ====================
 

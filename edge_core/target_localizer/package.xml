@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>target_localizer</name>
+  <version>1.0.0</version>
+  <description>
+    Automated target detection, localization, and natural-language description
+    generation for AEAC 2026 Task 1 Fire Reconnaissance.
+    Uses HSV for colored circle targets and YOLO for landmark detection.
+  </description>
+  <maintainer email="avionics@mcgilldroneclub.com">MAD Avionics</maintainer>
+  <license>MIT</license>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>nav_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>cv_bridge</depend>
+  <depend>mavros_msgs</depend>
+  <depend>message_filters</depend>
+
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

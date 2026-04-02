@@ -25,6 +25,8 @@ namespace NOMAD.MissionPlanner
         private EmbeddedVideoPlayer _videoPlayer;
         private FlowLayoutPanel _galleryPanel;
         private PayloadControlPanel _payloadControl;
+        private Task1UploadPanel _uploadPanel;
+        private TabControl _tabControl;
         
         public NOMADTask1View(DualLinkSender sender, NOMADConfig config, JetsonConnectionManager jetsonConnectionManager = null)
         {
@@ -36,7 +38,7 @@ namespace NOMAD.MissionPlanner
         
         private void InitializeUI()
         {
-            // Two-column layout: Video (left) | Controls + Gallery (right)
+            // Main layout: Video (left) | TabControl for Capture/Submit (right)
             var mainLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -49,7 +51,7 @@ namespace NOMAD.MissionPlanner
             mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-            // ========== LEFT COLUMN: Video (no title label - player fills entirely) ==========
+            // ========== LEFT COLUMN: Video ==========
             var videoPanel = new Panel
             {
                 Dock = DockStyle.Fill,
@@ -77,7 +79,74 @@ namespace NOMAD.MissionPlanner
             }
             mainLayout.Controls.Add(videoPanel, 0, 0);
 
-            // ========== RIGHT COLUMN: GPS + Capture + Gallery ==========
+            // ========== RIGHT COLUMN: TabControl with Capture and Submit tabs ==========
+            _tabControl = new TabControl
+            {
+                Dock = DockStyle.Fill,
+                Margin = new Padding(5),
+            };
+            StyleTabControl(_tabControl);
+
+            // --- Tab 1: Capture ---
+            var captureTab = new TabPage("Capture")
+            {
+                BackColor = CARD_BG,
+                Padding = new Padding(0),
+            };
+            captureTab.Controls.Add(CreateCapturePanel());
+            _tabControl.TabPages.Add(captureTab);
+
+            // --- Tab 2: Submit to Google Drive ---
+            var submitTab = new TabPage("Submit")
+            {
+                BackColor = CARD_BG,
+                Padding = new Padding(0),
+            };
+            _uploadPanel = new Task1UploadPanel(_config);
+            _uploadPanel.Dock = DockStyle.Fill;
+            submitTab.Controls.Add(_uploadPanel);
+            _tabControl.TabPages.Add(submitTab);
+
+            mainLayout.Controls.Add(_tabControl, 1, 0);
+
+            this.AutoScroll = false;
+            this.Controls.Add(mainLayout);
+        }
+
+        private void StyleTabControl(TabControl tabControl)
+        {
+            tabControl.DrawMode = TabDrawMode.OwnerDrawFixed;
+            tabControl.SizeMode = TabSizeMode.Fixed;
+            tabControl.ItemSize = new Size(100, 30);
+            tabControl.DrawItem += (s, e) =>
+            {
+                var tab = tabControl.TabPages[e.Index];
+                var isSelected = tabControl.SelectedIndex == e.Index;
+                var bgColor = isSelected ? ACCENT_COLOR : Color.FromArgb(45, 45, 48);
+                var textColor = Color.White;
+
+                using (var bgBrush = new SolidBrush(bgColor))
+                using (var textBrush = new SolidBrush(textColor))
+                {
+                    e.Graphics.FillRectangle(bgBrush, e.Bounds);
+                    var sf = new StringFormat
+                    {
+                        Alignment = StringAlignment.Center,
+                        LineAlignment = StringAlignment.Center,
+                    };
+                    e.Graphics.DrawString(tab.Text, new Font("Segoe UI", 9, FontStyle.Bold), textBrush, e.Bounds, sf);
+                }
+            };
+        }
+
+        private Panel CreateCapturePanel()
+        {
+            var capturePanel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = CARD_BG,
+            };
+
             var rightLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -181,10 +250,8 @@ namespace NOMAD.MissionPlanner
 
             rightLayout.Controls.Add(galleryCard, 0, 3);
 
-            mainLayout.Controls.Add(rightLayout, 1, 0);
-
-            this.AutoScroll = false;
-            this.Controls.Add(mainLayout);
+            capturePanel.Controls.Add(rightLayout);
+            return capturePanel;
         }
         
         private async void BtnCapture_Click(object sender, EventArgs e)
@@ -652,6 +719,8 @@ namespace NOMAD.MissionPlanner
             {
                 _videoPlayer?.Dispose();
                 _payloadControl?.Dispose();
+                _uploadPanel?.Dispose();
+                _tabControl?.Dispose();
             }
             base.Dispose(disposing);
         }

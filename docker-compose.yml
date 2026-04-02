@@ -121,6 +121,13 @@ services:
         source /opt/ros/humble/setup.bash 2>/dev/null;
         source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null || true;
         export LD_LIBRARY_PATH=/usr/local/zed/lib:$$LD_LIBRARY_PATH;
+
+        echo '[init] Building target_localizer ROS 2 package...';
+        cp -r /workspaces/isaac_ros-dev/edge_core/target_localizer /tmp/target_localizer_src;
+        cd /tmp && colcon build --paths target_localizer_src --install-base /opt/target_localizer_install 2>&1 | tail -5;
+        source /opt/target_localizer_install/setup.bash 2>/dev/null || true;
+        cd /workspaces/isaac_ros-dev;
+
         echo '[init] Isaac ROS container ready.';
 
         # NOTE: Do NOT patch pub_downscale_factor to 1.0.
@@ -156,8 +163,18 @@ services:
         BRIDGE_PID=$$!;
         echo $$BRIDGE_PID > /tmp/ros_bridge.pid;
 
+        echo '[init] Launching drone state publisher (Edge Core -> ROS topics for target_localizer)...';
+        python3 /workspaces/isaac_ros-dev/edge_core/ros/drone_state_publisher.py --host localhost --port 8000 --rate 10 > /tmp/drone_state_pub.log 2>&1 &
+        DRONE_STATE_PID=$$!;
+        echo $$DRONE_STATE_PID > /tmp/drone_state_pub.pid;
+
+        echo '[init] Launching target_localizer node...';
+        ros2 launch target_localizer target_localizer.launch.py > /tmp/target_localizer.log 2>&1 &
+        TARGET_LOC_PID=$$!;
+        echo $$TARGET_LOC_PID > /tmp/target_localizer.pid;
+
         echo '[init] All services launched.';
-        wait -n $$NVBLOX_PID $$BRIDGE_PID 2>/dev/null || wait $$NVBLOX_PID;
+        wait -n $$NVBLOX_PID $$BRIDGE_PID $$DRONE_STATE_PID $$TARGET_LOC_PID 2>/dev/null || wait $$NVBLOX_PID;
           echo '[init] Process exited, container will restart';
       "
     healthcheck:
