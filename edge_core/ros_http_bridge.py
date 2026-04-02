@@ -457,7 +457,7 @@ class ROSHTTPBridge(Node):
 
         # HSV circle detection state
         self._enable_hsv_circles = CV2_AVAILABLE and IMAGE_AVAILABLE
-        self._hsv_circle_interval = 0.5  # Run HSV circle detection at 2 Hz
+        self._hsv_circle_interval = 1.0 / 15.0  # Run HSV circle detection at 15 Hz to match video
         self._last_hsv_circle_time = 0.0
         self._hsv_circle_send_count = 0
 

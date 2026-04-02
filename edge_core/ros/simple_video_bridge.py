@@ -450,13 +450,32 @@ class VideoStreamNode(Node):
                 conf = 0.0
             color = self._color_for_label(label)
 
-            # Draw ellipse for HSV circle detections, rectangle for others
+            # Draw ellipse for HSV circle detections with fitted orientation if available
             cx = (x1 + x2) // 2
             cy = (y1 + y2) // 2
             rx = (x2 - x1) // 2
             ry = (y2 - y1) // 2
+            
             if 'circle' in label.lower() and rx > 0 and ry > 0:
-                cv2.ellipse(frame, (cx, cy), (rx, ry), 0, 0, 360, color, 2)
+                # Use ellipse fitting parameters if available, otherwise use bbox
+                ellipse_w = det.get('ellipse_half_w')
+                ellipse_h = det.get('ellipse_half_h')
+                ellipse_angle = det.get('ellipse_angle', 0.0)
+                
+                if ellipse_w is not None and ellipse_h is not None:
+                    # Scale ellipse parameters to frame size
+                    ellipse_w = int(float(ellipse_w) * sx)
+                    ellipse_h = int(float(ellipse_h) * sy)
+                    ellipse_angle = float(ellipse_angle)
+                    if ellipse_w > 0 and ellipse_h > 0:
+                        cv2.ellipse(frame, (cx, cy), (ellipse_w, ellipse_h), ellipse_angle, 0, 360, color, 2)
+                    else:
+                        # Fallback to bbox-derived ellipse
+                        cv2.ellipse(frame, (cx, cy), (rx, ry), 0, 0, 360, color, 2)
+                else:
+                    # Use bbox-derived ellipse
+                    cv2.ellipse(frame, (cx, cy), (rx, ry), 0, 0, 360, color, 2)
+                    
                 cv2.drawMarker(frame, (cx, cy), color, cv2.MARKER_CROSS, 10, 1)
             else:
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
@@ -490,7 +509,7 @@ class VideoStreamNode(Node):
             except Exception:
                 with self._detections_lock:
                     self._detections = []
-            self._overlay_stop.wait(0.2)
+            self._overlay_stop.wait(1.0 / 15.0)  # Poll at 15 Hz to match video framerate
 
     def start_overlay(self):
         if self._overlay_enabled:
