@@ -129,6 +129,7 @@ namespace NOMAD.MissionPlanner
     {
         // ---- Configuration ----
         private readonly NOMADConfig _config;
+        private readonly DualLinkSender _sender;
 
         // ---- GL Control ----
         private GLControl _glControl;
@@ -294,9 +295,10 @@ namespace NOMAD.MissionPlanner
 
         // ==================== Constructor ====================
 
-        public SLAM3DView(NOMADConfig config)
+        public SLAM3DView(NOMADConfig config, DualLinkSender sender)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
+            _sender = sender ?? throw new ArgumentNullException(nameof(sender));
             InitializeComponents();
             StartUpdateLoop();
             StartServoPolling();

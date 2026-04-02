@@ -252,7 +252,7 @@ namespace NOMAD.MissionPlanner
 
             try
             {
-                _slam3DView = new SLAM3DView(_config);
+                _slam3DView = new SLAM3DView(_config, _sender);
                 _slam3DView.Dock = DockStyle.Fill;
                 slam3DTab.Controls.Add(_slam3DView);
             }
