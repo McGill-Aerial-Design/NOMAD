@@ -450,7 +450,7 @@ class VideoStreamNode(Node):
                 conf = 0.0
             color = self._color_for_label(label)
 
-            # Draw ellipse for HSV circle detections with fitted orientation if available
+            # Draw ellipse for circle detections with fitted orientation if available
             cx = (x1 + x2) // 2
             cy = (y1 + y2) // 2
             rx = (x2 - x1) // 2
@@ -490,7 +490,7 @@ class VideoStreamNode(Node):
             cv2.putText(frame, text, (x1 + 2, ty - baseline - 2),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
-        badge = f"HSV: {len(detections)} target{'s' if len(detections) != 1 else ''}"
+        badge = f"ROS2: {len(detections)} target{'s' if len(detections) != 1 else ''}"
         cv2.putText(frame, badge, (10, 25),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2, cv2.LINE_AA)
 

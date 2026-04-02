@@ -31,7 +31,7 @@ namespace NOMAD.MissionPlanner
 
         /// <summary>
         /// Long-running operations client (terminal commands, file transfers).
-        /// Timeout: 30s.
+        /// Timeout: 60s.
         /// </summary>
         private static HttpClient _longRunClient;
 
@@ -68,7 +68,7 @@ namespace NOMAD.MissionPlanner
 
                 _longRunClient = new HttpClient
                 {
-                    Timeout = TimeSpan.FromSeconds(30)
+                    Timeout = TimeSpan.FromSeconds(60)
                 };
 
                 // Set API key header if configured

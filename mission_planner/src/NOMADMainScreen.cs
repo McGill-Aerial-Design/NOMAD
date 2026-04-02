@@ -450,7 +450,7 @@ namespace NOMAD.MissionPlanner
                     newView = _dashboardView;
                     break;
                 case "Task1":
-                    if (_task1View == null) _task1View = new NOMADTask1View(_sender, _config, _jetsonConnectionManager);
+                    if (_task1View == null) _task1View = new NOMADTask1View(_sender, _config, _missionConfig, _jetsonConnectionManager);
                     newView = _task1View;
                     break;
                 case "Task2":

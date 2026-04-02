@@ -9,7 +9,7 @@
 Comprehensive photo capture system for Task 1 outdoor reconnaissance, featuring:
 - GPS, AHRS, and gimbal metadata capture
 - EXIF metadata embedding in JPEG files
-- Organized folder structure for AI processing
+- Target-localizer ROS 2 capture flow for current competition logic
 - Mission Planner UI integration
 
 ---
@@ -18,15 +18,11 @@ Comprehensive photo capture system for Task 1 outdoor reconnaissance, featuring:
 
 ### Data Flow
 ```
-Pilot Trigger → Mission Planner → Edge Core API → ZED Camera
-                                        ↓
-                            Capture Photo + Telemetry
-                                        ↓
-                            Embed EXIF → Save to Disk
-                                        ↓
-                        data/task1_captures/{timestamp}/
-                            ├── photo.jpg
-                            └── metadata.json
+Pilot Trigger → Mission Planner → Edge Core API → target_localizer ROS 2 node
+                    ↓
+          Capture target + build description + save target file
+                    ↓
+        Mission Planner displays ROS2 result and local metadata
 ```
 
 ### Folder Structure
@@ -51,26 +47,18 @@ data/task1_captures/
 
 #### API Endpoint
 ```
-POST /api/task/1/capture
+POST /api/task/1/target/capture
 ```
 
 **Response**:
 ```json
 {
   "success": true,
-  "timestamp": "2026-02-02T12:00:00.123456Z",
-  "position": {"lat": 45.123, "lon": -75.456, "alt": 100.0},
-  "heading_deg": 45.0,
-  "pitch_deg": -5.0,
-  "roll_deg": 2.0,
-  "gimbal_pitch_deg": -45.0,
-  "gimbal_yaw_deg": 0.0,
-  "image_name": "photo.jpg",
-  "capture_folder": "data/task1_captures/20260202_120000",
-  "metadata_file": "metadata.json",
-  "building_location": "Competition Building A (45.123, -75.456)"
+  "output": "Added 2 target(s):\nRed target ..."
 }
 ```
+
+The legacy `/api/task/1/capture` alias is still available for compatibility, but the Mission Planner Task 1 view now uses the target-localizer endpoint directly.
 
 #### EXIF Tags Embedded
 - GPS Latitude/Longitude (WGS84 DMS format)
@@ -100,6 +88,7 @@ piexif>=1.1.3  # EXIF metadata embedding
 - Label: "CAPTURE PHOTO WITH METADATA"
 - Enlarged size for prominence
 - Quick access also in Control Panel
+- Uses the target-localizer ROS 2 capture response when the new Task 1 pipeline is active
 
 #### Metadata Display
 8-line comprehensive format:
@@ -114,6 +103,8 @@ Folder: data/task1_captures/20260202_120000
 Image: photo.jpg
 ```
 
+When the backend returns the newer target-localizer response, Mission Planner shows the ROS2 output directly instead of trying to reconstruct the old image download path.
+
 #### Gallery Enhancement
 - Thumbnail view of captured photos
 - Hover tooltip with metadata
@@ -121,8 +112,8 @@ Image: photo.jpg
 - Gallery auto-refreshes after capture
 
 #### Files Modified
-- `mission_planner/src/NOMADViews.cs` - Enhanced Task 1 view
-- `mission_planner/src/NOMADControlPanel.cs` - Control panel button
+- `mission_planner/src/NOMADTask1View.cs` - Task 1 capture view
+- `mission_planner/src/ServiceControlPanel.cs` - Target localization controls
 
 ---
 
@@ -188,8 +179,8 @@ exiftool data/task1_captures/*/photo.jpg
 ### Mission Planner UI Test
 1. Open NOMAD → Task 1 View
 2. Click "CAPTURE PHOTO WITH METADATA"
-3. Verify 8-line metadata appears
-4. Check thumbnail in gallery
+3. Verify either the 8-line metadata block or the ROS2 target-localizer output appears
+4. Check thumbnail in gallery when the legacy image payload is returned
 5. Hover for metadata tooltip
 6. Click thumbnail for full view
 

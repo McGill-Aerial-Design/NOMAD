@@ -33,6 +33,7 @@ import json
 import logging
 import math
 import os
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -49,14 +50,14 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped, Twist
 from std_msgs.msg import Float32, Float32MultiArray
 
-# sensor_msgs for HSV color verification (TD-005) and HSV circle detection
+# sensor_msgs for image metadata and HSV color verification
 try:
     from sensor_msgs.msg import CameraInfo, Image
     IMAGE_AVAILABLE = True
 except ImportError:
     IMAGE_AVAILABLE = False
 
-# OpenCV + numpy for standalone HSV circle detection
+# OpenCV + numpy for HSV ROI verification
 try:
     import cv2
     import numpy as np
@@ -141,6 +142,22 @@ except ImportError:
     ZED_OD_AVAILABLE = False
     logger.warning("zed_interfaces not available - object detection bridge disabled")
 
+# Import target_localizer HSV verifier so HSV thresholds remain single-sourced.
+TargetLocalizerColorVerifier = None
+TARGET_LOCALIZER_IMPORT_ERROR = ""
+try:
+    from target_localizer.detectors import ColorVerifier as TargetLocalizerColorVerifier
+except Exception as e_import:
+    try:
+        target_localizer_pkg_root = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "target_localizer"
+        )
+        if target_localizer_pkg_root not in sys.path:
+            sys.path.insert(0, target_localizer_pkg_root)
+        from target_localizer.detectors import ColorVerifier as TargetLocalizerColorVerifier
+    except Exception as e_pkg_import:
+        TARGET_LOCALIZER_IMPORT_ERROR = f"{e_import}; {e_pkg_import}"
+
 
 @dataclass
 class VIOData:
@@ -182,7 +199,7 @@ class VelocityCommand:
 
 @dataclass
 class DetectedObject:
-    """Detected object from HSV circle detection."""
+    """Detected object forwarded from the ROS detection stream."""
     timestamp: float
     label: str           # Class label (e.g. 'red_circle')
     label_id: int        # Class ID
@@ -208,11 +225,6 @@ class DetectedObject:
     needs_review: bool = False   # True if color verification failed
 
 
-def _hsv_color_to_id(color: str) -> int:
-    """Map HSV color name to a class ID."""
-    return {"black": 0, "blue": 1, "green": 2, "red": 3, "white": 4, "yellow": 5}.get(color, -1)
-
-
 class ROSHTTPBridge(Node):
     """
     ROS2 node that bridges topics to NOMAD Edge Core HTTP API.
@@ -230,7 +242,7 @@ class ROSHTTPBridge(Node):
         vio_topic: str = "/zed/zed_node/odom",  # Default to ZED odom
         cmd_vel_topic: str = "/cmd_vel",         # Nav2 velocity commands
         mesh_topic: str = "/nvblox_node/color_layer_marker",   # Nvblox marker topic
-        mesh_output_mode: str = "block",         # Runtime-selectable output mode: block|voxel
+        mesh_output_mode: str = "voxel",         # Runtime-selectable output mode: voxel-only
         servo_topic: str = "/nomad/servo/nozzle_angle",  # Nozzle servo angle
         detection_topic: str = "/zed/zed_node/obj_det/objects",  # ZED custom OD
         send_rate_hz: float = 30.0,
@@ -261,11 +273,7 @@ class ROSHTTPBridge(Node):
         self._enable_nav_control = enable_nav_control
         self._enable_mesh = enable_mesh and MARKER_AVAILABLE
         self._mesh_topic = (mesh_topic or "/nvblox_node/color_layer_marker").strip() or "/nvblox_node/color_layer_marker"
-        self._mesh_output_mode = (mesh_output_mode or "block").strip().lower()
-        if self._mesh_output_mode not in ("block", "voxel"):
-            raise ValueError(
-                f"mesh_output_mode must be one of block/voxel, got {mesh_output_mode}"
-            )
+        self._mesh_output_mode = "voxel"
         self._enable_servo = enable_servo
         self._enable_detections = enable_detections and ZED_OD_AVAILABLE
 
@@ -356,7 +364,7 @@ class ROSHTTPBridge(Node):
         self._cmd_vel_send_http_count = 0
         self._mesh_recv_count = 0
         self._mesh_send_count = 0
-        self._voxel_empty_count = 0  # consecutive empty voxel markers; fall back to block mode after threshold
+        self._voxel_empty_count = 0  # consecutive empty voxel markers
         self._servo_recv_count = 0
         self._servo_send_count = 0
         self._detection_recv_count = 0
@@ -434,7 +442,7 @@ class ROSHTTPBridge(Node):
             )
             self.get_logger().info(f"Subscribed to servo angle: {servo_topic}")
         
-        # Subscribe to ZED custom object detections (HSV circle detection)
+        # Subscribe to ZED custom object detections
         if self._enable_detections:
             self.create_subscription(
                 ObjectsStamped,
@@ -446,22 +454,29 @@ class ROSHTTPBridge(Node):
         elif enable_detections and not ZED_OD_AVAILABLE:
             self.get_logger().warning("Detections requested but zed_interfaces not available")
         
-        # Subscribe to camera image for HSV color verification and
-        # standalone HSV circle detection
+        # Subscribe to camera image for HSV color verification.
         self._latest_image = None  # Raw image bytes
         self._image_width = 0
         self._image_height = 0
         self._image_encoding = "rgb8"
         self._image_step = 0
         self._image_lock = threading.Lock()
+        self._hsv_verify_min_ratio = 0.20
+        self._color_verifier = None
 
-        # HSV circle detection state (disabled — target_localizer ROS node handles detection)
-        self._enable_hsv_circles = False
-        self._hsv_circle_interval = 1.0 / 15.0  # Run HSV circle detection at 15 Hz to match video
-        self._last_hsv_circle_time = 0.0
-        self._hsv_circle_send_count = 0
+        if CV2_AVAILABLE and TargetLocalizerColorVerifier is not None:
+            self._color_verifier = TargetLocalizerColorVerifier()
+            self.get_logger().info(
+                "HSV verifier source: target_localizer.detectors.ColorVerifier"
+            )
+        elif not CV2_AVAILABLE:
+            self.get_logger().warning("HSV verification disabled (cv2 not available)")
+        else:
+            self.get_logger().warning(
+                "HSV verification disabled (target_localizer verifier unavailable): "
+                f"{TARGET_LOCALIZER_IMPORT_ERROR}"
+            )
 
-        # Subscribe to camera image for both HSV verification and circle detection
         if IMAGE_AVAILABLE:
             image_topic = "/zed/zed_node/rgb/color/rect/image"
             image_qos = QoSProfile(
@@ -485,24 +500,6 @@ class ROSHTTPBridge(Node):
                 image_qos,
             )
             self.get_logger().info(f"Subscribed to camera info: {camera_info_topic}")
-
-            if self._enable_hsv_circles:
-                self.get_logger().info("HSV circle detection ENABLED (standalone)")
-            else:
-                self.get_logger().warning("HSV circle detection disabled (cv2 not available)")
-
-        # Subscribe to depth image for 3D position of HSV-detected circles
-        self._latest_depth = None
-        self._depth_lock = threading.Lock()
-        if IMAGE_AVAILABLE and self._enable_hsv_circles:
-            depth_topic = "/zed/zed_node/depth/depth_registered"
-            self.create_subscription(
-                Image,
-                depth_topic,
-                self._handle_depth,
-                image_qos,
-            )
-            self.get_logger().info(f"Subscribed to depth image: {depth_topic}")
 
         # ZED camera intrinsics (will be populated from camera_info if available)
         # Default ZED 2i HD720 intrinsics as fallback
@@ -569,7 +566,7 @@ class ROSHTTPBridge(Node):
         self.create_timer(self._send_interval, self._send_to_edge_core)
         # Poll gimbal angle on its own timer to avoid blocking VIO send timer work.
         self.create_timer(self._gimbal_poll_interval, self._poll_gimbal_angle)
-        # Poll runtime mesh output mode from Edge Core (block|voxel) without restart.
+        # Poll runtime mesh output mode from Edge Core (voxel-only) without restart.
         self.create_timer(self._mesh_mode_poll_interval, self._poll_mesh_output_mode)
 
         self.get_logger().info(
@@ -1175,7 +1172,7 @@ class ROSHTTPBridge(Node):
             pass
     
     def _handle_image(self, msg: 'Image') -> None:
-        """Store latest camera image for HSV color verification and circle detection."""
+        """Store latest camera image for HSV color verification."""
         try:
             with self._image_lock:
                 self._latest_image = bytes(msg.data)
@@ -1183,206 +1180,20 @@ class ROSHTTPBridge(Node):
                 self._image_height = msg.height
                 self._image_encoding = msg.encoding if hasattr(msg, 'encoding') and msg.encoding else 'rgb8'
                 self._image_step = int(msg.step) if hasattr(msg, 'step') and msg.step else 0
-
-            # Run standalone HSV circle detection at configured rate
-            if self._enable_hsv_circles:
-                now = time.time()
-                if now - self._last_hsv_circle_time >= self._hsv_circle_interval:
-                    self._last_hsv_circle_time = now
-                    self._run_hsv_circle_detection(msg)
         except Exception:
             pass
-
-    def _handle_depth(self, msg: 'Image') -> None:
-        """Store latest depth image for 3D position of HSV-detected circles."""
-        try:
-            with self._depth_lock:
-                self._latest_depth = msg
-        except Exception:
-            pass
-
-    def _run_hsv_circle_detection(self, img_msg: 'Image') -> None:
-        """
-        Run standalone HSV circle detection on the camera image.
-
-        Uses OpenCV HoughCircles to find circles, then classifies their
-        color using HSV analysis. Results are sent to Edge Core as
-        DetectedObject entries.
-        """
-        if not CV2_AVAILABLE:
-            return
-
-        try:
-            # Convert ROS Image to numpy BGR
-            w = img_msg.width
-            h = img_msg.height
-            encoding = img_msg.encoding if hasattr(img_msg, 'encoding') else 'rgb8'
-            encoding_l = encoding.lower()
-
-            img_data = np.frombuffer(bytes(img_msg.data), dtype=np.uint8)
-
-            if 'bgra' in encoding_l or 'rgba' in encoding_l:
-                channels = 4
-            else:
-                channels = 3
-
-            min_row_stride = w * channels
-            msg_step = int(img_msg.step) if hasattr(img_msg, 'step') and img_msg.step else 0
-            row_stride = msg_step if msg_step >= min_row_stride else min_row_stride
-            required_size = h * row_stride
-
-            if img_data.size < required_size:
-                self.get_logger().warning(
-                    f"HSV image decode skipped: insufficient buffer ({img_data.size} < {required_size})"
-                )
-                return
-
-            img_data = img_data[:required_size].reshape((h, row_stride))
-            img_data = img_data[:, :min_row_stride].reshape((h, w, channels))
-
-            if 'bgra' in encoding_l:
-                image_bgr = cv2.cvtColor(img_data, cv2.COLOR_BGRA2BGR)
-            elif 'bgr' in encoding_l:
-                image_bgr = img_data
-            elif 'rgba' in encoding_l:
-                image_bgr = cv2.cvtColor(img_data, cv2.COLOR_RGBA2BGR)
-            else:
-                # Assume RGB8
-                image_bgr = cv2.cvtColor(img_data, cv2.COLOR_RGB2BGR)
-
-            # Get depth image for 3D projection
-            depth_np = None
-            with self._depth_lock:
-                depth_msg = self._latest_depth
-            if depth_msg is not None:
-                try:
-                    depth_h = int(depth_msg.height)
-                    depth_w = int(depth_msg.width)
-                    if depth_h > 0 and depth_w > 0:
-                        depth_encoding = (getattr(depth_msg, "encoding", "") or "").lower()
-                        if depth_encoding and "32fc1" not in depth_encoding:
-                            raise ValueError(f"Unsupported depth encoding: {depth_msg.encoding}")
-
-                        bytes_per_pixel = 4  # 32FC1
-                        min_row_stride = depth_w * bytes_per_pixel
-                        depth_step = int(depth_msg.step) if hasattr(depth_msg, "step") and depth_msg.step else 0
-                        depth_row_stride = depth_step if depth_step >= min_row_stride else min_row_stride
-                        required_size = depth_h * depth_row_stride
-
-                        depth_raw = bytes(depth_msg.data)
-                        if len(depth_raw) < required_size:
-                            raise ValueError(
-                                f"Insufficient depth buffer ({len(depth_raw)} < {required_size})"
-                            )
-
-                        depth_rows = np.frombuffer(depth_raw[:required_size], dtype=np.uint8).reshape(
-                            (depth_h, depth_row_stride)
-                        )
-                        depth_tight = depth_rows[:, :min_row_stride].copy()
-                        depth_np = depth_tight.view(np.float32).reshape((depth_h, depth_w))
-                except Exception:
-                    depth_np = None
-
-            # Build camera matrix
-            cam_matrix = np.array([
-                [self._camera_fx, 0, self._camera_cx],
-                [0, self._camera_fy, self._camera_cy],
-                [0, 0, 1],
-            ], dtype=np.float32)
-
-            # Import and run the HSV circle detector
-            # Use try-except to handle both installed package and standalone script scenarios
-            try:
-                from edge_core.hsv_circle_detector import detect_circles_hsv
-            except ImportError:
-                # Fallback: try direct import when running in container without edge_core package
-                import sys
-                import os
-                script_dir = os.path.dirname(os.path.abspath(__file__))
-                if script_dir not in sys.path:
-                    sys.path.insert(0, script_dir)
-                from hsv_circle_detector import detect_circles_hsv
-
-            circles = detect_circles_hsv(
-                image_bgr,
-                depth_image=depth_np,
-                camera_matrix=cam_matrix,
-                min_radius=15,
-                max_radius=150,
-                min_color_confidence=0.60,
-                min_circularity=0.70,
-                min_solidity=0.85,
-                min_aspect_ratio=0.55,
-                min_contour_area=600,
-                dp=1.5,
-                min_dist=40,
-                param1=100,
-                param2=50,
-            )
-
-            if not circles:
-                return
-
-            # Convert to DetectedObject format for Edge Core compatibility
-            capture_time = time.time()
-            detections = []
-            for circ in circles:
-                label = f"{circ.color}_circle"
-                det = DetectedObject(
-                    timestamp=capture_time,
-                    label=label,
-                    label_id=_hsv_color_to_id(circ.color),
-                    confidence=circ.confidence,
-                    x=circ.x if circ.x is not None else 0.0,
-                    y=circ.y if circ.y is not None else 0.0,
-                    z=circ.z if circ.z is not None else 0.0,
-                    bbox_x=float(circ.bbox_x),
-                    bbox_y=float(circ.bbox_y),
-                    bbox_w=float(circ.bbox_w),
-                    bbox_h=float(circ.bbox_h),
-                    tracking_state=1,  # OK
-                    hsv_color=circ.color,
-                    color_match=True,
-                    needs_review=False,
-                )
-                detections.append(det)
-
-            with self._lock:
-                self._latest_detections = detections
-                self._detection_recv_count += 1
-
-            self._send_detections_to_edge_core(detections)
-            self._hsv_circle_send_count += 1
-
-            if self._hsv_circle_send_count % 20 == 1:
-                colors = [c.color for c in circles]
-                self.get_logger().info(
-                    f"HSV circle detection: {len(circles)} targets ({', '.join(colors)})"
-                )
-
-        except Exception as e:
-            self.get_logger().error(f"HSV circle detection error: {e}")
-
-    # HSV color ranges for circle detection classes (TD-005)
-    # Each entry maps a color name to (H_low, H_high, S_min, V_min) in OpenCV HSV
-    # H: 0-179, S: 0-255, V: 0-255
-    _HSV_RANGES = {
-        "red":    [(0, 10, 80, 50), (170, 179, 80, 50)],   # red wraps around 0/180
-        "blue":   [(100, 130, 80, 50)],
-        "green":  [(35, 85, 80, 50)],
-        "yellow": [(20, 35, 80, 50)],
-        "white":  [(0, 179, 0, 200)],   # low saturation, high value
-        "black":  [(0, 179, 0, 0)],     # special: V < 50
-    }
 
     def _verify_hsv_color(self, bbox_x: float, bbox_y: float,
                           bbox_w: float, bbox_h: float) -> str:
         """
-        Analyze HSV color distribution within a bounding box (TD-005).
+        Cross-check detection color using target_localizer HSV verifier.
 
-        Returns the dominant color name from HSV analysis, or "" if
-        image data is unavailable.
+        Returns a verified color name, or "" when verification is unavailable
+        or confidence is too low.
         """
+        if self._color_verifier is None or not CV2_AVAILABLE:
+            return ""
+
         with self._image_lock:
             image = self._latest_image
             img_w = self._image_width
@@ -1411,12 +1222,11 @@ class ROSHTTPBridge(Node):
         x2 = min(img_w, cx + hw)
         y2 = min(img_h, cy + hh)
 
-        # Decode channel order/stride from ROS Image metadata for robust HSV checks
-        total_pixels = 0
-        color_votes = {}
-
         encoding = (img_encoding or "rgb8").lower()
-        if encoding == "bgr8":
+        if encoding == "mono8":
+            channels = 1
+            is_bgr = True
+        elif encoding == "bgr8":
             channels = 3
             is_bgr = True
         elif encoding == "rgba8":
@@ -1426,73 +1236,45 @@ class ROSHTTPBridge(Node):
             channels = 4
             is_bgr = True
         else:
-            # Preserve legacy behavior by defaulting to RGB8 semantics.
             channels = 3
             is_bgr = False
 
         min_row_stride = img_w * channels
         row_stride = img_step if isinstance(img_step, int) and img_step >= min_row_stride else min_row_stride
-
-        for row in range(y1, y2, 2):  # sample every other pixel for speed
-            for col in range(x1, x2, 2):
-                idx = row * row_stride + col * channels
-                if idx + channels - 1 >= len(image):
-                    continue
-                if is_bgr:
-                    b, g, r = image[idx], image[idx + 1], image[idx + 2]
-                else:
-                    r, g, b = image[idx], image[idx + 1], image[idx + 2]
-
-                # RGB to HSV (OpenCV convention: H 0-179, S 0-255, V 0-255)
-                r_f, g_f, b_f = r / 255.0, g / 255.0, b / 255.0
-                c_max = max(r_f, g_f, b_f)
-                c_min = min(r_f, g_f, b_f)
-                delta = c_max - c_min
-
-                # Value (0-255)
-                v = int(c_max * 255)
-
-                # Saturation (0-255)
-                s = int((delta / c_max) * 255) if c_max > 0 else 0
-
-                # Hue (0-179)
-                if delta == 0:
-                    h = 0
-                elif c_max == r_f:
-                    h = int(30.0 * (((g_f - b_f) / delta) % 6))
-                elif c_max == g_f:
-                    h = int(30.0 * (((b_f - r_f) / delta) + 2))
-                else:
-                    h = int(30.0 * (((r_f - g_f) / delta) + 4))
-                h = h % 180
-
-                total_pixels += 1
-
-                # Check black first (low value)
-                if v < 50:
-                    color_votes["black"] = color_votes.get("black", 0) + 1
-                    continue
-
-                # Check white (low saturation, high value)
-                if s < 40 and v > 200:
-                    color_votes["white"] = color_votes.get("white", 0) + 1
-                    continue
-
-                # Check chromatic colors by hue range
-                for color_name, ranges in self._HSV_RANGES.items():
-                    if color_name in ("white", "black"):
-                        continue
-                    for rng in ranges:
-                        h_lo, h_hi, s_min, v_min = rng
-                        if h_lo <= h <= h_hi and s >= s_min and v >= v_min:
-                            color_votes[color_name] = color_votes.get(color_name, 0) + 1
-                            break
-
-        if not color_votes or total_pixels == 0:
+        required_size = img_h * row_stride
+        if len(image) < required_size:
             return ""
 
-        # Return the color with the most votes
-        return max(color_votes, key=lambda k: color_votes[k])
+        try:
+            image_rows = np.frombuffer(image[:required_size], dtype=np.uint8).reshape((img_h, row_stride))
+            roi_flat = image_rows[y1:y2, x1 * channels:x2 * channels]
+            if roi_flat.size == 0:
+                return ""
+
+            roi = roi_flat.reshape((y2 - y1, x2 - x1, channels))
+            roi = np.ascontiguousarray(roi)
+
+            if channels == 1:
+                roi_bgr = cv2.cvtColor(roi[:, :, 0], cv2.COLOR_GRAY2BGR)
+            elif is_bgr and channels == 4:
+                roi_bgr = cv2.cvtColor(roi, cv2.COLOR_BGRA2BGR)
+            elif is_bgr:
+                roi_bgr = roi
+            elif channels == 4:
+                roi_bgr = cv2.cvtColor(roi, cv2.COLOR_RGBA2BGR)
+            else:
+                roi_bgr = cv2.cvtColor(roi, cv2.COLOR_RGB2BGR)
+
+            color, ratio = self._color_verifier.classify_roi(
+                roi_bgr,
+                (0, 0, roi_bgr.shape[1], roi_bgr.shape[0]),
+            )
+            color_name = str(getattr(color, "value", color)).lower()
+            if color_name == "unknown" or ratio < self._hsv_verify_min_ratio:
+                return ""
+            return color_name
+        except Exception:
+            return ""
 
     def _handle_detections(self, msg) -> None:
         """
@@ -1677,7 +1459,7 @@ class ROSHTTPBridge(Node):
     
 
     def _handle_voxel_marker(self, msg: 'Marker') -> None:
-        """Handle nvblox CUBE_LIST marker data and forward as block/voxel payloads."""
+        """Handle nvblox CUBE_LIST marker data and forward voxel payloads."""
         if not self._enable_mesh:
             return
         try:
@@ -1688,18 +1470,14 @@ class ROSHTTPBridge(Node):
 
             n_pts = len(msg.points)
 
-            # Track empty markers for fallback logic (DO THIS BEFORE rate limiting)
-            # so we count ALL empty messages, not just the ones that pass the rate limit
+            # Track empty markers before rate limiting so we count all messages.
             if n_pts == 0:
                 self._voxel_empty_count += 1
                 if self._voxel_empty_count == 20:
                     self.get_logger().warning(
                         f"{self._mesh_topic} has been empty for 20 consecutive messages"
                     )
-                empty_mode = self._mesh_output_mode if self._mesh_output_mode in ("block", "voxel") else "block"
-                self._send_empty_mesh_heartbeat(mode=empty_mode, timestamp=now)
-                # Return AFTER tracking, but before rate limit check
-                # (so we don't skip block mesh if voxels are temporarily empty)
+                self._send_empty_mesh_heartbeat(mode="voxel", timestamp=now)
                 return
 
             # Got real points -- reset empty counter
@@ -1711,13 +1489,11 @@ class ROSHTTPBridge(Node):
 
             voxel_size = msg.scale.x if msg.scale.x > 0.0 else 0.05
             has_colors = len(msg.colors) == n_pts
-            active_mode = self._mesh_output_mode if self._mesh_output_mode in ("block", "voxel") else "block"
 
             # Cap payload size so large voxel messages do not starve pose/world cadence.
             # 8k voxels is a good balance between detail and real-time responsiveness.
             limit = min(n_pts, 8000)
 
-            blocks_acc = {}
             voxels = []
             if limit == n_pts:
                 sample_indices = range(limit)
@@ -1728,81 +1504,31 @@ class ROSHTTPBridge(Node):
 
             for i in sample_indices:
                 p = msg.points[i]
-
-                if active_mode == "voxel":
-                    entry = {"p": [round(p.x, 4), round(p.y, 4), round(p.z, 4)]}
-                    if has_colors:
-                        c = msg.colors[i]
-                        entry["c"] = [
+                if has_colors:
+                    c = msg.colors[i]
+                    voxels.append({
+                        "p": [round(p.x, 4), round(p.y, 4), round(p.z, 4)],
+                        "c": [
                             int(max(0.0, min(1.0, c.r)) * 255.0),
                             int(max(0.0, min(1.0, c.g)) * 255.0),
                             int(max(0.0, min(1.0, c.b)) * 255.0),
-                        ]
-                    voxels.append(entry)
-                    continue
-
-                # Quantize marker points into block indices so downstream
-                # consumers can stay in compact block mode.
-                bix = int(math.floor((p.x / voxel_size) + 0.5))
-                biy = int(math.floor((p.y / voxel_size) + 0.5))
-                biz = int(math.floor((p.z / voxel_size) + 0.5))
-                key = (bix, biy, biz)
-
-                if has_colors:
-                    c = msg.colors[i]
-
-                    r = int(max(0.0, min(1.0, c.r)) * 255.0)
-                    g = int(max(0.0, min(1.0, c.g)) * 255.0)
-                    b = int(max(0.0, min(1.0, c.b)) * 255.0)
-
-                    bucket = blocks_acc.get(key)
-                    if bucket is None:
-                        blocks_acc[key] = [r, g, b, 1]
-                    else:
-                        bucket[0] += r
-                        bucket[1] += g
-                        bucket[2] += b
-                        bucket[3] += 1
-                elif key not in blocks_acc:
-                    blocks_acc[key] = None
+                        ],
+                    })
+                else:
+                    voxels.append({"p": [round(p.x, 4), round(p.y, 4), round(p.z, 4)]})
 
             drone_pose = self._get_drone_body_pose()
 
-            if active_mode == "voxel":
-                mesh_data = {
-                    "voxels": voxels,
-                    "voxel_size": round(voxel_size, 4),
-                    "mode": "voxel",
-                    "total_voxels": n_pts,
-                    "sent_voxels": len(voxels),
-                    "timestamp": now,
-                    "frame_id": "ros_optical",  # Same frame as mesh vertices and drone_position/attitude
-                    "clear": False,
-                }
-            else:
-                blocks = []
-                for (bix, biy, biz), color_acc in blocks_acc.items():
-                    block_entry = {"index": [bix, biy, biz]}
-                    if color_acc is not None and color_acc[3] > 0:
-                        count = color_acc[3]
-                        block_entry["color"] = [
-                            int(color_acc[0] / count),
-                            int(color_acc[1] / count),
-                            int(color_acc[2] / count),
-                        ]
-                    blocks.append(block_entry)
-
-                mesh_data = {
-                    "blocks": blocks,
-                    "block_size": round(voxel_size, 4),
-                    "mode": "block",
-                    "total_blocks": len(blocks_acc),
-                    "source_voxels": n_pts,
-                    "sampled_voxels": limit,
-                    "timestamp": now,
-                    "frame_id": "ros_optical",  # Same frame as mesh vertices and drone_position/attitude
-                    "clear": False,
-                }
+            mesh_data = {
+                "voxels": voxels,
+                "voxel_size": round(voxel_size, 4),
+                "mode": "voxel",
+                "total_voxels": n_pts,
+                "sent_voxels": len(voxels),
+                "timestamp": now,
+                "frame_id": "ros_optical",  # Same frame as mesh vertices and drone_position/attitude
+                "clear": False,
+            }
 
             if drone_pose:
                 mesh_data["drone_position"] = drone_pose["position"]
@@ -1815,7 +1541,7 @@ class ROSHTTPBridge(Node):
             self.get_logger().error(f"Voxel marker processing error: {e}")
 
     def _poll_mesh_output_mode(self) -> None:
-        """Poll Edge Core for runtime mesh output mode (block|voxel)."""
+        """Poll Edge Core for runtime mesh output mode (voxel-only)."""
         now = time.time()
         if now - self._mesh_mode_last_poll < self._mesh_mode_poll_interval:
             return
@@ -1828,16 +1554,7 @@ class ROSHTTPBridge(Node):
             with urlopen(req, timeout=0.1) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
 
-            mode = str(data.get("mesh_output_mode", "")).strip().lower()
-            if mode not in ("block", "voxel"):
-                return
-
-            if mode != self._mesh_output_mode:
-                previous = self._mesh_output_mode
-                self._mesh_output_mode = mode
-                self.get_logger().info(
-                    f"Mesh output mode changed at runtime: {previous} -> {mode}"
-                )
+            self._mesh_output_mode = "voxel"
         except Exception:
             # Keep last known mode on transient API/network errors.
             pass
@@ -1968,7 +1685,7 @@ class ROSHTTPBridge(Node):
         with self._mesh_pending_lock:
             self._mesh_pending_data = data
             self._mesh_pending_ctype = ctype
-            self._mesh_pending_meta = mesh_data.get('mode', 'block'), mesh_data.get('total_voxels', mesh_data.get('total_blocks', 0))
+            self._mesh_pending_meta = mesh_data.get('mode', 'voxel'), mesh_data.get('total_voxels', 0)
         self._mesh_send_event.set()
 
     def _mesh_sender_loop(self) -> None:
@@ -1984,7 +1701,7 @@ class ROSHTTPBridge(Node):
             with self._mesh_pending_lock:
                 data = self._mesh_pending_data
                 ctype = getattr(self, '_mesh_pending_ctype', 'application/json')
-                meta = getattr(self, '_mesh_pending_meta', ('block', 0))
+                meta = getattr(self, '_mesh_pending_meta', ('voxel', 0))
                 self._mesh_pending_data = None
 
             if data is None:
@@ -1996,9 +1713,8 @@ class ROSHTTPBridge(Node):
                     self._last_mesh_send_time = time.time()
                     if self._mesh_send_count % 10 == 1:
                         mode, count = meta
-                        unit = "voxels" if mode == 'voxel' else "blocks"
                         self.get_logger().info(
-                            f"Mesh sent: {count} {unit} (mode={mode})"
+                            f"Mesh sent: {count} voxels (mode={mode})"
                         )
                 else:
                     self._send_errors += 1
@@ -2021,10 +1737,7 @@ class ROSHTTPBridge(Node):
             "frame_id": "ros_optical",
             "clear": False,
         }
-        if mode == "voxel":
-            mesh_data.update({"voxels": [], "voxel_size": 0.0, "total_voxels": 0, "sent_voxels": 0})
-        else:
-            mesh_data.update({"blocks": [], "block_size": 0.0, "total_blocks": 0})
+        mesh_data.update({"voxels": [], "voxel_size": 0.0, "total_voxels": 0, "sent_voxels": 0})
 
         drone_pose = self._get_drone_body_pose()
         if drone_pose:
@@ -2132,8 +1845,6 @@ class ROSHTTPBridge(Node):
             "mesh_output_mode": self._mesh_output_mode,
             "servo_enabled": self._enable_servo,
             "detections_enabled": self._enable_detections,
-            "hsv_circles_enabled": self._enable_hsv_circles,
-            "hsv_circles_sent": self._hsv_circle_send_count,
             # VO-006: tilt cycle drift stats
             "tilt_drift": {
                 "cycles": self._tilt_cycle_count,
@@ -2157,8 +1868,8 @@ def main():
                         help="Navigation velocity command topic")
     parser.add_argument("--mesh-topic", default="/nvblox_node/color_layer_marker",
                         help="Nvblox marker topic (visualization_msgs/Marker CUBE_LIST)")
-    parser.add_argument("--mesh-output-mode", default="block", choices=["block", "voxel"],
-                        help="Mesh payload mode sent to Edge Core (runtime-toggleable via API)")
+    parser.add_argument("--mesh-output-mode", default="voxel", choices=["voxel"],
+                        help="Mesh payload mode sent to Edge Core")
     parser.add_argument("--rate", type=float, default=30.0, help="Send rate Hz")
     parser.add_argument("--disable-nav", action="store_true",
                         help="Disable navigation control (cmd_vel forwarding)")

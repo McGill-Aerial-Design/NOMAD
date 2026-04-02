@@ -516,10 +516,10 @@ class VideoStreamManager:
 
     def set_overlay(self, enabled: bool) -> bool:
         """
-        Enable or disable the HSV circle detection overlay on the video stream.
+        Enable or disable the ROS2 detection overlay on the video stream.
 
         When enabled, the video bridge draws bounding boxes from Edge Core
-        HSV circle detections directly onto the video frames before encoding to RTSP.
+        detections directly onto the video frames before encoding to RTSP.
         """
         if not self.is_relay_running():
             logger.warning("Cannot toggle overlay: video bridge not running")

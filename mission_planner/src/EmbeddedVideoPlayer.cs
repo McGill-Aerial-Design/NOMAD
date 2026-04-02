@@ -44,7 +44,7 @@ namespace NOMAD.MissionPlanner
         private Bitmap _lastFrame;
         private List<(string Name, string Display)> _topics = new List<(string, string)>();
         
-        // Detection overlay (server-side toggle via API)
+        // Unified HSV toggle (ROS2 detection lifecycle + video overlay)
         private CheckBox _chkDetections;
         private bool _overlayEnabled;
         private bool _syncingOverlayState;
@@ -205,7 +205,7 @@ namespace NOMAD.MissionPlanner
             // Detection overlay checkbox
             _chkDetections = new CheckBox
             {
-                Text = "HSV",
+                Text = "HSV (ROS2)",
                 Location = new Point(340, 33),
                 AutoSize = true,
                 ForeColor = Color.FromArgb(255, 180, 60),
@@ -217,27 +217,27 @@ namespace NOMAD.MissionPlanner
             {
                 if (_syncingOverlayState) return;
 
-                _overlayEnabled = _chkDetections.Checked;
-                // Toggle server-side overlay (bbox burn-in on RTSP stream)
+                bool requestedEnabled = _chkDetections.Checked;
+
+                _lblStatus.Text = requestedEnabled
+                    ? "Enabling HSV detector..."
+                    : "Disabling HSV detector...";
+                _lblStatus.ForeColor = Color.Yellow;
+
                 try
                 {
-                    string action = _overlayEnabled ? "enable" : "disable";
-                    var resp = await JetsonApiService.ApiClient.PostAsync(
-                        $"{_apiBaseUrl}/api/video/overlay/{action}", null);
-                    if (!resp.IsSuccessStatusCode)
-                    {
-                        _lblStatus.Text = $"Overlay toggle failed: {resp.StatusCode}";
-                        _syncingOverlayState = true;
-                        _chkDetections.Checked = !_overlayEnabled;
-                        _syncingOverlayState = false;
-                        _overlayEnabled = _chkDetections.Checked;
-                    }
+                    await SetHsvModeAsync(requestedEnabled);
+                    _overlayEnabled = requestedEnabled;
+                    _lblStatus.Text = requestedEnabled
+                        ? "HSV detector enabled"
+                        : "HSV detector disabled";
+                    _lblStatus.ForeColor = requestedEnabled ? Color.LimeGreen : Color.Gray;
                 }
                 catch (Exception ex)
                 {
-                    _lblStatus.Text = $"Overlay error: {ex.Message}";
+                    _lblStatus.Text = $"HSV toggle failed: {ex.Message}";
                     _syncingOverlayState = true;
-                    _chkDetections.Checked = !_overlayEnabled;
+                    _chkDetections.Checked = !requestedEnabled;
                     _syncingOverlayState = false;
                     _overlayEnabled = _chkDetections.Checked;
                 }
@@ -258,9 +258,24 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                var json = await JetsonApiService.ApiClient.GetStringAsync($"{_apiBaseUrl}/api/video/overlay/status");
-                var data = JObject.Parse(json);
-                var enabled = data["enabled"]?.Value<bool>() ?? false;
+                var overlayJson = await JetsonApiService.ApiClient.GetStringAsync($"{_apiBaseUrl}/api/video/overlay/status");
+                var overlayData = JObject.Parse(overlayJson);
+                var overlayEnabled = overlayData["enabled"]?.Value<bool>() ?? false;
+
+                bool detectionEnabled = overlayEnabled;
+                try
+                {
+                    var detectionJson = await JetsonApiService.ApiClient.GetStringAsync($"{_apiBaseUrl}/api/detections/status");
+                    var detectionData = JObject.Parse(detectionJson);
+                    detectionEnabled = detectionData["detection_enabled"]?.Value<bool>() ?? false;
+                }
+                catch
+                {
+                    // If detection probe fails, preserve overlay status only.
+                    detectionEnabled = overlayEnabled;
+                }
+
+                var enabled = overlayEnabled && detectionEnabled;
 
                 _syncingOverlayState = true;
                 _chkDetections.Checked = enabled;
@@ -271,6 +286,83 @@ namespace NOMAD.MissionPlanner
             {
                 // Keep local default if status probe fails.
                 _syncingOverlayState = false;
+            }
+        }
+
+        private async System.Threading.Tasks.Task SetHsvModeAsync(bool enabled)
+        {
+            if (enabled)
+            {
+                var detectionResp = await JetsonApiService.LongRunClient.PostAsync(
+                    $"{_apiBaseUrl}/api/detections/start", null);
+                await EnsureRequestSucceededAsync(detectionResp, "detector start", requireSuccessField: true);
+
+                var overlayResp = await JetsonApiService.ApiClient.PostAsync(
+                    $"{_apiBaseUrl}/api/video/overlay/enable", null);
+                try
+                {
+                    await EnsureRequestSucceededAsync(overlayResp, "overlay enable", requireSuccessField: true);
+                }
+                catch
+                {
+                    try
+                    {
+                        await JetsonApiService.LongRunClient.PostAsync(
+                            $"{_apiBaseUrl}/api/detections/stop", null);
+                    }
+                    catch { }
+
+                    throw;
+                }
+
+                return;
+            }
+
+            var overlayDisableResp = await JetsonApiService.ApiClient.PostAsync(
+                $"{_apiBaseUrl}/api/video/overlay/disable", null);
+            var detectionStopResp = await JetsonApiService.LongRunClient.PostAsync(
+                $"{_apiBaseUrl}/api/detections/stop", null);
+            await EnsureRequestSucceededAsync(overlayDisableResp, "overlay disable", requireSuccessField: true);
+            await EnsureRequestSucceededAsync(detectionStopResp, "detector stop", requireSuccessField: true);
+        }
+
+        private async System.Threading.Tasks.Task EnsureRequestSucceededAsync(
+            HttpResponseMessage response,
+            string operation,
+            bool requireSuccessField = false)
+        {
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException(
+                    $"{operation} returned {response.StatusCode}");
+            }
+
+            var payload = await response.Content.ReadAsStringAsync();
+            if (string.IsNullOrWhiteSpace(payload))
+            {
+                if (requireSuccessField)
+                    throw new InvalidOperationException($"{operation} returned empty response");
+                return;
+            }
+
+            try
+            {
+                var json = JObject.Parse(payload);
+                var successToken = json["success"];
+                if (successToken != null && !successToken.Value<bool>())
+                {
+                    var detail = json["error"]?.ToString()
+                        ?? json["message"]?.ToString()
+                        ?? payload;
+                    throw new InvalidOperationException($"{operation} failed: {detail}");
+                }
+
+                if (requireSuccessField && successToken == null)
+                    throw new InvalidOperationException($"{operation} returned no success field");
+            }
+            catch (Newtonsoft.Json.JsonException) when (!requireSuccessField)
+            {
+                // Some endpoints return plain text; HTTP status already validated.
             }
         }
         
@@ -787,6 +879,10 @@ namespace NOMAD.MissionPlanner
                     {
                         JetsonApiService.ApiClient.PostAsync(
                             $"{_apiBaseUrl}/api/video/overlay/disable", null)
+                            .ConfigureAwait(false);
+
+                        JetsonApiService.LongRunClient.PostAsync(
+                            $"{_apiBaseUrl}/api/detections/stop", null)
                             .ConfigureAwait(false);
                     }
                     catch { }

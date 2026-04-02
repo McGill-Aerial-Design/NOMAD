@@ -391,13 +391,13 @@ def create_app(state_manager: StateManager) -> FastAPI:
     # VIO state from external sources (ROS bridge)
     app.state.external_vio_state: Optional[dict] = None
     app.state.slam_vio_ros_frame: Optional[dict] = None  # ROS-frame pose for SLAM 3D
-    configured_mesh_mode = (os.environ.get("NOMAD_SLAM_MESH_OUTPUT_MODE") or "block").strip().lower()
-    if configured_mesh_mode not in ("block", "voxel"):
+    configured_mesh_mode = (os.environ.get("NOMAD_SLAM_MESH_OUTPUT_MODE") or "voxel").strip().lower()
+    if configured_mesh_mode != "voxel":
         logger.warning(
-            "Invalid NOMAD_SLAM_MESH_OUTPUT_MODE='%s'; defaulting to 'block'",
+            "Invalid NOMAD_SLAM_MESH_OUTPUT_MODE='%s'; defaulting to 'voxel'",
             configured_mesh_mode,
         )
-        configured_mesh_mode = "block"
+        configured_mesh_mode = "voxel"
     app.state.slam_mesh_output_mode: str = configured_mesh_mode
     app.state.vio_trajectory: list[dict] = []  # List of {x, y, z, timestamp} points
     app.state.vio_trajectory_max_points: int = 1000  # Keep last N points
@@ -1596,7 +1596,7 @@ wait
             service_name="/target_localizer/capture_target",
             service_type="std_srvs/srv/Trigger",
             request_payload={},
-            timeout_s=15.0,
+            timeout_s=45.0,
         )
         return {"success": True, "output": output}
 
@@ -1746,7 +1746,7 @@ wait
             service_name="/target_localizer/capture_target",
             service_type="std_srvs/srv/Trigger",
             request_payload={},
-            timeout_s=15.0,
+            timeout_s=45.0,
         )
         return {"success": True, "output": output}
 
@@ -3063,6 +3063,30 @@ wait
                 "running": False,
                 "trajectory_points": len(vio_trajectory),
             }
+
+        # Target localization status (Task 1 target_localizer ROS2 node)
+        with request.app.state.detection_state_lock:
+            detection_enabled = bool(getattr(request.app.state, "detection_enabled", True))
+            detection_last_update = request.app.state.detection_last_update
+            detection_current_count = len(request.app.state.detected_objects)
+            detection_history_count = len(request.app.state.detection_history)
+        age_seconds = time.time() - detection_last_update if detection_last_update > 0 else None
+        detection_fresh = age_seconds is not None and age_seconds <= 3.0
+        services["detections"] = {
+            "status": "active" if detection_enabled else "inactive",
+            "running": detection_enabled,
+            "detection_enabled": detection_enabled,
+            "fresh_stream": detection_fresh,
+            "age_seconds": age_seconds,
+            "current_count": detection_current_count,
+            "history_count": detection_history_count,
+            "message": (
+                "Running" if detection_enabled else "Stopped"
+            ) + (
+                f" ({detection_current_count} current, {detection_history_count} history)"
+                if detection_enabled else ""
+            ),
+        }
         
         # Isaac ROS container summary (from shared probe)
         services["isaac_ros_container"] = {
@@ -3626,13 +3650,13 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             return {"success": True, "cleared": count}
 
     # ==================== Object Detection Endpoints ====================
-    # HSV circle detection via ZED custom OD pipeline
-    # Detections are received from ros_http_bridge and served to Mission Planner
+    # ROS2 target detections via ZED custom OD pipeline.
+    # Detections are received from ros_http_bridge and served to Mission Planner.
 
     @app.post("/api/detections/start", tags=["Detections"])
     async def start_detections(request: Request):
         """
-        Start HSV circle detection by relaunching nvblox with OD enabled.
+        Start ROS2 target detection by relaunching nvblox with OD enabled.
 
         This keeps launch behavior consistent with NOMAD's custom launch file.
         """
@@ -3647,7 +3671,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
     @app.post("/api/detections/stop", tags=["Detections"])
     async def stop_detections(request: Request):
         """
-        Stop HSV detection by relaunching nvblox with OD disabled.
+        Stop ROS2 target detection by relaunching nvblox with OD disabled.
 
         nvblox mapping remains available; only custom object detection is disabled.
         """
@@ -3661,7 +3685,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
 
     @app.get("/api/detections/status", tags=["Detections"])
     async def get_detections_status(request: Request):
-        """Get circle detection runtime status for Mission Planner service control polling."""
+        """Get ROS2 detection runtime status for Mission Planner polling."""
         import time as _time
 
         with request.app.state.detection_state_lock:
@@ -3991,15 +4015,15 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             }
         }
 
-    # ---- Video Overlay (HSV detection bboxes on stream) ----
+    # ---- Video Overlay (ROS2 detection bounding boxes on stream) ----
     
     @app.post("/api/video/overlay/enable", tags=["Video"])
     async def enable_video_overlay():
         """
-        Enable HSV circle detection overlay on the video stream.
+        Enable ROS2 detection overlay on the video stream.
 
         When enabled, the video bridge draws bounding boxes from the
-        HSV circle detection pipeline directly onto the RTSP frames in real time.
+        ROS2 detection pipeline directly onto the RTSP frames in real time.
         Toggle off with POST /api/video/overlay/disable.
         """
         mgr = get_video_stream_manager()
@@ -4013,7 +4037,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
     
     @app.post("/api/video/overlay/disable", tags=["Video"])
     async def disable_video_overlay():
-        """Disable HSV circle detection overlay on the video stream."""
+        """Disable ROS2 detection overlay on the video stream."""
         mgr = get_video_stream_manager()
         if not mgr:
             raise HTTPException(status_code=503, detail="Video stream manager not initialized")
@@ -4039,31 +4063,27 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
     @app.get("/api/task/2/slam/mesh/mode", tags=["Task 2", "SLAM"])
     async def get_slam_mesh_mode(request: Request):
         """Get current runtime mesh output mode requested by Edge Core."""
-        mode = str(getattr(request.app.state, "slam_mesh_output_mode", "block")).strip().lower()
-        if mode not in ("block", "voxel"):
-            mode = "block"
-            request.app.state.slam_mesh_output_mode = mode
+        mode = "voxel"
+        request.app.state.slam_mesh_output_mode = mode
         return {
             "mesh_output_mode": mode,
-            "supported_modes": ["block", "voxel"],
-            "runtime_toggle": True,
+            "supported_modes": ["voxel"],
+            "runtime_toggle": False,
         }
 
     @app.post("/api/task/2/slam/mesh/mode", tags=["Task 2", "SLAM"])
-    async def set_slam_mesh_mode(request: Request, mode: str = Query(..., description="Mesh output mode: block or voxel")):
+    async def set_slam_mesh_mode(request: Request, mode: str = Query(..., description="Mesh output mode: voxel")):
         """Set runtime mesh output mode for ros_http_bridge without restart."""
-        normalized = (mode or "").strip().lower()
-        if normalized not in ("block", "voxel"):
-            raise HTTPException(status_code=400, detail="mode must be 'block' or 'voxel'")
+        normalized = "voxel"
 
-        previous = str(getattr(request.app.state, "slam_mesh_output_mode", "block")).strip().lower()
+        previous = str(getattr(request.app.state, "slam_mesh_output_mode", "voxel")).strip().lower()
         request.app.state.slam_mesh_output_mode = normalized
         return {
             "success": True,
             "mesh_output_mode": normalized,
             "previous_mesh_output_mode": previous,
-            "applies_without_restart": True,
-            "bridge_poll_interval_s": 1.0,
+            "applies_without_restart": False,
+            "bridge_poll_interval_s": 0.0,
         }
     
     @app.post("/api/task/2/slam/mesh/update", tags=["Task 2", "SLAM"])
@@ -4175,7 +4195,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                         "timestamp": stored.get("received_at"),
                         "block_count": stored.get("block_count", 0),
                         "total_blocks": stored.get("total_blocks", 0),
-                        "mode": "block" if stored.get("mode") == "blocks" else stored.get("mode", "block"),
+                        "mode": stored.get("mode", "voxel"),
                     }
                 else:
                     result = {
@@ -4306,31 +4326,31 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         nvblox map itself - use the nvblox reset service for that.
         
         Instead of nulling slam_mesh_data, we replace it with a valid
-        cleared state containing an empty
-        block list and clear=True so clients can clear their local caches.
+        cleared state containing an empty voxel list and clear=True so
+        clients can clear their local caches.
         """
-        # Preserve block_size from the previous mesh data if available
-        prev_block_size = 0.05
+        # Preserve voxel size from the previous mesh data if available.
+        prev_voxel_size = 0.05
         if (hasattr(request.app.state, 'slam_mesh_data')
                 and isinstance(request.app.state.slam_mesh_data, dict)):
             prev_mesh = request.app.state.slam_mesh_data.get("mesh")
             if isinstance(prev_mesh, dict):
-                prev_block_size = prev_mesh.get("block_size", 0.05)
+                prev_voxel_size = prev_mesh.get("voxel_size", 0.05)
         
         # Replace with a cleared-but-valid state so the GET endpoint
         # still returns available=True and clients see clear=True
         request.app.state.slam_mesh_data = {
             "mesh": {
-                "blocks": [],
-                "block_size": prev_block_size,
-                "total_blocks": 0,
-                "mode": "block",
+                "voxels": [],
+                "voxel_size": prev_voxel_size,
+                "total_voxels": 0,
+                "mode": "voxel",
                 "clear": True,
             },
             "received_at": datetime.now(timezone.utc).isoformat(),
             "block_count": 0,
             "total_blocks": 0,
-            "mode": "block",
+            "mode": "voxel",
         }
         request.app.state.slam_mesh_version = getattr(request.app.state, "slam_mesh_version", 0) + 1
         

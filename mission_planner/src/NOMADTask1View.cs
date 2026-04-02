@@ -17,9 +17,15 @@ namespace NOMAD.MissionPlanner
     {
         private readonly DualLinkSender _sender;
         private readonly NOMADConfig _config;
+        private readonly MissionConfig _missionConfig;
         private readonly JetsonConnectionManager _jetsonConnectionManager;
         private Label _lblPosition;
         private Label _lblGpsStatus;
+        private Label _lblBuildingStatus;
+        private TextBox _txtBuildingLat;
+        private TextBox _txtBuildingLon;
+        private Button _btnBuildingSave;
+        private Button _btnBuildingUseCurrent;
         private Button _btnCapture;
         private TextBox _txtResult;
         private EmbeddedVideoPlayer _videoPlayer;
@@ -28,10 +34,15 @@ namespace NOMAD.MissionPlanner
         private Task1UploadPanel _uploadPanel;
         private TabControl _tabControl;
         
-        public NOMADTask1View(DualLinkSender sender, NOMADConfig config, JetsonConnectionManager jetsonConnectionManager = null)
+        public NOMADTask1View(
+            DualLinkSender sender,
+            NOMADConfig config,
+            MissionConfig missionConfig = null,
+            JetsonConnectionManager jetsonConnectionManager = null)
         {
             _sender = sender;
             _config = config;
+            _missionConfig = missionConfig ?? MissionConfig.Load();
             _jetsonConnectionManager = jetsonConnectionManager;
             InitializeUI();
         }
@@ -151,14 +162,91 @@ namespace NOMAD.MissionPlanner
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 4,
+                RowCount = 5,
                 Margin = Padding.Empty,
                 Padding = Padding.Empty,
             };
+            rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 92));   // Building location
             rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));   // GPS status
             rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 105));  // Payload controls
-            rightLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50));    // Capture
-            rightLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50));    // Gallery
+            rightLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 45));    // Capture
+            rightLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 55));    // Gallery
+
+            // --- Building Location ---
+            var buildingCard = CreateCard("BUILDING LOCATION");
+            buildingCard.Dock = DockStyle.Fill;
+
+            _lblBuildingStatus = new Label
+            {
+                Text = GetTask1BuildingLocationText() ?? "Not set",
+                Font = new Font("Segoe UI", 8),
+                ForeColor = TEXT_PRIMARY,
+                Location = new Point(10, 22),
+                AutoSize = true,
+            };
+            buildingCard.Controls.Add(_lblBuildingStatus);
+
+            var lblBuildingLat = new Label
+            {
+                Text = "Lat:",
+                Font = new Font("Segoe UI", 8),
+                ForeColor = TEXT_PRIMARY,
+                Location = new Point(10, 42),
+                AutoSize = true,
+            };
+            buildingCard.Controls.Add(lblBuildingLat);
+
+            _txtBuildingLat = new TextBox
+            {
+                Location = new Point(35, 39),
+                Size = new Size(95, 22),
+                BackColor = Color.FromArgb(50, 50, 53),
+                ForeColor = Color.White,
+                BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font("Segoe UI", 8),
+            };
+            buildingCard.Controls.Add(_txtBuildingLat);
+
+            var lblBuildingLon = new Label
+            {
+                Text = "Lon:",
+                Font = new Font("Segoe UI", 8),
+                ForeColor = TEXT_PRIMARY,
+                Location = new Point(135, 42),
+                AutoSize = true,
+            };
+            buildingCard.Controls.Add(lblBuildingLon);
+
+            _txtBuildingLon = new TextBox
+            {
+                Location = new Point(162, 39),
+                Size = new Size(95, 22),
+                BackColor = Color.FromArgb(50, 50, 53),
+                ForeColor = Color.White,
+                BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font("Segoe UI", 8),
+            };
+            buildingCard.Controls.Add(_txtBuildingLon);
+
+            _btnBuildingUseCurrent = CreateButton("Use Current", ACCENT_COLOR, 85, 22);
+            _btnBuildingUseCurrent.Font = new Font("Segoe UI", 7, FontStyle.Bold);
+            _btnBuildingUseCurrent.Location = new Point(10, 65);
+            _btnBuildingUseCurrent.Click += (s, e) => UseCurrentGpsForBuildingLocation();
+            buildingCard.Controls.Add(_btnBuildingUseCurrent);
+
+            _btnBuildingSave = CreateButton("Save", SUCCESS_COLOR, 50, 22);
+            _btnBuildingSave.Font = new Font("Segoe UI", 7, FontStyle.Bold);
+            _btnBuildingSave.Location = new Point(100, 65);
+            _btnBuildingSave.Click += (s, e) => SaveBuildingLocationFromFields();
+            buildingCard.Controls.Add(_btnBuildingSave);
+
+            var btnBuildingClear = CreateButton("Clear", ERROR_COLOR, 50, 22);
+            btnBuildingClear.Font = new Font("Segoe UI", 7, FontStyle.Bold);
+            btnBuildingClear.Location = new Point(155, 65);
+            btnBuildingClear.Click += (s, e) => ClearBuildingLocationFields();
+            buildingCard.Controls.Add(btnBuildingClear);
+
+            rightLayout.Controls.Add(buildingCard, 0, 0);
 
             // --- GPS Status ---
             var gpsCard = CreateCard("GPS STATUS");
@@ -184,13 +272,13 @@ namespace NOMAD.MissionPlanner
             };
             gpsCard.Controls.Add(_lblPosition);
 
-            rightLayout.Controls.Add(gpsCard, 0, 0);
+            rightLayout.Controls.Add(gpsCard, 0, 1);
 
             // --- Payload Controls ---
             _payloadControl = new PayloadControlPanel(_config);
             _payloadControl.Dock = DockStyle.Fill;
             _payloadControl.Margin = new Padding(5);
-            rightLayout.Controls.Add(_payloadControl, 0, 1);
+            rightLayout.Controls.Add(_payloadControl, 0, 2);
 
             // --- Capture Card ---
             var captureCard = CreateCard("SNAPSHOT CAPTURE");
@@ -224,7 +312,7 @@ namespace NOMAD.MissionPlanner
                 _txtResult.Height = captureCard.ClientSize.Height - 110;
             };
 
-            rightLayout.Controls.Add(captureCard, 0, 2);
+            rightLayout.Controls.Add(captureCard, 0, 3);
 
             // --- Gallery Card ---
             var galleryCard = CreateCard("CAPTURED IMAGES");
@@ -248,10 +336,86 @@ namespace NOMAD.MissionPlanner
                 _galleryPanel.Height = galleryCard.ClientSize.Height - 60;
             };
 
-            rightLayout.Controls.Add(galleryCard, 0, 3);
+            rightLayout.Controls.Add(galleryCard, 0, 4);
+
+            LoadBuildingLocationFields();
 
             capturePanel.Controls.Add(rightLayout);
             return capturePanel;
+        }
+
+        private string GetTask1BuildingLocationText()
+        {
+            var coords = _missionConfig?.Task1Building?.Coordinates;
+            if (coords != null)
+            {
+                return $"{coords.Lat:F6}, {coords.Lon:F6}";
+            }
+
+            return null;
+        }
+
+        private void LoadBuildingLocationFields()
+        {
+            if (_txtBuildingLat != null)
+                _txtBuildingLat.Text = _missionConfig?.Task1Building?.Coordinates?.Lat.ToString("F6") ?? string.Empty;
+            if (_txtBuildingLon != null)
+                _txtBuildingLon.Text = _missionConfig?.Task1Building?.Coordinates?.Lon.ToString("F6") ?? string.Empty;
+            UpdateBuildingLocationStatus();
+        }
+
+        private void UpdateBuildingLocationStatus(string prefix = null)
+        {
+            if (_lblBuildingStatus == null)
+                return;
+
+            var text = GetTask1BuildingLocationText() ?? "Not set";
+            _lblBuildingStatus.Text = string.IsNullOrWhiteSpace(prefix) ? text : $"{prefix}: {text}";
+        }
+
+        private void SaveBuildingLocationFromFields()
+        {
+            if (!double.TryParse(_txtBuildingLat?.Text, out var lat) ||
+                !double.TryParse(_txtBuildingLon?.Text, out var lon))
+            {
+                _txtResult.Text = "[FAIL] Invalid building GPS coordinates.";
+                _txtResult.ForeColor = ERROR_COLOR;
+                return;
+            }
+
+            var building = _missionConfig.Task1Building ?? new BuildingInfo();
+            building.Coordinates = new GpsPoint(lat, lon);
+            _missionConfig.Task1Building = building;
+            _missionConfig.Save();
+            UpdateBuildingLocationStatus("Saved");
+            _txtResult.Text = $"[OK] Building location saved: {lat:F6}, {lon:F6}";
+            _txtResult.ForeColor = SUCCESS_COLOR;
+        }
+
+        private void UseCurrentGpsForBuildingLocation()
+        {
+            var cs = MainV2.comPort?.MAV?.cs;
+            if (cs == null || (Math.Abs(cs.lat) < 0.000001 && Math.Abs(cs.lng) < 0.000001))
+            {
+                _txtResult.Text = "[FAIL] No GPS position available.";
+                _txtResult.ForeColor = ERROR_COLOR;
+                return;
+            }
+
+            _txtBuildingLat.Text = cs.lat.ToString("F6");
+            _txtBuildingLon.Text = cs.lng.ToString("F6");
+            SaveBuildingLocationFromFields();
+        }
+
+        private void ClearBuildingLocationFields()
+        {
+            _missionConfig.Task1Building = new BuildingInfo();
+            _missionConfig.Save();
+            if (_txtBuildingLat != null) _txtBuildingLat.Text = string.Empty;
+            if (_txtBuildingLon != null) _txtBuildingLon.Text = string.Empty;
+            UpdateBuildingLocationStatus();
+            _txtResult.Text = "[OK] Building location cleared.";
+            _txtResult.ForeColor = SUCCESS_COLOR;
         }
         
         private async void BtnCapture_Click(object sender, EventArgs e)
@@ -294,6 +458,24 @@ namespace NOMAD.MissionPlanner
 
                             var imageName = Val("image_name");
 
+                            if (string.IsNullOrEmpty(imageName))
+                            {
+                                var output = Val("output") ?? Val("message") ?? Val("detail");
+                                var captureSummary = new StringBuilder();
+                                captureSummary.AppendLine("[OK] Capture Successful");
+                                if (!string.IsNullOrWhiteSpace(output))
+                                {
+                                    captureSummary.AppendLine(output);
+                                }
+                                else
+                                {
+                                    captureSummary.AppendLine("Target localization completed, but no image metadata was returned by the API.");
+                                }
+
+                                _txtResult.Text = captureSummary.ToString().TrimEnd();
+                                return;
+                            }
+
                             // Extract enhanced metadata
                             var timestamp = Val("timestamp") ?? DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ssZ");
                             var headingDeg = Val("heading_deg") ?? "N/A";
@@ -301,7 +483,7 @@ namespace NOMAD.MissionPlanner
                             var rollDeg = Val("roll_deg") ?? "N/A";
                             var gimbalPitch = Val("gimbal_pitch_deg") ?? "N/A";
                             var gimbalYaw = Val("gimbal_yaw_deg") ?? "N/A";
-                            var buildingLocation = Val("building_location") ?? "N/A";
+                            var buildingLocation = GetTask1BuildingLocationText() ?? Val("building_location") ?? "N/A";
                             var captureFolder = Val("capture_folder") ?? "N/A";
 
                             var position = data["position"] as Newtonsoft.Json.Linq.JObject;

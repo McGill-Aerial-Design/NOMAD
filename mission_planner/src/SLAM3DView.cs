@@ -212,12 +212,15 @@ namespace NOMAD.MissionPlanner
         // ---- UI Controls ----
         private Panel _controlPanel;
         private Button _btnToggleCamera, _btnResetView, _btnClearMesh;
+        private Button _btnSaveMap, _btnLoadMap, _btnRelocalizeMap, _btnCenterOnPose;
         private Label _lblStatus, _lblStats;
         private Label _lblPerceptionStatus;
+        private Label _lblMapPath;
+        private TextBox _txtMapPath;
         private CheckBox _chkShowGrid, _chkShowTrajectory, _chkAutoUpdate;
         private ComboBox _combDroneType, _combMeshMode;
         private NumericUpDown _numLength, _numWidth, _numHeight, _numHeadingOffset, _numFov;
-        private string _meshOutputMode = "block";
+        private string _meshOutputMode = "voxel";
         private bool _meshModeApplyInFlight;
         private bool _meshModeRefreshInFlight;
         private bool _meshModeSelectionInternal;
@@ -316,7 +319,7 @@ namespace NOMAD.MissionPlanner
                 BackColor = Color.FromArgb(30, 30, 33),
             };
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 110));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 150));
 
             // OpenGL viewport
             try
@@ -397,9 +400,10 @@ namespace NOMAD.MissionPlanner
                 BackColor = Color.FromArgb(60, 60, 60),
                 Font = new Font("Segoe UI", 8.5f),
             };
-            _combMeshMode.Items.AddRange(new[] { "Block", "Voxel" });
+            _combMeshMode.Items.Add("Voxel");
             _combMeshMode.SelectedIndexChanged += CombMeshMode_SelectedIndexChanged;
             _combMeshMode.SelectedIndex = 0;
+            _combMeshMode.Enabled = false;
             _controlPanel.Controls.Add(_combMeshMode);
 
             // Second row: drone config
@@ -466,8 +470,47 @@ namespace NOMAD.MissionPlanner
             };
             _controlPanel.Controls.Add(_numFov);
 
+            // Third row: area map controls
+            y += 26;
+            x = 10;
+
+            _lblMapPath = CreateLabel("Area Map:", x, y + 3);
+            _controlPanel.Controls.Add(_lblMapPath);
+            x += 65;
+
+            _txtMapPath = new TextBox
+            {
+                Location = new Point(x, y),
+                Size = new Size(300, 22),
+                Text = "/home/mad/NOMAD/data/area_maps/slam_area_map.area",
+                BackColor = Color.FromArgb(50, 50, 55),
+                ForeColor = Color.White,
+                BorderStyle = BorderStyle.FixedSingle,
+            };
+            _controlPanel.Controls.Add(_txtMapPath);
+            x += 310;
+
+            _btnSaveMap = CreateButton("Save", x, y, 58, 24, Color.FromArgb(0, 122, 204));
+            _btnSaveMap.Click += async (s, e) => await SaveAreaMapAsync();
+            _controlPanel.Controls.Add(_btnSaveMap);
+            x += 62;
+
+            _btnLoadMap = CreateButton("Load", x, y, 58, 24, Color.FromArgb(60, 60, 65));
+            _btnLoadMap.Click += async (s, e) => await LoadAreaMapAsync();
+            _controlPanel.Controls.Add(_btnLoadMap);
+            x += 62;
+
+            _btnRelocalizeMap = CreateButton("Relocalize", x, y, 80, 24, Color.FromArgb(150, 90, 0));
+            _btnRelocalizeMap.Click += async (s, e) => await RelocalizeAreaMapAsync();
+            _controlPanel.Controls.Add(_btnRelocalizeMap);
+            x += 86;
+
+            _btnCenterOnPose = CreateButton("Center", x, y, 65, 24, Color.FromArgb(60, 60, 65));
+            _btnCenterOnPose.Click += (s, e) => CenterOrbitOnCurrentPose();
+            _controlPanel.Controls.Add(_btnCenterOnPose);
+
             // Third row: status
-            y += 28;
+            y += 30;
             _lblStatus = new Label
             {
                 Text = "Status: Connecting...",
@@ -2110,37 +2153,43 @@ namespace NOMAD.MissionPlanner
             _orbitCenterX = _orbitCenterY = _orbitCenterZ = 0;
         }
 
+        private void CenterOrbitOnCurrentPose()
+        {
+            ZedToGL(_renderPosX, _renderPosY, _renderPosZ,
+                out _orbitCenterX, out _orbitCenterY, out _orbitCenterZ);
+            _currentViewMode = CameraViewMode.FreeOrbit;
+            if (_btnToggleCamera != null)
+                _btnToggleCamera.Text = "View: Orbit";
+        }
+
         private async void CombMeshMode_SelectedIndexChanged(object sender, EventArgs e)
         {
             if (_combMeshMode == null || _meshModeSelectionInternal || _meshModeApplyInFlight)
                 return;
 
-            string selectedMode = (_combMeshMode.SelectedItem?.ToString() ?? "Block").Equals("Voxel", StringComparison.OrdinalIgnoreCase)
-                ? "voxel"
-                : "block";
-
-            if (selectedMode == _meshOutputMode)
+            // Voxel-only mode: keep the control as a status indicator.
+            if (_meshOutputMode == "voxel")
                 return;
 
             _meshModeApplyInFlight = true;
             _combMeshMode.Enabled = false;
             try
             {
-                var response = await JetsonApiService.PostAsync($"/api/task/2/slam/mesh/mode?mode={selectedMode}");
+                var response = await JetsonApiService.PostAsync("/api/task/2/slam/mesh/mode?mode=voxel");
                 if (response.IsSuccessStatusCode)
                 {
-                    _meshOutputMode = selectedMode;
-                    UpdateStatusSafe($"Status: Mesh mode set to {selectedMode}");
+                    _meshOutputMode = "voxel";
+                    UpdateStatusSafe("Status: Mesh mode set to voxel");
                 }
                 else
                 {
-                    SetMeshModeSelection(_meshOutputMode);
+                    SetMeshModeSelection("voxel");
                     UpdateStatusSafe($"Status: Mesh mode change failed ({(int)response.StatusCode})");
                 }
             }
             catch (Exception ex)
             {
-                SetMeshModeSelection(_meshOutputMode);
+                SetMeshModeSelection("voxel");
                 UpdateStatusSafe($"Status: Mesh mode change failed ({ex.Message})");
             }
             finally
@@ -2211,9 +2260,34 @@ namespace NOMAD.MissionPlanner
                 _lblPerceptionStatus.Text = text;
         }
 
+        private static string SummarizeCommandResult(CommandResult result)
+        {
+            if (result == null)
+                return "Unknown result";
+
+            if (!string.IsNullOrWhiteSpace(result.Data))
+            {
+                try
+                {
+                    var json = JObject.Parse(result.Data);
+                    var message = json["message"]?.ToString()
+                        ?? json["detail"]?.ToString()
+                        ?? json["output"]?.ToString();
+                    if (!string.IsNullOrWhiteSpace(message))
+                        return message;
+                }
+                catch
+                {
+                    // Fall back to the transport-level message below.
+                }
+            }
+
+            return string.IsNullOrWhiteSpace(result.Message) ? "Completed" : result.Message;
+        }
+
         private static string NormalizeMeshMode(string mode)
         {
-            return string.Equals(mode, "voxel", StringComparison.OrdinalIgnoreCase) ? "voxel" : "block";
+            return "voxel";
         }
 
         private void SetMeshModeSelection(string mode)
@@ -2263,7 +2337,7 @@ namespace NOMAD.MissionPlanner
                 }
 
                 if (updateStatus)
-                    UpdateStatusSafe($"Status: Mesh mode is {mode}");
+                    UpdateStatusSafe("Status: Mesh mode is voxel");
             }
             catch
             {
@@ -2273,6 +2347,55 @@ namespace NOMAD.MissionPlanner
             {
                 _meshModeRefreshInFlight = false;
             }
+        }
+
+        private async Task SaveAreaMapAsync()
+        {
+            var path = (_txtMapPath?.Text ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                UpdateStatusSafe("Status: Area map path is empty");
+                return;
+            }
+
+            UpdateStatusSafe("Status: Saving area map...");
+            var result = await _sender.SaveAreaMapAsync(path);
+            var message = SummarizeCommandResult(result);
+            UpdateStatusSafe(result.Success ? $"Status: {message}" : $"Status: Save failed ({message})");
+        }
+
+        private async Task LoadAreaMapAsync()
+        {
+            var path = (_txtMapPath?.Text ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                UpdateStatusSafe("Status: Area map path is empty");
+                return;
+            }
+
+            UpdateStatusSafe("Status: Loading area map...");
+            var result = await _sender.LoadAreaMapAsync(path);
+            if (result.Success)
+                CenterOrbitOnCurrentPose();
+            var message = SummarizeCommandResult(result);
+            UpdateStatusSafe(result.Success ? $"Status: {message}" : $"Status: Load failed ({message})");
+        }
+
+        private async Task RelocalizeAreaMapAsync()
+        {
+            var path = (_txtMapPath?.Text ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                UpdateStatusSafe("Status: Area map path is empty");
+                return;
+            }
+
+            UpdateStatusSafe("Status: Relocalizing...");
+            var result = await _sender.RelocalizeAreaMapAsync(path);
+            if (result.Success)
+                CenterOrbitOnCurrentPose();
+            var message = SummarizeCommandResult(result);
+            UpdateStatusSafe(result.Success ? $"Status: {message}" : $"Status: Relocalize failed ({message})");
         }
 
         // ==================== Cleanup ====================

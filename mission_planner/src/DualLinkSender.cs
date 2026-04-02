@@ -148,8 +148,8 @@ namespace NOMAD.MissionPlanner
                     gimbal_pitch_deg = gimbalPitchOverride,
                     lidar_distance_m = lidarDistanceOverride
                 };
-                // Use long-run client (30s) -- RTSP capture can take 5-10s
-                return await SendHttpPostLongRun("/api/task/1/capture", body);
+                // Use the target-localizer capture endpoint with the long-run client.
+                return await SendHttpPostLongRun("/api/task/1/target/capture", body);
             }
         }
 
@@ -393,6 +393,14 @@ namespace NOMAD.MissionPlanner
         public async Task<CommandResult> GetIsaacStatusAsync()
         {
             return await SendHttpGetLongRun("/api/isaac/status", 15);
+        }
+
+        /// <summary>
+        /// Get target-localization runtime status.
+        /// </summary>
+        public async Task<CommandResult> GetTargetLocalizationStatusAsync()
+        {
+            return await SendHttpGetLongRun("/api/detections/status", 15);
         }
 
         /// <summary>
@@ -671,6 +679,22 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
+        /// Start target localization without stopping the Isaac ROS container.
+        /// </summary>
+        public async Task<CommandResult> StartTargetLocalizationAsync()
+        {
+            return await SendHttpPostLongRun("/api/detections/start", null);
+        }
+
+        /// <summary>
+        /// Stop target localization without stopping the Isaac ROS container.
+        /// </summary>
+        public async Task<CommandResult> StopTargetLocalizationAsync()
+        {
+            return await SendHttpPostLongRun("/api/detections/stop", null);
+        }
+
+        /// <summary>
         /// Get Isaac ROS logs.
         /// </summary>
         public async Task<CommandResult> GetIsaacRosLogsAsync(string logType = "all")
@@ -718,6 +742,44 @@ namespace NOMAD.MissionPlanner
         public async Task<CommandResult> ClearSlamAsync()
         {
             return await SendHttpPost("/api/task/2/slam/clear", null);
+        }
+
+        /// <summary>
+        /// Save the ZED positional tracking area map to a Jetson SSD path.
+        /// </summary>
+        public async Task<CommandResult> SaveAreaMapAsync(string filePath)
+        {
+            var body = new
+            {
+                file_path = filePath,
+                wait_for_completion = true,
+                timeout_s = 30.0,
+            };
+            return await SendHttpPostLongRun("/api/vio/area/save", body);
+        }
+
+        /// <summary>
+        /// Load a previously saved area map for relocalization.
+        /// </summary>
+        public async Task<CommandResult> LoadAreaMapAsync(string filePath)
+        {
+            var body = new
+            {
+                file_path = filePath,
+            };
+            return await SendHttpPostLongRun("/api/vio/area/load", body);
+        }
+
+        /// <summary>
+        /// Load an area map and immediately attempt relocalization.
+        /// </summary>
+        public async Task<CommandResult> RelocalizeAreaMapAsync(string filePath)
+        {
+            var body = new
+            {
+                file_path = filePath,
+            };
+            return await SendHttpPostLongRun("/api/vio/area/relocalize", body);
         }
 
         // ============================================================
@@ -985,7 +1047,7 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Send an HTTP POST using the long-running client (30s timeout).
+        /// Send an HTTP POST using the long-running client (60s timeout).
         /// Use for operations that take longer than the standard timeout,
         /// such as starting video bridges, Isaac ROS, etc.
         /// </summary>
