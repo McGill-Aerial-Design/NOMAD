@@ -212,12 +212,14 @@ namespace NOMAD.MissionPlanner
 
         // ---- UI Controls ----
         private Panel _controlPanel;
+        private Panel _statusLogPanel;
         private Button _btnToggleCamera, _btnResetView, _btnClearMesh;
         private Button _btnSaveMap, _btnLoadMap, _btnRelocalizeMap, _btnCenterOnPose;
         private Label _lblStatus, _lblStats;
         private Label _lblPerceptionStatus;
         private Label _lblMapPath;
         private TextBox _txtMapPath;
+        private TextBox _txtStatusLog;
         private CheckBox _chkShowGrid, _chkShowTrajectory, _chkAutoUpdate;
         private ComboBox _combDroneType, _combMeshMode;
         private NumericUpDown _numLength, _numWidth, _numHeight, _numHeadingOffset, _numFov;
@@ -228,6 +230,7 @@ namespace NOMAD.MissionPlanner
         private int _meshUpdateCount;
         private int _totalBlocks;
         private DateTime _lastUpdateTime = DateTime.MinValue;
+        private const int MaxStatusLogLines = 120;
 
         // ==================== Voxel Key Helpers ====================
 
@@ -321,7 +324,19 @@ namespace NOMAD.MissionPlanner
                 BackColor = Color.FromArgb(30, 30, 33),
             };
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 150));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 170));
+
+            var bottomLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                RowCount = 1,
+                BackColor = Color.FromArgb(30, 30, 33),
+                Margin = new Padding(0),
+                Padding = new Padding(0),
+            };
+            bottomLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 76));
+            bottomLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 24));
 
             // OpenGL viewport
             try
@@ -359,6 +374,7 @@ namespace NOMAD.MissionPlanner
                 Dock = DockStyle.Fill,
                 BackColor = Color.FromArgb(40, 40, 45),
                 Padding = new Padding(10),
+                AutoScroll = true,
             };
 
             int x = 10, y = 8;
@@ -544,8 +560,44 @@ namespace NOMAD.MissionPlanner
             };
             _controlPanel.Controls.Add(_lblPerceptionStatus);
 
-            mainLayout.Controls.Add(_controlPanel, 0, 1);
+            _statusLogPanel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(34, 34, 38),
+                Padding = new Padding(8),
+            };
+
+            var lblStatusLogTitle = new Label
+            {
+                Text = "Status Log",
+                Dock = DockStyle.Top,
+                Height = 20,
+                ForeColor = Color.LightSteelBlue,
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                TextAlign = ContentAlignment.MiddleLeft,
+            };
+
+            _txtStatusLog = new TextBox
+            {
+                Dock = DockStyle.Fill,
+                Multiline = true,
+                ScrollBars = ScrollBars.Vertical,
+                ReadOnly = true,
+                BackColor = Color.FromArgb(24, 24, 26),
+                ForeColor = Color.Gainsboro,
+                BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font("Consolas", 8),
+            };
+
+            _statusLogPanel.Controls.Add(_txtStatusLog);
+            _statusLogPanel.Controls.Add(lblStatusLogTitle);
+
+            bottomLayout.Controls.Add(_controlPanel, 0, 0);
+            bottomLayout.Controls.Add(_statusLogPanel, 1, 0);
+            mainLayout.Controls.Add(bottomLayout, 0, 1);
             Controls.Add(mainLayout);
+
+            AppendStatusLogSafe("SLAM status log initialized");
 
             // Render timer ~30fps
             _renderTimer = new System.Windows.Forms.Timer { Interval = 33 };
@@ -2182,17 +2234,20 @@ namespace NOMAD.MissionPlanner
                 {
                     _meshOutputMode = "voxel";
                     UpdateStatusSafe("Status: Mesh mode set to voxel");
+                    AppendStatusLogSafe("Mesh mode set to voxel");
                 }
                 else
                 {
                     SetMeshModeSelection("voxel");
                     UpdateStatusSafe($"Status: Mesh mode change failed ({(int)response.StatusCode})");
+                    AppendStatusLogSafe($"Mesh mode change failed ({(int)response.StatusCode})");
                 }
             }
             catch (Exception ex)
             {
                 SetMeshModeSelection("voxel");
                 UpdateStatusSafe($"Status: Mesh mode change failed ({ex.Message})");
+                AppendStatusLogSafe($"Mesh mode change failed ({ex.Message})");
             }
             finally
             {
@@ -2226,10 +2281,12 @@ namespace NOMAD.MissionPlanner
             {
                 await JetsonApiService.PostAsync("/api/task/2/slam/clear");
                 UpdateStatusSafe("Mesh cleared");
+                AppendStatusLogSafe("Mesh cleared");
             }
             catch (Exception ex)
             {
                 UpdateStatusSafe($"Mesh cleared locally (server: {ex.Message})");
+                AppendStatusLogSafe($"Mesh clear sent locally (server warning: {ex.Message})");
             }
         }
 
@@ -2262,6 +2319,34 @@ namespace NOMAD.MissionPlanner
                 _lblPerceptionStatus.Text = text;
         }
 
+        private void AppendStatusLogSafe(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text) || _txtStatusLog == null || _txtStatusLog.IsDisposed)
+                return;
+
+            void Append()
+            {
+                if (_txtStatusLog == null || _txtStatusLog.IsDisposed)
+                    return;
+
+                string timestamp = DateTime.Now.ToString("HH:mm:ss");
+                _txtStatusLog.AppendText($"[{timestamp}] {text}\r\n");
+
+                var lines = _txtStatusLog.Lines;
+                if (lines.Length > MaxStatusLogLines)
+                {
+                    _txtStatusLog.Lines = lines.Skip(lines.Length - MaxStatusLogLines).ToArray();
+                    _txtStatusLog.SelectionStart = _txtStatusLog.TextLength;
+                    _txtStatusLog.ScrollToCaret();
+                }
+            }
+
+            if (_txtStatusLog.InvokeRequired)
+                _txtStatusLog.BeginInvoke((Action)Append);
+            else
+                Append();
+        }
+
         private static string SummarizeCommandResult(CommandResult result)
         {
             if (result == null)
@@ -2285,6 +2370,53 @@ namespace NOMAD.MissionPlanner
             }
 
             return string.IsNullOrWhiteSpace(result.Message) ? "Completed" : result.Message;
+        }
+
+        private static bool IsServiceUnavailableMessage(string message)
+        {
+            string text = (message ?? string.Empty).ToLowerInvariant();
+            return text.Contains("waiting for service")
+                || text.Contains("service to be available")
+                || text.Contains("service is not available")
+                || text.Contains("service unavailable");
+        }
+
+        private static string BuildAreaMapFailureText(string actionName, string summary)
+        {
+            if (IsServiceUnavailableMessage(summary))
+            {
+                return $"{actionName} failed: map service not ready yet (start Isaac ROS + nvblox, then retry)";
+            }
+
+            return $"{actionName} failed ({summary})";
+        }
+
+        private async Task<CommandResult> ExecuteAreaMapCommandWithRetryAsync(
+            Func<Task<CommandResult>> command,
+            string actionName)
+        {
+            CommandResult lastResult = null;
+
+            for (int attempt = 1; attempt <= 2; attempt++)
+            {
+                lastResult = await command();
+                if (lastResult.Success)
+                    return lastResult;
+
+                string summary = SummarizeCommandResult(lastResult);
+                if (!IsServiceUnavailableMessage(summary) || attempt >= 2)
+                    return lastResult;
+
+                AppendStatusLogSafe($"{actionName}: service not ready, retrying in 2s...");
+                await Task.Delay(2000);
+            }
+
+            return lastResult ?? new CommandResult
+            {
+                Success = false,
+                Message = $"{actionName} failed",
+                Method = "HTTP",
+            };
         }
 
         private static string NormalizeMeshMode(string mode)
@@ -2357,13 +2489,38 @@ namespace NOMAD.MissionPlanner
             if (string.IsNullOrWhiteSpace(path))
             {
                 UpdateStatusSafe("Status: Area map path is empty");
+                AppendStatusLogSafe("Save area map failed: path is empty");
                 return;
             }
 
-            UpdateStatusSafe("Status: Saving area map...");
-            var result = await _sender.SaveAreaMapAsync(path);
-            var message = SummarizeCommandResult(result);
-            UpdateStatusSafe(result.Success ? $"Status: {message}" : $"Status: Save failed ({message})");
+            try
+            {
+                UpdateStatusSafe("Status: Saving area map...");
+                AppendStatusLogSafe($"Save area map requested: {path}");
+
+                var result = await ExecuteAreaMapCommandWithRetryAsync(
+                    () => _sender.SaveAreaMapAsync(path),
+                    "Save area map");
+                var message = SummarizeCommandResult(result);
+
+                if (result.Success)
+                {
+                    UpdateStatusSafe($"Status: {message}");
+                    AppendStatusLogSafe($"Save area map succeeded: {message}");
+                }
+                else
+                {
+                    string failureText = BuildAreaMapFailureText("Save area map", message);
+                    UpdateStatusSafe($"Status: {failureText}");
+                    AppendStatusLogSafe(failureText);
+                }
+            }
+            catch (Exception ex)
+            {
+                string failureText = $"Save area map failed ({ex.Message})";
+                UpdateStatusSafe($"Status: {failureText}");
+                AppendStatusLogSafe(failureText);
+            }
         }
 
         private async Task LoadAreaMapAsync()
@@ -2372,15 +2529,40 @@ namespace NOMAD.MissionPlanner
             if (string.IsNullOrWhiteSpace(path))
             {
                 UpdateStatusSafe("Status: Area map path is empty");
+                AppendStatusLogSafe("Load area map failed: path is empty");
                 return;
             }
 
-            UpdateStatusSafe("Status: Loading area map...");
-            var result = await _sender.LoadAreaMapAsync(path);
-            if (result.Success)
-                CenterOrbitOnCurrentPose();
-            var message = SummarizeCommandResult(result);
-            UpdateStatusSafe(result.Success ? $"Status: {message}" : $"Status: Load failed ({message})");
+            try
+            {
+                UpdateStatusSafe("Status: Loading area map...");
+                AppendStatusLogSafe($"Load area map requested: {path}");
+
+                var result = await ExecuteAreaMapCommandWithRetryAsync(
+                    () => _sender.LoadAreaMapAsync(path),
+                    "Load area map");
+                if (result.Success)
+                    CenterOrbitOnCurrentPose();
+
+                var message = SummarizeCommandResult(result);
+                if (result.Success)
+                {
+                    UpdateStatusSafe($"Status: {message}");
+                    AppendStatusLogSafe($"Load area map succeeded: {message}");
+                }
+                else
+                {
+                    string failureText = BuildAreaMapFailureText("Load area map", message);
+                    UpdateStatusSafe($"Status: {failureText}");
+                    AppendStatusLogSafe(failureText);
+                }
+            }
+            catch (Exception ex)
+            {
+                string failureText = $"Load area map failed ({ex.Message})";
+                UpdateStatusSafe($"Status: {failureText}");
+                AppendStatusLogSafe(failureText);
+            }
         }
 
         private async Task RelocalizeAreaMapAsync()
@@ -2389,15 +2571,40 @@ namespace NOMAD.MissionPlanner
             if (string.IsNullOrWhiteSpace(path))
             {
                 UpdateStatusSafe("Status: Area map path is empty");
+                AppendStatusLogSafe("Relocalize area map failed: path is empty");
                 return;
             }
 
-            UpdateStatusSafe("Status: Relocalizing...");
-            var result = await _sender.RelocalizeAreaMapAsync(path);
-            if (result.Success)
-                CenterOrbitOnCurrentPose();
-            var message = SummarizeCommandResult(result);
-            UpdateStatusSafe(result.Success ? $"Status: {message}" : $"Status: Relocalize failed ({message})");
+            try
+            {
+                UpdateStatusSafe("Status: Relocalizing...");
+                AppendStatusLogSafe($"Relocalize area map requested: {path}");
+
+                var result = await ExecuteAreaMapCommandWithRetryAsync(
+                    () => _sender.RelocalizeAreaMapAsync(path),
+                    "Relocalize area map");
+                if (result.Success)
+                    CenterOrbitOnCurrentPose();
+
+                var message = SummarizeCommandResult(result);
+                if (result.Success)
+                {
+                    UpdateStatusSafe($"Status: {message}");
+                    AppendStatusLogSafe($"Relocalize area map succeeded: {message}");
+                }
+                else
+                {
+                    string failureText = BuildAreaMapFailureText("Relocalize area map", message);
+                    UpdateStatusSafe($"Status: {failureText}");
+                    AppendStatusLogSafe(failureText);
+                }
+            }
+            catch (Exception ex)
+            {
+                string failureText = $"Relocalize area map failed ({ex.Message})";
+                UpdateStatusSafe($"Status: {failureText}");
+                AppendStatusLogSafe(failureText);
+            }
         }
 
         // ==================== Cleanup ====================

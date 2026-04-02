@@ -158,19 +158,167 @@ namespace NOMAD.MissionPlanner
                 BackColor = CARD_BG,
             };
 
-            var rightLayout = new TableLayoutPanel
+            var controlsTabs = new TabControl
+            {
+                Dock = DockStyle.Fill,
+                Margin = new Padding(5),
+            };
+            StyleTabControl(controlsTabs);
+            controlsTabs.ItemSize = new Size(145, 30);
+
+            var mainControlsTab = new TabPage("Main Controls")
+            {
+                BackColor = CARD_BG,
+                Padding = new Padding(0),
+            };
+            mainControlsTab.Controls.Add(CreateMainControlsSubtab());
+            controlsTabs.TabPages.Add(mainControlsTab);
+
+            var configTab = new TabPage("Configuration")
+            {
+                BackColor = CARD_BG,
+                Padding = new Padding(0),
+            };
+            configTab.Controls.Add(CreateConfigurationSubtab());
+            controlsTabs.TabPages.Add(configTab);
+
+            LoadBuildingLocationFields();
+
+            capturePanel.Controls.Add(controlsTabs);
+            return capturePanel;
+        }
+
+        private Panel CreateMainControlsSubtab()
+        {
+            var panel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = CARD_BG,
+            };
+
+            var layout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 5,
+                RowCount = 4,
                 Margin = Padding.Empty,
                 Padding = Padding.Empty,
             };
-            rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 92));   // Building location
-            rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));   // GPS status
-            rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 105));  // Payload controls
-            rightLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 45));    // Capture
-            rightLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 55));    // Gallery
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));   // GPS status
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 105));  // Payload controls
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 45));    // Capture
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 55));    // Gallery
+
+            // --- GPS Status ---
+            var gpsCard = CreateCard("GPS STATUS");
+            gpsCard.Dock = DockStyle.Fill;
+
+            _lblGpsStatus = new Label
+            {
+                Text = "Fix: Waiting...",
+                Font = new Font("Consolas", 10),
+                ForeColor = TEXT_PRIMARY,
+                Location = new Point(15, 40),
+                AutoSize = true,
+            };
+            gpsCard.Controls.Add(_lblGpsStatus);
+
+            _lblPosition = new Label
+            {
+                Text = "Position: --",
+                Font = new Font("Consolas", 10),
+                ForeColor = TEXT_PRIMARY,
+                Location = new Point(15, 62),
+                AutoSize = true,
+            };
+            gpsCard.Controls.Add(_lblPosition);
+
+            layout.Controls.Add(gpsCard, 0, 0);
+
+            // --- Payload Controls ---
+            _payloadControl = new PayloadControlPanel(_config);
+            _payloadControl.Dock = DockStyle.Fill;
+            _payloadControl.Margin = new Padding(5);
+            layout.Controls.Add(_payloadControl, 0, 1);
+
+            // --- Capture Card ---
+            var captureCard = CreateCard("SNAPSHOT CAPTURE");
+            captureCard.Dock = DockStyle.Fill;
+
+            _btnCapture = CreateButton("CAPTURE PHOTO", ACCENT_COLOR, 200, 40);
+            _btnCapture.Location = new Point(15, 45);
+            _btnCapture.Click += BtnCapture_Click;
+            captureCard.Controls.Add(_btnCapture);
+
+            _txtResult = new TextBox
+            {
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
+                Location = new Point(15, 95),
+                Size = new Size(280, 80),
+                Multiline = true,
+                ReadOnly = true,
+                ScrollBars = ScrollBars.Vertical,
+                BackColor = Color.FromArgb(25, 25, 28),
+                ForeColor = SUCCESS_COLOR,
+                Font = new Font("Consolas", 9),
+                BorderStyle = BorderStyle.FixedSingle,
+                Text = "Ready to capture...",
+            };
+            captureCard.Controls.Add(_txtResult);
+
+            captureCard.Resize += (s, e) =>
+            {
+                _txtResult.Width = captureCard.ClientSize.Width - 30;
+                _txtResult.Height = captureCard.ClientSize.Height - 110;
+            };
+
+            layout.Controls.Add(captureCard, 0, 2);
+
+            // --- Gallery Card ---
+            var galleryCard = CreateCard("CAPTURED IMAGES");
+            galleryCard.Dock = DockStyle.Fill;
+
+            _galleryPanel = new FlowLayoutPanel
+            {
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
+                Location = new Point(15, 45),
+                Size = new Size(280, 100),
+                AutoScroll = true,
+                BorderStyle = BorderStyle.FixedSingle,
+                BackColor = Color.FromArgb(25, 25, 28),
+            };
+            galleryCard.Controls.Add(_galleryPanel);
+
+            galleryCard.Resize += (s, e) =>
+            {
+                _galleryPanel.Width = galleryCard.ClientSize.Width - 30;
+                _galleryPanel.Height = galleryCard.ClientSize.Height - 60;
+            };
+
+            layout.Controls.Add(galleryCard, 0, 3);
+
+            panel.Controls.Add(layout);
+            return panel;
+        }
+
+        private Panel CreateConfigurationSubtab()
+        {
+            var panel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = CARD_BG,
+            };
+
+            var layout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 2,
+                Margin = Padding.Empty,
+                Padding = Padding.Empty,
+            };
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 92));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
             // --- Building Location ---
             var buildingCard = CreateCard("BUILDING LOCATION");
@@ -246,102 +394,23 @@ namespace NOMAD.MissionPlanner
             btnBuildingClear.Click += (s, e) => ClearBuildingLocationFields();
             buildingCard.Controls.Add(btnBuildingClear);
 
-            rightLayout.Controls.Add(buildingCard, 0, 0);
+            layout.Controls.Add(buildingCard, 0, 0);
 
-            // --- GPS Status ---
-            var gpsCard = CreateCard("GPS STATUS");
-            gpsCard.Dock = DockStyle.Fill;
-
-            _lblGpsStatus = new Label
+            var notesCard = CreateCard("CONFIG NOTES");
+            notesCard.Dock = DockStyle.Fill;
+            var lblNotes = new Label
             {
-                Text = "Fix: Waiting...",
-                Font = new Font("Consolas", 10),
+                Text = "Keep target building coordinates updated for mission context and AI descriptions.",
+                Font = new Font("Segoe UI", 9),
                 ForeColor = TEXT_PRIMARY,
-                Location = new Point(15, 40),
-                AutoSize = true,
+                Location = new Point(12, 38),
+                Size = new Size(400, 24),
             };
-            gpsCard.Controls.Add(_lblGpsStatus);
+            notesCard.Controls.Add(lblNotes);
+            layout.Controls.Add(notesCard, 0, 1);
 
-            _lblPosition = new Label
-            {
-                Text = "Position: --",
-                Font = new Font("Consolas", 10),
-                ForeColor = TEXT_PRIMARY,
-                Location = new Point(15, 62),
-                AutoSize = true,
-            };
-            gpsCard.Controls.Add(_lblPosition);
-
-            rightLayout.Controls.Add(gpsCard, 0, 1);
-
-            // --- Payload Controls ---
-            _payloadControl = new PayloadControlPanel(_config);
-            _payloadControl.Dock = DockStyle.Fill;
-            _payloadControl.Margin = new Padding(5);
-            rightLayout.Controls.Add(_payloadControl, 0, 2);
-
-            // --- Capture Card ---
-            var captureCard = CreateCard("SNAPSHOT CAPTURE");
-            captureCard.Dock = DockStyle.Fill;
-
-            _btnCapture = CreateButton("CAPTURE PHOTO", ACCENT_COLOR, 200, 40);
-            _btnCapture.Location = new Point(15, 45);
-            _btnCapture.Click += BtnCapture_Click;
-            captureCard.Controls.Add(_btnCapture);
-
-            _txtResult = new TextBox
-            {
-                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
-                Location = new Point(15, 95),
-                Size = new Size(280, 80),
-                Multiline = true,
-                ReadOnly = true,
-                ScrollBars = ScrollBars.Vertical,
-                BackColor = Color.FromArgb(25, 25, 28),
-                ForeColor = SUCCESS_COLOR,
-                Font = new Font("Consolas", 9),
-                BorderStyle = BorderStyle.FixedSingle,
-                Text = "Ready to capture...",
-            };
-            captureCard.Controls.Add(_txtResult);
-
-            // Anchor result textbox to fill available space
-            captureCard.Resize += (s, e) =>
-            {
-                _txtResult.Width = captureCard.ClientSize.Width - 30;
-                _txtResult.Height = captureCard.ClientSize.Height - 110;
-            };
-
-            rightLayout.Controls.Add(captureCard, 0, 3);
-
-            // --- Gallery Card ---
-            var galleryCard = CreateCard("CAPTURED IMAGES");
-            galleryCard.Dock = DockStyle.Fill;
-
-            _galleryPanel = new FlowLayoutPanel
-            {
-                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
-                Location = new Point(15, 45),
-                Size = new Size(280, 100),
-                AutoScroll = true,
-                BorderStyle = BorderStyle.FixedSingle,
-                BackColor = Color.FromArgb(25, 25, 28),
-            };
-            galleryCard.Controls.Add(_galleryPanel);
-
-            // Anchor gallery to fill available space
-            galleryCard.Resize += (s, e) =>
-            {
-                _galleryPanel.Width = galleryCard.ClientSize.Width - 30;
-                _galleryPanel.Height = galleryCard.ClientSize.Height - 60;
-            };
-
-            rightLayout.Controls.Add(galleryCard, 0, 4);
-
-            LoadBuildingLocationFields();
-
-            capturePanel.Controls.Add(rightLayout);
-            return capturePanel;
+            panel.Controls.Add(layout);
+            return panel;
         }
 
         private string GetTask1BuildingLocationText()
