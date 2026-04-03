@@ -100,9 +100,6 @@ namespace NOMAD.MissionPlanner
         // EKF source control
         private EkfSourceControlPanel _ekfControlPanel;
         
-        // EKF source control
-        private EkfSourceControlPanel _ekfControlPanel;
-        
         // Notification system
         private NotificationService _notificationService;
         private NotificationPanel _notificationPanel;
@@ -209,7 +206,6 @@ namespace NOMAD.MissionPlanner
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 200)); // Quick actions + Notifications + Link status
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 220)); // Video preview + Health summary
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 190)); // EKF Source Control
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 190)); // EKF Source Control
             
             // Row 1: Connection, Flight Mode, GPS Status
             _connectionCard = CreateStatusCard("Connection", "DISCONNECTED", out _lblConnectionStatus, out _lblConnectionValue, ERROR_COLOR);
@@ -251,16 +247,6 @@ namespace NOMAD.MissionPlanner
             
             var healthSummaryPanel = CreateHealthSummaryPanel();
             mainLayout.Controls.Add(healthSummaryPanel, 2, 3);
-            
-            // Row 5: EKF Source Control (spans all columns)
-            if (_sender != null)
-            {
-                _ekfControlPanel = new EkfSourceControlPanel(_sender);
-                _ekfControlPanel.Dock = DockStyle.Fill;
-                _ekfControlPanel.Margin = new Padding(5);
-                mainLayout.Controls.Add(_ekfControlPanel, 0, 4);
-                mainLayout.SetColumnSpan(_ekfControlPanel, 3);
-            }
             
             // Row 5: EKF Source Control (spans all columns)
             if (_sender != null)

@@ -165,6 +165,11 @@ namespace NOMAD.MissionPlanner
         private bool _renderPoseInitialized;
         private long _lastPoseBlendStamp = -1;
         private const float PoseBlendRateHz = 12.0f;
+        private DateTime _lastPoseResetDropLogUtc = DateTime.MinValue;
+        private const float PoseResetJumpThresholdDeg = 25.0f;
+        private const float PoseResetNearZeroDeg = 8.0f;
+        private const float PoseResetPrevMinDeg = 15.0f;
+        private const float PoseResetMaxPositionDeltaM = 0.35f;
 
         // ---- Voxel storage ----
         private Dictionary<long, uint> _persistedBlocks = new Dictionary<long, uint>();
@@ -393,11 +398,6 @@ namespace NOMAD.MissionPlanner
             _btnClearMesh = CreateButton("Clear Mesh", x, y, 85, 28, Color.FromArgb(180, 60, 60));
             _btnClearMesh.Click += BtnClearMesh_Click;
             _controlPanel.Controls.Add(_btnClearMesh);
-            x += 95;
-
-            _btnResetImuBiases = CreateButton("Reset IMU", x, y, 85, 28, Color.FromArgb(120, 80, 0));
-            _btnResetImuBiases.Click += BtnResetImuBiases_Click;
-            _controlPanel.Controls.Add(_btnResetImuBiases);
             x += 95;
 
             _btnResetImuBiases = CreateButton("Reset IMU", x, y, 85, 28, Color.FromArgb(120, 80, 0));
@@ -819,6 +819,63 @@ namespace NOMAD.MissionPlanner
             while (delta > pi) delta -= pi * 2.0f;
             while (delta < -pi) delta += pi * 2.0f;
             return current + delta * alpha;
+        }
+
+        private static bool TryReadFloatToken(JToken token, out float value)
+        {
+            value = 0f;
+            if (token == null || (token.Type != JTokenType.Integer && token.Type != JTokenType.Float))
+                return false;
+
+            value = token.Value<float>();
+            return !float.IsNaN(value) && !float.IsInfinity(value);
+        }
+
+        private static float WrappedAngleDeltaRadians(float from, float to)
+        {
+            float delta = to - from;
+            float pi = (float)Math.PI;
+            while (delta > pi) delta -= 2f * pi;
+            while (delta < -pi) delta += 2f * pi;
+            return delta;
+        }
+
+        private static float AngleMagnitudeDeg(float roll, float pitch, float yaw)
+        {
+            return (float)((Math.Abs(roll) + Math.Abs(pitch) + Math.Abs(yaw)) * 180.0 / Math.PI);
+        }
+
+        private bool ShouldRejectAttitudeResetGlitch(
+            float prevX,
+            float prevY,
+            float prevZ,
+            float prevRoll,
+            float prevPitch,
+            float prevYaw,
+            float nextX,
+            float nextY,
+            float nextZ,
+            float nextRoll,
+            float nextPitch,
+            float nextYaw)
+        {
+            float prevMagDeg = AngleMagnitudeDeg(prevRoll, prevPitch, prevYaw);
+            float nextMagDeg = AngleMagnitudeDeg(nextRoll, nextPitch, nextYaw);
+
+            float rollJumpDeg = (float)(Math.Abs(WrappedAngleDeltaRadians(prevRoll, nextRoll)) * 180.0 / Math.PI);
+            float pitchJumpDeg = (float)(Math.Abs(WrappedAngleDeltaRadians(prevPitch, nextPitch)) * 180.0 / Math.PI);
+            float yawJumpDeg = (float)(Math.Abs(WrappedAngleDeltaRadians(prevYaw, nextYaw)) * 180.0 / Math.PI);
+            float maxJumpDeg = Math.Max(rollJumpDeg, Math.Max(pitchJumpDeg, yawJumpDeg));
+
+            float dx = nextX - prevX;
+            float dy = nextY - prevY;
+            float dz = nextZ - prevZ;
+            float posDelta = (float)Math.Sqrt(dx * dx + dy * dy + dz * dz);
+
+            return prevMagDeg >= PoseResetPrevMinDeg
+                && nextMagDeg <= PoseResetNearZeroDeg
+                && maxJumpDeg >= PoseResetJumpThresholdDeg
+                && posDelta <= PoseResetMaxPositionDeltaM;
         }
 
         private void SetupCamera()
@@ -1392,11 +1449,11 @@ namespace NOMAD.MissionPlanner
         private void DrawHudOverlay(Graphics g)
         {
             float rollDeg, pitchDeg, yawDeg, vx, vy, vz;
+            rollDeg = (float)(_renderRollRaw * 180.0 / Math.PI);
+            pitchDeg = (float)(_renderPitchRaw * 180.0 / Math.PI);
+            yawDeg = (float)(_renderYawRaw * 180.0 / Math.PI);
             lock (_poseLock)
             {
-                rollDeg = (float)(_droneRollRaw * 180.0 / Math.PI);
-                pitchDeg = (float)(_dronePitchRaw * 180.0 / Math.PI);
-                yawDeg = (float)(_droneYawRaw * 180.0 / Math.PI);
                 vx = _droneVelX;
                 vy = _droneVelY;
                 vz = _droneVelZ;
@@ -1978,6 +2035,7 @@ namespace NOMAD.MissionPlanner
                         string json = Encoding.UTF8.GetString(messageBuffer.GetBuffer(), 0, (int)messageBuffer.Length);
                         var frame = JObject.Parse(json);
                         string frameType = frame["type"]?.ToString() ?? "pose";
+                        bool isMeshFrame = string.Equals(frameType, "mesh", StringComparison.OrdinalIgnoreCase);
 
                         // Validate frame_id (should be "ros_optical" for all SLAM data)
                         // Default to "ros_optical" if missing (backward compatibility)
@@ -1993,40 +2051,65 @@ namespace NOMAD.MissionPlanner
                         float latestX, latestY, latestZ;
                         lock (_poseLock)
                         {
-                            var xToken = frame["x"];
-                            if (xToken != null && (xToken.Type == JTokenType.Integer || xToken.Type == JTokenType.Float))
-                                _dronePosX = xToken.Value<float>();
+                            float prevX = _dronePosX;
+                            float prevY = _dronePosY;
+                            float prevZ = _dronePosZ;
+                            float prevRoll = _droneRollRaw;
+                            float prevPitch = _dronePitchRaw;
+                            float prevYaw = _droneYawRaw;
 
-                            var yToken = frame["y"];
-                            if (yToken != null && (yToken.Type == JTokenType.Integer || yToken.Type == JTokenType.Float))
-                                _dronePosY = yToken.Value<float>();
+                            if (!isMeshFrame)
+                            {
+                                if (TryReadFloatToken(frame["x"], out float xVal))
+                                    _dronePosX = xVal;
 
-                            var zToken = frame["z"];
-                            if (zToken != null && (zToken.Type == JTokenType.Integer || zToken.Type == JTokenType.Float))
-                                _dronePosZ = zToken.Value<float>();
+                                if (TryReadFloatToken(frame["y"], out float yVal))
+                                    _dronePosY = yVal;
 
-                            var rollToken = frame["roll"];
-                            if (rollToken != null && (rollToken.Type == JTokenType.Integer || rollToken.Type == JTokenType.Float))
-                                _droneRollRaw = rollToken.Value<float>();
+                                if (TryReadFloatToken(frame["z"], out float zVal))
+                                    _dronePosZ = zVal;
 
-                            var pitchToken = frame["pitch"];
-                            if (pitchToken != null && (pitchToken.Type == JTokenType.Integer || pitchToken.Type == JTokenType.Float))
-                                _dronePitchRaw = pitchToken.Value<float>();
-
-                            var yawToken = frame["yaw"];
-                            if (yawToken != null && (yawToken.Type == JTokenType.Integer || yawToken.Type == JTokenType.Float))
-                                _droneYawRaw = yawToken.Value<float>();
+                                bool hasRoll = TryReadFloatToken(frame["roll"], out float nextRoll);
+                                bool hasPitch = TryReadFloatToken(frame["pitch"], out float nextPitch);
+                                bool hasYaw = TryReadFloatToken(frame["yaw"], out float nextYaw);
+                                if (hasRoll && hasPitch && hasYaw)
+                                {
+                                    if (ShouldRejectAttitudeResetGlitch(
+                                        prevX,
+                                        prevY,
+                                        prevZ,
+                                        prevRoll,
+                                        prevPitch,
+                                        prevYaw,
+                                        _dronePosX,
+                                        _dronePosY,
+                                        _dronePosZ,
+                                        nextRoll,
+                                        nextPitch,
+                                        nextYaw))
+                                    {
+                                        if ((DateTime.UtcNow - _lastPoseResetDropLogUtc).TotalSeconds >= 2)
+                                        {
+                                            _lastPoseResetDropLogUtc = DateTime.UtcNow;
+                                            AppendStatusLogSafe("Ignored transient zero-attitude reset frame.");
+                                        }
+                                    }
+                                    else
+                                    {
+                                        _droneRollRaw = nextRoll;
+                                        _dronePitchRaw = nextPitch;
+                                        _droneYawRaw = nextYaw;
+                                    }
+                                }
+                            }
 
                             // Velocity (optional, from external VIO state)
-                            var vxToken = frame["vx"];
-                            if (vxToken != null && (vxToken.Type == JTokenType.Integer || vxToken.Type == JTokenType.Float))
-                                _droneVelX = vxToken.Value<float>();
-                            var vyToken = frame["vy"];
-                            if (vyToken != null && (vyToken.Type == JTokenType.Integer || vyToken.Type == JTokenType.Float))
-                                _droneVelY = vyToken.Value<float>();
-                            var vzToken = frame["vz"];
-                            if (vzToken != null && (vzToken.Type == JTokenType.Integer || vzToken.Type == JTokenType.Float))
-                                _droneVelZ = vzToken.Value<float>();
+                            if (TryReadFloatToken(frame["vx"], out float vxVal))
+                                _droneVelX = vxVal;
+                            if (TryReadFloatToken(frame["vy"], out float vyVal))
+                                _droneVelY = vyVal;
+                            if (TryReadFloatToken(frame["vz"], out float vzVal))
+                                _droneVelZ = vzVal;
 
                             latestX = _dronePosX;
                             latestY = _dronePosY;
@@ -2034,7 +2117,8 @@ namespace NOMAD.MissionPlanner
                         }
 
                         // Trajectory
-                        AddTrajectoryPoint(latestX, latestY, latestZ);
+                        if (!isMeshFrame)
+                            AddTrajectoryPoint(latestX, latestY, latestZ);
 
                         // Detection markers
                         var detectionsToken = frame["detections"] as JArray;
@@ -2393,73 +2477,35 @@ namespace NOMAD.MissionPlanner
 
             if (result != DialogResult.Yes) return;
 
-            _btnResetImuBiases.Enabled = false;
-            _btnResetImuBiases.Text = "Resetting...";
-            UpdateStatusSafe("Resetting IMU biases...");
-
+            // IMU EEPROM reset needs exclusive access to the ZED camera.
+            // Block early if Isaac ROS/nvblox currently owns the camera.
             try
             {
-                var response = await JetsonApiService.PostAsync("/api/calibration/imu/reset_biases");
-                var body = await response.Content.ReadAsStringAsync();
-                var data = Newtonsoft.Json.Linq.JObject.Parse(body);
-
-                if (response.IsSuccessStatusCode)
+                var isaacResponse = await JetsonApiService.GetAsync("/api/isaac/status");
+                if (isaacResponse.IsSuccessStatusCode)
                 {
-                    UpdateStatusSafe("IMU biases reset successfully");
-                    AppendStatusLogSafe("IMU biases reset. Camera EEPROM cleared.");
-                    MessageBox.Show(
-                        "IMU biases reset successfully.\n\n" +
-                        "The camera's internal bias values have been cleared.\n" +
-                        "Allow the camera to warm up for a few minutes before use.",
-                        "IMU Reset Complete",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Information
-                    );
-                }
-                else
-                {
-                    var detail = data["detail"]?.ToString() ?? "Unknown error";
-                    UpdateStatusSafe($"IMU reset failed: {detail}");
-                    AppendStatusLogSafe($"IMU reset failed: {detail}");
-                    MessageBox.Show(
-                        $"Failed to reset IMU biases:\n\n{detail}",
-                        "IMU Reset Failed",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Error
-                    );
+                    var isaacBody = await isaacResponse.Content.ReadAsStringAsync();
+                    var isaacData = JObject.Parse(isaacBody);
+                    bool isaacRunning = isaacData["running"]?.Value<bool>() ?? false;
+                    if (isaacRunning)
+                    {
+                        UpdateStatusSafe("Stop Isaac ROS before IMU reset");
+                        AppendStatusLogSafe("IMU reset blocked: Isaac ROS/nvblox is running.");
+                        MessageBox.Show(
+                            "IMU reset requires exclusive camera access, but Isaac ROS/nvblox is currently using the ZED camera.\n\n" +
+                            "Stop Isaac ROS first, then retry IMU reset.",
+                            "IMU Reset Blocked",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning
+                        );
+                        return;
+                    }
                 }
             }
-            catch (Exception ex)
+            catch
             {
-                UpdateStatusSafe($"IMU reset error: {ex.Message}");
-                AppendStatusLogSafe($"IMU reset error: {ex.Message}");
-                MessageBox.Show(
-                    $"Error resetting IMU biases:\n\n{ex.Message}",
-                    "IMU Reset Error",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error
-                );
+                // If status probe fails, continue and let the reset endpoint return a concrete error.
             }
-            finally
-            {
-                _btnResetImuBiases.Enabled = true;
-                _btnResetImuBiases.Text = "Reset IMU";
-            }
-        }
-
-        private async void BtnResetImuBiases_Click(object sender, EventArgs e)
-        {
-            var result = MessageBox.Show(
-                "Reset IMU bias values stored in the ZED camera's internal EEPROM?\n\n" +
-                "This is equivalent to running 'ZED Sensor Calibration.exe --cimu'.\n" +
-                "Use this if camera orientation continues to drift after warmup.\n\n" +
-                "The camera must be stationary during this operation.",
-                "Reset IMU Biases",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Warning
-            );
-
-            if (result != DialogResult.Yes) return;
 
             _btnResetImuBiases.Enabled = false;
             _btnResetImuBiases.Text = "Resetting...";

@@ -479,7 +479,7 @@ namespace NOMAD.MissionPlanner
                         sb.AppendLine("Images uploaded:");
                         foreach (var img in imageResults)
                         {
-                            sb.AppendLine($"  - {img.filename} (ID: {img.FileId})");
+                            sb.AppendLine($"  - {img.filename} (ID: {img.fileId})");
                         }
                     }
 

@@ -178,18 +178,24 @@ namespace NOMAD.MissionPlanner
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
             // ---- Left side: Wizard steps + controls ----
-            var leftPanel = new Panel
+            var leftPanel = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                AutoScroll = true,
+                ColumnCount = 1,
+                RowCount = 5,
                 Padding = new Padding(10),
             };
+            leftPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            leftPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
+            leftPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 220));
+            leftPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 140));
+            leftPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 55));
+            leftPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
             // Status banner
             _magStatusPanel = new Panel
             {
-                Dock = DockStyle.Top,
-                Height = 50,
+                Dock = DockStyle.Fill,
                 BackColor = NOMADTheme.CARD_BG,
                 Padding = new Padding(15, 10, 15, 10),
                 Margin = new Padding(0, 0, 0, 10),
@@ -203,13 +209,12 @@ namespace NOMAD.MissionPlanner
                 TextAlign = ContentAlignment.MiddleLeft,
             };
             _magStatusPanel.Controls.Add(_lblMagStatus);
-            leftPanel.Controls.Add(_magStatusPanel);
+            leftPanel.Controls.Add(_magStatusPanel, 0, 0);
 
             // Wizard step panel
             _magWizardPanel = new Panel
             {
-                Dock = DockStyle.Top,
-                Height = 220,
+                Dock = DockStyle.Fill,
                 BackColor = NOMADTheme.CARD_BG,
                 Padding = new Padding(15),
                 Margin = new Padding(0, 5, 0, 10),
@@ -284,13 +289,12 @@ namespace NOMAD.MissionPlanner
                 }
             }
             _magWizardPanel.Controls.Add(stepFlow);
-            leftPanel.Controls.Add(_magWizardPanel);
+            leftPanel.Controls.Add(_magWizardPanel, 0, 1);
 
             // Progress metrics panel
             var metricsPanel = new Panel
             {
-                Dock = DockStyle.Top,
-                Height = 140,
+                Dock = DockStyle.Fill,
                 BackColor = NOMADTheme.CARD_BG,
                 Padding = new Padding(15),
                 Margin = new Padding(0, 5, 0, 10),
@@ -345,15 +349,15 @@ namespace NOMAD.MissionPlanner
             };
             metricsPanel.Controls.Add(_lblMagElapsed);
 
-            leftPanel.Controls.Add(metricsPanel);
+            leftPanel.Controls.Add(metricsPanel, 0, 2);
 
             // Buttons panel
             var btnPanel = new FlowLayoutPanel
             {
-                Dock = DockStyle.Top,
-                Height = 55,
+                Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.LeftToRight,
                 Padding = new Padding(0, 5, 0, 5),
+                Margin = new Padding(0, 5, 0, 10),
             };
 
             _btnMagStart = new Button
@@ -402,7 +406,7 @@ namespace NOMAD.MissionPlanner
             _btnMagCancel.Click += BtnMagCancel_Click;
             btnPanel.Controls.Add(_btnMagCancel);
 
-            leftPanel.Controls.Add(btnPanel);
+            leftPanel.Controls.Add(btnPanel, 0, 3);
 
             // Result text area
             _txtMagResult = new TextBox
@@ -416,8 +420,9 @@ namespace NOMAD.MissionPlanner
                 Font = new Font("Consolas", 9),
                 BorderStyle = BorderStyle.FixedSingle,
                 Text = "Calibration results will appear here after computation.",
+                Margin = new Padding(0),
             };
-            leftPanel.Controls.Add(_txtMagResult);
+            leftPanel.Controls.Add(_txtMagResult, 0, 4);
 
             mainLayout.Controls.Add(leftPanel, 0, 0);
 
@@ -1633,20 +1638,29 @@ namespace NOMAD.MissionPlanner
             using (var font = new Font("Segoe UI", 8, FontStyle.Italic))
             using (var brush = new SolidBrush(NOMADTheme.TEXT_MUTED))
             {
-                // Bottom layer axis
-                int lx = startX;
-                int ly = startY + step * 2 + cellSize + 4;
-                g.DrawString("Y+", font, brush, lx, ly);
-                g.DrawString("Y-", font, brush, lx + step * 2 + 4, ly);
-                g.DrawString("X-", font, brush, lx - 20, startY + step + cellSize / 2 - 6);
-                g.DrawString("X+", font, brush, lx + step * 2 + cellSize + 4, startY + step + cellSize / 2 - 6);
+                int layerSize = step + cellSize;
+                const int axisBottomOffset = 8;
+                const int axisSideOffset = 16;
 
-                // Top layer axis
-                int rx = startX + step * 2 + cellSize;
-                g.DrawString("Y+", font, brush, rx, ly);
-                g.DrawString("Y-", font, brush, rx + step * 2 + 4, ly);
-                g.DrawString("X-", font, brush, rx - 20, startY + step + cellSize / 2 - 6);
-                g.DrawString("X+", font, brush, rx + step * 2 + cellSize + 4, startY + step + cellSize / 2 - 6);
+                void DrawCentered(string text, float centerX, float centerY)
+                {
+                    var textSize = g.MeasureString(text, font);
+                    g.DrawString(text, font, brush, centerX - textSize.Width / 2f, centerY - textSize.Height / 2f);
+                }
+
+                void DrawAxesForLayer(int layerX)
+                {
+                    float bottomAxisY = startY + layerSize + axisBottomOffset;
+                    float layerCenterY = startY + layerSize / 2f;
+
+                    DrawCentered("Y+", layerX + cellSize / 2f, bottomAxisY);
+                    DrawCentered("Y-", layerX + step + cellSize / 2f, bottomAxisY);
+                    DrawCentered("X-", layerX - axisSideOffset, layerCenterY);
+                    DrawCentered("X+", layerX + layerSize + axisSideOffset, layerCenterY);
+                }
+
+                DrawAxesForLayer(startX);
+                DrawAxesForLayer(startX + step * 2 + cellSize);
             }
 
             // Summary at bottom
@@ -1707,70 +1721,12 @@ namespace NOMAD.MissionPlanner
                     }
 
                     // Label
-                    string label = covered ? "OK" : $"{octantIndex + 1}";
+                    string cellLabel = covered ? "OK" : $"{octantIndex + 1}";
                     using (var font = new Font("Segoe UI", 9, FontStyle.Bold))
                     using (var textBrush = new SolidBrush(covered ? Color.White : NOMADTheme.TEXT_MUTED))
                     {
-                        var textSize = g.MeasureString(label, font);
-                        g.DrawString(label, font, textBrush,
-                            cx + (cellSize - textSize.Width) / 2,
-                            cy + (cellSize - textSize.Height) / 2);
-                    }
-                }
-            }
-        }
-
-        private void DrawLayer(Graphics g, int x, int y, int cellSize, int step, int layerZ, string label)
-        {
-            // Layer label
-            using (var font = new Font("Segoe UI", 9, FontStyle.Bold))
-            using (var brush = new SolidBrush(NOMADTheme.ACCENT))
-            {
-                var sz = g.MeasureString(label, font);
-                g.DrawString(label, font, brush, x + cellSize - sz.Width / 2, y - 16);
-            }
-
-            for (int sy = 0; sy < 2; sy++) // sign_y: row
-            {
-                for (int sx = 0; sx < 2; sx++) // sign_x: column
-                {
-                    int octantIndex = sx + 2 * sy + 4 * layerZ;
-                    bool covered = _octantFlags[octantIndex];
-
-                    int cx = x + sx * step;
-                    int cy = y + sy * step;
-
-                    Color fillColor = covered
-                        ? Color.FromArgb(180, NOMADTheme.SUCCESS)
-                        : Color.FromArgb(60, NOMADTheme.TEXT_MUTED);
-
-                    Color borderColor = covered
-                        ? NOMADTheme.SUCCESS
-                        : Color.FromArgb(100, NOMADTheme.TEXT_MUTED);
-
-                    // Draw rounded square
-                    int radius = 6;
-                    using (var path = new System.Drawing.Drawing2D.GraphicsPath())
-                    {
-                        path.AddArc(cx, cy, radius * 2, radius * 2, 180, 90);
-                        path.AddArc(cx + cellSize - radius * 2, cy, radius * 2, radius * 2, 270, 90);
-                        path.AddArc(cx + cellSize - radius * 2, cy + cellSize - radius * 2, radius * 2, radius * 2, 0, 90);
-                        path.AddArc(cx, cy + cellSize - radius * 2, radius * 2, radius * 2, 90, 90);
-                        path.CloseFigure();
-
-                        using (var brush = new SolidBrush(fillColor))
-                            g.FillPath(brush, path);
-                        using (var pen = new Pen(borderColor, 2f))
-                            g.DrawPath(pen, path);
-                    }
-
-                    // Label
-                    string label = covered ? "OK" : $"{octantIndex + 1}";
-                    using (var font = new Font("Segoe UI", 9, FontStyle.Bold))
-                    using (var textBrush = new SolidBrush(covered ? Color.White : NOMADTheme.TEXT_MUTED))
-                    {
-                        var textSize = g.MeasureString(label, font);
-                        g.DrawString(label, font, textBrush,
+                        var textSize = g.MeasureString(cellLabel, font);
+                        g.DrawString(cellLabel, font, textBrush,
                             cx + (cellSize - textSize.Width) / 2,
                             cy + (cellSize - textSize.Height) / 2);
                     }
