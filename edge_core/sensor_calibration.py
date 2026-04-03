@@ -252,12 +252,6 @@ class MagCalibrationSession:
                 except Exception as e:
                     logger.warning(f"EEPROM store error: {e}")
         else:
-                        logger.warning(
-                            f"Failed to store calibration to EEPROM: {store_status}"
-                        )
-                except Exception as e:
-                    logger.warning(f"EEPROM store error: {e}")
-        else:
             self._state = CalibrationState.FAILED
 
         return result
