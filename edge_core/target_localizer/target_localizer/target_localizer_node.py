@@ -53,9 +53,11 @@ from std_srvs.srv import Trigger
 from cv_bridge import CvBridge
 
 import numpy as np
+import cv2
 import math
 import os
 import time
+import traceback
 from datetime import datetime
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -197,21 +199,28 @@ class TargetLocalizerNode(Node):
 
         # ----- Services ----- #
         self.capture_srv = self.create_service(
-            Trigger, '~/capture_target', self._capture_callback
+            Trigger, '/target_localizer/capture_target', self._capture_callback
         )
         self.save_srv = self.create_service(
-            Trigger, '~/save_targets', self._save_callback
+            Trigger, '/target_localizer/save_targets', self._save_callback
         )
         self.model_srv = self.create_service(
-            Trigger, '~/print_model', self._print_model_callback
+            Trigger, '/target_localizer/print_model', self._print_model_callback
         )
+
+        # Emit concrete service registrations for runtime diagnostics.
+        for name, types in self.get_service_names_and_types():
+            if "target_localizer" in name:
+                self.get_logger().info(f"Registered service: {name} types={types}")
 
         # ----- Background landmark detection timer ----- #
         if self.get_parameter('auto_landmark_detection').value and self.landmark_detector:
             self.create_timer(self.landmark_interval, self._landmark_timer_callback)
 
-        self.get_logger().info("Target localizer node started. "
-                               "Call ~/capture_target to detect and describe targets.")
+        self.get_logger().info(
+            "Target localizer node started. "
+            "Call /target_localizer/capture_target to detect and describe targets."
+        )
 
     # ================================================================ #
     #  Subscriber callbacks
@@ -633,9 +642,13 @@ def main(args=None):
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
+    except Exception as e:
+        node.get_logger().error(f"Unhandled target_localizer exception: {e}")
+        traceback.print_exc()
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

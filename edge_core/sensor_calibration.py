@@ -47,6 +47,7 @@ CALIBRATION_DIR = Path(__file__).parent.parent / "config" / "calibration"
 
 class CalibrationState(str, Enum):
     """Calibration process state."""
+
     IDLE = "idle"
     COLLECTING = "collecting"
     COMPUTING = "computing"
@@ -57,9 +58,10 @@ class CalibrationState(str, Enum):
 @dataclass
 class MagCalibrationResult:
     """Result of magnetometer calibration."""
+
     hard_iron: Tuple[float, float, float]  # Offset (x, y, z) in uT
-    soft_iron: List[List[float]]           # 3x3 correction matrix
-    fitness: float                         # Fit quality (0-1, higher is better)
+    soft_iron: List[List[float]]  # 3x3 correction matrix
+    fitness: float  # Fit quality (0-1, higher is better)
     samples_used: int
     timestamp: str
     duration_s: float
@@ -78,13 +80,14 @@ class MagCalibrationResult:
 @dataclass
 class IMUCheckResult:
     """Result of IMU health check."""
+
     accel_bias: Tuple[float, float, float]  # m/s^2
-    gyro_bias: Tuple[float, float, float]   # rad/s
-    accel_noise: float                       # Standard deviation m/s^2
-    gyro_noise: float                        # Standard deviation rad/s
-    gravity_magnitude: float                 # Should be ~9.81 m/s^2
-    gravity_error_pct: float                 # % deviation from 9.81
-    temperature: float                       # Celsius
+    gyro_bias: Tuple[float, float, float]  # rad/s
+    accel_noise: float  # Standard deviation m/s^2
+    gyro_noise: float  # Standard deviation rad/s
+    gravity_magnitude: float  # Should be ~9.81 m/s^2
+    gravity_error_pct: float  # % deviation from 9.81
+    temperature: float  # Celsius
     healthy: bool
     issues: List[str]
     timestamp: str
@@ -191,7 +194,9 @@ class MagCalibrationSession:
                 target=self._collect_loop, daemon=True
             )
             self._collection_thread.start()
-            logger.info("Magnetometer calibration started - rotate camera in all orientations")
+            logger.info(
+                "Magnetometer calibration started - rotate camera in all orientations"
+            )
             return True
 
     def stop(self) -> Optional[MagCalibrationResult]:
@@ -233,6 +238,25 @@ class MagCalibrationSession:
                 f"Magnetometer calibration complete: "
                 f"hard_iron={result.hard_iron}, fitness={result.fitness:.3f}"
             )
+
+            # Attempt to store calibration in camera EEPROM so the SDK
+            # applies it automatically to get_magnetic_field_calibrated()
+            if self._zed:
+                try:
+                    import pyzed.sl as sl
+                    store_status = self._zed.store_calibration()
+                    if store_status == sl.ERROR_CODE.SUCCESS:
+                        logger.info("Calibration parameters stored to camera EEPROM")
+                    else:
+                        logger.warning(f"Failed to store calibration to EEPROM: {store_status}")
+                except Exception as e:
+                    logger.warning(f"EEPROM store error: {e}")
+        else:
+                        logger.warning(
+                            f"Failed to store calibration to EEPROM: {store_status}"
+                        )
+                except Exception as e:
+                    logger.warning(f"EEPROM store error: {e}")
         else:
             self._state = CalibrationState.FAILED
 
@@ -309,7 +333,10 @@ class MagCalibrationSession:
             sensors_data = sl.SensorsData()
 
             while not self._stop_event.is_set():
-                if self._zed.get_sensors_data(sensors_data, sl.TIME_REFERENCE.CURRENT) == sl.ERROR_CODE.SUCCESS:
+                if (
+                    self._zed.get_sensors_data(sensors_data, sl.TIME_REFERENCE.CURRENT)
+                    == sl.ERROR_CODE.SUCCESS
+                ):
                     mag = sensors_data.get_magnetometer_data()
                     # Use UNCALIBRATED data to avoid double-applying factory cal
                     mag_field = mag.get_magnetic_field_uncalibrated()
@@ -319,7 +346,11 @@ class MagCalibrationSession:
                         mag_field = mag.get_magnetic_field_calibrated()
 
                     if mag_field is not None:
-                        mx, my, mz = float(mag_field[0]), float(mag_field[1]), float(mag_field[2])
+                        mx, my, mz = (
+                            float(mag_field[0]),
+                            float(mag_field[1]),
+                            float(mag_field[2]),
+                        )
 
                         # Skip zero/invalid readings
                         if abs(mx) < 0.001 and abs(my) < 0.001 and abs(mz) < 0.001:
@@ -381,11 +412,7 @@ class MagCalibrationSession:
             # ---- Full quadratic ellipsoid fit ----
             # Ax^2 + By^2 + Cz^2 + Dxy + Exz + Fyz + Gx + Hy + Iz = 1
             x, y, z = data[:, 0], data[:, 1], data[:, 2]
-            D_mat = np.column_stack([
-                x ** 2, y ** 2, z ** 2,
-                x * y, x * z, y * z,
-                x, y, z
-            ])
+            D_mat = np.column_stack([x**2, y**2, z**2, x * y, x * z, y * z, x, y, z])
 
             ones = np.ones(n)
 
@@ -397,11 +424,13 @@ class MagCalibrationSession:
             # [A, D/2, E/2]
             # [D/2, B, F/2]
             # [E/2, F/2, C]
-            Q = np.array([
-                [A, D_cross / 2, E_cross / 2],
-                [D_cross / 2, B, F_cross / 2],
-                [E_cross / 2, F_cross / 2, C],
-            ])
+            Q = np.array(
+                [
+                    [A, D_cross / 2, E_cross / 2],
+                    [D_cross / 2, B, F_cross / 2],
+                    [E_cross / 2, F_cross / 2, C],
+                ]
+            )
 
             # Check positive-definiteness
             eigvals = np.linalg.eigvalsh(Q)
@@ -450,7 +479,11 @@ class MagCalibrationSession:
             duration = time.time() - self._start_time if self._start_time else 0.0
 
             return MagCalibrationResult(
-                hard_iron=(round(float(hx), 4), round(float(hy), 4), round(float(hz), 4)),
+                hard_iron=(
+                    round(float(hx), 4),
+                    round(float(hy), 4),
+                    round(float(hz), 4),
+                ),
                 soft_iron=[[round(float(v), 6) for v in row] for row in soft_iron],
                 fitness=round(float(fitness), 4),
                 samples_used=n,
@@ -563,10 +596,15 @@ class IMUCalibrationCheck:
             sensors_data = sl.SensorsData()
             start = time.time()
 
-            logger.info(f"IMU check: collecting data for {duration_s}s (keep camera still)")
+            logger.info(
+                f"IMU check: collecting data for {duration_s}s (keep camera still)"
+            )
 
             while time.time() - start < duration_s:
-                if zed.get_sensors_data(sensors_data, sl.TIME_REFERENCE.CURRENT) == sl.ERROR_CODE.SUCCESS:
+                if (
+                    zed.get_sensors_data(sensors_data, sl.TIME_REFERENCE.CURRENT)
+                    == sl.ERROR_CODE.SUCCESS
+                ):
                     imu = sensors_data.get_imu_data()
 
                     # Use raw acceleration (includes gravity) for gravity magnitude check
@@ -584,16 +622,22 @@ class IMUCalibrationCheck:
                     gyro = imu.get_angular_velocity()
 
                     if accel is not None:
-                        accel_samples.append((float(accel[0]), float(accel[1]), float(accel[2])))
+                        accel_samples.append(
+                            (float(accel[0]), float(accel[1]), float(accel[2]))
+                        )
                     if gyro is not None:
-                        gyro_samples.append((float(gyro[0]), float(gyro[1]), float(gyro[2])))
+                        gyro_samples.append(
+                            (float(gyro[0]), float(gyro[1]), float(gyro[2]))
+                        )
 
                     # Temperature
                     try:
                         temp_data = sensors_data.get_temperature_data()
                         if temp_data:
                             temp_val = temp_data.get(sl.SENSOR_LOCATION.IMU)
-                            if temp_val is not None and isinstance(temp_val, (int, float)):
+                            if temp_val is not None and isinstance(
+                                temp_val, (int, float)
+                            ):
                                 temperatures.append(float(temp_val))
                     except Exception:
                         pass
@@ -654,12 +698,16 @@ class IMUCalibrationCheck:
         healthy = True
 
         if gravity_error > 5.0:
-            issues.append(f"Gravity magnitude off by {gravity_error:.1f}% (expected ~9.81 m/s^2, got {gravity_mag:.3f})")
+            issues.append(
+                f"Gravity magnitude off by {gravity_error:.1f}% (expected ~9.81 m/s^2, got {gravity_mag:.3f})"
+            )
             healthy = False
 
         gyro_bias_mag = float(np.linalg.norm(gyro_mean))
         if gyro_bias_mag > 0.05:  # > 0.05 rad/s (~3 deg/s)
-            issues.append(f"Gyroscope bias too high: {gyro_bias_mag:.4f} rad/s (threshold: 0.05)")
+            issues.append(
+                f"Gyroscope bias too high: {gyro_bias_mag:.4f} rad/s (threshold: 0.05)"
+            )
             healthy = False
 
         accel_noise_mag = float(np.mean(accel_std))
@@ -676,8 +724,16 @@ class IMUCalibrationCheck:
             issues.append("All sensors within normal parameters")
 
         return IMUCheckResult(
-            accel_bias=(round(float(accel_mean[0]), 4), round(float(accel_mean[1]), 4), round(float(accel_mean[2]), 4)),
-            gyro_bias=(round(float(gyro_mean[0]), 4), round(float(gyro_mean[1]), 4), round(float(gyro_mean[2]), 4)),
+            accel_bias=(
+                round(float(accel_mean[0]), 4),
+                round(float(accel_mean[1]), 4),
+                round(float(accel_mean[2]), 4),
+            ),
+            gyro_bias=(
+                round(float(gyro_mean[0]), 4),
+                round(float(gyro_mean[1]), 4),
+                round(float(gyro_mean[2]), 4),
+            ),
             accel_noise=round(accel_noise_mag, 4),
             gyro_noise=round(gyro_noise_mag, 4),
             gravity_magnitude=round(gravity_mag, 4),
@@ -780,23 +836,24 @@ IMU_POSITIONS = [
     #   right (-X down)    -X                      +X  →  (+1, 0, 0)   ← left side resting on table
     #   up    (Y down)     +Y                      -Y  →  (0, -1, 0)   ← normal upright position
     #   down  (-Y down)    -Y                      +Y  →  (0, +1, 0)   ← upside down
-    ("front",  "Place camera lens pointing DOWN (front facing ground)", (0,  0, -1)),
-    ("back",   "Place camera lens pointing UP (front facing sky)",      (0,  0, +1)),
-    ("left",   "Place camera on its RIGHT side (left side facing up)",  (-1, 0,  0)),
-    ("right",  "Place camera on its LEFT side (right side facing up)",  (+1, 0,  0)),
-    ("up",     "Place camera upright (top facing up, normal position)", (0, -1,  0)),
-    ("down",   "Place camera upside-down (top facing ground)",          (0, +1,  0)),
+    ("front", "Place camera lens pointing DOWN (front facing ground)", (0, 0, -1)),
+    ("back", "Place camera lens pointing UP (front facing sky)", (0, 0, +1)),
+    ("left", "Place camera on its RIGHT side (left side facing up)", (-1, 0, 0)),
+    ("right", "Place camera on its LEFT side (right side facing up)", (+1, 0, 0)),
+    ("up", "Place camera upright (top facing up, normal position)", (0, -1, 0)),
+    ("down", "Place camera upside-down (top facing ground)", (0, +1, 0)),
 ]
 
 
 @dataclass
 class IMUHeadingCalibrationResult:
     """Result of 6-position IMU heading calibration."""
-    accel_bias: Tuple[float, float, float]    # (x, y, z) bias in m/s^2
-    accel_scale: Tuple[float, float, float]   # (x, y, z) scale factors
-    gyro_bias: Tuple[float, float, float]     # (x, y, z) gyro bias in rad/s
+
+    accel_bias: Tuple[float, float, float]  # (x, y, z) bias in m/s^2
+    accel_scale: Tuple[float, float, float]  # (x, y, z) scale factors
+    gyro_bias: Tuple[float, float, float]  # (x, y, z) gyro bias in rad/s
     positions_collected: int
-    fitness: float          # 0-1, quality of fit
+    fitness: float  # 0-1, quality of fit
     timestamp: str
     duration_s: float
 
@@ -902,14 +959,19 @@ class IMUHeadingCalibration:
 
             logger.info(f"Collecting position '{label}': {description}")
 
-            while time.time() - start < self._collect_duration and not self._stop_event.is_set():
+            while (
+                time.time() - start < self._collect_duration
+                and not self._stop_event.is_set()
+            ):
                 with self._lock:
                     if self._zed is None:
                         if self._stop_event.is_set():
                             break
                         self._error = "ZED camera not available"
                         return {"success": False, "error": self._error}
-                    read_status = self._zed.get_sensors_data(sensors_data, sl.TIME_REFERENCE.CURRENT)
+                    read_status = self._zed.get_sensors_data(
+                        sensors_data, sl.TIME_REFERENCE.CURRENT
+                    )
 
                 if read_status == sl.ERROR_CODE.SUCCESS:
                     imu = sensors_data.get_imu_data()
@@ -925,9 +987,13 @@ class IMUHeadingCalibration:
                     gyro = imu.get_angular_velocity()
 
                     if accel is not None:
-                        accel_samples.append((float(accel[0]), float(accel[1]), float(accel[2])))
+                        accel_samples.append(
+                            (float(accel[0]), float(accel[1]), float(accel[2]))
+                        )
                     if gyro is not None:
-                        gyro_samples.append((float(gyro[0]), float(gyro[1]), float(gyro[2])))
+                        gyro_samples.append(
+                            (float(gyro[0]), float(gyro[1]), float(gyro[2]))
+                        )
 
                 time.sleep(0.01)
 
@@ -935,16 +1001,24 @@ class IMUHeadingCalibration:
                 return {"success": False, "error": "Calibration canceled"}
 
             if len(accel_samples) < 50:
-                return {"success": False, "error": f"Too few samples: {len(accel_samples)}"}
+                return {
+                    "success": False,
+                    "error": f"Too few samples: {len(accel_samples)}",
+                }
 
             with self._lock:
-                if self._stop_event.is_set() or self._state != CalibrationState.COLLECTING:
+                if (
+                    self._stop_event.is_set()
+                    or self._state != CalibrationState.COLLECTING
+                ):
                     return {"success": False, "error": "Calibration canceled"}
                 self._position_data[label] = (accel_samples, gyro_samples)
                 self._current_position += 1
                 positions_remaining = len(IMU_POSITIONS) - self._current_position
 
-            logger.info(f"Position '{label}' collected: {len(accel_samples)} accel, {len(gyro_samples)} gyro samples")
+            logger.info(
+                f"Position '{label}' collected: {len(accel_samples)} accel, {len(gyro_samples)} gyro samples"
+            )
 
             return {
                 "success": True,
@@ -994,8 +1068,8 @@ class IMUHeadingCalibration:
                     gyro_arr = np.array(gyro_samples)
                     all_gyro.append(np.mean(gyro_arr, axis=0))
 
-            measured = np.array(all_accel)   # (6, 3)
-            expected = np.array(all_expected) # (6, 3)
+            measured = np.array(all_accel)  # (6, 3)
+            expected = np.array(all_expected)  # (6, 3)
 
             # Per-axis least-squares: measured_i = scale_i * expected_i + bias_i
             scale = np.ones(3)
@@ -1022,9 +1096,21 @@ class IMUHeadingCalibration:
             duration = time.time() - self._start_time if self._start_time else 0.0
 
             result = IMUHeadingCalibrationResult(
-                accel_bias=(round(float(bias[0]), 6), round(float(bias[1]), 6), round(float(bias[2]), 6)),
-                accel_scale=(round(float(scale[0]), 6), round(float(scale[1]), 6), round(float(scale[2]), 6)),
-                gyro_bias=(round(float(gyro_bias[0]), 6), round(float(gyro_bias[1]), 6), round(float(gyro_bias[2]), 6)),
+                accel_bias=(
+                    round(float(bias[0]), 6),
+                    round(float(bias[1]), 6),
+                    round(float(bias[2]), 6),
+                ),
+                accel_scale=(
+                    round(float(scale[0]), 6),
+                    round(float(scale[1]), 6),
+                    round(float(scale[2]), 6),
+                ),
+                gyro_bias=(
+                    round(float(gyro_bias[0]), 6),
+                    round(float(gyro_bias[1]), 6),
+                    round(float(gyro_bias[2]), 6),
+                ),
                 positions_collected=len(self._position_data),
                 fitness=round(float(fitness), 4),
                 timestamp=datetime.now(timezone.utc).isoformat(),
@@ -1034,7 +1120,22 @@ class IMUHeadingCalibration:
             self._result = result
             self._state = CalibrationState.COMPLETE
             self._save_calibration(result)
-            logger.info(f"IMU heading calibration complete: fitness={result.fitness:.3f}")
+            logger.info(
+                f"IMU heading calibration complete: fitness={result.fitness:.3f}"
+            )
+
+            # Attempt to store calibration in camera EEPROM
+            if self._zed:
+                try:
+                    import pyzed.sl as sl
+                    store_status = self._zed.store_calibration()
+                    if store_status == sl.ERROR_CODE.SUCCESS:
+                        logger.info("IMU heading calibration stored to camera EEPROM")
+                    else:
+                        logger.warning(f"Failed to store IMU heading calibration to EEPROM: {store_status}")
+                except Exception as e:
+                    logger.warning(f"EEPROM store error: {e}")
+
             return result
 
         except Exception as e:
@@ -1175,11 +1276,14 @@ def start_imu_heading_calibration(zed_camera=None) -> IMUHeadingCalibration:
     _imu_heading_session = IMUHeadingCalibration()
     success = _imu_heading_session.start(zed_camera)
     if not success:
-        logger.error(f"Failed to start IMU heading calibration: {_imu_heading_session.error}")
+        logger.error(
+            f"Failed to start IMU heading calibration: {_imu_heading_session.error}"
+        )
     return _imu_heading_session
 
 
 # ==================== CLI Entry Point ====================
+
 
 def main():
     """CLI entry point for sensor calibration."""
@@ -1215,7 +1319,9 @@ def main():
         print("\n=== IMU Health Check ===")
         print("Keep the camera stationary and level...")
         result = IMUCalibrationCheck.run_check(duration_s=args.imu_duration)
-        print(f"  Gravity: {result.gravity_magnitude:.3f} m/s^2 (error: {result.gravity_error_pct:.1f}%)")
+        print(
+            f"  Gravity: {result.gravity_magnitude:.3f} m/s^2 (error: {result.gravity_error_pct:.1f}%)"
+        )
         print(f"  Accel bias: {result.accel_bias}")
         print(f"  Gyro bias: {result.gyro_bias}")
         print(f"  Accel noise: {result.accel_noise:.4f} m/s^2")

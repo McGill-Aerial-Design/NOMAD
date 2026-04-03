@@ -67,10 +67,10 @@ def generate_launch_description():
             'auto_landmark_detection': True,
         }],
         remappings=[
-            # NOMAD launches ZED with camera:=zed2, so topics are /zed/zed_node/...
-            ('/zed2i/zed_node/rgb/image_rect_color', '/zed/zed_node/rgb/image_rect_color'),
+            # NOMAD launches ZED with camera:=zed2 and SDK 5.2 topic naming.
+            ('/zed2i/zed_node/rgb/image_rect_color', '/zed/zed_node/rgb/color/rect/image'),
             ('/zed2i/zed_node/depth/depth_registered', '/zed/zed_node/depth/depth_registered'),
-            ('/zed2i/zed_node/rgb/camera_info', '/zed/zed_node/rgb/camera_info'),
+            ('/zed2i/zed_node/rgb/camera_info', '/zed/zed_node/rgb/color/rect/camera_info'),
         ],
     )
 

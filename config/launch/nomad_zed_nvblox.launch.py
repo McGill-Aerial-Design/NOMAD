@@ -177,7 +177,7 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(zed_example_launch),
             launch_arguments={
                 'camera': 'zed2',
-                'enable_od': 'false',  # Disable OD to prevent parameter duplication crash
+                'enable_od': LaunchConfiguration('enable_od'),
                 'run_rviz': 'false',   # Headless Jetson — no display for rviz
             }.items(),
         ),

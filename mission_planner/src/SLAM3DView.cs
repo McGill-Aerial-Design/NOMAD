@@ -214,7 +214,7 @@ namespace NOMAD.MissionPlanner
         // ---- UI Controls ----
         private Panel _controlPanel;
         private Panel _statusLogPanel;
-        private Button _btnToggleCamera, _btnResetView, _btnClearMesh;
+        private Button _btnToggleCamera, _btnResetView, _btnClearMesh, _btnResetImuBiases;
         private Button _btnSaveMap, _btnLoadMap, _btnRelocalizeMap, _btnCenterOnPose;
         private Label _lblStatus, _lblStats;
         private Label _lblPerceptionStatus;
@@ -393,6 +393,16 @@ namespace NOMAD.MissionPlanner
             _btnClearMesh = CreateButton("Clear Mesh", x, y, 85, 28, Color.FromArgb(180, 60, 60));
             _btnClearMesh.Click += BtnClearMesh_Click;
             _controlPanel.Controls.Add(_btnClearMesh);
+            x += 95;
+
+            _btnResetImuBiases = CreateButton("Reset IMU", x, y, 85, 28, Color.FromArgb(120, 80, 0));
+            _btnResetImuBiases.Click += BtnResetImuBiases_Click;
+            _controlPanel.Controls.Add(_btnResetImuBiases);
+            x += 95;
+
+            _btnResetImuBiases = CreateButton("Reset IMU", x, y, 85, 28, Color.FromArgb(120, 80, 0));
+            _btnResetImuBiases.Click += BtnResetImuBiases_Click;
+            _controlPanel.Controls.Add(_btnResetImuBiases);
             x += 95;
 
             _chkShowGrid = CreateCheckBox("Grid", x, y + 4, true);
@@ -2366,6 +2376,142 @@ namespace NOMAD.MissionPlanner
             {
                 UpdateStatusSafe($"Mesh cleared locally (server: {ex.Message})");
                 AppendStatusLogSafe($"Mesh clear sent locally (server warning: {ex.Message})");
+            }
+        }
+
+        private async void BtnResetImuBiases_Click(object sender, EventArgs e)
+        {
+            var result = MessageBox.Show(
+                "Reset IMU bias values stored in the ZED camera's internal EEPROM?\n\n" +
+                "This is equivalent to running 'ZED Sensor Calibration.exe --cimu'.\n" +
+                "Use this if camera orientation continues to drift after warmup.\n\n" +
+                "The camera must be stationary during this operation.",
+                "Reset IMU Biases",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning
+            );
+
+            if (result != DialogResult.Yes) return;
+
+            _btnResetImuBiases.Enabled = false;
+            _btnResetImuBiases.Text = "Resetting...";
+            UpdateStatusSafe("Resetting IMU biases...");
+
+            try
+            {
+                var response = await JetsonApiService.PostAsync("/api/calibration/imu/reset_biases");
+                var body = await response.Content.ReadAsStringAsync();
+                var data = Newtonsoft.Json.Linq.JObject.Parse(body);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    UpdateStatusSafe("IMU biases reset successfully");
+                    AppendStatusLogSafe("IMU biases reset. Camera EEPROM cleared.");
+                    MessageBox.Show(
+                        "IMU biases reset successfully.\n\n" +
+                        "The camera's internal bias values have been cleared.\n" +
+                        "Allow the camera to warm up for a few minutes before use.",
+                        "IMU Reset Complete",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information
+                    );
+                }
+                else
+                {
+                    var detail = data["detail"]?.ToString() ?? "Unknown error";
+                    UpdateStatusSafe($"IMU reset failed: {detail}");
+                    AppendStatusLogSafe($"IMU reset failed: {detail}");
+                    MessageBox.Show(
+                        $"Failed to reset IMU biases:\n\n{detail}",
+                        "IMU Reset Failed",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error
+                    );
+                }
+            }
+            catch (Exception ex)
+            {
+                UpdateStatusSafe($"IMU reset error: {ex.Message}");
+                AppendStatusLogSafe($"IMU reset error: {ex.Message}");
+                MessageBox.Show(
+                    $"Error resetting IMU biases:\n\n{ex.Message}",
+                    "IMU Reset Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
+            finally
+            {
+                _btnResetImuBiases.Enabled = true;
+                _btnResetImuBiases.Text = "Reset IMU";
+            }
+        }
+
+        private async void BtnResetImuBiases_Click(object sender, EventArgs e)
+        {
+            var result = MessageBox.Show(
+                "Reset IMU bias values stored in the ZED camera's internal EEPROM?\n\n" +
+                "This is equivalent to running 'ZED Sensor Calibration.exe --cimu'.\n" +
+                "Use this if camera orientation continues to drift after warmup.\n\n" +
+                "The camera must be stationary during this operation.",
+                "Reset IMU Biases",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning
+            );
+
+            if (result != DialogResult.Yes) return;
+
+            _btnResetImuBiases.Enabled = false;
+            _btnResetImuBiases.Text = "Resetting...";
+            UpdateStatusSafe("Resetting IMU biases...");
+
+            try
+            {
+                var response = await JetsonApiService.PostAsync("/api/calibration/imu/reset_biases");
+                var body = await response.Content.ReadAsStringAsync();
+                var data = Newtonsoft.Json.Linq.JObject.Parse(body);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    UpdateStatusSafe("IMU biases reset successfully");
+                    AppendStatusLogSafe("IMU biases reset. Camera EEPROM cleared.");
+                    MessageBox.Show(
+                        "IMU biases reset successfully.\n\n" +
+                        "The camera's internal bias values have been cleared.\n" +
+                        "Allow the camera to warm up for a few minutes before use.",
+                        "IMU Reset Complete",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information
+                    );
+                }
+                else
+                {
+                    var detail = data["detail"]?.ToString() ?? "Unknown error";
+                    UpdateStatusSafe($"IMU reset failed: {detail}");
+                    AppendStatusLogSafe($"IMU reset failed: {detail}");
+                    MessageBox.Show(
+                        $"Failed to reset IMU biases:\n\n{detail}",
+                        "IMU Reset Failed",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error
+                    );
+                }
+            }
+            catch (Exception ex)
+            {
+                UpdateStatusSafe($"IMU reset error: {ex.Message}");
+                AppendStatusLogSafe($"IMU reset error: {ex.Message}");
+                MessageBox.Show(
+                    $"Error resetting IMU biases:\n\n{ex.Message}",
+                    "IMU Reset Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
+            finally
+            {
+                _btnResetImuBiases.Enabled = true;
+                _btnResetImuBiases.Text = "Reset IMU";
             }
         }
 

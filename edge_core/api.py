@@ -989,6 +989,7 @@ export LD_LIBRARY_PATH=/usr/local/zed/lib:/opt/ros/humble/lib/aarch64-linux-gnu:
 pkill -f 'nomad_zed_nvblox\\.launch\\.py|zed_example\\.launch\\.py' 2>/dev/null || true
 pkill -f 'component_container' 2>/dev/null || true
 pkill -f ros_http_bridge 2>/dev/null || true
+pkill -f 'target_localizer_node|target_localizer\\.launch\\.py' 2>/dev/null || true
 sleep 2
 # Clean up stale FastRTPS/DDS shared memory locks left by killed processes.
 # Without this, new ROS2 nodes fail with RTPS_TRANSPORT_SHM port lock errors.
@@ -1192,7 +1193,7 @@ if [ ! -f "$NOMAD_LAUNCH" ]; then
     exit 2
 fi
 
-ros2 launch "$NOMAD_LAUNCH" enable_nav2:=true &
+ros2 launch "$NOMAD_LAUNCH" enable_nav2:=true enable_od:=$ENABLE_OD &
 echo $! > /tmp/zed_nvblox.pid
 
 # Wait for launch process to stabilize before starting bridge.
@@ -1206,6 +1207,41 @@ fi
 sleep 2
 python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --mesh-topic /nvblox_node/color_layer_marker &
 echo $! > /tmp/ros_bridge.pid
+
+# Launch Task 1 target-localizer only when OD mode is enabled.
+if [ "$ENABLE_OD" = "true" ]; then
+    PYTHONPATH=/workspaces/isaac_ros-dev/edge_core/target_localizer:${{PYTHONPATH:-}} \
+    python3 -m target_localizer.target_localizer_node \
+        --ros-args \
+        -p output_dir:=/home/mad/NOMAD/data/task1_captures \
+        -p team_name:=MAD \
+        -r /zed2i/zed_node/rgb/image_rect_color:=/zed/zed_node/rgb/color/rect/image \
+        -r /zed2i/zed_node/depth/depth_registered:=/zed/zed_node/depth/depth_registered \
+        -r /zed2i/zed_node/rgb/camera_info:=/zed/zed_node/rgb/color/rect/camera_info &
+    echo $! > /tmp/target_localizer.pid
+
+    sleep 2
+    if ! kill -0 "$(cat /tmp/target_localizer.pid 2>/dev/null)" 2>/dev/null; then
+        echo "ERROR: target_localizer process exited early"
+        exit 6
+    fi
+
+    TL_READY=0
+    for i in $(seq 1 20); do
+        if ROS2CLI_DISABLE_DAEMON=1 ros2 service list 2>/dev/null | grep -q '/target_localizer/capture_target' \
+           && ROS2CLI_DISABLE_DAEMON=1 ros2 service list 2>/dev/null | grep -q '/target_localizer/save_targets' \
+           && ROS2CLI_DISABLE_DAEMON=1 ros2 service list 2>/dev/null | grep -q '/target_localizer/print_model'; then
+            TL_READY=1
+            break
+        fi
+        sleep 1
+    done
+
+    if [ "$TL_READY" != "1" ]; then
+        echo "ERROR: target_localizer services not discoverable after startup"
+        exit 7
+    fi
+fi
 
 wait
 """
@@ -1702,7 +1738,7 @@ wait
     # ==================== Task 1: Recon (Outdoor) ====================
 
     @app.post("/api/task/1/capture", tags=["Task 1"])
-    async def task1_capture():
+    async def task1_capture(request: Request):
         """
         Trigger target detection for Task 1 recon mission.
 
@@ -1710,13 +1746,67 @@ wait
         ROS container. The node captures the current ZED frame, runs HSV
         circle detection, back-projects to 3D, and generates a description.
         """
-        output = _call_ros2_service_in_isaac_container_or_raise(
-            service_name="/target_localizer/capture_target",
-            service_type="std_srvs/srv/Trigger",
-            request_payload={},
-            timeout_s=45.0,
-        )
-        return {"success": True, "output": output}
+        try:
+            output = _call_ros2_service_in_isaac_container_or_raise(
+                service_name="/target_localizer/capture_target",
+                service_type="std_srvs/srv/Trigger",
+                request_payload={},
+                timeout_s=45.0,
+            )
+            return {
+                "success": True,
+                "output": output,
+                "mode": "target_localizer",
+            }
+        except HTTPException as exc:
+            # Fallback to the live detections cache so Task 1 capture can still
+            # produce useful output when the target_localizer service is unavailable.
+            detail = str(exc.detail)
+            with request.app.state.detection_state_lock:
+                current = list(request.app.state.detected_objects)
+                history = list(request.app.state.detection_history)
+                last_update = request.app.state.detection_last_update
+
+            fallback_candidates = current if current else history[-10:]
+            age_seconds = time.time() - last_update if last_update > 0 else None
+
+            if fallback_candidates:
+                best = max(
+                    fallback_candidates,
+                    key=lambda d: float(d.get("confidence", 0.0) or 0.0),
+                )
+                label = best.get("label") or best.get("class_name") or "target"
+                confidence = float(best.get("confidence", 0.0) or 0.0)
+                x = best.get("x")
+                y = best.get("y")
+                z = best.get("z")
+                pos = ""
+                if x is not None and y is not None and z is not None:
+                    pos = f" at ({float(x):.2f}, {float(y):.2f}, {float(z):.2f})"
+
+                output = (
+                    f"Fallback capture: top detection '{label}' "
+                    f"(confidence {confidence:.2f}){pos}."
+                )
+                return {
+                    "success": True,
+                    "output": output,
+                    "mode": "detections_fallback",
+                    "detail": detail,
+                    "current_count": len(current),
+                    "history_count": len(history),
+                    "age_seconds": age_seconds,
+                }
+
+            return {
+                "success": False,
+                "output": "Capture fallback has no detections available.",
+                "mode": "detections_fallback",
+                "detail": detail,
+                "current_count": len(current),
+                "history_count": len(history),
+                "age_seconds": age_seconds,
+            }
 
     @app.get("/api/task/1/images/{filename}", tags=["Task 1"])
     async def task1_get_image(filename: str):
@@ -3477,6 +3567,7 @@ wait
                 "nomad_zed_nvblox\\.launch\\.py|zed_example\\.launch\\.py",
                 "component_container",
                 "ros_http_bridge",
+                "target_localizer_node|target_localizer\\.launch\\.py",
             ]:
                 subprocess.run(
                     ["docker", "exec", container, "pkill", "-f", proc],
@@ -4889,6 +4980,100 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             return result.to_dict()
         except Exception as e:
             logger.error(f"IMU check error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/calibration/imu/reset_biases", tags=["Calibration"])
+    async def reset_imu_biases(request: Request):
+        """
+        Reset IMU bias values stored in the ZED camera's internal EEPROM.
+
+        This is equivalent to running 'ZED Sensor Calibration.exe --cimu' on
+        Windows. Required if camera orientation continues to drift even after
+        warmup. Removes stored bias values from the camera's non-volatile memory.
+        """
+        try:
+            import pyzed.sl as sl
+
+            zed = sl.Camera()
+            init_params = sl.InitParameters()
+            init_params.depth_mode = sl.DEPTH_MODE.NONE
+            init_params.camera_resolution = sl.RESOLUTION.VGA
+            init_params.camera_fps = 15
+
+            status = zed.open(init_params)
+            if status != sl.ERROR_CODE.SUCCESS:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to open ZED camera: {status}",
+                )
+
+            reset_status = zed.reset_calibration()
+            zed.close()
+
+            if reset_status == sl.ERROR_CODE.SUCCESS:
+                return {
+                    "success": True,
+                    "message": "IMU biases reset successfully. Camera EEPROM cleared.",
+                }
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to reset IMU biases: {reset_status}",
+                )
+
+        except ImportError:
+            raise HTTPException(status_code=500, detail="ZED SDK (pyzed) not installed")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"IMU bias reset error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/calibration/imu/reset_biases", tags=["Calibration"])
+    async def reset_imu_biases(request: Request):
+        """
+        Reset IMU bias values stored in the ZED camera's internal EEPROM.
+
+        This is equivalent to running 'ZED Sensor Calibration.exe --cimu' on
+        Windows. Required if camera orientation continues to drift even after
+        warmup. Removes stored bias values from the camera's non-volatile memory.
+        """
+        try:
+            import pyzed.sl as sl
+
+            zed = sl.Camera()
+            init_params = sl.InitParameters()
+            init_params.depth_mode = sl.DEPTH_MODE.NONE
+            init_params.camera_resolution = sl.RESOLUTION.VGA
+            init_params.camera_fps = 15
+
+            status = zed.open(init_params)
+            if status != sl.ERROR_CODE.SUCCESS:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to open ZED camera: {status}",
+                )
+
+            reset_status = zed.reset_calibration()
+            zed.close()
+
+            if reset_status == sl.ERROR_CODE.SUCCESS:
+                return {
+                    "success": True,
+                    "message": "IMU biases reset successfully. Camera EEPROM cleared.",
+                }
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to reset IMU biases: {reset_status}",
+                )
+
+        except ImportError:
+            raise HTTPException(status_code=500, detail="ZED SDK (pyzed) not installed")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"IMU bias reset error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
     # ==================== IMU Heading (6-Position) Calibration ====================

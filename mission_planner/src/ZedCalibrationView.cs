@@ -1606,71 +1606,51 @@ namespace NOMAD.MissionPlanner
 
             int w = this.Width;
             int h = this.Height;
-            int cx = w / 2;
-            int cy = h / 2;
-            int size = Math.Min(w, h) / 3;
 
-            // Draw the exploded cube diagram: 8 small cubes in octant positions
-            // Isometric offsets
-            float dx = size * 0.8f;
-            float dy = size * 0.5f;
+            // Draw a clean 2x2x2 cube grid with proper labels
+            // Top layer (Z+) and bottom layer (Z-) shown side by side
+            int cellSize = Math.Min(w / 6, h / 6);
+            int gap = 6;
+            int step = cellSize + gap;
 
-            // Octant positions (isometric projection)
-            // Octant index: (sign_x >= 0, sign_y >= 0, sign_z >= 0)
-            var octantPositions = new PointF[]
+            // Center the entire diagram
+            int totalW = step * 5 + cellSize; // 2 cells + gap + label + gap + 2 cells
+            int totalH = step * 2 + cellSize + 50; // 2 rows + bottom label area
+            int startX = (w - totalW) / 2;
+            int startY = (h - totalH) / 2 + 15;
+
+            // Octant mapping: index = sign_x + 2*sign_y + 4*sign_z
+            // sign_x: 0=negative, 1=positive (columns)
+            // sign_y: 0=negative, 1=positive (rows)
+            // sign_z: 0=bottom layer, 1=top layer (left vs right group)
+
+            // Draw bottom layer (Z-) on the left
+            DrawLayer(g, startX, startY, cellSize, step, layerZ: 0, label: "Z- (Down)");
+            // Draw top layer (Z+) on the right
+            DrawLayer(g, startX + step * 2 + cellSize, startY, cellSize, step, layerZ: 1, label: "Z+ (Up)");
+
+            // Axis labels
+            using (var font = new Font("Segoe UI", 8, FontStyle.Italic))
+            using (var brush = new SolidBrush(NOMADTheme.TEXT_MUTED))
             {
-                new PointF(cx - dx * 0.1f, cy - dy * 1.1f),  // (0,0,0) -> bottom-left-back
-                new PointF(cx + dx * 0.9f, cy - dy * 0.6f),  // (1,0,0) -> bottom-right-back
-                new PointF(cx - dx * 0.9f, cy - dy * 0.6f),  // (0,1,0) -> bottom-left-front
-                new PointF(cx + dx * 0.1f, cy - dy * 0.1f),  // (1,1,0) -> bottom-right-front
-                new PointF(cx - dx * 0.1f, cy - dy * 0.1f - size), // (0,0,1) -> top-left-back
-                new PointF(cx + dx * 0.9f, cy + dy * 0.4f - size), // (1,0,1) -> top-right-back
-                new PointF(cx - dx * 0.9f, cy + dy * 0.4f - size), // (0,1,1) -> top-left-front
-                new PointF(cx + dx * 0.1f, cy + dy * 0.9f - size), // (1,1,1) -> top-right-front
-            };
+                // Bottom layer axis
+                int lx = startX;
+                int ly = startY + step * 2 + cellSize + 4;
+                g.DrawString("Y+", font, brush, lx, ly);
+                g.DrawString("Y-", font, brush, lx + step * 2 + 4, ly);
+                g.DrawString("X-", font, brush, lx - 20, startY + step + cellSize / 2 - 6);
+                g.DrawString("X+", font, brush, lx + step * 2 + cellSize + 4, startY + step + cellSize / 2 - 6);
 
-            int cubeSize = size / 2;
-
-            for (int i = 0; i < 8; i++)
-            {
-                var pos = octantPositions[i];
-                bool covered = _octantFlags[i];
-
-                Color fillColor = covered
-                    ? Color.FromArgb(180, NOMADTheme.SUCCESS)
-                    : Color.FromArgb(60, NOMADTheme.TEXT_MUTED);
-
-                Color borderColor = covered
-                    ? NOMADTheme.SUCCESS
-                    : Color.FromArgb(100, NOMADTheme.TEXT_MUTED);
-
-                // Draw a small isometric cube face (just a diamond for simplicity)
-                var diamond = new PointF[]
-                {
-                    new PointF(pos.X, pos.Y - cubeSize / 2f),
-                    new PointF(pos.X + cubeSize / 2f, pos.Y),
-                    new PointF(pos.X, pos.Y + cubeSize / 2f),
-                    new PointF(pos.X - cubeSize / 2f, pos.Y),
-                };
-
-                using (var brush = new SolidBrush(fillColor))
-                    g.FillPolygon(brush, diamond);
-                using (var pen = new Pen(borderColor, 1.5f))
-                    g.DrawPolygon(pen, diamond);
-
-                // Label
-                string label = covered ? "OK" : $"{i + 1}";
-                using (var font = new Font("Segoe UI", 7, FontStyle.Bold))
-                using (var textBrush = new SolidBrush(covered ? Color.White : NOMADTheme.TEXT_MUTED))
-                {
-                    var textSize = g.MeasureString(label, font);
-                    g.DrawString(label, font, textBrush,
-                        pos.X - textSize.Width / 2, pos.Y - textSize.Height / 2);
-                }
+                // Top layer axis
+                int rx = startX + step * 2 + cellSize;
+                g.DrawString("Y+", font, brush, rx, ly);
+                g.DrawString("Y-", font, brush, rx + step * 2 + 4, ly);
+                g.DrawString("X-", font, brush, rx - 20, startY + step + cellSize / 2 - 6);
+                g.DrawString("X+", font, brush, rx + step * 2 + cellSize + 4, startY + step + cellSize / 2 - 6);
             }
 
-            // Title at bottom
-            string summary = $"{_octantsCovered}/8 Octants";
+            // Summary at bottom
+            string summary = $"{_octantsCovered}/8 Octants Covered";
             using (var font = new Font("Segoe UI", 11, FontStyle.Bold))
             using (var brush = new SolidBrush(
                 _octantsCovered >= 6 ? NOMADTheme.SUCCESS :
@@ -1678,16 +1658,123 @@ namespace NOMAD.MissionPlanner
             {
                 var textSize = g.MeasureString(summary, font);
                 g.DrawString(summary, font, brush,
-                    cx - textSize.Width / 2, h - textSize.Height - 10);
+                    w / 2 - textSize.Width / 2, h - textSize.Height - 8);
+            }
+        }
+
+        private void DrawLayer(Graphics g, int x, int y, int cellSize, int step, int layerZ, string label)
+        {
+            // Layer label
+            using (var font = new Font("Segoe UI", 9, FontStyle.Bold))
+            using (var brush = new SolidBrush(NOMADTheme.ACCENT))
+            {
+                var sz = g.MeasureString(label, font);
+                g.DrawString(label, font, brush, x + cellSize - sz.Width / 2, y - 16);
             }
 
-            // Axis labels
-            using (var font = new Font("Segoe UI", 8))
-            using (var brush = new SolidBrush(NOMADTheme.TEXT_MUTED))
+            for (int sy = 0; sy < 2; sy++) // sign_y: row
             {
-                g.DrawString("+X", font, brush, cx + dx + 5, cy - 10);
-                g.DrawString("-X", font, brush, cx - dx - 25, cy - 10);
-                g.DrawString("+Z", font, brush, cx - 10, cy - size - dy - 10);
+                for (int sx = 0; sx < 2; sx++) // sign_x: column
+                {
+                    int octantIndex = sx + 2 * sy + 4 * layerZ;
+                    bool covered = _octantFlags[octantIndex];
+
+                    int cx = x + sx * step;
+                    int cy = y + sy * step;
+
+                    Color fillColor = covered
+                        ? Color.FromArgb(180, NOMADTheme.SUCCESS)
+                        : Color.FromArgb(60, NOMADTheme.TEXT_MUTED);
+
+                    Color borderColor = covered
+                        ? NOMADTheme.SUCCESS
+                        : Color.FromArgb(100, NOMADTheme.TEXT_MUTED);
+
+                    // Draw rounded square
+                    int radius = 6;
+                    using (var path = new System.Drawing.Drawing2D.GraphicsPath())
+                    {
+                        path.AddArc(cx, cy, radius * 2, radius * 2, 180, 90);
+                        path.AddArc(cx + cellSize - radius * 2, cy, radius * 2, radius * 2, 270, 90);
+                        path.AddArc(cx + cellSize - radius * 2, cy + cellSize - radius * 2, radius * 2, radius * 2, 0, 90);
+                        path.AddArc(cx, cy + cellSize - radius * 2, radius * 2, radius * 2, 90, 90);
+                        path.CloseFigure();
+
+                        using (var brush = new SolidBrush(fillColor))
+                            g.FillPath(brush, path);
+                        using (var pen = new Pen(borderColor, 2f))
+                            g.DrawPath(pen, path);
+                    }
+
+                    // Label
+                    string label = covered ? "OK" : $"{octantIndex + 1}";
+                    using (var font = new Font("Segoe UI", 9, FontStyle.Bold))
+                    using (var textBrush = new SolidBrush(covered ? Color.White : NOMADTheme.TEXT_MUTED))
+                    {
+                        var textSize = g.MeasureString(label, font);
+                        g.DrawString(label, font, textBrush,
+                            cx + (cellSize - textSize.Width) / 2,
+                            cy + (cellSize - textSize.Height) / 2);
+                    }
+                }
+            }
+        }
+
+        private void DrawLayer(Graphics g, int x, int y, int cellSize, int step, int layerZ, string label)
+        {
+            // Layer label
+            using (var font = new Font("Segoe UI", 9, FontStyle.Bold))
+            using (var brush = new SolidBrush(NOMADTheme.ACCENT))
+            {
+                var sz = g.MeasureString(label, font);
+                g.DrawString(label, font, brush, x + cellSize - sz.Width / 2, y - 16);
+            }
+
+            for (int sy = 0; sy < 2; sy++) // sign_y: row
+            {
+                for (int sx = 0; sx < 2; sx++) // sign_x: column
+                {
+                    int octantIndex = sx + 2 * sy + 4 * layerZ;
+                    bool covered = _octantFlags[octantIndex];
+
+                    int cx = x + sx * step;
+                    int cy = y + sy * step;
+
+                    Color fillColor = covered
+                        ? Color.FromArgb(180, NOMADTheme.SUCCESS)
+                        : Color.FromArgb(60, NOMADTheme.TEXT_MUTED);
+
+                    Color borderColor = covered
+                        ? NOMADTheme.SUCCESS
+                        : Color.FromArgb(100, NOMADTheme.TEXT_MUTED);
+
+                    // Draw rounded square
+                    int radius = 6;
+                    using (var path = new System.Drawing.Drawing2D.GraphicsPath())
+                    {
+                        path.AddArc(cx, cy, radius * 2, radius * 2, 180, 90);
+                        path.AddArc(cx + cellSize - radius * 2, cy, radius * 2, radius * 2, 270, 90);
+                        path.AddArc(cx + cellSize - radius * 2, cy + cellSize - radius * 2, radius * 2, radius * 2, 0, 90);
+                        path.AddArc(cx, cy + cellSize - radius * 2, radius * 2, radius * 2, 90, 90);
+                        path.CloseFigure();
+
+                        using (var brush = new SolidBrush(fillColor))
+                            g.FillPath(brush, path);
+                        using (var pen = new Pen(borderColor, 2f))
+                            g.DrawPath(pen, path);
+                    }
+
+                    // Label
+                    string label = covered ? "OK" : $"{octantIndex + 1}";
+                    using (var font = new Font("Segoe UI", 9, FontStyle.Bold))
+                    using (var textBrush = new SolidBrush(covered ? Color.White : NOMADTheme.TEXT_MUTED))
+                    {
+                        var textSize = g.MeasureString(label, font);
+                        g.DrawString(label, font, textBrush,
+                            cx + (cellSize - textSize.Width) / 2,
+                            cy + (cellSize - textSize.Height) / 2);
+                    }
+                }
             }
         }
     }

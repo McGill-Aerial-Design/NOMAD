@@ -312,9 +312,10 @@ namespace NOMAD.MissionPlanner
                     if (dialog.ShowDialog() == DialogResult.OK)
                     {
                         _targetGrid.Rows[e.RowIndex].Cells["ImagePath"].Value = dialog.FileName;
-                    }
-                }
-            }
+        }
+    }
+}
+
         }
 
         private void TargetGrid_CellEndEdit(object sender, DataGridViewCellEventArgs e)
@@ -588,7 +589,6 @@ namespace NOMAD.MissionPlanner
             _lblStatus.Text = $"Loaded {_targetGrid.Rows.Count} captures";
             _lblStatus.ForeColor = SUCCESS_COLOR;
         }
-
-        }
     }
 }
+
