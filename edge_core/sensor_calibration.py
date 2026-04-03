@@ -850,6 +850,9 @@ class IMUHeadingCalibrationResult:
     fitness: float  # 0-1, quality of fit
     timestamp: str
     duration_s: float
+    eeprom_store_attempted: bool = False
+    eeprom_store_success: Optional[bool] = None
+    eeprom_store_detail: str = "not_attempted"
 
     def to_dict(self) -> dict:
         return {
@@ -860,6 +863,9 @@ class IMUHeadingCalibrationResult:
             "fitness": self.fitness,
             "timestamp": self.timestamp,
             "duration_s": self.duration_s,
+            "eeprom_store_attempted": self.eeprom_store_attempted,
+            "eeprom_store_success": self.eeprom_store_success,
+            "eeprom_store_detail": self.eeprom_store_detail,
         }
 
 
@@ -1113,22 +1119,30 @@ class IMUHeadingCalibration:
 
             self._result = result
             self._state = CalibrationState.COMPLETE
-            self._save_calibration(result)
             logger.info(
                 f"IMU heading calibration complete: fitness={result.fitness:.3f}"
             )
 
             # Attempt to store calibration in camera EEPROM
             if self._zed:
+                result.eeprom_store_attempted = True
                 try:
                     import pyzed.sl as sl
                     store_status = self._zed.store_calibration()
                     if store_status == sl.ERROR_CODE.SUCCESS:
+                        result.eeprom_store_success = True
+                        result.eeprom_store_detail = "stored_to_camera_eeprom"
                         logger.info("IMU heading calibration stored to camera EEPROM")
                     else:
+                        result.eeprom_store_success = False
+                        result.eeprom_store_detail = str(store_status)
                         logger.warning(f"Failed to store IMU heading calibration to EEPROM: {store_status}")
                 except Exception as e:
+                    result.eeprom_store_success = False
+                    result.eeprom_store_detail = str(e)
                     logger.warning(f"EEPROM store error: {e}")
+
+            self._save_calibration(result)
 
             return result
 
@@ -1249,6 +1263,9 @@ def load_imu_heading_calibration() -> Optional[IMUHeadingCalibrationResult]:
             fitness=data["fitness"],
             timestamp=data["timestamp"],
             duration_s=data["duration_s"],
+            eeprom_store_attempted=data.get("eeprom_store_attempted", False),
+            eeprom_store_success=data.get("eeprom_store_success"),
+            eeprom_store_detail=data.get("eeprom_store_detail", "not_attempted"),
         )
     except Exception as e:
         logger.error(f"Failed to load IMU heading calibration: {e}")

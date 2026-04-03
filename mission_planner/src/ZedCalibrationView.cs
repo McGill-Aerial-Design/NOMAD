@@ -931,15 +931,36 @@ namespace NOMAD.MissionPlanner
                 {
                     var result = data["result"];
                     float fitness = (float?)result?["fitness"] ?? 0;
+                    bool eepromAttempted = (bool?)result?["eeprom_store_attempted"] ?? false;
+                    bool? eepromSuccess = (bool?)result?["eeprom_store_success"];
+                    string eepromDetail = result?["eeprom_store_detail"]?.ToString() ?? "not_attempted";
 
-                    _lblHeadingStatus.Text = $"Calibration COMPLETE (fitness: {fitness:P1})";
-                    _lblHeadingStatus.ForeColor = fitness > 0.95f ? NOMADTheme.SUCCESS : NOMADTheme.WARNING;
+                    string eepromSummary;
+                    if (!eepromAttempted)
+                        eepromSummary = "Not attempted";
+                    else if (eepromSuccess == true)
+                        eepromSummary = "SUCCESS";
+                    else
+                        eepromSummary = $"FAILED ({eepromDetail})";
+
+                    _lblHeadingStatus.Text =
+                        eepromSuccess == false
+                            ? $"Calibration complete, EEPROM write failed (fitness: {fitness:P1})"
+                            : $"Calibration COMPLETE (fitness: {fitness:P1})";
+                    _lblHeadingStatus.ForeColor =
+                        eepromSuccess == false
+                            ? NOMADTheme.WARNING
+                            : fitness > 0.95f
+                                ? NOMADTheme.SUCCESS
+                                : NOMADTheme.WARNING;
 
                     _txtHeadingResult.ForeColor = NOMADTheme.SUCCESS;
                     _txtHeadingResult.Text =
                         $"=== IMU Heading Calibration Complete ===\r\n\r\n" +
                         $"Fitness:          {fitness:F4}\r\n" +
                         $"Duration:         {result?["duration_s"]}s\r\n\r\n" +
+                        $"EEPROM Store:     {eepromSummary}\r\n" +
+                        $"EEPROM Detail:    {eepromDetail}\r\n\r\n" +
                         $"Accel Bias (m/s^2):\r\n" +
                         $"  X: {result?["accel_bias"]?[0]}\r\n" +
                         $"  Y: {result?["accel_bias"]?[1]}\r\n" +
