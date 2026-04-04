@@ -651,10 +651,10 @@ class ROSHTTPBridge(Node):
                 pose.orientation.w,
             )
 
-            # Use raw ZED pose attitude from odom quaternion (no extra servo
-            # calibration/correction applied in bridge).
+            # Roll follows raw ZED pose. Compensate only pitch for servo tilt;
+            # keep yaw from raw ZED pose.
             body_roll = self._wrap_angle_rad(ros_roll)
-            body_pitch = self._wrap_angle_rad(ros_pitch)
+            body_pitch = self._wrap_angle_rad(ros_pitch - self._gimbal_pitch_rad)
             body_yaw = self._wrap_angle_rad(ros_yaw)
 
             # Convert attitude to NED so primary pose fields match position frame.
@@ -1628,9 +1628,9 @@ class ROSHTTPBridge(Node):
         cx, cy, cz = vio.ros_x, vio.ros_y, vio.ros_z
         c_roll, c_pitch, c_yaw = vio.ros_roll, vio.ros_pitch, vio.ros_yaw
 
-        # Use raw ZED pose attitude for body orientation (no extra correction).
+        # Mirror VIO attitude mapping: pitch corrected by servo tilt only.
         body_roll = c_roll
-        body_pitch = c_pitch
+        body_pitch = c_pitch - self._gimbal_pitch_rad
         body_yaw = c_yaw
 
         # Compute the mount offset vector rotated into the odom frame,
