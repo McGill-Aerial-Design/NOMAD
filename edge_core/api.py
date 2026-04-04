@@ -5265,6 +5265,119 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             ),
         )
 
+    @app.post("/api/calibration/zed/calibration/start", tags=["Calibration"])
+    async def start_zed_calibration_tool(request: Request):
+        """
+        Launch ZED_Calibration on the Jetson desktop.
+
+        This endpoint intentionally targets the ZED_Calibration binary directly.
+        """
+        calibration_bin = shutil.which("ZED_Calibration")
+        if not calibration_bin:
+            raise HTTPException(
+                status_code=500,
+                detail="ZED_Calibration was not found in PATH",
+            )
+
+        display = os.environ.get("NOMAD_CAL_DISPLAY") or os.environ.get("DISPLAY") or ":1"
+        request_host = request.url.hostname or ""
+        novnc_host = request_host
+        if not novnc_host or novnc_host in {"localhost", "127.0.0.1"}:
+            novnc_host = (
+                os.environ.get("TAILSCALE_IP")
+                or os.environ.get("JETSON_IP")
+                or "localhost"
+            )
+        novnc_url = f"http://{novnc_host}:6080/vnc.html?autoconnect=0&reconnect=0&resize=scale"
+
+        deps_lib_dir = os.path.expanduser(
+            "~/NOMAD/.deps/zed_viewer/root/usr/lib/aarch64-linux-gnu"
+        )
+        run_env = os.environ.copy()
+        run_env["DISPLAY"] = display
+        if os.path.isdir(deps_lib_dir):
+            existing_ld = run_env.get("LD_LIBRARY_PATH", "")
+            run_env["LD_LIBRARY_PATH"] = (
+                f"{deps_lib_dir}:{existing_ld}" if existing_ld else deps_lib_dir
+            )
+
+        try:
+            already_running = subprocess.run(
+                ["pgrep", "-f", "ZED_Calibration"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            if already_running.returncode == 0:
+                return {
+                    "success": True,
+                    "message": "ZED_Calibration already running",
+                    "display": display,
+                    "tool": os.path.basename(calibration_bin),
+                    "novnc_url": novnc_url,
+                }
+        except Exception:
+            pass
+
+        try:
+            ldd_result = subprocess.run(
+                ["ldd", calibration_bin],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                env=run_env,
+            )
+            ldd_output = "\n".join(
+                part for part in [ldd_result.stdout, ldd_result.stderr] if part
+            )
+            missing = []
+            for line in ldd_output.splitlines():
+                if "=> not found" not in line:
+                    continue
+                lib_name = line.split("=>", 1)[0].strip()
+                if lib_name:
+                    missing.append(lib_name)
+            if missing:
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "ZED_Calibration is missing shared libraries: "
+                        + ", ".join(missing)
+                    ),
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            # If ldd check fails unexpectedly, still attempt launch.
+            pass
+
+        try:
+            proc = subprocess.Popen(
+                [calibration_bin],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=run_env,
+                start_new_session=True,
+            )
+            time.sleep(0.8)
+            if proc.poll() is not None:
+                raise RuntimeError("ZED_Calibration process exited immediately")
+
+            return {
+                "success": True,
+                "message": "ZED_Calibration launched",
+                "display": display,
+                "tool": os.path.basename(calibration_bin),
+                "pid": proc.pid,
+                "novnc_url": novnc_url,
+            }
+        except Exception as e:
+            logger.error(f"Failed to launch ZED_Calibration: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to launch ZED_Calibration: {e}",
+            )
+
     @app.post("/api/calibration/magnetometer/start", tags=["Calibration"])
     async def start_magnetometer_calibration(request: Request):
         """

@@ -19,6 +19,7 @@ namespace NOMAD.MissionPlanner
 
         private TabControl _tabControl;
         private Button _btnLaunchSensorViewer;
+        private Button _btnLaunchZedCalibration;
         private Button _btnOpenRemoteDesktop;
         private Label _lblStatus;
 
@@ -104,8 +105,9 @@ namespace NOMAD.MissionPlanner
                     "Custom in-app calibration pages were removed.\n" +
                     "Use the official ZED Sensor Viewer in remote desktop:\n\n" +
                     "1. Click 'Launch Sensor Viewer'\n" +
-                    "2. noVNC opens in your default browser\n" +
-                    "3. Run magnetometer calibration in Sensor Viewer",
+                    "2. (Optional) Click 'Launch ZED Calibration'\n" +
+                    "3. noVNC opens in your default browser\n" +
+                    "4. Run calibration in the selected ZED tool",
                 Font = new Font("Segoe UI", 10),
                 ForeColor = NOMADTheme.TEXT_PRIMARY,
                 Dock = DockStyle.Fill,
@@ -133,6 +135,21 @@ namespace NOMAD.MissionPlanner
             _btnLaunchSensorViewer.FlatAppearance.BorderSize = 0;
             _btnLaunchSensorViewer.Click += async (s, e) => await LaunchSensorViewerAsync();
             buttonRow.Controls.Add(_btnLaunchSensorViewer);
+
+            _btnLaunchZedCalibration = new Button
+            {
+                Text = "Launch ZED Calibration",
+                Size = new Size(220, 40),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(70, 120, 95),
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                Cursor = Cursors.Hand,
+                Margin = new Padding(0, 10, 12, 0),
+            };
+            _btnLaunchZedCalibration.FlatAppearance.BorderSize = 0;
+            _btnLaunchZedCalibration.Click += async (s, e) => await LaunchZedCalibrationAsync();
+            buttonRow.Controls.Add(_btnLaunchZedCalibration);
 
             _btnOpenRemoteDesktop = new Button
             {
@@ -199,6 +216,7 @@ namespace NOMAD.MissionPlanner
         private async Task LaunchSensorViewerAsync()
         {
             _btnLaunchSensorViewer.Enabled = false;
+            _btnLaunchZedCalibration.Enabled = false;
             _lblStatus.Text = "Launching Sensor Viewer...";
             _lblStatus.ForeColor = NOMADTheme.WARNING;
 
@@ -255,6 +273,71 @@ namespace NOMAD.MissionPlanner
             finally
             {
                 _btnLaunchSensorViewer.Enabled = true;
+                _btnLaunchZedCalibration.Enabled = true;
+            }
+        }
+
+        private async Task LaunchZedCalibrationAsync()
+        {
+            _btnLaunchSensorViewer.Enabled = false;
+            _btnLaunchZedCalibration.Enabled = false;
+            _lblStatus.Text = "Launching ZED Calibration...";
+            _lblStatus.ForeColor = NOMADTheme.WARNING;
+
+            try
+            {
+                var resp = await JetsonApiService.PostAsync("/api/calibration/zed/calibration/start");
+                var body = await resp.Content.ReadAsStringAsync();
+
+                if (!resp.IsSuccessStatusCode)
+                {
+                    _lblStatus.Text = "Launch failed";
+                    _lblStatus.ForeColor = NOMADTheme.ERROR;
+                    MessageBox.Show(
+                        $"Failed to launch ZED Calibration:\n\n{body}",
+                        "Calibration Tool Error",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error
+                    );
+                    return;
+                }
+
+                string message = "ZED Calibration launched";
+                string noVncUrl = BuildNoVncUrl();
+                try
+                {
+                    var data = JObject.Parse(body);
+                    var apiMessage = data["message"]?.Value<string>();
+                    var apiNoVnc = data["novnc_url"]?.Value<string>();
+                    if (!string.IsNullOrWhiteSpace(apiMessage))
+                        message = apiMessage;
+                    if (!string.IsNullOrWhiteSpace(apiNoVnc))
+                        noVncUrl = apiNoVnc;
+                }
+                catch
+                {
+                    // Keep fallback values.
+                }
+
+                OpenNoVncInBrowser(noVncUrl);
+                _lblStatus.Text = message;
+                _lblStatus.ForeColor = NOMADTheme.SUCCESS;
+            }
+            catch (Exception ex)
+            {
+                _lblStatus.Text = "Launch failed";
+                _lblStatus.ForeColor = NOMADTheme.ERROR;
+                MessageBox.Show(
+                    $"Unable to launch ZED Calibration:\n\n{ex.Message}",
+                    "Calibration Tool Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
+            finally
+            {
+                _btnLaunchSensorViewer.Enabled = true;
+                _btnLaunchZedCalibration.Enabled = true;
             }
         }
 
