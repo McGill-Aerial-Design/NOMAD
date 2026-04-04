@@ -1683,6 +1683,9 @@ wait
                                 frame["roll"] = roll
                                 frame["pitch"] = pitch
                                 frame["yaw"] = yaw
+                                frame["body_roll"] = roll
+                                frame["body_pitch"] = pitch
+                                frame["body_yaw"] = yaw
                                 frame["attitude_valid"] = True
                                 last_good_roll = roll
                                 last_good_pitch = pitch
@@ -1705,26 +1708,29 @@ wait
                         if not has_attitude:
                             # Prefer body attitude when available so SLAM airframe
                             # orientation stays stable while servo tilt changes.
+                            body_roll = ros_vio.get("body_roll")
+                            body_pitch = ros_vio.get("body_pitch")
+                            body_yaw = ros_vio.get("body_yaw")
                             roll = float(
                                 (
-                                    ros_vio.get("body_roll")
-                                    if ros_vio.get("body_roll") is not None
+                                    body_roll
+                                    if body_roll is not None
                                     else ros_vio.get("roll", 0)
                                 )
                                 or 0
                             )
                             pitch = float(
                                 (
-                                    ros_vio.get("body_pitch")
-                                    if ros_vio.get("body_pitch") is not None
+                                    body_pitch
+                                    if body_pitch is not None
                                     else ros_vio.get("pitch", 0)
                                 )
                                 or 0
                             )
                             yaw = float(
                                 (
-                                    ros_vio.get("body_yaw")
-                                    if ros_vio.get("body_yaw") is not None
+                                    body_yaw
+                                    if body_yaw is not None
                                     else ros_vio.get("yaw", 0)
                                 )
                                 or 0
@@ -1740,6 +1746,10 @@ wait
                                 frame["roll"] = roll
                                 frame["pitch"] = pitch
                                 frame["yaw"] = yaw
+                                if body_roll is not None and body_pitch is not None and body_yaw is not None:
+                                    frame["body_roll"] = float(body_roll)
+                                    frame["body_pitch"] = float(body_pitch)
+                                    frame["body_yaw"] = float(body_yaw)
                                 frame["attitude_valid"] = True
                                 last_good_roll = roll
                                 last_good_pitch = pitch

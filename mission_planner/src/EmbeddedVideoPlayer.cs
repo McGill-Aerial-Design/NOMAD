@@ -220,8 +220,8 @@ namespace NOMAD.MissionPlanner
                 bool requestedEnabled = _chkDetections.Checked;
 
                 _lblStatus.Text = requestedEnabled
-                    ? "Enabling HSV detector..."
-                    : "Disabling HSV detector...";
+                    ? "Enabling HSV overlay..."
+                    : "Disabling HSV overlay...";
                 _lblStatus.ForeColor = Color.Yellow;
 
                 try
@@ -229,8 +229,8 @@ namespace NOMAD.MissionPlanner
                     await SetHsvModeAsync(requestedEnabled);
                     _overlayEnabled = requestedEnabled;
                     _lblStatus.Text = requestedEnabled
-                        ? "HSV detector enabled"
-                        : "HSV detector disabled";
+                        ? "HSV overlay enabled"
+                        : "HSV overlay disabled";
                     _lblStatus.ForeColor = requestedEnabled ? Color.LimeGreen : Color.Gray;
                 }
                 catch (Exception ex)
@@ -262,25 +262,10 @@ namespace NOMAD.MissionPlanner
                 var overlayData = JObject.Parse(overlayJson);
                 var overlayEnabled = overlayData["enabled"]?.Value<bool>() ?? false;
 
-                bool detectionEnabled = overlayEnabled;
-                try
-                {
-                    var detectionJson = await JetsonApiService.ApiClient.GetStringAsync($"{_apiBaseUrl}/api/detections/status");
-                    var detectionData = JObject.Parse(detectionJson);
-                    detectionEnabled = detectionData["detection_enabled"]?.Value<bool>() ?? false;
-                }
-                catch
-                {
-                    // If detection probe fails, preserve overlay status only.
-                    detectionEnabled = overlayEnabled;
-                }
-
-                var enabled = overlayEnabled && detectionEnabled;
-
                 _syncingOverlayState = true;
-                _chkDetections.Checked = enabled;
+                _chkDetections.Checked = overlayEnabled;
                 _syncingOverlayState = false;
-                _overlayEnabled = enabled;
+                _overlayEnabled = overlayEnabled;
             }
             catch
             {
@@ -293,37 +278,15 @@ namespace NOMAD.MissionPlanner
         {
             if (enabled)
             {
-                var detectionResp = await JetsonApiService.LongRunClient.PostAsync(
-                    $"{_apiBaseUrl}/api/detections/start", null);
-                await EnsureRequestSucceededAsync(detectionResp, "detector start", requireSuccessField: true);
-
                 var overlayResp = await JetsonApiService.ApiClient.PostAsync(
                     $"{_apiBaseUrl}/api/video/overlay/enable", null);
-                try
-                {
-                    await EnsureRequestSucceededAsync(overlayResp, "overlay enable", requireSuccessField: true);
-                }
-                catch
-                {
-                    try
-                    {
-                        await JetsonApiService.LongRunClient.PostAsync(
-                            $"{_apiBaseUrl}/api/detections/stop", null);
-                    }
-                    catch { }
-
-                    throw;
-                }
-
+                await EnsureRequestSucceededAsync(overlayResp, "overlay enable", requireSuccessField: true);
                 return;
             }
 
             var overlayDisableResp = await JetsonApiService.ApiClient.PostAsync(
                 $"{_apiBaseUrl}/api/video/overlay/disable", null);
-            var detectionStopResp = await JetsonApiService.LongRunClient.PostAsync(
-                $"{_apiBaseUrl}/api/detections/stop", null);
             await EnsureRequestSucceededAsync(overlayDisableResp, "overlay disable", requireSuccessField: true);
-            await EnsureRequestSucceededAsync(detectionStopResp, "detector stop", requireSuccessField: true);
         }
 
         private async System.Threading.Tasks.Task EnsureRequestSucceededAsync(
@@ -879,10 +842,6 @@ namespace NOMAD.MissionPlanner
                     {
                         JetsonApiService.ApiClient.PostAsync(
                             $"{_apiBaseUrl}/api/video/overlay/disable", null)
-                            .ConfigureAwait(false);
-
-                        JetsonApiService.LongRunClient.PostAsync(
-                            $"{_apiBaseUrl}/api/detections/stop", null)
                             .ConfigureAwait(false);
                     }
                     catch { }

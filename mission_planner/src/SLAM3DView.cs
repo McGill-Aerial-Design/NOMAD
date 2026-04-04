@@ -2069,9 +2069,31 @@ namespace NOMAD.MissionPlanner
                                 if (TryReadFloatToken(frame["z"], out float zVal))
                                     _dronePosZ = zVal;
 
-                                bool hasRoll = TryReadFloatToken(frame["roll"], out float nextRoll);
-                                bool hasPitch = TryReadFloatToken(frame["pitch"], out float nextPitch);
-                                bool hasYaw = TryReadFloatToken(frame["yaw"], out float nextYaw);
+                                bool hasBodyRoll = TryReadFloatToken(frame["body_roll"], out float bodyRoll);
+                                bool hasBodyPitch = TryReadFloatToken(frame["body_pitch"], out float bodyPitch);
+                                bool hasBodyYaw = TryReadFloatToken(frame["body_yaw"], out float bodyYaw);
+
+                                bool hasRoll;
+                                bool hasPitch;
+                                bool hasYaw;
+                                float nextRoll;
+                                float nextPitch;
+                                float nextYaw;
+
+                                if (hasBodyRoll && hasBodyPitch && hasBodyYaw)
+                                {
+                                    hasRoll = hasPitch = hasYaw = true;
+                                    nextRoll = bodyRoll;
+                                    nextPitch = bodyPitch;
+                                    nextYaw = bodyYaw;
+                                }
+                                else
+                                {
+                                    hasRoll = TryReadFloatToken(frame["roll"], out nextRoll);
+                                    hasPitch = TryReadFloatToken(frame["pitch"], out nextPitch);
+                                    hasYaw = TryReadFloatToken(frame["yaw"], out nextYaw);
+                                }
+
                                 if (hasRoll && hasPitch && hasYaw)
                                 {
                                     if (ShouldRejectAttitudeResetGlitch(
