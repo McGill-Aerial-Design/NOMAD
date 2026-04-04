@@ -651,10 +651,10 @@ class ROSHTTPBridge(Node):
                 pose.orientation.w,
             )
 
-            # Remove camera gimbal pitch so SLAM body attitude remains stable when
-            # the servo moves. The axis basis stays ROS optical (x-right, y-down, z-forward).
+            # Use raw ZED pose attitude from odom quaternion (no extra servo
+            # calibration/correction applied in bridge).
             body_roll = self._wrap_angle_rad(ros_roll)
-            body_pitch = self._wrap_angle_rad(ros_pitch - self._gimbal_pitch_rad)
+            body_pitch = self._wrap_angle_rad(ros_pitch)
             body_yaw = self._wrap_angle_rad(ros_yaw)
 
             # Convert attitude to NED so primary pose fields match position frame.
@@ -1628,12 +1628,9 @@ class ROSHTTPBridge(Node):
         cx, cy, cz = vio.ros_x, vio.ros_y, vio.ros_z
         c_roll, c_pitch, c_yaw = vio.ros_roll, vio.ros_pitch, vio.ros_yaw
 
-        # Remove servo pitch from camera orientation to get drone body orientation.
-        # Camera orientation = body orientation * servo_pitch_rotation
-        # => body pitch = camera pitch - servo pitch
-        servo_pitch = self._gimbal_pitch_rad
+        # Use raw ZED pose attitude for body orientation (no extra correction).
         body_roll = c_roll
-        body_pitch = c_pitch - servo_pitch
+        body_pitch = c_pitch
         body_yaw = c_yaw
 
         # Compute the mount offset vector rotated into the odom frame,
