@@ -5301,6 +5301,39 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 f"{deps_lib_dir}:{existing_ld}" if existing_ld else deps_lib_dir
             )
 
+        # Ensure the :1 virtual desktop exists when calibration is requested on :1.
+        if display == ":1":
+            try:
+                if not os.path.exists("/tmp/.X11-unix/X1"):
+                    screen = f"{os.environ.get('NOVNC_GEOMETRY', '1280x720')}x24"
+                    subprocess.Popen(
+                        ["Xvfb", ":1", "-screen", "0", screen, "-ac", "+extension", "RANDR"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                    time.sleep(1.0)
+
+                openbox_running = subprocess.run(
+                    ["pgrep", "-x", "openbox"],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+                if openbox_running.returncode != 0:
+                    openbox_env = run_env.copy()
+                    openbox_env["DISPLAY"] = ":1"
+                    subprocess.Popen(
+                        ["openbox-session"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        env=openbox_env,
+                        start_new_session=True,
+                    )
+                    time.sleep(0.5)
+            except Exception as e:
+                logger.warning(f"Failed to pre-start :1 desktop environment: {e}")
+
         try:
             already_running = subprocess.run(
                 ["pgrep", "-f", "ZED_Calibration"],
