@@ -651,11 +651,11 @@ class ROSHTTPBridge(Node):
                 pose.orientation.w,
             )
 
-            # Single-source SLAM body attitude mapping in ROS optical basis.
-            # Roll/pitch follow camera attitude directly; yaw carries servo offset.
+            # Remove camera gimbal pitch so SLAM body attitude remains stable when
+            # the servo moves. The axis basis stays ROS optical (x-right, y-down, z-forward).
             body_roll = self._wrap_angle_rad(ros_roll)
-            body_pitch = self._wrap_angle_rad(ros_pitch)
-            body_yaw = self._wrap_angle_rad(ros_yaw + self._gimbal_pitch_rad)
+            body_pitch = self._wrap_angle_rad(ros_pitch - self._gimbal_pitch_rad)
+            body_yaw = self._wrap_angle_rad(ros_yaw)
 
             # Convert attitude to NED so primary pose fields match position frame.
             roll, pitch, yaw = self._quat_to_ned_euler(
@@ -1628,12 +1628,13 @@ class ROSHTTPBridge(Node):
         cx, cy, cz = vio.ros_x, vio.ros_y, vio.ros_z
         c_roll, c_pitch, c_yaw = vio.ros_roll, vio.ros_pitch, vio.ros_yaw
 
-        # Use the same single-source attitude mapping as VIO forwarding:
-        # roll/pitch from camera; yaw carries servo offset.
+        # Remove servo pitch from camera orientation to get drone body orientation.
+        # Camera orientation = body orientation * servo_pitch_rotation
+        # => body pitch = camera pitch - servo pitch
         servo_pitch = self._gimbal_pitch_rad
         body_roll = c_roll
-        body_pitch = c_pitch
-        body_yaw = c_yaw + servo_pitch
+        body_pitch = c_pitch - servo_pitch
+        body_yaw = c_yaw
 
         # Compute the mount offset vector rotated into the odom frame,
         # then subtract it from the camera position to get body position.
