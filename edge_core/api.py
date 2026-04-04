@@ -99,7 +99,7 @@ COMMAND_WHITELIST: dict[str, str] = {
     # --- Service status (pgrep for bare processes, systemctl for systemd) ---
     "status_mediamtx": "pgrep -x mediamtx > /dev/null && echo active || echo inactive",
     "status_mavlink": "pgrep -f mavlink-routerd > /dev/null && echo active || echo inactive",
-    "status_novnc": "if systemctl --user is-active --quiet novnc 2>/dev/null || systemctl is-active --quiet novnc 2>/dev/null || pgrep -f 'websockify.*6080' >/dev/null; then echo active; else echo inactive; fi",
+    "status_novnc": "if systemctl --user is-active --quiet novnc 2>/dev/null || systemctl is-active --quiet novnc 2>/dev/null || pgrep -f '[w]ebsockify.*6080' >/dev/null; then echo active; else echo inactive; fi",
     "status_nomad": "systemctl is-active nomad",
     # --- Service restart ---
     "restart_video": "pkill -x mediamtx 2>/dev/null; sleep 1; nohup mediamtx ~/NOMAD/infra/mediamtx.yml > ~/nomad_logs/mediamtx.log 2>&1 & sleep 1; pgrep -x mediamtx > /dev/null && echo restarted || echo failed",
@@ -110,8 +110,8 @@ COMMAND_WHITELIST: dict[str, str] = {
     "stop_mediamtx": "pkill -x mediamtx 2>&1 && echo stopped || echo 'not running'",
     "start_mavlink": "[ -e /dev/ttyACM0 ] && { pgrep -f mavlink-routerd > /dev/null && echo 'already running' || { GCS=${GCS_IP:-100.76.127.17}; nohup mavlink-routerd -e \"${GCS}:14550\" -e 127.0.0.1:14550 /dev/ttyACM0 > ~/nomad_logs/mavlink.log 2>&1 & sleep 2; pgrep -f mavlink-routerd > /dev/null && echo started || (cat ~/nomad_logs/mavlink.log; echo failed); }; } || echo 'no CubePilot'",
     "stop_mavlink": "pkill -f mavlink-routerd 2>&1 && echo stopped || echo 'not running'",
-    "start_novnc": "if systemctl --user is-active --quiet novnc 2>/dev/null || systemctl is-active --quiet novnc 2>/dev/null || pgrep -f 'websockify.*6080' >/dev/null; then echo 'already running'; elif systemctl --user start novnc 2>/dev/null || systemctl start novnc 2>/dev/null; then echo started; else echo failed; fi",
-    "stop_novnc": "if systemctl --user stop novnc 2>/dev/null || systemctl stop novnc 2>/dev/null || pkill -f 'websockify.*6080' 2>/dev/null; then echo stopped; else echo 'not running'; fi",
+    "start_novnc": "if ss -ltn | grep -q ':6080 '; then echo 'already running'; else if ! ss -ltn | grep -q ':5900 '; then x11vnc -display :0 -auth guess -rfbport 5900 -localhost -forever -shared -bg -passwd ${NOVNC_VNC_PASSWORD:-skibidi123} -o ~/nomad_logs/x11vnc.log >/dev/null 2>&1; sleep 1; fi; if ! ss -ltn | grep -q ':5900 '; then echo failed; exit 1; fi; nohup websockify --web /usr/share/novnc/ 6080 localhost:5900 > ~/nomad_logs/novnc.log 2>&1 & sleep 1; ss -ltn | grep -q ':6080 ' && echo started || (echo failed; exit 1); fi",
+    "stop_novnc": "stopped=0; pkill -f '[w]ebsockify.*6080' 2>/dev/null && stopped=1; pkill -f '[x]11vnc.*-rfbport 5900' 2>/dev/null && stopped=1; [ $stopped -eq 1 ] && echo stopped || echo 'not running'",
     "start_nomad": "sudo systemctl start nomad 2>&1 && echo started || echo failed",
     "stop_nomad": "nohup bash -c 'sleep 2 && sudo systemctl stop nomad' > /dev/null 2>&1 & echo 'stop scheduled'",
     # --- System commands ---
@@ -3440,7 +3440,7 @@ wait
             process_running = False
             try:
                 process_result = subprocess.run(
-                    ["pgrep", "-f", "websockify.*6080"],
+                    ["pgrep", "-f", "[w]ebsockify.*6080"],
                     capture_output=True,
                     text=True,
                     timeout=5,
