@@ -1212,7 +1212,12 @@ if [ ! -f "$NOMAD_LAUNCH" ]; then
     exit 2
 fi
 
-ros2 launch "$NOMAD_LAUNCH" enable_nav2:=true enable_od:=$ENABLE_OD &
+NAV2_FLAG=true
+if [ "$ENABLE_OD" = "true" ]; then
+    NAV2_FLAG=false
+fi
+
+ros2 launch "$NOMAD_LAUNCH" enable_nav2:=$NAV2_FLAG enable_od:=$ENABLE_OD &
 echo $! > /tmp/zed_nvblox.pid
 
 # Wait for launch process to stabilize before starting bridge.
