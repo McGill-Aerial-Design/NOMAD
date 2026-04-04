@@ -1230,6 +1230,12 @@ if ! kill -0 "$(cat /tmp/zed_nvblox.pid 2>/dev/null)" 2>/dev/null; then
     exit 4
 fi
 
+# Ensure nvblox-expected frame alias exists even when camera URDF chain is delayed.
+ros2 run tf2_ros static_transform_publisher \
+    --x 0 --y 0 --z 0 --roll 0 --pitch 0 --yaw 0 \
+    --frame-id camera_link --child-frame-id zed_camera_link \
+    >/tmp/zed_camera_link_alias.log 2>&1 &
+
 # Wait for topics then launch bridge
 sleep 2
 {bridge_env_prefix}python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --mesh-topic /nvblox_node/color_layer_marker &
