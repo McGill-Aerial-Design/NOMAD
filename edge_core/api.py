@@ -999,6 +999,9 @@ source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 # ROS lib dir so the component_container can dlopen the camera plugin.
 GXF_LIB_DIRS=$(find /opt/ros/humble/share -path '*/gxf/lib' -type d 2>/dev/null | tr '\\n' ':')
 export LD_LIBRARY_PATH=/usr/local/zed/lib:/opt/ros/humble/lib/aarch64-linux-gnu:${{GXF_LIB_DIRS}}$LD_LIBRARY_PATH
+# Reduce FastDDS SHM lock contention that can wedge ROS graph/topic flow
+# after repeated relaunches in containerized runtime.
+export RMW_FASTRTPS_TRANSPORT_SHARED_MEMORY_DISABLED=1
 
 # Kill ALL previous nvblox/ZED/bridge processes from ANY launch path.
 # Do NOT kill launcher scripts by name — this script IS launch_nvblox_bridge.sh
