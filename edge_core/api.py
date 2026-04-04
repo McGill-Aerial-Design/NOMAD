@@ -980,6 +980,13 @@ def create_app(state_manager: StateManager) -> FastAPI:
 
         od_value = "true" if enable_od else "false"
         mode_text = "enabled" if enable_od else "disabled"
+        bridge_api_key = (os.environ.get("NOMAD_API_KEY") or "").strip()
+        bridge_internal_token = (os.environ.get("NOMAD_INTERNAL_TOKEN") or "").strip()
+        bridge_env_prefix = ""
+        if bridge_api_key:
+            bridge_env_prefix += f"NOMAD_API_KEY='{bridge_api_key}' "
+        if bridge_internal_token:
+            bridge_env_prefix += f"NOMAD_INTERNAL_TOKEN='{bridge_internal_token}' "
 
         # Build launch script with OD config merge
         # od_value is interpolated into the heredoc so the script knows whether to enable OD
@@ -1216,7 +1223,7 @@ fi
 
 # Wait for topics then launch bridge
 sleep 2
-python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --mesh-topic /nvblox_node/color_layer_marker &
+{bridge_env_prefix}python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --mesh-topic /nvblox_node/color_layer_marker &
 echo $! > /tmp/ros_bridge.pid
 
 # Launch Task 1 target-localizer only when OD mode is enabled.
