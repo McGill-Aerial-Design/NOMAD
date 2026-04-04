@@ -1246,7 +1246,7 @@ if [ "$ENABLE_OD" = "true" ]; then
     fi
 
     TL_READY=0
-    for i in $(seq 1 20); do
+    for i in $(seq 1 45); do
         if ROS2CLI_DISABLE_DAEMON=1 ros2 service list 2>/dev/null | grep -q '/target_localizer/capture_target' \
            && ROS2CLI_DISABLE_DAEMON=1 ros2 service list 2>/dev/null | grep -q '/target_localizer/save_targets' \
            && ROS2CLI_DISABLE_DAEMON=1 ros2 service list 2>/dev/null | grep -q '/target_localizer/print_model'; then
@@ -1257,8 +1257,7 @@ if [ "$ENABLE_OD" = "true" ]; then
     done
 
     if [ "$TL_READY" != "1" ]; then
-        echo "ERROR: target_localizer services not discoverable after startup"
-        exit 7
+        echo "WARNING: target_localizer services not discoverable yet; continuing startup"
     fi
 fi
 
