@@ -183,6 +183,12 @@ class VIOData:
     ros_roll: float = 0.0
     ros_pitch: float = 0.0
     ros_yaw: float = 0.0
+    # Body attitude in the same ROS optical basis as ros_* pose fields.
+    # This removes gimbal pitch so SLAM viewers can render airframe attitude
+    # and apply camera tilt separately.
+    body_roll: float = 0.0
+    body_pitch: float = 0.0
+    body_yaw: float = 0.0
     frame_id: str = "ros_optical"  # Explicit frame identifier for all ros_* fields
 
 
@@ -645,6 +651,12 @@ class ROSHTTPBridge(Node):
                 pose.orientation.w,
             )
 
+            # Remove camera gimbal pitch so SLAM body attitude remains stable when
+            # the servo moves. The axis basis stays ROS optical (x-right, y-down, z-forward).
+            body_roll = self._wrap_angle_rad(ros_roll)
+            body_pitch = self._wrap_angle_rad(ros_pitch - self._gimbal_pitch_rad)
+            body_yaw = self._wrap_angle_rad(ros_yaw)
+
             # Convert attitude to NED so primary pose fields match position frame.
             roll, pitch, yaw = self._quat_to_ned_euler(
                 pose.orientation.x,
@@ -676,6 +688,9 @@ class ROSHTTPBridge(Node):
                 ros_roll=ros_roll,
                 ros_pitch=ros_pitch,
                 ros_yaw=ros_yaw,
+                body_roll=body_roll,
+                body_pitch=body_pitch,
+                body_yaw=body_yaw,
             )
 
             with self._lock:
@@ -1784,6 +1799,11 @@ class ROSHTTPBridge(Node):
         yaw = math.atan2(siny_cosp, cosy_cosp)
         
         return roll, pitch, yaw
+
+    @staticmethod
+    def _wrap_angle_rad(angle: float) -> float:
+        """Normalize an angle to [-pi, pi] for stable downstream interpolation."""
+        return math.atan2(math.sin(angle), math.cos(angle))
 
     def _quat_to_ned_euler(
         self, x: float, y: float, z: float, w: float

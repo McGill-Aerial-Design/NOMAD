@@ -257,6 +257,30 @@ class ZEDCameraService:
         """Get the latest captured frame."""
         with self._lock:
             return self._latest_frame
+
+    def _build_tracking_params(self, sl, area_file_path: Optional[str] = None):
+        """Build positional tracking params consistently across all tracking entry points."""
+        tracking_params = sl.PositionalTrackingParameters()
+        tracking_params.enable_area_memory = True
+        tracking_params.enable_pose_smoothing = True
+        tracking_params.set_floor_as_origin = False
+
+        # Keep IMU fusion explicit for stable orientation in SDK 5.x.
+        if hasattr(tracking_params, "enable_imu_fusion"):
+            tracking_params.enable_imu_fusion = True
+
+        # Prefer the modern tracker mode when the SDK exposes it.
+        if (
+            hasattr(tracking_params, "mode")
+            and hasattr(sl, "POSITIONAL_TRACKING_MODE")
+            and hasattr(sl.POSITIONAL_TRACKING_MODE, "GEN_2")
+        ):
+            tracking_params.mode = sl.POSITIONAL_TRACKING_MODE.GEN_2
+
+        if area_file_path:
+            tracking_params.area_file_path = area_file_path
+
+        return tracking_params
     
     def reset_tracking(self) -> bool:
         """
@@ -321,25 +345,71 @@ class ZEDCameraService:
                 return False, message
 
             if not wait_for_completion:
-                return True, f"Area map export started: {map_path}"
+                export_state = None
+                if hasattr(self._zed, "get_area_export_state"):
+                    try:
+                        export_state = self._zed.get_area_export_state()
+                    except Exception:
+                        export_state = None
+                if export_state is None:
+                    return True, f"Area map export started (state unavailable): {map_path}"
+                export_state_text = str(export_state).upper()
+                if "FAIL" in export_state_text or "ERROR" in export_state_text:
+                    message = f"Area map export failed: {export_state}"
+                    logger.error(message)
+                    return False, message
+                if "SUCCESS" in export_state_text:
+                    if not os.path.isfile(map_path):
+                        message = (
+                            f"Area map export reported SUCCESS but file is missing: {map_path}"
+                        )
+                        logger.error(message)
+                        return False, message
+                    if os.path.getsize(map_path) <= 0:
+                        message = (
+                            f"Area map export reported SUCCESS but file is empty: {map_path}"
+                        )
+                        logger.error(message)
+                        return False, message
+                return True, f"Area map export started (state={export_state}): {map_path}"
 
             if not hasattr(self._zed, "get_area_export_state"):
-                return True, f"Area map export requested: {map_path}"
+                return False, (
+                    "Area map export state API is unavailable; cannot verify save outcome. "
+                    "Upgrade ZED SDK/runtime or retry with wait_for_completion=false"
+                )
 
             deadline = time.time() + max(timeout_s, 0.0)
+            last_state = "UNKNOWN"
             while time.time() <= deadline:
                 export_state = self._zed.get_area_export_state()
                 export_state_text = str(export_state).upper()
+                last_state = str(export_state)
                 if "SUCCESS" in export_state_text:
-                    logger.info(f"Area map saved: {map_path}")
-                    return True, f"Area map saved: {map_path}"
+                    if not os.path.isfile(map_path):
+                        message = (
+                            f"Area map export reported SUCCESS but file is missing: {map_path}"
+                        )
+                        logger.error(message)
+                        return False, message
+                    if os.path.getsize(map_path) <= 0:
+                        message = (
+                            f"Area map export reported SUCCESS but file is empty: {map_path}"
+                        )
+                        logger.error(message)
+                        return False, message
+                    logger.info(f"Area map saved: {map_path} (state={export_state})")
+                    return True, f"Area map saved (state={export_state}): {map_path}"
                 if "FAIL" in export_state_text or "ERROR" in export_state_text:
                     message = f"Area map export failed: {export_state}"
                     logger.error(message)
                     return False, message
                 time.sleep(0.1)
 
-            message = f"Timed out waiting for area map export after {timeout_s:.1f}s"
+            message = (
+                f"Timed out waiting for area map export after {timeout_s:.1f}s "
+                f"(last_state={last_state})"
+            )
             logger.error(message)
             return False, message
 
@@ -367,11 +437,7 @@ class ZEDCameraService:
                 self._zed.disable_positional_tracking()
                 self._tracking_enabled = False
 
-            tracking_params = sl.PositionalTrackingParameters()
-            tracking_params.enable_area_memory = True
-            tracking_params.enable_pose_smoothing = True
-            tracking_params.set_floor_as_origin = False
-            tracking_params.area_file_path = map_path
+            tracking_params = self._build_tracking_params(sl, area_file_path=map_path)
 
             status = self._zed.enable_positional_tracking(tracking_params)
             if status != sl.ERROR_CODE.SUCCESS:
@@ -385,8 +451,14 @@ class ZEDCameraService:
                 return False, message
 
             self._tracking_enabled = True
-            logger.info(f"Area map loaded for relocalization: {map_path}")
-            return True, f"Area map loaded for relocalization: {map_path}"
+            logger.info(
+                "Area map loaded for relocalization and positional tracking enabled: %s",
+                map_path,
+            )
+            return True, (
+                "Area map loaded for relocalization; positional tracking enabled "
+                f"with area_file_path={map_path}"
+            )
 
         except Exception as e:
             if was_tracking_enabled and not self._tracking_enabled:
@@ -406,9 +478,7 @@ class ZEDCameraService:
             import pyzed.sl as sl
             
             if enable and not self._tracking_enabled:
-                tracking_params = sl.PositionalTrackingParameters()
-                tracking_params.enable_area_memory = True
-                tracking_params.enable_pose_smoothing = True
+                tracking_params = self._build_tracking_params(sl)
                 
                 status = self._zed.enable_positional_tracking(tracking_params)
                 if status == sl.ERROR_CODE.SUCCESS:
@@ -506,10 +576,7 @@ class ZEDCameraService:
             
             # Enable positional tracking if configured
             if self._config.enable_tracking:
-                tracking_params = sl.PositionalTrackingParameters()
-                tracking_params.enable_area_memory = True
-                tracking_params.enable_pose_smoothing = True
-                tracking_params.set_floor_as_origin = False
+                tracking_params = self._build_tracking_params(sl)
                 
                 status = self._zed.enable_positional_tracking(tracking_params)
                 if status == sl.ERROR_CODE.SUCCESS:

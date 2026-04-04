@@ -278,9 +278,8 @@ namespace NOMAD.MissionPlanner
 
             _tabControl.TabPages.Add(slam3DTab);
 
-            // Tab 3: Remote Screen (noVNC)
-            var remoteScreenTab = CreateRemoteScreenTab();
-            _tabControl.TabPages.Add(remoteScreenTab);
+            // Remote Screen tab intentionally removed.
+            // Remote desktop access is now handled from the Calibration view.
 
             this.Controls.Add(_tabControl);
         }

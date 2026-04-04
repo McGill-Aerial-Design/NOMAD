@@ -178,6 +178,10 @@ class VIOUpdateRequest(BaseModel):
     ros_roll: float = 0.0
     ros_pitch: float = 0.0
     ros_yaw: float = 0.0
+    # Optional body attitude in ROS frame (camera attitude with gimbal pitch removed)
+    body_roll: Optional[float] = None
+    body_pitch: Optional[float] = None
+    body_yaw: Optional[float] = None
     # Coordinate frame for ros_* pose fields (ZED optical frame by default)
     frame_id: str = "ros_optical"
 
@@ -530,6 +534,9 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 "roll": vio_request.ros_roll,
                 "pitch": vio_request.ros_pitch,
                 "yaw": vio_request.ros_yaw,
+                "body_roll": vio_request.body_roll,
+                "body_pitch": vio_request.body_pitch,
+                "body_yaw": vio_request.body_yaw,
                 "timestamp": vio_request.timestamp,
                 "frame_id": getattr(vio_request, "frame_id", "ros_optical"),
             }
@@ -1625,7 +1632,8 @@ wait
         next_tick = asyncio.get_running_loop().time()
         try:
             while True:
-                frame = {"type": "pose", "ts": frame_count, "frame_id": "ros_optical"}
+                frame = {"type": "pose", "ts": frame_count}
+                frame_id = "ros_optical"
                 has_position = False
                 has_attitude = False
 
@@ -1643,6 +1651,7 @@ wait
                         has_mesh = True
                         frame["type"] = "mesh"
                         frame["mesh"] = stored.get("mesh")
+                        frame_id = stored.get("frame_id", frame_id)
                         if stored.get("drone_position"):
                             dp = stored["drone_position"]
                             frame["x"] = dp.get("x", 0)
@@ -1680,15 +1689,39 @@ wait
                 if not has_position or not has_attitude:
                     ros_vio = _get_vio_snapshot()["slam_vio_ros_frame"]
                     if ros_vio:
+                        frame_id = ros_vio.get("frame_id", frame_id)
                         if not has_position:
                             frame["x"] = ros_vio.get("x", 0)
                             frame["y"] = ros_vio.get("y", 0)
                             frame["z"] = ros_vio.get("z", 0)
                             has_position = True
                         if not has_attitude:
-                            roll = float(ros_vio.get("roll", 0) or 0)
-                            pitch = float(ros_vio.get("pitch", 0) or 0)
-                            yaw = float(ros_vio.get("yaw", 0) or 0)
+                            # Prefer body attitude when available so SLAM airframe
+                            # orientation stays stable while servo tilt changes.
+                            roll = float(
+                                (
+                                    ros_vio.get("body_roll")
+                                    if ros_vio.get("body_roll") is not None
+                                    else ros_vio.get("roll", 0)
+                                )
+                                or 0
+                            )
+                            pitch = float(
+                                (
+                                    ros_vio.get("body_pitch")
+                                    if ros_vio.get("body_pitch") is not None
+                                    else ros_vio.get("pitch", 0)
+                                )
+                                or 0
+                            )
+                            yaw = float(
+                                (
+                                    ros_vio.get("body_yaw")
+                                    if ros_vio.get("body_yaw") is not None
+                                    else ros_vio.get("yaw", 0)
+                                )
+                                or 0
+                            )
                             if all(abs(v) <= 1e-4 for v in (roll, pitch, yaw)):
                                 if has_last_good_attitude:
                                     frame["roll"] = last_good_roll
@@ -1722,6 +1755,7 @@ wait
                     frame["vz"] = external_vio.get("vz", 0)
 
                 has_pose = has_position or has_attitude
+                frame["frame_id"] = frame_id
 
                 # Skip frames when no pose data available at all
                 if not has_pose and not has_mesh:
@@ -2248,9 +2282,46 @@ wait
             return 409
         if "not found" in text or "no such file" in text or "does not exist" in text:
             return 404
+        if "reported success but file is missing" in text:
+            return 500
+        if "reported success but file is empty" in text:
+            return 500
         if "missing" in text or "invalid" in text or "empty" in text:
             return 400
+        if "must be enabled before saving" in text:
+            return 409
+        if "timed out waiting for area map export" in text:
+            return 504
+        if "export state api is unavailable" in text:
+            return 503
         return default_status
+
+    def _actionable_vio_area_detail(message: str, fallback: str) -> str:
+        """Attach an operator-facing next action to backend errors."""
+        base = (message or "").strip() or fallback
+        lower = base.lower()
+
+        if "must be enabled before saving" in lower:
+            return (
+                f"{base}. Action: start VIO/positional tracking first, then retry save."
+            )
+        if "not found" in lower or "missing" in lower or "no such file" in lower:
+            return (
+                f"{base}. Action: verify the map path exists on Jetson and retry."
+            )
+        if "timed out waiting for area map export" in lower:
+            return (
+                f"{base}. Action: increase timeout_s or retry after camera motion/feature-rich view."
+            )
+        if "export state api is unavailable" in lower:
+            return (
+                f"{base}. Action: use wait_for_completion=false for this runtime or upgrade ZED SDK/runtime."
+            )
+        if "failed to load area map for relocalization" in lower:
+            return (
+                f"{base}. Action: confirm area file was created on this unit and is not corrupted."
+            )
+        return base
 
     def _sanitize_ros2_service_output(output: str) -> str:
         """Strip noisy ROS2 CLI/runtime lines and keep actionable output."""
@@ -2489,7 +2560,11 @@ wait
             if not success:
                 status = _status_for_vio_area_failure(message, default_status=500)
                 raise HTTPException(
-                    status_code=status, detail=message or "Failed to save area map"
+                    status_code=status,
+                    detail=_actionable_vio_area_detail(
+                        message,
+                        "Failed to save area map",
+                    ),
                 )
         else:
             backend = "nvblox_map_service"
@@ -2526,7 +2601,11 @@ wait
             if not success:
                 status = _status_for_vio_area_failure(message, default_status=500)
                 raise HTTPException(
-                    status_code=status, detail=message or "Failed to load area map"
+                    status_code=status,
+                    detail=_actionable_vio_area_detail(
+                        message,
+                        "Failed to load area map",
+                    ),
                 )
         else:
             backend = "nvblox_map_service"
@@ -2562,7 +2641,11 @@ wait
             if not load_success:
                 status = _status_for_vio_area_failure(load_message, default_status=500)
                 raise HTTPException(
-                    status_code=status, detail=load_message or "Failed to load area map"
+                    status_code=status,
+                    detail=_actionable_vio_area_detail(
+                        load_message,
+                        "Failed to load area map",
+                    ),
                 )
 
             reset_ok = True
@@ -4703,6 +4786,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 "block_count": item_count,
                 "total_blocks": total_items,
                 "mode": mode,
+                "frame_id": mesh_data.get("frame_id", "ros_optical"),
             }
 
             # Store drone pose from mesh data (from TF lookup in ros_http_bridge)
@@ -4790,9 +4874,21 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                             "z": ros_vio.get("z", 0),
                         }
                         result["drone_attitude"] = {
-                            "roll": ros_vio.get("roll", 0),
-                            "pitch": ros_vio.get("pitch", 0),
-                            "yaw": ros_vio.get("yaw", 0),
+                            "roll": (
+                                ros_vio.get("body_roll")
+                                if ros_vio.get("body_roll") is not None
+                                else ros_vio.get("roll", 0)
+                            ),
+                            "pitch": (
+                                ros_vio.get("body_pitch")
+                                if ros_vio.get("body_pitch") is not None
+                                else ros_vio.get("pitch", 0)
+                            ),
+                            "yaw": (
+                                ros_vio.get("body_yaw")
+                                if ros_vio.get("body_yaw") is not None
+                                else ros_vio.get("yaw", 0)
+                            ),
                         }
 
                 return result
@@ -4974,7 +5070,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
     # ==================== Sensor Calibration Endpoints ====================
 
     @app.post("/api/calibration/zed/sensor-viewer/start", tags=["Calibration"])
-    async def start_zed_sensor_viewer():
+    async def start_zed_sensor_viewer(request: Request):
         """
         Launch ZED Sensor Viewer on the Jetson desktop.
 
@@ -4989,11 +5085,14 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             )
 
         display = os.environ.get("NOMAD_CAL_DISPLAY") or os.environ.get("DISPLAY") or ":1"
-        novnc_host = (
-            os.environ.get("TAILSCALE_IP")
-            or os.environ.get("JETSON_IP")
-            or "localhost"
-        )
+        request_host = request.url.hostname or ""
+        novnc_host = request_host
+        if not novnc_host or novnc_host in {"localhost", "127.0.0.1"}:
+            novnc_host = (
+                os.environ.get("TAILSCALE_IP")
+                or os.environ.get("JETSON_IP")
+                or "localhost"
+            )
         novnc_url = f"http://{novnc_host}:6080/vnc.html?autoconnect=0&reconnect=0&resize=scale"
 
         deps_lib_dir = os.path.expanduser(
