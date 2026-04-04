@@ -11,6 +11,7 @@ namespace NOMAD.MissionPlanner
     /// Service Control Panel for NOMAD - manages Jetson services including:
     /// - MAVLink Router
     /// - MediaMTX (RTSP Server)
+    /// - noVNC
     /// - Edge Core
     /// - Isaac ROS Container
     /// - VIO Pipeline Status
@@ -39,6 +40,7 @@ namespace NOMAD.MissionPlanner
         // Service status indicators
         private Label _lblMavlinkStatus;
         private Label _lblMediamtxStatus;
+        private Label _lblNoVncStatus;
         private Label _lblEdgeCoreStatus;
         private Label _lblIsaacRosStatus;
         private Label _lblTargetLocalizationStatus;
@@ -48,6 +50,8 @@ namespace NOMAD.MissionPlanner
         private Button _btnMavlinkRestart;
         private Button _btnMediamtxRestart;
         private Button _btnEdgeCoreRestart;
+        private Button _btnNoVncStart;
+        private Button _btnNoVncStop;
         private Button _btnIsaacRosStart;
         private Button _btnVioReset;
         private Button _btnTargetLocalizationStart;
@@ -167,6 +171,9 @@ namespace NOMAD.MissionPlanner
             // === MediaMTX ===
             AddServiceRow("MediaMTX (RTSP)", ref _lblMediamtxStatus, ref _btnMediamtxRestart, ref yOffset);
             _btnMediamtxRestart.Click += async (s, e) => await RestartServiceAsync("mediamtx", _lblMediamtxStatus);
+
+            // === noVNC (with Start/Stop) ===
+            AddNoVncRow(ref yOffset);
             
             // === NOMAD Services (Full Restart) ===
             AddServiceRow("NOMAD Services", ref _lblEdgeCoreStatus, ref _btnEdgeCoreRestart, ref yOffset, "Restart All");
@@ -466,6 +473,60 @@ namespace NOMAD.MissionPlanner
 
             yOffset += 35;
         }
+
+        private void AddNoVncRow(ref int yOffset)
+        {
+            int leftCol = ServiceLeftCol;
+            int startCol = ServiceStartCol;
+            int stopCol = ServiceStopCol;
+
+            var lblName = new Label
+            {
+                Text = "noVNC:",
+                Location = new Point(leftCol, yOffset + 3),
+                Size = new Size(120, 20),
+                ForeColor = Color.LightGray
+            };
+            _servicesPanel.Controls.Add(lblName);
+
+            _lblNoVncStatus = new Label
+            {
+                Text = "Checking...",
+                Location = new Point(ServiceStatusCol, yOffset + 3),
+                Size = new Size(240, 20),
+                ForeColor = Color.Yellow,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left,
+            };
+            _servicesPanel.Controls.Add(_lblNoVncStatus);
+
+            _btnNoVncStart = new Button
+            {
+                Text = "Start",
+                Location = new Point(startCol, yOffset),
+                Size = new Size(70, 25),
+                BackColor = Color.FromArgb(0, 120, 60),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left,
+            };
+            _btnNoVncStart.Click += async (s, e) => await StartNoVncAsync();
+            _servicesPanel.Controls.Add(_btnNoVncStart);
+
+            _btnNoVncStop = new Button
+            {
+                Text = "Stop",
+                Location = new Point(stopCol, yOffset),
+                Size = new Size(70, 25),
+                BackColor = Color.FromArgb(150, 50, 50),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left,
+            };
+            _btnNoVncStop.Click += async (s, e) => await StopNoVncAsync();
+            _servicesPanel.Controls.Add(_btnNoVncStop);
+
+            yOffset += 35;
+        }
         
         private void AddNvbloxRow(ref int yOffset)
         {
@@ -567,6 +628,21 @@ namespace NOMAD.MissionPlanner
                         bool mediamtxRunning = services["mediamtx"]?["running"]?.Value<bool>() ?? false;
                         UpdateStatusLabel(_lblMediamtxStatus, mediamtxRunning, mediamtxRunning ? "Running" : "Stopped");
 
+                        var novncToken = services["novnc"];
+                        if (novncToken != null)
+                        {
+                            bool noVncRunning = novncToken["running"]?.Value<bool>() ?? false;
+                            string noVncStatus = novncToken["status"]?.Value<string>() ?? string.Empty;
+                            string noVncText = noVncRunning
+                                ? "Running (port 6080)"
+                                : (!string.IsNullOrWhiteSpace(noVncStatus) ? $"Stopped ({noVncStatus})" : "Stopped");
+                            UpdateStatusLabel(_lblNoVncStatus, noVncRunning, noVncText);
+                        }
+                        else
+                        {
+                            UpdateStatusLabel(_lblNoVncStatus, false, "Unavailable");
+                        }
+
                         bool isaacRunning = services["isaac_ros"]?["running"]?.Value<bool>() ?? false;
                         string isaacMessage = services["isaac_ros"]?["message"]?.Value<string>();
                         string isaacText = isaacRunning
@@ -605,6 +681,7 @@ namespace NOMAD.MissionPlanner
                 // skip the rest of endpoint-specific probes this cycle.
                 if (!servicesFresh)
                 {
+                    UpdateStatusPendingIfChecking(_lblNoVncStatus, "Waiting...");
                     UpdateStatusPendingIfChecking(_lblIsaacRosStatus, "Waiting...");
                     UpdateStatusPendingIfChecking(_lblTargetLocalizationStatus, "Waiting...");
                     UpdateStatusPendingIfChecking(_lblNvbloxStatus, "Waiting...");
@@ -1027,6 +1104,41 @@ namespace NOMAD.MissionPlanner
             }
         }
 
+        private async Task StartNoVncAsync()
+        {
+            LogMessage("Starting noVNC...");
+            UpdateStatusLabel(_lblNoVncStatus, false, "Starting...");
+
+            var result = await _sender.StartServiceAsync("novnc");
+
+            if (result.Success)
+            {
+                LogMessage("noVNC start command sent");
+            }
+            else
+            {
+                LogMessage($"Failed to start noVNC: {result.Message}");
+                UpdateStatusLabel(_lblNoVncStatus, false, "Start Failed");
+            }
+        }
+
+        private async Task StopNoVncAsync()
+        {
+            LogMessage("Stopping noVNC...");
+            UpdateStatusLabel(_lblNoVncStatus, false, "Stopping...");
+
+            var result = await _sender.StopServiceAsync("novnc");
+
+            if (result.Success)
+            {
+                LogMessage("noVNC stop command sent");
+            }
+            else
+            {
+                LogMessage($"Failed to stop noVNC: {result.Message}");
+            }
+        }
+
         private async Task StopIsaacRosAsync()
         {
             LogMessage("Stopping Isaac ROS...");
@@ -1128,8 +1240,32 @@ namespace NOMAD.MissionPlanner
             var result = await _sender.ClearSlamAsync();
             if (result.Success)
             {
-                LogMessage("SLAM mesh cleared");
-                UpdateStatusLabel(_lblSlamStatus, true, "Cleared");
+                bool nvbloxCleared = true;
+                string displayMessage = "SLAM mesh cleared";
+
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(result.Data))
+                    {
+                        var payload = JObject.Parse(result.Data);
+                        nvbloxCleared = payload["nvblox_cleared"]?.Value<bool>() ?? true;
+                        string apiMessage = payload["message"]?.Value<string>();
+                        string nvbloxMessage = payload["nvblox_message"]?.Value<string>();
+
+                        if (!string.IsNullOrWhiteSpace(apiMessage))
+                            displayMessage = apiMessage;
+
+                        if (!nvbloxCleared && !string.IsNullOrWhiteSpace(nvbloxMessage))
+                            displayMessage += $" | {nvbloxMessage}";
+                    }
+                }
+                catch
+                {
+                    // Keep generic success message when payload parsing fails.
+                }
+
+                LogMessage(displayMessage);
+                UpdateStatusLabel(_lblSlamStatus, nvbloxCleared, nvbloxCleared ? "Cleared" : "Cache Cleared");
             }
             else
             {

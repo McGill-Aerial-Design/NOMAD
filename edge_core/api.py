@@ -99,6 +99,7 @@ COMMAND_WHITELIST: dict[str, str] = {
     # --- Service status (pgrep for bare processes, systemctl for systemd) ---
     "status_mediamtx": "pgrep -x mediamtx > /dev/null && echo active || echo inactive",
     "status_mavlink": "pgrep -f mavlink-routerd > /dev/null && echo active || echo inactive",
+    "status_novnc": "if systemctl --user is-active --quiet novnc 2>/dev/null || systemctl is-active --quiet novnc 2>/dev/null || pgrep -f 'websockify.*6080' >/dev/null; then echo active; else echo inactive; fi",
     "status_nomad": "systemctl is-active nomad",
     # --- Service restart ---
     "restart_video": "pkill -x mediamtx 2>/dev/null; sleep 1; nohup mediamtx ~/NOMAD/infra/mediamtx.yml > ~/nomad_logs/mediamtx.log 2>&1 & sleep 1; pgrep -x mediamtx > /dev/null && echo restarted || echo failed",
@@ -109,6 +110,8 @@ COMMAND_WHITELIST: dict[str, str] = {
     "stop_mediamtx": "pkill -x mediamtx 2>&1 && echo stopped || echo 'not running'",
     "start_mavlink": "[ -e /dev/ttyACM0 ] && { pgrep -f mavlink-routerd > /dev/null && echo 'already running' || { GCS=${GCS_IP:-100.76.127.17}; nohup mavlink-routerd -e \"${GCS}:14550\" -e 127.0.0.1:14550 /dev/ttyACM0 > ~/nomad_logs/mavlink.log 2>&1 & sleep 2; pgrep -f mavlink-routerd > /dev/null && echo started || (cat ~/nomad_logs/mavlink.log; echo failed); }; } || echo 'no CubePilot'",
     "stop_mavlink": "pkill -f mavlink-routerd 2>&1 && echo stopped || echo 'not running'",
+    "start_novnc": "if systemctl --user is-active --quiet novnc 2>/dev/null || systemctl is-active --quiet novnc 2>/dev/null || pgrep -f 'websockify.*6080' >/dev/null; then echo 'already running'; elif systemctl --user start novnc 2>/dev/null || systemctl start novnc 2>/dev/null; then echo started; else echo failed; fi",
+    "stop_novnc": "if systemctl --user stop novnc 2>/dev/null || systemctl stop novnc 2>/dev/null || pkill -f 'websockify.*6080' 2>/dev/null; then echo stopped; else echo 'not running'; fi",
     "start_nomad": "sudo systemctl start nomad 2>&1 && echo started || echo failed",
     "stop_nomad": "nohup bash -c 'sleep 2 && sudo systemctl stop nomad' > /dev/null 2>&1 & echo 'stop scheduled'",
     # --- System commands ---
@@ -1614,6 +1617,10 @@ wait
         await websocket.accept()
         last_mesh_timestamp = None
         frame_count = 0
+        has_last_good_attitude = False
+        last_good_roll = 0.0
+        last_good_pitch = 0.0
+        last_good_yaw = 0.0
         target_interval = 1.0 / 30.0
         next_tick = asyncio.get_running_loop().time()
         try:
@@ -1644,10 +1651,28 @@ wait
                             has_position = True
                         if stored.get("drone_attitude"):
                             da = stored["drone_attitude"]
-                            frame["roll"] = da.get("roll", 0)
-                            frame["pitch"] = da.get("pitch", 0)
-                            frame["yaw"] = da.get("yaw", 0)
-                            has_attitude = True
+                            roll = float(da.get("roll", 0) or 0)
+                            pitch = float(da.get("pitch", 0) or 0)
+                            yaw = float(da.get("yaw", 0) or 0)
+                            # Guard against transient all-zero reset frames by
+                            # holding the last known-good attitude when available.
+                            if all(abs(v) <= 1e-4 for v in (roll, pitch, yaw)):
+                                if has_last_good_attitude:
+                                    frame["roll"] = last_good_roll
+                                    frame["pitch"] = last_good_pitch
+                                    frame["yaw"] = last_good_yaw
+                                    frame["attitude_valid"] = False
+                                    has_attitude = True
+                            else:
+                                frame["roll"] = roll
+                                frame["pitch"] = pitch
+                                frame["yaw"] = yaw
+                                frame["attitude_valid"] = True
+                                last_good_roll = roll
+                                last_good_pitch = pitch
+                                last_good_yaw = yaw
+                                has_last_good_attitude = True
+                                has_attitude = True
 
                 # Fall back to ROS-frame VIO for pose (used for pose-only frames
                 # and for mesh frames that only include one of position/attitude)
@@ -1661,17 +1686,33 @@ wait
                             frame["z"] = ros_vio.get("z", 0)
                             has_position = True
                         if not has_attitude:
-                            frame["roll"] = ros_vio.get("roll", 0)
-                            frame["pitch"] = ros_vio.get("pitch", 0)
-                            frame["yaw"] = ros_vio.get("yaw", 0)
-                            has_attitude = True
+                            roll = float(ros_vio.get("roll", 0) or 0)
+                            pitch = float(ros_vio.get("pitch", 0) or 0)
+                            yaw = float(ros_vio.get("yaw", 0) or 0)
+                            if all(abs(v) <= 1e-4 for v in (roll, pitch, yaw)):
+                                if has_last_good_attitude:
+                                    frame["roll"] = last_good_roll
+                                    frame["pitch"] = last_good_pitch
+                                    frame["yaw"] = last_good_yaw
+                                    frame["attitude_valid"] = False
+                                    has_attitude = True
+                            else:
+                                frame["roll"] = roll
+                                frame["pitch"] = pitch
+                                frame["yaw"] = yaw
+                                frame["attitude_valid"] = True
+                                last_good_roll = roll
+                                last_good_pitch = pitch
+                                last_good_yaw = yaw
+                                has_last_good_attitude = True
+                                has_attitude = True
 
-                # Always include velocity from external VIO state when available
-                external_vio = _get_vio_snapshot()["external_vio_state"]
-                if external_vio:
-                    frame["vx"] = external_vio.get("vx", 0)
-                    frame["vy"] = external_vio.get("vy", 0)
-                    frame["vz"] = external_vio.get("vz", 0)
+                if not has_attitude and has_last_good_attitude:
+                    frame["roll"] = last_good_roll
+                    frame["pitch"] = last_good_pitch
+                    frame["yaw"] = last_good_yaw
+                    frame["attitude_valid"] = False
+                    has_attitude = True
 
                 # Always include velocity from external VIO state when available
                 external_vio = _get_vio_snapshot()["external_vio_state"]
@@ -2305,11 +2346,62 @@ wait
         )
 
         request_yaml = json.dumps(request_payload)
-        shell_cmd = (
+        base_env_cmd = (
             "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
             "source /workspaces/isaac_ros-dev/install/setup.bash >/dev/null 2>&1; "
-            f"ros2 service call {service_name} {service_type} {shlex.quote(request_yaml)}"
+            "export ROS2CLI_DISABLE_DAEMON=1; "
+            "export ROS2CLI_NO_DAEMON=1; "
         )
+
+        type_check_cmd = (
+            base_env_cmd
+            + f"ros2 service type {shlex.quote(service_name)}"
+        )
+        try:
+            type_result = subprocess.run(
+                ["docker", "exec", "nomad_isaac_ros", "bash", "-lc", type_check_cmd],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            raise HTTPException(
+                status_code=504,
+                detail=f"ROS2 service probe timed out: {service_name}",
+            )
+        except Exception as e:
+            logger.error(f"ROS2 service probe failed ({service_name}): {e}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Failed to probe ROS2 service: {service_name}",
+            )
+
+        type_output = "\n".join(
+            part
+            for part in [
+                (type_result.stdout or "").strip(),
+                (type_result.stderr or "").strip(),
+            ]
+            if part
+        ).strip()
+        type_output = _sanitize_ros2_service_output(type_output)
+        if type_result.returncode != 0 or not type_output:
+            raise HTTPException(
+                status_code=503,
+                detail=type_output or f"ROS2 service not available: {service_name}",
+            )
+
+        advertised_type = type_output.splitlines()[-1].strip()
+        if advertised_type != service_type:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"ROS2 service type mismatch for {service_name}: "
+                    f"expected {service_type}, got {advertised_type}"
+                ),
+            )
+
+        shell_cmd = base_env_cmd + f"ros2 service call {service_name} {service_type} {shlex.quote(request_yaml)}"
 
         try:
             result = subprocess.run(
@@ -3150,6 +3242,7 @@ wait
         Returns status of:
         - mavlink-router: MAVLink routing to CubePilot
         - mediamtx: RTSP video server
+        - novnc: Browser-based remote desktop service
         - edge_core: This API service (always running if you see this)
         - isaac_ros: Isaac ROS bridge status
         - vio: VIO pipeline status
@@ -3230,6 +3323,67 @@ wait
             }
         except Exception as e:
             services["mediamtx"] = {"status": "error", "error": str(e)}
+
+        # Check noVNC (remote desktop web bridge)
+        try:
+            user_status = "inactive"
+            user_running = False
+            try:
+                user_result = subprocess.run(
+                    ["systemctl", "--user", "is-active", "novnc"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+                user_status = user_result.stdout.strip() or "inactive"
+                user_running = user_result.returncode == 0
+            except Exception:
+                pass
+
+            system_status = "inactive"
+            system_running = False
+            try:
+                system_result = subprocess.run(
+                    ["systemctl", "is-active", "novnc"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+                system_status = system_result.stdout.strip() or "inactive"
+                system_running = system_result.returncode == 0
+            except Exception:
+                pass
+
+            process_running = False
+            try:
+                process_result = subprocess.run(
+                    ["pgrep", "-f", "websockify.*6080"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                process_running = process_result.returncode == 0
+            except Exception:
+                process_running = False
+
+            novnc_running = user_running or system_running or process_running
+            novnc_status = (
+                "active"
+                if novnc_running
+                else (
+                    user_status
+                    if user_status != "inactive"
+                    else system_status
+                )
+            )
+
+            services["novnc"] = {
+                "status": novnc_status,
+                "running": novnc_running,
+                "url": "http://localhost:6080/vnc.html",
+            }
+        except Exception as e:
+            services["novnc"] = {"status": "error", "error": str(e)}
 
         # Edge Core is always running (we're responding)
         services["edge_core"] = {
@@ -4742,22 +4896,39 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         """
         Clear the current SLAM mesh and reset the nvblox map.
 
-        This calls the nvblox ROS2 service to clear the actual map,
-        then clears the cached mesh data so clients receive a fresh state.
+        For the current nvblox stack, the reliable map reset path is to
+        relaunch nvblox + bridge (which starts with a fresh map), then
+        clear the cached mesh data so clients receive a fresh state.
         """
         nvblox_cleared = False
         nvblox_message = ""
+        nvblox_error_status = 503
         try:
-            nvblox_message = _call_ros2_service_in_isaac_container_or_raise(
-                service_name="/nvblox_node/remove_all",
-                service_type="std_srvs/srv/Empty",
-                request_payload={},
-                timeout_s=5.0,
+            with request.app.state.detection_state_lock:
+                detection_enabled = bool(
+                    getattr(request.app.state, "detection_enabled", True)
+                )
+
+            relaunch_result = _launch_nvblox_bridge_with_od(
+                enable_od=detection_enabled
             )
-            nvblox_cleared = True
-            logger.info("nvblox map cleared via /nvblox_node/remove_all")
+            if relaunch_result.get("success"):
+                nvblox_cleared = True
+                nvblox_message = relaunch_result.get(
+                    "message", "nvblox stack relaunched"
+                )
+                logger.info("nvblox map reset via stack relaunch")
+            else:
+                nvblox_message = relaunch_result.get(
+                    "error", "Failed to relaunch nvblox stack"
+                )
+                logger.warning(f"Failed to reset nvblox map: {nvblox_message}")
+        except HTTPException as e:
+            logger.warning(f"Failed to reset nvblox map: {e.detail}")
+            nvblox_message = str(e.detail)
+            nvblox_error_status = e.status_code
         except Exception as e:
-            logger.warning(f"Failed to clear nvblox map: {e}")
+            logger.warning(f"Failed to reset nvblox map: {e}")
             nvblox_message = str(e)
 
         # Preserve voxel size from the previous mesh data if available.
@@ -4788,28 +4959,200 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             getattr(request.app.state, "slam_mesh_version", 0) + 1
         )
 
-        return {
-            "success": True,
+        response_payload = {
+            "success": nvblox_cleared,
             "nvblox_cleared": nvblox_cleared,
             "nvblox_message": nvblox_message,
             "message": "Mesh cache cleared"
             + (", nvblox map reset" if nvblox_cleared else " (nvblox clear failed)"),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        request.app.state.slam_mesh_version = (
-            getattr(request.app.state, "slam_mesh_version", 0) + 1
-        )
-
-        return {
-            "success": True,
-            "nvblox_cleared": nvblox_cleared,
-            "nvblox_message": nvblox_message,
-            "message": "Mesh cache cleared"
-            + (", nvblox map reset" if nvblox_cleared else " (nvblox clear failed)"),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
+        if not nvblox_cleared:
+            return JSONResponse(status_code=nvblox_error_status, content=response_payload)
+        return response_payload
 
     # ==================== Sensor Calibration Endpoints ====================
+
+    @app.post("/api/calibration/zed/sensor-viewer/start", tags=["Calibration"])
+    async def start_zed_sensor_viewer():
+        """
+        Launch ZED Sensor Viewer on the Jetson desktop.
+
+        This is intended for manual magnetometer calibration via noVNC.
+        """
+        viewer_bin = shutil.which("ZED_Sensor_Viewer") or shutil.which("zed_sensor_viewer")
+        fallback_bin = shutil.which("ZED_Calibration")
+        if not viewer_bin and not fallback_bin:
+            raise HTTPException(
+                status_code=500,
+                detail="Neither ZED_Sensor_Viewer nor ZED_Calibration was found in PATH",
+            )
+
+        display = os.environ.get("NOMAD_CAL_DISPLAY") or os.environ.get("DISPLAY") or ":1"
+        novnc_host = (
+            os.environ.get("TAILSCALE_IP")
+            or os.environ.get("JETSON_IP")
+            or "localhost"
+        )
+        novnc_url = f"http://{novnc_host}:6080/vnc.html?autoconnect=0&reconnect=0&resize=scale"
+
+        deps_lib_dir = os.path.expanduser(
+            "~/NOMAD/.deps/zed_viewer/root/usr/lib/aarch64-linux-gnu"
+        )
+        run_env = os.environ.copy()
+        run_env["DISPLAY"] = display
+        if os.path.isdir(deps_lib_dir):
+            existing_ld = run_env.get("LD_LIBRARY_PATH", "")
+            run_env["LD_LIBRARY_PATH"] = (
+                f"{deps_lib_dir}:{existing_ld}" if existing_ld else deps_lib_dir
+            )
+
+        def _missing_shared_libs(binary_path: str) -> list[str]:
+            try:
+                result = subprocess.run(
+                    ["ldd", binary_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    env=run_env,
+                )
+                output = "\n".join(
+                    part for part in [result.stdout, result.stderr] if part
+                )
+                missing = []
+                for line in output.splitlines():
+                    if "=> not found" not in line:
+                        continue
+                    lib_name = line.split("=>", 1)[0].strip()
+                    if lib_name:
+                        missing.append(lib_name)
+                return missing
+            except Exception:
+                return []
+
+        def _launch_and_verify(binary_path: str, process_name: str) -> int:
+            proc = subprocess.Popen(
+                [binary_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=run_env,
+                start_new_session=True,
+            )
+            time.sleep(0.8)
+            if proc.poll() is not None:
+                raise RuntimeError(f"{process_name} process exited immediately")
+            return proc.pid
+
+        try:
+            if viewer_bin:
+                running_probe = subprocess.run(
+                    ["pgrep", "-f", "ZED_Sensor_Viewer|zed_sensor_viewer"],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+                if running_probe.returncode == 0:
+                    return {
+                        "success": True,
+                        "message": "ZED Sensor Viewer already running",
+                        "display": display,
+                        "tool": os.path.basename(viewer_bin),
+                        "novnc_url": novnc_url,
+                    }
+
+            if fallback_bin:
+                fallback_running = subprocess.run(
+                    ["pgrep", "-f", "ZED_Calibration"],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+                if fallback_running.returncode == 0:
+                    return {
+                        "success": True,
+                        "message": "ZED_Calibration already running",
+                        "display": display,
+                        "tool": os.path.basename(fallback_bin),
+                        "fallback": True,
+                        "novnc_url": novnc_url,
+                    }
+        except Exception:
+            # Continue with launch attempt even if probe fails.
+            pass
+
+        viewer_missing_deps: list[str] = []
+        if viewer_bin:
+            viewer_missing_deps = _missing_shared_libs(viewer_bin)
+            if not viewer_missing_deps:
+                try:
+                    pid = _launch_and_verify(viewer_bin, "ZED Sensor Viewer")
+                    return {
+                        "success": True,
+                        "message": "ZED Sensor Viewer launched",
+                        "display": display,
+                        "tool": os.path.basename(viewer_bin),
+                        "pid": pid,
+                        "novnc_url": novnc_url,
+                    }
+                except Exception as e:
+                    logger.warning(f"Sensor Viewer launch failed, trying fallback: {e}")
+            else:
+                logger.warning(
+                    "Sensor Viewer missing shared libs: "
+                    + ", ".join(viewer_missing_deps)
+                )
+
+        if fallback_bin:
+            fallback_missing = _missing_shared_libs(fallback_bin)
+            if fallback_missing:
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "ZED_Calibration is missing shared libraries: "
+                        + ", ".join(fallback_missing)
+                    ),
+                )
+
+            try:
+                pid = _launch_and_verify(fallback_bin, "ZED_Calibration")
+                message = "ZED_Calibration launched"
+                if viewer_missing_deps:
+                    message = (
+                        "ZED Sensor Viewer dependencies missing; "
+                        "launched ZED_Calibration fallback"
+                    )
+                return {
+                    "success": True,
+                    "message": message,
+                    "display": display,
+                    "tool": os.path.basename(fallback_bin),
+                    "fallback": True,
+                    "missing_dependencies": viewer_missing_deps,
+                    "pid": pid,
+                    "novnc_url": novnc_url,
+                }
+            except Exception as e:
+                logger.error(f"Failed to launch ZED_Calibration fallback: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "Failed to launch ZED calibration tools. "
+                        + (f"Sensor Viewer missing deps: {', '.join(viewer_missing_deps)}. " if viewer_missing_deps else "")
+                        + f"Fallback error: {e}"
+                    ),
+                )
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "ZED Sensor Viewer could not be launched"
+                + (
+                    f" (missing dependencies: {', '.join(viewer_missing_deps)})"
+                    if viewer_missing_deps
+                    else ""
+                )
+            ),
+        )
 
     @app.post("/api/calibration/magnetometer/start", tags=["Calibration"])
     async def start_magnetometer_calibration(request: Request):

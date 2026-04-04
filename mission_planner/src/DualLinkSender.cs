@@ -59,7 +59,7 @@ namespace NOMAD.MissionPlanner
         // Security: Whitelist of allowed service names (defense-in-depth)
         private static readonly System.Collections.Generic.HashSet<string> ALLOWED_SERVICES = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "nomad", "edge_core", "mediamtx", "mavlink-router", "isaac-ros", "zed-service"
+            "nomad", "edge_core", "mediamtx", "mavlink-router", "isaac-ros", "zed-service", "novnc"
         };
 
         // ============================================================
@@ -571,6 +571,7 @@ namespace NOMAD.MissionPlanner
                 "mediamtx" => "start_mediamtx",
                 "mavlink-router" => "start_mavlink",
                 "nomad" or "edge_core" => "start_nomad",
+                "novnc" => "start_novnc",
                 _ => $"start_{serviceName}"
             };
 
@@ -591,6 +592,7 @@ namespace NOMAD.MissionPlanner
                 "mediamtx" => "stop_mediamtx",
                 "mavlink-router" => "stop_mavlink",
                 "nomad" or "edge_core" => "stop_nomad",
+                "novnc" => "stop_novnc",
                 _ => $"stop_{serviceName}"
             };
 
@@ -631,6 +633,7 @@ namespace NOMAD.MissionPlanner
                 "mediamtx" => "status_mediamtx",
                 "mavlink-router" => "status_mavlink",
                 "nomad" => "status_nomad",
+                "novnc" => "status_novnc",
                 _ => $"status_{serviceName}" // Fallback
             };
             
@@ -741,7 +744,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> ClearSlamAsync()
         {
-            return await SendHttpPost("/api/task/2/slam/clear", null);
+            return await SendHttpPostLongRun("/api/task/2/slam/clear", null);
         }
 
         /// <summary>

@@ -1,83 +1,26 @@
 // ============================================================
 // NOMAD ZED Calibration View
 // ============================================================
-// Interactive ZED 2i sensor calibration wizard for magnetometer
-// and IMU calibration. Provides step-by-step guidance with
-// real-time visualization of calibration progress.
+// Calibration workflow is performed using the official
+// ZED Sensor Viewer over remote desktop (noVNC).
 // ============================================================
 
 using System;
 using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Newtonsoft.Json.Linq;
 
 namespace NOMAD.MissionPlanner
 {
-    /// <summary>
-    /// ZED Camera Calibration view with step-by-step wizard,
-    /// real-time progress visualization, and IMU health checks.
-    /// </summary>
     public class ZedCalibrationView : NOMADViewBase, IUpdatableView
     {
         private readonly NOMADConfig _config;
 
-        // Tab control
         private TabControl _tabControl;
-
-        // === Magnetometer Calibration Tab ===
-        private Panel _magWizardPanel;
-        private Label _lblMagStep;
-        private Label _lblMagInstruction;
-        private Label _lblMagSamples;
-        private Label _lblMagCoverage;
-        private Label _lblMagFitness;
-        private Label _lblMagElapsed;
-        private ProgressBar _magProgressBar;
-        private CoverageVisualization _coverageViz;
-        private Button _btnMagStart;
-        private Button _btnMagStop;
-        private Button _btnMagCancel;
-        private Panel _magStatusPanel;
-        private Label _lblMagStatus;
-        private TextBox _txtMagResult;
-        private int _magWizardStep = 0;
-
-        // === IMU Check Tab ===
-        private Button _btnImuCheck;
-        private Label _lblImuStatus;
-        private Panel _imuResultPanel;
-        private Label _lblGravity;
-        private Label _lblAccelBias;
-        private Label _lblGyroBias;
-        private Label _lblAccelNoise;
-        private Label _lblGyroNoise;
-        private Label _lblTemperature;
-        private Label _lblImuHealthy;
-        private TextBox _txtImuIssues;
-
-        // === Saved Calibration Tab ===
-        private TextBox _txtSavedCal;
-        private Button _btnRefreshSaved;
-        private Label _lblSavedStatus;
-
-        // === IMU Heading Calibration Tab ===
-        private Label _lblHeadingStep;
-        private Label _lblHeadingInstruction;
-        private Button _btnHeadingStart;
-        private Button _btnHeadingCollect;
-        private Button _btnHeadingCancel;
-        private Label _lblHeadingStatus;
-        private ProgressBar _headingProgressBar;
-        private TextBox _txtHeadingResult;
-        private Panel[] _positionIndicators;
-
-        // Polling timer for mag calibration status
-        private Timer _pollTimer;
-        private bool _isMagCalibrating = false;
-        private bool _isPolling = false;
+        private Button _btnLaunchSensorViewer;
+        private Button _btnOpenRemoteDesktop;
+        private Label _lblStatus;
 
         public ZedCalibrationView(NOMADConfig config)
         {
@@ -93,57 +36,21 @@ namespace NOMAD.MissionPlanner
             {
                 Dock = DockStyle.Fill,
                 Font = new Font("Segoe UI", 10),
+                DrawMode = TabDrawMode.OwnerDrawFixed,
             };
-            // Apply dark theme to tabs
-            _tabControl.DrawMode = TabDrawMode.OwnerDrawFixed;
             _tabControl.DrawItem += TabControl_DrawItem;
 
-            // --- Tab 1: Magnetometer Calibration ---
-            var magTab = new TabPage("Magnetometer Calibration")
+            var tab = new TabPage("ZED Sensor Viewer")
             {
                 BackColor = NOMADTheme.BG_DARK,
                 Padding = new Padding(15),
             };
-            BuildMagnetometerTab(magTab);
-            _tabControl.TabPages.Add(magTab);
 
-            // --- Tab 2: IMU Health Check ---
-            var imuTab = new TabPage("IMU Health Check")
-            {
-                BackColor = NOMADTheme.BG_DARK,
-                Padding = new Padding(15),
-            };
-            BuildImuTab(imuTab);
-            _tabControl.TabPages.Add(imuTab);
-
-            // --- Tab 3: Saved Calibration ---
-            var savedTab = new TabPage("Saved Calibration")
-            {
-                BackColor = NOMADTheme.BG_DARK,
-                Padding = new Padding(15),
-            };
-            BuildSavedCalibrationTab(savedTab);
-            _tabControl.TabPages.Add(savedTab);
-
-            // --- Tab 4: IMU Heading Calibration ---
-            var headingTab = new TabPage("IMU Heading Cal")
-            {
-                BackColor = NOMADTheme.BG_DARK,
-                Padding = new Padding(15),
-            };
-            BuildImuHeadingTab(headingTab);
-            _tabControl.TabPages.Add(headingTab);
+            BuildRemoteCalibrationTab(tab);
+            _tabControl.TabPages.Add(tab);
 
             this.Controls.Add(_tabControl);
-
-            // Polling timer for mag calibration progress
-            _pollTimer = new Timer { Interval = 500 };
-            _pollTimer.Tick += PollTimer_Tick;
         }
-
-        // ============================================================
-        // Tab Drawing (Dark Theme)
-        // ============================================================
 
         private void TabControl_DrawItem(object sender, DrawItemEventArgs e)
         {
@@ -157,1602 +64,203 @@ namespace NOMAD.MissionPlanner
             }
 
             var textColor = selected ? NOMADTheme.ACCENT : NOMADTheme.TEXT_SECONDARY;
-            TextRenderer.DrawText(e.Graphics, tab.Text, _tabControl.Font, bounds, textColor,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            TextRenderer.DrawText(
+                e.Graphics,
+                tab.Text,
+                _tabControl.Font,
+                bounds,
+                textColor,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter
+            );
         }
 
-        // ============================================================
-        // Magnetometer Calibration Tab
-        // ============================================================
-
-        private void BuildMagnetometerTab(TabPage tab)
+        private void BuildRemoteCalibrationTab(TabPage tab)
         {
-            var mainLayout = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 2,
-                RowCount = 1,
-            };
-            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55));
-            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45));
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-
-            // ---- Left side: Wizard steps + controls ----
-            var leftPanel = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 5,
-                Padding = new Padding(10),
-            };
-            leftPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            leftPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
-            leftPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 220));
-            leftPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 140));
-            leftPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 55));
-            leftPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-
-            // Status banner
-            _magStatusPanel = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = NOMADTheme.CARD_BG,
-                Padding = new Padding(15, 10, 15, 10),
-                Margin = new Padding(0, 0, 0, 10),
-            };
-            _lblMagStatus = new Label
-            {
-                Text = "Ready - Press Start to begin magnetometer calibration",
-                Font = new Font("Segoe UI", 11, FontStyle.Bold),
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Dock = DockStyle.Fill,
-                TextAlign = ContentAlignment.MiddleLeft,
-            };
-            _magStatusPanel.Controls.Add(_lblMagStatus);
-            leftPanel.Controls.Add(_magStatusPanel, 0, 0);
-
-            // Wizard step panel
-            _magWizardPanel = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = NOMADTheme.CARD_BG,
-                Padding = new Padding(15),
-                Margin = new Padding(0, 5, 0, 10),
-            };
-
-            var wizardTitle = new Label
-            {
-                Text = "CALIBRATION STEPS",
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                ForeColor = NOMADTheme.ACCENT,
-                Location = new Point(15, 10),
-                AutoSize = true,
-            };
-            _magWizardPanel.Controls.Add(wizardTitle);
-
-            _lblMagStep = new Label
-            {
-                Text = "Step 1 of 3",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = NOMADTheme.TEXT_SECONDARY,
-                Location = new Point(15, 35),
-                AutoSize = true,
-            };
-            _magWizardPanel.Controls.Add(_lblMagStep);
-
-            _lblMagInstruction = new Label
-            {
-                Text = "1. Ensure the ZED camera is connected and accessible.\n" +
-                       "2. Place the drone in an open area away from metal objects.\n" +
-                       "3. Press START to begin collecting magnetometer data.",
-                Font = new Font("Segoe UI", 10),
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Location = new Point(15, 60),
-                Size = new Size(380, 100),
-            };
-            _magWizardPanel.Controls.Add(_lblMagInstruction);
-
-            // Step indicators
-            var stepFlow = new FlowLayoutPanel
-            {
-                Location = new Point(15, 170),
-                Size = new Size(380, 35),
-                FlowDirection = FlowDirection.LeftToRight,
-            };
-            for (int i = 1; i <= 3; i++)
-            {
-                var stepLabel = new Label
-                {
-                    Name = $"stepIndicator_{i}",
-                    Text = i.ToString(),
-                    Size = new Size(30, 30),
-                    Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                    ForeColor = i == 1 ? Color.White : NOMADTheme.TEXT_MUTED,
-                    BackColor = i == 1 ? NOMADTheme.ACCENT : NOMADTheme.CARD_BG,
-                    TextAlign = ContentAlignment.MiddleCenter,
-                    Margin = new Padding(2),
-                };
-                stepFlow.Controls.Add(stepLabel);
-
-                if (i < 3)
-                {
-                    var dash = new Label
-                    {
-                        Text = "---",
-                        Size = new Size(30, 30),
-                        Font = new Font("Segoe UI", 10),
-                        ForeColor = NOMADTheme.TEXT_MUTED,
-                        TextAlign = ContentAlignment.MiddleCenter,
-                        Margin = new Padding(0),
-                    };
-                    stepFlow.Controls.Add(dash);
-                }
-            }
-            _magWizardPanel.Controls.Add(stepFlow);
-            leftPanel.Controls.Add(_magWizardPanel, 0, 1);
-
-            // Progress metrics panel
-            var metricsPanel = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = NOMADTheme.CARD_BG,
-                Padding = new Padding(15),
-                Margin = new Padding(0, 5, 0, 10),
-            };
-
-            var metricsTitle = new Label
-            {
-                Text = "PROGRESS",
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                ForeColor = NOMADTheme.ACCENT,
-                Location = new Point(15, 10),
-                AutoSize = true,
-            };
-            metricsPanel.Controls.Add(metricsTitle);
-
-            _magProgressBar = new ProgressBar
-            {
-                Location = new Point(15, 35),
-                Size = new Size(350, 20),
-                Style = ProgressBarStyle.Continuous,
-                Maximum = 100,
-            };
-            metricsPanel.Controls.Add(_magProgressBar);
-
-            _lblMagSamples = new Label
-            {
-                Text = "Samples: 0 / 500",
-                Font = new Font("Consolas", 10),
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Location = new Point(15, 65),
-                AutoSize = true,
-            };
-            metricsPanel.Controls.Add(_lblMagSamples);
-
-            _lblMagCoverage = new Label
-            {
-                Text = "Coverage: 0 / 8 octants (0%)",
-                Font = new Font("Consolas", 10),
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Location = new Point(15, 88),
-                AutoSize = true,
-            };
-            metricsPanel.Controls.Add(_lblMagCoverage);
-
-            _lblMagElapsed = new Label
-            {
-                Text = "Elapsed: 0s",
-                Font = new Font("Consolas", 10),
-                ForeColor = NOMADTheme.TEXT_SECONDARY,
-                Location = new Point(15, 111),
-                AutoSize = true,
-            };
-            metricsPanel.Controls.Add(_lblMagElapsed);
-
-            leftPanel.Controls.Add(metricsPanel, 0, 2);
-
-            // Buttons panel
-            var btnPanel = new FlowLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                FlowDirection = FlowDirection.LeftToRight,
-                Padding = new Padding(0, 5, 0, 5),
-                Margin = new Padding(0, 5, 0, 10),
-            };
-
-            _btnMagStart = new Button
-            {
-                Text = "START CALIBRATION",
-                Size = new Size(180, 40),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NOMADTheme.BTN_START,
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                Cursor = Cursors.Hand,
-                Margin = new Padding(0, 0, 10, 0),
-            };
-            _btnMagStart.FlatAppearance.BorderSize = 0;
-            _btnMagStart.Click += BtnMagStart_Click;
-            btnPanel.Controls.Add(_btnMagStart);
-
-            _btnMagStop = new Button
-            {
-                Text = "STOP & COMPUTE",
-                Size = new Size(160, 40),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NOMADTheme.ACCENT,
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                Cursor = Cursors.Hand,
-                Enabled = false,
-                Margin = new Padding(0, 0, 10, 0),
-            };
-            _btnMagStop.FlatAppearance.BorderSize = 0;
-            _btnMagStop.Click += BtnMagStop_Click;
-            btnPanel.Controls.Add(_btnMagStop);
-
-            _btnMagCancel = new Button
-            {
-                Text = "CANCEL",
-                Size = new Size(100, 40),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NOMADTheme.BTN_STOP,
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                Cursor = Cursors.Hand,
-                Enabled = false,
-            };
-            _btnMagCancel.FlatAppearance.BorderSize = 0;
-            _btnMagCancel.Click += BtnMagCancel_Click;
-            btnPanel.Controls.Add(_btnMagCancel);
-
-            leftPanel.Controls.Add(btnPanel, 0, 3);
-
-            // Result text area
-            _txtMagResult = new TextBox
-            {
-                Dock = DockStyle.Fill,
-                Multiline = true,
-                ReadOnly = true,
-                ScrollBars = ScrollBars.Vertical,
-                BackColor = Color.FromArgb(25, 25, 28),
-                ForeColor = NOMADTheme.SUCCESS,
-                Font = new Font("Consolas", 9),
-                BorderStyle = BorderStyle.FixedSingle,
-                Text = "Calibration results will appear here after computation.",
-                Margin = new Padding(0),
-            };
-            leftPanel.Controls.Add(_txtMagResult, 0, 4);
-
-            mainLayout.Controls.Add(leftPanel, 0, 0);
-
-            // ---- Right side: 3D Coverage Visualization ----
-            var rightPanel = new Panel
-            {
-                Dock = DockStyle.Fill,
-                Padding = new Padding(10),
-            };
-
-            var vizTitle = new Label
-            {
-                Text = "SPATIAL COVERAGE",
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                ForeColor = NOMADTheme.ACCENT,
-                Dock = DockStyle.Top,
-                Height = 25,
-                TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(5, 0, 0, 0),
-            };
-            rightPanel.Controls.Add(vizTitle);
-
-            _coverageViz = new CoverageVisualization
-            {
-                Dock = DockStyle.Fill,
-                BackColor = Color.FromArgb(25, 25, 28),
-            };
-            rightPanel.Controls.Add(_coverageViz);
-
-            // Fitness label below viz
-            _lblMagFitness = new Label
-            {
-                Text = "Fitness: --",
-                Font = new Font("Segoe UI", 11, FontStyle.Bold),
-                ForeColor = NOMADTheme.TEXT_SECONDARY,
-                Dock = DockStyle.Bottom,
-                Height = 30,
-                TextAlign = ContentAlignment.MiddleCenter,
-            };
-            rightPanel.Controls.Add(_lblMagFitness);
-
-            mainLayout.Controls.Add(rightPanel, 1, 0);
-
-            tab.Controls.Add(mainLayout);
-        }
-
-        // ============================================================
-        // IMU Health Check Tab
-        // ============================================================
-
-        private void BuildImuTab(TabPage tab)
-        {
-            var layout = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 3,
-            };
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 120));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 120));
-
-            // Instructions card
-            var instrCard = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = NOMADTheme.CARD_BG,
-                Padding = new Padding(15),
-            };
-            var instrTitle = new Label
-            {
-                Text = "IMU HEALTH CHECK",
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                ForeColor = NOMADTheme.ACCENT,
-                Location = new Point(15, 10),
-                AutoSize = true,
-            };
-            instrCard.Controls.Add(instrTitle);
-
-            var instrText = new Label
-            {
-                Text = "This check verifies accelerometer and gyroscope health.\n" +
-                       "IMPORTANT: Keep the camera completely stationary and level during the 5-second check.",
-                Font = new Font("Segoe UI", 10),
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Location = new Point(15, 35),
-                Size = new Size(600, 50),
-            };
-            instrCard.Controls.Add(instrText);
-
-            _btnImuCheck = new Button
-            {
-                Text = "RUN IMU CHECK",
-                Size = new Size(180, 35),
-                Location = new Point(15, 80),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NOMADTheme.ACCENT,
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                Cursor = Cursors.Hand,
-            };
-            _btnImuCheck.FlatAppearance.BorderSize = 0;
-            _btnImuCheck.Click += BtnImuCheck_Click;
-            instrCard.Controls.Add(_btnImuCheck);
-
-            _lblImuStatus = new Label
-            {
-                Text = "",
-                Font = new Font("Segoe UI", 10),
-                ForeColor = NOMADTheme.WARNING,
-                Location = new Point(210, 85),
-                AutoSize = true,
-            };
-            instrCard.Controls.Add(_lblImuStatus);
-
-            layout.Controls.Add(instrCard, 0, 0);
-
-            // Results card
-            _imuResultPanel = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = NOMADTheme.CARD_BG,
-                Padding = new Padding(15),
-                Visible = false,
-            };
-
-            var resTitle = new Label
-            {
-                Text = "RESULTS",
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                ForeColor = NOMADTheme.ACCENT,
-                Location = new Point(15, 10),
-                AutoSize = true,
-            };
-            _imuResultPanel.Controls.Add(resTitle);
-
-            _lblImuHealthy = new Label
-            {
-                Text = "Status: --",
-                Font = new Font("Segoe UI", 12, FontStyle.Bold),
-                Location = new Point(15, 35),
-                AutoSize = true,
-            };
-            _imuResultPanel.Controls.Add(_lblImuHealthy);
-
-            int yOff = 65;
-            _lblGravity = CreateMetricLabel("Gravity:", ref yOff);
-            _imuResultPanel.Controls.Add(_lblGravity);
-            _lblAccelBias = CreateMetricLabel("Accel Bias:", ref yOff);
-            _imuResultPanel.Controls.Add(_lblAccelBias);
-            _lblGyroBias = CreateMetricLabel("Gyro Bias:", ref yOff);
-            _imuResultPanel.Controls.Add(_lblGyroBias);
-            _lblAccelNoise = CreateMetricLabel("Accel Noise:", ref yOff);
-            _imuResultPanel.Controls.Add(_lblAccelNoise);
-            _lblGyroNoise = CreateMetricLabel("Gyro Noise:", ref yOff);
-            _imuResultPanel.Controls.Add(_lblGyroNoise);
-            _lblTemperature = CreateMetricLabel("Temperature:", ref yOff);
-            _imuResultPanel.Controls.Add(_lblTemperature);
-
-            layout.Controls.Add(_imuResultPanel, 0, 1);
-
-            // Issues card
-            var issuesCard = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = NOMADTheme.CARD_BG,
-                Padding = new Padding(15),
-            };
-            var issuesTitle = new Label
-            {
-                Text = "DIAGNOSTICS",
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                ForeColor = NOMADTheme.ACCENT,
-                Dock = DockStyle.Top,
-                Height = 25,
-            };
-            issuesCard.Controls.Add(issuesTitle);
-
-            _txtImuIssues = new TextBox
-            {
-                Dock = DockStyle.Fill,
-                Multiline = true,
-                ReadOnly = true,
-                ScrollBars = ScrollBars.Vertical,
-                BackColor = Color.FromArgb(25, 25, 28),
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Font = new Font("Consolas", 9),
-                BorderStyle = BorderStyle.FixedSingle,
-                Text = "Run the IMU check to see diagnostics.",
-            };
-            issuesCard.Controls.Add(_txtImuIssues);
-
-            layout.Controls.Add(issuesCard, 0, 2);
-
-            tab.Controls.Add(layout);
-        }
-
-        private Label CreateMetricLabel(string prefix, ref int yOffset)
-        {
-            var lbl = new Label
-            {
-                Text = $"{prefix} --",
-                Font = new Font("Consolas", 10),
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Location = new Point(15, yOffset),
-                AutoSize = true,
-            };
-            yOffset += 23;
-            return lbl;
-        }
-
-        // ============================================================
-        // IMU Heading (6-Position) Calibration Tab
-        // ============================================================
-
-        // Must match the lowercase labels in sensor_calibration.py IMU_POSITIONS (case-insensitive compare).
-        // ZED IMU frame: X=right, Y=down, Z=forward.
-        // "Left"  = camera resting on its RIGHT side → +X faces down  → accel reads (-1, 0, 0)
-        // "Right" = camera resting on its LEFT side  → -X faces down  → accel reads (+1, 0, 0)
-        private static readonly string[] _positionLabels = { "Front", "Back", "Left", "Right", "Up", "Down" };
-
-        private void BuildImuHeadingTab(TabPage tab)
-        {
-            var layout = new TableLayoutPanel
+            var panel = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
                 RowCount = 4,
+                Padding = new Padding(20),
             };
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 80));  // Instructions + status
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 80));  // Position indicators
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 120)); // Current step + buttons
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));  // Results
+            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
+            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 150));
+            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-            // Row 0: Instructions
-            var instrCard = new Panel
+            var title = new Label
             {
-                Dock = DockStyle.Fill,
-                BackColor = NOMADTheme.CARD_BG,
-                Padding = new Padding(15),
-            };
-            var instrTitle = new Label
-            {
-                Text = "6-POSITION IMU HEADING CALIBRATION",
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                Text = "ZED CALIBRATION (OFFICIAL WORKFLOW)",
+                Font = new Font("Segoe UI", 13, FontStyle.Bold),
                 ForeColor = NOMADTheme.ACCENT,
-                Location = new Point(15, 10),
-                AutoSize = true,
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft,
             };
-            instrCard.Controls.Add(instrTitle);
+            panel.Controls.Add(title, 0, 0);
 
-            _lblHeadingStatus = new Label
+            var instructions = new Label
             {
-                Text = "Calibrate accelerometer by placing camera in 6 orientations. Press START to begin.",
+                Text =
+                    "Custom in-app calibration pages were removed.\n" +
+                    "Use the official ZED Sensor Viewer in remote desktop:\n\n" +
+                    "1. Click 'Launch Sensor Viewer'\n" +
+                    "2. noVNC opens in your default browser\n" +
+                    "3. Run magnetometer calibration in Sensor Viewer",
                 Font = new Font("Segoe UI", 10),
                 ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Location = new Point(15, 35),
-                Size = new Size(600, 35),
+                Dock = DockStyle.Fill,
             };
-            instrCard.Controls.Add(_lblHeadingStatus);
-            layout.Controls.Add(instrCard, 0, 0);
+            panel.Controls.Add(instructions, 0, 1);
 
-            // Row 1: Position indicators (6 boxes)
-            var posPanel = new FlowLayoutPanel
+            var buttonRow = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.LeftToRight,
-                BackColor = NOMADTheme.CARD_BG,
-                Padding = new Padding(10, 10, 10, 5),
-            };
-            _positionIndicators = new Panel[6];
-            for (int i = 0; i < 6; i++)
-            {
-                var box = new Panel
-                {
-                    Size = new Size(90, 55),
-                    BackColor = Color.FromArgb(40, 40, 45),
-                    Margin = new Padding(3),
-                };
-                var lbl = new Label
-                {
-                    Text = _positionLabels[i],
-                    Dock = DockStyle.Fill,
-                    Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                    ForeColor = NOMADTheme.TEXT_MUTED,
-                    TextAlign = ContentAlignment.MiddleCenter,
-                };
-                box.Controls.Add(lbl);
-                _positionIndicators[i] = box;
-                posPanel.Controls.Add(box);
-            }
-            layout.Controls.Add(posPanel, 0, 1);
-
-            // Row 2: Current step + buttons
-            var stepCard = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = NOMADTheme.CARD_BG,
-                Padding = new Padding(15),
+                WrapContents = false,
             };
 
-            _lblHeadingStep = new Label
+            _btnLaunchSensorViewer = new Button
             {
-                Text = "Step 0 / 6",
+                Text = "Launch Sensor Viewer",
+                Size = new Size(200, 40),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = NOMADTheme.ACCENT,
+                ForeColor = Color.White,
                 Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Location = new Point(15, 8),
-                AutoSize = true,
+                Cursor = Cursors.Hand,
+                Margin = new Padding(0, 10, 12, 0),
             };
-            stepCard.Controls.Add(_lblHeadingStep);
+            _btnLaunchSensorViewer.FlatAppearance.BorderSize = 0;
+            _btnLaunchSensorViewer.Click += async (s, e) => await LaunchSensorViewerAsync();
+            buttonRow.Controls.Add(_btnLaunchSensorViewer);
 
-            _lblHeadingInstruction = new Label
+            _btnOpenRemoteDesktop = new Button
             {
-                Text = "Press START to begin calibration.",
+                Text = "Open Remote Desktop",
+                Size = new Size(200, 40),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(70, 90, 140),
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                Cursor = Cursors.Hand,
+                Margin = new Padding(0, 10, 0, 0),
+            };
+            _btnOpenRemoteDesktop.FlatAppearance.BorderSize = 0;
+            _btnOpenRemoteDesktop.Click += (s, e) => OpenNoVncInBrowser(BuildNoVncUrl());
+            buttonRow.Controls.Add(_btnOpenRemoteDesktop);
+
+            panel.Controls.Add(buttonRow, 0, 2);
+
+            _lblStatus = new Label
+            {
+                Text = "Ready",
                 Font = new Font("Segoe UI", 10),
-                ForeColor = NOMADTheme.WARNING,
-                Location = new Point(15, 32),
-                Size = new Size(500, 22),
-            };
-            stepCard.Controls.Add(_lblHeadingInstruction);
-
-            _headingProgressBar = new ProgressBar
-            {
-                Location = new Point(15, 58),
-                Size = new Size(400, 18),
-                Maximum = 6,
-                Style = ProgressBarStyle.Continuous,
-            };
-            stepCard.Controls.Add(_headingProgressBar);
-
-            _btnHeadingStart = new Button
-            {
-                Text = "START",
-                Size = new Size(100, 32),
-                Location = new Point(15, 82),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NOMADTheme.BTN_START,
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                Cursor = Cursors.Hand,
-            };
-            _btnHeadingStart.FlatAppearance.BorderSize = 0;
-            _btnHeadingStart.Click += BtnHeadingStart_Click;
-            stepCard.Controls.Add(_btnHeadingStart);
-
-            _btnHeadingCollect = new Button
-            {
-                Text = "COLLECT POSITION",
-                Size = new Size(150, 32),
-                Location = new Point(125, 82),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NOMADTheme.ACCENT,
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                Cursor = Cursors.Hand,
-                Enabled = false,
-            };
-            _btnHeadingCollect.FlatAppearance.BorderSize = 0;
-            _btnHeadingCollect.Click += BtnHeadingCollect_Click;
-            stepCard.Controls.Add(_btnHeadingCollect);
-
-            _btnHeadingCancel = new Button
-            {
-                Text = "CANCEL",
-                Size = new Size(80, 32),
-                Location = new Point(285, 82),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NOMADTheme.BTN_STOP,
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                Cursor = Cursors.Hand,
-                Enabled = false,
-            };
-            _btnHeadingCancel.FlatAppearance.BorderSize = 0;
-            _btnHeadingCancel.Click += BtnHeadingCancel_Click;
-            stepCard.Controls.Add(_btnHeadingCancel);
-
-            layout.Controls.Add(stepCard, 0, 2);
-
-            // Row 3: Results
-            _txtHeadingResult = new TextBox
-            {
-                Dock = DockStyle.Fill,
-                Multiline = true,
-                ReadOnly = true,
-                ScrollBars = ScrollBars.Vertical,
-                BackColor = Color.FromArgb(25, 25, 28),
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Font = new Font("Consolas", 9),
-                BorderStyle = BorderStyle.FixedSingle,
-                Text = "Calibration results will appear here.",
-            };
-            layout.Controls.Add(_txtHeadingResult, 0, 3);
-
-            tab.Controls.Add(layout);
-        }
-
-        // ============================================================
-        // IMU Heading Calibration Logic
-        // ============================================================
-
-        private async void BtnHeadingStart_Click(object sender, EventArgs e)
-        {
-            _btnHeadingStart.Enabled = false;
-            _btnHeadingCancel.Enabled = false;
-            _lblHeadingStatus.Text = "Starting IMU heading calibration...";
-            _lblHeadingStatus.ForeColor = NOMADTheme.WARNING;
-            _txtHeadingResult.Text = "";
-
-            try
-            {
-                var resp = await JetsonApiService.PostAsync("/api/calibration/imu/heading/start");
-                var body = await resp.Content.ReadAsStringAsync();
-                var data = JObject.Parse(body);
-
-                if (resp.IsSuccessStatusCode)
-                {
-                    UpdateHeadingUI(data);
-                    _btnHeadingStart.Enabled = false;
-                    _btnHeadingCollect.Enabled = true;
-                    _btnHeadingCancel.Enabled = true;
-                    _lblHeadingStatus.Text = "Place camera in the instructed orientation, then press COLLECT POSITION.";
-                    _lblHeadingStatus.ForeColor = NOMADTheme.SUCCESS;
-                }
-                else
-                {
-                    _lblHeadingStatus.Text = $"Failed: {data["detail"]}";
-                    _lblHeadingStatus.ForeColor = NOMADTheme.ERROR;
-                    _btnHeadingStart.Enabled = true;
-                }
-            }
-            catch (Exception ex)
-            {
-                _lblHeadingStatus.Text = $"Error: {ex.Message}";
-                _lblHeadingStatus.ForeColor = NOMADTheme.ERROR;
-                _btnHeadingStart.Enabled = true;
-            }
-        }
-
-        private async void BtnHeadingCollect_Click(object sender, EventArgs e)
-        {
-            _btnHeadingCollect.Enabled = false;
-            _btnHeadingCollect.Text = "Collecting...";
-            _lblHeadingStatus.Text = "Hold camera STILL for 3 seconds...";
-            _lblHeadingStatus.ForeColor = NOMADTheme.WARNING;
-
-            try
-            {
-                var resp = await JetsonApiService.LongRunClient.PostAsync(
-                    $"{JetsonApiService.BaseUrl}/api/calibration/imu/heading/collect", null);
-                var body = await resp.Content.ReadAsStringAsync();
-                var data = JObject.Parse(body);
-
-                if (resp.IsSuccessStatusCode)
-                {
-                    UpdateHeadingUI(data);
-
-                    int remaining = (int?)data["positions_remaining"] ?? 0;
-                    if (remaining == 0)
-                    {
-                        // All positions collected -- compute
-                        _lblHeadingStatus.Text = "All positions collected. Computing calibration...";
-                        _lblHeadingStatus.ForeColor = NOMADTheme.WARNING;
-                        _btnHeadingCollect.Text = "COLLECT POSITION";
-                        _btnHeadingCollect.Enabled = false;
-
-                        await ComputeHeadingCalibration();
-                    }
-                    else
-                    {
-                        _lblHeadingStatus.Text = $"Position captured. {remaining} remaining. Place camera in next orientation.";
-                        _lblHeadingStatus.ForeColor = NOMADTheme.SUCCESS;
-                        _btnHeadingCollect.Enabled = true;
-                        _btnHeadingCollect.Text = "COLLECT POSITION";
-                    }
-                }
-                else
-                {
-                    var detail = data["detail"]?.ToString() ?? "Collection failed";
-                    _lblHeadingStatus.Text = $"Error: {detail}";
-                    _lblHeadingStatus.ForeColor = NOMADTheme.ERROR;
-                    _btnHeadingCollect.Enabled = true;
-                    _btnHeadingCollect.Text = "COLLECT POSITION";
-                }
-            }
-            catch (Exception ex)
-            {
-                _lblHeadingStatus.Text = $"Error: {ex.Message}";
-                _lblHeadingStatus.ForeColor = NOMADTheme.ERROR;
-                _btnHeadingCollect.Enabled = true;
-                _btnHeadingCollect.Text = "COLLECT POSITION";
-            }
-        }
-
-        private async System.Threading.Tasks.Task ComputeHeadingCalibration()
-        {
-            try
-            {
-                var resp = await JetsonApiService.LongRunClient.PostAsync(
-                    $"{JetsonApiService.BaseUrl}/api/calibration/imu/heading/compute", null);
-                var body = await resp.Content.ReadAsStringAsync();
-                var data = JObject.Parse(body);
-
-                bool success = (bool?)data["success"] ?? false;
-                if (success)
-                {
-                    var result = data["result"];
-                    float fitness = (float?)result?["fitness"] ?? 0;
-                    bool eepromAttempted = (bool?)result?["eeprom_store_attempted"] ?? false;
-                    bool? eepromSuccess = (bool?)result?["eeprom_store_success"];
-                    string eepromDetail = result?["eeprom_store_detail"]?.ToString() ?? "not_attempted";
-
-                    string eepromSummary;
-                    if (!eepromAttempted)
-                        eepromSummary = "Not attempted";
-                    else if (eepromSuccess == true)
-                        eepromSummary = "SUCCESS";
-                    else
-                        eepromSummary = $"FAILED ({eepromDetail})";
-
-                    _lblHeadingStatus.Text =
-                        eepromSuccess == false
-                            ? $"Calibration complete, EEPROM write failed (fitness: {fitness:P1})"
-                            : $"Calibration COMPLETE (fitness: {fitness:P1})";
-                    _lblHeadingStatus.ForeColor =
-                        eepromSuccess == false
-                            ? NOMADTheme.WARNING
-                            : fitness > 0.95f
-                                ? NOMADTheme.SUCCESS
-                                : NOMADTheme.WARNING;
-
-                    _txtHeadingResult.ForeColor = NOMADTheme.SUCCESS;
-                    _txtHeadingResult.Text =
-                        $"=== IMU Heading Calibration Complete ===\r\n\r\n" +
-                        $"Fitness:          {fitness:F4}\r\n" +
-                        $"Duration:         {result?["duration_s"]}s\r\n\r\n" +
-                        $"EEPROM Store:     {eepromSummary}\r\n" +
-                        $"EEPROM Detail:    {eepromDetail}\r\n\r\n" +
-                        $"Accel Bias (m/s^2):\r\n" +
-                        $"  X: {result?["accel_bias"]?[0]}\r\n" +
-                        $"  Y: {result?["accel_bias"]?[1]}\r\n" +
-                        $"  Z: {result?["accel_bias"]?[2]}\r\n\r\n" +
-                        $"Accel Scale:\r\n" +
-                        $"  X: {result?["accel_scale"]?[0]}\r\n" +
-                        $"  Y: {result?["accel_scale"]?[1]}\r\n" +
-                        $"  Z: {result?["accel_scale"]?[2]}\r\n\r\n" +
-                        $"Gyro Bias (rad/s):\r\n" +
-                        $"  X: {result?["gyro_bias"]?[0]}\r\n" +
-                        $"  Y: {result?["gyro_bias"]?[1]}\r\n" +
-                        $"  Z: {result?["gyro_bias"]?[2]}\r\n\r\n" +
-                        $"Saved to: config/calibration/imu_heading_cal.json";
-                }
-                else
-                {
-                    var msg = data["message"]?.ToString() ?? "Unknown error";
-                    _lblHeadingStatus.Text = $"Calibration failed: {msg}";
-                    _lblHeadingStatus.ForeColor = NOMADTheme.ERROR;
-                    _txtHeadingResult.ForeColor = NOMADTheme.ERROR;
-                    _txtHeadingResult.Text = msg;
-                }
-            }
-            catch (Exception ex)
-            {
-                _lblHeadingStatus.Text = $"Compute error: {ex.Message}";
-                _lblHeadingStatus.ForeColor = NOMADTheme.ERROR;
-                _txtHeadingResult.Text = ex.Message;
-            }
-
-            _btnHeadingStart.Enabled = true;
-            _btnHeadingCollect.Enabled = false;
-            _btnHeadingCancel.Enabled = false;
-        }
-
-        private async void BtnHeadingCancel_Click(object sender, EventArgs e)
-        {
-            _btnHeadingCancel.Enabled = false;
-            _btnHeadingCollect.Enabled = false;
-
-            try
-            {
-                await JetsonApiService.PostAsync("/api/calibration/imu/heading/cancel");
-            }
-            catch { }
-
-            _lblHeadingStatus.Text = "Calibration cancelled.";
-            _lblHeadingStatus.ForeColor = NOMADTheme.TEXT_SECONDARY;
-            ResetHeadingIndicators();
-            _headingProgressBar.Value = 0;
-            _lblHeadingStep.Text = "Step 0 / 6";
-            _lblHeadingInstruction.Text = "Press START to begin calibration.";
-            _btnHeadingStart.Enabled = true;
-        }
-
-        private void UpdateHeadingUI(JObject data)
-        {
-            int step = (int?)data["current_step"] ?? 0;
-            int total = (int?)data["total_steps"] ?? 6;
-            string nextPos = data["next_position"]?.ToString();
-            string nextInstr = data["next_instruction"]?.ToString();
-
-            _lblHeadingStep.Text = $"Step {step} / {total}";
-            _headingProgressBar.Value = Math.Min(step, total);
-
-            if (!string.IsNullOrEmpty(nextInstr))
-                _lblHeadingInstruction.Text = nextInstr;
-            else if (step >= total)
-                _lblHeadingInstruction.Text = "All positions collected.";
-
-            // Update position indicators
-            var done = data["positions_done"] as JArray;
-            if (done != null)
-            {
-                for (int i = 0; i < 6 && i < _positionIndicators.Length; i++)
-                {
-                    bool collected = false;
-                    foreach (var d in done)
-                    {
-                        if (string.Equals(d.ToString(), _positionLabels[i], StringComparison.OrdinalIgnoreCase))
-                        {
-                            collected = true;
-                            break;
-                        }
-                    }
-
-                    bool isCurrent = string.Equals(nextPos, _positionLabels[i], StringComparison.OrdinalIgnoreCase);
-                    _positionIndicators[i].BackColor = collected ? Color.FromArgb(30, 100, 30)
-                        : isCurrent ? Color.FromArgb(100, 80, 0)
-                        : Color.FromArgb(40, 40, 45);
-
-                    if (_positionIndicators[i].Controls.Count > 0)
-                    {
-                        _positionIndicators[i].Controls[0].ForeColor = collected ? NOMADTheme.SUCCESS
-                            : isCurrent ? NOMADTheme.WARNING
-                            : NOMADTheme.TEXT_MUTED;
-                    }
-                }
-            }
-        }
-
-        private void ResetHeadingIndicators()
-        {
-            if (_positionIndicators == null) return;
-            for (int i = 0; i < _positionIndicators.Length; i++)
-            {
-                _positionIndicators[i].BackColor = Color.FromArgb(40, 40, 45);
-                if (_positionIndicators[i].Controls.Count > 0)
-                    _positionIndicators[i].Controls[0].ForeColor = NOMADTheme.TEXT_MUTED;
-            }
-        }
-
-        // ============================================================
-        // Saved Calibration Tab
-        // ============================================================
-
-        private void BuildSavedCalibrationTab(TabPage tab)
-        {
-            var layout = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 3,
-            };
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 35));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-
-            _lblSavedStatus = new Label
-            {
-                Text = "View the currently saved magnetometer calibration.",
-                Font = new Font("Segoe UI", 10),
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Dock = DockStyle.Fill,
+                ForeColor = NOMADTheme.TEXT_SECONDARY,
+                Dock = DockStyle.Top,
+                Height = 30,
                 TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(10, 0, 0, 0),
             };
-            layout.Controls.Add(_lblSavedStatus, 0, 0);
+            panel.Controls.Add(_lblStatus, 0, 3);
 
-            _btnRefreshSaved = new Button
-            {
-                Text = "REFRESH",
-                Size = new Size(120, 30),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NOMADTheme.ACCENT,
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                Cursor = Cursors.Hand,
-                Margin = new Padding(10, 0, 0, 5),
-            };
-            _btnRefreshSaved.FlatAppearance.BorderSize = 0;
-            _btnRefreshSaved.Click += async (s, e) => await LoadSavedCalibration();
-            layout.Controls.Add(_btnRefreshSaved, 0, 1);
-
-            _txtSavedCal = new TextBox
-            {
-                Dock = DockStyle.Fill,
-                Multiline = true,
-                ReadOnly = true,
-                ScrollBars = ScrollBars.Vertical,
-                BackColor = Color.FromArgb(25, 25, 28),
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Font = new Font("Consolas", 10),
-                BorderStyle = BorderStyle.FixedSingle,
-                Text = "Press REFRESH to load saved calibration data.",
-            };
-            layout.Controls.Add(_txtSavedCal, 0, 2);
-
-            tab.Controls.Add(layout);
+            tab.Controls.Add(panel);
         }
 
-        // ============================================================
-        // Magnetometer Calibration Logic
-        // ============================================================
-
-        private async void BtnMagStart_Click(object sender, EventArgs e)
+        private string BuildNoVncUrl()
         {
-            _btnMagStart.Enabled = false;
-            _btnMagStop.Enabled = false;
-            _btnMagCancel.Enabled = false;
-            _lblMagStatus.Text = "Starting magnetometer calibration...";
-            _lblMagStatus.ForeColor = NOMADTheme.WARNING;
-            _txtMagResult.Text = "";
+            string host = _config.UseTailscale ? _config.TailscaleIP : _config.JetsonIP;
+            if (string.IsNullOrWhiteSpace(host))
+                host = "100.85.121.98";
 
+            return $"http://{host}:6080/vnc.html?autoconnect=0&reconnect=0&resize=scale";
+        }
+
+        private void OpenNoVncInBrowser(string url)
+        {
             try
             {
-                var resp = await JetsonApiService.PostAsync("/api/calibration/magnetometer/start");
-                var body = await resp.Content.ReadAsStringAsync();
-                var data = JObject.Parse(body);
-
-                if (resp.IsSuccessStatusCode)
+                var psi = new System.Diagnostics.ProcessStartInfo
                 {
-                    _isMagCalibrating = true;
-                    _pollTimer.Start();
-
-                    // Transition to step 2
-                    SetMagWizardStep(2);
-
-                    _lblMagStatus.Text = "COLLECTING - Rotate the camera slowly in all directions";
-                    _lblMagStatus.ForeColor = NOMADTheme.SUCCESS;
-                    _magStatusPanel.BackColor = Color.FromArgb(30, 70, 30);
-
-                    _btnMagStart.Enabled = false;
-                    _btnMagStop.Enabled = true;
-                    _btnMagCancel.Enabled = true;
-                }
-                else
-                {
-                    var detail = data["detail"]?.ToString() ?? "Unknown error";
-                    _lblMagStatus.Text = $"Failed: {detail}";
-                    _lblMagStatus.ForeColor = NOMADTheme.ERROR;
-                    _btnMagStart.Enabled = true;
-                }
+                    FileName = url,
+                    UseShellExecute = true,
+                };
+                System.Diagnostics.Process.Start(psi);
             }
             catch (Exception ex)
             {
-                _lblMagStatus.Text = $"Connection error: {ex.Message}";
-                _lblMagStatus.ForeColor = NOMADTheme.ERROR;
-                _btnMagStart.Enabled = true;
+                MessageBox.Show(
+                    $"Unable to open remote desktop:\n\n{ex.Message}",
+                    "Remote Desktop Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
             }
         }
 
-        private async void BtnMagStop_Click(object sender, EventArgs e)
+        private async Task LaunchSensorViewerAsync()
         {
-            _btnMagStop.Enabled = false;
-            _btnMagCancel.Enabled = false;
-            _pollTimer.Stop();
-            _lblMagStatus.Text = "Computing calibration (ellipsoid fitting)...";
-            _lblMagStatus.ForeColor = NOMADTheme.WARNING;
-
-            // Transition to step 3
-            SetMagWizardStep(3);
+            _btnLaunchSensorViewer.Enabled = false;
+            _lblStatus.Text = "Launching Sensor Viewer...";
+            _lblStatus.ForeColor = NOMADTheme.WARNING;
 
             try
             {
-                var resp = await JetsonApiService.PostLongRunAsync("/api/calibration/magnetometer/stop");
+                var resp = await JetsonApiService.PostAsync("/api/calibration/zed/sensor-viewer/start");
                 var body = await resp.Content.ReadAsStringAsync();
-                var data = JObject.Parse(body);
 
-                _isMagCalibrating = false;
-
-                bool success = (bool?)data["success"] ?? false;
-                if (success)
+                if (!resp.IsSuccessStatusCode)
                 {
-                    var result = data["result"];
-                    _lblMagStatus.Text = "Calibration COMPLETE - Results saved";
-                    _lblMagStatus.ForeColor = NOMADTheme.SUCCESS;
-                    _magStatusPanel.BackColor = Color.FromArgb(30, 70, 30);
-
-                    float fitness = (float?)result?["fitness"] ?? 0;
-                    _lblMagFitness.Text = $"Fitness: {fitness:P1}";
-                    _lblMagFitness.ForeColor = fitness > 0.9f ? NOMADTheme.SUCCESS
-                        : fitness > 0.7f ? NOMADTheme.WARNING : NOMADTheme.ERROR;
-
-                    var hardIron = result?["hard_iron"];
-                    var softIron = result?["soft_iron"];
-
-                    _txtMagResult.ForeColor = NOMADTheme.SUCCESS;
-                    _txtMagResult.Text = $"=== Magnetometer Calibration Complete ===\r\n\r\n" +
-                        $"Fitness:        {fitness:F4}\r\n" +
-                        $"Samples Used:   {result?["samples_used"]}\r\n" +
-                        $"Duration:       {result?["duration_s"]}s\r\n\r\n" +
-                        $"Hard-Iron Offset (uT):\r\n" +
-                        $"  X: {hardIron?[0]}\r\n" +
-                        $"  Y: {hardIron?[1]}\r\n" +
-                        $"  Z: {hardIron?[2]}\r\n\r\n" +
-                        $"Soft-Iron Correction Matrix:\r\n" +
-                        $"  [{FormatRow(softIron?[0])}]\r\n" +
-                        $"  [{FormatRow(softIron?[1])}]\r\n" +
-                        $"  [{FormatRow(softIron?[2])}]\r\n\r\n" +
-                        $"Saved to: config/calibration/magnetometer_cal.json";
-                }
-                else
-                {
-                    var msg = data["message"]?.ToString() ?? "Unknown error";
-                    _lblMagStatus.Text = $"Calibration failed: {msg}";
-                    _lblMagStatus.ForeColor = NOMADTheme.ERROR;
-                    _magStatusPanel.BackColor = Color.FromArgb(80, 30, 30);
-                    _txtMagResult.ForeColor = NOMADTheme.ERROR;
-                    _txtMagResult.Text = msg;
-                }
-            }
-            catch (Exception ex)
-            {
-                _lblMagStatus.Text = $"Error: {ex.Message}";
-                _lblMagStatus.ForeColor = NOMADTheme.ERROR;
-                _txtMagResult.ForeColor = NOMADTheme.ERROR;
-                _txtMagResult.Text = $"Compute error: {ex.Message}";
-            }
-
-            _btnMagStart.Enabled = true;
-            _btnMagStop.Enabled = false;
-            _btnMagCancel.Enabled = false;
-        }
-
-        private async void BtnMagCancel_Click(object sender, EventArgs e)
-        {
-            _pollTimer.Stop();
-            _isMagCalibrating = false;
-            _btnMagCancel.Enabled = false;
-            _btnMagStop.Enabled = false;
-
-            try
-            {
-                await JetsonApiService.PostAsync("/api/calibration/magnetometer/cancel");
-            }
-            catch { }
-
-            _lblMagStatus.Text = "Calibration cancelled";
-            _lblMagStatus.ForeColor = NOMADTheme.TEXT_SECONDARY;
-            _magStatusPanel.BackColor = NOMADTheme.CARD_BG;
-
-            SetMagWizardStep(1);
-            ResetMagProgress();
-
-            _btnMagStart.Enabled = true;
-        }
-
-        private async void PollTimer_Tick(object sender, EventArgs e)
-        {
-            if (!_isMagCalibrating || _isPolling) return;
-            _isPolling = true;
-
-            try
-            {
-                var resp = await JetsonApiService.GetAsync("/api/calibration/magnetometer/status");
-                var body = await resp.Content.ReadAsStringAsync();
-                var data = JObject.Parse(body);
-
-                int samples = (int?)data["samples"] ?? 0;
-                int target = (int?)data["target_samples"] ?? 500;
-                float progress = (float?)data["progress"] ?? 0;
-                float elapsed = (float?)data["elapsed_s"] ?? 0;
-                string state = data["state"]?.ToString() ?? "unknown";
-
-                _lblMagSamples.Text = $"Samples: {samples} / {target}";
-                _magProgressBar.Value = Math.Min(100, (int)(progress * 100));
-                _lblMagElapsed.Text = $"Elapsed: {elapsed:F0}s";
-
-                var coverage = data["coverage"];
-                if (coverage != null)
-                {
-                    int octants = (int?)coverage["octants_covered"] ?? 0;
-                    float pct = (float?)coverage["coverage_pct"] ?? 0;
-                    _lblMagCoverage.Text = $"Coverage: {octants} / 8 octants ({pct:F0}%)";
-
-                    // Update visualization
-                    _coverageViz.UpdateCoverage(octants, GetOctantFlags(coverage));
-
-                    // Color code coverage
-                    _lblMagCoverage.ForeColor = octants >= 6 ? NOMADTheme.SUCCESS
-                        : octants >= 4 ? NOMADTheme.WARNING : NOMADTheme.ERROR;
+                    _lblStatus.Text = "Launch failed";
+                    _lblStatus.ForeColor = NOMADTheme.ERROR;
+                    MessageBox.Show(
+                        $"Failed to launch ZED Sensor Viewer:\n\n{body}",
+                        "Calibration Tool Error",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error
+                    );
+                    return;
                 }
 
-                if (state == "failed")
-                {
-                    _pollTimer.Stop();
-                    _isMagCalibrating = false;
-                    _lblMagStatus.Text = $"Collection failed: {data["error"]}";
-                    _lblMagStatus.ForeColor = NOMADTheme.ERROR;
-                    _btnMagStart.Enabled = true;
-                    _btnMagStop.Enabled = false;
-                    _btnMagCancel.Enabled = false;
-                }
-            }
-            catch { /* Ignore transient poll failures */ }
-            finally { _isPolling = false; }
-        }
-
-        private bool[] GetOctantFlags(JToken coverage)
-        {
-            // The API reports coverage as octants_covered count
-            // We approximate which octants are covered based on count
-            // (precise per-octant data could be added to the API later)
-            int covered = (int?)coverage?["octants_covered"] ?? 0;
-            var flags = new bool[8];
-            for (int i = 0; i < Math.Min(covered, 8); i++)
-                flags[i] = true;
-            return flags;
-        }
-
-        private void SetMagWizardStep(int step)
-        {
-            _magWizardStep = step;
-            _lblMagStep.Text = $"Step {step} of 3";
-
-            // Update step indicators
-            for (int i = 1; i <= 3; i++)
-            {
-                var ctrl = _magWizardPanel.Controls.Find($"stepIndicator_{i}", true);
-                if (ctrl.Length > 0)
-                {
-                    ctrl[0].BackColor = i <= step ? NOMADTheme.ACCENT : NOMADTheme.CARD_BG;
-                    ctrl[0].ForeColor = i <= step ? Color.White : NOMADTheme.TEXT_MUTED;
-                }
-            }
-
-            switch (step)
-            {
-                case 1:
-                    _lblMagInstruction.Text =
-                        "1. Ensure the ZED camera is connected and accessible.\n" +
-                        "2. Place the drone in an open area away from metal objects.\n" +
-                        "3. Press START to begin collecting magnetometer data.";
-                    break;
-                case 2:
-                    _lblMagInstruction.Text =
-                        "ROTATING: Slowly rotate the drone in all orientations.\n\n" +
-                        "- Roll, pitch, and yaw slowly through full range\n" +
-                        "- Try to cover all 8 spatial octants (see visualization)\n" +
-                        "- Continue until coverage is green (6+ octants)\n" +
-                        "- Press STOP & COMPUTE when satisfied";
-                    break;
-                case 3:
-                    _lblMagInstruction.Text =
-                        "COMPUTING: Fitting ellipsoid to collected data...\n\n" +
-                        "This computes hard-iron offset and soft-iron\n" +
-                        "correction matrix using least-squares fitting.\n" +
-                        "Results will be saved automatically.";
-                    break;
-            }
-        }
-
-        private void ResetMagProgress()
-        {
-            _magProgressBar.Value = 0;
-            _lblMagSamples.Text = "Samples: 0 / 500";
-            _lblMagCoverage.Text = "Coverage: 0 / 8 octants (0%)";
-            _lblMagCoverage.ForeColor = NOMADTheme.TEXT_PRIMARY;
-            _lblMagElapsed.Text = "Elapsed: 0s";
-            _lblMagFitness.Text = "Fitness: --";
-            _lblMagFitness.ForeColor = NOMADTheme.TEXT_SECONDARY;
-            _coverageViz.Reset();
-        }
-
-        private string FormatRow(JToken row)
-        {
-            if (row == null) return "N/A";
-            try
-            {
-                return string.Join(", ", row.Select(v => $"{(float)v,10:F6}"));
-            }
-            catch { return row.ToString(); }
-        }
-
-        // ============================================================
-        // IMU Check Logic
-        // ============================================================
-
-        private async void BtnImuCheck_Click(object sender, EventArgs e)
-        {
-            _btnImuCheck.Enabled = false;
-            _btnImuCheck.Text = "Running...";
-            _lblImuStatus.Text = "Keep the camera STILL for 5 seconds...";
-            _lblImuStatus.ForeColor = NOMADTheme.WARNING;
-            _imuResultPanel.Visible = false;
-            _txtImuIssues.Text = "";
-
-            try
-            {
-                // IMU check takes ~5 seconds on the Jetson; use the long-run client to avoid timeout
-                var resp = await JetsonApiService.LongRunClient.GetAsync(
-                    $"{JetsonApiService.BaseUrl}/api/calibration/imu/check");
-                var body = await resp.Content.ReadAsStringAsync();
-                var data = JObject.Parse(body);
-
-                bool healthy = (bool?)data["healthy"] ?? false;
-
-                _lblImuHealthy.Text = healthy ? "HEALTHY" : "ISSUES DETECTED";
-                _lblImuHealthy.ForeColor = healthy ? NOMADTheme.SUCCESS : NOMADTheme.ERROR;
-
-                float gravity = (float?)data["gravity_magnitude"] ?? 0;
-                float gravError = (float?)data["gravity_error_pct"] ?? 0;
-                _lblGravity.Text = $"Gravity:     {gravity:F4} m/s^2 (error: {gravError:F1}%)";
-                _lblGravity.ForeColor = gravError < 5 ? NOMADTheme.SUCCESS : NOMADTheme.ERROR;
-
-                var accelBias = data["accel_bias"];
-                _lblAccelBias.Text = $"Accel Bias:  ({accelBias?[0]:F4}, {accelBias?[1]:F4}, {accelBias?[2]:F4}) m/s^2";
-
-                var gyroBias = data["gyro_bias"];
-                float gyroBiasMag = 0;
-                if (gyroBias != null)
-                {
-                    float gx = (float?)gyroBias[0] ?? 0;
-                    float gy = (float?)gyroBias[1] ?? 0;
-                    float gz = (float?)gyroBias[2] ?? 0;
-                    gyroBiasMag = (float)Math.Sqrt(gx * gx + gy * gy + gz * gz);
-                }
-                _lblGyroBias.Text = $"Gyro Bias:   ({gyroBias?[0]:F4}, {gyroBias?[1]:F4}, {gyroBias?[2]:F4}) rad/s";
-                _lblGyroBias.ForeColor = gyroBiasMag < 0.05f ? NOMADTheme.TEXT_PRIMARY : NOMADTheme.ERROR;
-
-                float accelNoise = (float?)data["accel_noise"] ?? 0;
-                _lblAccelNoise.Text = $"Accel Noise: {accelNoise:F4} m/s^2";
-                _lblAccelNoise.ForeColor = accelNoise < 0.5f ? NOMADTheme.TEXT_PRIMARY : NOMADTheme.WARNING;
-
-                float gyroNoise = (float?)data["gyro_noise"] ?? 0;
-                _lblGyroNoise.Text = $"Gyro Noise:  {gyroNoise:F4} rad/s";
-                _lblGyroNoise.ForeColor = gyroNoise < 0.02f ? NOMADTheme.TEXT_PRIMARY : NOMADTheme.WARNING;
-
-                float temp = (float?)data["temperature"] ?? 0;
-                _lblTemperature.Text = $"Temperature: {temp:F1} C";
-
-                // Show issues
-                var issues = data["issues"] as JArray;
-                if (issues != null && issues.Count > 0)
-                {
-                    _txtImuIssues.Text = string.Join("\r\n", issues.Select(i => $"  - {i}"));
-                    _txtImuIssues.ForeColor = healthy ? NOMADTheme.SUCCESS : NOMADTheme.WARNING;
-                }
-
-                _imuResultPanel.Visible = true;
-                _lblImuStatus.Text = healthy ? "Check passed" : "Check completed with issues";
-                _lblImuStatus.ForeColor = healthy ? NOMADTheme.SUCCESS : NOMADTheme.WARNING;
-            }
-            catch (Exception ex)
-            {
-                _lblImuStatus.Text = $"Error: {ex.Message}";
-                _lblImuStatus.ForeColor = NOMADTheme.ERROR;
-                _txtImuIssues.Text = $"Connection error: {ex.Message}";
-                _txtImuIssues.ForeColor = NOMADTheme.ERROR;
-            }
-
-            _btnImuCheck.Enabled = true;
-            _btnImuCheck.Text = "RUN IMU CHECK";
-        }
-
-        // ============================================================
-        // Saved Calibration Logic
-        // ============================================================
-
-        private async Task LoadSavedCalibration()
-        {
-            _btnRefreshSaved.Enabled = false;
-            _txtSavedCal.Text = "Loading...";
-
-            const int maxRetries = 2;
-            Exception lastEx = null;
-
-            for (int attempt = 0; attempt <= maxRetries; attempt++)
-            {
+                string message = "ZED Sensor Viewer launched";
+                string noVncUrl = BuildNoVncUrl();
                 try
                 {
-                    var resp = await JetsonApiService.GetAsync("/api/calibration/magnetometer/saved");
-                    var body = await resp.Content.ReadAsStringAsync();
                     var data = JObject.Parse(body);
-
-                    bool available = (bool?)data["available"] ?? false;
-                    if (available)
-                    {
-                        float fitness = (float?)data["fitness"] ?? 0;
-                        var hardIron = data["hard_iron"];
-                        var softIron = data["soft_iron"];
-
-                        _lblSavedStatus.Text = $"Calibration available (fitness: {fitness:P1})";
-                        _lblSavedStatus.ForeColor = fitness > 0.9f ? NOMADTheme.SUCCESS
-                            : fitness > 0.7f ? NOMADTheme.WARNING : NOMADTheme.ERROR;
-
-                        _txtSavedCal.ForeColor = NOMADTheme.TEXT_PRIMARY;
-                        _txtSavedCal.Text =
-                            $"=== Saved Magnetometer Calibration ===\r\n\r\n" +
-                            $"Timestamp:      {data["timestamp"]}\r\n" +
-                            $"Fitness:        {fitness:F4}\r\n" +
-                            $"Samples Used:   {data["samples_used"]}\r\n" +
-                            $"Duration:       {data["duration_s"]}s\r\n\r\n" +
-                            $"Hard-Iron Offset (uT):\r\n" +
-                            $"  X: {hardIron?[0]}\r\n" +
-                            $"  Y: {hardIron?[1]}\r\n" +
-                            $"  Z: {hardIron?[2]}\r\n\r\n" +
-                            $"Soft-Iron Correction Matrix:\r\n" +
-                            $"  [{FormatRow(softIron?[0])}]\r\n" +
-                            $"  [{FormatRow(softIron?[1])}]\r\n" +
-                            $"  [{FormatRow(softIron?[2])}]\r\n";
-                    }
-                    else
-                    {
-                        _lblSavedStatus.Text = "No calibration saved";
-                        _lblSavedStatus.ForeColor = NOMADTheme.WARNING;
-                        _txtSavedCal.ForeColor = NOMADTheme.TEXT_SECONDARY;
-                        _txtSavedCal.Text = data["message"]?.ToString() ?? "No magnetometer calibration found on the Jetson.";
-                    }
-
-                    _btnRefreshSaved.Enabled = true;
-                    return; // success
+                    var apiMessage = data["message"]?.Value<string>();
+                    var apiNoVnc = data["novnc_url"]?.Value<string>();
+                    if (!string.IsNullOrWhiteSpace(apiMessage))
+                        message = apiMessage;
+                    if (!string.IsNullOrWhiteSpace(apiNoVnc))
+                        noVncUrl = apiNoVnc;
                 }
-                catch (Exception ex)
+                catch
                 {
-                    lastEx = ex;
-                    if (attempt < maxRetries)
-                        await Task.Delay(1000);
+                    // Keep fallback values.
                 }
+
+                OpenNoVncInBrowser(noVncUrl);
+                _lblStatus.Text = message;
+                _lblStatus.ForeColor = NOMADTheme.SUCCESS;
             }
-
-            // All retries exhausted
-            _lblSavedStatus.Text = "Error loading calibration";
-            _lblSavedStatus.ForeColor = NOMADTheme.ERROR;
-            _txtSavedCal.ForeColor = NOMADTheme.ERROR;
-            string msg = lastEx is TaskCanceledException
-                ? "Connection timed out. Verify the Jetson is reachable."
-                : lastEx?.Message ?? "Unknown error";
-            _txtSavedCal.Text = $"Error: {msg}";
-
-            _btnRefreshSaved.Enabled = true;
+            catch (Exception ex)
+            {
+                _lblStatus.Text = "Launch failed";
+                _lblStatus.ForeColor = NOMADTheme.ERROR;
+                MessageBox.Show(
+                    $"Unable to launch Sensor Viewer:\n\n{ex.Message}",
+                    "Calibration Tool Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
+            finally
+            {
+                _btnLaunchSensorViewer.Enabled = true;
+            }
         }
-
-        // ============================================================
-        // IUpdatableView
-        // ============================================================
 
         public void UpdateData()
         {
-            // No periodic update needed -- mag calibration polls via its own timer
-        }
-
-        // ============================================================
-        // Cleanup
-        // ============================================================
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing)
-            {
-                _pollTimer?.Stop();
-                _pollTimer?.Dispose();
-            }
-            base.Dispose(disposing);
-        }
-    }
-
-    // ============================================================
-    // Coverage Visualization Control
-    // ============================================================
-
-    /// <summary>
-    /// Custom painting control that shows octant coverage as an
-    /// isometric cube diagram. Each octant is color-coded based on
-    /// whether it has been covered during magnetometer calibration.
-    /// </summary>
-    internal class CoverageVisualization : Control
-    {
-        private int _octantsCovered = 0;
-        private bool[] _octantFlags = new bool[8];
-
-        public CoverageVisualization()
-        {
-            this.DoubleBuffered = true;
-            this.SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
-        }
-
-        public void UpdateCoverage(int octantsCovered, bool[] flags)
-        {
-            _octantsCovered = octantsCovered;
-            if (flags != null && flags.Length == 8)
-                _octantFlags = flags;
-            Invalidate();
-        }
-
-        public void Reset()
-        {
-            _octantsCovered = 0;
-            _octantFlags = new bool[8];
-            Invalidate();
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            base.OnPaint(e);
-            var g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-
-            int w = this.Width;
-            int h = this.Height;
-
-            // Draw a clean 2x2x2 cube grid with proper labels
-            // Top layer (Z+) and bottom layer (Z-) shown side by side
-            int cellSize = Math.Min(w / 6, h / 6);
-            int gap = 6;
-            int step = cellSize + gap;
-
-            // Center the entire diagram
-            int totalW = step * 5 + cellSize; // 2 cells + gap + label + gap + 2 cells
-            int totalH = step * 2 + cellSize + 50; // 2 rows + bottom label area
-            int startX = (w - totalW) / 2;
-            int startY = (h - totalH) / 2 + 15;
-
-            // Octant mapping: index = sign_x + 2*sign_y + 4*sign_z
-            // sign_x: 0=negative, 1=positive (columns)
-            // sign_y: 0=negative, 1=positive (rows)
-            // sign_z: 0=bottom layer, 1=top layer (left vs right group)
-
-            // Draw bottom layer (Z-) on the left
-            DrawLayer(g, startX, startY, cellSize, step, layerZ: 0, label: "Z- (Down)");
-            // Draw top layer (Z+) on the right
-            DrawLayer(g, startX + step * 2 + cellSize, startY, cellSize, step, layerZ: 1, label: "Z+ (Up)");
-
-            // Axis labels
-            using (var font = new Font("Segoe UI", 8, FontStyle.Italic))
-            using (var brush = new SolidBrush(NOMADTheme.TEXT_MUTED))
-            {
-                int layerSize = step + cellSize;
-                const int axisBottomOffset = 8;
-                const int axisSideOffset = 16;
-
-                void DrawCentered(string text, float centerX, float centerY)
-                {
-                    var textSize = g.MeasureString(text, font);
-                    g.DrawString(text, font, brush, centerX - textSize.Width / 2f, centerY - textSize.Height / 2f);
-                }
-
-                void DrawAxesForLayer(int layerX)
-                {
-                    float bottomAxisY = startY + layerSize + axisBottomOffset;
-                    float layerCenterY = startY + layerSize / 2f;
-
-                    DrawCentered("Y+", layerX + cellSize / 2f, bottomAxisY);
-                    DrawCentered("Y-", layerX + step + cellSize / 2f, bottomAxisY);
-                    DrawCentered("X-", layerX - axisSideOffset, layerCenterY);
-                    DrawCentered("X+", layerX + layerSize + axisSideOffset, layerCenterY);
-                }
-
-                DrawAxesForLayer(startX);
-                DrawAxesForLayer(startX + step * 2 + cellSize);
-            }
-
-            // Summary at bottom
-            string summary = $"{_octantsCovered}/8 Octants Covered";
-            using (var font = new Font("Segoe UI", 11, FontStyle.Bold))
-            using (var brush = new SolidBrush(
-                _octantsCovered >= 6 ? NOMADTheme.SUCCESS :
-                _octantsCovered >= 4 ? NOMADTheme.WARNING : NOMADTheme.TEXT_SECONDARY))
-            {
-                var textSize = g.MeasureString(summary, font);
-                g.DrawString(summary, font, brush,
-                    w / 2 - textSize.Width / 2, h - textSize.Height - 8);
-            }
-        }
-
-        private void DrawLayer(Graphics g, int x, int y, int cellSize, int step, int layerZ, string label)
-        {
-            // Layer label
-            using (var font = new Font("Segoe UI", 9, FontStyle.Bold))
-            using (var brush = new SolidBrush(NOMADTheme.ACCENT))
-            {
-                var sz = g.MeasureString(label, font);
-                g.DrawString(label, font, brush, x + cellSize - sz.Width / 2, y - 16);
-            }
-
-            for (int sy = 0; sy < 2; sy++) // sign_y: row
-            {
-                for (int sx = 0; sx < 2; sx++) // sign_x: column
-                {
-                    int octantIndex = sx + 2 * sy + 4 * layerZ;
-                    bool covered = _octantFlags[octantIndex];
-
-                    int cx = x + sx * step;
-                    int cy = y + sy * step;
-
-                    Color fillColor = covered
-                        ? Color.FromArgb(180, NOMADTheme.SUCCESS)
-                        : Color.FromArgb(60, NOMADTheme.TEXT_MUTED);
-
-                    Color borderColor = covered
-                        ? NOMADTheme.SUCCESS
-                        : Color.FromArgb(100, NOMADTheme.TEXT_MUTED);
-
-                    // Draw rounded square
-                    int radius = 6;
-                    using (var path = new System.Drawing.Drawing2D.GraphicsPath())
-                    {
-                        path.AddArc(cx, cy, radius * 2, radius * 2, 180, 90);
-                        path.AddArc(cx + cellSize - radius * 2, cy, radius * 2, radius * 2, 270, 90);
-                        path.AddArc(cx + cellSize - radius * 2, cy + cellSize - radius * 2, radius * 2, radius * 2, 0, 90);
-                        path.AddArc(cx, cy + cellSize - radius * 2, radius * 2, radius * 2, 90, 90);
-                        path.CloseFigure();
-
-                        using (var brush = new SolidBrush(fillColor))
-                            g.FillPath(brush, path);
-                        using (var pen = new Pen(borderColor, 2f))
-                            g.DrawPath(pen, path);
-                    }
-
-                    // Label
-                    string cellLabel = covered ? "OK" : $"{octantIndex + 1}";
-                    using (var font = new Font("Segoe UI", 9, FontStyle.Bold))
-                    using (var textBrush = new SolidBrush(covered ? Color.White : NOMADTheme.TEXT_MUTED))
-                    {
-                        var textSize = g.MeasureString(cellLabel, font);
-                        g.DrawString(cellLabel, font, textBrush,
-                            cx + (cellSize - textSize.Width) / 2,
-                            cy + (cellSize - textSize.Height) / 2);
-                    }
-                }
-            }
+            // No periodic updates required for this view.
         }
     }
 }

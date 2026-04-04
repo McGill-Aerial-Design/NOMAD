@@ -325,7 +325,7 @@ namespace NOMAD.MissionPlanner
 
             _btnRemoteScreenConnect = CreateButton("Connect", ACCENT_COLOR, 90, 28);
             _btnRemoteScreenConnect.Dock = DockStyle.Right;
-            _btnRemoteScreenConnect.Click += (s, e) => NavigateRemoteScreen();
+            _btnRemoteScreenConnect.Click += async (s, e) => await NavigateRemoteScreenAsync();
 
             _txtRemoteScreenUrl = new TextBox
             {
@@ -350,8 +350,9 @@ namespace NOMAD.MissionPlanner
             _remoteScreenBrowser.DocumentText =
                 "<html><body style='background:#1e1e21;color:#ddd;font-family:Segoe UI;padding:16px;'>" +
                 "<h3 style='color:#36A2EB;margin-top:0;'>Remote Screen</h3>" +
-                "<p>Click <b>Connect</b> to open the Jetson noVNC page inside this tab.</p>" +
-                "<p>If the embedded view fails, click <b>Open External</b>.</p>" +
+                "<p>Click <b>Connect</b> to open the Jetson noVNC login page inside this tab.</p>" +
+                "<p>Auto-connect is disabled so password prompt/login can appear normally.</p>" +
+                "<p>If the embedded view still spins, click <b>Open External</b>.</p>" +
                 "</body></html>";
 
             layout.Controls.Add(topBar, 0, 0);
@@ -367,10 +368,62 @@ namespace NOMAD.MissionPlanner
             if (string.IsNullOrWhiteSpace(host))
                 host = "100.85.121.98";
 
-            return $"http://{host}:6080/vnc.html?autoconnect=1&resize=scale";
+            return $"http://{host}:6080/vnc.html?autoconnect=0&reconnect=0&resize=scale";
         }
 
-        private void NavigateRemoteScreen()
+        private string NormalizeRemoteScreenUrl(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+                return url;
+
+            string normalized = url;
+            string lower = normalized.ToLowerInvariant();
+
+            int autoconnectIndex = lower.IndexOf("autoconnect=", StringComparison.Ordinal);
+            if (autoconnectIndex >= 0)
+            {
+                int valueStart = autoconnectIndex + "autoconnect=".Length;
+                int valueEnd = normalized.IndexOf('&', valueStart);
+                if (valueEnd < 0)
+                    valueEnd = normalized.Length;
+                normalized = normalized.Substring(0, valueStart) + "0" + normalized.Substring(valueEnd);
+                lower = normalized.ToLowerInvariant();
+            }
+            else if (lower.Contains("vnc.html"))
+            {
+                normalized += normalized.Contains("?") ? "&autoconnect=0" : "?autoconnect=0";
+                lower = normalized.ToLowerInvariant();
+            }
+
+            if (lower.Contains("vnc.html") && !lower.Contains("reconnect="))
+            {
+                normalized += normalized.Contains("?") ? "&reconnect=0" : "?reconnect=0";
+            }
+
+            return normalized;
+        }
+
+        private async Task<bool> IsNoVncReachableAsync(string url)
+        {
+            try
+            {
+                using (var client = new HttpClient())
+                {
+                    client.Timeout = TimeSpan.FromSeconds(4);
+                    using (var req = new HttpRequestMessage(HttpMethod.Get, url))
+                    using (var resp = await client.SendAsync(req))
+                    {
+                        return resp.IsSuccessStatusCode;
+                    }
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private async Task NavigateRemoteScreenAsync()
         {
             var url = _txtRemoteScreenUrl?.Text?.Trim();
             if (string.IsNullOrWhiteSpace(url) || _remoteScreenBrowser == null)
@@ -380,12 +433,48 @@ namespace NOMAD.MissionPlanner
                 !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             {
                 url = $"http://{url}";
-                _txtRemoteScreenUrl.Text = url;
             }
+
+            url = NormalizeRemoteScreenUrl(url);
+            _txtRemoteScreenUrl.Text = url;
 
             try
             {
-                _remoteScreenBrowser.Navigate(url);
+                bool reachable = await IsNoVncReachableAsync(url);
+                if (!reachable)
+                {
+                    var startResult = await _sender.StartServiceAsync("novnc");
+                    if (startResult.Success)
+                    {
+                        await Task.Delay(1500);
+                        reachable = await IsNoVncReachableAsync(url);
+                    }
+                }
+
+                if (!reachable)
+                {
+                    MessageBox.Show(
+                        "Cannot reach noVNC on port 6080.\n\n" +
+                        "Checked URL: " + url + "\n\n" +
+                        "Possible causes:\n" +
+                        "- noVNC service is not running\n" +
+                        "- Firewall is blocking port 6080\n" +
+                        "- Network path to Jetson is down",
+                        "Remote Screen Unreachable",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning
+                    );
+                    return;
+                }
+
+                OpenRemoteScreenExternal(url);
+
+                _remoteScreenBrowser.DocumentText =
+                    "<html><body style='background:#1e1e21;color:#ddd;font-family:Segoe UI;padding:16px;'>" +
+                    "<h3 style='color:#36A2EB;margin-top:0;'>Remote Screen</h3>" +
+                    "<p>Opened noVNC in your default browser for reliable password prompts.</p>" +
+                    "<p>If needed, edit the URL above and click Connect again.</p>" +
+                    "</body></html>";
             }
             catch (Exception ex)
             {
@@ -398,9 +487,9 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private void OpenRemoteScreenExternal()
+        private void OpenRemoteScreenExternal(string urlOverride = null)
         {
-            var url = _txtRemoteScreenUrl?.Text?.Trim();
+            var url = string.IsNullOrWhiteSpace(urlOverride) ? _txtRemoteScreenUrl?.Text?.Trim() : urlOverride;
             if (string.IsNullOrWhiteSpace(url))
                 return;
 
