@@ -2513,7 +2513,7 @@ namespace NOMAD.MissionPlanner
 
             try
             {
-                var response = await JetsonApiService.PostAsync("/api/calibration/imu/reset_biases");
+                var response = await JetsonApiService.PostLongRunAsync("/api/calibration/imu/reset_biases");
                 var body = await response.Content.ReadAsStringAsync();
                 var data = Newtonsoft.Json.Linq.JObject.Parse(body);
 

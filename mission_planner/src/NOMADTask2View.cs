@@ -31,6 +31,10 @@ namespace NOMAD.MissionPlanner
         private Button _btnResetVio;
         private SLAM3DView _slam3DView;
         private TabControl _tabControl;
+        private WebBrowser _remoteScreenBrowser;
+        private TextBox _txtRemoteScreenUrl;
+        private Button _btnRemoteScreenConnect;
+        private Button _btnRemoteScreenOpenExternal;
 
         // Mode selector controls
         private ComboBox _cmbMode;
@@ -274,7 +278,157 @@ namespace NOMAD.MissionPlanner
 
             _tabControl.TabPages.Add(slam3DTab);
 
+            // Tab 3: Remote Screen (noVNC)
+            var remoteScreenTab = CreateRemoteScreenTab();
+            _tabControl.TabPages.Add(remoteScreenTab);
+
             this.Controls.Add(_tabControl);
+        }
+
+        private TabPage CreateRemoteScreenTab()
+        {
+            var tab = new TabPage("Remote Screen")
+            {
+                BackColor = NOMADTheme.BG_DARK,
+            };
+
+            var layout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 2,
+                Padding = new Padding(8),
+            };
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+            var topBar = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(40, 40, 45),
+                Padding = new Padding(6),
+            };
+
+            var lblUrl = new Label
+            {
+                Text = "noVNC URL:",
+                ForeColor = TEXT_SECONDARY,
+                Dock = DockStyle.Left,
+                Width = 85,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Font = new Font("Segoe UI", 9),
+            };
+
+            _btnRemoteScreenOpenExternal = CreateButton("Open External", Color.FromArgb(60, 60, 65), 115, 28);
+            _btnRemoteScreenOpenExternal.Dock = DockStyle.Right;
+            _btnRemoteScreenOpenExternal.Click += (s, e) => OpenRemoteScreenExternal();
+
+            _btnRemoteScreenConnect = CreateButton("Connect", ACCENT_COLOR, 90, 28);
+            _btnRemoteScreenConnect.Dock = DockStyle.Right;
+            _btnRemoteScreenConnect.Click += (s, e) => NavigateRemoteScreen();
+
+            _txtRemoteScreenUrl = new TextBox
+            {
+                Dock = DockStyle.Fill,
+                Text = BuildDefaultRemoteScreenUrl(),
+                BackColor = NOMADTheme.INPUT_BG,
+                ForeColor = Color.White,
+                BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font("Segoe UI", 9),
+            };
+
+            topBar.Controls.Add(_txtRemoteScreenUrl);
+            topBar.Controls.Add(_btnRemoteScreenConnect);
+            topBar.Controls.Add(_btnRemoteScreenOpenExternal);
+            topBar.Controls.Add(lblUrl);
+
+            _remoteScreenBrowser = new WebBrowser
+            {
+                Dock = DockStyle.Fill,
+                ScriptErrorsSuppressed = true,
+            };
+            _remoteScreenBrowser.DocumentText =
+                "<html><body style='background:#1e1e21;color:#ddd;font-family:Segoe UI;padding:16px;'>" +
+                "<h3 style='color:#36A2EB;margin-top:0;'>Remote Screen</h3>" +
+                "<p>Click <b>Connect</b> to open the Jetson noVNC page inside this tab.</p>" +
+                "<p>If the embedded view fails, click <b>Open External</b>.</p>" +
+                "</body></html>";
+
+            layout.Controls.Add(topBar, 0, 0);
+            layout.Controls.Add(_remoteScreenBrowser, 0, 1);
+
+            tab.Controls.Add(layout);
+            return tab;
+        }
+
+        private string BuildDefaultRemoteScreenUrl()
+        {
+            string host = _config.UseTailscale ? _config.TailscaleIP : _config.JetsonIP;
+            if (string.IsNullOrWhiteSpace(host))
+                host = "100.85.121.98";
+
+            return $"http://{host}:6080/vnc.html?autoconnect=1&resize=scale";
+        }
+
+        private void NavigateRemoteScreen()
+        {
+            var url = _txtRemoteScreenUrl?.Text?.Trim();
+            if (string.IsNullOrWhiteSpace(url) || _remoteScreenBrowser == null)
+                return;
+
+            if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                url = $"http://{url}";
+                _txtRemoteScreenUrl.Text = url;
+            }
+
+            try
+            {
+                _remoteScreenBrowser.Navigate(url);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Failed to open remote screen URL:\n\n{ex.Message}",
+                    "Remote Screen Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
+        }
+
+        private void OpenRemoteScreenExternal()
+        {
+            var url = _txtRemoteScreenUrl?.Text?.Trim();
+            if (string.IsNullOrWhiteSpace(url))
+                return;
+
+            if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                url = $"http://{url}";
+                _txtRemoteScreenUrl.Text = url;
+            }
+
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = url,
+                    UseShellExecute = true,
+                };
+                System.Diagnostics.Process.Start(psi);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Failed to open browser:\n\n{ex.Message}",
+                    "Remote Screen Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
         }
 
         #region Mode Polling

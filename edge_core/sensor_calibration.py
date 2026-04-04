@@ -244,11 +244,16 @@ class MagCalibrationSession:
             if self._zed:
                 try:
                     import pyzed.sl as sl
-                    store_status = self._zed.store_calibration()
-                    if store_status == sl.ERROR_CODE.SUCCESS:
-                        logger.info("Calibration parameters stored to camera EEPROM")
+                    if not hasattr(self._zed, "store_calibration"):
+                        logger.warning(
+                            "Camera SDK does not expose store_calibration(); EEPROM write unsupported"
+                        )
                     else:
-                        logger.warning(f"Failed to store calibration to EEPROM: {store_status}")
+                        store_status = self._zed.store_calibration()
+                        if store_status == sl.ERROR_CODE.SUCCESS:
+                            logger.info("Calibration parameters stored to camera EEPROM")
+                        else:
+                            logger.warning(f"Failed to store calibration to EEPROM: {store_status}")
                 except Exception as e:
                     logger.warning(f"EEPROM store error: {e}")
         else:
@@ -1128,15 +1133,22 @@ class IMUHeadingCalibration:
                 result.eeprom_store_attempted = True
                 try:
                     import pyzed.sl as sl
-                    store_status = self._zed.store_calibration()
-                    if store_status == sl.ERROR_CODE.SUCCESS:
-                        result.eeprom_store_success = True
-                        result.eeprom_store_detail = "stored_to_camera_eeprom"
-                        logger.info("IMU heading calibration stored to camera EEPROM")
-                    else:
+                    if not hasattr(self._zed, "store_calibration"):
                         result.eeprom_store_success = False
-                        result.eeprom_store_detail = str(store_status)
-                        logger.warning(f"Failed to store IMU heading calibration to EEPROM: {store_status}")
+                        result.eeprom_store_detail = "store_calibration_not_supported_by_pyzed"
+                        logger.warning(
+                            "IMU heading EEPROM write unsupported: pyzed Camera has no store_calibration()"
+                        )
+                    else:
+                        store_status = self._zed.store_calibration()
+                        if store_status == sl.ERROR_CODE.SUCCESS:
+                            result.eeprom_store_success = True
+                            result.eeprom_store_detail = "stored_to_camera_eeprom"
+                            logger.info("IMU heading calibration stored to camera EEPROM")
+                        else:
+                            result.eeprom_store_success = False
+                            result.eeprom_store_detail = str(store_status)
+                            logger.warning(f"Failed to store IMU heading calibration to EEPROM: {store_status}")
                 except Exception as e:
                     result.eeprom_store_success = False
                     result.eeprom_store_detail = str(e)

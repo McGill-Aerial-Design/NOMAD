@@ -16,6 +16,7 @@ import math
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import threading
 import time
@@ -4983,93 +4984,82 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             raise HTTPException(status_code=500, detail=str(e))
 
     @app.post("/api/calibration/imu/reset_biases", tags=["Calibration"])
-    async def reset_imu_biases(request: Request):
+    async def reset_imu_biases(
+        request: Request,
+        mode: str = Query(
+            "gyro",
+            description="Calibration mode: 'gyro' (static bias reset) or 'dynamic' (6-point dynamic calibration)",
+        ),
+    ):
         """
-        Reset IMU bias values stored in the ZED camera's internal EEPROM.
+        Run official ZED calibration tool for IMU drift correction.
 
-        This is equivalent to running 'ZED Sensor Calibration.exe --cimu' on
-        Windows. Required if camera orientation continues to drift even after
-        warmup. Removes stored bias values from the camera's non-volatile memory.
+        Uses Stereolabs CLI utility on Linux:
+        - mode=gyro    -> ZED_Calibration --calib_gyro
+        - mode=dynamic -> ZED_Calibration --calib_dynamic
         """
+        selected_mode = (mode or "gyro").strip().lower()
+        flag_by_mode = {
+            "gyro": "--calib_gyro",
+            "dynamic": "--calib_dynamic",
+        }
+
+        calib_flag = flag_by_mode.get(selected_mode)
+        if calib_flag is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid mode '{mode}'. Use 'gyro' or 'dynamic'.",
+            )
+
+        calib_tool = shutil.which("ZED_Calibration")
+        if not calib_tool:
+            raise HTTPException(
+                status_code=500,
+                detail="ZED_Calibration tool not found in PATH",
+            )
+
         try:
-            import pyzed.sl as sl
+            cmd = [calib_tool, calib_flag]
+            run_env = os.environ.copy()
+            if not run_env.get("DISPLAY"):
+                run_env["DISPLAY"] = os.environ.get("NOMAD_CAL_DISPLAY", ":1")
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600,
+                env=run_env,
+            )
 
-            zed = sl.Camera()
-            init_params = sl.InitParameters()
-            init_params.depth_mode = sl.DEPTH_MODE.NONE
-            init_params.camera_resolution = sl.RESOLUTION.VGA
-            init_params.camera_fps = 15
+            stdout = (proc.stdout or "").strip()
+            stderr = (proc.stderr or "").strip()
+            combined_output = "\n".join(part for part in [stdout, stderr] if part)
 
-            status = zed.open(init_params)
-            if status != sl.ERROR_CODE.SUCCESS:
+            if proc.returncode != 0:
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Failed to open ZED camera: {status}",
+                    detail=(
+                        f"ZED calibration failed ({selected_mode}) with code {proc.returncode}: "
+                        f"{combined_output or 'no output'}"
+                    ),
                 )
 
-            reset_status = zed.reset_calibration()
-            zed.close()
+            return {
+                "success": True,
+                "mode": selected_mode,
+                "message": f"ZED {selected_mode} calibration completed successfully",
+                "tool": os.path.basename(calib_tool),
+                "output": combined_output,
+            }
 
-            if reset_status == sl.ERROR_CODE.SUCCESS:
-                return {
-                    "success": True,
-                    "message": "IMU biases reset successfully. Camera EEPROM cleared.",
-                }
-            else:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to reset IMU biases: {reset_status}",
-                )
-
-        except ImportError:
-            raise HTTPException(status_code=500, detail="ZED SDK (pyzed) not installed")
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"IMU bias reset error: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
-
-    @app.post("/api/calibration/imu/reset_biases", tags=["Calibration"])
-    async def reset_imu_biases(request: Request):
-        """
-        Reset IMU bias values stored in the ZED camera's internal EEPROM.
-
-        This is equivalent to running 'ZED Sensor Calibration.exe --cimu' on
-        Windows. Required if camera orientation continues to drift even after
-        warmup. Removes stored bias values from the camera's non-volatile memory.
-        """
-        try:
-            import pyzed.sl as sl
-
-            zed = sl.Camera()
-            init_params = sl.InitParameters()
-            init_params.depth_mode = sl.DEPTH_MODE.NONE
-            init_params.camera_resolution = sl.RESOLUTION.VGA
-            init_params.camera_fps = 15
-
-            status = zed.open(init_params)
-            if status != sl.ERROR_CODE.SUCCESS:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to open ZED camera: {status}",
-                )
-
-            reset_status = zed.reset_calibration()
-            zed.close()
-
-            if reset_status == sl.ERROR_CODE.SUCCESS:
-                return {
-                    "success": True,
-                    "message": "IMU biases reset successfully. Camera EEPROM cleared.",
-                }
-            else:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to reset IMU biases: {reset_status}",
-                )
-
-        except ImportError:
-            raise HTTPException(status_code=500, detail="ZED SDK (pyzed) not installed")
+        except subprocess.TimeoutExpired:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"ZED calibration timed out ({selected_mode}). "
+                    "Ensure camera is connected and follow on-screen tool instructions."
+                ),
+            )
         except HTTPException:
             raise
         except Exception as e:
