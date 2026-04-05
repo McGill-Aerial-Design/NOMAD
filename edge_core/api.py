@@ -1021,6 +1021,7 @@ export RMW_FASTRTPS_TRANSPORT_SHARED_MEMORY_DISABLED=1
 # wrapper scripts will exit when their children die.
 pkill -f 'nomad_zed_nvblox\\.launch\\.py|zed_example\\.launch\\.py' 2>/dev/null || true
 pkill -f 'component_container' 2>/dev/null || true
+pkill -f 'controller_server|planner_server|smoother_server|behavior_server|bt_navigator|lifecycle_manager_navigation|waypoint_follower|velocity_smoother' 2>/dev/null || true
 pkill -f ros_http_bridge 2>/dev/null || true
 pkill -f 'target_localizer_node|target_localizer\\.launch\\.py' 2>/dev/null || true
 pkill -f 'servo_tf_publisher\.py|obstacle_distance_bridge\.py|nav2_goal_bridge\.py|robot_state_publisher|static_transform_publisher' 2>/dev/null || true
@@ -1227,9 +1228,9 @@ if [ ! -f "$NOMAD_LAUNCH" ]; then
     exit 2
 fi
 
-NAV2_FLAG=true
-if [ "$ENABLE_OD" = "true" ]; then
-    NAV2_FLAG=false
+NAV2_FLAG=false
+if [ "${{NOMAD_ENABLE_NAV2:-false}}" = "true" ] && [ "$ENABLE_OD" != "true" ]; then
+    NAV2_FLAG=true
 fi
 
 ros2 launch "$NOMAD_LAUNCH" enable_nav2:=$NAV2_FLAG enable_od:=$ENABLE_OD &

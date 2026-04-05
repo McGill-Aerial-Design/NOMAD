@@ -790,6 +790,7 @@ mkdir -p /home/mad/NOMAD/data/area_maps 2>/dev/null || true
 # container (without full container recreation).
 pkill -f 'nomad_zed_nvblox\.launch\.py|zed_camera\.launch\.py' 2>/dev/null || true
 pkill -f 'component_container' 2>/dev/null || true
+pkill -f 'controller_server|planner_server|smoother_server|behavior_server|bt_navigator|lifecycle_manager_navigation|waypoint_follower|velocity_smoother' 2>/dev/null || true
 pkill -f 'obstacle_distance_bridge\.py|nav2_goal_bridge\.py|servo_tf_publisher\.py' 2>/dev/null || true
 sleep 1
 
