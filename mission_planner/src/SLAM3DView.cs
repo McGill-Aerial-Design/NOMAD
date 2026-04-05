@@ -1451,11 +1451,11 @@ namespace NOMAD.MissionPlanner
         private void DrawHudOverlay(Graphics g)
         {
             float rollDeg, pitchDeg, yawDeg, vx, vy, vz;
-            rollDeg = (float)(_renderRollRaw * 180.0 / Math.PI);
-            pitchDeg = (float)(_renderPitchRaw * 180.0 / Math.PI);
-            yawDeg = (float)(_renderYawRaw * 180.0 / Math.PI);
             lock (_poseLock)
             {
+                rollDeg = (float)(_droneRollRaw * 180.0 / Math.PI);
+                pitchDeg = (float)(_dronePitchRaw * 180.0 / Math.PI);
+                yawDeg = (float)(_droneYawRaw * 180.0 / Math.PI);
                 vx = _droneVelX;
                 vy = _droneVelY;
                 vz = _droneVelZ;
@@ -1467,7 +1467,7 @@ namespace NOMAD.MissionPlanner
             int pad = 4;
 
             string[] lines = new string[7];
-            lines[0] = "POSE (ZED Optical)";
+            lines[0] = "POSE (RAW ZED WS)";
             lines[1] = $"  Roll:  {rollDeg,8:F2}°";
             lines[2] = $"  Pitch: {pitchDeg,8:F2}°";
             lines[3] = $"  Yaw:   {yawDeg,8:F2}°";
