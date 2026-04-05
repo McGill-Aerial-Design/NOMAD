@@ -45,11 +45,19 @@ def wrap_deg(delta: float) -> float:
     return delta
 
 
-def ros_optical_to_ned_deg(roll_ros: float, pitch_ros: float, yaw_ros: float):
-    # Must mirror bridge conversion in ros_http_bridge._handle_vio.
-    roll_ned = -pitch_ros
-    pitch_ned = roll_ros
-    yaw_ned = yaw_ros
+def ros_odom_to_ned_deg(roll_ros: float, pitch_ros: float, yaw_ros: float):
+    """Convert ROS REP-103 odom Euler angles to NED frame.
+    
+    REP-103: X-forward, Y-left, Z-up
+    NED:     X-north (forward), Y-east (right), Z-down
+    
+    Roll: same sign (both positive = right wing down)
+    Pitch: negate (ROS nose-up positive, NED nose-down positive)
+    Yaw: negate (ROS CCW positive, NED CW positive from above)
+    """
+    roll_ned = roll_ros
+    pitch_ned = -pitch_ros
+    yaw_ned = -yaw_ros
     return roll_ned, pitch_ned, yaw_ned
 
 
@@ -113,7 +121,7 @@ def main() -> int:
                         api_pitch = float(data.get("pitch", 0.0)) * 180.0 / math.pi
                         api_yaw = float(data.get("yaw", 0.0)) * 180.0 / math.pi
 
-                        od_roll_ned, od_pitch_ned, od_yaw_ned = ros_optical_to_ned_deg(
+                        od_roll_ned, od_pitch_ned, od_yaw_ned = ros_odom_to_ned_deg(
                             od.roll, od.pitch, od.yaw
                         )
 

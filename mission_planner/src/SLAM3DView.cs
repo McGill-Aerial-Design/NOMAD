@@ -156,7 +156,7 @@ namespace NOMAD.MissionPlanner
         private bool _statusPollInFlight;
         private const float ScanStopThresholdMps = 0.10f;
 
-        // ---- Drone pose (raw from WS, ZED optical/odom frame) ----
+        // ---- Drone pose (raw from WS, REP-103 odom frame: X-forward, Y-left, Z-up) ----
         private float _dronePosX, _dronePosY, _dronePosZ;
         private float _droneRollRaw, _dronePitchRaw, _droneYawRaw;
         private float _droneVelX, _droneVelY, _droneVelZ;
@@ -1188,12 +1188,17 @@ namespace NOMAD.MissionPlanner
             ZedToGL(posX, posY, posZ, out float glX, out float glY, out float glZ);
 
             // Drone body orientation from camera pose
-            // CORRECTED: ZED odom convention is standard aviation Euler (ZYX intrinsic):
-            //   roll (X-rotation) = rotation about forward axis (nose roll)
-            //   pitch (Y-rotation) = rotation about lateral axis (nose up/down)
-            //   yaw (Z-rotation) = rotation about vertical axis (heading)
-            // After position frame conversion (x,y,z)->(x,-y,-z), apply rotations correctly:
-            // Model geometry alignment: reverse yaw direction and add 180° so model nose matches true heading.
+            // Input is in ROS REP-103 odom frame (X-forward, Y-left, Z-up).
+            // Euler convention: roll=X, pitch=Y, yaw=Z (intrinsic ZYX).
+            // After position frame conversion with ZedToGL:
+            //   ROS X (forward) -> GL -Z (into screen)
+            //   ROS Y (left) -> GL -X
+            //   ROS Z (up) -> GL +Y
+            // Rotation mapping:
+            //   Yaw about Z(up) -> rotate about GL Y
+            //   Pitch about Y(left) -> rotate about GL X (sign may need attention)
+            //   Roll about X(forward) -> rotate about GL -Z = -GL.Z
+            // Model geometry alignment: add 180 deg so model nose matches true heading.
             float headingDeg = (float)(yawRaw * 180.0 / Math.PI) + _config.SlamHeadingOffsetDeg + 180f;
             float bodyPitchDeg = (float)(pitchRaw * 180.0 / Math.PI);
             float bodyRollDeg = (float)(rollRaw * 180.0 / Math.PI);

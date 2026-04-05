@@ -174,7 +174,7 @@ class VIOData:
     vz: float = 0.0
     confidence: float = 1.0
     source: str = "isaac_ros"
-    # Raw camera pose in odom frame (ZED odom topic, X-right, Y-down, Z-forward).
+    # Raw camera pose in odom frame (ZED odom topic, REP-103: X-forward, Y-left, Z-up).
     # This is the camera position, NOT the drone body. _get_drone_body_pose()
     # removes the servo pitch and mounting offset to get the true body pose.
     ros_x: float = 0.0
@@ -183,13 +183,13 @@ class VIOData:
     ros_roll: float = 0.0
     ros_pitch: float = 0.0
     ros_yaw: float = 0.0
-    # Body attitude in the same ROS optical basis as ros_* pose fields.
+    # Body attitude in the same ROS odom frame (REP-103) as ros_* pose fields.
     # This removes gimbal pitch so SLAM viewers can render airframe attitude
     # and apply camera tilt separately.
     body_roll: float = 0.0
     body_pitch: float = 0.0
     body_yaw: float = 0.0
-    frame_id: str = "ros_optical"  # Explicit frame identifier for all ros_* fields
+    frame_id: str = "ros_odom"  # Explicit frame identifier: REP-103 (X-fwd, Y-left, Z-up)
 
 
 @dataclass
@@ -649,7 +649,10 @@ class ROSHTTPBridge(Node):
             )
             self._drone_velocity_mps = vel_mag
 
-            # Keep raw ROS optical attitude for SLAM consumers.
+            # Extract Euler angles from the ZED odom quaternion.
+            # ZED ROS2 wrapper publishes /zed/zed_node/odom in REP-103 odom frame:
+            #   X-forward, Y-left, Z-up (standard ROS body frame convention).
+            # The quaternion represents zed_camera_link orientation in odom frame.
             ros_roll, ros_pitch, ros_yaw = self._quat_to_euler(
                 pose.orientation.x,
                 pose.orientation.y,
@@ -657,37 +660,47 @@ class ROSHTTPBridge(Node):
                 pose.orientation.w,
             )
 
-            # Roll follows raw ZED pose. Compensate only pitch for servo tilt;
-            # keep yaw from raw ZED pose.
+            # Body attitude: roll and yaw from raw ZED pose, pitch compensated for servo tilt.
+            # This allows SLAM viewers to render airframe attitude and apply camera tilt separately.
             body_roll = self._wrap_angle_rad(ros_roll)
             body_pitch = self._wrap_angle_rad(ros_pitch - self._gimbal_pitch_rad)
             body_yaw = self._wrap_angle_rad(ros_yaw)
 
-            # Convert attitude to NED so primary pose fields match position frame.
-            roll, pitch, yaw = self._quat_to_ned_euler(
-                pose.orientation.x,
-                pose.orientation.y,
-                pose.orientation.z,
-                pose.orientation.w,
-            )
+            # Convert from ROS odom frame (REP-103) to NED frame for MAVLink.
+            # REP-103: X-forward, Y-left, Z-up
+            # NED:     X-north (forward), Y-east (right), Z-down
+            # Position mapping:
+            ned_x = pose.position.x      # Forward -> North
+            ned_y = -pose.position.y     # Left -> East (negate)
+            ned_z = -pose.position.z     # Up -> Down (negate)
+            # Attitude mapping:
+            # Roll about X (forward) - same sign (both positive = right wing down)
+            # Pitch about Y - left in REP-103, right in NED - negate (ROS nose-up vs NED nose-down)
+            # Yaw about Z - up in REP-103, down in NED - negate (ROS CCW vs NED CW from above)
+            ned_roll = ros_roll
+            ned_pitch = -ros_pitch
+            ned_yaw = -ros_yaw
+            # Velocity in odom message is in child frame (body), following REP-103.
+            # Convert to NED body velocities:
+            ned_vx = twist.linear.x      # Forward -> North
+            ned_vy = -twist.linear.y     # Left -> East (negate)
+            ned_vz = -twist.linear.z     # Up -> Down (negate)
 
-            # Convert from ZED camera frame to NED frame
-            # ZED odom: X-right, Y-down, Z-forward (camera/OpenCV convention)
-            # NED: X-north(forward), Y-east(right), Z-down
             vio = VIOData(
                 timestamp=time.time(),
-                x=pose.position.z,   # Forward -> North
-                y=pose.position.x,   # Right -> East
-                z=pose.position.y,   # Down -> Down (ZED Y-down = NED Z-down)
-                roll=roll,
-                pitch=pitch,
-                yaw=yaw,
-                vx=twist.linear.z,
-                vy=twist.linear.x,
-                vz=twist.linear.y,
+                x=ned_x,
+                y=ned_y,
+                z=ned_z,
+                roll=ned_roll,
+                pitch=ned_pitch,
+                yaw=ned_yaw,
+                vx=ned_vx,
+                vy=ned_vy,
+                vz=ned_vz,
                 confidence=confidence,
                 source="isaac_ros",
                 # Also store the raw odom pose for SLAM 3D (same frame as mesh)
+                # These stay in ROS odom frame (REP-103) for consistency with nvblox mesh
                 ros_x=pose.position.x,
                 ros_y=pose.position.y,
                 ros_z=pose.position.z,
@@ -1552,7 +1565,7 @@ class ROSHTTPBridge(Node):
                 "total_voxels": n_pts,
                 "sent_voxels": len(voxels),
                 "timestamp": now,
-                "frame_id": "ros_optical",  # Same frame as mesh vertices and drone_position/attitude
+                "frame_id": "odom",  # Same frame as nvblox mesh vertices and drone_position/attitude
                 "clear": False,
             }
 
@@ -1757,7 +1770,7 @@ class ROSHTTPBridge(Node):
         mesh_data = {
             "mode": mode,
             "timestamp": timestamp,
-            "frame_id": "ros_optical",
+            "frame_id": "odom",
             "clear": False,
         }
         mesh_data.update({"voxels": [], "voxel_size": 0.0, "total_voxels": 0, "sent_voxels": 0})

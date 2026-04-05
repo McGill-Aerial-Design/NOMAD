@@ -182,8 +182,8 @@ class VIOUpdateRequest(BaseModel):
     body_roll: Optional[float] = None
     body_pitch: Optional[float] = None
     body_yaw: Optional[float] = None
-    # Coordinate frame for ros_* pose fields (ZED optical frame by default)
-    frame_id: str = "ros_optical"
+    # Coordinate frame for ros_* pose fields: REP-103 odom frame (X-forward, Y-left, Z-up)
+    frame_id: str = "ros_odom"
 
 
 class VIOAreaSaveRequest(BaseModel):
@@ -526,7 +526,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
             }
 
             # Store ROS-frame pose for SLAM 3D WebSocket (same frame as mesh vertices)
-            # Always in "ros_optical" frame (ZED camera: X-right, Y-down, Z-forward)
+            # REP-103 odom frame: X-forward, Y-left, Z-up (standard ROS convention)
             app.state.slam_vio_ros_frame = {
                 "x": vio_request.ros_x,
                 "y": vio_request.ros_y,
@@ -538,7 +538,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 "body_pitch": vio_request.body_pitch,
                 "body_yaw": vio_request.body_yaw,
                 "timestamp": vio_request.timestamp,
-                "frame_id": getattr(vio_request, "frame_id", "ros_optical"),
+                "frame_id": getattr(vio_request, "frame_id", "ros_odom"),
             }
 
             # Add to trajectory
@@ -1670,7 +1670,7 @@ wait
         - type="mesh": mesh delta when new data arrives (only changed blocks/voxels)
 
         The client (SLAM3DView) connects once and receives a continuous stream.
-        All poses are in "ros_optical" frame (ZED camera: X-right, Y-down, Z-forward).
+        All poses are in REP-103 odom frame (X-forward, Y-left, Z-up).
         """
         if not await _validate_ws_token(websocket):
             return
@@ -1686,7 +1686,7 @@ wait
         try:
             while True:
                 frame = {"type": "pose", "ts": frame_count}
-                frame_id = "ros_optical"
+                frame_id = "ros_odom"
                 has_position = False
                 has_attitude = False
 
@@ -1708,7 +1708,7 @@ wait
 
                 # Fall back to ROS-frame VIO for pose (used for pose-only frames
                 # and for mesh frames that only include one of position/attitude)
-                # frame_id is always "ros_optical" for all pose data
+                # frame_id is always "ros_odom" (REP-103) for all pose data
                 ros_vio = _get_vio_snapshot()["slam_vio_ros_frame"]
                 if ros_vio:
                     frame_id = ros_vio.get("frame_id", frame_id)
@@ -4820,7 +4820,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 "block_count": item_count,
                 "total_blocks": total_items,
                 "mode": mode,
-                "frame_id": mesh_data.get("frame_id", "ros_optical"),
+                "frame_id": mesh_data.get("frame_id", "odom"),
             }
 
             # Store drone pose from mesh data (from TF lookup in ros_http_bridge)
