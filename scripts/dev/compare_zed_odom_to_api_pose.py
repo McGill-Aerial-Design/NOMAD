@@ -45,6 +45,14 @@ def wrap_deg(delta: float) -> float:
     return delta
 
 
+def ros_optical_to_ned_deg(roll_ros: float, pitch_ros: float, yaw_ros: float):
+    # Must mirror bridge conversion in ros_http_bridge._handle_vio.
+    roll_ned = -pitch_ros
+    pitch_ned = roll_ros
+    yaw_ned = yaw_ros
+    return roll_ned, pitch_ned, yaw_ned
+
+
 @dataclass
 class OdomSample:
     t_wall: float
@@ -105,9 +113,13 @@ def main() -> int:
                         api_pitch = float(data.get("pitch", 0.0)) * 180.0 / math.pi
                         api_yaw = float(data.get("yaw", 0.0)) * 180.0 / math.pi
 
-                        roll_d.append(wrap_deg(api_roll - od.roll))
-                        pitch_d.append(wrap_deg(api_pitch - od.pitch))
-                        yaw_d.append(wrap_deg(api_yaw - od.yaw))
+                        od_roll_ned, od_pitch_ned, od_yaw_ned = ros_optical_to_ned_deg(
+                            od.roll, od.pitch, od.yaw
+                        )
+
+                        roll_d.append(wrap_deg(api_roll - od_roll_ned))
+                        pitch_d.append(wrap_deg(api_pitch - od_pitch_ned))
+                        yaw_d.append(wrap_deg(api_yaw - od_yaw_ned))
                         samples += 1
             except Exception:
                 pass
