@@ -175,6 +175,7 @@
     <Compile Include="SLAM3D\Rendering\VoxelRenderer.cs" />
     <Compile Include="SLAM3D\Rendering\TrajectoryRenderer.cs" />
     <Compile Include="SLAM3D\Rendering\DetectionRenderer.cs" />
+    <Compile Include="SLAM3D\Rendering\VoxelMeshBuilder.cs" />
     <Compile Include="SnapshotManager.cs" />
     <Compile Include="AIDescriptionService.cs" />
     <Compile Include="GoogleDriveUploadService.cs" />

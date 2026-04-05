@@ -25,11 +25,11 @@ namespace NOMAD.MissionPlanner.SLAM3D.Data
         /// <remarks>
         /// ROS: X-forward, Y-left, Z-up
         /// OpenGL: X-right, Y-up, Z-out (toward viewer)
-        /// Mapping: GL_X = -ROS_Y, GL_Y = ROS_Z, GL_Z = ROS_X
+        /// Mapping: GL_X = -ROS_Y, GL_Y = ROS_Z, GL_Z = -ROS_X
         /// </remarks>
         public static (float x, float y, float z) RosToOpenGL(float rosX, float rosY, float rosZ)
         {
-            return (-rosY, rosZ, rosX);
+            return (-rosY, rosZ, -rosX);
         }
         
         /// <summary>
@@ -37,7 +37,7 @@ namespace NOMAD.MissionPlanner.SLAM3D.Data
         /// </summary>
         public static (float x, float y, float z) OpenGLToRos(float glX, float glY, float glZ)
         {
-            return (glZ, -glX, glY);
+            return (-glZ, -glX, glY);
         }
         
         /// <summary>

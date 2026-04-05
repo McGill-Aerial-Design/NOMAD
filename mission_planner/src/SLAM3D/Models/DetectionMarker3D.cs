@@ -31,7 +31,7 @@ namespace NOMAD.MissionPlanner.SLAM3D.Models
         public string HsvColor { get; set; }
         
         /// <summary>Whether the color matches expected target.</summary>
-        public bool ColorMatch { get; set; }
+        public bool ColorMatch { get; set; } = true;
         
         /// <summary>Whether this detection needs manual review.</summary>
         public bool NeedsReview { get; set; }

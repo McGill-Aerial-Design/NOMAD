@@ -1,6 +1,9 @@
 // ============================================================
 // DroneRenderer.cs - Draws the drone model in 3D view
 // ============================================================
+// Supports tricopter and quadcopter frames with servo camera
+// mount, avoidance envelope, and configurable dimensions.
+// ============================================================
 
 using System;
 using OpenTK.Graphics.OpenGL;
@@ -8,281 +11,226 @@ using OpenTK.Graphics.OpenGL;
 namespace NOMAD.MissionPlanner.SLAM3D.Rendering
 {
     /// <summary>
-    /// Renders the drone model (tricopter) with orientation.
+    /// Renders the drone model with orientation, servo camera, and avoidance envelope.
+    /// Supports tricopter and quadcopter frame types.
     /// </summary>
     public class DroneRenderer
     {
         // ==================== Configuration ====================
-        
+
         /// <summary>Drone body length in meters.</summary>
-        public float Length { get; set; } = 0.35f;
-        
+        public float LengthM { get; set; } = 0.35f;
+
         /// <summary>Drone body width in meters.</summary>
-        public float Width { get; set; } = 0.35f;
-        
+        public float WidthM { get; set; } = 0.35f;
+
         /// <summary>Drone body height in meters.</summary>
-        public float Height { get; set; } = 0.08f;
-        
-        /// <summary>Motor arm length in meters.</summary>
-        public float ArmLength { get; set; } = 0.18f;
-        
-        /// <summary>Motor radius in meters.</summary>
-        public float MotorRadius { get; set; } = 0.03f;
-        
+        public float HeightM { get; set; } = 0.08f;
+
         /// <summary>Heading offset in degrees (for camera vs drone orientation).</summary>
         public float HeadingOffsetDeg { get; set; } = 0f;
-        
-        /// <summary>Show heading indicator arrow.</summary>
-        public bool ShowHeadingIndicator { get; set; } = true;
-        
-        /// <summary>Scale factor for entire model.</summary>
-        public float Scale { get; set; } = 1.0f;
-        
+
+        /// <summary>Frame type: "Tricopter" or "Quadcopter".</summary>
+        public string FrameType { get; set; } = "Tricopter";
+
+        /// <summary>Camera forward offset from center in meters.</summary>
+        public float CameraForwardOffsetM { get; set; } = 0f;
+
+        /// <summary>Camera downward offset from center in meters.</summary>
+        public float CameraDownOffsetM { get; set; } = 0f;
+
+        /// <summary>Show avoidance envelope wireframe around drone.</summary>
+        public bool ShowAvoidanceEnvelope { get; set; } = true;
+
+        /// <summary>Avoidance envelope padding in meters.</summary>
+        public float AvoidanceEnvelopePadM { get; set; } = 0.1f;
+
         // ==================== Public Methods ====================
-        
+
         /// <summary>
-        /// Draw the drone at the specified position and orientation.
+        /// Draw the drone at the specified GL position with ROS attitude and servo angle.
+        /// Position should already be in OpenGL frame.
         /// </summary>
-        /// <param name="x">X position (OpenGL frame)</param>
-        /// <param name="y">Y position (OpenGL frame)</param>
-        /// <param name="z">Z position (OpenGL frame)</param>
-        /// <param name="roll">Roll angle in radians</param>
-        /// <param name="pitch">Pitch angle in radians</param>
-        /// <param name="yaw">Yaw angle in radians</param>
-        public void Draw(float x, float y, float z, float roll, float pitch, float yaw)
+        /// <param name="glX">X position (OpenGL frame)</param>
+        /// <param name="glY">Y position (OpenGL frame)</param>
+        /// <param name="glZ">Z position (OpenGL frame)</param>
+        /// <param name="yawRad">Raw yaw in radians (ROS frame)</param>
+        /// <param name="pitchRad">Raw pitch in radians (ROS frame)</param>
+        /// <param name="rollRad">Raw roll in radians (ROS frame)</param>
+        /// <param name="servoDeg">Servo angle in degrees (90=level)</param>
+        public void Draw(float glX, float glY, float glZ,
+                         float yawRad, float pitchRad, float rollRad,
+                         float servoDeg = 90f)
         {
+            // Rotation mapping: ROS → OpenGL
+            // Model geometry alignment: add 180 deg so model nose matches true heading.
+            float headingDeg = (float)(yawRad * 180.0 / Math.PI) + HeadingOffsetDeg + 180f;
+            float bodyPitchDeg = (float)(pitchRad * 180.0 / Math.PI);
+            float bodyRollDeg = (float)(rollRad * 180.0 / Math.PI);
+
+            GL.Disable(EnableCap.Lighting);
             GL.PushMatrix();
-            
-            // Position
-            GL.Translate(x, y, z);
-            
-            // Rotation (apply heading offset, then yaw, pitch, roll)
-            float totalYaw = yaw + HeadingOffsetDeg * MathHelper.PI / 180f;
-            float yawDeg = totalYaw * 180f / MathHelper.PI;
-            float pitchDeg = pitch * 180f / MathHelper.PI;
-            float rollDeg = roll * 180f / MathHelper.PI;
-            
-            GL.Rotate(yawDeg, 0, 1, 0);   // Yaw (around Y-up)
-            GL.Rotate(pitchDeg, 1, 0, 0); // Pitch (around X)
-            GL.Rotate(rollDeg, 0, 0, 1);  // Roll (around Z-forward)
-            
-            // Scale
-            GL.Scale(Scale, Scale, Scale);
-            
-            // Draw components
-            DrawBody();
-            DrawMotorArms();
-            DrawMotors();
-            
-            if (ShowHeadingIndicator)
+            GL.Translate(glX, glY, glZ);
+            GL.Rotate(headingDeg, 0f, 1f, 0f);
+            GL.Rotate(bodyPitchDeg, 1f, 0f, 0f);
+            GL.Rotate(bodyRollDeg, 0f, 0f, 1f);
+
+            // Draw body based on frame type
+            if (FrameType == "Quadcopter")
+                DrawQuadcopterBody();
+            else
+                DrawTricopterBody();
+
+            // Camera servo mount
+            DrawServoCamera(servoDeg);
+
+            // Avoidance envelope
+            if (ShowAvoidanceEnvelope)
             {
-                DrawHeadingIndicator();
+                float pad = AvoidanceEnvelopePadM;
+                GL.Color4(0f, 0.86f, 0.86f, 0.2f);
+                DrawWireBox(0, 0, 0, LengthM + pad * 2, HeightM + pad * 2, WidthM + pad * 2);
             }
-            
+
+            GL.Enable(EnableCap.Lighting);
             GL.PopMatrix();
         }
-        
-        // ==================== Private Methods ====================
-        
-        private void DrawBody()
+
+        // ==================== Private: Frame Types ====================
+
+        private void DrawTricopterBody()
         {
-            float hx = Length / 2;
-            float hy = Height / 2;
-            float hz = Width / 2;
-            
-            // Main body - dark gray
-            GL.Color3(0.3f, 0.3f, 0.35f);
-            
-            GL.Begin(PrimitiveType.Quads);
-            
-            // Top
-            GL.Normal3(0, 1, 0);
-            GL.Vertex3(-hx, hy, -hz);
-            GL.Vertex3(hx, hy, -hz);
-            GL.Vertex3(hx, hy, hz);
-            GL.Vertex3(-hx, hy, hz);
-            
-            // Bottom
-            GL.Normal3(0, -1, 0);
-            GL.Vertex3(-hx, -hy, hz);
-            GL.Vertex3(hx, -hy, hz);
-            GL.Vertex3(hx, -hy, -hz);
-            GL.Vertex3(-hx, -hy, -hz);
-            
-            // Front (positive X)
-            GL.Color3(0.2f, 0.5f, 0.2f); // Green tint for front
-            GL.Normal3(1, 0, 0);
-            GL.Vertex3(hx, -hy, -hz);
-            GL.Vertex3(hx, -hy, hz);
-            GL.Vertex3(hx, hy, hz);
-            GL.Vertex3(hx, hy, -hz);
-            
-            // Back
-            GL.Color3(0.3f, 0.3f, 0.35f);
-            GL.Normal3(-1, 0, 0);
-            GL.Vertex3(-hx, -hy, hz);
-            GL.Vertex3(-hx, -hy, -hz);
-            GL.Vertex3(-hx, hy, -hz);
-            GL.Vertex3(-hx, hy, hz);
-            
-            // Right
-            GL.Normal3(0, 0, 1);
-            GL.Vertex3(-hx, -hy, hz);
-            GL.Vertex3(-hx, hy, hz);
-            GL.Vertex3(hx, hy, hz);
-            GL.Vertex3(hx, -hy, hz);
-            
-            // Left
-            GL.Normal3(0, 0, -1);
-            GL.Vertex3(hx, -hy, -hz);
-            GL.Vertex3(hx, hy, -hz);
-            GL.Vertex3(-hx, hy, -hz);
-            GL.Vertex3(-hx, -hy, -hz);
-            
-            GL.End();
-        }
-        
-        private void DrawMotorArms()
-        {
-            float armWidth = 0.02f;
-            float armHeight = 0.015f;
-            
-            GL.Color3(0.25f, 0.25f, 0.25f);
-            
-            // Front-right arm
-            DrawArm(Length / 2, 0, Width / 4, 30f, armWidth, armHeight);
-            
+            GL.Color3(0f, 0.86f, 0.86f); // cyan
+
+            // Central body wireframe
+            DrawWireBox(0, 0, 0, WidthM * 0.3f, HeightM, LengthM * 0.4f);
+
             // Front-left arm
-            DrawArm(Length / 2, 0, -Width / 4, -30f, armWidth, armHeight);
-            
-            // Rear arm (center for tricopter)
-            DrawArm(-Length / 2, 0, 0, 180f, armWidth, armHeight);
+            float frontX = WidthM * 0.4f;
+            float frontZ = LengthM * 0.35f;
+            GL.Begin(PrimitiveType.Lines);
+            GL.Vertex3(0, 0, 0); GL.Vertex3(-frontX, 0, frontZ);
+            GL.End();
+
+            // Front-right arm
+            GL.Begin(PrimitiveType.Lines);
+            GL.Vertex3(0, 0, 0); GL.Vertex3(frontX, 0, frontZ);
+            GL.End();
+
+            // Rear arm
+            float rearZ = -LengthM * 0.4f;
+            GL.Begin(PrimitiveType.Lines);
+            GL.Vertex3(0, 0, 0); GL.Vertex3(0, 0, rearZ);
+            GL.End();
+
+            // Motor discs
+            float motorR = Math.Min(LengthM, WidthM) * 0.15f;
+            DrawMotorDisc(frontX, 0, frontZ, motorR);
+            DrawMotorDisc(-frontX, 0, frontZ, motorR);
+            DrawMotorDisc(0, 0, rearZ, motorR);
+
+            DrawForwardIndicator();
         }
-        
-        private void DrawArm(float startX, float startY, float startZ, float angleDeg, float width, float height)
+
+        private void DrawQuadcopterBody()
+        {
+            GL.Color3(1f, 0.65f, 0f); // orange
+
+            // Central body wireframe
+            DrawWireBox(0, 0, 0, WidthM * 0.3f, HeightM, LengthM * 0.3f);
+
+            // X configuration arms
+            float armAngle = 45f * (float)Math.PI / 180f;
+            float cosA = (float)Math.Cos(armAngle);
+            float sinA = (float)Math.Sin(armAngle);
+
+            float flX = -WidthM * 0.4f * cosA, flZ = LengthM * 0.35f * sinA;
+            float frX = WidthM * 0.4f * cosA, frZ = LengthM * 0.35f * sinA;
+            float rlX = -WidthM * 0.4f * cosA, rlZ = -LengthM * 0.35f * sinA;
+            float rrX = WidthM * 0.4f * cosA, rrZ = -LengthM * 0.35f * sinA;
+
+            GL.Begin(PrimitiveType.Lines);
+            GL.Vertex3(0, 0, 0); GL.Vertex3(flX, 0, flZ);
+            GL.Vertex3(0, 0, 0); GL.Vertex3(frX, 0, frZ);
+            GL.Vertex3(0, 0, 0); GL.Vertex3(rlX, 0, rlZ);
+            GL.Vertex3(0, 0, 0); GL.Vertex3(rrX, 0, rrZ);
+            GL.End();
+
+            // Motor discs
+            float motorR = Math.Min(LengthM, WidthM) * 0.15f;
+            DrawMotorDisc(flX, 0, flZ, motorR);
+            DrawMotorDisc(frX, 0, frZ, motorR);
+            DrawMotorDisc(rlX, 0, rlZ, motorR);
+            DrawMotorDisc(rrX, 0, rrZ, motorR);
+
+            DrawForwardIndicator();
+        }
+
+        // ==================== Private: Sub-components ====================
+
+        private void DrawServoCamera(float servoDeg)
         {
             GL.PushMatrix();
-            GL.Translate(startX, startY, startZ);
-            GL.Rotate(angleDeg, 0, 1, 0);
-            
-            float hw = width / 2;
-            float hh = height / 2;
-            
-            GL.Begin(PrimitiveType.Quads);
-            
-            // Top
-            GL.Vertex3(0, hh, -hw);
-            GL.Vertex3(ArmLength, hh, -hw);
-            GL.Vertex3(ArmLength, hh, hw);
-            GL.Vertex3(0, hh, hw);
-            
-            // Bottom
-            GL.Vertex3(0, -hh, hw);
-            GL.Vertex3(ArmLength, -hh, hw);
-            GL.Vertex3(ArmLength, -hh, -hw);
-            GL.Vertex3(0, -hh, -hw);
-            
-            // Front
-            GL.Vertex3(ArmLength, -hh, -hw);
-            GL.Vertex3(ArmLength, -hh, hw);
-            GL.Vertex3(ArmLength, hh, hw);
-            GL.Vertex3(ArmLength, hh, -hw);
-            
-            // Sides
-            GL.Vertex3(0, -hh, hw);
-            GL.Vertex3(0, hh, hw);
-            GL.Vertex3(ArmLength, hh, hw);
-            GL.Vertex3(ArmLength, -hh, hw);
-            
-            GL.Vertex3(ArmLength, -hh, -hw);
-            GL.Vertex3(ArmLength, hh, -hw);
-            GL.Vertex3(0, hh, -hw);
-            GL.Vertex3(0, -hh, -hw);
-            
+            GL.Translate(0, -CameraDownOffsetM, CameraForwardOffsetM);
+            // Servo tilts camera: rotation around X (lateral axis in body frame)
+            // servo=90 is level, >90 tilts up
+            GL.Rotate(90f - servoDeg, 1f, 0f, 0f);
+
+            // Camera box (yellow)
+            GL.Color3(0.9f, 0.85f, 0.2f);
+            DrawWireBox(0.04f * 0.3f, 0, 0, 0.04f, 0.025f, 0.03f);
+
+            // Camera look direction (green)
+            GL.Color3(0.2f, 1f, 0.2f);
+            GL.Begin(PrimitiveType.Lines);
+            GL.Vertex3(0, 0, 0);
+            GL.Vertex3(0, 0, 0.15f);
             GL.End();
+
             GL.PopMatrix();
         }
-        
-        private void DrawMotors()
+
+        private void DrawForwardIndicator()
         {
-            // Motor positions (tricopter layout)
-            float frontX = Length / 2 + ArmLength * MathHelper.Cos(30f * MathHelper.PI / 180f);
-            float frontZ = ArmLength * MathHelper.Sin(30f * MathHelper.PI / 180f);
-            float rearX = -Length / 2 - ArmLength;
-            
-            // Front-right motor
-            DrawMotor(frontX, Height / 2 + 0.01f, frontZ + Width / 4);
-            
-            // Front-left motor
-            DrawMotor(frontX, Height / 2 + 0.01f, -frontZ - Width / 4);
-            
-            // Rear motor
-            DrawMotor(rearX, Height / 2 + 0.01f, 0);
-        }
-        
-        private void DrawMotor(float x, float y, float z)
-        {
-            const int segments = 12;
-            
-            GL.PushMatrix();
-            GL.Translate(x, y, z);
-            
-            // Motor body
-            GL.Color3(0.2f, 0.2f, 0.2f);
-            GL.Begin(PrimitiveType.TriangleFan);
-            GL.Vertex3(0, 0.02f, 0);
-            for (int i = 0; i <= segments; i++)
-            {
-                float angle = i * 2 * MathHelper.PI / segments;
-                GL.Vertex3(MotorRadius * MathHelper.Cos(angle), 0, MotorRadius * MathHelper.Sin(angle));
-            }
+            GL.Color3(1f, 0.3f, 0.3f);
+            GL.LineWidth(2f);
+            GL.Begin(PrimitiveType.Lines);
+            GL.Vertex3(0, 0, 0);
+            GL.Vertex3(0, 0, LengthM * 0.6f);
             GL.End();
-            
-            // Prop disc (translucent)
-            GL.Enable(EnableCap.Blend);
-            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
-            GL.Color4(0.5f, 0.5f, 0.5f, 0.3f);
-            
-            float propRadius = MotorRadius * 3;
-            GL.Begin(PrimitiveType.TriangleFan);
-            GL.Vertex3(0, 0.025f, 0);
-            for (int i = 0; i <= segments * 2; i++)
-            {
-                float angle = i * 2 * MathHelper.PI / (segments * 2);
-                GL.Vertex3(propRadius * MathHelper.Cos(angle), 0.025f, propRadius * MathHelper.Sin(angle));
-            }
-            GL.End();
-            
-            GL.Disable(EnableCap.Blend);
-            GL.PopMatrix();
+            GL.LineWidth(1f);
         }
-        
-        private void DrawHeadingIndicator()
+
+        // ==================== Private: Primitives ====================
+
+        private static void DrawWireBox(float cx, float cy, float cz, float sx, float sy, float sz)
         {
-            // Arrow pointing forward (positive X in drone frame)
-            float arrowLength = Length * 0.8f;
-            float arrowWidth = 0.02f;
-            float arrowHeadLength = 0.06f;
-            float arrowHeadWidth = 0.05f;
-            
-            GL.Color3(1.0f, 0.3f, 0.3f); // Red arrow
-            
-            GL.Begin(PrimitiveType.Triangles);
-            
-            // Arrow shaft
-            GL.Vertex3(0, Height / 2 + 0.01f, -arrowWidth);
-            GL.Vertex3(arrowLength - arrowHeadLength, Height / 2 + 0.01f, -arrowWidth);
-            GL.Vertex3(arrowLength - arrowHeadLength, Height / 2 + 0.01f, arrowWidth);
-            
-            GL.Vertex3(0, Height / 2 + 0.01f, -arrowWidth);
-            GL.Vertex3(arrowLength - arrowHeadLength, Height / 2 + 0.01f, arrowWidth);
-            GL.Vertex3(0, Height / 2 + 0.01f, arrowWidth);
-            
-            // Arrow head
-            GL.Vertex3(arrowLength - arrowHeadLength, Height / 2 + 0.01f, -arrowHeadWidth);
-            GL.Vertex3(arrowLength, Height / 2 + 0.01f, 0);
-            GL.Vertex3(arrowLength - arrowHeadLength, Height / 2 + 0.01f, arrowHeadWidth);
-            
+            float hx = sx / 2, hy = sy / 2, hz = sz / 2;
+            GL.Begin(PrimitiveType.Lines);
+            for (int i = 0; i < 2; i++)
+            {
+                float y = (i == 0) ? cy - hy : cy + hy;
+                GL.Vertex3(cx - hx, y, cz - hz); GL.Vertex3(cx + hx, y, cz - hz);
+                GL.Vertex3(cx + hx, y, cz - hz); GL.Vertex3(cx + hx, y, cz + hz);
+                GL.Vertex3(cx + hx, y, cz + hz); GL.Vertex3(cx - hx, y, cz + hz);
+                GL.Vertex3(cx - hx, y, cz + hz); GL.Vertex3(cx - hx, y, cz - hz);
+            }
+            GL.Vertex3(cx - hx, cy - hy, cz - hz); GL.Vertex3(cx - hx, cy + hy, cz - hz);
+            GL.Vertex3(cx + hx, cy - hy, cz - hz); GL.Vertex3(cx + hx, cy + hy, cz - hz);
+            GL.Vertex3(cx + hx, cy - hy, cz + hz); GL.Vertex3(cx + hx, cy + hy, cz + hz);
+            GL.Vertex3(cx - hx, cy - hy, cz + hz); GL.Vertex3(cx - hx, cy + hy, cz + hz);
+            GL.End();
+        }
+
+        private static void DrawMotorDisc(float cx, float cy, float cz, float radius)
+        {
+            GL.Begin(PrimitiveType.LineLoop);
+            for (int i = 0; i < 12; i++)
+            {
+                float angle = (float)(i * 2 * Math.PI / 12);
+                GL.Vertex3(cx + radius * (float)Math.Cos(angle), cy,
+                           cz + radius * (float)Math.Sin(angle));
+            }
             GL.End();
         }
     }
