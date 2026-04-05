@@ -159,6 +159,22 @@
     <Compile Include="NotificationService.cs" />
     <Compile Include="ServiceControlPanel.cs" />
     <Compile Include="SLAM3DView.cs" />
+    <!-- SLAM3D Refactored Components -->
+    <Compile Include="SLAM3D\MathHelper.cs" />
+    <Compile Include="SLAM3D\SLAM3DManager.cs" />
+    <Compile Include="SLAM3D\Models\MeshDataModel.cs" />
+    <Compile Include="SLAM3D\Models\DetectionMarker3D.cs" />
+    <Compile Include="SLAM3D\Models\CameraViewMode.cs" />
+    <Compile Include="SLAM3D\Data\PoseState.cs" />
+    <Compile Include="SLAM3D\Data\VoxelStorage.cs" />
+    <Compile Include="SLAM3D\Data\CoordinateConverter.cs" />
+    <Compile Include="SLAM3D\Network\WebSocketClient.cs" />
+    <Compile Include="SLAM3D\Camera\CameraController.cs" />
+    <Compile Include="SLAM3D\Rendering\DroneRenderer.cs" />
+    <Compile Include="SLAM3D\Rendering\GridRenderer.cs" />
+    <Compile Include="SLAM3D\Rendering\VoxelRenderer.cs" />
+    <Compile Include="SLAM3D\Rendering\TrajectoryRenderer.cs" />
+    <Compile Include="SLAM3D\Rendering\DetectionRenderer.cs" />
     <Compile Include="SnapshotManager.cs" />
     <Compile Include="AIDescriptionService.cs" />
     <Compile Include="GoogleDriveUploadService.cs" />
