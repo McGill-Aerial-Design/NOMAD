@@ -940,6 +940,11 @@ def create_app(state_manager: StateManager) -> FastAPI:
         """
         container = "nomad_isaac_ros"
 
+        if not hasattr(app.state, "slam_mesh_lock"):
+            app.state.slam_mesh_lock = threading.Lock()
+        if not hasattr(app.state, "slam_mesh_data"):
+            app.state.slam_mesh_data = {}
+
         with app.state.slam_mesh_lock:
             previous_mesh_ts = (
                 app.state.slam_mesh_data.get("received_at")
