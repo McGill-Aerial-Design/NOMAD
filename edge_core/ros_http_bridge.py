@@ -50,12 +50,14 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped, Twist
 from std_msgs.msg import Float32, Float32MultiArray
 
-# sensor_msgs for image metadata and HSV color verification
+# sensor_msgs for image metadata, HSV color verification, and IMU data
 try:
-    from sensor_msgs.msg import CameraInfo, Image
+    from sensor_msgs.msg import CameraInfo, Image, Imu
     IMAGE_AVAILABLE = True
+    IMU_AVAILABLE = True
 except ImportError:
     IMAGE_AVAILABLE = False
+    IMU_AVAILABLE = False
 
 # OpenCV + numpy for HSV ROI verification
 try:
@@ -246,6 +248,7 @@ class ROSHTTPBridge(Node):
         host: str = "172.17.0.1",
         port: int = 8000,
         vio_topic: str = "/zed/zed_node/odom",  # Default to ZED odom
+        imu_topic: str = "/zed/zed_node/imu/data",  # Calibrated IMU for attitude
         cmd_vel_topic: str = "/cmd_vel",         # Nav2 velocity commands
         mesh_topic: str = "/nvblox_node/color_layer_marker",   # Nvblox marker topic
         mesh_output_mode: str = "voxel",         # Runtime-selectable output mode: voxel-only
@@ -256,6 +259,7 @@ class ROSHTTPBridge(Node):
         enable_mesh: bool = True,                # Enable mesh forwarding
         enable_servo: bool = True,               # Enable servo control forwarding
         enable_detections: bool = True,          # Enable object detection forwarding
+        use_imu_attitude: bool = True,           # Use IMU for gravity-aligned attitude (vs VIO odom)
         high_rate_transport: str = "zmq",       # High-rate stream transport: zmq/http/both (zmq preferred, HTTP fallback auto-activates)
         high_rate_zmq_endpoint: Optional[str] = None,
         high_rate_zmq_pub_mode: str = "connect",
@@ -282,6 +286,8 @@ class ROSHTTPBridge(Node):
         self._mesh_output_mode = "voxel"
         self._enable_servo = enable_servo
         self._enable_detections = enable_detections and ZED_OD_AVAILABLE
+        self._imu_topic = imu_topic
+        self._use_imu_attitude = use_imu_attitude and IMU_AVAILABLE
 
         self._high_rate_transport = high_rate_transport.strip().lower()
         if self._high_rate_transport not in ("zmq", "http", "both"):
@@ -365,6 +371,13 @@ class ROSHTTPBridge(Node):
         self._latest_cmd_vel: Optional[VelocityCommand] = None
         self._lock = threading.Lock()
         
+        # IMU attitude (gravity-referenced, more stable than VIO for roll/pitch)
+        self._imu_roll: float = 0.0
+        self._imu_pitch: float = 0.0
+        self._imu_yaw: float = 0.0
+        self._imu_recv_count: int = 0
+        self._last_imu_ts: float = 0.0
+        
         # Stats
         self._vio_recv_count = 0
         self._vio_send_count = 0
@@ -419,6 +432,16 @@ class ROSHTTPBridge(Node):
             sensor_qos,
         )
         self.get_logger().info(f"Subscribed to VIO: {vio_topic}")
+        
+        # Subscribe to IMU for gravity-aligned attitude (more accurate roll/pitch)
+        if self._use_imu_attitude:
+            self.create_subscription(
+                Imu,
+                imu_topic,
+                self._handle_imu,
+                sensor_qos,
+            )
+            self.get_logger().info(f"Subscribed to IMU (for attitude): {imu_topic}")
         
         # Subscribe to cmd_vel for navigation control
         if enable_nav_control:
@@ -660,11 +683,28 @@ class ROSHTTPBridge(Node):
                 pose.orientation.w,
             )
 
-            # Body attitude: roll and yaw from raw ZED pose, pitch compensated for servo tilt.
+            # Determine which attitude source to use for body orientation.
+            # IMU provides gravity-aligned roll/pitch that don't drift, while
+            # VIO odom drifts over time. For yaw, both drift (no magnetometer
+            # in ZED), but VIO is generally more accurate for heading during
+            # active tracking. We use IMU for roll/pitch but keep VIO yaw.
+            if self._use_imu_attitude and self._imu_recv_count > 0:
+                # Use IMU roll/pitch (stable, gravity-referenced)
+                # Keep VIO yaw (more accurate during visual tracking)
+                attitude_roll = self._imu_roll
+                attitude_pitch = self._imu_pitch
+                attitude_yaw = ros_yaw  # VIO yaw is better than gyro-only IMU yaw
+            else:
+                # Fall back to VIO-only if IMU not available
+                attitude_roll = ros_roll
+                attitude_pitch = ros_pitch
+                attitude_yaw = ros_yaw
+
+            # Body attitude: compensate pitch for servo tilt.
             # This allows SLAM viewers to render airframe attitude and apply camera tilt separately.
-            body_roll = self._wrap_angle_rad(ros_roll)
-            body_pitch = self._wrap_angle_rad(ros_pitch - self._gimbal_pitch_rad)
-            body_yaw = self._wrap_angle_rad(ros_yaw)
+            body_roll = self._wrap_angle_rad(attitude_roll)
+            body_pitch = self._wrap_angle_rad(attitude_pitch - self._gimbal_pitch_rad)
+            body_yaw = self._wrap_angle_rad(attitude_yaw)
 
             # Convert from ROS odom frame (REP-103) to NED frame for MAVLink.
             # REP-103: X-forward, Y-left, Z-up
@@ -673,13 +713,13 @@ class ROSHTTPBridge(Node):
             ned_x = pose.position.x      # Forward -> North
             ned_y = -pose.position.y     # Left -> East (negate)
             ned_z = -pose.position.z     # Up -> Down (negate)
-            # Attitude mapping:
+            # Attitude mapping (using attitude_* which may be IMU-fused):
             # Roll about X (forward) - same sign (both positive = right wing down)
             # Pitch about Y - left in REP-103, right in NED - negate (ROS nose-up vs NED nose-down)
             # Yaw about Z - up in REP-103, down in NED - negate (ROS CCW vs NED CW from above)
-            ned_roll = ros_roll
-            ned_pitch = -ros_pitch
-            ned_yaw = -ros_yaw
+            ned_roll = attitude_roll
+            ned_pitch = -attitude_pitch
+            ned_yaw = -attitude_yaw
             # Velocity in odom message is in child frame (body), following REP-103.
             # Convert to NED body velocities:
             ned_vx = twist.linear.x      # Forward -> North
@@ -704,9 +744,9 @@ class ROSHTTPBridge(Node):
                 ros_x=pose.position.x,
                 ros_y=pose.position.y,
                 ros_z=pose.position.z,
-                ros_roll=ros_roll,
-                ros_pitch=ros_pitch,
-                ros_yaw=ros_yaw,
+                ros_roll=attitude_roll,   # Use fused attitude for consistency
+                ros_pitch=attitude_pitch,
+                ros_yaw=attitude_yaw,
                 body_roll=body_roll,
                 body_pitch=body_pitch,
                 body_yaw=body_yaw,
@@ -718,6 +758,30 @@ class ROSHTTPBridge(Node):
 
         except Exception as e:
             self.get_logger().error(f"VIO processing error: {e}")
+    
+    def _handle_imu(self, msg: Imu) -> None:
+        """
+        Handle IMU data from ZED for gravity-aligned attitude.
+        
+        The /zed/zed_node/imu/data topic provides calibrated IMU orientation
+        that is gravity-referenced. Unlike VIO odom which drifts over time,
+        the IMU roll and pitch are stable (tied to gravity).
+        
+        IMU yaw still drifts without magnetometer, but less than VIO yaw
+        during visual tracking failures.
+        """
+        try:
+            q = msg.orientation
+            imu_roll, imu_pitch, imu_yaw = self._quat_to_euler(q.x, q.y, q.z, q.w)
+            
+            with self._lock:
+                self._imu_roll = imu_roll
+                self._imu_pitch = imu_pitch
+                self._imu_yaw = imu_yaw
+                self._imu_recv_count += 1
+                self._last_imu_ts = time.time()
+        except Exception as e:
+            self.get_logger().error(f"IMU processing error: {e}", throttle_duration_sec=5.0)
     
     def _handle_cmd_vel(self, msg: Twist) -> None:
         """
@@ -1867,6 +1931,8 @@ class ROSHTTPBridge(Node):
             "vio_sent": self._vio_send_count,
             "vio_sent_zmq": self._vio_send_zmq_count,
             "vio_sent_http": self._vio_send_http_count,
+            "imu_received": self._imu_recv_count,
+            "imu_attitude_enabled": self._use_imu_attitude,
             "cmd_vel_received": self._cmd_vel_recv_count,
             "cmd_vel_sent": self._cmd_vel_send_count,
             "cmd_vel_sent_zmq": self._cmd_vel_send_zmq_count,
@@ -1905,6 +1971,8 @@ def main():
     parser.add_argument("--port", type=int, default=8000, help="Edge Core port")
     parser.add_argument("--vio-topic", default="/zed/zed_node/odom",
                         help="VIO odometry topic")
+    parser.add_argument("--imu-topic", default="/zed/zed_node/imu/data",
+                        help="IMU topic for gravity-aligned attitude")
     parser.add_argument("--cmd-vel-topic", default="/cmd_vel",
                         help="Navigation velocity command topic")
     parser.add_argument("--mesh-topic", default="/nvblox_node/color_layer_marker",
@@ -1924,6 +1992,8 @@ def main():
                         help="ZED custom object detection topic (ObjectsStamped)")
     parser.add_argument("--disable-detections", action="store_true",
                         help="Disable object detection forwarding")
+    parser.add_argument("--disable-imu-attitude", action="store_true",
+                        help="Disable IMU-based attitude (use VIO-only, which drifts)")
     parser.add_argument(
         "--high-rate-transport",
         default="zmq",
@@ -1953,6 +2023,7 @@ def main():
         host=args.host,
         port=args.port,
         vio_topic=args.vio_topic,
+        imu_topic=args.imu_topic,
         cmd_vel_topic=args.cmd_vel_topic,
         mesh_topic=args.mesh_topic,
         mesh_output_mode=args.mesh_output_mode,
@@ -1963,6 +2034,7 @@ def main():
         enable_mesh=not args.disable_mesh,
         enable_servo=not args.disable_servo,
         enable_detections=not args.disable_detections,
+        use_imu_attitude=not args.disable_imu_attitude,
         high_rate_transport=args.high_rate_transport,
         high_rate_zmq_endpoint=args.high_rate_zmq_endpoint,
         high_rate_zmq_pub_mode=args.high_rate_zmq_pub_mode,
