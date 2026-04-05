@@ -4303,6 +4303,16 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 request.app.state.detection_enabled = True
                 request.app.state.detection_last_update = 0.0
                 request.app.state.detected_objects = []
+
+            # Keep operator UX consistent: enabling detections should enable overlay.
+            mgr = get_video_stream_manager()
+            if mgr:
+                if mgr.set_overlay(True):
+                    logger.info("Video overlay enabled after detections/start")
+                else:
+                    logger.warning(
+                        "Detections started, but video overlay could not be enabled"
+                    )
         return result
 
     @app.post("/api/detections/stop", tags=["Detections"])
@@ -4318,6 +4328,10 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 request.app.state.detection_enabled = False
                 request.app.state.detection_last_update = 0.0
                 request.app.state.detected_objects = []
+
+            mgr = get_video_stream_manager()
+            if mgr:
+                mgr.set_overlay(False)
         return result
 
     @app.get("/api/detections/status", tags=["Detections"])
@@ -4544,7 +4558,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         }
 
     @app.post("/api/video/start", tags=["Video"])
-    async def start_video_stream():
+    async def start_video_stream(request: Request):
         """
         Start the video streaming pipeline.
 
@@ -4563,10 +4577,19 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 status_code=500, detail=f"Failed to start video stream: {reason}"
             )
 
+        overlay_enabled = False
+        with request.app.state.detection_state_lock:
+            detection_enabled = bool(
+                getattr(request.app.state, "detection_enabled", True)
+            )
+        if detection_enabled:
+            overlay_enabled = mgr.set_overlay(True)
+
         return {
             "success": True,
             "rtsp_url": mgr.get_rtsp_url(),
             "message": "Video pipeline started",
+            "overlay_enabled": overlay_enabled,
         }
 
     @app.post("/api/video/stop", tags=["Video"])
@@ -4587,7 +4610,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         }
 
     @app.post("/api/video/restart", tags=["Video"])
-    async def restart_video_stream():
+    async def restart_video_stream(request: Request):
         """
         Restart the video streaming pipeline.
 
@@ -4610,21 +4633,30 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 status_code=500, detail=f"Failed to restart video stream: {reason}"
             )
 
+        overlay_enabled = False
+        with request.app.state.detection_state_lock:
+            detection_enabled = bool(
+                getattr(request.app.state, "detection_enabled", True)
+            )
+        if detection_enabled:
+            overlay_enabled = mgr.set_overlay(True)
+
         return {
             "success": True,
             "rtsp_url": mgr.get_rtsp_url(),
             "message": "Video pipeline restarted",
+            "overlay_enabled": overlay_enabled,
         }
 
     @app.post("/api/video/bridges/start", tags=["Video"])
-    async def start_video_bridges():
+    async def start_video_bridges(request: Request):
         """
         Start video bridges (legacy endpoint for compatibility).
 
         This is an alias for /api/video/start since we simplified to a single bridge.
         Mission Planner Service Control Panel calls this endpoint.
         """
-        return await start_video_stream()
+        return await start_video_stream(request)
 
     @app.get("/api/video/logs", tags=["Video"])
     async def get_video_logs(
