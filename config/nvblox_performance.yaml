@@ -36,13 +36,13 @@
     # RATE SETTINGS — conservative for 8GB Orin Nano
     # Lower rates reduce GPU memory pressure from queued frames
     # ==============================================================
-    tick_period_ms: 50
-    integrate_depth_rate_hz: 5.0     # conservative depth integration
+    tick_period_ms: 40
+    integrate_depth_rate_hz: 10.0    # faster depth integration for smoother mesh updates
     integrate_color_rate_hz: 1.0     # needed for mesh vertex generation
     integrate_lidar_rate_hz: 0.0
-    update_mesh_rate_hz: 5.0         # mesh for MissionPlanner 3D view
-    update_esdf_rate_hz: 5.0         # ESDF for obstacle avoidance
-    publish_layer_rate_hz: 5.0
+    update_mesh_rate_hz: 10.0        # higher mesh update cadence for SLAM3DView
+    update_esdf_rate_hz: 8.0         # maintain responsive obstacle field updates
+    publish_layer_rate_hz: 10.0
     publish_debug_vis_rate_hz: 1.0
     decay_tsdf_rate_hz: 1.0
     decay_dynamic_occupancy_rate_hz: 2.0

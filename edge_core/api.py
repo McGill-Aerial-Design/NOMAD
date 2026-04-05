@@ -5023,44 +5023,94 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         }
 
     @app.post("/api/task/2/slam/clear", tags=["Task 2", "SLAM"])
-    async def clear_slam_mesh(request: Request):
+    async def clear_slam_mesh(request: Request, relaunch_if_needed: bool = False):
         """
-        Clear the current SLAM mesh and reset the nvblox map.
+        Clear the current SLAM mesh and reset the map without a full relaunch when possible.
 
-        For the current nvblox stack, the reliable map reset path is to
-        relaunch nvblox + bridge (which starts with a fresh map), then
-        clear the cached mesh data so clients receive a fresh state.
+        Strategy:
+        1) Try native nvblox clear service.
+        2) Fallback to ZED tracking reset services.
+        3) Relaunch only when explicitly requested via relaunch_if_needed=true.
         """
         nvblox_cleared = False
         nvblox_message = ""
         nvblox_error_status = 503
-        try:
-            with request.app.state.detection_state_lock:
-                detection_enabled = bool(
-                    getattr(request.app.state, "detection_enabled", True)
-                )
+        clear_strategy = "none"
+        clear_warnings: list[str] = []
 
-            relaunch_result = _launch_nvblox_bridge_with_od(
-                enable_od=detection_enabled
+        # Preferred path: native nvblox clear service (no restart).
+        try:
+            clear_msg = _call_ros2_service_in_isaac_container_or_raise(
+                service_name="/nvblox_node/clear_map",
+                service_type="std_srvs/srv/Empty",
+                request_payload={},
+                timeout_s=10.0,
             )
-            if relaunch_result.get("success"):
-                nvblox_cleared = True
-                nvblox_message = relaunch_result.get(
-                    "message", "nvblox stack relaunched"
-                )
-                logger.info("nvblox map reset via stack relaunch")
-            else:
-                nvblox_message = relaunch_result.get(
-                    "error", "Failed to relaunch nvblox stack"
-                )
-                logger.warning(f"Failed to reset nvblox map: {nvblox_message}")
+            nvblox_cleared = True
+            clear_strategy = "nvblox_clear_map_service"
+            nvblox_message = clear_msg or "nvblox clear_map service succeeded"
+            logger.info("nvblox map cleared via /nvblox_node/clear_map")
         except HTTPException as e:
-            logger.warning(f"Failed to reset nvblox map: {e.detail}")
-            nvblox_message = str(e.detail)
-            nvblox_error_status = e.status_code
+            clear_warnings.append(f"clear_map service failed: {e.detail}")
         except Exception as e:
-            logger.warning(f"Failed to reset nvblox map: {e}")
-            nvblox_message = str(e)
+            clear_warnings.append(f"clear_map service failed: {e}")
+
+        # Fallback path: reset tracking/odometry in-place to start a fresh map.
+        if not nvblox_cleared:
+            for service_name in [
+                "/zed/zed_node/reset_pos_tracking",
+                "/zed/zed_node/reset_odometry",
+            ]:
+                try:
+                    reset_msg = _call_ros2_service_in_isaac_container_or_raise(
+                        service_name=service_name,
+                        service_type="std_srvs/srv/Trigger",
+                        request_payload={},
+                        timeout_s=10.0,
+                    )
+                    nvblox_cleared = True
+                    clear_strategy = "zed_tracking_reset"
+                    nvblox_message = reset_msg or f"{service_name} succeeded"
+                    logger.info(f"Requested non-restart SLAM reset via {service_name}")
+                    break
+                except HTTPException as e:
+                    clear_warnings.append(f"{service_name} failed: {e.detail}")
+                except Exception as e:
+                    clear_warnings.append(f"{service_name} failed: {e}")
+
+        # Optional hard fallback: relaunch stack only if explicitly requested.
+        if not nvblox_cleared and relaunch_if_needed:
+            try:
+                with request.app.state.detection_state_lock:
+                    detection_enabled = bool(
+                        getattr(request.app.state, "detection_enabled", True)
+                    )
+
+                relaunch_result = _launch_nvblox_bridge_with_od(
+                    enable_od=detection_enabled
+                )
+                if relaunch_result.get("success"):
+                    nvblox_cleared = True
+                    clear_strategy = "stack_relaunch"
+                    nvblox_message = relaunch_result.get(
+                        "message", "nvblox stack relaunched"
+                    )
+                    logger.info("nvblox map reset via stack relaunch")
+                else:
+                    nvblox_message = relaunch_result.get(
+                        "error", "Failed to relaunch nvblox stack"
+                    )
+                    logger.warning(f"Failed to reset nvblox map: {nvblox_message}")
+            except HTTPException as e:
+                logger.warning(f"Failed to reset nvblox map: {e.detail}")
+                nvblox_message = str(e.detail)
+                nvblox_error_status = e.status_code
+            except Exception as e:
+                logger.warning(f"Failed to reset nvblox map: {e}")
+                nvblox_message = str(e)
+
+        if not nvblox_cleared and not nvblox_message:
+            nvblox_message = "No non-restart map clear service is available in current nvblox runtime"
 
         # Preserve voxel size from the previous mesh data if available.
         prev_voxel_size = 0.05
@@ -5094,6 +5144,8 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             "success": nvblox_cleared,
             "nvblox_cleared": nvblox_cleared,
             "nvblox_message": nvblox_message,
+            "clear_strategy": clear_strategy,
+            "warnings": clear_warnings,
             "message": "Mesh cache cleared"
             + (", nvblox map reset" if nvblox_cleared else " (nvblox clear failed)"),
             "timestamp": datetime.now(timezone.utc).isoformat(),
