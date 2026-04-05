@@ -1646,17 +1646,10 @@ class ROSHTTPBridge(Node):
             voxel_size = msg.scale.x if msg.scale.x > 0.0 else 0.05
             has_colors = len(msg.colors) == n_pts
 
-            # Cap payload size so large voxel messages do not starve pose/world cadence.
-            # 8k voxels is a good balance between detail and real-time responsiveness.
-            limit = min(n_pts, 8000)
-
+            # Preserve exact nvblox geometry: forward every voxel marker point
+            # instead of subsampling, to match RViz placement precisely.
             voxels = []
-            if limit == n_pts:
-                sample_indices = range(limit)
-            else:
-                # Evenly subsample across the marker to preserve spatial coverage.
-                stride = n_pts / float(limit)
-                sample_indices = (int(i * stride) for i in range(limit))
+            sample_indices = range(n_pts)
 
             for i in sample_indices:
                 p = msg.points[i]

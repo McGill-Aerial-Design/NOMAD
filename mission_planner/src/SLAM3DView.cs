@@ -902,6 +902,21 @@ namespace NOMAD.MissionPlanner
                 float nextPitch = hasBodyPitch ? bodyPitch : (hasFallbackPitch ? pitchFallback : 0f);
                 float nextYaw = hasBodyYaw ? bodyYaw : (hasFallbackYaw ? yawFallback : 0f);
 
+                if (hasBodyYaw)
+                {
+                    float prevYaw = _droneYawRaw;
+                    float diff = nextYaw - prevYaw;
+                    while (diff > Math.PI) diff -= (float)(2.0 * Math.PI);
+                    while (diff < -Math.PI) diff += (float)(2.0 * Math.PI);
+                    float yawJumpDeg = Math.Abs(diff * 180f / (float)Math.PI);
+
+                    // Guard against sporadic magnetometer resets to exactly zero.
+                    if (Math.Abs(nextYaw) < 1e-4f && yawJumpDeg > 45f)
+                    {
+                        nextYaw = prevYaw;
+                    }
+                }
+
                 _hasBodyAttitude = hasBodyYaw;
 
                 if (hasRoll && hasPitch && hasYaw)
