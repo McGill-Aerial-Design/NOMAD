@@ -47,6 +47,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 from sensor_msgs.msg import Image, NavSatFix, CameraInfo
 from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Odometry
 from std_msgs.msg import Float64
 from std_srvs.srv import Trigger
 
@@ -143,6 +144,10 @@ class TargetLocalizerNode(Node):
         self.latest_rgb_stamp = None
         self.drone_lat: float = 0.0
         self.drone_lon: float = 0.0
+        self.has_gps_fix: bool = False
+        self.has_local_pose: bool = False
+        self.drone_local_east: float = 0.0
+        self.drone_local_north: float = 0.0
         self.drone_alt: float = 0.0    # AGL from rangefinder or baro
         self.drone_heading: float = 0.0
         self.servo_pitch_deg: float = 0.0
@@ -191,6 +196,10 @@ class TargetLocalizerNode(Node):
         self.pose_sub = self.create_subscription(
             PoseStamped, '/mavros/local_position/pose',
             self._pose_callback, sensor_qos
+        )
+        self.zed_odom_sub = self.create_subscription(
+            Odometry, '/zed/zed_node/odom',
+            self._zed_odom_callback, sensor_qos
         )
         self.servo_sub = self.create_subscription(
             Float64, '/servo/angle',
@@ -248,6 +257,11 @@ class TargetLocalizerNode(Node):
     def _gps_callback(self, msg: NavSatFix):
         self.drone_lat = msg.latitude
         self.drone_lon = msg.longitude
+        self.has_gps_fix = (
+            math.isfinite(self.drone_lat)
+            and math.isfinite(self.drone_lon)
+            and not (abs(self.drone_lat) < 1e-8 and abs(self.drone_lon) < 1e-8)
+        )
         # Altitude from GPS is MSL; we use local pose for AGL
         # but store GPS alt as fallback
         self.drone_gps_alt = msg.altitude
@@ -256,8 +270,27 @@ class TargetLocalizerNode(Node):
         self.drone_heading = msg.data
 
     def _pose_callback(self, msg: PoseStamped):
+        self.drone_local_east = msg.pose.position.x
+        self.drone_local_north = msg.pose.position.y
         # Z from local pose is AGL if EKF origin is at ground level
         self.drone_alt = msg.pose.position.z
+        self.has_local_pose = True
+
+    def _zed_odom_callback(self, msg: Odometry):
+        pose = msg.pose.pose
+        self.drone_local_east = pose.position.x
+        self.drone_local_north = pose.position.y
+        self.drone_alt = pose.position.z
+        self.has_local_pose = True
+
+        # Fallback heading from odometry quaternion when compass is unavailable.
+        q = pose.orientation
+        siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        yaw_deg = math.degrees(math.atan2(siny_cosp, cosy_cosp))
+        if yaw_deg < 0.0:
+            yaw_deg += 360.0
+        self.drone_heading = yaw_deg
 
     def _servo_callback(self, msg: Float64):
         # Positive = tilting up, negative = tilting down
@@ -335,11 +368,19 @@ class TargetLocalizerNode(Node):
 
         east_off, north_off, up = local
 
-        # Drone position in building-relative ENU
-        drone_east, drone_north = gps_to_local(
-            self.drone_lat, self.drone_lon,
-            self.building.center_lat, self.building.center_lon
-        )
+        # Drone position in building-relative ENU.
+        # Prefer GPS geodetic conversion when available, otherwise fall back
+        # to local pose (e.g., ZED odom / MAVROS local_position) so Task 1
+        # capture remains usable indoors or before GPS lock.
+        if self.has_gps_fix:
+            drone_east, drone_north = gps_to_local(
+                self.drone_lat,
+                self.drone_lon,
+                self.building.center_lat,
+                self.building.center_lon,
+            )
+        else:
+            drone_east, drone_north = self.drone_local_east, self.drone_local_north
 
         return (drone_east + east_off, drone_north + north_off, up)
 
@@ -412,9 +453,9 @@ class TargetLocalizerNode(Node):
             response.message = "Camera intrinsics not yet received."
             return response
 
-        if self.drone_lat == 0.0 and self.drone_lon == 0.0:
+        if not self.has_gps_fix and not self.has_local_pose:
             response.success = False
-            response.message = "No GPS fix available."
+            response.message = "No GPS fix or local pose available."
             return response
 
         # Snapshot current data
@@ -516,7 +557,10 @@ class TargetLocalizerNode(Node):
         if new_targets:
             response.success = True
             descs = [t.description for t in new_targets]
-            response.message = f"Added {len(new_targets)} target(s):\n" + "\n".join(descs)
+            prefix = ""
+            if not self.has_gps_fix:
+                prefix = "GPS unavailable; using local pose fallback. "
+            response.message = prefix + f"Added {len(new_targets)} target(s):\n" + "\n".join(descs)
         else:
             response.success = False
             response.message = "Circles detected but none passed depth/dedup filters."
@@ -545,7 +589,7 @@ class TargetLocalizerNode(Node):
             return
         if not self.intrinsics_received:
             return
-        if self.drone_lat == 0.0 and self.drone_lon == 0.0:
+        if not self.has_gps_fix and not self.has_local_pose:
             return
         if self.landmark_detector is None:
             return

@@ -134,6 +134,10 @@ class VideoStreamManager:
         self.height = height
         self.fps = fps
         self.bitrate = bitrate
+        self._edge_core_api_key = (os.environ.get("NOMAD_API_KEY") or "").strip()
+        self._edge_core_internal_token = (
+            os.environ.get("NOMAD_INTERNAL_TOKEN") or ""
+        ).strip()
         
         self._started = False
         self._lock = threading.RLock()
@@ -264,8 +268,15 @@ class VideoStreamManager:
                 pass  # OK if nothing to kill
 
             # Start the simple video bridge
-            cmd = [
-                "docker", "exec", "-d", self.container_name,
+            cmd = ["docker", "exec", "-d"]
+            if self._edge_core_api_key:
+                cmd.extend(["-e", f"NOMAD_API_KEY={self._edge_core_api_key}"])
+            if self._edge_core_internal_token:
+                cmd.extend(
+                    ["-e", f"NOMAD_INTERNAL_TOKEN={self._edge_core_internal_token}"]
+                )
+            cmd.extend([
+                self.container_name,
                 "bash", "-c",
                 f"source /opt/ros/humble/setup.bash 2>/dev/null; source /opt/ros/humble/install/setup.bash 2>/dev/null; "
                 f"source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null; "
@@ -277,7 +288,7 @@ class VideoStreamManager:
                 f"--bitrate {self.bitrate} "
                 f"--http-port {self.relay_http_port} "
                 f"> /tmp/video_bridge.log 2>&1"
-            ]
+            ])
             
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)

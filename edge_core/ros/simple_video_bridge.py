@@ -27,6 +27,7 @@ import numpy as np
 import threading
 import time
 import subprocess
+import os
 import json
 import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -108,8 +109,13 @@ class VideoStreamNode(Node):
         self._detections = []
         self._detections_lock = threading.Lock()
         self._edge_core_url = "http://172.17.0.1:8000"
+        self._edge_core_api_key = (os.environ.get("NOMAD_API_KEY") or "").strip()
+        self._edge_core_internal_token = (
+            os.environ.get("NOMAD_INTERNAL_TOKEN") or ""
+        ).strip()
         self._overlay_thread = None
         self._overlay_stop = threading.Event()
+        self._overlay_last_error_log_ts = 0.0
 
         # Probe encoder
         self._encoder_name, self._encoder_fragment = _probe_encoder()
@@ -500,13 +506,21 @@ class VideoStreamNode(Node):
                 url = f"{self._edge_core_url}/api/detections"
                 req = urllib.request.Request(url, method='GET')
                 req.add_header('Accept', 'application/json')
+                if self._edge_core_api_key:
+                    req.add_header('X-API-Key', self._edge_core_api_key)
+                if self._edge_core_internal_token:
+                    req.add_header('X-NOMAD-Internal-Token', self._edge_core_internal_token)
                 with urllib.request.urlopen(req, timeout=2) as resp:
                     data = json.loads(resp.read().decode())
                     current = data.get('current', {})
                     dets = current.get('detections', []) if isinstance(current, dict) else []
                     with self._detections_lock:
                         self._detections = dets
-            except Exception:
+            except Exception as e:
+                now = time.time()
+                if now - self._overlay_last_error_log_ts > 5.0:
+                    self.get_logger().warn(f"Overlay fetch failed: {e}")
+                    self._overlay_last_error_log_ts = now
                 with self._detections_lock:
                     self._detections = []
             self._overlay_stop.wait(1.0 / 15.0)  # Poll at 15 Hz to match video framerate
