@@ -50,14 +50,16 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped, Twist
 from std_msgs.msg import Float32, Float32MultiArray
 
-# sensor_msgs for image metadata, HSV color verification, and IMU data
+# sensor_msgs for image metadata, HSV color verification, IMU and magnetometer data
 try:
-    from sensor_msgs.msg import CameraInfo, Image, Imu
+    from sensor_msgs.msg import CameraInfo, Image, Imu, MagneticField
     IMAGE_AVAILABLE = True
     IMU_AVAILABLE = True
+    MAG_AVAILABLE = True
 except ImportError:
     IMAGE_AVAILABLE = False
     IMU_AVAILABLE = False
+    MAG_AVAILABLE = False
 
 # OpenCV + numpy for HSV ROI verification
 try:
@@ -249,6 +251,7 @@ class ROSHTTPBridge(Node):
         port: int = 8000,
         vio_topic: str = "/zed/zed_node/odom",  # Default to ZED odom
         imu_topic: str = "/zed/zed_node/imu/data",  # Calibrated IMU for attitude
+        mag_topic: str = "/zed/zed_node/imu/mag",   # Magnetometer for heading
         cmd_vel_topic: str = "/cmd_vel",         # Nav2 velocity commands
         mesh_topic: str = "/nvblox_node/color_layer_marker",   # Nvblox marker topic
         mesh_output_mode: str = "voxel",         # Runtime-selectable output mode: voxel-only
@@ -259,7 +262,8 @@ class ROSHTTPBridge(Node):
         enable_mesh: bool = True,                # Enable mesh forwarding
         enable_servo: bool = True,               # Enable servo control forwarding
         enable_detections: bool = True,          # Enable object detection forwarding
-        use_imu_attitude: bool = True,           # Use IMU for gravity-aligned attitude (vs VIO odom)
+        use_imu_attitude: bool = True,           # Use IMU for gravity-aligned roll/pitch
+        use_mag_heading: bool = True,            # Use magnetometer for yaw/heading
         high_rate_transport: str = "zmq",       # High-rate stream transport: zmq/http/both (zmq preferred, HTTP fallback auto-activates)
         high_rate_zmq_endpoint: Optional[str] = None,
         high_rate_zmq_pub_mode: str = "connect",
@@ -287,7 +291,9 @@ class ROSHTTPBridge(Node):
         self._enable_servo = enable_servo
         self._enable_detections = enable_detections and ZED_OD_AVAILABLE
         self._imu_topic = imu_topic
+        self._mag_topic = mag_topic
         self._use_imu_attitude = use_imu_attitude and IMU_AVAILABLE
+        self._use_mag_heading = use_mag_heading and MAG_AVAILABLE
 
         self._high_rate_transport = high_rate_transport.strip().lower()
         if self._high_rate_transport not in ("zmq", "http", "both"):
@@ -378,6 +384,11 @@ class ROSHTTPBridge(Node):
         self._imu_recv_count: int = 0
         self._last_imu_ts: float = 0.0
         
+        # Magnetometer heading (absolute compass heading)
+        self._mag_heading: float = 0.0  # Radians, 0 = North, positive = East (CW from above)
+        self._mag_recv_count: int = 0
+        self._last_mag_ts: float = 0.0
+        
         # Stats
         self._vio_recv_count = 0
         self._vio_send_count = 0
@@ -442,6 +453,16 @@ class ROSHTTPBridge(Node):
                 sensor_qos,
             )
             self.get_logger().info(f"Subscribed to IMU (for attitude): {imu_topic}")
+        
+        # Subscribe to magnetometer for compass heading (yaw)
+        if self._use_mag_heading:
+            self.create_subscription(
+                MagneticField,
+                mag_topic,
+                self._handle_mag,
+                sensor_qos,
+            )
+            self.get_logger().info(f"Subscribed to magnetometer (for heading): {mag_topic}")
         
         # Subscribe to cmd_vel for navigation control
         if enable_nav_control:
@@ -684,20 +705,22 @@ class ROSHTTPBridge(Node):
             )
 
             # Determine which attitude source to use for body orientation.
-            # IMU provides gravity-aligned roll/pitch that don't drift, while
-            # VIO odom drifts over time. For yaw, both drift (no magnetometer
-            # in ZED), but VIO is generally more accurate for heading during
-            # active tracking. We use IMU for roll/pitch but keep VIO yaw.
+            # Priority: magnetometer for yaw (absolute heading), IMU for roll/pitch (gravity).
+            # Fall back to VIO if sensors unavailable.
+            
+            # Roll/pitch: prefer IMU (gravity-aligned, doesn't drift)
             if self._use_imu_attitude and self._imu_recv_count > 0:
-                # Use IMU roll/pitch (stable, gravity-referenced)
-                # Keep VIO yaw (more accurate during visual tracking)
                 attitude_roll = self._imu_roll
                 attitude_pitch = self._imu_pitch
-                attitude_yaw = ros_yaw  # VIO yaw is better than gyro-only IMU yaw
             else:
-                # Fall back to VIO-only if IMU not available
                 attitude_roll = ros_roll
                 attitude_pitch = ros_pitch
+            
+            # Yaw: prefer magnetometer (absolute compass heading)
+            if self._use_mag_heading and self._mag_recv_count > 0:
+                attitude_yaw = self._mag_heading
+            else:
+                # Fall back to VIO yaw if no magnetometer
                 attitude_yaw = ros_yaw
 
             # Body attitude: compensate pitch for servo tilt.
@@ -782,6 +805,36 @@ class ROSHTTPBridge(Node):
                 self._last_imu_ts = time.time()
         except Exception as e:
             self.get_logger().error(f"IMU processing error: {e}", throttle_duration_sec=5.0)
+    
+    def _handle_mag(self, msg: MagneticField) -> None:
+        """
+        Handle magnetometer data from ZED for compass heading.
+        
+        The /zed/zed_node/imu/mag topic provides raw magnetometer readings
+        in microtesla (uT). We compute heading from the X/Y components.
+        
+        Heading convention: 0 = North, positive = clockwise (East).
+        This gives absolute compass heading that doesn't drift like VIO yaw.
+        """
+        try:
+            # Get raw magnetometer X, Y (horizontal plane)
+            mag_x = msg.magnetic_field.x
+            mag_y = msg.magnetic_field.y
+            # mag_z = msg.magnetic_field.z  # Vertical component (not used for 2D heading)
+            
+            # Compute heading from X/Y
+            # atan2(y, x) gives angle from +X axis (East in sensor frame)
+            # For ZED, X is forward and Y is left in camera frame
+            # So atan2(-Y, X) gives heading from North (forward = North when heading=0)
+            # Negate Y because leftward is positive in camera frame but we want CW positive
+            heading = math.atan2(-mag_y, mag_x)
+            
+            with self._lock:
+                self._mag_heading = heading
+                self._mag_recv_count += 1
+                self._last_mag_ts = time.time()
+        except Exception as e:
+            self.get_logger().error(f"Magnetometer processing error: {e}", throttle_duration_sec=5.0)
     
     def _handle_cmd_vel(self, msg: Twist) -> None:
         """
@@ -1933,6 +1986,8 @@ class ROSHTTPBridge(Node):
             "vio_sent_http": self._vio_send_http_count,
             "imu_received": self._imu_recv_count,
             "imu_attitude_enabled": self._use_imu_attitude,
+            "mag_received": self._mag_recv_count,
+            "mag_heading_enabled": self._use_mag_heading,
             "cmd_vel_received": self._cmd_vel_recv_count,
             "cmd_vel_sent": self._cmd_vel_send_count,
             "cmd_vel_sent_zmq": self._cmd_vel_send_zmq_count,
@@ -1973,6 +2028,8 @@ def main():
                         help="VIO odometry topic")
     parser.add_argument("--imu-topic", default="/zed/zed_node/imu/data",
                         help="IMU topic for gravity-aligned attitude")
+    parser.add_argument("--mag-topic", default="/zed/zed_node/imu/mag",
+                        help="Magnetometer topic for compass heading")
     parser.add_argument("--cmd-vel-topic", default="/cmd_vel",
                         help="Navigation velocity command topic")
     parser.add_argument("--mesh-topic", default="/nvblox_node/color_layer_marker",
@@ -1993,7 +2050,9 @@ def main():
     parser.add_argument("--disable-detections", action="store_true",
                         help="Disable object detection forwarding")
     parser.add_argument("--disable-imu-attitude", action="store_true",
-                        help="Disable IMU-based attitude (use VIO-only, which drifts)")
+                        help="Disable IMU-based roll/pitch (use VIO-only)")
+    parser.add_argument("--disable-mag-heading", action="store_true",
+                        help="Disable magnetometer-based yaw (use VIO yaw)")
     parser.add_argument(
         "--high-rate-transport",
         default="zmq",
@@ -2024,6 +2083,7 @@ def main():
         port=args.port,
         vio_topic=args.vio_topic,
         imu_topic=args.imu_topic,
+        mag_topic=args.mag_topic,
         cmd_vel_topic=args.cmd_vel_topic,
         mesh_topic=args.mesh_topic,
         mesh_output_mode=args.mesh_output_mode,
@@ -2035,6 +2095,7 @@ def main():
         enable_servo=not args.disable_servo,
         enable_detections=not args.disable_detections,
         use_imu_attitude=not args.disable_imu_attitude,
+        use_mag_heading=not args.disable_mag_heading,
         high_rate_transport=args.high_rate_transport,
         high_rate_zmq_endpoint=args.high_rate_zmq_endpoint,
         high_rate_zmq_pub_mode=args.high_rate_zmq_pub_mode,
