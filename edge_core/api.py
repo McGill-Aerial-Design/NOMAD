@@ -1250,7 +1250,7 @@ ros2 run tf2_ros static_transform_publisher \
 
 # Wait for topics then launch bridge
 sleep 2
-{bridge_env_prefix}python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --mesh-topic /nvblox_node/color_layer_marker --high-rate-transport http --http-post-timeout 0.5 --http-min-interval 0.03 &
+{bridge_env_prefix}python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --mesh-topic /nvblox_node/color_layer_marker --high-rate-transport http &
 echo $! > /tmp/ros_bridge.pid
 
 # Launch Task 1 target-localizer only when OD mode is enabled.

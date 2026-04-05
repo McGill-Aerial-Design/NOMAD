@@ -338,6 +338,12 @@ class ROSHTTPBridge(Node):
                 self._activate_high_rate_http_fallback(
                     "high-rate ZMQ publisher is unavailable at startup"
                 )
+
+        # VIO HTTP send tuning for high CPU load: avoid aggressive short timeouts
+        # and tiny bursts that starve under backpressure.
+        self._vio_http_timeout_s = 0.5
+        self._vio_http_min_interval_s = 0.03
+        self._last_vio_http_send_time = 0.0
         
         # QoS for sensor data
         sensor_qos = QoSProfile(
@@ -977,12 +983,16 @@ class ROSHTTPBridge(Node):
         if now < self._vio_backoff_until:
             return
 
+        if (now - self._last_vio_http_send_time) < self._vio_http_min_interval_s:
+            return
+
         try:
             data = json.dumps(payload).encode("utf-8")
-            if self._http_post("/api/vio/update", data, timeout=0.15):
+            if self._http_post("/api/vio/update", data, timeout=self._vio_http_timeout_s):
                 self._vio_send_http_count += 1
                 self._vio_send_count += 1
                 self._vio_send_backoff_s = 0.0
+                self._last_vio_http_send_time = now
             else:
                 self._send_errors += 1
                 self._vio_send_backoff_s = (
@@ -990,6 +1000,7 @@ class ROSHTTPBridge(Node):
                     else min(self._vio_backoff_max_s, self._vio_send_backoff_s * 2.0)
                 )
                 self._vio_backoff_until = now + self._vio_send_backoff_s
+                self._last_vio_http_send_time = now
 
         except URLError as e:
             self._send_errors += 1
