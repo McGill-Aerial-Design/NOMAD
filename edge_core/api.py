@@ -2294,6 +2294,17 @@ wait
             raise HTTPException(status_code=400, detail="file_path is required")
         return normalized
 
+    def _resolve_nvblox_empty_map_path(file_path: Optional[str] = None) -> str:
+        """Resolve baseline map path used for non-restart nvblox clear workflow."""
+        if file_path and str(file_path).strip():
+            return _normalize_vio_area_file_path_or_raise(str(file_path))
+
+        env_path = (os.getenv("NVBLOX_EMPTY_MAP_PATH") or "").strip()
+        if env_path:
+            return env_path
+
+        return "/home/mad/NOMAD/data/area_maps/nvblox_empty_map"
+
     def _status_for_vio_area_failure(message: str, default_status: int) -> int:
         """Map backend failure text to HTTP status while preserving safe defaults."""
         text = (message or "").strip().lower()
@@ -5022,15 +5033,45 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             "error": "No mesh data available",
         }
 
+    @app.post("/api/task/2/slam/empty-map/create", tags=["Task 2", "SLAM"])
+    async def create_slam_empty_map(file_path: Optional[str] = Query(default=None)):
+        """
+        Save the current nvblox map as the baseline map used for non-restart clears.
+
+        Recommended workflow:
+        1) Ensure the environment is in the desired "empty" baseline state.
+        2) Call this endpoint once.
+        3) Future /api/task/2/slam/clear calls can reload this baseline map.
+        """
+        target_path = _resolve_nvblox_empty_map_path(file_path)
+        message = _call_ros2_service_in_isaac_container_or_raise(
+            service_name="/nvblox_node/save_map",
+            service_type="nvblox_msgs/srv/FilePath",
+            request_payload={"file_path": target_path},
+            timeout_s=30.0,
+        )
+
+        return {
+            "success": True,
+            "message": message
+            or "Baseline map saved. /api/task/2/slam/clear can now load it without relaunch.",
+            "file_path": target_path,
+        }
+
     @app.post("/api/task/2/slam/clear", tags=["Task 2", "SLAM"])
-    async def clear_slam_mesh(request: Request, relaunch_if_needed: bool = False):
+    async def clear_slam_mesh(
+        request: Request,
+        relaunch_if_needed: bool = False,
+        empty_map_path: Optional[str] = None,
+    ):
         """
         Clear the current SLAM mesh and reset the map without a full relaunch when possible.
 
         Strategy:
         1) Try native nvblox clear service.
-        2) Fallback to ZED tracking reset services.
-        3) Relaunch only when explicitly requested via relaunch_if_needed=true.
+        2) Fallback to loading baseline map snapshot.
+        3) Fallback to ZED tracking reset services.
+        4) Relaunch only when explicitly requested via relaunch_if_needed=true.
         """
         nvblox_cleared = False
         nvblox_message = ""
@@ -5054,6 +5095,35 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             clear_warnings.append(f"clear_map service failed: {e.detail}")
         except Exception as e:
             clear_warnings.append(f"clear_map service failed: {e}")
+
+        # Fallback path: load baseline map snapshot (no restart).
+        if not nvblox_cleared:
+            try:
+                baseline_path = _resolve_nvblox_empty_map_path(empty_map_path)
+                load_msg = _call_ros2_service_in_isaac_container_or_raise(
+                    service_name="/nvblox_node/load_map",
+                    service_type="nvblox_msgs/srv/FilePath",
+                    request_payload={"file_path": baseline_path},
+                    timeout_s=20.0,
+                )
+                reset_msg = _call_ros2_service_in_isaac_container_or_raise(
+                    service_name="/zed/zed_node/reset_pos_tracking",
+                    service_type="std_srvs/srv/Trigger",
+                    request_payload={},
+                    timeout_s=10.0,
+                )
+                nvblox_cleared = True
+                clear_strategy = "load_empty_map"
+                nvblox_message = "; ".join(
+                    part for part in [load_msg, reset_msg] if part
+                ) or f"Loaded baseline map: {baseline_path}"
+                logger.info(
+                    f"nvblox map reset by loading baseline map: {baseline_path}"
+                )
+            except HTTPException as e:
+                clear_warnings.append(f"load baseline map failed: {e.detail}")
+            except Exception as e:
+                clear_warnings.append(f"load baseline map failed: {e}")
 
         # Fallback path: reset tracking/odometry in-place to start a fresh map.
         if not nvblox_cleared:
