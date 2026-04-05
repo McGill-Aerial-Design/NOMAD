@@ -946,6 +946,28 @@ BRIDGE_SCRIPT
     fi
 }
 
+trigger_edge_core_video_start() {
+    # Edge Core owns simple_video_bridge.py lifecycle. Trigger it explicitly
+    # after Isaac startup so video comes up even when Edge Core itself was
+    # not restarted (auto-start thread runs only at Edge Core startup).
+    if ! command -v curl >/dev/null 2>&1; then
+        log_warn "curl not found; skipping automatic /api/video/start trigger"
+        return 0
+    fi
+
+    local api_url="http://localhost:8000/api/video/start"
+    local curl_args=(-sS --max-time 8 -X POST "$api_url")
+    if [ -n "${NOMAD_API_KEY:-}" ]; then
+        curl_args=(-sS --max-time 8 -H "X-API-Key: ${NOMAD_API_KEY}" -X POST "$api_url")
+    fi
+
+    if curl "${curl_args[@]}" >/dev/null 2>&1; then
+        log_info "Triggered Edge Core video bridge start via /api/video/start"
+    else
+        log_warn "Could not trigger /api/video/start (Edge Core may still be initializing)"
+    fi
+}
+
 # =========================================================================
 # Stop / Status / Logs
 # =========================================================================
@@ -1032,7 +1054,8 @@ case "${1:-start}" in
         [ "$ZED_READY" = false ] && log_warn "ZED topics not detected after 30s, continuing..."
 
         launch_ros_http_bridge
-        log_info "Isaac ROS startup complete! (Video bridge will be started by Edge Core /api/video/start)"
+        trigger_edge_core_video_start
+        log_info "Isaac ROS startup complete!"
         show_status
         ;;
     stop)    stop_services ;;
