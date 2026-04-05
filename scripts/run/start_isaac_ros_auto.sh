@@ -786,6 +786,13 @@ fi
 # (save_map/load_map) succeed with the Mission Planner default path.
 mkdir -p /home/mad/NOMAD/data/area_maps 2>/dev/null || true
 
+# Prevent duplicate helper/launch processes when restarting in an existing
+# container (without full container recreation).
+pkill -f 'nomad_zed_nvblox\.launch\.py|zed_camera\.launch\.py' 2>/dev/null || true
+pkill -f 'component_container' 2>/dev/null || true
+pkill -f 'obstacle_distance_bridge\.py|nav2_goal_bridge\.py|servo_tf_publisher\.py' 2>/dev/null || true
+sleep 1
+
 # Launch ZED + nvblox using NOMAD custom launch file.
 # Includes: optical frame alias TF, servo TF publisher, obstacle distance bridge.
 # Uses blocking CUDA stream (type 0) to prevent cudaErrorIllegalAddress on 8GB Jetson.

@@ -1023,7 +1023,7 @@ pkill -f 'nomad_zed_nvblox\\.launch\\.py|zed_example\\.launch\\.py' 2>/dev/null 
 pkill -f 'component_container' 2>/dev/null || true
 pkill -f ros_http_bridge 2>/dev/null || true
 pkill -f 'target_localizer_node|target_localizer\\.launch\\.py' 2>/dev/null || true
-pkill -f 'servo_tf_publisher\\.py|robot_state_publisher|static_transform_publisher' 2>/dev/null || true
+pkill -f 'servo_tf_publisher\.py|obstacle_distance_bridge\.py|nav2_goal_bridge\.py|robot_state_publisher|static_transform_publisher' 2>/dev/null || true
 sleep 2
 # Clean up stale FastRTPS/DDS shared memory locks left by killed processes.
 # Without this, new ROS2 nodes fail with RTPS_TRANSPORT_SHM port lock errors.
