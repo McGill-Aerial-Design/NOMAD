@@ -37,7 +37,6 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
 
         // Configuration
         private float _markerSize = 0.15f;
-        private float _labelOffset = 0.25f;
         private bool _showLabels = true;
         private bool _showConfidence = true;
         private bool _showBoundingBox = true;
