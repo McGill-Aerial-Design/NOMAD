@@ -890,28 +890,19 @@ namespace NOMAD.MissionPlanner
                 bool hasBodyPitch = TryReadFloatToken(frameJson["body_pitch"], out float bodyPitch);
                 bool hasBodyYaw = TryReadFloatToken(frameJson["body_yaw"], out float bodyYaw);
 
-                bool hasRoll;
-                bool hasPitch;
-                bool hasYaw;
-                float nextRoll;
-                float nextPitch;
-                float nextYaw;
+                bool hasFallbackRoll = TryReadFloatToken(frameJson["roll"], out float rollFallback);
+                bool hasFallbackPitch = TryReadFloatToken(frameJson["pitch"], out float pitchFallback);
+                bool hasFallbackYaw = TryReadFloatToken(frameJson["yaw"], out float yawFallback);
 
-                if (hasBodyRoll && hasBodyPitch && hasBodyYaw)
-                {
-                    hasRoll = hasPitch = hasYaw = true;
-                    nextRoll = bodyRoll;
-                    nextPitch = bodyPitch;
-                    nextYaw = bodyYaw;
-                    _hasBodyAttitude = true;
-                }
-                else
-                {
-                    hasRoll = TryReadFloatToken(frameJson["roll"], out nextRoll);
-                    hasPitch = TryReadFloatToken(frameJson["pitch"], out nextPitch);
-                    hasYaw = TryReadFloatToken(frameJson["yaw"], out nextYaw);
-                    _hasBodyAttitude = false;
-                }
+                bool hasRoll = hasBodyRoll || hasFallbackRoll;
+                bool hasPitch = hasBodyPitch || hasFallbackPitch;
+                bool hasYaw = hasBodyYaw || hasFallbackYaw;
+
+                float nextRoll = hasBodyRoll ? bodyRoll : (hasFallbackRoll ? rollFallback : 0f);
+                float nextPitch = hasBodyPitch ? bodyPitch : (hasFallbackPitch ? pitchFallback : 0f);
+                float nextYaw = hasBodyYaw ? bodyYaw : (hasFallbackYaw ? yawFallback : 0f);
+
+                _hasBodyAttitude = hasBodyYaw;
 
                 if (hasRoll && hasPitch && hasYaw)
                 {

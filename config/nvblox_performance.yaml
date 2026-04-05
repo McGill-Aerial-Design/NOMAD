@@ -20,17 +20,17 @@
     cuda_stream_type: 0
 
     # ==============================================================
-    # VOXEL SIZE - 10cm balances detail vs GPU memory on 8GB shared
-    # 5cm OOMs on Orin Nano; 15cm is too coarse for target placement
+    # VOXEL SIZE - 20cm performance profile (reduced GPU/CPU load)
+    # Use nvblox_indoor.yaml when high-resolution placement is required
     # ==============================================================
-    voxel_size: 0.10  # 10cm voxels
+    voxel_size: 0.20  # 20cm voxels
 
     # dynamic: depth-based dynamic object detection (people, vehicles)
     # static_tsdf crashes with cudaErrorIllegalAddress on Jetson Orin Nano
     mapping_type: "dynamic"
 
     # 2D ESDF — 3D ESDF doubles GPU memory usage, not needed for drone nav
-    esdf_mode: "2d"
+    esdf_mode: "3d"
 
     # ==============================================================
     # RATE SETTINGS — conservative for 8GB Orin Nano
@@ -73,7 +73,7 @@
     use_lidar: false
 
     # Input queue - minimal to reduce GPU memory pressure
-    maximum_input_queue_length: 1
+    maximum_input_queue_length: 3
 
     # ==============================================================
     # Map clearing - 5m radius (reduced from 8m to save GPU memory)

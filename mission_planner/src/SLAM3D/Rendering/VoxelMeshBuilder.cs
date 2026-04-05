@@ -126,7 +126,7 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
                 long elapsedMs = ElapsedMsSince(_lastMeshRebuildStamp);
                 if (elapsedMs >= (long)MinRebuildInterval.TotalMilliseconds)
                 {
-                    FillGaps();
+                    // Preserve exact nvblox geometry; do not synthesize gap voxels.
                     RebuildVoxelMesh();
                     _pendingMeshUpdate = false;
                 }
