@@ -1742,66 +1742,70 @@ wait
                 # Fall back to ROS-frame VIO for pose (used for pose-only frames
                 # and for mesh frames that only include one of position/attitude)
                 # frame_id is always "ros_optical" for all pose data
-                if not has_position or not has_attitude:
-                    ros_vio = _get_vio_snapshot()["slam_vio_ros_frame"]
-                    if ros_vio:
-                        frame_id = ros_vio.get("frame_id", frame_id)
-                        if not has_position:
-                            frame["x"] = ros_vio.get("x", 0)
-                            frame["y"] = ros_vio.get("y", 0)
-                            frame["z"] = ros_vio.get("z", 0)
-                            has_position = True
-                        if not has_attitude:
-                            # Prefer body attitude when available so SLAM airframe
-                            # orientation stays stable while servo tilt changes.
-                            body_roll = ros_vio.get("body_roll")
-                            body_pitch = ros_vio.get("body_pitch")
-                            body_yaw = ros_vio.get("body_yaw")
-                            roll = float(
-                                (
-                                    body_roll
-                                    if body_roll is not None
-                                    else ros_vio.get("roll", 0)
-                                )
-                                or 0
+                ros_vio = _get_vio_snapshot()["slam_vio_ros_frame"]
+                if ros_vio:
+                    frame_id = ros_vio.get("frame_id", frame_id)
+                    if not has_position:
+                        frame["x"] = ros_vio.get("x", 0)
+                        frame["y"] = ros_vio.get("y", 0)
+                        frame["z"] = ros_vio.get("z", 0)
+                        has_position = True
+
+                    # Always prefer freshest VIO body attitude when available,
+                    # even on mesh frames that carried an older attitude snapshot.
+                    body_roll = ros_vio.get("body_roll")
+                    body_pitch = ros_vio.get("body_pitch")
+                    body_yaw = ros_vio.get("body_yaw")
+                    body_attitude_available = (
+                        body_roll is not None and body_pitch is not None and body_yaw is not None
+                    )
+
+                    if body_attitude_available or not has_attitude:
+                        roll = float(
+                            (
+                                body_roll
+                                if body_attitude_available
+                                else ros_vio.get("roll", 0)
                             )
-                            pitch = float(
-                                (
-                                    body_pitch
-                                    if body_pitch is not None
-                                    else ros_vio.get("pitch", 0)
-                                )
-                                or 0
+                            or 0
+                        )
+                        pitch = float(
+                            (
+                                body_pitch
+                                if body_attitude_available
+                                else ros_vio.get("pitch", 0)
                             )
-                            yaw = float(
-                                (
-                                    body_yaw
-                                    if body_yaw is not None
-                                    else ros_vio.get("yaw", 0)
-                                )
-                                or 0
+                            or 0
+                        )
+                        yaw = float(
+                            (
+                                body_yaw
+                                if body_attitude_available
+                                else ros_vio.get("yaw", 0)
                             )
-                            if all(abs(v) <= 1e-4 for v in (roll, pitch, yaw)):
-                                if has_last_good_attitude:
-                                    frame["roll"] = last_good_roll
-                                    frame["pitch"] = last_good_pitch
-                                    frame["yaw"] = last_good_yaw
-                                    frame["attitude_valid"] = False
-                                    has_attitude = True
-                            else:
-                                frame["roll"] = roll
-                                frame["pitch"] = pitch
-                                frame["yaw"] = yaw
-                                if body_roll is not None and body_pitch is not None and body_yaw is not None:
-                                    frame["body_roll"] = float(body_roll)
-                                    frame["body_pitch"] = float(body_pitch)
-                                    frame["body_yaw"] = float(body_yaw)
-                                frame["attitude_valid"] = True
-                                last_good_roll = roll
-                                last_good_pitch = pitch
-                                last_good_yaw = yaw
-                                has_last_good_attitude = True
+                            or 0
+                        )
+                        if all(abs(v) <= 1e-4 for v in (roll, pitch, yaw)):
+                            if has_last_good_attitude:
+                                frame["roll"] = last_good_roll
+                                frame["pitch"] = last_good_pitch
+                                frame["yaw"] = last_good_yaw
+                                frame["attitude_valid"] = False
                                 has_attitude = True
+                        else:
+                            frame["roll"] = roll
+                            frame["pitch"] = pitch
+                            frame["yaw"] = yaw
+                            if body_attitude_available:
+                                frame["body_roll"] = float(body_roll)
+                                frame["body_pitch"] = float(body_pitch)
+                                frame["body_yaw"] = float(body_yaw)
+                            frame["attitude_valid"] = True
+                            last_good_roll = roll
+                            last_good_pitch = pitch
+                            last_good_yaw = yaw
+                            has_last_good_attitude = True
+                            has_attitude = True
 
                 if not has_attitude and has_last_good_attitude:
                     frame["roll"] = last_good_roll
