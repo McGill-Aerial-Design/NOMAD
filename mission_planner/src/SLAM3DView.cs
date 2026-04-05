@@ -170,6 +170,8 @@ namespace NOMAD.MissionPlanner
         private const float PoseResetNearZeroDeg = 8.0f;
         private const float PoseResetPrevMinDeg = 15.0f;
         private const float PoseResetMaxPositionDeltaM = 0.35f;
+        private const int PoseResetRejectStreakLimit = 3;
+        private int _poseResetRejectStreak = 0;
 
         // ---- Voxel storage ----
         private Dictionary<long, uint> _persistedBlocks = new Dictionary<long, uint>();
@@ -2046,8 +2048,7 @@ namespace NOMAD.MissionPlanner
                             System.Diagnostics.Debug.WriteLine($"[SLAM3D] Unexpected frame_id: {frameId} (expected ros_optical)");
                         }
 
-                        if (frame["x"] == null) continue;
-
+                        bool hasPosePositionInFrame = false;
                         float latestX, latestY, latestZ;
                         lock (_poseLock)
                         {
@@ -2058,70 +2059,80 @@ namespace NOMAD.MissionPlanner
                             float prevPitch = _dronePitchRaw;
                             float prevYaw = _droneYawRaw;
 
-                            if (!isMeshFrame)
+                            if (TryReadFloatToken(frame["x"], out float xVal))
                             {
-                                if (TryReadFloatToken(frame["x"], out float xVal))
-                                    _dronePosX = xVal;
+                                _dronePosX = xVal;
+                                hasPosePositionInFrame = true;
+                            }
 
-                                if (TryReadFloatToken(frame["y"], out float yVal))
-                                    _dronePosY = yVal;
+                            if (TryReadFloatToken(frame["y"], out float yVal))
+                            {
+                                _dronePosY = yVal;
+                                hasPosePositionInFrame = true;
+                            }
 
-                                if (TryReadFloatToken(frame["z"], out float zVal))
-                                    _dronePosZ = zVal;
+                            if (TryReadFloatToken(frame["z"], out float zVal))
+                            {
+                                _dronePosZ = zVal;
+                                hasPosePositionInFrame = true;
+                            }
 
-                                bool hasBodyRoll = TryReadFloatToken(frame["body_roll"], out float bodyRoll);
-                                bool hasBodyPitch = TryReadFloatToken(frame["body_pitch"], out float bodyPitch);
-                                bool hasBodyYaw = TryReadFloatToken(frame["body_yaw"], out float bodyYaw);
+                            bool hasBodyRoll = TryReadFloatToken(frame["body_roll"], out float bodyRoll);
+                            bool hasBodyPitch = TryReadFloatToken(frame["body_pitch"], out float bodyPitch);
+                            bool hasBodyYaw = TryReadFloatToken(frame["body_yaw"], out float bodyYaw);
 
-                                bool hasRoll;
-                                bool hasPitch;
-                                bool hasYaw;
-                                float nextRoll;
-                                float nextPitch;
-                                float nextYaw;
+                            bool hasRoll;
+                            bool hasPitch;
+                            bool hasYaw;
+                            float nextRoll;
+                            float nextPitch;
+                            float nextYaw;
 
-                                if (hasBodyRoll && hasBodyPitch && hasBodyYaw)
+                            if (hasBodyRoll && hasBodyPitch && hasBodyYaw)
+                            {
+                                hasRoll = hasPitch = hasYaw = true;
+                                nextRoll = bodyRoll;
+                                nextPitch = bodyPitch;
+                                nextYaw = bodyYaw;
+                            }
+                            else
+                            {
+                                hasRoll = TryReadFloatToken(frame["roll"], out nextRoll);
+                                hasPitch = TryReadFloatToken(frame["pitch"], out nextPitch);
+                                hasYaw = TryReadFloatToken(frame["yaw"], out nextYaw);
+                            }
+
+                            if (hasRoll && hasPitch && hasYaw)
+                            {
+                                bool rejectResetGlitch = ShouldRejectAttitudeResetGlitch(
+                                    prevX,
+                                    prevY,
+                                    prevZ,
+                                    prevRoll,
+                                    prevPitch,
+                                    prevYaw,
+                                    _dronePosX,
+                                    _dronePosY,
+                                    _dronePosZ,
+                                    nextRoll,
+                                    nextPitch,
+                                    nextYaw);
+
+                                if (rejectResetGlitch && _poseResetRejectStreak < PoseResetRejectStreakLimit)
                                 {
-                                    hasRoll = hasPitch = hasYaw = true;
-                                    nextRoll = bodyRoll;
-                                    nextPitch = bodyPitch;
-                                    nextYaw = bodyYaw;
+                                    _poseResetRejectStreak++;
+                                    if ((DateTime.UtcNow - _lastPoseResetDropLogUtc).TotalSeconds >= 2)
+                                    {
+                                        _lastPoseResetDropLogUtc = DateTime.UtcNow;
+                                        AppendStatusLogSafe("Ignored transient zero-attitude reset frame.");
+                                    }
                                 }
                                 else
                                 {
-                                    hasRoll = TryReadFloatToken(frame["roll"], out nextRoll);
-                                    hasPitch = TryReadFloatToken(frame["pitch"], out nextPitch);
-                                    hasYaw = TryReadFloatToken(frame["yaw"], out nextYaw);
-                                }
-
-                                if (hasRoll && hasPitch && hasYaw)
-                                {
-                                    if (ShouldRejectAttitudeResetGlitch(
-                                        prevX,
-                                        prevY,
-                                        prevZ,
-                                        prevRoll,
-                                        prevPitch,
-                                        prevYaw,
-                                        _dronePosX,
-                                        _dronePosY,
-                                        _dronePosZ,
-                                        nextRoll,
-                                        nextPitch,
-                                        nextYaw))
-                                    {
-                                        if ((DateTime.UtcNow - _lastPoseResetDropLogUtc).TotalSeconds >= 2)
-                                        {
-                                            _lastPoseResetDropLogUtc = DateTime.UtcNow;
-                                            AppendStatusLogSafe("Ignored transient zero-attitude reset frame.");
-                                        }
-                                    }
-                                    else
-                                    {
-                                        _droneRollRaw = nextRoll;
-                                        _dronePitchRaw = nextPitch;
-                                        _droneYawRaw = nextYaw;
-                                    }
+                                    _poseResetRejectStreak = 0;
+                                    _droneRollRaw = nextRoll;
+                                    _dronePitchRaw = nextPitch;
+                                    _droneYawRaw = nextYaw;
                                 }
                             }
 
@@ -2139,7 +2150,7 @@ namespace NOMAD.MissionPlanner
                         }
 
                         // Trajectory
-                        if (!isMeshFrame)
+                        if (hasPosePositionInFrame)
                             AddTrajectoryPoint(latestX, latestY, latestZ);
 
                         // Detection markers
