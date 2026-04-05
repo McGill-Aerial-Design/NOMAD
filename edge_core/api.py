@@ -940,6 +940,13 @@ def create_app(state_manager: StateManager) -> FastAPI:
         """
         container = "nomad_isaac_ros"
 
+        with app.state.slam_mesh_lock:
+            previous_mesh_ts = (
+                app.state.slam_mesh_data.get("received_at")
+                if app.state.slam_mesh_data
+                else None
+            )
+
         # Verify container is running
         try:
             result = subprocess.run(
@@ -1368,6 +1375,26 @@ wait
                 return {
                     "success": False,
                     "error": "ZED camera not detected inside container",
+                }
+
+            # Require at least one fresh mesh update before reporting success.
+            mesh_ready = False
+            for _ in range(50):
+                time.sleep(0.5)
+                with app.state.slam_mesh_lock:
+                    current_mesh_ts = (
+                        app.state.slam_mesh_data.get("received_at")
+                        if app.state.slam_mesh_data
+                        else None
+                    )
+                if current_mesh_ts and current_mesh_ts != previous_mesh_ts:
+                    mesh_ready = True
+                    break
+
+            if not mesh_ready:
+                return {
+                    "success": False,
+                    "error": "Launch completed but mesh stream did not become active.",
                 }
 
             return {
