@@ -164,7 +164,9 @@ namespace NOMAD.MissionPlanner
         private float _renderRollRaw, _renderPitchRaw, _renderYawRaw;
         private bool _renderPoseInitialized;
         private long _lastPoseBlendStamp = -1;
-        private const float PoseBlendRateHz = 12.0f;
+        private long _lastRawPoseUpdateStamp = -1;
+        private const float PoseBlendRateHz = 24.0f;
+        private const double PoseSnapAfterGapSec = 0.40;
         private DateTime _lastPoseResetDropLogUtc = DateTime.MinValue;
         private const float PoseResetJumpThresholdDeg = 25.0f;
         private const float PoseResetNearZeroDeg = 8.0f;
@@ -2075,6 +2077,22 @@ namespace NOMAD.MissionPlanner
                             {
                                 _dronePosZ = zVal;
                                 hasPosePositionInFrame = true;
+                            }
+
+                            if (hasPosePositionInFrame)
+                            {
+                                long nowPoseStamp = Stopwatch.GetTimestamp();
+                                if (_lastRawPoseUpdateStamp > 0)
+                                {
+                                    double gapSec = (double)(nowPoseStamp - _lastRawPoseUpdateStamp) / Stopwatch.Frequency;
+                                    if (gapSec > PoseSnapAfterGapSec)
+                                    {
+                                        // After upstream stalls, snap render pose to fresh raw pose
+                                        // to avoid prolonged catch-up lag from stale samples.
+                                        _renderPoseInitialized = false;
+                                    }
+                                }
+                                _lastRawPoseUpdateStamp = nowPoseStamp;
                             }
 
                             bool hasBodyRoll = TryReadFloatToken(frame["body_roll"], out float bodyRoll);
