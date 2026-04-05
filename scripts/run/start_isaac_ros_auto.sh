@@ -50,6 +50,37 @@ log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # =========================================================================
+# Bridge Authentication Environment
+# =========================================================================
+load_bridge_auth_env() {
+    local env_file="${REPO_ROOT}/config/env/jetson.env"
+
+    if [ -f "$env_file" ]; then
+        if [ -z "${NOMAD_API_KEY:-}" ]; then
+            local api_key
+            api_key=$(grep -E '^NOMAD_API_KEY=' "$env_file" | tail -n1 | cut -d= -f2- | tr -d '\r')
+            if [ -n "$api_key" ]; then
+                export NOMAD_API_KEY="$api_key"
+                log_info "Loaded NOMAD_API_KEY from config/env/jetson.env for bridge auth"
+            fi
+        fi
+
+        if [ -z "${NOMAD_INTERNAL_TOKEN:-}" ]; then
+            local internal_token
+            internal_token=$(grep -E '^NOMAD_INTERNAL_TOKEN=' "$env_file" | tail -n1 | cut -d= -f2- | tr -d '\r')
+            if [ -n "$internal_token" ]; then
+                export NOMAD_INTERNAL_TOKEN="$internal_token"
+                log_info "Loaded NOMAD_INTERNAL_TOKEN from config/env/jetson.env for bridge auth"
+            fi
+        fi
+    fi
+
+    if [ -z "${NOMAD_API_KEY:-}" ]; then
+        log_warn "NOMAD_API_KEY is not set; ros_http_bridge may receive 401 from Edge Core"
+    fi
+}
+
+# =========================================================================
 # Zombie Process Cleanup
 # =========================================================================
 cleanup_zombies() {
@@ -824,6 +855,7 @@ LAUNCH_SCRIPT
 # =========================================================================
 launch_ros_http_bridge() {
     log_info "Launching ROS-HTTP bridge..."
+    load_bridge_auth_env
 
     # Bridge script is available via volume mount at /workspaces/isaac_ros-dev/edge_core/
     # Kill any existing bridge processes to prevent duplicates with proper reaping
