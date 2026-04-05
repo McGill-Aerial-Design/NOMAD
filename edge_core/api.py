@@ -1705,39 +1705,6 @@ wait
                         frame["type"] = "mesh"
                         frame["mesh"] = stored.get("mesh")
                         frame_id = stored.get("frame_id", frame_id)
-                        if stored.get("drone_position"):
-                            dp = stored["drone_position"]
-                            frame["x"] = dp.get("x", 0)
-                            frame["y"] = dp.get("y", 0)
-                            frame["z"] = dp.get("z", 0)
-                            has_position = True
-                        if stored.get("drone_attitude"):
-                            da = stored["drone_attitude"]
-                            roll = float(da.get("roll", 0) or 0)
-                            pitch = float(da.get("pitch", 0) or 0)
-                            yaw = float(da.get("yaw", 0) or 0)
-                            # Guard against transient all-zero reset frames by
-                            # holding the last known-good attitude when available.
-                            if all(abs(v) <= 1e-4 for v in (roll, pitch, yaw)):
-                                if has_last_good_attitude:
-                                    frame["roll"] = last_good_roll
-                                    frame["pitch"] = last_good_pitch
-                                    frame["yaw"] = last_good_yaw
-                                    frame["attitude_valid"] = False
-                                    has_attitude = True
-                            else:
-                                frame["roll"] = roll
-                                frame["pitch"] = pitch
-                                frame["yaw"] = yaw
-                                frame["body_roll"] = roll
-                                frame["body_pitch"] = pitch
-                                frame["body_yaw"] = yaw
-                                frame["attitude_valid"] = True
-                                last_good_roll = roll
-                                last_good_pitch = pitch
-                                last_good_yaw = yaw
-                                has_last_good_attitude = True
-                                has_attitude = True
 
                 # Fall back to ROS-frame VIO for pose (used for pose-only frames
                 # and for mesh frames that only include one of position/attitude)
@@ -2282,27 +2249,15 @@ wait
         """Get current VIO pose (position and orientation)."""
         external_vio_state = _get_vio_snapshot()["external_vio_state"]
         if external_vio_state:
-            return external_vio_state
+            payload = dict(external_vio_state)
+            payload["source"] = "ros_http_bridge"
+            return payload
 
-        isaac_bridge = request.app.state.isaac_bridge
-        if isaac_bridge and isaac_bridge.vio_state:
-            vio = isaac_bridge.vio_state
-            return {
-                "timestamp": vio.timestamp,
-                "x": vio.x,
-                "y": vio.y,
-                "z": vio.z,
-                "roll": vio.roll,
-                "pitch": vio.pitch,
-                "yaw": vio.yaw,
-                "vx": vio.vx,
-                "vy": vio.vy,
-                "vz": vio.vz,
-                "confidence": vio.confidence,
-                "source": "isaac_ros",
-            }
-
-        return {"valid": False, "message": "No VIO data available"}
+        return {
+            "valid": False,
+            "message": "No external VIO data available",
+            "source": "external_vio_required",
+        }
 
     @app.get("/api/vio/trajectory", tags=["VIO"])
     async def vio_trajectory(
