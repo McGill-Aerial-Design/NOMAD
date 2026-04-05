@@ -58,7 +58,7 @@ load_bridge_auth_env() {
     if [ -f "$env_file" ]; then
         if [ -z "${NOMAD_API_KEY:-}" ]; then
             local api_key
-            api_key=$(grep -E '^NOMAD_API_KEY=' "$env_file" | tail -n1 | cut -d= -f2- | tr -d '\r')
+            api_key=$(grep -E '^NOMAD_API_KEY=' "$env_file" 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '\r' || true)
             if [ -n "$api_key" ]; then
                 export NOMAD_API_KEY="$api_key"
                 log_info "Loaded NOMAD_API_KEY from config/env/jetson.env for bridge auth"
@@ -67,7 +67,7 @@ load_bridge_auth_env() {
 
         if [ -z "${NOMAD_INTERNAL_TOKEN:-}" ]; then
             local internal_token
-            internal_token=$(grep -E '^NOMAD_INTERNAL_TOKEN=' "$env_file" | tail -n1 | cut -d= -f2- | tr -d '\r')
+            internal_token=$(grep -E '^NOMAD_INTERNAL_TOKEN=' "$env_file" 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '\r' || true)
             if [ -n "$internal_token" ]; then
                 export NOMAD_INTERNAL_TOKEN="$internal_token"
                 log_info "Loaded NOMAD_INTERNAL_TOKEN from config/env/jetson.env for bridge auth"
@@ -922,11 +922,21 @@ BRIDGE_SCRIPT
 
     # Validate launcher startup quickly. The real bridge process starts after
     # the warmup sleep inside /tmp/launch_bridge.sh.
-    sleep 2
-    BRIDGE_LAUNCHER_PID=$(docker exec "$CONTAINER_NAME" cat /tmp/ros_bridge.pid 2>/dev/null)
+    # Use retries to avoid race conditions when /tmp/ros_bridge.pid is created slightly late.
+    local BRIDGE_LAUNCHER_PID=""
+    local _bridge_probe_tries=20
+    while [ $_bridge_probe_tries -gt 0 ]; do
+        BRIDGE_LAUNCHER_PID=$(docker exec "$CONTAINER_NAME" cat /tmp/ros_bridge.pid 2>/dev/null || true)
+        if [ -n "$BRIDGE_LAUNCHER_PID" ] && docker exec "$CONTAINER_NAME" kill -0 "$BRIDGE_LAUNCHER_PID" 2>/dev/null; then
+            break
+        fi
+        sleep 0.5
+        _bridge_probe_tries=$((_bridge_probe_tries - 1))
+    done
+
     if [ -z "$BRIDGE_LAUNCHER_PID" ] || ! docker exec "$CONTAINER_NAME" kill -0 "$BRIDGE_LAUNCHER_PID" 2>/dev/null; then
         log_error "Failed: ROS-HTTP bridge launcher did not start. Check logs:"
-        docker exec "$CONTAINER_NAME" tail -20 /tmp/ros_bridge.log
+        docker exec "$CONTAINER_NAME" tail -20 /tmp/ros_bridge.log 2>/dev/null || true
         return 1
     fi
     if docker exec "$CONTAINER_NAME" pgrep -f "[r]os_http_bridge\.py" >/dev/null 2>&1; then
