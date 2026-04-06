@@ -25,6 +25,7 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
         // ---- Configuration ----
         private const int MaxPersistedVoxels = 5000;
         private const int VoxelMaxAge = 10;
+        private const double RenderCubeScale = 1.0;
         private static readonly TimeSpan MinRebuildInterval = TimeSpan.FromMilliseconds(250);
 
         // ---- Voxel storage ----
@@ -33,7 +34,6 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
         private int _meshGeneration;
         private Queue<long> _voxelInsertionOrder = new Queue<long>();
         private HashSet<long> _queuedForEviction = new HashSet<long>();
-        private HashSet<long> _occupancySet = new HashSet<long>();
         private double _currentVoxelSize = 0.05;
         private string _currentMeshMode = "";
 
@@ -81,7 +81,6 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
                             if (_persistedBlocks.Remove(key))
                             {
                                 UnqueueForEviction(key);
-                                _occupancySet.Remove(PackKey(rx, ry, rz));
                                 _meshDirty = true;
                             }
                         }
@@ -182,7 +181,7 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
 
         private void ProcessVoxels(MeshDataModel meshData)
         {
-            double vs = meshData.VoxelSize > 0 ? meshData.VoxelSize : 0.15;
+            double vs = NormalizeCellSize(meshData.VoxelSize > 0 ? meshData.VoxelSize : 0.15);
 
             if (_currentMeshMode != "voxel")
             {
@@ -197,9 +196,9 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
                 if (voxel.Position == null || voxel.Position.Count < 3) continue;
 
                 // ROS→GL coordinate conversion at quantization
-                int qx = (int)Math.Floor(-voxel.Position[1] / vs + 0.5);
-                int qy = (int)Math.Floor(voxel.Position[2] / vs + 0.5);
-                int qz = (int)Math.Floor(-voxel.Position[0] / vs + 0.5);
+                int qx = (int)Math.Round(-voxel.Position[1] / vs, MidpointRounding.AwayFromZero);
+                int qy = (int)Math.Round(voxel.Position[2] / vs, MidpointRounding.AwayFromZero);
+                int qz = (int)Math.Round(-voxel.Position[0] / vs, MidpointRounding.AwayFromZero);
                 long key = PackVoxelKey(qx, qy, qz);
 
                 uint colorKey = PackColor(voxel.Color);
@@ -210,7 +209,6 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
                     if (!_persistedBlocks.ContainsKey(key))
                         QueueForEviction(key);
                     _persistedBlocks[key] = colorKey;
-                    _occupancySet.Add(PackKey(qx, qy, qz));
                     _meshDirty = true;
                 }
             }
@@ -220,7 +218,7 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
 
         private void ProcessBlocks(MeshDataModel meshData)
         {
-            double bs = meshData.BlockSize > 0 ? meshData.BlockSize : 0.05;
+            double bs = NormalizeCellSize(meshData.BlockSize > 0 ? meshData.BlockSize : 0.05);
 
             if (_currentMeshMode != "block")
             {
@@ -246,12 +244,17 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
                     if (!_persistedBlocks.ContainsKey(key))
                         QueueForEviction(key);
                     _persistedBlocks[key] = colorKey;
-                    _occupancySet.Add(PackKey(bix, biy, biz));
                     _meshDirty = true;
                 }
             }
 
             EvictOldVoxels();
+        }
+
+        private static double NormalizeCellSize(double size)
+        {
+            if (size <= 0.0) return 0.15;
+            return Math.Round(size, 2, MidpointRounding.AwayFromZero);
         }
 
         private static uint PackColor(List<int> color)
@@ -276,7 +279,7 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
             _lastRenderedCount = _persistedBlocks.Count;
 
             double vs = _currentVoxelSize;
-            float half = (float)(vs * 0.5);
+            float half = (float)(vs * 0.5 * RenderCubeScale);
 
             var verts = new List<float>(_persistedBlocks.Count * 100);
             var indices = new List<int>(_persistedBlocks.Count * 36);
@@ -300,17 +303,17 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
                 }
 
                 // Face-culled cube: only emit faces not adjacent to another voxel
-                if (!_occupancySet.Contains(PackKey(ix + 1, iy, iz)))
+                if (!_persistedBlocks.ContainsKey(PackVoxelKey(ix + 1, iy, iz)))
                     AddQuad(verts, indices, ref vertOffset, cx + half, cy - half, cz - half, cx + half, cy + half, cz - half, cx + half, cy + half, cz + half, cx + half, cy - half, cz + half, cr, cg, cb, 1, 0, 0);
-                if (!_occupancySet.Contains(PackKey(ix - 1, iy, iz)))
+                if (!_persistedBlocks.ContainsKey(PackVoxelKey(ix - 1, iy, iz)))
                     AddQuad(verts, indices, ref vertOffset, cx - half, cy - half, cz + half, cx - half, cy + half, cz + half, cx - half, cy + half, cz - half, cx - half, cy - half, cz - half, cr, cg, cb, -1, 0, 0);
-                if (!_occupancySet.Contains(PackKey(ix, iy + 1, iz)))
+                if (!_persistedBlocks.ContainsKey(PackVoxelKey(ix, iy + 1, iz)))
                     AddQuad(verts, indices, ref vertOffset, cx - half, cy + half, cz - half, cx - half, cy + half, cz + half, cx + half, cy + half, cz + half, cx + half, cy + half, cz - half, cr, cg, cb, 0, 1, 0);
-                if (!_occupancySet.Contains(PackKey(ix, iy - 1, iz)))
+                if (!_persistedBlocks.ContainsKey(PackVoxelKey(ix, iy - 1, iz)))
                     AddQuad(verts, indices, ref vertOffset, cx - half, cy - half, cz + half, cx - half, cy - half, cz - half, cx + half, cy - half, cz - half, cx + half, cy - half, cz + half, cr, cg, cb, 0, -1, 0);
-                if (!_occupancySet.Contains(PackKey(ix, iy, iz + 1)))
+                if (!_persistedBlocks.ContainsKey(PackVoxelKey(ix, iy, iz + 1)))
                     AddQuad(verts, indices, ref vertOffset, cx - half, cy - half, cz + half, cx + half, cy - half, cz + half, cx + half, cy + half, cz + half, cx - half, cy + half, cz + half, cr, cg, cb, 0, 0, 1);
-                if (!_occupancySet.Contains(PackKey(ix, iy, iz - 1)))
+                if (!_persistedBlocks.ContainsKey(PackVoxelKey(ix, iy, iz - 1)))
                     AddQuad(verts, indices, ref vertOffset, cx + half, cy - half, cz - half, cx - half, cy - half, cz - half, cx - half, cy + half, cz - half, cx + half, cy + half, cz - half, cr, cg, cb, 0, 0, -1);
             }
 
@@ -352,8 +355,6 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
                 if (!_persistedBlocks.ContainsKey(kvp.Key))
                     QueueForEviction(kvp.Key);
                 _persistedBlocks[kvp.Key] = kvp.Value;
-                UnpackVoxelKey(kvp.Key, out int fx, out int fy, out int fz);
-                _occupancySet.Add(PackKey(fx, fy, fz));
             }
 
             if (_currentMeshMode == "block")
@@ -391,8 +392,6 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
                 if (_persistedBlocks.Remove(key))
                 {
                     _voxelLastSeen.Remove(key);
-                    UnpackVoxelKey(key, out int ix, out int iy, out int iz);
-                    _occupancySet.Remove(PackKey(ix, iy, iz));
                     _meshDirty = true;
                 }
             }
@@ -418,8 +417,6 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
                 {
                     if (_queuedForEviction.Remove(key))
                         compactQueue = true;
-                    UnpackVoxelKey(key, out int ix, out int iy, out int iz);
-                    _occupancySet.Remove(PackKey(ix, iy, iz));
                     _meshDirty = true;
                 }
             }
@@ -438,14 +435,6 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
         }
 
         // ==================== Private: Key Helpers ====================
-
-        private static long PackKey(int x, int y, int z)
-        {
-            long lx = (long)(x + 0x100000) & 0xFFFFF;
-            long ly = (long)(y + 0x100000) & 0xFFFFF;
-            long lz = (long)(z + 0x100000) & 0xFFFFF;
-            return (lx << 40) | (ly << 20) | lz;
-        }
 
         private static long PackVoxelKey(int ix, int iy, int iz)
         {
@@ -486,7 +475,6 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
             _persistedBlocks.Clear();
             _voxelInsertionOrder.Clear();
             _queuedForEviction.Clear();
-            _occupancySet.Clear();
             _voxelLastSeen.Clear();
             _voxelVerts = null;
             _voxelIndices = null;

@@ -821,6 +821,12 @@ class ROSHTTPBridge(Node):
             mag_x = msg.magnetic_field.x
             mag_y = msg.magnetic_field.y
             # mag_z = msg.magnetic_field.z  # Vertical component (not used for 2D heading)
+
+            # Reject invalid near-zero vectors to avoid spurious heading resets to 0.
+            # MagneticField is in Tesla; Earth horizontal field is typically tens of uT.
+            horiz_field = math.sqrt(mag_x * mag_x + mag_y * mag_y)
+            if horiz_field < 1e-6:
+                return
             
             # Compute heading from X/Y
             # atan2(y, x) gives angle from +X axis (East in sensor frame)
