@@ -375,6 +375,14 @@ install_dependencies() {
 
         if [ "$detected_zed_version" = "$ZED_SDK_VERSION" ]; then
             log_info "ZED SDK installed successfully ($detected_zed_version)"
+
+            # Persist SDK installation in the base runtime image so future
+            # container recreations start with the correct SDK version.
+            if docker commit "$CONTAINER_NAME" "$IMAGE_NAME" >/dev/null 2>&1; then
+                log_info "Persisted $IMAGE_NAME with ZED SDK $detected_zed_version"
+            else
+                log_warn "Could not persist $IMAGE_NAME after SDK install (will reinstall on next recreate)"
+            fi
         else
             if [ -z "$detected_zed_version" ]; then
                 log_error "ZED SDK installation failed: unable to detect installed version"
