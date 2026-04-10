@@ -5852,8 +5852,8 @@ echo $!
                         container,
                         "bash",
                         "-lc",
-                        "pkill -f '[r]viz2' >/dev/null 2>&1 || true; "
-                        "if pgrep -f '[r]viz2' >/dev/null 2>&1; then echo running; else echo stopped; fi",
+                        "pkill -9 -f '(^|/)rviz2([[:space:]]|$)' >/dev/null 2>&1 || true; "
+                        "if pgrep -f '(^|/)rviz2([[:space:]]|$)' >/dev/null 2>&1; then echo running; else echo stopped; fi",
                     ],
                     capture_output=True,
                     text=True,
@@ -5877,8 +5877,8 @@ echo $!
             [
                 "bash",
                 "-lc",
-                "pkill -f '[r]viz2' >/dev/null 2>&1 || true; "
-                "if pgrep -f '[r]viz2' >/dev/null 2>&1; then echo running; else echo stopped; fi",
+                "pkill -9 -f '(^|/)rviz2([[:space:]]|$)' >/dev/null 2>&1 || true; "
+                "if pgrep -f '(^|/)rviz2([[:space:]]|$)' >/dev/null 2>&1; then echo running; else echo stopped; fi",
             ],
             capture_output=True,
             text=True,
