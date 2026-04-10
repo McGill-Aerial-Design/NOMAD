@@ -280,9 +280,9 @@ pub_downscale_factor: 1.0  # 1.0 = native 720p, 2.0 = 360p
 | `/zed/zed_node/rgb/image_rect_color` | 30 Hz | Camera image (default 360p via `pub_downscale_factor: 2.0`; optional 720p with `pub_downscale_factor: 1.0`) |
 | `/zed/zed_node/depth/depth_registered` | 30 Hz | Depth map |
 | `/zed/zed_node/odom` | 30 Hz | Visual-inertial odometry |
-| `/nvblox_node/mesh` | 5.0 Hz | 3D mesh for visualization |
+| `/nvblox_node/mesh` | ~5 Hz (publisher-limited) | 3D mesh for RViz (NOT consumed by NOMAD bridge) |
 | `/nvblox_node/static_map_slice` | ~1 Hz | 2D occupancy grid |
-| `/nvblox_node/color_layer_marker` | 5.0 Hz | Colored voxel markers |
+| `/nvblox_node/color_layer_marker` | publisher-limited; forwarded by ros_http_bridge at up to 30 Hz | Colored voxel markers (primary mesh source for Mission Planner) |
 
 ---
 
@@ -306,7 +306,7 @@ Edge Core API (host, port 8000)
 Mission Planner Plugin (Windows, over Tailscale VPN)
     |
     v
-SLAM3DView.cs (Helix Toolkit WPF)
+SLAM3DView.cs (OpenTK / cross-platform OpenGL)
 ```
 
 ---

@@ -1,5 +1,6 @@
 #!/bin/bash
-# P1-1 & P3-7 Test Runner for Jetson Orin Nano
+# Jetson smoke-test runner: checks SLAM frame contract, edge_core service
+# health, and the VIO endpoint. Canonical SLAM frame_id is "odom".
 # Place in ~/NOMAD/tests/ and run: bash run_jetson_tests.sh
 
 set -e
@@ -10,7 +11,7 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOG_FILE="$TEST_DIR/jetson_test_${TIMESTAMP}.log"
 
 echo "======================================================================"
-echo "P1-1 & P3-7 Jetson Test Suite"
+echo "Jetson SLAM + Edge Core Smoke Tests"
 echo "======================================================================"
 echo "Start time: $(date)"
 echo "Log file: $LOG_FILE"
@@ -34,26 +35,32 @@ echo "======================================================================"
     git status
     echo ""
     
-    # Test 2: P1-1 code changes present
+    # Test 2: Canonical SLAM frame contract
     echo "======================================================================"
-    echo "Test 2: P1-1 Code Changes Verification"
+    echo "Test 2: SLAM frame_id contract (canonical = 'odom')"
     echo "======================================================================"
-    
-    echo "Checking edge_core/api.py for frame_id..."
-    if grep -q '"frame_id": "ros_optical"' edge_core/api.py; then
-        echo "✓ Found frame_id in api.py (WebSocket endpoint)"
-        grep -n '"frame_id": "ros_optical"' edge_core/api.py | head -3
+
+    echo "Checking edge_core/api.py for canonical frame_id 'odom'..."
+    if grep -q "frame_id = \"odom\"" edge_core/api.py || grep -q '"frame_id": "odom"' edge_core/api.py; then
+        echo "✓ Canonical frame_id 'odom' present in api.py"
     else
-        echo "✗ frame_id NOT found in api.py"
+        echo "✗ Canonical frame_id 'odom' NOT found in api.py"
     fi
     echo ""
-    
-    echo "Checking edge_core/ros_http_bridge.py for frame_id..."
-    if grep -q "frame_id.*ros_optical" edge_core/ros_http_bridge.py; then
-        echo "✓ Found frame_id in ros_http_bridge.py"
-        grep -n "frame_id.*ros_optical" edge_core/ros_http_bridge.py | head -3
+
+    echo "Checking edge_core/ros_http_bridge.py for canonical frame_id 'odom'..."
+    if grep -q '"frame_id": "odom"' edge_core/ros_http_bridge.py; then
+        echo "✓ Canonical frame_id 'odom' present in ros_http_bridge.py"
     else
-        echo "✗ frame_id NOT found in ros_http_bridge.py"
+        echo "✗ Canonical frame_id 'odom' NOT found in ros_http_bridge.py"
+    fi
+    echo ""
+
+    echo "Scanning for legacy 'ros_optical' references (should be none)..."
+    if grep -rn "ros_optical" edge_core/ mission_planner/src/ 2>/dev/null; then
+        echo "✗ Legacy 'ros_optical' references still present"
+    else
+        echo "✓ No legacy 'ros_optical' references in edge_core/ or mission_planner/src/"
     fi
     echo ""
     
@@ -127,6 +134,5 @@ echo "Logs saved to: $LOG_FILE"
 echo ""
 echo "Next steps:"
 echo "1. Review log file for any failures"
-echo "2. From Windows, run: python tests/test_p1_1_websocket_frame_id.py"
-echo "3. From Windows, run: python tests/test_p3_7_debounce.py"
+echo "2. Connect to ws://<jetson>:8000/ws/slam and confirm frame_id == 'odom' on live frames"
 echo ""

@@ -538,7 +538,9 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 "body_pitch": vio_request.body_pitch,
                 "body_yaw": vio_request.body_yaw,
                 "timestamp": vio_request.timestamp,
-                "frame_id": getattr(vio_request, "frame_id", "ros_odom"),
+                # Canonical SLAM frame identifier end-to-end: "odom" (REP-103).
+                # Bridge, mesh endpoint, ws_slam, and Mission Planner all agree on this.
+                "frame_id": getattr(vio_request, "frame_id", "odom"),
             }
 
             # Add to trajectory
@@ -1687,7 +1689,9 @@ wait
         try:
             while True:
                 frame = {"type": "pose", "ts": frame_count}
-                frame_id = "ros_odom"
+                # Canonical SLAM frame identifier (REP-103 odom). Same string the
+                # bridge uses for mesh payloads and the Mission Planner client expects.
+                frame_id = "odom"
                 has_position = False
                 has_attitude = False
 
@@ -1705,22 +1709,93 @@ wait
                         has_mesh = True
                         frame["type"] = "mesh"
                         frame["mesh"] = stored.get("mesh")
-                        frame_id = stored.get("frame_id", frame_id)
+                        # Expose the mesh's ROS-time timestamp so clients can
+                        # measure mesh/pose skew and reason about staleness.
+                        frame["mesh_ts"] = mesh_ts
+                        # Canonical frame is "odom". If the stored mesh payload
+                        # has a different frame_id the bridge is misconfigured --
+                        # log once, but keep emitting the canonical identifier so
+                        # downstream clients have a stable contract.
+                        stored_mesh_frame = stored.get("frame_id")
+                        if stored_mesh_frame and stored_mesh_frame != frame_id:
+                            _mesh_mismatch_log = getattr(
+                                websocket.app.state,
+                                "_ws_slam_mesh_frame_mismatch_logged",
+                                False,
+                            )
+                            if not _mesh_mismatch_log:
+                                logger.warning(
+                                    "ws_slam mesh frame_id mismatch: got %r, expected %r",
+                                    stored_mesh_frame,
+                                    frame_id,
+                                )
+                                websocket.app.state._ws_slam_mesh_frame_mismatch_logged = True
+
+                        # Prefer mesh-bundled drone pose for mesh frames so mesh
+                        # vertices and the drone marker originate from the same
+                        # ROS-time snapshot. This matches how RViz renders mesh
+                        # plus TF at a single consistent moment rather than
+                        # mixing older mesh with freshest VIO. Pose-only frames
+                        # continue to use the live ros_vio snapshot below.
+                        mesh_position = stored.get("drone_position")
+                        if isinstance(mesh_position, dict):
+                            frame["x"] = float(mesh_position.get("x", 0) or 0)
+                            frame["y"] = float(mesh_position.get("y", 0) or 0)
+                            frame["z"] = float(mesh_position.get("z", 0) or 0)
+                            has_position = True
+                            frame["pose_source"] = "mesh"
+
+                        mesh_attitude = stored.get("drone_attitude")
+                        if isinstance(mesh_attitude, dict):
+                            m_roll = mesh_attitude.get("roll")
+                            m_pitch = mesh_attitude.get("pitch")
+                            m_yaw = mesh_attitude.get("yaw")
+                            if m_roll is not None and m_pitch is not None and m_yaw is not None:
+                                frame["roll"] = float(m_roll)
+                                frame["pitch"] = float(m_pitch)
+                                frame["yaw"] = float(m_yaw)
+                                frame["body_roll"] = float(m_roll)
+                                frame["body_pitch"] = float(m_pitch)
+                                frame["body_yaw"] = float(m_yaw)
+                                frame["attitude_valid"] = True
+                                last_good_roll = float(m_roll)
+                                last_good_pitch = float(m_pitch)
+                                last_good_yaw = float(m_yaw)
+                                has_last_good_attitude = True
+                                has_attitude = True
 
                 # Fall back to ROS-frame VIO for pose (used for pose-only frames
-                # and for mesh frames that only include one of position/attitude)
-                # frame_id is always "ros_odom" (REP-103) for all pose data
+                # and for mesh frames that only include one of position/attitude).
+                # frame_id is always "odom" (REP-103) for all SLAM pose data.
                 ros_vio = _get_vio_snapshot()["slam_vio_ros_frame"]
                 if ros_vio:
-                    frame_id = ros_vio.get("frame_id", frame_id)
+                    # Only honor the stored frame_id if it matches the canonical
+                    # identifier -- mismatched frames indicate a stale/misrouted
+                    # publisher and must not silently corrupt the ws_slam contract.
+                    stored_frame = ros_vio.get("frame_id")
+                    if stored_frame and stored_frame != frame_id:
+                        _frame_mismatch_log = getattr(
+                            websocket.app.state, "_ws_slam_frame_mismatch_logged", False
+                        )
+                        if not _frame_mismatch_log:
+                            logger.warning(
+                                "ws_slam pose frame_id mismatch: got %r, expected %r",
+                                stored_frame,
+                                frame_id,
+                            )
+                            websocket.app.state._ws_slam_frame_mismatch_logged = True
                     if not has_position:
                         frame["x"] = ros_vio.get("x", 0)
                         frame["y"] = ros_vio.get("y", 0)
                         frame["z"] = ros_vio.get("z", 0)
                         has_position = True
+                        frame.setdefault("pose_source", "vio")
 
-                    # Always prefer freshest VIO body attitude when available,
-                    # even on mesh frames that carried an older attitude snapshot.
+                    # For pose-only frames, pull attitude from the freshest VIO
+                    # snapshot. For mesh frames we already populated attitude
+                    # from the mesh-bundled drone pose (same ROS-time as the
+                    # mesh vertices); leave that intact to keep mesh + drone
+                    # marker temporally consistent.
                     body_roll = ros_vio.get("body_roll")
                     body_pitch = ros_vio.get("body_pitch")
                     body_yaw = ros_vio.get("body_yaw")
@@ -1728,7 +1803,7 @@ wait
                         body_roll is not None and body_pitch is not None and body_yaw is not None
                     )
 
-                    if body_attitude_available or not has_attitude:
+                    if not has_attitude:
                         roll = float(
                             (
                                 body_roll
@@ -4810,14 +4885,35 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
 
         Posted by: ros_http_bridge.py (inside Isaac ROS container)
         """
-        # Size check -- reject payloads over 5 MB
-        max_payload_bytes = 5 * 1024 * 1024
+        # Size check -- raised from 5 MB to 32 MB to avoid dropping dense
+        # nvblox mesh updates in large environments. Oversize payloads still
+        # return 413 but now also bump a visible counter the UI can surface
+        # instead of disappearing silently.
+        max_payload_bytes = 32 * 1024 * 1024
         try:
             raw = await request.body()
         except Exception:
             return JSONResponse({"error": "Invalid payload"}, status_code=400)
         if len(raw) > max_payload_bytes:
-            return JSONResponse({"error": "Payload too large"}, status_code=413)
+            request.app.state.slam_mesh_drops = (
+                getattr(request.app.state, "slam_mesh_drops", 0) + 1
+            )
+            request.app.state.slam_mesh_last_drop_bytes = len(raw)
+            request.app.state.slam_mesh_last_drop_reason = "payload_too_large"
+            logger.warning(
+                "mesh/update dropped: payload %d bytes > limit %d (drop count %d)",
+                len(raw),
+                max_payload_bytes,
+                request.app.state.slam_mesh_drops,
+            )
+            return JSONResponse(
+                {
+                    "error": "Payload too large",
+                    "bytes": len(raw),
+                    "limit": max_payload_bytes,
+                },
+                status_code=413,
+            )
 
         try:
             content_type = request.headers.get("content-type", "application/json")
@@ -4858,13 +4954,25 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 "total_blocks", mesh_data.get("total_voxels", 0)
             )
 
+            # Canonical SLAM frame identifier is "odom" (REP-103). Anything else
+            # from the bridge is a contract violation -- normalize and log once
+            # so silent drift cannot corrupt Mission Planner visualization.
+            incoming_frame = mesh_data.get("frame_id", "odom")
+            if incoming_frame != "odom":
+                if not getattr(request.app.state, "_mesh_ingest_frame_mismatch_logged", False):
+                    logger.warning(
+                        "mesh/update frame_id mismatch: got %r, expected 'odom'",
+                        incoming_frame,
+                    )
+                    request.app.state._mesh_ingest_frame_mismatch_logged = True
+
             request.app.state.slam_mesh_data = {
                 "mesh": mesh_data,
                 "received_at": datetime.now(timezone.utc).isoformat(),
                 "block_count": item_count,
                 "total_blocks": total_items,
                 "mode": mode,
-                "frame_id": mesh_data.get("frame_id", "odom"),
+                "frame_id": "odom",
             }
 
             # Store drone pose from mesh data (from TF lookup in ros_http_bridge)
@@ -4927,6 +5035,13 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                         "block_count": stored.get("block_count", 0),
                         "total_blocks": stored.get("total_blocks", 0),
                         "mode": stored.get("mode", "voxel"),
+                        "drops": getattr(request.app.state, "slam_mesh_drops", 0),
+                        "last_drop_bytes": getattr(
+                            request.app.state, "slam_mesh_last_drop_bytes", 0
+                        ),
+                        "last_drop_reason": getattr(
+                            request.app.state, "slam_mesh_last_drop_reason", None
+                        ),
                     }
                 else:
                     result = {

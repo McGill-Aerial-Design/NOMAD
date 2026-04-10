@@ -22,11 +22,46 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
     /// </summary>
     public class VoxelMeshBuilder
     {
-        // ---- Configuration ----
-        private const int MaxPersistedVoxels = 5000;
-        private const int VoxelMaxAge = 10;
-        private const double RenderCubeScale = 1.01;
-        private static readonly TimeSpan MinRebuildInterval = TimeSpan.FromMilliseconds(250);
+        // ---- Configuration (operational defaults; relaxed in ParityMode) ----
+        private int _maxPersistedVoxels = 5000;
+        private int _voxelMaxAge = 10;
+        private double _renderCubeScale = 1.01;
+        private TimeSpan _minRebuildInterval = TimeSpan.FromMilliseconds(250);
+        private bool _parityMode;
+
+        /// <summary>
+        /// Parity mode for RViz validation runs. When enabled:
+        ///   - Retention cap is raised far above normal so map density matches RViz.
+        ///   - Age-based expiry is disabled so voxels persist as long as RViz would show them.
+        ///   - Render cube scale is exactly 1.0 (no quantization padding).
+        ///   - Rebuild debounce drops to ~16ms so mesh updates are reflected immediately.
+        /// Must be set before mesh ingestion begins to take effect on all geometry.
+        /// </summary>
+        public bool ParityMode
+        {
+            get { lock (_meshLock) return _parityMode; }
+            set
+            {
+                lock (_meshLock)
+                {
+                    _parityMode = value;
+                    if (value)
+                    {
+                        _maxPersistedVoxels = int.MaxValue;
+                        _voxelMaxAge = int.MaxValue;
+                        _renderCubeScale = 1.0;
+                        _minRebuildInterval = TimeSpan.FromMilliseconds(16);
+                    }
+                    else
+                    {
+                        _maxPersistedVoxels = 5000;
+                        _voxelMaxAge = 10;
+                        _renderCubeScale = 1.01;
+                        _minRebuildInterval = TimeSpan.FromMilliseconds(250);
+                    }
+                }
+            }
+        }
 
         // ---- Voxel storage ----
         private Dictionary<long, uint> _persistedBlocks = new Dictionary<long, uint>();
@@ -123,7 +158,7 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
                 }
 
                 long elapsedMs = ElapsedMsSince(_lastMeshRebuildStamp);
-                if (elapsedMs >= (long)MinRebuildInterval.TotalMilliseconds)
+                if (elapsedMs >= (long)_minRebuildInterval.TotalMilliseconds)
                 {
                     // Preserve exact nvblox geometry; do not synthesize gap voxels.
                     RebuildVoxelMesh();
@@ -181,7 +216,10 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
 
         private void ProcessVoxels(MeshDataModel meshData)
         {
-            double vs = NormalizeCellSize(meshData.VoxelSize > 0 ? meshData.VoxelSize : 0.15);
+            // Parity mode preserves the exact server-reported voxel size; the
+            // default path rounds to 2 decimals for cache-friendly grid keys.
+            double incomingSize = meshData.VoxelSize > 0 ? meshData.VoxelSize : 0.15;
+            double vs = _parityMode ? incomingSize : NormalizeCellSize(incomingSize);
 
             if (_currentMeshMode != "voxel")
             {
@@ -222,7 +260,8 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
 
         private void ProcessBlocks(MeshDataModel meshData)
         {
-            double bs = NormalizeCellSize(meshData.BlockSize > 0 ? meshData.BlockSize : 0.05);
+            double incomingBlockSize = meshData.BlockSize > 0 ? meshData.BlockSize : 0.05;
+            double bs = _parityMode ? incomingBlockSize : NormalizeCellSize(incomingBlockSize);
 
             if (_currentMeshMode != "block")
             {
@@ -283,7 +322,7 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
             _lastRenderedCount = _persistedBlocks.Count;
 
             double vs = _currentVoxelSize;
-            float half = (float)(vs * 0.5 * RenderCubeScale);
+            float half = (float)(vs * 0.5 * _renderCubeScale);
 
             var verts = new List<float>(_persistedBlocks.Count * 100);
             var indices = new List<int>(_persistedBlocks.Count * 36);
@@ -391,7 +430,8 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
 
         private void EvictOldVoxels()
         {
-            while (_persistedBlocks.Count > MaxPersistedVoxels && _voxelInsertionOrder.Count > 0)
+            if (_parityMode) return; // Parity mode: never cap retention.
+            while (_persistedBlocks.Count > _maxPersistedVoxels && _voxelInsertionOrder.Count > 0)
             {
                 long key = _voxelInsertionOrder.Dequeue();
                 _queuedForEviction.Remove(key);
@@ -405,7 +445,8 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
 
         private void ExpireOldVoxels()
         {
-            int cutoff = _meshGeneration - VoxelMaxAge;
+            if (_parityMode) return; // Parity mode: never age voxels out.
+            int cutoff = _meshGeneration - _voxelMaxAge;
             if (cutoff < 0) return;
 
             var expired = new List<long>();

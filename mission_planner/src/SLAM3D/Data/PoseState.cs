@@ -45,6 +45,14 @@ namespace NOMAD.MissionPlanner.SLAM3D.Data
         
         /// <summary>Near-zero threshold (degrees) for detecting reset-to-origin frames.</summary>
         public float NearZeroDeg { get; set; } = 8.0f;
+
+        /// <summary>
+        /// Parity mode: when true, all jump rejection and smoothing are bypassed
+        /// so the client renders exactly what the server sends. Used for RViz
+        /// parity validation runs where any client-side filtering would make the
+        /// two visualizations diverge under aggressive maneuvers or relocalization.
+        /// </summary>
+        public bool ParityMode { get; set; } = false;
         
         // ==================== State ====================
         
@@ -151,7 +159,26 @@ namespace NOMAD.MissionPlanner.SLAM3D.Data
             {
                 _totalUpdates++;
                 long nowTicks = Stopwatch.GetTimestamp();
-                
+
+                // Parity mode short-circuit: store the raw values, snap smoothed
+                // output directly to them, and skip all rejection/smoothing so
+                // the view matches RViz's direct stream behavior one-for-one.
+                if (ParityMode)
+                {
+                    _rawX = x; _rawY = y; _rawZ = z;
+                    _smoothX = x; _smoothY = y; _smoothZ = z;
+                    if (attitudeValid)
+                    {
+                        _rawRoll = roll; _rawPitch = pitch; _rawYaw = yaw;
+                        _smoothRoll = roll; _smoothPitch = pitch; _smoothYaw = yaw;
+                    }
+                    _lastUpdateTicks = nowTicks;
+                    _initialized = true;
+                    _consecutiveRejects = 0;
+                    _acceptedUpdates++;
+                    return true;
+                }
+
                 // First update: initialize everything
                 if (!_initialized)
                 {

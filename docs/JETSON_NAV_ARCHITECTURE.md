@@ -92,7 +92,7 @@ This document describes the **Jetson-centric navigation architecture** for NOMAD
 
 ### Position Feedback (30 Hz)
 ```
-ZED Camera -> ZED VSLAM -> /visual_slam/tracking/odometry
+ZED Camera -> ZED ROS driver -> /zed/zed_node/odom
     -> ros_http_bridge -> POST /api/vio/update
     -> VIO Pipeline -> VISION_POSITION_ESTIMATE MAVLink
     -> ArduPilot EKF3
@@ -202,14 +202,17 @@ VIO Failed      -> ALT_HOLD mode, manual takeover required
 ### Inputs (Subscribed by ros_http_bridge)
 | Topic | Type | Source | Rate |
 |-------|------|--------|------|
-| `/visual_slam/tracking/odometry` | nav_msgs/Odometry | ZED VSLAM | 30 Hz |
+| `/zed/zed_node/odom` | nav_msgs/Odometry | ZED ROS driver | 30 Hz |
+| `/zed/zed_node/imu/data` | sensor_msgs/Imu | ZED ROS driver | ~200 Hz |
+| `/zed/zed_node/imu/mag` | sensor_msgs/MagneticField | ZED ROS driver | ~50 Hz |
+| `/nvblox_node/color_layer_marker` | visualization_msgs/Marker | nvblox | publisher-limited |
 | `/cmd_vel` | geometry_msgs/Twist | Nav2 | 10-20 Hz |
 
-### Optional Topics
+### Other nvblox Topics (not consumed by bridge, useful in RViz)
 | Topic | Type | Description |
 |-------|------|-------------|
-| `/nvblox_node/mesh` | nvblox_msgs/Mesh3D | 3D occupancy mesh |
-| `/nvblox_node/map_slice` | nvblox_msgs/DistanceMapSlice | 2D slice for viz |
+| `/nvblox_node/mesh` | nvblox_msgs/Mesh3D | 3D occupancy mesh (RViz only) |
+| `/nvblox_node/static_map_slice` | nvblox_msgs/DistanceMapSlice | 2D slice for viz |
 
 ## Starting the System
 
@@ -225,13 +228,29 @@ python -m edge_core.main
 ```
 
 ### 3. Launch ROS Nodes (inside container)
-```bash
-# ZED + Nvblox
-ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2
+The canonical NOMAD stack (used for Mission Planner parity with RViz) launches
+`nomad_zed_nvblox.launch.py`, not the upstream `zed_example.launch.py`. The
+`start_isaac_ros_auto.sh` script does this automatically:
 
-# ROS-HTTP Bridge (separate terminal)
-python3 ros_http_bridge.py --host 172.17.0.1 --port 8000
+```bash
+# Canonical: launches nomad_zed_nvblox + ros_http_bridge at 30 Hz
+./scripts/run/start_isaac_ros_auto.sh start
 ```
+
+Manual launch inside the container (canonical):
+```bash
+ros2 launch nomad_zed_nvblox.launch.py enable_nav2:=true
+python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py \
+    --host localhost --port 8000 --rate 30 \
+    --vio-topic /zed/zed_node/odom \
+    --mesh-topic /nvblox_node/color_layer_marker \
+    --high-rate-transport http
+```
+
+> **Debug only:** `ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2`
+> launches the upstream nvblox example without the NOMAD bridge. Mission Planner
+> will show nothing on that path and any parity measurements taken against it
+> are invalid. See `docs/NVBLOX_VISUALIZATION.md` for the canonical/debug split.
 
 ### 4. Enable Navigation
 ```bash

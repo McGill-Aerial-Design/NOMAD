@@ -400,6 +400,10 @@ class ROSHTTPBridge(Node):
         self._cmd_vel_send_http_count = 0
         self._mesh_recv_count = 0
         self._mesh_send_count = 0
+        # Counts ROS mesh messages whose bytes were dropped because the
+        # sender thread had not yet transmitted the previous payload. This
+        # surfaces coalescing behavior instead of hiding it as a silent lag.
+        self._mesh_coalesced_count = 0
         self._voxel_empty_count = 0  # consecutive empty voxel markers
         self._servo_recv_count = 0
         self._servo_send_count = 0
@@ -1856,6 +1860,12 @@ class ROSHTTPBridge(Node):
             return
 
         with self._mesh_pending_lock:
+            if self._mesh_pending_data is not None:
+                # Previous payload was still pending -- it will never reach
+                # edge_core. Bump a counter so operators can see coalescing
+                # is happening and decide whether to raise the bridge rate
+                # or move to incremental mesh patching.
+                self._mesh_coalesced_count += 1
             self._mesh_pending_data = data
             self._mesh_pending_ctype = ctype
             self._mesh_pending_meta = mesh_data.get('mode', 'voxel'), mesh_data.get('total_voxels', 0)
@@ -2017,6 +2027,7 @@ class ROSHTTPBridge(Node):
             "cmd_vel_sent_http": self._cmd_vel_send_http_count,
             "mesh_received": self._mesh_recv_count,
             "mesh_sent": self._mesh_send_count,
+            "mesh_coalesced": self._mesh_coalesced_count,
             "servo_received": self._servo_recv_count,
             "servo_sent": self._servo_send_count,
             "detection_received": self._detection_recv_count,

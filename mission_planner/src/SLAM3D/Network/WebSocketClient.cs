@@ -78,8 +78,8 @@ namespace NOMAD.MissionPlanner.SLAM3D.Network
         /// <summary>Maximum reconnect delay in milliseconds.</summary>
         public int MaxReconnectDelayMs { get; set; } = 30000;
         
-        /// <summary>Maximum message size in bytes (10 MB).</summary>
-        public int MaxMessageSize { get; set; } = 10 * 1024 * 1024;
+        /// <summary>Maximum message size in bytes (64 MB — raised so dense nvblox mesh updates are not silently dropped).</summary>
+        public int MaxMessageSize { get; set; } = 64 * 1024 * 1024;
         
         /// <summary>Receive timeout in seconds.</summary>
         public int ReceiveTimeoutSec { get; set; } = 30;
@@ -95,6 +95,8 @@ namespace NOMAD.MissionPlanner.SLAM3D.Network
         private int _framesReceived;
         private int _meshFramesReceived;
         private int _reconnectCount;
+        private int _oversizeDrops;
+        private long _lastOversizeBytes;
         private DateTime _lastFrameTime = DateTime.MinValue;
         
         // ==================== Events ====================
@@ -121,6 +123,12 @@ namespace NOMAD.MissionPlanner.SLAM3D.Network
         
         /// <summary>Number of reconnection attempts.</summary>
         public int ReconnectCount => _reconnectCount;
+
+        /// <summary>Number of frames dropped because they exceeded MaxMessageSize.</summary>
+        public int OversizeDrops => _oversizeDrops;
+
+        /// <summary>Size in bytes of the most recent oversize-dropped frame.</summary>
+        public long LastOversizeBytes => _lastOversizeBytes;
         
         /// <summary>Time since last frame (for health monitoring).</summary>
         public TimeSpan TimeSinceLastFrame => DateTime.UtcNow - _lastFrameTime;
@@ -256,7 +264,17 @@ namespace NOMAD.MissionPlanner.SLAM3D.Network
                 
                 if (timedOut) break;
                 if (result == null || result.MessageType == WebSocketMessageType.Close) break;
-                if (oversized) continue; // Skip oversized messages
+                if (oversized)
+                {
+                    // Track oversized drops visibly instead of silently swallowing
+                    // them -- UI stats reads these counters so operators can see
+                    // whether mesh visualization is stale because of transport
+                    // limits rather than because the bridge stopped publishing.
+                    _oversizeDrops++;
+                    _lastOversizeBytes = messageBuffer.Length;
+                    OnError?.Invoke($"Dropped oversized frame ({_lastOversizeBytes} bytes > {MaxMessageSize} limit)");
+                    continue;
+                }
                 
                 // Parse the message
                 try
@@ -302,7 +320,8 @@ namespace NOMAD.MissionPlanner.SLAM3D.Network
             var frame = new SlamFrame
             {
                 RawJson = jobj,
-                FrameId = jobj["frame_id"]?.ToString() ?? "ros_odom",
+                // Canonical SLAM frame identifier end-to-end: "odom" (REP-103).
+                FrameId = jobj["frame_id"]?.ToString() ?? "odom",
                 FrameNumber = jobj["ts"]?.Value<int>() ?? 0,
             };
             

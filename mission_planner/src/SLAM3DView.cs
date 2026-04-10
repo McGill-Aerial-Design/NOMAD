@@ -65,9 +65,26 @@ namespace NOMAD.MissionPlanner
         // ---- PoseState (anti-jitter filtering) ----
         private readonly PoseState _poseState = new PoseState();
 
+        /// <summary>
+        /// When true, bypass all client-side pose smoothing, jump rejection,
+        /// and voxel retention/quantization so the 3D view matches RViz exactly.
+        /// Controlled by environment variable NOMAD_SLAM3D_PARITY=1 or the
+        /// ParityMode property at runtime.
+        /// </summary>
+        public bool ParityMode
+        {
+            get => _poseState.ParityMode;
+            set
+            {
+                _poseState.ParityMode = value;
+                _voxelMeshBuilder.ParityMode = value;
+            }
+        }
+
         // ---- Drone pose (raw from WS, REP-103 odom frame: X-forward, Y-left, Z-up) ----
         private float _dronePosX, _dronePosY, _dronePosZ;
         private float _droneRollRaw, _dronePitchRaw, _droneYawRaw;
+        private bool _attitudeValid = true; // Tracks server-reported attitude_valid flag
         private float _droneVelX, _droneVelY, _droneVelZ;
         private float _renderPosX, _renderPosY, _renderPosZ;
         private float _renderRollRaw, _renderPitchRaw, _renderYawRaw;
@@ -107,6 +124,24 @@ namespace NOMAD.MissionPlanner
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
             _sender = sender ?? throw new ArgumentNullException(nameof(sender));
+
+            // Parity mode opt-in via environment variable for RViz comparison runs.
+            // Accepts "1", "true", "yes" (case-insensitive).
+            try
+            {
+                string parityEnv = Environment.GetEnvironmentVariable("NOMAD_SLAM3D_PARITY");
+                if (!string.IsNullOrWhiteSpace(parityEnv))
+                {
+                    string v = parityEnv.Trim().ToLowerInvariant();
+                    if (v == "1" || v == "true" || v == "yes")
+                    {
+                        ParityMode = true;
+                        Debug.WriteLine("[SLAM3D] ParityMode enabled via NOMAD_SLAM3D_PARITY");
+                    }
+                }
+            }
+            catch { /* ignore env access failures */ }
+
             InitializeSlamComponents();
             InitializeComponents();
             StartUpdateLoop();
@@ -843,10 +878,12 @@ namespace NOMAD.MissionPlanner
                 return;
 
             var frameJson = frame.RawJson ?? new JObject();
-            string frameId = string.IsNullOrWhiteSpace(frame.FrameId) ? "ros_optical" : frame.FrameId;
-            if (!string.Equals(frameId, "ros_optical", StringComparison.OrdinalIgnoreCase))
+            // Canonical SLAM frame identifier end-to-end: "odom" (REP-103).
+            // Bridge, ws_slam, and mesh endpoint all emit this exact string.
+            string frameId = string.IsNullOrWhiteSpace(frame.FrameId) ? "odom" : frame.FrameId;
+            if (!string.Equals(frameId, "odom", StringComparison.OrdinalIgnoreCase))
             {
-                Debug.WriteLine($"[SLAM3D] Unexpected frame_id: {frameId} (expected ros_optical)");
+                Debug.WriteLine($"[SLAM3D] Unexpected frame_id: {frameId} (expected odom)");
             }
 
             bool hasPosePositionInFrame = false;
@@ -879,6 +916,20 @@ namespace NOMAD.MissionPlanner
                 // websocket hiccup (GC pause, net jitter, etc.). PoseState.Update()
                 // already snaps instead of smoothing when its internal gap
                 // exceeds SnapAfterGapSec, so no external reset is needed.
+
+                // Server marks attitude_valid=false when it is replaying the
+                // last known-good attitude because the live VIO attitude has
+                // collapsed to zero/degraded. In that case do NOT push raw
+                // values through the client pipeline: keep the previously
+                // cached attitude and flag it as degraded so UI can surface
+                // the state instead of silently drifting.
+                bool attitudeValidFromFrame = frame.AttitudeValid;
+                if (frameJson["attitude_valid"] != null)
+                {
+                    try { attitudeValidFromFrame = frameJson["attitude_valid"].Value<bool>(); }
+                    catch { attitudeValidFromFrame = true; }
+                }
+                _attitudeValid = attitudeValidFromFrame;
 
                 bool hasBodyRoll = TryReadFloatToken(frameJson["body_roll"], out float bodyRoll);
                 bool hasBodyPitch = TryReadFloatToken(frameJson["body_pitch"], out float bodyPitch);
@@ -913,7 +964,13 @@ namespace NOMAD.MissionPlanner
 
                 _hasBodyAttitude = hasBodyYaw;
 
-                if (hasRoll && hasPitch && hasYaw)
+                // Only commit a new attitude sample when the server reports it
+                // as valid. When attitude_valid is false the server is replaying
+                // the last-good value, and we prefer to leave our local cached
+                // raw values untouched so the client does not count the replay
+                // as a fresh observation (which would feed PoseState smoothing
+                // and jump-rejection with stale data).
+                if (attitudeValidFromFrame && hasRoll && hasPitch && hasYaw)
                 {
                     _droneRollRaw = nextRoll;
                     _dronePitchRaw = nextPitch;

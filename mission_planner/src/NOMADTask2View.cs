@@ -265,8 +265,9 @@ namespace NOMAD.MissionPlanner
                 var errorLabel = new Label
                 {
                     Text = $"3D SLAM View unavailable: {ex.Message}\n\n" +
-                           "This may be due to missing Helix Toolkit dependencies.\n" +
-                           "Ensure HelixToolkit.Wpf NuGet package is installed.",
+                           "The 3D SLAM view uses OpenTK (cross-platform OpenGL).\n" +
+                           "Ensure the OpenTK NuGet packages are present and the\n" +
+                           "GPU supports OpenGL 2.1 or newer.",
                     Font = new Font("Segoe UI", 11),
                     ForeColor = ERROR_COLOR,
                     Dock = DockStyle.Fill,
