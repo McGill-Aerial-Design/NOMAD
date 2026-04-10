@@ -5447,10 +5447,6 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         """
         Launch RViz2 on the Jetson desktop for remote viewing through noVNC.
         """
-        rviz_bin = shutil.which("rviz2")
-        if not rviz_bin:
-            raise HTTPException(status_code=500, detail="rviz2 was not found in PATH")
-
         display = os.environ.get("NOMAD_CAL_DISPLAY") or os.environ.get("DISPLAY") or ":1"
         request_host = request.url.hostname or ""
         novnc_host = request_host
@@ -5465,6 +5461,28 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         run_env = os.environ.copy()
         run_env["DISPLAY"] = display
         run_env.setdefault("QT_X11_NO_MITSHM", "1")
+        run_env.setdefault("XDG_RUNTIME_DIR", "/tmp")
+
+        start_novnc_cmd = COMMAND_WHITELIST.get("start_novnc")
+        if start_novnc_cmd:
+            novnc_result = subprocess.run(
+                ["bash", "-lc", start_novnc_cmd],
+                capture_output=True,
+                text=True,
+                timeout=25,
+                env=run_env,
+            )
+            if novnc_result.returncode != 0:
+                novnc_output = "\n".join(
+                    part for part in [novnc_result.stdout, novnc_result.stderr] if part
+                ).strip()
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "Failed to start noVNC desktop stack before launching RViz2. "
+                        + (novnc_output or "No additional output available")
+                    ),
+                )
 
         try:
             running_probe = subprocess.run(
@@ -5478,39 +5496,111 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                     "success": True,
                     "message": "RViz2 already running",
                     "display": display,
-                    "tool": os.path.basename(rviz_bin),
+                    "tool": "rviz2",
                     "novnc_url": novnc_url,
                 }
         except Exception:
             # Continue with launch attempt even if process probe fails.
             pass
 
+        launch_cmd = """
+mkdir -p ~/nomad_logs
+source /opt/ros/humble/setup.bash 2>/dev/null || true
+source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null || true
+if ! command -v rviz2 >/dev/null 2>&1; then
+    echo __RVIZ2_NOT_FOUND__
+    exit 127
+fi
+nohup rviz2 > ~/nomad_logs/rviz2.log 2>&1 &
+echo $!
+"""
+
         try:
-            proc = subprocess.Popen(
-                [rviz_bin],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+            launch_result = subprocess.run(
+                ["bash", "-lc", launch_cmd],
+                capture_output=True,
+                text=True,
+                timeout=20,
                 env=run_env,
-                start_new_session=True,
             )
-            time.sleep(0.8)
-            if proc.poll() is not None:
-                raise RuntimeError("rviz2 process exited immediately")
+
+            launch_output = "\n".join(
+                part for part in [launch_result.stdout, launch_result.stderr] if part
+            ).strip()
+
+            if launch_result.returncode != 0:
+                if "__RVIZ2_NOT_FOUND__" in launch_output or launch_result.returncode == 127:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=(
+                            "rviz2 is not available in the current ROS environment. "
+                            "Install rviz2 on the Jetson or source the correct ROS setup."
+                        ),
+                    )
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "Failed to start RViz2 via ROS environment. "
+                        + (launch_output or "No launch output available")
+                    ),
+                )
+
+            pid = None
+            for line in reversed((launch_result.stdout or "").splitlines()):
+                token = line.strip()
+                if token.isdigit():
+                    pid = int(token)
+                    break
+
+            if pid is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "RViz2 launch command did not return a process id. "
+                        + (launch_output or "No launch output available")
+                    ),
+                )
+
+            time.sleep(1.0)
+            alive_check = subprocess.run(
+                ["bash", "-lc", f"kill -0 {pid} 2>/dev/null"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                env=run_env,
+            )
+            if alive_check.returncode != 0:
+                log_tail = subprocess.run(
+                    ["bash", "-lc", "tail -40 ~/nomad_logs/rviz2.log 2>/dev/null || true"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    env=run_env,
+                )
+                tail_text = (log_tail.stdout or "").strip()
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "RViz2 exited immediately after launch. "
+                        + (f"Recent log output:\n{tail_text}" if tail_text else "No RViz2 log output found")
+                    ),
+                )
 
             return {
                 "success": True,
                 "message": "RViz2 launched",
                 "display": display,
-                "tool": os.path.basename(rviz_bin),
-                "pid": proc.pid,
+                "tool": "rviz2",
+                "pid": pid,
                 "novnc_url": novnc_url,
             }
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(
                 status_code=500,
                 detail=(
                     "Failed to launch RViz2. "
-                    "Check DISPLAY/noVNC availability and graphics runtime. "
                     f"Error: {e}"
                 ),
             )
