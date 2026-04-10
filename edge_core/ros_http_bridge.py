@@ -575,7 +575,7 @@ class ROSHTTPBridge(Node):
         else:
             self.get_logger().warning("TF2 not available - camera pose tracking disabled")
         
-        # Camera frame to track (zed2_base_link matches camera:=zed2 launch param)
+        # Camera frame to track (zed2i launch defaults to zed_camera_link frame names)
         self._camera_frame = "zed_camera_link"
         self._reference_frame = "odom"  # Or "map" depending on your setup
 
@@ -704,30 +704,32 @@ class ROSHTTPBridge(Node):
                 pose.orientation.w,
             )
 
-            # Determine which attitude source to use for body orientation.
-            # Priority: magnetometer for yaw (absolute heading), IMU for roll/pitch (gravity).
-            # Fall back to VIO if sensors unavailable.
-            
-            # Roll/pitch: prefer IMU (gravity-aligned, doesn't drift)
+            # --- Attitude sources ---
+            # For SLAM 3D visualization: always use raw VIO attitude.
+            # VIO attitude is in the same odom frame as the nvblox mesh, so
+            # it's self-consistent. IMU/magnetometer are in sensor frame
+            # (magnetic north for yaw) which doesn't match the mesh frame.
+            #
+            # For NED/MAVLink: use IMU roll/pitch (gravity-aligned, no drift)
+            # and magnetometer yaw (absolute heading) when available.
+
+            # SLAM body attitude: VIO with gimbal compensation only
+            body_roll = self._wrap_angle_rad(ros_roll)
+            body_pitch = self._wrap_angle_rad(ros_pitch - self._gimbal_pitch_rad)
+            body_yaw = self._wrap_angle_rad(ros_yaw)
+
+            # NED attitude: prefer IMU/mag when available
             if self._use_imu_attitude and self._imu_recv_count > 0:
                 attitude_roll = self._imu_roll
                 attitude_pitch = self._imu_pitch
             else:
                 attitude_roll = ros_roll
                 attitude_pitch = ros_pitch
-            
-            # Yaw: prefer magnetometer (absolute compass heading)
+
             if self._use_mag_heading and self._mag_recv_count > 0:
                 attitude_yaw = self._mag_heading
             else:
-                # Fall back to VIO yaw if no magnetometer
                 attitude_yaw = ros_yaw
-
-            # Body attitude: compensate pitch for servo tilt.
-            # This allows SLAM viewers to render airframe attitude and apply camera tilt separately.
-            body_roll = self._wrap_angle_rad(attitude_roll)
-            body_pitch = self._wrap_angle_rad(attitude_pitch - self._gimbal_pitch_rad)
-            body_yaw = self._wrap_angle_rad(attitude_yaw)
 
             # Convert from ROS odom frame (REP-103) to NED frame for MAVLink.
             # REP-103: X-forward, Y-left, Z-up
@@ -762,14 +764,16 @@ class ROSHTTPBridge(Node):
                 vz=ned_vz,
                 confidence=confidence,
                 source="isaac_ros",
-                # Also store the raw odom pose for SLAM 3D (same frame as mesh)
-                # These stay in ROS odom frame (REP-103) for consistency with nvblox mesh
+                # Raw VIO odom pose for SLAM 3D (same frame as nvblox mesh).
+                # Uses VIO attitude directly — NOT IMU/mag fused — because the
+                # mesh vertices are in the VIO odom frame. IMU/mag heading is in
+                # magnetic north frame which doesn't match the mesh.
                 ros_x=pose.position.x,
                 ros_y=pose.position.y,
                 ros_z=pose.position.z,
-                ros_roll=attitude_roll,   # Use fused attitude for consistency
-                ros_pitch=attitude_pitch,
-                ros_yaw=attitude_yaw,
+                ros_roll=ros_roll,
+                ros_pitch=ros_pitch,
+                ros_yaw=ros_yaw,
                 body_roll=body_roll,
                 body_pitch=body_pitch,
                 body_yaw=body_yaw,
@@ -808,32 +812,49 @@ class ROSHTTPBridge(Node):
     
     def _handle_mag(self, msg: MagneticField) -> None:
         """
-        Handle magnetometer data from ZED for compass heading.
-        
-        The /zed/zed_node/imu/mag topic provides raw magnetometer readings
-        in microtesla (uT). We compute heading from the X/Y components.
-        
-        Heading convention: 0 = North, positive = clockwise (East).
-        This gives absolute compass heading that doesn't drift like VIO yaw.
+        Handle calibrated magnetometer data from ZED for yaw heading.
+
+        The /zed/zed_node/imu/mag topic is sensor_msgs/MagneticField in Tesla.
+        Compute tilt-compensated heading using IMU roll/pitch so yaw remains
+        stable when pitching/rolling the camera.
         """
         try:
-            # Get raw magnetometer X, Y (horizontal plane)
             mag_x = msg.magnetic_field.x
             mag_y = msg.magnetic_field.y
-            # mag_z = msg.magnetic_field.z  # Vertical component (not used for 2D heading)
+            mag_z = msg.magnetic_field.z
 
-            # Reject invalid near-zero vectors to avoid spurious heading resets to 0.
-            # MagneticField is in Tesla; Earth horizontal field is typically tens of uT.
+            # Reject only truly near-zero vectors to avoid spurious heading resets.
+            # Some ZED setups report scaled/calibrated values around 1e-7 Tesla,
+            # so a high cutoff (for example 1e-6) can incorrectly discard valid data.
             horiz_field = math.sqrt(mag_x * mag_x + mag_y * mag_y)
-            if horiz_field < 1e-6:
+            if horiz_field < 1e-9:
                 return
-            
-            # Compute heading from X/Y
-            # atan2(y, x) gives angle from +X axis (East in sensor frame)
-            # For ZED, X is forward and Y is left in camera frame
-            # So atan2(-Y, X) gives heading from North (forward = North when heading=0)
-            # Negate Y because leftward is positive in camera frame but we want CW positive
-            heading = math.atan2(-mag_y, mag_x)
+
+            with self._lock:
+                imu_roll = self._imu_roll
+                imu_pitch = self._imu_pitch
+                has_imu_attitude = self._imu_recv_count > 0
+
+            # If IMU attitude is available, compensate tilt before computing heading.
+            # Frame assumption: X forward, Y left, Z up (REP-103 body frame).
+            if has_imu_attitude:
+                cr = math.cos(imu_roll)
+                sr = math.sin(imu_roll)
+                cp = math.cos(imu_pitch)
+                sp = math.sin(imu_pitch)
+
+                # Rotate measured field to a level frame to isolate horizontal heading.
+                xh = mag_x * cp + mag_z * sp
+                yh = mag_x * sr * sp + mag_y * cr - mag_z * sr * cp
+
+                if math.sqrt(xh * xh + yh * yh) < 1e-12:
+                    return
+
+                # ROS yaw convention: positive is CCW about +Z.
+                heading = math.atan2(-yh, xh)
+            else:
+                # Fallback to 2D heading when IMU orientation is not yet available.
+                heading = math.atan2(-mag_y, mag_x)
             
             with self._lock:
                 self._mag_heading = heading
@@ -2031,7 +2052,7 @@ def main():
     parser.add_argument("--imu-topic", default="/zed/zed_node/imu/data",
                         help="IMU topic for gravity-aligned attitude")
     parser.add_argument("--mag-topic", default="/zed/zed_node/imu/mag",
-                        help="Magnetometer topic for compass heading")
+                        help="Magnetometer topic for heading")
     parser.add_argument("--cmd-vel-topic", default="/cmd_vel",
                         help="Navigation velocity command topic")
     parser.add_argument("--mesh-topic", default="/nvblox_node/color_layer_marker",

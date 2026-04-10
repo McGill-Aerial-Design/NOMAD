@@ -25,7 +25,7 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
         // ---- Configuration ----
         private const int MaxPersistedVoxels = 5000;
         private const int VoxelMaxAge = 10;
-        private const double RenderCubeScale = 1.0;
+        private const double RenderCubeScale = 1.01;
         private static readonly TimeSpan MinRebuildInterval = TimeSpan.FromMilliseconds(250);
 
         // ---- Voxel storage ----
@@ -195,10 +195,14 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
             {
                 if (voxel.Position == null || voxel.Position.Count < 3) continue;
 
-                // ROS→GL coordinate conversion at quantization
-                int qx = (int)Math.Round(-voxel.Position[1] / vs, MidpointRounding.AwayFromZero);
-                int qy = (int)Math.Round(voxel.Position[2] / vs, MidpointRounding.AwayFromZero);
-                int qz = (int)Math.Round(-voxel.Position[0] / vs, MidpointRounding.AwayFromZero);
+                // ROS→GL coordinate conversion at quantization.
+                // Use Floor (not Round) for consistent grid mapping: every
+                // position in [n*vs, (n+1)*vs) maps to grid index n.
+                // Round(AwayFromZero) skips grid cell 0 when positions
+                // straddle zero (-0.5 → -1, +0.5 → +1), creating visible gaps.
+                int qx = (int)Math.Floor(-voxel.Position[1] / vs);
+                int qy = (int)Math.Floor(voxel.Position[2] / vs);
+                int qz = (int)Math.Floor(-voxel.Position[0] / vs);
                 long key = PackVoxelKey(qx, qy, qz);
 
                 uint colorKey = PackColor(voxel.Color);
@@ -288,9 +292,11 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
             foreach (var kvp in _persistedBlocks)
             {
                 UnpackVoxelKey(kvp.Key, out int ix, out int iy, out int iz);
-                float cx = (float)(ix * vs);
-                float cy = (float)(iy * vs);
-                float cz = (float)(iz * vs);
+                // Center cube in its grid cell: floor-based quantization maps
+                // [n*vs, (n+1)*vs) to index n, so the cell center is (n+0.5)*vs.
+                float cx = (float)((ix + 0.5) * vs);
+                float cy = (float)((iy + 0.5) * vs);
+                float cz = (float)((iz + 0.5) * vs);
 
                 uint ck = kvp.Value;
                 float cr, cg, cb;

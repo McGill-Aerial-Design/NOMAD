@@ -1251,7 +1251,7 @@ ros2 run tf2_ros static_transform_publisher \
 
 # Wait for topics then launch bridge
 sleep 2
-{bridge_env_prefix}python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --mesh-topic /nvblox_node/color_layer_marker --high-rate-transport http &
+{bridge_env_prefix}python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --mag-topic /zed/zed_node/imu/mag --mesh-topic /nvblox_node/color_layer_marker --high-rate-transport http &
 echo $! > /tmp/ros_bridge.pid
 
 # Launch Task 1 target-localizer only when OD mode is enabled.
@@ -5441,6 +5441,79 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 )
             ),
         )
+
+    @app.post("/api/tools/rviz2/start", tags=["Tools"])
+    async def start_rviz2(request: Request):
+        """
+        Launch RViz2 on the Jetson desktop for remote viewing through noVNC.
+        """
+        rviz_bin = shutil.which("rviz2")
+        if not rviz_bin:
+            raise HTTPException(status_code=500, detail="rviz2 was not found in PATH")
+
+        display = os.environ.get("NOMAD_CAL_DISPLAY") or os.environ.get("DISPLAY") or ":1"
+        request_host = request.url.hostname or ""
+        novnc_host = request_host
+        if not novnc_host or novnc_host in {"localhost", "127.0.0.1"}:
+            novnc_host = (
+                os.environ.get("TAILSCALE_IP")
+                or os.environ.get("JETSON_IP")
+                or "localhost"
+            )
+        novnc_url = f"http://{novnc_host}:6080/vnc.html?autoconnect=0&reconnect=0&resize=scale"
+
+        run_env = os.environ.copy()
+        run_env["DISPLAY"] = display
+        run_env.setdefault("QT_X11_NO_MITSHM", "1")
+
+        try:
+            running_probe = subprocess.run(
+                ["pgrep", "-x", "rviz2"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            if running_probe.returncode == 0:
+                return {
+                    "success": True,
+                    "message": "RViz2 already running",
+                    "display": display,
+                    "tool": os.path.basename(rviz_bin),
+                    "novnc_url": novnc_url,
+                }
+        except Exception:
+            # Continue with launch attempt even if process probe fails.
+            pass
+
+        try:
+            proc = subprocess.Popen(
+                [rviz_bin],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=run_env,
+                start_new_session=True,
+            )
+            time.sleep(0.8)
+            if proc.poll() is not None:
+                raise RuntimeError("rviz2 process exited immediately")
+
+            return {
+                "success": True,
+                "message": "RViz2 launched",
+                "display": display,
+                "tool": os.path.basename(rviz_bin),
+                "pid": proc.pid,
+                "novnc_url": novnc_url,
+            }
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Failed to launch RViz2. "
+                    "Check DISPLAY/noVNC availability and graphics runtime. "
+                    f"Error: {e}"
+                ),
+            )
 
     # ==================== Admin Endpoints ====================
 

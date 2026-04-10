@@ -30,7 +30,7 @@ NOMAD_LAUNCH=/workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py
 if [ -f "$NOMAD_LAUNCH" ]; then
     ros2 launch "$NOMAD_LAUNCH" &
 else
-    ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2 &
+  ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2 &
 fi
 NVBLOX_PID=$!
 echo "nvblox launch PID: $NVBLOX_PID"

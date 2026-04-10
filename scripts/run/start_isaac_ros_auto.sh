@@ -719,6 +719,72 @@ export LD_LIBRARY_PATH=/opt/ros/humble/lib:/opt/ros/humble/lib/aarch64-linux-gnu
 source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 export EGL_PLATFORM=device
+
+# Ensure calibrated magnetometer publishing is enabled for ZED heading.
+# This enables /zed/zed_node/imu/mag used by ros_http_bridge yaw fusion.
+python3 << 'PYEOF_ZED_MAG'
+from pathlib import Path
+import re
+
+candidates = [
+    Path('/workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common_stereo.yaml'),
+    Path('/workspaces/isaac_ros-dev/src/zed-ros2-wrapper/zed_wrapper/config/common_stereo.yaml'),
+]
+
+updated_any = False
+for path in candidates:
+    if not path.exists():
+        continue
+
+    text = path.read_text()
+    if re.search(r'(?m)^\s*publish_mag\s*:', text):
+        new_text = re.sub(r'(?m)^(\s*publish_mag\s*:\s*)(?:true|false)\s*$', r'\1true', text)
+    else:
+        new_text = text.rstrip() + '\npublish_mag: true\n'
+
+    if new_text != text:
+        path.write_text(new_text)
+        print(f'Enabled publish_mag in {path}')
+    else:
+        print(f'publish_mag already true in {path}')
+
+    updated_any = True
+
+if not updated_any:
+    print('WARNING: common_stereo.yaml not found; could not enforce publish_mag')
+
+# nvblox zed_example launch uses zed_common.yaml as an override layer.
+# sensors.publish_mag is read-only at runtime, so it must be set before launch.
+zed_common_candidates = [
+    Path('/workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/sensors/zed_common.yaml'),
+    Path('/workspaces/isaac_ros-dev/src/isaac_ros_nvblox/nvblox_examples/nvblox_examples_bringup/config/sensors/zed_common.yaml'),
+]
+
+updated_zed_common = False
+for path in zed_common_candidates:
+    if not path.exists():
+        continue
+
+    text = path.read_text()
+    if re.search(r'(?m)^\s*publish_mag\s*:', text):
+        new_text = re.sub(r'(?m)^(\s*publish_mag\s*:\s*)(?:true|false)\s*$', r'\1true', text)
+    elif re.search(r'(?m)^\s*sensors:\s*$', text):
+        new_text = re.sub(r'(?m)^(\s*sensors:\s*)$', r'\1\n      publish_mag: true', text, count=1)
+    else:
+        new_text = text.rstrip() + '\n    sensors:\n      publish_mag: true\n'
+
+    if new_text != text:
+        path.write_text(new_text)
+        print(f'Enabled sensors.publish_mag in {path}')
+    else:
+        print(f'sensors.publish_mag already true in {path}')
+
+    updated_zed_common = True
+
+if not updated_zed_common:
+    print('WARNING: zed_common.yaml not found; could not enforce sensors.publish_mag')
+PYEOF_ZED_MAG
+
 # Keep ZED at 360p (default downscale 2.0) to save GPU memory.
 # 720p causes cudaErrorIllegalAddress when nvblox allocates GPU memory.
 # sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
@@ -904,7 +970,7 @@ export PYTHONPATH=/workspaces/isaac_ros-dev:${PYTHONPATH:-}
 # Wait for ZED node to fully start and DDS discovery to complete
 # (ZED + nvblox take ~20-30s to init)
 sleep 30
-python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --mesh-topic /nvblox_node/color_layer_marker --high-rate-transport both
+python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --mag-topic /zed/zed_node/imu/mag --mesh-topic /nvblox_node/color_layer_marker --high-rate-transport both
 BRIDGE_SCRIPT
     docker cp "$_bridge_tmp" "$CONTAINER_NAME:/tmp/launch_bridge.sh"
     rm -f "$_bridge_tmp"

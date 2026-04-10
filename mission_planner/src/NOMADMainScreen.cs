@@ -71,6 +71,7 @@ namespace NOMAD.MissionPlanner
         private Button _btnHealth;
         private Button _btnLinks;
         private Button _btnCalibration;
+        private Button _btnRviz2;
         
         // Content views
         private UserControl _currentView;
@@ -83,6 +84,7 @@ namespace NOMAD.MissionPlanner
         private NOMADHealthView _healthView;
         private NOMADLinksView _linksView;
         private ZedCalibrationView _calibrationView;
+        private Rviz2View _rviz2View;
         
         // Update timer
         private System.Windows.Forms.Timer _updateTimer;
@@ -291,6 +293,11 @@ namespace NOMAD.MissionPlanner
             _btnCalibration = CreateSidebarButton("ZED Calibration");
             _btnCalibration.Click += (s, e) => ShowView("Calibration");
             navPanel.Controls.Add(_btnCalibration);
+
+            // RViz2 button
+            _btnRviz2 = CreateSidebarButton("RViz2 (Remote)");
+            _btnRviz2.Click += (s, e) => ShowView("Rviz2");
+            navPanel.Controls.Add(_btnRviz2);
             
             // IMPORTANT: In Windows Forms, docking order is reverse of Z-order
             // Add navPanel FIRST (will be at back, fills remaining space)
@@ -422,6 +429,7 @@ namespace NOMAD.MissionPlanner
                     case "Health": headerText = "System Health"; break;
                     case "Links": headerText = "Dual Link Status"; break;
                     case "Calibration": headerText = "ZED Camera Calibration"; break;
+                    case "Rviz2": headerText = "RViz2 Remote Viewer"; break;
                 }
                 ((Label)headerLabel[0]).Text = headerText;
             }
@@ -481,6 +489,10 @@ namespace NOMAD.MissionPlanner
                     if (_calibrationView == null) _calibrationView = new ZedCalibrationView(_config);
                     newView = _calibrationView;
                     break;
+                case "Rviz2":
+                    if (_rviz2View == null) _rviz2View = new Rviz2View(_config);
+                    newView = _rviz2View;
+                    break;
             }
             
             if (newView != null)
@@ -494,7 +506,7 @@ namespace NOMAD.MissionPlanner
         private void UpdateSidebarButtonState(string viewName)
         {
             // Reset all buttons to default state
-            var buttons = new[] { _btnDashboard, _btnTask1, _btnTask2, _btnBoundaries, _btnVideo, _btnTerminal, _btnHealth, _btnLinks, _btnCalibration };
+            var buttons = new[] { _btnDashboard, _btnTask1, _btnTask2, _btnBoundaries, _btnVideo, _btnTerminal, _btnHealth, _btnLinks, _btnCalibration, _btnRviz2 };
             foreach (var btn in buttons)
             {
                 if (btn != null)
@@ -517,6 +529,7 @@ namespace NOMAD.MissionPlanner
                 case "Health": activeBtn = _btnHealth; break;
                 case "Links": activeBtn = _btnLinks; break;
                 case "Calibration": activeBtn = _btnCalibration; break;
+                case "Rviz2": activeBtn = _btnRviz2; break;
             }
             
             if (activeBtn != null)
@@ -575,6 +588,7 @@ namespace NOMAD.MissionPlanner
                 _healthView?.Dispose();
                 _linksView?.Dispose();
                 _calibrationView?.Dispose();
+                _rviz2View?.Dispose();
             }
             base.Dispose(disposing);
         }

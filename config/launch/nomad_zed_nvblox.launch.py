@@ -1,7 +1,7 @@
 # NOMAD ZED + nvblox + Nav2 + Custom Object Detection Launch File
 #
 # Wraps the standard zed_example.launch.py and adds:
-# - camera=zed2 for the ZED 2i
+# - camera=zed2 for the ZED 2i (zed_example launch expects zed2 token)
 # - Custom YOLO26 object detection via ZED SDK custom OD pipeline
 # - Servo TF publisher (servo_mount -> camera_link dynamic transform)
 # - Static TF: base_link -> servo_mount (mounting offset)

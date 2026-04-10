@@ -72,8 +72,6 @@ namespace NOMAD.MissionPlanner
         private float _renderPosX, _renderPosY, _renderPosZ;
         private float _renderRollRaw, _renderPitchRaw, _renderYawRaw;
         private bool _hasBodyAttitude; // True if body_roll/pitch/yaw received (magnetometer-corrected)
-        private long _lastRawPoseUpdateStamp = -1;
-        private const double PoseSnapAfterGapSec = 0.40;
 
         // ---- Trajectory ----
         private const int MaxTrajectoryPoints = 500;
@@ -874,17 +872,13 @@ namespace NOMAD.MissionPlanner
                     hasPosePositionInFrame = true;
                 }
 
-                if (hasPosePositionInFrame)
-                {
-                    long nowPoseStamp = Stopwatch.GetTimestamp();
-                    if (_lastRawPoseUpdateStamp > 0)
-                    {
-                        double gapSec = (double)(nowPoseStamp - _lastRawPoseUpdateStamp) / Stopwatch.Frequency;
-                        if (gapSec > PoseSnapAfterGapSec)
-                            _poseState.Reset();
-                    }
-                    _lastRawPoseUpdateStamp = nowPoseStamp;
-                }
+                // NOTE: previously this branch called _poseState.Reset() when
+                // the gap since the last pose frame exceeded 0.4s. That zeroed
+                // the smooth render values and caused the drone to appear to
+                // teleport to (0,0,0) with zero attitude whenever there was a
+                // websocket hiccup (GC pause, net jitter, etc.). PoseState.Update()
+                // already snaps instead of smoothing when its internal gap
+                // exceeds SnapAfterGapSec, so no external reset is needed.
 
                 bool hasBodyRoll = TryReadFloatToken(frameJson["body_roll"], out float bodyRoll);
                 bool hasBodyPitch = TryReadFloatToken(frameJson["body_pitch"], out float bodyPitch);
