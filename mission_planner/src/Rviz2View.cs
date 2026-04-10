@@ -18,6 +18,7 @@ namespace NOMAD.MissionPlanner
 
         private TabControl _tabControl;
         private Button _btnLaunchRviz2;
+        private Button _btnStopRviz2;
         private Button _btnOpenRemoteDesktop;
         private Label _lblStatus;
 
@@ -103,7 +104,8 @@ namespace NOMAD.MissionPlanner
                     "Run RViz2 on the Jetson desktop and view it through noVNC:\n\n" +
                     "1. Click 'Launch RViz2'\n" +
                     "2. noVNC opens in your default browser\n" +
-                    "3. Use the remote desktop session to work in RViz2",
+                    "3. Use the remote desktop session to work in RViz2\n" +
+                    "4. Click 'Stop RViz2' when done to reduce Jetson CPU/GPU load",
                 Font = new Font("Segoe UI", 10),
                 ForeColor = NOMADTheme.TEXT_PRIMARY,
                 Dock = DockStyle.Fill,
@@ -131,6 +133,21 @@ namespace NOMAD.MissionPlanner
             _btnLaunchRviz2.FlatAppearance.BorderSize = 0;
             _btnLaunchRviz2.Click += async (s, e) => await LaunchRviz2Async();
             buttonRow.Controls.Add(_btnLaunchRviz2);
+
+            _btnStopRviz2 = new Button
+            {
+                Text = "Stop RViz2",
+                Size = new Size(200, 40),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(170, 58, 58),
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                Cursor = Cursors.Hand,
+                Margin = new Padding(0, 10, 12, 0),
+            };
+            _btnStopRviz2.FlatAppearance.BorderSize = 0;
+            _btnStopRviz2.Click += async (s, e) => await StopRviz2Async();
+            buttonRow.Controls.Add(_btnStopRviz2);
 
             _btnOpenRemoteDesktop = new Button
             {
@@ -253,6 +270,63 @@ namespace NOMAD.MissionPlanner
             finally
             {
                 _btnLaunchRviz2.Enabled = true;
+            }
+        }
+
+        private async Task StopRviz2Async()
+        {
+            _btnStopRviz2.Enabled = false;
+            _lblStatus.Text = "Stopping RViz2...";
+            _lblStatus.ForeColor = NOMADTheme.WARNING;
+
+            try
+            {
+                var resp = await JetsonApiService.PostLongRunAsync("/api/tools/rviz2/stop");
+                var body = await resp.Content.ReadAsStringAsync();
+
+                if (!resp.IsSuccessStatusCode)
+                {
+                    _lblStatus.Text = "Stop failed";
+                    _lblStatus.ForeColor = NOMADTheme.ERROR;
+                    MessageBox.Show(
+                        $"Failed to stop RViz2:\n\n{body}",
+                        "RViz2 Tool Error",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error
+                    );
+                    return;
+                }
+
+                string message = "RViz2 stopped";
+                try
+                {
+                    var data = JObject.Parse(body);
+                    var apiMessage = data["message"]?.Value<string>();
+                    if (!string.IsNullOrWhiteSpace(apiMessage))
+                        message = apiMessage;
+                }
+                catch
+                {
+                    // Keep fallback status message.
+                }
+
+                _lblStatus.Text = message;
+                _lblStatus.ForeColor = NOMADTheme.SUCCESS;
+            }
+            catch (Exception ex)
+            {
+                _lblStatus.Text = "Stop failed";
+                _lblStatus.ForeColor = NOMADTheme.ERROR;
+                MessageBox.Show(
+                    $"Unable to stop RViz2:\n\n{ex.Message}",
+                    "RViz2 Tool Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
+            finally
+            {
+                _btnStopRviz2.Enabled = true;
             }
         }
 

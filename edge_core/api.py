@@ -5563,6 +5563,10 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         Launch RViz2 inside the Isaac ROS container and show it via noVNC.
         """
         display = os.environ.get("NOMAD_CAL_DISPLAY") or os.environ.get("DISPLAY") or ":1"
+        rviz_config_path = os.environ.get(
+            "NOMAD_RVIZ_CONFIG_PATH",
+            "/workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/visualization/zed_example.rviz",
+        )
         request_host = request.url.hostname or ""
         novnc_host = request_host
         if not novnc_host or novnc_host in {"localhost", "127.0.0.1"}:
@@ -5629,6 +5633,66 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             )
 
         container = "nomad_isaac_ros"
+
+        config_probe = subprocess.run(
+            [
+                "docker",
+                "exec",
+                container,
+                "bash",
+                "-lc",
+                f"test -f {shlex.quote(rviz_config_path)}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if config_probe.returncode != 0:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "RViz2 config file not found in Isaac ROS container: "
+                    f"{rviz_config_path}"
+                ),
+            )
+
+        # Compatibility fix for Humble images where PointCloudBox requests
+        # rviz/glsl150/box.geom, which may be missing in the container runtime.
+        patch_cmd = """
+set -e
+src=/workspaces/isaac_ros-dev/src/isaac_ros_nvblox/nvblox_rviz_plugin/src/nvblox_plugin_visual.cpp
+if [ ! -f "$src" ]; then
+  echo __NVBLOX_PLUGIN_SRC_MISSING__
+  exit 0
+fi
+if grep -q '"rviz/PointCloudBox"' "$src"; then
+  sed -i 's/"rviz\\/PointCloudBox"/"rviz\\/PointCloudPoint"/g' "$src"
+  source /opt/ros/humble/setup.bash
+  cd /workspaces/isaac_ros-dev
+  colcon build --packages-select nvblox_rviz_plugin > /tmp/nomad_rviz_patch_build.log 2>&1
+  echo __NVBLOX_PATCH_APPLIED__
+else
+  echo __NVBLOX_PATCH_ALREADY_PRESENT__
+fi
+"""
+        patch_result = subprocess.run(
+            ["docker", "exec", "-u", "root", container, "bash", "-lc", patch_cmd],
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+        patch_output = "\n".join(
+            part for part in [patch_result.stdout, patch_result.stderr] if part
+        ).strip()
+        if patch_result.returncode != 0:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Failed to apply RViz2 nvblox compatibility patch before launch. "
+                    + (patch_output or "No patch output available")
+                ),
+            )
+
         try:
             running_probe = subprocess.run(
                 ["docker", "exec", container, "pgrep", "-x", "rviz2"],
@@ -5648,70 +5712,21 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             # Continue with launch attempt even if process probe fails.
             pass
 
-        rviz_config_text = """
-Panels:
-  - Class: rviz_common/Displays
-    Name: Displays
-  - Class: rviz_common/Tool Properties
-    Name: Tool Properties
-  - Class: rviz_common/Views
-    Name: Views
-Visualization Manager:
-  Class: ""
-  Displays:
-    - Class: rviz_default_plugins/Grid
-      Enabled: true
-      Name: Grid
-      Reference Frame: <Fixed Frame>
-      Value: true
-    - Class: rviz_default_plugins/TF
-      Enabled: true
-      Name: TF
-      Show Arrows: true
-      Show Axes: true
-      Show Names: true
-      Value: true
-  Enabled: true
-  Global Options:
-    Background Color: 48; 48; 48
-    Fixed Frame: odom
-    Frame Rate: 30
-  Name: root
-  Tools:
-    - Class: rviz_default_plugins/Interact
-    - Class: rviz_default_plugins/MoveCamera
-    - Class: rviz_default_plugins/Select
-    - Class: rviz_default_plugins/FocusCamera
-    - Class: rviz_default_plugins/Measure
-    - Class: rviz_default_plugins/SetInitialPose
-      Topic:
-        Value: /initialpose
-    - Class: rviz_default_plugins/SetGoal
-      Topic:
-        Value: /goal_pose
-    - Class: rviz_default_plugins/PublishPoint
-      Single click: true
-      Topic:
-        Value: /clicked_point
-  Transformation:
-    Current:
-      Class: rviz_default_plugins/TF
-  Value: true
-""".strip()
-
         display_arg = shlex.quote(display)
+        rviz_config_arg = shlex.quote(rviz_config_path)
         launch_cmd = f"""
-mkdir -p /tmp/nomad
-cat > /tmp/nomad/nomad_default.rviz <<'RVIZCFG'
-{rviz_config_text}
-RVIZCFG
 export DISPLAY={display_arg}
 source /opt/ros/humble/setup.bash 2>/dev/null || true
+source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null || true
 if ! command -v rviz2 >/dev/null 2>&1; then
     echo __RVIZ2_NOT_FOUND__
     exit 127
 fi
-nohup rviz2 -d /tmp/nomad/nomad_default.rviz > /tmp/rviz2.log 2>&1 &
+if [ ! -f {rviz_config_arg} ]; then
+        echo __RVIZ_CONFIG_NOT_FOUND__
+        exit 66
+fi
+nohup rviz2 -d {rviz_config_arg} > /tmp/rviz2.log 2>&1 &
 echo $!
 """
 
@@ -5734,6 +5749,14 @@ echo $!
                         detail=(
                             "rviz2 is not available in the current ROS environment. "
                             "Install rviz2 on the Jetson or source the correct ROS setup."
+                        ),
+                    )
+                if "__RVIZ_CONFIG_NOT_FOUND__" in launch_output:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=(
+                            "RViz2 config file not found in Isaac ROS container: "
+                            f"{rviz_config_path}"
                         ),
                     )
                 raise HTTPException(
@@ -5805,6 +5828,83 @@ echo $!
                     f"Error: {e}"
                 ),
             )
+
+    @app.post("/api/tools/rviz2/stop", tags=["Tools"])
+    async def stop_rviz2():
+        """
+        Stop RViz2 processes to reduce CPU/GPU load.
+
+        Attempts to stop RViz2 inside the Isaac ROS container and on the host.
+        """
+        container = "nomad_isaac_ros"
+        runtime_state = _probe_isaac_runtime_state(force_refresh=True)
+
+        container_status = "not_running"
+        container_output = ""
+        if runtime_state.get("container_running", False):
+            try:
+                container_stop = subprocess.run(
+                    [
+                        "docker",
+                        "exec",
+                        "-u",
+                        "root",
+                        container,
+                        "bash",
+                        "-lc",
+                        "pkill -x rviz2 >/dev/null 2>&1 || true; "
+                        "if pgrep -x rviz2 >/dev/null 2>&1; then echo running; else echo stopped; fi",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=8,
+                )
+                container_output = "\n".join(
+                    part
+                    for part in [container_stop.stdout, container_stop.stderr]
+                    if part
+                ).strip()
+                container_status = (
+                    "stopped"
+                    if "stopped" in (container_output or "")
+                    else "running"
+                )
+            except Exception as e:
+                container_status = "error"
+                container_output = str(e)
+
+        host_stop = subprocess.run(
+            [
+                "bash",
+                "-lc",
+                "pkill -x rviz2 >/dev/null 2>&1 || true; "
+                "if pgrep -x rviz2 >/dev/null 2>&1; then echo running; else echo stopped; fi",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        host_output = "\n".join(
+            part for part in [host_stop.stdout, host_stop.stderr] if part
+        ).strip()
+        host_status = "stopped" if "stopped" in (host_output or "") else "running"
+
+        success = host_status == "stopped" and container_status in {
+            "stopped",
+            "not_running",
+        }
+
+        return {
+            "success": success,
+            "message": (
+                "RViz2 stopped"
+                if success
+                else "RViz2 stop requested but one or more processes are still running"
+            ),
+            "host_status": host_status,
+            "container_status": container_status,
+            "container_output": container_output,
+        }
 
     # ==================== Admin Endpoints ====================
 
