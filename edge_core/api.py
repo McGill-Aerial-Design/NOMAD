@@ -5852,8 +5852,8 @@ echo $!
                         container,
                         "bash",
                         "-lc",
-                        "pkill -x rviz2 >/dev/null 2>&1 || true; "
-                        "if pgrep -x rviz2 >/dev/null 2>&1; then echo running; else echo stopped; fi",
+                        "pkill -f '[r]viz2' >/dev/null 2>&1 || true; "
+                        "if pgrep -f '[r]viz2' >/dev/null 2>&1; then echo running; else echo stopped; fi",
                     ],
                     capture_output=True,
                     text=True,
@@ -5877,8 +5877,8 @@ echo $!
             [
                 "bash",
                 "-lc",
-                "pkill -x rviz2 >/dev/null 2>&1 || true; "
-                "if pgrep -x rviz2 >/dev/null 2>&1; then echo running; else echo stopped; fi",
+                "pkill -f '[r]viz2' >/dev/null 2>&1 || true; "
+                "if pgrep -f '[r]viz2' >/dev/null 2>&1; then echo running; else echo stopped; fi",
             ],
             capture_output=True,
             text=True,
