@@ -5445,7 +5445,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
     @app.post("/api/tools/rviz2/start", tags=["Tools"])
     async def start_rviz2(request: Request):
         """
-        Launch RViz2 on the Jetson desktop for remote viewing through noVNC.
+        Launch RViz2 inside the Isaac ROS container and show it via noVNC.
         """
         display = os.environ.get("NOMAD_CAL_DISPLAY") or os.environ.get("DISPLAY") or ":1"
         request_host = request.url.hostname or ""
@@ -5503,11 +5503,37 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             # Continue with launch attempt even if process probe fails.
             pass
 
-        rviz_config_dir = os.path.expanduser("~/NOMAD/config/rviz")
-        rviz_config_path = os.path.join(rviz_config_dir, "nomad_default.rviz")
-        if not os.path.isfile(rviz_config_path):
-            os.makedirs(rviz_config_dir, exist_ok=True)
-            rviz_config_text = """
+        runtime_state = _probe_isaac_runtime_state(force_refresh=True)
+        if not runtime_state.get("container_running", False):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Isaac ROS container is not running. Start Task 2 / Isaac ROS "
+                    "before launching RViz2."
+                ),
+            )
+
+        container = "nomad_isaac_ros"
+        try:
+            running_probe = subprocess.run(
+                ["docker", "exec", container, "pgrep", "-x", "rviz2"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            if running_probe.returncode == 0:
+                return {
+                    "success": True,
+                    "message": "RViz2 already running",
+                    "display": display,
+                    "tool": "rviz2",
+                    "novnc_url": novnc_url,
+                }
+        except Exception:
+            # Continue with launch attempt even if process probe fails.
+            pass
+
+        rviz_config_text = """
 Panels:
   - Class: rviz_common/Displays
     Name: Displays
@@ -5557,29 +5583,29 @@ Visualization Manager:
       Class: rviz_default_plugins/TF
   Value: true
 """.strip()
-            with open(rviz_config_path, "w", encoding="utf-8") as f:
-                f.write(rviz_config_text + "\n")
 
-        rviz_config_arg = shlex.quote(rviz_config_path)
+        display_arg = shlex.quote(display)
         launch_cmd = f"""
-mkdir -p ~/nomad_logs
+mkdir -p /tmp/nomad
+cat > /tmp/nomad/nomad_default.rviz <<'RVIZCFG'
+{rviz_config_text}
+RVIZCFG
+export DISPLAY={display_arg}
 source /opt/ros/humble/setup.bash 2>/dev/null || true
-source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null || true
 if ! command -v rviz2 >/dev/null 2>&1; then
     echo __RVIZ2_NOT_FOUND__
     exit 127
 fi
-nohup rviz2 -d {rviz_config_arg} > ~/nomad_logs/rviz2.log 2>&1 &
+nohup rviz2 -d /tmp/nomad/nomad_default.rviz > /tmp/rviz2.log 2>&1 &
 echo $!
 """
 
         try:
             launch_result = subprocess.run(
-                ["bash", "-lc", launch_cmd],
+                ["docker", "exec", container, "bash", "-lc", launch_cmd],
                 capture_output=True,
                 text=True,
                 timeout=20,
-                env=run_env,
             )
 
             launch_output = "\n".join(
@@ -5621,19 +5647,17 @@ echo $!
 
             time.sleep(1.0)
             alive_check = subprocess.run(
-                ["bash", "-lc", f"kill -0 {pid} 2>/dev/null"],
+                ["docker", "exec", container, "bash", "-lc", f"kill -0 {pid} 2>/dev/null"],
                 capture_output=True,
                 text=True,
                 timeout=3,
-                env=run_env,
             )
             if alive_check.returncode != 0:
                 log_tail = subprocess.run(
-                    ["bash", "-lc", "tail -40 ~/nomad_logs/rviz2.log 2>/dev/null || true"],
+                    ["docker", "exec", container, "bash", "-lc", "tail -40 /tmp/rviz2.log 2>/dev/null || true"],
                     capture_output=True,
                     text=True,
                     timeout=5,
-                    env=run_env,
                 )
                 tail_text = (log_tail.stdout or "").strip()
                 raise HTTPException(
