@@ -5503,7 +5503,65 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             # Continue with launch attempt even if process probe fails.
             pass
 
-        launch_cmd = """
+        rviz_config_dir = os.path.expanduser("~/NOMAD/config/rviz")
+        rviz_config_path = os.path.join(rviz_config_dir, "nomad_default.rviz")
+        if not os.path.isfile(rviz_config_path):
+            os.makedirs(rviz_config_dir, exist_ok=True)
+            rviz_config_text = """
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Tool Properties
+    Name: Tool Properties
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Enabled: true
+      Name: Grid
+      Reference Frame: <Fixed Frame>
+      Value: true
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Name: TF
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+      Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: odom
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+    - Class: rviz_default_plugins/SetInitialPose
+      Topic:
+        Value: /initialpose
+    - Class: rviz_default_plugins/SetGoal
+      Topic:
+        Value: /goal_pose
+    - Class: rviz_default_plugins/PublishPoint
+      Single click: true
+      Topic:
+        Value: /clicked_point
+  Transformation:
+    Current:
+      Class: rviz_default_plugins/TF
+  Value: true
+""".strip()
+            with open(rviz_config_path, "w", encoding="utf-8") as f:
+                f.write(rviz_config_text + "\n")
+
+        rviz_config_arg = shlex.quote(rviz_config_path)
+        launch_cmd = f"""
 mkdir -p ~/nomad_logs
 source /opt/ros/humble/setup.bash 2>/dev/null || true
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null || true
@@ -5511,7 +5569,7 @@ if ! command -v rviz2 >/dev/null 2>&1; then
     echo __RVIZ2_NOT_FOUND__
     exit 127
 fi
-nohup rviz2 > ~/nomad_logs/rviz2.log 2>&1 &
+nohup rviz2 -d {rviz_config_arg} > ~/nomad_logs/rviz2.log 2>&1 &
 echo $!
 """
 
@@ -5582,7 +5640,11 @@ echo $!
                     status_code=500,
                     detail=(
                         "RViz2 exited immediately after launch. "
-                        + (f"Recent log output:\n{tail_text}" if tail_text else "No RViz2 log output found")
+                        + (
+                            f"Recent log output:\n{tail_text}"
+                            if tail_text
+                            else "No RViz2 log output found"
+                        )
                     ),
                 )
 

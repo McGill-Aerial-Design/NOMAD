@@ -202,7 +202,7 @@ namespace NOMAD.MissionPlanner
 
             try
             {
-                var resp = await JetsonApiService.PostAsync("/api/tools/rviz2/start");
+                var resp = await JetsonApiService.PostLongRunAsync("/api/tools/rviz2/start");
                 var body = await resp.Content.ReadAsStringAsync();
 
                 if (!resp.IsSuccessStatusCode)
