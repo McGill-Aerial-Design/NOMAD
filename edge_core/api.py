@@ -5567,6 +5567,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             "NOMAD_RVIZ_CONFIG_PATH",
             "/workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/visualization/zed_example.rviz",
         )
+        rviz_fixed_frame = os.environ.get("NOMAD_RVIZ_FIXED_FRAME", "base_link")
         request_host = request.url.hostname or ""
         novnc_host = request_host
         if not novnc_host or novnc_host in {"localhost", "127.0.0.1"}:
@@ -5714,6 +5715,7 @@ fi
 
         display_arg = shlex.quote(display)
         rviz_config_arg = shlex.quote(rviz_config_path)
+        rviz_fixed_frame_arg = shlex.quote(rviz_fixed_frame)
         launch_cmd = f"""
 export DISPLAY={display_arg}
 source /opt/ros/humble/setup.bash 2>/dev/null || true
@@ -5726,7 +5728,10 @@ if [ ! -f {rviz_config_arg} ]; then
         echo __RVIZ_CONFIG_NOT_FOUND__
         exit 66
 fi
-nohup rviz2 -d {rviz_config_arg} > /tmp/rviz2.log 2>&1 &
+mkdir -p /tmp/nomad
+cp {rviz_config_arg} /tmp/nomad/active_zed_example.rviz
+sed -i -E "s/^([[:space:]]*Fixed Frame:).*/\\1 {rviz_fixed_frame_arg}/" /tmp/nomad/active_zed_example.rviz || true
+nohup rviz2 -d /tmp/nomad/active_zed_example.rviz > /tmp/rviz2.log 2>&1 &
 echo $!
 """
 
