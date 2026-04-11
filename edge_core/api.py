@@ -5572,6 +5572,10 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             "NOMAD_RVIZ_FRAME_CANDIDATES",
             "map,odom,base_link,servo_mount,camera_link,zed_camera_center",
         )
+        rviz_voxel_only = (
+            os.environ.get("NOMAD_RVIZ_VOXEL_ONLY", "1").strip().lower()
+            not in {"0", "false", "no", "off"}
+        )
         rviz_frame_candidates = [
             token.strip().lstrip("/")
             for token in rviz_frame_candidates_env.split(",")
@@ -5761,6 +5765,7 @@ fi
                     "display": display,
                     "tool": "rviz2",
                     "fixed_frame": selected_fixed_frame,
+                    "voxel_only": rviz_voxel_only,
                     "novnc_url": novnc_url,
                 }
         except Exception:
@@ -5770,6 +5775,14 @@ fi
         display_arg = shlex.quote(display)
         rviz_config_arg = shlex.quote(rviz_config_path)
         rviz_fixed_frame_arg = shlex.quote(selected_fixed_frame)
+        voxel_only_cmd = ""
+        if rviz_voxel_only:
+            voxel_only_cmd = """
+# Hide triangle mesh in RViz and prefer voxel/occupancy visualization.
+sed -i -E '/Class: nvblox_rviz_plugin\\/NvbloxMesh/{n; s/^([[:space:]]*Enabled:).*/\\1 false/;}' /tmp/nomad/active_zed_example.rviz || true
+# Reduce Jetson load by disabling mesh updates when nvblox supports dynamic params.
+ros2 param set /nvblox_node update_mesh_rate_hz 0.0 > /tmp/nomad/nvblox_mesh_rate.log 2>&1 || true
+"""
         launch_cmd = f"""
 export DISPLAY={display_arg}
 source /opt/ros/humble/setup.bash 2>/dev/null || true
@@ -5785,6 +5798,7 @@ fi
 mkdir -p /tmp/nomad
 cp {rviz_config_arg} /tmp/nomad/active_zed_example.rviz
 sed -i -E "s/^([[:space:]]*Fixed Frame:).*/\\1 {rviz_fixed_frame_arg}/" /tmp/nomad/active_zed_example.rviz || true
+{voxel_only_cmd}
 nohup rviz2 -d /tmp/nomad/active_zed_example.rviz > /tmp/rviz2.log 2>&1 &
 echo $!
 """
@@ -5875,6 +5889,7 @@ echo $!
                 "display": display,
                 "tool": "rviz2",
                 "fixed_frame": selected_fixed_frame,
+                "voxel_only": rviz_voxel_only,
                 "pid": pid,
                 "novnc_url": novnc_url,
             }
