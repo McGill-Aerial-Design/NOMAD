@@ -5785,7 +5785,19 @@ mesh && /^[[:space:]]*Enabled:/ { sub(/Enabled:.*/, "Enabled: false"); mesh=0 }
 { print }
 ' /tmp/nomad/active_zed_example.rviz > /tmp/nomad/active_zed_example.rviz.tmp && mv /tmp/nomad/active_zed_example.rviz.tmp /tmp/nomad/active_zed_example.rviz || true
 # Reduce Jetson load by disabling mesh updates when nvblox supports dynamic params.
-ros2 param set /nvblox_node update_mesh_rate_hz 0.0 > /tmp/nomad/nvblox_mesh_rate.log 2>&1 || true
+mesh_node=""
+for i in 1 2 3 4 5 6; do
+    mesh_node=$(ros2 node list 2>/dev/null | grep nvblox | head -n1 || true)
+    if [ -n "$mesh_node" ]; then
+        break
+    fi
+    sleep 1
+done
+if [ -n "$mesh_node" ]; then
+    ros2 param set "$mesh_node" update_mesh_rate_hz 0.0 > /tmp/nomad/nvblox_mesh_rate.log 2>&1 || true
+else
+    echo "nvblox node not found" > /tmp/nomad/nvblox_mesh_rate.log
+fi
 """
         launch_cmd = f"""
 export DISPLAY={display_arg}
