@@ -20,16 +20,18 @@
     cuda_stream_type: 0
 
     # ==============================================================
-    # VOXEL SIZE - 20cm performance profile (reduced GPU/CPU load)
-    # Use nvblox_indoor.yaml when high-resolution placement is required
+    # VOXEL SIZE - 10cm for decimeter precision (Task 1 + Task 2)
+    # Increase to 0.20 only if GPU memory becomes a problem.
+    # Use nvblox_indoor.yaml (3cm voxels) for fine doorway navigation.
     # ==============================================================
-    voxel_size: 0.20  # 20cm voxels
+    voxel_size: 0.10  # 10cm voxels — decimeter precision
 
     # dynamic: depth-based dynamic object detection (people, vehicles)
     # static_tsdf crashes with cudaErrorIllegalAddress on Jetson Orin Nano
     mapping_type: "dynamic"
 
-    # 2D ESDF — 3D ESDF doubles GPU memory usage, not needed for drone nav
+    # 3D ESDF — required for drone 3D collision checks (variable altitude,
+    # overhead obstacles, low tables). ~2x voxel memory vs 2D mode.
     esdf_mode: "3d"
 
     # ==============================================================
@@ -38,7 +40,10 @@
     # ==============================================================
     tick_period_ms: 50
     integrate_depth_rate_hz: 5.0     # conservative depth integration
-    integrate_color_rate_hz: 1.0     # needed for mesh vertex generation
+    # Color integration must match depth/mesh rate or color_layer_marker
+    # voxels flash in/out at the color cadence. Was 1.0 — produced a visible
+    # 1 Hz thrash in RViz because the color layer lagged depth by 4 frames.
+    integrate_color_rate_hz: 5.0     # matches depth/mesh; prevents marker flicker
     integrate_lidar_rate_hz: 0.0
     update_mesh_rate_hz: 5.0         # balanced mesh update cadence for lower CPU
     update_esdf_rate_hz: 5.0         # balanced ESDF updates for obstacle avoidance
@@ -93,7 +98,14 @@
     layer_visualization_min_tsdf_weight: 0.0001
     max_back_projection_distance: 5.0
     back_projection_subsampling: 4
-    layer_streamer_bandwidth_limit_mbps: 30.0
+    # Negative value = unlimited. nvblox's layer_streamer uses a bandwidth
+    # budget to decide how many dirty blocks it streams per publish tick.
+    # Any positive cap (even large) causes the color_layer_marker topic to
+    # become incremental, which is broken with stock RViz (stateless Marker
+    # display replaces rather than accumulates). For the plugin topics
+    # (/nvblox_node/mesh, /nvblox_node/color_layer) this simply maximizes
+    # throughput. See nvblox layer_streamer_impl.h.
+    layer_streamer_bandwidth_limit_mbps: -1.0
 
     # Multi-mapper settings
     multi_mapper:
@@ -132,19 +144,47 @@
       esdf_integrator_max_distance_m: 2.0
 
       # Mesh - triangle surface generation (streamed to Mission Planner)
-      # Min weight must be very low for dynamic mode — background TSDF accumulates
-      # weight slowly with the blocking CUDA stream
-      mesh_integrator_min_weight: 0.0001
+      # Must be high enough that low-confidence voxels don't appear/disappear
+      # on every decay cycle (previous value 0.0001 caused visible flicker in
+      # color_layer_marker — blocks popped in on integration then vanished on
+      # the next decay tick).
+      mesh_integrator_min_weight: 0.1
       mesh_integrator_weld_vertices: true
 
-      # Decay - enable to free GPU memory for old blocks
-      tsdf_decay_factor: 0.95
+      # Decay - softened to prevent block thrash
+      # Previous config (0.95 factor + 0.001 threshold + deallocate) caused
+      # blocks just outside the camera frustum to oscillate: their weight
+      # decayed below threshold in ~1s, the deallocator removed them, and the
+      # next depth frame re-allocated them. Keep decayed blocks around (dim
+      # rather than vanish) and decay more gently.
+      tsdf_decay_factor: 0.98
       tsdf_decayed_weight_threshold: 0.001
       exclude_last_view_from_decay: true
       tsdf_set_free_distance_on_decayed: false
       tsdf_decayed_free_distance_vox: 4.0
-      decay_integrator_deallocate_decayed_blocks: true
+      decay_integrator_deallocate_decayed_blocks: false
 
       # Streaming - 5m radius
       layer_streamer_exclusion_height_m: 50.0
       layer_streamer_exclusion_radius_m: 5.0
+
+    # Dynamic mapper (moving-object layer in dynamic mode).
+    # In dynamic mapping_type, nvblox classifies each voxel as static or
+    # dynamic every cycle. Border voxels (ZED depth noise, VIO jitter) flip
+    # classifications, so any aggressive decay / deallocate on the dynamic
+    # side causes the voxel to vanish → reappear → vanish on the
+    # color_layer_marker topic. Mirror the static_mapper decay tuning so
+    # misclassified voxels don't thrash.
+    dynamic_mapper:
+      projective_integrator_max_integration_distance_m: 5.0
+      projective_integrator_truncation_distance_vox: 4.0
+      projective_integrator_weighting_mode: "inverse_square_tsdf_distance_penalty"
+      projective_integrator_max_weight: 10.0
+
+      mesh_integrator_min_weight: 0.1
+      mesh_integrator_weld_vertices: true
+
+      tsdf_decay_factor: 0.98
+      tsdf_decayed_weight_threshold: 0.001
+      exclude_last_view_from_decay: true
+      decay_integrator_deallocate_decayed_blocks: false
