@@ -5779,7 +5779,11 @@ fi
         if rviz_voxel_only:
             voxel_only_cmd = """
 # Hide triangle mesh in RViz and prefer voxel/occupancy visualization.
-sed -i -E '/Class: nvblox_rviz_plugin\\/NvbloxMesh/{n; s/^([[:space:]]*Enabled:).*/\\1 false/;}' /tmp/nomad/active_zed_example.rviz || true
+awk '
+/Class: nvblox_rviz_plugin\\/NvbloxMesh/ { mesh=1 }
+mesh && /^[[:space:]]*Enabled:/ { sub(/Enabled:.*/, "Enabled: false"); mesh=0 }
+{ print }
+' /tmp/nomad/active_zed_example.rviz > /tmp/nomad/active_zed_example.rviz.tmp && mv /tmp/nomad/active_zed_example.rviz.tmp /tmp/nomad/active_zed_example.rviz || true
 # Reduce Jetson load by disabling mesh updates when nvblox supports dynamic params.
 ros2 param set /nvblox_node update_mesh_rate_hz 0.0 > /tmp/nomad/nvblox_mesh_rate.log 2>&1 || true
 """
