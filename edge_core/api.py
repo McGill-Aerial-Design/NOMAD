@@ -5853,11 +5853,15 @@ echo $!
                         "bash",
                         "-lc",
                         "pkill -9 -f '(^|/)rviz2([[:space:]]|$)' >/dev/null 2>&1 || true; "
-                        "if pgrep -f '(^|/)rviz2([[:space:]]|$)' >/dev/null 2>&1; then echo running; else echo stopped; fi",
+                        "for i in 1 2 3 4 5 6; do "
+                        "if ! pgrep -f '(^|/)rviz2([[:space:]]|$)' >/dev/null 2>&1; then echo stopped; exit 0; fi; "
+                        "sleep 0.5; "
+                        "done; "
+                        "echo running",
                     ],
                     capture_output=True,
                     text=True,
-                    timeout=8,
+                    timeout=12,
                 )
                 container_output = "\n".join(
                     part
@@ -5878,11 +5882,15 @@ echo $!
                 "bash",
                 "-lc",
                 "pkill -9 -f '(^|/)rviz2([[:space:]]|$)' >/dev/null 2>&1 || true; "
-                "if pgrep -f '(^|/)rviz2([[:space:]]|$)' >/dev/null 2>&1; then echo running; else echo stopped; fi",
+                "for i in 1 2 3 4 5 6; do "
+                "if ! pgrep -f '(^|/)rviz2([[:space:]]|$)' >/dev/null 2>&1; then echo stopped; exit 0; fi; "
+                "sleep 0.5; "
+                "done; "
+                "echo running",
             ],
             capture_output=True,
             text=True,
-            timeout=8,
+            timeout=12,
         )
         host_output = "\n".join(
             part for part in [host_stop.stdout, host_stop.stderr] if part
