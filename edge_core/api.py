@@ -5790,6 +5790,9 @@ mesh && /^[[:space:]]*Enabled:/ { sub(/Enabled:.*/, "Enabled: false"); mesh=0 }
     mesh_node=""
     for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
         mesh_node=$(ros2 node list 2>/dev/null | grep nvblox | head -n1 || true)
+        if [ -z "$mesh_node" ]; then
+            mesh_node=$(ros2 service list 2>/dev/null | sed -n 's#^\(.*\)/set_parameters$#\1#p' | grep nvblox | head -n1 || true)
+        fi
         if [ -n "$mesh_node" ]; then
             ros2 param set "$mesh_node" update_mesh_rate_hz 0.0
             exit 0
