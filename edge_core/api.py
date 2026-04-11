@@ -5567,7 +5567,22 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             "NOMAD_RVIZ_CONFIG_PATH",
             "/workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/visualization/zed_example.rviz",
         )
-        rviz_fixed_frame = os.environ.get("NOMAD_RVIZ_FIXED_FRAME", "base_link")
+        rviz_fixed_frame = (os.environ.get("NOMAD_RVIZ_FIXED_FRAME") or "").strip()
+        rviz_frame_candidates_env = os.environ.get(
+            "NOMAD_RVIZ_FRAME_CANDIDATES",
+            "map,odom,base_link,servo_mount,camera_link,zed_camera_center",
+        )
+        rviz_frame_candidates = [
+            token.strip().lstrip("/")
+            for token in rviz_frame_candidates_env.split(",")
+            if token.strip()
+        ]
+        if rviz_fixed_frame:
+            preferred = rviz_fixed_frame.lstrip("/")
+            rviz_frame_candidates = [
+                preferred,
+                *[c for c in rviz_frame_candidates if c != preferred],
+            ]
         request_host = request.url.hostname or ""
         novnc_host = request_host
         if not novnc_host or novnc_host in {"localhost", "127.0.0.1"}:
@@ -5634,6 +5649,44 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             )
 
         container = "nomad_isaac_ros"
+        selected_fixed_frame = rviz_fixed_frame.lstrip("/") if rviz_fixed_frame else "map"
+
+        frame_probe_cmd = """
+source /opt/ros/humble/setup.bash 2>/dev/null || true
+source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null || true
+collect_frames() {
+  topic="$1"
+  timeout 6 ros2 topic echo "$topic" --once 2>/dev/null \
+    | awk '/frame_id:|child_frame_id:/{gsub("\"", "", $2); gsub("^/", "", $2); print $2}' \
+    || true
+}
+{
+  collect_frames /tf_static
+  collect_frames /tf
+} | sed '/^$/d' | sort -u
+"""
+        try:
+            frame_probe = subprocess.run(
+                ["docker", "exec", container, "bash", "-lc", frame_probe_cmd],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            available_frames = {
+                line.strip().lstrip("/")
+                for line in (frame_probe.stdout or "").splitlines()
+                if line.strip()
+            }
+            if available_frames:
+                for candidate in rviz_frame_candidates:
+                    if candidate in available_frames:
+                        selected_fixed_frame = candidate
+                        break
+                else:
+                    selected_fixed_frame = sorted(available_frames)[0]
+        except Exception:
+            # Keep configured default if probing fails.
+            pass
 
         config_probe = subprocess.run(
             [
@@ -5707,6 +5760,7 @@ fi
                     "message": "RViz2 already running",
                     "display": display,
                     "tool": "rviz2",
+                    "fixed_frame": selected_fixed_frame,
                     "novnc_url": novnc_url,
                 }
         except Exception:
@@ -5715,7 +5769,7 @@ fi
 
         display_arg = shlex.quote(display)
         rviz_config_arg = shlex.quote(rviz_config_path)
-        rviz_fixed_frame_arg = shlex.quote(rviz_fixed_frame)
+        rviz_fixed_frame_arg = shlex.quote(selected_fixed_frame)
         launch_cmd = f"""
 export DISPLAY={display_arg}
 source /opt/ros/humble/setup.bash 2>/dev/null || true
@@ -5820,6 +5874,7 @@ echo $!
                 "message": "RViz2 launched",
                 "display": display,
                 "tool": "rviz2",
+                "fixed_frame": selected_fixed_frame,
                 "pid": pid,
                 "novnc_url": novnc_url,
             }
