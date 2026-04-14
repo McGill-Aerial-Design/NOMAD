@@ -1189,7 +1189,7 @@ try:
             break
     with open(common_path, 'w') as f:
         yaml.safe_dump(common, f, default_flow_style=False, sort_keys=False)
-    print(f"Configured NITROS (ENABLE_OD={enable_od}, disable_nitros={disable_nitros})")
+    print("Configured NITROS (ENABLE_OD=%s, disable_nitros=%s)" % (enable_od, disable_nitros))
 except Exception as e:
     print("NITROS config warning: " + str(e))
 PYEOF_NITROS
