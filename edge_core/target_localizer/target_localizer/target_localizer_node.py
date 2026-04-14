@@ -156,6 +156,11 @@ class TargetLocalizerNode(Node):
         self.camera_cx: float = 0.0
         self.camera_cy: float = 0.0
         self.intrinsics_received: bool = False
+        self.rgb_msg_count: int = 0
+        self.depth_msg_count: int = 0
+        self.cam_info_msg_count: int = 0
+        self._last_rgb_error_ts: float = 0.0
+        self._last_depth_error_ts: float = 0.0
 
         self.targets: List[TargetRecord] = []
         self.next_target_id: int = 1
@@ -177,12 +182,24 @@ class TargetLocalizerNode(Node):
             Image, '/zed2i/zed_node/rgb/image_rect_color',
             self._rgb_callback, sensor_qos
         )
+        self.rgb_sub_direct = self.create_subscription(
+            Image, '/zed/zed_node/rgb/color/rect/image',
+            self._rgb_callback, sensor_qos
+        )
         self.depth_sub = self.create_subscription(
             Image, '/zed2i/zed_node/depth/depth_registered',
             self._depth_callback, sensor_qos
         )
+        self.depth_sub_direct = self.create_subscription(
+            Image, '/zed/zed_node/depth/depth_registered',
+            self._depth_callback, sensor_qos
+        )
         self.cam_info_sub = self.create_subscription(
             CameraInfo, '/zed2i/zed_node/rgb/camera_info',
+            self._cam_info_callback, sensor_qos
+        )
+        self.cam_info_sub_direct = self.create_subscription(
+            CameraInfo, '/zed/zed_node/rgb/color/rect/camera_info',
             self._cam_info_callback, sensor_qos
         )
         self.gps_sub = self.create_subscription(
@@ -226,6 +243,9 @@ class TargetLocalizerNode(Node):
         if self.get_parameter('auto_landmark_detection').value and self.landmark_detector:
             self.create_timer(self.landmark_interval, self._landmark_timer_callback)
 
+        # Periodic input health watchdog so startup issues are visible in logs.
+        self.create_timer(5.0, self._input_watchdog_callback)
+
         self.get_logger().info(
             "Target localizer node started. "
             "Call /target_localizer/capture_target to detect and describe targets."
@@ -235,14 +255,33 @@ class TargetLocalizerNode(Node):
     #  Subscriber callbacks
     # ================================================================ #
     def _rgb_callback(self, msg: Image):
-        self.latest_rgb = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-        self.latest_rgb_stamp = msg.header.stamp
+        try:
+            self.latest_rgb = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            self.latest_rgb_stamp = msg.header.stamp
+            self.rgb_msg_count += 1
+        except Exception as e:
+            now = time.time()
+            if now - self._last_rgb_error_ts > 5.0:
+                self._last_rgb_error_ts = now
+                self.get_logger().warn(
+                    f"RGB conversion failed (encoding={getattr(msg, 'encoding', '?')}): {e}"
+                )
 
     def _depth_callback(self, msg: Image):
-        # ZED publishes depth as 32FC1 in meters
-        self.latest_depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding='32FC1')
+        try:
+            # ZED publishes depth as 32FC1 in meters
+            self.latest_depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding='32FC1')
+            self.depth_msg_count += 1
+        except Exception as e:
+            now = time.time()
+            if now - self._last_depth_error_ts > 5.0:
+                self._last_depth_error_ts = now
+                self.get_logger().warn(
+                    f"Depth conversion failed (encoding={getattr(msg, 'encoding', '?')}): {e}"
+                )
 
     def _cam_info_callback(self, msg: CameraInfo):
+        self.cam_info_msg_count += 1
         if not self.intrinsics_received:
             self.camera_fx = msg.k[0]
             self.camera_fy = msg.k[4]
@@ -253,6 +292,18 @@ class TargetLocalizerNode(Node):
                 f"Camera intrinsics received: fx={self.camera_fx:.1f}, "
                 f"fy={self.camera_fy:.1f}, cx={self.camera_cx:.1f}, cy={self.camera_cy:.1f}"
             )
+
+    def _input_watchdog_callback(self):
+        if self.latest_rgb is not None and self.latest_depth is not None and self.intrinsics_received:
+            return
+
+        self.get_logger().warn(
+            "Waiting for camera inputs: "
+            f"rgb_msg_count={self.rgb_msg_count}, "
+            f"depth_msg_count={self.depth_msg_count}, "
+            f"cam_info_msg_count={self.cam_info_msg_count}, "
+            f"intrinsics_received={self.intrinsics_received}"
+        )
 
     def _gps_callback(self, msg: NavSatFix):
         self.drone_lat = msg.latitude
@@ -445,12 +496,19 @@ class TargetLocalizerNode(Node):
         # Validate state
         if self.latest_rgb is None or self.latest_depth is None:
             response.success = False
-            response.message = "No RGB or depth image available."
+            response.message = (
+                "No RGB or depth image available. "
+                f"(rgb_msgs={self.rgb_msg_count}, depth_msgs={self.depth_msg_count}, "
+                f"cam_info_msgs={self.cam_info_msg_count})"
+            )
             return response
 
         if not self.intrinsics_received:
             response.success = False
-            response.message = "Camera intrinsics not yet received."
+            response.message = (
+                "Camera intrinsics not yet received. "
+                f"(cam_info_msgs={self.cam_info_msg_count})"
+            )
             return response
 
         if not self.has_gps_fix and not self.has_local_pose:
