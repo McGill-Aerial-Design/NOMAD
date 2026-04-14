@@ -410,6 +410,9 @@ class ROSHTTPBridge(Node):
         self._detection_recv_count = 0
         self._detection_send_count = 0
         self._last_detection_send_time = 0.0
+        self._last_detection_heartbeat_log_time = 0.0
+        self._detection_heartbeat_interval_s = 1.0
+        self._detection_camera_fresh_s = 2.5
         self._latest_detections: list[DetectedObject] = []
         self._send_errors = 0
         self._last_send_time = 0.0
@@ -520,6 +523,7 @@ class ROSHTTPBridge(Node):
         self._image_height = 0
         self._image_encoding = "rgb8"
         self._image_step = 0
+        self._last_image_receive_time = 0.0
         self._image_lock = threading.Lock()
         self._hsv_verify_min_ratio = 0.20
         self._color_verifier = None
@@ -624,6 +628,9 @@ class ROSHTTPBridge(Node):
 
         # Timer to send data to edge_core
         self.create_timer(self._send_interval, self._send_to_edge_core)
+        # Keep detection freshness alive even when no objects are detected,
+        # but only while camera frames are actively flowing.
+        self.create_timer(0.5, self._send_detection_heartbeat)
         # Poll gimbal angle on its own timer to avoid blocking VIO send timer work.
         self.create_timer(self._gimbal_poll_interval, self._poll_gimbal_angle)
         # Poll runtime mesh output mode from Edge Core (voxel-only) without restart.
@@ -1385,8 +1392,38 @@ class ROSHTTPBridge(Node):
                 self._image_height = msg.height
                 self._image_encoding = msg.encoding if hasattr(msg, 'encoding') and msg.encoding else 'rgb8'
                 self._image_step = int(msg.step) if hasattr(msg, 'step') and msg.step else 0
+                self._last_image_receive_time = time.time()
         except Exception:
             pass
+
+    def _send_detection_heartbeat(self) -> None:
+        """Send empty detection frames when camera is alive but no detections are produced."""
+        if not self._enable_detections:
+            return
+
+        now = time.time()
+        if (now - self._last_detection_send_time) < self._detection_heartbeat_interval_s:
+            return
+
+        with self._image_lock:
+            last_image_ts = self._last_image_receive_time
+
+        if last_image_ts <= 0.0:
+            return
+
+        image_age_s = now - last_image_ts
+        if image_age_s > self._detection_camera_fresh_s:
+            return
+
+        try:
+            self._send_detections_to_edge_core([])
+            if (now - self._last_detection_heartbeat_log_time) >= 10.0:
+                self.get_logger().info(
+                    "Detection heartbeat sent (no objects, camera stream fresh)"
+                )
+                self._last_detection_heartbeat_log_time = now
+        except Exception as e:
+            self.get_logger().debug(f"Detection heartbeat error: {e}")
 
     def _verify_hsv_color(self, bbox_x: float, bbox_y: float,
                           bbox_w: float, bbox_h: float) -> str:
@@ -1573,9 +1610,10 @@ class ROSHTTPBridge(Node):
             with self._lock:
                 self._latest_detections = detections
                 self._detection_recv_count += 1
-            
-            if detections:
-                self._send_detections_to_edge_core(detections)
+
+            # Forward every detection frame, including empty lists, so
+            # Edge Core can track stream freshness even when no targets are visible.
+            self._send_detections_to_edge_core(detections)
                 
         except Exception as e:
             self.get_logger().error(f"Detection processing error: {e}")

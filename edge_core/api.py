@@ -855,6 +855,21 @@ def create_app(state_manager: StateManager) -> FastAPI:
         except Exception:
             return None
 
+    def _docker_exec_bash_success(
+        container: str, command: str, timeout_s: int = 5
+    ) -> Optional[bool]:
+        """Run a bash command in-container and return True/False, or None on probe failure."""
+        try:
+            result = subprocess.run(
+                ["docker", "exec", container, "bash", "-lc", command],
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+            )
+            return result.returncode == 0
+        except Exception:
+            return None
+
     def _probe_isaac_runtime_state(force_refresh: bool = False) -> dict[str, bool]:
         """Probe Isaac ROS container/bridge process state with short cache grace."""
         now = time.time()
@@ -899,7 +914,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
         if container_running:
             nvblox_probe = _docker_exec_pgrep(
                 "nomad_isaac_ros",
-                "component_container_mt|component_container|zed_example.launch.py|nomad_zed_nvblox.launch.py",
+                "component_container_mt|component_container_isolated|component_container|nvblox_container|zed_example.launch.py|nomad_zed_nvblox.launch.py",
                 timeout_s=5,
             )
             bridge_probe = _docker_exec_pgrep(
@@ -935,7 +950,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
 
     def _launch_nvblox_bridge_with_od(
         enable_od: bool,
-        camera_retry_remaining: int = 1,
+        camera_retry_remaining: int = 2,
     ) -> dict:
         """
         Launch nvblox + ROS-HTTP bridge with explicit object detection mode.
@@ -1334,7 +1349,27 @@ if [ "$ENABLE_OD" = "true" ]; then
     fi
 fi
 
-wait
+    # Supervise launch lifecycle: if ZED/nvblox exits, stop dependent bridges so
+    # runtime state does not falsely appear healthy.
+    if [ -f /tmp/zed_nvblox.pid ]; then
+        ZED_PID=$(cat /tmp/zed_nvblox.pid 2>/dev/null || true)
+        if [ -n "$ZED_PID" ]; then
+            wait "$ZED_PID"
+            ZED_RC=$?
+            echo "ZED/nvblox launch exited (rc=$ZED_RC); stopping dependent bridge processes"
+            for pidfile in /tmp/ros_bridge.pid /tmp/target_localizer.pid; do
+                if [ -f "$pidfile" ]; then
+                    pid=$(cat "$pidfile" 2>/dev/null || true)
+                    if [ -n "$pid" ]; then
+                        kill "$pid" 2>/dev/null || true
+                    fi
+                fi
+            done
+            exit "$ZED_RC"
+        fi
+    fi
+
+    wait
 """
 
         try:
@@ -1436,7 +1471,7 @@ wait
                     container,
                     "bash",
                     "-c",
-                    "grep -Eq 'CAMERA STREAM FAILED TO START|Camera detection timeout|Error opening camera' /tmp/zed_nvblox.log",
+                    "grep -Eq 'CAMERA STREAM FAILED TO START|CAMERA FAILED TO SETUP|Camera detection timeout|Error opening camera' /tmp/zed_nvblox.log",
                 ],
                 capture_output=True,
                 text=True,
@@ -1456,7 +1491,7 @@ wait
                                 container,
                                 "bash",
                                 "-lc",
-                                "pkill -f 'component_container|zed_example\\.launch\\.py|nomad_zed_nvblox\\.launch\\.py|ros_http_bridge|target_localizer_node|servo_tf_publisher\\.py|obstacle_distance_bridge\\.py|static_transform_publisher' 2>/dev/null || true; rm -f /dev/shm/fastrtps_* /tmp/zed_nvblox.pid /tmp/ros_bridge.pid /tmp/target_localizer.pid 2>/dev/null || true",
+                                "pkill -f 'component_container|zed_example\\.launch\\.py|nomad_zed_nvblox\\.launch\\.py|ros_http_bridge|target_localizer_node|servo_tf_publisher\\.py|obstacle_distance_bridge\\.py|static_transform_publisher' 2>/dev/null || true; rm -f /dev/shm/fastrtps_* /tmp/zed_nvblox.pid /tmp/ros_bridge.pid /tmp/target_localizer.pid 2>/dev/null || true; for dev in /sys/bus/usb/devices/*/idVendor; do dir=$(dirname \"$dev\"); vid=$(cat \"$dev\" 2>/dev/null); if [ \"$vid\" = \"2b03\" ]; then for iface in \"$dir\"/*:*/bInterfaceClass; do idir=$(dirname \"$iface\"); cls=$(cat \"$iface\" 2>/dev/null); iname=$(basename \"$idir\"); if [ \"$cls\" = \"0e\" ]; then echo \"$iname\" > /sys/bus/usb/drivers/uvcvideo/unbind 2>/dev/null || true; sleep 0.2; echo \"$iname\" > /sys/bus/usb/drivers/uvcvideo/bind 2>/dev/null || true; fi; done; fi; done",
                             ],
                             capture_output=True,
                             text=True,
@@ -1565,7 +1600,29 @@ wait
                     )
                     rgb_stream_ready = rgb_stream_probe.returncode == 0
                     depth_stream_ready = depth_stream_probe.returncode == 0
-                    detector_ready = service_ready and rgb_stream_ready and depth_stream_ready
+
+                    rgb_pub_probe = _docker_exec_bash_success(
+                        container,
+                        "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
+                        "source /workspaces/isaac_ros-dev/install/setup.bash >/dev/null 2>&1; "
+                        "ROS2CLI_DISABLE_DAEMON=1 ros2 topic info /zed/zed_node/rgb/color/rect/image 2>/dev/null | "
+                        "grep -Eq 'Publisher count: [1-9]'",
+                        timeout_s=6,
+                    )
+                    depth_pub_probe = _docker_exec_bash_success(
+                        container,
+                        "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
+                        "source /workspaces/isaac_ros-dev/install/setup.bash >/dev/null 2>&1; "
+                        "ROS2CLI_DISABLE_DAEMON=1 ros2 topic info /zed/zed_node/depth/depth_registered 2>/dev/null | "
+                        "grep -Eq 'Publisher count: [1-9]'",
+                        timeout_s=6,
+                    )
+
+                    rgb_publisher_ready = bool(rgb_pub_probe)
+                    depth_publisher_ready = bool(depth_pub_probe)
+                    rgb_ready = rgb_stream_ready or rgb_publisher_ready
+                    depth_ready = depth_stream_ready or depth_publisher_ready
+                    detector_ready = service_ready and rgb_ready and depth_ready
 
                     if detector_ready:
                         return {
@@ -1575,15 +1632,15 @@ wait
                             "mesh_ready": False,
                         }
 
-                    if camera_retry_remaining > 0 and (
-                        not rgb_stream_ready or not depth_stream_ready
-                    ):
+                    if camera_retry_remaining > 0 and (not rgb_ready or not depth_ready):
                         logger.warning(
                             "OD launch missing streams; retrying with extra cleanup "
-                            "(service_ready=%s, rgb=%s, depth=%s, remaining=%s)",
+                            "(service_ready=%s, rgb=%s, depth=%s, rgb_pub=%s, depth_pub=%s, remaining=%s)",
                             service_ready,
                             rgb_stream_ready,
                             depth_stream_ready,
+                            rgb_publisher_ready,
+                            depth_publisher_ready,
                             camera_retry_remaining,
                         )
                         try:
@@ -1594,7 +1651,7 @@ wait
                                     container,
                                     "bash",
                                     "-lc",
-                                    "pkill -f 'component_container|zed_example\\.launch\\.py|nomad_zed_nvblox\\.launch\\.py|ros_http_bridge|target_localizer_node|servo_tf_publisher\\.py|obstacle_distance_bridge\\.py|static_transform_publisher' 2>/dev/null || true; rm -f /dev/shm/fastrtps_* /tmp/zed_nvblox.pid /tmp/ros_bridge.pid /tmp/target_localizer.pid 2>/dev/null || true",
+                                    "pkill -f 'component_container|zed_example\\.launch\\.py|nomad_zed_nvblox\\.launch\\.py|ros_http_bridge|target_localizer_node|servo_tf_publisher\\.py|obstacle_distance_bridge\\.py|static_transform_publisher' 2>/dev/null || true; rm -f /dev/shm/fastrtps_* /tmp/zed_nvblox.pid /tmp/ros_bridge.pid /tmp/target_localizer.pid 2>/dev/null || true; for dev in /sys/bus/usb/devices/*/idVendor; do dir=$(dirname \"$dev\"); vid=$(cat \"$dev\" 2>/dev/null); if [ \"$vid\" = \"2b03\" ]; then for iface in \"$dir\"/*:*/bInterfaceClass; do idir=$(dirname \"$iface\"); cls=$(cat \"$iface\" 2>/dev/null); iname=$(basename \"$idir\"); if [ \"$cls\" = \"0e\" ]; then echo \"$iname\" > /sys/bus/usb/drivers/uvcvideo/unbind 2>/dev/null || true; sleep 0.2; echo \"$iname\" > /sys/bus/usb/drivers/uvcvideo/bind 2>/dev/null || true; fi; done; fi; done",
                                 ],
                                 capture_output=True,
                                 text=True,
@@ -1619,7 +1676,9 @@ wait
                         "error": (
                             "Detections launch incomplete: target_localizer or camera streams not ready "
                             f"(service_ready={service_ready}, rgb_stream_ready={rgb_stream_ready}, "
-                            f"depth_stream_ready={depth_stream_ready})"
+                            f"depth_stream_ready={depth_stream_ready}, "
+                            f"rgb_publisher_ready={rgb_publisher_ready}, "
+                            f"depth_publisher_ready={depth_publisher_ready})"
                         ),
                         "logs": (log_tail.stdout or log_tail.stderr or "")[-800:],
                     }
@@ -4636,6 +4695,56 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
 
         This keeps launch behavior consistent with NOMAD's custom launch file.
         """
+        runtime_state = _probe_isaac_runtime_state(force_refresh=True)
+        stack_running = (
+            runtime_state.get("container_running", False)
+            and runtime_state.get("nvblox_running", False)
+            and runtime_state.get("bridge_running", False)
+        )
+
+        if stack_running:
+            service_ready = _docker_exec_bash_success(
+                "nomad_isaac_ros",
+                "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
+                "source /workspaces/isaac_ros-dev/install/setup.bash >/dev/null 2>&1; "
+                "ROS2CLI_DISABLE_DAEMON=1 ros2 service list 2>/dev/null | "
+                "grep -q '/target_localizer/capture_target'",
+                timeout_s=6,
+            )
+            rgb_pub_ready = _docker_exec_bash_success(
+                "nomad_isaac_ros",
+                "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
+                "source /workspaces/isaac_ros-dev/install/setup.bash >/dev/null 2>&1; "
+                "ROS2CLI_DISABLE_DAEMON=1 ros2 topic info /zed/zed_node/rgb/color/rect/image 2>/dev/null | "
+                "grep -Eq 'Publisher count: [1-9]'",
+                timeout_s=6,
+            )
+            depth_pub_ready = _docker_exec_bash_success(
+                "nomad_isaac_ros",
+                "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
+                "source /workspaces/isaac_ros-dev/install/setup.bash >/dev/null 2>&1; "
+                "ROS2CLI_DISABLE_DAEMON=1 ros2 topic info /zed/zed_node/depth/depth_registered 2>/dev/null | "
+                "grep -Eq 'Publisher count: [1-9]'",
+                timeout_s=6,
+            )
+
+            if bool(service_ready) and bool(rgb_pub_ready) and bool(depth_pub_ready):
+                with request.app.state.detection_state_lock:
+                    request.app.state.detection_enabled = True
+
+                mgr = get_video_stream_manager()
+                if mgr and not mgr.set_overlay(True):
+                    logger.warning(
+                        "Detections already running, but video overlay could not be enabled"
+                    )
+
+                return {
+                    "success": True,
+                    "message": "Detections already running; skipped relaunch.",
+                    "detection_enabled": True,
+                    "already_running": True,
+                }
+
         result = _launch_nvblox_bridge_with_od(enable_od=True)
         if result.get("success"):
             with request.app.state.detection_state_lock:
