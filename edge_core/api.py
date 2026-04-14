@@ -1164,26 +1164,32 @@ else
         echo "  NVBLOX_BASE_B=$NVBLOX_BASE_B"
 fi
 
-# Ensure NITROS is enabled for ZED SDK 5.x (zero-copy depth transport to nvblox).
-# The nvblox_examples zed_common.yaml may omit disable_nitros, causing the ZED
-# wrapper to default to NITROS disabled.  This patches the debug section.
+# Configure NITROS mode for ZED SDK 5.x.
+# In OD mode, target_localizer is a Python node that consumes sensor_msgs/Image;
+# forcing disable_nitros=true improves compatibility/reliability of RGB/depth
+# delivery to Python subscribers.
 python3 << 'PYEOF_NITROS'
 import yaml
+import os
 common_path = "/workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/sensors/zed_common.yaml"
 try:
     with open(common_path, 'r') as f:
         common = yaml.safe_load(f) or {{}}
+
+    enable_od = os.environ.get("ENABLE_OD", "false").strip().lower() == "true"
+    disable_nitros = True if enable_od else False
+
     for key in common:
         if isinstance(common[key], dict) and 'ros__parameters' in common[key]:
             params = common[key]['ros__parameters']
             if 'debug' not in params:
                 params['debug'] = {{}}
-            params['debug']['disable_nitros'] = False
+            params['debug']['disable_nitros'] = disable_nitros
             params['debug']['debug_nitros'] = False
             break
     with open(common_path, 'w') as f:
         yaml.safe_dump(common, f, default_flow_style=False, sort_keys=False)
-    print("Ensured NITROS enabled (disable_nitros: false)")
+    print(f"Configured NITROS (ENABLE_OD={enable_od}, disable_nitros={disable_nitros})")
 except Exception as e:
     print("NITROS config warning: " + str(e))
 PYEOF_NITROS
