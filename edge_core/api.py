@@ -933,7 +933,10 @@ def create_app(state_manager: StateManager) -> FastAPI:
             "bridge_running": bridge_running,
         }
 
-    def _launch_nvblox_bridge_with_od(enable_od: bool) -> dict:
+    def _launch_nvblox_bridge_with_od(
+        enable_od: bool,
+        camera_retry_remaining: int = 1,
+    ) -> dict:
         """
         Launch nvblox + ROS-HTTP bridge with explicit object detection mode.
 
@@ -1440,6 +1443,33 @@ wait
                 timeout=5,
             )
             if cam_stream_err.returncode == 0:
+                if camera_retry_remaining > 0:
+                    logger.warning(
+                        "ZED camera stream failed; retrying launch with extra cleanup (remaining=%s)",
+                        camera_retry_remaining,
+                    )
+                    try:
+                        subprocess.run(
+                            [
+                                "docker",
+                                "exec",
+                                container,
+                                "bash",
+                                "-lc",
+                                "pkill -f 'component_container|zed_example\\.launch\\.py|nomad_zed_nvblox\\.launch\\.py|ros_http_bridge|target_localizer_node|servo_tf_publisher\\.py|obstacle_distance_bridge\\.py|static_transform_publisher' 2>/dev/null || true; rm -f /dev/shm/fastrtps_* /tmp/zed_nvblox.pid /tmp/ros_bridge.pid /tmp/target_localizer.pid 2>/dev/null || true",
+                            ],
+                            capture_output=True,
+                            text=True,
+                            timeout=8,
+                        )
+                    except Exception:
+                        pass
+                    time.sleep(3)
+                    return _launch_nvblox_bridge_with_od(
+                        enable_od=enable_od,
+                        camera_retry_remaining=camera_retry_remaining - 1,
+                    )
+
                 log_tail = subprocess.run(
                     ["docker", "exec", container, "tail", "-120", "/tmp/zed_nvblox.log"],
                     capture_output=True,
@@ -1544,6 +1574,39 @@ wait
                             "detection_enabled": enable_od,
                             "mesh_ready": False,
                         }
+
+                    if camera_retry_remaining > 0 and (
+                        not rgb_stream_ready or not depth_stream_ready
+                    ):
+                        logger.warning(
+                            "OD launch missing streams; retrying with extra cleanup "
+                            "(service_ready=%s, rgb=%s, depth=%s, remaining=%s)",
+                            service_ready,
+                            rgb_stream_ready,
+                            depth_stream_ready,
+                            camera_retry_remaining,
+                        )
+                        try:
+                            subprocess.run(
+                                [
+                                    "docker",
+                                    "exec",
+                                    container,
+                                    "bash",
+                                    "-lc",
+                                    "pkill -f 'component_container|zed_example\\.launch\\.py|nomad_zed_nvblox\\.launch\\.py|ros_http_bridge|target_localizer_node|servo_tf_publisher\\.py|obstacle_distance_bridge\\.py|static_transform_publisher' 2>/dev/null || true; rm -f /dev/shm/fastrtps_* /tmp/zed_nvblox.pid /tmp/ros_bridge.pid /tmp/target_localizer.pid 2>/dev/null || true",
+                                ],
+                                capture_output=True,
+                                text=True,
+                                timeout=8,
+                            )
+                        except Exception:
+                            pass
+                        time.sleep(3)
+                        return _launch_nvblox_bridge_with_od(
+                            enable_od=enable_od,
+                            camera_retry_remaining=camera_retry_remaining - 1,
+                        )
 
                     log_tail = subprocess.run(
                         ["docker", "exec", container, "tail", "-120", "/tmp/zed_nvblox.log"],
