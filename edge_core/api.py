@@ -1426,6 +1426,32 @@ wait
                     "error": "ZED camera not detected inside container",
                 }
 
+            cam_stream_err = subprocess.run(
+                [
+                    "docker",
+                    "exec",
+                    container,
+                    "bash",
+                    "-c",
+                    "grep -Eq 'CAMERA STREAM FAILED TO START|Camera detection timeout|Error opening camera' /tmp/zed_nvblox.log",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if cam_stream_err.returncode == 0:
+                log_tail = subprocess.run(
+                    ["docker", "exec", container, "tail", "-120", "/tmp/zed_nvblox.log"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                return {
+                    "success": False,
+                    "error": "ZED camera stream failed to start inside container",
+                    "logs": (log_tail.stdout or log_tail.stderr or "")[-800:],
+                }
+
             # Require at least one fresh mesh update before reporting success.
             mesh_ready = False
             for _ in range(50):
@@ -1442,10 +1468,10 @@ wait
 
             if not mesh_ready:
                 if enable_od:
-                    # OD startup should be accepted when target_localizer is
-                    # discoverable and camera RGB topic is present, even if
-                    # mesh updates are delayed.
+                    # OD startup should be accepted only when target_localizer is
+                    # discoverable AND RGB/depth streams are producing messages.
                     detector_ready = False
+                    service_ready = False
                     for _ in range(30):
                         time.sleep(0.5)
                         service_probe = subprocess.run(
@@ -1478,8 +1504,38 @@ wait
                             service_probe.returncode == 0
                             and topic_probe.returncode == 0
                         ):
-                            detector_ready = True
+                            service_ready = True
                             break
+
+                    rgb_stream_probe = subprocess.run(
+                        [
+                            "docker",
+                            "exec",
+                            container,
+                            "bash",
+                            "-lc",
+                            "source /opt/ros/humble/setup.bash >/dev/null 2>&1; export ROS2CLI_DISABLE_DAEMON=1; export ROS2CLI_NO_DAEMON=1; timeout 8s ros2 topic echo --once /zed/zed_node/rgb/color/rect/image >/dev/null 2>&1",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=12,
+                    )
+                    depth_stream_probe = subprocess.run(
+                        [
+                            "docker",
+                            "exec",
+                            container,
+                            "bash",
+                            "-lc",
+                            "source /opt/ros/humble/setup.bash >/dev/null 2>&1; export ROS2CLI_DISABLE_DAEMON=1; export ROS2CLI_NO_DAEMON=1; timeout 8s ros2 topic echo --once /zed/zed_node/depth/depth_registered >/dev/null 2>&1",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=12,
+                    )
+                    rgb_stream_ready = rgb_stream_probe.returncode == 0
+                    depth_stream_ready = depth_stream_probe.returncode == 0
+                    detector_ready = service_ready and rgb_stream_ready and depth_stream_ready
 
                     if detector_ready:
                         return {
@@ -1488,6 +1544,22 @@ wait
                             "detection_enabled": enable_od,
                             "mesh_ready": False,
                         }
+
+                    log_tail = subprocess.run(
+                        ["docker", "exec", container, "tail", "-120", "/tmp/zed_nvblox.log"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                    return {
+                        "success": False,
+                        "error": (
+                            "Detections launch incomplete: target_localizer or camera streams not ready "
+                            f"(service_ready={service_ready}, rgb_stream_ready={rgb_stream_ready}, "
+                            f"depth_stream_ready={depth_stream_ready})"
+                        ),
+                        "logs": (log_tail.stdout or log_tail.stderr or "")[-800:],
+                    }
 
                 return {
                     "success": False,
