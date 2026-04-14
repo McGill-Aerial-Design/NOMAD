@@ -872,8 +872,9 @@ sleep 1
 # Includes: optical frame alias TF, servo TF publisher, obstacle distance bridge.
 # Uses blocking CUDA stream (type 0) to prevent cudaErrorIllegalAddress on 8GB Jetson.
 # Nav2 is disabled by default; enable with: enable_nav2:=true
-echo "Launching ZED + nvblox (nomad_zed_nvblox.launch.py) with nav2 disabled..."
-ros2 launch /workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py enable_nav2:=false &
+# ZED OD is disabled by default to prevent VRAM exhaustion and composable node instability
+echo "Launching ZED + nvblox (nomad_zed_nvblox.launch.py) with nav2 disabled and ZED OD disabled..."
+ros2 launch /workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py enable_nav2:=false enable_od:=false &
 LAUNCH_PID=$!
 
 # Post-launch validation: nav2 is disabled by default and will not start

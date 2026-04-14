@@ -23,9 +23,8 @@ source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH
 
-# Patch ZED publish resolution to native 720p
-sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
-    /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null
+# Keep ZED at 360p (pub_downscale_factor: 2.0) to prevent cudaErrorIllegalAddress
+# on 8GB Jetson Orin Nano when nvblox allocates GPU memory
 
 # Overlay NOMAD nvblox config
 NOMAD_CFG=/workspaces/isaac_ros-dev/config/nvblox_performance.yaml
@@ -35,14 +34,14 @@ if [ -f "$NOMAD_CFG" ] && [ -f "$NVBLOX_BASE" ]; then
     cp "$NOMAD_CFG" "$NVBLOX_BASE"
 fi
 
-# Use custom NOMAD launch with OD
+# Use custom NOMAD launch with OD disabled by default
 NOMAD_LAUNCH=/workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py
 if [ -f "$NOMAD_LAUNCH" ]; then
-    echo "Launching with custom OD launch file"
-    ros2 launch "$NOMAD_LAUNCH"
+    echo "Launching with custom launch file (ZED OD disabled)"
+    ros2 launch "$NOMAD_LAUNCH" enable_od:=false
 else
     echo "Custom launch not found, falling back to stock"
-    ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2
+    ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2 enable_od:=false
 fi
 LAUNCH_SCRIPT
 docker exec $CONTAINER_NAME chmod +x /tmp/launch_nvblox_bridge.sh

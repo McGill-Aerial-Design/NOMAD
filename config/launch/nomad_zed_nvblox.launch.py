@@ -36,7 +36,11 @@
 
 import os
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, ExecuteProcess
+from launch.actions import (
+    IncludeLaunchDescription,
+    DeclareLaunchArgument,
+    ExecuteProcess,
+)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -45,30 +49,30 @@ from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
-    nvblox_bringup_dir = get_package_share_directory('nvblox_examples_bringup')
+    nvblox_bringup_dir = get_package_share_directory("nvblox_examples_bringup")
     zed_example_launch = os.path.join(
-        nvblox_bringup_dir, 'launch', 'zed_example.launch.py'
+        nvblox_bringup_dir, "launch", "zed_example.launch.py"
     )
 
     # Nav2 config for omnidirectional drone
-    nav2_params_file = '/workspaces/isaac_ros-dev/config/nav2_drone.yaml'
+    nav2_params_file = "/workspaces/isaac_ros-dev/config/nav2_drone.yaml"
 
     enable_od_arg = DeclareLaunchArgument(
-        'enable_od',
-        default_value='true',
-        description='Enable ZED custom object detection (YOLO26 circle detection)',
+        "enable_od",
+        default_value="false",
+        description="Enable ZED custom object detection (YOLO26 circle detection) - DISABLED by default to prevent VRAM exhaustion and composable node instability on 8GB Jetson Orin Nano",
     )
 
     enable_nav2_arg = DeclareLaunchArgument(
-        'enable_nav2',
-        default_value='false',
-        description='Enable Nav2 stack for Jetson-side obstacle avoidance with nvblox costmap (disabled by default to prevent duplicate instances from repeated launches)',
+        "enable_nav2",
+        default_value="false",
+        description="Enable Nav2 stack for Jetson-side obstacle avoidance with nvblox costmap (disabled by default to prevent duplicate instances from repeated launches)",
     )
 
     enable_foxglove_arg = DeclareLaunchArgument(
-        'enable_foxglove',
-        default_value='false',
-        description='Enable Foxglove bridge for ROS2 topic visualization in Foxglove Studio (WebSocket on port 8765)',
+        "enable_foxglove",
+        default_value="false",
+        description="Enable Foxglove bridge for ROS2 topic visualization in Foxglove Studio (WebSocket on port 8765)",
     )
 
     # NOTE: Do NOT patch pub_downscale_factor to 1.0 (720p).
@@ -82,75 +86,94 @@ def generate_launch_description():
     # so the full TF chain is connected: odom -> base_link -> servo_mount -> camera_link
     servo_tf_publisher = ExecuteProcess(
         cmd=[
-            'python3',
-            '/workspaces/isaac_ros-dev/edge_core/ros/servo_tf_publisher.py',
-            '--host', '172.17.0.1',
-            '--port', '8000',
-            '--tf-rate', '20.0',
-            '--poll-rate', '10.0',
-            '--odom-topic', '/zed/zed_node/odom',
+            "python3",
+            "/workspaces/isaac_ros-dev/edge_core/ros/servo_tf_publisher.py",
+            "--host",
+            "172.17.0.1",
+            "--port",
+            "8000",
+            "--tf-rate",
+            "20.0",
+            "--poll-rate",
+            "10.0",
+            "--odom-topic",
+            "/zed/zed_node/odom",
         ],
-        name='servo_tf_publisher',
-        output='screen',
+        name="servo_tf_publisher",
+        output="screen",
     )
 
     # Obstacle distance bridge: converts nvblox 2D ESDF slice to
     # MAVLink OBSTACLE_DISTANCE for ArduPilot obstacle avoidance (NV-008)
     obstacle_distance_bridge = ExecuteProcess(
         cmd=[
-            'python3',
-            '/workspaces/isaac_ros-dev/edge_core/ros/obstacle_distance_bridge.py',
-            '--host', '172.17.0.1',
-            '--port', '8000',
-            '--rate', '5.0',
-            '--buffer', '2.0',
-            '--topic', '/nvblox_node/combined_dynamic_map_slice',
+            "python3",
+            "/workspaces/isaac_ros-dev/edge_core/ros/obstacle_distance_bridge.py",
+            "--host",
+            "172.17.0.1",
+            "--port",
+            "8000",
+            "--rate",
+            "5.0",
+            "--buffer",
+            "2.0",
+            "--topic",
+            "/nvblox_node/combined_dynamic_map_slice",
         ],
-        name='obstacle_distance_bridge',
-        output='screen',
+        name="obstacle_distance_bridge",
+        output="screen",
     )
 
     # Nav2 stack: full navigation with nvblox costmap for obstacle avoidance
-    nav2_bringup_dir = get_package_share_directory('nav2_bringup')
+    nav2_bringup_dir = get_package_share_directory("nav2_bringup")
     nav2_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(nav2_bringup_dir, 'launch', 'navigation_launch.py')
+            os.path.join(nav2_bringup_dir, "launch", "navigation_launch.py")
         ),
         launch_arguments={
-            'use_sim_time': 'false',
-            'params_file': nav2_params_file,
-            'autostart': 'true',
+            "use_sim_time": "false",
+            "params_file": nav2_params_file,
+            "autostart": "true",
         }.items(),
-        condition=IfCondition(LaunchConfiguration('enable_nav2')),
+        condition=IfCondition(LaunchConfiguration("enable_nav2")),
     )
 
     # Nav2 goal bridge: polls Edge Core for navigation goals, sends to Nav2
     nav2_goal_bridge = ExecuteProcess(
         cmd=[
-            'python3',
-            '/workspaces/isaac_ros-dev/edge_core/ros/nav2_goal_bridge.py',
-            '--host', '172.17.0.1',
-            '--port', '8000',
-            '--rate', '2.0',
+            "python3",
+            "/workspaces/isaac_ros-dev/edge_core/ros/nav2_goal_bridge.py",
+            "--host",
+            "172.17.0.1",
+            "--port",
+            "8000",
+            "--rate",
+            "2.0",
         ],
-        name='nav2_goal_bridge',
-        output='screen',
-        condition=IfCondition(LaunchConfiguration('enable_nav2')),
+        name="nav2_goal_bridge",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("enable_nav2")),
     )
 
     # Foxglove bridge: exposes all ROS2 topics via WebSocket for Foxglove Studio
     # Connect Foxglove Studio to ws://<jetson-ip>:8765
     foxglove_bridge = ExecuteProcess(
         cmd=[
-            'ros2', 'run', 'foxglove_bridge', 'foxglove_bridge',
-            '--ros-args',
-            '-p', 'port:=8765',
-            '-p', 'address:=0.0.0.0',
-            '-p', 'send_buffer_limit:=10000000',
+            "ros2",
+            "run",
+            "foxglove_bridge",
+            "foxglove_bridge",
+            "--ros-args",
+            "-p",
+            "port:=8765",
+            "-p",
+            "address:=0.0.0.0",
+            "-p",
+            "send_buffer_limit:=10000000",
         ],
-        name='foxglove_bridge',
-        output='screen',
-        condition=IfCondition(LaunchConfiguration('enable_foxglove')),
+        name="foxglove_bridge",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("enable_foxglove")),
     )
 
     # Static TF alias: ZED URDF uses "zed_left_camera_frame_optical" but
@@ -158,33 +181,47 @@ def generate_launch_description():
     # nvblox needs to look up the image frame in TF, so we bridge the gap
     # with an identity transform.
     optical_frame_alias = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='optical_frame_alias',
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        name="optical_frame_alias",
         arguments=[
-            '--x', '0', '--y', '0', '--z', '0',
-            '--roll', '0', '--pitch', '0', '--yaw', '0',
-            '--frame-id', 'zed_left_camera_frame_optical',
-            '--child-frame-id', 'zed_left_camera_optical_frame',
+            "--x",
+            "0",
+            "--y",
+            "0",
+            "--z",
+            "0",
+            "--roll",
+            "0",
+            "--pitch",
+            "0",
+            "--yaw",
+            "0",
+            "--frame-id",
+            "zed_left_camera_frame_optical",
+            "--child-frame-id",
+            "zed_left_camera_optical_frame",
         ],
     )
 
-    return LaunchDescription([
-        enable_od_arg,
-        enable_nav2_arg,
-        enable_foxglove_arg,
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(zed_example_launch),
-            launch_arguments={
-                'camera': 'zed2',
-                'enable_od': LaunchConfiguration('enable_od'),
-                'run_rviz': 'false',   # Headless Jetson — no display for rviz
-            }.items(),
-        ),
-        optical_frame_alias,
-        servo_tf_publisher,
-        obstacle_distance_bridge,
-        nav2_launch,
-        nav2_goal_bridge,
-        foxglove_bridge,
-    ])
+    return LaunchDescription(
+        [
+            enable_od_arg,
+            enable_nav2_arg,
+            enable_foxglove_arg,
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(zed_example_launch),
+                launch_arguments={
+                    "camera": "zed2",
+                    "enable_od": LaunchConfiguration("enable_od"),
+                    "run_rviz": "false",  # Headless Jetson — no display for rviz
+                }.items(),
+            ),
+            optical_frame_alias,
+            servo_tf_publisher,
+            obstacle_distance_bridge,
+            nav2_launch,
+            nav2_goal_bridge,
+            foxglove_bridge,
+        ]
+    )
