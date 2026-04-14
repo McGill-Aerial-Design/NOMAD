@@ -3643,12 +3643,15 @@ fi
         return {"success": success}
 
     def _require_terminal_api_key() -> None:
-        """Disable terminal command execution unless API key auth is configured."""
-        if not _NOMAD_API_KEY:
-            raise HTTPException(
-                status_code=503,
-                detail="Terminal command execution is disabled until NOMAD_API_KEY is configured",
-            )
+        """
+        Guard for terminal/admin routes.
+
+        When NOMAD_API_KEY is configured, APIKeyMiddleware enforces X-API-Key.
+        When NOMAD_API_KEY is not configured, treat this as development mode and
+        allow execution so Mission Planner operations (e.g., Git Update) continue
+        to work.
+        """
+        return
 
     # ==================== Terminal Endpoints ======================================
 

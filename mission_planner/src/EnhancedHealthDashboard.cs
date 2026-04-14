@@ -1014,7 +1014,7 @@ namespace NOMAD.MissionPlanner
                 _lblGitStatus.Text = "Stashing & pulling...";
                 _lblGitStatus.ForeColor = Color.Yellow;
                 
-                var response = await JetsonApiService.PostAsync("/api/admin/git-update");
+                var response = await JetsonApiService.PostLongRunAsync("/api/admin/git-update");
                 
                 if (response.IsSuccessStatusCode)
                 {
@@ -1053,9 +1053,30 @@ namespace NOMAD.MissionPlanner
                 }
                 else
                 {
-                    _lblGitStatus.Text = $"HTTP {response.StatusCode}";
+                    string detail = null;
+                    try
+                    {
+                        var errorJson = await response.Content.ReadAsStringAsync();
+                        if (!string.IsNullOrWhiteSpace(errorJson))
+                        {
+                            var errorData = JObject.Parse(errorJson);
+                            detail = errorData["detail"]?.ToString() ?? errorData["error"]?.ToString();
+                        }
+                    }
+                    catch
+                    {
+                        // Keep generic status when response body is not JSON.
+                    }
+
+                    var statusText = $"HTTP {response.StatusCode}";
+                    if (!string.IsNullOrWhiteSpace(detail))
+                    {
+                        statusText += $": {detail}";
+                    }
+
+                    _lblGitStatus.Text = TruncateString(statusText, 80);
                     _lblGitStatus.ForeColor = Color.Red;
-                    AddAlert($"[{DateTime.Now:HH:mm:ss}] Git update request failed: HTTP {response.StatusCode}");
+                    AddAlert($"[{DateTime.Now:HH:mm:ss}] Git update request failed: {statusText}");
                 }
             }
             catch (Exception ex)
