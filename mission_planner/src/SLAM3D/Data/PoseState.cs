@@ -226,8 +226,11 @@ namespace NOMAD.MissionPlanner.SLAM3D.Data
                                            MathHelper.Abs(_rawPitch) > NearZeroDeg * MathHelper.PI / 180f ||
                                            MathHelper.Abs(_rawYaw) > NearZeroDeg * MathHelper.PI / 180f;
                     
-                    // Suspicious if we suddenly reset to zero when we had real attitude before
-                    suspiciousReset = allNearZero && prevHadAttitude && tiltJump > MaxTiltJumpDeg;
+                    // Suspicious if we suddenly reset to zero when we had real attitude before.
+                    // Include yawJump so a flat drone (roll≈0, pitch≈0) with non-zero yaw that
+                    // drops to (0,0,0) is also caught — tiltJump alone is near-zero in that case.
+                    suspiciousReset = allNearZero && prevHadAttitude &&
+                                      (tiltJump > MaxTiltJumpDeg || yawJump > NearZeroDeg);
                 }
                 
                 // Decide whether to reject

@@ -145,7 +145,7 @@ class VideoStreamNode(Node):
     def _build_pipeline_string(self) -> str:
         width, height, fps, bitrate = self.width, self.height, self.fps, self.bitrate
         keyint = fps * 2
-        threads = min(4, max(1, __import__('os').cpu_count() or 2))
+        threads = 2  # 2 threads is sufficient for 848x480@15fps ultrafast x264; frees cores for nvblox/SLAM
 
         encoder_str = self._encoder_fragment.format(
             bitrate=bitrate,

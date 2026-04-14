@@ -86,7 +86,7 @@ def generate_launch_description():
             '/workspaces/isaac_ros-dev/edge_core/ros/servo_tf_publisher.py',
             '--host', '172.17.0.1',
             '--port', '8000',
-            '--tf-rate', '50.0',
+            '--tf-rate', '20.0',
             '--poll-rate', '10.0',
             '--odom-topic', '/zed/zed_node/odom',
         ],
