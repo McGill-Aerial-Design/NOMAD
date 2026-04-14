@@ -933,7 +933,9 @@ def create_app(state_manager: StateManager) -> FastAPI:
             "bridge_running": bridge_running,
         }
 
-    def _launch_nvblox_bridge_with_od(enable_od: bool) -> dict:
+    def _launch_nvblox_bridge_with_od(
+        enable_od: bool, require_fresh_mesh: bool = True
+    ) -> dict:
         """
         Launch nvblox + ROS-HTTP bridge with explicit object detection mode.
 
@@ -1386,6 +1388,8 @@ wait
                 }
 
             # Require at least one fresh mesh update before reporting success.
+            # For clear/relaunch workflows this can be relaxed because an empty map
+            # may legitimately produce no immediate mesh delta.
             mesh_ready = False
             for _ in range(50):
                 time.sleep(0.5)
@@ -1400,6 +1404,25 @@ wait
                     break
 
             if not mesh_ready:
+                if not require_fresh_mesh:
+                    runtime = _probe_isaac_runtime(force=True)
+                    if (
+                        runtime.get("container_running")
+                        and runtime.get("nvblox_running")
+                        and runtime.get("bridge_running")
+                    ):
+                        return {
+                            "success": True,
+                            "message": (
+                                "nvblox + ROS-HTTP bridge relaunched; mesh stream is still warming up"
+                            ),
+                            "detection_enabled": enable_od,
+                            "warning": (
+                                "No fresh mesh delta observed yet after relaunch; "
+                                "runtime probes are healthy"
+                            ),
+                        }
+
                 return {
                     "success": False,
                     "error": "Launch completed but mesh stream did not become active.",
@@ -5276,7 +5299,8 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                     )
 
                 relaunch_result = _launch_nvblox_bridge_with_od(
-                    enable_od=detection_enabled
+                    enable_od=detection_enabled,
+                    require_fresh_mesh=False,
                 )
                 if relaunch_result.get("success"):
                     nvblox_cleared = True
@@ -5284,6 +5308,9 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                     nvblox_message = relaunch_result.get(
                         "message", "nvblox stack relaunched"
                     )
+                    relaunch_warning = relaunch_result.get("warning")
+                    if relaunch_warning:
+                        clear_warnings.append(relaunch_warning)
                     logger.info("nvblox map reset via stack relaunch")
                 else:
                     nvblox_message = relaunch_result.get(
