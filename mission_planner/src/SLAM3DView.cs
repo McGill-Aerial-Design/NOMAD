@@ -1276,21 +1276,70 @@ namespace NOMAD.MissionPlanner
 
         private async void BtnClearMesh_Click(object sender, EventArgs e)
         {
-            _voxelMeshBuilder.Clear();
-            _trajectoryRenderer.Clear();
-            _detectionRenderer.Clear();
-            _totalBlocks = 0;
-
             try
             {
-                await JetsonApiService.PostAsync("/api/task/2/slam/clear?prefer_load_map=true&auto_create_empty_map_if_missing=true");
-                UpdateStatusSafe("Mesh cleared");
-                AppendStatusLogSafe("Mesh cleared");
+                var response = await JetsonApiService.PostLongRunAsync(
+                    "/api/task/2/slam/clear?prefer_load_map=true&auto_create_empty_map_if_missing=true"
+                );
+                var responseBody = await response.Content.ReadAsStringAsync();
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    string failureMessage = $"Mesh clear failed ({(int)response.StatusCode})";
+                    try
+                    {
+                        if (!string.IsNullOrWhiteSpace(responseBody))
+                        {
+                            var payload = JObject.Parse(responseBody);
+                            var apiMessage = payload["message"]?.Value<string>();
+                            if (!string.IsNullOrWhiteSpace(apiMessage))
+                                failureMessage = apiMessage;
+                        }
+                    }
+                    catch
+                    {
+                        // Keep generic failure message when payload parsing fails.
+                    }
+
+                    UpdateStatusSafe(failureMessage);
+                    AppendStatusLogSafe(failureMessage);
+                    return;
+                }
+
+                _voxelMeshBuilder.Clear();
+                _trajectoryRenderer.Clear();
+                _detectionRenderer.Clear();
+                _totalBlocks = 0;
+
+                string successMessage = "Mesh cleared";
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(responseBody))
+                    {
+                        var payload = JObject.Parse(responseBody);
+                        var clearStrategy = payload["clear_strategy"]?.Value<string>();
+                        if (!string.IsNullOrWhiteSpace(clearStrategy))
+                            successMessage = $"Mesh cleared ({clearStrategy})";
+                    }
+                }
+                catch
+                {
+                    // Keep default success message when payload parsing fails.
+                }
+
+                UpdateStatusSafe(successMessage);
+                AppendStatusLogSafe(successMessage);
+            }
+            catch (TaskCanceledException)
+            {
+                const string timeoutMessage = "Mesh clear timed out before server confirmation";
+                UpdateStatusSafe(timeoutMessage);
+                AppendStatusLogSafe(timeoutMessage);
             }
             catch (Exception ex)
             {
-                UpdateStatusSafe($"Mesh cleared locally (server: {ex.Message})");
-                AppendStatusLogSafe($"Mesh clear sent locally (server warning: {ex.Message})");
+                UpdateStatusSafe($"Mesh clear failed ({ex.Message})");
+                AppendStatusLogSafe($"Mesh clear failed ({ex.Message})");
             }
         }
 

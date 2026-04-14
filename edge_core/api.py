@@ -1195,7 +1195,7 @@ import yaml
 common_path = "/workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/sensors/zed_common.yaml"
 try:
     with open(common_path, 'r') as f:
-        common = yaml.safe_load(f) or {}
+        common = yaml.safe_load(f) or {{}}
 
     patched = False
     for key in common:
@@ -1207,7 +1207,7 @@ try:
             elif isinstance(params.get('pos_tracking'), dict):
                 params['pos_tracking']['area_memory'] = True
             else:
-                params['positional_tracking'] = {'area_memory': True}
+                params['positional_tracking'] = {{'area_memory': True}}
 
             patched = True
             break
