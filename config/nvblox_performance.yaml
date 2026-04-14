@@ -53,6 +53,11 @@
     decay_dynamic_occupancy_rate_hz: 2.0
     clear_map_outside_radius_rate_hz: 1.0
 
+    # Global frame: map (stable under ZED loop-closure corrections).
+    # nvblox defaults to "odom" which drifts when ZED area memory publishes
+    # map->odom corrections — the map frame is fixed and correction-safe.
+    global_frame: "map"
+
     # Misc
     num_cameras: 1
     use_tf_transforms: true

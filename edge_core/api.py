@@ -525,8 +525,8 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 "source": source,
             }
 
-            # Store ROS-frame pose for SLAM 3D WebSocket (same frame as mesh vertices)
-            # REP-103 odom frame: X-forward, Y-left, Z-up (standard ROS convention)
+            # Store map-frame pose for SLAM 3D WebSocket (same frame as nvblox mesh vertices).
+            # REP-103 map frame (X-forward, Y-left, Z-up); stable under ZED loop-closure corrections.
             app.state.slam_vio_ros_frame = {
                 "x": vio_request.ros_x,
                 "y": vio_request.ros_y,
@@ -538,9 +538,9 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 "body_pitch": vio_request.body_pitch,
                 "body_yaw": vio_request.body_yaw,
                 "timestamp": vio_request.timestamp,
-                # Canonical SLAM frame identifier end-to-end: "odom" (REP-103).
-                # Bridge, mesh endpoint, ws_slam, and Mission Planner all agree on this.
-                "frame_id": getattr(vio_request, "frame_id", "odom"),
+                # Canonical SLAM frame identifier end-to-end: "map".
+                # nvblox global_frame=map; bridge TF-looks up map->camera_link for pose.
+                "frame_id": getattr(vio_request, "frame_id", "map"),
             }
 
             # Add to trajectory
@@ -1913,9 +1913,9 @@ wait
         try:
             while True:
                 frame = {"type": "pose", "ts": frame_count}
-                # Canonical SLAM frame identifier (REP-103 odom). Same string the
-                # bridge uses for mesh payloads and the Mission Planner client expects.
-                frame_id = "odom"
+                # Canonical SLAM frame identifier: "map". nvblox global_frame=map;
+                # bridge TF-looks up map->camera_link for pose to match mesh vertices.
+                frame_id = "map"
                 has_position = False
                 has_attitude = False
 
@@ -1936,7 +1936,7 @@ wait
                         # Expose the mesh's ROS-time timestamp so clients can
                         # measure mesh/pose skew and reason about staleness.
                         frame["mesh_ts"] = mesh_ts
-                        # Canonical frame is "odom". If the stored mesh payload
+                        # Canonical frame is "map". If the stored mesh payload
                         # has a different frame_id the bridge is misconfigured --
                         # log once, but keep emitting the canonical identifier so
                         # downstream clients have a stable contract.
@@ -1958,7 +1958,7 @@ wait
 
                 # Fall back to ROS-frame VIO for pose (used for pose-only frames
                 # and for mesh frames that only include one of position/attitude).
-                # frame_id is always "odom" (REP-103) for all SLAM pose data.
+                # frame_id is always "map" for all SLAM pose data.
                 ros_vio = _get_vio_snapshot()["slam_vio_ros_frame"]
                 if ros_vio:
                     # Only honor the stored frame_id if it matches the canonical
@@ -5218,14 +5218,14 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 "total_blocks", mesh_data.get("total_voxels", 0)
             )
 
-            # Canonical SLAM frame identifier is "odom" (REP-103). Anything else
+            # Canonical SLAM frame identifier is "map". Anything else
             # from the bridge is a contract violation -- normalize and log once
             # so silent drift cannot corrupt Mission Planner visualization.
-            incoming_frame = mesh_data.get("frame_id", "odom")
-            if incoming_frame != "odom":
+            incoming_frame = mesh_data.get("frame_id", "map")
+            if incoming_frame != "map":
                 if not getattr(request.app.state, "_mesh_ingest_frame_mismatch_logged", False):
                     logger.warning(
-                        "mesh/update frame_id mismatch: got %r, expected 'odom'",
+                        "mesh/update frame_id mismatch: got %r, expected 'map'",
                         incoming_frame,
                     )
                     request.app.state._mesh_ingest_frame_mismatch_logged = True
@@ -5236,7 +5236,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 "block_count": item_count,
                 "total_blocks": total_items,
                 "mode": mode,
-                "frame_id": "odom",
+                "frame_id": "map",
             }
 
             # Store drone pose from mesh data (from TF lookup in ros_http_bridge)

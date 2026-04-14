@@ -581,7 +581,7 @@ class ROSHTTPBridge(Node):
         
         # Camera frame to track (zed2i launch defaults to zed_camera_link frame names)
         self._camera_frame = "zed_camera_link"
-        self._reference_frame = "odom"  # Or "map" depending on your setup
+        self._reference_frame = "map"   # map frame: stable under ZED loop-closure corrections
 
         # Camera gimbal (servo) angle for drone body pose computation.
         # The ZED odom gives the camera pose which includes the servo tilt.
@@ -755,6 +755,26 @@ class ROSHTTPBridge(Node):
             ned_vy = -twist.linear.y     # Left -> East (negate)
             ned_vz = -twist.linear.z     # Up -> Down (negate)
 
+            # Map-frame pose for SLAM 3D: look up map -> zed_camera_link via TF.
+            # nvblox uses global_frame=map, so this keeps the drone marker
+            # co-registered with voxel blocks through ZED loop-closure corrections.
+            slam_x, slam_y, slam_z = pose.position.x, pose.position.y, pose.position.z
+            slam_roll, slam_pitch, slam_yaw = ros_roll, ros_pitch, ros_yaw
+            if self._tf_buffer is not None:
+                try:
+                    import rclpy.duration
+                    _tf_t = self._tf_buffer.lookup_transform(
+                        "map", self._camera_frame, msg.header.stamp,
+                        timeout=rclpy.duration.Duration(seconds=0.05))
+                    slam_x = _tf_t.transform.translation.x
+                    slam_y = _tf_t.transform.translation.y
+                    slam_z = _tf_t.transform.translation.z
+                    slam_roll, slam_pitch, slam_yaw = self._quat_to_euler(
+                        _tf_t.transform.rotation.x, _tf_t.transform.rotation.y,
+                        _tf_t.transform.rotation.z, _tf_t.transform.rotation.w)
+                except Exception:
+                    pass  # Keep odom-frame fallback values
+
             vio = VIOData(
                 timestamp=time.time(),
                 x=ned_x,
@@ -768,16 +788,14 @@ class ROSHTTPBridge(Node):
                 vz=ned_vz,
                 confidence=confidence,
                 source="isaac_ros",
-                # Raw VIO odom pose for SLAM 3D (same frame as nvblox mesh).
-                # Uses VIO attitude directly — NOT IMU/mag fused — because the
-                # mesh vertices are in the VIO odom frame. IMU/mag heading is in
-                # magnetic north frame which doesn't match the mesh.
-                ros_x=pose.position.x,
-                ros_y=pose.position.y,
-                ros_z=pose.position.z,
-                ros_roll=ros_roll,
-                ros_pitch=ros_pitch,
-                ros_yaw=ros_yaw,
+                # Map-frame camera pose for SLAM 3D (nvblox global_frame=map).
+                # Falls back to odom values if TF lookup fails (see block above).
+                ros_x=slam_x,
+                ros_y=slam_y,
+                ros_z=slam_z,
+                ros_roll=slam_roll,
+                ros_pitch=slam_pitch,
+                ros_yaw=slam_yaw,
                 body_roll=body_roll,
                 body_pitch=body_pitch,
                 body_yaw=body_yaw,
@@ -1706,7 +1724,7 @@ class ROSHTTPBridge(Node):
                 "total_voxels": n_pts,
                 "sent_voxels": len(voxels),
                 "timestamp": now,
-                "frame_id": "odom",  # Same frame as nvblox mesh vertices and drone_position/attitude
+                "frame_id": "map",  # Same frame as nvblox mesh vertices (global_frame=map)
                 "clear": False,
             }
 
@@ -1917,7 +1935,7 @@ class ROSHTTPBridge(Node):
         mesh_data = {
             "mode": mode,
             "timestamp": timestamp,
-            "frame_id": "odom",
+            "frame_id": "map",
             "clear": False,
         }
         mesh_data.update({"voxels": [], "voxel_size": 0.0, "total_voxels": 0, "sent_voxels": 0})
