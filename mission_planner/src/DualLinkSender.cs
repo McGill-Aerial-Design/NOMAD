@@ -744,7 +744,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> ClearSlamAsync()
         {
-            return await SendHttpPostLongRun("/api/task/2/slam/clear?relaunch_if_needed=true", null);
+            return await SendHttpPostLongRun("/api/task/2/slam/clear", null);
         }
 
         /// <summary>

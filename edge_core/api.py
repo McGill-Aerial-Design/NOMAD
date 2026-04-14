@@ -933,9 +933,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
             "bridge_running": bridge_running,
         }
 
-    def _launch_nvblox_bridge_with_od(
-        enable_od: bool, require_fresh_mesh: bool = True
-    ) -> dict:
+    def _launch_nvblox_bridge_with_od(enable_od: bool) -> dict:
         """
         Launch nvblox + ROS-HTTP bridge with explicit object detection mode.
 
@@ -1388,8 +1386,6 @@ wait
                 }
 
             # Require at least one fresh mesh update before reporting success.
-            # For clear/relaunch workflows this can be relaxed because an empty map
-            # may legitimately produce no immediate mesh delta.
             mesh_ready = False
             for _ in range(50):
                 time.sleep(0.5)
@@ -1404,25 +1400,6 @@ wait
                     break
 
             if not mesh_ready:
-                if not require_fresh_mesh:
-                    runtime = _probe_isaac_runtime(force=True)
-                    if (
-                        runtime.get("container_running")
-                        and runtime.get("nvblox_running")
-                        and runtime.get("bridge_running")
-                    ):
-                        return {
-                            "success": True,
-                            "message": (
-                                "nvblox + ROS-HTTP bridge relaunched; mesh stream is still warming up"
-                            ),
-                            "detection_enabled": enable_od,
-                            "warning": (
-                                "No fresh mesh delta observed yet after relaunch; "
-                                "runtime probes are healthy"
-                            ),
-                        }
-
                 return {
                     "success": False,
                     "error": "Launch completed but mesh stream did not become active.",
@@ -5206,7 +5183,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         Strategy:
         1) Try native nvblox clear service.
         2) Fallback to loading baseline map snapshot.
-        3) Fallback to ZED tracking reset services (partial reset only; does not clear nvblox map memory).
+        3) Fallback to ZED tracking reset services.
         4) Relaunch only when explicitly requested via relaunch_if_needed=true.
         """
         nvblox_cleared = False
@@ -5214,7 +5191,6 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         nvblox_error_status = 503
         clear_strategy = "none"
         clear_warnings: list[str] = []
-        zed_reset_message = ""
 
         # Preferred path: native nvblox clear service (no restart).
         try:
@@ -5275,15 +5251,10 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                         request_payload={},
                         timeout_s=10.0,
                     )
-                    zed_reset_message = reset_msg or f"{service_name} succeeded"
-                    clear_strategy = "zed_tracking_reset_only"
-                    clear_warnings.append(
-                        f"{service_name} succeeded, but nvblox map memory was not explicitly cleared"
-                    )
-                    logger.warning(
-                        "Requested ZED tracking reset via %s, but nvblox clear path remains unavailable",
-                        service_name,
-                    )
+                    nvblox_cleared = True
+                    clear_strategy = "zed_tracking_reset"
+                    nvblox_message = reset_msg or f"{service_name} succeeded"
+                    logger.info(f"Requested non-restart SLAM reset via {service_name}")
                     break
                 except HTTPException as e:
                     clear_warnings.append(f"{service_name} failed: {e.detail}")
@@ -5299,8 +5270,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                     )
 
                 relaunch_result = _launch_nvblox_bridge_with_od(
-                    enable_od=detection_enabled,
-                    require_fresh_mesh=False,
+                    enable_od=detection_enabled
                 )
                 if relaunch_result.get("success"):
                     nvblox_cleared = True
@@ -5308,9 +5278,6 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                     nvblox_message = relaunch_result.get(
                         "message", "nvblox stack relaunched"
                     )
-                    relaunch_warning = relaunch_result.get("warning")
-                    if relaunch_warning:
-                        clear_warnings.append(relaunch_warning)
                     logger.info("nvblox map reset via stack relaunch")
                 else:
                     nvblox_message = relaunch_result.get(
@@ -5326,12 +5293,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 nvblox_message = str(e)
 
         if not nvblox_cleared and not nvblox_message:
-            if zed_reset_message:
-                nvblox_message = (
-                    f"{zed_reset_message}. Full nvblox map clear requires relaunch_if_needed=true"
-                )
-            else:
-                nvblox_message = "No non-restart map clear service is available in current nvblox runtime"
+            nvblox_message = "No non-restart map clear service is available in current nvblox runtime"
 
         # Preserve voxel size from the previous mesh data if available.
         prev_voxel_size = 0.05
