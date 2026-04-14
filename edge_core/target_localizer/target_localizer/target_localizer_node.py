@@ -383,19 +383,28 @@ class TargetLocalizerNode(Node):
         if not self.intrinsics_received:
             return None
 
-        # Get median depth in a small window around the pixel
-        half_w = 5
-        y1 = max(0, py - half_w)
-        y2 = min(depth_image.shape[0], py + half_w)
-        x1 = max(0, px - half_w)
-        x2 = min(depth_image.shape[1], px + half_w)
+        def _sample_depth(half_window: int, max_range_m: float) -> Optional[float]:
+            y1 = max(0, py - half_window)
+            y2 = min(depth_image.shape[0], py + half_window + 1)
+            x1 = max(0, px - half_window)
+            x2 = min(depth_image.shape[1], px + half_window + 1)
+            roi = depth_image[y1:y2, x1:x2]
+            valid = roi[np.isfinite(roi) & (roi > 0.1) & (roi < max_range_m)]
+            if len(valid) == 0:
+                return None
+            return float(np.median(valid))
 
-        roi = depth_image[y1:y2, x1:x2]
-        valid = roi[np.isfinite(roi) & (roi > 0.1) & (roi < 20.0)]
-        if len(valid) == 0:
+        # Start with a tight ROI for precision, then expand to handle common
+        # depth holes on low-texture/reflective target patches.
+        depth = _sample_depth(half_window=5, max_range_m=20.0)
+        if depth is None:
+            for half_window in (12, 20, 30):
+                depth = _sample_depth(half_window=half_window, max_range_m=35.0)
+                if depth is not None:
+                    break
+
+        if depth is None:
             return None
-
-        depth = float(np.median(valid))
 
         # Pixel to camera-frame 3D (OpenCV convention: Z forward, X right, Y down)
         cam_x = (px - self.camera_cx) * depth / self.camera_fx
