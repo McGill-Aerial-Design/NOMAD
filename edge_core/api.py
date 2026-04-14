@@ -2581,7 +2581,12 @@ wait
                 status_code=503,
                 detail="Isaac ROS container stack is not running",
             )
-        if not runtime.get("nvblox_running", False):
+
+        # Only enforce nvblox process availability for nvblox-specific service calls.
+        # Task-1 target_localizer calls should be allowed whenever the service is
+        # discoverable, even if nvblox runtime probes are temporarily stale.
+        requires_nvblox_runtime = service_name.startswith("/nvblox_node/")
+        if requires_nvblox_runtime and not runtime.get("nvblox_running", False):
             raise HTTPException(
                 status_code=503,
                 detail="Isaac ROS nvblox stack is not running",
