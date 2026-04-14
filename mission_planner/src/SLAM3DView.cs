@@ -1283,7 +1283,7 @@ namespace NOMAD.MissionPlanner
 
             try
             {
-                await JetsonApiService.PostAsync("/api/task/2/slam/clear");
+                await JetsonApiService.PostAsync("/api/task/2/slam/clear?prefer_load_map=true&auto_create_empty_map_if_missing=true");
                 UpdateStatusSafe("Mesh cleared");
                 AppendStatusLogSafe("Mesh cleared");
             }

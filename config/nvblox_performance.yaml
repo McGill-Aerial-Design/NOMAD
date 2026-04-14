@@ -49,7 +49,7 @@
     update_esdf_rate_hz: 5.0         # balanced ESDF updates for obstacle avoidance
     publish_layer_rate_hz: 5.0
     publish_debug_vis_rate_hz: 1.0
-    decay_tsdf_rate_hz: 1.0
+    decay_tsdf_rate_hz: 2.0          # >0 enables time-based map decay (old detections fade)
     decay_dynamic_occupancy_rate_hz: 2.0
     clear_map_outside_radius_rate_hz: 1.0
 
@@ -81,11 +81,11 @@
     maximum_input_queue_length: 3
 
     # ==============================================================
-    # Map clearing - 5m radius (reduced from 8m to save GPU memory)
-    # At 10cm voxels, 5m radius is ~125k voxels vs ~512k at 8m
+    # Map clearing - 8m radius around base_link
+    # Voxels outside this radius are continuously cleared.
     # ==============================================================
-    map_clearing_radius_m: 5.0
-    map_clearing_frame_id: "zed_camera_link"
+    map_clearing_radius_m: 8.0
+    map_clearing_frame_id: "base_link"
 
     # QoS settings
     input_qos: "SYSTEM_DEFAULT"

@@ -1188,6 +1188,40 @@ except Exception as e:
     print("NITROS config warning: " + str(e))
 PYEOF_NITROS
 
+# Ensure ZED loop-closure memory is enabled for drift correction.
+python3 << 'PYEOF_AREA_MEMORY'
+import yaml
+
+common_path = "/workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/sensors/zed_common.yaml"
+try:
+    with open(common_path, 'r') as f:
+        common = yaml.safe_load(f) or {}
+
+    patched = False
+    for key in common:
+        if isinstance(common[key], dict) and 'ros__parameters' in common[key]:
+            params = common[key]['ros__parameters']
+
+            if isinstance(params.get('positional_tracking'), dict):
+                params['positional_tracking']['area_memory'] = True
+            elif isinstance(params.get('pos_tracking'), dict):
+                params['pos_tracking']['area_memory'] = True
+            else:
+                params['positional_tracking'] = {'area_memory': True}
+
+            patched = True
+            break
+
+    if patched:
+        with open(common_path, 'w') as f:
+            yaml.safe_dump(common, f, default_flow_style=False, sort_keys=False)
+        print("Ensured ZED area_memory enabled")
+    else:
+        print("Area memory warning: no ros__parameters namespace found in zed_common.yaml")
+except Exception as e:
+    print("Area memory config warning: " + str(e))
+PYEOF_AREA_MEMORY
+
 # ZED SDK 5.2 publishes RGB on /zed/zed_node/rgb/color/rect/*, while
 # older nvblox launch files still remap to legacy RGB topics. Patch remaps
 # in-place so nvblox receives color frames.
@@ -2344,7 +2378,7 @@ wait
         if env_path:
             return env_path
 
-        return "/home/mad/NOMAD/data/area_maps/nvblox_empty_map"
+        return "/workspaces/isaac_ros-dev/data/area_maps/empty_map.nvblx"
 
     def _status_for_vio_area_failure(message: str, default_status: int) -> int:
         """Map backend failure text to HTTP status while preserving safe defaults."""
@@ -2466,6 +2500,24 @@ wait
                 or f"mkdir failed for {parent_dir}"
             )
             raise HTTPException(status_code=503, detail=detail)
+
+    def _isaac_container_file_exists(file_path: str) -> bool:
+        """Check if a file exists inside the Isaac ROS container."""
+        normalized = (file_path or "").strip()
+        if not normalized:
+            return False
+
+        test_cmd = f"test -f {shlex.quote(normalized)}"
+        try:
+            probe = subprocess.run(
+                ["docker", "exec", "nomad_isaac_ros", "bash", "-lc", test_cmd],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return probe.returncode == 0
+        except Exception:
+            return False
 
     def _call_ros2_service_in_isaac_container_or_raise(
         service_name: str,
@@ -5176,15 +5228,18 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         request: Request,
         relaunch_if_needed: bool = False,
         empty_map_path: Optional[str] = None,
+        prefer_load_map: bool = True,
+        auto_create_empty_map_if_missing: bool = True,
     ):
         """
         Clear the current SLAM mesh and reset the map without a full relaunch when possible.
 
         Strategy:
-        1) Try native nvblox clear service.
-        2) Fallback to loading baseline map snapshot.
-        3) Fallback to ZED tracking reset services.
-        4) Relaunch only when explicitly requested via relaunch_if_needed=true.
+        1) Ensure baseline empty-map file exists (auto-create if missing).
+        2) Load baseline map snapshot (manual-reset flow).
+        3) Fallback to native nvblox clear service.
+        4) Fallback to ZED tracking reset services.
+        5) Relaunch only when explicitly requested via relaunch_if_needed=true.
         """
         nvblox_cleared = False
         nvblox_message = ""
@@ -5192,44 +5247,103 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         clear_strategy = "none"
         clear_warnings: list[str] = []
 
-        # Preferred path: native nvblox clear service (no restart).
-        try:
-            clear_msg = _call_ros2_service_in_isaac_container_or_raise(
-                service_name="/nvblox_node/clear_map",
-                service_type="std_srvs/srv/Empty",
-                request_payload={},
-                timeout_s=10.0,
-            )
-            nvblox_cleared = True
-            clear_strategy = "nvblox_clear_map_service"
-            nvblox_message = clear_msg or "nvblox clear_map service succeeded"
-            logger.info("nvblox map cleared via /nvblox_node/clear_map")
-        except HTTPException as e:
-            clear_warnings.append(f"clear_map service failed: {e.detail}")
-        except Exception as e:
-            clear_warnings.append(f"clear_map service failed: {e}")
+        def _load_empty_map_and_reset_or_raise(
+            path_hint: Optional[str],
+        ) -> tuple[str, str]:
+            baseline_path = _resolve_nvblox_empty_map_path(path_hint)
+            bootstrap_messages: list[str] = []
 
-        # Fallback path: load baseline map snapshot (no restart).
-        if not nvblox_cleared:
-            try:
-                baseline_path = _resolve_nvblox_empty_map_path(empty_map_path)
-                load_msg = _call_ros2_service_in_isaac_container_or_raise(
-                    service_name="/nvblox_node/load_map",
+            if auto_create_empty_map_if_missing and not _isaac_container_file_exists(
+                baseline_path
+            ):
+                bootstrap_clear_msg = _call_ros2_service_in_isaac_container_or_raise(
+                    service_name="/nvblox_node/clear_map",
+                    service_type="std_srvs/srv/Empty",
+                    request_payload={},
+                    timeout_s=10.0,
+                )
+                bootstrap_save_msg = _call_ros2_service_in_isaac_container_or_raise(
+                    service_name="/nvblox_node/save_map",
                     service_type="nvblox_msgs/srv/FilePath",
                     request_payload={"file_path": baseline_path},
                     timeout_s=20.0,
                 )
-                reset_msg = _call_ros2_service_in_isaac_container_or_raise(
-                    service_name="/zed/zed_node/reset_pos_tracking",
-                    service_type="std_srvs/srv/Trigger",
+                bootstrap_messages = [
+                    part
+                    for part in [
+                        bootstrap_clear_msg,
+                        bootstrap_save_msg
+                        or f"Created baseline empty map: {baseline_path}",
+                    ]
+                    if part
+                ]
+                logger.info(
+                    f"Created missing baseline empty map for SLAM clear: {baseline_path}"
+                )
+
+            load_msg = _call_ros2_service_in_isaac_container_or_raise(
+                service_name="/nvblox_node/load_map",
+                service_type="nvblox_msgs/srv/FilePath",
+                request_payload={"file_path": baseline_path},
+                timeout_s=20.0,
+            )
+            reset_msg = _call_ros2_service_in_isaac_container_or_raise(
+                service_name="/zed/zed_node/reset_pos_tracking",
+                service_type="std_srvs/srv/Trigger",
+                request_payload={},
+                timeout_s=10.0,
+            )
+            combined_message = "; ".join(
+                part for part in [*bootstrap_messages, load_msg, reset_msg] if part
+            )
+            if not combined_message:
+                combined_message = f"Loaded baseline map: {baseline_path}"
+            return baseline_path, combined_message
+
+        # Preferred manual-reset path: load a known-empty baseline map.
+        if prefer_load_map:
+            try:
+                baseline_path, combined_message = _load_empty_map_and_reset_or_raise(
+                    empty_map_path
+                )
+                nvblox_cleared = True
+                clear_strategy = "load_empty_map"
+                nvblox_message = combined_message
+                logger.info(
+                    f"nvblox map reset by loading baseline map: {baseline_path}"
+                )
+            except HTTPException as e:
+                clear_warnings.append(f"load baseline map failed: {e.detail}")
+            except Exception as e:
+                clear_warnings.append(f"load baseline map failed: {e}")
+
+        # Fallback path: native nvblox clear service (no restart).
+        if not nvblox_cleared:
+            try:
+                clear_msg = _call_ros2_service_in_isaac_container_or_raise(
+                    service_name="/nvblox_node/clear_map",
+                    service_type="std_srvs/srv/Empty",
                     request_payload={},
                     timeout_s=10.0,
                 )
                 nvblox_cleared = True
-                clear_strategy = "load_empty_map"
-                nvblox_message = "; ".join(
-                    part for part in [load_msg, reset_msg] if part
-                ) or f"Loaded baseline map: {baseline_path}"
+                clear_strategy = "nvblox_clear_map_service"
+                nvblox_message = clear_msg or "nvblox clear_map service succeeded"
+                logger.info("nvblox map cleared via /nvblox_node/clear_map")
+            except HTTPException as e:
+                clear_warnings.append(f"clear_map service failed: {e.detail}")
+            except Exception as e:
+                clear_warnings.append(f"clear_map service failed: {e}")
+
+        # Optional fallback for callers that disable the load-map-first behavior.
+        if not nvblox_cleared and not prefer_load_map:
+            try:
+                baseline_path, combined_message = _load_empty_map_and_reset_or_raise(
+                    empty_map_path
+                )
+                nvblox_cleared = True
+                clear_strategy = "load_empty_map_fallback"
+                nvblox_message = combined_message
                 logger.info(
                     f"nvblox map reset by loading baseline map: {baseline_path}"
                 )
