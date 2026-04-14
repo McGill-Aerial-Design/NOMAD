@@ -1982,10 +1982,9 @@ wait
         circle detection, back-projects to 3D, and generates a description.
         """
         try:
-            output = _call_ros2_service_in_isaac_container_or_raise(
-                service_name="/target_localizer/capture_target",
-                service_type="std_srvs/srv/Trigger",
-                request_payload={},
+            output = await _call_target_capture_with_retries(
+                max_attempts=3,
+                retry_delay_s=2.0,
                 timeout_s=45.0,
             )
             return {
@@ -2189,10 +2188,9 @@ wait
         the current ZED frame, back-projects to 3D, determines the building face,
         and generates a ConOps-compliant description.
         """
-        output = _call_ros2_service_in_isaac_container_or_raise(
-            service_name="/target_localizer/capture_target",
-            service_type="std_srvs/srv/Trigger",
-            request_payload={},
+        output = await _call_target_capture_with_retries(
+            max_attempts=3,
+            retry_delay_s=2.0,
             timeout_s=45.0,
         )
         return {"success": True, "output": output}
@@ -2549,6 +2547,59 @@ wait
                 or f"mkdir failed for {parent_dir}"
             )
             raise HTTPException(status_code=503, detail=detail)
+
+    def _is_transient_target_capture_error(detail: str) -> bool:
+        """Return True when target capture failure is likely startup/warmup related."""
+        msg = (detail or "").strip().lower()
+        transient_markers = (
+            "no rgb or depth image available",
+            "camera intrinsics not yet received",
+            "ros2 service not available: /target_localizer/capture_target",
+            "failed to probe ros2 service: /target_localizer/capture_target",
+            "isaac ros container stack is not running",
+            "isaac ros nvblox stack is not running",
+            "ros2 service call timed out: /target_localizer/capture_target",
+        )
+        return any(marker in msg for marker in transient_markers)
+
+    async def _call_target_capture_with_retries(
+        *,
+        max_attempts: int = 3,
+        retry_delay_s: float = 2.0,
+        timeout_s: float = 45.0,
+    ) -> str:
+        """Call target_localizer capture service with short retries for warmup races."""
+        attempts = max(1, int(max_attempts))
+        last_exc: HTTPException | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                return _call_ros2_service_in_isaac_container_or_raise(
+                    service_name="/target_localizer/capture_target",
+                    service_type="std_srvs/srv/Trigger",
+                    request_payload={},
+                    timeout_s=timeout_s,
+                )
+            except HTTPException as exc:
+                last_exc = exc
+                detail = str(exc.detail)
+                should_retry = (
+                    attempt < attempts
+                    and _is_transient_target_capture_error(detail)
+                )
+                if should_retry:
+                    logger.warning(
+                        "Task1 capture transient failure (attempt %s/%s): %s",
+                        attempt,
+                        attempts,
+                        detail,
+                    )
+                    await asyncio.sleep(max(0.1, float(retry_delay_s)))
+                    continue
+                raise
+
+        if last_exc is not None:
+            raise last_exc
+        raise HTTPException(status_code=503, detail="Target capture unavailable")
 
     def _isaac_container_file_exists(file_path: str) -> bool:
         """Check if a file exists inside the Isaac ROS container."""
