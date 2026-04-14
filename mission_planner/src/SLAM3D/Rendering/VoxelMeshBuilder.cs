@@ -30,6 +30,13 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
         private bool _parityMode;
 
         /// <summary>
+        /// Minimum brightness for voxels at maximum age (0=fully dark, 1=no decay).
+        /// Voxels fade linearly from full brightness when fresh to this value just
+        /// before they expire, so the map dims gracefully rather than blinking out.
+        /// </summary>
+        public float DecayMinBrightness { get; set; } = 0.2f;
+
+        /// <summary>
         /// Parity mode for RViz validation runs. When enabled:
         ///   - Retention cap is raised far above normal so map density matches RViz.
         ///   - Age-based expiry is disabled so voxels persist as long as RViz would show them.
@@ -281,6 +288,7 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
                 long key = PackVoxelKey(bix, biy, biz);
 
                 uint colorKey = PackColor(block.Color);
+                _voxelLastSeen[key] = _meshGeneration;
 
                 if (!_persistedBlocks.ContainsKey(key) || _persistedBlocks[key] != colorKey)
                 {
@@ -291,6 +299,7 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
                 }
             }
 
+            ExpireOldVoxels();
             EvictOldVoxels();
         }
 
@@ -345,6 +354,16 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
                     cr = ((ck >> 16) & 0xFF) / 255f;
                     cg = ((ck >> 8) & 0xFF) / 255f;
                     cb = (ck & 0xFF) / 255f;
+                }
+
+                // Age-based brightness decay: fade voxels toward DecayMinBrightness
+                // as they approach _voxelMaxAge without being refreshed by nvblox.
+                if (!_parityMode && _voxelMaxAge > 0 && _voxelMaxAge != int.MaxValue)
+                {
+                    int lastSeen = _voxelLastSeen.TryGetValue(kvp.Key, out int ls) ? ls : 0;
+                    float ageFrac = Math.Max(0f, Math.Min(1f, (float)(_meshGeneration - lastSeen) / _voxelMaxAge));
+                    float brightness = 1f - ageFrac * (1f - DecayMinBrightness);
+                    cr *= brightness; cg *= brightness; cb *= brightness;
                 }
 
                 // Face-culled cube: only emit faces not adjacent to another voxel

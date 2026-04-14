@@ -1731,38 +1731,6 @@ wait
                                 )
                                 websocket.app.state._ws_slam_mesh_frame_mismatch_logged = True
 
-                        # Prefer mesh-bundled drone pose for mesh frames so mesh
-                        # vertices and the drone marker originate from the same
-                        # ROS-time snapshot. This matches how RViz renders mesh
-                        # plus TF at a single consistent moment rather than
-                        # mixing older mesh with freshest VIO. Pose-only frames
-                        # continue to use the live ros_vio snapshot below.
-                        mesh_position = stored.get("drone_position")
-                        if isinstance(mesh_position, dict):
-                            frame["x"] = float(mesh_position.get("x", 0) or 0)
-                            frame["y"] = float(mesh_position.get("y", 0) or 0)
-                            frame["z"] = float(mesh_position.get("z", 0) or 0)
-                            has_position = True
-                            frame["pose_source"] = "mesh"
-
-                        mesh_attitude = stored.get("drone_attitude")
-                        if isinstance(mesh_attitude, dict):
-                            m_roll = mesh_attitude.get("roll")
-                            m_pitch = mesh_attitude.get("pitch")
-                            m_yaw = mesh_attitude.get("yaw")
-                            if m_roll is not None and m_pitch is not None and m_yaw is not None:
-                                frame["roll"] = float(m_roll)
-                                frame["pitch"] = float(m_pitch)
-                                frame["yaw"] = float(m_yaw)
-                                frame["body_roll"] = float(m_roll)
-                                frame["body_pitch"] = float(m_pitch)
-                                frame["body_yaw"] = float(m_yaw)
-                                frame["attitude_valid"] = True
-                                last_good_roll = float(m_roll)
-                                last_good_pitch = float(m_pitch)
-                                last_good_yaw = float(m_yaw)
-                                has_last_good_attitude = True
-                                has_attitude = True
 
                 # Fall back to ROS-frame VIO for pose (used for pose-only frames
                 # and for mesh frames that only include one of position/attitude).
@@ -1791,11 +1759,9 @@ wait
                         has_position = True
                         frame.setdefault("pose_source", "vio")
 
-                    # For pose-only frames, pull attitude from the freshest VIO
-                    # snapshot. For mesh frames we already populated attitude
-                    # from the mesh-bundled drone pose (same ROS-time as the
-                    # mesh vertices); leave that intact to keep mesh + drone
-                    # marker temporally consistent.
+                    # Always pull attitude from the freshest VIO snapshot.
+                    # Mesh frames use live VIO pose too — using mesh-bundled
+                    # (stale) pose caused visible back-and-forward twitching.
                     body_roll = ros_vio.get("body_roll")
                     body_pitch = ros_vio.get("body_pitch")
                     body_yaw = ros_vio.get("body_yaw")
