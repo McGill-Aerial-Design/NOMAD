@@ -511,6 +511,28 @@ class TargetLocalizerNode(Node):
         # This would be caught upstream, but handle gracefully
         return desc
 
+    def _resolve_observed_face(self) -> Tuple[Optional["Face"], str]:
+        """Resolve active building face using GPS first, then local-pose fallback."""
+        if self.has_gps_fix:
+            face = self.building.get_face_from_drone_pose(
+                self.drone_lat,
+                self.drone_lon,
+                self.drone_heading,
+            )
+            if face is not None:
+                return face, "gps"
+
+        if self.has_local_pose:
+            face = self.building.get_face_from_local_pose(
+                self.drone_local_east,
+                self.drone_local_north,
+                self.drone_heading,
+            )
+            if face is not None:
+                return face, "local_pose"
+
+        return None, "none"
+
     # ================================================================ #
     #  Target capture (button press)
     # ================================================================ #
@@ -536,11 +558,6 @@ class TargetLocalizerNode(Node):
             )
             return response
 
-        if not self.has_gps_fix and not self.has_local_pose:
-            response.success = False
-            response.message = "No GPS fix or local pose available."
-            return response
-
         # Create timestamped capture folder
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         capture_dir = os.path.join(self.output_dir, timestamp)
@@ -560,6 +577,60 @@ class TargetLocalizerNode(Node):
             return response
 
         self.get_logger().info(f"Detected {len(circles)} circle(s)")
+
+        # Save images of all detected circles for Mission Planner display
+        saved_images = []
+        for i, det in enumerate(circles):
+            # Save detection image
+            img_filename = f"target_{i:02d}.jpg"
+            img_path = os.path.join(capture_dir, img_filename)
+
+            # Draw bounding box on image copy
+            annotated = rgb.copy()
+            x1, y1, x2, y2 = det.bbox
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(
+                annotated,
+                f"{det.color.value} ({det.confidence:.2f})",
+                (x1, y1 - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 255, 0),
+                2,
+            )
+            cv2.imwrite(img_path, annotated)
+            saved_images.append(img_filename)
+
+            self.get_logger().info(f"Saved detection image: {img_filename}")
+
+        # Check if we can create targets (requires GPS/local pose)
+        can_create_targets = self.has_gps_fix or self.has_local_pose
+        if not can_create_targets:
+            response.success = True
+            response.message = (
+                f"Detected {len(circles)} circle(s) and saved {len(saved_images)} image(s). "
+                "GPS/local pose unavailable - targets not created but images saved for review."
+            )
+            self.get_logger().info(
+                f"Saved {len(saved_images)} detection images without GPS"
+            )
+            return response
+
+        active_face, face_source = self._resolve_observed_face()
+        if active_face is None:
+            response.success = True
+            response.message = (
+                f"Detected {len(circles)} circle(s) and saved {len(saved_images)} image(s), "
+                "but could not determine the viewed building face "
+                "(GPS/local pose context unavailable)."
+            )
+            self.get_logger().warn(
+                "Saved %s detection images but face could not be resolved (gps_fix=%s, has_local_pose=%s)",
+                len(saved_images),
+                self.has_gps_fix,
+                self.has_local_pose,
+            )
+            return response
 
         new_targets = []
         duplicate_count = 0
@@ -589,14 +660,8 @@ class TargetLocalizerNode(Node):
 
             east, north, up = world
 
-            # Determine building face
-            face = self.building.get_face_from_drone_pose(
-                self.drone_lat, self.drone_lon, self.drone_heading
-            )
-            if face is None:
-                self.get_logger().warn("Could not determine building face, skipping.")
-                face_fail_count += 1
-                continue
+            # Determine building face once per capture request and reuse it.
+            face = active_face
 
             # Project onto face
             horiz_from_left, height_agl = self.building.project_point_onto_face(
@@ -616,7 +681,7 @@ class TargetLocalizerNode(Node):
                 final_color, face, horiz_from_left, height_agl
             )
 
-            # Save detection image
+            # Save target image (already saved detection images above, this is for confirmed targets)
             img_filename = f"target_{self.next_target_id:02d}.jpg"
             img_path = os.path.join(capture_dir, img_filename)
             # Draw bounding box on image copy
@@ -659,7 +724,7 @@ class TargetLocalizerNode(Node):
             response.success = True
             descs = [t.description for t in new_targets]
             prefix = ""
-            if not self.has_gps_fix:
+            if face_source == "local_pose":
                 prefix = "GPS unavailable; using local pose fallback. "
             response.message = (
                 prefix + f"Added {len(new_targets)} target(s):\n" + "\n".join(descs)
@@ -721,6 +786,16 @@ class TargetLocalizerNode(Node):
                 drone_lat=self.drone_lat,
                 drone_lon=self.drone_lon,
                 drone_heading_deg=self.drone_heading,
+                drone_local_east=(
+                    self.drone_local_east
+                    if (self.has_local_pose and not self.has_gps_fix)
+                    else None
+                ),
+                drone_local_north=(
+                    self.drone_local_north
+                    if (self.has_local_pose and not self.has_gps_fix)
+                    else None
+                ),
             )
 
         if landmarks:

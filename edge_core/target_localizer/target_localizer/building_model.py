@@ -267,21 +267,11 @@ class BuildingModel:
     # ------------------------------------------------------------ #
     #  Drone-relative queries
     # ------------------------------------------------------------ #
-    def get_face_from_drone_pose(self,
-                                 drone_lat: float,
-                                 drone_lon: float,
-                                 drone_heading_deg: float) -> Optional[Face]:
-        """
-        Determine which building face the drone is looking at based on
-        drone GPS position and heading.
-
-        Returns the face whose outward normal most closely opposes
-        the drone's viewing direction, provided the drone is roughly
-        in front of that face.
-        """
-        drone_east, drone_north = gps_to_local(
-            drone_lat, drone_lon, self.center_lat, self.center_lon
-        )
+    def _get_face_from_local_pose(self,
+                                  drone_east: float,
+                                  drone_north: float,
+                                  drone_heading_deg: float) -> Optional[Face]:
+        """Determine visible face from a drone pose already expressed in local ENU."""
 
         # Vector from building center to drone
         to_drone = np.array([drone_east, drone_north])
@@ -311,6 +301,41 @@ class BuildingModel:
                 best_face = face
 
         return best_face
+
+    def get_face_from_drone_pose(self,
+                                 drone_lat: float,
+                                 drone_lon: float,
+                                 drone_heading_deg: float) -> Optional[Face]:
+        """
+        Determine which building face the drone is looking at based on
+        drone GPS position and heading.
+
+        Returns the face whose outward normal most closely opposes
+        the drone's viewing direction, provided the drone is roughly
+        in front of that face.
+        """
+        drone_east, drone_north = gps_to_local(
+            drone_lat, drone_lon, self.center_lat, self.center_lon
+        )
+        return self._get_face_from_local_pose(
+            drone_east,
+            drone_north,
+            drone_heading_deg,
+        )
+
+    def get_face_from_local_pose(self,
+                                 drone_east: float,
+                                 drone_north: float,
+                                 drone_heading_deg: float) -> Optional[Face]:
+        """
+        Determine which building face the drone is looking at from
+        local ENU coordinates (e.g., VIO odometry when GPS is unavailable).
+        """
+        return self._get_face_from_local_pose(
+            drone_east,
+            drone_north,
+            drone_heading_deg,
+        )
 
     def project_point_onto_face(self,
                                  point_east: float,
@@ -345,7 +370,7 @@ class BuildingModel:
         # Clamp to face width
         horiz_from_left = max(0.0, min(horiz_from_left, face_length))
 
-        return horiz_from_left, point_up
+        return float(horiz_from_left), float(point_up)
 
     def find_nearest_reference(self,
                                 face: Face,
@@ -434,9 +459,27 @@ class BuildingModel:
                               confidence: float,
                               drone_lat: float,
                               drone_lon: float,
-                              drone_heading_deg: float):
+                              drone_heading_deg: float,
+                              drone_local_east: Optional[float] = None,
+                              drone_local_north: Optional[float] = None):
         """Register a detected landmark (door, window, etc.) onto the building model."""
-        face = self.get_face_from_drone_pose(drone_lat, drone_lon, drone_heading_deg)
+        if (
+            drone_local_east is not None
+            and drone_local_north is not None
+            and math.isfinite(drone_local_east)
+            and math.isfinite(drone_local_north)
+        ):
+            face = self.get_face_from_local_pose(
+                drone_local_east,
+                drone_local_north,
+                drone_heading_deg,
+            )
+        else:
+            face = self.get_face_from_drone_pose(
+                drone_lat,
+                drone_lon,
+                drone_heading_deg,
+            )
         if face is None:
             return
 
