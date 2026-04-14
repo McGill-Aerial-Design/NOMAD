@@ -474,6 +474,9 @@ class TargetLocalizerNode(Node):
         self.get_logger().info(f"Detected {len(circles)} circle(s)")
 
         new_targets = []
+        duplicate_count = 0
+        depth_fail_count = 0
+        face_fail_count = 0
         for det in circles:
             # Cross-verify color with independent HSV check
             verified_color, ratio = self.color_verifier.classify_roi(rgb, det.bbox)
@@ -493,6 +496,7 @@ class TargetLocalizerNode(Node):
                 self.get_logger().warn(
                     f"Could not get depth for circle at ({det.cx}, {det.cy}), skipping."
                 )
+                depth_fail_count += 1
                 continue
 
             east, north, up = world
@@ -503,6 +507,7 @@ class TargetLocalizerNode(Node):
             )
             if face is None:
                 self.get_logger().warn("Could not determine building face, skipping.")
+                face_fail_count += 1
                 continue
 
             # Project onto face
@@ -515,6 +520,7 @@ class TargetLocalizerNode(Node):
                 self.get_logger().info(
                     f"Duplicate target at ({east:.1f}, {north:.1f}, {up:.1f}), skipping."
                 )
+                duplicate_count += 1
                 continue
 
             # Generate description
@@ -562,8 +568,14 @@ class TargetLocalizerNode(Node):
                 prefix = "GPS unavailable; using local pose fallback. "
             response.message = prefix + f"Added {len(new_targets)} target(s):\n" + "\n".join(descs)
         else:
-            response.success = False
-            response.message = "Circles detected but none passed depth/dedup filters."
+            # A filter-only result means HSV detection is working, but no NEW
+            # targets were produced for this capture request.
+            response.success = True
+            response.message = (
+                f"Detected {len(circles)} circle(s), but no new targets added "
+                f"(duplicates={duplicate_count}, depth_filtered={depth_fail_count}, "
+                f"face_filtered={face_fail_count})."
+            )
 
         self.get_logger().info(f"Total targets so far: {len(self.targets)}")
         return response
