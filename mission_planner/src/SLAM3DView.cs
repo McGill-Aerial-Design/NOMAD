@@ -118,6 +118,23 @@ namespace NOMAD.MissionPlanner
         private int _totalBlocks;
         private const int MaxStatusLogLines = 120;
 
+        // ---- Pose discontinuity handling (prevents ghosted duplicate maps) ----
+        private bool _hasPoseDiscontinuityBaseline;
+        private float _baselinePoseX, _baselinePoseY, _baselinePoseZ;
+        private DateTime _baselinePoseUtc = DateTime.MinValue;
+        private DateTime _lastAutoFrameResetUtc = DateTime.MinValue;
+        private const float PoseDiscontinuityMinJumpM = 1.75f;
+        private const float PoseDiscontinuitySafetyMarginM = 1.0f;
+        private const double PoseDiscontinuityMinGapSec = 0.03;
+        private const double PoseDiscontinuityMaxGapSec = 2.0;
+        private const double PoseDiscontinuityCooldownSec = 2.5;
+
+        // ---- On-screen reset indicator ----
+        private readonly object _resetIndicatorLock = new object();
+        private string _resetIndicatorText;
+        private DateTime _resetIndicatorUntilUtc = DateTime.MinValue;
+        private const double ResetIndicatorDurationSec = 4.0;
+
         // ==================== Constructor ====================
 
         public SLAM3DView(NOMADConfig config, DualLinkSender sender)
@@ -840,6 +857,56 @@ namespace NOMAD.MissionPlanner
                     cy += lineH;
                 }
             }
+
+            DrawResetIndicatorOverlay(g);
+        }
+
+        private void ShowResetIndicator(string reason)
+        {
+            string text = string.IsNullOrWhiteSpace(reason)
+                ? "SLAM frame realigned"
+                : $"SLAM frame realigned: {reason}";
+
+            if (text.Length > 120)
+                text = text.Substring(0, 117) + "...";
+
+            lock (_resetIndicatorLock)
+            {
+                _resetIndicatorText = text;
+                _resetIndicatorUntilUtc = DateTime.UtcNow.AddSeconds(ResetIndicatorDurationSec);
+            }
+        }
+
+        private void DrawResetIndicatorOverlay(Graphics g)
+        {
+            string text;
+            DateTime untilUtc;
+            lock (_resetIndicatorLock)
+            {
+                text = _resetIndicatorText;
+                untilUtc = _resetIndicatorUntilUtc;
+            }
+
+            if (string.IsNullOrWhiteSpace(text) || DateTime.UtcNow > untilUtc)
+                return;
+
+            using (var font = new Font("Segoe UI", 9f, FontStyle.Bold))
+            using (var bgBrush = new SolidBrush(Color.FromArgb(185, 120, 55, 0)))
+            using (var textBrush = new SolidBrush(Color.FromArgb(255, 255, 240, 215)))
+            using (var borderPen = new Pen(Color.FromArgb(220, 210, 145, 40), 1f))
+            {
+                var size = g.MeasureString(text, font);
+                int padX = 10;
+                int padY = 6;
+                int x = 12;
+                int y = 12;
+                int w = (int)Math.Ceiling(size.Width) + (padX * 2);
+                int h = (int)Math.Ceiling(size.Height) + (padY * 2);
+
+                g.FillRectangle(bgBrush, x, y, w, h);
+                g.DrawRectangle(borderPen, x, y, w, h);
+                g.DrawString(text, font, textBrush, x + padX, y + padY);
+            }
         }
 
         private void HandleWebSocketStatusChanged(string status)
@@ -888,6 +955,7 @@ namespace NOMAD.MissionPlanner
 
             bool hasPosePositionInFrame = false;
             float latestX = 0f, latestY = 0f, latestZ = 0f;
+            float latestVx = 0f, latestVy = 0f, latestVz = 0f;
 
             lock (_poseLock)
             {
@@ -987,10 +1055,22 @@ namespace NOMAD.MissionPlanner
                 latestX = _dronePosX;
                 latestY = _dronePosY;
                 latestZ = _dronePosZ;
+                latestVx = _droneVelX;
+                latestVy = _droneVelY;
+                latestVz = _droneVelZ;
             }
 
             if (hasPosePositionInFrame)
+            {
+                EvaluatePoseDiscontinuityAndResetIfNeeded(
+                    latestX,
+                    latestY,
+                    latestZ,
+                    latestVx,
+                    latestVy,
+                    latestVz);
                 _trajectoryRenderer.AddPointFromRos(latestX, latestY, latestZ);
+            }
 
             UpdateDetectionMarkersFromFrame(frameJson);
 
@@ -999,6 +1079,15 @@ namespace NOMAD.MissionPlanner
                 var meshData = frame.MeshToken.ToObject<MeshDataModel>();
                 if (meshData == null)
                     return;
+
+                if (meshData.Clear)
+                {
+                    ResetVisualizationCache(
+                        "Server requested map clear",
+                        resetPoseState: false,
+                        nowUtc: DateTime.UtcNow,
+                        updateStatus: false);
+                }
 
                 _voxelMeshBuilder.UpdateMesh(meshData);
                 _meshUpdateCount++;
@@ -1049,6 +1138,115 @@ namespace NOMAD.MissionPlanner
             }
 
             _detectionRenderer.UpdateMarkers(markers);
+        }
+
+        private void EvaluatePoseDiscontinuityAndResetIfNeeded(
+            float x,
+            float y,
+            float z,
+            float vx,
+            float vy,
+            float vz)
+        {
+            var now = DateTime.UtcNow;
+
+            if (!_hasPoseDiscontinuityBaseline)
+            {
+                _baselinePoseX = x;
+                _baselinePoseY = y;
+                _baselinePoseZ = z;
+                _baselinePoseUtc = now;
+                _hasPoseDiscontinuityBaseline = true;
+                return;
+            }
+
+            double dt = (now - _baselinePoseUtc).TotalSeconds;
+            float dx = x - _baselinePoseX;
+            float dy = y - _baselinePoseY;
+            float dz = z - _baselinePoseZ;
+            float jumpDist = (float)Math.Sqrt(dx * dx + dy * dy + dz * dz);
+            float speedMag = (float)Math.Sqrt(vx * vx + vy * vy + vz * vz);
+            float jumpThreshold = Math.Max(
+                PoseDiscontinuityMinJumpM,
+                speedMag * (float)Math.Max(0.0, dt) + PoseDiscontinuitySafetyMarginM);
+
+            bool gapValid = dt >= PoseDiscontinuityMinGapSec && dt <= PoseDiscontinuityMaxGapSec;
+            bool cooldownElapsed = (now - _lastAutoFrameResetUtc).TotalSeconds >= PoseDiscontinuityCooldownSec;
+
+            if (gapValid && cooldownElapsed && jumpDist > jumpThreshold)
+            {
+                string reason =
+                    $"Pose discontinuity {jumpDist:F2}m in {dt:F2}s (expected <= {jumpThreshold:F2}m)";
+                ResetVisualizationCache(reason, resetPoseState: true, nowUtc: now);
+            }
+
+            _baselinePoseX = x;
+            _baselinePoseY = y;
+            _baselinePoseZ = z;
+            _baselinePoseUtc = now;
+            _hasPoseDiscontinuityBaseline = true;
+        }
+
+        private void ResetVisualizationCache(
+            string reason,
+            bool resetPoseState,
+            DateTime? nowUtc = null,
+            bool updateStatus = true)
+        {
+            _voxelMeshBuilder.Clear();
+            _trajectoryRenderer.Clear();
+            _detectionRenderer.Clear();
+            _totalBlocks = 0;
+
+            float baselineX;
+            float baselineY;
+            float baselineZ;
+            float baselineRoll;
+            float baselinePitch;
+            float baselineYaw;
+
+            lock (_poseLock)
+            {
+                baselineX = _dronePosX;
+                baselineY = _dronePosY;
+                baselineZ = _dronePosZ;
+                baselineRoll = _droneRollRaw;
+                baselinePitch = _dronePitchRaw;
+                baselineYaw = _droneYawRaw;
+            }
+
+            if (resetPoseState)
+            {
+                _poseState.Reset();
+                _poseState.ForceSet(
+                    baselineX,
+                    baselineY,
+                    baselineZ,
+                    baselineRoll,
+                    baselinePitch,
+                    baselineYaw);
+
+                _renderPosX = baselineX;
+                _renderPosY = baselineY;
+                _renderPosZ = baselineZ;
+                _renderRollRaw = baselineRoll;
+                _renderPitchRaw = baselinePitch;
+                _renderYawRaw = baselineYaw;
+            }
+
+            var stamp = nowUtc ?? DateTime.UtcNow;
+            _lastAutoFrameResetUtc = stamp;
+            _baselinePoseX = baselineX;
+            _baselinePoseY = baselineY;
+            _baselinePoseZ = baselineZ;
+            _baselinePoseUtc = stamp;
+            _hasPoseDiscontinuityBaseline = true;
+
+            UpdateStatsSafe("Mesh: 0 voxels");
+            AppendStatusLogSafe($"SLAM cache reset: {reason}");
+            ShowResetIndicator(reason);
+            if (updateStatus)
+                UpdateStatusSafe("Status: SLAM frame reset; waiting for fresh map data");
         }
 
         // ==================== Servo Polling ====================
@@ -1276,16 +1474,25 @@ namespace NOMAD.MissionPlanner
 
         private async void BtnClearMesh_Click(object sender, EventArgs e)
         {
-            _voxelMeshBuilder.Clear();
-            _trajectoryRenderer.Clear();
-            _detectionRenderer.Clear();
-            _totalBlocks = 0;
+            ResetVisualizationCache(
+                "Manual clear requested",
+                resetPoseState: false,
+                nowUtc: DateTime.UtcNow,
+                updateStatus: false);
 
             try
             {
-                await JetsonApiService.PostAsync("/api/task/2/slam/clear");
-                UpdateStatusSafe("Mesh cleared");
-                AppendStatusLogSafe("Mesh cleared");
+                var response = await JetsonApiService.PostAsync("/api/task/2/slam/clear?relaunch_if_needed=true");
+                if (response.IsSuccessStatusCode)
+                {
+                    UpdateStatusSafe("Mesh cleared");
+                    AppendStatusLogSafe("Mesh cleared");
+                }
+                else
+                {
+                    UpdateStatusSafe($"Mesh cleared locally (server clear unavailable: {(int)response.StatusCode})");
+                    AppendStatusLogSafe($"Mesh cleared locally; server clear unavailable ({(int)response.StatusCode})");
+                }
             }
             catch (Exception ex)
             {
@@ -1651,7 +1858,14 @@ namespace NOMAD.MissionPlanner
                     () => _sender.LoadAreaMapAsync(path),
                     "Load area map");
                 if (result.Success)
+                {
+                    ResetVisualizationCache(
+                        "Area map loaded; cleared stale local SLAM cache",
+                        resetPoseState: true,
+                        nowUtc: DateTime.UtcNow,
+                        updateStatus: false);
                     CenterOrbitOnCurrentPose();
+                }
 
                 var message = SummarizeCommandResult(result);
                 if (result.Success)
@@ -1693,7 +1907,14 @@ namespace NOMAD.MissionPlanner
                     () => _sender.RelocalizeAreaMapAsync(path),
                     "Relocalize area map");
                 if (result.Success)
+                {
+                    ResetVisualizationCache(
+                        "Area map relocalized; cleared stale local SLAM cache",
+                        resetPoseState: true,
+                        nowUtc: DateTime.UtcNow,
+                        updateStatus: false);
                     CenterOrbitOnCurrentPose();
+                }
 
                 var message = SummarizeCommandResult(result);
                 if (result.Success)

@@ -5183,7 +5183,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         Strategy:
         1) Try native nvblox clear service.
         2) Fallback to loading baseline map snapshot.
-        3) Fallback to ZED tracking reset services.
+        3) Fallback to ZED tracking reset services (partial reset only; does not clear nvblox map memory).
         4) Relaunch only when explicitly requested via relaunch_if_needed=true.
         """
         nvblox_cleared = False
@@ -5191,6 +5191,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         nvblox_error_status = 503
         clear_strategy = "none"
         clear_warnings: list[str] = []
+        zed_reset_message = ""
 
         # Preferred path: native nvblox clear service (no restart).
         try:
@@ -5251,10 +5252,15 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                         request_payload={},
                         timeout_s=10.0,
                     )
-                    nvblox_cleared = True
-                    clear_strategy = "zed_tracking_reset"
-                    nvblox_message = reset_msg or f"{service_name} succeeded"
-                    logger.info(f"Requested non-restart SLAM reset via {service_name}")
+                    zed_reset_message = reset_msg or f"{service_name} succeeded"
+                    clear_strategy = "zed_tracking_reset_only"
+                    clear_warnings.append(
+                        f"{service_name} succeeded, but nvblox map memory was not explicitly cleared"
+                    )
+                    logger.warning(
+                        "Requested ZED tracking reset via %s, but nvblox clear path remains unavailable",
+                        service_name,
+                    )
                     break
                 except HTTPException as e:
                     clear_warnings.append(f"{service_name} failed: {e.detail}")
@@ -5293,7 +5299,12 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 nvblox_message = str(e)
 
         if not nvblox_cleared and not nvblox_message:
-            nvblox_message = "No non-restart map clear service is available in current nvblox runtime"
+            if zed_reset_message:
+                nvblox_message = (
+                    f"{zed_reset_message}. Full nvblox map clear requires relaunch_if_needed=true"
+                )
+            else:
+                nvblox_message = "No non-restart map clear service is available in current nvblox runtime"
 
         # Preserve voxel size from the previous mesh data if available.
         prev_voxel_size = 0.05
