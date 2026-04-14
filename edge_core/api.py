@@ -1299,7 +1299,8 @@ if [ "$ENABLE_OD" = "true" ]; then
         -p team_name:=MAD \
         -r /zed2i/zed_node/rgb/image_rect_color:=/zed/zed_node/rgb/color/rect/image \
         -r /zed2i/zed_node/depth/depth_registered:=/zed/zed_node/depth/depth_registered \
-        -r /zed2i/zed_node/rgb/camera_info:=/zed/zed_node/rgb/color/rect/camera_info &
+        -r /zed2i/zed_node/rgb/camera_info:=/zed/zed_node/rgb/color/rect/camera_info \
+        > /tmp/target_localizer.log 2>&1 &
     echo $! > /tmp/target_localizer.pid
 
     sleep 2
@@ -1434,6 +1435,54 @@ wait
                     break
 
             if not mesh_ready:
+                if enable_od:
+                    # OD startup should be accepted when target_localizer is
+                    # discoverable and camera RGB topic is present, even if
+                    # mesh updates are delayed.
+                    detector_ready = False
+                    for _ in range(30):
+                        time.sleep(0.5)
+                        service_probe = subprocess.run(
+                            [
+                                "docker",
+                                "exec",
+                                container,
+                                "bash",
+                                "-lc",
+                                "source /opt/ros/humble/setup.bash >/dev/null 2>&1; ROS2CLI_DISABLE_DAEMON=1 ros2 service list 2>/dev/null | grep -q '/target_localizer/capture_target'",
+                            ],
+                            capture_output=True,
+                            text=True,
+                            timeout=5,
+                        )
+                        topic_probe = subprocess.run(
+                            [
+                                "docker",
+                                "exec",
+                                container,
+                                "bash",
+                                "-lc",
+                                "source /opt/ros/humble/setup.bash >/dev/null 2>&1; ROS2CLI_DISABLE_DAEMON=1 ros2 topic list 2>/dev/null | grep -q '/zed/zed_node/rgb/color/rect/image'",
+                            ],
+                            capture_output=True,
+                            text=True,
+                            timeout=5,
+                        )
+                        if (
+                            service_probe.returncode == 0
+                            and topic_probe.returncode == 0
+                        ):
+                            detector_ready = True
+                            break
+
+                    if detector_ready:
+                        return {
+                            "success": True,
+                            "message": "Detections launch succeeded (target_localizer ready; mesh stream still warming up).",
+                            "detection_enabled": enable_od,
+                            "mesh_ready": False,
+                        }
+
                 return {
                     "success": False,
                     "error": "Launch completed but mesh stream did not become active.",
