@@ -70,6 +70,7 @@ from .detectors import CircleDetector, LandmarkDetector, ColorVerifier, TargetCo
 @dataclass
 class TargetRecord:
     """A confirmed target with 3D position and description."""
+
     target_id: int
     color: TargetColor
     face: FaceID
@@ -85,41 +86,42 @@ class TargetRecord:
 
 
 class TargetLocalizerNode(Node):
-
     def __init__(self):
-        super().__init__('target_localizer')
+        super().__init__("target_localizer")
 
         # ----- Parameters ----- #
-        self.declare_parameter('building.center_lat', 0.0)
-        self.declare_parameter('building.center_lon', 0.0)
-        self.declare_parameter('building.length', 10.0)
-        self.declare_parameter('building.width', 6.0)
-        self.declare_parameter('building.height', 5.0)
-        self.declare_parameter('building.orientation_deg', 0.0)
-        self.declare_parameter('team_name', 'MAD')
-        self.declare_parameter('output_dir', '/home/mad/targets')
-        self.declare_parameter('yolo_model_path', '')
-        self.declare_parameter('dedup_radius_m', 0.5)
-        self.declare_parameter('landmark_detect_rate_hz', 2.0)
-        self.declare_parameter('auto_landmark_detection', True)
+        self.declare_parameter("building.center_lat", 0.0)
+        self.declare_parameter("building.center_lon", 0.0)
+        self.declare_parameter("building.length", 10.0)
+        self.declare_parameter("building.width", 6.0)
+        self.declare_parameter("building.height", 5.0)
+        self.declare_parameter("building.orientation_deg", 0.0)
+        self.declare_parameter("team_name", "MAD")
+        self.declare_parameter("output_dir", "/home/mad/targets")
+        self.declare_parameter("yolo_model_path", "")
+        self.declare_parameter("dedup_radius_m", 0.5)
+        self.declare_parameter("landmark_detect_rate_hz", 2.0)
+        self.declare_parameter("auto_landmark_detection", True)
 
         # Load parameters
-        self.team_name = self.get_parameter('team_name').value
-        self.output_dir = self.get_parameter('output_dir').value
-        self.dedup_radius = self.get_parameter('dedup_radius_m').value
+        self.team_name = self.get_parameter("team_name").value
+        self.output_dir = self.get_parameter("output_dir").value
+        self.dedup_radius = self.get_parameter("dedup_radius_m").value
 
         os.makedirs(self.output_dir, exist_ok=True)
 
         # ----- Building model ----- #
         self.building = BuildingModel(
-            center_lat=self.get_parameter('building.center_lat').value,
-            center_lon=self.get_parameter('building.center_lon').value,
-            length=self.get_parameter('building.length').value,
-            width=self.get_parameter('building.width').value,
-            height=self.get_parameter('building.height').value,
-            orientation_deg=self.get_parameter('building.orientation_deg').value,
+            center_lat=self.get_parameter("building.center_lat").value,
+            center_lon=self.get_parameter("building.center_lon").value,
+            length=self.get_parameter("building.length").value,
+            width=self.get_parameter("building.width").value,
+            height=self.get_parameter("building.height").value,
+            orientation_deg=self.get_parameter("building.orientation_deg").value,
         )
-        self.get_logger().info(f"Building model initialized:\n{self.building.get_summary()}")
+        self.get_logger().info(
+            f"Building model initialized:\n{self.building.get_summary()}"
+        )
 
         # ----- Detectors ----- #
         self.circle_detector = CircleDetector(
@@ -129,11 +131,15 @@ class TargetLocalizerNode(Node):
             min_solidity=0.70,
         )
 
-        yolo_path = self.get_parameter('yolo_model_path').value
-        self.landmark_detector = LandmarkDetector(
-            model_path=yolo_path,
-            conf_threshold=0.35,
-        ) if yolo_path else None
+        yolo_path = self.get_parameter("yolo_model_path").value
+        self.landmark_detector = (
+            LandmarkDetector(
+                model_path=yolo_path,
+                conf_threshold=0.35,
+            )
+            if yolo_path
+            else None
+        )
 
         self.color_verifier = ColorVerifier()
         self.bridge = CvBridge()
@@ -148,7 +154,7 @@ class TargetLocalizerNode(Node):
         self.has_local_pose: bool = False
         self.drone_local_east: float = 0.0
         self.drone_local_north: float = 0.0
-        self.drone_alt: float = 0.0    # AGL from rangefinder or baro
+        self.drone_alt: float = 0.0  # AGL from rangefinder or baro
         self.drone_heading: float = 0.0
         self.servo_pitch_deg: float = 0.0
         self.camera_fx: float = 0.0
@@ -167,71 +173,78 @@ class TargetLocalizerNode(Node):
 
         # Landmark detection timer
         self.last_landmark_time = 0.0
-        lm_rate = self.get_parameter('landmark_detect_rate_hz').value
+        lm_rate = self.get_parameter("landmark_detect_rate_hz").value
         self.landmark_interval = 1.0 / max(lm_rate, 0.1)
 
         # ----- QoS ----- #
         sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
-            depth=1
+            depth=1,
         )
 
         # ----- Subscribers ----- #
         self.rgb_sub = self.create_subscription(
-            Image, '/zed2i/zed_node/rgb/image_rect_color',
-            self._rgb_callback, sensor_qos
+            Image,
+            "/zed2i/zed_node/rgb/image_rect_color",
+            self._rgb_callback,
+            sensor_qos,
         )
         self.rgb_sub_direct = self.create_subscription(
-            Image, '/zed/zed_node/rgb/color/rect/image',
-            self._rgb_callback, sensor_qos
+            Image, "/zed/zed_node/rgb/color/rect/image", self._rgb_callback, sensor_qos
         )
         self.depth_sub = self.create_subscription(
-            Image, '/zed2i/zed_node/depth/depth_registered',
-            self._depth_callback, sensor_qos
+            Image,
+            "/zed2i/zed_node/depth/depth_registered",
+            self._depth_callback,
+            sensor_qos,
         )
         self.depth_sub_direct = self.create_subscription(
-            Image, '/zed/zed_node/depth/depth_registered',
-            self._depth_callback, sensor_qos
+            Image,
+            "/zed/zed_node/depth/depth_registered",
+            self._depth_callback,
+            sensor_qos,
         )
         self.cam_info_sub = self.create_subscription(
-            CameraInfo, '/zed2i/zed_node/rgb/camera_info',
-            self._cam_info_callback, sensor_qos
+            CameraInfo,
+            "/zed2i/zed_node/rgb/camera_info",
+            self._cam_info_callback,
+            sensor_qos,
         )
         self.cam_info_sub_direct = self.create_subscription(
-            CameraInfo, '/zed/zed_node/rgb/color/rect/camera_info',
-            self._cam_info_callback, sensor_qos
+            CameraInfo,
+            "/zed/zed_node/rgb/color/rect/camera_info",
+            self._cam_info_callback,
+            sensor_qos,
         )
         self.gps_sub = self.create_subscription(
-            NavSatFix, '/mavros/global_position/global',
-            self._gps_callback, sensor_qos
+            NavSatFix, "/mavros/global_position/global", self._gps_callback, sensor_qos
         )
         self.heading_sub = self.create_subscription(
-            Float64, '/mavros/global_position/compass_hdg',
-            self._heading_callback, sensor_qos
+            Float64,
+            "/mavros/global_position/compass_hdg",
+            self._heading_callback,
+            sensor_qos,
         )
         self.pose_sub = self.create_subscription(
-            PoseStamped, '/mavros/local_position/pose',
-            self._pose_callback, sensor_qos
+            PoseStamped, "/mavros/local_position/pose", self._pose_callback, sensor_qos
         )
         self.zed_odom_sub = self.create_subscription(
-            Odometry, '/zed/zed_node/odom',
-            self._zed_odom_callback, sensor_qos
+            Odometry, "/zed/zed_node/odom", self._zed_odom_callback, sensor_qos
         )
         self.servo_sub = self.create_subscription(
-            Float64, '/servo/angle',
-            self._servo_callback, sensor_qos
+            Float64, "/servo/angle", self._servo_callback, sensor_qos
         )
 
         # ----- Services ----- #
         self.capture_srv = self.create_service(
-            Trigger, '/target_localizer/capture_target', self._capture_callback
+            Trigger, "/target_localizer/capture_target", self._capture_callback
         )
         self.save_srv = self.create_service(
-            Trigger, '/target_localizer/save_targets', self._save_callback
+            Trigger, "/target_localizer/save_targets", self._save_callback
         )
         self.model_srv = self.create_service(
-            Trigger, '/target_localizer/print_model', self._print_model_callback
+            Trigger, "/target_localizer/print_model", self._print_model_callback
         )
 
         # Emit concrete service registrations for runtime diagnostics.
@@ -240,7 +253,10 @@ class TargetLocalizerNode(Node):
                 self.get_logger().info(f"Registered service: {name} types={types}")
 
         # ----- Background landmark detection timer ----- #
-        if self.get_parameter('auto_landmark_detection').value and self.landmark_detector:
+        if (
+            self.get_parameter("auto_landmark_detection").value
+            and self.landmark_detector
+        ):
             self.create_timer(self.landmark_interval, self._landmark_timer_callback)
 
         # Periodic input health watchdog so startup issues are visible in logs.
@@ -256,7 +272,7 @@ class TargetLocalizerNode(Node):
     # ================================================================ #
     def _rgb_callback(self, msg: Image):
         try:
-            self.latest_rgb = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            self.latest_rgb = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
             self.latest_rgb_stamp = msg.header.stamp
             self.rgb_msg_count += 1
         except Exception as e:
@@ -270,7 +286,7 @@ class TargetLocalizerNode(Node):
     def _depth_callback(self, msg: Image):
         try:
             # ZED publishes depth as 32FC1 in meters
-            self.latest_depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding='32FC1')
+            self.latest_depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding="32FC1")
             self.depth_msg_count += 1
         except Exception as e:
             now = time.time()
@@ -294,7 +310,11 @@ class TargetLocalizerNode(Node):
             )
 
     def _input_watchdog_callback(self):
-        if self.latest_rgb is not None and self.latest_depth is not None and self.intrinsics_received:
+        if (
+            self.latest_rgb is not None
+            and self.latest_depth is not None
+            and self.intrinsics_received
+        ):
             return
 
         self.get_logger().warn(
@@ -350,8 +370,9 @@ class TargetLocalizerNode(Node):
     # ================================================================ #
     #  3D back-projection
     # ================================================================ #
-    def _pixel_to_3d_local(self, px: int, py: int,
-                            depth_image: np.ndarray) -> Optional[Tuple[float, float, float]]:
+    def _pixel_to_3d_local(
+        self, px: int, py: int, depth_image: np.ndarray
+    ) -> Optional[Tuple[float, float, float]]:
         """
         Back-project a pixel to 3D coordinates in the drone's local ENU frame,
         accounting for servo tilt.
@@ -408,8 +429,9 @@ class TargetLocalizerNode(Node):
 
         return east_offset, north_offset, target_up
 
-    def _pixel_to_world_enu(self, px: int, py: int,
-                             depth_image: np.ndarray) -> Optional[Tuple[float, float, float]]:
+    def _pixel_to_world_enu(
+        self, px: int, py: int, depth_image: np.ndarray
+    ) -> Optional[Tuple[float, float, float]]:
         """
         Back-project pixel to world ENU coordinates (relative to building center).
         """
@@ -438,10 +460,13 @@ class TargetLocalizerNode(Node):
     # ================================================================ #
     #  Description generation
     # ================================================================ #
-    def _generate_description(self, color: TargetColor,
-                               face: 'Face',
-                               horiz_from_left: float,
-                               height_agl: float) -> str:
+    def _generate_description(
+        self,
+        color: TargetColor,
+        face: "Face",
+        horiz_from_left: float,
+        height_agl: float,
+    ) -> str:
         """
         Generate a natural-language target description using the building
         model and detected landmarks.
@@ -516,6 +541,11 @@ class TargetLocalizerNode(Node):
             response.message = "No GPS fix or local pose available."
             return response
 
+        # Create timestamped capture folder
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        capture_dir = os.path.join(self.output_dir, timestamp)
+        os.makedirs(capture_dir, exist_ok=True)
+
         # Snapshot current data
         rgb = self.latest_rgb.copy()
         depth = self.latest_depth.copy()
@@ -588,13 +618,20 @@ class TargetLocalizerNode(Node):
 
             # Save detection image
             img_filename = f"target_{self.next_target_id:02d}.jpg"
-            img_path = os.path.join(self.output_dir, img_filename)
+            img_path = os.path.join(capture_dir, img_filename)
             # Draw bounding box on image copy
             annotated = rgb.copy()
             x1, y1, x2, y2 = det.bbox
             cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(annotated, f"{final_color.value} ({det.confidence:.2f})",
-                        (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            cv2.putText(
+                annotated,
+                f"{final_color.value} ({det.confidence:.2f})",
+                (x1, y1 - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 255, 0),
+                2,
+            )
             cv2.imwrite(img_path, annotated)
 
             # Create record
@@ -624,7 +661,9 @@ class TargetLocalizerNode(Node):
             prefix = ""
             if not self.has_gps_fix:
                 prefix = "GPS unavailable; using local pose fallback. "
-            response.message = prefix + f"Added {len(new_targets)} target(s):\n" + "\n".join(descs)
+            response.message = (
+                prefix + f"Added {len(new_targets)} target(s):\n" + "\n".join(descs)
+            )
         else:
             # A filter-only result means HSV detection is working, but no NEW
             # targets were produced for this capture request.
@@ -642,9 +681,7 @@ class TargetLocalizerNode(Node):
         """Check if a detection is within dedup_radius of an existing target."""
         for t in self.targets:
             dist = math.sqrt(
-                (east - t.east)**2 +
-                (north - t.north)**2 +
-                (up - t.up)**2
+                (east - t.east) ** 2 + (north - t.north) ** 2 + (up - t.up) ** 2
             )
             if dist < self.dedup_radius:
                 return True
@@ -676,7 +713,9 @@ class TargetLocalizerNode(Node):
 
             east, north, up = world
             self.building.add_landmark_from_3d(
-                east, north, up,
+                east,
+                north,
+                up,
                 kind=lm.kind,
                 confidence=lm.confidence,
                 drone_lat=self.drone_lat,
@@ -704,13 +743,11 @@ class TargetLocalizerNode(Node):
 
         lines = []
         for t in self.targets:
-            lines.append(
-                f"Target {t.target_id}: {t.description}"
-            )
+            lines.append(f"Target {t.target_id}: {t.description}")
 
         content = "\n\n".join(lines) + "\n"
 
-        with open(filepath, 'w') as f:
+        with open(filepath, "w") as f:
             f.write(content)
 
         self.get_logger().info(f"Saved {len(self.targets)} targets to {filepath}")
@@ -733,7 +770,7 @@ class TargetLocalizerNode(Node):
                 f"  Image: {t.image_path}\n"
                 f"  Timestamp: {datetime.fromtimestamp(t.timestamp).isoformat()}"
             )
-        with open(debug_filepath, 'w') as f:
+        with open(debug_filepath, "w") as f:
             f.write("\n\n".join(debug_lines) + "\n")
 
         response.success = True
@@ -765,5 +802,5 @@ def main(args=None):
             rclpy.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

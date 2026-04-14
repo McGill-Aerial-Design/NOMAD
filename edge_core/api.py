@@ -1314,8 +1314,9 @@ sleep 2
 {bridge_env_prefix}python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --mag-topic /zed/zed_node/imu/mag --mesh-topic /nvblox_node/color_layer_marker --high-rate-transport http &
 echo $! > /tmp/ros_bridge.pid
 
-# Launch Task 1 target-localizer only when OD mode is enabled.
-if [ "$ENABLE_OD" = "true" ]; then
+# Launch Task 1 target-localizer for HSV circle detection (always needed for Task 1 capture).
+# Previously only launched when OD was enabled, but now runs independently since ZED OD is disabled.
+if true; then
     PYTHONPATH=/workspaces/isaac_ros-dev/edge_core/target_localizer:${{PYTHONPATH:-}} \
     python3 -m target_localizer.target_localizer_node \
         --ros-args \
@@ -1491,7 +1492,7 @@ fi
                                 container,
                                 "bash",
                                 "-lc",
-                                "pkill -f 'component_container|zed_example\\.launch\\.py|nomad_zed_nvblox\\.launch\\.py|ros_http_bridge|target_localizer_node|servo_tf_publisher\\.py|obstacle_distance_bridge\\.py|static_transform_publisher' 2>/dev/null || true; rm -f /dev/shm/fastrtps_* /tmp/zed_nvblox.pid /tmp/ros_bridge.pid /tmp/target_localizer.pid 2>/dev/null || true; for dev in /sys/bus/usb/devices/*/idVendor; do dir=$(dirname \"$dev\"); vid=$(cat \"$dev\" 2>/dev/null); if [ \"$vid\" = \"2b03\" ]; then for iface in \"$dir\"/*:*/bInterfaceClass; do idir=$(dirname \"$iface\"); cls=$(cat \"$iface\" 2>/dev/null); iname=$(basename \"$idir\"); if [ \"$cls\" = \"0e\" ]; then echo \"$iname\" > /sys/bus/usb/drivers/uvcvideo/unbind 2>/dev/null || true; sleep 0.2; echo \"$iname\" > /sys/bus/usb/drivers/uvcvideo/bind 2>/dev/null || true; fi; done; fi; done",
+                                'pkill -f \'component_container|zed_example\\.launch\\.py|nomad_zed_nvblox\\.launch\\.py|ros_http_bridge|target_localizer_node|servo_tf_publisher\\.py|obstacle_distance_bridge\\.py|static_transform_publisher\' 2>/dev/null || true; rm -f /dev/shm/fastrtps_* /tmp/zed_nvblox.pid /tmp/ros_bridge.pid /tmp/target_localizer.pid 2>/dev/null || true; for dev in /sys/bus/usb/devices/*/idVendor; do dir=$(dirname "$dev"); vid=$(cat "$dev" 2>/dev/null); if [ "$vid" = "2b03" ]; then for iface in "$dir"/*:*/bInterfaceClass; do idir=$(dirname "$iface"); cls=$(cat "$iface" 2>/dev/null); iname=$(basename "$idir"); if [ "$cls" = "0e" ]; then echo "$iname" > /sys/bus/usb/drivers/uvcvideo/unbind 2>/dev/null || true; sleep 0.2; echo "$iname" > /sys/bus/usb/drivers/uvcvideo/bind 2>/dev/null || true; fi; done; fi; done',
                             ],
                             capture_output=True,
                             text=True,
@@ -1506,7 +1507,14 @@ fi
                     )
 
                 log_tail = subprocess.run(
-                    ["docker", "exec", container, "tail", "-120", "/tmp/zed_nvblox.log"],
+                    [
+                        "docker",
+                        "exec",
+                        container,
+                        "tail",
+                        "-120",
+                        "/tmp/zed_nvblox.log",
+                    ],
                     capture_output=True,
                     text=True,
                     timeout=5,
@@ -1632,7 +1640,9 @@ fi
                             "mesh_ready": False,
                         }
 
-                    if camera_retry_remaining > 0 and (not rgb_ready or not depth_ready):
+                    if camera_retry_remaining > 0 and (
+                        not rgb_ready or not depth_ready
+                    ):
                         logger.warning(
                             "OD launch missing streams; retrying with extra cleanup "
                             "(service_ready=%s, rgb=%s, depth=%s, rgb_pub=%s, depth_pub=%s, remaining=%s)",
@@ -1651,7 +1661,7 @@ fi
                                     container,
                                     "bash",
                                     "-lc",
-                                    "pkill -f 'component_container|zed_example\\.launch\\.py|nomad_zed_nvblox\\.launch\\.py|ros_http_bridge|target_localizer_node|servo_tf_publisher\\.py|obstacle_distance_bridge\\.py|static_transform_publisher' 2>/dev/null || true; rm -f /dev/shm/fastrtps_* /tmp/zed_nvblox.pid /tmp/ros_bridge.pid /tmp/target_localizer.pid 2>/dev/null || true; for dev in /sys/bus/usb/devices/*/idVendor; do dir=$(dirname \"$dev\"); vid=$(cat \"$dev\" 2>/dev/null); if [ \"$vid\" = \"2b03\" ]; then for iface in \"$dir\"/*:*/bInterfaceClass; do idir=$(dirname \"$iface\"); cls=$(cat \"$iface\" 2>/dev/null); iname=$(basename \"$idir\"); if [ \"$cls\" = \"0e\" ]; then echo \"$iname\" > /sys/bus/usb/drivers/uvcvideo/unbind 2>/dev/null || true; sleep 0.2; echo \"$iname\" > /sys/bus/usb/drivers/uvcvideo/bind 2>/dev/null || true; fi; done; fi; done",
+                                    'pkill -f \'component_container|zed_example\\.launch\\.py|nomad_zed_nvblox\\.launch\\.py|ros_http_bridge|target_localizer_node|servo_tf_publisher\\.py|obstacle_distance_bridge\\.py|static_transform_publisher\' 2>/dev/null || true; rm -f /dev/shm/fastrtps_* /tmp/zed_nvblox.pid /tmp/ros_bridge.pid /tmp/target_localizer.pid 2>/dev/null || true; for dev in /sys/bus/usb/devices/*/idVendor; do dir=$(dirname "$dev"); vid=$(cat "$dev" 2>/dev/null); if [ "$vid" = "2b03" ]; then for iface in "$dir"/*:*/bInterfaceClass; do idir=$(dirname "$iface"); cls=$(cat "$iface" 2>/dev/null); iname=$(basename "$idir"); if [ "$cls" = "0e" ]; then echo "$iname" > /sys/bus/usb/drivers/uvcvideo/unbind 2>/dev/null || true; sleep 0.2; echo "$iname" > /sys/bus/usb/drivers/uvcvideo/bind 2>/dev/null || true; fi; done; fi; done',
                                 ],
                                 capture_output=True,
                                 text=True,
@@ -1666,7 +1676,14 @@ fi
                         )
 
                     log_tail = subprocess.run(
-                        ["docker", "exec", container, "tail", "-120", "/tmp/zed_nvblox.log"],
+                        [
+                            "docker",
+                            "exec",
+                            container,
+                            "tail",
+                            "-120",
+                            "/tmp/zed_nvblox.log",
+                        ],
                         capture_output=True,
                         text=True,
                         timeout=5,
@@ -2014,7 +2031,6 @@ fi
                                 )
                                 websocket.app.state._ws_slam_mesh_frame_mismatch_logged = True
 
-
                 # Fall back to ROS-frame VIO for pose (used for pose-only frames
                 # and for mesh frames that only include one of position/attitude).
                 # frame_id is always "map" for all SLAM pose data.
@@ -2049,7 +2065,9 @@ fi
                     body_pitch = ros_vio.get("body_pitch")
                     body_yaw = ros_vio.get("body_yaw")
                     body_attitude_available = (
-                        body_roll is not None and body_pitch is not None and body_yaw is not None
+                        body_roll is not None
+                        and body_pitch is not None
+                        and body_yaw is not None
                     )
 
                     if not has_attitude:
@@ -2387,13 +2405,95 @@ fi
         Calls the ~/capture_target service which runs HSV circle detection on
         the current ZED frame, back-projects to 3D, determines the building face,
         and generates a ConOps-compliant description.
+
+        Returns structured metadata for Mission Planner compatibility.
         """
         output = await _call_target_capture_with_retries(
             max_attempts=3,
             retry_delay_s=2.0,
             timeout_s=45.0,
         )
-        return {"success": True, "output": output}
+
+        # Get current state for metadata
+        state = app.state.state_manager.get_state()
+        now = datetime.now(timezone.utc)
+
+        # Find the most recent capture folder
+        captures_base = "./data/task1_captures"
+        if os.path.exists(captures_base):
+            folders = [
+                f
+                for f in os.listdir(captures_base)
+                if os.path.isdir(os.path.join(captures_base, f))
+            ]
+            timestamp_pattern = re.compile(r"^\d{8}_\d{6}$")
+            valid_folders = [f for f in folders if timestamp_pattern.match(f)]
+            if valid_folders:
+                latest_folder = max(valid_folders)
+                folder_path = os.path.join(captures_base, latest_folder)
+                images = [f for f in os.listdir(folder_path) if f.endswith(".jpg")]
+                if images:
+                    # Return metadata for the first image (or could return all)
+                    image_name = images[0]
+
+                    return {
+                        "success": True,
+                        "output": output,
+                        "image_name": image_name,
+                        "capture_folder": latest_folder,
+                        "timestamp": now.isoformat(),
+                        "position": {
+                            "lat": state.gps_lat or 0.0,
+                            "lon": state.gps_lon or 0.0,
+                            "alt": state.gps_alt or 0.0,
+                        },
+                        "heading_deg": state.heading_deg or 0.0,
+                        "pitch_deg": state.pitch_deg or 0.0,
+                        "roll_deg": state.roll_deg or 0.0,
+                        "gimbal_pitch_deg": state.gimbal_pitch_deg or 0.0,
+                        "gimbal_yaw_deg": state.gimbal_yaw_deg or 0.0,
+                        "building_location": "Unknown",  # TODO: get from target_localizer
+                    }
+
+        # Fallback if no images found
+        return {
+            "success": True,
+            "output": output,
+            "image_name": None,
+            "capture_folder": None,
+            "timestamp": now.isoformat(),
+            "position": {
+                "lat": state.gps_lat or 0.0,
+                "lon": state.gps_lon or 0.0,
+                "alt": state.gps_alt or 0.0,
+            },
+            "heading_deg": state.heading_deg or 0.0,
+            "pitch_deg": state.pitch_deg or 0.0,
+            "roll_deg": state.roll_deg or 0.0,
+            "gimbal_pitch_deg": state.gimbal_pitch_deg or 0.0,
+            "gimbal_yaw_deg": state.gimbal_yaw_deg or 0.0,
+            "building_location": "Unknown",
+        }
+
+        # Fallback if no images found
+        return {
+            "success": True,
+            "output": output,
+            "image_name": None,
+            "capture_folder": None,
+            "timestamp": now.isoformat(),
+            "position": {
+                "lat": state.get("latitude", 0.0),
+                "lon": state.get("longitude", 0.0),
+                "alt": state.get("altitude", 0.0),
+            },
+            "heading_deg": state.get("heading", 0.0),
+            "pitch_deg": state.get("pitch", 0.0),
+            "roll_deg": state.get("roll", 0.0),
+            "gimbal_pitch_deg": state.get("gimbal_pitch", 0.0),
+            "gimbal_yaw_deg": state.get("gimbal_yaw", 0.0),
+            "building_location": "Unknown",
+        }
 
     @app.post("/api/task/1/target/save", tags=["Task 1"])
     async def task1_save_targets():
@@ -2662,21 +2762,13 @@ fi
                 f"{base}. Action: start VIO/positional tracking first, then retry save."
             )
         if "not found" in lower or "missing" in lower or "no such file" in lower:
-            return (
-                f"{base}. Action: verify the map path exists on Jetson and retry."
-            )
+            return f"{base}. Action: verify the map path exists on Jetson and retry."
         if "timed out waiting for area map export" in lower:
-            return (
-                f"{base}. Action: increase timeout_s or retry after camera motion/feature-rich view."
-            )
+            return f"{base}. Action: increase timeout_s or retry after camera motion/feature-rich view."
         if "export state api is unavailable" in lower:
-            return (
-                f"{base}. Action: use wait_for_completion=false for this runtime or upgrade ZED SDK/runtime."
-            )
+            return f"{base}. Action: use wait_for_completion=false for this runtime or upgrade ZED SDK/runtime."
         if "failed to load area map for relocalization" in lower:
-            return (
-                f"{base}. Action: confirm area file was created on this unit and is not corrupted."
-            )
+            return f"{base}. Action: confirm area file was created on this unit and is not corrupted."
         return base
 
     def _sanitize_ros2_service_output(output: str) -> str:
@@ -2783,8 +2875,7 @@ fi
                 last_exc = exc
                 detail = str(exc.detail)
                 should_retry = (
-                    attempt < attempts
-                    and _is_transient_target_capture_error(detail)
+                    attempt < attempts and _is_transient_target_capture_error(detail)
                 )
                 if should_retry:
                     logger.warning(
@@ -2856,10 +2947,7 @@ fi
             "export ROS2CLI_NO_DAEMON=1; "
         )
 
-        type_check_cmd = (
-            base_env_cmd
-            + f"ros2 service type {shlex.quote(service_name)}"
-        )
+        type_check_cmd = base_env_cmd + f"ros2 service type {shlex.quote(service_name)}"
         try:
             type_result = subprocess.run(
                 ["docker", "exec", "nomad_isaac_ros", "bash", "-lc", type_check_cmd],
@@ -2904,7 +2992,10 @@ fi
                 ),
             )
 
-        shell_cmd = base_env_cmd + f"ros2 service call {service_name} {service_type} {shlex.quote(request_yaml)}"
+        shell_cmd = (
+            base_env_cmd
+            + f"ros2 service call {service_name} {service_type} {shlex.quote(request_yaml)}"
+        )
 
         try:
             result = subprocess.run(
@@ -3891,17 +3982,15 @@ fi
                 websockify_running = False
                 x11vnc_running = False
 
-            novnc_running = user_running or system_running or (
-                websockify_running and x11vnc_running
+            novnc_running = (
+                user_running
+                or system_running
+                or (websockify_running and x11vnc_running)
             )
             novnc_status = (
                 "active"
                 if novnc_running
-                else (
-                    user_status
-                    if user_status != "inactive"
-                    else system_status
-                )
+                else (user_status if user_status != "inactive" else system_status)
             )
 
             services["novnc"] = {
@@ -5332,7 +5421,9 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             # so silent drift cannot corrupt Mission Planner visualization.
             incoming_frame = mesh_data.get("frame_id", "map")
             if incoming_frame != "map":
-                if not getattr(request.app.state, "_mesh_ingest_frame_mismatch_logged", False):
+                if not getattr(
+                    request.app.state, "_mesh_ingest_frame_mismatch_logged", False
+                ):
                     logger.warning(
                         "mesh/update frame_id mismatch: got %r, expected 'map'",
                         incoming_frame,
@@ -5803,7 +5894,9 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         if not nvblox_cleared:
-            return JSONResponse(status_code=nvblox_error_status, content=response_payload)
+            return JSONResponse(
+                status_code=nvblox_error_status, content=response_payload
+            )
         return response_payload
 
     # ==================== Sensor Calibration Endpoints ====================
@@ -5815,7 +5908,9 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
 
         This is intended for manual magnetometer calibration via noVNC.
         """
-        viewer_bin = shutil.which("ZED_Sensor_Viewer") or shutil.which("zed_sensor_viewer")
+        viewer_bin = shutil.which("ZED_Sensor_Viewer") or shutil.which(
+            "zed_sensor_viewer"
+        )
         fallback_bin = shutil.which("ZED_Calibration")
         if not viewer_bin and not fallback_bin:
             raise HTTPException(
@@ -5823,7 +5918,9 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 detail="Neither ZED_Sensor_Viewer nor ZED_Calibration was found in PATH",
             )
 
-        display = os.environ.get("NOMAD_CAL_DISPLAY") or os.environ.get("DISPLAY") or ":1"
+        display = (
+            os.environ.get("NOMAD_CAL_DISPLAY") or os.environ.get("DISPLAY") or ":1"
+        )
         request_host = request.url.hostname or ""
         novnc_host = request_host
         if not novnc_host or novnc_host in {"localhost", "127.0.0.1"}:
@@ -5832,7 +5929,9 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 or os.environ.get("JETSON_IP")
                 or "localhost"
             )
-        novnc_url = f"http://{novnc_host}:6080/vnc.html?autoconnect=0&reconnect=0&resize=scale"
+        novnc_url = (
+            f"http://{novnc_host}:6080/vnc.html?autoconnect=0&reconnect=0&resize=scale"
+        )
 
         deps_lib_dir = os.path.expanduser(
             "~/NOMAD/.deps/zed_viewer/root/usr/lib/aarch64-linux-gnu"
@@ -5975,7 +6074,11 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                     status_code=500,
                     detail=(
                         "Failed to launch ZED calibration tools. "
-                        + (f"Sensor Viewer missing deps: {', '.join(viewer_missing_deps)}. " if viewer_missing_deps else "")
+                        + (
+                            f"Sensor Viewer missing deps: {', '.join(viewer_missing_deps)}. "
+                            if viewer_missing_deps
+                            else ""
+                        )
                         + f"Fallback error: {e}"
                     ),
                 )
@@ -5997,7 +6100,9 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         """
         Launch RViz2 inside the Isaac ROS container and show it via noVNC.
         """
-        display = os.environ.get("NOMAD_CAL_DISPLAY") or os.environ.get("DISPLAY") or ":1"
+        display = (
+            os.environ.get("NOMAD_CAL_DISPLAY") or os.environ.get("DISPLAY") or ":1"
+        )
         rviz_config_path = os.environ.get(
             "NOMAD_RVIZ_CONFIG_PATH",
             "/workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/visualization/zed_example.rviz",
@@ -6007,10 +6112,9 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             "NOMAD_RVIZ_FRAME_CANDIDATES",
             "map,odom,base_link,servo_mount,camera_link,zed_camera_center",
         )
-        rviz_voxel_only = (
-            os.environ.get("NOMAD_RVIZ_VOXEL_ONLY", "1").strip().lower()
-            not in {"0", "false", "no", "off"}
-        )
+        rviz_voxel_only = os.environ.get(
+            "NOMAD_RVIZ_VOXEL_ONLY", "1"
+        ).strip().lower() not in {"0", "false", "no", "off"}
         rviz_frame_candidates = [
             token.strip().lstrip("/")
             for token in rviz_frame_candidates_env.split(",")
@@ -6030,7 +6134,9 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 or os.environ.get("JETSON_IP")
                 or "localhost"
             )
-        novnc_url = f"http://{novnc_host}:6080/vnc.html?autoconnect=0&reconnect=0&resize=scale"
+        novnc_url = (
+            f"http://{novnc_host}:6080/vnc.html?autoconnect=0&reconnect=0&resize=scale"
+        )
 
         run_env = os.environ.copy()
         run_env["DISPLAY"] = display
@@ -6088,7 +6194,9 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
             )
 
         container = "nomad_isaac_ros"
-        selected_fixed_frame = rviz_fixed_frame.lstrip("/") if rviz_fixed_frame else "map"
+        selected_fixed_frame = (
+            rviz_fixed_frame.lstrip("/") if rviz_fixed_frame else "map"
+        )
 
         frame_probe_cmd = """
 source /opt/ros/humble/setup.bash 2>/dev/null || true
@@ -6270,7 +6378,10 @@ echo $!
             ).strip()
 
             if launch_result.returncode != 0:
-                if "__RVIZ2_NOT_FOUND__" in launch_output or launch_result.returncode == 127:
+                if (
+                    "__RVIZ2_NOT_FOUND__" in launch_output
+                    or launch_result.returncode == 127
+                ):
                     raise HTTPException(
                         status_code=500,
                         detail=(
@@ -6312,14 +6423,28 @@ echo $!
 
             time.sleep(1.0)
             alive_check = subprocess.run(
-                ["docker", "exec", container, "bash", "-lc", f"kill -0 {pid} 2>/dev/null"],
+                [
+                    "docker",
+                    "exec",
+                    container,
+                    "bash",
+                    "-lc",
+                    f"kill -0 {pid} 2>/dev/null",
+                ],
                 capture_output=True,
                 text=True,
                 timeout=3,
             )
             if alive_check.returncode != 0:
                 log_tail = subprocess.run(
-                    ["docker", "exec", container, "bash", "-lc", "tail -40 /tmp/rviz2.log 2>/dev/null || true"],
+                    [
+                        "docker",
+                        "exec",
+                        container,
+                        "bash",
+                        "-lc",
+                        "tail -40 /tmp/rviz2.log 2>/dev/null || true",
+                    ],
                     capture_output=True,
                     text=True,
                     timeout=5,
@@ -6352,10 +6477,7 @@ echo $!
         except Exception as e:
             raise HTTPException(
                 status_code=500,
-                detail=(
-                    "Failed to launch RViz2. "
-                    f"Error: {e}"
-                ),
+                detail=(f"Failed to launch RViz2. Error: {e}"),
             )
 
     @app.post("/api/tools/rviz2/stop", tags=["Tools"])
@@ -6398,9 +6520,7 @@ echo $!
                     if part
                 ).strip()
                 container_status = (
-                    "stopped"
-                    if "stopped" in (container_output or "")
-                    else "running"
+                    "stopped" if "stopped" in (container_output or "") else "running"
                 )
             except Exception as e:
                 container_status = "error"

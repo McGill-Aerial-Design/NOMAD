@@ -155,6 +155,18 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("enable_nav2")),
     )
 
+    # Task 1 target localizer: HSV circle detection for capture operations
+    # Runs independently of ZED OD mode since we disabled ZED OD to prevent crashes
+    target_localizer = ExecuteProcess(
+        cmd=[
+            "/bin/bash",
+            "-c",
+            ". /opt/ros/humble/setup.bash && . /workspaces/isaac_ros-dev/install/setup.bash && PYTHONPATH=/workspaces/isaac_ros-dev/edge_core/target_localizer:$PYTHONPATH exec python3 -m target_localizer.target_localizer_node --ros-args -p output_dir:=/home/mad/NOMAD/data/task1_captures -p team_name:=MAD -r /zed2i/zed_node/rgb/image_rect_color:=/zed/zed_node/rgb/color/rect/image -r /zed2i/zed_node/depth/depth_registered:=/zed/zed_node/depth/depth_registered -r /zed2i/zed_node/rgb/camera_info:=/zed/zed_node/rgb/color/rect/camera_info",
+        ],
+        name="target_localizer",
+        output="screen",
+    )
+
     # Foxglove bridge: exposes all ROS2 topics via WebSocket for Foxglove Studio
     # Connect Foxglove Studio to ws://<jetson-ip>:8765
     foxglove_bridge = ExecuteProcess(
@@ -218,6 +230,7 @@ def generate_launch_description():
                 }.items(),
             ),
             optical_frame_alias,
+            target_localizer,
             servo_tf_publisher,
             obstacle_distance_bridge,
             nav2_launch,
