@@ -2348,7 +2348,7 @@ fi
         if not timestamp_pattern.match(folder):
             raise HTTPException(status_code=400, detail="Invalid folder name format")
 
-        # Security: Validate filename - whitelist allowed files
+        # Security: Validate filename - whitelist known artifacts and target frames
         allowed_files = [
             "photo.jpg",
             "metadata.json",
@@ -2356,10 +2356,14 @@ fi
             "detections_overlay.jpg",
             "building_3d_snapshot.jpg",
         ]
-        if filename not in allowed_files:
+        dynamic_target_image = re.compile(r"^target_\d+\.(jpg|jpeg)$", re.IGNORECASE)
+        if filename not in allowed_files and not dynamic_target_image.match(filename):
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid filename. Allowed: {', '.join(allowed_files)}",
+                detail=(
+                    "Invalid filename. Allowed static files: "
+                    f"{', '.join(allowed_files)}, plus target_<n>.jpg"
+                ),
             )
 
         # Security: Prevent path traversal
@@ -2368,18 +2372,9 @@ fi
         if ".." in filename or "/" in filename or "\\" in filename:
             raise HTTPException(status_code=400, detail="Invalid filename")
 
-        # Build file path
-        base_dir = "./data/task1_captures"
-        file_path = os.path.join(base_dir, folder, filename)
-
-        # Normalize path and ensure it's within base_dir (additional security)
-        base_dir_abs = os.path.abspath(base_dir)
-        file_path_abs = os.path.abspath(file_path)
-        if not file_path_abs.startswith(base_dir_abs):
-            raise HTTPException(status_code=400, detail="Invalid file path")
-
-        # Check if file exists
-        if not os.path.exists(file_path):
+        # Resolve from host captures first, then mirror from container if needed.
+        file_path = _resolve_task1_capture_file(folder, filename)
+        if not file_path:
             raise HTTPException(
                 status_code=404, detail=f"File not found: {folder}/{filename}"
             )
@@ -2394,6 +2389,151 @@ fi
             media_type = "text/plain"
 
         return FileResponse(file_path, media_type=media_type)
+
+    def _task1_capture_base_dirs() -> list[str]:
+        """Candidate host directories where Task 1 captures may be stored."""
+        candidates = [
+            "./data/task1_captures",
+            os.path.expanduser("~/NOMAD/data/task1_captures"),
+        ]
+        seen: set[str] = set()
+        resolved: list[str] = []
+        for path in candidates:
+            abs_path = os.path.abspath(path)
+            if abs_path in seen:
+                continue
+            seen.add(abs_path)
+            resolved.append(abs_path)
+        return resolved
+
+    def _latest_task1_capture_from_host() -> tuple[Optional[str], list[str]]:
+        """Return newest timestamp folder and its jpg list from host storage."""
+        timestamp_pattern = re.compile(r"^\d{8}_\d{6}$")
+        latest_folder: Optional[str] = None
+        latest_images: list[str] = []
+
+        for base_dir in _task1_capture_base_dirs():
+            if not os.path.isdir(base_dir):
+                continue
+
+            try:
+                for folder in os.listdir(base_dir):
+                    folder_path = os.path.join(base_dir, folder)
+                    if not os.path.isdir(folder_path):
+                        continue
+                    if not timestamp_pattern.match(folder):
+                        continue
+
+                    images = sorted(
+                        [
+                            name
+                            for name in os.listdir(folder_path)
+                            if name.lower().endswith(".jpg")
+                        ]
+                    )
+
+                    if latest_folder is None or folder > latest_folder:
+                        latest_folder = folder
+                        latest_images = images
+            except Exception:
+                continue
+
+        return latest_folder, latest_images
+
+    def _latest_task1_capture_from_container() -> tuple[Optional[str], list[str]]:
+        """Return newest timestamp folder and jpg list from Isaac container storage."""
+        base_path = "/home/mad/NOMAD/data/task1_captures"
+
+        try:
+            folder_probe = subprocess.run(
+                [
+                    "docker",
+                    "exec",
+                    "nomad_isaac_ros",
+                    "bash",
+                    "-lc",
+                    (
+                        "base='/home/mad/NOMAD/data/task1_captures'; "
+                        "[ -d \"$base\" ] || exit 2; "
+                        "ls -1 \"$base\" 2>/dev/null | "
+                        "grep -E '^[0-9]{8}_[0-9]{6}$' | sort -r | head -n1"
+                    ),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=6,
+            )
+        except Exception:
+            return None, []
+
+        folder = (folder_probe.stdout or "").strip()
+        if folder_probe.returncode != 0 or not folder:
+            return None, []
+
+        safe_base = shlex.quote(base_path)
+        safe_folder = shlex.quote(folder)
+        image_cmd = (
+            f"base={safe_base}; "
+            f"folder={safe_folder}; "
+            "[ -d \"$base/$folder\" ] || exit 2; "
+            "ls -1 \"$base/$folder\" 2>/dev/null | grep -Ei '\\.(jpg|jpeg)$' | sort"
+        )
+
+        try:
+            image_probe = subprocess.run(
+                ["docker", "exec", "nomad_isaac_ros", "bash", "-lc", image_cmd],
+                capture_output=True,
+                text=True,
+                timeout=6,
+            )
+        except Exception:
+            return folder, []
+
+        if image_probe.returncode != 0:
+            return folder, []
+
+        images = [line.strip() for line in (image_probe.stdout or "").splitlines() if line.strip()]
+        return folder, images
+
+    def _copy_task1_file_from_container(
+        folder: str,
+        filename: str,
+    ) -> Optional[str]:
+        """Mirror a Task 1 capture file from Isaac container into host storage."""
+        host_bases = _task1_capture_base_dirs()
+        if not host_bases:
+            return None
+
+        host_folder = os.path.join(host_bases[0], folder)
+        os.makedirs(host_folder, exist_ok=True)
+        host_path = os.path.join(host_folder, filename)
+
+        if os.path.isfile(host_path):
+            return host_path
+
+        container_path = f"/home/mad/NOMAD/data/task1_captures/{folder}/{filename}"
+        try:
+            copy_result = subprocess.run(
+                ["docker", "cp", f"nomad_isaac_ros:{container_path}", host_path],
+                capture_output=True,
+                text=True,
+                timeout=8,
+            )
+            if copy_result.returncode == 0 and os.path.isfile(host_path):
+                return host_path
+        except Exception:
+            pass
+
+        return None
+
+    def _resolve_task1_capture_file(folder: str, filename: str) -> Optional[str]:
+        """Resolve capture file on host, with container mirror fallback."""
+        for base_dir in _task1_capture_base_dirs():
+            candidate = os.path.join(base_dir, folder, filename)
+            if os.path.isfile(candidate):
+                return candidate
+
+        return _copy_task1_file_from_container(folder, filename)
 
     # ==================== Task 1: Target Localizer (ROS 2) ====================
 
@@ -2418,42 +2558,45 @@ fi
         state = app.state.state_manager.get_state()
         now = datetime.now(timezone.utc)
 
-        # Find the most recent capture folder
-        captures_base = "./data/task1_captures"
-        if os.path.exists(captures_base):
-            folders = [
-                f
-                for f in os.listdir(captures_base)
-                if os.path.isdir(os.path.join(captures_base, f))
-            ]
-            timestamp_pattern = re.compile(r"^\d{8}_\d{6}$")
-            valid_folders = [f for f in folders if timestamp_pattern.match(f)]
-            if valid_folders:
-                latest_folder = max(valid_folders)
-                folder_path = os.path.join(captures_base, latest_folder)
-                images = [f for f in os.listdir(folder_path) if f.endswith(".jpg")]
-                if images:
-                    # Return metadata for the first image (or could return all)
-                    image_name = images[0]
+        latest_folder: Optional[str] = None
+        images: list[str] = []
 
-                    return {
-                        "success": True,
-                        "output": output,
-                        "image_name": image_name,
-                        "capture_folder": latest_folder,
-                        "timestamp": now.isoformat(),
-                        "position": {
-                            "lat": state.gps_lat or 0.0,
-                            "lon": state.gps_lon or 0.0,
-                            "alt": state.gps_alt or 0.0,
-                        },
-                        "heading_deg": state.heading_deg or 0.0,
-                        "pitch_deg": state.pitch_deg or 0.0,
-                        "roll_deg": state.roll_deg or 0.0,
-                        "gimbal_pitch_deg": state.gimbal_pitch_deg or 0.0,
-                        "gimbal_yaw_deg": state.gimbal_yaw_deg or 0.0,
-                        "building_location": "Unknown",  # TODO: get from target_localizer
-                    }
+        # Give host storage a short grace period in case files are still syncing.
+        for _ in range(8):
+            latest_folder, images = _latest_task1_capture_from_host()
+            if latest_folder and images:
+                break
+            await asyncio.sleep(0.2)
+
+        # If host capture path is not visible, fall back to container-local files.
+        if not latest_folder or not images:
+            container_folder, container_images = _latest_task1_capture_from_container()
+            if container_folder:
+                latest_folder = container_folder
+                images = container_images
+
+        if latest_folder and images:
+            # Return metadata for the first image.
+            image_name = images[0]
+
+            return {
+                "success": True,
+                "output": output,
+                "image_name": image_name,
+                "capture_folder": latest_folder,
+                "timestamp": now.isoformat(),
+                "position": {
+                    "lat": state.gps_lat or 0.0,
+                    "lon": state.gps_lon or 0.0,
+                    "alt": state.gps_alt or 0.0,
+                },
+                "heading_deg": state.heading_deg or 0.0,
+                "pitch_deg": state.pitch_deg or 0.0,
+                "roll_deg": state.roll_deg or 0.0,
+                "gimbal_pitch_deg": state.gimbal_pitch_deg or 0.0,
+                "gimbal_yaw_deg": state.gimbal_yaw_deg or 0.0,
+                "building_location": "Unknown",  # TODO: get from target_localizer
+            }
 
         # Fallback if no images found
         return {
@@ -2472,26 +2615,6 @@ fi
             "roll_deg": state.roll_deg or 0.0,
             "gimbal_pitch_deg": state.gimbal_pitch_deg or 0.0,
             "gimbal_yaw_deg": state.gimbal_yaw_deg or 0.0,
-            "building_location": "Unknown",
-        }
-
-        # Fallback if no images found
-        return {
-            "success": True,
-            "output": output,
-            "image_name": None,
-            "capture_folder": None,
-            "timestamp": now.isoformat(),
-            "position": {
-                "lat": state.get("latitude", 0.0),
-                "lon": state.get("longitude", 0.0),
-                "alt": state.get("altitude", 0.0),
-            },
-            "heading_deg": state.get("heading", 0.0),
-            "pitch_deg": state.get("pitch", 0.0),
-            "roll_deg": state.get("roll", 0.0),
-            "gimbal_pitch_deg": state.get("gimbal_pitch", 0.0),
-            "gimbal_yaw_deg": state.get("gimbal_yaw", 0.0),
             "building_location": "Unknown",
         }
 

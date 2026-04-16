@@ -289,6 +289,29 @@ namespace NOMAD.MissionPlanner
             }
         }
 
+        /// <summary>
+        /// Add a captured image as a new submission row.
+        /// </summary>
+        public void AddCapturedImage(string imagePath, string suggestedDescription = null)
+        {
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(() => AddCapturedImage(imagePath, suggestedDescription)));
+                return;
+            }
+
+            int nextNumber = _targetGrid.Rows.Count + 1;
+            int rowIndex = _targetGrid.Rows.Add();
+            _targetGrid.Rows[rowIndex].Cells["Number"].Value = nextNumber;
+            _targetGrid.Rows[rowIndex].Cells["Color"].Value = "Red";
+            _targetGrid.Rows[rowIndex].Cells["Description"].Value = suggestedDescription ?? "";
+            _targetGrid.Rows[rowIndex].Cells["ImagePath"].Value = imagePath ?? "";
+
+            _targetGrid.ClearSelection();
+            _targetGrid.Rows[rowIndex].Selected = true;
+            _targetGrid.CurrentCell = _targetGrid.Rows[rowIndex].Cells["Description"];
+        }
+
         private void TargetGrid_CellClick(object sender, DataGridViewCellEventArgs e)
         {
             if (e.RowIndex < 0) return;

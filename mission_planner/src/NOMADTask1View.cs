@@ -522,6 +522,7 @@ namespace NOMAD.MissionPlanner
                             var gimbalYaw = Val("gimbal_yaw_deg") ?? "N/A";
                             var buildingLocation = GetTask1BuildingLocationText() ?? Val("building_location") ?? "N/A";
                             var captureFolder = Val("capture_folder") ?? "N/A";
+                            var outputText = Val("output") ?? Val("message") ?? Val("detail");
 
                             var position = data["position"] as Newtonsoft.Json.Linq.JObject;
                             var latStr = position?["lat"]?.ToString() ?? "N/A";
@@ -578,6 +579,13 @@ namespace NOMAD.MissionPlanner
                                 };
 
                                 File.WriteAllText(jsonPath, Newtonsoft.Json.JsonConvert.SerializeObject(metadata, Newtonsoft.Json.Formatting.Indented));
+
+                                // Mirror successful captures into the Submit tab so
+                                // operators can upload without re-entering image paths.
+                                _uploadPanel?.AddCapturedImage(
+                                    localPath,
+                                    ExtractSuggestedTask1Description(outputText)
+                                );
 
                                 // Auto-generate AI description if enabled
                                 if (_config.AiAutoGenerate)
@@ -688,6 +696,26 @@ namespace NOMAD.MissionPlanner
                 _btnCapture.Enabled = true;
                 _btnCapture.Text = "CAPTURE PHOTO WITH METADATA";
             }
+        }
+
+        private string ExtractSuggestedTask1Description(string outputText)
+        {
+            if (string.IsNullOrWhiteSpace(outputText))
+                return string.Empty;
+
+            var normalized = outputText.Replace("\r", string.Empty);
+            var lines = normalized.Split('\n');
+            foreach (var rawLine in lines)
+            {
+                var line = rawLine?.Trim();
+                if (string.IsNullOrEmpty(line))
+                    continue;
+
+                if (line.IndexOf("target on", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return line;
+            }
+
+            return string.Empty;
         }
         
         public void UpdateData()
