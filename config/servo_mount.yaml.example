@@ -1,0 +1,15 @@
+# Servo mount offset configuration (TF-004).
+# Install to /etc/nomad/servo_mount.yaml on the Jetson.
+#
+# Measured from drone body center (base_link origin) to the servo pivot,
+# in ROS REP-103 body frame:
+#   x: forward (+), aft (-)
+#   y: left (+), right (-)
+#   z: up (+), down (-)
+#
+# Target accuracy: within 1 cm of physical measurement (TF-004).
+# Env vars SERVO_MOUNT_X/Y/Z override any value set here.
+
+x: 0.10
+y: 0.00
+z: -0.05

@@ -178,7 +178,7 @@ services:
           echo '[init] Process exited, container will restart';
       "
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'source /opt/ros/humble/setup.bash 2>/dev/null; ros2 topic list 2>/dev/null | grep -q zed && curl -sf http://localhost:8000/api/health || exit 1'"]
+      test: ["CMD-SHELL", "bash -c 'source /opt/ros/humble/setup.bash 2>/dev/null; ros2 topic list 2>/dev/null | grep -q zed && curl -sf http://localhost:8000/api/health && [ -f /tmp/ros_bridge.pid ] && kill -0 $(cat /tmp/ros_bridge.pid) 2>/dev/null && [ -f /tmp/drone_state_pub.pid ] && kill -0 $(cat /tmp/drone_state_pub.pid) 2>/dev/null || exit 1'"]
       interval: 30s
       timeout: 10s
       retries: 3

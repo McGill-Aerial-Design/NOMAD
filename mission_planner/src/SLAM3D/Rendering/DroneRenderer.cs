@@ -31,7 +31,7 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
         public float HeadingOffsetDeg { get; set; } = 0f;
 
         /// <summary>Frame type: "Tricopter" or "Quadcopter".</summary>
-        public string FrameType { get; set; } = "Tricopter";
+        public string FrameType { get; set; } = "Quadcopter";
 
         /// <summary>Camera forward offset from center in meters.</summary>
         public float CameraForwardOffsetM { get; set; } = 0f;

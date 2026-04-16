@@ -1,11 +1,11 @@
 # ==============================================================
 # NOMAD Nav2 Configuration for Omnidirectional Drone
 #
-# Tricopter tiltrotor VTOL in copter mode (omnidirectional hover)
+# ArduCopter quadcopter (omnidirectional hover)
 # Uses nvblox ESDF costmap for 2D obstacle avoidance at flight altitude
 # Altitude is managed separately by mission planning / Edge Core
 #
-# Nav2 generates /cmd_vel -> ros_http_bridge -> NavController -> ArduPlane GUIDED
+# Nav2 generates /cmd_vel -> ros_http_bridge -> NavController -> ArduCopter GUIDED
 # ==============================================================
 
 bt_navigator:

@@ -92,6 +92,15 @@ def setup_credentials(client_secret_path: str) -> bool:
     return True
 
 
+def gdrive_ready() -> bool:
+    """Check if Google Drive upload is configured and credentials are valid."""
+    token_path = _get_token_path()
+    if not os.path.isfile(token_path):
+        return False
+    creds = _get_credentials()
+    return creds is not None and creds.valid
+
+
 def upload_to_gdrive(
     local_path: str,
     filename: str,

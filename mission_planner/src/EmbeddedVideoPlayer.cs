@@ -86,7 +86,7 @@ namespace NOMAD.MissionPlanner
             }
             catch
             {
-                _apiBaseUrl = "http://100.85.121.98:8000";
+                _apiBaseUrl = NOMADConfig.Load().EffectiveBaseUrl;
             }
         }
         

@@ -398,6 +398,9 @@ def create_app(state_manager: StateManager) -> FastAPI:
         set()
     )  # SP-005: sectors excluded from obstacle avoidance
 
+    # Latest OBSTACLE_DISTANCE snapshot cached for UI consumers (GET /api/obstacle_distance)
+    app.state.obstacle_distance_last: Optional[dict] = None
+
     # Nav2 goal state (Jetson-side obstacle avoidance via nav2 stack)
     app.state.nav2_pending_goal = None  # Goal waiting to be picked up by bridge
     app.state.nav2_current_status = {"status": "idle"}  # Latest feedback from bridge
@@ -438,6 +441,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
         "container_running": False,
         "nvblox_running": False,
         "bridge_running": False,
+        "target_localizer_running": False,
     }
     app.state.isaac_startup_last_initiated = 0.0
     app.state.high_rate_zmq_enabled = os.environ.get(
@@ -883,6 +887,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 "container_running": bool(cache.get("container_running", False)),
                 "nvblox_running": bool(cache.get("nvblox_running", False)),
                 "bridge_running": bool(cache.get("bridge_running", False)),
+                "target_localizer_running": bool(cache.get("target_localizer_running", False)),
             }
 
         container_probe: Optional[bool] = None
@@ -911,6 +916,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
 
         nvblox_running = False
         bridge_running = False
+        target_localizer_running = False
         if container_running:
             nvblox_probe = _docker_exec_pgrep(
                 "nomad_isaac_ros",
@@ -920,6 +926,11 @@ def create_app(state_manager: StateManager) -> FastAPI:
             bridge_probe = _docker_exec_pgrep(
                 "nomad_isaac_ros",
                 "ros_http_bridge.py|ros_http_bridge",
+                timeout_s=5,
+            )
+            target_localizer_probe = _docker_exec_pgrep(
+                "nomad_isaac_ros",
+                "target_localizer_node|target_localizer\\.launch\\.py",
                 timeout_s=5,
             )
 
@@ -933,11 +944,17 @@ def create_app(state_manager: StateManager) -> FastAPI:
             else:
                 bridge_running = bool(bridge_probe)
 
+            if target_localizer_probe is None and cache_age_s < cache_max_stale_s:
+                target_localizer_running = bool(cache.get("target_localizer_running", False))
+            else:
+                target_localizer_running = bool(target_localizer_probe)
+
         app.state.isaac_runtime_cache = {
             "timestamp": now,
             "container_running": container_running,
             "nvblox_running": nvblox_running,
             "bridge_running": bridge_running,
+            "target_localizer_running": target_localizer_running,
         }
         if container_running and nvblox_running and bridge_running:
             app.state.isaac_startup_last_initiated = 0.0
@@ -946,6 +963,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
             "container_running": container_running,
             "nvblox_running": nvblox_running,
             "bridge_running": bridge_running,
+            "target_localizer_running": target_localizer_running,
         }
 
     def _launch_nvblox_bridge_with_od(
@@ -1044,7 +1062,7 @@ pkill -f 'component_container' 2>/dev/null || true
 pkill -f 'controller_server|planner_server|smoother_server|behavior_server|bt_navigator|lifecycle_manager_navigation|waypoint_follower|velocity_smoother' 2>/dev/null || true
 pkill -f ros_http_bridge 2>/dev/null || true
 pkill -f 'target_localizer_node|target_localizer\\.launch\\.py' 2>/dev/null || true
-pkill -f 'servo_tf_publisher\.py|obstacle_distance_bridge\.py|nav2_goal_bridge\.py|robot_state_publisher|static_transform_publisher' 2>/dev/null || true
+pkill -f 'servo_tf_publisher\\.py|obstacle_distance_bridge\\.py|nav2_goal_bridge\\.py|robot_state_publisher|static_transform_publisher' 2>/dev/null || true
 sleep 2
 # Clean up stale FastRTPS/DDS shared memory locks left by killed processes.
 # Without this, new ROS2 nodes fail with RTPS_TRANSPORT_SHM port lock errors.
@@ -1791,6 +1809,20 @@ fi
                 "message_rate_hz": 30.0,
             }
 
+        response["gdrive_ready"] = getattr(request.app.state, "gdrive_ready", False)
+
+        # Target localizer (Task 1 detection) readiness
+        enable_od = os.environ.get("ENABLE_OD", "false").strip().lower() == "true"
+        try:
+            isaac_cache = getattr(request.app.state, "isaac_runtime_cache", {}) or {}
+            target_localizer_running = bool(isaac_cache.get("target_localizer_running", False))
+        except Exception:
+            target_localizer_running = False
+        response["target_localizer"] = {
+            "enable_od": enable_od,
+            "running": target_localizer_running,
+        }
+
         return response
 
     @app.get("/health/detailed", tags=["System"])
@@ -2392,7 +2424,9 @@ fi
 
     def _task1_capture_base_dirs() -> list[str]:
         """Candidate host directories where Task 1 captures may be stored."""
+        env_dir = os.environ.get("NOMAD_TASK1_CAPTURE_DIR", "").strip()
         candidates = [
+            *([] if not env_dir else [env_dir]),
             "./data/task1_captures",
             os.path.expanduser("~/NOMAD/data/task1_captures"),
         ]
@@ -2537,6 +2571,13 @@ fi
 
     # ==================== Task 1: Target Localizer (ROS 2) ====================
 
+    _FACE_RE = re.compile(r"(?:on|near)\s+the\s+(north|south|east|west)\s+face", re.IGNORECASE)
+
+    def _parse_building_face(output: str) -> str:
+        """Extract building face from target_localizer description, or 'Unknown'."""
+        m = _FACE_RE.search(output or "")
+        return m.group(1).lower() if m else "Unknown"
+
     @app.post("/api/task/1/target/capture", tags=["Task 1"])
     async def task1_capture_target():
         """
@@ -2595,7 +2636,7 @@ fi
                 "roll_deg": state.roll_deg or 0.0,
                 "gimbal_pitch_deg": state.gimbal_pitch_deg or 0.0,
                 "gimbal_yaw_deg": state.gimbal_yaw_deg or 0.0,
-                "building_location": "Unknown",  # TODO: get from target_localizer
+                "building_location": _parse_building_face(output),
             }
 
         # Fallback if no images found
@@ -2615,7 +2656,7 @@ fi
             "roll_deg": state.roll_deg or 0.0,
             "gimbal_pitch_deg": state.gimbal_pitch_deg or 0.0,
             "gimbal_yaw_deg": state.gimbal_yaw_deg or 0.0,
-            "building_location": "Unknown",
+            "building_location": _parse_building_face(output),
         }
 
     @app.post("/api/task/1/target/save", tags=["Task 1"])
@@ -3519,7 +3560,7 @@ fi
         }
 
     # ==================== Nav2 Obstacle Avoidance (Jetson-side) ====================
-    # ArduPlane has no onboard obstacle avoidance. Nav2 runs on the Jetson with
+    # ArduCopter has no onboard obstacle avoidance. Nav2 runs on the Jetson with
     # nvblox costmap and generates obstacle-avoiding /cmd_vel. The nav2_goal_bridge
     # (ROS2 node inside the container) polls these endpoints to receive goals and
     # report feedback/results back.
@@ -3755,15 +3796,69 @@ fi
         if not mavlink_svc:
             raise HTTPException(status_code=503, detail="MAVLink service not available")
 
+        increment = body.get("increment", 5)
+        min_distance_cm = body.get("min_distance", 20)
+        max_distance_cm = body.get("max_distance", 2000)
+
         success = mavlink_svc.send_obstacle_distance(
             distances=distances,
-            increment=body.get("increment", 5),
-            min_distance=body.get("min_distance", 20),
-            max_distance=body.get("max_distance", 2000),
+            increment=increment,
+            min_distance=min_distance_cm,
+            max_distance=max_distance_cm,
             angle_offset=body.get("angle_offset", 0),
             frame=body.get("frame", 0),
         )
+
+        # Cache snapshot for UI consumers (nearest-obstacle readout, radar)
+        valid_distances = [
+            (i, d) for i, d in enumerate(distances)
+            if d is not None and min_distance_cm <= d < max_distance_cm
+        ]
+        if valid_distances:
+            nearest_idx, nearest_cm = min(valid_distances, key=lambda t: t[1])
+            # Each sector spans `increment` degrees; angle is sector-center.
+            nearest_bearing_deg = (nearest_idx * increment + increment / 2.0) % 360
+        else:
+            nearest_idx = None
+            nearest_cm = None
+            nearest_bearing_deg = None
+
+        request.app.state.obstacle_distance_last = {
+            "timestamp": time.time(),
+            "distances": list(distances),
+            "increment_deg": increment,
+            "min_distance_cm": min_distance_cm,
+            "max_distance_cm": max_distance_cm,
+            "nearest_sector": nearest_idx,
+            "nearest_distance_cm": nearest_cm,
+            "nearest_bearing_deg": nearest_bearing_deg,
+        }
         return {"success": success}
+
+    @app.get("/api/obstacle_distance", tags=["Navigation"])
+    async def get_obstacle_distance(request: Request):
+        """
+        Return the most recent obstacle distance snapshot received from
+        obstacle_distance_bridge, along with nearest-obstacle summary
+        fields for lightweight UI readouts.
+        """
+        snapshot = getattr(request.app.state, "obstacle_distance_last", None)
+        if not snapshot:
+            return {"valid": False, "message": "No obstacle distance data received"}
+
+        age_s = time.time() - snapshot.get("timestamp", 0.0)
+        return {
+            "valid": age_s < 5.0,
+            "age_seconds": age_s,
+            "timestamp": snapshot.get("timestamp"),
+            "increment_deg": snapshot.get("increment_deg"),
+            "min_distance_cm": snapshot.get("min_distance_cm"),
+            "max_distance_cm": snapshot.get("max_distance_cm"),
+            "nearest_sector": snapshot.get("nearest_sector"),
+            "nearest_distance_cm": snapshot.get("nearest_distance_cm"),
+            "nearest_bearing_deg": snapshot.get("nearest_bearing_deg"),
+            "distances": snapshot.get("distances", []),
+        }
 
     def _require_terminal_api_key() -> None:
         """
@@ -6460,7 +6555,7 @@ mesh && /^[[:space:]]*Enabled:/ { sub(/Enabled:.*/, "Enabled: false"); mesh=0 }
     for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
         mesh_node=$(ros2 node list 2>/dev/null | grep nvblox | head -n1 || true)
         if [ -z "$mesh_node" ]; then
-            mesh_node=$(ros2 service list 2>/dev/null | sed -n 's#^\(.*\)/set_parameters$#\1#p' | grep nvblox | head -n1 || true)
+            mesh_node=$(ros2 service list 2>/dev/null | sed -n 's#^\\(.*\\)/set_parameters$#\\1#p' | grep nvblox | head -n1 || true)
         fi
         if [ -n "$mesh_node" ]; then
             ros2 param set "$mesh_node" update_mesh_rate_hz 0.0

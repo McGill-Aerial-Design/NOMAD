@@ -167,9 +167,7 @@ namespace NOMAD.MissionPlanner
 
         private string BuildNoVncUrl()
         {
-            string host = _config.UseTailscale ? _config.TailscaleIP : _config.JetsonIP;
-            if (string.IsNullOrWhiteSpace(host))
-                host = "100.85.121.98";
+            string host = _config.EffectiveIP;
 
             return $"http://{host}:6080/vnc.html?autoconnect=0&reconnect=0&resize=scale";
         }

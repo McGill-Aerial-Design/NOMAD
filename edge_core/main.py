@@ -51,7 +51,7 @@ from .api import ( create_app,
 )
 from .operational_mode import init_mode_manager, OperationalModeManager
 from .spray_controller import SprayController, SprayTarget
-from .gdrive_upload import upload_to_gdrive
+from .gdrive_upload import upload_to_gdrive, gdrive_ready
 
 from .logging_service import cleanup_old_logs
 from .video_stream_manager import init_video_stream_manager
@@ -496,6 +496,20 @@ def run(
 
     spray_controller.set_excluded_sectors_fn(_set_excluded_sectors)
     logger.info("Spray controller initialized with callbacks")
+
+    # GDrive readiness probe — warn early if spray uploads will fail
+    app.state.gdrive_ready = gdrive_ready()
+    if os.environ.get("GDRIVE_FOLDER_ID"):
+        if app.state.gdrive_ready:
+            logger.info("Google Drive upload ready")
+        else:
+            logger.warning(
+                "GDRIVE_FOLDER_ID is set but no valid token found at %s — "
+                "spray photo uploads will fail. Run: python -m edge_core.gdrive_upload --setup <client_secret.json>",
+                os.environ.get("GDRIVE_TOKEN_PATH", "~/.nomad/gdrive_token.json"),
+            )
+    else:
+        logger.info("Google Drive upload disabled (GDRIVE_FOLDER_ID not set)")
 
     # Start health status broadcast (every 2 seconds)
     mavlink_service.start_health_broadcast(interval=2.0)

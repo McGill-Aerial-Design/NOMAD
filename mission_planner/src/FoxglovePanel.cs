@@ -390,7 +390,7 @@ namespace NOMAD.MissionPlanner
                 try
                 {
                     var data = JObject.Parse(result.Data);
-                    var url = data["url"]?.Value<string>() ?? "ws://100.85.121.98:8765";
+                    var url = data["url"]?.Value<string>() ?? $"ws://{NOMADConfig.Load().EffectiveIP}:8765";
                     var alreadyRunning = data["already_running"]?.Value<bool>() ?? false;
 
                     LogMessage(alreadyRunning ? "Foxglove bridge was already running" : "Foxglove bridge started");

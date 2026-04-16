@@ -38,9 +38,10 @@ import argparse
 import json
 import logging
 import math
+import os
 import threading
 import time
-from typing import Optional
+from typing import Optional, Tuple
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
@@ -69,11 +70,14 @@ class ServoTFPublisher(Node):
     Static:  base_link -> servo_mount (physical mounting offset)
     """
 
-    # Mounting offset: servo pivot is 10cm forward, 5cm below base_link center
-    # These should match the physical drone measurements (TF-004: within 1cm/1deg)
-    MOUNT_OFFSET_X = 0.10   # forward (meters)
-    MOUNT_OFFSET_Y = 0.0    # lateral
-    MOUNT_OFFSET_Z = -0.05  # down (negative Z in ROS = below)
+    # Mounting offset defaults: servo pivot 10cm forward, 5cm below base_link.
+    # Real values are loaded from env (SERVO_MOUNT_X/Y/Z) or
+    # /etc/nomad/servo_mount.yaml at __init__ time. TF-004 requires
+    # within 1cm/1deg of physical measurement.
+    DEFAULT_MOUNT_OFFSET_X = 0.10
+    DEFAULT_MOUNT_OFFSET_Y = 0.0
+    DEFAULT_MOUNT_OFFSET_Z = -0.05
+    MOUNT_CONFIG_PATH = "/etc/nomad/servo_mount.yaml"
 
     def __init__(
         self,
@@ -84,6 +88,12 @@ class ServoTFPublisher(Node):
         odom_topic: str = "/zed/zed_node/odom",
     ):
         super().__init__("nomad_servo_tf_publisher")
+
+        self._mount_x, self._mount_y, self._mount_z, mount_source = self._load_mount_offsets()
+        self.get_logger().info(
+            f"Mount offsets ({mount_source}): "
+            f"x={self._mount_x:.3f}m y={self._mount_y:.3f}m z={self._mount_z:.3f}m"
+        )
 
         self._host = host
         self._port = port
@@ -133,6 +143,65 @@ class ServoTFPublisher(Node):
             f"{poll_rate_hz} Hz servo poll -> {self._base_url}"
         )
 
+    @classmethod
+    def _load_mount_offsets(cls) -> Tuple[float, float, float, str]:
+        """
+        Resolve mount offsets (meters) with priority:
+            env SERVO_MOUNT_X/Y/Z > /etc/nomad/servo_mount.yaml > defaults.
+        Any individual axis falls back to its default if missing/invalid.
+        """
+        x = cls.DEFAULT_MOUNT_OFFSET_X
+        y = cls.DEFAULT_MOUNT_OFFSET_Y
+        z = cls.DEFAULT_MOUNT_OFFSET_Z
+        source = "defaults"
+
+        yaml_values = {}
+        try:
+            if os.path.isfile(cls.MOUNT_CONFIG_PATH):
+                with open(cls.MOUNT_CONFIG_PATH, "r") as f:
+                    for line in f:
+                        line = line.split("#", 1)[0].strip()
+                        if not line or ":" not in line:
+                            continue
+                        k, v = line.split(":", 1)
+                        key = k.strip().lower()
+                        try:
+                            yaml_values[key] = float(v.strip())
+                        except ValueError:
+                            pass
+                if yaml_values:
+                    source = cls.MOUNT_CONFIG_PATH
+        except OSError as e:
+            logger.warning(f"Could not read {cls.MOUNT_CONFIG_PATH}: {e}")
+
+        x = yaml_values.get("x", x)
+        y = yaml_values.get("y", y)
+        z = yaml_values.get("z", z)
+
+        env_overrides = []
+        for axis, default in (("x", x), ("y", y), ("z", z)):
+            raw = os.environ.get(f"SERVO_MOUNT_{axis.upper()}")
+            if raw is None:
+                continue
+            try:
+                val = float(raw)
+            except ValueError:
+                logger.warning(f"Invalid SERVO_MOUNT_{axis.upper()}={raw!r}, ignoring")
+                continue
+            if axis == "x":
+                x = val
+            elif axis == "y":
+                y = val
+            else:
+                z = val
+            env_overrides.append(axis.upper())
+
+        if env_overrides:
+            source = f"env ({','.join(env_overrides)})" + (
+                f" + {cls.MOUNT_CONFIG_PATH}" if yaml_values else ""
+            )
+        return x, y, z, source
+
     def _handle_odom(self, msg: Odometry) -> None:
         """Cache latest ZED odom for base_link transform computation."""
         with self._odom_lock:
@@ -144,9 +213,9 @@ class ServoTFPublisher(Node):
         t.header.stamp = self.get_clock().now().to_msg()
         t.header.frame_id = "base_link"
         t.child_frame_id = "servo_mount"
-        t.transform.translation.x = self.MOUNT_OFFSET_X
-        t.transform.translation.y = self.MOUNT_OFFSET_Y
-        t.transform.translation.z = self.MOUNT_OFFSET_Z
+        t.transform.translation.x = self._mount_x
+        t.transform.translation.y = self._mount_y
+        t.transform.translation.z = self._mount_z
         # No rotation - servo mount aligned with body frame
         t.transform.rotation.x = 0.0
         t.transform.rotation.y = 0.0
@@ -156,7 +225,7 @@ class ServoTFPublisher(Node):
         self._static_tf_broadcaster.sendTransform(t)
         self.get_logger().info(
             f"Static TF published: base_link -> servo_mount "
-            f"({self.MOUNT_OFFSET_X}, {self.MOUNT_OFFSET_Y}, {self.MOUNT_OFFSET_Z})"
+            f"({self._mount_x}, {self._mount_y}, {self._mount_z})"
         )
 
     def _publish_all_tf(self) -> None:
@@ -269,7 +338,7 @@ class ServoTFPublisher(Node):
             bqw /= n
 
         # Rotate mount offset by body quaternion: R_body * mount_offset
-        mx, my, mz = self.MOUNT_OFFSET_X, self.MOUNT_OFFSET_Y, self.MOUNT_OFFSET_Z
+        mx, my, mz = self._mount_x, self._mount_y, self._mount_z
         # Quaternion-vector rotation: q * v * q_conj
         # Using the formula directly:
         # t = 2 * cross(q.xyz, v)

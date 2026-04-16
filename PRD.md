@@ -10,7 +10,7 @@ This specification is designed to be included in the **AEAC Phase 1 Design Paper
 | :--- | :--- |
 | **Team** | McGill Aerial Design (MAD) |
 | **Competition** | AEAC Student Competition 2026 |
-| **Platform** | Jetson Orin Nano / ZED 2i / Tricopter Tiltrotor (Quad Config) |
+| **Platform** | Jetson Orin Nano / ZED 2i / ArduCopter Quadcopter |
 | **Software Stack** | Python 3.13.9 (Free-Threading), C# .NET |
 | **Version** | **3.0.0** |
 | **Status** | **APPROVED FOR IMPLEMENTATION** |

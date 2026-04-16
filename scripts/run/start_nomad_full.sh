@@ -63,6 +63,16 @@ fi
 
 mkdir -p $LOG_DIR
 
+# Source jetson.env if present (overrides like GCS_IP, MAVLINK_UART_DEV, etc.)
+JETSON_ENV_FILE="${NOMAD_DIR}/config/env/jetson.env"
+if [ -f "$JETSON_ENV_FILE" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$JETSON_ENV_FILE"
+    set +a
+    echo "[INFO] Sourced $JETSON_ENV_FILE"
+fi
+
 # Cleanup old logs (keep last 48 hours or 500MB max)
 log_info "Cleaning up logs older than 2 days..."
 LOG_CLEANUP_AGE_DAYS=2
@@ -122,12 +132,15 @@ start_mavlink_router() {
         return
     fi
     
-    # Get ground station IP
-    GCS_IP=$(tailscale status 2>/dev/null | grep -v "$(hostname)" | grep -oP '\d+\.\d+\.\d+\.\d+' | head -1 || echo "")
-    
-    if [ -z "$GCS_IP" ]; then
-        GCS_IP="192.168.1.255"
-        log_warn "No Tailscale peer found, using: $GCS_IP"
+    # Ground station IP: prefer explicit env (jetson.env GCS_IP), else discover via Tailscale.
+    if [ -n "${GCS_IP:-}" ]; then
+        log_ok "Using GCS_IP from environment: $GCS_IP"
+    else
+        GCS_IP=$(tailscale status 2>/dev/null | grep -v "$(hostname)" | grep -oP '\d+\.\d+\.\d+\.\d+' | head -1 || echo "")
+        if [ -z "$GCS_IP" ]; then
+            GCS_IP="192.168.1.255"
+            log_warn "No Tailscale peer found, using: $GCS_IP"
+        fi
     fi
     
     nohup mavlink-routerd -e "$GCS_IP:14550" -e 127.0.0.1:14550 /dev/ttyACM0 > $LOG_DIR/mavlink.log 2>&1 &

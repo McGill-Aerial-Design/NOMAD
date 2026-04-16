@@ -333,7 +333,7 @@ namespace NOMAD.MissionPlanner
             _combDroneType.SelectedItem = _config.DroneFrameType;
             _combDroneType.SelectedIndexChanged += (s, e) =>
             {
-                _config.DroneFrameType = _combDroneType.SelectedItem?.ToString() ?? "Tricopter";
+                _config.DroneFrameType = _combDroneType.SelectedItem?.ToString() ?? "Quadcopter";
                 _config.Save();
                 _glControl?.Invalidate();
             };

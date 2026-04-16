@@ -46,6 +46,11 @@ namespace NOMAD.MissionPlanner
         private Button _btnSprayTarget;
         private Button _btnAbortSpray;
         private Label _lblSprayStatus;
+        private volatile bool _sprayInProgress;
+        private bool _modesPopulated;
+
+        // Obstacle distance readout (from Jetson obstacle_distance_bridge)
+        private Label _lblObstacleStatus;
 
         public NOMADTask2View(DualLinkSender sender, NOMADConfig config, JetsonConnectionManager jetsonConnectionManager = null)
         {
@@ -54,6 +59,14 @@ namespace NOMAD.MissionPlanner
             _jetsonConnectionManager = jetsonConnectionManager;
             InitializeUI();
             StartModePolling();
+
+            VisibleChanged += (s, e) =>
+            {
+                if (Visible)
+                    _modePollTimer?.Change(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2));
+                else
+                    _modePollTimer?.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+            };
         }
 
         private void InitializeUI()
@@ -114,6 +127,23 @@ namespace NOMAD.MissionPlanner
             vioCard.Controls.Add(_btnResetVio);
 
             statusLayout.Controls.Add(vioCard);
+
+            // ==================== Obstacle Distance Card ====================
+            var obstacleCard = CreateCard("OBSTACLE DISTANCE");
+            obstacleCard.Size = new Size(600, 80);
+
+            _lblObstacleStatus = new Label
+            {
+                Text = "Obstacles: no data",
+                Font = new Font("Consolas", 11),
+                ForeColor = TEXT_SECONDARY,
+                Location = new Point(15, 45),
+                AutoSize = true,
+                MaximumSize = new Size(570, 0),
+            };
+            obstacleCard.Controls.Add(_lblObstacleStatus);
+
+            statusLayout.Controls.Add(obstacleCard);
 
             // ==================== Operational Mode Card ====================
             var modeCard = CreateCard("OPERATIONAL MODE");
@@ -540,16 +570,22 @@ namespace NOMAD.MissionPlanner
             {
                 var modeTask = JetsonApiService.GetAsync("/api/mode");
                 var sprayTask = JetsonApiService.GetAsync("/api/spray/status");
+                var vioTask = JetsonApiService.GetAsync("/api/vio/status");
+                var obstacleTask = JetsonApiService.GetAsync("/api/obstacle_distance");
 
-                await Task.WhenAll(modeTask, sprayTask);
+                await Task.WhenAll(modeTask, sprayTask, vioTask, obstacleTask);
 
                 if (IsDisposed || !IsHandleCreated) return;
 
                 var modeResp = await modeTask;
                 var sprayResp = await sprayTask;
+                var vioResp = await vioTask;
+                var obstacleResp = await obstacleTask;
 
                 JObject modeData = null;
                 JObject sprayData = null;
+                JObject vioData = null;
+                JObject obstacleData = null;
 
                 if (modeResp.IsSuccessStatusCode)
                 {
@@ -563,9 +599,21 @@ namespace NOMAD.MissionPlanner
                     sprayData = JObject.Parse(json);
                 }
 
+                if (vioResp.IsSuccessStatusCode)
+                {
+                    var json = await vioResp.Content.ReadAsStringAsync();
+                    vioData = JObject.Parse(json);
+                }
+
+                if (obstacleResp.IsSuccessStatusCode)
+                {
+                    var json = await obstacleResp.Content.ReadAsStringAsync();
+                    obstacleData = JObject.Parse(json);
+                }
+
                 if (!IsDisposed && IsHandleCreated)
                 {
-                    this.BeginInvoke((Action)(() => UpdateModeAndSprayUI(modeData, sprayData)));
+                    this.BeginInvoke((Action)(() => UpdateModeAndSprayUI(modeData, sprayData, vioData, obstacleData)));
                 }
             }
             catch (ObjectDisposedException) { }
@@ -576,13 +624,81 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private void UpdateModeAndSprayUI(JObject modeData, JObject sprayData)
+        private void UpdateModeAndSprayUI(JObject modeData, JObject sprayData, JObject vioData = null, JObject obstacleData = null)
         {
             try
             {
+                // Update VIO status (tracking quality, rate, source)
+                if (vioData != null && _lblVioStatus != null)
+                {
+                    var health = vioData["health"]?.ToString() ?? "unknown";
+                    var confidence = vioData["tracking_confidence"]?.Value<double>() ?? 0.0;
+                    var rateHz = vioData["message_rate_hz"]?.Value<double>() ?? 0.0;
+                    var source = vioData["source"]?.ToString() ?? "none";
+
+                    _lblVioStatus.Text = $"VIO: {health}  |  quality {confidence * 100.0:F0}%  |  {rateHz:F1} Hz  |  {source}";
+                    if (health == "healthy")
+                        _lblVioStatus.ForeColor = SUCCESS_COLOR;
+                    else if (health == "degraded")
+                        _lblVioStatus.ForeColor = WARNING_COLOR;
+                    else
+                        _lblVioStatus.ForeColor = ERROR_COLOR;
+                }
+
+                // Update nearest-obstacle readout
+                if (obstacleData != null && _lblObstacleStatus != null)
+                {
+                    var valid = obstacleData["valid"]?.Value<bool>() ?? false;
+                    if (!valid)
+                    {
+                        _lblObstacleStatus.Text = "Obstacles: no data";
+                        _lblObstacleStatus.ForeColor = TEXT_SECONDARY;
+                    }
+                    else
+                    {
+                        var nearestCm = obstacleData["nearest_distance_cm"]?.Value<double?>();
+                        var nearestBearing = obstacleData["nearest_bearing_deg"]?.Value<double?>();
+                        var ageS = obstacleData["age_seconds"]?.Value<double>() ?? 0.0;
+
+                        if (nearestCm.HasValue && nearestBearing.HasValue)
+                        {
+                            var meters = nearestCm.Value / 100.0;
+                            _lblObstacleStatus.Text = $"Nearest obstacle: {meters:F2} m @ {nearestBearing.Value:F0}°  (age {ageS:F1}s)";
+                            if (meters < 0.5)
+                                _lblObstacleStatus.ForeColor = ERROR_COLOR;
+                            else if (meters < 1.5)
+                                _lblObstacleStatus.ForeColor = WARNING_COLOR;
+                            else
+                                _lblObstacleStatus.ForeColor = SUCCESS_COLOR;
+                        }
+                        else
+                        {
+                            _lblObstacleStatus.Text = $"Obstacles: clear  (age {ageS:F1}s)";
+                            _lblObstacleStatus.ForeColor = SUCCESS_COLOR;
+                        }
+                    }
+                }
+
                 // Update mode status
                 if (modeData != null)
                 {
+                    if (!_modesPopulated)
+                    {
+                        var availModes = modeData["available_modes"] as JArray;
+                        if (availModes != null && availModes.Count > 0)
+                        {
+                            var selected = _cmbMode.SelectedItem?.ToString();
+                            _cmbMode.Items.Clear();
+                            foreach (var m in availModes)
+                                _cmbMode.Items.Add(m.ToString());
+                            if (selected != null && _cmbMode.Items.Contains(selected))
+                                _cmbMode.SelectedItem = selected;
+                            else if (_cmbMode.Items.Count > 0)
+                                _cmbMode.SelectedIndex = 0;
+                            _modesPopulated = true;
+                        }
+                    }
+
                     var status = modeData["status"];
                     if (status != null)
                     {
@@ -680,6 +796,8 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         private async Task TriggerSpray()
         {
+            if (_sprayInProgress) return;
+            _sprayInProgress = true;
             try
             {
                 _btnSprayTarget.Enabled = false;
@@ -739,6 +857,10 @@ namespace NOMAD.MissionPlanner
             {
                 _lblSprayStatus.Text = $"Error: {ex.Message}";
                 _btnSprayTarget.Enabled = true;
+            }
+            finally
+            {
+                _sprayInProgress = false;
             }
         }
 

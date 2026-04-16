@@ -12,7 +12,7 @@ Architecture:
     Mission Planner -> Edge Core API -> (HTTP poll) -> nav2_goal_bridge
     -> Nav2 NavigateToPose/NavigateThroughPoses action
     -> Nav2 plans path using nvblox costmap (obstacle avoidance)
-    -> /cmd_vel -> ros_http_bridge -> Edge Core -> NavController -> ArduPlane GUIDED
+    -> /cmd_vel -> ros_http_bridge -> Edge Core -> NavController -> ArduCopter GUIDED
 
 Usage (inside Isaac ROS container):
     python3 nav2_goal_bridge.py --host 172.17.0.1 --port 8000
