@@ -567,7 +567,10 @@ class VideoStreamNode(Node):
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         out = []
         claimed_centers = []
-        min_r = 8
+        # At 848x480 stream res, a 5cm target at 10m ≈ 10px radius, at 5m ≈ 20px.
+        # 12px floor keeps the smallest legitimate targets while rejecting the
+        # distant noise blobs that triggered false positives in indoor tests.
+        min_r = 12
         max_r = max(40, min(h, w) // 2)
         min_area = math.pi * min_r * min_r
         max_area = math.pi * max_r * max_r
@@ -589,11 +592,11 @@ class VideoStreamNode(Node):
                 if perim < 1.0:
                     continue
                 circ = (4.0 * math.pi * area) / (perim * perim)
-                if circ < 0.60:
+                if circ < 0.78:
                     continue
                 hull = cv2.convexHull(c)
                 hull_area = cv2.contourArea(hull)
-                if hull_area < 1.0 or (area / hull_area) < 0.70:
+                if hull_area < 1.0 or (area / hull_area) < 0.85:
                     continue
                 (cx_f, cy_f), radius = cv2.minEnclosingCircle(c)
                 cx, cy, r = int(cx_f), int(cy_f), int(radius)

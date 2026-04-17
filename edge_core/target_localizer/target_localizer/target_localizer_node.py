@@ -138,11 +138,16 @@ class TargetLocalizerNode(Node):
         )
 
         # ----- Detectors ----- #
+        # Tighter filters than the old defaults: 0.60 circularity and 8px min
+        # radius were letting distant, non-circular blobs through. 0.75/0.82
+        # with a 15px floor cuts most false positives while still catching the
+        # smallest competition target (5cm @ 5m ≈ 25 px on a 1080p ZED feed).
         self.circle_detector = CircleDetector(
-            min_radius_px=8,
+            min_radius_px=15,
             max_radius_px=400,
-            min_circularity=0.60,
-            min_solidity=0.70,
+            min_circularity=0.75,
+            min_solidity=0.82,
+            blur_kernel=7,
         )
 
         yolo_path = self.get_parameter("yolo_model_path").value
@@ -573,6 +578,30 @@ class TargetLocalizerNode(Node):
             )
             return response
 
+        # Guard against stale frames: if the most recent RGB message stamp is
+        # more than 2s old we have been capturing the same frozen frame on
+        # every trigger. Surface this explicitly instead of silently returning
+        # yesterday's image.
+        if self.latest_rgb_stamp is not None:
+            try:
+                stamp_sec = (
+                    self.latest_rgb_stamp.sec
+                    + self.latest_rgb_stamp.nanosec * 1e-9
+                )
+                age = self.get_clock().now().nanoseconds * 1e-9 - stamp_sec
+                if age > 2.0:
+                    response.success = False
+                    response.message = (
+                        f"Latest ZED RGB frame is {age:.1f}s old — the camera "
+                        "stream appears frozen. Check the zed_node / ros bridge "
+                        f"(rgb_msgs={self.rgb_msg_count})."
+                    )
+                    self.get_logger().warn(response.message)
+                    return response
+            except Exception:
+                # If clock math fails, fall through and let capture proceed.
+                pass
+
         if not self.intrinsics_received:
             response.success = False
             response.message = (
@@ -601,20 +630,26 @@ class TargetLocalizerNode(Node):
 
         self.get_logger().info(f"Detected {len(circles)} circle(s)")
 
-        # Save images of all detected circles for Mission Planner display
+        # Save one preview image per detection with letter names derived from
+        # the running global counter so each capture produces unique filenames.
+        # This avoids the old overwrite-same-name pattern (target_00.jpg every
+        # capture), which caused the MissionPlanner UI to show cached stale
+        # images due to browser/URL caching.
         saved_images = []
-        for i, det in enumerate(circles):
-            # Save detection image
-            img_filename = f"target_{i:02d}.jpg"
+        preview_letters = [
+            target_letter_from_index(self.next_target_index + offset)
+            for offset in range(len(circles))
+        ]
+        for det, preview_letter in zip(circles, preview_letters):
+            img_filename = f"target_{preview_letter}.jpg"
             img_path = os.path.join(capture_dir, img_filename)
 
-            # Draw bounding box on image copy
             annotated = rgb.copy()
             x1, y1, x2, y2 = det.bbox
             cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(
                 annotated,
-                f"{det.color.value} ({det.confidence:.2f})",
+                f"{preview_letter}: {det.color.value} ({det.confidence:.2f})",
                 (x1, y1 - 10),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
@@ -623,7 +658,6 @@ class TargetLocalizerNode(Node):
             )
             cv2.imwrite(img_path, annotated)
             saved_images.append(img_filename)
-
             self.get_logger().info(f"Saved detection image: {img_filename}")
 
         # Check if we can create targets (requires GPS/local pose)

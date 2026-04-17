@@ -2388,13 +2388,18 @@ fi
             "detections_overlay.jpg",
             "building_3d_snapshot.jpg",
         ]
-        dynamic_target_image = re.compile(r"^target_\d+\.(jpg|jpeg)$", re.IGNORECASE)
+        # Accept both legacy numeric (target_00.jpg) and letter IDs (target_A.jpg,
+        # target_AB.jpg) produced by target_localizer_node.py. Letters wrap
+        # A..Z, AA..ZZ, etc.
+        dynamic_target_image = re.compile(
+            r"^target_(?:\d+|[A-Za-z]+)\.(jpg|jpeg)$", re.IGNORECASE
+        )
         if filename not in allowed_files and not dynamic_target_image.match(filename):
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "Invalid filename. Allowed static files: "
-                    f"{', '.join(allowed_files)}, plus target_<n>.jpg"
+                    f"{', '.join(allowed_files)}, plus target_<id>.jpg"
                 ),
             )
 
