@@ -100,7 +100,7 @@ namespace NOMAD.MissionPlanner
         private TextBox _txtOpenRouterApiKey;
         private TextBox _txtGeminiApiKey;
         private TextBox _txtOllamaHost;
-        private TextBox _txtAiModel;
+        private ComboBox _cmbAiModel;
         
         // Google Drive
         private Button _btnUploadGDrive;
@@ -542,14 +542,31 @@ namespace NOMAD.MissionPlanner
             AddSectionLabel(tab, "Model", ref y);
 
             AddLabel(tab, "Model Name:", 20, y);
-            _txtAiModel = AddTextBox(tab, 130, y, 200);
-            y += 25;
-            AddLabel(tab, "OpenRouter: nvidia/nemotron-nano-12b-v2-vl:free", 30, y, Color.Gray);
-            y += 18;
-            AddLabel(tab, "Gemini: gemini-1.5-flash or gemini-1.5-pro", 30, y, Color.Gray);
-            y += 18;
-            AddLabel(tab, "Ollama: llava:13b or llava:7b", 30, y, Color.Gray);
+            _cmbAiModel = new ComboBox
+            {
+                Location = new Point(130, y),
+                Size = new Size(280, 23),
+                DropDownStyle = ComboBoxStyle.DropDown,
+                BackColor = Color.FromArgb(30, 30, 30),
+                ForeColor = Color.White,
+            };
+            _cmbAiModel.Items.AddRange(new[]
+            {
+                // OpenRouter vision-capable free tier
+                "nvidia/nemotron-nano-12b-v2-vl:free",
+                "google/gemma-4-31b-it:free",
+                "google/gemma-4-26b-a4b-it:free",
+                // Gemini
+                "gemini-1.5-flash",
+                "gemini-1.5-pro",
+                // Ollama
+                "llava:13b",
+                "llava:7b",
+            });
+            tab.Controls.Add(_cmbAiModel);
             y += 30;
+            AddLabel(tab, "Pick a preset or type a custom model id. Match provider selected above.", 30, y, Color.Gray);
+            y += 24;
 
             AddSectionLabel(tab, "Google Drive (Spray Photo Upload)", ref y);
             AddLabel(tab, "Upload OAuth2 token to Jetson (from gdrive_upload --setup):", 20, y, Color.LightGray);
@@ -797,7 +814,7 @@ namespace NOMAD.MissionPlanner
             _txtOpenRouterApiKey.Text = Config.OpenRouterApiKey;
             _txtGeminiApiKey.Text = Config.GeminiApiKey;
             _txtOllamaHost.Text = Config.OllamaHost;
-            _txtAiModel.Text = Config.AiModel;
+            _cmbAiModel.Text = Config.AiModel;
             
             // GPIO
             _numGpioPayload1.Value = Config.GpioPayload1Pin;
@@ -885,7 +902,7 @@ namespace NOMAD.MissionPlanner
             Config.OpenRouterApiKey = _txtOpenRouterApiKey.Text.Trim();
             Config.GeminiApiKey = _txtGeminiApiKey.Text.Trim();
             Config.OllamaHost = _txtOllamaHost.Text.Trim();
-            Config.AiModel = _txtAiModel.Text.Trim();
+            Config.AiModel = _cmbAiModel.Text.Trim();
             
             // GPIO
             Config.GpioPayload1Pin = (int)_numGpioPayload1.Value;

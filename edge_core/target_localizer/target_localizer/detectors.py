@@ -16,6 +16,8 @@ Both detectors output bounding boxes and class labels. The main node
 handles 3D back-projection using depth and TF data.
 """
 
+import math
+
 import cv2
 import numpy as np
 from dataclasses import dataclass
@@ -64,18 +66,25 @@ class LandmarkDetection:
 # Each color has a list of (lower_hsv, upper_hsv) ranges.
 # Red wraps around 0/180 in OpenCV HSV, so it needs two ranges.
 HSV_RANGES = {
+    # RED covers pure red AND orange-red (hue 0-17). Phone screens, printed
+    # targets, and low-sun lighting all shift red toward orange; the old 0-10
+    # cap left a dead zone at hue 11-17 that dropped targets silently.
     TargetColor.RED: [
-        (np.array([0, 80, 60]), np.array([10, 255, 255])),
-        (np.array([170, 80, 60]), np.array([180, 255, 255])),
+        (np.array([0, 60, 60]), np.array([17, 255, 255])),
+        (np.array([165, 60, 60]), np.array([180, 255, 255])),
     ],
+    # YELLOW starts at hue 22 so it does not overlap the extended RED band.
     TargetColor.YELLOW: [
-        (np.array([18, 80, 80]), np.array([38, 255, 255])),
+        (np.array([22, 90, 90]), np.array([38, 255, 255])),
     ],
     TargetColor.GREEN: [
-        (np.array([38, 50, 50]), np.array([85, 255, 255])),
+        (np.array([40, 70, 60]), np.array([85, 255, 255])),
     ],
+    # BLUE tightened: old S_min=50 V_min=50 grabbed dark navy shadows and
+    # denim/tarp edges. 90/70 keeps saturated competition targets without
+    # the false positives seen in indoor testing.
     TargetColor.BLUE: [
-        (np.array([90, 50, 50]), np.array([135, 255, 255])),
+        (np.array([95, 90, 70]), np.array([130, 255, 255])),
     ],
     # Black and white use value channel primarily
     TargetColor.BLACK: [
@@ -413,7 +422,3 @@ class ColorVerifier:
                 best_color = color
 
         return best_color, best_ratio
-
-
-# Need math import at module level
-import math

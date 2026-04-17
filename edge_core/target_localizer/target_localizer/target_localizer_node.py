@@ -67,11 +67,25 @@ from .building_model import BuildingModel, FaceID, gps_to_local
 from .detectors import CircleDetector, LandmarkDetector, ColorVerifier, TargetColor
 
 
+def target_letter_from_index(i: int) -> str:
+    """Map 0->A, 25->Z, 26->AA, 27->AB, ... (Excel-column style, no zero)."""
+    if i < 0:
+        raise ValueError("target index must be non-negative")
+    letters = ""
+    n = i
+    while True:
+        letters = chr(ord("A") + (n % 26)) + letters
+        n = n // 26 - 1
+        if n < 0:
+            break
+    return letters
+
+
 @dataclass
 class TargetRecord:
     """A confirmed target with 3D position and description."""
 
-    target_id: int
+    target_id: str
     color: TargetColor
     face: FaceID
     height_agl: float
@@ -169,7 +183,7 @@ class TargetLocalizerNode(Node):
         self._last_depth_error_ts: float = 0.0
 
         self.targets: List[TargetRecord] = []
-        self.next_target_id: int = 1
+        self.next_target_index: int = 0
 
         # Landmark detection timer
         self.last_landmark_time = 0.0
@@ -691,7 +705,8 @@ class TargetLocalizerNode(Node):
             )
 
             # Save target image (already saved detection images above, this is for confirmed targets)
-            img_filename = f"target_{self.next_target_id:02d}.jpg"
+            target_letter = target_letter_from_index(self.next_target_index)
+            img_filename = f"target_{target_letter}.jpg"
             img_path = os.path.join(capture_dir, img_filename)
             # Draw bounding box on image copy
             annotated = rgb.copy()
@@ -710,7 +725,7 @@ class TargetLocalizerNode(Node):
 
             # Create record
             record = TargetRecord(
-                target_id=self.next_target_id,
+                target_id=target_letter,
                 color=final_color,
                 face=face.face_id,
                 height_agl=height_agl,
@@ -725,13 +740,13 @@ class TargetLocalizerNode(Node):
             )
             self.targets.append(record)
             new_targets.append(record)
-            self.next_target_id += 1
+            self.next_target_index += 1
 
             self.get_logger().info(f"TARGET {record.target_id}: {description}")
 
         if new_targets:
             response.success = True
-            descs = [t.description for t in new_targets]
+            descs = [f"Target {t.target_id}: {t.description}" for t in new_targets]
             prefix = ""
             if face_source == "local_pose":
                 prefix = "GPS unavailable; using local pose fallback. "

@@ -26,12 +26,27 @@ from gi.repository import Gst, GLib
 import numpy as np
 import threading
 import time
+import math
 import subprocess
 import os
 import json
 import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
+
+
+# HSV ranges mirror edge_core/target_localizer/target_localizer/detectors.py so
+# the livestream overlay shows the same circles as a /capture_target call would.
+# Keep these two files in sync when tuning.
+_HSV_RANGES = {
+    "red": [((0, 60, 60), (17, 255, 255)), ((165, 60, 60), (180, 255, 255))],
+    "yellow": [((22, 90, 90), (38, 255, 255))],
+    "green": [((40, 70, 60), (85, 255, 255))],
+    "blue": [((95, 90, 70), (130, 255, 255))],
+    "black": [((0, 0, 0), (180, 80, 60))],
+    "white": [((0, 0, 180), (180, 40, 255))],
+}
+_HSV_PRIORITY = ["red", "yellow", "green", "blue", "black", "white"]
 
 Gst.init(None)
 
@@ -108,6 +123,10 @@ class VideoStreamNode(Node):
         self._overlay_enabled = False
         self._detections = []
         self._detections_lock = threading.Lock()
+        # Local HSV circle detection runs inline at ~5 Hz so the livestream
+        # shows the same boxes as /capture_target without a network round-trip.
+        self._hsv_last_run_ts = 0.0
+        self._hsv_min_interval = 0.2
         self._edge_core_url = "http://172.17.0.1:8000"
         self._edge_core_api_key = (os.environ.get("NOMAD_API_KEY") or "").strip()
         self._edge_core_internal_token = (
@@ -307,8 +326,18 @@ class VideoStreamNode(Node):
                 cv_image = cv2.resize(cv_image, (self.width, self.height),
                                       interpolation=cv2.INTER_NEAREST)
 
-            # Overlay detections if enabled
+            # Overlay detections if enabled. Run local HSV detection at ~5 Hz
+            # so circles show up in the livestream exactly as they do on capture.
             if self._overlay_enabled:
+                if (now - self._hsv_last_run_ts) >= self._hsv_min_interval:
+                    self._hsv_last_run_ts = now
+                    try:
+                        hsv_dets = self._detect_hsv_circles(cv_image)
+                        with self._detections_lock:
+                            self._detections = hsv_dets
+                    except Exception as hsv_err:
+                        if self.frame_count % 150 == 0:
+                            self.get_logger().warn(f'HSV detect error: {hsv_err}')
                 self.draw_detections(cv_image)
 
             # Ensure contiguous C-order for zero-copy tobytes
@@ -525,15 +554,78 @@ class VideoStreamNode(Node):
                     self._detections = []
             self._overlay_stop.wait(1.0 / 15.0)  # Poll at 15 Hz to match video framerate
 
+    def _detect_hsv_circles(self, frame):
+        """Local HSV circle detector mirroring target_localizer/detectors.py.
+
+        Populates self._detections with dicts shaped for draw_detections:
+        bbox_x/y/w/h, label, confidence, hsv_color, ellipse_*.
+        """
+        import cv2
+        h, w = frame.shape[:2]
+        blurred = cv2.GaussianBlur(frame, (5, 5), 0)
+        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        out = []
+        claimed_centers = []
+        min_r = 8
+        max_r = max(40, min(h, w) // 2)
+        min_area = math.pi * min_r * min_r
+        max_area = math.pi * max_r * max_r
+
+        for color_name in _HSV_PRIORITY:
+            mask = np.zeros((h, w), dtype=np.uint8)
+            for lo, hi in _HSV_RANGES[color_name]:
+                mask |= cv2.inRange(hsv, np.array(lo, dtype=np.uint8),
+                                    np.array(hi, dtype=np.uint8))
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL,
+                                           cv2.CHAIN_APPROX_SIMPLE)
+            for c in contours:
+                area = cv2.contourArea(c)
+                if area < min_area or area > max_area:
+                    continue
+                perim = cv2.arcLength(c, True)
+                if perim < 1.0:
+                    continue
+                circ = (4.0 * math.pi * area) / (perim * perim)
+                if circ < 0.60:
+                    continue
+                hull = cv2.convexHull(c)
+                hull_area = cv2.contourArea(hull)
+                if hull_area < 1.0 or (area / hull_area) < 0.70:
+                    continue
+                (cx_f, cy_f), radius = cv2.minEnclosingCircle(c)
+                cx, cy, r = int(cx_f), int(cy_f), int(radius)
+                if r < min_r or r > max_r:
+                    continue
+                # Reject overlaps with higher-priority detections.
+                if any(((cx - ex) ** 2 + (cy - ey) ** 2) ** 0.5 < max(r, er) * 0.7
+                       for ex, ey, er in claimed_centers):
+                    continue
+                claimed_centers.append((cx, cy, r))
+                x, y, bw, bh = cv2.boundingRect(c)
+                out.append({
+                    "label": f"{color_name}_circle",
+                    "hsv_color": color_name,
+                    "confidence": float(min(circ, area / hull_area)),
+                    "bbox_x": float(x),
+                    "bbox_y": float(y),
+                    "bbox_w": float(bw),
+                    "bbox_h": float(bh),
+                    "_src_w": w,
+                    "_src_h": h,
+                })
+        return out
+
     def start_overlay(self):
         if self._overlay_enabled:
             return
         self._overlay_enabled = True
-        self._overlay_stop.clear()
-        self._overlay_thread = threading.Thread(
-            target=self._fetch_detections_loop, daemon=True, name='overlay-fetch')
-        self._overlay_thread.start()
-        self.get_logger().info("Detection overlay enabled")
+        # Local HSV runs inline on each frame; no HTTP fetch thread needed.
+        # The fetch loop previously pulled ZED YOLO detections, but for
+        # Task 1 circle targets HSV is the authoritative detector.
+        self.get_logger().info("Detection overlay enabled (local HSV)")
 
     def stop_overlay(self):
         if not self._overlay_enabled:
@@ -545,6 +637,7 @@ class VideoStreamNode(Node):
             self._overlay_thread = None
         with self._detections_lock:
             self._detections = []
+        self._hsv_last_run_ts = 0.0
         self.get_logger().info("Detection overlay disabled")
 
 
