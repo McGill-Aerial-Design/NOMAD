@@ -2594,11 +2594,42 @@ fi
 
         Returns structured metadata for Mission Planner compatibility.
         """
-        output = await _call_target_capture_with_retries(
-            max_attempts=3,
-            retry_delay_s=2.0,
-            timeout_s=45.0,
-        )
+        # The helper maps any `success: false` response (including the
+        # application-level "no circles detected" case) to HTTPException 502,
+        # which the client then shows as a scary "HTTP 502 Bad Gateway".
+        # Catch that and return a structured success=False payload instead, so
+        # legitimate no-detect captures don't look like gateway outages.
+        try:
+            output = await _call_target_capture_with_retries(
+                max_attempts=3,
+                retry_delay_s=2.0,
+                timeout_s=45.0,
+            )
+        except HTTPException as exc:
+            detail_text = str(exc.detail or "").strip()
+            low = detail_text.lower()
+            application_level_failure = exc.status_code == 502 and any(
+                marker in low
+                for marker in (
+                    "no colored circles",
+                    "no circles",
+                    "no rgb",
+                    "camera intrinsics",
+                    "stream appears frozen",
+                    "frame is",
+                )
+            )
+            if application_level_failure:
+                now = datetime.now(timezone.utc)
+                return {
+                    "success": False,
+                    "error": detail_text or "Capture returned no targets.",
+                    "output": detail_text,
+                    "image_name": None,
+                    "capture_folder": None,
+                    "timestamp": now.isoformat(),
+                }
+            raise
 
         # Get current state for metadata
         state = app.state.state_manager.get_state()

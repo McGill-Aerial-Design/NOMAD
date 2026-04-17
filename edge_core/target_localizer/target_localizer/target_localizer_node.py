@@ -116,6 +116,14 @@ class TargetLocalizerNode(Node):
         self.declare_parameter("dedup_radius_m", 0.5)
         self.declare_parameter("landmark_detect_rate_hz", 2.0)
         self.declare_parameter("auto_landmark_detection", True)
+        # HSV circle detector knobs. Exposed so we can tune live via
+        #   ros2 param set /target_localizer circle.min_circularity 0.65
+        # without rebuilding the container.
+        self.declare_parameter("circle.min_radius_px", 12)
+        self.declare_parameter("circle.max_radius_px", 400)
+        self.declare_parameter("circle.min_circularity", 0.70)
+        self.declare_parameter("circle.min_solidity", 0.80)
+        self.declare_parameter("circle.blur_kernel", 7)
 
         # Load parameters
         self.team_name = self.get_parameter("team_name").value
@@ -138,16 +146,15 @@ class TargetLocalizerNode(Node):
         )
 
         # ----- Detectors ----- #
-        # Tighter filters than the old defaults: 0.60 circularity and 8px min
-        # radius were letting distant, non-circular blobs through. 0.75/0.82
-        # with a 15px floor cuts most false positives while still catching the
-        # smallest competition target (5cm @ 5m ≈ 25 px on a 1080p ZED feed).
+        # Defaults: 12px min radius, 0.70 circularity, 0.80 solidity.
+        # Looser than the distant-blob filter but still rejects obvious noise.
+        # Live-tunable via the circle.* ROS parameters declared above.
         self.circle_detector = CircleDetector(
-            min_radius_px=15,
-            max_radius_px=400,
-            min_circularity=0.75,
-            min_solidity=0.82,
-            blur_kernel=7,
+            min_radius_px=int(self.get_parameter("circle.min_radius_px").value),
+            max_radius_px=int(self.get_parameter("circle.max_radius_px").value),
+            min_circularity=float(self.get_parameter("circle.min_circularity").value),
+            min_solidity=float(self.get_parameter("circle.min_solidity").value),
+            blur_kernel=int(self.get_parameter("circle.blur_kernel").value),
         )
 
         yolo_path = self.get_parameter("yolo_model_path").value
@@ -578,29 +585,27 @@ class TargetLocalizerNode(Node):
             )
             return response
 
-        # Guard against stale frames: if the most recent RGB message stamp is
-        # more than 2s old we have been capturing the same frozen frame on
-        # every trigger. Surface this explicitly instead of silently returning
-        # yesterday's image.
-        if self.latest_rgb_stamp is not None:
-            try:
+        # Log frame age for diagnostics. Intentionally non-fatal: ZED can
+        # publish with sim time while rclpy reads wall time, and a noisy
+        # clock comparison used to reject every capture with a cryptic 502.
+        # If the stream really is frozen, the rgb_msg_count will stop
+        # climbing in the 5s watchdog log instead.
+        try:
+            if self.latest_rgb_stamp is not None:
                 stamp_sec = (
                     self.latest_rgb_stamp.sec
                     + self.latest_rgb_stamp.nanosec * 1e-9
                 )
-                age = self.get_clock().now().nanoseconds * 1e-9 - stamp_sec
-                if age > 2.0:
-                    response.success = False
-                    response.message = (
-                        f"Latest ZED RGB frame is {age:.1f}s old — the camera "
-                        "stream appears frozen. Check the zed_node / ros bridge "
-                        f"(rgb_msgs={self.rgb_msg_count})."
+                now_sec = self.get_clock().now().nanoseconds * 1e-9
+                age = now_sec - stamp_sec
+                # Only flag absurdly large gaps; small negatives are fine.
+                if abs(age) < 3600:
+                    self.get_logger().info(
+                        f"Capture: RGB frame age = {age:.2f}s "
+                        f"(rgb_msgs={self.rgb_msg_count})"
                     )
-                    self.get_logger().warn(response.message)
-                    return response
-            except Exception:
-                # If clock math fails, fall through and let capture proceed.
-                pass
+        except Exception:
+            pass
 
         if not self.intrinsics_received:
             response.success = False
