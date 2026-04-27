@@ -2726,6 +2726,192 @@ fi
         )
         return {"success": True, "output": output}
 
+
+# ==================== Building Corner Calibration ====================
+
+class BuildingCornerRequest(BaseModel):
+    name: str
+    lat: float
+    lon: float
+
+
+class BuildingCornersRequest(BaseModel):
+    center_lat: float
+    center_lon: float
+    height: float
+    corners: list[dict[str, Any]]  # [{"name": "NW", "lat": 45.xxx, "lon": -75.xxx}]
+
+
+# Shared path for the corners JSON file consumed by the ROS2 service.
+# Matches target_localizer output_dir default (/home/mad/targets).
+_BUILDING_CORNERS_DIR = "/home/mad/targets"
+
+
+@app.post("/api/task/1/building/corner", tags=["Task 1"])
+async def task1_add_building_corner(corner: BuildingCornerRequest):
+    """
+    Add a single building corner coordinate (e.g. from the drone's GPS
+    while hovering above the corner).
+
+    Pilots fly the drone above each building corner, then the operator
+    clicks "Capture Corner" in Mission Planner. This endpoint appends
+    the corner to the persistent corners list. Once >= 3 corners are
+    collected, call /api/task/1/building/corners/apply to rebuild the
+    building model.
+    """
+    corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
+    os.makedirs(_BUILDING_CORNERS_DIR, exist_ok=True)
+
+    # Load or create the corners file
+    data = {}
+    if os.path.exists(corners_path):
+        try:
+            with open(corners_path, "r") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+
+    if "corners" not in data:
+        data["corners"] = []
+
+    # Add or update the corner by name
+    existing_idx = None
+    for i, c in enumerate(data["corners"]):
+        if c.get("name") == corner.name:
+            existing_idx = i
+            break
+
+    corner_entry = {"name": corner.name, "lat": corner.lat, "lon": corner.lon}
+    if existing_idx is not None:
+        data["corners"][existing_idx] = corner_entry
+    else:
+        data["corners"].append(corner_entry)
+
+    # Preserve center_lat/center_lon/height if already set, else use defaults
+    data.setdefault("center_lat", data["corners"][0]["lat"] if data["corners"] else 45.0)
+    data.setdefault("center_lon", data["corners"][0]["lon"] if data["corners"] else -75.0)
+    data.setdefault("height", 5.0)
+
+    with open(corners_path, "w") as f:
+        json.dump(data, f, indent=2)
+
+    return {
+        "success": True,
+        "corner": corner_entry,
+        "total_corners": len(data["corners"]),
+        "can_apply": len(data["corners"]) >= 3,
+        "corners_path": corners_path,
+    }
+
+
+@app.get("/api/task/1/building/corners", tags=["Task 1"])
+async def task1_get_building_corners():
+    """
+    List the currently saved building corners (from the JSON file).
+    """
+    corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
+    if not os.path.exists(corners_path):
+        return {"success": True, "corners": [], "total_corners": 0, "can_apply": False}
+
+    try:
+        with open(corners_path, "r") as f:
+            data = json.load(f)
+    except Exception as e:
+        return {"success": False, "error": str(e), "corners": [], "total_corners": 0, "can_apply": False}
+
+    corners = data.get("corners", [])
+    return {
+        "success": True,
+        "corners": corners,
+        "center_lat": data.get("center_lat"),
+        "center_lon": data.get("center_lon"),
+        "height": data.get("height"),
+        "total_corners": len(corners),
+        "can_apply": len(corners) >= 3,
+    }
+
+
+@app.delete("/api/task/1/building/corners", tags=["Task 1"])
+async def task1_clear_building_corners():
+    """
+    Clear all saved building corners (e.g. to restart calibration).
+    """
+    corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
+    if os.path.exists(corners_path):
+        os.remove(corners_path)
+    return {"success": True, "message": "Building corners cleared."}
+
+
+@app.post("/api/task/1/building/corners/apply", tags=["Task 1"])
+async def task1_apply_building_corners(
+    center_lat: Optional[float] = None,
+    center_lon: Optional[float] = None,
+    height: Optional[float] = None,
+):
+    """
+    Apply the saved building corners to the target_localizer node by
+    calling the /target_localizer/set_building_corners ROS2 service.
+
+    The service reads the building_corners.json file and rebuilds the
+    BuildingModel at runtime. At least 3 corners must be saved first
+    (via /api/task/1/building/corner).
+
+    Optionally override center_lat, center_lon, height via query params.
+    """
+    corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
+    if not os.path.exists(corners_path):
+        raise HTTPException(status_code=404, detail="No building corners saved yet. Add corners via POST /api/task/1/building/corner first.")
+
+    try:
+        with open(corners_path, "r") as f:
+            data = json.load(f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read corners file: {e}")
+
+    corners = data.get("corners", [])
+    if len(corners) < 3:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Need at least 3 corners to build a polygon, got {len(corners)}. Add more corners first.",
+        )
+
+    # Apply any overrides from query params
+    if center_lat is not None:
+        data["center_lat"] = center_lat
+    if center_lon is not None:
+        data["center_lon"] = center_lon
+    if height is not None:
+        data["height"] = height
+
+    # Write back with any overrides
+    with open(corners_path, "w") as f:
+        json.dump(data, f, indent=2)
+
+    # Call the ROS2 service to rebuild the building model
+    try:
+        output = _call_ros2_service_in_isaac_container_or_raise(
+            service_name="/target_localizer/set_building_corners",
+            service_type="std_srvs/srv/Trigger",
+            request_payload={},
+            timeout_s=15.0,
+        )
+    except HTTPException as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=f"Failed to apply building corners to target_localizer: {exc.detail}",
+        )
+
+    return {
+        "success": True,
+        "message": f"Building model rebuilt with {len(corners)} corners.",
+        "corners": corners,
+        "center_lat": data.get("center_lat"),
+        "center_lon": data.get("center_lon"),
+        "height": data.get("height"),
+        "output": output,
+    }
+
+
     # ==================== Google Drive Upload ====================
 
     @app.get("/api/gdrive/status", tags=["Google Drive"])
@@ -3704,6 +3890,18 @@ fi
             "goal_id": body.get("goal_id"),
             "message": body.get("message"),
         }
+
+    # Notify spray controller of Nav2 result (unblocks APPROACH state)
+    spray_ctrl = getattr(request.app.state, "spray_controller", None)
+    if spray_ctrl:
+        try:
+            spray_ctrl.update_nav2_result(
+                goal_id=body.get("goal_id", ""),
+                status=body.get("status", "unknown"),
+                message=body.get("message", ""),
+            )
+        except Exception:
+            pass  # spray controller may not be active
         return {"success": True}
 
     # ==================== Spray Controller (SP-001 to SP-008) =====================
@@ -3721,11 +3919,10 @@ fi
         """
         Trigger autonomous spray sequence on a target (SP-001).
 
-        Requires target_id, x, y, z coordinates. Drone must be > 2m
-        from target in the plane parallel to the target.
+        Requires target_id, x, y, z coordinates. Drone must be within 3m of target (operator positioned via WASD).
 
         The sequence runs fully autonomously (SP-002):
-        APPROACH -> AIM -> SPRAY -> VERIFY -> UPLOAD -> COMPLETE
+        APPROACH (3m->2m via Nav2) -> AIM -> SPRAY -> VERIFY (circle change) -> UPLOAD -> COMPLETE
         """
         spray_ctrl = getattr(request.app.state, "spray_controller", None)
         if not spray_ctrl:
@@ -3743,7 +3940,6 @@ fi
             z=body.get("z", 0.0),
             label=body.get("label", ""),
             confidence=body.get("confidence", 0.0),
-            is_ground=body.get("is_ground", False),
         )
 
         result = spray_ctrl.trigger(target)

@@ -23,6 +23,7 @@ namespace NOMAD.MissionPlanner
         protected static readonly Color INFO_COLOR = NOMADTheme.INFO;
         protected static readonly Color TEXT_PRIMARY = NOMADTheme.TEXT_PRIMARY;
         protected static readonly Color TEXT_SECONDARY = NOMADTheme.TEXT_SECONDARY;
+        protected static readonly Color TEXT_MUTED = NOMADTheme.TEXT_MUTED;
 
         protected NOMADViewBase()
         {

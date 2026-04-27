@@ -125,8 +125,18 @@ Always check this file for actual IP addresses and paths.
 - `POST /network/reconnect` - Trigger Tailscale reconnect
 - `GET /network/ping/{host}` - Ping utility
 
-### Task 1 (Outdoor GPS)
-- `POST /api/task/1/capture` - Capture GPS snapshot
+### Task 1 (Outdoor Reconnaissance)
+- `POST /api/task/1/target/capture` - Trigger target detection + description (primary)
+- `POST /api/task/1/target/save` - Save targets to competition .txt file
+- `GET /api/task/1/target/model` - Print building model summary
+- `POST /api/task/1/building/corner` - Save one building corner GPS (on-site calibration)
+- `GET /api/task/1/building/corners` - List saved building corners
+- `DELETE /api/task/1/building/corners` - Clear all building corners
+- `POST /api/task/1/building/corners/apply` - Apply saved corners to target_localizer (rebuild building model)
+- `POST /api/task/1/capture` - Legacy capture (fallback to detections cache)
+- `GET /api/task/1/captures` - List capture folders
+- `GET /api/task/1/images/{folder}/{filename}` - Download captured image/metadata
+- **Full guide**: `docs/TASK1_COMPETITION_GUIDE.md`
 
 ### Task 2 (Indoor VIO)
 - `POST /api/task/2/reset_map` - Clear exclusion map
@@ -291,6 +301,7 @@ The Jetson connects via Tailscale VPN for:
 | Navigation Architecture | `docs/JETSON_NAV_ARCHITECTURE.md` |
 | Isaac ROS + nvblox Setup | `docs/ISAAC_ROS_NVBLOX_SETUP.md` |
 | Servo Control | `docs/SERVO_CONTROL.md` |
+| **Task 1 Competition Guide** | **`docs/TASK1_COMPETITION_GUIDE.md`** |
 | **TODO / Requirements Audit** | **`TODO.md`** |
 | This Quick Reference | `AGENTS.md` |
 

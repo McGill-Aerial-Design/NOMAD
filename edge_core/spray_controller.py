@@ -1,18 +1,21 @@
 """
-NOMAD Edge Core - Autonomous Spray Controller (SP-001 to SP-008)
+NOMAD Edge Core - Task 2 Spray Controller (Hybrid Manual+Autonomous)
 
-State machine for Task 2 autonomous target engagement:
-    IDLE -> APPROACH -> AIM -> SPRAY -> VERIFY -> UPLOAD -> COMPLETE
+Workflow:
+  Operator manually positions drone within 3m of target.
+  Upon spray trigger, system autonomously approaches to 2m and executes spray sequence.
 
-Requirements:
-    SP-001: Trigger from > 2m distance (parallel to target plane)
-    SP-002: Fully autonomous after trigger
-    SP-003: Visual servoing (drone + servo) to center target
-    SP-004: Nozzle pitch + ballistic drop compensation
-    SP-005: Obstacle avoidance sector exclusion during approach
-    SP-006: Ground target vertical descent (min alt 0.8m)
-    SP-007: Post-spray photo + HSV verification + Google Drive upload
-    SP-008: Re-spray once on verification failure
+State Machine:
+  IDLE -> APPROACH (3m->2m) -> AIM -> SPRAY -> VERIFY -> UPLOAD -> COMPLETE
+
+Features:
+  - Operator manual positioning (WASD) to enter 3m engagement zone
+  - Autonomous approach via Nav2 NavigateToPose (3m to 2m)
+  - Pre-spray image capture for circle change verification
+  - Circle change verification: color-agnostic before/after comparison (>20% change)
+  - Visual servoing: servo pitch + ballistic drop compensation
+  - Google Drive upload: posts proof photo
+  - Obstacle avoidance sector exclusion during approach
 
 Target: Python 3.13 | NVIDIA Jetson Orin Nano
 """
@@ -23,7 +26,7 @@ import logging
 import math
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Optional
 
@@ -33,26 +36,25 @@ logger = logging.getLogger("edge_core.spray_controller")
 class SprayState(Enum):
     """Spray sequence states."""
     IDLE = "idle"
-    APPROACH = "approach"       # Moving toward target
-    AIM = "aim"                 # Fine alignment with visual servoing
-    SPRAY = "spray"             # Activating water pump
-    VERIFY = "verify"           # HSV color check on sprayed target
-    UPLOAD = "upload"           # Photo capture + Google Drive upload
-    COMPLETE = "complete"       # Sequence done, ready for next target
-    FAILED = "failed"           # Sequence failed (after retry)
-    ABORTED = "aborted"         # Operator or safety abort
+    APPROACH = "approach"    # Autonomous 3m->2m approach via Nav2
+    AIM = "aim"              # Fine alignment with visual servoing
+    SPRAY = "spray"          # Activating water pump
+    VERIFY = "verify"        # Circle change detection (before/after comparison)
+    UPLOAD = "upload"        # Photo capture + Google Drive upload
+    COMPLETE = "complete"    # Sequence done, ready for next target
+    FAILED = "failed"        # Sequence failed (after retry)
+    ABORTED = "aborted"      # Operator or safety abort
 
 
 @dataclass
 class SprayTarget:
-    """Target to engage."""
+    """Target to spray (operator must position drone manually)."""
     target_id: int
-    x: float            # world-frame position
+    x: float  # world-frame position (NED)
     y: float
     z: float
     label: str = ""
     confidence: float = 0.0
-    is_ground: bool = False  # True if target is on the ground (SP-006)
 
 
 @dataclass
@@ -67,6 +69,10 @@ class SprayStatus:
     verification_passed: bool = False
     upload_url: str = ""
     error: Optional[str] = None
+    # Nav2 approach tracking
+    nav2_goal_id: Optional[str] = None
+    nav2_approach_active: bool = False
+    approach_method: str = ""  # "nav2" or "velocity"
     # Stats
     targets_engaged: int = 0
     targets_succeeded: int = 0
@@ -83,6 +89,9 @@ class SprayStatus:
             "verification_passed": self.verification_passed,
             "upload_url": self.upload_url,
             "error": self.error,
+            "nav2_goal_id": self.nav2_goal_id,
+            "nav2_approach_active": self.nav2_approach_active,
+            "approach_method": self.approach_method,
             "targets_engaged": self.targets_engaged,
             "targets_succeeded": self.targets_succeeded,
             "targets_failed": self.targets_failed,
@@ -90,14 +99,12 @@ class SprayStatus:
 
 
 # Ballistic drop compensation table (SP-004)
-# Maps engagement distance (m) to additional pitch-down angle (degrees)
-# Based on water nozzle at ~2 bar pressure, measured empirically
 BALLISTIC_DROP_TABLE = {
-    1.0: 0.0,   # 1m - negligible drop
-    2.0: 2.0,   # 2m - ~2 degrees down
-    3.0: 5.0,   # 3m - ~5 degrees down
-    4.0: 8.0,   # 4m - ~8 degrees down
-    5.0: 12.0,  # 5m - ~12 degrees down
+    1.0: 0.0,    # 1m - negligible drop
+    2.0: 2.0,    # 2m - ~2 degrees down
+    3.0: 5.0,    # 3m - ~5 degrees down
+    4.0: 8.0,    # 4m - ~8 degrees down
+    5.0: 12.0,   # 5m - ~12 degrees down
 }
 
 
@@ -107,7 +114,6 @@ def _interpolate_drop(distance_m: float) -> float:
         return 0.0
     if distance_m >= 5.0:
         return 12.0
-
     keys = sorted(BALLISTIC_DROP_TABLE.keys())
     for i in range(len(keys) - 1):
         if keys[i] <= distance_m <= keys[i + 1]:
@@ -121,26 +127,34 @@ def _interpolate_drop(distance_m: float) -> float:
 
 class SprayController:
     """
-    Autonomous spray sequence controller for Task 2.
+    Task 2 Hybrid Spray Controller.
 
-    Orchestrates the full engage sequence: approach, aim, spray, verify, upload.
-    Uses NavController for drone movement and ServoController for nozzle aiming.
+    Operator positions drone within 3m via WASD, then system autonomously
+    approaches to 2m (Nav2) and executes the spray sequence.
     """
 
     # Engagement parameters
-    TRIGGER_MIN_DISTANCE_M = 2.0    # SP-001: min distance to trigger
-    APPROACH_SPEED_MPS = 0.5        # approach velocity
-    AIM_TOLERANCE_PX = 30           # pixel tolerance for target centering
-    SPRAY_DURATION_MS = 500         # water pump duration per spray
-    SPRAY_SETTLE_TIME_S = 0.5       # wait after spray before verify
-    GROUND_TARGET_MIN_ALT_M = 0.8   # SP-006: minimum altitude for ground targets
-    GROUND_TARGET_HOVER_ALT_M = 1.2 # SP-006: hover altitude above ground target
-    MAX_SPRAY_ATTEMPTS = 2          # SP-008: max spray attempts
+    TRIGGER_MAX_DISTANCE_M = 3.0
+    APPROACH_STOP_DISTANCE_M = 2.0
+    APPROACH_SPEED_MPS = 0.5
+    APPROACH_TIMEOUT_S = 20.0
+
+    # Nav2 approach parameters
+    NAV2_GOAL_SETTLE_TIME_S = 1.0
+    NAV2_STATUS_POLL_INTERVAL_S = 0.2
+
+    # Aiming parameters
+    AIM_TOLERANCE_PX = 30
+
+    # Spray parameters
+    SPRAY_DURATION_MS = 500
+    SPRAY_SETTLE_TIME_S = 0.5
+    MAX_SPRAY_ATTEMPTS = 2
 
     # Visual servoing parameters
-    IMAGE_CENTER_X = 640            # assume 1280x720 image
+    IMAGE_CENTER_X = 640
     IMAGE_CENTER_Y = 360
-    SERVO_GAIN = 0.1                # degrees per pixel error
+    SERVO_GAIN = 0.1
 
     def __init__(
         self,
@@ -153,23 +167,31 @@ class SprayController:
         self._servo = servo_controller
         self._state = state_manager
         self._mode_mgr = mode_manager
-
         self._status = SprayStatus()
         self._lock = threading.RLock()
         self._current_target: Optional[SprayTarget] = None
         self._spray_count = 0
-
         self._thread: Optional[threading.Thread] = None
         self._abort_event = threading.Event()
 
-        # Callbacks (set externally)
+        # Nav2 callbacks (set by main.py)
+        self._send_nav2_goal_fn: Optional[Callable[[dict], dict]] = None
+        self._get_nav2_status_fn: Optional[Callable[[], dict]] = None
+        self._cancel_nav2_goal_fn: Optional[Callable[[], None]] = None
+        # Obstacle avoidance sector exclusion callback
+        self._set_excluded_sectors_fn: Optional[Callable[[set[int]], None]] = None
+
+        # Photo / verify / upload callbacks (set externally)
         self._capture_photo_fn: Optional[Callable[[], Optional[str]]] = None
         self._verify_hsv_fn: Optional[Callable[[str], bool]] = None
+        self._verify_circle_change_fn: Optional[Callable[[str, str], bool]] = None
         self._upload_fn: Optional[Callable[[str, str], str]] = None
         self._get_detection_bbox_fn: Optional[Callable[[int], Optional[tuple]]] = None
-        self._set_excluded_sectors_fn: Optional[Callable[[set], None]] = None
 
-        logger.info("Spray controller initialized")
+        # Pre-spray image path for circle change verification
+        self._pre_spray_image_path: Optional[str] = None
+
+        logger.info("Spray controller initialized (Nav2 approach + circle verify)")
 
     @property
     def status(self) -> SprayStatus:
@@ -179,13 +201,28 @@ class SprayController:
     @property
     def is_active(self) -> bool:
         with self._lock:
-            return self._status.state not in ("idle", "complete", "failed", "aborted")
+            return self._status.state not in (
+                "idle", "complete", "failed", "aborted"
+            )
+
+    # ------------------------------------------------------------------ #
+    # Callback setters
+    # ------------------------------------------------------------------ #
 
     def set_capture_photo_fn(self, fn: Callable) -> None:
         self._capture_photo_fn = fn
 
     def set_verify_hsv_fn(self, fn: Callable) -> None:
+        """Legacy HSV verify callback (fallback if circle change unavailable)."""
         self._verify_hsv_fn = fn
+
+    def set_verify_circle_change_fn(self, fn: Callable[[str, str], bool]) -> None:
+        """Set callback for circle change verification.
+
+        fn(pre_spray_path, post_spray_path) -> bool
+        Returns True if circle change exceeds 20% threshold.
+        """
+        self._verify_circle_change_fn = fn
 
     def set_upload_fn(self, fn: Callable) -> None:
         self._upload_fn = fn
@@ -193,113 +230,160 @@ class SprayController:
     def set_detection_bbox_fn(self, fn: Callable) -> None:
         self._get_detection_bbox_fn = fn
 
-    def set_excluded_sectors_fn(self, fn: Callable) -> None:
+    def set_nav2_goal_fn(self, fn: Callable[[dict], dict]) -> None:
+        """Set callback to send Nav2 navigation goal."""
+        self._send_nav2_goal_fn = fn
+
+    def set_nav2_status_fn(self, fn: Callable[[], dict]) -> None:
+        """Set callback to read current Nav2 navigation status."""
+        self._get_nav2_status_fn = fn
+
+    def set_nav2_cancel_fn(self, fn: Callable[[], None]) -> None:
+        """Set callback to cancel current Nav2 goal."""
+        self._cancel_nav2_goal_fn = fn
+
+    def set_excluded_sectors_fn(self, fn: Callable[[set[int]], None]) -> None:
+        """Set callback to update obstacle avoidance excluded sectors."""
         self._set_excluded_sectors_fn = fn
 
+    # ------------------------------------------------------------------ #
+    # Trigger / Abort
+    # ------------------------------------------------------------------ #
+
     def trigger(self, target: SprayTarget) -> dict:
-        """
-        Trigger autonomous spray sequence on a target (SP-001).
-
-        Args:
-            target: Target to engage.
-
-        Returns:
-            dict with success status.
-        """
+        """Trigger autonomous spray sequence on target."""
         with self._lock:
             if self.is_active:
                 return {"success": False, "error": "Spray sequence already active"}
 
-        # SP-001: Validate trigger distance
-        drone_pos = self._get_drone_position()
-        if drone_pos is None:
-            return {"success": False, "error": "Cannot determine drone position"}
+            drone_pos = self._get_drone_position()
+            if drone_pos is None:
+                return {"success": False, "error": "Cannot determine drone position"}
 
-        dx = target.x - drone_pos[0]
-        dy = target.y - drone_pos[1]
-        dz = target.z - drone_pos[2]
-        distance = math.sqrt(dx * dx + dy * dy + dz * dz)
+            dx = target.x - drone_pos[0]
+            dy = target.y - drone_pos[1]
+            dz = target.z - drone_pos[2]
+            distance = math.sqrt(dx * dx + dy * dy + dz * dz)
 
-        if distance < self.TRIGGER_MIN_DISTANCE_M:
-            return {
-                "success": False,
-                "error": f"Too close to target ({distance:.1f}m < {self.TRIGGER_MIN_DISTANCE_M}m). "
-                         f"Must be > {self.TRIGGER_MIN_DISTANCE_M}m per SP-001.",
-            }
+            if distance > self.TRIGGER_MAX_DISTANCE_M:
+                return {
+                    "success": False,
+                    "error": (
+                        f"Drone too far ({distance:.1f}m > "
+                        f"{self.TRIGGER_MAX_DISTANCE_M}m). Position manually "
+                        f"within {self.TRIGGER_MAX_DISTANCE_M}m before triggering."
+                    ),
+                }
 
-        # Start the sequence
-        self._current_target = target
-        self._spray_count = 0
-        self._abort_event.clear()
+            skip_approach = distance < self.APPROACH_STOP_DISTANCE_M
+            self._current_target = target
+            self._spray_count = 0
+            self._abort_event.clear()
+            self._pre_spray_image_path = None
 
-        with self._lock:
-            self._status.state = SprayState.APPROACH.value
+            self._status.state = (
+                SprayState.AIM.value if skip_approach
+                else SprayState.APPROACH.value
+            )
             self._status.target_id = target.target_id
             self._status.target_label = target.label
             self._status.distance_to_target = distance
             self._status.spray_count = 0
             self._status.verification_passed = False
             self._status.error = None
+            self._status.nav2_goal_id = None
+            self._status.nav2_approach_active = False
+            self._status.approach_method = ""
             self._status.targets_engaged += 1
 
-        # Switch to spray approach mode (SP-005)
-        if self._mode_mgr:
-            self._mode_mgr.switch_mode("spray_approach")
-
-        # Calculate and exclude target sector from obstacle avoidance (SP-005)
-        self._update_excluded_sector(target)
-
-        # Run sequence in background thread (SP-002)
-        self._thread = threading.Thread(target=self._run_sequence, daemon=True)
+        # Run sequence in background thread (outside lock)
+        self._thread = threading.Thread(
+            target=self._run_sequence,
+            args=(skip_approach,),
+            daemon=True,
+        )
         self._thread.start()
 
         logger.info(
             f"Spray sequence triggered: target {target.target_id} "
             f"({target.label}) at {distance:.1f}m"
+            + (" [SKIP APPROACH]" if skip_approach else "")
         )
-
         return {
             "success": True,
             "target_id": target.target_id,
             "distance": round(distance, 2),
+            "skip_approach": skip_approach,
         }
 
     def abort(self) -> dict:
         """Abort the current spray sequence."""
         self._abort_event.set()
-        with self._lock:
-            self._status.state = SprayState.ABORTED.value
+
+        # Cancel Nav2 goal if active
+        if self._cancel_nav2_goal_fn and self._status.nav2_approach_active:
+            try:
+                self._cancel_nav2_goal_fn()
+                logger.info("Nav2 goal cancelled on spray abort")
+            except Exception as e:
+                logger.warning(f"Nav2 cancel failed on abort: {e}")
+
         # Stop drone movement
         if self._nav:
             self._nav.stop_movement()
-        # Clear excluded sectors
+
+        # Clear obstacle avoidance exclusions
         if self._set_excluded_sectors_fn:
-            self._set_excluded_sectors_fn(set())
+            try:
+                self._set_excluded_sectors_fn(set())
+            except Exception:
+                pass
+
+        with self._lock:
+            self._status.state = SprayState.ABORTED.value
+            self._status.nav2_approach_active = False
         logger.info("Spray sequence aborted")
         return {"success": True, "message": "Spray sequence aborted"}
 
-    def _run_sequence(self) -> None:
-        """
-        Run the full autonomous spray sequence (SP-002).
+    def update_nav2_result(self, goal_id: str, status: str, message: str = "") -> None:
+        """Called by API when Nav2 reports a goal result."""
+        with self._lock:
+            if (
+                self._status.nav2_goal_id == goal_id
+                and self._status.nav2_approach_active
+            ):
+                self._status.nav2_approach_active = False
+                logger.info(
+                    f"Nav2 approach result: goal={goal_id} status={status} "
+                    f"msg={message}"
+                )
 
-        States: APPROACH -> AIM -> SPRAY -> VERIFY -> UPLOAD -> COMPLETE
-        """
+    # ------------------------------------------------------------------ #
+    # Sequence runner
+    # ------------------------------------------------------------------ #
+
+    def _run_sequence(self, skip_approach: bool = False) -> None:
+        """Run autonomous spray sequence."""
         try:
             target = self._current_target
             if target is None:
                 return
 
-            # --- APPROACH ---
-            self._set_state(SprayState.APPROACH)
-            if not self._approach_target(target):
-                return
+            # --- APPROACH (3m -> 2m via Nav2) ---
+            if not skip_approach:
+                self._set_state(SprayState.APPROACH)
+                if not self._approach_target(target):
+                    return
 
             # --- AIM ---
             self._set_state(SprayState.AIM)
             if not self._aim_at_target(target):
                 return
 
-            # --- SPRAY (with retry per SP-008) ---
+            # --- CAPTURE PRE-SPRAY SNAPSHOT ---
+            self._capture_pre_spray(target)
+
+            # --- SPRAY (with retry) ---
             for attempt in range(self.MAX_SPRAY_ATTEMPTS):
                 self._spray_count = attempt + 1
                 with self._lock:
@@ -313,17 +397,15 @@ class SprayController:
                 self._set_state(SprayState.VERIFY)
                 time.sleep(self.SPRAY_SETTLE_TIME_S)
                 passed = self._verify_spray()
-
                 if passed:
                     with self._lock:
                         self._status.verification_passed = True
                     break
                 elif attempt < self.MAX_SPRAY_ATTEMPTS - 1:
                     logger.info(
-                        f"SP-008: Spray attempt {attempt + 1} failed verification, "
-                        f"retrying..."
+                        f"Spray attempt {attempt + 1} failed verification, "
+                        "retrying..."
                     )
-                    # Re-aim before retry
                     self._set_state(SprayState.AIM)
                     self._aim_at_target(target)
 
@@ -338,22 +420,16 @@ class SprayController:
                 else:
                     self._status.targets_failed += 1
                     logger.warning(
-                        f"SP-008: Target {target.target_id} failed after "
+                        f"Target {target.target_id} failed after "
                         f"{self.MAX_SPRAY_ATTEMPTS} attempts"
                     )
-
             self._set_state(SprayState.COMPLETE)
 
         except Exception as e:
             logger.error(f"Spray sequence error: {e}")
             self._set_state(SprayState.FAILED, error=str(e))
 
-        finally:
-            # Clean up: clear excluded sectors, return to previous mode
-            if self._set_excluded_sectors_fn:
-                self._set_excluded_sectors_fn(set())
-
-    def _set_state(self, state: SprayState, error: str = None) -> None:
+    def _set_state(self, state: SprayState, error: Optional[str] = None) -> None:
         with self._lock:
             self._status.state = state.value
             if error:
@@ -374,26 +450,138 @@ class SprayController:
             return (x, y, z)
         return None
 
-    def _approach_target(self, target: SprayTarget) -> bool:
-        """
-        Approach the target (SP-003, SP-006).
+    # ------------------------------------------------------------------ #
+    # APPROACH (Nav2 primary, velocity fallback)
+    # ------------------------------------------------------------------ #
 
-        For wall targets: fly forward toward target.
-        For ground targets: descend vertically above target (SP-006).
+    def _compute_approach_pose(self, target: SprayTarget) -> dict:
+        """Compute the 2m approach pose for Nav2 NavigateToPose goal."""
+        drone_pos = self._get_drone_position()
+        if drone_pos is None:
+            dx, dy, dz = target.x, target.y, target.z
+        else:
+            dx = target.x - drone_pos[0]
+            dy = target.y - drone_pos[1]
+            dz = target.z - drone_pos[2]
+
+        dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if dist < 0.1:
+            return {"x": target.x, "y": target.y, "z": target.z, "yaw": 0.0}
+
+        nx, ny, nz = dx / dist, dy / dist, dz / dist
+        approach_dist = self.APPROACH_STOP_DISTANCE_M
+        approach_x = target.x - nx * approach_dist
+        approach_y = target.y - ny * approach_dist
+        approach_z = target.z - nz * approach_dist
+        yaw = math.atan2(dy, dx)
+        return {"x": approach_x, "y": approach_y, "z": approach_z, "yaw": yaw}
+
+    def _approach_target(self, target: SprayTarget) -> bool:
+        """Autonomous approach from 3m to 2m. Returns False if aborted."""
+        nav2_available = self._send_nav2_goal_fn is not None
+        self._set_approach_sectors(target, exclude=True)
+
+        if nav2_available:
+            approach_ok = self._approach_via_nav2(target)
+            if approach_ok is not None:
+                return approach_ok
+            logger.warning("Nav2 approach failed, falling back to velocity")
+
+        return self._approach_via_velocity(target)
+
+    def _approach_via_nav2(self, target: SprayTarget) -> Optional[bool]:
+        """Approach using Nav2 NavigateToPose.
+
+        Returns: True=succeeded, False=aborted, None=should fall back.
         """
+        if not self._send_nav2_goal_fn:
+            return None
+
+        approach_pose = self._compute_approach_pose(target)
+        goal_dict = {"type": "navigate_to_pose", "pose": approach_pose}
+
+        try:
+            result = self._send_nav2_goal_fn(goal_dict)
+        except Exception as e:
+            logger.error(f"Failed to send Nav2 goal: {e}")
+            return None
+
+        if not result.get("success", False):
+            logger.warning(f"Nav2 goal rejected: {result.get('error', 'unknown')}")
+            return None
+
+        goal_id = result.get("goal_id", "")
+        with self._lock:
+            self._status.nav2_goal_id = goal_id
+            self._status.nav2_approach_active = True
+            self._status.approach_method = "nav2"
+
+        logger.info(f"Nav2 approach goal sent: id={goal_id}")
+
+        # Wait for Nav2 result
+        approach_start = time.time()
+        while not self._check_abort():
+            if time.time() - approach_start > self.APPROACH_TIMEOUT_S:
+                logger.warning(f"Nav2 approach timeout ({self.APPROACH_TIMEOUT_S}s)")
+                if self._cancel_nav2_goal_fn:
+                    try:
+                        self._cancel_nav2_goal_fn()
+                    except Exception:
+                        pass
+                with self._lock:
+                    self._status.nav2_approach_active = False
+                # Timeout: proceed from current position
+                self._set_approach_sectors(target, exclude=False)
+                return True
+
+            # Check if Nav2 result was reported
+            with self._lock:
+                if not self._status.nav2_approach_active:
+                    # Result received via update_nav2_result()
+                    if self._get_nav2_status_fn:
+                        nav2_status = self._get_nav2_status_fn()
+                        final_status = nav2_status.get("status", "unknown")
+                    else:
+                        final_status = "unknown"
+
+                    if final_status == "succeeded":
+                        logger.info("Nav2 approach succeeded")
+                        time.sleep(self.NAV2_GOAL_SETTLE_TIME_S)
+                        self._update_distance_to_target(target)
+                        self._set_approach_sectors(target, exclude=False)
+                        return True
+                    elif final_status == "cancelled":
+                        if self._check_abort():
+                            return False
+                        return None  # Non-abort cancel, fall back
+                    else:
+                        logger.warning(f"Nav2 approach result: {final_status}")
+                        return None
+
+            self._update_distance_to_target(target)
+            time.sleep(self.NAV2_STATUS_POLL_INTERVAL_S)
+
+        # Aborted
+        with self._lock:
+            self._status.nav2_approach_active = False
+        self._set_approach_sectors(target, exclude=False)
+        return False
+
+    def _approach_via_velocity(self, target: SprayTarget) -> bool:
+        """Fallback approach using direct velocity commands."""
         if not self._nav:
             logger.error("NavController not available for approach")
             self._set_state(SprayState.FAILED, error="NavController unavailable")
             return False
 
-        approach_start = time.time()
-        max_approach_time = 30.0  # safety timeout
+        with self._lock:
+            self._status.approach_method = "velocity"
 
+        approach_start = time.time()
         while not self._check_abort():
-            if time.time() - approach_start > max_approach_time:
-                logger.error("Approach timeout")
-                self._set_state(SprayState.FAILED, error="Approach timeout")
-                return False
+            if time.time() - approach_start > self.APPROACH_TIMEOUT_S:
+                logger.warning("Velocity approach timeout - continuing")
+                return True
 
             drone_pos = self._get_drone_position()
             if drone_pos is None:
@@ -404,59 +592,73 @@ class SprayController:
             dy = target.y - drone_pos[1]
             dz = target.z - drone_pos[2]
             distance = math.sqrt(dx * dx + dy * dy + dz * dz)
-
             with self._lock:
                 self._status.distance_to_target = distance
 
-            # Check if close enough to start aiming
-            if distance < 2.5:  # 2.5m engagement distance
-                self._nav.stop_movement()
+            if distance < self.APPROACH_STOP_DISTANCE_M:
+                logger.info(f"Velocity approach complete at {distance:.2f}m")
+                if self._nav:
+                    self._nav.stop_movement()
+                self._set_approach_sectors(target, exclude=False)
                 return True
 
-            # SP-006: Ground target - vertical descent
-            if target.is_ground:
-                horiz_dist = math.sqrt(dx * dx + dy * dy)
-                if horiz_dist < 0.5:
-                    # Above target - descend
-                    alt = -drone_pos[2]  # NED Z is down, so altitude = -z
-                    if alt > self.GROUND_TARGET_MIN_ALT_M:
-                        self._nav.send_velocity(0, 0, -0.3, 0)  # descend
-                    else:
-                        self._nav.stop_movement()
-                        return True
-                else:
-                    # Move horizontally above target first
-                    speed = min(self.APPROACH_SPEED_MPS, horiz_dist)
-                    vx = (dx / horiz_dist) * speed
-                    vy = (dy / horiz_dist) * speed
-                    self._nav.send_velocity(vx, vy, 0, 0)
-            else:
-                # Wall target - fly toward it
-                speed = min(self.APPROACH_SPEED_MPS, distance * 0.3)
-                norm = max(distance, 0.1)
-                vx = (dx / norm) * speed
-                vy = (dy / norm) * speed
-                vz = (dz / norm) * speed * 0.5  # slower vertical
-                self._nav.send_velocity(vx, vy, vz, 0)
-
-            time.sleep(0.1)  # 10 Hz control loop
+            norm = max(distance, 0.1)
+            speed = min(self.APPROACH_SPEED_MPS, distance * 0.5)
+            vx = (dx / norm) * speed
+            vy = (dy / norm) * speed
+            vz = (dz / norm) * speed * 0.3
+            self._nav.send_velocity(vx, vy, vz, 0)
+            time.sleep(0.1)
 
         return False
 
-    def _aim_at_target(self, target: SprayTarget) -> bool:
-        """
-        Visual servoing to center target in camera (SP-003, SP-004).
+    def _update_distance_to_target(self, target: SprayTarget) -> None:
+        drone_pos = self._get_drone_position()
+        if drone_pos is None:
+            return
+        dx = target.x - drone_pos[0]
+        dy = target.y - drone_pos[1]
+        dz = target.z - drone_pos[2]
+        distance = math.sqrt(dx * dx + dy * dy + dz * dz)
+        with self._lock:
+            self._status.distance_to_target = distance
 
-        Commands both drone lateral adjustments and servo pitch to
-        center the target bounding box in the camera frame.
-        """
+    def _set_approach_sectors(
+        self, target: SprayTarget, *, exclude: bool
+    ) -> None:
+        """Set or clear obstacle avoidance sector exclusions for approach."""
+        if not self._set_excluded_sectors_fn:
+            return
+        if not exclude:
+            self._set_excluded_sectors_fn(set())
+            return
+
+        drone_pos = self._get_drone_position()
+        if drone_pos is None:
+            return
+        dx = target.x - drone_pos[0]
+        dy = target.y - drone_pos[1]
+        angle_deg = math.degrees(math.atan2(dy, dx)) % 360
+        center_sector = int(angle_deg / 5) % 72
+
+        sectors = set()
+        for offset in range(-2, 3):
+            sectors.add((center_sector + offset) % 72)
+        self._set_excluded_sectors_fn(sectors)
+        logger.debug(f"Excluded obstacle sectors {sectors} for approach")
+
+    # ------------------------------------------------------------------ #
+    # AIM (visual servoing)
+    # ------------------------------------------------------------------ #
+
+    def _aim_at_target(self, target: SprayTarget) -> bool:
+        """Visual servoing to center target in camera via servo pitch."""
         if not self._get_detection_bbox_fn:
             logger.warning("No detection bbox function - skipping aim")
-            return True  # proceed without aiming
+            return True
 
         aim_start = time.time()
         max_aim_time = 15.0
-
         while not self._check_abort():
             if time.time() - aim_start > max_aim_time:
                 logger.warning("Aim timeout - proceeding with current alignment")
@@ -467,30 +669,18 @@ class SprayController:
                 time.sleep(0.1)
                 continue
 
-            cx, cy, w, h = bbox  # center x, center y, width, height
-
-            # Error from image center
+            cx, cy, w, h = bbox
             err_x = cx - self.IMAGE_CENTER_X
             err_y = cy - self.IMAGE_CENTER_Y
 
-            # Check if centered enough
-            if abs(err_x) < self.AIM_TOLERANCE_PX and abs(err_y) < self.AIM_TOLERANCE_PX:
-                if self._nav:
-                    self._nav.stop_movement()
+            if (
+                abs(err_x) < self.AIM_TOLERANCE_PX
+                and abs(err_y) < self.AIM_TOLERANCE_PX
+            ):
                 return True
 
-            # SP-003: Command drone lateral adjustment
-            if self._nav and abs(err_x) > self.AIM_TOLERANCE_PX:
-                vy = err_x * 0.001  # proportional lateral velocity
-                vy = max(-0.3, min(0.3, vy))
-                self._nav.send_velocity(0, vy, 0, 0)
-
-            # SP-003 + SP-004: Command servo pitch
             if self._servo:
-                # Vertical error -> servo pitch adjustment
                 pitch_adjust = err_y * self.SERVO_GAIN
-
-                # SP-004: Add ballistic drop compensation
                 drone_pos = self._get_drone_position()
                 if drone_pos:
                     dist = math.sqrt(
@@ -500,11 +690,9 @@ class SprayController:
                     drop_angle = _interpolate_drop(dist)
                     pitch_adjust += drop_angle
 
-                # Convert to servo angle (90 = level, lower = pitch down)
                 current_angle = self._status.servo_angle
                 new_angle = max(0, min(180, current_angle - pitch_adjust))
                 self._servo.set_camera_tilt(new_angle)
-
                 with self._lock:
                     self._status.servo_angle = new_angle
 
@@ -512,107 +700,130 @@ class SprayController:
 
         return False
 
+    # ------------------------------------------------------------------ #
+    # CAPTURE PRE-SPRAY
+    # ------------------------------------------------------------------ #
+
+    def _capture_pre_spray(self, target: SprayTarget) -> None:
+        """Capture a pre-spray image for circle change verification.
+
+        Called before the first spray attempt. Only captures once per sequence.
+        """
+        if self._pre_spray_image_path is not None:
+            return  # Already captured
+
+        try:
+            if self._capture_photo_fn:
+                path = self._capture_photo_fn()
+                if path:
+                    self._pre_spray_image_path = path
+                    logger.info(f"Pre-spray image captured: {path}")
+                else:
+                    logger.warning("Pre-spray capture returned no path")
+            else:
+                logger.warning("No capture_photo_fn for pre-spray snapshot")
+        except Exception as e:
+            logger.error(f"Pre-spray capture error: {e}")
+
+    # ------------------------------------------------------------------ #
+    # SPRAY
+    # ------------------------------------------------------------------ #
+
     def _spray_target(self) -> bool:
-        """Activate water pump (SP-002)."""
+        """Activate water pump."""
         if not self._servo:
             logger.error("ServoController not available for spray")
-            return True  # don't fail the whole sequence
+            return True
 
         logger.info(f"Spraying target (attempt {self._spray_count})")
-
         success = self._servo.trigger_water_shooter(
             duration_ms=self.SPRAY_DURATION_MS
         )
-
         if not success:
             logger.warning("Water shooter trigger returned failure")
-
         return True  # proceed regardless
 
+    # ------------------------------------------------------------------ #
+    # VERIFY (circle change detection, HSV fallback)
+    # ------------------------------------------------------------------ #
+
     def _verify_spray(self) -> bool:
+        """Post-spray circle change verification.
+
+        Captures a post-spray image and compares with the pre-spray image.
+        Detects circles color-agnostically in both images, matches them
+        by proximity, and computes pixel change ratio within matched circles.
+        If > 20% of pixels changed significantly, the spray hit.
+
+        Falls back to legacy HSV verification if circle change callback
+        is not available.
         """
-        Post-spray HSV verification (SP-007).
-
-        Checks if target color has shifted from purple to blue,
-        indicating successful spray.
-        """
-        if not self._verify_hsv_fn:
-            logger.warning("No HSV verify function - assuming pass")
-            return True
-
-        try:
-            # Capture current frame and verify
-            photo_path = None
-            if self._capture_photo_fn:
-                photo_path = self._capture_photo_fn()
-
-            if photo_path:
-                return self._verify_hsv_fn(photo_path)
-            else:
-                logger.warning("Could not capture photo for verification")
+        # Primary: circle change verification
+        if self._verify_circle_change_fn and self._pre_spray_image_path:
+            try:
+                post_path = None
+                if self._capture_photo_fn:
+                    post_path = self._capture_photo_fn()
+                if post_path:
+                    result = self._verify_circle_change_fn(
+                        self._pre_spray_image_path, post_path
+                    )
+                    logger.info(
+                        f"Circle change verify: pre={self._pre_spray_image_path} "
+                        f"post={post_path} -> {'PASS' if result else 'FAIL'}"
+                    )
+                    return result
+                else:
+                    logger.warning("Could not capture post-spray photo")
+                    return False
+            except Exception as e:
+                logger.error(f"Circle change verification error: {e}")
                 return False
 
-        except Exception as e:
-            logger.error(f"Verification error: {e}")
-            return False
+        # Fallback: legacy HSV verification (if available)
+        if self._verify_hsv_fn:
+            logger.info("Falling back to legacy HSV verification")
+            try:
+                photo_path = None
+                if self._capture_photo_fn:
+                    photo_path = self._capture_photo_fn()
+                if photo_path:
+                    return self._verify_hsv_fn(photo_path)
+                else:
+                    logger.warning("Could not capture photo for HSV verify")
+                    return False
+            except Exception as e:
+                logger.error(f"HSV verification error: {e}")
+                return False
+
+        # No verification function at all - assume pass
+        logger.warning("No verify function available - assuming pass")
+        return True
+
+    # ------------------------------------------------------------------ #
+    # UPLOAD
+    # ------------------------------------------------------------------ #
 
     def _capture_and_upload(self, target: SprayTarget) -> None:
-        """
-        Capture photo and upload to Google Drive (SP-007).
+        """Capture photo and upload to Google Drive.
 
-        Filename format: Task_2_MAD_target_<n>.jpg
+        Filename: Task_2_MAD_target_<n>.jpg (matches CONOPS Section 5.2.4)
         """
         try:
-            # Capture photo
             photo_path = None
             if self._capture_photo_fn:
                 photo_path = self._capture_photo_fn()
-
             if not photo_path:
                 logger.warning("Could not capture photo for upload")
                 return
 
-            # Upload to Google Drive
             filename = f"Task_2_MAD_target_{target.target_id}.jpg"
-
             if self._upload_fn:
                 url = self._upload_fn(photo_path, filename)
                 with self._lock:
                     self._status.upload_url = url or ""
-                logger.info(f"SP-007: Uploaded {filename} -> {url}")
+                logger.info(f"Uploaded {filename} -> {url}")
             else:
-                logger.warning("No upload function configured - photo saved locally only")
-
+                logger.warning("No upload function - photo saved locally only")
         except Exception as e:
             logger.error(f"Upload error: {e}")
-
-    def _update_excluded_sector(self, target: SprayTarget) -> None:
-        """
-        Calculate and set excluded obstacle avoidance sector (SP-005).
-
-        The sector containing the target is excluded from OBSTACLE_DISTANCE
-        so the drone can approach without avoidance interference.
-        """
-        drone_pos = self._get_drone_position()
-        if drone_pos is None or self._set_excluded_sectors_fn is None:
-            return
-
-        dx = target.x - drone_pos[0]
-        dy = target.y - drone_pos[1]
-
-        # Angle to target (NED: atan2(east, north))
-        angle_rad = math.atan2(dy, dx)
-        angle_deg = math.degrees(angle_rad) % 360
-
-        # Exclude a 30-degree wide sector centered on the target
-        sector_width = 30
-        center_sector = int(angle_deg / 5) % 72
-        excluded = set()
-        for offset in range(-sector_width // 10, sector_width // 10 + 1):
-            excluded.add((center_sector + offset) % 72)
-
-        self._set_excluded_sectors_fn(excluded)
-        logger.info(
-            f"SP-005: Excluded sectors {excluded} "
-            f"(target at {angle_deg:.0f} deg)"
-        )

@@ -11,7 +11,8 @@ Workflow:
      a. Capture current ZED frame
      b. Run HSV circle detection
      c. Back-project detections to 3D using depth + TF
-     d. Project onto building face
+      d. Classify nearest analytical plane (4 walls + ground + roof)
+          and project onto nearest wall face for references
      e. Find nearest landmark/corner
      f. Generate natural-language description from template
      g. Append to target list (with deduplication)
@@ -30,14 +31,17 @@ Services:
   - ~/capture_target (std_srvs/Trigger) - run detection + description
   - ~/save_targets (std_srvs/Trigger) - write .txt file
   - ~/print_model (std_srvs/Trigger) - print building model summary
+   - ~/set_building_corners (std_srvs/Trigger) - rebuild building model from corners JSON file
 
 Parameters (set via YAML config):
-  - building.center_lat, building.center_lon
-  - building.length, building.width, building.height
-  - building.orientation_deg
+  - building.center_lat, building.center_lon, building.height
+  - building.corner_names + building.corner_lats + building.corner_lons
+    (parallel arrays, one entry per polygon corner)
+  - building.rectangle.{length,width,orientation_deg}
+    (only used when corner_names is empty -- rectangle convenience fallback)
   - team_name
   - output_dir
-  - yolo_model_path
+  - yolo_model_path  (Task 1: leave empty; CONOPS provides no landmark info)
   - dedup_radius_m
 """
 
@@ -63,7 +67,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-from .building_model import BuildingModel, FaceID, gps_to_local
+from .building_model import BuildingModel, Face, gps_to_local
 from .detectors import CircleDetector, LandmarkDetector, ColorVerifier, TargetColor
 
 
@@ -87,7 +91,7 @@ class TargetRecord:
 
     target_id: str
     color: TargetColor
-    face: FaceID
+    face_label: str            # face name, or 'ground' / 'roof'
     height_agl: float
     horiz_from_left: float
     east: float
@@ -106,16 +110,22 @@ class TargetLocalizerNode(Node):
         # ----- Parameters ----- #
         self.declare_parameter("building.center_lat", 0.0)
         self.declare_parameter("building.center_lon", 0.0)
-        self.declare_parameter("building.length", 10.0)
-        self.declare_parameter("building.width", 6.0)
         self.declare_parameter("building.height", 5.0)
-        self.declare_parameter("building.orientation_deg", 0.0)
+        # N-corner polygon (preferred path). Three parallel arrays so ROS 2
+        # parameters can carry the schema (no list-of-dict support natively).
+        self.declare_parameter("building.corner_names", [""])
+        self.declare_parameter("building.corner_lats", [0.0])
+        self.declare_parameter("building.corner_lons", [0.0])
+        # Rectangle convenience fallback, only used when corner_names is empty.
+        self.declare_parameter("building.rectangle.length", 10.0)
+        self.declare_parameter("building.rectangle.width", 6.0)
+        self.declare_parameter("building.rectangle.orientation_deg", 0.0)
         self.declare_parameter("team_name", "MAD")
         self.declare_parameter("output_dir", "/home/mad/targets")
         self.declare_parameter("yolo_model_path", "")
         self.declare_parameter("dedup_radius_m", 0.5)
         self.declare_parameter("landmark_detect_rate_hz", 2.0)
-        self.declare_parameter("auto_landmark_detection", True)
+        self.declare_parameter("auto_landmark_detection", False)
         # HSV circle detector knobs. Exposed so we can tune live via
         #   ros2 param set /target_localizer circle.min_circularity 0.65
         # without rebuilding the container.
@@ -133,13 +143,49 @@ class TargetLocalizerNode(Node):
         os.makedirs(self.output_dir, exist_ok=True)
 
         # ----- Building model ----- #
+        center_lat = float(self.get_parameter("building.center_lat").value)
+        center_lon = float(self.get_parameter("building.center_lon").value)
+        height = float(self.get_parameter("building.height").value)
+
+        corner_names = [
+            str(s) for s in self.get_parameter("building.corner_names").value or []
+            if str(s).strip() != ""
+        ]
+        corner_lats = list(self.get_parameter("building.corner_lats").value or [])
+        corner_lons = list(self.get_parameter("building.corner_lons").value or [])
+
+        corners_local = None
+        if len(corner_names) >= 3:
+            if not (len(corner_names) == len(corner_lats) == len(corner_lons)):
+                raise RuntimeError(
+                    "building.corner_names / corner_lats / corner_lons must "
+                    f"have equal length, got {len(corner_names)} / "
+                    f"{len(corner_lats)} / {len(corner_lons)}"
+                )
+            corners_local = [
+                (name,) + gps_to_local(float(lat), float(lon), center_lat, center_lon)
+                for name, lat, lon in zip(corner_names, corner_lats, corner_lons)
+            ]
+            self.get_logger().info(
+                f"Loaded {len(corners_local)} polygon corners from CONOPS data."
+            )
+        else:
+            self.get_logger().warn(
+                "No polygon corners configured; falling back to rectangle "
+                "convenience path. Update building.corner_* params for the real "
+                "building shape."
+            )
+
         self.building = BuildingModel(
-            center_lat=self.get_parameter("building.center_lat").value,
-            center_lon=self.get_parameter("building.center_lon").value,
-            length=self.get_parameter("building.length").value,
-            width=self.get_parameter("building.width").value,
-            height=self.get_parameter("building.height").value,
-            orientation_deg=self.get_parameter("building.orientation_deg").value,
+            center_lat=center_lat,
+            center_lon=center_lon,
+            height=height,
+            corners_local=corners_local,
+            length=float(self.get_parameter("building.rectangle.length").value),
+            width=float(self.get_parameter("building.rectangle.width").value),
+            orientation_deg=float(
+                self.get_parameter("building.rectangle.orientation_deg").value
+            ),
         )
         self.get_logger().info(
             f"Building model initialized:\n{self.building.get_summary()}"
@@ -271,6 +317,9 @@ class TargetLocalizerNode(Node):
         )
         self.model_srv = self.create_service(
             Trigger, "/target_localizer/print_model", self._print_model_callback
+        )
+        self.corners_srv = self.create_service(
+            Trigger, "/target_localizer/set_building_corners", self._set_corners_callback
         )
 
         # Emit concrete service registrations for runtime diagnostics.
@@ -498,53 +547,41 @@ class TargetLocalizerNode(Node):
     def _generate_description(
         self,
         color: TargetColor,
-        face: "Face",
+        face: Face,
         horiz_from_left: float,
         height_agl: float,
+        plane_kind: str = "wall",
     ) -> str:
         """
-        Generate a natural-language target description using the building
-        model and detected landmarks.
+        Generate a natural-language target description.
 
-        Output follows the format specified in ConOps Appendix D:
+        Output follows the format in CONOPS Appendix D:
           "<Color> target on the <face> face of the building, <height>m
            above ground, <horizontal reference>."
-        """
-        # Round to decimetres per ConOps rules
-        height_rounded = round(height_agl, 1)
 
-        # Find nearest reference point (landmark or corner)
+        plane_kind is 'wall', 'ground', or 'roof'.
+        """
+        height_rounded = round(height_agl, 1)
         ref_name, ref_dist, ref_phrase = self.building.find_nearest_reference(
             face, horiz_from_left, height_agl
         )
+        face_name = face.name
 
-        # Face name
-        face_name = face.face_id.value
-
-        # Build description
-        if "corner" in ref_name:
-            desc = (
-                f"{color.value.capitalize()} target on the {face_name} face "
-                f"of the building, {height_rounded}m above ground, "
-                f"{ref_phrase}."
-            )
-        else:
-            desc = (
-                f"{color.value.capitalize()} target on the {face_name} face "
-                f"of the building, {height_rounded}m above ground, "
-                f"{ref_phrase}."
-            )
-
-        # Special case: ground-level target near the building
-        if height_agl < 0.3:
-            desc = (
+        if plane_kind == "ground" or height_agl < 0.3:
+            return (
                 f"{color.value.capitalize()} target on the ground near the "
                 f"{face_name} face of the building, {ref_phrase}."
             )
-
-        # Special case: target not on a wall (detected on ground away from building)
-        # This would be caught upstream, but handle gracefully
-        return desc
+        if plane_kind == "roof":
+            return (
+                f"{color.value.capitalize()} target on the roof near the "
+                f"{face_name} face of the building, {ref_phrase}."
+            )
+        return (
+            f"{color.value.capitalize()} target on the {face_name} face "
+            f"of the building, {height_rounded}m above ground, "
+            f"{ref_phrase}."
+        )
 
     def _resolve_observed_face(self) -> Tuple[Optional["Face"], str]:
         """Resolve active building face using GPS first, then local-pose fallback."""
@@ -678,22 +715,6 @@ class TargetLocalizerNode(Node):
             )
             return response
 
-        active_face, face_source = self._resolve_observed_face()
-        if active_face is None:
-            response.success = True
-            response.message = (
-                f"Detected {len(circles)} circle(s) and saved {len(saved_images)} image(s), "
-                "but could not determine the viewed building face "
-                "(GPS/local pose context unavailable)."
-            )
-            self.get_logger().warn(
-                "Saved %s detection images but face could not be resolved (gps_fix=%s, has_local_pose=%s)",
-                len(saved_images),
-                self.has_gps_fix,
-                self.has_local_pose,
-            )
-            return response
-
         new_targets = []
         duplicate_count = 0
         depth_fail_count = 0
@@ -722,8 +743,18 @@ class TargetLocalizerNode(Node):
 
             east, north, up = world
 
-            # Determine building face once per capture request and reuse it.
-            face = active_face
+            # Prefer the face the drone is actively looking at; fall back to
+            # nearest-wall classification if view direction is unknown. Either
+            # way `face` is guaranteed non-None for the description below.
+            observed_face, _ = self._resolve_observed_face()
+            plane_hit = self.building.classify_nearest_plane(east, north, up)
+
+            if observed_face is not None:
+                face: Face = observed_face
+            elif plane_hit.face is not None:
+                face = plane_hit.face
+            else:
+                face, _ = self.building.get_nearest_wall_face(east, north)
 
             # Project onto face
             horiz_from_left, height_agl = self.building.project_point_onto_face(
@@ -740,7 +771,11 @@ class TargetLocalizerNode(Node):
 
             # Generate description
             description = self._generate_description(
-                final_color, face, horiz_from_left, height_agl
+                final_color,
+                face,
+                horiz_from_left,
+                height_agl,
+                plane_kind=plane_hit.kind,
             )
 
             # Save target image (already saved detection images above, this is for confirmed targets)
@@ -766,7 +801,7 @@ class TargetLocalizerNode(Node):
             record = TargetRecord(
                 target_id=target_letter,
                 color=final_color,
-                face=face.face_id,
+                face_label=plane_hit.label,
                 height_agl=height_agl,
                 horiz_from_left=horiz_from_left,
                 east=east,
@@ -781,17 +816,15 @@ class TargetLocalizerNode(Node):
             new_targets.append(record)
             self.next_target_index += 1
 
-            self.get_logger().info(f"TARGET {record.target_id}: {description}")
+            self.get_logger().info(
+                f"TARGET {record.target_id}: {description} "
+                f"(plane={plane_hit.label}, distance={plane_hit.distance:.2f}m)"
+            )
 
         if new_targets:
             response.success = True
             descs = [f"Target {t.target_id}: {t.description}" for t in new_targets]
-            prefix = ""
-            if face_source == "local_pose":
-                prefix = "GPS unavailable; using local pose fallback. "
-            response.message = (
-                prefix + f"Added {len(new_targets)} target(s):\n" + "\n".join(descs)
-            )
+            response.message = f"Added {len(new_targets)} target(s):\n" + "\n".join(descs)
         else:
             # A filter-only result means HSV detection is working, but no NEW
             # targets were produced for this capture request.
@@ -900,7 +933,7 @@ class TargetLocalizerNode(Node):
                 f"Target {t.target_id}:\n"
                 f"  Description: {t.description}\n"
                 f"  Color: {t.color.value}\n"
-                f"  Face: {t.face.value}\n"
+                f"  Face: {t.face_label}\n"
                 f"  Height AGL: {t.height_agl:.2f}m\n"
                 f"  Horiz from left: {t.horiz_from_left:.2f}m\n"
                 f"  World ENU: ({t.east:.2f}, {t.north:.2f}, {t.up:.2f})\n"
@@ -913,6 +946,80 @@ class TargetLocalizerNode(Node):
 
         response.success = True
         response.message = f"Saved to {filepath} ({len(self.targets)} targets)"
+        return response
+
+
+    def _set_corners_callback(self, request, response):
+        """Rebuild the building model from a corners JSON file.
+
+        The API writes a JSON file to the output_dir containing corner
+        GPS coordinates. This service reads it and rebuilds the
+        BuildingModel at runtime, so operators can calibrate corners
+        by flying to each one and capturing the drone GPS.
+
+        Expected JSON format (written to <output_dir>/building_corners.json):
+        {
+            "center_lat": 45.322,
+            "center_lon": -75.760,
+            "height": 5.0,
+            "corners": [
+                {"name": "NW", "lat": 45.32205, "lon": -75.7601},
+                {"name": "NE", "lat": 45.32205, "lon": -75.7595},
+                ...
+            ]
+        }
+        """
+        import json as _json
+        corners_path = os.path.join(self.output_dir, "building_corners.json")
+        if not os.path.exists(corners_path):
+            response.success = False
+            response.message = f"Corners file not found: {corners_path}. Write building_corners.json first."
+            return response
+
+        try:
+            with open(corners_path, "r") as f:
+                data = _json.load(f)
+        except Exception as e:
+            response.success = False
+            response.message = f"Failed to read corners file: {e}"
+            return response
+
+        try:
+            center_lat = float(data.get("center_lat", self.building.center_lat))
+            center_lon = float(data.get("center_lon", self.building.center_lon))
+            height = float(data.get("height", self.building.height))
+            corners_data = data.get("corners", [])
+
+            if len(corners_data) < 3:
+                response.success = False
+                response.message = f"Need at least 3 corners, got {len(corners_data)}"
+                return response
+
+            # Convert corner GPS to local ENU
+            corners_local = [
+                (c["name"],) + gps_to_local(float(c["lat"]), float(c["lon"]), center_lat, center_lon)
+                for c in corners_data
+            ]
+
+            # Rebuild the building model
+            self.building = BuildingModel(
+                center_lat=center_lat,
+                center_lon=center_lon,
+                height=height,
+                corners_local=corners_local,
+            )
+
+            summary = self.building.get_summary()
+            self.get_logger().info(
+                f"Building model rebuilt from corner calibration:\n{summary}"
+            )
+            response.success = True
+            response.message = f"Building model rebuilt with {len(corners_data)} corners.\n{summary}"
+        except Exception as e:
+            self.get_logger().error(f"Failed to rebuild building model: {e}")
+            response.success = False
+            response.message = f"Error rebuilding building model: {e}"
+
         return response
 
     def _print_model_callback(self, request, response):

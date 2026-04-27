@@ -33,6 +33,12 @@ namespace NOMAD.MissionPlanner
         private PayloadControlPanel _payloadControl;
         private Task1UploadPanel _uploadPanel;
         private TabControl _tabControl;
+    private TextBox _txtCornerName;
+    private ListBox _lstCorners;
+    private Label _lblCornerStatus;
+    private Button _btnCaptureCorner;
+    private Button _btnApplyCorners;
+    private Button _btnClearCorners;
         
         public NOMADTask1View(
             DualLinkSender sender,
@@ -378,6 +384,102 @@ namespace NOMAD.MissionPlanner
             };
 
             panel.Controls.Add(buildingCard);
+
+            // --- Building Corner Calibration ---
+            var cornerCard = CreateCard("BUILDING CORNER CALIBRATION");
+            cornerCard.Dock = DockStyle.Top;
+            cornerCard.Height = 320;
+
+            _lblCornerStatus = new Label
+            {
+                Text = "Fly above each building corner and click Capture Corner",
+                Font = new Font("Segoe UI", 9),
+                ForeColor = TEXT_SECONDARY,
+                Location = new Point(16, 34),
+                AutoSize = true,
+            };
+            cornerCard.Controls.Add(_lblCornerStatus);
+
+            var lblCornerName = new Label
+            {
+                Text = "Corner Name:",
+                Font = new Font("Segoe UI", 9),
+                ForeColor = TEXT_PRIMARY,
+                Location = new Point(16, 58),
+                AutoSize = true,
+            };
+            cornerCard.Controls.Add(lblCornerName);
+
+            _txtCornerName = new TextBox
+            {
+                Text = "NW",
+                Location = new Point(16, 76),
+                Size = new Size(120, 28),
+                BackColor = Color.FromArgb(50, 50, 53),
+                ForeColor = Color.White,
+                BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font("Segoe UI", 9),
+            };
+            cornerCard.Controls.Add(_txtCornerName);
+
+            // Preset corner name buttons: cardinal (rectangles) + alphabetic (any polygon)
+            string[] presetNames = { "NW", "NE", "SE", "SW", "A", "B", "C" };
+            for (int i = 0; i < presetNames.Length; i++)
+            {
+                string name = presetNames[i];
+                int btnW = name.Length > 1 ? 36 : 28;
+                var btnPreset = CreateButton(name, Color.FromArgb(70, 70, 73), btnW, 26);
+                btnPreset.Font = new Font("Segoe UI", 7, FontStyle.Bold);
+                btnPreset.Location = new Point(144 + i * 38, 77);
+                btnPreset.Click += (s, e) => _txtCornerName.Text = name;
+                cornerCard.Controls.Add(btnPreset);
+            }
+
+            _btnCaptureCorner = CreateButton("CAPTURE CORNER GPS", ACCENT_COLOR, 250, 32);
+            _btnCaptureCorner.Font = new Font("Segoe UI", 9, FontStyle.Bold);
+            _btnCaptureCorner.Location = new Point(16, 110);
+            _btnCaptureCorner.Click += BtnCaptureCorner_Click;
+            cornerCard.Controls.Add(_btnCaptureCorner);
+
+            _lstCorners = new ListBox
+            {
+                Location = new Point(16, 150),
+                Size = new Size(280, 80),
+                BackColor = Color.FromArgb(40, 40, 43),
+                ForeColor = Color.White,
+                Font = new Font("Consolas", 9),
+                BorderStyle = BorderStyle.FixedSingle,
+                SelectionMode = SelectionMode.One,
+            };
+            cornerCard.Controls.Add(_lstCorners);
+
+            _btnApplyCorners = CreateButton("Apply to Model", SUCCESS_COLOR, 130, 30);
+            _btnApplyCorners.Font = new Font("Segoe UI", 8, FontStyle.Bold);
+            _btnApplyCorners.Location = new Point(16, 238);
+            _btnApplyCorners.Click += BtnApplyCorners_Click;
+            cornerCard.Controls.Add(_btnApplyCorners);
+
+            _btnClearCorners = CreateButton("Clear All", ERROR_COLOR, 90, 30);
+            _btnClearCorners.Font = new Font("Segoe UI", 8, FontStyle.Bold);
+            _btnClearCorners.Location = new Point(156, 238);
+            _btnClearCorners.Click += BtnClearCorners_Click;
+            cornerCard.Controls.Add(_btnClearCorners);
+
+            var btnRefreshCorners = CreateButton("Refresh", Color.FromArgb(70, 70, 73), 90, 30);
+            btnRefreshCorners.Font = new Font("Segoe UI", 8, FontStyle.Bold);
+            btnRefreshCorners.Location = new Point(256, 238);
+            btnRefreshCorners.Click += async (s, e) => await RefreshCornerListAsync();
+            cornerCard.Controls.Add(btnRefreshCorners);
+
+            cornerCard.Resize += (s, e) =>
+            {
+                int inputWidth = Math.Max(260, cornerCard.ClientSize.Width - 32);
+                _btnCaptureCorner.Width = inputWidth;
+                _lstCorners.Width = inputWidth;
+            };
+
+            panel.Controls.Add(cornerCard);
+
             return panel;
         }
 
@@ -455,6 +557,187 @@ namespace NOMAD.MissionPlanner
             _txtResult.ForeColor = SUCCESS_COLOR;
         }
         
+        private async void BtnCaptureCorner_Click(object sender, EventArgs e)
+        {
+            var cs = MainV2.comPort?.MAV?.cs;
+            if (cs == null || (Math.Abs(cs.lat) < 0.000001 && Math.Abs(cs.lng) < 0.000001))
+            {
+                _txtResult.Text = "[FAIL] No GPS position available. Fly above the corner first.";
+                _txtResult.ForeColor = ERROR_COLOR;
+                return;
+            }
+
+            string cornerName = _txtCornerName.Text.Trim();
+            if (string.IsNullOrEmpty(cornerName))
+            {
+                _txtResult.Text = "[FAIL] Enter a corner name (e.g. NW, NE).";
+                _txtResult.ForeColor = ERROR_COLOR;
+                return;
+            }
+
+            _btnCaptureCorner.Enabled = false;
+            _btnCaptureCorner.Text = "Capturing...";
+            _txtResult.Text = $"Saving corner {cornerName} at {cs.lat:F6}, {cs.lng:F6}...";
+            _txtResult.ForeColor = WARNING_COLOR;
+
+            try
+            {
+                var body = new { name = cornerName, lat = cs.lat, lon = cs.lng };
+                var json = Newtonsoft.Json.JsonConvert.SerializeObject(body);
+                var httpContent = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json");
+                var response = await JetsonApiService.PostAsync("/api/task/1/building/corner", httpContent);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    var respBody = await response.Content.ReadAsStringAsync();
+                    var data = Newtonsoft.Json.Linq.JObject.Parse(respBody);
+                    int total = (int?)data["total_corners"] ?? 0;
+                    bool canApply = (bool?)data["can_apply"] ?? false;
+
+                    _txtResult.Text = $"[OK] Corner '{cornerName}' saved ({cs.lat:F6}, {cs.lng:F6}). {total} corners total." + (canApply ? " Ready to Apply!" : " Need >= 3 corners to apply.");
+                    _txtResult.ForeColor = SUCCESS_COLOR;
+
+                    // Auto-advance to next corner name suggestion
+                    AutoAdvanceCornerName(cornerName);
+
+                    await RefreshCornerListAsync();
+                }
+                else
+                {
+                    _txtResult.Text = $"[FAIL] API returned {response.StatusCode}";
+                    _txtResult.ForeColor = ERROR_COLOR;
+                }
+            }
+            catch (Exception ex)
+            {
+                _txtResult.Text = $"[FAIL] {ex.Message}";
+                _txtResult.ForeColor = ERROR_COLOR;
+            }
+            finally
+            {
+                _btnCaptureCorner.Enabled = true;
+                _btnCaptureCorner.Text = "CAPTURE CORNER GPS";
+            }
+        }
+
+        private void AutoAdvanceCornerName(string current)
+        {
+            // Cardinal sequence: NW -> NE -> SE -> SW (good for rectangles)
+            var cardinal = new[] { "NW", "NE", "SE", "SW" };
+            int idx = Array.IndexOf(cardinal, current.ToUpper());
+            if (idx >= 0 && idx < cardinal.Length - 1)
+            {
+                _txtCornerName.Text = cardinal[idx + 1];
+                return;
+            }
+
+            // Alphabetic sequence: A -> B -> C -> ... -> Z (scales to any polygon)
+            if (current.Length == 1 && char.IsLetter(current[0]))
+            {
+                char next = (char)(char.ToUpper(current[0]) + 1);
+                if (next <= 'Z')
+                    _txtCornerName.Text = next.ToString();
+            }
+        }
+
+        private async Task RefreshCornerListAsync()
+        {
+            try
+            {
+                var response = await JetsonApiService.GetAsync("/api/task/1/building/corners");
+                if (response.IsSuccessStatusCode)
+                {
+                    var body = await response.Content.ReadAsStringAsync();
+                    var data = Newtonsoft.Json.Linq.JObject.Parse(body);
+                    var corners = data["corners"] as Newtonsoft.Json.Linq.JArray;
+                    int total = (int?)data["total_corners"] ?? 0;
+                    bool canApply = (bool?)data["can_apply"] ?? false;
+
+                    _lstCorners.Items.Clear();
+                    if (corners != null)
+                    {
+                        foreach (var c in corners)
+                        {
+                            string name = c["name"]?.ToString() ?? "?";
+                            double lat = (double?)c["lat"] ?? 0;
+                            double lon = (double?)c["lon"] ?? 0;
+                            _lstCorners.Items.Add($"{name}: {lat:F6}, {lon:F6}");
+                        }
+                    }
+
+                    _lblCornerStatus.Text = total == 0
+                        ? "Fly above each building corner and click Capture Corner"
+                        : $"{total} corners captured" + (canApply ? " - Ready to Apply!" : " - Need >= 3");
+                    _lblCornerStatus.ForeColor = canApply ? SUCCESS_COLOR : TEXT_SECONDARY;
+                }
+            }
+            catch
+            {
+                // Silently fail - API may not be available
+            }
+        }
+
+        private async void BtnApplyCorners_Click(object sender, EventArgs e)
+        {
+            _btnApplyCorners.Enabled = false;
+            _txtResult.Text = "Applying corners to building model...";
+            _txtResult.ForeColor = WARNING_COLOR;
+
+            try
+            {
+                var response = await JetsonApiService.PostAsync("/api/task/1/building/corners/apply", null);
+                if (response.IsSuccessStatusCode)
+                {
+                    var body = await response.Content.ReadAsStringAsync();
+                    var data = Newtonsoft.Json.Linq.JObject.Parse(body);
+                    int count = (data["corners"] as Newtonsoft.Json.Linq.JArray)?.Count ?? 0;
+                    _txtResult.Text = $"[OK] Building model rebuilt with {count} corners!";
+                    _txtResult.ForeColor = SUCCESS_COLOR;
+                }
+                else
+                {
+                    var errorBody = await response.Content.ReadAsStringAsync();
+                    _txtResult.Text = $"[FAIL] Apply corners failed: {response.StatusCode} - {errorBody}";
+                    _txtResult.ForeColor = ERROR_COLOR;
+                }
+            }
+            catch (Exception ex)
+            {
+                _txtResult.Text = $"[FAIL] {ex.Message}";
+                _txtResult.ForeColor = ERROR_COLOR;
+            }
+            finally
+            {
+                _btnApplyCorners.Enabled = true;
+            }
+        }
+
+        private async void BtnClearCorners_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                var response = await JetsonApiService.DeleteAsync("/api/task/1/building/corners");
+                if (response.IsSuccessStatusCode)
+                {
+                    _lstCorners.Items.Clear();
+                    _lblCornerStatus.Text = "Fly above each building corner and click Capture Corner";
+                    _lblCornerStatus.ForeColor = TEXT_SECONDARY;
+                    _txtResult.Text = "[OK] Building corners cleared.";
+                    _txtResult.ForeColor = SUCCESS_COLOR;
+                }
+                else
+                {
+                    _txtResult.Text = $"[FAIL] Clear failed: {response.StatusCode}";
+                    _txtResult.ForeColor = ERROR_COLOR;
+                }
+            }
+            catch (Exception ex)
+            {
+                _txtResult.Text = $"[FAIL] {ex.Message}";
+                _txtResult.ForeColor = ERROR_COLOR;
+            }
+        }
+
         private async void BtnCapture_Click(object sender, EventArgs e)
         {
             _btnCapture.Enabled = false;

@@ -1,8 +1,10 @@
 # Task 1 Photo Capture with Metadata
 
-**Feature Category**: Task 1 - Outdoor Reconnaissance  
-**Status**: Production Ready  
-**Last Updated**: February 2, 2026
+**Feature Category**: Task 1 - Outdoor Reconnaissance
+**Status**: Production Ready
+**Last Updated**: April 26, 2026
+
+> **See also**: [Task 1 Competition Guide](../TASK1_COMPETITION_GUIDE.md) — the definitive reference for competition-day operations, checklists, and CONOPS compliance.
 
 ## Overview
 
@@ -11,6 +13,7 @@ Comprehensive photo capture system for Task 1 outdoor reconnaissance, featuring:
 - EXIF metadata embedding in JPEG files
 - Target-localizer ROS 2 capture flow for current competition logic
 - Mission Planner UI integration
+- Automated target detection + ConOPS-compliant natural language description
 
 ---
 
@@ -230,7 +233,9 @@ ZED camera automatically selected via `SystemState.camera` interface.
 
 ## Known Issues
 
-None - feature is production-ready.
+- **Fallback chain on capture**: When target_localizer ROS services are unavailable, the \ endpoint falls back to the ZED object detection cache. This does NOT generate ConOPS-compliant descriptions - it only gives raw 3D coordinates. Always verify the target_localizer is running before flight.
+- **Equipment delivery is operator-enforced**: The CONOPS requires UAV to land/touch ground before releasing equipment. The payload drop relay triggers immediately on button press - the operator must land first.
+- **Lap counting is manual**: No automated lap detection; the pilot must count laps or plan waypoint missions that enforce the course.
 
 ---
 
@@ -247,8 +252,10 @@ None - feature is production-ready.
 ## Related Documentation
 
 - [Task 1 AI Processing](task1_ai_processing.md) - AI-powered scene description
+- [Task 1 Competition Guide](../TASK1_COMPETITION_GUIDE.md) - Full competition-day procedure, checklists, CONOPS compliance
 - [../architecture.md](../architecture.md) - System architecture overview
 - [../JETSON_DEPLOYMENT.md](../JETSON_DEPLOYMENT.md) - Jetson setup guide
+- [../../edge_core/target_localizer/README.md](../../edge_core/target_localizer/README.md) - Target localizer ROS 2 node
 
 ---
 

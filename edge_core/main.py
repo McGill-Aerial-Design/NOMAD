@@ -483,6 +483,32 @@ def run(
 
     spray_controller.set_verify_hsv_fn(_verify_hsv)
 
+    # set_verify_circle_change_fn: color-agnostic circle detection before/after
+    # Compares circles in pre/post spray images. If >20% pixel change, pass.
+    def _verify_circle_change(pre_spray_path: str, post_spray_path: str) -> bool:
+        """Compare pre/post spray images using color-agnostic circle detection."""
+        try:
+            from task2_circle_verify import CircleChangeVerifier
+            verifier = CircleChangeVerifier(
+                change_threshold=0.20,
+                pixel_diff_threshold=30,
+                match_distance_px=50,
+            )
+            before = verifier.capture_snapshot_from_file(pre_spray_path)
+            after = verifier.capture_snapshot_from_file(post_spray_path)
+            result = verifier.compare(before, after)
+            logger.info(
+                f"Circle verify: change={result.change_ratio:.1%} "
+                f"verified={result.verified} matched={result.matched_pairs} "
+                f"detail={result.details}"
+            )
+            return result.verified
+        except Exception as e:
+            logger.error(f"Circle change verification failed: {e}")
+            return False
+
+    spray_controller.set_verify_circle_change_fn(_verify_circle_change)
+
     # set_upload_fn: upload photo to Google Drive
     spray_controller.set_upload_fn(
         lambda local_path, filename: upload_to_gdrive(local_path, filename)
@@ -495,7 +521,45 @@ def run(
         app.state.excluded_sectors = sectors
 
     spray_controller.set_excluded_sectors_fn(_set_excluded_sectors)
-    logger.info("Spray controller initialized with callbacks")
+        # Nav2 callback wiring for autonomous approach (3m to 2m)
+    import uuid as _uuid
+    from datetime import datetime as _dt, timezone as _tz
+
+    def _send_nav2_goal(goal_dict: dict) -> dict:
+        """Send Nav2 navigation goal via app.state."""
+        try:
+            goal_type = goal_dict.get("type", "navigate_to_pose")
+            if goal_type == "cancel":
+                app.state.nav2_pending_goal = {"type": "cancel", "id": f"cancel_{int(time.time())}"}
+                return {"success": True, "goal_id": "cancel"}
+            goal_id = _uuid.uuid4().hex[:8]
+            app.state.nav2_pending_goal = {
+                "type": goal_type,
+                "id": goal_id,
+                "pose": goal_dict.get("pose", {}),
+                "timestamp": _dt.now(_tz.utc).isoformat(),
+            }
+            app.state.nav2_current_status = {"status": "pending", "goal_id": goal_id}
+            logger.info(f"Nav2 goal sent: id={goal_id} type={goal_type}")
+            return {"success": True, "goal_id": goal_id, "type": goal_type}
+        except Exception as e:
+            logger.error(f"Nav2 goal send error: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _get_nav2_status() -> dict:
+        """Read current Nav2 navigation status."""
+        return getattr(app.state, 'nav2_current_status', None) or {"status": "idle"}
+
+    def _cancel_nav2_goal() -> None:
+        """Cancel current Nav2 goal."""
+        app.state.nav2_pending_goal = {"type": "cancel", "id": f"cancel_{int(time.time())}"}
+        logger.info("Nav2 goal cancel requested")
+
+    spray_controller.set_nav2_goal_fn(_send_nav2_goal)
+    spray_controller.set_nav2_status_fn(_get_nav2_status)
+    spray_controller.set_nav2_cancel_fn(_cancel_nav2_goal)
+
+    logger.info("Spray controller initialized with Nav2 approach + circle verify support")
 
     # GDrive readiness probe — warn early if spray uploads will fail
     app.state.gdrive_ready = gdrive_ready()

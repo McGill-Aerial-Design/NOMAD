@@ -2,18 +2,28 @@
 # Target Localizer Configuration - AEAC 2026 Task 1
 # ============================================================
 #
-# BEFORE FLIGHT:
-#   1. Update building params with values received Thursday night
-#   2. Set building_orientation by checking satellite imagery or
-#      measuring on-site with a compass
-#   3. If you have a YOLO landmark model, set yolo_model_path
-#   4. Do a quick HSV calibration with the actual target colors
-#      under current lighting conditions (see hsv_tuning below)
+# CONOPS gives us a single building lat/lon (just identifies which
+# building) plus the critical building dimensions. Building shape is
+# NOT necessarily rectangular -- could be L-shape, T-shape, etc.
+#
+# Pre-flight reconstruction (Thursday night -> Friday morning):
+#   1. From the satellite image of Area XO, derive the building's
+#      rotation (long-axis heading from true north).
+#   2. From CONOPS dimensions + that rotation + the lat/lon, compute
+#      a GPS coordinate for each corner of the polygon.
+#   3. Paste them into building.corner_lats / building.corner_lons /
+#      building.corner_names below (one entry per corner, same order,
+#      polygon must be wound consistently -- CCW or CW, model handles
+#      either).
+#   4. Set building.height from CONOPS dimensions.
+#   5. Run the node and call /target_localizer/print_model to verify
+#      face headings, names, and corner order match the satellite view.
+#
+# For a quick rectangular fallback (e.g. testing without CONOPS data),
+# leave corner_names empty and set the rectangle.* fields instead.
 #
 # USAGE:
-#   ros2 launch target_localizer target_localizer.launch.py \
-#       building_lat:=45.3220 building_lon:=-75.7600 \
-#       building_length:=12.0 building_width:=8.0
+#   ros2 launch target_localizer target_localizer.launch.py
 #
 # OR load this file directly:
 #   ros2 run target_localizer target_localizer_node \
@@ -24,86 +34,107 @@ target_localizer:
   ros__parameters:
 
     # ---- Building Geometry ----
-    # UPDATE THESE THURSDAY NIGHT with competition-provided values
     building:
-      center_lat: 45.3220       # Building center GPS latitude
-      center_lon: -75.7600      # Building center GPS longitude
-      length: 10.0              # Long axis dimension (meters)
-      width: 6.0                # Short axis dimension (meters)
-      height: 5.0               # Building height (meters)
-      orientation_deg: 0.0      # Long axis heading (deg CW from north)
-                                # 0 = long axis points north
-                                # 90 = long axis points east
+      # GPS origin of the local ENU frame. Use the CONOPS-provided lat/lon
+      # for the building, or the centroid of the corners.
+      center_lat: 45.3220
+      center_lon: -75.7600
+
+      # Building height (meters), from CONOPS dimensions.
+      height: 5.0
+
+      # ---- Polygon corners (preferred path) ----
+      # One entry per corner. corner_names, corner_lats, corner_lons must all
+      # have the same length (>= 3). Order the corners going around the
+      # polygon (CW or CCW, model auto-detects).
+      #
+      # Names are operator-facing and appear in target descriptions, e.g.
+      # "3.2m from the NW corner". Use short labels -- "NW", "NE", "A", "B".
+      #
+      # Set corner_names to [] to fall back to the rectangle.* convenience
+      # path below.
+      corner_names: []
+      corner_lats: []
+      corner_lons: []
+
+      # ---- Rectangle convenience fallback ----
+      # Used only when corner_names is empty. Generates a 4-corner rectangle
+      # labeled NW/NE/SE/SW from center+dims+orientation.
+      rectangle:
+        length: 10.0           # Long axis dimension (meters)
+        width: 6.0             # Short axis dimension (meters)
+        orientation_deg: 0.0   # Long-axis heading, deg CW from true north
+                               # 0 = long axis points north, 90 = points east
 
     # ---- Team ----
     team_name: "MAD"
     output_dir: "/home/mad/targets"
 
-    # ---- Landmark Detection (YOLO) ----
-    # Leave empty to disable landmark detection
-    # The node still works with corners-only descriptions
-    yolo_model_path: ""         # e.g. "/home/mad/models/landmarks.onnx"
+    # ---- Landmark Detection (DISABLED for Task 1) ----
+    # CONOPS Q&A #7 explicitly says no landmark info (doors, windows, paths)
+    # will be provided. We have no training data for a doors/windows YOLO and
+    # the corner-relative descriptions in CONOPS Appendix D are sufficient on
+    # their own, so leave this off.
+    yolo_model_path: ""
     landmark_detect_rate_hz: 2.0
-    auto_landmark_detection: true
+    auto_landmark_detection: false
 
     # ---- Target Detection ----
     dedup_radius_m: 0.5         # Targets within this 3D distance are merged
+
+    # ---- HSV Circle Detector (live-tunable) ----
+    # ros2 param set /target_localizer circle.min_circularity 0.65
+    circle:
+      min_radius_px: 12
+      max_radius_px: 400
+      min_circularity: 0.70
+      min_solidity: 0.80
+      blur_kernel: 7
 
 # ============================================================
 # HSV Tuning Guide
 # ============================================================
 #
-# The default HSV ranges in detectors.py are a starting point.
-# To calibrate for competition conditions:
+# The default HSV ranges in detectors.py are a starting point. Re-tune at
+# the venue with the actual targets:
+#   1. Capture sample images with the ZED at typical hover distances
+#   2. Run python3 tools/hsv_tuner.py --image target_sample.jpg
+#   3. Update HSV_RANGES in detectors.py and rebuild
 #
-# 1. Capture images of the actual colored targets at the site
-# 2. Run the HSV tuning script:
-#      python3 hsv_tuner.py --image target_sample.jpg
-# 3. Update the HSV_RANGES dict in detectors.py
-#
-# Key considerations:
-#   - Ottawa in May: overcast skies shift colors toward blue
-#   - Morning vs afternoon sun changes everything
-#   - The targets are solid-color plastic (per Q&A #26),
-#     so colors should be fairly saturated
-#   - Black targets have very low value (V < 60)
-#   - White targets have very low saturation (S < 40) and
-#     high value (V > 180)
-#   - Red wraps around 0/180 in OpenCV HSV, needs two ranges
-#
-# Quick sanity check at the flight line:
-#   ros2 service call /target_localizer/capture_target \
-#       std_srvs/srv/Trigger
-#   Check the annotated image in output_dir
+# Operator can also override the detected color via the GCS review UI
+# before each target is appended -- color penalty is x50% so HITL color
+# verification is the dominant accuracy lever.
 #
 # ============================================================
 # Operational Checklist
 # ============================================================
 #
-# Thursday night (after receiving building data):
-#   [ ] Update building params in this file or launch args
-#   [ ] Verify building orientation on Google Maps
-#   [ ] Pre-compute expected face labels (which wall is "north")
-#   [ ] Test node launch with updated params
+# Thursday night (after CONOPS releases building data):
+#   [ ] Open Area XO satellite imagery, measure building rotation
+#   [ ] Compute corner GPS coords from dimensions + rotation + lat/lon
+#   [ ] Paste into corner_names / corner_lats / corner_lons
+#   [ ] Set building.height from CONOPS dimensions
+#   [ ] Set building.center_lat / center_lon to the polygon centroid
+#   [ ] ros2 run + call /target_localizer/print_model to verify
 #
 # Friday morning (before flight):
-#   [ ] Verify GPS fix quality on the Cube
-#   [ ] Check ZED camera feed (RGB + depth)
-#   [ ] Verify servo angle topic is publishing
-#   [ ] Do one test capture at the flight line
-#   [ ] Confirm output_dir exists and is writable
-#   [ ] Confirm Google Drive upload path is ready
+#   [ ] RTK fix on the Cube (or local pose if EKF origin is set)
+#   [ ] ZED RGB + depth + camera_info topics live
+#   [ ] Servo angle topic publishing
+#   [ ] One test capture at the flight line, review on GCS
+#   [ ] output_dir writable, Google Drive upload tested
 #
 # During flight:
-#   [ ] Fly survey orbit, landmarks auto-register
-#   [ ] Call ~/capture_target at each detected circle
-#   [ ] Monitor ROS logs for duplicate rejections
-#   [ ] After landing, call ~/save_targets
-#   [ ] Review .txt file before uploading to Google Drive
+#   [ ] Pilot positions UAV ~3-5m from each candidate target
+#   [ ] Operator triggers /target_localizer/capture_target
+#   [ ] Operator confirms color + face on GCS, accepts/rejects
+#   [ ] Repeat for each target
+#   [ ] After landing, /target_localizer/save_targets
+#   [ ] Review .txt before uploading to Google Drive
 #   [ ] Upload Task_1_MAD_targets.txt before window closes
 #
 # Emergency fallback:
 #   If the node fails, manually write descriptions using:
 #   - Annotated images in output_dir
 #   - Debug log with raw 3D coordinates
-#   - Building dimensions and your own judgment
+#   - Building dimensions + corner GPS from this file

@@ -17,6 +17,8 @@ Automated scene description generation for Task 1 captured photos using AI. Supp
 
 ---
 
+> **See also**: [Task 1 Competition Guide](../TASK1_COMPETITION_GUIDE.md) - the definitive reference for competition-day operations, checklists, and CONOPS compliance.
+
 ## Architecture
 
 ### Processing Flow

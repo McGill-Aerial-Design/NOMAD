@@ -23,6 +23,7 @@
 - [NVBLOX_VISUALIZATION.md](NVBLOX_VISUALIZATION.md) - 3D mapping visualization
 - [DUAL_LINK_FAILOVER.md](DUAL_LINK_FAILOVER.md) - Redundant telemetry setup
 - [SERVO_CONTROL.md](SERVO_CONTROL.md) - Camera tilt servo and water shooter control
+- [TASK1_COMPETITION_GUIDE.md](TASK1_COMPETITION_GUIDE.md) - Task 1 competition-day operations, checklists, CONOPS compliance
 
 ---
 
@@ -34,8 +35,10 @@
 3. [OPERATIONS_RUNBOOK.md](OPERATIONS_RUNBOOK.md) - Operations and competition day
 
 ### Task 1 (Outdoor Recon)
+- [TASK1_COMPETITION_GUIDE.md](TASK1_COMPETITION_GUIDE.md) - **Competition guide** — operations, checklists, CONOPS compliance, scoring strategy
 - [features/task1_photo_capture.md](features/task1_photo_capture.md) - Photo capture system
 - [features/task1_ai_processing.md](features/task1_ai_processing.md) - AI scene description
+- [../edge_core/target_localizer/README.md](../edge_core/target_localizer/README.md) - Target localizer ROS 2 node (detection, 3D positioning, description generation)
 
 ### Task 2 (Indoor Autonomous)
 - [JETSON_NAV_ARCHITECTURE.md](JETSON_NAV_ARCHITECTURE.md) - Navigation architecture

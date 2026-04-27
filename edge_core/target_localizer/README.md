@@ -1,5 +1,7 @@
 # Target Localizer - AEAC 2026 Task 1
 
+> **See also**: [Task 1 Competition Guide](../../docs/TASK1_COMPETITION_GUIDE.md) - full competition-day procedure, checklists, CONOPS compliance, and scoring strategy.
+
 Automated target detection, 3D localization, and natural-language description
 generation for the AEAC 2026 Fire Reconnaissance task.
 
