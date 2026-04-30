@@ -84,6 +84,7 @@ namespace NOMAD.MissionPlanner
         private CheckBox _chkDarkMode;
         private CheckBox _chkUseELRS;
         private NumericUpDown _numSlamFov;
+        private NumericUpDown _numSlamMapRadius;
         
         // Alerts Tab
         private NumericUpDown _numTempWarning;
@@ -475,6 +476,12 @@ namespace NOMAD.MissionPlanner
             _numSlamFov = AddNumericUpDown(tab, 150, y, 70, 30, 140, 60);
             y += 24;
             AddLabel(tab, "Lower = zoom in, higher = wider view", 20, y, Color.Gray);
+            y += 26;
+
+            AddLabel(tab, "Local Map Radius (m):", 20, y);
+            _numSlamMapRadius = AddNumericUpDown(tab, 150, y, 70, 1, 20, 3);
+            y += 24;
+            AddLabel(tab, "Controls how much SLAM data stays in the Mission Planner view", 20, y, Color.Gray);
 
             return tab;
         }
@@ -802,6 +809,7 @@ namespace NOMAD.MissionPlanner
             _chkDebugMode.Checked = Config.DebugMode;
             _chkUseELRS.Checked = Config.UseELRS;
             _numSlamFov.Value = (decimal)Math.Max(30f, Math.Min(140f, Config.SlamCameraFovDeg));
+            _numSlamMapRadius.Value = (decimal)Math.Max(1f, Math.Min(20f, Config.SlamMapRadiusM));
             
             // Alerts
             _numTempWarning.Value = (decimal)Config.TempWarningC;
@@ -885,6 +893,7 @@ namespace NOMAD.MissionPlanner
             Config.DebugMode = _chkDebugMode.Checked;
             Config.UseELRS = _chkUseELRS.Checked;
             Config.SlamCameraFovDeg = (float)_numSlamFov.Value;
+            Config.SlamMapRadiusM = (float)_numSlamMapRadius.Value;
             
             // Alerts
             Config.TempWarningC = (float)_numTempWarning.Value;

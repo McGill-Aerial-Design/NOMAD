@@ -89,6 +89,7 @@ namespace NOMAD.MissionPlanner
         private float _renderPosX, _renderPosY, _renderPosZ;
         private float _renderRollRaw, _renderPitchRaw, _renderYawRaw;
         private bool _hasBodyAttitude; // True if body_roll/pitch/yaw received (magnetometer-corrected)
+        private bool _hasPoseFrame;
 
         // ---- Trajectory ----
         private const int MaxTrajectoryPoints = 500;
@@ -109,7 +110,7 @@ namespace NOMAD.MissionPlanner
         private TextBox _txtStatusLog;
         private CheckBox _chkShowGrid, _chkShowTrajectory, _chkAutoUpdate;
         private ComboBox _combDroneType, _combMeshMode;
-        private NumericUpDown _numLength, _numWidth, _numHeight, _numHeadingOffset, _numFov;
+        private NumericUpDown _numLength, _numWidth, _numHeight, _numHeadingOffset, _numFov, _numMapRadius;
         private string _meshOutputMode = "voxel";
         private bool _meshModeApplyInFlight;
         private bool _meshModeRefreshInFlight;
@@ -357,6 +358,17 @@ namespace NOMAD.MissionPlanner
                 _glControl?.Invalidate();
             };
             _controlPanel.Controls.Add(_numFov);
+
+            x += 60;
+            _controlPanel.Controls.Add(CreateLabel("Radius:", x, y + 3));
+            x += 45;
+            _numMapRadius = CreateNumericUpDown(x, y, 50, 1, 20, (decimal)Math.Max(1f, Math.Min(20f, _config.SlamMapRadiusM)));
+            _numMapRadius.ValueChanged += (s, e) =>
+            {
+                _config.SlamMapRadiusM = (float)_numMapRadius.Value;
+                _config.Save();
+            };
+            _controlPanel.Controls.Add(_numMapRadius);
 
             // Third row: area map controls
             y += 26;
@@ -661,6 +673,7 @@ namespace NOMAD.MissionPlanner
             _renderRollRaw = _poseState.Roll;
             _renderPitchRaw = _poseState.Pitch;
             _renderYawRaw = _poseState.Yaw;
+            UpdateLocalMapFocus();
 
             // Log pose state stats periodically (every 5 seconds)
             LogPoseStateStats();
@@ -990,7 +1003,10 @@ namespace NOMAD.MissionPlanner
             }
 
             if (hasPosePositionInFrame)
+            {
                 _trajectoryRenderer.AddPointFromRos(latestX, latestY, latestZ);
+                _hasPoseFrame = true;
+            }
 
             UpdateDetectionMarkersFromFrame(frameJson);
 
@@ -1047,8 +1063,16 @@ namespace NOMAD.MissionPlanner
                     NeedsReview = detection["needs_review"]?.Value<bool>() ?? false,
                 });
             }
-
             _detectionRenderer.UpdateMarkers(markers);
+        }
+
+        private void UpdateLocalMapFocus()
+        {
+            if (!_hasPoseFrame)
+                return;
+
+            var (glX, glY, glZ) = CoordinateConverter.RosToOpenGL(_renderPosX, _renderPosY, _renderPosZ);
+            _voxelMeshBuilder.SetFocusSphere(glX, glY, glZ, Math.Max(1f, _config.SlamMapRadiusM));
         }
 
         // ==================== Servo Polling ====================
@@ -1108,7 +1132,7 @@ namespace NOMAD.MissionPlanner
                 {
                     var detectionsJson = await detectionsResponse.Content.ReadAsStringAsync();
                     var detectionsObj = JObject.Parse(detectionsJson);
-                    var current = detectionsObj["current"]? ["detections"] as JArray;
+                    var current = detectionsObj["current"]?["detections"] as JArray;
                     int total = current?.Count ?? 0;
                     int mismatches = 0;
                     string sampleMismatch = null;

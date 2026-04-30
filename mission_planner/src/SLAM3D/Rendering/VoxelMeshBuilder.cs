@@ -78,6 +78,11 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
         private HashSet<long> _queuedForEviction = new HashSet<long>();
         private double _currentVoxelSize = 0.05;
         private string _currentMeshMode = "";
+        private float _focusCenterX;
+        private float _focusCenterY;
+        private float _focusCenterZ;
+        private float _focusRadiusM = 3f;
+        private bool _focusSphereEnabled;
 
         // ---- GL vertex data (rebuilt when mesh changes) ----
         private float[] _voxelVerts;
@@ -167,9 +172,42 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
                 long elapsedMs = ElapsedMsSince(_lastMeshRebuildStamp);
                 if (elapsedMs >= (long)_minRebuildInterval.TotalMilliseconds)
                 {
+                    if (_focusSphereEnabled && !_parityMode)
+                    {
+                        CullOutsideFocusSphere();
+                    }
+
                     // Preserve exact nvblox geometry; do not synthesize gap voxels.
                     RebuildVoxelMesh();
                     _pendingMeshUpdate = false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Keep only voxels inside a local sphere centered on the current pose.
+        /// </summary>
+        public void SetFocusSphere(float centerX, float centerY, float centerZ, float radiusMeters)
+        {
+            lock (_meshLock)
+            {
+                float clampedRadius = Math.Max(1f, radiusMeters);
+                bool changed = !_focusSphereEnabled
+                    || Math.Abs(_focusCenterX - centerX) > 0.01f
+                    || Math.Abs(_focusCenterY - centerY) > 0.01f
+                    || Math.Abs(_focusCenterZ - centerZ) > 0.01f
+                    || Math.Abs(_focusRadiusM - clampedRadius) > 0.01f;
+
+                _focusSphereEnabled = true;
+                _focusCenterX = centerX;
+                _focusCenterY = centerY;
+                _focusCenterZ = centerZ;
+                _focusRadiusM = clampedRadius;
+
+                if (changed && !_parityMode)
+                {
+                    _meshDirty = true;
+                    _pendingMeshUpdate = true;
                 }
             }
         }
@@ -548,6 +586,40 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
             _meshDirty = false;
             _pendingMeshUpdate = false;
             _lastRenderedCount = 0;
+        }
+
+        private void CullOutsideFocusSphere()
+        {
+            double radiusSq = _focusRadiusM * _focusRadiusM;
+            var toRemove = new List<long>();
+
+            foreach (var kvp in _persistedBlocks)
+            {
+                UnpackVoxelKey(kvp.Key, out int ix, out int iy, out int iz);
+                float cx = (float)((ix + 0.5) * _currentVoxelSize);
+                float cy = (float)((iy + 0.5) * _currentVoxelSize);
+                float cz = (float)((iz + 0.5) * _currentVoxelSize);
+
+                double dx = cx - _focusCenterX;
+                double dy = cy - _focusCenterY;
+                double dz = cz - _focusCenterZ;
+                if ((dx * dx) + (dy * dy) + (dz * dz) > radiusSq)
+                {
+                    toRemove.Add(kvp.Key);
+                }
+            }
+
+            if (toRemove.Count == 0)
+                return;
+
+            foreach (var key in toRemove)
+            {
+                _persistedBlocks.Remove(key);
+                _voxelLastSeen.Remove(key);
+                UnqueueForEviction(key);
+            }
+
+            _meshDirty = true;
         }
 
         private static long ElapsedMsSince(long startStamp)

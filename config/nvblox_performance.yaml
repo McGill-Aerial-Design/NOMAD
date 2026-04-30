@@ -2,14 +2,15 @@
 # NOMAD nvblox Configuration
 #
 # Tuned for Jetson Orin Nano (8GB shared CPU+GPU RAM)
-# 10cm voxels, 2D ESDF, dynamic mapping, 5m radius
+# 10cm voxels, 3D ESDF, dynamic mapping, 3m local map radius
+# Unified config for all tasks (Task 1 outdoor + Task 2 indoor)
 #
 # IMPORTANT: ZED + nvblox share 8GB GPU memory. To prevent
 # cudaErrorIllegalAddress crashes:
 # - Use blocking CUDA stream (type 0) for sequential GPU access
 # - Disable color integration (saves ~30% GPU memory)
 # - Keep depth at 360p (pub_downscale_factor: 2.0 default)
-# - Use 5m radius (not 8m) to reduce active voxel count
+# - Use 3m radius to keep the local map tightly centered on the drone
 # ==============================================================
 
 /**:
@@ -20,9 +21,8 @@
     cuda_stream_type: 0
 
     # ==============================================================
-    # VOXEL SIZE - 10cm for decimeter precision (Task 1 + Task 2)
-    # Increase to 0.20 only if GPU memory becomes a problem.
-    # Use nvblox_indoor.yaml (3cm voxels) for fine doorway navigation.
+    # VOXEL SIZE - 10cm for decimeter precision (all tasks)
+    # Suitable for both Task 1 (outdoor) and Task 2 (indoor) operations.
     # ==============================================================
     voxel_size: 0.10  # 10cm voxels — decimeter precision
 
@@ -45,13 +45,13 @@
     # 1 Hz thrash in RViz because the color layer lagged depth by 4 frames.
     integrate_color_rate_hz: 5.0     # matches depth/mesh; prevents marker flicker
     integrate_lidar_rate_hz: 0.0
-    update_mesh_rate_hz: 5.0         # balanced mesh update cadence for lower CPU
-    update_esdf_rate_hz: 5.0         # balanced ESDF updates for obstacle avoidance
+    update_mesh_rate_hz: 10.0        # faster mesh refresh for the local 3m window
+    update_esdf_rate_hz: 10.0        # faster ESDF updates for local obstacle avoidance
     publish_layer_rate_hz: 5.0
     publish_debug_vis_rate_hz: 1.0
     decay_tsdf_rate_hz: 2.0          # >0 enables time-based map decay (old detections fade)
     decay_dynamic_occupancy_rate_hz: 2.0
-    clear_map_outside_radius_rate_hz: 1.0
+    clear_map_outside_radius_rate_hz: 5.0
 
     # Global frame: map (stable under ZED loop-closure corrections).
     # nvblox defaults to "odom" which drifts when ZED area memory publishes
@@ -86,22 +86,22 @@
     maximum_input_queue_length: 3
 
     # ==============================================================
-    # Map clearing - 8m radius around base_link
+    # Map clearing - 3m radius around base_link
     # Voxels outside this radius are continuously cleared.
     # ==============================================================
-    map_clearing_radius_m: 8.0
+    map_clearing_radius_m: 3.0
     map_clearing_frame_id: "base_link"
 
     # QoS settings
     input_qos: "SYSTEM_DEFAULT"
 
-    # Visualization - 5m view area
-    esdf_slice_bounds_visualization_side_length: 5.0
-    workspace_height_bounds_visualization_side_length: 5.0
+    # Visualization - 3m view area
+    esdf_slice_bounds_visualization_side_length: 3.0
+    workspace_height_bounds_visualization_side_length: 3.0
     layer_visualization_exclusion_height_m: 50.0
-    layer_visualization_exclusion_radius_m: 5.0
+    layer_visualization_exclusion_radius_m: 3.0
     layer_visualization_min_tsdf_weight: 0.0001
-    max_back_projection_distance: 5.0
+    max_back_projection_distance: 3.0
     back_projection_subsampling: 4
     # Negative value = unlimited. nvblox's layer_streamer uses a bandwidth
     # budget to decide how many dirty blocks it streams per publish tick.

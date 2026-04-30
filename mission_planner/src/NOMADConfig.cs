@@ -377,6 +377,9 @@ namespace NOMAD.MissionPlanner
         /// <summary>SLAM 3D camera field of view in degrees.</summary>
         public float SlamCameraFovDeg { get; set; } = 60.0f;
 
+        /// <summary>SLAM 3D local map radius in meters.</summary>
+        public float SlamMapRadiusM { get; set; } = 3.0f;
+
         // ============================================================
         // GPIO/Payload Configuration
         // ============================================================
@@ -488,6 +491,11 @@ namespace NOMAD.MissionPlanner
             {
                 SlamCameraFovDeg = 60.0f;
             }
+
+            if (SlamMapRadiusM < 1.0f || SlamMapRadiusM > 20.0f)
+            {
+                SlamMapRadiusM = 3.0f;
+            }
         }
 
         /// <summary>
@@ -546,6 +554,7 @@ namespace NOMAD.MissionPlanner
             CameraDownOffsetCm = defaults.CameraDownOffsetCm;
             SlamHeadingOffsetDeg = defaults.SlamHeadingOffsetDeg;
             SlamCameraFovDeg = defaults.SlamCameraFovDeg;
+            SlamMapRadiusM = defaults.SlamMapRadiusM;
         }
     }
 }

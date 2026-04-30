@@ -228,33 +228,7 @@ Optimized for **Task 1 (outdoor)** and **real-time 3D visualization** in Mission
 | `back_projection_subsampling` | 4 | Heavy subsampling for speed |
 | `publish_layer_rate_hz` | 5.0 | Layer publishing rate tuned for Orin Nano headroom |
 
-#### Indoor config: `config/nvblox_indoor.yaml`
 
-Optimized for **Task 2 (indoor fire extinguishing)** with high-resolution obstacle mapping.
-
-| Parameter | Value | Notes |
-|-----------|-------|-------|
-| `voxel_size` | 0.03 m | 3cm voxels for fine obstacle detection through doorways |
-| `map_clearing_radius_m` | 5.0 m | Tighter 5m radius (indoor spaces) |
-| `integrate_depth_rate_hz` | 15.0 | Safety-critical rate limit for tight indoor spaces |
-| `update_mesh_rate_hz` | 3.0 | Fast mesh for close obstacle detection |
-| `update_esdf_rate_hz` | 10.0 | Responsive obstacle avoidance distance field |
-| `mapping_type` | "dynamic" | Dynamic occupancy for moving obstacles (people) |
-| `decay_dynamic_occupancy_rate_hz` | 10.0 | Fast decay for moving obstacles |
-
-#### Switching Profiles
-
-The active config is determined by which yaml file is copied to the nvblox base config:
-
-```bash
-# Use performance (outdoor) profile
-cp /workspaces/isaac_ros-dev/config/nvblox_performance.yaml /workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/nvblox/nvblox_base.yaml
-
-# Use indoor profile (requires nvblox container restart, ~2-3s blind window)
-cp /workspaces/isaac_ros-dev/config/nvblox_indoor.yaml /workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/nvblox/nvblox_base.yaml
-```
-
-The `start_isaac_ros_auto.sh` script applies `nvblox_performance.yaml` by default.
 
 To use this config when launching nvblox manually:
 

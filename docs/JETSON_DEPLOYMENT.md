@@ -108,8 +108,7 @@ cat /sys/class/thermal/thermal_zone*/temp | awk '{temp=$1/1000; print temp "°C"
 **Cooling Strategies**:
 1. **Active cooling**: Add a 40x40mm heatsink fan (5-10W additional power)
 2. **Passive cooling**: Ensure airflow around Jetson enclosure
-3. **Load management**: Reduce nvblox update rates if consistent > 80°C
-4. **Operational mode**: Use `nvblox_safe.yaml` if Jetson consistently throttles
+3. **Load management**: If throttling occurs, the unified `nvblox_performance.yaml` profile is tuned for safe operation
 
 ### Memory Layout on Orin Nano 8GB
 
@@ -134,7 +133,7 @@ Under Heavy Load (all services):
 1. Stop Isaac ROS container: `./start_isaac_ros_auto.sh stop`
 2. Check memory: `free -h`
 3. Kill background processes: `ps aux | grep -v "mad\|root\|[" | awk '{print $2}' | xargs kill 2>/dev/null || true`
-4. Switch to `nvblox_safe.yaml` for lower memory footprint
+4. The unified nvblox profile handles both outdoor and indoor operations
 5. Restart: `./start_isaac_ros_auto.sh start`
 
 ---

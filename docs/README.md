@@ -60,28 +60,14 @@ Key configuration files and their purposes:
 
 | Config File | Purpose | Task | Details |
 |-------------|---------|------|----------|
-| `config/nvblox_performance.yaml` | Primary nvblox (default) | Task 1 + visualization | 5cm voxels, 30Hz updates, 8m radius, static TSDF mapping |
-| `config/nvblox_indoor.yaml` | Indoor-optimized nvblox | Task 2 indoor | 3cm voxels, 15Hz depth, 5m radius, dynamic occupancy for people |
+| `config/nvblox_performance.yaml` | Unified nvblox (all tasks) | Task 1 + Task 2 | 10cm voxels, 10Hz updates, 3m local map, dynamic mapping with 3D ESDF |
 | `config/profiles/task1_outdoor.params` | Task 1 operational config | Task 1 | GPS geofencing, outdoor navigation params |
 | `config/profiles/task2_indoor.params` | Task 2 operational config | Task 2 | Indoor nav2 constraints, obstacle avoidance safety limits |
 | `config/nav2_drone.yaml` | Nav2 stack configuration | Task 2 | Navigation controller, planner, recovery behaviors |
 | `config/video_streams.json` | MediaMTX RTSP streams | All | ZED camera RTSP, mask stream URLs for Mission Planner |
 | `config/env/jetson.env` | Environment variables | All | Tailscale IPs, home paths, port configuration |
 
-### Switching nvblox Profiles
 
-By default, `nvblox_performance.yaml` is active. To switch to indoor profile:
-
-```bash
-# Option 1: Manual copy inside container
-docker exec nomad_isaac_ros bash -c \
-  'cp /workspaces/isaac_ros-dev/config/nvblox_indoor.yaml \
-      /opt/ros/humble/.../nvblox/nvblox_base.yaml' 
-rosnode kill /nvblox_node  # Restart occurs automatically (~2-3s blind)
-
-# Option 2: Edit start_isaac_ros_auto.sh before launch
-# Change NOMAD_CFG=/workspaces/isaac_ros-dev/config/nvblox_indoor.yaml
-```
 - [analysis/codebase_analysis.md](analysis/codebase_analysis.md) - Code quality
 
 ---

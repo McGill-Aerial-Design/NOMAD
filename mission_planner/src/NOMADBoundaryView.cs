@@ -30,7 +30,6 @@ namespace NOMAD.MissionPlanner
         public List<GpsPoint> SoftBoundary { get; set; } = new List<GpsPoint>();
         public List<GpsPoint> HardBoundary { get; set; } = new List<GpsPoint>();
         public double MaxAltitudeMeters { get; set; } = 122.0; // 400ft
-        public GpsPoint BuildingLocation { get; set; }
     }
     
     public class NOMADBoundaryView : NOMADViewBase, IUpdatableView
@@ -56,8 +55,6 @@ namespace NOMAD.MissionPlanner
         private NumericUpDown _nudMaxAlt;
         
         // Building location
-        private TextBox _txtBuildingLat;
-        private TextBox _txtBuildingLon;
         
         // Violation action controls
         private ComboBox _cmbSoftAction;
@@ -248,24 +245,6 @@ namespace NOMAD.MissionPlanner
             var btnDeletePreset = CreateButton("Del", ERROR_COLOR, 35, 22); btnDeletePreset.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnDeletePreset.Location = new Point(265, 40); btnDeletePreset.Click += DeleteSelectedPreset; presetCard.Controls.Add(btnDeletePreset);
             rightScroll.Controls.Add(presetCard);
 
-            // 4) Building Location
-            var buildingCard = CreateCard("BUILDING LOCATION");
-            buildingCard.Dock = DockStyle.Top;
-            buildingCard.Height = 80;
-            buildingCard.Margin = new Padding(0, 3, 0, 0);
-
-            var lblBuildingLat = new Label { Text = "Lat:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(10, 42), AutoSize = true };
-            buildingCard.Controls.Add(lblBuildingLat);
-            _txtBuildingLat = new TextBox { Location = new Point(35, 39), Size = new Size(95, 22), BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White, Font = new Font("Segoe UI", 8) };
-            buildingCard.Controls.Add(_txtBuildingLat);
-            var lblBuildingLon = new Label { Text = "Lon:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(135, 42), AutoSize = true };
-            buildingCard.Controls.Add(lblBuildingLon);
-            _txtBuildingLon = new TextBox { Location = new Point(162, 39), Size = new Size(95, 22), BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White, Font = new Font("Segoe UI", 8) };
-            buildingCard.Controls.Add(_txtBuildingLon);
-            var btnSaveBuilding = CreateButton("Save", SUCCESS_COLOR, 40, 22); btnSaveBuilding.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnSaveBuilding.Location = new Point(10, 65); btnSaveBuilding.Click += SaveBuildingLocation; buildingCard.Controls.Add(btnSaveBuilding);
-            var btnShowBuilding = CreateButton("Show", ACCENT_COLOR, 45, 22); btnShowBuilding.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnShowBuilding.Location = new Point(55, 65); btnShowBuilding.Click += ShowBuildingOnMap; buildingCard.Controls.Add(btnShowBuilding);
-            rightScroll.Controls.Add(buildingCard);
-
             // 3) Violation Actions
             var actionCard = CreateCard("VIOLATION ACTIONS");
             actionCard.Dock = DockStyle.Top;
@@ -423,15 +402,6 @@ namespace NOMAD.MissionPlanner
                 _dgvHardBoundary.Rows.Add(point.Lat.ToString("F8"), point.Lon.ToString("F8"));
             }
             
-            // Load building location based on current task
-            var building = _missionConfig.CurrentTask == 1 
-                ? _missionConfig.Task1Building 
-                : _missionConfig.Task2Building;
-            if (building?.Coordinates != null)
-            {
-                _txtBuildingLat.Text = building.Coordinates.Lat.ToString("F8");
-                _txtBuildingLon.Text = building.Coordinates.Lon.ToString("F8");
-            }
             
             UpdatePointCounts();
         }
@@ -1190,68 +1160,7 @@ namespace NOMAD.MissionPlanner
             catch { }
         }
         
-        private void SaveBuildingLocation(object sender, EventArgs e)
-        {
-            try
-            {
-                if (double.TryParse(_txtBuildingLat.Text, out double lat) &&
-                    double.TryParse(_txtBuildingLon.Text, out double lon))
-                {
-                    var building = _missionConfig.CurrentTask == 1 
-                        ? _missionConfig.Task1Building 
-                        : _missionConfig.Task2Building;
-                    
-                    if (building == null)
-                    {
-                        building = new BuildingInfo();
-                        if (_missionConfig.CurrentTask == 1)
-                            _missionConfig.Task1Building = building;
-                        else
-                            _missionConfig.Task2Building = building;
-                    }
-                    
-                    building.Coordinates = new GpsPoint(lat, lon);
-                    _missionConfig.Save();
-                    CustomMessageBox.Show("Building location saved.", "Success");
-                }
-                else
-                {
-                    CustomMessageBox.Show("Invalid coordinates.", "Error");
-                }
-            }
-            catch (Exception ex)
-            {
-                CustomMessageBox.Show($"Error saving building: {ex.Message}", "Error");
-            }
-        }
-        
-        private void ShowBuildingOnMap(object sender, EventArgs e)
-        {
-            try
-            {
-                if (double.TryParse(_txtBuildingLat.Text, out double lat) &&
-                    double.TryParse(_txtBuildingLon.Text, out double lon))
-                {
-                    CustomMessageBox.Show($"Building Location (Task {_missionConfig.CurrentTask}):\n" +
-                        $"Latitude: {lat:F8}\n" +
-                        $"Longitude: {lon:F8}\n\n" +
-                        "Use Mission Planner's map to add a marker at this location.", "Building Location");
-                }
-                else
-                {
-                    CustomMessageBox.Show("Invalid coordinates.", "Error");
-                }
-            }
-            catch (Exception ex)
-            {
-                CustomMessageBox.Show($"Error: {ex.Message}", "Error");
-            }
-        }
-        
-        // ============================================================
-        // Preset Management
-        // ============================================================
-        
+
         private void LoadPresets()
         {
             _presets.Clear();
@@ -1298,22 +1207,6 @@ namespace NOMAD.MissionPlanner
                 _missionConfig.SoftBoundary.Vertices = preset.SoftBoundary.ToList();
                 _missionConfig.HardBoundary.Vertices = preset.HardBoundary.ToList();
                 _missionConfig.MaxAltitudeAglMeters = preset.MaxAltitudeMeters;
-                
-                if (preset.BuildingLocation != null)
-                {
-                    var building = _missionConfig.CurrentTask == 1 
-                        ? _missionConfig.Task1Building 
-                        : _missionConfig.Task2Building;
-                    if (building == null)
-                    {
-                        building = new BuildingInfo();
-                        if (_missionConfig.CurrentTask == 1)
-                            _missionConfig.Task1Building = building;
-                        else
-                            _missionConfig.Task2Building = building;
-                    }
-                    building.Coordinates = preset.BuildingLocation;
-                }
                 
                 _missionConfig.Save();
                 LoadBoundaries();
@@ -1383,10 +1276,7 @@ namespace NOMAD.MissionPlanner
                 
                 if (inputForm.ShowDialog() == DialogResult.OK && !string.IsNullOrWhiteSpace(txtName.Text))
                 {
-                    var building = _missionConfig.CurrentTask == 1 
-                        ? _missionConfig.Task1Building 
-                        : _missionConfig.Task2Building;
-                    
+
                     var preset = new BoundaryPreset
                     {
                         Name = txtName.Text,
@@ -1396,7 +1286,7 @@ namespace NOMAD.MissionPlanner
                         SoftBoundary = _missionConfig.SoftBoundary.Vertices.ToList(),
                         HardBoundary = _missionConfig.HardBoundary.Vertices.ToList(),
                         MaxAltitudeMeters = _missionConfig.MaxAltitudeAglMeters,
-                        BuildingLocation = building?.Coordinates,
+        
                     };
                     
                     try

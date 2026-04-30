@@ -21,11 +21,6 @@ namespace NOMAD.MissionPlanner
         private readonly JetsonConnectionManager _jetsonConnectionManager;
         private Label _lblPosition;
         private Label _lblGpsStatus;
-        private Label _lblBuildingStatus;
-        private TextBox _txtBuildingLat;
-        private TextBox _txtBuildingLon;
-        private Button _btnBuildingSave;
-        private Button _btnBuildingUseCurrent;
         private Button _btnCapture;
         private TextBox _txtResult;
         private EmbeddedVideoPlayer _videoPlayer;
@@ -133,7 +128,6 @@ namespace NOMAD.MissionPlanner
             configTab.Controls.Add(CreateConfigurationSubtab());
             _tabControl.TabPages.Add(configTab);
 
-            LoadBuildingLocationFields();
 
             mainLayout.Controls.Add(_tabControl, 1, 0);
 
@@ -301,90 +295,6 @@ namespace NOMAD.MissionPlanner
                 Padding = new Padding(12),
             };
 
-            // --- Building Location ---
-            var buildingCard = CreateCard("BUILDING LOCATION");
-            buildingCard.Dock = DockStyle.Top;
-            buildingCard.Height = 230;
-
-            _lblBuildingStatus = new Label
-            {
-                Text = GetTask1BuildingLocationText() ?? "Not set",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = TEXT_PRIMARY,
-                Location = new Point(16, 34),
-                AutoSize = true,
-            };
-            buildingCard.Controls.Add(_lblBuildingStatus);
-
-            var lblBuildingLat = new Label
-            {
-                Text = "Lat:",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = TEXT_PRIMARY,
-                Location = new Point(16, 70),
-                AutoSize = true,
-            };
-            buildingCard.Controls.Add(lblBuildingLat);
-
-            _txtBuildingLat = new TextBox
-            {
-                Location = new Point(16, 88),
-                Size = new Size(280, 28),
-                BackColor = Color.FromArgb(50, 50, 53),
-                ForeColor = Color.White,
-                BorderStyle = BorderStyle.FixedSingle,
-                Font = new Font("Segoe UI", 9),
-            };
-            buildingCard.Controls.Add(_txtBuildingLat);
-
-            var lblBuildingLon = new Label
-            {
-                Text = "Lon:",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = TEXT_PRIMARY,
-                Location = new Point(16, 124),
-                AutoSize = true,
-            };
-            buildingCard.Controls.Add(lblBuildingLon);
-
-            _txtBuildingLon = new TextBox
-            {
-                Location = new Point(16, 142),
-                Size = new Size(280, 28),
-                BackColor = Color.FromArgb(50, 50, 53),
-                ForeColor = Color.White,
-                BorderStyle = BorderStyle.FixedSingle,
-                Font = new Font("Segoe UI", 9),
-            };
-            buildingCard.Controls.Add(_txtBuildingLon);
-
-            _btnBuildingUseCurrent = CreateButton("Use Current", ACCENT_COLOR, 120, 30);
-            _btnBuildingUseCurrent.Font = new Font("Segoe UI", 8, FontStyle.Bold);
-            _btnBuildingUseCurrent.Location = new Point(16, 180);
-            _btnBuildingUseCurrent.Click += (s, e) => UseCurrentGpsForBuildingLocation();
-            buildingCard.Controls.Add(_btnBuildingUseCurrent);
-
-            _btnBuildingSave = CreateButton("Save", SUCCESS_COLOR, 90, 30);
-            _btnBuildingSave.Font = new Font("Segoe UI", 8, FontStyle.Bold);
-            _btnBuildingSave.Location = new Point(146, 180);
-            _btnBuildingSave.Click += (s, e) => SaveBuildingLocationFromFields();
-            buildingCard.Controls.Add(_btnBuildingSave);
-
-            var btnBuildingClear = CreateButton("Clear", ERROR_COLOR, 90, 30);
-            btnBuildingClear.Font = new Font("Segoe UI", 8, FontStyle.Bold);
-            btnBuildingClear.Location = new Point(246, 180);
-            btnBuildingClear.Click += (s, e) => ClearBuildingLocationFields();
-            buildingCard.Controls.Add(btnBuildingClear);
-
-            buildingCard.Resize += (s, e) =>
-            {
-                int inputWidth = Math.Max(260, buildingCard.ClientSize.Width - 32);
-                _txtBuildingLat.Width = inputWidth;
-                _txtBuildingLon.Width = inputWidth;
-            };
-
-            panel.Controls.Add(buildingCard);
-
             // --- Building Corner Calibration ---
             var cornerCard = CreateCard("BUILDING CORNER CALIBRATION");
             cornerCard.Dock = DockStyle.Top;
@@ -483,80 +393,6 @@ namespace NOMAD.MissionPlanner
             return panel;
         }
 
-        private string GetTask1BuildingLocationText()
-        {
-            var coords = _missionConfig?.Task1Building?.Coordinates;
-            if (coords != null)
-            {
-                return $"{coords.Lat:F6}, {coords.Lon:F6}";
-            }
-
-            return null;
-        }
-
-        private void LoadBuildingLocationFields()
-        {
-            if (_txtBuildingLat != null)
-                _txtBuildingLat.Text = _missionConfig?.Task1Building?.Coordinates?.Lat.ToString("F6") ?? string.Empty;
-            if (_txtBuildingLon != null)
-                _txtBuildingLon.Text = _missionConfig?.Task1Building?.Coordinates?.Lon.ToString("F6") ?? string.Empty;
-            UpdateBuildingLocationStatus();
-        }
-
-        private void UpdateBuildingLocationStatus(string prefix = null)
-        {
-            if (_lblBuildingStatus == null)
-                return;
-
-            var text = GetTask1BuildingLocationText() ?? "Not set";
-            _lblBuildingStatus.Text = string.IsNullOrWhiteSpace(prefix) ? text : $"{prefix}: {text}";
-        }
-
-        private void SaveBuildingLocationFromFields()
-        {
-            if (!double.TryParse(_txtBuildingLat?.Text, out var lat) ||
-                !double.TryParse(_txtBuildingLon?.Text, out var lon))
-            {
-                _txtResult.Text = "[FAIL] Invalid building GPS coordinates.";
-                _txtResult.ForeColor = ERROR_COLOR;
-                return;
-            }
-
-            var building = _missionConfig.Task1Building ?? new BuildingInfo();
-            building.Coordinates = new GpsPoint(lat, lon);
-            _missionConfig.Task1Building = building;
-            _missionConfig.Save();
-            UpdateBuildingLocationStatus("Saved");
-            _txtResult.Text = $"[OK] Building location saved: {lat:F6}, {lon:F6}";
-            _txtResult.ForeColor = SUCCESS_COLOR;
-        }
-
-        private void UseCurrentGpsForBuildingLocation()
-        {
-            var cs = MainV2.comPort?.MAV?.cs;
-            if (cs == null || (Math.Abs(cs.lat) < 0.000001 && Math.Abs(cs.lng) < 0.000001))
-            {
-                _txtResult.Text = "[FAIL] No GPS position available.";
-                _txtResult.ForeColor = ERROR_COLOR;
-                return;
-            }
-
-            _txtBuildingLat.Text = cs.lat.ToString("F6");
-            _txtBuildingLon.Text = cs.lng.ToString("F6");
-            SaveBuildingLocationFromFields();
-        }
-
-        private void ClearBuildingLocationFields()
-        {
-            _missionConfig.Task1Building = new BuildingInfo();
-            _missionConfig.Save();
-            if (_txtBuildingLat != null) _txtBuildingLat.Text = string.Empty;
-            if (_txtBuildingLon != null) _txtBuildingLon.Text = string.Empty;
-            UpdateBuildingLocationStatus();
-            _txtResult.Text = "[OK] Building location cleared.";
-            _txtResult.ForeColor = SUCCESS_COLOR;
-        }
-        
         private async void BtnCaptureCorner_Click(object sender, EventArgs e)
         {
             var cs = MainV2.comPort?.MAV?.cs;
@@ -803,8 +639,7 @@ namespace NOMAD.MissionPlanner
                             var rollDeg = Val("roll_deg") ?? "N/A";
                             var gimbalPitch = Val("gimbal_pitch_deg") ?? "N/A";
                             var gimbalYaw = Val("gimbal_yaw_deg") ?? "N/A";
-                            var buildingLocation = GetTask1BuildingLocationText() ?? Val("building_location") ?? "N/A";
-                            var captureFolder = Val("capture_folder") ?? "N/A";
+                                            var captureFolder = Val("capture_folder") ?? "N/A";
                             var outputText = Val("output") ?? Val("message") ?? Val("detail");
 
                             var position = data["position"] as Newtonsoft.Json.Linq.JObject;
@@ -819,8 +654,7 @@ namespace NOMAD.MissionPlanner
                             metadataText.AppendLine($"Position: {latStr}, {lonStr} @ {altStr}m");
                             metadataText.AppendLine($"AHRS: Hdg={headingDeg} Pitch={pitchDeg} Roll={rollDeg}");
                             metadataText.AppendLine($"Gimbal: Pitch={gimbalPitch} Yaw={gimbalYaw}");
-                            metadataText.AppendLine($"Building: {buildingLocation}");
-                            metadataText.AppendLine($"Folder: {captureFolder}");
+                                            metadataText.AppendLine($"Folder: {captureFolder}");
                             metadataText.Append($"Image: {imageName}");
                             
                             _txtResult.Text = metadataText.ToString();
@@ -858,7 +692,7 @@ namespace NOMAD.MissionPlanner
                                     RollDeg = double.TryParse(rollDeg, out var roll) ? roll : (double?)null,
                                     GimbalPitchDeg = double.TryParse(gimbalPitch, out var gPitch) ? gPitch : (double?)null,
                                     GimbalYawDeg = double.TryParse(gimbalYaw, out var gYaw) ? gYaw : (double?)null,
-                                    BuildingLocation = buildingLocation
+                                    BuildingLocation = null
                                 };
 
                                 File.WriteAllText(jsonPath, Newtonsoft.Json.JsonConvert.SerializeObject(metadata, Newtonsoft.Json.Formatting.Indented));
@@ -942,7 +776,7 @@ namespace NOMAD.MissionPlanner
                                                      $"Position: {latStr}, {lonStr}\n" +
                                                      $"Heading: {headingDeg} Pitch: {pitchDeg} Roll: {rollDeg}\n" +
                                                      $"Gimbal: P={gimbalPitch} Y={gimbalYaw}\n" +
-                                                     $"Building: {buildingLocation}";
+                                                     "";
                                     tooltip.SetToolTip(picBox, tooltipText);
                                     
                                     _galleryPanel.Controls.Add(picBox);
