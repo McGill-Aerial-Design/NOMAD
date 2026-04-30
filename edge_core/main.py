@@ -288,13 +288,21 @@ def run(
     # Initialize servo controller for camera tilt and water shooter
     global servo_controller_initialized
     enable_servos = os.environ.get("NOMAD_ENABLE_SERVOS", "true").lower() == "true"
+    # Camera tilt servo can be driven from the flight controller PWM outputs.
+    # Use environment variable NOMAD_CAMERA_TILT_SERVO_CHANNEL to select channel (1-indexed).
+    try:
+        camera_tilt_channel = int(os.environ.get("NOMAD_CAMERA_TILT_SERVO_CHANNEL", "8"))
+    except ValueError:
+        camera_tilt_channel = 8
+        logger.warning("Invalid NOMAD_CAMERA_TILT_SERVO_CHANNEL value, using default 8")
+
     if enable_servos and SERVO_AVAILABLE:
         try:
-            if init_servo_controller():
+            if init_servo_controller(mavlink_service=mavlink_service, camera_tilt_channel=camera_tilt_channel):
                 servo_controller_initialized = True
                 logger.info("Servo controller initialized for camera tilt and water shooter")
             else:
-                logger.warning("Servo controller initialization failed - PWM pins may not be configured")
+                logger.warning("Servo controller initialization failed - PWM pins or MAVLink may not be configured")
         except Exception as e:
             logger.error(f"Failed to initialize servo controller: {e}")
     elif not SERVO_AVAILABLE:

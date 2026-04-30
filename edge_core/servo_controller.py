@@ -32,7 +32,7 @@ import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Optional, Any
 
 logger = logging.getLogger(__name__)
 
@@ -446,6 +446,75 @@ int main(int argc, char *argv[]) {
         return pulse_us
 
 
+class MavlinkServo:
+    """
+    Controls a servo by sending MAVLink DO_SET_SERVO commands to the flight controller.
+
+    This allows the nozzle / camera tilt servo to be driven from the Cube Orange
+    PWM outputs instead of local Jetson GPIO PWM.
+    """
+
+    def __init__(self, config: ServoConfig, mavlink_service: Any | None = None, channel: Optional[int] = 8):
+        self.config = config
+        self._mav = mavlink_service
+        self._channel = int(channel) if channel is not None else None
+        self._enabled = False
+        self._current_angle = config.neutral_angle
+        self._lock = threading.Lock()
+
+    def initialize(self) -> bool:
+        """Initialize the MAVLink servo (no connection required at init).
+
+        Returns True if configuration looks valid.
+        """
+        if self._channel is None or self._channel <= 0:
+            logger.error(f"Invalid MAVLink servo channel: {self._channel}")
+            return False
+
+        logger.info(f"MAVLink servo {self.config.name} configured on channel {self._channel}")
+        return True
+
+    def enable(self) -> bool:
+        self._enabled = True
+        return True
+
+    def disable(self) -> bool:
+        self._enabled = False
+        return True
+
+    def set_angle(self, angle: float) -> bool:
+        """Set servo angle by sending MAVLink DO_SET_SERVO (PWM microseconds)."""
+        angle = max(self.config.min_angle, min(self.config.max_angle, angle))
+        pulse_us = self._angle_to_pulse_us(angle)
+
+        with self._lock:
+            self._current_angle = angle
+            if self._mav is None:
+                logger.warning("MAVLink service not available for MAVLink servo")
+                return False
+
+            try:
+                # MavlinkService.trigger_payload expects (pwm_value, servo_channel)
+                success = self._mav.trigger_payload(pulse_us, self._channel)
+                if not success:
+                    logger.debug(f"MAVLink servo send failed (channel={self._channel}, pwm={pulse_us})")
+                return success
+            except Exception as e:
+                logger.error(f"Failed to send MAVLink servo PWM: {e}")
+                return False
+
+    def get_state(self) -> ServoState:
+        return ServoState(angle=self._current_angle, enabled=self._enabled, last_update=time.time())
+
+    def _angle_to_pulse_us(self, angle: float) -> int:
+        normalized = (angle - self.config.min_angle) / (self.config.max_angle - self.config.min_angle)
+        if self.config.inverted:
+            normalized = 1.0 - normalized
+        pulse_range = self.config.max_pulse_us - self.config.min_pulse_us
+        pulse_us = int(self.config.min_pulse_us + (normalized * pulse_range))
+        return pulse_us
+
+
 class GPIOOutput:
     """
     Controls a simple GPIO output pin for on/off control.
@@ -658,6 +727,9 @@ class ServoController:
         self._servos: dict[ServoFunction, PWMServo] = {}
         self._gpio_outputs: dict[ServoFunction, GPIOOutput] = {}
         self._initialized = False
+        # Optional MAVLink integration for camera tilt servo
+        self._mavlink_service: Optional[Any] = None
+        self._camera_tilt_channel: Optional[int] = None
         
         # PWM servo configuration (nozzle on Pin 15 via GPIO bit-bang)
         self._servo_configs = {
@@ -681,9 +753,15 @@ class ServoController:
         """
         success_count = 0
         
-        # Initialize PWM servos
+        # Initialize servos (PWM on Jetson or MAVLink-driven depending on config)
         for function, config in self._servo_configs.items():
-            servo = PWMServo(config)
+            # If camera tilt is configured to use MAVLink channel, create MavlinkServo
+            channel = getattr(self, '_camera_tilt_channel', None)
+            if function == ServoFunction.CAMERA_TILT and channel is not None and channel > 0:
+                servo = MavlinkServo(config, mavlink_service=self._mavlink_service, channel=channel)
+            else:
+                servo = PWMServo(config)
+
             if servo.initialize():
                 self._servos[function] = servo
                 success_count += 1
@@ -713,8 +791,8 @@ class ServoController:
         """Check if servo controller is available."""
         return self._initialized and (len(self._servos) > 0 or len(self._gpio_outputs) > 0)
     
-    def get_servo(self, function: ServoFunction) -> Optional[PWMServo]:
-        """Get a specific PWM servo by function."""
+    def get_servo(self, function: ServoFunction) -> Optional[Any]:
+        """Get a specific servo (PWM or MAVLink) by function."""
         return self._servos.get(function)
     
     def get_gpio(self, function: ServoFunction) -> Optional[GPIOOutput]:
@@ -810,11 +888,16 @@ class ServoController:
         
         for function, servo in self._servos.items():
             state = servo.get_state()
+            # Determine servo type
+            servo_type = "gpio_pwm"
+            if isinstance(servo, MavlinkServo):
+                servo_type = "mavlink"
+
             status["servos"][function.value] = {
                 "angle": state.angle,
                 "enabled": state.enabled,
                 "last_update": state.last_update,
-                "type": "gpio_pwm"
+                "type": servo_type,
             }
         
         for function, gpio in self._gpio_outputs.items():
@@ -844,11 +927,21 @@ class ServoController:
 _controller: Optional[ServoController] = None
 
 
-def init_servo_controller() -> bool:
-    """Initialize the global servo controller."""
+def init_servo_controller(mavlink_service: Any | None = None, camera_tilt_channel: Optional[int] = None) -> bool:
+    """Initialize the global servo controller.
+
+    Args:
+        mavlink_service: Optional MavlinkService instance to drive FC PWM outputs.
+        camera_tilt_channel: If set (>0) use this FC servo output channel for camera tilt (default None).
+    """
     global _controller
     if _controller is None:
         _controller = ServoController()
+
+    # Configure optional MAVLink-driven camera tilt
+    _controller._mavlink_service = mavlink_service
+    _controller._camera_tilt_channel = int(camera_tilt_channel) if camera_tilt_channel is not None else None
+
     return _controller.initialize()
 
 
