@@ -313,8 +313,21 @@ class VideoStreamNode(Node):
                 else:
                     cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGRA2BGR)
             elif encoding in ('16uc1', 'mono16', '32fc1'):
-                cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
-                cv_image = self._normalize_depth_image(cv_image, encoding)
+                raw_depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+                if self.frame_count % 60 == 0:
+                    finite = np.isfinite(raw_depth) & (raw_depth > 0)
+                    n_valid = int(finite.sum())
+                    if n_valid > 0:
+                        vmin = float(raw_depth[finite].min())
+                        vmax = float(raw_depth[finite].max())
+                    else:
+                        vmin = vmax = 0.0
+                    self.get_logger().info(
+                        f'Depth frame #{self.frame_count}: enc={encoding} '
+                        f'shape={raw_depth.shape} valid={n_valid}/{raw_depth.size} '
+                        f'range=[{vmin:.2f}, {vmax:.2f}]'
+                    )
+                cv_image = self._normalize_depth_image(raw_depth, encoding)
             elif encoding in ('mono8', '8uc1'):
                 cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
                 cv_image = cv2.cvtColor(cv_image, cv2.COLOR_GRAY2BGR)
@@ -410,13 +423,25 @@ class VideoStreamNode(Node):
     # ---- Depth normalization ----
 
     def _normalize_depth_image(self, image, encoding):
+        """Convert a raw depth frame into a colorized BGR image for streaming.
+
+        ZED publishes depth as 32FC1 in meters. Some other drivers publish
+        16UC1 in millimeters; we convert those to meters so the visible range
+        in the legend (and percentile thresholds) is consistent.
+        """
         import cv2
-        img = image.astype(np.float32) if encoding != '32fc1' else image.copy()
-        valid_mask = np.isfinite(img) & (img > 0)
+        if encoding == '32fc1':
+            img = image.astype(np.float32, copy=True)
+        else:
+            # 16UC1 / mono16 — assume millimeters, convert to meters.
+            img = image.astype(np.float32) * 0.001
+
+        valid_mask = np.isfinite(img) & (img > 0.1) & (img < 35.0)
         if not valid_mask.any():
+            # Solid dark frame so VLC knows there's still video flowing.
             return np.zeros((image.shape[0], image.shape[1], 3), dtype=np.uint8)
-        min_val = np.percentile(img[valid_mask], 2)
-        max_val = np.percentile(img[valid_mask], 98)
+        min_val = float(np.percentile(img[valid_mask], 2))
+        max_val = float(np.percentile(img[valid_mask], 98))
         if max_val <= min_val:
             max_val = min_val + 1.0
         normalized = np.clip((img - min_val) / (max_val - min_val) * 255.0, 0, 255).astype(np.uint8)

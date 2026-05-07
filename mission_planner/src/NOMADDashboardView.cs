@@ -4,9 +4,8 @@
 // A simplified, information-dense dashboard showing all key data at a glance.
 // Features:
 // - Connection status with visual indicators
-// - Flight mode and telemetry summary  
-// - Quick action buttons
-// - Mini video preview
+// - Flight mode and telemetry summary
+// - Enlarged video preview
 // - System health summary
 // - Link status indicators
 // ============================================================
@@ -68,12 +67,6 @@ namespace NOMAD.MissionPlanner
         private Label _lblVioConfidence;
         private Label _lblJetsonStatus;
         private Label _lblJetsonTemp;
-        
-        // Quick actions
-        private Button _btnCapture;
-        private Button _btnResetMap;
-        private Button _btnResetVio;
-        private Button _btnEmergency;
         
         // Link indicators
         private Panel _lteIndicator;
@@ -200,54 +193,50 @@ namespace NOMAD.MissionPlanner
             mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
             mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
             
-            // Row heights - adjusted for notification panel
+            // Row heights
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 110)); // Status cards row 1
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 110)); // Status cards row 2
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 200)); // Quick actions + Notifications + Link status
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 220)); // Video preview + Health summary
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 200)); // Notifications + Link Status + Health Summary
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 420)); // Enlarged video preview (spans all 3 columns)
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 190)); // EKF Source Control
-            
+
             // Row 1: Connection, Flight Mode, GPS Status
             _connectionCard = CreateStatusCard("Connection", "DISCONNECTED", out _lblConnectionStatus, out _lblConnectionValue, ERROR_COLOR);
             mainLayout.Controls.Add(_connectionCard, 0, 0);
-            
+
             _flightModeCard = CreateStatusCard("Flight Mode", "UNKNOWN", out var lblModeTitle, out _lblFlightMode, TEXT_SECONDARY);
             mainLayout.Controls.Add(_flightModeCard, 1, 0);
-            
+
             _gpsCard = CreateStatusCard("GPS Status", "No Fix", out _lblGpsStatus, out _lblGpsFix, WARNING_COLOR);
             mainLayout.Controls.Add(_gpsCard, 2, 0);
-            
+
             // Row 2: Battery, VIO Status, Jetson Status
             _batteryCard = CreateStatusCard("Battery", "--.- V", out var lblBattTitle, out _lblBattery, TEXT_SECONDARY);
             _lblBatteryVolts = _lblBattery;
             mainLayout.Controls.Add(_batteryCard, 0, 1);
-            
+
             _vioCard = CreateStatusCard("VIO Status", "Inactive", out _lblVioStatus, out _lblVioConfidence, TEXT_SECONDARY);
             mainLayout.Controls.Add(_vioCard, 1, 1);
-            
+
             _jetsonCard = CreateStatusCard("Jetson", "Offline", out _lblJetsonStatus, out _lblJetsonTemp, ERROR_COLOR);
             mainLayout.Controls.Add(_jetsonCard, 2, 1);
-            
-            // Row 3: Quick Actions + Notifications + Link Status
-            var quickActionsPanel = CreateQuickActionsPanel();
-            mainLayout.Controls.Add(quickActionsPanel, 0, 2);
-            
-            // Notification panel next to Quick Actions
+
+            // Row 3: Notifications + Link Status + Health Summary
             _notificationPanel = new NotificationPanel(_notificationService);
             _notificationPanel.Margin = new Padding(5);
-            mainLayout.Controls.Add(_notificationPanel, 1, 2);
-            
+            mainLayout.Controls.Add(_notificationPanel, 0, 2);
+
             var linkStatusPanel = CreateLinkStatusPanel();
-            mainLayout.Controls.Add(linkStatusPanel, 2, 2);
-            
-            // Row 4: Video Preview + Health Summary
+            mainLayout.Controls.Add(linkStatusPanel, 1, 2);
+
+            var healthSummaryPanel = CreateHealthSummaryPanel();
+            mainLayout.Controls.Add(healthSummaryPanel, 2, 2);
+
+            // Row 4: Enlarged video preview spans all 3 columns
             _videoPreviewPanel = CreateVideoPreviewPanel();
             mainLayout.Controls.Add(_videoPreviewPanel, 0, 3);
-            mainLayout.SetColumnSpan(_videoPreviewPanel, 2);
-            
-            var healthSummaryPanel = CreateHealthSummaryPanel();
-            mainLayout.Controls.Add(healthSummaryPanel, 2, 3);
-            
+            mainLayout.SetColumnSpan(_videoPreviewPanel, 3);
+
             // Row 5: EKF Source Control (spans all columns)
             if (_sender != null)
             {
@@ -322,127 +311,6 @@ namespace NOMAD.MissionPlanner
             card.Controls.Add(indicator);
             
             return card;
-        }
-        
-        private Panel CreateQuickActionsPanel()
-        {
-            var panel = new Panel
-            {
-                BackColor = CARD_BG,
-                Margin = new Padding(5),
-                Dock = DockStyle.Fill,
-                Padding = new Padding(15),
-            };
-            
-            var titleLabel = new Label
-            {
-                Text = "QUICK ACTIONS",
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                ForeColor = ACCENT_COLOR,
-                Location = new Point(15, 15),
-                AutoSize = true,
-            };
-            panel.Controls.Add(titleLabel);
-            
-            // Buttons flow panel - compact layout for single column
-            var buttonsPanel = new FlowLayoutPanel
-            {
-                Location = new Point(15, 45),
-                Size = new Size(200, 140),
-                FlowDirection = FlowDirection.TopDown,
-                WrapContents = true,
-                BackColor = Color.Transparent,
-            };
-            
-            _btnCapture = CreateActionButton("Capture", ACCENT_COLOR, 85, 50);
-            _btnCapture.Click += async (s, e) =>
-            {
-                _btnCapture.Enabled = false;
-                _btnCapture.Text = "Capturing...";
-                try
-                {
-                    var result = await _sender.SendTask1Capture();
-                    if (!result.Success)
-                    {
-                        CustomMessageBox.Show($"Capture failed: {result.Message}", "Error");
-                    }
-                }
-                finally
-                {
-                    _btnCapture.Enabled = true;
-                    _btnCapture.Text = "Capture";
-                }
-            };
-            buttonsPanel.Controls.Add(_btnCapture);
-            
-            _btnResetMap = CreateActionButton("Reset Map", Color.FromArgb(200, 80, 80), 85, 50);
-            _btnResetMap.Click += async (s, e) =>
-            {
-                var confirm = MessageBox.Show(
-                    "Reset the exclusion map? All stored targets will be cleared.",
-                    "Confirm Reset",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Warning
-                );
-                if (confirm == DialogResult.Yes)
-                {
-                    await _sender.SendTask2ResetMap();
-                }
-            };
-            buttonsPanel.Controls.Add(_btnResetMap);
-            
-            _btnResetVio = CreateActionButton("Reset VIO", SUCCESS_COLOR, 85, 50);
-            _btnResetVio.Click += async (s, e) =>
-            {
-                await _sender.ResetVioOriginAsync();
-            };
-            buttonsPanel.Controls.Add(_btnResetVio);
-            
-            _btnEmergency = CreateActionButton("EMRG", ERROR_COLOR, 85, 50);
-            _btnEmergency.Font = new Font("Segoe UI", 9, FontStyle.Bold);
-            _btnEmergency.Click += (s, e) =>
-            {
-                var confirm = MessageBox.Show(
-                    "Trigger emergency stop? This will attempt to disarm the drone.",
-                    "EMERGENCY STOP",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Warning
-                );
-                if (confirm == DialogResult.Yes)
-                {
-                    try
-                    {
-                        // Attempt to disarm via MAVLink
-                        MainV2.comPort.doARMAsync(MainV2.comPort.MAV.sysid, MainV2.comPort.MAV.compid, false);
-                    }
-                    catch (Exception ex)
-                    {
-                        CustomMessageBox.Show($"Emergency action failed: {ex.Message}", "Error");
-                    }
-                }
-            };
-            buttonsPanel.Controls.Add(_btnEmergency);
-            
-            panel.Controls.Add(buttonsPanel);
-            
-            return panel;
-        }
-        
-        private Button CreateActionButton(string text, Color bgColor, int width, int height)
-        {
-            var btn = new Button
-            {
-                Text = text,
-                Size = new Size(width, height),
-                Margin = new Padding(5),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = bgColor,
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                Cursor = Cursors.Hand,
-            };
-            btn.FlatAppearance.BorderSize = 0;
-            return btn;
         }
         
         private Panel CreateLinkStatusPanel()

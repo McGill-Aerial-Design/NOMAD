@@ -2534,6 +2534,28 @@ fi
         images = [line.strip() for line in (image_probe.stdout or "").splitlines() if line.strip()]
         return folder, images
 
+    def _mirror_task1_capture_from_container(folder: str, filenames: list[str]) -> None:
+        """Copy all files from a container capture folder to host storage."""
+        host_bases = _task1_capture_base_dirs()
+        if not host_bases or not filenames:
+            return
+        host_folder = os.path.join(host_bases[0], folder)
+        os.makedirs(host_folder, exist_ok=True)
+        for filename in filenames:
+            host_path = os.path.join(host_folder, filename)
+            if os.path.isfile(host_path):
+                continue
+            container_path = f"/home/mad/NOMAD/data/task1_captures/{folder}/{filename}"
+            try:
+                subprocess.run(
+                    ["docker", "cp", f"nomad_isaac_ros:{container_path}", host_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=8,
+                )
+            except Exception:
+                pass
+
     def _copy_task1_file_from_container(
         folder: str,
         filename: str,
@@ -2638,19 +2660,28 @@ fi
         latest_folder: Optional[str] = None
         images: list[str] = []
 
-        # Give host storage a short grace period in case files are still syncing.
-        for _ in range(8):
+        # Give host storage a grace period in case files are still syncing.
+        # The target_localizer creates capture folders inside the Isaac ROS
+        # container, and docker volume mounts may not sync instantly. Use a
+        # longer total window (3s) with 15 quick polls.
+        for _ in range(15):
             latest_folder, images = _latest_task1_capture_from_host()
             if latest_folder and images:
                 break
             await asyncio.sleep(0.2)
 
-        # If host capture path is not visible, fall back to container-local files.
+        # If host capture path is not visible, mirror from container-local storage.
         if not latest_folder or not images:
             container_folder, container_images = _latest_task1_capture_from_container()
             if container_folder:
-                latest_folder = container_folder
-                images = container_images
+                # Trigger a docker cp mirror so host sees the files
+                # without waiting for volume sync.
+                _mirror_task1_capture_from_container(container_folder, container_images)
+                # Re-check host storage after mirror
+                latest_folder, images = _latest_task1_capture_from_host()
+                if not latest_folder or not images:
+                    latest_folder = container_folder
+                    images = container_images
 
         if latest_folder and images:
             # Return metadata for the first image.
@@ -2711,6 +2742,179 @@ fi
         )
         return {"success": True, "output": output}
 
+    @app.post("/api/task/1/target/clear", tags=["Task 1"])
+    async def task1_clear_targets():
+        """
+        Delete all captured targets from the in-memory list.
+
+        Calls the ~/clear_targets service on the target_localizer node.
+        Useful when starting a fresh run or after a false positive capture.
+        """
+        output = _call_ros2_service_in_isaac_container_or_raise(
+            service_name="/target_localizer/clear_targets",
+            service_type="std_srvs/srv/Trigger",
+            request_payload={},
+            timeout_s=10.0,
+        )
+        return {"success": True, "output": output}
+
+    @app.post("/api/task/1/target/ground_alt", tags=["Task 1"])
+    async def task1_set_ground_alt():
+        """
+        Set the current drone AGL as ground level (0m reference).
+
+        The pilot lands the drone on the ground, then calls this endpoint.
+        All subsequent target heights are reported relative to this level.
+        Calls the ~/set_ground_alt service on the target_localizer node.
+        """
+        output = _call_ros2_service_in_isaac_container_or_raise(
+            service_name="/target_localizer/set_ground_alt",
+            service_type="std_srvs/srv/Trigger",
+            request_payload={},
+            timeout_s=10.0,
+        )
+        return {"success": True, "output": output}
+
+    class PlaneOverrideRequest(BaseModel):
+        plane_kind: str  # "wall" | "ground" | "roof"
+        face_name: Optional[str] = None  # optional explicit wall face (e.g. "N", "S")
+
+    @app.post("/api/task/1/target/{target_id}/plane_override", tags=["Task 1"])
+    async def task1_set_target_plane(target_id: str, body: PlaneOverrideRequest):
+        """
+        Override the plane classification (wall/ground/roof) of a single target.
+
+        Writes ``plane_override.json`` to the target output dir, then triggers
+        the ``~/set_target_plane`` ROS2 service which updates the target's
+        raw_data and regenerates its description. The pilot uses this when
+        the auto-classification picked the wrong plane.
+        """
+        plane_kind = (body.plane_kind or "").strip().lower()
+        if plane_kind not in {"wall", "ground", "roof"}:
+            raise HTTPException(
+                status_code=400,
+                detail=f"plane_kind must be wall|ground|roof, got {body.plane_kind!r}",
+            )
+        override_path = os.path.join(_BUILDING_CORNERS_DIR, "plane_override.json")
+        os.makedirs(_BUILDING_CORNERS_DIR, exist_ok=True)
+        payload = {"target_id": target_id, "plane_kind": plane_kind}
+        if body.face_name:
+            payload["face_name"] = body.face_name
+        with open(override_path, "w") as f:
+            json.dump(payload, f)
+        output = _call_ros2_service_in_isaac_container_or_raise(
+            service_name="/target_localizer/set_target_plane",
+            service_type="std_srvs/srv/Trigger",
+            request_payload={},
+            timeout_s=10.0,
+        )
+        return {"success": True, "target_id": target_id, "plane_kind": plane_kind, "output": output}
+
+    @app.post("/api/task/1/target/regenerate", tags=["Task 1"])
+    async def task1_regenerate_descriptions():
+        """
+        Regenerate all target descriptions from stored raw data.
+
+        Call after changing building model, ground altitude, or plane
+        overrides so that all descriptions stay consistent with the
+        current building geometry.
+        Calls the ~/regenerate_descriptions service.
+        """
+        output = _call_ros2_service_in_isaac_container_or_raise(
+            service_name="/target_localizer/regenerate_descriptions",
+            service_type="std_srvs/srv/Trigger",
+            request_payload={},
+            timeout_s=10.0,
+        )
+        return {"success": True, "output": output}
+
+    @app.get("/api/task/1/target/detections", tags=["Task 1"])
+    async def task1_detection_status():
+        """
+        Get the current realtime HSV circle detection status.
+
+        Returns the count and details of circles currently visible in
+        the ZED camera frame, along with sensor status. The GCS can
+        poll this to show a live detection indicator before the pilot
+        triggers a capture.
+        """
+        # Prefer the rich JSON status (includes per-circle distance and a
+        # center-pixel fallback distance). Fall back to the Float64 count if
+        # the JSON topic isn't available.
+        try:
+            json_raw = subprocess.run(
+                [
+                    "docker", "exec", "nomad_isaac_ros", "bash", "-lc",
+                    (
+                        "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
+                        "source /workspaces/isaac_ros-dev/install/setup.bash >/dev/null 2>&1; "
+                        "ros2 topic echo /target_localizer/detection_status_json "
+                        "--once --field data 2>/dev/null"
+                    ),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if json_raw.returncode == 0 and json_raw.stdout.strip():
+                # `ros2 topic echo --field data` prints the raw string contents
+                # (often wrapped in single quotes by YAML escaping). Strip them.
+                payload = json_raw.stdout.strip()
+                if payload.startswith("'") and payload.endswith("'"):
+                    payload = payload[1:-1].replace("''", "'")
+                try:
+                    status = json.loads(payload)
+                    return {"success": True, **status}
+                except json.JSONDecodeError:
+                    pass
+        except Exception:
+            pass
+
+        try:
+            status_raw = subprocess.run(
+                [
+                    "docker", "exec", "nomad_isaac_ros", "bash", "-lc",
+                    (
+                        "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
+                        "source /workspaces/isaac_ros-dev/install/setup.bash >/dev/null 2>&1; "
+                        "ros2 topic echo /target_localizer/detection_status "
+                        "--once --no-arr 2>/dev/null | head -1"
+                    ),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            count_str = (status_raw.stdout or "").strip().split(":")[-1].strip() if status_raw.returncode == 0 else "0"
+            try:
+                circle_count = int(float(count_str))
+            except (ValueError, TypeError):
+                circle_count = 0
+            return {"success": True, "circle_count": circle_count}
+        except Exception as e:
+            return {"success": True, "circle_count": 0, "error": str(e)}
+
+    @app.get("/api/task/1/target/list", tags=["Task 1"])
+    async def task1_list_targets():
+        """
+        List all captured targets with their descriptions, approval status,
+        and warnings (e.g., above building height).
+
+        This endpoint reads the target list from the target_localizer node
+        via the print_model service, plus the target file if saved.
+        Returns structured data for the Mission Planner submission table.
+        """
+        try:
+            output = _call_ros2_service_in_isaac_container_or_raise(
+                service_name="/target_localizer/save_targets",
+                service_type="std_srvs/srv/Trigger",
+                request_payload={},
+                timeout_s=10.0,
+            )
+            return {"success": True, "output": output}
+        except HTTPException:
+            return {"success": True, "targets": [], "message": "Target localizer service unavailable"}
+
     @app.get("/api/task/1/target/model", tags=["Task 1"])
     async def task1_print_building_model():
         """
@@ -2726,240 +2930,304 @@ fi
         )
         return {"success": True, "output": output}
 
+    @app.post("/api/task/1/building/corner", tags=["Task 1"])
+    async def task1_add_building_corner(corner: BuildingCornerRequest):
+        """
+        Add a single building corner coordinate (e.g. from the drone's GPS
+        while hovering above the corner).
 
-# ==================== Building Corner Calibration ====================
+        Pilots fly the drone above each building corner, then the operator
+        clicks "Capture Corner" in Mission Planner. This endpoint appends
+        the corner to the persistent corners list. Once >= 3 corners are
+        collected, call /api/task/1/building/corners/apply to rebuild the
+        building model.
+        """
+        corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
+        os.makedirs(_BUILDING_CORNERS_DIR, exist_ok=True)
 
-class BuildingCornerRequest(BaseModel):
-    name: str
-    lat: float
-    lon: float
+        # Load or create the corners file
+        data = {}
+        if os.path.exists(corners_path):
+            try:
+                with open(corners_path, "r") as f:
+                    data = json.load(f)
+            except Exception:
+                data = {}
 
+        if "corners" not in data:
+            data["corners"] = []
 
-class BuildingCornersRequest(BaseModel):
-    center_lat: float
-    center_lon: float
-    height: float
-    corners: list[dict[str, Any]]  # [{"name": "NW", "lat": 45.xxx, "lon": -75.xxx}]
+        # Add or update the corner by name
+        existing_idx = None
+        for i, c in enumerate(data["corners"]):
+            if c.get("name") == corner.name:
+                existing_idx = i
+                break
 
+        corner_entry = {"name": corner.name, "lat": corner.lat, "lon": corner.lon}
+        if existing_idx is not None:
+            data["corners"][existing_idx] = corner_entry
+        else:
+            data["corners"].append(corner_entry)
 
-# Shared path for the corners JSON file consumed by the ROS2 service.
-# Matches target_localizer output_dir default (/home/mad/targets).
-_BUILDING_CORNERS_DIR = "/home/mad/targets"
+        # Preserve center_lat/center_lon/height if already set, else use defaults
+        data.setdefault("center_lat", data["corners"][0]["lat"] if data["corners"] else 45.0)
+        data.setdefault("center_lon", data["corners"][0]["lon"] if data["corners"] else -75.0)
+        data.setdefault("height", 5.0)
 
+        with open(corners_path, "w") as f:
+            json.dump(data, f, indent=2)
 
-@app.post("/api/task/1/building/corner", tags=["Task 1"])
-async def task1_add_building_corner(corner: BuildingCornerRequest):
-    """
-    Add a single building corner coordinate (e.g. from the drone's GPS
-    while hovering above the corner).
+        return {
+            "success": True,
+            "corner": corner_entry,
+            "total_corners": len(data["corners"]),
+            "can_apply": len(data["corners"]) >= 3,
+            "corners_path": corners_path,
+        }
 
-    Pilots fly the drone above each building corner, then the operator
-    clicks "Capture Corner" in Mission Planner. This endpoint appends
-    the corner to the persistent corners list. Once >= 3 corners are
-    collected, call /api/task/1/building/corners/apply to rebuild the
-    building model.
-    """
-    corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
-    os.makedirs(_BUILDING_CORNERS_DIR, exist_ok=True)
+    @app.get("/api/task/1/building/corners", tags=["Task 1"])
+    async def task1_get_building_corners():
+        """
+        List the currently saved building corners (from the JSON file).
+        Includes calculated wall lengths and manual overrides.
+        """
+        corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
+        if not os.path.exists(corners_path):
+            return {"success": True, "corners": [], "walls": [], "total_corners": 0, "can_apply": False}
 
-    # Load or create the corners file
-    data = {}
-    if os.path.exists(corners_path):
         try:
             with open(corners_path, "r") as f:
                 data = json.load(f)
-        except Exception:
-            data = {}
+        except Exception as e:
+            return {"success": False, "error": str(e), "corners": [], "walls": [], "total_corners": 0, "can_apply": False}
 
-    if "corners" not in data:
-        data["corners"] = []
+        corners = data.get("corners", [])
+        
+        # Calculate wall lengths if we have corners
+        walls = []
+        if len(corners) >= 3:
+            from .geospatial import calculate_wall_lengths_from_corners
+            center_lat = data.get("center_lat", corners[0]["lat"] if corners else 45.0)
+            center_lon = data.get("center_lon", corners[0]["lon"] if corners else -75.0)
+            walls = calculate_wall_lengths_from_corners(corners, center_lat, center_lon)
+            
+            # Merge with saved manual overrides
+            saved_walls = data.get("walls", [])
+            for wall in walls:
+                for saved_wall in saved_walls:
+                    if saved_wall.get("name") == wall["name"]:
+                        wall["manual_override_m"] = saved_wall.get("manual_override_m")
+                        break
+        
+        return {
+            "success": True,
+            "corners": corners,
+            "walls": walls,
+            "center_lat": data.get("center_lat"),
+            "center_lon": data.get("center_lon"),
+            "height": data.get("height"),
+            "total_corners": len(corners),
+            "can_apply": len(corners) >= 3,
+        }
 
-    # Add or update the corner by name
-    existing_idx = None
-    for i, c in enumerate(data["corners"]):
-        if c.get("name") == corner.name:
-            existing_idx = i
-            break
+    @app.delete("/api/task/1/building/corners", tags=["Task 1"])
+    async def task1_clear_building_corners():
+        """
+        Clear all saved building corners (e.g. to restart calibration).
+        """
+        corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
+        if os.path.exists(corners_path):
+            os.remove(corners_path)
+        return {"success": True, "message": "Building corners cleared."}
 
-    corner_entry = {"name": corner.name, "lat": corner.lat, "lon": corner.lon}
-    if existing_idx is not None:
-        data["corners"][existing_idx] = corner_entry
-    else:
-        data["corners"].append(corner_entry)
-
-    # Preserve center_lat/center_lon/height if already set, else use defaults
-    data.setdefault("center_lat", data["corners"][0]["lat"] if data["corners"] else 45.0)
-    data.setdefault("center_lon", data["corners"][0]["lon"] if data["corners"] else -75.0)
-    data.setdefault("height", 5.0)
-
-    with open(corners_path, "w") as f:
-        json.dump(data, f, indent=2)
-
-    return {
-        "success": True,
-        "corner": corner_entry,
-        "total_corners": len(data["corners"]),
-        "can_apply": len(data["corners"]) >= 3,
-        "corners_path": corners_path,
-    }
-
-
-@app.get("/api/task/1/building/corners", tags=["Task 1"])
-async def task1_get_building_corners():
-    """
-    List the currently saved building corners (from the JSON file).
-    """
-    corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
-    if not os.path.exists(corners_path):
-        return {"success": True, "corners": [], "total_corners": 0, "can_apply": False}
-
-    try:
-        with open(corners_path, "r") as f:
-            data = json.load(f)
-    except Exception as e:
-        return {"success": False, "error": str(e), "corners": [], "total_corners": 0, "can_apply": False}
-
-    corners = data.get("corners", [])
-    return {
-        "success": True,
-        "corners": corners,
-        "center_lat": data.get("center_lat"),
-        "center_lon": data.get("center_lon"),
-        "height": data.get("height"),
-        "total_corners": len(corners),
-        "can_apply": len(corners) >= 3,
-    }
-
-
-@app.delete("/api/task/1/building/corners", tags=["Task 1"])
-async def task1_clear_building_corners():
-    """
-    Clear all saved building corners (e.g. to restart calibration).
-    """
-    corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
-    if os.path.exists(corners_path):
-        os.remove(corners_path)
-    return {"success": True, "message": "Building corners cleared."}
-
-
-@app.post("/api/task/1/building/corners/apply", tags=["Task 1"])
-async def task1_apply_building_corners(
-    center_lat: Optional[float] = None,
-    center_lon: Optional[float] = None,
-    height: Optional[float] = None,
-):
-    """
-    Apply the saved building corners to the target_localizer node by
-    calling the /target_localizer/set_building_corners ROS2 service.
-
-    The service reads the building_corners.json file and rebuilds the
-    BuildingModel at runtime. At least 3 corners must be saved first
-    (via /api/task/1/building/corner).
-
-    Optionally override center_lat, center_lon, height via query params.
-    """
-    corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
-    if not os.path.exists(corners_path):
-        raise HTTPException(status_code=404, detail="No building corners saved yet. Add corners via POST /api/task/1/building/corner first.")
-
-    try:
-        with open(corners_path, "r") as f:
-            data = json.load(f)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read corners file: {e}")
-
-    corners = data.get("corners", [])
-    if len(corners) < 3:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Need at least 3 corners to build a polygon, got {len(corners)}. Add more corners first.",
-        )
-
-    # Apply any overrides from query params
-    if center_lat is not None:
-        data["center_lat"] = center_lat
-    if center_lon is not None:
-        data["center_lon"] = center_lon
-    if height is not None:
+    @app.post("/api/task/1/building/height", tags=["Task 1"])
+    async def task1_set_building_height(height: float = Query(..., description="Building height in meters")):
+        """
+        Set the building height manually.
+        
+        This allows operators to input the exact building height provided
+        by the competition organizers.
+        """
+        corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
+        os.makedirs(_BUILDING_CORNERS_DIR, exist_ok=True)
+        
+        # Load or create the corners file
+        data = {}
+        if os.path.exists(corners_path):
+            try:
+                with open(corners_path, "r") as f:
+                    data = json.load(f)
+            except Exception:
+                data = {}
+        
+        # Update height
         data["height"] = height
+        
+        # Ensure other fields exist
+        data.setdefault("corners", [])
+        data.setdefault("center_lat", 45.0)
+        data.setdefault("center_lon", -75.0)
+        
+        with open(corners_path, "w") as f:
+            json.dump(data, f, indent=2)
+        
+        return {
+            "success": True,
+            "height": height,
+            "message": f"Building height set to {height}m",
+        }
 
-    # Write back with any overrides
-    with open(corners_path, "w") as f:
-        json.dump(data, f, indent=2)
+    @app.post("/api/task/1/building/wall/override", tags=["Task 1"])
+    async def task1_set_wall_override(
+        wall_name: str = Query(..., description="Wall name (e.g., 'NW-NE')"),
+        length_m: Optional[float] = Query(None, description="Manual wall length in meters (null to clear override)"),
+    ):
+        """
+        Set or clear a manual override for a wall length.
+        
+        This allows operators to input the exact wall dimensions provided
+        by the competition organizers, overriding the GPS-calculated values.
+        """
+        corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
+        
+        if not os.path.exists(corners_path):
+            raise HTTPException(status_code=404, detail="No building configuration found. Add corners first.")
+        
+        try:
+            with open(corners_path, "r") as f:
+                data = json.load(f)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to read building configuration: {e}")
+        
+        corners = data.get("corners", [])
+        if len(corners) < 3:
+            raise HTTPException(status_code=400, detail="At least 3 corners required before setting wall overrides.")
+        
+        # Calculate current walls
+        from .geospatial import calculate_wall_lengths_from_corners
+        center_lat = data.get("center_lat", corners[0]["lat"])
+        center_lon = data.get("center_lon", corners[0]["lon"])
+        walls = calculate_wall_lengths_from_corners(corners, center_lat, center_lon)
+        
+        # Find the wall
+        wall_found = False
+        for wall in walls:
+            if wall["name"] == wall_name:
+                wall["manual_override_m"] = length_m
+                wall_found = True
+                break
+        
+        if not wall_found:
+            available_walls = [w["name"] for w in walls]
+            raise HTTPException(
+                status_code=404,
+                detail=f"Wall '{wall_name}' not found. Available walls: {', '.join(available_walls)}"
+            )
+        
+        # Save walls with overrides
+        data["walls"] = walls
+        
+        with open(corners_path, "w") as f:
+            json.dump(data, f, indent=2)
+        
+        action = "cleared" if length_m is None else f"set to {length_m}m"
+        return {
+            "success": True,
+            "wall_name": wall_name,
+            "manual_override_m": length_m,
+            "message": f"Wall '{wall_name}' override {action}",
+        }
 
-    # Call the ROS2 service to rebuild the building model
-    try:
+    @app.post("/api/task/1/building/corners/apply", tags=["Task 1"])
+    async def task1_apply_building_corners(
+        center_lat: Optional[float] = None,
+        center_lon: Optional[float] = None,
+        height: Optional[float] = None,
+    ):
+        """
+        Apply the saved building corners to the target_localizer node by
+        calling the /target_localizer/set_building_corners ROS2 service.
+
+        The service reads the building_corners.json file and rebuilds the
+        BuildingModel at runtime. At least 3 corners must be saved first
+        (via /api/task/1/building/corner).
+
+        Optionally override center_lat, center_lon, height via query params.
+        """
+        corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
+        if not os.path.exists(corners_path):
+            raise HTTPException(status_code=404, detail="No building corners saved yet. Add corners via POST /api/task/1/building/corner first.")
+
+        try:
+            with open(corners_path, "r") as f:
+                data = json.load(f)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to read building corners: {e}")
+
+        corners = data.get("corners", [])
+        if len(corners) < 3:
+            raise HTTPException(status_code=400, detail="At least 3 building corners are required before applying.")
+
+        payload = {
+            "center_lat": center_lat if center_lat is not None else data.get("center_lat"),
+            "center_lon": center_lon if center_lon is not None else data.get("center_lon"),
+            "height": height if height is not None else data.get("height"),
+            "corners": corners,
+        }
+
+        if payload["center_lat"] is None or payload["center_lon"] is None or payload["height"] is None:
+            raise HTTPException(status_code=400, detail="center_lat, center_lon, and height must be available (either saved or provided as query parameters).")
+
+        # Persist the potentially overridden center/height back to disk
+        data["center_lat"] = payload["center_lat"]
+        data["center_lon"] = payload["center_lon"]
+        data["height"] = payload["height"]
+        with open(corners_path, "w") as f:
+            json.dump(data, f, indent=2)
+
+        # The ROS2 node registers /target_localizer/set_building_corners as
+        # std_srvs/srv/Trigger (no request payload). It reads the corners JSON
+        # file from disk, so we pass an empty payload and just trigger the
+        # rebuild. The file was already written by the API endpoints above.
         output = _call_ros2_service_in_isaac_container_or_raise(
             service_name="/target_localizer/set_building_corners",
             service_type="std_srvs/srv/Trigger",
             request_payload={},
-            timeout_s=15.0,
-        )
-    except HTTPException as exc:
-        raise HTTPException(
-            status_code=exc.status_code,
-            detail=f"Failed to apply building corners to target_localizer: {exc.detail}",
+            timeout_s=10.0,
         )
 
-    return {
-        "success": True,
-        "message": f"Building model rebuilt with {len(corners)} corners.",
-        "corners": corners,
-        "center_lat": data.get("center_lat"),
-        "center_lon": data.get("center_lon"),
-        "height": data.get("height"),
-        "output": output,
-    }
+        return {
+            "success": True,
+            "output": output,
+            "corners_count": len(corners),
+            "center_lat": payload["center_lat"],
+            "center_lon": payload["center_lon"],
+            "height": payload["height"],
+        }
 
 
-    # ==================== Google Drive Upload ====================
+# ==================== Building Corner Calibration ====================
 
-    @app.get("/api/gdrive/status", tags=["Google Drive"])
-    async def gdrive_status():
-        """
-        Check Google Drive upload capability status.
+    class BuildingCornerRequest(BaseModel):
+        name: str
+        lat: float
+        lon: float
 
-        Returns whether credentials are configured and valid.
-        """
-        try:
-            from .gdrive_upload import _get_credentials, _get_token_path
+    class BuildingCornersRequest(BaseModel):
+        center_lat: float
+        center_lon: float
+        height: float
+        corners: list[dict[str, Any]]
 
-            token_path = _get_token_path()
-            has_token = os.path.isfile(token_path)
+    # Shared path for the corners JSON file consumed by the ROS2 service.
+    # Default matches target_localizer output_dir default (/home/mad/targets).
+    # Override via NOMAD_TARGET_OUTPUT_DIR env var for consistency.
+    _BUILDING_CORNERS_DIR = os.environ.get(
+        "NOMAD_TARGET_OUTPUT_DIR",
+        "/home/mad/targets",
+    )
 
-            if not has_token:
-                return {
-                    "available": False,
-                    "message": "No Google Drive token found. Run setup.",
-                    "token_path": token_path,
-                }
-
-            creds = _get_credentials()
-            if creds is None:
-                return {
-                    "available": False,
-                    "message": "Token exists but credentials invalid/expired.",
-                    "token_path": token_path,
-                }
-
-            folder_id = os.environ.get("GDRIVE_FOLDER_ID", "")
-
-            return {
-                "available": True,
-                "message": "Google Drive ready",
-                "token_path": token_path,
-                "folder_configured": bool(folder_id),
-            }
-        except ImportError:
-            return {
-                "available": False,
-                "message": "Google Drive dependencies not installed",
-            }
-        except Exception as e:
-            return {
-                "available": False,
-                "message": f"Error checking status: {e}",
-            }
 
     # ==================== Task 2: Extinguish (Indoor) ====================
 

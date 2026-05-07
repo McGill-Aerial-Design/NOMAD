@@ -390,6 +390,15 @@ class BuildingModel:
         if best is None or d_roof < best.distance:
             best = PlaneHit(kind='roof', face=None, distance=d_roof)
 
+        # If the nearest wall hit is within a small epsilon of the roof plane,
+        # reclassify as roof to avoid ambiguous ground-wall-roof decisions for
+        # targets on parapets, antennas, or edge-mounted targets at roof height.
+        if best is not None and best.kind == "wall":
+            wall_dist = best.distance
+            if wall_dist < 0.05 and d_roof < 0.3:
+                roof_hit = PlaneHit(kind='roof', face=None, distance=d_roof)
+                best = roof_hit
+
         return best  # type: ignore[return-value]
 
     def get_nearest_wall_face(self,
@@ -485,7 +494,9 @@ class BuildingModel:
         offset = point_2d - cl
         horiz_from_left = float(np.dot(offset, face_horiz_unit))
         horiz_from_left = max(0.0, min(horiz_from_left, face_length))
-        height_agl = max(0.0, min(float(point_up), self.height))
+        # Use a small epsilon (0.05m) so targets slightly above roof height
+        # are clamped to roof rather than being excluded or producing >height AGL.
+        height_agl = max(0.0, min(float(point_up), self.height + 0.05))
         return float(horiz_from_left), float(height_agl)
 
     def find_nearest_reference(self,

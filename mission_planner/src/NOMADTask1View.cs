@@ -5,6 +5,7 @@
 using System;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -34,6 +35,14 @@ namespace NOMAD.MissionPlanner
     private Button _btnCaptureCorner;
     private Button _btnApplyCorners;
     private Button _btnClearCorners;
+    private TextBox _txtBuildingHeight;
+private ListBox _lstWalls;
+        private TextBox _txtWallOverride;
+        private Button _btnSetGroundAlt;
+        private Label _lblGroundAlt;
+        private Button _btnRegenDescriptions;
+        private Label _lblDetectionStatus;
+        private int _detectionPollCounter = 0;
         
         public NOMADTask1View(
             DualLinkSender sender,
@@ -208,15 +217,25 @@ namespace NOMAD.MissionPlanner
             };
             gpsCard.Controls.Add(_lblGpsStatus);
 
-            _lblPosition = new Label
-            {
-                Text = "Position: --",
-                Font = new Font("Consolas", 10),
-                ForeColor = TEXT_PRIMARY,
-                Location = new Point(15, 62),
-                AutoSize = true,
-            };
-            gpsCard.Controls.Add(_lblPosition);
+_lblPosition = new Label
+        {
+            Text = "Position: --",
+            Font = new Font("Consolas", 10),
+            ForeColor = TEXT_PRIMARY,
+            Location = new Point(15, 62),
+            AutoSize = true,
+        };
+        gpsCard.Controls.Add(_lblPosition);
+
+        _lblDetectionStatus = new Label
+        {
+            Text = "\u25CB No detection",
+            Font = new Font("Consolas", 9),
+            ForeColor = TEXT_SECONDARY,
+            Location = new Point(15, 82),
+            AutoSize = true,
+        };
+        gpsCard.Controls.Add(_lblDetectionStatus);
 
             layout.Controls.Add(gpsCard, 0, 0);
 
@@ -293,7 +312,120 @@ namespace NOMAD.MissionPlanner
                 Dock = DockStyle.Fill,
                 BackColor = CARD_BG,
                 Padding = new Padding(12),
+                AutoScroll = true,
             };
+
+            // --- Building Dimensions Card ---
+            var dimensionsCard = CreateCard("BUILDING DIMENSIONS");
+            dimensionsCard.Dock = DockStyle.Top;
+            dimensionsCard.Height = 380;
+
+            var lblHeightInfo = new Label
+            {
+                Text = "Enter the building height and wall lengths from competition data",
+                Font = new Font("Segoe UI", 9),
+                ForeColor = TEXT_SECONDARY,
+                Location = new Point(16, 34),
+                AutoSize = true,
+            };
+            dimensionsCard.Controls.Add(lblHeightInfo);
+
+            var lblHeight = new Label
+            {
+                Text = "Building Height (m):",
+                Font = new Font("Segoe UI", 9),
+                ForeColor = TEXT_PRIMARY,
+                Location = new Point(16, 58),
+                AutoSize = true,
+            };
+            dimensionsCard.Controls.Add(lblHeight);
+
+            _txtBuildingHeight = new TextBox
+            {
+                Text = "5.0",
+                Location = new Point(16, 76),
+                Size = new Size(100, 28),
+                BackColor = Color.FromArgb(50, 50, 53),
+                ForeColor = Color.White,
+                BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font("Segoe UI", 9),
+            };
+            dimensionsCard.Controls.Add(_txtBuildingHeight);
+
+            var btnSetHeight = CreateButton("Set Height", ACCENT_COLOR, 100, 28);
+            btnSetHeight.Font = new Font("Segoe UI", 8, FontStyle.Bold);
+            btnSetHeight.Location = new Point(126, 76);
+            btnSetHeight.Click += BtnSetHeight_Click;
+            dimensionsCard.Controls.Add(btnSetHeight);
+
+            var lblWalls = new Label
+            {
+                Text = "Wall Lengths (calculated from GPS, editable):",
+                Font = new Font("Segoe UI", 9),
+                ForeColor = TEXT_PRIMARY,
+                Location = new Point(16, 114),
+                AutoSize = true,
+            };
+            dimensionsCard.Controls.Add(lblWalls);
+
+            _lstWalls = new ListBox
+            {
+                Location = new Point(16, 136),
+                Size = new Size(280, 120),
+                BackColor = Color.FromArgb(40, 40, 43),
+                ForeColor = Color.White,
+                Font = new Font("Consolas", 9),
+                BorderStyle = BorderStyle.FixedSingle,
+                SelectionMode = SelectionMode.One,
+            };
+            dimensionsCard.Controls.Add(_lstWalls);
+
+            var lblOverride = new Label
+            {
+                Text = "Manual Override (m):",
+                Font = new Font("Segoe UI", 9),
+                ForeColor = TEXT_PRIMARY,
+                Location = new Point(16, 264),
+                AutoSize = true,
+            };
+            dimensionsCard.Controls.Add(lblOverride);
+
+            _txtWallOverride = new TextBox
+            {
+                Location = new Point(16, 282),
+                Size = new Size(100, 28),
+                BackColor = Color.FromArgb(50, 50, 53),
+                ForeColor = Color.White,
+                BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font("Segoe UI", 9),
+            };
+            dimensionsCard.Controls.Add(_txtWallOverride);
+
+            var btnSetWall = CreateButton("Set Wall", SUCCESS_COLOR, 80, 28);
+            btnSetWall.Font = new Font("Segoe UI", 8, FontStyle.Bold);
+            btnSetWall.Location = new Point(126, 282);
+            btnSetWall.Click += BtnSetWall_Click;
+            dimensionsCard.Controls.Add(btnSetWall);
+
+            var btnClearWall = CreateButton("Clear", ERROR_COLOR, 70, 28);
+            btnClearWall.Font = new Font("Segoe UI", 8, FontStyle.Bold);
+            btnClearWall.Location = new Point(216, 282);
+            btnClearWall.Click += BtnClearWall_Click;
+            dimensionsCard.Controls.Add(btnClearWall);
+
+            var btnRefreshWalls = CreateButton("Refresh Walls", Color.FromArgb(70, 70, 73), 120, 28);
+            btnRefreshWalls.Font = new Font("Segoe UI", 8, FontStyle.Bold);
+            btnRefreshWalls.Location = new Point(16, 318);
+            btnRefreshWalls.Click += async (s, e) => await RefreshWallsAsync();
+            dimensionsCard.Controls.Add(btnRefreshWalls);
+
+            dimensionsCard.Resize += (s, e) =>
+            {
+                int inputWidth = Math.Max(260, dimensionsCard.ClientSize.Width - 32);
+                _lstWalls.Width = inputWidth;
+            };
+
+            panel.Controls.Add(dimensionsCard);
 
             // --- Building Corner Calibration ---
             var cornerCard = CreateCard("BUILDING CORNER CALIBRATION");
@@ -389,6 +521,45 @@ namespace NOMAD.MissionPlanner
             };
 
             panel.Controls.Add(cornerCard);
+
+            // --- Ground Altitude Calibration ---
+            var groundAltCard = CreateCard("GROUND ALTITUDE CALIBRATION");
+            groundAltCard.Dock = DockStyle.Top;
+            groundAltCard.Height = 140;
+
+            var lblGroundAltInfo = new Label
+            {
+                Text = "Land the drone on the ground, then click to set 0m AGL reference",
+                Font = new Font("Segoe UI", 9),
+                ForeColor = TEXT_SECONDARY,
+                Location = new Point(16, 34),
+                AutoSize = true,
+            };
+            groundAltCard.Controls.Add(lblGroundAltInfo);
+
+            _btnSetGroundAlt = CreateButton("SET AS GROUND ALT", ACCENT_COLOR, 200, 28);
+            _btnSetGroundAlt.Font = new Font("Segoe UI", 8, FontStyle.Bold);
+            _btnSetGroundAlt.Location = new Point(16, 56);
+            _btnSetGroundAlt.Click += BtnSetGroundAlt_Click;
+            groundAltCard.Controls.Add(_btnSetGroundAlt);
+
+            _lblGroundAlt = new Label
+            {
+                Text = "Offset: not set",
+                Font = new Font("Consolas", 9),
+                ForeColor = TEXT_SECONDARY,
+                Location = new Point(226, 60),
+                AutoSize = true,
+            };
+            groundAltCard.Controls.Add(_lblGroundAlt);
+
+            _btnRegenDescriptions = CreateButton("REGENERATE DESCRIPTIONS", ACCENT_COLOR, 240, 28);
+            _btnRegenDescriptions.Font = new Font("Segoe UI", 8, FontStyle.Bold);
+            _btnRegenDescriptions.Location = new Point(16, 96);
+            _btnRegenDescriptions.Click += BtnRegenDescriptions_Click;
+            groundAltCard.Controls.Add(_btnRegenDescriptions);
+
+            panel.Controls.Add(groundAltCard);
 
             return panel;
         }
@@ -505,6 +676,9 @@ namespace NOMAD.MissionPlanner
                         ? "Fly above each building corner and click Capture Corner"
                         : $"{total} corners captured" + (canApply ? " - Ready to Apply!" : " - Need >= 3");
                     _lblCornerStatus.ForeColor = canApply ? SUCCESS_COLOR : TEXT_SECONDARY;
+                    
+                    // Also refresh walls when corners change
+                    await RefreshWallsAsync();
                 }
             }
             catch
@@ -564,6 +738,236 @@ namespace NOMAD.MissionPlanner
                 else
                 {
                     _txtResult.Text = $"[FAIL] Clear failed: {response.StatusCode}";
+                    _txtResult.ForeColor = ERROR_COLOR;
+                }
+            }
+            catch (Exception ex)
+            {
+                _txtResult.Text = $"[FAIL] {ex.Message}";
+                _txtResult.ForeColor = ERROR_COLOR;
+            }
+        }
+
+        private async void BtnSetGroundAlt_Click(object sender, EventArgs e)
+        {
+            _btnSetGroundAlt.Enabled = false;
+            _btnSetGroundAlt.Text = "Setting...";
+            try
+            {
+                var response = await JetsonApiService.PostAsync("/api/task/1/target/ground_alt", null);
+                if (response.IsSuccessStatusCode)
+                {
+                    var body = await response.Content.ReadAsStringAsync();
+                    _lblGroundAlt.Text = "Offset: set!";
+                    _lblGroundAlt.ForeColor = SUCCESS_COLOR;
+                    _txtResult.Text = "[OK] Ground altitude set. All heights now relative to ground level.";
+                    _txtResult.ForeColor = SUCCESS_COLOR;
+                }
+                else
+                {
+                    _lblGroundAlt.Text = "Offset: failed";
+                    _lblGroundAlt.ForeColor = ERROR_COLOR;
+                    _txtResult.Text = $"[FAIL] Ground altitude failed: {response.StatusCode}";
+                    _txtResult.ForeColor = ERROR_COLOR;
+                }
+            }
+            catch (Exception ex)
+            {
+                _lblGroundAlt.Text = "Offset: error";
+                _lblGroundAlt.ForeColor = ERROR_COLOR;
+                _txtResult.Text = $"[FAIL] {ex.Message}";
+                _txtResult.ForeColor = ERROR_COLOR;
+            }
+            finally
+            {
+                _btnSetGroundAlt.Enabled = true;
+                _btnSetGroundAlt.Text = "SET AS GROUND ALT";
+            }
+        }
+
+        private async void BtnRegenDescriptions_Click(object sender, EventArgs e)
+        {
+            _btnRegenDescriptions.Enabled = false;
+            _btnRegenDescriptions.Text = "Regenerating...";
+            try
+            {
+                var response = await JetsonApiService.PostAsync("/api/task/1/target/regenerate", null);
+                if (response.IsSuccessStatusCode)
+                {
+                    _txtResult.Text = "[OK] Target descriptions regenerated from raw data.";
+                    _txtResult.ForeColor = SUCCESS_COLOR;
+                }
+                else
+                {
+                    _txtResult.Text = $"[FAIL] Regenerate failed: {response.StatusCode}";
+                    _txtResult.ForeColor = ERROR_COLOR;
+                }
+            }
+            catch (Exception ex)
+            {
+                _txtResult.Text = $"[FAIL] {ex.Message}";
+                _txtResult.ForeColor = ERROR_COLOR;
+            }
+            finally
+            {
+                _btnRegenDescriptions.Enabled = true;
+                _btnRegenDescriptions.Text = "REGENERATE DESCRIPTIONS";
+            }
+        }
+
+        private async void BtnSetHeight_Click(object sender, EventArgs e)
+        {
+            if (!double.TryParse(_txtBuildingHeight.Text, out double height) || height <= 0)
+            {
+                _txtResult.Text = "[FAIL] Enter a valid building height (e.g., 5.0)";
+                _txtResult.ForeColor = ERROR_COLOR;
+                return;
+            }
+
+            try
+            {
+                var response = await JetsonApiService.PostAsync($"/api/task/1/building/height?height={height}", null);
+                if (response.IsSuccessStatusCode)
+                {
+                    _txtResult.Text = $"[OK] Building height set to {height}m";
+                    _txtResult.ForeColor = SUCCESS_COLOR;
+                    if (_uploadPanel != null) _uploadPanel.BuildingHeight = height;
+                    await RefreshWallsAsync();
+                }
+                else
+                {
+                    _txtResult.Text = $"[FAIL] API returned {response.StatusCode}";
+                    _txtResult.ForeColor = ERROR_COLOR;
+                }
+            }
+            catch (Exception ex)
+            {
+                _txtResult.Text = $"[FAIL] {ex.Message}";
+                _txtResult.ForeColor = ERROR_COLOR;
+            }
+        }
+
+        private async Task RefreshWallsAsync()
+        {
+            try
+            {
+                var response = await JetsonApiService.GetAsync("/api/task/1/building/corners");
+                if (response.IsSuccessStatusCode)
+                {
+                    var body = await response.Content.ReadAsStringAsync();
+                    var data = Newtonsoft.Json.Linq.JObject.Parse(body);
+                    var walls = data["walls"] as Newtonsoft.Json.Linq.JArray;
+                    double? height = (double?)data["height"];
+
+                    if (height.HasValue)
+                    {
+                        _txtBuildingHeight.Text = height.Value.ToString("F1");
+                    }
+
+                    _lstWalls.Items.Clear();
+                    if (walls != null && walls.Count > 0)
+                    {
+                        foreach (var w in walls)
+                        {
+                            string name = w["name"]?.ToString() ?? "?";
+                            double lengthM = (double?)w["length_m"] ?? 0;
+                            double? overrideM = (double?)w["manual_override_m"];
+
+                            string display = overrideM.HasValue
+                                ? $"{name}: {lengthM:F2}m → {overrideM.Value:F2}m (manual)"
+                                : $"{name}: {lengthM:F2}m";
+                            
+                            _lstWalls.Items.Add(display);
+                        }
+                    }
+                    else
+                    {
+                        _lstWalls.Items.Add("(No walls - add >= 3 corners first)");
+                    }
+                }
+            }
+            catch
+            {
+                // Silently fail - API may not be available
+            }
+        }
+
+        private async void BtnSetWall_Click(object sender, EventArgs e)
+        {
+            if (_lstWalls.SelectedIndex < 0)
+            {
+                _txtResult.Text = "[FAIL] Select a wall from the list first";
+                _txtResult.ForeColor = ERROR_COLOR;
+                return;
+            }
+
+            if (!double.TryParse(_txtWallOverride.Text, out double length) || length <= 0)
+            {
+                _txtResult.Text = "[FAIL] Enter a valid wall length (e.g., 10.5)";
+                _txtResult.ForeColor = ERROR_COLOR;
+                return;
+            }
+
+            try
+            {
+                // Extract wall name from selected item (format: "NW-NE: 10.5m" or "NW-NE: 10.5m → 12.0m (manual)")
+                string selectedItem = _lstWalls.SelectedItem.ToString();
+                string wallName = selectedItem.Split(':')[0].Trim();
+
+                var response = await JetsonApiService.PostAsync(
+                    $"/api/task/1/building/wall/override?wall_name={Uri.EscapeDataString(wallName)}&length_m={length}",
+                    null);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    _txtResult.Text = $"[OK] Wall '{wallName}' set to {length}m";
+                    _txtResult.ForeColor = SUCCESS_COLOR;
+                    _txtWallOverride.Clear();
+                    await RefreshWallsAsync();
+                }
+                else
+                {
+                    var errorBody = await response.Content.ReadAsStringAsync();
+                    _txtResult.Text = $"[FAIL] {response.StatusCode}: {errorBody}";
+                    _txtResult.ForeColor = ERROR_COLOR;
+                }
+            }
+            catch (Exception ex)
+            {
+                _txtResult.Text = $"[FAIL] {ex.Message}";
+                _txtResult.ForeColor = ERROR_COLOR;
+            }
+        }
+
+        private async void BtnClearWall_Click(object sender, EventArgs e)
+        {
+            if (_lstWalls.SelectedIndex < 0)
+            {
+                _txtResult.Text = "[FAIL] Select a wall from the list first";
+                _txtResult.ForeColor = ERROR_COLOR;
+                return;
+            }
+
+            try
+            {
+                // Extract wall name from selected item
+                string selectedItem = _lstWalls.SelectedItem.ToString();
+                string wallName = selectedItem.Split(':')[0].Trim();
+
+                var response = await JetsonApiService.PostAsync(
+                    $"/api/task/1/building/wall/override?wall_name={Uri.EscapeDataString(wallName)}",
+                    null);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    _txtResult.Text = $"[OK] Wall '{wallName}' override cleared (using GPS-calculated length)";
+                    _txtResult.ForeColor = SUCCESS_COLOR;
+                    _txtWallOverride.Clear();
+                    await RefreshWallsAsync();
+                }
+                else
+                {
+                    _txtResult.Text = $"[FAIL] API returned {response.StatusCode}";
                     _txtResult.ForeColor = ERROR_COLOR;
                 }
             }
@@ -697,12 +1101,27 @@ namespace NOMAD.MissionPlanner
 
                                 File.WriteAllText(jsonPath, Newtonsoft.Json.JsonConvert.SerializeObject(metadata, Newtonsoft.Json.Formatting.Indented));
 
-                                // Mirror successful captures into the Submit tab so
-                                // operators can upload without re-entering image paths.
-                                _uploadPanel?.AddCapturedImage(
-                                    localPath,
-                                    ExtractSuggestedTask1Description(outputText)
-                                );
+// Mirror successful captures into the Submit tab so
+                // operators can approve and upload without re-entering data.
+                var capturedColor = Val("color") ?? "Red";
+                if (!new[] { "Red", "Blue", "Green", "Yellow", "Orange", "Purple", "White", "Black", "Unknown" }.Contains(capturedColor))
+                    capturedColor = "Red";
+                var capturedPlane = "wall";
+                var outputLower = (outputText ?? "").ToLower();
+                if (outputLower.Contains("ground")) capturedPlane = "ground";
+                else if (outputLower.Contains("roof")) capturedPlane = "roof";
+                var capturedHeight = "";
+                var heightMatch = System.Text.RegularExpressions.Regex.Match(
+                    outputText ?? "", @"(\d+\.?\d*)\s*m\s+above\s+ground");
+                if (heightMatch.Success) capturedHeight = heightMatch.Groups[1].Value;
+
+                _uploadPanel?.AddCapturedImage(
+                    localPath,
+                    ExtractSuggestedTask1Description(outputText),
+                    capturedColor,
+                    capturedPlane,
+                    capturedHeight
+                );
 
                                 // Auto-generate AI description if enabled
                                 if (_config.AiAutoGenerate)
@@ -861,6 +1280,53 @@ namespace NOMAD.MissionPlanner
                 _lblGpsStatus.ForeColor = gpsFix >= 3 ? SUCCESS_COLOR : WARNING_COLOR;
                 
                 _lblPosition.Text = $"Position: {cs.lat:F6}, {cs.lng:F6} | Alt: {cs.alt:F1}m";
+
+                // Update detection status indicator (poll every ~2s via a simple counter)
+                _detectionPollCounter++;
+                if (_detectionPollCounter >= 4)
+                {
+                    _detectionPollCounter = 0;
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var resp = await JetsonApiService.GetAsync("/api/task/1/target/detections");
+                            if (resp.IsSuccessStatusCode)
+                            {
+                                var body = await resp.Content.ReadAsStringAsync();
+                                var data = Newtonsoft.Json.Linq.JObject.Parse(body);
+                                int count = (int?)data["circle_count"] ?? 0;
+                                double? topDist = (double?)data["top_distance_m"];
+                                double? centerDist = (double?)data["center_distance_m"];
+                                this.BeginInvoke(new Action(() =>
+                                {
+                                    if (_lblDetectionStatus != null && !_lblDetectionStatus.IsDisposed)
+                                    {
+                                        if (count > 0)
+                                        {
+                                            string distStr = topDist.HasValue
+                                                ? $" @ {topDist.Value:F2}m"
+                                                : "";
+                                            _lblDetectionStatus.Text = $"\u25CF {count} circle(s){distStr}";
+                                            _lblDetectionStatus.ForeColor = SUCCESS_COLOR;
+                                        }
+                                        else if (centerDist.HasValue)
+                                        {
+                                            _lblDetectionStatus.Text = $"\u25CB No detection (crosshair: {centerDist.Value:F2}m)";
+                                            _lblDetectionStatus.ForeColor = TEXT_SECONDARY;
+                                        }
+                                        else
+                                        {
+                                            _lblDetectionStatus.Text = "\u25CB No detection";
+                                            _lblDetectionStatus.ForeColor = TEXT_SECONDARY;
+                                        }
+                                    }
+                                }));
+                            }
+                        }
+                        catch { }
+                    });
+                }
             }
             catch { }
         }

@@ -52,7 +52,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image, NavSatFix, CameraInfo
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Float64
+from std_msgs.msg import Float64, String
 from std_srvs.srv import Trigger
 
 from cv_bridge import CvBridge
@@ -91,7 +91,7 @@ class TargetRecord:
 
     target_id: str
     color: TargetColor
-    face_label: str            # face name, or 'ground' / 'roof'
+    face_label: str
     height_agl: float
     horiz_from_left: float
     east: float
@@ -101,6 +101,10 @@ class TargetRecord:
     timestamp: float
     confidence: float
     image_path: Optional[str] = None
+    plane_kind: str = "wall"
+    face_name: str = ""
+    approved: bool = False
+    raw_data: Optional[dict] = None
 
 
 class TargetLocalizerNode(Node):
@@ -124,6 +128,7 @@ class TargetLocalizerNode(Node):
         self.declare_parameter("output_dir", "/home/mad/targets")
         self.declare_parameter("yolo_model_path", "")
         self.declare_parameter("dedup_radius_m", 0.5)
+        self.declare_parameter("min_confidence", 0.35)
         self.declare_parameter("landmark_detect_rate_hz", 2.0)
         self.declare_parameter("auto_landmark_detection", False)
         # HSV circle detector knobs. Exposed so we can tune live via
@@ -139,6 +144,8 @@ class TargetLocalizerNode(Node):
         self.team_name = self.get_parameter("team_name").value
         self.output_dir = self.get_parameter("output_dir").value
         self.dedup_radius = self.get_parameter("dedup_radius_m").value
+
+        self.min_confidence = float(self.get_parameter("min_confidence").value)
 
         os.makedirs(self.output_dir, exist_ok=True)
 
@@ -242,6 +249,9 @@ class TargetLocalizerNode(Node):
 
         self.targets: List[TargetRecord] = []
         self.next_target_index: int = 0
+        self.ground_alt_offset: float = 0.0
+
+        self._latest_detections_json: str = "{}"
 
         # Landmark detection timer
         self.last_landmark_time = 0.0
@@ -321,6 +331,25 @@ class TargetLocalizerNode(Node):
         self.corners_srv = self.create_service(
             Trigger, "/target_localizer/set_building_corners", self._set_corners_callback
         )
+        self.clear_srv = self.create_service(
+            Trigger, "/target_localizer/clear_targets", self._clear_targets_callback
+        )
+        self.ground_alt_srv = self.create_service(
+            Trigger, "/target_localizer/set_ground_alt", self._set_ground_alt_callback
+        )
+        self.regen_srv = self.create_service(
+            Trigger, "/target_localizer/regenerate_descriptions", self._regenerate_descriptions_callback
+        )
+        self.plane_override_srv = self.create_service(
+            Trigger, "/target_localizer/set_target_plane", self._set_target_plane_callback
+        )
+
+        self._detection_status_pub = self.create_publisher(
+            Float64, "/target_localizer/detection_status", 10
+        )
+        self._detection_status_json_pub = self.create_publisher(
+            String, "/target_localizer/detection_status_json", 10
+        )
 
         # Emit concrete service registrations for runtime diagnostics.
         for name, types in self.get_service_names_and_types():
@@ -336,6 +365,8 @@ class TargetLocalizerNode(Node):
 
         # Periodic input health watchdog so startup issues are visible in logs.
         self.create_timer(5.0, self._input_watchdog_callback)
+
+        self.create_timer(0.5, self._detection_status_timer_callback)
 
         self.get_logger().info(
             "Target localizer node started. "
@@ -446,7 +477,8 @@ class TargetLocalizerNode(Node):
     #  3D back-projection
     # ================================================================ #
     def _pixel_to_3d_local(
-        self, px: int, py: int, depth_image: np.ndarray
+        self, px: int, py: int, depth_image: np.ndarray,
+        servo_pitch_override: Optional[float] = None,
     ) -> Optional[Tuple[float, float, float]]:
         """
         Back-project a pixel to 3D coordinates in the drone's local ENU frame,
@@ -488,7 +520,9 @@ class TargetLocalizerNode(Node):
 
         # Apply servo pitch rotation (rotate around camera X axis)
         # Servo pitch: positive = tilt up, negative = tilt down
-        pitch_rad = math.radians(self.servo_pitch_deg)
+        # Use captured snapshot if provided, fall back to latest live value
+        pitch = servo_pitch_override if servo_pitch_override is not None else self.servo_pitch_deg
+        pitch_rad = math.radians(pitch)
         cos_p = math.cos(pitch_rad)
         sin_p = math.sin(pitch_rad)
 
@@ -514,12 +548,13 @@ class TargetLocalizerNode(Node):
         return east_offset, north_offset, target_up
 
     def _pixel_to_world_enu(
-        self, px: int, py: int, depth_image: np.ndarray
+        self, px: int, py: int, depth_image: np.ndarray,
+        servo_pitch_override: Optional[float] = None,
     ) -> Optional[Tuple[float, float, float]]:
         """
         Back-project pixel to world ENU coordinates (relative to building center).
         """
-        local = self._pixel_to_3d_local(px, py, depth_image)
+        local = self._pixel_to_3d_local(px, py, depth_image, servo_pitch_override)
         if local is None:
             return None
 
@@ -570,12 +605,14 @@ class TargetLocalizerNode(Node):
         if plane_kind == "ground" or height_agl < 0.3:
             return (
                 f"{color.value.capitalize()} target on the ground near the "
-                f"{face_name} face of the building, {ref_phrase}."
+                f"{face_name} face of the building, {height_rounded}m above ground, "
+                f"{ref_phrase}."
             )
         if plane_kind == "roof":
             return (
                 f"{color.value.capitalize()} target on the roof near the "
-                f"{face_name} face of the building, {ref_phrase}."
+                f"{face_name} face of the building, {height_rounded}m above ground, "
+                f"{ref_phrase}."
             )
         return (
             f"{color.value.capitalize()} target on the {face_name} face "
@@ -657,18 +694,87 @@ class TargetLocalizerNode(Node):
         capture_dir = os.path.join(self.output_dir, timestamp)
         os.makedirs(capture_dir, exist_ok=True)
 
-        # Snapshot current data
+        # Snapshot current data (including servo angle to avoid stale value for 3D back-projection)
         rgb = self.latest_rgb.copy()
         depth = self.latest_depth.copy()
+        captured_servo_pitch = self.servo_pitch_deg
 
         # Run HSV circle detection
         circles = self.circle_detector.detect(rgb)
 
         if len(circles) == 0:
-            response.success = False
-            response.message = "No colored circles detected in current frame."
-            self.get_logger().warn("No circles found.")
-            return response
+            # Center-pixel depth fallback: if pilot has manually centered the
+            # target in the camera crosshair, use center-pixel depth to get
+            # a 3D position without relying on HSV circle detection.
+            if self.has_gps_fix or self.has_local_pose:
+                center_px = self.latest_rgb.shape[1] // 2
+                center_py = self.latest_rgb.shape[0] // 2
+                world = self._pixel_to_world_enu(center_px, center_py, depth, captured_servo_pitch)
+                if world is not None:
+                    east, north, up = world
+                    observed_face, _ = self._resolve_observed_face()
+                    plane_hit = self.building.classify_nearest_plane(east, north, up)
+                    if observed_face is not None:
+                        face = observed_face
+                    elif plane_hit.face is not None:
+                        face = plane_hit.face
+                    else:
+                        face, _ = self.building.get_nearest_wall_face(east, north)
+                    horiz_from_left, height_agl = self.building.project_point_onto_face(
+                        east, north, up, face
+                    )
+                    height_agl = height_agl - self.ground_alt_offset
+                    target_letter = target_letter_from_index(self.next_target_index)
+                    description = self._generate_description(
+                        TargetColor.UNKNOWN, face, horiz_from_left, height_agl, plane_hit.kind
+                    )
+                    img_filename = f"target_{target_letter}.jpg"
+                    img_path = os.path.join(capture_dir, img_filename)
+                    annotated = rgb.copy()
+                    h, w = annotated.shape[:2]
+                    cv2.line(annotated, (w // 2 - 20, h // 2), (w // 2 + 20, h // 2), (0, 255, 255), 2)
+                    cv2.line(annotated, (w // 2, h // 2 - 20), (w // 2, h // 2 + 20), (0, 255, 255), 2)
+                    cv2.putText(annotated, f"{target_letter}: center-depth fallback", (10, 30),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                    cv2.imwrite(img_path, annotated)
+                    record = TargetRecord(
+                        target_id=target_letter,
+                        color=TargetColor.UNKNOWN,
+                        face_label=plane_hit.label,
+                        height_agl=height_agl,
+                        horiz_from_left=horiz_from_left,
+                        east=east,
+                        north=north,
+                        up=up,
+                        description=description,
+                        timestamp=time.time(),
+                        confidence=0.0,
+                        image_path=img_path,
+                        plane_kind=plane_hit.kind,
+                        face_name=face.name,
+                        approved=False,
+                        raw_data={
+                            "east": east, "north": north, "up": up,
+                            "plane_kind": plane_hit.kind,
+                            "drone_lat": self.drone_lat,
+                            "drone_lon": self.drone_lon,
+                            "drone_heading": self.drone_heading,
+                            "servo_pitch": captured_servo_pitch,
+                            "drone_alt": self.drone_alt,
+                            "center_fallback": True,
+                        },
+                    )
+                    self.targets.append(record)
+                    new_targets.append(record)
+                    self.next_target_index += 1
+                    self.get_logger().info(
+                        f"TARGET {record.target_id} (center-fallback): {description}"
+                    )
+            if not new_targets:
+                response.success = False
+                response.message = "No colored circles detected in current frame. Center the target and retry, or use crosshair alignment."
+                self.get_logger().warn("No circles found.")
+                return response
 
         self.get_logger().info(f"Detected {len(circles)} circle(s)")
 
@@ -719,7 +825,13 @@ class TargetLocalizerNode(Node):
         duplicate_count = 0
         depth_fail_count = 0
         face_fail_count = 0
+        confidence_filtered_count = 0
         for det in circles:
+            # Confidence threshold filter: reject detections below minimum
+            if det.confidence < self.min_confidence:
+                confidence_filtered_count += 1
+                continue
+
             # Cross-verify color with independent HSV check
             verified_color, ratio = self.color_verifier.classify_roi(rgb, det.bbox)
             if verified_color != det.color and ratio > 0.3:
@@ -732,8 +844,8 @@ class TargetLocalizerNode(Node):
             else:
                 final_color = det.color
 
-            # Back-project to 3D world coordinates
-            world = self._pixel_to_world_enu(det.cx, det.cy, depth)
+            # Back-project to 3D world coordinates using captured servo angle
+            world = self._pixel_to_world_enu(det.cx, det.cy, depth, captured_servo_pitch)
             if world is None:
                 self.get_logger().warn(
                     f"Could not get depth for circle at ({det.cx}, {det.cy}), skipping."
@@ -760,6 +872,7 @@ class TargetLocalizerNode(Node):
             horiz_from_left, height_agl = self.building.project_point_onto_face(
                 east, north, up, face
             )
+            height_agl = height_agl - self.ground_alt_offset
 
             # Deduplication check
             if self._is_duplicate(east, north, up):
@@ -811,6 +924,24 @@ class TargetLocalizerNode(Node):
                 timestamp=time.time(),
                 confidence=det.confidence,
                 image_path=img_path,
+                plane_kind=plane_hit.kind,
+                face_name=face.name,
+                approved=False,
+                raw_data={
+                    "east": east, "north": north, "up": up,
+                    "plane_kind": plane_hit.kind,
+                    "face_name_override": None,
+                    "drone_lat": self.drone_lat,
+                    "drone_lon": self.drone_lon,
+                    "drone_heading": self.drone_heading,
+                    "servo_pitch": captured_servo_pitch,
+                    "drone_alt": self.drone_alt,
+                    "det_cx": int(det.cx), "det_cy": int(det.cy),
+                    "det_radius": int(det.radius),
+                    "det_color": det.color.value,
+                    "det_confidence": float(det.confidence),
+                    "center_fallback": False,
+                },
             )
             self.targets.append(record)
             new_targets.append(record)
@@ -832,7 +963,8 @@ class TargetLocalizerNode(Node):
             response.message = (
                 f"Detected {len(circles)} circle(s), but no new targets added "
                 f"(duplicates={duplicate_count}, depth_filtered={depth_fail_count}, "
-                f"face_filtered={face_fail_count})."
+                f"face_filtered={face_fail_count}, "
+                f"confidence_filtered={confidence_filtered_count})."
             )
 
         self.get_logger().info(f"Total targets so far: {len(self.targets)}")
@@ -912,8 +1044,9 @@ class TargetLocalizerNode(Node):
         filename = f"Task_1_{self.team_name}_targets.txt"
         filepath = os.path.join(self.output_dir, filename)
 
+        sorted_targets = sorted(self.targets, key=lambda t: t.target_id)
         lines = []
-        for t in self.targets:
+        for t in sorted_targets:
             lines.append(f"Target {t.target_id}: {t.description}")
 
         content = "\n\n".join(lines) + "\n"
@@ -928,7 +1061,7 @@ class TargetLocalizerNode(Node):
         debug_filename = f"Task_1_{self.team_name}_targets_debug.txt"
         debug_filepath = os.path.join(self.output_dir, debug_filename)
         debug_lines = []
-        for t in self.targets:
+        for t in sorted_targets:
             debug_lines.append(
                 f"Target {t.target_id}:\n"
                 f"  Description: {t.description}\n"
@@ -1021,6 +1154,217 @@ class TargetLocalizerNode(Node):
             response.message = f"Error rebuilding building model: {e}"
 
         return response
+
+    def _clear_targets_callback(self, request, response):
+        """Service handler for ~/clear_targets. Clears all captured targets."""
+        count = len(self.targets)
+        self.targets.clear()
+        self.next_target_index = 0
+        self.get_logger().info(f"Cleared {count} target(s)")
+        response.success = True
+        response.message = f"Cleared {count} target(s)."
+        return response
+
+    def _set_ground_alt_callback(self, request, response):
+        """Set the ground altitude offset from the drone's current AGL.
+
+        The pilot lands the drone on the ground, then triggers this service.
+        The drone's current AGL reading becomes the 0m ground reference.
+        All subsequent height_agl values are adjusted by this offset.
+        """
+        self.ground_alt_offset = self.drone_alt
+        self.get_logger().info(
+            f"Ground altitude set: drone_alt={self.drone_alt:.2f}m, "
+            f"offset={self.ground_alt_offset:.2f}m"
+        )
+        response.success = True
+        response.message = (
+            f"Ground altitude set to {self.ground_alt_offset:.2f}m. "
+            f"All heights will be relative to this level."
+        )
+        return response
+
+    def _regenerate_one_target(self, t) -> bool:
+        """Recompute face/height/description for a single target from its raw_data.
+
+        Returns True if the target was regenerated, False if it had no raw_data.
+        """
+        if t.raw_data is None:
+            return False
+        rd = t.raw_data
+        plane_kind = rd.get("plane_kind", t.plane_kind)
+        face_name_override = rd.get("face_name_override")
+
+        east = rd.get("east", t.east)
+        north = rd.get("north", t.north)
+        up = rd.get("up", t.up)
+
+        if face_name_override:
+            face = self.building.faces_by_name.get(face_name_override)
+            if face is None:
+                face, _ = self.building.get_nearest_wall_face(east, north)
+        else:
+            observed_face, _ = self._resolve_observed_face()
+            plane_hit = self.building.classify_nearest_plane(east, north, up)
+            if observed_face is not None:
+                face = observed_face
+            elif plane_hit.face is not None:
+                face = plane_hit.face
+            else:
+                face, _ = self.building.get_nearest_wall_face(east, north)
+
+        horiz_from_left, height_agl = self.building.project_point_onto_face(
+            east, north, up, face
+        )
+        height_agl = height_agl - self.ground_alt_offset
+
+        if plane_kind == "ground":
+            height_agl = max(0.0, height_agl)
+
+        t.face_label = face.name if face else plane_kind
+        t.face_name = face.name if face else ""
+        t.plane_kind = plane_kind
+        t.height_agl = height_agl
+        t.horiz_from_left = horiz_from_left
+        t.description = self._generate_description(
+            t.color, face, horiz_from_left, height_agl, plane_kind
+        )
+        return True
+
+    def _regenerate_descriptions_callback(self, request, response):
+        """Regenerate all target descriptions from stored raw data.
+
+        Called after the pilot changes building model, ground altitude,
+        or plane overrides so that all descriptions stay consistent.
+        """
+        regenerated = sum(1 for t in self.targets if self._regenerate_one_target(t))
+        msg = f"Regenerated {regenerated}/{len(self.targets)} target description(s)."
+        self.get_logger().info(msg)
+        response.success = True
+        response.message = msg
+        return response
+
+    def _set_target_plane_callback(self, request, response):
+        """Override the plane classification of a single target.
+
+        The API writes a ``plane_override.json`` file to the output directory
+        containing ``{"target_id": "A", "plane_kind": "wall|ground|roof",
+        "face_name": "N"}`` (face_name optional). This service reads it,
+        updates that target's raw_data, and regenerates its description.
+        """
+        import json as _json
+        override_path = os.path.join(self.output_dir, "plane_override.json")
+        if not os.path.exists(override_path):
+            response.success = False
+            response.message = f"Override file not found: {override_path}"
+            return response
+        try:
+            with open(override_path, "r") as f:
+                data = _json.load(f)
+        except Exception as e:
+            response.success = False
+            response.message = f"Failed to read override file: {e}"
+            return response
+
+        target_id = str(data.get("target_id", "")).strip()
+        plane_kind = str(data.get("plane_kind", "")).strip().lower()
+        face_name = data.get("face_name")
+        if plane_kind not in {"wall", "ground", "roof"}:
+            response.success = False
+            response.message = f"Invalid plane_kind: {plane_kind!r}"
+            return response
+
+        target = next((t for t in self.targets if t.target_id == target_id), None)
+        if target is None:
+            response.success = False
+            response.message = f"Target {target_id!r} not found"
+            return response
+
+        if target.raw_data is None:
+            target.raw_data = {}
+        target.raw_data["plane_kind"] = plane_kind
+        if face_name:
+            target.raw_data["face_name_override"] = str(face_name)
+        elif "face_name_override" in target.raw_data:
+            del target.raw_data["face_name_override"]
+
+        self._regenerate_one_target(target)
+        msg = (
+            f"Target {target_id} plane set to {plane_kind}"
+            + (f" (face={face_name})" if face_name else "")
+            + f"; description: {target.description}"
+        )
+        self.get_logger().info(msg)
+        response.success = True
+        response.message = msg
+        return response
+
+    def _detection_status_timer_callback(self):
+        """Run HSV detection on the latest frame and publish status."""
+        if self.latest_rgb is None:
+            return
+        try:
+            circles = self.circle_detector.detect(self.latest_rgb)
+            import json as _json
+
+            depth_img = self.latest_depth
+            depth_h, depth_w = (depth_img.shape if depth_img is not None else (0, 0))
+
+            def _depth_at(px: int, py: int) -> Optional[float]:
+                """Median depth in a small ROI around (px, py); None if invalid."""
+                if depth_img is None or depth_h == 0 or depth_w == 0:
+                    return None
+                hw = 5
+                y1 = max(0, py - hw); y2 = min(depth_h, py + hw + 1)
+                x1 = max(0, px - hw); x2 = min(depth_w, px + hw + 1)
+                roi = depth_img[y1:y2, x1:x2]
+                valid = roi[np.isfinite(roi) & (roi > 0.1) & (roi < 35.0)]
+                if len(valid) == 0:
+                    return None
+                return float(np.median(valid))
+
+            circle_payloads = []
+            top_distance: Optional[float] = None
+            for d in circles[:5]:
+                dist = _depth_at(int(d.cx), int(d.cy))
+                circle_payloads.append({
+                    "cx": int(d.cx),
+                    "cy": int(d.cy),
+                    "radius": int(d.radius),
+                    "color": d.color.value,
+                    "confidence": round(float(d.confidence), 3),
+                    "distance_m": round(dist, 3) if dist is not None else None,
+                })
+                if top_distance is None and dist is not None:
+                    top_distance = round(dist, 3)
+
+            # Center-pixel depth as a fallback distance when no circle is detected
+            center_distance: Optional[float] = None
+            if depth_img is not None:
+                center_distance = _depth_at(depth_w // 2, depth_h // 2)
+                if center_distance is not None:
+                    center_distance = round(center_distance, 3)
+
+            status = {
+                "circle_count": len(circles),
+                "has_depth": depth_img is not None,
+                "has_gps": self.has_gps_fix,
+                "has_local_pose": self.has_local_pose,
+                "ground_alt_offset": self.ground_alt_offset,
+                "target_count": len(self.targets),
+                "top_distance_m": top_distance,
+                "center_distance_m": center_distance,
+                "circles": circle_payloads,
+            }
+            self._latest_detections_json = _json.dumps(status)
+            self._detection_status_pub.publish(
+                Float64(data=float(len(circles)))
+            )
+            self._detection_status_json_pub.publish(
+                String(data=self._latest_detections_json)
+            )
+        except Exception:
+            pass
 
     def _print_model_callback(self, request, response):
         """Print the current building model with landmarks."""
