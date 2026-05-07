@@ -2775,6 +2775,27 @@ fi
         )
         return {"success": True, "output": output}
 
+# ==================== Building Corner Calibration ====================
+
+    class BuildingCornerRequest(BaseModel):
+        name: str
+        lat: float
+        lon: float
+
+    class BuildingCornersRequest(BaseModel):
+        center_lat: float
+        center_lon: float
+        height: float
+        corners: list[dict[str, Any]]
+
+    # Shared path for the corners JSON file consumed by the ROS2 service.
+    # Default matches target_localizer output_dir default (/home/mad/targets).
+    # Override via NOMAD_TARGET_OUTPUT_DIR env var for consistency.
+    _BUILDING_CORNERS_DIR = os.environ.get(
+        "NOMAD_TARGET_OUTPUT_DIR",
+        "/home/mad/targets",
+    )
+
     class PlaneOverrideRequest(BaseModel):
         plane_kind: str  # "wall" | "ground" | "roof"
         face_name: Optional[str] = None  # optional explicit wall face (e.g. "N", "S")
@@ -3205,28 +3226,6 @@ fi
             "center_lon": payload["center_lon"],
             "height": payload["height"],
         }
-
-
-# ==================== Building Corner Calibration ====================
-
-    class BuildingCornerRequest(BaseModel):
-        name: str
-        lat: float
-        lon: float
-
-    class BuildingCornersRequest(BaseModel):
-        center_lat: float
-        center_lon: float
-        height: float
-        corners: list[dict[str, Any]]
-
-    # Shared path for the corners JSON file consumed by the ROS2 service.
-    # Default matches target_localizer output_dir default (/home/mad/targets).
-    # Override via NOMAD_TARGET_OUTPUT_DIR env var for consistency.
-    _BUILDING_CORNERS_DIR = os.environ.get(
-        "NOMAD_TARGET_OUTPUT_DIR",
-        "/home/mad/targets",
-    )
 
 
     # ==================== Task 2: Extinguish (Indoor) ====================
