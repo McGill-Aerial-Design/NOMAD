@@ -763,9 +763,20 @@ for path in candidates:
                 new_text,
             )
 
+    # Publish ZED images at native 720p instead of the default 360p downscale.
+    # WARNING: 720p with nvblox enabled triggers cudaErrorIllegalAddress on
+    # the 8GB Orin Nano. Pair this with NOMAD_DISABLE_NVBLOX=1 if running on
+    # that hardware, or accept the risk on platforms with more VRAM.
+    if re.search(r'(?m)^\s*pub_downscale_factor\s*:', new_text):
+        new_text = re.sub(
+            r'(?m)^(\s*pub_downscale_factor\s*:\s*)[0-9.]+',
+            r'\g<1>1.0',
+            new_text,
+        )
+
     if new_text != text:
         path.write_text(new_text)
-        print(f'Enabled publish_mag/publish_raw/publish_left_right in {path}')
+        print(f'Enabled publish_mag/publish_raw/publish_left_right + 720p pub in {path}')
     else:
         print(f'publish_mag/publish_raw/publish_left_right already true in {path}')
 
