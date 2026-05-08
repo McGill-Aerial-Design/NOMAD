@@ -26,6 +26,17 @@ namespace NOMAD.MissionPlanner
         private static readonly Color ERROR_COLOR = NOMADTheme.ERROR;
         private static readonly Color ACCENT_COLOR = NOMADTheme.ACCENT;
 
+        // ZED camera tilt servo PWM endpoints (microseconds).
+        // The Jetson API takes an angle in [0, 180] which it linearly maps to
+        // pulse widths in [SERVO_PULSE_MIN_US, SERVO_PULSE_MAX_US] (500-2500us
+        // per servo_controller.ServoConfig). We expose PWM directly to the
+        // operator and convert client-side so the slider matches the rig.
+        private const int CAMERA_TILT_PWM_DOWN  = 700;
+        private const int CAMERA_TILT_PWM_LEVEL = 1250;
+        private const int CAMERA_TILT_PWM_UP    = 1450;
+        private const int SERVO_PULSE_MIN_US    = 500;
+        private const int SERVO_PULSE_MAX_US    = 2500;
+
         private readonly NOMADConfig _config;
         private TrackBar _nozzleServoSlider;
         private Label _lblNozzleValue;
@@ -110,13 +121,14 @@ namespace NOMAD.MissionPlanner
             btnWater.Click += (s, e) => ShootWater();
             Controls.Add(btnWater);
 
-            // Second row: Nozzle servo
+            // Second row: ZED camera tilt servo (PWM in microseconds)
+            // Mechanical range on this rig: 700us = down, 1250us = straight, 1450us = up.
             y += 35;
             x = 10;
 
             var lblNozzle = new Label
             {
-                Text = "Nozzle Angle:",
+                Text = "Camera Tilt:",
                 Font = new Font("Segoe UI", 9),
                 ForeColor = TEXT_SECONDARY,
                 Location = new Point(x, y + 5),
@@ -129,10 +141,12 @@ namespace NOMAD.MissionPlanner
             {
                 Location = new Point(x, y),
                 Size = new Size(180, 28),
-                Minimum = 0,
-                Maximum = 180,
-                Value = 90,
-                TickFrequency = 30,
+                Minimum = CAMERA_TILT_PWM_DOWN,
+                Maximum = CAMERA_TILT_PWM_UP,
+                Value = CAMERA_TILT_PWM_LEVEL,
+                TickFrequency = 50,
+                SmallChange = 10,
+                LargeChange = 50,
                 BackColor = CARD_BG,
             };
             _nozzleServoSlider.ValueChanged += (s, e) => UpdateNozzleServo();
@@ -141,7 +155,7 @@ namespace NOMAD.MissionPlanner
 
             _lblNozzleValue = new Label
             {
-                Text = "90 deg",
+                Text = $"{CAMERA_TILT_PWM_LEVEL} us",
                 Font = new Font("Segoe UI", 9),
                 ForeColor = TEXT_PRIMARY,
                 Location = new Point(x, y + 5),
@@ -222,8 +236,15 @@ namespace NOMAD.MissionPlanner
         {
             if (_nozzleServoSlider == null || _lblNozzleValue == null) return;
 
-            int angle = _nozzleServoSlider.Value;
-            _lblNozzleValue.Text = $"{angle} deg";
+            int pulseUs = _nozzleServoSlider.Value;
+            _lblNozzleValue.Text = $"{pulseUs} us";
+
+            // Convert PWM us to the angle the API expects.
+            // Server maps angle [0,180] -> pulse [SERVO_PULSE_MIN_US, SERVO_PULSE_MAX_US].
+            double angle = (pulseUs - SERVO_PULSE_MIN_US) * 180.0
+                         / (SERVO_PULSE_MAX_US - SERVO_PULSE_MIN_US);
+            if (angle < 0) angle = 0;
+            if (angle > 180) angle = 180;
 
             try
             {
@@ -231,7 +252,7 @@ namespace NOMAD.MissionPlanner
                 if (string.IsNullOrEmpty(jetsonIp)) return;
 
                 await JetsonApiService.PostAsync(
-                    $"/api/servo/camera/tilt?angle={angle}");
+                    $"/api/servo/camera/tilt?angle={angle.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}");
             }
             catch { }
         }

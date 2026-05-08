@@ -250,7 +250,7 @@ namespace NOMAD.MissionPlanner
             Controls.Add(ctrlPanel);
             
             // Initialize with default topic
-            _topics.Add(("/zed/zed_node/rgb/color/rect/image", "RGB Color"));
+            _topics.Add(("/zed/zed_node/rgb/color/rect/image", "RGB Rect"));
             PopulateTopics();
         }
 
@@ -378,13 +378,29 @@ namespace NOMAD.MissionPlanner
                     {
                         var name = t["name"]?.ToString();
                         var disp = t["display_name"]?.ToString() ?? name;
-                        if (!string.IsNullOrEmpty(name))
-                            _topics.Add((name, disp));
+                        if (string.IsNullOrEmpty(name))
+                            continue;
+
+                        // Whitelist: only RGB rect (rectified) and RGB raw (left camera).
+                        // Depth display in the embedded player is broken; hide everything else.
+                        var lower = name.ToLowerInvariant();
+                        if (lower.IndexOf("rgb") < 0)
+                            continue;
+                        if (lower.IndexOf("gray") >= 0 || lower.IndexOf("depth") >= 0)
+                            continue;
+
+                        bool isRect = lower.IndexOf("rect") >= 0;
+                        bool isRaw = lower.IndexOf("raw") >= 0;
+                        if (!isRect && !isRaw)
+                            continue;
+
+                        var label = isRect ? "RGB Rect" : "RGB Raw (Left)";
+                        _topics.Add((name, label));
                     }
                 }
-                
+
                 if (_topics.Count == 0)
-                    _topics.Add(("/zed/zed_node/rgb/color/rect/image", "RGB Color"));
+                    _topics.Add(("/zed/zed_node/rgb/color/rect/image", "RGB Rect"));
                 
                 PopulateTopics();
                 _lblStatus.Text = $"Found {_topics.Count} topics";

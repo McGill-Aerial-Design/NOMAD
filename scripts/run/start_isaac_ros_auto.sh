@@ -742,11 +742,21 @@ for path in candidates:
     else:
         new_text = text.rstrip() + '\npublish_mag: true\n'
 
+    # Mission Planner video player needs RGB raw (left camera) in addition
+    # to the rect stream. Both default to false in the upstream wrapper config.
+    for flag in ('publish_raw', 'publish_left_right'):
+        if re.search(rf'(?m)^\s*{flag}\s*:', new_text):
+            new_text = re.sub(
+                rf'(?m)^(\s*{flag}\s*:\s*)(?:true|false)\s*$',
+                rf'\1true',
+                new_text,
+            )
+
     if new_text != text:
         path.write_text(new_text)
-        print(f'Enabled publish_mag in {path}')
+        print(f'Enabled publish_mag/publish_raw/publish_left_right in {path}')
     else:
-        print(f'publish_mag already true in {path}')
+        print(f'publish_mag/publish_raw/publish_left_right already true in {path}')
 
     updated_any = True
 

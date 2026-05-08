@@ -291,10 +291,10 @@ def run(
     # Camera tilt servo can be driven from the flight controller PWM outputs.
     # Use environment variable NOMAD_CAMERA_TILT_SERVO_CHANNEL to select channel (1-indexed).
     try:
-        camera_tilt_channel = int(os.environ.get("NOMAD_CAMERA_TILT_SERVO_CHANNEL", "8"))
+        camera_tilt_channel = int(os.environ.get("NOMAD_CAMERA_TILT_SERVO_CHANNEL", "6"))
     except ValueError:
-        camera_tilt_channel = 8
-        logger.warning("Invalid NOMAD_CAMERA_TILT_SERVO_CHANNEL value, using default 8")
+        camera_tilt_channel = 6
+        logger.warning("Invalid NOMAD_CAMERA_TILT_SERVO_CHANNEL value, using default 6")
 
     if enable_servos and SERVO_AVAILABLE:
         try:
