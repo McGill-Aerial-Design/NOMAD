@@ -4158,17 +4158,17 @@ fi
             "message": body.get("message"),
         }
 
-    # Notify spray controller of Nav2 result (unblocks APPROACH state)
-    spray_ctrl = getattr(request.app.state, "spray_controller", None)
-    if spray_ctrl:
-        try:
-            spray_ctrl.update_nav2_result(
-                goal_id=body.get("goal_id", ""),
-                status=body.get("status", "unknown"),
-                message=body.get("message", ""),
-            )
-        except Exception:
-            pass  # spray controller may not be active
+        # Notify spray controller of Nav2 result (unblocks APPROACH state)
+        spray_ctrl = getattr(request.app.state, "spray_controller", None)
+        if spray_ctrl:
+            try:
+                spray_ctrl.update_nav2_result(
+                    goal_id=body.get("goal_id", ""),
+                    status=body.get("status", "unknown"),
+                    message=body.get("message", ""),
+                )
+            except Exception:
+                pass  # spray controller may not be active
         return {"success": True}
 
     # ==================== Spray Controller (SP-001 to SP-008) =====================
