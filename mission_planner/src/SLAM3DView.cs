@@ -54,13 +54,21 @@ namespace NOMAD.MissionPlanner
         private readonly object _poseLock = new object();
 
         // ---- Servo polling ----
-        private float _servoAngleDeg = 90.0f;
+        // Track the camera tilt as PWM microseconds — the server's 0-180 deg
+        // value is a linear projection onto a 500-2500us range that doesn't
+        // match the rig's mechanical limits (700us=down, 1250us=level, 1450us=up).
+        // We display PWM directly and remap to the renderer's "90deg=level" space.
+        private const int ServoPulseDownUs  = 700;
+        private const int ServoPulseLevelUs = 1250;
+        private const int ServoPulseUpUs    = 1450;
+        private const int ServoApiPulseMinUs = 500;
+        private const int ServoApiPulseMaxUs = 2500;
+        private int _servoPulseUs = ServoPulseLevelUs;
         private System.Windows.Forms.Timer _servoTimer;
 
         // ---- Perception/status polling ----
         private System.Windows.Forms.Timer _statusTimer;
         private bool _statusPollInFlight;
-        private const float ScanStopThresholdMps = 0.10f;
 
         // ---- PoseState (anti-jitter filtering) ----
         private readonly PoseState _poseState = new PoseState();
@@ -434,7 +442,7 @@ namespace NOMAD.MissionPlanner
             y += 18;
             _lblPerceptionStatus = new Label
             {
-                Text = "HSV: -- | Servo: -- | ScanStopScan: --",
+                Text = "HSV: -- | Servo: --",
                 Location = new Point(10, y),
                 ForeColor = Color.FromArgb(150, 150, 150),
                 AutoSize = true,
@@ -708,10 +716,39 @@ namespace NOMAD.MissionPlanner
 
         // Note: AngleMagnitudeDeg and ShouldRejectAttitudeResetGlitch moved to PoseState.cs
 
+        // Remap PWM us to the renderer's "90deg = level" space using the rig's
+        // mechanical anchors. The mount can only tilt about 45deg either side
+        // of horizontal — it cannot look straight down.
+        //   700us  -> 45deg below horizontal  (renderer 45deg)
+        //   1250us -> level                   (renderer 90deg)
+        //   1450us -> 45deg above horizontal  (renderer 135deg)
+        // Piecewise linear so each half compresses correctly given the
+        // asymmetric pulse spans (down=550us, up=200us).
+        private const float ServoTiltMaxDownDeg = 45f;
+        private const float ServoTiltMaxUpDeg   = 45f;
+
+        private static float ServoPulseUsToRenderDeg(int pulseUs)
+        {
+            if (pulseUs <= ServoPulseLevelUs)
+            {
+                float span = ServoPulseLevelUs - ServoPulseDownUs;
+                if (span <= 0) return 90f;
+                return (90f - ServoTiltMaxDownDeg) +
+                       (pulseUs - ServoPulseDownUs) * ServoTiltMaxDownDeg / span;
+            }
+            else
+            {
+                float span = ServoPulseUpUs - ServoPulseLevelUs;
+                if (span <= 0) return 90f;
+                return 90f +
+                       (pulseUs - ServoPulseLevelUs) * ServoTiltMaxUpDeg / span;
+            }
+        }
+
         private void ApplyCameraControllerView()
         {
             float servoDeg;
-            lock (_poseLock) { servoDeg = _servoAngleDeg; }
+            lock (_poseLock) { servoDeg = ServoPulseUsToRenderDeg(_servoPulseUs); }
 
             var (glX, glY, glZ) = CoordinateConverter.RosToOpenGL(_renderPosX, _renderPosY, _renderPosZ);
 
@@ -776,7 +813,7 @@ namespace NOMAD.MissionPlanner
                 return;
 
             float servoDeg;
-            lock (_poseLock) { servoDeg = _servoAngleDeg; }
+            lock (_poseLock) { servoDeg = ServoPulseUsToRenderDeg(_servoPulseUs); }
 
             var (glX, glY, glZ) = CoordinateConverter.RosToOpenGL(_renderPosX, _renderPosY, _renderPosZ);
 
@@ -1089,10 +1126,12 @@ namespace NOMAD.MissionPlanner
                     {
                         var json = await response.Content.ReadAsStringAsync();
                         var obj = JObject.Parse(json);
-                        lock (_poseLock)
-                        {
-                            _servoAngleDeg = obj["angle"]?.Value<float>() ?? 90f;
-                        }
+                        float angleDeg = obj["angle"]?.Value<float>() ?? 90f;
+                        // Server returns the API angle (0-180 over 500-2500us); convert to PWM.
+                        int pulseUs = (int)Math.Round(
+                            ServoApiPulseMinUs +
+                            angleDeg * (ServoApiPulseMaxUs - ServoApiPulseMinUs) / 180f);
+                        lock (_poseLock) { _servoPulseUs = pulseUs; }
                     }
                 }
                 catch { }
@@ -1123,7 +1162,6 @@ namespace NOMAD.MissionPlanner
         {
             string hsvText = "HSV: --";
             string servoText = "Servo: --";
-            string scanText = "ScanStopScan: --";
 
             try
             {
@@ -1178,42 +1216,18 @@ namespace NOMAD.MissionPlanner
                     bool available = servoObj["available"]?.Value<bool>() ?? false;
                     var camTilt = servoObj["servos"]?["camera_tilt"];
                     bool enabled = camTilt?["enabled"]?.Value<bool>() ?? false;
-                    float angle = camTilt?["angle"]?.Value<float>() ?? _servoAngleDeg;
+                    float angleDeg = camTilt?["angle"]?.Value<float>() ?? 90f;
+                    int pulseUs = (int)Math.Round(
+                        ServoApiPulseMinUs +
+                        angleDeg * (ServoApiPulseMaxUs - ServoApiPulseMinUs) / 180f);
                     servoText = available
-                        ? $"Servo: {(enabled ? "Enabled" : "Disabled")} {angle:F1} deg"
+                        ? $"Servo: {(enabled ? "Enabled" : "Disabled")} {pulseUs} us"
                         : "Servo: Not available";
                 }
             }
             catch { }
 
-            try
-            {
-                var poseResponse = await JetsonApiService.GetAsync("/api/vio/pose");
-                if (poseResponse.IsSuccessStatusCode)
-                {
-                    var poseJson = await poseResponse.Content.ReadAsStringAsync();
-                    var poseObj = JObject.Parse(poseJson);
-                    bool valid = poseObj["valid"]?.Value<bool?>() ?? true;
-                    if (valid)
-                    {
-                        float vx = poseObj["vx"]?.Value<float>() ?? 0f;
-                        float vy = poseObj["vy"]?.Value<float>() ?? 0f;
-                        float vz = poseObj["vz"]?.Value<float>() ?? 0f;
-                        float speed = (float)Math.Sqrt(vx * vx + vy * vy + vz * vz);
-                        bool moving = speed > ScanStopThresholdMps;
-                        scanText = moving
-                            ? $"ScanStopScan: HOLD ({speed:F2} m/s)"
-                            : $"ScanStopScan: SCAN ({speed:F2} m/s)";
-                    }
-                    else
-                    {
-                        scanText = "ScanStopScan: No VIO";
-                    }
-                }
-            }
-            catch { }
-
-            UpdatePerceptionStatusSafe($"{hsvText} | {servoText} | {scanText}");
+            UpdatePerceptionStatusSafe($"{hsvText} | {servoText}");
         }
 
         // ==================== Event Handlers ====================

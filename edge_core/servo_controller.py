@@ -471,6 +471,10 @@ class MavlinkServo:
             logger.error(f"Invalid MAVLink servo channel: {self._channel}")
             return False
 
+        # MAVLink servos have no per-pin hardware activation step; the FC drives
+        # them whenever DO_SET_SERVO is sent. Mark enabled so /api/servo/status
+        # reports the truth (otherwise UI shows "Disabled" forever).
+        self._enabled = True
         logger.info(f"MAVLink servo {self.config.name} configured on channel {self._channel}")
         return True
 

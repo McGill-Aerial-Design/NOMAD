@@ -41,6 +41,14 @@ namespace NOMAD.MissionPlanner
         private TrackBar _nozzleServoSlider;
         private Label _lblNozzleValue;
         private Label _lblStatus;
+        private bool _suppressTiltEvent;
+
+        // Shared camera-tilt state across every PayloadControlPanel instance.
+        // Without this, sliders on different views (Task1, Video, ...) each push
+        // their own stale PWM whenever they fire ValueChanged, and the servo
+        // ping-pongs between two operator setpoints.
+        private static int s_lastTiltPulseUs = CAMERA_TILT_PWM_LEVEL;
+        private static event Action<int, PayloadControlPanel> CameraTiltChanged;
 
         private int GPIO_PAYLOAD1_PIN => _config?.GpioPayload1Pin ?? -1;
         private int GPIO_PAYLOAD2_PIN => _config?.GpioPayload2Pin ?? -1;
@@ -49,6 +57,11 @@ namespace NOMAD.MissionPlanner
         {
             _config = config;
             InitializeUI();
+            CameraTiltChanged += OnCameraTiltChangedExternally;
+            this.Disposed += (s, e) => CameraTiltChanged -= OnCameraTiltChangedExternally;
+            // Adopt the last known operator setpoint so a new panel doesn't
+            // flash the level default and trip a redundant POST.
+            ApplyTiltPulseQuietly(s_lastTiltPulseUs);
         }
 
         private void InitializeUI()
@@ -239,6 +252,14 @@ namespace NOMAD.MissionPlanner
             int pulseUs = _nozzleServoSlider.Value;
             _lblNozzleValue.Text = $"{pulseUs} us";
 
+            // ValueChanged fires both on user drags AND on programmatic sets
+            // we use to mirror state from another panel. Only POST on user input.
+            if (_suppressTiltEvent) return;
+
+            // Mirror this setpoint to every other panel and remember it for new ones.
+            s_lastTiltPulseUs = pulseUs;
+            CameraTiltChanged?.Invoke(pulseUs, this);
+
             // Convert PWM us to the angle the API expects.
             // Server maps angle [0,180] -> pulse [SERVO_PULSE_MIN_US, SERVO_PULSE_MAX_US].
             double angle = (pulseUs - SERVO_PULSE_MIN_US) * 180.0
@@ -255,6 +276,37 @@ namespace NOMAD.MissionPlanner
                     $"/api/servo/camera/tilt?angle={angle.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}");
             }
             catch { }
+        }
+
+        private void OnCameraTiltChangedExternally(int pulseUs, PayloadControlPanel source)
+        {
+            if (source == this) return;
+            if (IsDisposed || _nozzleServoSlider == null) return;
+
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => ApplyTiltPulseQuietly(pulseUs)));
+                return;
+            }
+            ApplyTiltPulseQuietly(pulseUs);
+        }
+
+        private void ApplyTiltPulseQuietly(int pulseUs)
+        {
+            if (_nozzleServoSlider == null) return;
+            int clamped = pulseUs;
+            if (clamped < _nozzleServoSlider.Minimum) clamped = _nozzleServoSlider.Minimum;
+            if (clamped > _nozzleServoSlider.Maximum) clamped = _nozzleServoSlider.Maximum;
+            if (_nozzleServoSlider.Value == clamped)
+            {
+                if (_lblNozzleValue != null) _lblNozzleValue.Text = $"{clamped} us";
+                return;
+            }
+
+            _suppressTiltEvent = true;
+            try { _nozzleServoSlider.Value = clamped; }
+            finally { _suppressTiltEvent = false; }
+            if (_lblNozzleValue != null) _lblNozzleValue.Text = $"{clamped} us";
         }
 
         private void SetStatus(string text, Color color)

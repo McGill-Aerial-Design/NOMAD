@@ -598,6 +598,17 @@ validate_nav2_config() {
 # Launch ZED + nvblox
 # =========================================================================
 launch_zed_nvblox() {
+    # Allow operators to skip nvblox while keeping the ZED node (and therefore
+    # the video bridge) running. Set NOMAD_DISABLE_NVBLOX=1 to take this path.
+    # The ZED ROS node is composed into the same container as nvblox in the
+    # default launch, so killing nvblox there also kills video — this flag
+    # avoids that coupling by routing to the standalone zed_camera launch.
+    if [ "${NOMAD_DISABLE_NVBLOX:-0}" = "1" ] || [ "${NOMAD_DISABLE_NVBLOX:-}" = "true" ]; then
+        log_warn "NOMAD_DISABLE_NVBLOX set -- launching ZED only (no nvblox/nav2)"
+        launch_zed_only
+        return
+    fi
+
     # PREFLIGHT: nvblox_ros MUST be available (hard fail if missing)
     if ! docker exec "$CONTAINER_NAME" bash -c "$ROS_SETUP; $WS_SETUP; ros2 pkg list 2>/dev/null | grep -q nvblox_ros"; then
         log_error "FATAL: nvblox_ros package not found in container"
