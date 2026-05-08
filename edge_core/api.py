@@ -5085,8 +5085,14 @@ fi
             )
 
             # Relaunch ZED on its own so the video bridge keeps streaming.
-            # Detached so the API returns promptly; logs land alongside the
-            # original combined-launch logs for inspection.
+            # Use the nvblox_examples_bringup ZED-only launch (sensors/zed.launch.py)
+            # rather than upstream zed_wrapper/zed_camera.launch.py: it loads the
+            # same zed_common.yaml + zed2.yaml that the combined launch uses, so
+            # the depth-mode TensorRT model is already optimized/cached and ZED
+            # starts publishing within seconds. The upstream default config uses
+            # NEURAL_LIGHT depth which forces a 5+ minute one-time optimization
+            # the first time it's run, during which no topics are published.
+            # Detached so the API returns promptly; logs share /tmp/zed_nvblox.log.
             zed_only_cmd = (
                 "GXF_LIB_DIRS=$(find /opt/ros/humble/share -path '*/gxf/lib' "
                 "-type d 2>/dev/null | tr '\\n' ':'); "
@@ -5097,8 +5103,9 @@ fi
                 "source /opt/ros/humble/setup.bash 2>/dev/null; "
                 "source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null; "
                 "export EGL_PLATFORM=device; "
-                "ros2 launch zed_wrapper zed_camera.launch.py "
-                "camera_model:=zed2 >> /tmp/zed_nvblox.log 2>&1 &"
+                "ros2 launch nvblox_examples_bringup sensors/zed.launch.py "
+                "zed_camera_model:=zed2 run_standalone:=True "
+                ">> /tmp/zed_nvblox.log 2>&1 &"
             )
             subprocess.run(
                 ["docker", "exec", "-d", container, "bash", "-c", zed_only_cmd],
