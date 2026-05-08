@@ -5049,7 +5049,12 @@ fi
     @app.post("/api/isaac/stop-nvblox", tags=["Isaac ROS"])
     async def isaac_stop_nvblox():
         """
-        Stop nvblox and ROS-HTTP bridge without stopping the container.
+        Stop nvblox and the ROS-HTTP bridge without stopping the container.
+
+        nvblox and the ZED ROS node share the same composable container, so
+        the only way to stop nvblox is to tear that container down — which
+        also kills the camera and silences the video bridge. To keep video
+        alive we relaunch ZED standalone (zed_camera.launch.py) right after.
         """
         container = "nomad_isaac_ros"
         try:
@@ -5065,7 +5070,7 @@ fi
                     capture_output=True,
                     timeout=5,
                 )
-            # Clean stale FastRTPS SHM locks so next launch succeeds
+            # Clean stale FastRTPS SHM locks so the new ZED launch can bind.
             subprocess.run(
                 [
                     "docker",
@@ -5078,7 +5083,33 @@ fi
                 capture_output=True,
                 timeout=5,
             )
-            return {"success": True, "message": "nvblox and bridge stopped"}
+
+            # Relaunch ZED on its own so the video bridge keeps streaming.
+            # Detached so the API returns promptly; logs land alongside the
+            # original combined-launch logs for inspection.
+            zed_only_cmd = (
+                "GXF_LIB_DIRS=$(find /opt/ros/humble/share -path '*/gxf/lib' "
+                "-type d 2>/dev/null | tr '\\n' ':'); "
+                "export LD_LIBRARY_PATH=/opt/ros/humble/lib:"
+                "/opt/ros/humble/lib/aarch64-linux-gnu:/usr/local/zed/lib:"
+                "${GXF_LIB_DIRS}${LD_LIBRARY_PATH:-}; "
+                "source /opt/ros/humble/install/setup.bash 2>/dev/null || "
+                "source /opt/ros/humble/setup.bash 2>/dev/null; "
+                "source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null; "
+                "export EGL_PLATFORM=device; "
+                "ros2 launch zed_wrapper zed_camera.launch.py "
+                "camera_model:=zed2 >> /tmp/zed_nvblox.log 2>&1 &"
+            )
+            subprocess.run(
+                ["docker", "exec", "-d", container, "bash", "-c", zed_only_cmd],
+                capture_output=True,
+                timeout=10,
+            )
+
+            return {
+                "success": True,
+                "message": "nvblox and bridge stopped; ZED relaunched standalone",
+            }
         except Exception as e:
             return {"success": False, "error": str(e)}
 
