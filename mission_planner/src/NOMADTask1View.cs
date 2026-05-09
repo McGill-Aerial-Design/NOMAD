@@ -42,7 +42,10 @@ private ListBox _lstWalls;
         private Label _lblGroundAlt;
         private Button _btnRegenDescriptions;
         private Label _lblDetectionStatus;
+        private Label _lblTiltInfo;
         private int _detectionPollCounter = 0;
+        private int _tiltPollCounter = 2; // Staggered from detection poll
+        private int _lastDetectionCount = 0;
         
         public NOMADTask1View(
             DualLinkSender sender,
@@ -201,7 +204,7 @@ private ListBox _lstWalls;
                 Margin = Padding.Empty,
                 Padding = Padding.Empty,
             };
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));   // GPS status
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 115));  // GPS status
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 150));  // Payload controls (3 rows)
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 45));    // Capture
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 55));    // Gallery
@@ -239,6 +242,16 @@ _lblPosition = new Label
             AutoSize = true,
         };
         gpsCard.Controls.Add(_lblDetectionStatus);
+
+        _lblTiltInfo = new Label
+        {
+            Text = "Tilt: -- | Gnd: --",
+            Font = new Font("Consolas", 9),
+            ForeColor = TEXT_SECONDARY,
+            Location = new Point(15, 100),
+            AutoSize = true,
+        };
+        gpsCard.Controls.Add(_lblTiltInfo);
 
             layout.Controls.Add(gpsCard, 0, 0);
 
@@ -1193,7 +1206,16 @@ _lblPosition = new Label
             finally
             {
                 _btnCapture.Enabled = true;
-                _btnCapture.Text = "CAPTURE PHOTO WITH METADATA";
+                if (_lastDetectionCount > 0)
+                {
+                    _btnCapture.BackColor = SUCCESS_COLOR;
+                    _btnCapture.Text = $"● CAPTURE ({_lastDetectionCount} circle{(_lastDetectionCount > 1 ? "s" : "")})";
+                }
+                else
+                {
+                    _btnCapture.BackColor = ACCENT_COLOR;
+                    _btnCapture.Text = "CAPTURE (crosshair)";
+                }
             }
         }
 
@@ -1244,7 +1266,7 @@ _lblPosition = new Label
                 
                 _lblPosition.Text = $"Position: {cs.lat:F6}, {cs.lng:F6} | Alt: {cs.alt:F1}m";
 
-                // Update detection status indicator (poll every ~2s via a simple counter)
+                // Update detection status + capture button color every ~2s
                 _detectionPollCounter++;
                 if (_detectionPollCounter >= 4)
                 {
@@ -1263,13 +1285,13 @@ _lblPosition = new Label
                                 double? centerDist = (double?)data["center_distance_m"];
                                 this.BeginInvoke(new Action(() =>
                                 {
+                                    _lastDetectionCount = count;
+
                                     if (_lblDetectionStatus != null && !_lblDetectionStatus.IsDisposed)
                                     {
                                         if (count > 0)
                                         {
-                                            string distStr = topDist.HasValue
-                                                ? $" @ {topDist.Value:F2}m"
-                                                : "";
+                                            string distStr = topDist.HasValue ? $" @ {topDist.Value:F2}m" : "";
                                             _lblDetectionStatus.Text = $"\u25CF {count} circle(s){distStr}";
                                             _lblDetectionStatus.ForeColor = SUCCESS_COLOR;
                                         }
@@ -1283,6 +1305,72 @@ _lblPosition = new Label
                                             _lblDetectionStatus.Text = "\u25CB No detection";
                                             _lblDetectionStatus.ForeColor = TEXT_SECONDARY;
                                         }
+                                    }
+
+                                    // Update capture button: green when circles found, amber for crosshair fallback.
+                                    // Always enabled \u2014 crosshair fallback handles the no-circle case.
+                                    if (_btnCapture != null && !_btnCapture.IsDisposed && _btnCapture.Enabled)
+                                    {
+                                        if (count > 0)
+                                        {
+                                            _btnCapture.BackColor = SUCCESS_COLOR;
+                                            _btnCapture.Text = $"\u25CF CAPTURE ({count} circle{(count > 1 ? "s" : "")})";
+                                        }
+                                        else
+                                        {
+                                            _btnCapture.BackColor = ACCENT_COLOR;
+                                            _btnCapture.Text = "CAPTURE (crosshair)";
+                                        }
+                                    }
+                                }));
+                            }
+                        }
+                        catch { }
+                    });
+                }
+
+                // Poll camera tilt angle every ~2s, staggered from detection poll
+                _tiltPollCounter++;
+                if (_tiltPollCounter >= 4)
+                {
+                    _tiltPollCounter = 0;
+                    double droneAlt = cs.alt;
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var resp = await JetsonApiService.GetAsync("/api/servo/camera/tilt");
+                            if (resp.IsSuccessStatusCode)
+                            {
+                                var body = await resp.Content.ReadAsStringAsync();
+                                var data = Newtonsoft.Json.Linq.JObject.Parse(body);
+                                float feedbackAngle = data["feedback_angle"]?.Value<float>()
+                                    ?? data["angle"]?.Value<float>() ?? 90f;
+                                float pitchDeg = feedbackAngle - 90f;
+                                string tiltText;
+                                Color tiltColor;
+                                if (pitchDeg < -1f)
+                                {
+                                    double groundDist = droneAlt / Math.Tan(Math.Abs(pitchDeg) * Math.PI / 180.0);
+                                    tiltText = $"Tilt: {pitchDeg:F0}\u00B0 | Gnd: {groundDist:F1}m fwd";
+                                    tiltColor = Math.Abs(pitchDeg) >= 30f ? SUCCESS_COLOR : WARNING_COLOR;
+                                }
+                                else if (pitchDeg > 1f)
+                                {
+                                    tiltText = $"Tilt: +{pitchDeg:F0}\u00B0 (up)";
+                                    tiltColor = WARNING_COLOR;
+                                }
+                                else
+                                {
+                                    tiltText = "Tilt: 0\u00B0 (level \u2014 tilt down for targeting)";
+                                    tiltColor = WARNING_COLOR;
+                                }
+                                this.BeginInvoke(new Action(() =>
+                                {
+                                    if (_lblTiltInfo != null && !_lblTiltInfo.IsDisposed)
+                                    {
+                                        _lblTiltInfo.Text = tiltText;
+                                        _lblTiltInfo.ForeColor = tiltColor;
                                     }
                                 }));
                             }

@@ -368,38 +368,108 @@ After 2359 ET on Thursday May 21, competition organizers provide:
 
 > If you calibrated corners from satellite imagery Thursday night and verified them, you can skip this step. But on-site calibration is always more accurate.
 
-### 5.5 At the Scene — Target Detection & Description
+### 5.5 Camera Geometry — How to Position the Drone (READ THIS)
+
+> **The ZED camera can only tilt up to 45° downward. It cannot look straight down.**
+> This is the single biggest source of operator positioning errors. Read this section before your first pass.
+
+#### Camera tilt convention
+
+| Servo command | Camera direction | Use case |
+|--------------|-----------------|----------|
+| 1450 us | +45° (up) | Looking at high walls / rooftop |
+| 1250 us | 0° (level/horizontal) | Default / transit |
+| 700 us | −45° (down, maximum) | Ground targets / low walls |
+
+**Set the camera to maximum down (700 us / −45°) before approaching any target area.**
+The Mission Planner Task 1 capture tab shows the current tilt angle and estimated ground-ahead distance in real time.
+
+#### Where does the camera look?
+
+At **−45° tilt**, the camera's center line hits the ground at a **horizontal distance equal to the drone's altitude**.
+
+```
+Drone altitude 5m → ground intersection 5m ahead of the drone
+Drone altitude 3m → ground intersection 3m ahead of the drone
+```
+
+The on-screen crosshair always marks this intersection point — center the target in the crosshair before pressing capture.
+
+#### Positioning for ground targets
+
+The drone **cannot hover directly above a ground target** and see it in the crosshair. The sightline is always 45° forward, never straight down.
+
+```
+Target on ground:
+  → Fly forward of the target by approximately your AGL altitude
+  → Example: target at ground level, drone at 4m AGL → position drone ~4m past the target
+```
+
+#### Positioning for wall targets
+
+| Target height | Drone AGL | Recommended standoff |
+|--------------|-----------|---------------------|
+| Low (0–1m) | 3–4m | 3–4m from wall |
+| Mid (1–3m) | 4–5m | 4–5m from wall |
+| High (3–5m) | 5–6m | 5–8m from wall |
+
+For upper-wall targets: if the drone is too close to the wall, the target will be **above the top of the image**. Move further back.
+
+#### GCS tilt display
+
+The capture tab shows: `Tilt: -45° | Gnd: 5.2m fwd`
+- **Tilt** — actual servo angle read from the flight controller (SERVO_OUTPUT_RAW), not commanded
+- **Gnd: X.Xm fwd** — estimated ground intersection ahead at current tilt + current altitude
+- Label turns **green** when tilt is ≥30° down (good targeting angle)
+- Label turns **amber** when tilt is level or up (camera not aimed at scene)
+
+#### Capture button states
+
+| Button appearance | Meaning |
+|------------------|---------|
+| **Green — ● CAPTURE (N circles)** | HSV detector found N colored circles — ideal, capture now |
+| **Blue — CAPTURE (crosshair)** | No circles detected — will use frame center depth as position |
+
+Both states always allow capture. The crosshair fallback handles partially obstructed circles or unusual colors that the detector misses — center the target manually and press capture.
+
+---
+
+### 5.6 At the Scene — Target Detection & Description
 
 > This is the core automated pipeline. One operator triggers captures, reviews results, and confirms/rejects targets.
 
 **Per-target workflow:**
 
-1. **Pilot positions UAV** 3–5m from a visible target, facing the building face where the target is located.
-2. **Operator clicks "CAPTURE PHOTO WITH METADATA"** in Mission Planner → Task 1 → Capture tab.
+1. **Set camera tilt to maximum down** (700 us / −45°) using the servo slider in Mission Planner.
+2. **Pilot positions UAV** using the geometry in §5.5 — check the tilt display for ground-ahead distance.
+3. **Center the target in the crosshair** (visible on the live video feed in the capture tab).
+4. **Operator clicks capture** in Mission Planner → Task 1 → Capture tab.
+   - Green button = circles detected, capture is HSV-guided
+   - Blue button = no circles, capture uses crosshair depth (still valid — press it)
    - This calls `/api/task/1/target/capture` → triggers `/target_localizer/capture_target` ROS service.
-3. **System processes** (takes ~1–2s):
-   - HSV circle detection finds the coloured circle
+5. **System processes** (takes ~1–2s):
+   - HSV circle detection finds the coloured circle (or crosshair fallback if not detected)
    - Depth back-projection computes 3D world position
    - Building face classifier determines which wall face
    - Description generator produces natural-language text
    - Annotated image saved; target appended to list
-4. **Operator reviews** the description shown in the Mission Planner result box:
+6. **Operator reviews** the description shown in the Mission Planner result box:
    - Verify **colour** is correct (×50% penalty if wrong)
    - Verify **face name** matches visual observation
    - Verify **description reads unambiguously** in 3D space
-5. **If target is a duplicate**: System auto-detects and skips (within 0.5m of existing target).
-6. **Rotate/adjust position** and capture next target.
+7. **If target is a duplicate**: System auto-detects and skips (within 0.5m of existing target).
+8. **Rotate/adjust position** and capture next target.
 
 **Repeat** for each visible target. Order does not matter — targets are labeled A, B, C... in order of first detection.
 
-### 5.6 Return & Landing
+### 5.7 Return & Landing
 
 1. Fly back toward flight line.
 2. **"NOMAD 406K to base, request landing."** → Wait for clearance.
 3. **"Cleared to land, NOMAD 406K."** → Acknowledge and land.
 4. **"NOMAD 406K landed."**
 
-### 5.7 Post-Landing — Submit Targets (CRITICAL — must complete before window closes)
+### 5.8 Post-Landing — Submit Targets (CRITICAL — must complete before window closes)
 
 1. **Save targets to file**:
    - Click **"Save Targets"** in Mission Planner Task 1 view, or
