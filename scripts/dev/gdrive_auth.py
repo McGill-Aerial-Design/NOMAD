@@ -20,11 +20,12 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
-REDIRECT_PORT = 8765
-REDIRECT_URI  = f"http://localhost:{REDIRECT_PORT}"
-SCOPE         = "https://www.googleapis.com/auth/drive.file"
-FOLDER_ID     = "14cK37Kw6YipYQqaL2l6S-g24SCGhU-xv"
-TOKEN_PATH    = Path.home() / ".nomad" / "gdrive_token.json"
+REDIRECT_PORT    = 8765
+REDIRECT_URI     = f"http://localhost:{REDIRECT_PORT}"
+SCOPE            = "https://www.googleapis.com/auth/drive.file"
+TASK1_FOLDER_ID  = "15RI4kxsE2ZywWWUyuy2StXK1sd8a7zyw"
+TASK2_FOLDER_ID  = "1NkxYnIH0l1Pq2Rj9jiSbfd6tieir2mMJ"
+TOKEN_PATH       = Path.home() / ".nomad" / "gdrive_token.json"
 
 auth_code = None
 server_done = threading.Event()
@@ -128,7 +129,8 @@ def main():
         "token_type":    tokens.get("token_type", "Bearer"),
         "expires_in":    tokens.get("expires_in", 3600),
         "scope":         tokens.get("scope", SCOPE),
-        "folder_id":     FOLDER_ID,
+        "folder_id":      TASK1_FOLDER_ID,
+        "task2_folder_id": TASK2_FOLDER_ID,
     }
 
     TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)

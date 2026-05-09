@@ -1077,9 +1077,9 @@ private ListBox _lstWalls;
                             var distanceM = Val("distance_m");
                             var altAgl = Val("alt_agl_m");
                             var rawOutput = Val("output") ?? Val("message") ?? Val("detail");
-                            // Strip legacy "Added N target(s):\n" prefix if present
+                            // Strip "Added N target(s):\n" prefix (literal \n or real newline)
                             var outputText = System.Text.RegularExpressions.Regex.Replace(
-                                rawOutput ?? "", @"^Added \d+ target\(s\):\\n", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                                rawOutput ?? "", @"(?i)^Added \d+ target\(s\):(\\n|\n|\r\n)?", "").TrimStart();
 
                             var position = data["position"] as Newtonsoft.Json.Linq.JObject;
                             var latStr = position?["lat"]?.ToString() ?? "N/A";

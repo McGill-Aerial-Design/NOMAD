@@ -780,24 +780,23 @@ namespace NOMAD.MissionPlanner
         private string GenerateTxtContent()
         {
             var lines = new List<string>();
+            int letterIndex = 0;
 
             foreach (DataGridViewRow row in _targetGrid.Rows)
             {
                 bool approved = (bool?)row.Cells["Approved"].Value ?? false;
                 if (!approved) continue;
 
-                var number = row.Cells["Number"].Value?.ToString();
+                char letter = (char)('A' + letterIndex++);
                 var color = row.Cells["Color"].Value?.ToString() ?? "";
                 var description = row.Cells["Description"].Value?.ToString() ?? "";
 
-                if (!string.IsNullOrEmpty(number) && !string.IsNullOrEmpty(description))
+                if (!string.IsNullOrEmpty(description))
                 {
                     string fullDesc = description;
                     if (!description.StartsWith(color, StringComparison.OrdinalIgnoreCase))
-                    {
                         fullDesc = $"{color} target - {description}";
-                    }
-                    lines.Add($"Target {number}: {fullDesc}");
+                    lines.Add($"Target {letter}: {fullDesc}");
                 }
             }
 
@@ -820,13 +819,15 @@ namespace NOMAD.MissionPlanner
                 return;
             }
 
+            int checkIdx = 0;
             foreach (DataGridViewRow row in _targetGrid.Rows)
             {
                 if (!((bool?)row.Cells["Approved"].Value ?? false)) continue;
+                char checkLetter = (char)('A' + checkIdx++);
                 var desc = row.Cells["Description"].Value?.ToString();
                 if (string.IsNullOrWhiteSpace(desc))
                 {
-                    MessageBox.Show($"Target {row.Cells["Number"].Value} has no description.",
+                    MessageBox.Show($"Target {checkLetter} has no description.",
                         "Missing Description", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
@@ -871,30 +872,31 @@ namespace NOMAD.MissionPlanner
                     if (string.IsNullOrEmpty(txtFileId))
                         throw new Exception("Failed to upload Task_1_MAD_targets.txt to Google Drive.");
 
-                    var imageResults = new List<(int number, string filename, string fileId)>();
+                    var imageResults = new List<(char letter, string filename, string fileId)>();
                     var errors = new List<string>();
+                    int imgIdx = 0;
 
                     foreach (DataGridViewRow row in _targetGrid.Rows)
                     {
                         if (!((bool?)row.Cells["Approved"].Value ?? false)) continue;
 
-                        var number = int.Parse(row.Cells["Number"].Value?.ToString() ?? "0");
+                        char letter = (char)('A' + imgIdx++);
                         var imagePath = row.Cells["ImagePath"].Value?.ToString() ?? "";
 
                         if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
                         {
-                            _lblStatus.Text = $"Uploading Target {number} image...";
+                            _lblStatus.Text = $"Uploading Target {letter} image...";
                             var ext = Path.GetExtension(imagePath) ?? ".jpg";
-                            var filename = $"Target_{number}{ext}";
+                            var filename = $"Target_{letter}{ext}";
 
                             try
                             {
                                 var fileId = await gdrive.UploadFileAsync(imagePath, filename);
-                                imageResults.Add((number, filename, fileId));
+                                imageResults.Add((letter, filename, fileId));
                             }
                             catch (Exception imgEx)
                             {
-                                errors.Add($"Target {number} image failed: {imgEx.Message}");
+                                errors.Add($"Target {letter} image failed: {imgEx.Message}");
                             }
                         }
                     }

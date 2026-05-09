@@ -34,16 +34,19 @@ namespace NOMAD.MissionPlanner
             _tokenPath = tokenPath ?? TOKEN_PATH;
             _folderId = folderId
                 ?? Environment.GetEnvironmentVariable(FOLDER_ID_ENV)
-                ?? ReadFolderIdFromToken(_tokenPath ?? TOKEN_PATH);
+                ?? ReadFieldFromToken(_tokenPath ?? TOKEN_PATH, "folder_id");
         }
 
-        private static string ReadFolderIdFromToken(string tokenPath)
+        /// <summary>Get the Task 2 folder ID from the token file.</summary>
+        public string GetTask2FolderId() => ReadFieldFromToken(_tokenPath, "task2_folder_id");
+
+        private static string ReadFieldFromToken(string tokenPath, string field)
         {
             try
             {
                 if (!File.Exists(tokenPath)) return null;
                 var data = JObject.Parse(File.ReadAllText(tokenPath));
-                return data["folder_id"]?.ToString();
+                return data[field]?.ToString();
             }
             catch { return null; }
         }
@@ -74,8 +77,13 @@ namespace NOMAD.MissionPlanner
                 if (string.IsNullOrEmpty(tokenData["client_secret"]?.ToString()))  missing.Add("client_secret");
                 if (missing.Count > 0)
                     return $"Token file is missing fields: {string.Join(", ", missing)}\nFile: {_tokenPath}";
+                var warnings = new List<string>();
                 if (string.IsNullOrEmpty(tokenData["folder_id"]?.ToString()))
-                    return $"Warning: no folder_id in token file — files will upload to root Drive.\nFile: {_tokenPath}";
+                    warnings.Add("missing folder_id (Task 1 uploads will go to Drive root)");
+                if (string.IsNullOrEmpty(tokenData["task2_folder_id"]?.ToString()))
+                    warnings.Add("missing task2_folder_id (Task 2 uploads will go to Drive root)");
+                if (warnings.Count > 0)
+                    return $"Warning: {string.Join("; ", warnings)}\nFile: {_tokenPath}";
                 return null; // looks ok
             }
             catch (Exception ex)
