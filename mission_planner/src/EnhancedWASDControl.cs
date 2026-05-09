@@ -65,7 +65,7 @@ namespace NOMAD.MissionPlanner
         // Configuration
         private NOMADConfig _config;
         
-        // Connection manager for safety controls
+        // Connection manager for status display only (not used as safety gate)
         private JetsonConnectionManager _jetsonConnectionManager;
         private bool _jetsonConnected = false;
         
@@ -92,17 +92,17 @@ namespace NOMAD.MissionPlanner
         
         /// <summary>
         /// Enable or disable WASD control.
-        /// SAFETY: Cannot enable when Jetson is disconnected.
+        /// SAFETY: Cannot enable when MAVLink is not connected.
         /// </summary>
         public bool ControlEnabled
         {
             get => _enabled;
             set
             {
-                // SAFETY: Block enabling when Jetson is disconnected
-                if (value && !_jetsonConnected)
+                // SAFETY: Block enabling when MAVLink is not connected
+                if (value && (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen))
                 {
-                    UpdateStatus("BLOCKED - Jetson offline (safety)", ERROR_COLOR);
+                    UpdateStatus("BLOCKED - MAVLink offline (safety)", ERROR_COLOR);
                     if (_chkEnable != null) _chkEnable.Checked = false;
                     return;
                 }
@@ -182,29 +182,23 @@ namespace NOMAD.MissionPlanner
         private void DisableForSafety()
         {
             ControlEnabled = false;
-            UpdateStatus("DISABLED - Jetson offline (safety)", ERROR_COLOR);
+            UpdateStatus("DISABLED - MAVLink disconnected (safety)", ERROR_COLOR);
         }
         
         private void UpdateConnectionState()
         {
+            bool mavlinkConnected = MainV2.comPort?.BaseStream?.IsOpen == true;
+
             if (_chkEnable != null)
             {
-                // Grey out enable checkbox when disconnected
-                _chkEnable.Enabled = _jetsonConnected;
-                if (!_jetsonConnected)
-                {
-                    _chkEnable.ForeColor = TEXT_SECONDARY;
-                }
-                else
-                {
-                    _chkEnable.ForeColor = TEXT_PRIMARY;
-                }
+                // Grey out enable checkbox when MAVLink is disconnected
+                _chkEnable.Enabled = mavlinkConnected;
+                _chkEnable.ForeColor = mavlinkConnected ? TEXT_PRIMARY : TEXT_SECONDARY;
             }
-            
-            // Update status message
-            if (!_jetsonConnected && !_enabled)
+
+            if (!mavlinkConnected && !_enabled)
             {
-                UpdateStatus("Jetson offline - controls disabled", WARNING_COLOR);
+                UpdateStatus("MAVLink offline - controls disabled", WARNING_COLOR);
             }
         }
         
@@ -1013,18 +1007,24 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
+                // SAFETY: Auto-disable if MAVLink drops while nudge is active
+                bool mavlinkConnected = MainV2.comPort?.BaseStream?.IsOpen == true;
+                if (!mavlinkConnected && _enabled)
+                {
+                    if (IsHandleCreated && !IsDisposed)
+                        BeginInvoke(new Action(DisableForSafety));
+                    return;
+                }
+
                 // Safety: Check for key releases using Windows API on UI thread
                 if (IsHandleCreated && !IsDisposed)
                 {
                     BeginInvoke(new Action(() => {
-                        try
-                        {
-                            CheckKeyReleases();
-                        }
+                        try { CheckKeyReleases(); }
                         catch { }
                     }));
                 }
-                
+
                 // Send velocity command (even if zero - ensures clean stop)
                 SendVelocityCommand();
             }

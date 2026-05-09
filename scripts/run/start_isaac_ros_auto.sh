@@ -763,20 +763,9 @@ for path in candidates:
                 new_text,
             )
 
-    # Publish ZED images at native 720p instead of the default 360p downscale.
-    # WARNING: 720p with nvblox enabled triggers cudaErrorIllegalAddress on
-    # the 8GB Orin Nano. Pair this with NOMAD_DISABLE_NVBLOX=1 if running on
-    # that hardware, or accept the risk on platforms with more VRAM.
-    if re.search(r'(?m)^\s*pub_downscale_factor\s*:', new_text):
-        new_text = re.sub(
-            r'(?m)^(\s*pub_downscale_factor\s*:\s*)[0-9.]+',
-            r'\g<1>1.0',
-            new_text,
-        )
-
     if new_text != text:
         path.write_text(new_text)
-        print(f'Enabled publish_mag/publish_raw/publish_left_right + 720p pub in {path}')
+        print(f'Enabled publish_mag/publish_raw/publish_left_right in {path}')
     else:
         print(f'publish_mag/publish_raw/publish_left_right already true in {path}')
 
@@ -1003,7 +992,12 @@ export PYTHONPATH=/workspaces/isaac_ros-dev:${PYTHONPATH:-}
 # Wait for ZED node to fully start and DDS discovery to complete
 # (ZED + nvblox take ~20-30s to init)
 sleep 30
-python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --mag-topic /zed/zed_node/imu/mag --mesh-topic /nvblox_node/color_layer_marker --high-rate-transport zmq
+# Restart loop: bridge survives nvblox crashes without losing telemetry/VIO.
+while true; do
+    python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --mag-topic /zed/zed_node/imu/mag --mesh-topic /nvblox_node/color_layer_marker --high-rate-transport zmq
+    echo "ros_http_bridge exited (rc=$?), restarting in 10s..."
+    sleep 10
+done
 BRIDGE_SCRIPT
     docker cp "$_bridge_tmp" "$CONTAINER_NAME:/tmp/launch_bridge.sh"
     rm -f "$_bridge_tmp"

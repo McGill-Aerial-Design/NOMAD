@@ -1037,6 +1037,12 @@ def create_app(state_manager: StateManager) -> FastAPI:
             bridge_env_prefix += f"NOMAD_API_KEY='{bridge_api_key}' "
         if bridge_internal_token:
             bridge_env_prefix += f"NOMAD_INTERNAL_TOKEN='{bridge_internal_token}' "
+        # export-style for use before setsid (avoids single-quote nesting issues)
+        bridge_env_exports = ""
+        if bridge_api_key:
+            bridge_env_exports += f"export NOMAD_API_KEY='{bridge_api_key}'\n"
+        if bridge_internal_token:
+            bridge_env_exports += f"export NOMAD_INTERNAL_TOKEN='{bridge_internal_token}'\n"
 
         # Build launch script with OD config merge
         # od_value is interpolated into the heredoc so the script knows whether to enable OD
@@ -1327,9 +1333,19 @@ ros2 run tf2_ros static_transform_publisher \
     --frame-id camera_link --child-frame-id zed_camera_link \
     >/tmp/zed_camera_link_alias.log 2>&1 &
 
-# Wait for topics then launch bridge
+# Wait for topics then launch bridge in its own session with a restart loop.
+# setsid isolates the bridge from the ros2 launch process group, so signals
+# delivered to the launch group (e.g. SIGINT on nvblox crash) do not reach it.
+# The restart loop keeps telemetry running across nvblox crashes/restarts.
+# Credentials exported before setsid are inherited by the subprocess.
 sleep 2
-{bridge_env_prefix}python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --mag-topic /zed/zed_node/imu/mag --mesh-topic /nvblox_node/color_layer_marker --high-rate-transport http &
+{bridge_env_exports}setsid bash -c '
+    while true; do
+        python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --mag-topic /zed/zed_node/imu/mag --mesh-topic /nvblox_node/color_layer_marker --high-rate-transport http
+        echo "ros_http_bridge exited (rc=$?), restarting in 10s..."
+        sleep 10
+    done
+' &
 echo $! > /tmp/ros_bridge.pid
 
 # target_localizer is launched by nomad_zed_nvblox.launch.py above.
@@ -1349,22 +1365,15 @@ if [ "$TL_READY" != "1" ]; then
     echo "WARNING: target_localizer services not discoverable yet; continuing startup"
 fi
 
-    # Supervise launch lifecycle: if ZED/nvblox exits, stop dependent bridges so
-    # runtime state does not falsely appear healthy.
+    # Wait for ZED/nvblox launch to exit. The ros_http_bridge runs in its own
+    # session (setsid above) and continues independently — do NOT kill it here.
+    # Killing the bridge on nvblox crash would cut off VIO/telemetry from GCS.
     if [ -f /tmp/zed_nvblox.pid ]; then
         ZED_PID=$(cat /tmp/zed_nvblox.pid 2>/dev/null || true)
         if [ -n "$ZED_PID" ]; then
             wait "$ZED_PID"
             ZED_RC=$?
-            echo "ZED/nvblox launch exited (rc=$ZED_RC); stopping dependent bridge processes"
-            for pidfile in /tmp/ros_bridge.pid /tmp/target_localizer.pid; do
-                if [ -f "$pidfile" ]; then
-                    pid=$(cat "$pidfile" 2>/dev/null || true)
-                    if [ -n "$pid" ]; then
-                        kill "$pid" 2>/dev/null || true
-                    fi
-                fi
-            done
+            echo "ZED/nvblox launch exited (rc=$ZED_RC); bridge continues running independently"
             exit "$ZED_RC"
         fi
     fi

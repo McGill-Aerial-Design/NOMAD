@@ -22,35 +22,68 @@ namespace NOMAD.MissionPlanner
     /// </summary>
     public class PayloadControlPanel : UserControl
     {
-        private static readonly Color CARD_BG       = NOMADTheme.CARD_BG;
-        private static readonly Color TEXT_PRIMARY  = NOMADTheme.TEXT_PRIMARY;
-        private static readonly Color TEXT_SECONDARY= NOMADTheme.TEXT_SECONDARY;
-        private static readonly Color SUCCESS_COLOR = NOMADTheme.SUCCESS;
-        private static readonly Color WARNING_COLOR = NOMADTheme.WARNING;
-        private static readonly Color ERROR_COLOR   = NOMADTheme.ERROR;
-        private static readonly Color ACCENT_COLOR  = NOMADTheme.ACCENT;
+        private static readonly Color CARD_BG        = NOMADTheme.CARD_BG;
+        private static readonly Color TEXT_PRIMARY   = NOMADTheme.TEXT_PRIMARY;
+        private static readonly Color TEXT_SECONDARY = NOMADTheme.TEXT_SECONDARY;
+        private static readonly Color SUCCESS_COLOR  = NOMADTheme.SUCCESS;
+        private static readonly Color WARNING_COLOR  = NOMADTheme.WARNING;
+        private static readonly Color ERROR_COLOR    = NOMADTheme.ERROR;
+        private static readonly Color ACCENT_COLOR   = NOMADTheme.ACCENT;
+
+        // Drop button base color and armed-state colors (1 and 2 clicks in)
+        private static readonly Color DROP_COLOR_IDLE    = Color.FromArgb(120, 50, 15);
+        private static readonly Color DROP_COLOR_ARM1    = Color.FromArgb(200, 110, 0);   // 1st click — orange
+        private static readonly Color DROP_COLOR_ARM2    = Color.FromArgb(220, 50,  0);   // 2nd click — red-orange
+        private static readonly Color DROP_COLOR_DROPPED = Color.FromArgb(50, 90, 130);   // dropped — steel blue → retract mode
 
         // Used only for the Jetson API angle-conversion fallback.
         private const int SERVO_PULSE_MIN_US = 500;
         private const int SERVO_PULSE_MAX_US = 2500;
 
+        // Safety limits
+        private const int DROP_CLICKS_REQUIRED = 3;      // clicks needed to drop
+        private const int DROP_RESET_MS        = 3000;   // ms before click count resets
+        private const int REEL_SAFETY_MS       = 10_000; // max continuous reel time
+        private const int TILT_DEBOUNCE_MS     = 150;    // slider debounce before servo send
+
         private readonly NOMADConfig _config;
+
+        // Drop safety
+        private readonly Button[]  _dropButtons    = new Button[3];
+        private readonly int[]     _dropClickCount  = { 0, 0, 0 };
+        private readonly Timer[]   _dropResetTimers = new Timer[3];
+        private readonly bool[]    _dropDropped     = { false, false, false }; // true = servo at PwmMax, retract available
+
+        // Reel safety
+        private bool  _reelActive;
+        private Timer _reelSafetyTimer;
+
+        // Tilt debounce
         private TrackBar _tiltSlider;
         private Label    _lblTiltValue;
-        private Label    _lblStatus;
+        private Timer    _tiltDebounceTimer;
         private bool     _suppressTiltEvent;
 
-        // Shared tilt state so multiple panel instances stay in sync
-        // without each independently pushing stale setpoints.
+        private Label _lblStatus;
+
+        // Shared tilt state so multiple panel instances stay in sync.
         private static int s_lastTiltPulseUs = 1000;
         private static event Action<int, PayloadControlPanel> CameraTiltChanged;
+
+        // ============================================================
+        // Construction
+        // ============================================================
 
         public PayloadControlPanel(NOMADConfig config)
         {
             _config = config;
             InitializeUI();
             CameraTiltChanged += OnCameraTiltChangedExternally;
-            this.Disposed += (s, e) => CameraTiltChanged -= OnCameraTiltChangedExternally;
+            this.Disposed += (s, e) =>
+            {
+                CameraTiltChanged -= OnCameraTiltChangedExternally;
+                CleanupTimers();
+            };
             ApplyTiltPulseQuietly(s_lastTiltPulseUs);
         }
 
@@ -64,104 +97,97 @@ namespace NOMAD.MissionPlanner
             Dock = DockStyle.Fill;
             Padding = new Padding(10, 5, 10, 5);
 
-            var titleLabel = new Label
+            Controls.Add(new Label
             {
                 Text = "PAYLOAD CONTROLS",
                 Font = new Font("Segoe UI", 9, FontStyle.Bold),
                 ForeColor = ACCENT_COLOR,
                 Location = new Point(10, 5),
                 AutoSize = true,
-            };
-            Controls.Add(titleLabel);
+            });
 
-            // ---- Row 1: Drop buttons + water pump ----
-            int x = 10, y = 28;
-            const int DROP_W = 75, DROP_H = 26;
+            const int DROP_H = 26;
+            const int DROP_W = 75;
+            const int ROW_GAP = 5;
 
-            var btnDrop1 = MakeButton("Drop P1", Color.FromArgb(140, 60, 20), DROP_W, DROP_H);
-            btnDrop1.Location = new Point(x, y);
-            btnDrop1.Click += (s, e) => DropPayload(1);
-            Controls.Add(btnDrop1);
-            x += DROP_W + 4;
+            // ---- Row 1: Drop buttons (triple-click required) + water pump ----
+            int x = 10, y = 26;
 
-            var btnDrop2 = MakeButton("Drop P2", Color.FromArgb(140, 60, 20), DROP_W, DROP_H);
-            btnDrop2.Location = new Point(x, y);
-            btnDrop2.Click += (s, e) => DropPayload(2);
-            Controls.Add(btnDrop2);
-            x += DROP_W + 4;
-
-            var btnDrop3 = MakeButton("Drop P3", Color.FromArgb(140, 60, 20), DROP_W, DROP_H);
-            btnDrop3.Location = new Point(x, y);
-            btnDrop3.Click += (s, e) => DropPayload(3);
-            Controls.Add(btnDrop3);
-            x += DROP_W + 8;
+            for (int i = 0; i < 3; i++)
+            {
+                int payload = i + 1;
+                var btn = MakeButton($"Drop P{payload}", DROP_COLOR_IDLE, DROP_W, DROP_H);
+                btn.Location = new Point(x, y);
+                btn.Click += (s, e) => OnDropClick(payload);
+                Controls.Add(btn);
+                _dropButtons[i] = btn;
+                x += DROP_W + 4;
+            }
 
             var btnWater = MakeButton("Shoot Water", Color.FromArgb(30, 100, 180), 90, DROP_H);
-            btnWater.Font = new Font("Segoe UI", 8, FontStyle.Bold);
             btnWater.Location = new Point(x, y);
             btnWater.Click += (s, e) => ShootWater();
             Controls.Add(btnWater);
 
-            // ---- Row 2: Strap reel (hold-to-reel) ----
-            y += DROP_H + 7;
+            // ---- Row 2: Strap reel (hold-to-reel, 10s safety limit) ----
+            y += DROP_H + ROW_GAP;
             x = 10;
 
-            var lblReel = new Label
+            Controls.Add(new Label
             {
                 Text = "Reel P1:",
                 Font = new Font("Segoe UI", 9),
                 ForeColor = TEXT_SECONDARY,
                 Location = new Point(x, y + 4),
                 AutoSize = true,
-            };
-            Controls.Add(lblReel);
+            });
             x += 58;
 
-            var btnReelIn = MakeButton("⬆ Reel In", Color.FromArgb(60, 110, 60), 85, DROP_H);
+            var btnReelIn = MakeButton("⬆ Reel In", Color.FromArgb(50, 100, 50), 85, DROP_H);
             btnReelIn.Location = new Point(x, y);
-            btnReelIn.MouseDown += (s, e) => SendReelAsync(_config?.ReelPwmIn ?? 2100);
-            btnReelIn.MouseUp   += (s, e) => SendReelAsync(1500);
-            btnReelIn.MouseLeave+= (s, e) => SendReelAsync(1500); // safety: stop if cursor leaves
+            btnReelIn.MouseDown  += (s, e) => StartReel(_config?.ReelPwmIn  ?? 2100);
+            btnReelIn.MouseUp    += (s, e) => StopReel();
+            btnReelIn.MouseLeave += (s, e) => { if (_reelActive) StopReel(); };
             Controls.Add(btnReelIn);
             x += 89;
 
-            var btnReelOut = MakeButton("⬇ Reel Out", Color.FromArgb(60, 60, 110), 88, DROP_H);
+            var btnReelOut = MakeButton("⬇ Reel Out", Color.FromArgb(50, 50, 100), 88, DROP_H);
             btnReelOut.Location = new Point(x, y);
-            btnReelOut.MouseDown += (s, e) => SendReelAsync(_config?.ReelPwmOut ?? 900);
-            btnReelOut.MouseUp   += (s, e) => SendReelAsync(1500);
-            btnReelOut.MouseLeave+= (s, e) => SendReelAsync(1500);
+            btnReelOut.MouseDown  += (s, e) => StartReel(_config?.ReelPwmOut ?? 900);
+            btnReelOut.MouseUp    += (s, e) => StopReel();
+            btnReelOut.MouseLeave += (s, e) => { if (_reelActive) StopReel(); };
             Controls.Add(btnReelOut);
 
             // ---- Row 3: Camera tilt slider ----
-            y += DROP_H + 7;
+            y += DROP_H + ROW_GAP;
             x = 10;
 
-            var lblTilt = new Label
+            Controls.Add(new Label
             {
                 Text = "Cam Tilt:",
                 Font = new Font("Segoe UI", 9),
                 ForeColor = TEXT_SECONDARY,
-                Location = new Point(x, y + 5),
+                Location = new Point(x, y + 4),
                 AutoSize = true,
-            };
-            Controls.Add(lblTilt);
+            });
             x += 72;
 
-            int tiltMin = _config?.CameraTiltPwmMin ?? 700;
-            int tiltMax = _config?.CameraTiltPwmMax ?? 1450;
+            int tiltMin     = _config?.CameraTiltPwmMin ?? 700;
+            int tiltMax     = _config?.CameraTiltPwmMax ?? 1450;
             int initialTilt = Math.Max(tiltMin, Math.Min(tiltMax, s_lastTiltPulseUs));
 
             _tiltSlider = new TrackBar
             {
-                Location = new Point(x, y),
-                Size = new Size(170, 28),
-                Minimum = tiltMin,
-                Maximum = tiltMax,
-                Value = initialTilt,
-                TickFrequency = 50,
-                SmallChange = 10,
-                LargeChange = 50,
-                BackColor = CARD_BG,
+                Location      = new Point(x, y - 2),
+                Size          = new Size(170, 26),
+                AutoSize      = false,   // prevent TrackBar from growing over the status label
+                TickStyle     = TickStyle.None,
+                Minimum       = tiltMin,
+                Maximum       = tiltMax,
+                Value         = initialTilt,
+                SmallChange   = 10,
+                LargeChange   = 50,
+                BackColor     = CARD_BG,
             };
             _tiltSlider.ValueChanged += (s, e) => OnTiltSliderChanged();
             Controls.Add(_tiltSlider);
@@ -169,23 +195,24 @@ namespace NOMAD.MissionPlanner
 
             _lblTiltValue = new Label
             {
-                Text = $"{initialTilt} us",
-                Font = new Font("Segoe UI", 9),
+                Text     = $"{initialTilt} us",
+                Font     = new Font("Segoe UI", 9),
                 ForeColor = TEXT_PRIMARY,
-                Location = new Point(x, y + 5),
-                AutoSize = true,
+                Location  = new Point(x, y + 4),
+                AutoSize  = true,
             };
             Controls.Add(_lblTiltValue);
 
-            // ---- Status label ----
-            y += DROP_H + 7;
+            // ---- Status label — below tilt row, full width ----
+            // Using a fixed y offset (not derived from DROP_H) to guarantee
+            // it never overlaps with the TrackBar regardless of DPI/theme.
             _lblStatus = new Label
             {
-                Text = "",
-                Font = new Font("Segoe UI", 8),
+                Text      = "",
+                Font      = new Font("Segoe UI", 8),
                 ForeColor = TEXT_SECONDARY,
-                Location = new Point(10, y),
-                AutoSize = true,
+                Location  = new Point(10, y + 32),
+                AutoSize  = true,
             };
             Controls.Add(_lblStatus);
         }
@@ -221,11 +248,63 @@ namespace NOMAD.MissionPlanner
         }
 
         // ============================================================
-        // Drop payload
+        // Drop payload  —  3-click confirmation
         // ============================================================
 
-        private async void DropPayload(int payloadNumber)
+        private void OnDropClick(int payloadNumber)
         {
+            int idx = payloadNumber - 1;
+
+            // Already dropped — single click retracts back to PwmMin so the
+            // operator can wiggle the servo if a strap is caught.
+            if (_dropDropped[idx])
+            {
+                ExecuteRetract(payloadNumber);
+                return;
+            }
+
+            _dropClickCount[idx]++;
+
+            // Restart the reset timer so clicks that come > 3s apart reset the count.
+            _dropResetTimers[idx]?.Stop();
+            _dropResetTimers[idx]?.Dispose();
+            var resetTimer = new Timer { Interval = DROP_RESET_MS };
+            resetTimer.Tick += (s, e) =>
+            {
+                resetTimer.Stop();
+                resetTimer.Dispose();
+                _dropResetTimers[idx] = null;
+                _dropClickCount[idx] = 0;
+                if (!IsDisposed && _dropButtons[idx] != null)
+                    _dropButtons[idx].BackColor = DROP_COLOR_IDLE;
+                SetStatus($"Payload {payloadNumber} drop cancelled (timeout)", TEXT_SECONDARY);
+            };
+            _dropResetTimers[idx] = resetTimer;
+            resetTimer.Start();
+
+            int count = _dropClickCount[idx];
+
+            if (count < DROP_CLICKS_REQUIRED)
+            {
+                int remaining = DROP_CLICKS_REQUIRED - count;
+                _dropButtons[idx].BackColor = count == 1 ? DROP_COLOR_ARM1 : DROP_COLOR_ARM2;
+                SetStatus($"Payload {payloadNumber}: {remaining} more click{(remaining == 1 ? "" : "s")} to drop!", WARNING_COLOR);
+                return;
+            }
+
+            // Third click — arm timer cleaned up, execute drop
+            _dropResetTimers[idx]?.Stop();
+            _dropResetTimers[idx]?.Dispose();
+            _dropResetTimers[idx] = null;
+            _dropClickCount[idx]  = 0;
+            _dropButtons[idx].BackColor = DROP_COLOR_IDLE;
+
+            ExecuteDrop(payloadNumber);
+        }
+
+        private async void ExecuteDrop(int payloadNumber)
+        {
+            int idx = payloadNumber - 1;
             int channel, pwmDrop;
             switch (payloadNumber)
             {
@@ -237,52 +316,144 @@ namespace NOMAD.MissionPlanner
 
             if (channel <= 0)
             {
-                SetStatus($"Payload {payloadNumber} servo channel not configured", WARNING_COLOR);
+                SetStatus($"Payload {payloadNumber} channel not configured (see Settings > Servos)", WARNING_COLOR);
                 return;
             }
 
-            // Primary: MAVLink
+            bool success = false;
+
             if (TrySendServoMAVLink(channel, pwmDrop))
             {
-                SetStatus($"Payload {payloadNumber} dropped (MAVLink ch{channel} {pwmDrop}us)", SUCCESS_COLOR);
+                SetStatus($"Payload {payloadNumber} dropped  (MAVLink ch{channel} {pwmDrop}us)", SUCCESS_COLOR);
+                success = true;
+            }
+            else
+            {
+                // Fallback: Jetson API
+                SetStatus("MAVLink unavailable — falling back to API...", WARNING_COLOR);
+                try
+                {
+                    var resp = await JetsonApiService.PostAsync(
+                        $"/api/servo/channel/{channel}/pwm?pwm={pwmDrop}");
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        SetStatus($"Payload {payloadNumber} dropped  (API ch{channel})", SUCCESS_COLOR);
+                        success = true;
+                    }
+                    else
+                    {
+                        SetStatus($"Drop failed: HTTP {(int)resp.StatusCode}", ERROR_COLOR);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    SetStatus($"Drop failed: {ex.Message}", ERROR_COLOR);
+                }
+            }
+
+            if (success)
+            {
+                _dropDropped[idx] = true;
+                _dropButtons[idx].Text = $"Retract P{payloadNumber}";
+                _dropButtons[idx].BackColor = DROP_COLOR_DROPPED;
+            }
+        }
+
+        private async void ExecuteRetract(int payloadNumber)
+        {
+            int idx = payloadNumber - 1;
+            int channel, pwmMin;
+            switch (payloadNumber)
+            {
+                case 1: channel = _config?.Servo1Channel ?? 0; pwmMin = _config?.Servo1PwmMin ?? 1000; break;
+                case 2: channel = _config?.Servo2Channel ?? 0; pwmMin = _config?.Servo2PwmMin ?? 1000; break;
+                case 3: channel = _config?.Servo3Channel ?? 0; pwmMin = _config?.Servo3PwmMin ?? 1000; break;
+                default: return;
+            }
+
+            if (channel <= 0)
+            {
+                SetStatus($"Payload {payloadNumber} channel not configured (see Settings > Servos)", WARNING_COLOR);
                 return;
             }
 
-            // Fallback: Jetson API
-            SetStatus($"MAVLink unavailable — trying API fallback...", WARNING_COLOR);
+            // Immediately restore button to drop-ready state so the operator can
+            // drop again without waiting for the servo to physically finish moving.
+            _dropDropped[idx] = false;
+            _dropButtons[idx].Text = $"Drop P{payloadNumber}";
+            _dropButtons[idx].BackColor = DROP_COLOR_IDLE;
+
+            if (TrySendServoMAVLink(channel, pwmMin))
+            {
+                SetStatus($"Payload {payloadNumber} retracted  (MAVLink ch{channel} {pwmMin}us)", SUCCESS_COLOR);
+                return;
+            }
+
+            SetStatus("MAVLink unavailable — falling back to API...", WARNING_COLOR);
             try
             {
                 var resp = await JetsonApiService.PostAsync(
-                    $"/api/servo/channel/{channel}/pwm?pwm={pwmDrop}");
+                    $"/api/servo/channel/{channel}/pwm?pwm={pwmMin}");
                 SetStatus(resp.IsSuccessStatusCode
-                    ? $"Payload {payloadNumber} dropped (API ch{channel})"
-                    : $"Drop failed: HTTP {(int)resp.StatusCode}",
+                    ? $"Payload {payloadNumber} retracted  (API ch{channel})"
+                    : $"Retract failed: HTTP {(int)resp.StatusCode}",
                     resp.IsSuccessStatusCode ? SUCCESS_COLOR : ERROR_COLOR);
             }
             catch (Exception ex)
             {
-                SetStatus($"Drop failed: {ex.Message}", ERROR_COLOR);
+                SetStatus($"Retract failed: {ex.Message}", ERROR_COLOR);
             }
         }
 
         // ============================================================
-        // Strap reel
+        // Strap reel  —  hold-to-reel, 10-second safety cut-off
         // ============================================================
 
-        private async void SendReelAsync(int pwmUs)
+        private void StartReel(int pwmUs)
         {
-            int channel = _config?.ReelServoChannel ?? 0;
-            if (channel <= 0) return;
+            _reelActive = true;
 
-            if (TrySendServoMAVLink(channel, pwmUs))
+            // Safety: automatically stop after REEL_SAFETY_MS even if button stays held.
+            _reelSafetyTimer?.Stop();
+            _reelSafetyTimer?.Dispose();
+            _reelSafetyTimer = new Timer { Interval = REEL_SAFETY_MS };
+            _reelSafetyTimer.Tick += (s, e) =>
             {
-                SetStatus(pwmUs == 1500
-                    ? "Reel stopped"
-                    : $"Reeling ({pwmUs}us)", pwmUs == 1500 ? TEXT_SECONDARY : SUCCESS_COLOR);
-                return;
-            }
+                _reelSafetyTimer.Stop();
+                _reelSafetyTimer.Dispose();
+                _reelSafetyTimer = null;
+                _reelActive = false;
+                SendServoNow(_config?.ReelServoChannel ?? 0, 1500);
+                SetStatus("Reel stopped  (10s safety limit)", WARNING_COLOR);
+            };
+            _reelSafetyTimer.Start();
 
-            // Fallback: Jetson API (fire-and-forget — don't block the MouseUp handler)
+            SendServoNow(_config?.ReelServoChannel ?? 0, pwmUs);
+            SetStatus($"Reeling  ({pwmUs}µs) — hold button...", SUCCESS_COLOR);
+        }
+
+        private void StopReel()
+        {
+            if (!_reelActive) return;
+            _reelActive = false;
+
+            _reelSafetyTimer?.Stop();
+            _reelSafetyTimer?.Dispose();
+            _reelSafetyTimer = null;
+
+            SendServoNow(_config?.ReelServoChannel ?? 0, 1500);
+            SetStatus("Reel stopped", TEXT_SECONDARY);
+        }
+
+        /// <summary>
+        /// Fire-and-forget servo command for time-critical paths (reel MouseDown/Up).
+        /// Tries MAVLink synchronously; falls back to API asynchronously if needed.
+        /// </summary>
+        private async void SendServoNow(int channel, int pwmUs)
+        {
+            if (channel <= 0) return;
+            if (TrySendServoMAVLink(channel, pwmUs)) return;
+
             try
             {
                 await JetsonApiService.PostAsync(
@@ -297,22 +468,20 @@ namespace NOMAD.MissionPlanner
 
         private async void ShootWater()
         {
-            int channel  = _config?.WaterPumpChannel  ?? 0;
-            int pwmOn    = _config?.WaterPumpPwmOn    ?? 2000;
-            int pwmOff   = _config?.WaterPumpPwmOff   ?? 1000;
+            int channel    = _config?.WaterPumpChannel    ?? 0;
+            int pwmOn      = _config?.WaterPumpPwmOn      ?? 2000;
+            int pwmOff     = _config?.WaterPumpPwmOff     ?? 1000;
             int durationMs = _config?.WaterPumpDurationMs ?? 500;
 
-            // Primary: MAVLink pulse
             if (channel > 0 && TrySendServoMAVLink(channel, pwmOn))
             {
-                SetStatus($"Water pump firing ({durationMs}ms)...", SUCCESS_COLOR);
+                SetStatus($"Water pump firing  ({durationMs}ms)...", SUCCESS_COLOR);
                 await Task.Delay(durationMs);
                 TrySendServoMAVLink(channel, pwmOff);
                 SetStatus("Water pump done", SUCCESS_COLOR);
                 return;
             }
 
-            // Fallback: Jetson API
             SetStatus("Triggering water pump via API...", WARNING_COLOR);
             try
             {
@@ -330,7 +499,7 @@ namespace NOMAD.MissionPlanner
         }
 
         // ============================================================
-        // Camera tilt
+        // Camera tilt  —  debounced to avoid flooding MAVLink/API
         // ============================================================
 
         private void OnTiltSliderChanged()
@@ -342,18 +511,30 @@ namespace NOMAD.MissionPlanner
 
             if (_suppressTiltEvent) return;
 
-            // Sync all other panel instances to this setpoint.
             s_lastTiltPulseUs = pulseUs;
             CameraTiltChanged?.Invoke(pulseUs, this);
 
-            SendCameraTiltAsync(pulseUs);
+            // Debounce: only send the servo command once the slider has been
+            // still for TILT_DEBOUNCE_MS. This prevents MAVLink/API flooding
+            // during fast drags which caused apparent slider freeze.
+            _tiltDebounceTimer?.Stop();
+            _tiltDebounceTimer?.Dispose();
+            _tiltDebounceTimer = new Timer { Interval = TILT_DEBOUNCE_MS };
+            _tiltDebounceTimer.Tick += (s, e) =>
+            {
+                _tiltDebounceTimer?.Stop();
+                _tiltDebounceTimer?.Dispose();
+                _tiltDebounceTimer = null;
+                if (_tiltSlider != null && !_tiltSlider.IsDisposed)
+                    SendCameraTiltAsync(_tiltSlider.Value);
+            };
+            _tiltDebounceTimer.Start();
         }
 
         private async void SendCameraTiltAsync(int pulseUs)
         {
             int channel = _config?.CameraTiltChannel ?? 0;
 
-            // Primary: MAVLink
             if (TrySendServoMAVLink(channel, pulseUs))
                 return;
 
@@ -377,11 +558,7 @@ namespace NOMAD.MissionPlanner
             if (source == this) return;
             if (IsDisposed || _tiltSlider == null) return;
 
-            if (InvokeRequired)
-            {
-                BeginInvoke(new Action(() => ApplyTiltPulseQuietly(pulseUs)));
-                return;
-            }
+            if (InvokeRequired) { BeginInvoke(new Action(() => ApplyTiltPulseQuietly(pulseUs))); return; }
             ApplyTiltPulseQuietly(pulseUs);
         }
 
@@ -422,16 +599,24 @@ namespace NOMAD.MissionPlanner
 
         private void SetStatus(string text, Color color)
         {
-            if (InvokeRequired)
+            if (InvokeRequired) { BeginInvoke(new Action(() => SetStatus(text, color))); return; }
+            if (_lblStatus != null) { _lblStatus.Text = text; _lblStatus.ForeColor = color; }
+        }
+
+        private void CleanupTimers()
+        {
+            for (int i = 0; i < _dropResetTimers.Length; i++)
             {
-                BeginInvoke(new Action(() => SetStatus(text, color)));
-                return;
+                _dropResetTimers[i]?.Stop();
+                _dropResetTimers[i]?.Dispose();
+                _dropResetTimers[i] = null;
             }
-            if (_lblStatus != null)
-            {
-                _lblStatus.Text = text;
-                _lblStatus.ForeColor = color;
-            }
+            _reelSafetyTimer?.Stop();
+            _reelSafetyTimer?.Dispose();
+            _reelSafetyTimer = null;
+            _tiltDebounceTimer?.Stop();
+            _tiltDebounceTimer?.Dispose();
+            _tiltDebounceTimer = null;
         }
     }
 }
