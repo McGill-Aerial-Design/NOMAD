@@ -97,7 +97,7 @@ namespace NOMAD.MissionPlanner
         private NumericUpDown _numServo3Ch, _numServo3PwmMin, _numServo3PwmMax;
         private NumericUpDown _numReelCh, _numReelPwmIn, _numReelPwmOut;
         private NumericUpDown _numPumpCh, _numPumpPwmOn, _numPumpPwmOff, _numPumpDuration;
-        private NumericUpDown _numTiltCh, _numTiltPwmMin, _numTiltPwmMax;
+        private NumericUpDown _numTiltCh, _numTiltPwmMin, _numTiltPwmNeutral, _numTiltPwmMax, _numTiltAngleRange;
         
         // Google Drive
         private Button _btnUploadGDrive;
@@ -606,7 +606,13 @@ namespace NOMAD.MissionPlanner
             y += 32;
 
             AddSectionLabel(tab, "Camera Tilt (MAVLink primary, API fallback)", ref y);
+            // Calibration: down=700us, straight=1250us, up=1450us, ±45° range
             AddServoRow("Camera Tilt:", ref y, out _numTiltCh, out _numTiltPwmMin, out _numTiltPwmMax, 14, 700, 1450);
+            AddLabel(tab, "Neutral PWM:", 10, y);
+            _numTiltPwmNeutral = AddNumericUpDown(tab, 120, y, 60, 500, 2500, 1250);
+            AddLabel(tab, "Range (°):", 190, y, Color.Gray);
+            _numTiltAngleRange = AddNumericUpDown(tab, 258, y, 50, 1, 90, 45);
+            y += 28;
 
             return tab;
         }
@@ -803,9 +809,11 @@ namespace NOMAD.MissionPlanner
             _numPumpPwmOn.Value   = Config.WaterPumpPwmOn;
             _numPumpPwmOff.Value  = Config.WaterPumpPwmOff;
             _numPumpDuration.Value= Config.WaterPumpDurationMs;
-            _numTiltCh.Value      = Config.CameraTiltChannel;
-            _numTiltPwmMin.Value  = Config.CameraTiltPwmMin;
-            _numTiltPwmMax.Value  = Config.CameraTiltPwmMax;
+            _numTiltCh.Value          = Config.CameraTiltChannel;
+            _numTiltPwmMin.Value      = Config.CameraTiltPwmMin;
+            _numTiltPwmNeutral.Value  = Config.CameraTiltPwmNeutral;
+            _numTiltPwmMax.Value      = Config.CameraTiltPwmMax;
+            _numTiltAngleRange.Value  = Config.CameraTiltAngleRange;
 
             UpdateDualLinkControlsState();
             UpdateRadioMasterConnTypeState();
@@ -896,9 +904,11 @@ namespace NOMAD.MissionPlanner
             Config.WaterPumpPwmOn     = (int)_numPumpPwmOn.Value;
             Config.WaterPumpPwmOff    = (int)_numPumpPwmOff.Value;
             Config.WaterPumpDurationMs= (int)_numPumpDuration.Value;
-            Config.CameraTiltChannel  = (int)_numTiltCh.Value;
-            Config.CameraTiltPwmMin   = (int)_numTiltPwmMin.Value;
-            Config.CameraTiltPwmMax   = (int)_numTiltPwmMax.Value;
+            Config.CameraTiltChannel   = (int)_numTiltCh.Value;
+            Config.CameraTiltPwmMin    = (int)_numTiltPwmMin.Value;
+            Config.CameraTiltPwmNeutral= (int)_numTiltPwmNeutral.Value;
+            Config.CameraTiltPwmMax    = (int)_numTiltPwmMax.Value;
+            Config.CameraTiltAngleRange= (int)_numTiltAngleRange.Value;
         }
         
         private void SetComboBoxValue(ComboBox combo, string value)

@@ -21,9 +21,14 @@ class MavlinkService:
         
         # Time sync service reference (set externally)
         self._time_sync_service: Any = None
-        
+
         # RC servo bridge reference (set externally)
         self._rc_servo_bridge: Any = None
+
+        # SERVO_OUTPUT_RAW: last seen PWM per channel (1-indexed, us). Updated from
+        # SERVO_OUTPUT_RAW messages so callers can read actual FC servo outputs.
+        self._servo_output: dict[int, int] = {}
+        self._servo_output_lock = threading.Lock()
 
     def set_time_sync_service(self, service: Any) -> None:
         """Set the TimeSyncService to receive GPS time updates."""
@@ -32,6 +37,11 @@ class MavlinkService:
     def set_rc_servo_bridge(self, bridge: Any) -> None:
         """Set the RCServoBridge to receive RC channel updates."""
         self._rc_servo_bridge = bridge
+
+    def get_servo_output_pwm(self, channel: int) -> "int | None":
+        """Return the last SERVO_OUTPUT_RAW PWM (us) for channel (1-indexed), or None."""
+        with self._servo_output_lock:
+            return self._servo_output.get(channel)
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -86,8 +96,11 @@ class MavlinkService:
                 continue
 
             try:
-                # Include RC_CHANNELS when bridge is active
-                msg_types = ["HEARTBEAT", "SYS_STATUS", "GLOBAL_POSITION_INT", "ATTITUDE", "SYSTEM_TIME"]
+                msg_types = [
+                    "HEARTBEAT", "SYS_STATUS", "GLOBAL_POSITION_INT",
+                    "ATTITUDE", "SYSTEM_TIME",
+                    "SERVO_OUTPUT_RAW",  # actual FC PWM outputs for camera tilt TF
+                ]
                 if self._rc_servo_bridge is not None:
                     msg_types.append("RC_CHANNELS")
                 msg = self._conn.recv_match(
@@ -152,6 +165,14 @@ class MavlinkService:
                     time_boot_ms = getattr(msg, "time_boot_ms", 0)
                     if time_unix_usec > 0:
                         self._time_sync_service.update_gps_time(time_unix_usec, time_boot_ms)
+            elif msg_type == "SERVO_OUTPUT_RAW":
+                # Cache actual FC PWM per channel (1-indexed, channels 1-16).
+                with self._servo_output_lock:
+                    for ch in range(1, 17):
+                        attr = f"servo{ch}_raw"
+                        val = getattr(msg, attr, 0)
+                        if val and val > 0:
+                            self._servo_output[ch] = val
             elif msg_type == "RC_CHANNELS":
                 # Forward RC channel data to servo bridge
                 if self._rc_servo_bridge is not None:

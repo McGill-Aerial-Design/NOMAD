@@ -1126,11 +1126,24 @@ namespace NOMAD.MissionPlanner
                     {
                         var json = await response.Content.ReadAsStringAsync();
                         var obj = JObject.Parse(json);
-                        float angleDeg = obj["angle"]?.Value<float>() ?? 90f;
-                        // Server returns the API angle (0-180 over 500-2500us); convert to PWM.
-                        int pulseUs = (int)Math.Round(
-                            ServoApiPulseMinUs +
-                            angleDeg * (ServoApiPulseMaxUs - ServoApiPulseMinUs) / 180f);
+                        // Prefer pwm_us from SERVO_OUTPUT_RAW feedback (actual FC output).
+                        // Fall back to angle_deg → pulse conversion using calibration range.
+                        int pulseUs;
+                        var pwmToken = obj["pwm_us"];
+                        if (pwmToken != null)
+                        {
+                            pulseUs = pwmToken.Value<int>();
+                        }
+                        else
+                        {
+                            float angleDeg = obj["angle"]?.Value<float>() ?? 90f;
+                            // angle_deg is in 0-180 with 90=level; convert using calibration.
+                            // Below neutral uses down-side slope, above uses up-side slope.
+                            if (angleDeg <= 90f)
+                                pulseUs = (int)Math.Round(ServoPulseLevelUs - (90f - angleDeg) / 45f * (ServoPulseLevelUs - ServoPulseDownUs));
+                            else
+                                pulseUs = (int)Math.Round(ServoPulseLevelUs + (angleDeg - 90f) / 45f * (ServoPulseUpUs - ServoPulseLevelUs));
+                        }
                         lock (_poseLock) { _servoPulseUs = pulseUs; }
                     }
                 }
@@ -1217,9 +1230,12 @@ namespace NOMAD.MissionPlanner
                     var camTilt = servoObj["servos"]?["camera_tilt"];
                     bool enabled = camTilt?["enabled"]?.Value<bool>() ?? false;
                     float angleDeg = camTilt?["angle"]?.Value<float>() ?? 90f;
-                    int pulseUs = (int)Math.Round(
-                        ServoApiPulseMinUs +
-                        angleDeg * (ServoApiPulseMaxUs - ServoApiPulseMinUs) / 180f);
+                    // Piecewise linear: 0°→700us, 90°→1250us, 135°→1450us (camera range ±45°).
+                    int pulseUs;
+                    if (angleDeg <= 90f)
+                        pulseUs = (int)Math.Round(ServoPulseLevelUs - (90f - angleDeg) / 45f * (ServoPulseLevelUs - ServoPulseDownUs));
+                    else
+                        pulseUs = (int)Math.Round(ServoPulseLevelUs + (angleDeg - 90f) / 45f * (ServoPulseUpUs - ServoPulseLevelUs));
                     servoText = available
                         ? $"Servo: {(enabled ? "Enabled" : "Disabled")} {pulseUs} us"
                         : "Servo: Not available";

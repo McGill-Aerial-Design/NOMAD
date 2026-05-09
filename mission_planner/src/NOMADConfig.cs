@@ -391,12 +391,22 @@ namespace NOMAD.MissionPlanner
         public int WaterPumpDurationMs { get; set; } = 500;
 
         // --- Camera tilt servo (MAVLink primary, Jetson API fallback) ---
+        // ZED camera tilt calibration points:
+        //   700 us  → pointing down  (−45° from level)
+        //   1250 us → straight/level ( 0°)
+        //   1450 us → pointing up    (+45° from level)
+        // Neutral is at 1250us, NOT the standard 1500us, because the camera arm
+        // is mechanically offset. Conversion uses piecewise linear interpolation.
         /// <summary>Cube servo output channel for camera tilt servo.</summary>
         public int CameraTiltChannel { get; set; } = 14;
         /// <summary>Camera tilt minimum PWM (us) — fully down.</summary>
         public int CameraTiltPwmMin { get; set; } = 700;
+        /// <summary>Camera tilt neutral PWM (us) — camera pointing straight/level.</summary>
+        public int CameraTiltPwmNeutral { get; set; } = 1250;
         /// <summary>Camera tilt maximum PWM (us) — fully up.</summary>
         public int CameraTiltPwmMax { get; set; } = 1450;
+        /// <summary>Physical tilt range in degrees each way from level (±45°).</summary>
+        public int CameraTiltAngleRange { get; set; } = 45;
 
         // ============================================================
         // Persistence
@@ -571,7 +581,9 @@ namespace NOMAD.MissionPlanner
             WaterPumpDurationMs = defaults.WaterPumpDurationMs;
             CameraTiltChannel = defaults.CameraTiltChannel;
             CameraTiltPwmMin = defaults.CameraTiltPwmMin;
+            CameraTiltPwmNeutral = defaults.CameraTiltPwmNeutral;
             CameraTiltPwmMax = defaults.CameraTiltPwmMax;
+            CameraTiltAngleRange = defaults.CameraTiltAngleRange;
         }
     }
 }

@@ -7592,6 +7592,45 @@ echo $!
 
     # ==================== Servo Control Endpoints ====================
     # Control camera tilt servo and water shooter via PWM
+    #
+    # Camera tilt servo calibration (ZED camera on channel 14):
+    #   700 us  → pointing down  (−45° pitch)
+    #   1250 us → straight/level ( 0° pitch)
+    #   1450 us → pointing up    (+45° pitch)
+    # The range is NOT symmetric around 1500us (standard servo neutral) because
+    # the camera arm is mechanically offset. Conversion uses piecewise linear
+    # interpolation through the three calibration points.
+    #
+    # These defaults can be overridden at runtime via POST /api/servo/camera/config
+    # (Mission Planner sends this on connect so the Jetson always uses UI settings).
+
+    _camera_tilt_config: dict = {
+        "channel":      14,    # ArduPilot servo output channel (1-indexed)
+        "pwm_down":     700,   # PWM us → camera pointing down (−angle_range_deg)
+        "pwm_neutral":  1250,  # PWM us → camera level (0° pitch)
+        "pwm_up":       1450,  # PWM us → camera pointing up (+angle_range_deg)
+        "angle_range_deg": 45, # ±45° physical range
+    }
+
+    def _pwm_to_servo_angle(pwm_us: int, cfg: dict) -> float:
+        """Convert FC SERVO_OUTPUT_RAW PWM to angle_deg (0-180, 90=level).
+
+        Uses piecewise linear interpolation through the three calibration points:
+          pwm_down → 90 - angle_range_deg
+          pwm_neutral → 90
+          pwm_up → 90 + angle_range_deg
+        """
+        r = cfg["angle_range_deg"]
+        n = cfg["pwm_neutral"]
+        d = cfg["pwm_down"]
+        u = cfg["pwm_up"]
+        if pwm_us <= n:
+            span = max(n - d, 1)
+            pitch = -r * (n - pwm_us) / span
+        else:
+            span = max(u - n, 1)
+            pitch = r * (pwm_us - n) / span
+        return max(90.0 - r, min(90.0 + r, 90.0 + pitch))
 
     @app.get("/api/servo/status", tags=["Servo"])
     async def get_servo_status():
@@ -7668,26 +7707,74 @@ echo $!
             raise HTTPException(status_code=500, detail=str(e))
 
     @app.get("/api/servo/camera/tilt", tags=["Servo"])
-    async def get_camera_tilt():
+    async def get_camera_tilt(request: Request):
         """
         Get current camera tilt angle.
 
-        Returns:
-            Current angle in degrees
+        Returns feedback_angle from actual MAVLink SERVO_OUTPUT_RAW when available
+        (piecewise linear conversion through down/neutral/up calibration points).
+        Falls back to commanded angle from the servo controller.
+        servo_tf_publisher polls this endpoint to drive the SLAM camera TF.
         """
+        response: dict = {"angle": 90.0, "feedback_angle": None, "available": False}
+        cfg = _camera_tilt_config
+
+        # Primary: read actual PWM from FC SERVO_OUTPUT_RAW
+        try:
+            mav = request.app.state.mavlink_service
+            if mav is not None:
+                pwm = mav.get_servo_output_pwm(cfg["channel"])
+                if pwm is not None and pwm > 0:
+                    angle = _pwm_to_servo_angle(pwm, cfg)
+                    response["feedback_angle"] = angle
+                    response["angle"] = angle
+                    response["pwm_us"] = pwm
+                    response["available"] = True
+        except Exception as e:
+            logger.debug(f"Servo OUTPUT_RAW feedback error: {e}")
+
+        # Fallback: commanded angle from servo controller
         try:
             from .servo_controller import get_servo_controller
-
             controller = get_servo_controller()
-            if not controller or not controller.is_available():
-                return {"angle": None, "available": False}
+            if controller and controller.is_available():
+                commanded = controller.get_camera_tilt()
+                if commanded is not None:
+                    response["commanded_angle"] = commanded
+                    response["available"] = True
+                    if response["feedback_angle"] is None:
+                        response["angle"] = commanded
+        except Exception:
+            pass
 
-            angle = controller.get_camera_tilt()
-            return {"angle": angle, "available": angle is not None}
+        return response
 
-        except Exception as e:
-            logger.error(f"Get camera tilt error: {e}")
-            return {"angle": None, "available": False, "error": str(e)}
+    @app.get("/api/servo/camera/config", tags=["Servo"])
+    async def get_camera_tilt_config():
+        """Return current camera tilt servo calibration config."""
+        return dict(_camera_tilt_config)
+
+    @app.post("/api/servo/camera/config", tags=["Servo"])
+    async def set_camera_tilt_config(
+        channel: int = Query(..., ge=1, le=16, description="ArduPilot servo output channel (1-indexed)"),
+        pwm_down: int = Query(700, ge=500, le=2500, description="PWM us for camera fully down"),
+        pwm_neutral: int = Query(1250, ge=500, le=2500, description="PWM us for camera level"),
+        pwm_up: int = Query(1450, ge=500, le=2500, description="PWM us for camera fully up"),
+        angle_range_deg: float = Query(45.0, ge=1.0, le=90.0, description="Physical range in degrees each way"),
+    ):
+        """Update camera tilt servo calibration (called by Mission Planner on connect)."""
+        _camera_tilt_config.update({
+            "channel": channel,
+            "pwm_down": pwm_down,
+            "pwm_neutral": pwm_neutral,
+            "pwm_up": pwm_up,
+            "angle_range_deg": angle_range_deg,
+        })
+        logger.info(
+            f"Camera tilt config updated: ch={channel} down={pwm_down}us "
+            f"neutral={pwm_neutral}us up={pwm_up}us range=±{angle_range_deg}°"
+        )
+        return dict(_camera_tilt_config)
 
     @app.post("/api/servo/shooter/trigger", tags=["Servo"])
     async def trigger_water_shooter(
