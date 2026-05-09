@@ -22,8 +22,10 @@ Target: Python 3.13 | NVIDIA Jetson Orin Nano
 
 from __future__ import annotations
 
+import json
 import logging
 import math
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -99,6 +101,7 @@ class SprayStatus:
 
 
 # Ballistic drop compensation table (SP-004)
+# Default values — overridden by calibration file if available
 BALLISTIC_DROP_TABLE = {
     1.0: 0.0,    # 1m - negligible drop
     2.0: 2.0,    # 2m - ~2 degrees down
@@ -106,6 +109,43 @@ BALLISTIC_DROP_TABLE = {
     4.0: 8.0,    # 4m - ~8 degrees down
     5.0: 12.0,   # 5m - ~12 degrees down
 }
+
+# Calibration file path — produced by bench calibration system (aeac_ws)
+CALIBRATION_FILE = os.path.expanduser("~/.nomad/calibration/spray_calibration.json")
+
+
+def _load_calibration() -> dict:
+    """Load bench calibration data from JSON file if available.
+
+    Expected format:
+        {
+            "ballistic_drop_table": {"2.0": 2.5, "3.0": 6.0, ...},
+            "spray_duration_ms": 600,
+            "servo_gain": 0.08,
+            "aim_tolerance_px": 25,
+            "calibration_date": "2026-05-10",
+            "notes": "Bench test results"
+        }
+    """
+    try:
+        if os.path.exists(CALIBRATION_FILE):
+            with open(CALIBRATION_FILE) as f:
+                data = json.load(f)
+            logger.info(f"Loaded spray calibration from {CALIBRATION_FILE}")
+            return data
+    except Exception as e:
+        logger.warning(f"Failed to load spray calibration from {CALIBRATION_FILE}: {e}")
+    return {}
+
+
+# Apply calibration overrides at module load time
+_calibration = _load_calibration()
+if "ballistic_drop_table" in _calibration:
+    BALLISTIC_DROP_TABLE = {
+        float(k): float(v)
+        for k, v in _calibration["ballistic_drop_table"].items()
+    }
+    logger.info(f"Using calibrated ballistic drop table: {BALLISTIC_DROP_TABLE}")
 
 
 def _interpolate_drop(distance_m: float) -> float:
@@ -477,16 +517,15 @@ class SprayController:
         return {"x": approach_x, "y": approach_y, "z": approach_z, "yaw": yaw}
 
     def _approach_target(self, target: SprayTarget) -> bool:
-        """Autonomous approach from 3m to 2m. Returns False if aborted."""
-        nav2_available = self._send_nav2_goal_fn is not None
+        """Autonomous approach from 3m to 2m. Returns False if aborted.
+
+        Uses direct velocity commands (not Nav2) because:
+        - Nav2 is a 2D planner designed for ground robots — it ignores Z
+        - The approach is only ~1m (3m→2m), obstacle avoidance is unnecessary
+        - Velocity commands handle all 3 axes natively via MAVLink GUIDED
+        - Nav2 has been reported to crash with vertical-level targets
+        """
         self._set_approach_sectors(target, exclude=True)
-
-        if nav2_available:
-            approach_ok = self._approach_via_nav2(target)
-            if approach_ok is not None:
-                return approach_ok
-            logger.warning("Nav2 approach failed, falling back to velocity")
-
         return self._approach_via_velocity(target)
 
     def _approach_via_nav2(self, target: SprayTarget) -> Optional[bool]:
@@ -827,3 +866,17 @@ class SprayController:
                 logger.warning("No upload function - photo saved locally only")
         except Exception as e:
             logger.error(f"Upload error: {e}")
+
+
+# ---------------------------------------------------------------------- #
+# Apply calibration overrides to class parameters (after class definition)
+# ---------------------------------------------------------------------- #
+if "spray_duration_ms" in _calibration:
+    SprayController.SPRAY_DURATION_MS = int(_calibration["spray_duration_ms"])
+    logger.info(f"Using calibrated spray duration: {SprayController.SPRAY_DURATION_MS}ms")
+if "servo_gain" in _calibration:
+    SprayController.SERVO_GAIN = float(_calibration["servo_gain"])
+    logger.info(f"Using calibrated servo gain: {SprayController.SERVO_GAIN}")
+if "aim_tolerance_px" in _calibration:
+    SprayController.AIM_TOLERANCE_PX = int(_calibration["aim_tolerance_px"])
+    logger.info(f"Using calibrated aim tolerance: {SprayController.AIM_TOLERANCE_PX}px")

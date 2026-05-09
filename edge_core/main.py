@@ -35,6 +35,7 @@ if os.path.isdir(_local_lib):
         except OSError:
             pass
 
+import time
 import uvicorn
 import asyncio
 
@@ -141,6 +142,15 @@ def cleanup() -> None:
             spray_controller.abort()
         except Exception:
             pass
+
+    # Stop detection thread (if running)
+    try:
+        stop_fn = getattr(app.state, '_stop_detection_fn', None)
+        if stop_fn:
+            stop_fn()
+    except Exception:
+        pass
+
     spray_controller = None
 
     # Shutdown RC servo bridge
@@ -439,11 +449,21 @@ def run(
 
     # Wire spray callbacks
     # set_capture_photo_fn: capture frame from video bridge HTTP snapshot
+    # Photos saved to persistent directory (not /tmp) for competition evidence
+    SPRAY_CAPTURE_DIR = os.path.expanduser("~/.nomad/spray_captures")
+
     def _capture_photo() -> str | None:
-        """Capture a frame from the ZED video bridge and save to a temp file."""
+        """Capture a frame from the ZED video bridge and save persistently.
+
+        Saves to ~/.nomad/spray_captures/ with timestamped filenames
+        so images survive reboots and can be reviewed after flights.
+        """
         try:
             import requests as _requests
             import numpy as _np
+            from datetime import datetime
+
+            os.makedirs(SPRAY_CAPTURE_DIR, exist_ok=True)
             bridge_port = int(os.environ.get("NOMAD_BRIDGE_HTTP_PORT", "9200"))
             snap_url = f"http://172.17.0.1:{bridge_port}/snapshot"
             resp = _requests.get(snap_url, timeout=3)
@@ -452,10 +472,11 @@ def run(
                 arr = _np.frombuffer(resp.content, dtype=_np.uint8)
                 img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
                 if img is not None:
-                    import tempfile
-                    fd, path = tempfile.mkstemp(suffix=".jpg", prefix="spray_capture_")
-                    os.close(fd)
+                    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                    filename = f"spray_capture_{ts}.jpg"
+                    path = os.path.join(SPRAY_CAPTURE_DIR, filename)
                     cv2.imwrite(path, img)
+                    logger.info(f"Photo saved: {path}")
                     return path
         except Exception as e:
             logger.error(f"Photo capture failed: {e}")
@@ -495,7 +516,7 @@ def run(
     def _verify_circle_change(pre_spray_path: str, post_spray_path: str) -> bool:
         """Compare pre/post spray images using color-agnostic circle detection."""
         try:
-            from task2_circle_verify import CircleChangeVerifier
+            from .task2_circle_verify import CircleChangeVerifier
             verifier = CircleChangeVerifier(
                 change_threshold=0.20,
                 pixel_diff_threshold=30,
@@ -516,9 +537,32 @@ def run(
 
     spray_controller.set_verify_circle_change_fn(_verify_circle_change)
 
-    # Google Drive uploads are handled by the ground station, not on the drone.
-    # spray_controller's _upload_fn is optional; leaving it unset makes the
-    # post-spray upload step a no-op here.
+    # Wire Google Drive upload for autonomous photo submission (CONOPS 5.2.4).
+    # Uses existing gdrive_upload.py module — requires OAuth2 setup on Jetson:
+    #   python -m edge_core.gdrive_upload --setup <client_secret.json>
+    # Set GDRIVE_FOLDER_ID env var to the team's competition folder.
+    try:
+        from .gdrive_upload import upload_to_gdrive, gdrive_ready
+
+        if gdrive_ready():
+            def _upload_photo(local_path: str, filename: str) -> str:
+                """Upload spray photo to Google Drive."""
+                file_id = upload_to_gdrive(local_path, filename)
+                if file_id:
+                    logger.info(f"Google Drive upload: {filename} -> id={file_id}")
+                else:
+                    logger.warning(f"Google Drive upload failed for {filename}")
+                return file_id
+
+            spray_controller.set_upload_fn(_upload_photo)
+            logger.info("Google Drive upload enabled (autonomous)")
+        else:
+            logger.warning(
+                "Google Drive not configured — photos saved locally only. "
+                "Run: python -m edge_core.gdrive_upload --setup <client_secret.json>"
+            )
+    except ImportError as e:
+        logger.warning(f"Google Drive upload unavailable: {e}")
 
     # set_excluded_sectors_fn: store on app.state for obstacle distance endpoint
     app.state.excluded_sectors: set[int] = set()
@@ -565,7 +609,97 @@ def run(
     spray_controller.set_nav2_status_fn(_get_nav2_status)
     spray_controller.set_nav2_cancel_fn(_cancel_nav2_goal)
 
-    logger.info("Spray controller initialized with Nav2 approach + circle verify support")
+    # ------------------------------------------------------------------ #
+    # Continuous detection thread for visual servoing AIM phase.
+    # Runs at ~5 Hz in background, caches the latest detection so the
+    # spray controller gets instant responses instead of blocking on
+    # an HTTP snapshot per detection call.
+    # ------------------------------------------------------------------ #
+    import threading as _threading
+
+    _latest_detection: tuple | None = None
+    _detection_lock = _threading.Lock()
+    _detection_running = False
+
+    def _detection_loop() -> None:
+        """Background detection thread — continuously detects targets at ~5 Hz.
+
+        Uses NOMAD's built-in circle detector (contrast-based, color-agnostic).
+        Tuned for small targets (5-30cm) at 3-4m distance.
+        Caches the latest detection result for the spray controller to read.
+        """
+        nonlocal _latest_detection, _detection_running
+        _detection_running = True
+        logger.info("Detection thread started (~5 Hz)")
+
+        # Lazy imports (only done once when thread starts)
+        try:
+            from .task2_circle_verify import Task2CircleDetector
+            import cv2
+            import numpy as _np
+            import requests as _requests
+        except ImportError as e:
+            logger.error(f"Detection thread: missing dependency: {e}")
+            _detection_running = False
+            return
+
+        detector = Task2CircleDetector(
+            min_radius_px=3,    # Lowered for small targets at distance
+            hough_param2=30,    # More sensitive for small circles
+            blur_kernel=3,      # Less blur to preserve small features
+        )
+        bridge_port = int(os.environ.get("NOMAD_BRIDGE_HTTP_PORT", "9200"))
+        snap_url = f"http://172.17.0.1:{bridge_port}/snapshot"
+
+        while _detection_running:
+            try:
+                resp = _requests.get(snap_url, timeout=1)
+                if resp.status_code != 200:
+                    time.sleep(0.2)
+                    continue
+
+                arr = _np.frombuffer(resp.content, dtype=_np.uint8)
+                img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if img is None:
+                    time.sleep(0.2)
+                    continue
+
+                circles = detector.detect(img)
+                with _detection_lock:
+                    if circles:
+                        best = max(
+                            circles, key=lambda c: c.confidence * c.radius
+                        )
+                        _latest_detection = (
+                            best.cx, best.cy,
+                            best.radius * 2, best.radius * 2,
+                        )
+                    else:
+                        _latest_detection = None
+            except Exception as e:
+                logger.error(f"Detection loop error: {e}")
+            time.sleep(0.2)  # ~5 Hz
+
+    def _get_detection_bbox(target_id: int) -> tuple | None:
+        """Return the latest cached detection from the background thread."""
+        with _detection_lock:
+            return _latest_detection
+
+    def _stop_detection() -> None:
+        """Stop the detection thread (called on shutdown)."""
+        nonlocal _detection_running
+        _detection_running = False
+
+    # Start background detection thread
+    _det_thread = _threading.Thread(
+        target=_detection_loop, daemon=True, name="spray_detection"
+    )
+    _det_thread.start()
+    spray_controller.set_detection_bbox_fn(_get_detection_bbox)
+    # Store stop function for cleanup
+    app.state._stop_detection_fn = _stop_detection
+
+    logger.info("Spray controller initialized with velocity approach + circle verify + continuous detection")
 
     # Start health status broadcast (every 2 seconds)
     mavlink_service.start_health_broadcast(interval=2.0)
