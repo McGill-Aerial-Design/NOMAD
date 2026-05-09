@@ -58,17 +58,17 @@ removes filtering that protects against VIO glitches.
 | `/zed/zed_node/imu/data` | ~200 Hz | Calibrated IMU for attitude |
 | `/zed/zed_node/imu/mag` | ~50 Hz | Magnetometer heading |
 
-`frame_id` for SLAM visualization is **`odom`** end-to-end: bridge mesh payloads,
+`frame_id` for SLAM visualization is **`map`** end-to-end: bridge mesh payloads,
 `ws_slam` frames, mesh endpoint, and Mission Planner client all agree on this
 exact string (see "Frame contract" below).
 
 ## Frame contract
 
-All SLAM visualization payloads use `frame_id: "odom"` (REP-103 convention).
-- `ros_http_bridge.py` publishes mesh with `"frame_id": "odom"`.
-- `edge_core/api.py` `/api/task/2/slam/mesh/update` normalizes to `"odom"` and logs a mismatch if the bridge ever sends something else.
-- `edge_core/api.py` `/ws/slam` emits `frame_id: "odom"` on every frame.
-- `mission_planner/src/SLAM3DView.cs` expects `"odom"` and logs a warning on anything else.
+All SLAM visualization payloads use `frame_id: "map"` (nvblox global frame).
+- `ros_http_bridge.py` publishes mesh with `"frame_id": "map"`.
+- `edge_core/api.py` `/api/task/2/slam/mesh/update` normalizes to `"map"` and logs a mismatch if the bridge ever sends something else.
+- `edge_core/api.py` `/ws/slam` emits `frame_id: "map"` on every frame.
+- `mission_planner/src/SLAM3DView.cs` expects `"map"` and logs a warning on anything else.
 
 If you see a mismatch warning, you are running two publishers at once — stop
 the debug stack.
@@ -106,7 +106,7 @@ nothing and any parity measurements taken against it are invalid.
 
 ### nvblox Mesh Not Showing
 - Check mesh topic is publishing: `ros2 topic hz /nvblox_node/color_layer_marker`
-- In RViz, set Fixed Frame to `odom`
+- In RViz, set Fixed Frame to `map`
 - Ensure marker display is enabled
 - Wait 10-20 seconds for mesh to build up
 
@@ -118,11 +118,11 @@ nothing and any parity measurements taken against it are invalid.
 
 ### Frame ID warnings in edge_core logs
 ```
-ws_slam pose frame_id mismatch: got 'X', expected 'odom'
-mesh/update frame_id mismatch: got 'X', expected 'odom'
+ws_slam pose frame_id mismatch: got 'X', expected 'map'
+mesh/update frame_id mismatch: got 'X', expected 'map'
 ```
 This means something is publishing to Edge Core with the wrong frame string.
-The canonical stack always emits `"odom"` — the most common cause is leaving the
+The canonical stack always emits `"map"` — the most common cause is leaving the
 debug stack running simultaneously.
 
 ### TF Frame Errors

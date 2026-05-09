@@ -106,6 +106,28 @@ POST /api/video/stop
 POST /api/video/restart
 ```
 
+### Source Switching
+
+```bash
+GET /api/video/source              # Get current video source
+POST /api/video/source             # Switch video source (topic)
+```
+
+### Video Bridges
+
+```bash
+POST /api/video/bridges/start      # Start video bridge(s)
+GET /api/video/bridges             # List active video bridges
+GET /api/video/topics              # List available video topics
+```
+
+### OSD Overlay
+
+```bash
+POST /api/video/overlay/enable     # Enable OSD overlay
+POST /api/video/overlay/disable    # Disable OSD overlay
+```
+
 ### Get Logs
 
 ```bash

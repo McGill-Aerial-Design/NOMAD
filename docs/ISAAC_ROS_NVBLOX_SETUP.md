@@ -209,21 +209,21 @@ If Nav2 packages are missing or Nav2 validation fails, startup may continue in d
 
 ### nvblox Configuration Profiles
 
-Two primary configurations are available depending on the mission:
+A unified performance configuration is currently available:
 
 #### Performance config: `config/nvblox_performance.yaml`
 
-Optimized for **Task 1 (outdoor)** and **real-time 3D visualization** in Mission Planner.
+Optimized for both **Task 1 (outdoor)** and **Task 2 (indoor)** on the Orin Nano 8GB.
 
 | Parameter | Value | Notes |
 |-----------|-------|-------|
 | `voxel_size` | 0.10 m | 10cm voxels tuned for Orin Nano 8GB stability |
-| `map_clearing_radius_m` | 5.0 m | 5m active mapping radius to reduce GPU memory pressure |
+| `map_clearing_radius_m` | 3.0 m | 3m active mapping radius to reduce GPU memory pressure |
 | `projective_integrator_max_integration_distance_m` | 5.0 m | Max depth integration range |
 | `integrate_depth_rate_hz` | 5.0 | Conservative depth integration rate for stability |
-| `update_mesh_rate_hz` | 5.0 | Mesh updates tuned for stable real-time visualization |
-| `update_esdf_rate_hz` | 5.0 | ESDF update rate for consistent obstacle field updates |
-| `esdf_mode` | "2d" | 2D ESDF mode to reduce compute/memory load |
+| `update_mesh_rate_hz` | 10.0 | Mesh updates for real-time visualization |
+| `update_esdf_rate_hz` | 10.0 | ESDF update rate for obstacle field updates |
+| `esdf_mode` | "3d" | 3D ESDF mode for full obstacle detection |
 | `mapping_type` | "dynamic" | Dynamic mapping mode for robust operation |
 | `back_projection_subsampling` | 4 | Heavy subsampling for speed |
 | `publish_layer_rate_hz` | 5.0 | Layer publishing rate tuned for Orin Nano headroom |

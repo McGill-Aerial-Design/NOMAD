@@ -8,6 +8,7 @@ This document describes the nozzle servo control system for NOMAD, covering both
 |-----------|--------|
 | **Servo** | Standard hobby servo (50Hz PWM, 500-2500us pulse range) |
 | **Signal Pin** | Jetson Orin Nano Pin 15 (gpiochip0, line 85 / SOC_GPIO39_PN1) |
+| **Water Shooter** | Jetson Orin Nano Pin 18 (gpiochip0, line 50 / SOC_GPIO09_PQ1) |
 | **Power** | Pin 2 or Pin 4 (5V rail) -- or external 5V BEC for high-torque servos |
 | **Ground** | Pin 14 (any GND pin works: 6, 9, 14, 20, 25, 30, 34, 39) |
 
@@ -119,15 +120,22 @@ curl http://100.85.121.98:8000/api/servo/status
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| `GET` | `/api/servo/status` | Get servo + GPIO output status |
 | `POST` | `/api/servo/camera/tilt?angle={0-180}` | Set nozzle servo angle |
+| `GET` | `/api/servo/camera/tilt` | Get current camera tilt angle |
+| `GET` | `/api/servo/camera/config` | Get servo config (min/max pulse, etc.) |
+| `POST` | `/api/servo/camera/config` | Update servo config |
+| `POST` | `/api/servo/enable` | Enable servo output |
+| `POST` | `/api/servo/disable` | Disable servo output |
 | `POST` | `/api/servo/shooter/trigger?duration_ms={ms}` | Trigger water shooter GPIO |
-| `GET` | `/api/servo/status` | Get servo + GPIO status |
+| `GET` | `/api/servo/rc/status` | RC-to-servo bridge status (channel, last value, angle) |
+| `POST` | `/api/servo/rc/channel?channel={1-18}` | Change which RC channel controls servo |
 
 ## Servo Controller Details
 
 **File:** `edge_core/servo_controller.py`
 
-The `GPIOPWMServo` class manages the servo through a C helper process:
+The `PWMServo` class manages the servo through a C helper process:
 
 1. On first `set_angle()` call, it compiles `/tmp/nomad_servo_pwm.c` into `/tmp/nomad_servo_pwm`
 2. Spawns the C helper as a subprocess with `stdin`/`stdout` pipes

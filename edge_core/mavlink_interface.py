@@ -132,17 +132,20 @@ class MavlinkService:
             elif msg_type == "GLOBAL_POSITION_INT":
                 lat_raw = getattr(msg, "lat", 0)
                 lon_raw = getattr(msg, "lon", 0)
-                alt_raw = getattr(msg, "alt", 0)  # mm above MSL
+                alt_raw = getattr(msg, "alt", 0)          # mm above MSL
+                rel_alt_raw = getattr(msg, "relative_alt", 0)  # mm above home/ground
                 gps_fix = bool(lat_raw or lon_raw)
                 # GLOBAL_POSITION_INT encodes lat/lon in 1e7 degrees, alt in mm
                 gps_lat = lat_raw / 1e7 if lat_raw else None
                 gps_lon = lon_raw / 1e7 if lon_raw else None
-                gps_alt = alt_raw / 1000.0 if alt_raw else None  # mm -> m
+                gps_alt = alt_raw / 1000.0 if alt_raw else None          # mm -> m MSL
+                alt_agl_m = rel_alt_raw / 1000.0 if rel_alt_raw else None  # mm -> m AGL
                 self.state_manager.update_state(
                     gps_fix=gps_fix,
                     gps_lat=gps_lat,
                     gps_lon=gps_lon,
                     gps_alt=gps_alt,
+                    alt_agl_m=alt_agl_m,
                 )
             elif msg_type == "ATTITUDE":
                 import math

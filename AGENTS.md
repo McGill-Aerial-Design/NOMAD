@@ -45,28 +45,75 @@ Invoke-WebRequest -Uri 'http://100.85.121.98:8000/' -UseBasicParsing
 ```
 NOMAD/
 |-- edge_core/              # Python FastAPI server (runs on Jetson)
-|   |-- api.py              # API endpoints
-|   |-- main.py             # Entry point
+|   |-- api.py              # REST / WebSocket API endpoints (~125 endpoints across all tags)
+|   |-- main.py             # Entry point, service orchestration
+|   |-- state.py            # Global state manager (singleton)
 |   |-- health_monitor.py   # Jetson hardware monitoring
-|   |-- nav_controller.py   # Navigation commands
-|   |-- vio_pipeline.py     # Visual-Inertial Odometry
-|   |-- ros_*               # ROS2 bridge modules
+|   |-- mavlink_interface.py # MAVLink telemetry + command interface
+|   |-- nav_controller.py   # Velocity / position command routing
+|   |-- servo_controller.py # Camera tilt / water shooter PWM
+|   |-- rc_servo_bridge.py # RC channel -> servo angle bridge
+|   |-- spray_controller.py # Fire-extinguisher spray control
+|   |-- operational_mode.py # Operational mode state machine
+|   |-- video_stream_manager.py # Video bridge / overlay / source switching
+|   |-- isaac_ros_bridge.py # Isaac ROS / nvblox container lifecycle
+|   |-- ros_http_bridge.py # ROS <-> HTTP bridge
+|   |-- gdrive_upload.py    # Google Drive upload helpers
+|   |-- ipc.py              # ZMQ/IPC for high-rate ROS data
+|   |-- logging_service.py  # Structured logging utilities
+|   |-- time_manager.py     # Time synchronization
+|   |-- geospatial.py       # GPS / ENU / NED conversions
+|   |-- models.py           # Pydantic data models
+|   |-- target_localizer/   # HSV circle detection, building model, descriptions
+|   |-- ros/                # ROS2 utility nodes (VIO, video, obstacles)
 |
 |-- mission_planner/        # C# plugin (runs on Windows GCS)
 |   |-- src/
-|       |-- EnhancedHealthDashboard.cs   # Health + network display
+|       |-- NOMADPlugin.cs               # Plugin entry point
+|       |-- NOMADMainScreen.cs           # Main plugin host screen
+|       |-- NOMADDashboardView.cs        # System overview dashboard
+|       |-- NOMADTask1View.cs            # Task 1 capture / submit UI
+|       |-- NOMADTask2View.cs            # Task 2 VIO / WASD UI
+|       |-- NOMADVideoView.cs            # Standalone video panel
+|       |-- NOMADHealthView.cs           # Health metrics view
+|       |-- NOMADLinksView.cs            # Link status view
+|       |-- NOMADBoundaryView.cs         # Geofence / boundary display
+|       |-- NOMADTerminalView.cs         # Remote terminal tab
+|       |-- NOMADSettingsForm.cs         # Plugin settings
+|       |-- ServiceControlPanel.cs       # Service status / control panel
+|       |-- EnhancedHealthDashboard.cs     # Health + network display
 |       |-- JetsonConnectionManager.cs   # API client
 |       |-- EmbeddedVideoPlayer.cs       # RTSP video
 |       |-- LinkHealthPanel.cs           # MAVLink dual-link
-|       |-- NOMADPlugin.cs               # Plugin entry point
+|       |-- JetsonHealthTab.cs           # Per-tab health display
+|       |-- JetsonTerminalControl.cs     # Remote terminal access
+|       |-- SLAM3DView.cs + SLAM3D/      # 3D nvblox mesh viewer
+|       |-- Task1UploadPanel.cs          # Target grid + Google Drive upload
+|       |-- PayloadControlPanel.cs       # Payload drop / water shooter
+|       |-- GoogleDriveUploadService.cs  # GDrive upload service
+|       |-- AIDescriptionService.cs      # AI description generation
+|       |-- DualLinkSender.cs            # HTTP/MAVLink dual-path sender
+|       |-- NotificationPanel.cs + NotificationService.cs # Toast notification system
+|       |-- MAVLinkConnectionManager.cs  # MAVLink telemetry mgmt
+|       |-- TelemetryInjector.cs         # Telemetry / HUD injection
+|       |-- EkfSourceControlPanel.cs     # EKF source switching
+|       |-- EnhancedWASDControl.cs        # WASD nav controls
+|       |-- SnapshotManager.cs           # ZED snapshot mgmt
+|       |-- BuildingViewer3D.cs          # 3D building viewer
+|       |-- ZedCalibrationView.cs        # ZED calibration UI
+|       |-- FoxglovePanel.cs             # Foxglove integration
+|       |-- Rviz2View.cs                 # RViz2 integration
+|       |-- MapOverlayManager.cs         # Map overlay manager
+|       |-- BoundaryManager.cs           # Geofence boundary manager
+|       |-- MissionConfig.cs + NOMADConfig.cs # Configuration models
+|       |-- NOMADTheme.cs                # UI theming
+|       |-- NOMADViewBase.cs             # Base view class
 |
 |-- scripts/
 |   |-- build/              # Build scripts
 |   |   |-- build_plugin_windows.ps1     # C# plugin build
-|   |   |-- build_nvblox_msgs.sh         # nvblox message package build
-|   |   |-- install_vpi_container.sh     # VPI dependency install
 |   |-- run/                # Runtime/startup scripts
-|   |   |-- start_nomad_full.sh          # Full system startup (main entry point)
+|   |   |-- start_nomad_full.sh          # Full system startup
 |   |   |-- start_isaac_ros_auto.sh      # Isaac ROS container lifecycle
 |   |   |-- restart_nomad.sh             # Kill-all and restart
 |   |   |-- launch_nvblox_performance.sh # Performance-tuned nvblox launch
@@ -74,13 +121,10 @@ NOMAD/
 |   |   |-- setup_jetson.sh              # Full Jetson initial setup
 |   |   |-- setup_service.sh             # systemd nomad.service install
 |   |   |-- setup_ssh_jetson.ps1         # SSH key setup (Windows)
-|   |   |-- setup_jetson_remote.py       # Remote Jetson setup via SSH
 |   |   |-- fix_power_mode_25w_v2.sh     # Jetson 25W power mode config
 |   |-- dev/                # Development tools
 |   |   |-- run_dev.ps1                  # Windows sim mode
 |   |   |-- run_dev.sh                   # Linux/macOS sim mode
-|   |-- task1/              # Task 1 AI processing
-|   |   |-- process_task1_ai.py          # Multi-provider AI image analysis
 |   |-- hardware/           # Hardware test utilities
 |       |-- servo_test.c                 # GPIO servo test (C)
 |       |-- sw_servo_test.py             # Servo sweep test (Python)
@@ -114,13 +158,16 @@ Always check this file for actual IP addresses and paths.
 
 ## 4. Edge Core API Endpoints
 
+> **Full codegen**: The API is defined in `edge_core/api.py` (8K+ lines). Only key endpoints are listed below. Always verify the source for the latest parameter list and behaviour.
+
 ### System
 - `GET /` - Service info
 - `GET /health` - Basic health check
-- `GET /health/detailed` - Full Jetson metrics
+- `GET /health/detailed` - Full Jetson metrics (CPU, GPU, temp, memory, disk)
 - `GET /status` - Current system state
+- `GET /api/services/status` - systemd / process status for nomad, mediamtx, mavlink-routerd
 
-### Network (Added in PR #3)
+### Network
 - `GET /network/status` - Tailscale + modem + reachability
 - `POST /network/reconnect` - Trigger Tailscale reconnect
 - `GET /network/ping/{host}` - Ping utility
@@ -128,13 +175,22 @@ Always check this file for actual IP addresses and paths.
 ### Task 1 (Outdoor Reconnaissance)
 - `POST /api/task/1/target/capture` - Trigger target detection + description (primary)
 - `POST /api/task/1/target/save` - Save targets to competition .txt file
+- `POST /api/task/1/target/clear` - Clear all captured targets
+- `POST /api/task/1/target/ground_alt` - Set global ground altitude for 3D back-projection
+- `POST /api/task/1/target/{target_id}/plane_override` - Override wall/ground/roof classification for a target
+- `GET /api/task/1/target/detections` - Get current frame detection overlay data
+- `GET /api/task/1/target/list` - List captured targets
+- `GET /api/task/1/target/list_structured` - Structured target list (with metadata)
 - `GET /api/task/1/target/model` - Print building model summary
 - `POST /api/task/1/building/corner` - Save one building corner GPS (on-site calibration)
 - `GET /api/task/1/building/corners` - List saved building corners
 - `DELETE /api/task/1/building/corners` - Clear all building corners
+- `POST /api/task/1/building/height` - Update building height
+- `POST /api/task/1/building/wall/override` - Override face wall directions
 - `POST /api/task/1/building/corners/apply` - Apply saved corners to target_localizer (rebuild building model)
-- `POST /api/task/1/capture` - Legacy capture (fallback to detections cache)
+- `POST /api/task/1/capture` - Legacy capture endpoint
 - `GET /api/task/1/captures` - List capture folders
+- `GET /api/task/1/images/{filename}` - Legacy image download
 - `GET /api/task/1/images/{folder}/{filename}` - Download captured image/metadata
 - **Full guide**: `docs/TASK1_COMPETITION_GUIDE.md`
 
@@ -145,29 +201,102 @@ Always check this file for actual IP addresses and paths.
 
 ### VIO
 - `GET /api/vio/status` - Pipeline health
+- `POST /api/vio/update` - Push external VIO pose update (internal bridge)
 - `GET /api/vio/pose` - Current position/orientation
 - `GET /api/vio/trajectory` - Path history
 - `DELETE /api/vio/trajectory` - Clear trajectory
 - `POST /api/vio/reset_origin` - Reset tracking origin
+- `GET /api/vio/calibration` - ZED calibration state
+- `POST /api/vio/area/save` - Save VIO relocalization area map
+- `POST /api/vio/area/load` - Load VIO relocalization area map
+- `POST /api/vio/area/relocalize` - Trigger relocalization to saved area
 
 ### Navigation
 - `GET /api/nav/status` - Navigation controller status
 - `POST /api/nav/velocity` - Send velocity command
 - `POST /api/nav/position` - Send position target
 - `POST /api/nav/stop` - Emergency stop
+- `GET /api/nav/enable_guided` - Enable guided mode
+- `POST /api/nav2/goal` - Set Nav2 goal for autonomous path
+- `GET /api/nav2/status` - Nav2 autonomy status
+- `GET /api/nav2/pending` - Pending Nav2 goal
+- `POST /api/nav2/feedback` - Nav2 feedback from bridge
+- `POST /api/nav2/result` - Nav2 result from bridge
+- `GET /api/obstacle_distance` - Last cached obstacle distance
+- `POST /api/obstacle_distance` - Update obstacle distance (internal bridge)
+
+### Spray
+- `GET /api/spray/status` - Spray controller state
+- `POST /api/spray/trigger` - Trigger spray sequence
+- `POST /api/spray/abort` - Abort spray sequence
 
 ### Isaac ROS (Task 2)
-- `GET /api/isaac/status` - Isaac ROS bridge status
+- `GET /api/isaac/status` - Isaac ROS bridge + container status
 - `POST /api/isaac/start` - Start Isaac ROS container
 - `POST /api/isaac/stop` - Stop Isaac ROS container
+- `POST /api/isaac/launch-nvblox` - Launch nvblox with specific config
+- `POST /api/isaac/bridge/start` - Start ROS <-> HTTP bridge
+- `POST /api/isaac/bridge/stop` - Stop ROS <-> HTTP bridge
+- `POST /api/isaac/nvblox/start` - Start nvblox node inside container
+- `POST /api/isaac/nvblox/stop` - Stop nvblox node inside container
+- `POST /api/isaac/foxglove/start` - Start Foxglove bridge
+- `POST /api/isaac/foxglove/stop` - Stop Foxglove bridge
+- `GET /api/isaac/foxglove/status` - Foxglove bridge status
+- `GET /api/isaac/logs` - Isaac ROS container logs
+- `GET /api/isaac/vio` - VIO state from Isaac ROS
+- `GET /api/isaac/detections` - Latest detections from Isaac ROS
+- `GET /api/isaac/exclusion_map` - Exclusion map from Isaac ROS
+- `POST /api/isaac/exclusion_map/add` - Add to Isaac ROS exclusion map
+- `POST /api/isaac/exclusion_map/clear` - Clear Isaac ROS exclusion map
+
+### Detections
+- `GET /api/detections` - Current frame detections
+- `GET /api/detections/status` - Detection pipeline status
+- `GET /api/detections/summary` - Summary of persisted detections
+- `POST /api/detections/start` - Start detection pipeline
+- `POST /api/detections/stop` - Stop detection pipeline
+- `POST /api/detections/update` - Push detection update (internal bridge)
+- `DELETE /api/detections/history` - Clear persisted detection history
+
+### Video / Streaming
+- `GET /api/stream/info` - Stream metadata (bitrate, fps, latency)
+- `GET /api/video/status` - Video pipeline status
+- `GET /api/video/source` - Current video source
+- `POST /api/video/source` - Switch video source
+- `POST /api/video/start` - Start video streaming pipeline
+- `POST /api/video/stop` - Stop video streaming pipeline
+- `POST /api/video/restart` - Restart video streaming pipeline
+- `POST /api/video/bridges/start` - Start video bridge(s)
+- `GET /api/video/bridges` - List active video bridges
+- `GET /api/video/topics` - List available video topics
+- `GET /api/video/logs` - Video pipeline logs
+- `POST /api/video/overlay/enable` - Enable OSD overlay
+- `POST /api/video/overlay/disable` - Disable OSD overlay
 
 ### Servo / Nozzle Control
-- `POST /api/servo/camera/tilt?angle={0-180}` - Set nozzle servo angle
-- `POST /api/servo/shooter/trigger?duration_ms={ms}` - Trigger water shooter GPIO
 - `GET /api/servo/status` - Get servo and GPIO output status
+- `POST /api/servo/enable` - Enable servo output
+- `POST /api/servo/disable` - Disable servo output
+- `GET /api/servo/camera/tilt` - Get current camera tilt angle
+- `POST /api/servo/camera/tilt?angle={0-180}` - Set camera servo angle
+- `GET /api/servo/camera/config` - Get servo config (min/max pulse, etc.)
+- `POST /api/servo/camera/config` - Update servo config
+- `POST /api/servo/shooter/trigger?duration_ms={ms}` - Trigger water shooter GPIO
 - `GET /api/servo/rc/status` - RC-to-servo bridge status (channel, last value, angle)
 - `POST /api/servo/rc/channel?channel={1-18}` - Change which RC channel controls servo
 - ROS topic: `/nomad/servo/nozzle_angle` (Float32) - Autonomous servo control via ros_http_bridge
+
+### Mode
+- `GET /api/mode` - Current operational mode
+- `POST /api/mode/set` - Set operational mode
+
+### Terminal
+- `GET /api/terminal/commands` - List available whitelisted commands
+- `GET /api/terminal/logs` - Recent stdout/stderr from executed commands
+
+### WebSockets
+- `WS /ws/state` - Real-time system state broadcast (10Hz)
+- `WS /ws/slam` - Real-time SLAM / nvblox mesh update stream
 
 ---
 
@@ -271,6 +400,7 @@ ssh mad@100.85.121.98 "cd ~/NOMAD && git log --oneline -1"
 |---------|------|----------|----------|
 | Edge Core API | 8000 | TCP | Jetson |
 | MAVLink Telemetry | 14550 | UDP | Jetson -> GCS |
+| MAVLink Local | 14551 | UDP | Jetson (localhost) |
 | RTSP Video | 8554 | TCP | Jetson (MediaMTX) |
 | SSH | 22 | TCP | Jetson |
 
@@ -300,16 +430,26 @@ The Jetson connects via Tailscale VPN for:
 | Video Streaming | `docs/VIDEO_STREAMING.md` |
 | Navigation Architecture | `docs/JETSON_NAV_ARCHITECTURE.md` |
 | Isaac ROS + nvblox Setup | `docs/ISAAC_ROS_NVBLOX_SETUP.md` |
+| nvblox Visualization | `docs/NVBLOX_VISUALIZATION.md` |
+| Mesh Troubleshooting | `docs/TROUBLESHOOTING_MESH.md` |
 | Servo Control | `docs/SERVO_CONTROL.md` |
+| Object Detection | `docs/OBJECT_DETECTION.md` |
+| Dual Link Failover | `docs/DUAL_LINK_FAILOVER.md` |
+| Nav2 Integration Plan | `docs/NAV2_INTEGRATION_PLAN.md` |
+| Task 2 Manual Positioning | `docs/TASK2_MANUAL_POSITIONING.md` |
 | **Task 1 Competition Guide** | **`docs/TASK1_COMPETITION_GUIDE.md`** |
-| **TODO / Requirements Audit** | **`TODO.md`** |
+| **TODO / Requirements Audit** | **`todo.md`** |
+| Edge Core README | `edge_core/README.md` |
+| Target Localizer README | `edge_core/target_localizer/README.md` |
+| Mission Planner README | `mission_planner/README.md` |
+| Scripts README | `scripts/README.md` |
 | This Quick Reference | `AGENTS.md` |
 
-> **IMPORTANT**: Always check `TODO.md` before starting work. It contains:
-> - The SLAM3DView rewrite task list (P0-P3, mostly complete)
+> **IMPORTANT**: Always check `todo.md` before starting work. It contains:
 > - A full requirements audit (REQ-1 to REQ-7) with detailed implementation notes
 > - Priority-ordered list of missing features (NV-008, operational modes, spray sequence)
 > - nvblox config switching notes (requires node restart, 2-3s blind window)
+> - Note: `config/nvblox_indoor.yaml` referenced in todo.md does not yet exist
 
 ---
 
@@ -362,4 +502,4 @@ The TaskSync protocol (terminal-based task input loop, continuous operation, no 
 
 ---
 
-*Last Updated: February 19, 2026*
+*Last Updated: May 9, 2026*

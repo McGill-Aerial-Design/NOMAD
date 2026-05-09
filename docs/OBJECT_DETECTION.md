@@ -109,7 +109,10 @@ Disable with `--disable-detections`.
 |--------|----------|-------------|
 | POST | `/api/detections/update` | Receive detections from ROS bridge |
 | GET | `/api/detections` | Get current + history detections |
+| GET | `/api/detections/status` | Get detection pipeline status |
 | GET | `/api/detections/summary` | Get detections grouped by class |
+| POST | `/api/detections/start` | Start detection pipeline |
+| POST | `/api/detections/stop` | Stop detection pipeline |
 | DELETE | `/api/detections/history` | Clear detection history |
 
 ### Example: Get Detection Summary

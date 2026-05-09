@@ -4,7 +4,7 @@ Reference guide for operating the NOMAD system during development and competitio
 
 **Jetson IP (Tailscale):** 100.85.121.98  
 **Ground Station IP:** 100.76.127.17  
-**Last Updated:** February 10, 2026
+**Last Updated:** May 9, 2026
 
 ---
 

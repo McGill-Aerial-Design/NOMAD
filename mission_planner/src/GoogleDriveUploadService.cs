@@ -36,11 +36,37 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Check if a valid token exists.
+        /// Check if a token file exists (does NOT validate the token content).
         /// </summary>
         public bool HasToken()
         {
             return File.Exists(_tokenPath);
+        }
+
+        /// <summary>
+        /// Return a human-readable description of the token file state, or null if everything looks ok.
+        /// </summary>
+        public string DiagnoseToken()
+        {
+            if (!File.Exists(_tokenPath))
+                return $"Token file not found: {_tokenPath}";
+            try
+            {
+                var json = File.ReadAllText(_tokenPath);
+                var tokenData = JObject.Parse(json);
+                var missing = new List<string>();
+                if (string.IsNullOrEmpty(tokenData["access_token"]?.ToString()))   missing.Add("access_token");
+                if (string.IsNullOrEmpty(tokenData["refresh_token"]?.ToString()))  missing.Add("refresh_token");
+                if (string.IsNullOrEmpty(tokenData["client_id"]?.ToString()))      missing.Add("client_id");
+                if (string.IsNullOrEmpty(tokenData["client_secret"]?.ToString()))  missing.Add("client_secret");
+                if (missing.Count > 0)
+                    return $"Token file is missing fields: {string.Join(", ", missing)}\nFile: {_tokenPath}";
+                return null; // looks ok
+            }
+            catch (Exception ex)
+            {
+                return $"Token file is not valid JSON: {ex.Message}\nFile: {_tokenPath}";
+            }
         }
 
         /// <summary>
@@ -49,112 +75,98 @@ namespace NOMAD.MissionPlanner
         /// <param name="localPath">Path to the local file to upload.</param>
         /// <param name="filename">Name for the file in Google Drive.</param>
         /// <param name="folderId">Optional Drive folder ID (overrides constructor value).</param>
-        /// <returns>Google Drive file ID on success, empty string on failure.</returns>
+        /// <returns>Google Drive file ID on success.</returns>
+        /// <exception cref="Exception">Thrown with the HTTP status and response body on any failure.</exception>
         public async Task<string> UploadFileAsync(string localPath, string filename, string folderId = null)
         {
             if (!File.Exists(localPath))
-                return "";
+                throw new FileNotFoundException($"Local file not found: {localPath}");
 
             string token = GetAccessToken();
             if (string.IsNullOrEmpty(token))
-                return "";
+            {
+                if (!File.Exists(_tokenPath))
+                    throw new Exception($"Token file missing: {_tokenPath}\nPlace gdrive_token.json in ~/.nomad/");
+                throw new Exception($"Token file exists but contains no access_token: {_tokenPath}");
+            }
 
             string targetFolderId = folderId ?? _folderId;
 
-            try
+            using (var client = new HttpClient { Timeout = TimeSpan.FromMinutes(2) })
             {
-                using (var client = new HttpClient { Timeout = TimeSpan.FromMinutes(2) })
+                client.DefaultRequestHeaders.Authorization =
+                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+
+                var (response, responseBody) = await DoUploadAsync(client, localPath, filename, targetFolderId);
+
+                if (response.IsSuccessStatusCode)
                 {
-                    client.DefaultRequestHeaders.Authorization =
-                        new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-
-                    // Build multipart upload request
-                    var boundary = "----NOMADUploadBoundary" + DateTime.Now.Ticks.ToString("x");
-                    var content = new MultipartContent("related", boundary);
-
-                    // Part 1: metadata JSON
-                    var metadata = new JObject { { "name", filename } };
-                    if (!string.IsNullOrEmpty(targetFolderId))
-                        metadata["parents"] = new JArray { targetFolderId };
-
-                    var metadataContent = new StringContent(
-                        metadata.ToString(Formatting.None),
-                        Encoding.UTF8,
-                        "application/json");
-                    metadataContent.Headers.Add("Content-ID", "<metadata>");
-                    content.Add(metadataContent);
-
-                    // Part 2: file data
-                    var fileStream = new FileStream(localPath, FileMode.Open, FileAccess.Read);
-                    var streamContent = new StreamContent(fileStream);
-                    streamContent.Headers.Add("Content-Type", GetMimeType(localPath));
-                    streamContent.Headers.Add("Content-ID", "<file-data>");
-                    content.Add(streamContent);
-
-                    var response = await client.PostAsync(
-                        "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",
-                        content);
-
-                    var responseBody = await response.Content.ReadAsStringAsync();
-
-                    if (response.IsSuccessStatusCode)
-                    {
-                        var result = JObject.Parse(responseBody);
-                        return result["id"]?.ToString() ?? "";
-                    }
-
-                    // If token expired, try to refresh and retry once
-                    if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
-                    {
-                        token = await RefreshTokenAsync();
-                        if (!string.IsNullOrEmpty(token))
-                        {
-                            client.DefaultRequestHeaders.Authorization =
-                                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-
-                            // Need to recreate content since StreamContent was consumed
-                            var boundary2 = "----NOMADUploadBoundary" + DateTime.Now.Ticks.ToString("x");
-                            var content2 = new MultipartContent("related", boundary2);
-
-                            var metadata2 = new JObject { { "name", filename } };
-                            if (!string.IsNullOrEmpty(targetFolderId))
-                                metadata2["parents"] = new JArray { targetFolderId };
-
-                            var metadataContent2 = new StringContent(
-                                metadata2.ToString(Formatting.None),
-                                Encoding.UTF8,
-                                "application/json");
-                            metadataContent2.Headers.Add("Content-ID", "<metadata>");
-                            content2.Add(metadataContent2);
-
-                            var fileStream2 = new FileStream(localPath, FileMode.Open, FileAccess.Read);
-                            var streamContent2 = new StreamContent(fileStream2);
-                            streamContent2.Headers.Add("Content-Type", GetMimeType(localPath));
-                            streamContent2.Headers.Add("Content-ID", "<file-data>");
-                            content2.Add(streamContent2);
-
-                            var response2 = await client.PostAsync(
-                                "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",
-                                content2);
-
-                            var responseBody2 = await response2.Content.ReadAsStringAsync();
-
-                            if (response2.IsSuccessStatusCode)
-                            {
-                                var result2 = JObject.Parse(responseBody2);
-                                return result2["id"]?.ToString() ?? "";
-                            }
-                        }
-                    }
-
-                    return "";
+                    var result = JObject.Parse(responseBody);
+                    return result["id"]?.ToString() ?? "";
                 }
+
+                // Token expired — try to refresh and retry once
+                if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+                {
+                    string newToken;
+                    try { newToken = await RefreshTokenAsync(); }
+                    catch (Exception refreshEx)
+                    {
+                        throw new Exception($"Token expired and refresh failed: {refreshEx.Message}");
+                    }
+
+                    if (string.IsNullOrEmpty(newToken))
+                        throw new Exception(
+                            "Token expired (HTTP 401) and refresh_token / client_id / client_secret are missing " +
+                            "from the token file. Re-run the OAuth flow to get a fresh token.\n\n" +
+                            $"Drive response: {responseBody}");
+
+                    client.DefaultRequestHeaders.Authorization =
+                        new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", newToken);
+
+                    var (response2, responseBody2) = await DoUploadAsync(client, localPath, filename, targetFolderId);
+
+                    if (response2.IsSuccessStatusCode)
+                    {
+                        var result2 = JObject.Parse(responseBody2);
+                        return result2["id"]?.ToString() ?? "";
+                    }
+
+                    throw new Exception(
+                        $"Upload failed after token refresh: HTTP {(int)response2.StatusCode} {response2.ReasonPhrase}\n{responseBody2}");
+                }
+
+                throw new Exception(
+                    $"Upload failed: HTTP {(int)response.StatusCode} {response.ReasonPhrase}\n{responseBody}");
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Google Drive upload failed: {ex.Message}");
-                return "";
-            }
+        }
+
+        private async Task<(HttpResponseMessage response, string body)> DoUploadAsync(
+            HttpClient client, string localPath, string filename, string targetFolderId)
+        {
+            var boundary = "----NOMADUploadBoundary" + DateTime.Now.Ticks.ToString("x");
+            var content = new MultipartContent("related", boundary);
+
+            var metadata = new JObject { { "name", filename } };
+            if (!string.IsNullOrEmpty(targetFolderId))
+                metadata["parents"] = new JArray { targetFolderId };
+
+            var metadataContent = new StringContent(
+                metadata.ToString(Formatting.None), Encoding.UTF8, "application/json");
+            metadataContent.Headers.Add("Content-ID", "<metadata>");
+            content.Add(metadataContent);
+
+            var fileStream = new FileStream(localPath, FileMode.Open, FileAccess.Read);
+            var streamContent = new StreamContent(fileStream);
+            streamContent.Headers.Add("Content-Type", GetMimeType(localPath));
+            streamContent.Headers.Add("Content-ID", "<file-data>");
+            content.Add(streamContent);
+
+            var response = await client.PostAsync(
+                "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",
+                content);
+            var body = await response.Content.ReadAsStringAsync();
+            return (response, body);
         }
 
         /// <summary>
@@ -179,65 +191,58 @@ namespace NOMAD.MissionPlanner
 
         /// <summary>
         /// Refresh the OAuth2 token using the refresh_token.
+        /// Returns null if refresh_token / client_id / client_secret are missing (caller decides what to do).
+        /// Throws if the OAuth2 endpoint rejects the request.
         /// </summary>
         private async Task<string> RefreshTokenAsync()
         {
-            try
+            if (!File.Exists(_tokenPath))
+                return null;
+
+            var json = File.ReadAllText(_tokenPath);
+            var tokenData = JObject.Parse(json);
+            var refreshToken = tokenData["refresh_token"]?.ToString();
+            var clientId = tokenData["client_id"]?.ToString();
+            var clientSecret = tokenData["client_secret"]?.ToString();
+
+            if (string.IsNullOrEmpty(refreshToken) || string.IsNullOrEmpty(clientId) || string.IsNullOrEmpty(clientSecret))
+                return null;
+
+            using (var client = new HttpClient())
             {
-                if (!File.Exists(_tokenPath))
-                    return null;
-
-                var json = File.ReadAllText(_tokenPath);
-                var tokenData = JObject.Parse(json);
-                var refreshToken = tokenData["refresh_token"]?.ToString();
-                var clientId = tokenData["client_id"]?.ToString();
-                var clientSecret = tokenData["client_secret"]?.ToString();
-
-                if (string.IsNullOrEmpty(refreshToken) || string.IsNullOrEmpty(clientId) || string.IsNullOrEmpty(clientSecret))
-                    return null;
-
-                using (var client = new HttpClient())
+                var postData = new FormUrlEncodedContent(new[]
                 {
-                    var postData = new FormUrlEncodedContent(new[]
-                    {
-                        new KeyValuePair<string, string>("client_id", clientId),
-                        new KeyValuePair<string, string>("client_secret", clientSecret),
-                        new KeyValuePair<string, string>("refresh_token", refreshToken),
-                        new KeyValuePair<string, string>("grant_type", "refresh_token"),
-                    });
+                    new KeyValuePair<string, string>("client_id", clientId),
+                    new KeyValuePair<string, string>("client_secret", clientSecret),
+                    new KeyValuePair<string, string>("refresh_token", refreshToken),
+                    new KeyValuePair<string, string>("grant_type", "refresh_token"),
+                });
 
-                    var response = await client.PostAsync("https://oauth2.googleapis.com/token", postData);
-                    var responseBody = await response.Content.ReadAsStringAsync();
+                var response = await client.PostAsync("https://oauth2.googleapis.com/token", postData);
+                var responseBody = await response.Content.ReadAsStringAsync();
 
-                    if (response.IsSuccessStatusCode)
-                    {
-                        var result = JObject.Parse(responseBody);
-                        var newAccessToken = result["access_token"]?.ToString();
+                if (!response.IsSuccessStatusCode)
+                    throw new Exception(
+                        $"OAuth2 token refresh rejected: HTTP {(int)response.StatusCode} {response.ReasonPhrase}\n{responseBody}");
 
-                        // Update token file with new access token
-                        if (!string.IsNullOrEmpty(newAccessToken))
-                        {
-                            tokenData["access_token"] = newAccessToken;
-                            if (result["expires_in"] != null)
-                                tokenData["expires_in"] = result["expires_in"];
-                            if (result["scope"] != null)
-                                tokenData["scope"] = result["scope"];
-                            tokenData["token_type"] = result["token_type"]?.ToString() ?? "Bearer";
+                var result = JObject.Parse(responseBody);
+                var newAccessToken = result["access_token"]?.ToString();
 
-                            Directory.CreateDirectory(Path.GetDirectoryName(_tokenPath));
-                            File.WriteAllText(_tokenPath, tokenData.ToString(Formatting.Indented));
-                        }
+                if (!string.IsNullOrEmpty(newAccessToken))
+                {
+                    tokenData["access_token"] = newAccessToken;
+                    if (result["expires_in"] != null)
+                        tokenData["expires_in"] = result["expires_in"];
+                    if (result["scope"] != null)
+                        tokenData["scope"] = result["scope"];
+                    tokenData["token_type"] = result["token_type"]?.ToString() ?? "Bearer";
 
-                        return newAccessToken;
-                    }
+                    Directory.CreateDirectory(Path.GetDirectoryName(_tokenPath));
+                    File.WriteAllText(_tokenPath, tokenData.ToString(Formatting.Indented));
                 }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Token refresh failed: {ex.Message}");
-            }
 
-            return null;
+                return newAccessToken;
+            }
         }
 
         private string GetMimeType(string filePath)

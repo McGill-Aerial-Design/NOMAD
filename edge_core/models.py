@@ -76,6 +76,7 @@ class SystemState(BaseModel):
     gps_lat: Optional[float] = None  # Latitude in degrees
     gps_lon: Optional[float] = None  # Longitude in degrees
     gps_alt: Optional[float] = None  # Altitude MSL in meters
+    alt_agl_m: Optional[float] = None  # Altitude AGL from FC (GLOBAL_POSITION_INT.relative_alt)
 
     # Attitude and heading
     heading_deg: Optional[float] = None  # Magnetic heading 0-360 (0=North)

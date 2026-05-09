@@ -218,8 +218,8 @@ Full audit of the requirements document against codebase. Audited 2026-03-19.
 ## REQ-2: Nvblox 3D Mapping (NV-001 to NV-008) — 7/8 PASS
 
 - [x] **NV-001**: Full TF chain (`use_tf_transforms: true`) — both configs
-- [x] **NV-002**: Outdoor voxel_size = 0.05 — `config/nvblox_performance.yaml:17`
-- [x] **NV-003**: Indoor voxel_size = 0.03 — `config/nvblox_indoor.yaml:25`
+- [x] **NV-002**: Outdoor voxel_size = 0.10 — `config/nvblox_performance.yaml`
+- [ ] **NV-003**: Indoor voxel_size = 0.03 — `config/nvblox_indoor.yaml` (NOT YET CREATED)
 - [x] **NV-004**: Depth rate limited (10 Hz outdoor, 15 Hz indoor)
 - [x] **NV-005**: 3D ESDF (`esdf_mode: "3d"`) — both configs
 - [x] **NV-006**: Correct TF prevents phantom geometry (depends on TF-*)
@@ -304,9 +304,9 @@ Full audit of the requirements document against codebase. Audited 2026-03-19.
 
 | Mode | Servo | VIO Source | Nvblox Config | Obstacle Buffer |
 |------|-------|-----------|---------------|-----------------|
-| outdoor_transit | Fixed 90 deg | Cube GPS EKF | performance.yaml (5cm, 8m) | 2m horizontal |
+| outdoor_transit | Fixed 90 deg | Cube GPS EKF | performance.yaml (10cm, 5m) | 2m horizontal |
 | outdoor_survey | Sweep -45/+30 | Cube GPS EKF | performance.yaml | 2m horizontal |
-| indoor_nav | Fixed 90 deg (scan-stop) | cuVSLAM/ZED VIO | indoor.yaml (3cm, 5m) | 0.7m h+v |
+| indoor_nav | Fixed 90 deg (scan-stop) | cuVSLAM/ZED VIO | indoor.yaml (3cm, 5m) (NOT YET CREATED) | 0.7m h+v |
 | spray_approach | Visual servo | Mode-dependent | keep current | Sector exclusion |
 | emergency | N/A (RC kill) | N/A | keep current | Bypassed |
 

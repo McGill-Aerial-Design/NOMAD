@@ -51,11 +51,14 @@ namespace NOMAD.MissionPlanner
         [JsonProperty("roll_deg")]
         public double? RollDeg { get; set; }
 
-        [JsonProperty("gimbal_pitch_deg")]
-        public double? GimbalPitchDeg { get; set; }
+        [JsonProperty("camera_pitch_deg")]
+        public double? CameraPitchDeg { get; set; }
 
-        [JsonProperty("gimbal_yaw_deg")]
-        public double? GimbalYawDeg { get; set; }
+        [JsonProperty("alt_agl_m")]
+        public double? AltAglM { get; set; }
+
+        [JsonProperty("distance_m")]
+        public double? DistanceM { get; set; }
 
         [JsonProperty("building_location")]
         public string BuildingLocation { get; set; }
@@ -65,18 +68,6 @@ namespace NOMAD.MissionPlanner
 
         [JsonProperty("target_color")]
         public string TargetColor { get; set; }
-
-        [JsonProperty("ai_description")]
-        public string AiDescription { get; set; }
-
-        [JsonProperty("ai_provider")]
-        public string AiProvider { get; set; }
-
-        [JsonProperty("ai_model")]
-        public string AiModel { get; set; }
-
-        [JsonProperty("ai_generated_at")]
-        public DateTime? AiGeneratedAt { get; set; }
     }
 
     /// <summary>

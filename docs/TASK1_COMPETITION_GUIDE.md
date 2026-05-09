@@ -710,15 +710,27 @@ The target_localizer ROS services are independent of Edge Core — they continue
 |--------|----------|---------|
 | `POST` | `/api/task/1/target/capture` | Trigger target detection + description. Returns structured metadata with image path, GPS, heading. |
 | `POST` | `/api/task/1/target/save` | Save all targets to `Task_1_MAD_targets.txt`. |
+| `POST` | `/api/task/1/target/clear` | Clear all captured targets. |
+| `POST` | `/api/task/1/target/ground_alt` | Set global ground altitude for 3D back-projection. |
+| `POST` | `/api/task/1/target/{target_id}/plane_override` | Override wall/ground/roof classification for a target. |
+| `GET` | `/api/task/1/target/detections` | Get current frame detection overlay data. |
+| `GET` | `/api/task/1/target/list` | List captured targets. |
+| `GET` | `/api/task/1/target/list_structured` | Structured target list (with metadata). |
 | `GET` | `/api/task/1/target/model` | Print building model summary (faces, corners, landmarks). |
+| `POST` | `/api/task/1/building/corner` | Save one building corner GPS (on-site calibration). |
+| `GET` | `/api/task/1/building/corners` | List saved building corners. |
+| `DELETE` | `/api/task/1/building/corners` | Clear all building corners. |
+| `POST` | `/api/task/1/building/height` | Update building height. |
+| `POST` | `/api/task/1/building/wall/override` | Override face wall directions. |
+| `POST` | `/api/task/1/building/corners/apply` | Rebuild building model from saved corners at runtime. |
 | `POST` | `/api/task/1/capture` | Legacy capture endpoint (fallback to detections cache if target_localizer unavailable). |
 | `GET` | `/api/task/1/captures` | List all capture folders (timestamp dirs). |
 | `GET` | `/api/task/1/images/{folder}/{filename}` | Download captured image/metadata from specific capture folder. |
+| `GET` | `/api/task/1/images/{filename}` | Legacy image download (backward compat). |
 | `POST` | `/api/servo/camera/tilt?angle={0-180}` | Set camera servo angle (for aiming at targets). |
 | `POST` | `/api/servo/shooter/trigger?duration_ms={ms}` | Trigger water pump (Task 1 not needed, but available). |
-| `GET` | `/api/task/1/images/{filename}` | Legacy image download (backward compat). |
 
 ---
 
-*Last updated: 2026-04-26*
+*Last updated: 2026-05-09*
 *NOMAD — McGill Aerial Design, AEAC 2026*

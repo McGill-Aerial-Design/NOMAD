@@ -779,9 +779,19 @@ private ListBox _lstWalls;
                 if (response.IsSuccessStatusCode)
                 {
                     var body = await response.Content.ReadAsStringAsync();
-                    _lblGroundAlt.Text = "Offset: set!";
+                    // Extract the altitude value from "Ground altitude set to X.XXm..."
+                    string altStr = "?";
+                    try
+                    {
+                        var json = Newtonsoft.Json.Linq.JObject.Parse(body);
+                        var msg = json["output"]?.ToString() ?? json["message"]?.ToString() ?? "";
+                        var m = System.Text.RegularExpressions.Regex.Match(msg, @"([\d.]+)m");
+                        if (m.Success) altStr = m.Groups[1].Value + "m";
+                    }
+                    catch { }
+                    _lblGroundAlt.Text = $"Offset: {altStr}";
                     _lblGroundAlt.ForeColor = SUCCESS_COLOR;
-                    _txtResult.Text = "[OK] Ground altitude set. All heights now relative to ground level.";
+                    _txtResult.Text = $"[OK] Ground alt set to {altStr}. Heights now relative to ground.";
                     _txtResult.ForeColor = SUCCESS_COLOR;
                 }
                 else
@@ -1062,10 +1072,14 @@ private ListBox _lstWalls;
                             var headingDeg = Val("heading_deg") ?? "N/A";
                             var pitchDeg = Val("pitch_deg") ?? "N/A";
                             var rollDeg = Val("roll_deg") ?? "N/A";
-                            var gimbalPitch = Val("gimbal_pitch_deg") ?? "N/A";
-                            var gimbalYaw = Val("gimbal_yaw_deg") ?? "N/A";
-                                            var captureFolder = Val("capture_folder") ?? "N/A";
-                            var outputText = Val("output") ?? Val("message") ?? Val("detail");
+                            var cameraPitch = Val("camera_pitch_deg") ?? "N/A";
+                            var captureFolder = Val("capture_folder") ?? "N/A";
+                            var distanceM = Val("distance_m");
+                            var altAgl = Val("alt_agl_m");
+                            var rawOutput = Val("output") ?? Val("message") ?? Val("detail");
+                            // Strip legacy "Added N target(s):\n" prefix if present
+                            var outputText = System.Text.RegularExpressions.Regex.Replace(
+                                rawOutput ?? "", @"^Added \d+ target\(s\):\\n", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
                             var position = data["position"] as Newtonsoft.Json.Linq.JObject;
                             var latStr = position?["lat"]?.ToString() ?? "N/A";
@@ -1078,8 +1092,9 @@ private ListBox _lstWalls;
                             metadataText.AppendLine($"Time: {timestamp}");
                             metadataText.AppendLine($"Position: {latStr}, {lonStr} @ {altStr}m");
                             metadataText.AppendLine($"AHRS: Hdg={headingDeg} Pitch={pitchDeg} Roll={rollDeg}");
-                            metadataText.AppendLine($"Gimbal: Pitch={gimbalPitch} Yaw={gimbalYaw}");
-                                            metadataText.AppendLine($"Folder: {captureFolder}");
+                            metadataText.AppendLine($"Cam pitch: {cameraPitch}°  AGL: {(altAgl != null ? altAgl + "m" : "N/A")}");
+                            if (distanceM != null) metadataText.AppendLine($"Distance to target: {distanceM}m");
+                            metadataText.AppendLine($"Folder: {captureFolder}");
                             int targetNum = (_uploadPanel?.TargetCount ?? 0) + 1;
                             metadataText.Append($"Image: Target {targetNum} ({imageName})");
                             
@@ -1119,8 +1134,9 @@ private ListBox _lstWalls;
                                     HeadingDeg = double.TryParse(headingDeg, out var heading) ? heading : (double?)null,
                                     PitchDeg = double.TryParse(pitchDeg, out var pitch) ? pitch : (double?)null,
                                     RollDeg = double.TryParse(rollDeg, out var roll) ? roll : (double?)null,
-                                    GimbalPitchDeg = double.TryParse(gimbalPitch, out var gPitch) ? gPitch : (double?)null,
-                                    GimbalYawDeg = double.TryParse(gimbalYaw, out var gYaw) ? gYaw : (double?)null,
+                                    CameraPitchDeg = double.TryParse(cameraPitch, out var cPitch) ? cPitch : (double?)null,
+                                    AltAglM = double.TryParse(altAgl, out var vAlt) ? vAlt : (double?)null,
+                                    DistanceM = double.TryParse(distanceM, out var dM) ? dM : (double?)null,
                                     BuildingLocation = null,
                                     RelativeDescription = outputText,
                                 };

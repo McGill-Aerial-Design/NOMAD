@@ -1,6 +1,6 @@
 # NOMAD Jetson Orin Nano Deployment Guide
 
-**Last Updated:** January 21, 2026  
+**Last Updated:** May 9, 2026  
 **Target:** NVIDIA Jetson Orin Nano (JetPack 5.x / Ubuntu 22.04)
 
 ---
@@ -187,20 +187,54 @@ EOF
 ### NOMAD Edge Core
 ```
 /home/mad/NOMAD/
-├── edge_core/           # Python FastAPI server
-│   ├── main.py          # Entry point
-│   ├── api.py           # REST endpoints
-│   ├── mavlink_interface.py
-│   ├── state.py
+├── edge_core/                # Python FastAPI server
+│   ├── main.py               # Entry point
+│   ├── api.py                # REST / WebSocket endpoints
+│   ├── mavlink_interface.py  # MAVLink telemetry + commands
+│   ├── nav_controller.py     # Velocity / position command routing
+│   ├── servo_controller.py   # Camera tilt / water shooter PWM
+│   ├── spray_controller.py   # Fire-extinguisher spray control
+│   ├── operational_mode.py   # Operational mode state machine
+│   ├── video_stream_manager.py # Video bridge management
+│   ├── isaac_ros_bridge.py   # Isaac ROS / nvblox lifecycle
+│   ├── health_monitor.py     # Jetson hardware monitoring
+│   ├── state.py              # Global state manager
 │   └── ...
 ├── config/
 │   └── env/
-│       └── jetson.env   # Environment template
+│       └── jetson.env        # Environment template
 ├── transport/
 │   └── mavlink_router/
-│       └── main.conf    # MAVLink routing config
-├── .env                 # Active environment config
-└── start_nomad.sh       # Startup script
+│       └── main.conf         # MAVLink routing config
+├── infra/
+│   └── mediamtx.yml          # MediaMTX RTSP server config
+├── scripts/
+│   ├── run/
+│   │   ├── start_nomad_full.sh    # Full system startup
+│   │   ├── start_isaac_ros_auto.sh # Isaac ROS container lifecycle
+│   │   └── restart_nomad.sh       # Kill-all and restart
+│   ├── setup/
+│   │   ├── setup_service.sh       # systemd nomad.service install
+│   │   └── setup_jetson.sh        # Full Jetson initial setup
+│   └── build/
+│       └── build_plugin_windows.ps1 # C# plugin build
+└── .env                      # Active environment config
+```
+
+### System Services
+```
+/etc/systemd/system/nomad.service  # NOMAD Edge Core systemd service
+```
+
+### Python Dependencies
+```
+/home/mad/NOMAD/venv/   # Python virtualenv (used by systemd service)
+```
+
+### Logs
+```
+~/nomad_logs/              # Log directory (mediamtx, mavlink, etc.)
+/home/mad/nomad.log        # Edge Core output (when run with nohup)
 ```
 
 ### System Services
@@ -229,36 +263,34 @@ EOF
 ## How to Start NOMAD
 
 ### Method 1: Unified Startup (Recommended)
-Starts both Edge Core API and ZED Video Stream:
+Starts MAVLink Router, Edge Core (if not already running via systemd), and prepares the system:
 ```bash
 ssh mad@100.85.121.98
-~/start_nomad_full.sh
+cd ~/NOMAD
+./scripts/run/start_nomad_full.sh
 ```
 
-### Method 2: Background Mode
-```bash
-ssh mad@100.85.121.98 "nohup ~/start_nomad_full.sh > /dev/null 2>&1 &"
-```
-
-### Method 3: Systemd Service (Auto-start on boot)
+### Method 2: Systemd Service (Auto-start on boot)
 ```bash
 # Install the service
-sudo cp ~/nomad.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable nomad
-sudo systemctl start nomad
+sudo bash ~/NOMAD/scripts/setup/setup_service.sh
 
 # Check status
 sudo systemctl status nomad
+
+# Edge Core auto-starts on boot once the service is installed
 ```
 
-### Method 4: Manual Start (Components Separately)
+### Method 3: Manual Start (Components Separately)
 ```bash
-# Start Edge Core only
-~/start_nomad.sh
+# Start Edge Core only (via systemd)
+sudo systemctl start nomad
 
-# Start Video Stream only
-~/start_zed_stream.sh
+# Start MAVLink Router manually
+GCS_IP=100.76.127.17 mavlink-routerd -e ${GCS_IP}:14550 -e 127.0.0.1:14550 /dev/ttyACM0 &
+
+# Start Isaac ROS (Task 2 only)
+~/NOMAD/scripts/run/start_isaac_ros_auto.sh start
 ```
 
 ---
@@ -352,22 +384,74 @@ For detailed setup and comparison, see:
 
 ## API Endpoints
 
+The full API is auto-documented at:
+```
+http://100.85.121.98:8000/docs
+```
+
+### System / Health
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/` | GET | Service information |
 | `/health` | GET | Quick health check with Jetson metrics |
-| `/health/detailed` | GET | Full Jetson health (CPU, GPU, memory, disk, fan) |
+| `/health/detailed` | GET | Full Jetson health (CPU, GPU, memory, disk) |
 | `/status` | GET | Current drone state (telemetry) |
 | `/docs` | GET | Swagger API documentation |
-| `/api/task/1/capture` | POST | Trigger Task 1 capture |
-| `/api/task/2/exclusion_map` | GET | Get exclusion map |
-| `/api/task/2/reset_map` | POST | Reset exclusion map |
+| `/api/services/status` | GET | systemd / process status |
+
+### Task 1 (Outdoor Recon)
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/task/1/target/capture` | POST | Trigger target detection + description |
+| `/api/task/1/target/save` | POST | Save targets to competition .txt file |
+| `/api/task/1/target/clear` | POST | Clear all captured targets |
+| `/api/task/1/target/list` | GET | List captured targets |
+| `/api/task/1/target/detections` | GET | Current frame detection overlay |
+| `/api/task/1/target/model` | GET | Building model summary |
+| `/api/task/1/capture` | POST | Legacy capture fallback |
+| `/api/task/1/captures` | GET | List capture folders |
+| `/api/task/1/building/corner` | POST | Save one building corner GPS |
+| `/api/task/1/building/corners` | GET | List saved building corners |
+| `/api/task/1/building/corners/apply` | POST | Rebuild building model from corners |
+
+### Task 2 (Indoor VIO)
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/task/2/reset_map` | POST | Clear exclusion map |
 | `/api/task/2/target_hit` | POST | Mark target as hit |
+| `/api/task/2/exclusion_map` | GET | Get hit targets |
+
+### VIO
+| Endpoint | Method | Description |
+|----------|--------|-------------|
 | `/api/vio/status` | GET | VIO pipeline status |
+| `/api/vio/pose` | GET | Current position/orientation |
+| `/api/vio/trajectory` | GET | Path history |
 | `/api/vio/reset_origin` | POST | Reset VIO origin |
+| `/api/vio/calibration` | GET | ZED calibration state |
+
+### Navigation / Isaac ROS
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/nav/status` | GET | Navigation controller status |
+| `/api/nav/velocity` | POST | Send velocity command |
+| `/api/nav/stop` | POST | Emergency stop |
 | `/api/isaac/status` | GET | Isaac ROS bridge status |
-| `/api/terminal/exec` | POST | Execute terminal command |
-| `/ws/state` | WS | WebSocket real-time state (10Hz) |
+| `/api/isaac/start` | POST | Start Isaac ROS container |
+| `/api/isaac/stop` | POST | Stop Isaac ROS container |
+
+### Servo / Spray / Video / Terminal
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/servo/status` | GET | Servo and GPIO status |
+| `/api/servo/camera/tilt?angle=N` | POST | Set camera servo angle |
+| `/api/servo/shooter/trigger?duration_ms=N` | POST | Trigger water shooter GPIO |
+| `/api/spray/status` | GET | Spray controller state |
+| `/api/spray/trigger` | POST | Trigger spray sequence |
+| `/api/video/status` | GET | Video pipeline status |
+| `/api/video/start` | POST | Start video streaming |
+| `/api/terminal/commands` | GET | List whitelisted commands |
+| `/api/terminal/logs` | GET | Recent command logs |
 
 ### Access Swagger UI:
 ```
@@ -384,61 +468,59 @@ The ZED 2i camera is connected and accessible via V4L2:
 - Resolution: 1344x376 (stereo side-by-side) or 672x376 (left eye only)
 - Frame Rate: 30 FPS
 
-### Start Video Stream (UDP to Ground Station)
+### Architecture
+Video streaming uses **MediaMTX** (bare metal, port 8554) to serve RTSP. The video encoding pipeline runs inside the Isaac ROS container using software `openh264enc` (Orin Nano lacks NVENC).
+
+```
+ZED -> Isaac ROS -> ROS Topic -> GStreamer/openh264enc -> MediaMTX RTSP -> Network -> Mission Planner (LibVLC)
+```
+
+### Start Video Stream
+Video is started automatically as part of `start_nomad_full.sh` or can be started via API:
 ```bash
-ssh mad@100.85.121.98
-~/start_zed_stream.sh
+curl -X POST http://localhost:8000/api/video/start
 ```
 
-### View Stream on Windows (VLC)
+### View Stream (RTSP)
 ```
-vlc udp://@:5600
+rtsp://100.85.121.98:8554/primary
 ```
 
-Or create an SDP file `zed.sdp`:
-```
-v=0
-m=video 5600 RTP/AVP 96
-c=IN IP4 100.76.127.17
-a=rtpmap:96 H264/90000
-```
-Then: `vlc zed.sdp`
+In Mission Planner, the NOMAD plugin embeds a LibVLC player that connects to this RTSP URL automatically.
 
 ### Stream Parameters
-- Codec: H.264
-- Bitrate: 2 Mbps
-- Port: UDP 5600
-- Resolution: 672x376 (left eye)
+- Codec: H.264 (software openh264enc)
+- Bitrate: Configurable (see `infra/mediamtx.yml`)
+- Protocol: RTSP (TCP)
+- Port: 8554
 - Latency: ~100-200ms over Tailscale
+
+### MediaMTX Management
+MediaMTX runs as a systemd user service (`mediamtx.service`) and auto-starts on boot. To manage:
+```bash
+systemctl --user status mediamtx
+systemctl --user restart mediamtx
+# Or via Edge Core API:
+curl -s http://localhost:8000/api/services/status
+```
 
 ---
 
 ## Configuration
 
-### Environment Variables (`.env`)
-Located at: `/home/mad/NOMAD/.env`
+### Environment Variables (`config/env/jetson.env`)
+Located at: `/home/mad/NOMAD/config/env/jetson.env`
 
-```bash
-# Network
-NOMAD_HOST=0.0.0.0
-NOMAD_PORT=8000
-TAILSCALE_IP=100.85.121.98
-GCS_IP=100.76.127.17
-GCS_PORT=14550
-
-# Hardware
-MAVLINK_UART_DEV=/dev/ttyTHS1
-MAVLINK_UART_BAUD=921600
-
-# Features
-NOMAD_ENABLE_VISION=true
-NOMAD_ENABLE_ISAAC_ROS=false
-NOMAD_DEBUG=false
-```
+This is the primary configuration file. It contains:
+- Jetson Tailscale IP (`TAILSCALE_IP=100.85.121.98`)
+- Ground Station IP (`GCS_IP=100.76.127.17`)
+- Home paths (`/home/mad/NOMAD/`)
+- Port configuration
+- Feature flags
 
 ### To Edit Configuration:
 ```bash
-nano ~/NOMAD/.env
+nano ~/NOMAD/config/env/jetson.env
 # Then restart Edge Core
 ```
 
@@ -465,16 +547,13 @@ git pull origin main
 
 ### Update Dependencies:
 ```bash
-pip3 install --user -r edge_core/requirements.txt
+cd ~/NOMAD
+./venv/bin/pip install -r edge_core/requirements.txt
 ```
 
 ### Restart Service:
 ```bash
-# If using nohup
-pkill -f "edge_core.main"
-nohup ~/start_nomad.sh > ~/nomad.log 2>&1 &
-
-# If using systemd
+# If using systemd (recommended)
 sudo systemctl restart nomad
 ```
 
@@ -487,7 +566,19 @@ sudo systemctl restart nomad
 **Check Python path:**
 ```bash
 which python3
-python3 --version  # Should be 3.10+
+python3 --version # Should be 3.10+ (JetPack 6.x ships Python 3.10)
+```
+
+**Check dependencies (in venv):**
+```bash
+cd ~/NOMAD
+./venv/bin/pip list | grep -E "fastapi|uvicorn|pymavlink"
+```
+
+**Check for errors:**
+```bash
+cd ~/NOMAD
+./venv/bin/python -m edge_core.main
 ```
 
 **Check dependencies:**
@@ -521,31 +612,32 @@ sudo ufw allow from 100.0.0.0/8 to any port 8000
 
 ### MAVLink Not Working
 
-**Check UART permissions:**
+**Check USB device permissions:**
 ```bash
-ls -la /dev/ttyTHS1
+ls -la /dev/ttyACM0
 sudo usermod -aG dialout mad
 # Then logout and login again
 ```
 
 **Check MAVLink Router:**
 ```bash
-sudo systemctl status mavlink-router
-cat /etc/mavlink-router/main.conf
+pgrep -f mavlink-routerd
+# MAVLink Router runs as a bare process, not as a systemd service
+cat ~/NOMAD/transport/mavlink_router/main.conf
 ```
 
 ### View Logs
 
-**Edge Core logs:**
-```bash
-cat ~/nomad.log
-tail -f ~/nomad.log
-```
-
-**System logs:**
+**Edge Core logs (systemd):**
 ```bash
 journalctl -u nomad -f
-dmesg | tail -50
+```
+
+**Service logs directory:**
+```bash
+ls ~/nomad_logs/
+cat ~/nomad_logs/mediamtx.log
+cat ~/nomad_logs/mavlink.log
 ```
 
 ---
@@ -561,22 +653,23 @@ ssh mad@100.85.121.98
 
 ### Start NOMAD
 ```bash
-nohup ~/start_nomad.sh > ~/nomad.log 2>&1 &
+cd ~/NOMAD && ./scripts/run/start_nomad_full.sh
 ```
 
 ### Stop NOMAD
 ```bash
-pkill -f "edge_core.main"
+sudo systemctl stop nomad
 ```
 
 ### Check Status
 ```bash
 curl localhost:8000/health
+systemctl status nomad
 ```
 
 ### View Logs
 ```bash
-tail -f ~/nomad.log
+journalctl -u nomad -f
 ```
 
 ### Pull Updates

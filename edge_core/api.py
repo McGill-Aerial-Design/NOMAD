@@ -2661,50 +2661,34 @@ fi
                     latest_folder = container_folder
                     images = container_images
 
-        if latest_folder and images:
-            # Return metadata for the first image.
-            image_name = images[0]
+        distance_cm = _parse_distance_cm(output)
 
+        def _meta(image_name=None, capture_folder=None):
             return {
                 "success": True,
                 "output": output,
                 "image_name": image_name,
-                "capture_folder": latest_folder,
+                "capture_folder": capture_folder,
                 "timestamp": now.isoformat(),
-                "distance_cm": _parse_distance_cm(output),
+                "distance_m": round(distance_cm / 100.0, 2) if distance_cm is not None else None,
                 "position": {
                     "lat": state.gps_lat or 0.0,
                     "lon": state.gps_lon or 0.0,
                     "alt": state.gps_alt or 0.0,
                 },
+                "alt_agl_m": round(state.alt_agl_m, 2) if state.alt_agl_m is not None else None,
                 "heading_deg": state.heading_deg or 0.0,
                 "pitch_deg": state.pitch_deg or 0.0,
                 "roll_deg": state.roll_deg or 0.0,
-                "gimbal_pitch_deg": state.gimbal_pitch_deg or 0.0,
-                "gimbal_yaw_deg": state.gimbal_yaw_deg or 0.0,
+                "camera_pitch_deg": state.gimbal_pitch_deg or 0.0,
                 "building_location": _parse_building_face(output),
             }
 
+        if latest_folder and images:
+            return _meta(image_name=images[0], capture_folder=latest_folder)
+
         # Fallback if no images found
-        return {
-            "success": True,
-            "output": output,
-            "image_name": None,
-            "capture_folder": None,
-            "timestamp": now.isoformat(),
-            "distance_cm": _parse_distance_cm(output),
-            "position": {
-                "lat": state.gps_lat or 0.0,
-                "lon": state.gps_lon or 0.0,
-                "alt": state.gps_alt or 0.0,
-            },
-            "heading_deg": state.heading_deg or 0.0,
-            "pitch_deg": state.pitch_deg or 0.0,
-            "roll_deg": state.roll_deg or 0.0,
-            "gimbal_pitch_deg": state.gimbal_pitch_deg or 0.0,
-            "gimbal_yaw_deg": state.gimbal_yaw_deg or 0.0,
-            "building_location": _parse_building_face(output),
-        }
+        return _meta()
 
     @app.post("/api/task/1/target/save", tags=["Task 1"])
     async def task1_save_targets():

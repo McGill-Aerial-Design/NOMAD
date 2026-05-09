@@ -14,8 +14,8 @@ nvblox_node                 ros_http_bridge         Edge Core API           Miss
     |                              | POST /api/task/2/   |                        |
     |                              | slam/mesh/update    |                        |
     |                              |-------------------->|                        |
-    |                              |                      | Store in               |
-    |                              |                      | app.state.slam_mesh    |
+| | | Store in | 
+| | | app.state.slam_mesh_data |
     |                              |                      |                        |
     |                              |                      | /ws/slam (WebSocket)   |
     |                              |                      |----------------------->|
@@ -138,7 +138,7 @@ When working correctly:
 - **Empty voxels after 20 messages**: Normal if camera isn't moving or depth invalid
 - **Voxels cap at 8000**: By design, larger scenes are subsampled for performance
 - **Mesh not updating**: May need to move camera to generate new depth data
-- **frame_id mismatch**: Must be exactly `"odom"` end-to-end (bridge, mesh endpoint, ws_slam, Mission Planner). Any other string triggers a one-shot warning in edge_core logs.
+- **frame_id mismatch**: Must be exactly `"map"` end-to-end (bridge, mesh endpoint, ws_slam, Mission Planner). Any other string triggers a one-shot warning in edge_core logs.
 
 ## Next Steps
 

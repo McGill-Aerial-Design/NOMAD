@@ -133,6 +133,11 @@ Mission Planner WASD Keys -> WASDControl.cs
 | `/api/vio/update` | POST | Receive VIO pose from ROS bridge |
 | `/api/vio/status` | GET | VIO pipeline health |
 | `/api/vio/pose` | GET | Current position/orientation |
+| `/api/vio/trajectory` | GET | Path history |
+| `/api/vio/reset_origin` | POST | Reset tracking origin |
+| `/api/vio/calibration` | GET | ZED calibration state |
+| `/api/vio/area/save` | POST | Save VIO relocalization area map |
+| `/api/vio/area/load` | POST | Load VIO relocalization area map |
 
 ## ArduPilot Configuration
 
@@ -282,11 +287,12 @@ curl -X POST http://localhost:8000/api/nav/enable_guided
 4. Check ros_http_bridge: `docker exec nomad_isaac_ros cat /tmp/ros_bridge.log`
 
 ### Commands Not Reaching ArduPilot
-1. Verify mavlink-router: `sudo systemctl status mavlink-router`
-2. Check MAVLink connection: `/api/health` endpoint
+1. Verify mavlink-router: `pgrep -f mavlink-routerd`
+2. Check MAVLink connection: `curl http://localhost:8000/health`
 3. Ensure vehicle is armed and in GUIDED mode
 
 ### VIO Failing
-1. Check camera: `curl http://localhost:8000/api/camera/status`
-2. Verify tracking: Environment needs sufficient visual features
-3. Reset origin: `curl -X POST http://localhost:8000/api/vio/reset_origin`
+1. Check VIO status: `curl http://localhost:8000/api/vio/status`
+2. Check ZED calibration: `curl http://localhost:8000/api/vio/calibration`
+3. Verify tracking: Environment needs sufficient visual features
+4. Reset origin: `curl -X POST http://localhost:8000/api/vio/reset_origin`

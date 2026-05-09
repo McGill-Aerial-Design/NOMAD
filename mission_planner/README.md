@@ -58,19 +58,47 @@ The Video view includes comprehensive manual drone control:
 | File | Description |
 |------|-------------|
 | `src/NOMADPlugin.cs` | Main plugin class (implements `MissionPlanner.Plugin.Plugin`) |
-| `src/NOMADMainScreen.cs` | **Full-page sidebar interface with pop-out support** |
-| `src/NOMADDashboardView.cs` | **Dashboard overview panel** |
-| `src/NOMADViews.cs` | **Individual view implementations (includes WASD controls)** |
+| `src/NOMADMainScreen.cs` | Full-page sidebar interface with pop-out support |
+| `src/NOMADDashboardView.cs` | Dashboard overview panel |
+| `src/NOMADTask1View.cs` | Task 1 capture / submit UI |
+| `src/NOMADTask2View.cs` | Task 2 VIO / WASD UI |
+| `src/NOMADVideoView.cs` | Standalone video panel |
+| `src/NOMADHealthView.cs` | Health metrics view |
+| `src/NOMADLinksView.cs` | Link status view |
+| `src/NOMADBoundaryView.cs` | Geofence / boundary display |
+| `src/NOMADTerminalView.cs` | Remote terminal tab |
+| `src/NOMADSettingsForm.cs` | Settings dialog |
+| `src/NOMADViewBase.cs` | Base view class |
+| `src/NOMADTheme.cs` | UI theming |
+| `src/NOMADConfig.cs` | Configuration persistence |
+| `src/MissionConfig.cs` | Mission configuration models |
 | `src/DualLinkSender.cs` | HTTP and MAVLink communication handler |
 | `src/MAVLinkConnectionManager.cs` | Dual link failover manager (UDP + COM port) |
 | `src/LinkHealthPanel.cs` | Link health monitoring UI |
 | `src/EmbeddedVideoPlayer.cs` | Built-in RTSP video player |
 | `src/JetsonTerminalControl.cs` | Remote terminal interface |
+| `src/JetsonConnectionManager.cs` | Jetson API client |
+| `src/JetsonHealthTab.cs` | Per-tab health display |
 | `src/EnhancedHealthDashboard.cs` | Health monitoring display |
-| `src/EnhancedWASDControl.cs` | **Full keyboard control with visual feedback** |
-| `src/NOMADConfig.cs` | Configuration persistence |
-| `src/NOMADSettingsForm.cs` | Settings dialog |
-| `src/NOMADPlugin.csproj` | Project file |
+| `src/EnhancedWASDControl.cs` | Full keyboard control with visual feedback |
+| `src/PayloadControlPanel.cs` | Payload drop / water shooter |
+| `src/Task1UploadPanel.cs` | Target grid + Google Drive upload |
+| `src/GoogleDriveUploadService.cs` | Google Drive upload service |
+| `src/AIDescriptionService.cs` | AI description generation |
+| `src/ServiceControlPanel.cs` | Service status / control panel |
+| `src/NotificationPanel.cs` | Toast notification UI |
+| `src/NotificationService.cs` | Toast notification service |
+| `src/TelemetryInjector.cs` | Telemetry / HUD injection |
+| `src/EkfSourceControlPanel.cs` | EKF source switching |
+| `src/SnapshotManager.cs` | ZED snapshot management |
+| `src/BuildingViewer3D.cs` | 3D building viewer |
+| `src/ZedCalibrationView.cs` | ZED calibration UI |
+| `src/FoxglovePanel.cs` | Foxglove integration |
+| `src/Rviz2View.cs` | RViz2 integration |
+| `src/MapOverlayManager.cs` | Map overlay manager |
+| `src/BoundaryManager.cs` | Geofence boundary manager |
+| `src/SLAM3DView.cs` | 3D nvblox mesh viewer (main) |
+| `src/SLAM3D/` | SLAM3D subdirectory (rendering, data, camera, models, network) |
 
 ## Installation
 
@@ -110,9 +138,9 @@ Usage:
    .\mission_planner\packaging\fetch-libvlc.ps1 -Arch win-x64
    ```
 2. Build using the included build script — it will automatically copy the managed and native files into the plugin output and deploy them to `%LOCALAPPDATA%\Mission Planner\plugins`:
-   ```powershell
-   .\mission_planner\src\build_and_deploy.ps1
-   ```
+```powershell
+.\scripts\build\build_plugin_windows.ps1
+```
 
 This ensures the embedded player can initialize libVLC at runtime. If you prefer not to include the redistributables in the repository, operators can instead install VLC on their machines and the plugin will detect the native libs automatically.
 
@@ -322,8 +350,8 @@ The plugin runs on Linux via Mono with Mission Planner:
     |  |  |    (FastAPI on port 8000)    |  |   |
     |  |  +------------------------------+  |   |
     |  |  +------------------------------+  |   |
-    |  |  |   MediaMTX RTSP Server       |  |   |
-    |  |  |   (port 8554: /live)         |  |   |
+| | | MediaMTX RTSP Server | | |
+| | | (port 8554: /primary) | | |
     |  |  +------------------------------+  |   |
     |  +------------------------------------+   |
     +------------------------------------------+

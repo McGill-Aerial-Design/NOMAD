@@ -105,18 +105,34 @@ Drone system for two distinct competition tasks:
 NOMAD/
 ├── docs/                   # Documentation
 │   ├── architecture.md     # System design
+│   ├── OPERATIONS_RUNBOOK.md # Operations guide
+│   ├── JETSON_DEPLOYMENT.md  # Deployment guide
 │   └── PRD.md              # Product requirements
 │
 ├── edge_core/              # Jetson software (Task 2 autonomy + Task 1 imaging support)
 │   ├── main.py             # Entry point
-│   ├── api.py              # REST API endpoints
+│   ├── api.py              # REST API endpoints (~8K lines, all tags)
 │   ├── state.py            # State manager
-│   ├── mavlink_interface.py  # Flight controller comms
+│   ├── mavlink_interface.py  # MAVLink flight controller comms
+│   ├── nav_controller.py     # Velocity/position command logic
+│   ├── servo_controller.py # Camera tilt / water shooter PWM
+│   ├── rc_servo_bridge.py  # RC channel -> servo angle bridge
+│   ├── spray_controller.py # Fire-extinguisher spray control
+│   ├── operational_mode.py # Operational mode state machine
+│   ├── video_stream_manager.py # Video bridge / overlay management
+│   ├── isaac_ros_bridge.py # Isaac ROS / nvblox lifecycle
+│   ├── health_monitor.py   # Jetson hardware monitoring
 │   ├── time_manager.py     # Time synchronization
-│   ├── geospatial.py       # GPS calculations
-│   └── models.py           # Data models
+│   ├── geospatial.py       # GPS/ENU conversions
+│   ├── models.py           # Pydantic data models
+│   ├── gdrive_upload.py    # Google Drive upload helpers
+│   ├── ipc.py              # ZMQ/IPC for high-rate ROS data
+│   ├── logging_service.py  # Structured logging utilities
+│   ├── ros_http_bridge.py  # ROS <-> HTTP bridge
+│   ├── target_localizer/   # HSV circle detection + building model
+│   └── ros/                # ROS2 utility nodes (VIO, video, obstacles)
 │
-├── tailscale/              # VPN configuration (Task 2)
+├── tailscale/              # VPN configuration
 │   ├── SETUP.md            # Installation guide
 │   ├── src/                # Python managers
 │   ├── scripts/            # Setup/watchdog scripts
@@ -128,11 +144,20 @@ NOMAD/
 │
 ├── mission_planner/        # Ground Control Plugin (C#)
 │   └── src/
-│       ├── NOMADPlugin.cs         # Plugin entry point
-│       ├── NOMADFullPage.cs       # Full-page control interface
-│       ├── NOMADControlPanel.cs   # Quick access panel
-│       ├── EmbeddedVideoPlayer.cs # Built-in video streaming
+│       ├── NOMADPlugin.cs            # Plugin entry point
+│       ├── NOMADMainScreen.cs        # Main plugin screen
+│       ├── NOMADDashboardView.cs     # Main dashboard view
+│       ├── NOMADTask1View.cs       # Task 1 capture / submit UI
+│       ├── NOMADTask2View.cs       # Task 2 VIO / WASD UI
+│       ├── ServiceControlPanel.cs  # Service status panel
+│       ├── EnhancedHealthDashboard.cs # Health + network display
+│       ├── JetsonConnectionManager.cs # API client
 │       ├── JetsonTerminalControl.cs # Remote terminal
+│       ├── EmbeddedVideoPlayer.cs   # Built-in video streaming
+│       ├── LinkHealthPanel.cs       # MAVLink dual-link health
+│       ├── SLAM3DView.cs + SLAM3D/ # 3D nvblox mesh viewer
+│       ├── Task1UploadPanel.cs      # Target grid + Google Drive upload
+│       ├── PayloadControlPanel.cs   # Payload drop / water shooter
 │       └── ...
 │
 ├── config/                 # Configuration files
@@ -141,10 +166,14 @@ NOMAD/
 │
 ├── infra/                  # Deployment configs
 │   ├── Dockerfile
-│   └── nomad.service
+│   ├── mediamtx.yml        # MediaMTX RTSP server config
+│   └── nomad.service       # systemd service
 │
-└── scripts/                # Dev scripts
-    └── run_dev.sh
+└── scripts/                # Dev / setup / runtime scripts
+    ├── build/              # Build scripts
+    ├── run/                # Runtime/startup scripts
+    ├── setup/              # One-time setup scripts
+    └── dev/                # Development tools
 ```
 
 ---

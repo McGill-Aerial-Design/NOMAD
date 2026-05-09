@@ -19,8 +19,6 @@ scripts/
 | Script | Description |
 |--------|-------------|
 | `build_plugin_windows.ps1` | Build the Mission Planner C# plugin on Windows |
-| `build_nvblox_msgs.sh` | Build nvblox_msgs package inside Isaac ROS container |
-| `install_vpi_container.sh` | Install VPI dev libraries inside Isaac ROS container |
 
 ## run/
 
@@ -38,7 +36,6 @@ scripts/
 | `setup_jetson.sh` | Full Jetson initial setup (deps, Tailscale, venv, MAVLink, firewall) |
 | `setup_service.sh` | Install systemd `nomad.service` for Edge Core |
 | `setup_ssh_jetson.ps1` | Set up passwordless SSH from Windows to Jetson |
-| `setup_jetson_remote.py` | Remote Jetson setup via SSH (alternative to on-device setup) |
 | `fix_power_mode_25w_v2.sh` | Add 25W MAXN power mode to Jetson Orin Nano |
 
 ## dev/
@@ -47,6 +44,19 @@ scripts/
 |--------|-------------|
 | `run_dev.ps1` | Run Edge Core in simulation mode on Windows |
 | `run_dev.sh` | Run Edge Core in simulation mode on Linux/macOS |
+
+The `dev/` directory also contains 50+ diagnostic and test scripts for ZED camera, USB, ROS, nvblox, and mesh debugging. Key ones include:
+
+| Script | Description |
+|--------|-------------|
+| `check_nvblox.sh` | Check nvblox node status |
+| `check_mesh_topics.sh` | Check mesh topic publishing |
+| `diag_zed.sh` | ZED camera diagnostics |
+| `diag_zed_usb.sh` | ZED USB connection diagnostics |
+| `full_restart_ros.sh` | Full restart of ROS components |
+| `restart_nvblox.sh` | Restart nvblox node |
+| `restart_bridge.sh` | Restart the ros_http_bridge |
+| `ros_full_launch.sh` | Full ROS launch for development |
 
 ```bash
 # Windows
@@ -57,17 +67,6 @@ scripts/
 ```
 
 Sets `NOMAD_SIM_MODE=true` for mock hardware. API at `http://localhost:8000/docs`.
-
-## task1/
-
-| Script | Description |
-|--------|-------------|
-| `process_task1_ai.py` | Multi-provider AI image analysis (Gemini, Ollama, OpenRouter) |
-| `README_AI.md` | Full documentation for Task 1 AI processing |
-
-```powershell
-python scripts\task1\process_task1_ai.py --provider gemini --gemini-key YOUR_KEY
-```
 
 ## hardware/
 

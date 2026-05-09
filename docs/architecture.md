@@ -6,14 +6,17 @@
 - Mission Planner (C): Centralized control plugin with RTSP video viewer, ELRS tunneling, indoor nudge, telemetry injection, task controls.
 
 ## Process Separation
-- `edge_core/orchestrator`: API + state management; watchdog for vision/VIO.
-- `edge_core/vision`: ZED VIO + YOLO + gimbal PID + exclusion map.
+- `edge_core/api.py`: FastAPI app + state management; REST/WebSocket endpoints.
+- `edge_core/nav_controller.py` + `mavlink_interface.py`: FC velocity/position command routing and MAVLink telemetry.
+- `edge_core/target_localizer/`: HSV circle detection, building model, 3D back-projection, description generation.
+- `edge_core/isaac_ros_bridge.py` + `video_stream_manager.py`: Isaac ROS / nvblox lifecycle and video pipeline.
+- `edge_core/servo_controller.py` + `rc_servo_bridge.py`: Camera tilt / water shooter PWM and RC channel mapping.
 - `transport`: mavlink routing; keep FC-facing ports stable.
 
 ## Data Flow (high-level)
-- FC UART → mavlink-router → Orchestrator + Vision + Mission Planner (UDP/ELRS).
-- Vision outputs detections + VIO → Orchestrator decisions → FC setpoints/gimbal commands.
-- Mission Planner plugin provides centralized control, receives RTSP video streams, and sends task triggers via HTTP API.
+- FC UART → mavlink-router → Edge Core + Mission Planner (UDP/ELRS).
+- ZED camera → Isaac ROS (Docker) → target_localizer (detections + depth) → API state → Mission Planner.
+- Mission Planner plugin receives RTSP video, sends capture/velocity commands via HTTP API.
 
 Keep each module small: one responsibility per package, tests in `tests/` mirroring package paths.
 

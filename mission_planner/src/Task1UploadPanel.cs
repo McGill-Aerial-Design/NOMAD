@@ -852,12 +852,10 @@ namespace NOMAD.MissionPlanner
             try
             {
                 var gdrive = new GoogleDriveUploadService();
-                if (!gdrive.HasToken())
-                {
-                    throw new Exception(
-                        "No Google Drive token found.\n\n" +
-                        "Place your gdrive_token.json in ~/.nomad/ or upload it via Settings > Google Drive.");
-                }
+                var tokenDiag = gdrive.DiagnoseToken();
+                if (tokenDiag != null)
+                    throw new Exception($"Google Drive token problem:\n\n{tokenDiag}");
+
 
                 var txtContent = GenerateTxtContent();
                 if (string.IsNullOrEmpty(txtContent))
@@ -889,14 +887,14 @@ namespace NOMAD.MissionPlanner
                             var ext = Path.GetExtension(imagePath) ?? ".jpg";
                             var filename = $"Target_{number}{ext}";
 
-                            var fileId = await gdrive.UploadFileAsync(imagePath, filename);
-                            if (!string.IsNullOrEmpty(fileId))
+                            try
                             {
+                                var fileId = await gdrive.UploadFileAsync(imagePath, filename);
                                 imageResults.Add((number, filename, fileId));
                             }
-                            else
+                            catch (Exception imgEx)
                             {
-                                errors.Add($"Failed to upload image for Target {number}");
+                                errors.Add($"Target {number} image failed: {imgEx.Message}");
                             }
                         }
                     }

@@ -715,9 +715,9 @@ def generate_launch_description():
 **Files to Modify**:
 - `edge_core/main.py` - Integrate ROS2 node
 - `edge_core/api.py` - Update endpoints for Nav2 actions
-- **DELETE**: `edge_core/nav_controller.py`
+- **KEEP**: `edge_core/nav_controller.py` (still in use)
 - **SIMPLIFY**: `edge_core/mavlink_interface.py`
-- **NEW**: `edge_core/ros_orchestrator.py`
+- **NEW**: `edge_core/ros_orchestrator.py` (NOT YET CREATED)
 
 ### Phase 5: Integration Testing (Week 4)
 
@@ -779,7 +779,7 @@ EK3_POSNE_M_NSE = 1.0
 ### Ground Station Plugin (C#)
 
 ```csharp
-// mission_planner/src/WASDNavControl.cs
+// mission_planner/src/EnhancedWASDControl.cs (existing file - adapt this pattern)
 public class WASDNavControl : Form
 {
     private HttpClient _httpClient = new HttpClient();
