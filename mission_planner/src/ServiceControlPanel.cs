@@ -61,7 +61,12 @@ namespace NOMAD.MissionPlanner
         private Label _lblVioTrajectoryPoints;
         private Button _btnClearTrajectory;
         
-        // Nvblox + Bridge
+        // ROS HTTP Bridge
+        private Label _lblRosBridgeStatus;
+        private Button _btnStartRosBridge;
+        private Button _btnStopRosBridge;
+
+        // Nvblox
         private Label _lblNvbloxStatus;
         private Button _btnNvbloxLaunch;
         private Button _btnNvbloxStop;
@@ -182,10 +187,13 @@ namespace NOMAD.MissionPlanner
             // === Isaac ROS (with Start/Stop) ===
             AddIsaacRosRow(ref yOffset);
 
+            // === ROS HTTP Bridge (with Start/Stop) ===
+            AddRosBridgeRow(ref yOffset);
+
             // === Target Localization (with Start/Stop) ===
             AddTargetLocalizationRow(ref yOffset);
 
-            // === Nvblox + Bridge (with Launch/Stop) ===
+            // === Nvblox (with Launch/Stop) ===
             AddNvbloxRow(ref yOffset);
 
             // === Video Bridges ===
@@ -420,6 +428,60 @@ namespace NOMAD.MissionPlanner
             yOffset += 35;
         }
 
+        private void AddRosBridgeRow(ref int yOffset)
+        {
+            int leftCol = ServiceLeftCol;
+            int startCol = ServiceStartCol;
+            int stopCol = ServiceStopCol;
+
+            var lblName = new Label
+            {
+                Text = "ROS HTTP Bridge:",
+                Location = new Point(leftCol, yOffset + 3),
+                Size = new Size(130, 20),
+                ForeColor = Color.LightGray
+            };
+            _servicesPanel.Controls.Add(lblName);
+
+            _lblRosBridgeStatus = new Label
+            {
+                Text = "Unknown",
+                Location = new Point(ServiceStatusCol, yOffset + 3),
+                Size = new Size(240, 20),
+                ForeColor = Color.Yellow,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left,
+            };
+            _servicesPanel.Controls.Add(_lblRosBridgeStatus);
+
+            _btnStartRosBridge = new Button
+            {
+                Text = "Start",
+                Location = new Point(startCol, yOffset),
+                Size = new Size(70, 25),
+                BackColor = Color.FromArgb(0, 120, 60),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left,
+            };
+            _btnStartRosBridge.Click += async (s, e) => await StartRosBridgeAsync();
+            _servicesPanel.Controls.Add(_btnStartRosBridge);
+
+            _btnStopRosBridge = new Button
+            {
+                Text = "Stop",
+                Location = new Point(stopCol, yOffset),
+                Size = new Size(70, 25),
+                BackColor = Color.FromArgb(150, 50, 50),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left,
+            };
+            _btnStopRosBridge.Click += async (s, e) => await StopRosBridgeAsync();
+            _servicesPanel.Controls.Add(_btnStopRosBridge);
+
+            yOffset += 35;
+        }
+
         private void AddTargetLocalizationRow(ref int yOffset)
         {
             int leftCol = ServiceLeftCol;
@@ -536,7 +598,7 @@ namespace NOMAD.MissionPlanner
 
             var lblName = new Label
             {
-                Text = "Nvblox + Bridge:",
+                Text = "Nvblox:",
                 Location = new Point(leftCol, yOffset + 3),
                 Size = new Size(120, 20),
                 ForeColor = Color.LightGray
@@ -1189,9 +1251,42 @@ namespace NOMAD.MissionPlanner
             }
         }
         
+        private async Task StartRosBridgeAsync()
+        {
+            LogMessage("Starting ROS HTTP bridge...");
+            UpdateStatusLabel(_lblRosBridgeStatus, false, "Starting...");
+            var result = await _sender.StartRosBridgeAsync();
+            if (result.Success)
+            {
+                LogMessage("ROS HTTP bridge started");
+                UpdateStatusLabel(_lblRosBridgeStatus, true, "Running");
+            }
+            else
+            {
+                LogMessage($"Failed to start ROS bridge: {result.Message}");
+                UpdateStatusLabel(_lblRosBridgeStatus, false, "Start Failed");
+            }
+        }
+
+        private async Task StopRosBridgeAsync()
+        {
+            LogMessage("Stopping ROS HTTP bridge...");
+            UpdateStatusLabel(_lblRosBridgeStatus, false, "Stopping...");
+            var result = await _sender.StopRosBridgeAsync();
+            if (result.Success)
+            {
+                LogMessage("ROS HTTP bridge stopped");
+                UpdateStatusLabel(_lblRosBridgeStatus, false, "Stopped");
+            }
+            else
+            {
+                LogMessage($"Failed to stop ROS bridge: {result.Message}");
+            }
+        }
+
         private async Task LaunchNvbloxAsync()
         {
-            LogMessage("Launching nvblox + ROS-HTTP bridge...");
+            LogMessage("Launching nvblox...");
             UpdateStatusLabel(_lblNvbloxStatus, false, "Launching...");
 
             var result = await _sender.LaunchNvbloxAsync();
@@ -1208,13 +1303,13 @@ namespace NOMAD.MissionPlanner
 
         private async Task StopNvbloxAsync()
         {
-            LogMessage("Stopping nvblox + bridge...");
+            LogMessage("Stopping nvblox...");
             UpdateStatusLabel(_lblNvbloxStatus, false, "Stopping...");
 
             var result = await _sender.StopNvbloxAsync();
             if (result.Success)
             {
-                LogMessage("nvblox + bridge stopped");
+                LogMessage("nvblox stopped");
                 UpdateStatusLabel(_lblNvbloxStatus, false, "Stopped");
             }
             else

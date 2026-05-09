@@ -1066,7 +1066,6 @@ export RMW_FASTRTPS_TRANSPORT_SHARED_MEMORY_DISABLED=1
 pkill -f 'nomad_zed_nvblox\\.launch\\.py|zed_example\\.launch\\.py' 2>/dev/null || true
 pkill -f 'component_container' 2>/dev/null || true
 pkill -f 'controller_server|planner_server|smoother_server|behavior_server|bt_navigator|lifecycle_manager_navigation|waypoint_follower|velocity_smoother' 2>/dev/null || true
-pkill -f ros_http_bridge 2>/dev/null || true
 pkill -f 'target_localizer_node|target_localizer\\.launch\\.py' 2>/dev/null || true
 pkill -f 'servo_tf_publisher\\.py|obstacle_distance_bridge\\.py|nav2_goal_bridge\\.py|robot_state_publisher|static_transform_publisher' 2>/dev/null || true
 sleep 2
@@ -1333,20 +1332,8 @@ ros2 run tf2_ros static_transform_publisher \
     --frame-id camera_link --child-frame-id zed_camera_link \
     >/tmp/zed_camera_link_alias.log 2>&1 &
 
-# Wait for topics then launch bridge in its own session with a restart loop.
-# setsid isolates the bridge from the ros2 launch process group, so signals
-# delivered to the launch group (e.g. SIGINT on nvblox crash) do not reach it.
-# The restart loop keeps telemetry running across nvblox crashes/restarts.
-# Credentials exported before setsid are inherited by the subprocess.
-sleep 2
-{bridge_env_exports}setsid bash -c '
-    while true; do
-        python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --mag-topic /zed/zed_node/imu/mag --mesh-topic /nvblox_node/color_layer_marker --high-rate-transport http
-        echo "ros_http_bridge exited (rc=$?), restarting in 10s..."
-        sleep 10
-    done
-' &
-echo $! > /tmp/ros_bridge.pid
+# NOTE: ros_http_bridge is managed independently via /api/isaac/bridge/start
+# and is NOT restarted here so it survives nvblox relaunches.
 
 # target_localizer is launched by nomad_zed_nvblox.launch.py above.
 # Just wait here until its services are discoverable before returning.
@@ -5157,18 +5144,113 @@ fi
         ),
     ):
         """
-        Launch nvblox + ROS-HTTP bridge inside a running container.
+        Launch nvblox inside a running Isaac ROS container.
 
         Lightweight alternative to /api/isaac/start: does NOT install deps
         or rebuild packages.  Assumes the container is already running and
-        packages are already built.  Kills any existing nvblox / bridge
-        processes first, applies NOMAD config overlay, then launches both.
+        packages are already built.  ros_http_bridge is NOT touched — manage
+        it independently via /api/isaac/bridge/start.
         """
-        result = _launch_nvblox_bridge_with_od(enable_od=enable_od)
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, lambda: _launch_nvblox_bridge_with_od(enable_od=enable_od)
+        )
         if result.get("success"):
             request.app.state.detection_enabled = enable_od
             request.app.state.detection_last_update = 0.0
         return result
+
+    def _start_ros_http_bridge(bridge_api_key: str = "", bridge_internal_token: str = "") -> dict:
+        """Start ros_http_bridge inside the Isaac ROS container (idempotent)."""
+        container = "nomad_isaac_ros"
+        try:
+            ps = subprocess.run(
+                ["docker", "ps", "--filter", f"name={container}", "--format", "{{.Names}}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if container not in ps.stdout:
+                return {"success": False, "error": "Isaac ROS container not running"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+        # Check if already running
+        probe = subprocess.run(
+            ["docker", "exec", container, "pgrep", "-f", "ros_http_bridge"],
+            capture_output=True, timeout=5,
+        )
+        if probe.returncode == 0:
+            return {"success": True, "message": "ros_http_bridge already running"}
+
+        env_exports = ""
+        if bridge_api_key:
+            env_exports += f"export NOMAD_API_KEY='{bridge_api_key}'\n"
+        if bridge_internal_token:
+            env_exports += f"export NOMAD_INTERNAL_TOKEN='{bridge_internal_token}'\n"
+
+        cmd = (
+            f"{env_exports}"
+            "source /opt/ros/humble/setup.bash 2>/dev/null; "
+            "source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null; "
+            "setsid bash -c '"
+            "while true; do "
+            "python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py "
+            "--host localhost --port 8000 --rate 30 "
+            "--vio-topic /zed/zed_node/odom "
+            "--mag-topic /zed/zed_node/imu/mag "
+            "--mesh-topic /nvblox_node/color_layer_marker "
+            "--high-rate-transport http; "
+            "echo \"ros_http_bridge exited (rc=$?), restarting in 10s...\"; "
+            "sleep 10; "
+            "done' >> /tmp/ros_bridge.log 2>&1 &"
+        )
+        try:
+            subprocess.run(
+                ["docker", "exec", "-d", container, "bash", "-c", cmd],
+                capture_output=True, timeout=10, check=True,
+            )
+        except subprocess.CalledProcessError as e:
+            return {"success": False, "error": f"Failed to start bridge: {e.stderr or e}"}
+
+        # Brief wait to confirm it started
+        import time as _time
+        for _ in range(5):
+            _time.sleep(1)
+            chk = subprocess.run(
+                ["docker", "exec", container, "pgrep", "-f", "ros_http_bridge"],
+                capture_output=True, timeout=5,
+            )
+            if chk.returncode == 0:
+                return {"success": True, "message": "ros_http_bridge started"}
+
+        return {"success": False, "error": "ros_http_bridge process did not appear within 5s"}
+
+    @app.post("/api/isaac/bridge/start", tags=["Isaac ROS"])
+    async def isaac_bridge_start():
+        """
+        Start the ROS-HTTP bridge inside the Isaac ROS container.
+
+        Independent of nvblox — runs whenever the container is up.
+        Idempotent: safe to call when bridge is already running.
+        """
+        api_key = (os.environ.get("NOMAD_API_KEY") or "").strip()
+        internal_token = (os.environ.get("NOMAD_INTERNAL_TOKEN") or "").strip()
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, lambda: _start_ros_http_bridge(api_key, internal_token)
+        )
+
+    @app.post("/api/isaac/bridge/stop", tags=["Isaac ROS"])
+    async def isaac_bridge_stop():
+        """Stop the ROS-HTTP bridge inside the Isaac ROS container."""
+        container = "nomad_isaac_ros"
+        try:
+            subprocess.run(
+                ["docker", "exec", container, "pkill", "-f", "ros_http_bridge"],
+                capture_output=True, timeout=5,
+            )
+            return {"success": True, "message": "ros_http_bridge stopped"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     def _relaunch_isaac_with_nvblox(enable_nvblox: bool) -> dict:
         """

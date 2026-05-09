@@ -674,7 +674,23 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Stop nvblox and ROS-HTTP bridge without stopping the container.
+        /// Start the ROS HTTP bridge inside the Isaac ROS container (idempotent).
+        /// </summary>
+        public async Task<CommandResult> StartRosBridgeAsync()
+        {
+            return await SendHttpPostLongRun("/api/isaac/bridge/start", null);
+        }
+
+        /// <summary>
+        /// Stop the ROS HTTP bridge inside the Isaac ROS container.
+        /// </summary>
+        public async Task<CommandResult> StopRosBridgeAsync()
+        {
+            return await SendHttpPost("/api/isaac/bridge/stop", null);
+        }
+
+        /// <summary>
+        /// Stop nvblox without stopping the container.
         /// </summary>
         public async Task<CommandResult> StopNvbloxAsync()
         {
@@ -1070,6 +1086,28 @@ namespace NOMAD.MissionPlanner
 
                 if (response.IsSuccessStatusCode)
                 {
+                    // Check for application-level failure: server returns HTTP 200
+                    // with {"success": false, "error": "..."} for long-running ops.
+                    string appError = null;
+                    try
+                    {
+                        var json = JObject.Parse(responseBody);
+                        if (json["success"]?.Value<bool>() == false)
+                            appError = json["error"]?.Value<string>() ?? json["message"]?.Value<string>() ?? "Server reported failure";
+                    }
+                    catch { }
+
+                    if (appError != null)
+                    {
+                        return new CommandResult
+                        {
+                            Success = false,
+                            Message = appError,
+                            Data = responseBody,
+                            Method = "HTTP"
+                        };
+                    }
+
                     return new CommandResult
                     {
                         Success = true,
