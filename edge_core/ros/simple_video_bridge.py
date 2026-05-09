@@ -50,15 +50,17 @@ _HSV_PRIORITY = ["red", "yellow", "green", "blue", "black", "white"]
 
 Gst.init(None)
 
-# ZED 2i topics that use lazy publishing — only published when someone subscribes.
+# ZED 2 SDK 5.x topics that use lazy publishing — only published when someone subscribes.
 # ros2 topic list won't show them until then, so we include them statically so
 # the user can pre-select before ZED starts; subscribing triggers publication.
+# Topic naming convention: /zed/zed_node/<side>/color/<raw|rect>/image
 _ZED_KNOWN_IMAGE_TOPICS = [
-    '/zed/zed_node/left/image_rect_color',
-    '/zed/zed_node/right/image_rect_color',
-    '/zed/zed_node/left_raw/image_raw_color',
-    '/zed/zed_node/right_raw/image_raw_color',
     '/zed/zed_node/rgb/color/rect/image',
+    '/zed/zed_node/rgb/color/raw/image',
+    '/zed/zed_node/left/color/rect/image',
+    '/zed/zed_node/left/color/raw/image',
+    '/zed/zed_node/right/color/rect/image',
+    '/zed/zed_node/right/color/raw/image',
     '/zed/zed_node/depth/depth_registered',
 ]
 
