@@ -2789,6 +2789,28 @@ fi
         os.path.expanduser("~/NOMAD/config"),
     )
 
+    def _atomic_write_json(path: str, data, *, indent: Optional[int] = 2) -> None:
+        """
+        Crash-safe JSON write: serialize to a sibling .tmp, fsync, then
+        os.replace() onto the target. A power loss or kill during the write
+        can only ever leave a stale .tmp — the live file is never half-written.
+        Used by all building configuration writes so a Jetson crash mid-save
+        cannot wipe the corner calibration.
+        """
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = f"{path}.tmp"
+        with open(tmp, "w") as f:
+            if indent is None:
+                json.dump(data, f)
+            else:
+                json.dump(data, f, indent=indent)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, path)
+
     class PlaneOverrideRequest(BaseModel):
         plane_kind: str  # "wall" | "ground" | "roof"
         face_name: Optional[str] = None  # optional explicit wall face (e.g. "N", "S")
@@ -2810,12 +2832,10 @@ fi
                 detail=f"plane_kind must be wall|ground|roof, got {body.plane_kind!r}",
             )
         override_path = os.path.join(_BUILDING_CORNERS_DIR, "plane_override.json")
-        os.makedirs(_BUILDING_CORNERS_DIR, exist_ok=True)
         payload = {"target_id": target_id, "plane_kind": plane_kind}
         if body.face_name:
             payload["face_name"] = body.face_name
-        with open(override_path, "w") as f:
-            json.dump(payload, f)
+        _atomic_write_json(override_path, payload, indent=None)
         output = _call_ros2_service_in_isaac_container_or_raise(
             service_name="/target_localizer/set_target_plane",
             service_type="std_srvs/srv/Trigger",
@@ -2989,8 +3009,7 @@ fi
         data.setdefault("center_lon", data["corners"][0]["lon"] if data["corners"] else -75.0)
         data.setdefault("height", 5.0)
 
-        with open(corners_path, "w") as f:
-            json.dump(data, f, indent=2)
+        _atomic_write_json(corners_path, data)
 
         return {
             "success": True,
@@ -3083,8 +3102,7 @@ fi
         data.setdefault("center_lat", 45.0)
         data.setdefault("center_lon", -75.0)
         
-        with open(corners_path, "w") as f:
-            json.dump(data, f, indent=2)
+        _atomic_write_json(corners_path, data)
         
         return {
             "success": True,
@@ -3142,8 +3160,7 @@ fi
         # Save walls with overrides
         data["walls"] = walls
         
-        with open(corners_path, "w") as f:
-            json.dump(data, f, indent=2)
+        _atomic_write_json(corners_path, data)
         
         action = "cleared" if length_m is None else f"set to {length_m}m"
         return {
@@ -3197,8 +3214,7 @@ fi
         data["center_lat"] = payload["center_lat"]
         data["center_lon"] = payload["center_lon"]
         data["height"] = payload["height"]
-        with open(corners_path, "w") as f:
-            json.dump(data, f, indent=2)
+        _atomic_write_json(corners_path, data)
 
         # The ROS2 node registers /target_localizer/set_building_corners as
         # std_srvs/srv/Trigger (no request payload). It reads the corners JSON

@@ -43,6 +43,25 @@ namespace NOMAD.MissionPlanner
         private ProgressBar _progressBar;
         private double _buildingHeight = 5.0;
 
+        // Crash-safe persistence of user edits (approve/desc/color/plane/height)
+        // keyed by image path. Sits next to the per-capture JSON files so a
+        // GCS crash never loses 20 minutes of approval work.
+        private System.Windows.Forms.Timer _stateSaveTimer;
+        private bool _restoringState;
+
+        private static string SubmitStatePath => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            "NOMAD", "Task1", "submit_state.json");
+
+        private class SubmitRowState
+        {
+            public bool Approved { get; set; }
+            public string Color { get; set; }
+            public string Plane { get; set; }
+            public string Height { get; set; }
+            public string Description { get; set; }
+        }
+
         public double BuildingHeight
         {
             get => _buildingHeight;
@@ -60,6 +79,20 @@ namespace NOMAD.MissionPlanner
             InitializeUI();
             // Auto-restore any previously saved captures on creation
             this.Load += (s, e) => RestoreFromSavedCaptures();
+            // Flush any pending debounced save when the panel is torn down.
+            this.Disposed += (s, e) =>
+            {
+                try
+                {
+                    if (_stateSaveTimer != null && _stateSaveTimer.Enabled)
+                    {
+                        _stateSaveTimer.Stop();
+                        SaveSubmitState();
+                    }
+                    _stateSaveTimer?.Dispose();
+                }
+                catch { }
+            };
         }
 
         private void RestoreFromSavedCaptures()
@@ -69,50 +102,171 @@ namespace NOMAD.MissionPlanner
                 "NOMAD", "Task1");
             if (!Directory.Exists(task1Dir)) return;
 
-            var jsonFiles = Directory.GetFiles(task1Dir, "*.json").OrderBy(f => f).ToArray();
+            // Skip the submit_state sidecar — it isn't a capture metadata file.
+            var jsonFiles = Directory.GetFiles(task1Dir, "*.json")
+                .Where(f => !string.Equals(Path.GetFileName(f), "submit_state.json", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(f => f).ToArray();
             if (jsonFiles.Length == 0) return;
 
-            _targetGrid.Rows.Clear();
-            int targetNum = 1;
-            foreach (var jsonFile in jsonFiles)
+            // Load per-row user edits keyed by image path (if any).
+            Dictionary<string, SubmitRowState> savedState = LoadSubmitState();
+
+            _restoringState = true;
+            try
             {
-                try
+                _targetGrid.Rows.Clear();
+                int targetNum = 1;
+                foreach (var jsonFile in jsonFiles)
                 {
-                    var json = File.ReadAllText(jsonFile);
-                    var metadata = JsonConvert.DeserializeObject<SnapshotMetadata>(json);
-
-                    var imagePath = Path.ChangeExtension(jsonFile, ".jpg");
-                    if (!File.Exists(imagePath)) imagePath = Path.ChangeExtension(jsonFile, ".jpeg");
-                    if (!File.Exists(imagePath)) imagePath = null;
-
-                    int rowIndex = _targetGrid.Rows.Add();
-                    var row = _targetGrid.Rows[rowIndex];
-                    row.Cells["Approved"].Value = false;
-                    row.Cells["Number"].Value = targetNum++;
-                    row.Cells["Color"].Value = metadata?.TargetColor ?? "Red";
-                    row.Cells["Plane"].Value = "wall";
-                    row.Cells["Height"].Value = "";
-                    row.Cells["Description"].Value = metadata?.RelativeDescription ?? "";
-                    row.Cells["ImagePath"].Value = imagePath ?? "";
-                    row.Cells["Warning"].Value = "";
-
-                    if (imagePath != null)
+                    try
                     {
-                        try
+                        var json = File.ReadAllText(jsonFile);
+                        var metadata = JsonConvert.DeserializeObject<SnapshotMetadata>(json);
+
+                        var imagePath = Path.ChangeExtension(jsonFile, ".jpg");
+                        if (!File.Exists(imagePath)) imagePath = Path.ChangeExtension(jsonFile, ".jpeg");
+                        if (!File.Exists(imagePath)) imagePath = null;
+
+                        // Overlay any user edits stored in submit_state.json on top
+                        // of the capture-time metadata so an earlier approval session
+                        // survives a GCS crash.
+                        SubmitRowState saved = null;
+                        if (imagePath != null)
+                            savedState.TryGetValue(imagePath, out saved);
+
+                        int rowIndex = _targetGrid.Rows.Add();
+                        var row = _targetGrid.Rows[rowIndex];
+                        row.Cells["Approved"].Value = saved?.Approved ?? false;
+                        row.Cells["Number"].Value = targetNum++;
+                        row.Cells["Color"].Value = saved?.Color ?? metadata?.TargetColor ?? "Red";
+                        row.Cells["Plane"].Value = saved?.Plane ?? "wall";
+                        row.Cells["Height"].Value = saved?.Height ?? "";
+                        row.Cells["Description"].Value = saved?.Description ?? metadata?.RelativeDescription ?? "";
+                        row.Cells["ImagePath"].Value = imagePath ?? "";
+                        row.Cells["Warning"].Value = "";
+
+                        if (imagePath != null)
                         {
-                            using (var img = Image.FromFile(imagePath))
-                                row.Cells["Preview"].Value = img.GetThumbnailImage(45, 45, null, IntPtr.Zero);
+                            try
+                            {
+                                using (var img = Image.FromFile(imagePath))
+                                    row.Cells["Preview"].Value = img.GetThumbnailImage(45, 45, null, IntPtr.Zero);
+                            }
+                            catch { }
                         }
-                        catch { }
+                        row.DefaultCellStyle.BackColor = UNAPPROVED_BG;
                     }
-                    row.DefaultCellStyle.BackColor = UNAPPROVED_BG;
+                    catch { }
                 }
-                catch { }
             }
+            finally
+            {
+                _restoringState = false;
+            }
+
             if (_targetGrid.Rows.Count > 0)
             {
                 ApplyRowHighlighting();
-                _lblStatus.Text = $"{_targetGrid.Rows.Count} capture(s) restored — approve before uploading";
+                int approvedCount = _targetGrid.Rows.Cast<DataGridViewRow>()
+                    .Count(r => (bool?)r.Cells["Approved"].Value ?? false);
+                _lblStatus.Text = approvedCount > 0
+                    ? $"{_targetGrid.Rows.Count} capture(s) restored ({approvedCount} pre-approved)"
+                    : $"{_targetGrid.Rows.Count} capture(s) restored — approve before uploading";
+            }
+        }
+
+        // ============================================================
+        // Submit-state persistence (crash-safe sidecar)
+        // ============================================================
+
+        private Dictionary<string, SubmitRowState> LoadSubmitState()
+        {
+            try
+            {
+                var path = SubmitStatePath;
+                if (!File.Exists(path)) return new Dictionary<string, SubmitRowState>(StringComparer.OrdinalIgnoreCase);
+                var raw = File.ReadAllText(path);
+                if (string.IsNullOrWhiteSpace(raw))
+                    return new Dictionary<string, SubmitRowState>(StringComparer.OrdinalIgnoreCase);
+                var loaded = JsonConvert.DeserializeObject<Dictionary<string, SubmitRowState>>(raw);
+                return loaded ?? new Dictionary<string, SubmitRowState>(StringComparer.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                // Try the .bak written by the last good save.
+                try
+                {
+                    var bak = SubmitStatePath + ".bak";
+                    if (File.Exists(bak))
+                    {
+                        var raw = File.ReadAllText(bak);
+                        var loaded = JsonConvert.DeserializeObject<Dictionary<string, SubmitRowState>>(raw);
+                        if (loaded != null) return loaded;
+                    }
+                }
+                catch { }
+            }
+            return new Dictionary<string, SubmitRowState>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Schedule a save of the current grid state. Debounced (250ms)
+        /// so a flurry of edits doesn't hammer the disk.
+        /// </summary>
+        private void ScheduleSubmitStateSave()
+        {
+            if (_restoringState) return;
+            if (_stateSaveTimer == null)
+            {
+                _stateSaveTimer = new System.Windows.Forms.Timer { Interval = 250 };
+                _stateSaveTimer.Tick += (s, e) =>
+                {
+                    _stateSaveTimer.Stop();
+                    SaveSubmitState();
+                };
+            }
+            _stateSaveTimer.Stop();
+            _stateSaveTimer.Start();
+        }
+
+        private void SaveSubmitState()
+        {
+            try
+            {
+                var dict = new Dictionary<string, SubmitRowState>(StringComparer.OrdinalIgnoreCase);
+                foreach (DataGridViewRow row in _targetGrid.Rows)
+                {
+                    if (row.IsNewRow) continue;
+                    var imagePath = row.Cells["ImagePath"].Value?.ToString();
+                    if (string.IsNullOrEmpty(imagePath)) continue;
+                    dict[imagePath] = new SubmitRowState
+                    {
+                        Approved = (bool?)row.Cells["Approved"].Value ?? false,
+                        Color = row.Cells["Color"].Value?.ToString(),
+                        Plane = row.Cells["Plane"].Value?.ToString(),
+                        Height = row.Cells["Height"].Value?.ToString(),
+                        Description = row.Cells["Description"].Value?.ToString(),
+                    };
+                }
+
+                var path = SubmitStatePath;
+                var dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                    Directory.CreateDirectory(dir);
+
+                var json = JsonConvert.SerializeObject(dict, Formatting.Indented);
+                var tmp = path + ".tmp";
+                var bak = path + ".bak";
+
+                File.WriteAllText(tmp, json);
+                if (File.Exists(path))
+                    File.Replace(tmp, path, bak, ignoreMetadataErrors: true);
+                else
+                    File.Move(tmp, path);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Submit state save failed: {ex.Message}");
             }
         }
 
@@ -263,7 +417,8 @@ namespace NOMAD.MissionPlanner
             _targetGrid.CellClick += TargetGrid_CellClick;
             _targetGrid.CellEndEdit += TargetGrid_CellEndEdit;
             _targetGrid.CellValueChanged += TargetGrid_CellValueChanged;
-            _targetGrid.RowsAdded += (s, e) => ApplyRowHighlighting();
+            _targetGrid.RowsAdded += (s, e) => { ApplyRowHighlighting(); ScheduleSubmitStateSave(); };
+            _targetGrid.RowsRemoved += (s, e) => ScheduleSubmitStateSave();
             _targetGrid.DataBindingComplete += (s, e) => ApplyRowHighlighting();
 
             mainLayout.Controls.Add(_targetGrid, 0, 1);
@@ -508,6 +663,15 @@ namespace NOMAD.MissionPlanner
                 ApplyRowHighlighting();
             else if (colName == "Plane")
                 _ = SendPlaneOverrideAsync(e.RowIndex);
+
+            // Persist any user-visible field change so a crash never loses
+            // approval/edit work. Image-path/preview/warning are derived,
+            // not user-edited, so skip them.
+            if (colName == "Approved" || colName == "Color" || colName == "Plane"
+                || colName == "Height" || colName == "Description")
+            {
+                ScheduleSubmitStateSave();
+            }
         }
 
         private async Task SendPlaneOverrideAsync(int rowIndex)

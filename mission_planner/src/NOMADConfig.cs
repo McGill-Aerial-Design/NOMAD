@@ -420,53 +420,77 @@ namespace NOMAD.MissionPlanner
         );
 
         /// <summary>
-        /// Load configuration from file.
+        /// Load configuration from file. If the primary file is missing or
+        /// corrupt (e.g. crash mid-write), fall back to the .bak written by
+        /// the last successful Save().
         /// </summary>
         public static NOMADConfig Load()
         {
-            try
+            var primary = ConfigPath;
+            var backup = primary + ".bak";
+
+            foreach (var path in new[] { primary, backup })
             {
-                if (File.Exists(ConfigPath))
+                try
                 {
-                    var json = File.ReadAllText(ConfigPath);
+                    if (!File.Exists(path)) continue;
+                    var json = File.ReadAllText(path);
+                    if (string.IsNullOrWhiteSpace(json)) continue;
                     var config = JsonConvert.DeserializeObject<NOMADConfig>(json);
-                    
-                    // Ensure non-null return
                     if (config != null)
                     {
-                        // Migrate any missing properties with defaults
                         config.MigrateDefaults();
+                        if (path == backup)
+                            Console.WriteLine("NOMAD: Loaded config from .bak (primary corrupt or missing).");
                         return config;
                     }
                 }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"NOMAD: Failed to load config - {ex.Message}");
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"NOMAD: Failed to load config from {path} - {ex.Message}");
+                }
             }
 
             return new NOMADConfig();
         }
 
         /// <summary>
-        /// Save configuration to file.
+        /// Save configuration atomically: write to .tmp first, then swap
+        /// using File.Replace which keeps the previous version as .bak.
+        /// This makes the on-disk file crash-safe — a kill mid-write can
+        /// only corrupt the .tmp, never the live file.
         /// </summary>
         public void Save()
         {
             try
             {
-                var dir = Path.GetDirectoryName(ConfigPath);
+                var path = ConfigPath;
+                var dir = Path.GetDirectoryName(path);
                 if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                {
                     Directory.CreateDirectory(dir);
-                }
 
                 var json = JsonConvert.SerializeObject(this, Formatting.Indented);
-                File.WriteAllText(ConfigPath, json);
+                var tmp = path + ".tmp";
+                var bak = path + ".bak";
+
+                File.WriteAllText(tmp, json);
+
+                if (File.Exists(path))
+                {
+                    // Atomic rename + backup. Replace() requires the destination
+                    // to exist; otherwise fall through to a plain Move().
+                    File.Replace(tmp, path, bak, ignoreMetadataErrors: true);
+                }
+                else
+                {
+                    File.Move(tmp, path);
+                }
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"NOMAD: Failed to save config - {ex.Message}");
+                // Best-effort cleanup so a stale .tmp doesn't sit around.
+                try { File.Delete(ConfigPath + ".tmp"); } catch { }
             }
         }
 
