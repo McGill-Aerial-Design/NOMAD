@@ -1344,8 +1344,8 @@ _lblPosition = new Label
                             {
                                 var body = await resp.Content.ReadAsStringAsync();
                                 var data = Newtonsoft.Json.Linq.JObject.Parse(body);
-                                float feedbackAngle = data["feedback_angle"]?.Value<float>()
-                                    ?? data["angle"]?.Value<float>() ?? 90f;
+                                float feedbackAngle = (float?)data["feedback_angle"]
+                                    ?? (float?)data["angle"] ?? 90f;
                                 float pitchDeg = feedbackAngle - 90f;
                                 string tiltText;
                                 Color tiltColor;

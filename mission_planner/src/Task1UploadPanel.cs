@@ -43,6 +43,11 @@ namespace NOMAD.MissionPlanner
         private ProgressBar _progressBar;
         private double _buildingHeight = 5.0;
 
+        // 3D building viewer (below the preview area).
+        private BuildingViewer3D _viewer;
+        private System.Windows.Forms.Timer _viewerRefreshTimer;
+        private bool _viewerRefreshInFlight;
+
         // Crash-safe persistence of user edits (approve/desc/color/plane/height)
         // keyed by image path. Sits next to the per-capture JSON files so a
         // GCS crash never loses 20 minutes of approval work.
@@ -65,7 +70,11 @@ namespace NOMAD.MissionPlanner
         public double BuildingHeight
         {
             get => _buildingHeight;
-            set => _buildingHeight = value;
+            set
+            {
+                _buildingHeight = value;
+                _viewer?.SetBuildingHeight(value);
+            }
         }
 
         /// <summary>
@@ -78,7 +87,16 @@ namespace NOMAD.MissionPlanner
             _config = config ?? throw new ArgumentNullException(nameof(config));
             InitializeUI();
             // Auto-restore any previously saved captures on creation
-            this.Load += (s, e) => RestoreFromSavedCaptures();
+            this.Load += (s, e) =>
+            {
+                RestoreFromSavedCaptures();
+                StartViewerRefresh();
+            };
+            this.VisibleChanged += (s, e) =>
+            {
+                if (Visible) StartViewerRefresh();
+                else StopViewerRefresh();
+            };
             // Flush any pending debounced save when the panel is torn down.
             this.Disposed += (s, e) =>
             {
@@ -90,6 +108,7 @@ namespace NOMAD.MissionPlanner
                         SaveSubmitState();
                     }
                     _stateSaveTimer?.Dispose();
+                    StopViewerRefresh();
                 }
                 catch { }
             };
@@ -279,14 +298,15 @@ namespace NOMAD.MissionPlanner
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 5,
+                RowCount = 6,
                 Padding = new Padding(5),
             };
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 55));
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 45));
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));         // 0: title
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 40));       // 1: grid
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));         // 2: buttons
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 18));       // 3: preview text
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 42));       // 4: 3D viewer
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));         // 5: status
 
             var lblTitle = new Label
             {
@@ -417,6 +437,12 @@ namespace NOMAD.MissionPlanner
             _targetGrid.CellClick += TargetGrid_CellClick;
             _targetGrid.CellEndEdit += TargetGrid_CellEndEdit;
             _targetGrid.CellValueChanged += TargetGrid_CellValueChanged;
+            _targetGrid.CellMouseEnter += (s, e) =>
+            {
+                if (e.RowIndex < 0 || _viewer == null) return;
+                _viewer.SetHighlightedTarget(TargetIdForRow(e.RowIndex));
+            };
+            _targetGrid.MouseLeave += (s, e) => _viewer?.SetHighlightedTarget(null);
             _targetGrid.RowsAdded += (s, e) => { ApplyRowHighlighting(); ScheduleSubmitStateSave(); };
             _targetGrid.RowsRemoved += (s, e) => ScheduleSubmitStateSave();
             _targetGrid.DataBindingComplete += (s, e) => ApplyRowHighlighting();
@@ -469,6 +495,31 @@ namespace NOMAD.MissionPlanner
             };
             mainLayout.Controls.Add(_txtPreview, 0, 3);
 
+            // ---- 3D building viewer ----
+            var viewerHost = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(20, 20, 22),
+                BorderStyle = BorderStyle.FixedSingle,
+                Padding = new Padding(0),
+            };
+            var viewerHeader = new Label
+            {
+                Text = "3D BUILDING MODEL  —  drag = orbit, wheel = zoom, right-drag = pan",
+                Dock = DockStyle.Top,
+                Height = 18,
+                ForeColor = ACCENT_COLOR,
+                BackColor = Color.FromArgb(30, 30, 33),
+                Font = new Font("Segoe UI", 8, FontStyle.Bold),
+                TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(6, 0, 0, 0),
+            };
+            _viewer = new BuildingViewer3D();
+            _viewer.TargetHovered += OnViewerTargetHovered;
+            viewerHost.Controls.Add(_viewer);
+            viewerHost.Controls.Add(viewerHeader);
+            mainLayout.Controls.Add(viewerHost, 0, 4);
+
             var statusPanel = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -496,7 +547,7 @@ namespace NOMAD.MissionPlanner
             };
             statusPanel.Controls.Add(_progressBar, 1, 0);
 
-            mainLayout.Controls.Add(statusPanel, 0, 4);
+            mainLayout.Controls.Add(statusPanel, 0, 5);
 
             this.Controls.Add(mainLayout);
         }
@@ -967,6 +1018,130 @@ namespace NOMAD.MissionPlanner
             ApplyRowHighlighting();
             _lblStatus.Text = $"Loaded {_targetGrid.Rows.Count} captures (unapproved)";
             _lblStatus.ForeColor = WARNING_COLOR;
+        }
+
+        // ============================================================
+        // 3D viewer integration (hover + auto-refresh)
+        // ============================================================
+
+        /// <summary>
+        /// Targets are assigned letters in capture order: row 0 → A, row 1 → B, ...
+        /// Same convention as SendPlaneOverrideAsync, so the IDs match what the
+        /// Jetson's debug file emits.
+        /// </summary>
+        private string TargetIdForRow(int rowIndex)
+        {
+            if (rowIndex < 0 || rowIndex >= _targetGrid.Rows.Count) return null;
+            return ((char)('A' + rowIndex)).ToString();
+        }
+
+        private void OnViewerTargetHovered(string targetId)
+        {
+            if (InvokeRequired) { BeginInvoke(new Action(() => OnViewerTargetHovered(targetId))); return; }
+            if (string.IsNullOrEmpty(targetId))
+            {
+                _targetGrid.ClearSelection();
+                return;
+            }
+            int idx = targetId[0] - 'A';
+            if (idx < 0 || idx >= _targetGrid.Rows.Count) return;
+            _targetGrid.ClearSelection();
+            _targetGrid.Rows[idx].Selected = true;
+            try { _targetGrid.FirstDisplayedScrollingRowIndex = Math.Max(0, idx - 2); } catch { }
+        }
+
+        private void StartViewerRefresh()
+        {
+            if (_viewerRefreshTimer != null) return;
+            _viewerRefreshTimer = new System.Windows.Forms.Timer { Interval = 3000 };
+            _viewerRefreshTimer.Tick += (s, e) => _ = RefreshViewerDataAsync();
+            _viewerRefreshTimer.Start();
+            _ = RefreshViewerDataAsync(); // Kick off an immediate refresh.
+        }
+
+        private void StopViewerRefresh()
+        {
+            if (_viewerRefreshTimer == null) return;
+            _viewerRefreshTimer.Stop();
+            _viewerRefreshTimer.Dispose();
+            _viewerRefreshTimer = null;
+        }
+
+        private async Task RefreshViewerDataAsync()
+        {
+            if (_viewerRefreshInFlight || _viewer == null) return;
+            _viewerRefreshInFlight = true;
+            try
+            {
+                // 1. Building corners + height.
+                var cornersResp = await JetsonApiService.GetAsync("/api/task/1/building/corners");
+                if (cornersResp.IsSuccessStatusCode)
+                {
+                    var body = await cornersResp.Content.ReadAsStringAsync();
+                    var data = Newtonsoft.Json.Linq.JObject.Parse(body);
+                    var arr = data["corners"] as Newtonsoft.Json.Linq.JArray;
+
+                    var corners = new List<BuildingViewer3D.Corner>();
+                    if (arr != null)
+                    {
+                        foreach (var c in arr)
+                        {
+                            corners.Add(new BuildingViewer3D.Corner
+                            {
+                                Name = c["name"]?.ToString() ?? "?",
+                                Lat = (double?)c["lat"] ?? 0,
+                                Lon = (double?)c["lon"] ?? 0,
+                            });
+                        }
+                    }
+                    double? centerLat = (double?)data["center_lat"];
+                    double? centerLon = (double?)data["center_lon"];
+                    double? heightM = (double?)data["height"];
+                    if (heightM.HasValue) _viewer.SetBuildingHeight(heightM.Value);
+                    _viewer.SetCorners(corners, centerLat, centerLon);
+                }
+
+                // 2. Captured targets.
+                var targetsResp = await JetsonApiService.GetAsync("/api/task/1/target/list_structured");
+                if (targetsResp.IsSuccessStatusCode)
+                {
+                    var body = await targetsResp.Content.ReadAsStringAsync();
+                    var data = Newtonsoft.Json.Linq.JObject.Parse(body);
+                    var arr = data["targets"] as Newtonsoft.Json.Linq.JArray;
+
+                    var targets = new List<BuildingViewer3D.Target>();
+                    if (arr != null)
+                    {
+                        foreach (var t in arr)
+                        {
+                            // Only plot targets the API gave us a 3D position for.
+                            var east = (float?)t["east"];
+                            var north = (float?)t["north"];
+                            var up = (float?)t["up"];
+                            if (!east.HasValue || !north.HasValue) continue;
+                            targets.Add(new BuildingViewer3D.Target
+                            {
+                                Id = t["id"]?.ToString() ?? "?",
+                                Color = t["color"]?.ToString(),
+                                Description = t["description"]?.ToString(),
+                                East = east.Value,
+                                North = north.Value,
+                                Up = up ?? 0f,
+                            });
+                        }
+                    }
+                    _viewer.SetTargets(targets);
+                }
+            }
+            catch
+            {
+                // Silently ignore — Jetson may be unreachable. The viewer keeps
+                // its previous data so the user still sees the last good model.
+            }
+            finally
+            {
+                _viewerRefreshInFlight = false;
+            }
         }
     }
 }
