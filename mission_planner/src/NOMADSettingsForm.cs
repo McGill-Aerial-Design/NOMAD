@@ -95,14 +95,6 @@ namespace NOMAD.MissionPlanner
         private NumericUpDown _numGpioPayload1;
         private NumericUpDown _numGpioPayload2;
         
-        // AI Tab
-        private CheckBox _chkAiAutoGenerate;
-        private ComboBox _cmbAiProvider;
-        private TextBox _txtOpenRouterApiKey;
-        private TextBox _txtGeminiApiKey;
-        private TextBox _txtOllamaHost;
-        private ComboBox _cmbAiModel;
-        
         // Google Drive
         private Button _btnUploadGDrive;
         private Label _lblGDriveStatus;
@@ -161,7 +153,7 @@ namespace NOMAD.MissionPlanner
             _tabControl.TabPages.Add(CreateVioTab());
             _tabControl.TabPages.Add(CreateUiTab());
             _tabControl.TabPages.Add(CreateAlertsTab());
-            _tabControl.TabPages.Add(CreateAiTab());
+            _tabControl.TabPages.Add(CreateUploadsTab());
             _tabControl.TabPages.Add(CreateGpioTab());
 
             // Buttons at bottom
@@ -513,67 +505,13 @@ namespace NOMAD.MissionPlanner
         }
 
         // ============================================================
-        // Tab: AI
+        // Tab: Uploads
         // ============================================================
-        
-        private TabPage CreateAiTab()
+
+        private TabPage CreateUploadsTab()
         {
-            var tab = CreateTabPage("AI");
+            var tab = CreateTabPage("Uploads");
             int y = 15;
-
-            AddSectionLabel(tab, "AI Image Description (Task 1)", ref y);
-
-            _chkAiAutoGenerate = AddCheckBox(tab, "Auto-generate AI description after capture", 20, y);
-            y += 35;
-
-            AddLabel(tab, "AI Provider:", 20, y);
-            _cmbAiProvider = AddComboBox(tab, 130, y, 150, new[] { "OpenRouter", "Gemini", "Ollama" });
-            y += 35;
-
-            AddSectionLabel(tab, "API Keys", ref y);
-
-            AddLabel(tab, "OpenRouter Key:", 20, y);
-            _txtOpenRouterApiKey = AddTextBox(tab, 130, y, 200);
-            _txtOpenRouterApiKey.UseSystemPasswordChar = true;
-            y += 30;
-
-            AddLabel(tab, "Gemini Key:", 20, y);
-            _txtGeminiApiKey = AddTextBox(tab, 130, y, 200);
-            _txtGeminiApiKey.UseSystemPasswordChar = true;
-            y += 30;
-
-            AddLabel(tab, "Ollama Host:", 20, y);
-            _txtOllamaHost = AddTextBox(tab, 130, y, 200);
-            y += 35;
-
-            AddSectionLabel(tab, "Model", ref y);
-
-            AddLabel(tab, "Model Name:", 20, y);
-            _cmbAiModel = new ComboBox
-            {
-                Location = new Point(130, y),
-                Size = new Size(280, 23),
-                DropDownStyle = ComboBoxStyle.DropDown,
-                BackColor = Color.FromArgb(30, 30, 30),
-                ForeColor = Color.White,
-            };
-            _cmbAiModel.Items.AddRange(new[]
-            {
-                // OpenRouter vision-capable free tier
-                "nvidia/nemotron-nano-12b-v2-vl:free",
-                "google/gemma-4-31b-it:free",
-                "google/gemma-4-26b-a4b-it:free",
-                // Gemini
-                "gemini-1.5-flash",
-                "gemini-1.5-pro",
-                // Ollama
-                "llava:13b",
-                "llava:7b",
-            });
-            tab.Controls.Add(_cmbAiModel);
-            y += 30;
-            AddLabel(tab, "Pick a preset or type a custom model id. Match provider selected above.", 30, y, Color.Gray);
-            y += 24;
 
             AddSectionLabel(tab, "Google Drive (Spray Photo Upload)", ref y);
             AddLabel(tab, "Upload OAuth2 token to Jetson (from gdrive_upload --setup):", 20, y, Color.LightGray);
@@ -816,14 +754,6 @@ namespace NOMAD.MissionPlanner
             _numTempCritical.Value = (decimal)Config.TempCriticalC;
             _chkAudioAlerts.Checked = Config.AudioAlerts;
             
-            // AI
-            _chkAiAutoGenerate.Checked = Config.AiAutoGenerate;
-            SetComboBoxValue(_cmbAiProvider, Config.AiProvider.ToString());
-            _txtOpenRouterApiKey.Text = Config.OpenRouterApiKey;
-            _txtGeminiApiKey.Text = Config.GeminiApiKey;
-            _txtOllamaHost.Text = Config.OllamaHost;
-            _cmbAiModel.Text = Config.AiModel;
-            
             // GPIO
             _numGpioPayload1.Value = Config.GpioPayload1Pin;
             _numGpioPayload2.Value = Config.GpioPayload2Pin;
@@ -899,19 +829,6 @@ namespace NOMAD.MissionPlanner
             Config.TempWarningC = (float)_numTempWarning.Value;
             Config.TempCriticalC = (float)_numTempCritical.Value;
             Config.AudioAlerts = _chkAudioAlerts.Checked;
-            
-            // AI
-            Config.AiAutoGenerate = _chkAiAutoGenerate.Checked;
-            Config.AiProvider = _cmbAiProvider.SelectedItem?.ToString() switch
-            {
-                "Gemini" => AIProvider.Gemini,
-                "Ollama" => AIProvider.Ollama,
-                _ => AIProvider.OpenRouter
-            };
-            Config.OpenRouterApiKey = _txtOpenRouterApiKey.Text.Trim();
-            Config.GeminiApiKey = _txtGeminiApiKey.Text.Trim();
-            Config.OllamaHost = _txtOllamaHost.Text.Trim();
-            Config.AiModel = _cmbAiModel.Text.Trim();
             
             // GPIO
             Config.GpioPayload1Pin = (int)_numGpioPayload1.Value;

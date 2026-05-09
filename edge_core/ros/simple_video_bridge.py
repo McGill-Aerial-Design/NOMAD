@@ -839,35 +839,71 @@ def main(args=None):
 
     parsed_args = parser.parse_args()
 
+    _shutdown = threading.Event()
+
     def signal_handler(sig, frame):
         print('\nShutting down...')
+        _shutdown.set()
         rclpy.shutdown()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    rclpy.init(args=args)
+    http_server = None
+    attempt = 0
+    max_restart_delay = 30
 
-    video_node = VideoStreamNode(
-        source_topic=parsed_args.source_topic,
-        width=parsed_args.width,
-        height=parsed_args.height,
-        fps=parsed_args.fps,
-        bitrate=parsed_args.bitrate,
-        rtsp_path=parsed_args.rtsp_path,
-    )
+    while not _shutdown.is_set():
+        attempt += 1
+        video_node = None
+        try:
+            if not rclpy.ok():
+                rclpy.init(args=args)
 
-    http_server = run_http_server(video_node, parsed_args.http_port)
+            video_node = VideoStreamNode(
+                source_topic=parsed_args.source_topic,
+                width=parsed_args.width,
+                height=parsed_args.height,
+                fps=parsed_args.fps,
+                bitrate=parsed_args.bitrate,
+                rtsp_path=parsed_args.rtsp_path,
+            )
 
-    try:
-        rclpy.spin(video_node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        video_node.cleanup()
-        video_node.destroy_node()
-        rclpy.shutdown()
+            # HTTP server is created once and reuses the same port
+            if http_server is None:
+                http_server = run_http_server(video_node, parsed_args.http_port)
+            else:
+                ControlServer.video_node = video_node
+
+            print(f'[bridge] Node started (attempt {attempt})')
+            rclpy.spin(video_node)
+
+        except KeyboardInterrupt:
+            break
+        except Exception as e:
+            print(f'[bridge] Unhandled exception (attempt {attempt}): {e}', flush=True)
+        finally:
+            if video_node is not None:
+                try:
+                    video_node.cleanup()
+                    video_node.destroy_node()
+                except Exception:
+                    pass
+            try:
+                if rclpy.ok():
+                    rclpy.shutdown()
+            except Exception:
+                pass
+
+        if _shutdown.is_set():
+            break
+
+        delay = min(5 * attempt, max_restart_delay)
+        print(f'[bridge] Restarting in {delay}s...', flush=True)
+        _shutdown.wait(delay)
+
+    print('[bridge] Exiting.')
 
 
 if __name__ == '__main__':

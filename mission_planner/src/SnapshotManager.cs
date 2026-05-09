@@ -119,7 +119,6 @@ namespace NOMAD.MissionPlanner
         private TextBox _txtRelativeDesc;
         private ComboBox _cmbTargetColor;
         private Button _btnSaveDescription;
-        private Button _btnGenerateAiDescription;
         private Button _btnOpenFolder;
         private Button _btnOpenFile;
         private Button _btnRefresh;
@@ -354,19 +353,6 @@ namespace NOMAD.MissionPlanner
             _btnSaveDescription.Click += BtnSaveDescription_Click;
             descGroup.Controls.Add(_btnSaveDescription);
 
-            _btnGenerateAiDescription = new Button
-            {
-                Text = "Generate AI Description",
-                Location = new Point(175, 140),
-                Size = new Size(170, 30),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(100, 50, 200),
-                ForeColor = Color.White,
-                Enabled = false,
-            };
-            _btnGenerateAiDescription.Click += BtnGenerateAiDescription_Click;
-            descGroup.Controls.Add(_btnGenerateAiDescription);
-
             _detailsPanel.Controls.Add(descGroup);
             rightPanel.Controls.Add(_detailsPanel);
 
@@ -476,14 +462,6 @@ namespace NOMAD.MissionPlanner
                 snapshot.TargetColor = data?.target_color;
                 snapshot.RelativeDescription = data?.relative_description;
 
-                // Load AI description fields
-                snapshot.AiDescription = data?.ai_description;
-                snapshot.AiProvider = data?.ai_provider;
-                snapshot.AiModel = data?.ai_model;
-                if (data?.ai_generated_at != null)
-                {
-                    snapshot.AiGeneratedAt = DateTime.TryParse(data.ai_generated_at.ToString(), out DateTime aiDate) ? aiDate : (DateTime?)null;
-                }
             }
             catch (Exception ex)
             {
@@ -505,7 +483,6 @@ namespace NOMAD.MissionPlanner
             _txtRelativeDesc.Text = "";
             _cmbTargetColor.SelectedIndex = -1;
             _btnSaveDescription.Enabled = false;
-            _btnGenerateAiDescription.Enabled = false;
         }
 
         private void ListView_SelectedIndexChanged(object sender, EventArgs e)
@@ -551,17 +528,6 @@ namespace NOMAD.MissionPlanner
                 details += "\nNo GPS metadata available";
             }
 
-            // Add AI description if available
-            if (_selectedSnapshot.HasAiDescription)
-            {
-                details += $"\n\n--- AI DESCRIPTION ({_selectedSnapshot.AiProvider} - {_selectedSnapshot.AiModel}) ---";
-                if (_selectedSnapshot.AiGeneratedAt.HasValue)
-                {
-                    details += $"\nGenerated: {_selectedSnapshot.AiGeneratedAt:g}";
-                }
-                details += $"\n\n{_selectedSnapshot.AiDescription}";
-            }
-
             _lblDetails.Text = details;
 
             // Load description fields
@@ -576,9 +542,6 @@ namespace NOMAD.MissionPlanner
             }
 
             UpdateSaveButtonState();
-
-            // Enable Generate AI Description button if snapshot is selected
-            _btnGenerateAiDescription.Enabled = true;
         }
 
         private void ListView_DoubleClick(object sender, EventArgs e)
@@ -668,104 +631,6 @@ namespace NOMAD.MissionPlanner
             catch (Exception ex)
             {
                 CustomMessageBox.Show($"Error saving description: {ex.Message}", "Error");
-            }
-        }
-
-        private async void BtnGenerateAiDescription_Click(object sender, EventArgs e)
-        {
-            if (_selectedSnapshot == null) return;
-
-            // Check if AI is configured
-            if (string.IsNullOrEmpty(_config.OpenRouterApiKey) &&
-                string.IsNullOrEmpty(_config.GeminiApiKey) &&
-                _config.AiProvider != AIProvider.Ollama)
-            {
-                CustomMessageBox.Show(
-                    "AI provider not configured. Please set up API keys in plugin settings.",
-                    "Configuration Required");
-                return;
-            }
-
-            // Disable button and show progress
-            _btnGenerateAiDescription.Enabled = false;
-            _btnGenerateAiDescription.Text = "Generating...";
-
-            try
-            {
-                // Load metadata from JSON if available
-                SnapshotMetadata metadata = null;
-                if (_selectedSnapshot.HasMetadata)
-                {
-                    var jsonPath = Path.ChangeExtension(_selectedSnapshot.FilePath, ".json");
-                    var jsonContent = File.ReadAllText(jsonPath);
-                    metadata = JsonConvert.DeserializeObject<SnapshotMetadata>(jsonContent);
-                }
-                else
-                {
-                    // Create minimal metadata from snapshot info
-                    metadata = new SnapshotMetadata
-                    {
-                        FileName = _selectedSnapshot.FileName,
-                        CaptureTime = _selectedSnapshot.CaptureTime,
-                        Position = _selectedSnapshot.Latitude.HasValue ? new PositionData
-                        {
-                            Lat = _selectedSnapshot.Latitude.Value,
-                            Lon = _selectedSnapshot.Longitude.Value,
-                            Alt = _selectedSnapshot.Altitude ?? 0
-                        } : null,
-                        HeadingDeg = _selectedSnapshot.Heading
-                    };
-                }
-
-                // Generate AI description
-                var aiService = new AIDescriptionService(_config);
-                var result = await aiService.GenerateDescriptionAsync(_selectedSnapshot.FilePath, metadata);
-
-                if (result.Success)
-                {
-                    // Update snapshot info
-                    _selectedSnapshot.AiDescription = result.Description;
-                    _selectedSnapshot.AiProvider = result.Provider.ToString();
-                    _selectedSnapshot.AiModel = result.Model;
-                    _selectedSnapshot.AiGeneratedAt = result.GeneratedAt;
-
-                    // Update metadata
-                    if (metadata != null)
-                    {
-                        metadata.AiDescription = result.Description;
-                        metadata.AiProvider = result.Provider.ToString();
-                        metadata.AiModel = result.Model;
-                        metadata.AiGeneratedAt = result.GeneratedAt;
-
-                        // Save to JSON
-                        var jsonPath = Path.ChangeExtension(_selectedSnapshot.FilePath, ".json");
-                        File.WriteAllText(jsonPath, JsonConvert.SerializeObject(metadata, Formatting.Indented));
-                    }
-
-                    // Refresh details display
-                    ListView_SelectedIndexChanged(_listView, EventArgs.Empty);
-
-                    CustomMessageBox.Show(
-                        $"AI description generated successfully using {result.Provider}!",
-                        "Success");
-                }
-                else
-                {
-                    CustomMessageBox.Show(
-                        $"Failed to generate AI description:\n\n{result.ErrorMessage}",
-                        "Error");
-                }
-            }
-            catch (Exception ex)
-            {
-                CustomMessageBox.Show(
-                    $"Error generating AI description:\n\n{ex.Message}",
-                    "Error");
-            }
-            finally
-            {
-                _btnGenerateAiDescription.Enabled = true;
-                _btnGenerateAiDescription.Text = "Generate AI Description";
             }
         }
 

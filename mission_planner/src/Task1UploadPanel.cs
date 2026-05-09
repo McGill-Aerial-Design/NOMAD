@@ -53,6 +53,62 @@ namespace NOMAD.MissionPlanner
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
             InitializeUI();
+            // Auto-restore any previously saved captures on creation
+            this.Load += (s, e) => RestoreFromSavedCaptures();
+        }
+
+        private void RestoreFromSavedCaptures()
+        {
+            var task1Dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                "NOMAD", "Task1");
+            if (!Directory.Exists(task1Dir)) return;
+
+            var jsonFiles = Directory.GetFiles(task1Dir, "*.json").OrderBy(f => f).ToArray();
+            if (jsonFiles.Length == 0) return;
+
+            _targetGrid.Rows.Clear();
+            int targetNum = 1;
+            foreach (var jsonFile in jsonFiles)
+            {
+                try
+                {
+                    var json = File.ReadAllText(jsonFile);
+                    var metadata = JsonConvert.DeserializeObject<SnapshotMetadata>(json);
+
+                    var imagePath = Path.ChangeExtension(jsonFile, ".jpg");
+                    if (!File.Exists(imagePath)) imagePath = Path.ChangeExtension(jsonFile, ".jpeg");
+                    if (!File.Exists(imagePath)) imagePath = null;
+
+                    int rowIndex = _targetGrid.Rows.Add();
+                    var row = _targetGrid.Rows[rowIndex];
+                    row.Cells["Approved"].Value = false;
+                    row.Cells["Number"].Value = targetNum++;
+                    row.Cells["Color"].Value = metadata?.TargetColor ?? "Red";
+                    row.Cells["Plane"].Value = "wall";
+                    row.Cells["Height"].Value = "";
+                    row.Cells["Description"].Value = metadata?.RelativeDescription ?? "";
+                    row.Cells["ImagePath"].Value = imagePath ?? "";
+                    row.Cells["Warning"].Value = "";
+
+                    if (imagePath != null)
+                    {
+                        try
+                        {
+                            using (var img = Image.FromFile(imagePath))
+                                row.Cells["Preview"].Value = img.GetThumbnailImage(45, 45, null, IntPtr.Zero);
+                        }
+                        catch { }
+                    }
+                    row.DefaultCellStyle.BackColor = UNAPPROVED_BG;
+                }
+                catch { }
+            }
+            if (_targetGrid.Rows.Count > 0)
+            {
+                ApplyRowHighlighting();
+                _lblStatus.Text = $"{_targetGrid.Rows.Count} capture(s) restored — approve before uploading";
+            }
         }
 
         private void InitializeUI()
@@ -715,7 +771,7 @@ namespace NOMAD.MissionPlanner
                     row.Cells["Plane"].Value = "wall";
                     row.Cells["Height"].Value = "";
                     row.Cells["Description"].Value =
-                        metadata?.AiDescription ?? metadata?.RelativeDescription ?? "";
+                        metadata?.RelativeDescription ?? "";
                     row.Cells["ImagePath"].Value = File.Exists(imagePath) ? imagePath : "";
                     row.Cells["Warning"].Value = "";
 

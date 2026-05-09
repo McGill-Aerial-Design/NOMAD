@@ -142,6 +142,9 @@ private ListBox _lstWalls;
 
             this.AutoScroll = false;
             this.Controls.Add(mainLayout);
+
+            // Restore gallery from locally saved captures after UI is ready
+            this.Load += async (s, e) => await RestoreGalleryAsync();
         }
 
         private void StyleTabControl(TabControl tabControl)
@@ -1096,7 +1099,8 @@ _lblPosition = new Label
                                     RollDeg = double.TryParse(rollDeg, out var roll) ? roll : (double?)null,
                                     GimbalPitchDeg = double.TryParse(gimbalPitch, out var gPitch) ? gPitch : (double?)null,
                                     GimbalYawDeg = double.TryParse(gimbalYaw, out var gYaw) ? gYaw : (double?)null,
-                                    BuildingLocation = null
+                                    BuildingLocation = null,
+                                    RelativeDescription = outputText,
                                 };
 
                                 File.WriteAllText(jsonPath, Newtonsoft.Json.JsonConvert.SerializeObject(metadata, Newtonsoft.Json.Formatting.Indented));
@@ -1122,51 +1126,6 @@ _lblPosition = new Label
                     capturedPlane,
                     capturedHeight
                 );
-
-                                // Auto-generate AI description if enabled
-                                if (_config.AiAutoGenerate)
-                                {
-                                    _ = Task.Run(async () =>
-                                    {
-                                        try
-                                        {
-                                            var aiService = new AIDescriptionService(_config);
-                                            var aiResult = await aiService.GenerateDescriptionAsync(localPath, metadata);
-
-                                            if (aiResult.Success)
-                                            {
-                                                // Update metadata with AI description
-                                                metadata.AiDescription = aiResult.Description;
-                                                metadata.AiProvider = aiResult.Provider.ToString();
-                                                metadata.AiModel = aiResult.Model;
-                                                metadata.AiGeneratedAt = aiResult.GeneratedAt;
-
-                                                // Save updated metadata
-                                                File.WriteAllText(jsonPath, Newtonsoft.Json.JsonConvert.SerializeObject(metadata, Newtonsoft.Json.Formatting.Indented));
-
-                                                // Update UI on main thread
-                                                this.BeginInvoke(new Action(() =>
-                                                {
-                                                    _txtResult.Text += $"\n\n[AI] Description generated using {aiResult.Provider}:\n{aiResult.Description}";
-                                                }));
-                                            }
-                                            else
-                                            {
-                                                this.BeginInvoke(new Action(() =>
-                                                {
-                                                    _txtResult.Text += $"\n\n[AI] Failed: {aiResult.ErrorMessage}";
-                                                }));
-                                            }
-                                        }
-                                        catch (Exception aiEx)
-                                        {
-                                            this.BeginInvoke(new Action(() =>
-                                            {
-                                                _txtResult.Text += $"\n\n[AI] Error: {aiEx.Message}";
-                                            }));
-                                        }
-                                    });
-                                }
 
                                 // Add thumbnail to gallery with enhanced metadata tooltip
                                 using (var ms = new MemoryStream(imageBytes))
@@ -1333,7 +1292,7 @@ _lblPosition = new Label
         
         /// <summary>
         /// Show a context menu on thumbnail click with options to open the image
-        /// or view the AI-generated description.
+        /// or view/edit the target description.
         /// </summary>
         private void ShowImageContextMenu(PictureBox picBox, Point location)
         {
@@ -1354,49 +1313,57 @@ _lblPosition = new Label
             };
             menu.Items.Add(openItem);
 
-            var descItem = new ToolStripMenuItem("View AI Description");
-            descItem.Click += (s, e) => ShowAIDescriptionPopup(jsonPath, imagePath);
+            var descItem = new ToolStripMenuItem("View / Edit Description");
+            descItem.Click += (s, e) => ShowDescriptionPopup(jsonPath, imagePath);
             menu.Items.Add(descItem);
 
             menu.Show(picBox, location);
         }
 
         /// <summary>
-        /// Show a modal popup displaying the AI description for a captured image,
-        /// with the ability to copy the text. Polls the JSON metadata file every
-        /// 2 seconds so the description auto-appears when AI processing finishes.
+        /// Show a modal popup displaying the deterministic target description for a
+        /// captured image. The operator can manually override the text and save it
+        /// back to the local JSON metadata file.
         /// </summary>
-        private void ShowAIDescriptionPopup(string jsonPath, string imagePath)
+        private void ShowDescriptionPopup(string jsonPath, string imagePath)
         {
-            string currentDescription = null;
-
-            // Helper: read AI fields from metadata JSON
-            void ReadMetadata(out string desc, out string provider, out string model, out string generatedAt)
+            string ReadDescription()
             {
-                desc = null; provider = null; model = null; generatedAt = null;
                 try
                 {
                     if (File.Exists(jsonPath))
                     {
                         var json = File.ReadAllText(jsonPath);
                         var data = Newtonsoft.Json.Linq.JObject.Parse(json);
-                        desc = data["ai_description"]?.ToString();
-                        provider = data["ai_provider"]?.ToString();
-                        model = data["ai_model"]?.ToString();
-                        generatedAt = data["ai_generated_at"]?.ToString();
+                        return data["relative_description"]?.ToString() ?? "";
+                    }
+                }
+                catch { }
+                return "";
+            }
+
+            void WriteDescription(string desc)
+            {
+                try
+                {
+                    if (File.Exists(jsonPath))
+                    {
+                        var json = File.ReadAllText(jsonPath);
+                        var data = Newtonsoft.Json.Linq.JObject.Parse(json);
+                        data["relative_description"] = desc;
+                        File.WriteAllText(jsonPath, data.ToString(Newtonsoft.Json.Formatting.Indented));
                     }
                 }
                 catch { }
             }
 
-            ReadMetadata(out var aiDescription, out var aiProvider, out var aiModel, out var aiGeneratedAt);
-            currentDescription = aiDescription;
+            var description = ReadDescription();
 
             var popup = new Form
             {
-                Text = "AI Description - " + Path.GetFileName(imagePath),
-                Size = new Size(680, 520),
-                MinimumSize = new Size(500, 380),
+                Text = "Target Description - " + Path.GetFileName(imagePath),
+                Size = new Size(680, 480),
+                MinimumSize = new Size(500, 350),
                 StartPosition = FormStartPosition.CenterParent,
                 BackColor = Color.FromArgb(30, 30, 33),
                 ForeColor = Color.White,
@@ -1419,9 +1386,7 @@ _lblPosition = new Label
 
             var header = new Label
             {
-                Text = !string.IsNullOrEmpty(aiProvider)
-                    ? $"Provider: {aiProvider}  |  Model: {aiModel ?? "N/A"}  |  Generated: {aiGeneratedAt ?? "N/A"}"
-                    : "Waiting for AI description...",
+                Text = "Deterministic description from target localizer. Edit to override before submission.",
                 AutoSize = true,
                 ForeColor = Color.FromArgb(180, 180, 180),
                 Padding = new Padding(4, 4, 4, 8),
@@ -1431,19 +1396,16 @@ _lblPosition = new Label
             var txtDesc = new RichTextBox
             {
                 Dock = DockStyle.Fill,
-                ReadOnly = true,
+                ReadOnly = false,
                 BackColor = Color.FromArgb(25, 25, 28),
                 ForeColor = Color.FromArgb(220, 220, 220),
                 BorderStyle = BorderStyle.FixedSingle,
                 Font = new Font("Segoe UI", 10f),
                 WordWrap = true,
                 ScrollBars = RichTextBoxScrollBars.Vertical,
-                Text = !string.IsNullOrEmpty(aiDescription)
-                    ? aiDescription
-                    : "Waiting for AI to generate description...",
+                Text = description,
                 Margin = new Padding(8, 4, 8, 4),
             };
-            // Remove the URL-detection underline behavior
             txtDesc.DetectUrls = false;
             layout.Controls.Add(txtDesc, 0, 1);
 
@@ -1465,64 +1427,129 @@ _lblPosition = new Label
             };
             btnClose.Click += (s, e) => popup.Close();
 
+            var btnSave = new Button
+            {
+                Text = "Save",
+                Size = new Size(80, 30),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(0, 150, 100),
+                ForeColor = Color.White,
+            };
+            btnSave.Click += (s, e) =>
+            {
+                WriteDescription(txtDesc.Text);
+                btnSave.Text = "Saved!";
+                var t = new System.Windows.Forms.Timer { Interval = 1500 };
+                t.Tick += (ts, te) => { btnSave.Text = "Save"; t.Stop(); t.Dispose(); };
+                t.Start();
+            };
+
             var btnCopy = new Button
             {
-                Text = "Copy Text",
-                Size = new Size(90, 30),
+                Text = "Copy",
+                Size = new Size(80, 30),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(0, 122, 204),
                 ForeColor = Color.White,
-                Enabled = !string.IsNullOrEmpty(aiDescription),
             };
             btnCopy.Click += (s, e) =>
             {
                 try
                 {
-                    if (!string.IsNullOrEmpty(currentDescription))
+                    if (!string.IsNullOrEmpty(txtDesc.Text))
                     {
-                        Clipboard.SetText(currentDescription);
+                        Clipboard.SetText(txtDesc.Text);
                         btnCopy.Text = "Copied!";
-                        var resetTimer = new System.Windows.Forms.Timer { Interval = 1500 };
-                        resetTimer.Tick += (ts, te) => { btnCopy.Text = "Copy Text"; resetTimer.Stop(); resetTimer.Dispose(); };
-                        resetTimer.Start();
+                        var t = new System.Windows.Forms.Timer { Interval = 1500 };
+                        t.Tick += (ts, te) => { btnCopy.Text = "Copy"; t.Stop(); t.Dispose(); };
+                        t.Start();
                     }
                 }
                 catch { }
             };
 
             btnPanel.Controls.Add(btnClose);
+            btnPanel.Controls.Add(btnSave);
             btnPanel.Controls.Add(btnCopy);
             layout.Controls.Add(btnPanel, 0, 2);
 
-            // Poll timer: re-read JSON every 2s until AI description appears
-            System.Windows.Forms.Timer pollTimer = null;
-            if (string.IsNullOrEmpty(aiDescription))
-            {
-                pollTimer = new System.Windows.Forms.Timer { Interval = 2000 };
-                pollTimer.Tick += (s, e) =>
-                {
-                    ReadMetadata(out var desc, out var prov, out var mod, out var gen);
-                    if (!string.IsNullOrEmpty(desc))
-                    {
-                        currentDescription = desc;
-                        txtDesc.Text = desc;
-                        header.Text = $"Provider: {prov}  |  Model: {mod ?? "N/A"}  |  Generated: {gen ?? "N/A"}";
-                        btnCopy.Enabled = true;
-                        pollTimer.Stop();
-                        pollTimer.Dispose();
-                    }
-                };
-                pollTimer.Start();
-            }
-
-            popup.FormClosed += (s, e) =>
-            {
-                pollTimer?.Stop();
-                pollTimer?.Dispose();
-            };
-
             popup.Controls.Add(layout);
             popup.ShowDialog(this);
+        }
+
+        /// <summary>
+        /// Restore the gallery panel from locally saved captures in Documents\NOMAD\Task1\.
+        /// Called once after UI is shown so the window survives reloads.
+        /// </summary>
+        private async Task RestoreGalleryAsync()
+        {
+            try
+            {
+                var task1Dir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NOMAD", "Task1");
+                if (!Directory.Exists(task1Dir))
+                    return;
+
+                var jsonFiles = await Task.Run(() =>
+                    Directory.GetFiles(task1Dir, "*.json")
+                        .Select(p => new { Path = p, Info = new FileInfo(p) })
+                        .OrderBy(x => x.Info.LastWriteTime)
+                        .ToArray());
+
+                foreach (var jf in jsonFiles)
+                {
+                    try
+                    {
+                        var imagePath = Path.ChangeExtension(jf.Path, ".jpg");
+                        if (!File.Exists(imagePath))
+                            imagePath = Path.ChangeExtension(jf.Path, ".jpeg");
+                        if (!File.Exists(imagePath))
+                            continue;
+
+                        var jsonText = await Task.Run(() => File.ReadAllText(jf.Path));
+                        var meta = Newtonsoft.Json.JsonConvert.DeserializeObject<SnapshotMetadata>(jsonText);
+
+                        var imageBytes = await Task.Run(() => File.ReadAllBytes(imagePath));
+                        var jsonPath = jf.Path;
+                        var localPath = imagePath;
+
+                        this.BeginInvoke(new Action(() =>
+                        {
+                            try
+                            {
+                                using (var ms = new MemoryStream(imageBytes))
+                                {
+                                    var originalImage = Image.FromStream(ms);
+                                    var thumbnail = originalImage.GetThumbnailImage(120, 90, null, IntPtr.Zero);
+
+                                    var picBox = new PictureBox
+                                    {
+                                        Image = thumbnail,
+                                        Size = new Size(120, 90),
+                                        SizeMode = PictureBoxSizeMode.Zoom,
+                                        Margin = new Padding(5),
+                                        Cursor = Cursors.Hand,
+                                        Tag = new { Path = localPath, JsonPath = jsonPath, Metadata = "" },
+                                    };
+
+                                    picBox.MouseClick += (s, mevt) => ShowImageContextMenu(picBox, mevt.Location);
+
+                                    var tooltip = new ToolTip();
+                                    var lat = meta?.Position?.Lat.ToString("F6") ?? "N/A";
+                                    var lon = meta?.Position?.Lon.ToString("F6") ?? "N/A";
+                                    tooltip.SetToolTip(picBox, $"{Path.GetFileName(imagePath)}\nPos: {lat}, {lon}");
+
+                                    _galleryPanel.Controls.Add(picBox);
+                                    originalImage.Dispose();
+                                }
+                            }
+                            catch { }
+                        }));
+                    }
+                    catch { }
+                }
+            }
+            catch { }
         }
 
         /// <summary>Dark color table for context menu styling.</summary>

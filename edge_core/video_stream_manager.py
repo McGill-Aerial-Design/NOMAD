@@ -141,7 +141,12 @@ class VideoStreamManager:
         
         self._started = False
         self._lock = threading.RLock()
-        
+
+        # Watchdog state
+        self._watchdog_stop = threading.Event()
+        self._watchdog_thread: Optional[threading.Thread] = None
+        self._user_stopped = False  # set True when operator explicitly stops bridge
+
         logger.info(f"VideoStreamManager initialized")
         logger.info(f"  Container: {container_name}")
         logger.info(f"  RTSP URL: {rtsp_url}")
@@ -339,7 +344,8 @@ class VideoStreamManager:
             return (False, msg)
 
     def stop(self) -> bool:
-        """Stop the video streaming pipeline."""
+        """Stop the video streaming pipeline (operator-initiated; watchdog will not auto-restart)."""
+        self._user_stopped = True
         with self._lock:
             try:
                 # Stop simple video bridge
@@ -357,9 +363,52 @@ class VideoStreamManager:
 
     def restart(self) -> bool:
         """Restart the video streaming pipeline."""
+        self._user_stopped = False
         self.stop()
         time.sleep(2)
         return self.start()
+
+    def _watchdog_loop(self):
+        """
+        Persistent watchdog: checks bridge health every 30 s.
+        Restarts the bridge automatically if it has crashed or stopped
+        receiving frames, unless the operator explicitly stopped it.
+        Handles container restarts transparently.
+        """
+        logger.info("Video bridge watchdog started")
+        while not self._watchdog_stop.is_set():
+            self._watchdog_stop.wait(30)
+            if self._watchdog_stop.is_set():
+                break
+            if self._user_stopped:
+                continue
+            try:
+                if not self.is_container_running():
+                    continue
+                if not self.is_relay_running(require_recent_frames=False):
+                    logger.warning("Watchdog: video bridge not running, restarting...")
+                    ok, msg = self._start_internal()
+                    if ok:
+                        logger.info("Watchdog: video bridge restarted successfully")
+                    else:
+                        logger.error(f"Watchdog: restart failed — {msg}")
+                elif not self.is_relay_running(require_recent_frames=True):
+                    # Process alive but no frames — GStreamer pipeline stalled
+                    logger.warning("Watchdog: bridge running but no recent frames, triggering pipeline restart")
+                    try:
+                        from urllib.request import urlopen, Request
+                        req = Request(
+                            f"http://localhost:{self.relay_http_port}/restart",
+                            method="POST"
+                        )
+                        urlopen(req, timeout=5)
+                    except Exception as e:
+                        logger.warning(f"Watchdog: pipeline restart request failed ({e}), killing and relaunching bridge")
+                        ok, msg = self._start_internal()
+                        if not ok:
+                            logger.error(f"Watchdog: relaunch failed — {msg}")
+            except Exception as e:
+                logger.error(f"Watchdog: unexpected error — {e}")
 
     def switch_topic(self, topic: str) -> bool:
         """
@@ -635,8 +684,22 @@ def init_video_stream_manager(
 
             logger.error("Video bridge safety net failed after all retry attempts")
 
-        thread = threading.Thread(target=_delayed_start, daemon=True)
+        thread = threading.Thread(target=_delayed_start, daemon=True, name="video-delayed-start")
         thread.start()
-        logger.info("Video bridge auto-start safety net scheduled")
-    
+
+    # Start persistent watchdog regardless of auto_start flag.
+    # It begins polling 120 s after init so the delayed-start thread
+    # has time to bring the bridge up before the watchdog first checks.
+    def _start_watchdog_after_delay():
+        time.sleep(120)
+        _video_stream_manager._watchdog_thread = threading.Thread(
+            target=_video_stream_manager._watchdog_loop,
+            daemon=True,
+            name="video-watchdog",
+        )
+        _video_stream_manager._watchdog_thread.start()
+
+    threading.Thread(target=_start_watchdog_after_delay, daemon=True, name="video-watchdog-init").start()
+    logger.info("Video bridge watchdog scheduled (starts in 120 s)")
+
     return _video_stream_manager

@@ -1167,7 +1167,10 @@ class TargetLocalizerNode(Node):
         }
         """
         import json as _json
-        corners_path = os.path.join(self.output_dir, "building_corners.json")
+        # API writes to the config bind-mount (host /home/mad/NOMAD/config -> container /workspaces/isaac_ros-dev/config).
+        # Fall back to output_dir for manual placement.
+        _config_corners = "/workspaces/isaac_ros-dev/config/building_corners.json"
+        corners_path = _config_corners if os.path.exists(_config_corners) else os.path.join(self.output_dir, "building_corners.json")
         if not os.path.exists(corners_path):
             response.success = False
             response.message = f"Corners file not found: {corners_path}. Write building_corners.json first."
@@ -1317,7 +1320,8 @@ class TargetLocalizerNode(Node):
         updates that target's raw_data, and regenerates its description.
         """
         import json as _json
-        override_path = os.path.join(self.output_dir, "plane_override.json")
+        _config_override = "/workspaces/isaac_ros-dev/config/plane_override.json"
+        override_path = _config_override if os.path.exists(_config_override) else os.path.join(self.output_dir, "plane_override.json")
         if not os.path.exists(override_path):
             response.success = False
             response.message = f"Override file not found: {override_path}"

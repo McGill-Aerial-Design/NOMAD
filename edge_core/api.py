@@ -2310,38 +2310,27 @@ fi
         Returns: List of folder names (timestamps) sorted by date descending.
         Example: ["20260202_120000", "20260202_115500", ...]
         """
-        base_dir = "./data/task1_captures"
+        timestamp_pattern = re.compile(r"^\d{8}_\d{6}$")
+        seen: set[str] = set()
+        valid_folders: list[str] = []
 
-        # Create directory if it doesn't exist
-        if not os.path.exists(base_dir):
-            os.makedirs(base_dir, exist_ok=True)
-            return Task1CapturesList(captures=[], count=0)
+        for base_dir in _task1_capture_base_dirs():
+            if not os.path.isdir(base_dir):
+                continue
+            try:
+                for entry in os.listdir(base_dir):
+                    if entry in seen:
+                        continue
+                    if not timestamp_pattern.match(entry):
+                        continue
+                    if os.path.isdir(os.path.join(base_dir, entry)):
+                        seen.add(entry)
+                        valid_folders.append(entry)
+            except Exception as e:
+                logger.warning(f"Failed to scan captures in {base_dir}: {e}")
 
-        try:
-            # List all directories in task1_captures
-            entries = os.listdir(base_dir)
-            folders = [
-                entry
-                for entry in entries
-                if os.path.isdir(os.path.join(base_dir, entry))
-            ]
-
-            # Filter to only timestamp-pattern folders (YYYYMMDD_HHMMSS)
-            timestamp_pattern = re.compile(r"^\d{8}_\d{6}$")
-            valid_folders = [
-                folder for folder in folders if timestamp_pattern.match(folder)
-            ]
-
-            # Sort by timestamp descending (newest first)
-            valid_folders.sort(reverse=True)
-
-            return Task1CapturesList(captures=valid_folders, count=len(valid_folders))
-
-        except Exception as e:
-            logger.error(f"Failed to list Task 1 captures: {e}")
-            raise HTTPException(
-                status_code=500, detail=f"Failed to list captures: {str(e)}"
-            )
+        valid_folders.sort(reverse=True)
+        return Task1CapturesList(captures=valid_folders, count=len(valid_folders))
 
     @app.get("/api/task/1/images/{folder}/{filename}", tags=["Task 1"])
     async def get_task1_image_with_folder(folder: str, filename: str):
@@ -2783,13 +2772,12 @@ fi
         height: float
         corners: list[dict[str, Any]]
 
-    # Shared path for the corners JSON file consumed by the ROS2 service.
-    # Must be on the host side of the rw bind-mount so both the API (host) and
-    # target_localizer (container) can access the same file.
-    # container /workspaces/isaac_ros-dev/data -> host /home/mad/workspaces/isaac_ros-dev/data
+    # Directory where API writes building_corners.json and plane_override.json.
+    # Must be writable by the mad user (host) AND readable by the node (container).
+    # /home/mad/NOMAD/config (host, mad-writable) -> /workspaces/isaac_ros-dev/config (container, RO mount).
     _BUILDING_CORNERS_DIR = os.environ.get(
         "NOMAD_TARGET_OUTPUT_DIR",
-        os.path.expanduser("~/workspaces/isaac_ros-dev/data/task1_captures"),
+        os.path.expanduser("~/NOMAD/config"),
     )
 
     class PlaneOverrideRequest(BaseModel):

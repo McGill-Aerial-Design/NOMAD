@@ -177,8 +177,7 @@
     <Compile Include="SLAM3D\Rendering\DetectionRenderer.cs" />
     <Compile Include="SLAM3D\Rendering\VoxelMeshBuilder.cs" />
     <Compile Include="SnapshotManager.cs" />
-    <Compile Include="AIDescriptionService.cs" />
-    <Compile Include="GoogleDriveUploadService.cs" />
+<Compile Include="GoogleDriveUploadService.cs" />
     <Compile Include="Task1UploadPanel.cs" />
     <Compile Include="TelemetryInjector.cs" />
     <Compile Include="Rviz2View.cs" />
