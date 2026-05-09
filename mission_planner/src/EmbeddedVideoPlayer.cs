@@ -251,7 +251,7 @@ namespace NOMAD.MissionPlanner
             Controls.Add(ctrlPanel);
             
             // Initialize with default topic
-            _topics.Add(("/zed/zed_node/rgb/color/rect/image", "RGB Rect"));
+            _topics.Add(("/zed/zed_node/rgb/color/rect/image", "Left Rect"));
             PopulateTopics();
         }
 
@@ -377,33 +377,60 @@ namespace NOMAD.MissionPlanner
                 _topics.Clear();
                 if (arr != null)
                 {
+                    // Allow the four useful RGB combinations from the ZED:
+                    // {left, right} × {raw, rect}. The ZED publishes them under
+                    // /zed/zed_node/{rgb,left,right,rgb_raw,left_raw,right_raw}/...
+                    // — "rgb" is an alias for "left", which we keep as the
+                    // default "Left" label.
                     foreach (var t in arr)
                     {
                         var name = t["name"]?.ToString();
-                        var disp = t["display_name"]?.ToString() ?? name;
-                        if (string.IsNullOrEmpty(name))
-                            continue;
+                        if (string.IsNullOrEmpty(name)) continue;
 
-                        // Whitelist: only RGB rect (rectified) and RGB raw (left camera).
-                        // Depth display in the embedded player is broken; hide everything else.
                         var lower = name.ToLowerInvariant();
-                        if (lower.IndexOf("rgb") < 0)
-                            continue;
                         if (lower.IndexOf("gray") >= 0 || lower.IndexOf("depth") >= 0)
                             continue;
 
-                        bool isRect = lower.IndexOf("rect") >= 0;
-                        bool isRaw = lower.IndexOf("raw") >= 0;
-                        if (!isRect && !isRaw)
-                            continue;
+                        bool isLeft  = lower.IndexOf("/left")  >= 0
+                                     || lower.IndexOf("/rgb")  >= 0;  // ZED rgb == left
+                        bool isRight = lower.IndexOf("/right") >= 0;
+                        if (!isLeft && !isRight) continue;
 
-                        var label = isRect ? "RGB Rect" : "RGB Raw (Left)";
-                        _topics.Add((name, label));
+                        // ZED naming: "_raw" suffix marks raw; "rect" in path marks rectified.
+                        bool isRaw  = lower.IndexOf("_raw") >= 0
+                                    || lower.IndexOf("/raw") >= 0
+                                    || lower.IndexOf("image_raw") >= 0;
+                        bool isRect = lower.IndexOf("rect") >= 0;
+                        if (!isRaw && !isRect) continue;
+
+                        string side = isRight ? "Right" : "Left";
+                        string kind = isRect ? "Rect" : "Raw";
+                        _topics.Add((name, $"{side} {kind}"));
                     }
+
+                    // Stable display order: Left Rect, Left Raw, Right Rect, Right Raw.
+                    var order = new System.Collections.Generic.Dictionary<string, int>
+                    {
+                        { "Left Rect", 0 }, { "Left Raw", 1 },
+                        { "Right Rect", 2 }, { "Right Raw", 3 },
+                    };
+                    _topics.Sort((a, b) =>
+                    {
+                        int ai, bi;
+                        if (!order.TryGetValue(a.Display, out ai)) ai = 99;
+                        if (!order.TryGetValue(b.Display, out bi)) bi = 99;
+                        return ai.CompareTo(bi);
+                    });
+
+                    // De-duplicate display labels: if the server reports both
+                    // /zed/zed_node/rgb/... and /zed/zed_node/left/... they
+                    // collapse to the same "Left Rect" label — keep the first.
+                    var seen = new System.Collections.Generic.HashSet<string>();
+                    _topics.RemoveAll(t => !seen.Add(t.Display));
                 }
 
                 if (_topics.Count == 0)
-                    _topics.Add(("/zed/zed_node/rgb/color/rect/image", "RGB Rect"));
+                    _topics.Add(("/zed/zed_node/rgb/color/rect/image", "Left Rect"));
                 
                 PopulateTopics();
                 _lblStatus.Text = $"Found {_topics.Count} topics";
