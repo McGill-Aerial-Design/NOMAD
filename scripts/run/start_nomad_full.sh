@@ -269,17 +269,21 @@ start_edge_core() {
     
     cd $NOMAD_DIR
     export PATH=${HOME}/.local/bin:$PATH
+    export PYTHONPATH="$NOMAD_DIR"
+    export PYTHONUNBUFFERED=1
+    export LD_LIBRARY_PATH="${HOME}/.local/lib:/usr/local/cuda/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     export NOMAD_DEBUG=true
     export NOMAD_LOG_DIR="$NOMAD_DIR/data/mission_logs"
-    
+    mkdir -p "$NOMAD_LOG_DIR"
+
     # Use venv Python if available (has pydantic, fastapi, etc.)
     PYTHON_BIN="python3"
     if [ -f "$NOMAD_DIR/venv/bin/python3" ]; then
         PYTHON_BIN="$NOMAD_DIR/venv/bin/python3"
         log_info "Using venv Python: $PYTHON_BIN"
     fi
-    
-    nohup $PYTHON_BIN -m edge_core.main > $LOG_DIR/edge_core.log 2>&1 &
+
+    nohup $PYTHON_BIN -m edge_core.main --host 0.0.0.0 --port $API_PORT --log-level info > $LOG_DIR/edge_core.log 2>&1 &
     EDGE_PID=$!
     SCRIPT_OWNS_EDGE_CORE=true
     sleep 3

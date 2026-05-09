@@ -342,24 +342,61 @@ namespace NOMAD.MissionPlanner
         public float SlamMapRadiusM { get; set; } = 3.0f;
 
         // ============================================================
-        // GPIO/Payload Configuration
+        // Servo Configuration (Cube Orange AUX Outputs via MAVLink)
+        // All payloads, reels, water pump and camera tilt are wired to the
+        // Cube and commanded via MAVLink DO_SET_SERVO. The Jetson API is
+        // used only as a fallback when the MAVLink link is unavailable.
+        // Channel numbers correspond to ArduPilot servo output numbers
+        // (e.g. 9 = SERVO9 = AUX1 on most Cube builds).
         // ============================================================
 
-        /// <summary>
-        /// Cube Orange AUX pin for payload 1 linear actuator.
-        /// Set to -1 to disable. Typical range: 50-55 (AUX1-AUX6).
-        /// </summary>
-        public int GpioPayload1Pin { get; set; } = -1;
+        // --- Payload drop servos ---
+        /// <summary>Cube servo output channel for payload 1 drop servo.</summary>
+        public int Servo1Channel { get; set; } = 9;
+        /// <summary>PWM (us) when payload 1 servo is locked/closed.</summary>
+        public int Servo1PwmMin { get; set; } = 1000;
+        /// <summary>PWM (us) when payload 1 servo is open/released (drop position).</summary>
+        public int Servo1PwmMax { get; set; } = 2000;
 
-        /// <summary>
-        /// Cube Orange AUX pin for payload 2 linear actuator.
-        /// Set to -1 to disable. Typical range: 50-55 (AUX1-AUX6).
-        /// </summary>
-        public int GpioPayload2Pin { get; set; } = -1;
+        /// <summary>Cube servo output channel for payload 2 drop servo.</summary>
+        public int Servo2Channel { get; set; } = 10;
+        /// <summary>PWM (us) when payload 2 servo is locked/closed.</summary>
+        public int Servo2PwmMin { get; set; } = 1000;
+        /// <summary>PWM (us) when payload 2 servo is open/released (drop position).</summary>
+        public int Servo2PwmMax { get; set; } = 2000;
 
-        // Note: Water shooter (Pin 18) and nozzle servo (Pin 15) are controlled
-        // via fixed Edge Core API endpoints and do not need configuration here.
-        // See: /api/servo/camera/tilt and /api/servo/shooter/trigger
+        /// <summary>Cube servo output channel for payload 3 drop servo.</summary>
+        public int Servo3Channel { get; set; } = 11;
+        /// <summary>PWM (us) when payload 3 servo is locked/closed.</summary>
+        public int Servo3PwmMin { get; set; } = 1000;
+        /// <summary>PWM (us) when payload 3 servo is open/released (drop position).</summary>
+        public int Servo3PwmMax { get; set; } = 2000;
+
+        // --- Strap reel servo (payload 1) ---
+        /// <summary>Cube servo output channel for payload 1 strap reel.</summary>
+        public int ReelServoChannel { get; set; } = 12;
+        /// <summary>PWM (us) to reel straps in (must be &gt;2000 us).</summary>
+        public int ReelPwmIn { get; set; } = 2100;
+        /// <summary>PWM (us) to reel straps out (must be &lt;1000 us).</summary>
+        public int ReelPwmOut { get; set; } = 900;
+
+        // --- Water pump ---
+        /// <summary>Cube servo output channel for the water pump.</summary>
+        public int WaterPumpChannel { get; set; } = 13;
+        /// <summary>PWM (us) to activate the water pump.</summary>
+        public int WaterPumpPwmOn { get; set; } = 2000;
+        /// <summary>PWM (us) to stop the water pump.</summary>
+        public int WaterPumpPwmOff { get; set; } = 1000;
+        /// <summary>Duration (ms) the water pump fires per trigger.</summary>
+        public int WaterPumpDurationMs { get; set; } = 500;
+
+        // --- Camera tilt servo (MAVLink primary, Jetson API fallback) ---
+        /// <summary>Cube servo output channel for camera tilt servo.</summary>
+        public int CameraTiltChannel { get; set; } = 14;
+        /// <summary>Camera tilt minimum PWM (us) — fully down.</summary>
+        public int CameraTiltPwmMin { get; set; } = 700;
+        /// <summary>Camera tilt maximum PWM (us) — fully up.</summary>
+        public int CameraTiltPwmMax { get; set; } = 1450;
 
         // ============================================================
         // Persistence
@@ -516,6 +553,25 @@ namespace NOMAD.MissionPlanner
             SlamHeadingOffsetDeg = defaults.SlamHeadingOffsetDeg;
             SlamCameraFovDeg = defaults.SlamCameraFovDeg;
             SlamMapRadiusM = defaults.SlamMapRadiusM;
+            Servo1Channel = defaults.Servo1Channel;
+            Servo1PwmMin = defaults.Servo1PwmMin;
+            Servo1PwmMax = defaults.Servo1PwmMax;
+            Servo2Channel = defaults.Servo2Channel;
+            Servo2PwmMin = defaults.Servo2PwmMin;
+            Servo2PwmMax = defaults.Servo2PwmMax;
+            Servo3Channel = defaults.Servo3Channel;
+            Servo3PwmMin = defaults.Servo3PwmMin;
+            Servo3PwmMax = defaults.Servo3PwmMax;
+            ReelServoChannel = defaults.ReelServoChannel;
+            ReelPwmIn = defaults.ReelPwmIn;
+            ReelPwmOut = defaults.ReelPwmOut;
+            WaterPumpChannel = defaults.WaterPumpChannel;
+            WaterPumpPwmOn = defaults.WaterPumpPwmOn;
+            WaterPumpPwmOff = defaults.WaterPumpPwmOff;
+            WaterPumpDurationMs = defaults.WaterPumpDurationMs;
+            CameraTiltChannel = defaults.CameraTiltChannel;
+            CameraTiltPwmMin = defaults.CameraTiltPwmMin;
+            CameraTiltPwmMax = defaults.CameraTiltPwmMax;
         }
     }
 }

@@ -223,7 +223,7 @@ namespace NOMAD.MissionPlanner
         /// <returns>Byte array of the response body.</returns>
         public static Task<byte[]> GetByteArrayAsync(string url)
         {
-            return ApiClient.GetByteArrayAsync(url);
+            return LongRunClient.GetByteArrayAsync(url);
         }
 
         // ============================================================

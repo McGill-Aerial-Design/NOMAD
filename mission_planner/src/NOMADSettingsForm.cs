@@ -91,9 +91,13 @@ namespace NOMAD.MissionPlanner
         private NumericUpDown _numTempCritical;
         private CheckBox _chkAudioAlerts;
         
-        // GPIO Tab
-        private NumericUpDown _numGpioPayload1;
-        private NumericUpDown _numGpioPayload2;
+        // Servos Tab
+        private NumericUpDown _numServo1Ch, _numServo1PwmMin, _numServo1PwmMax;
+        private NumericUpDown _numServo2Ch, _numServo2PwmMin, _numServo2PwmMax;
+        private NumericUpDown _numServo3Ch, _numServo3PwmMin, _numServo3PwmMax;
+        private NumericUpDown _numReelCh, _numReelPwmIn, _numReelPwmOut;
+        private NumericUpDown _numPumpCh, _numPumpPwmOn, _numPumpPwmOff, _numPumpDuration;
+        private NumericUpDown _numTiltCh, _numTiltPwmMin, _numTiltPwmMax;
         
         // Google Drive
         private Button _btnUploadGDrive;
@@ -154,7 +158,7 @@ namespace NOMAD.MissionPlanner
             _tabControl.TabPages.Add(CreateUiTab());
             _tabControl.TabPages.Add(CreateAlertsTab());
             _tabControl.TabPages.Add(CreateUploadsTab());
-            _tabControl.TabPages.Add(CreateGpioTab());
+            _tabControl.TabPages.Add(CreateServosTab());
 
             // Buttons at bottom
             int buttonY = 560;
@@ -545,36 +549,64 @@ namespace NOMAD.MissionPlanner
         }
 
         // ============================================================
-        // Tab: GPIO
+        // Tab: Servos
         // ============================================================
-        
-        private TabPage CreateGpioTab()
+
+        private TabPage CreateServosTab()
         {
-            var tab = CreateTabPage("GPIO");
-            int y = 15;
+            var tab = CreateTabPage("Servos");
+            int y = 10;
 
-            AddSectionLabel(tab, "Cube Orange Payload Pins (-1 = disabled)", ref y);
+            AddLabel(tab, "Channel = ArduPilot servo output number (e.g. 9 = AUX1).", 10, y, Color.Gray);
+            y += 18;
 
-            AddLabel(tab, "Payload 1 AUX Pin:", 20, y);
-            _numGpioPayload1 = AddNumericUpDown(tab, 180, y, 70, -1, 55, -1);
-            AddLabel(tab, "(50-55 = AUX1-6)", 260, y, Color.Gray);
-            y += 30;
+            // Helper to add a servo row: label | ch | min | max
+            void AddServoRow(string label, ref int row,
+                out NumericUpDown ch, out NumericUpDown min, out NumericUpDown max,
+                int defCh, int defMin, int defMax)
+            {
+                AddLabel(tab, label, 10, row);
+                AddLabel(tab, "Ch", 155, row, Color.Gray);
+                ch  = AddNumericUpDown(tab, 175, row, 45, 1, 99, defCh);
+                AddLabel(tab, "Min", 228, row, Color.Gray);
+                min = AddNumericUpDown(tab, 248, row, 55, 500, 2500, defMin);
+                AddLabel(tab, "Max", 310, row, Color.Gray);
+                max = AddNumericUpDown(tab, 330, row, 55, 500, 2500, defMax);
+                row += 28;
+            }
 
-            AddLabel(tab, "Payload 2 AUX Pin:", 20, y);
-            _numGpioPayload2 = AddNumericUpDown(tab, 180, y, 70, -1, 55, -1);
-            y += 40;
+            AddSectionLabel(tab, "Drop Servos (PWM Max = drop position)", ref y);
+            AddServoRow("Payload 1:", ref y, out _numServo1Ch, out _numServo1PwmMin, out _numServo1PwmMax, 9,  1000, 2000);
+            AddServoRow("Payload 2:", ref y, out _numServo2Ch, out _numServo2PwmMin, out _numServo2PwmMax, 10, 1000, 2000);
+            AddServoRow("Payload 3:", ref y, out _numServo3Ch, out _numServo3PwmMin, out _numServo3PwmMax, 11, 1000, 2000);
+            y += 4;
 
-            AddSectionLabel(tab, "Jetson Servo / Shooter (via Edge Core API)", ref y);
+            AddSectionLabel(tab, "Strap Reel (Payload 1)", ref y);
+            AddLabel(tab, "Channel:", 10, y);
+            _numReelCh = AddNumericUpDown(tab, 100, y, 50, 1, 99, 12);
+            y += 28;
+            AddLabel(tab, "PWM In (>2000):", 10, y);
+            _numReelPwmIn  = AddNumericUpDown(tab, 145, y, 60, 2001, 2500, 2100);
+            y += 28;
+            AddLabel(tab, "PWM Out (<1000):", 10, y);
+            _numReelPwmOut = AddNumericUpDown(tab, 145, y, 60, 500, 999, 900);
+            y += 32;
 
-            AddLabel(tab, "Nozzle servo and water shooter are controlled", 20, y);
-            y += 20;
-            AddLabel(tab, "via fixed Edge Core API endpoints:", 20, y);
-            y += 25;
-            AddLabel(tab, "Servo:  POST /api/servo/camera/tilt?angle=N", 30, y, Color.FromArgb(180, 180, 180));
-            y += 20;
-            AddLabel(tab, "Shooter: POST /api/servo/shooter/trigger", 30, y, Color.FromArgb(180, 180, 180));
-            y += 20;
-            AddLabel(tab, "Pins are fixed: servo=Pin15, shooter=Pin18", 30, y, Color.FromArgb(180, 180, 180));
+            AddSectionLabel(tab, "Water Pump", ref y);
+            AddLabel(tab, "Channel:", 10, y);
+            _numPumpCh = AddNumericUpDown(tab, 100, y, 50, 1, 99, 13);
+            y += 28;
+            AddLabel(tab, "PWM On:", 10, y);
+            _numPumpPwmOn  = AddNumericUpDown(tab, 100, y, 60, 500, 2500, 2000);
+            AddLabel(tab, "PWM Off:", 200, y, Color.Gray);
+            _numPumpPwmOff = AddNumericUpDown(tab, 260, y, 60, 500, 2500, 1000);
+            y += 28;
+            AddLabel(tab, "Duration (ms):", 10, y);
+            _numPumpDuration = AddNumericUpDown(tab, 130, y, 65, 50, 5000, 500);
+            y += 32;
+
+            AddSectionLabel(tab, "Camera Tilt (MAVLink primary, API fallback)", ref y);
+            AddServoRow("Camera Tilt:", ref y, out _numTiltCh, out _numTiltPwmMin, out _numTiltPwmMax, 14, 700, 1450);
 
             return tab;
         }
@@ -754,10 +786,27 @@ namespace NOMAD.MissionPlanner
             _numTempCritical.Value = (decimal)Config.TempCriticalC;
             _chkAudioAlerts.Checked = Config.AudioAlerts;
             
-            // GPIO
-            _numGpioPayload1.Value = Config.GpioPayload1Pin;
-            _numGpioPayload2.Value = Config.GpioPayload2Pin;
-            
+            // Servos
+            _numServo1Ch.Value    = Config.Servo1Channel;
+            _numServo1PwmMin.Value= Config.Servo1PwmMin;
+            _numServo1PwmMax.Value= Config.Servo1PwmMax;
+            _numServo2Ch.Value    = Config.Servo2Channel;
+            _numServo2PwmMin.Value= Config.Servo2PwmMin;
+            _numServo2PwmMax.Value= Config.Servo2PwmMax;
+            _numServo3Ch.Value    = Config.Servo3Channel;
+            _numServo3PwmMin.Value= Config.Servo3PwmMin;
+            _numServo3PwmMax.Value= Config.Servo3PwmMax;
+            _numReelCh.Value      = Config.ReelServoChannel;
+            _numReelPwmIn.Value   = Config.ReelPwmIn;
+            _numReelPwmOut.Value  = Config.ReelPwmOut;
+            _numPumpCh.Value      = Config.WaterPumpChannel;
+            _numPumpPwmOn.Value   = Config.WaterPumpPwmOn;
+            _numPumpPwmOff.Value  = Config.WaterPumpPwmOff;
+            _numPumpDuration.Value= Config.WaterPumpDurationMs;
+            _numTiltCh.Value      = Config.CameraTiltChannel;
+            _numTiltPwmMin.Value  = Config.CameraTiltPwmMin;
+            _numTiltPwmMax.Value  = Config.CameraTiltPwmMax;
+
             UpdateDualLinkControlsState();
             UpdateRadioMasterConnTypeState();
         }
@@ -830,9 +879,26 @@ namespace NOMAD.MissionPlanner
             Config.TempCriticalC = (float)_numTempCritical.Value;
             Config.AudioAlerts = _chkAudioAlerts.Checked;
             
-            // GPIO
-            Config.GpioPayload1Pin = (int)_numGpioPayload1.Value;
-            Config.GpioPayload2Pin = (int)_numGpioPayload2.Value;
+            // Servos
+            Config.Servo1Channel      = (int)_numServo1Ch.Value;
+            Config.Servo1PwmMin       = (int)_numServo1PwmMin.Value;
+            Config.Servo1PwmMax       = (int)_numServo1PwmMax.Value;
+            Config.Servo2Channel      = (int)_numServo2Ch.Value;
+            Config.Servo2PwmMin       = (int)_numServo2PwmMin.Value;
+            Config.Servo2PwmMax       = (int)_numServo2PwmMax.Value;
+            Config.Servo3Channel      = (int)_numServo3Ch.Value;
+            Config.Servo3PwmMin       = (int)_numServo3PwmMin.Value;
+            Config.Servo3PwmMax       = (int)_numServo3PwmMax.Value;
+            Config.ReelServoChannel   = (int)_numReelCh.Value;
+            Config.ReelPwmIn          = (int)_numReelPwmIn.Value;
+            Config.ReelPwmOut         = (int)_numReelPwmOut.Value;
+            Config.WaterPumpChannel   = (int)_numPumpCh.Value;
+            Config.WaterPumpPwmOn     = (int)_numPumpPwmOn.Value;
+            Config.WaterPumpPwmOff    = (int)_numPumpPwmOff.Value;
+            Config.WaterPumpDurationMs= (int)_numPumpDuration.Value;
+            Config.CameraTiltChannel  = (int)_numTiltCh.Value;
+            Config.CameraTiltPwmMin   = (int)_numTiltPwmMin.Value;
+            Config.CameraTiltPwmMax   = (int)_numTiltPwmMax.Value;
         }
         
         private void SetComboBoxValue(ComboBox combo, string value)

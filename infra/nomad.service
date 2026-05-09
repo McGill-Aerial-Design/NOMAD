@@ -33,11 +33,12 @@ Environment="PYTHONPATH=%h/NOMAD"
 # User-local libs (libturbojpeg for ZED SDK) + CUDA
 Environment="LD_LIBRARY_PATH=%h/.local/lib:/usr/local/cuda/lib64"
 
-# Main command - run orchestrator with uvicorn
-ExecStart=/usr/bin/python3 -m uvicorn edge_core.main:app --host 0.0.0.0 --port 8000 --log-level info
-
-# Alternative: Run with edge_core CLI
-# ExecStart=/usr/bin/python3 -m edge_core.main --host 0.0.0.0 --port 8000 --log-level info
+# Run via the edge_core CLI entry point (main.py:main()) so all services —
+# MAVLink, health monitor, video stream manager, servo controller, etc. —
+# are properly initialized before uvicorn starts.
+# Using the venv Python ensures all pip dependencies (fastapi, uvicorn,
+# pydantic, pymavlink, ...) are available regardless of system Python state.
+ExecStart=%h/NOMAD/venv/bin/python3 -m edge_core.main --host 0.0.0.0 --port 8000 --log-level info
 
 # Restart policy
 Restart=always

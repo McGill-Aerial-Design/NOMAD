@@ -202,7 +202,7 @@ private ListBox _lstWalls;
                 Padding = Padding.Empty,
             };
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));   // GPS status
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 105));  // Payload controls
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 150));  // Payload controls (3 rows)
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 45));    // Capture
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 55));    // Gallery
 
@@ -1062,7 +1062,8 @@ _lblPosition = new Label
                             metadataText.AppendLine($"AHRS: Hdg={headingDeg} Pitch={pitchDeg} Roll={rollDeg}");
                             metadataText.AppendLine($"Gimbal: Pitch={gimbalPitch} Yaw={gimbalYaw}");
                                             metadataText.AppendLine($"Folder: {captureFolder}");
-                            metadataText.Append($"Image: {imageName}");
+                            int targetNum = (_uploadPanel?.TargetCount ?? 0) + 1;
+                            metadataText.Append($"Image: Target {targetNum} ({imageName})");
                             
                             _txtResult.Text = metadataText.ToString();
                             
@@ -1072,13 +1073,16 @@ _lblPosition = new Label
                                 var folderName = Path.GetFileName(captureFolder.TrimEnd('/'));
                                 string imageUrl = $"http://{_config.EffectiveIP}:{_config.JetsonPort}/api/task/1/images/{folderName}/{imageName}";
                                 
-                                // Download image
+                                // Download image (use long-run client — JPEG can take >5s over WiFi)
                                 var imageBytes = await JetsonApiService.GetByteArrayAsync(imageUrl);
-                                
-                                // Save to local directory (use folder name to avoid overwriting)
+
+                                // Save to local directory using queue-position name so files stay
+                                // consistent even after the user clears the Jetson's internal counter.
                                 var task1Dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NOMAD", "Task1");
                                 Directory.CreateDirectory(task1Dir);
-                                var localImageName = $"{folderName}_{imageName}";
+                                var ext = Path.GetExtension(imageName);
+                                if (string.IsNullOrEmpty(ext)) ext = ".jpg";
+                                var localImageName = $"target_{targetNum}_{folderName}{ext}";
                                 var localPath = Path.Combine(task1Dir, localImageName);
                                 File.WriteAllBytes(localPath, imageBytes);
 

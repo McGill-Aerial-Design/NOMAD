@@ -49,6 +49,11 @@ namespace NOMAD.MissionPlanner
             set => _buildingHeight = value;
         }
 
+        /// <summary>
+        /// Current number of targets in the queue (before adding the next capture).
+        /// </summary>
+        public int TargetCount => _targetGrid?.Rows.Count ?? 0;
+
         public Task1UploadPanel(NOMADConfig config)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
