@@ -461,14 +461,13 @@ class VideoStreamManager:
             List of TopicInfo with name and display_name
         """
         if not self.is_relay_running():
-            # Fallback: query topics directly from container
-            return self._query_topics_docker()
-        
+            return []
+
         try:
             url = f"http://localhost:{self.relay_http_port}/topics"
             with urlopen(url, timeout=10) as response:
                 data = json.loads(response.read().decode())
-                
+
             topics = []
             for topic in data.get("topics", []):
                 topics.append(TopicInfo(
@@ -476,10 +475,10 @@ class VideoStreamManager:
                     display_name=trim_topic_name(topic)
                 ))
             return topics
-            
+
         except Exception as e:
             logger.error(f"Error listing topics: {e}")
-            return self._query_topics_docker()
+            return []
 
     def _query_topics_docker(self) -> List[TopicInfo]:
         """Query topics directly via docker exec (fallback)."""

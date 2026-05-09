@@ -292,21 +292,35 @@ namespace NOMAD.MissionPlanner
         private void InitializeUI()
         {
             this.BackColor = CARD_BG;
-            this.Padding = new Padding(10);
+            this.Padding = new Padding(0);
+            this.AutoScroll = true;
+
+            // Fixed-height inner panel — scrolls when window is too short
+            const int GRID_H    = 210;  // target table (~4 rows)
+            const int BTN_H     = 42;
+            const int PREVIEW_H = 110;
+            const int VIEWER_H  = 220;
+            const int STATUS_H  = 36;
+            const int TITLE_H   = 32;
+            const int TOTAL_H   = TITLE_H + GRID_H + BTN_H + PREVIEW_H + VIEWER_H + STATUS_H + 20;
 
             var mainLayout = new TableLayoutPanel
             {
-                Dock = DockStyle.Fill,
+                Dock = DockStyle.Top,
                 ColumnCount = 1,
                 RowCount = 6,
-                Padding = new Padding(5),
+                Height = TOTAL_H,
+                Padding = new Padding(8),
             };
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));         // 0: title
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 40));       // 1: grid
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));         // 2: buttons
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 18));       // 3: preview text
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 42));       // 4: 3D viewer
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));         // 5: status
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, TITLE_H));    // 0: title
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, GRID_H));     // 1: grid
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, BTN_H));      // 2: buttons
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, PREVIEW_H));  // 3: preview text
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, VIEWER_H));   // 4: 3D viewer
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, STATUS_H));   // 5: status
+
+            // Stretch inner panel width with the scroll container
+            this.Resize += (s, e) => mainLayout.Width = this.ClientSize.Width;
 
             var lblTitle = new Label
             {
@@ -314,7 +328,7 @@ namespace NOMAD.MissionPlanner
                 Font = new Font("Segoe UI", 11, FontStyle.Bold),
                 ForeColor = ACCENT_COLOR,
                 AutoSize = true,
-                Padding = new Padding(0, 0, 0, 10),
+                Padding = new Padding(0, 4, 0, 0),
             };
             mainLayout.Controls.Add(lblTitle, 0, 0);
 
@@ -515,6 +529,7 @@ namespace NOMAD.MissionPlanner
                 Padding = new Padding(6, 0, 0, 0),
             };
             _viewer = new BuildingViewer3D();
+            _viewer.Dock = DockStyle.Fill;
             _viewer.TargetHovered += OnViewerTargetHovered;
             viewerHost.Controls.Add(_viewer);
             viewerHost.Controls.Add(viewerHeader);

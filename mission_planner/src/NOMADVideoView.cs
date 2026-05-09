@@ -93,14 +93,12 @@ namespace NOMAD.MissionPlanner
             
             mainLayout.Controls.Add(videoSection, 0, 0);
             
-            // Right side: WASD Controls (full height - includes payload controls)
-            var controlsSection = new TableLayoutPanel
+            // Right side: WASD Controls — top-aligned with fixed height, rest is empty space
+            var controlsSection = new Panel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 1,
+                BackColor = CARD_BG,
             };
-            controlsSection.RowStyles.Add(new RowStyle(SizeType.Percent, 100));  // WASD with payload controls
 
             try
             {
@@ -108,29 +106,25 @@ namespace NOMAD.MissionPlanner
                     _config,
                     _config.WasdNudgeSpeed,
                     _config.WasdAltSpeed,
-                    15.0f,  // Default yaw rate
+                    15.0f,
                     _jetsonConnectionManager
                 );
-                _wasdControl.Dock = DockStyle.Fill;
-                controlsSection.Controls.Add(_wasdControl, 0, 0);
+                _wasdControl.Dock = DockStyle.Top;
+                _wasdControl.Height = 330;
+                controlsSection.Controls.Add(_wasdControl);
             }
             catch (Exception ex)
             {
-                var errorPanel = new Panel
-                {
-                    Dock = DockStyle.Fill,
-                    BackColor = CARD_BG,
-                };
                 var errorLabel = new Label
                 {
                     Text = $"WASD controls unavailable: {ex.Message}",
                     Font = new Font("Segoe UI", 11),
                     ForeColor = ERROR_COLOR,
-                    Dock = DockStyle.Fill,
+                    Dock = DockStyle.Top,
+                    Height = 60,
                     TextAlign = ContentAlignment.MiddleCenter,
                 };
-                errorPanel.Controls.Add(errorLabel);
-                controlsSection.Controls.Add(errorPanel, 0, 0);
+                controlsSection.Controls.Add(errorLabel);
             }
 
             mainLayout.Controls.Add(controlsSection, 1, 0);

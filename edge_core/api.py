@@ -6006,7 +6006,8 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        topics = mgr.list_topics()
+        loop = asyncio.get_event_loop()
+        topics = await loop.run_in_executor(None, mgr.list_topics)
         return {"topics": [t.to_dict() for t in topics], "count": len(topics)}
 
     @app.get("/api/video/status", tags=["Video"])

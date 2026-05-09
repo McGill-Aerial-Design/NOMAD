@@ -222,8 +222,8 @@ namespace NOMAD.MissionPlanner
             };
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));   // Enable/Status
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));   // Keyboard visual
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 65));   // Settings
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 80));   // Payload controls
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));   // Settings
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 140));  // Payload controls
             
             // Top row: Enable checkbox and status
             var topPanel = CreateTopPanel();

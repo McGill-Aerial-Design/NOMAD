@@ -370,7 +370,7 @@ namespace NOMAD.MissionPlanner
                 _lblStatus.Text = "Refreshing topics...";
                 _lblStatus.ForeColor = Color.Yellow;
                 
-                var json = await JetsonApiService.ApiClient.GetStringAsync($"{_apiBaseUrl}/api/video/topics");
+                var json = await JetsonApiService.LongRunClient.GetStringAsync($"{_apiBaseUrl}/api/video/topics");
                 var data = JObject.Parse(json);
                 var arr = data["topics"] as JArray;
                 

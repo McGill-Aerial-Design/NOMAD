@@ -190,80 +190,48 @@ private ListBox _lstWalls;
 
         private Panel CreateMainControlsSubtab()
         {
-            var panel = new Panel
+            // Scrollable container \u2014 cards stack top-to-bottom with fixed heights.
+            // Scrolling kicks in automatically when the window is too short.
+            var scroll = new Panel
             {
                 Dock = DockStyle.Fill,
                 BackColor = CARD_BG,
+                AutoScroll = true,
             };
 
-            var layout = new TableLayoutPanel
+            // Inner panel holds all cards stacked via DockStyle.Top (reverse add order).
+            var inner = new Panel
             {
-                Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 4,
-                Margin = Padding.Empty,
-                Padding = Padding.Empty,
+                Dock = DockStyle.Top,
+                BackColor = CARD_BG,
+                Height = 120 + 145 + 185 + 220,  // sum of card heights below
             };
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 115));  // GPS status
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 140));  // Payload controls
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 185));  // Capture (fixed so log always has room)
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));   // Gallery (fills remaining)
 
-            // --- GPS Status ---
-            var gpsCard = CreateCard("GPS STATUS");
-            gpsCard.Dock = DockStyle.Fill;
+            // --- Gallery Card (added first so it docks at bottom of inner, behind others) ---
+            var galleryCard = CreateCard("CAPTURED IMAGES");
+            galleryCard.Dock = DockStyle.Top;
+            galleryCard.Height = 220;
 
-            _lblGpsStatus = new Label
+            _galleryPanel = new FlowLayoutPanel
             {
-                Text = "Fix: Waiting...",
-                Font = new Font("Consolas", 10),
-                ForeColor = TEXT_PRIMARY,
+                Dock = DockStyle.None,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
                 Location = new Point(15, 40),
-                AutoSize = true,
+                AutoScroll = true,
+                BorderStyle = BorderStyle.FixedSingle,
+                BackColor = Color.FromArgb(25, 25, 28),
             };
-            gpsCard.Controls.Add(_lblGpsStatus);
-
-_lblPosition = new Label
-        {
-            Text = "Position: --",
-            Font = new Font("Consolas", 10),
-            ForeColor = TEXT_PRIMARY,
-            Location = new Point(15, 62),
-            AutoSize = true,
-        };
-        gpsCard.Controls.Add(_lblPosition);
-
-        _lblDetectionStatus = new Label
-        {
-            Text = "\u25CB No detection",
-            Font = new Font("Consolas", 9),
-            ForeColor = TEXT_SECONDARY,
-            Location = new Point(15, 82),
-            AutoSize = true,
-        };
-        gpsCard.Controls.Add(_lblDetectionStatus);
-
-        _lblTiltInfo = new Label
-        {
-            Text = "Tilt: -- | Gnd: --",
-            Font = new Font("Consolas", 9),
-            ForeColor = TEXT_SECONDARY,
-            Location = new Point(15, 100),
-            AutoSize = true,
-        };
-        gpsCard.Controls.Add(_lblTiltInfo);
-
-            layout.Controls.Add(gpsCard, 0, 0);
-
-            // --- Payload Controls ---
-            _payloadControl = new PayloadControlPanel(_config);
-            _payloadControl.Dock = DockStyle.Fill;
-            _payloadControl.Margin = new Padding(5);
-            layout.Controls.Add(_payloadControl, 0, 1);
+            galleryCard.Controls.Add(_galleryPanel);
+            galleryCard.Resize += (s, e) =>
+            {
+                _galleryPanel.Width = galleryCard.ClientSize.Width - 30;
+                _galleryPanel.Height = galleryCard.ClientSize.Height - 50;
+            };
 
             // --- Capture Card ---
             var captureCard = CreateCard("SNAPSHOT CAPTURE");
-            captureCard.Dock = DockStyle.Fill;
+            captureCard.Dock = DockStyle.Top;
+            captureCard.Height = 185;
 
             _btnCapture = CreateButton("CAPTURE PHOTO", ACCENT_COLOR, 200, 32);
             _btnCapture.Location = new Point(15, 38);
@@ -272,9 +240,9 @@ _lblPosition = new Label
 
             _txtResult = new TextBox
             {
-                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
                 Location = new Point(15, 78),
-                Size = new Size(280, 80),
+                Size = new Size(280, 90),
                 Multiline = true,
                 ReadOnly = true,
                 ScrollBars = ScrollBars.Vertical,
@@ -285,40 +253,77 @@ _lblPosition = new Label
                 Text = "Ready to capture...",
             };
             captureCard.Controls.Add(_txtResult);
-
             captureCard.Resize += (s, e) =>
             {
                 _txtResult.Width = captureCard.ClientSize.Width - 30;
-                _txtResult.Height = captureCard.ClientSize.Height - 90;
             };
 
-            layout.Controls.Add(captureCard, 0, 2);
+            // --- Payload Controls ---
+            _payloadControl = new PayloadControlPanel(_config);
+            _payloadControl.Dock = DockStyle.Top;
+            _payloadControl.Height = 145;
+            _payloadControl.Margin = new Padding(5, 0, 5, 0);
 
-            // --- Gallery Card ---
-            var galleryCard = CreateCard("CAPTURED IMAGES");
-            galleryCard.Dock = DockStyle.Fill;
+            // --- GPS Status Card ---
+            var gpsCard = CreateCard("GPS STATUS");
+            gpsCard.Dock = DockStyle.Top;
+            gpsCard.Height = 120;
 
-            _galleryPanel = new FlowLayoutPanel
+            _lblGpsStatus = new Label
             {
-                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
-                Location = new Point(15, 40),
-                Size = new Size(280, 100),
-                AutoScroll = true,
-                BorderStyle = BorderStyle.FixedSingle,
-                BackColor = Color.FromArgb(25, 25, 28),
+                Text = "Fix: Waiting...",
+                Font = new Font("Consolas", 10),
+                ForeColor = TEXT_PRIMARY,
+                Location = new Point(15, 38),
+                AutoSize = true,
             };
-            galleryCard.Controls.Add(_galleryPanel);
+            gpsCard.Controls.Add(_lblGpsStatus);
 
-            galleryCard.Resize += (s, e) =>
+            _lblPosition = new Label
             {
-                _galleryPanel.Width = galleryCard.ClientSize.Width - 30;
-                _galleryPanel.Height = galleryCard.ClientSize.Height - 50;
+                Text = "Position: --",
+                Font = new Font("Consolas", 10),
+                ForeColor = TEXT_PRIMARY,
+                Location = new Point(15, 58),
+                AutoSize = true,
+            };
+            gpsCard.Controls.Add(_lblPosition);
+
+            _lblDetectionStatus = new Label
+            {
+                Text = "\u25CB No detection",
+                Font = new Font("Consolas", 9),
+                ForeColor = TEXT_SECONDARY,
+                Location = new Point(15, 78),
+                AutoSize = true,
+            };
+            gpsCard.Controls.Add(_lblDetectionStatus);
+
+            _lblTiltInfo = new Label
+            {
+                Text = "Tilt: -- | Gnd: --",
+                Font = new Font("Consolas", 9),
+                ForeColor = TEXT_SECONDARY,
+                Location = new Point(15, 96),
+                AutoSize = true,
+            };
+            gpsCard.Controls.Add(_lblTiltInfo);
+
+            // Add cards to inner in reverse order (DockStyle.Top stacks bottom-up in WinForms)
+            inner.Controls.Add(galleryCard);
+            inner.Controls.Add(captureCard);
+            inner.Controls.Add(_payloadControl);
+            inner.Controls.Add(gpsCard);
+
+            // Resize inner panel to match total card height when scroll area resizes
+            scroll.Resize += (s, e) =>
+            {
+                int totalH = gpsCard.Height + _payloadControl.Height + captureCard.Height + galleryCard.Height;
+                inner.Height = Math.Max(totalH, scroll.ClientSize.Height);
             };
 
-            layout.Controls.Add(galleryCard, 0, 3);
-
-            panel.Controls.Add(layout);
-            return panel;
+            scroll.Controls.Add(inner);
+            return scroll;
         }
 
         private Panel CreateConfigurationSubtab()
