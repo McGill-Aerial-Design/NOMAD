@@ -419,28 +419,66 @@ sudo usermod -a -G dialout $USER
 
 ### Key API Endpoints
 
+> Full Swagger docs: `http://100.85.121.98:8000/docs`
+
+#### System / Services
 | Endpoint | Method | Description |
 |----------|--------|-------------|
+| `/` | GET | Service info |
 | `/health` | GET | System health overview |
-| `/health/detailed` | GET | Full Jetson metrics (temp, memory, disk) |
+| `/health/detailed` | GET | Full Jetson metrics (temp, memory, disk, CPU, GPU) |
 | `/status` | GET | Complete system state |
-| `/network/status` | GET | Tailscale, modem, reachability |
-| `/network/reconnect` | POST | Trigger Tailscale reconnect |
+| `/api/services/status` | GET | systemd / process status for nomad, mediamtx, mavlink-routerd |
+
+#### Task 1 (Outdoor Recon)
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/task/1/target/capture` | POST | Trigger target detection + description |
+| `/api/task/1/target/save` | POST | Save targets to `Task_1_MAD_targets.txt` |
+| `/api/task/1/target/clear` | POST | Clear all captured targets |
+| `/api/task/1/target/list` | GET | List captured targets |
+| `/api/task/1/target/model` | GET | Building model summary |
+| `/api/task/1/capture` | POST | Legacy capture fallback |
+| `/api/task/1/building/corner` | POST | Save one building corner GPS |
+| `/api/task/1/building/corners` | GET | List saved building corners |
+| `/api/task/1/building/corners/apply` | POST | Rebuild building model from corners |
+
+#### Task 2 (Indoor VIO)
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/task/2/reset_map` | POST | Clear exclusion map |
+| `/api/task/2/target_hit` | POST | Register target position |
+| `/api/task/2/exclusion_map` | GET | Get hit targets |
+
+#### VIO
+| Endpoint | Method | Description |
+|----------|--------|-------------|
 | `/api/vio/status` | GET | VIO pipeline health |
 | `/api/vio/pose` | GET | Current position/orientation |
+| `/api/vio/trajectory` | GET | Path history |
 | `/api/vio/reset_origin` | POST | Reset VIO tracking origin |
+| `/api/vio/calibration` | GET | ZED calibration state |
+
+#### Navigation / Isaac ROS
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/nav/status` | GET | Navigation controller status |
+| `/api/nav/velocity` | POST | Send velocity command |
+| `/api/nav/stop` | POST | Emergency stop |
 | `/api/isaac/status` | GET | Isaac ROS container status |
 | `/api/isaac/start` | POST | Start Isaac ROS container |
 | `/api/isaac/stop` | POST | Stop Isaac ROS container |
-| `/api/task/1/capture` | POST | Capture GPS snapshot (Task 1) |
-| `/api/task/2/target_hit` | POST | Register target position (Task 2) |
-| `/api/task/2/exclusion_map` | GET | Get hit targets |
+
+#### Servo / Spray / Video / Terminal / Network
+| Endpoint | Method | Description |
+|----------|--------|-------------|
 | `/api/servo/status` | GET | Servo and GPIO status |
-| `/api/servo/camera/tilt?angle=N` | POST | Set nozzle servo angle (0-180) |
-| `/api/servo/shooter/trigger?duration_ms=N` | POST | Fire water shooter |
-| `/api/nav/velocity` | POST | Send velocity command |
-| `/api/nav/position` | POST | Send position target |
-| `/api/nav/stop` | POST | Emergency stop |
+| `/api/servo/camera/tilt?angle=N` | POST | Set camera servo angle (0-180) |
+| `/api/servo/shooter/trigger?duration_ms=N` | POST | Trigger water shooter GPIO |
+| `/api/spray/status` | GET | Spray controller state |
+| `/api/spray/trigger` | POST | Trigger spray sequence |
+| `/api/spray/abort` | POST | Abort spray sequence |
+| `/api/video/status` | GET | Video pipeline status |
 | `/api/video/start` | POST | Start video streaming |
 
 ---

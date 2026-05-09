@@ -365,16 +365,16 @@ namespace NOMAD.MissionPlanner
             _headerPanel = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 60,
+                Height = 44,
                 BackColor = Color.FromArgb(35, 35, 40),
-                Padding = new Padding(25, 15, 25, 15),
+                Padding = new Padding(20, 10, 20, 10),
             };
-            
+
             var headerLabel = new Label
             {
                 Name = "lblHeader",
                 Text = "Dashboard",
-                Font = new Font("Segoe UI", 16, FontStyle.Bold),
+                Font = new Font("Segoe UI", 11, FontStyle.Bold),
                 ForeColor = TEXT_PRIMARY,
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleLeft,

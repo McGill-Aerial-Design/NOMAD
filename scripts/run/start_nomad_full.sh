@@ -570,12 +570,10 @@ cleanup() {
     echo ""
     log_info "Shutting down NOMAD services..."
     
-    # Only kill Edge Core if this script started it (not a pre-existing systemd instance)
-    if [ "$SCRIPT_OWNS_EDGE_CORE" = true ]; then
-        pkill -f "edge_core.main" 2>/dev/null || true
-    else
-        log_info "Leaving pre-existing Edge Core running (managed by systemd)"
-    fi
+    # Edge Core is a persistent daemon (nohup'd or systemd-managed) -- do NOT kill it
+    # on script exit. Killing it on Ctrl+C defeats the purpose of nohup and leaves
+    # Mission Planner disconnected. Edge Core outlives this script by design.
+    log_info "Leaving Edge Core running (persistent daemon)"
     
     # Stop video bridge inside Docker container
     docker exec nomad_isaac_ros pkill -f "simple_video_bridge" 2>/dev/null || true
@@ -601,14 +599,6 @@ if [ "$TASK_MODE" = "healthcheck" ]; then
     exit $main_rc
 fi
 
-# Keep script running to allow Ctrl+C cleanup.
-# 'wait' returns immediately if no child processes were spawned (e.g., Edge Core
-# was reused from systemd), so use 'sleep infinity' to block indefinitely.
-# The trap on INT/TERM will still fire on Ctrl+C or kill.
-if [ "$SCRIPT_OWNS_EDGE_CORE" = true ]; then
-    wait 2>/dev/null || true
-else
-    # No child to wait for -- block until signal
-    sleep infinity &
-    wait $! 2>/dev/null || true
-fi
+# Edge Core is left running after this script exits (it's a persistent daemon).
+# Nothing to block on -- exit cleanly so the terminal is returned to the user.
+log_ok "Startup complete. Edge Core and other daemons continue running in the background."

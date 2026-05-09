@@ -204,7 +204,7 @@ private ListBox _lstWalls;
                 Margin = Padding.Empty,
                 Padding = Padding.Empty,
             };
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 115));  // GPS status
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 130));  // GPS status
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 150));  // Payload controls (3 rows)
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 45));    // Capture
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 55));    // Gallery
