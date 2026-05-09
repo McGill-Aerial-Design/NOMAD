@@ -1191,7 +1191,7 @@ private ListBox _lstWalls;
                                     var tooltipText = $"{imageName}\n" +
                                                      $"Position: {latStr}, {lonStr}\n" +
                                                      $"Heading: {headingDeg} Pitch: {pitchDeg} Roll: {rollDeg}\n" +
-                                                     $"Gimbal: P={gimbalPitch} Y={gimbalYaw}\n" +
+                                                     $"Camera pitch: {cameraPitch}\n" +
                                                      "";
                                     tooltip.SetToolTip(picBox, tooltipText);
                                     
