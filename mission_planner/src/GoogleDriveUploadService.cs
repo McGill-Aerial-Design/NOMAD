@@ -32,7 +32,20 @@ namespace NOMAD.MissionPlanner
         public GoogleDriveUploadService(string tokenPath = null, string folderId = null)
         {
             _tokenPath = tokenPath ?? TOKEN_PATH;
-            _folderId = folderId ?? Environment.GetEnvironmentVariable(FOLDER_ID_ENV);
+            _folderId = folderId
+                ?? Environment.GetEnvironmentVariable(FOLDER_ID_ENV)
+                ?? ReadFolderIdFromToken(_tokenPath ?? TOKEN_PATH);
+        }
+
+        private static string ReadFolderIdFromToken(string tokenPath)
+        {
+            try
+            {
+                if (!File.Exists(tokenPath)) return null;
+                var data = JObject.Parse(File.ReadAllText(tokenPath));
+                return data["folder_id"]?.ToString();
+            }
+            catch { return null; }
         }
 
         /// <summary>
@@ -61,6 +74,8 @@ namespace NOMAD.MissionPlanner
                 if (string.IsNullOrEmpty(tokenData["client_secret"]?.ToString()))  missing.Add("client_secret");
                 if (missing.Count > 0)
                     return $"Token file is missing fields: {string.Join(", ", missing)}\nFile: {_tokenPath}";
+                if (string.IsNullOrEmpty(tokenData["folder_id"]?.ToString()))
+                    return $"Warning: no folder_id in token file — files will upload to root Drive.\nFile: {_tokenPath}";
                 return null; // looks ok
             }
             catch (Exception ex)
