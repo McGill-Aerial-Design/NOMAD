@@ -763,9 +763,18 @@ for path in candidates:
                 new_text,
             )
 
+    # Enforce 360p (downscale 2.0). 720p (1.0) causes cudaErrorIllegalAddress
+    # in nvblox on 8GB Jetson Orin Nano.
+    if re.search(r'(?m)^\s*pub_downscale_factor\s*:', new_text):
+        new_text = re.sub(
+            r'(?m)^(\s*pub_downscale_factor\s*:\s*)[0-9.]+',
+            r'\g<1>2.0',
+            new_text,
+        )
+
     if new_text != text:
         path.write_text(new_text)
-        print(f'Enabled publish_mag/publish_raw/publish_left_right in {path}')
+        print(f'Enabled publish_mag/publish_raw/publish_left_right, set pub_downscale_factor=2.0 in {path}')
     else:
         print(f'publish_mag/publish_raw/publish_left_right already true in {path}')
 

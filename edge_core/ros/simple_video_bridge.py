@@ -50,6 +50,18 @@ _HSV_PRIORITY = ["red", "yellow", "green", "blue", "black", "white"]
 
 Gst.init(None)
 
+# ZED 2i topics that use lazy publishing — only published when someone subscribes.
+# ros2 topic list won't show them until then, so we include them statically so
+# the user can pre-select before ZED starts; subscribing triggers publication.
+_ZED_KNOWN_IMAGE_TOPICS = [
+    '/zed/zed_node/left/image_rect_color',
+    '/zed/zed_node/right/image_rect_color',
+    '/zed/zed_node/left_raw/image_raw_color',
+    '/zed/zed_node/right_raw/image_raw_color',
+    '/zed/zed_node/rgb/color/rect/image',
+    '/zed/zed_node/depth/depth_registered',
+]
+
 
 def _probe_encoder():
     """Probe available H.264 software encoder.
@@ -796,20 +808,23 @@ class ControlServer(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(data).encode())
 
     def _discover_topics(self) -> list:
+        discovered = set()
         try:
             result = subprocess.run(
                 ['ros2', 'topic', 'list', '-t'],
                 capture_output=True, text=True, timeout=10)
-            topics = []
             for line in result.stdout.splitlines():
                 parts = line.split()
                 if len(parts) >= 2:
                     topic, type_ = parts[0], parts[1].strip('[]')
                     if 'Image' in type_ and 'sensor_msgs' in type_:
-                        topics.append(topic)
-            return sorted(topics)
+                        discovered.add(topic)
         except Exception:
-            return []
+            pass
+        # Merge live-discovered topics with known ZED lazy topics.
+        # ZED only publishes left/right/raw when a subscriber exists, so they
+        # won't appear in ros2 topic list until after the bridge subscribes.
+        return sorted(discovered | set(_ZED_KNOWN_IMAGE_TOPICS))
 
 
 def run_http_server(video_node: VideoStreamNode, port: int = 9200):
