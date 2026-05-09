@@ -148,6 +148,7 @@ namespace NOMAD.MissionPlanner
 
                 // Initialize Jetson connection manager for non-blocking UI
                 _jetsonConnectionManager = new JetsonConnectionManager(_config);
+                _jetsonConnectionManager.ConnectionStateChanged += OnJetsonConnected_PushServoConfig;
                 _jetsonConnectionManager.StartPolling();
 
                 // Initialize MAVLink dual link connection manager
@@ -906,5 +907,42 @@ namespace NOMAD.MissionPlanner
         /// Get the connection manager instance (for external access).
         /// </summary>
         public MAVLinkConnectionManager ConnectionManager => _connectionManager;
+
+        /// <summary>
+        /// Push servo calibration config to Jetson on every new connection so
+        /// the Jetson always uses the settings configured in the NOMAD Settings UI
+        /// rather than its own defaults (e.g. after a NOMAD restart on the Jetson).
+        /// </summary>
+        private void OnJetsonConnected_PushServoConfig(object sender, JetsonConnectionStateChangedEventArgs e)
+        {
+            if (e.NewState != JetsonConnectionState.Connected) return;
+
+            var cfg = _config;
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                try
+                {
+                    var body = new System.Net.Http.StringContent(
+                        Newtonsoft.Json.JsonConvert.SerializeObject(new
+                        {
+                            channel         = cfg.CameraTiltChannel,
+                            pwm_down        = cfg.CameraTiltPwmMin,
+                            pwm_neutral     = cfg.CameraTiltPwmNeutral,
+                            pwm_up          = cfg.CameraTiltPwmMax,
+                            angle_range_deg = cfg.CameraTiltAngleRange,
+                        }),
+                        System.Text.Encoding.UTF8,
+                        "application/json");
+
+                    var response = await JetsonApiService.PostAsync("/api/servo/camera/config", body);
+                    System.Diagnostics.Debug.WriteLine(
+                        $"NOMAD: Pushed servo config to Jetson — HTTP {(int)response.StatusCode}");
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"NOMAD: Failed to push servo config — {ex.Message}");
+                }
+            });
+        }
     }
 }
