@@ -420,8 +420,7 @@ For upper-wall targets: if the drone is too close to the wall, the target will b
 The capture tab shows: `Tilt: -45° | Gnd: 5.2m fwd`
 - **Tilt** — actual servo angle read from the flight controller (SERVO_OUTPUT_RAW), not commanded
 - **Gnd: X.Xm fwd** — estimated ground intersection ahead at current tilt + current altitude
-- Label turns **green** when tilt is ≥30° down (good targeting angle)
-- Label turns **amber** when tilt is level or up (camera not aimed at scene)
+- Use this to judge your forward offset when approaching ground targets, or to confirm the camera is aimed where you think it is for wall targets
 
 #### Capture button states
 

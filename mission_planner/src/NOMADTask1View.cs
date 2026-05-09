@@ -1353,18 +1353,16 @@ _lblPosition = new Label
                                 {
                                     double groundDist = droneAlt / Math.Tan(Math.Abs(pitchDeg) * Math.PI / 180.0);
                                     tiltText = $"Tilt: {pitchDeg:F0}\u00B0 | Gnd: {groundDist:F1}m fwd";
-                                    tiltColor = Math.Abs(pitchDeg) >= 30f ? SUCCESS_COLOR : WARNING_COLOR;
                                 }
                                 else if (pitchDeg > 1f)
                                 {
                                     tiltText = $"Tilt: +{pitchDeg:F0}\u00B0 (up)";
-                                    tiltColor = WARNING_COLOR;
                                 }
                                 else
                                 {
-                                    tiltText = "Tilt: 0\u00B0 (level \u2014 tilt down for targeting)";
-                                    tiltColor = WARNING_COLOR;
+                                    tiltText = "Tilt: 0\u00B0 (level)";
                                 }
+                                tiltColor = TEXT_SECONDARY;
                                 this.BeginInvoke(new Action(() =>
                                 {
                                     if (_lblTiltInfo != null && !_lblTiltInfo.IsDisposed)
