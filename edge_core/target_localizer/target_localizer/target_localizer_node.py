@@ -505,13 +505,27 @@ class TargetLocalizerNode(Node):
         # depth holes on low-texture/reflective target patches.
         depth = _sample_depth(half_window=5, max_range_m=20.0)
         if depth is None:
-            for half_window in (12, 20, 30):
+            for half_window in (12, 20, 30, 60, 100):
                 depth = _sample_depth(half_window=half_window, max_range_m=35.0)
                 if depth is not None:
                     break
 
         if depth is None:
-            return None
+            # Last resort: use global frame median. If the ZED depth is mostly NaN
+            # (e.g. textureless wall, strong reflections), use any valid pixel to
+            # at least produce a rough geolocalization rather than hard failing.
+            global_valid = depth_image[
+                np.isfinite(depth_image) & (depth_image > 0.1) & (depth_image < 35.0)
+            ]
+            if len(global_valid) >= 10:
+                depth = float(np.median(global_valid))
+                self.get_logger().warn(
+                    f"Depth at ({px},{py}) all-NaN in ±100px window; "
+                    f"using global frame median {depth:.2f}m "
+                    f"({len(global_valid)} valid pixels in frame)"
+                )
+            else:
+                return None
 
         # Pixel to camera-frame 3D (OpenCV convention: Z forward, X right, Y down)
         cam_x = (px - self.camera_cx) * depth / self.camera_fx
@@ -1021,7 +1035,7 @@ class TargetLocalizerNode(Node):
                     if dist_m is not None else ""
                 )
                 lines.append(f"Target {t.target_id}: {t.description}{dist_part}")
-            response.message = f"Added {len(new_targets)} target(s):\n" + "\n".join(lines)
+            response.message = "\n".join(lines)
         else:
             # A filter-only result means HSV detection is working, but no NEW
             # targets were produced for this capture request.

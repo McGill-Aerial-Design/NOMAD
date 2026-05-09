@@ -775,7 +775,7 @@ private ListBox _lstWalls;
             _btnSetGroundAlt.Text = "Setting...";
             try
             {
-                var response = await JetsonApiService.PostAsync("/api/task/1/target/ground_alt", null);
+                var response = await JetsonApiService.PostLongRunAsync("/api/task/1/target/ground_alt", null);
                 if (response.IsSuccessStatusCode)
                 {
                     var body = await response.Content.ReadAsStringAsync();

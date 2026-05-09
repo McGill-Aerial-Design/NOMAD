@@ -772,11 +772,28 @@ for path in candidates:
             new_text,
         )
 
+    # Lower depth confidence thresholds for outdoor use.
+    # Default depth_confidence:95 / depth_texture_conf:100 causes nearly all-NaN
+    # depth on low-texture surfaces (walls, ground). Target localizer needs valid
+    # depth at the frame center for geolocating targets.
+    if re.search(r'(?m)^\s*depth_confidence\s*:', new_text):
+        new_text = re.sub(
+            r'(?m)^(\s*depth_confidence\s*:\s*)[0-9]+',
+            r'\g<1>50',
+            new_text,
+        )
+    if re.search(r'(?m)^\s*depth_texture_conf\s*:', new_text):
+        new_text = re.sub(
+            r'(?m)^(\s*depth_texture_conf\s*:\s*)[0-9]+',
+            r'\g<1>70',
+            new_text,
+        )
+
     if new_text != text:
         path.write_text(new_text)
-        print(f'Enabled publish_mag/publish_raw/publish_left_right, set pub_downscale_factor=2.0 in {path}')
+        print(f'Patched common_stereo.yaml: publish_mag/publish_raw/publish_left_right=true, pub_downscale_factor=2.0, depth_confidence=50, depth_texture_conf=70 in {path}')
     else:
-        print(f'publish_mag/publish_raw/publish_left_right already true in {path}')
+        print(f'common_stereo.yaml already up to date in {path}')
 
     updated_any = True
 

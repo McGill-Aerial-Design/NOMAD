@@ -110,7 +110,7 @@ namespace NOMAD.MissionPlanner
                     _jetsonConnectionManager
                 );
                 _wasdControl.Dock = DockStyle.Top;
-                _wasdControl.Height = 330;
+                _wasdControl.Height = 455;
                 controlsSection.Controls.Add(_wasdControl);
             }
             catch (Exception ex)
