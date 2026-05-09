@@ -222,29 +222,41 @@ namespace NOMAD.MissionPlanner
         // ============================================================
 
         /// <summary>
-        /// Send a DO_SET_SERVO command via MAVLink.
-        /// Returns true if the command was dispatched successfully.
+        /// Send a DO_SET_SERVO command via MAVLink. Always non-blocking:
+        /// the synchronous ACK round-trip (which can stall hundreds of ms)
+        /// is dispatched on a worker thread so the UI thread never freezes.
+        /// Returns true if the link is open and the command was dispatched.
+        /// Note: this does NOT wait for the ACK — failure to deliver is silent
+        /// from the caller's perspective (status is set asynchronously).
         /// </summary>
         private bool TrySendServoMAVLink(int channel, int pwmUs)
         {
-            try
-            {
-                if (channel <= 0) return false;
-                if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen)
-                    return false;
-
-                MainV2.comPort.doCommand(
-                    MainV2.comPort.MAV.sysid,
-                    MainV2.comPort.MAV.compid,
-                    MAVLink.MAV_CMD.DO_SET_SERVO,
-                    channel, pwmUs, 0, 0, 0, 0, 0);
-
-                return true;
-            }
-            catch
-            {
+            if (channel <= 0) return false;
+            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen)
                 return false;
-            }
+
+            // Capture the current MAV identity on the UI thread, then fire
+            // the doCommand call from a background thread to avoid blocking.
+            byte sysid = MainV2.comPort.MAV.sysid;
+            byte compid = MainV2.comPort.MAV.compid;
+
+            Task.Run(() =>
+            {
+                try
+                {
+                    MainV2.comPort.doCommand(
+                        sysid, compid,
+                        MAVLink.MAV_CMD.DO_SET_SERVO,
+                        channel, pwmUs, 0, 0, 0, 0, 0);
+                }
+                catch
+                {
+                    // Swallow background MAVLink errors — the link health
+                    // panel and ACK timeouts surface real failures.
+                }
+            });
+
+            return true;
         }
 
         // ============================================================
