@@ -34,3 +34,7 @@ jetson-stats>=4.2.0  # jtop for Jetson devices (optional, graceful fallback)
 # EXIF metadata for image tagging
 piexif>=1.1.3
 
+# Google Drive upload for autonomous competition photo submission
+google-api-python-client>=2.150.0
+google-auth>=2.35.0
+google-auth-oauthlib>=1.2.1

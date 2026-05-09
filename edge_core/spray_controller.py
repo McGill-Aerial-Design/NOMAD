@@ -10,11 +10,12 @@ State Machine:
 
 Features:
   - Operator manual positioning (WASD) to enter 3m engagement zone
-  - Autonomous approach via Nav2 NavigateToPose (3m to 2m)
+  - Autonomous approach via MAVLink velocity commands (3m to 2m)
   - Pre-spray image capture for circle change verification
   - Circle change verification: color-agnostic before/after comparison (>20% change)
   - Visual servoing: servo pitch + ballistic drop compensation
-  - Google Drive upload: posts proof photo
+  - Google Drive upload: posts proof photo autonomously
+  - Calibration data loaded from ~/.nomad/calibration/spray_calibration.json
   - Obstacle avoidance sector exclusion during approach
 
 Target: Python 3.13 | NVIDIA Jetson Orin Nano

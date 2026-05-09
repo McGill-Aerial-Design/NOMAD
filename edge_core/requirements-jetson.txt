@@ -53,6 +53,13 @@ httpx==0.28.0
 python-dotenv==1.0.1  # Environment variable loading
 
 # ============================================================
+# Google Drive Upload
+# ============================================================
+google-api-python-client==2.151.0
+google-auth==2.35.0
+google-auth-oauthlib==1.2.1
+
+# ============================================================
 # Development & Testing (Optional)
 # ============================================================
 pytest==8.3.0
