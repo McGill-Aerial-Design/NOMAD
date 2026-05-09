@@ -769,10 +769,11 @@ namespace NOMAD.MissionPlanner
 
                             UpdateStatusLabel(_lblIsaacRosStatus, containerRunning, containerRunning ? "Running" : "Not Running");
 
-                            if (nvbloxRunning && bridgeRunning)
+                            UpdateStatusLabel(_lblRosBridgeStatus, bridgeRunning,
+                                bridgeRunning ? "Running" : (containerRunning ? "Stopped" : "No Container"));
+
+                            if (nvbloxRunning)
                                 UpdateStatusLabel(_lblNvbloxStatus, true, "Running");
-                            else if (nvbloxRunning)
-                                UpdateStatusLabel(_lblNvbloxStatus, false, "No Bridge");
                             else if (containerRunning)
                                 UpdateStatusLabel(_lblNvbloxStatus, false, "Stopped");
                             else

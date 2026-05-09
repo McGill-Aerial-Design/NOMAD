@@ -204,10 +204,10 @@ private ListBox _lstWalls;
                 Margin = Padding.Empty,
                 Padding = Padding.Empty,
             };
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 130));  // GPS status
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 150));  // Payload controls (3 rows)
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 45));    // Capture
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 55));    // Gallery
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 115));  // GPS status
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 140));  // Payload controls
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 185));  // Capture (fixed so log always has room)
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));   // Gallery (fills remaining)
 
             // --- GPS Status ---
             var gpsCard = CreateCard("GPS STATUS");
@@ -265,15 +265,15 @@ _lblPosition = new Label
             var captureCard = CreateCard("SNAPSHOT CAPTURE");
             captureCard.Dock = DockStyle.Fill;
 
-            _btnCapture = CreateButton("CAPTURE PHOTO", ACCENT_COLOR, 200, 40);
-            _btnCapture.Location = new Point(15, 45);
+            _btnCapture = CreateButton("CAPTURE PHOTO", ACCENT_COLOR, 200, 32);
+            _btnCapture.Location = new Point(15, 38);
             _btnCapture.Click += BtnCapture_Click;
             captureCard.Controls.Add(_btnCapture);
 
             _txtResult = new TextBox
             {
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
-                Location = new Point(15, 95),
+                Location = new Point(15, 78),
                 Size = new Size(280, 80),
                 Multiline = true,
                 ReadOnly = true,
@@ -289,7 +289,7 @@ _lblPosition = new Label
             captureCard.Resize += (s, e) =>
             {
                 _txtResult.Width = captureCard.ClientSize.Width - 30;
-                _txtResult.Height = captureCard.ClientSize.Height - 110;
+                _txtResult.Height = captureCard.ClientSize.Height - 90;
             };
 
             layout.Controls.Add(captureCard, 0, 2);
@@ -301,7 +301,7 @@ _lblPosition = new Label
             _galleryPanel = new FlowLayoutPanel
             {
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
-                Location = new Point(15, 45),
+                Location = new Point(15, 40),
                 Size = new Size(280, 100),
                 AutoScroll = true,
                 BorderStyle = BorderStyle.FixedSingle,
@@ -312,7 +312,7 @@ _lblPosition = new Label
             galleryCard.Resize += (s, e) =>
             {
                 _galleryPanel.Width = galleryCard.ClientSize.Width - 30;
-                _galleryPanel.Height = galleryCard.ClientSize.Height - 60;
+                _galleryPanel.Height = galleryCard.ClientSize.Height - 50;
             };
 
             layout.Controls.Add(galleryCard, 0, 3);

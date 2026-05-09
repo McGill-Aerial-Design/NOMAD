@@ -211,8 +211,8 @@ namespace NOMAD.MissionPlanner
             this.BackColor = BG_COLOR;
             this.Dock = DockStyle.Fill;
             this.Padding = new Padding(10);
-            this.MinimumSize = new Size(400, 400);
-            
+            this.MinimumSize = new Size(400, 280);
+
             var mainLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -220,10 +220,10 @@ namespace NOMAD.MissionPlanner
                 RowCount = 4,
                 BackColor = Color.Transparent,
             };
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));   // Enable/Status
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));   // Enable/Status
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));   // Keyboard visual
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 80));   // Settings
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));  // Payload controls
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 65));   // Settings
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 80));   // Payload controls
             
             // Top row: Enable checkbox and status
             var topPanel = CreateTopPanel();
@@ -256,21 +256,21 @@ namespace NOMAD.MissionPlanner
             _chkEnable = new CheckBox
             {
                 Text = "Enable Nudge Control",
-                Font = new Font("Segoe UI", 11, FontStyle.Bold),
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
                 ForeColor = TEXT_PRIMARY,
-                Location = new Point(10, 12),
+                Location = new Point(10, 8),
                 AutoSize = true,
                 Cursor = Cursors.Hand,
             };
             _chkEnable.CheckedChanged += (s, e) => ControlEnabled = _chkEnable.Checked;
             panel.Controls.Add(_chkEnable);
-            
+
             _lblStatus = new Label
             {
                 Text = "Disabled",
-                Font = new Font("Segoe UI", 10),
+                Font = new Font("Segoe UI", 9),
                 ForeColor = TEXT_SECONDARY,
-                Location = new Point(220, 14),
+                Location = new Point(210, 10),
                 AutoSize = true,
             };
             panel.Controls.Add(_lblStatus);
@@ -616,10 +616,10 @@ namespace NOMAD.MissionPlanner
             // Warning label
             var lblWarning = new Label
             {
-                Text = "CAUTION: Use in Guided mode only. Keep RC ready for override.",
+                Text = "CAUTION: Guided mode only. Keep RC ready.",
                 Font = new Font("Segoe UI", 8),
                 ForeColor = WARNING_COLOR,
-                Location = new Point(10, 45),
+                Location = new Point(10, 38),
                 AutoSize = true,
             };
             panel.Controls.Add(lblWarning);
