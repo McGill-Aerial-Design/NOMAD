@@ -41,7 +41,7 @@ from launch.actions import (
     DeclareLaunchArgument,
     ExecuteProcess,
 )
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -52,6 +52,12 @@ def generate_launch_description():
     nvblox_bringup_dir = get_package_share_directory("nvblox_examples_bringup")
     zed_example_launch = os.path.join(
         nvblox_bringup_dir, "launch", "zed_example.launch.py"
+    )
+    # ZED-only launch (loads only the ZED composable node, no nvblox).
+    # Used when enable_nvblox:=false so we keep video, ros_http_bridge,
+    # target_localizer, etc., without paying for nvblox VRAM/CUDA pressure.
+    zed_only_launch = os.path.join(
+        nvblox_bringup_dir, "launch", "sensors", "zed.launch.py"
     )
 
     # Nav2 config for omnidirectional drone
@@ -73,6 +79,12 @@ def generate_launch_description():
         "enable_foxglove",
         default_value="false",
         description="Enable Foxglove bridge for ROS2 topic visualization in Foxglove Studio (WebSocket on port 8765)",
+    )
+
+    enable_nvblox_arg = DeclareLaunchArgument(
+        "enable_nvblox",
+        default_value="true",
+        description="Load the nvblox composable node alongside ZED (true) or run ZED only with the rest of the bringup intact (false). Set false to keep video / ros_http_bridge / target_localizer running without nvblox VRAM and CUDA pressure.",
     )
 
     # NOTE: Do NOT patch pub_downscale_factor to 1.0 (720p).
@@ -104,7 +116,8 @@ def generate_launch_description():
     )
 
     # Obstacle distance bridge: converts nvblox 2D ESDF slice to
-    # MAVLink OBSTACLE_DISTANCE for ArduPilot obstacle avoidance (NV-008)
+    # MAVLink OBSTACLE_DISTANCE for ArduPilot obstacle avoidance (NV-008).
+    # Skipped when nvblox is disabled — its source topic wouldn't exist.
     obstacle_distance_bridge = ExecuteProcess(
         cmd=[
             "python3",
@@ -122,6 +135,7 @@ def generate_launch_description():
         ],
         name="obstacle_distance_bridge",
         output="screen",
+        condition=IfCondition(LaunchConfiguration("enable_nvblox")),
     )
 
     # Nav2 stack: full navigation with nvblox costmap for obstacle avoidance
@@ -161,7 +175,7 @@ def generate_launch_description():
         cmd=[
             "/bin/bash",
             "-c",
-            ". /opt/ros/humble/setup.bash && . /workspaces/isaac_ros-dev/install/setup.bash && PYTHONPATH=/workspaces/isaac_ros-dev/edge_core/target_localizer:$PYTHONPATH exec python3 -m target_localizer.target_localizer_node --ros-args -p output_dir:=/home/mad/NOMAD/data/task1_captures -p team_name:=MAD -r /zed2i/zed_node/rgb/image_rect_color:=/zed/zed_node/rgb/color/rect/image -r /zed2i/zed_node/depth/depth_registered:=/zed/zed_node/depth/depth_registered -r /zed2i/zed_node/rgb/camera_info:=/zed/zed_node/rgb/color/rect/camera_info",
+            ". /opt/ros/humble/setup.bash && . /workspaces/isaac_ros-dev/install/setup.bash && PYTHONPATH=/workspaces/isaac_ros-dev/edge_core/target_localizer:$PYTHONPATH exec python3 -m target_localizer.target_localizer_node --ros-args -p output_dir:=/workspaces/isaac_ros-dev/data/task1_captures -p team_name:=MAD -r /zed2i/zed_node/rgb/image_rect_color:=/zed/zed_node/rgb/color/rect/image -r /zed2i/zed_node/depth/depth_registered:=/zed/zed_node/depth/depth_registered -r /zed2i/zed_node/rgb/camera_info:=/zed/zed_node/rgb/color/rect/camera_info",
         ],
         name="target_localizer",
         output="screen",
@@ -216,19 +230,34 @@ def generate_launch_description():
         ],
     )
 
+    # ZED + nvblox in one composable container (default) ...
+    zed_with_nvblox = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(zed_example_launch),
+        launch_arguments={
+            "camera": "zed2",
+            "enable_od": LaunchConfiguration("enable_od"),
+            "run_rviz": "false",  # Headless Jetson — no display for rviz
+        }.items(),
+        condition=IfCondition(LaunchConfiguration("enable_nvblox")),
+    )
+    # ... or just ZED, in its own standalone container, when enable_nvblox:=false.
+    zed_only = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(zed_only_launch),
+        launch_arguments={
+            "zed_camera_model": "zed2",
+            "run_standalone": "True",
+        }.items(),
+        condition=UnlessCondition(LaunchConfiguration("enable_nvblox")),
+    )
+
     return LaunchDescription(
         [
             enable_od_arg,
             enable_nav2_arg,
             enable_foxglove_arg,
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(zed_example_launch),
-                launch_arguments={
-                    "camera": "zed2",
-                    "enable_od": LaunchConfiguration("enable_od"),
-                    "run_rviz": "false",  # Headless Jetson — no display for rviz
-                }.items(),
-            ),
+            enable_nvblox_arg,
+            zed_with_nvblox,
+            zed_only,
             optical_frame_alias,
             target_localizer,
             servo_tf_publisher,

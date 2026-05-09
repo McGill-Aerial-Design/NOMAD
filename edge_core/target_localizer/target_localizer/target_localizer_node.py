@@ -702,6 +702,8 @@ class TargetLocalizerNode(Node):
         # Run HSV circle detection
         circles = self.circle_detector.detect(rgb)
 
+        new_targets: List[TargetRecord] = []
+
         if len(circles) == 0:
             # Center-pixel depth fallback: if pilot has manually centered the
             # target in the camera crosshair, use center-pixel depth to get
@@ -709,6 +711,15 @@ class TargetLocalizerNode(Node):
             if self.has_gps_fix or self.has_local_pose:
                 center_px = self.latest_rgb.shape[1] // 2
                 center_py = self.latest_rgb.shape[0] // 2
+                # Raw depth at center pixel for distance reporting
+                _chw = 5
+                _cy_c, _cx_c = center_py, center_px
+                _cy1 = max(0, _cy_c - _chw); _cy2 = min(depth.shape[0], _cy_c + _chw + 1)
+                _cx1 = max(0, _cx_c - _chw); _cx2 = min(depth.shape[1], _cx_c + _chw + 1)
+                _croi = depth[_cy1:_cy2, _cx1:_cx2]
+                _cvalid = _croi[np.isfinite(_croi) & (_croi > 0.1) & (_croi < 35.0)]
+                center_distance_m: Optional[float] = float(np.median(_cvalid)) if len(_cvalid) > 0 else None
+
                 world = self._pixel_to_world_enu(center_px, center_py, depth, captured_servo_pitch)
                 if world is not None:
                     east, north, up = world
@@ -736,7 +747,14 @@ class TargetLocalizerNode(Node):
                     cv2.line(annotated, (w // 2, h // 2 - 20), (w // 2, h // 2 + 20), (0, 255, 255), 2)
                     cv2.putText(annotated, f"{target_letter}: center-depth fallback", (10, 30),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-                    cv2.imwrite(img_path, annotated)
+                    try:
+                        ok, buf = cv2.imencode(".jpg", annotated)
+                        if ok:
+                            with open(img_path, "wb") as _f:
+                                _f.write(buf.tobytes())
+                    except Exception as _imwrite_err:
+                        self.get_logger().warn(f"Image save failed (non-fatal): {_imwrite_err}")
+                        img_path = None
                     record = TargetRecord(
                         target_id=target_letter,
                         color=TargetColor.UNKNOWN,
@@ -761,14 +779,19 @@ class TargetLocalizerNode(Node):
                             "drone_heading": self.drone_heading,
                             "servo_pitch": captured_servo_pitch,
                             "drone_alt": self.drone_alt,
+                            "distance_m": center_distance_m,
                             "center_fallback": True,
                         },
                     )
                     self.targets.append(record)
                     new_targets.append(record)
                     self.next_target_index += 1
+                    dist_str = (
+                        f" [center_distance={center_distance_m * 100:.0f}cm]"
+                        if center_distance_m is not None else ""
+                    )
                     self.get_logger().info(
-                        f"TARGET {record.target_id} (center-fallback): {description}"
+                        f"TARGET {record.target_id} (center-fallback): {description}{dist_str}"
                     )
             if not new_targets:
                 response.success = False
@@ -804,9 +827,17 @@ class TargetLocalizerNode(Node):
                 (0, 255, 0),
                 2,
             )
-            cv2.imwrite(img_path, annotated)
-            saved_images.append(img_filename)
-            self.get_logger().info(f"Saved detection image: {img_filename}")
+            try:
+                ok, buf = cv2.imencode(".jpg", annotated)
+                if ok:
+                    with open(img_path, "wb") as _f:
+                        _f.write(buf.tobytes())
+                    saved_images.append(img_filename)
+                    self.get_logger().info(f"Saved detection image: {img_filename}")
+                else:
+                    self.get_logger().warn(f"Image encode returned False for {img_filename}")
+            except Exception as _imwrite_err:
+                self.get_logger().warn(f"Image save failed (non-fatal): {_imwrite_err}")
 
         # Check if we can create targets (requires GPS/local pose)
         can_create_targets = self.has_gps_fix or self.has_local_pose
@@ -821,7 +852,6 @@ class TargetLocalizerNode(Node):
             )
             return response
 
-        new_targets = []
         duplicate_count = 0
         depth_fail_count = 0
         face_fail_count = 0
@@ -854,6 +884,15 @@ class TargetLocalizerNode(Node):
                 continue
 
             east, north, up = world
+
+            # Raw slant range to target center (meters) for distance reporting
+            _hw = 5
+            _py, _px = int(det.cy), int(det.cx)
+            _y1 = max(0, _py - _hw); _y2 = min(depth.shape[0], _py + _hw + 1)
+            _x1 = max(0, _px - _hw); _x2 = min(depth.shape[1], _px + _hw + 1)
+            _roi = depth[_y1:_y2, _x1:_x2]
+            _valid = _roi[np.isfinite(_roi) & (_roi > 0.1) & (_roi < 35.0)]
+            det_distance_m: Optional[float] = float(np.median(_valid)) if len(_valid) > 0 else None
 
             # Prefer the face the drone is actively looking at; fall back to
             # nearest-wall classification if view direction is unknown. Either
@@ -899,16 +938,29 @@ class TargetLocalizerNode(Node):
             annotated = rgb.copy()
             x1, y1, x2, y2 = det.bbox
             cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            dist_label = (
+                f"{det_distance_m * 100:.0f}cm" if det_distance_m is not None else "?cm"
+            )
             cv2.putText(
                 annotated,
-                f"{final_color.value} ({det.confidence:.2f})",
+                f"{final_color.value} ({det.confidence:.2f}) {dist_label}",
                 (x1, y1 - 10),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
                 (0, 255, 0),
                 2,
             )
-            cv2.imwrite(img_path, annotated)
+            try:
+                ok, buf = cv2.imencode(".jpg", annotated)
+                if ok:
+                    with open(img_path, "wb") as _f:
+                        _f.write(buf.tobytes())
+                else:
+                    self.get_logger().warn(f"Image encode returned False for {img_filename}")
+                    img_path = None
+            except Exception as _imwrite_err:
+                self.get_logger().warn(f"Image save failed (non-fatal): {_imwrite_err}")
+                img_path = None
 
             # Create record
             record = TargetRecord(
@@ -940,6 +992,7 @@ class TargetLocalizerNode(Node):
                     "det_radius": int(det.radius),
                     "det_color": det.color.value,
                     "det_confidence": float(det.confidence),
+                    "distance_m": det_distance_m,
                     "center_fallback": False,
                 },
             )
@@ -947,15 +1000,26 @@ class TargetLocalizerNode(Node):
             new_targets.append(record)
             self.next_target_index += 1
 
+            dist_str = (
+                f" distance={det_distance_m * 100:.0f}cm"
+                if det_distance_m is not None else ""
+            )
             self.get_logger().info(
                 f"TARGET {record.target_id}: {description} "
-                f"(plane={plane_hit.label}, distance={plane_hit.distance:.2f}m)"
+                f"(plane={plane_hit.label}, slant_range={plane_hit.distance:.2f}m{dist_str})"
             )
 
         if new_targets:
             response.success = True
-            descs = [f"Target {t.target_id}: {t.description}" for t in new_targets]
-            response.message = f"Added {len(new_targets)} target(s):\n" + "\n".join(descs)
+            lines = []
+            for t in new_targets:
+                dist_m = (t.raw_data or {}).get("distance_m")
+                dist_part = (
+                    f" [distance={dist_m * 100:.0f}cm]"
+                    if dist_m is not None else ""
+                )
+                lines.append(f"Target {t.target_id}: {t.description}{dist_part}")
+            response.message = f"Added {len(new_targets)} target(s):\n" + "\n".join(lines)
         else:
             # A filter-only result means HSV detection is working, but no NEW
             # targets were produced for this capture request.

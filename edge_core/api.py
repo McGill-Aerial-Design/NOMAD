@@ -1332,40 +1332,21 @@ sleep 2
 {bridge_env_prefix}python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --mag-topic /zed/zed_node/imu/mag --mesh-topic /nvblox_node/color_layer_marker --high-rate-transport http &
 echo $! > /tmp/ros_bridge.pid
 
-# Launch Task 1 target-localizer for HSV circle detection (always needed for Task 1 capture).
-# Previously only launched when OD was enabled, but now runs independently since ZED OD is disabled.
-if true; then
-    PYTHONPATH=/workspaces/isaac_ros-dev/edge_core/target_localizer:${{PYTHONPATH:-}} \
-    python3 -m target_localizer.target_localizer_node \
-        --ros-args \
-        -p output_dir:=/home/mad/NOMAD/data/task1_captures \
-        -p team_name:=MAD \
-        -r /zed2i/zed_node/rgb/image_rect_color:=/zed/zed_node/rgb/color/rect/image \
-        -r /zed2i/zed_node/depth/depth_registered:=/zed/zed_node/depth/depth_registered \
-        -r /zed2i/zed_node/rgb/camera_info:=/zed/zed_node/rgb/color/rect/camera_info \
-        > /tmp/target_localizer.log 2>&1 &
-    echo $! > /tmp/target_localizer.pid
-
-    sleep 2
-    if ! kill -0 "$(cat /tmp/target_localizer.pid 2>/dev/null)" 2>/dev/null; then
-        echo "ERROR: target_localizer process exited early"
-        exit 6
+# target_localizer is launched by nomad_zed_nvblox.launch.py above.
+# Just wait here until its services are discoverable before returning.
+TL_READY=0
+for i in $(seq 1 45); do
+    if ROS2CLI_DISABLE_DAEMON=1 ros2 service list 2>/dev/null | grep -q '/target_localizer/capture_target' \
+       && ROS2CLI_DISABLE_DAEMON=1 ros2 service list 2>/dev/null | grep -q '/target_localizer/save_targets' \
+       && ROS2CLI_DISABLE_DAEMON=1 ros2 service list 2>/dev/null | grep -q '/target_localizer/print_model'; then
+        TL_READY=1
+        break
     fi
+    sleep 1
+done
 
-    TL_READY=0
-    for i in $(seq 1 45); do
-        if ROS2CLI_DISABLE_DAEMON=1 ros2 service list 2>/dev/null | grep -q '/target_localizer/capture_target' \
-           && ROS2CLI_DISABLE_DAEMON=1 ros2 service list 2>/dev/null | grep -q '/target_localizer/save_targets' \
-           && ROS2CLI_DISABLE_DAEMON=1 ros2 service list 2>/dev/null | grep -q '/target_localizer/print_model'; then
-            TL_READY=1
-            break
-        fi
-        sleep 1
-    done
-
-    if [ "$TL_READY" != "1" ]; then
-        echo "WARNING: target_localizer services not discoverable yet; continuing startup"
-    fi
+if [ "$TL_READY" != "1" ]; then
+    echo "WARNING: target_localizer services not discoverable yet; continuing startup"
 fi
 
     # Supervise launch lifecycle: if ZED/nvblox exits, stop dependent bridges so
@@ -1809,8 +1790,6 @@ fi
                 "message_rate_hz": 30.0,
             }
 
-        response["gdrive_ready"] = getattr(request.app.state, "gdrive_ready", False)
-
         # Target localizer (Task 1 detection) readiness
         enable_od = os.environ.get("ENABLE_OD", "false").strip().lower() == "true"
         try:
@@ -2233,9 +2212,9 @@ fi
         """
         try:
             output = await _call_target_capture_with_retries(
-                max_attempts=3,
-                retry_delay_s=2.0,
-                timeout_s=45.0,
+                max_attempts=2,
+                retry_delay_s=1.0,
+                timeout_s=20.0,
             )
             return {
                 "success": True,
@@ -2432,6 +2411,11 @@ fi
         env_dir = os.environ.get("NOMAD_TASK1_CAPTURE_DIR", "").strip()
         candidates = [
             *([] if not env_dir else [env_dir]),
+            # Primary: writable bind-mount path
+            # container /workspaces/isaac_ros-dev (rw) -> host /home/mad/workspaces/isaac_ros-dev
+            # config/ and edge_core/ subdirs are overlaid read-only; data/ uses the rw base mount
+            os.path.expanduser("~/workspaces/isaac_ros-dev/data/task1_captures"),
+            # Legacy fallbacks
             "./data/task1_captures",
             os.path.expanduser("~/NOMAD/data/task1_captures"),
         ]
@@ -2481,7 +2465,7 @@ fi
 
     def _latest_task1_capture_from_container() -> tuple[Optional[str], list[str]]:
         """Return newest timestamp folder and jpg list from Isaac container storage."""
-        base_path = "/home/mad/NOMAD/data/task1_captures"
+        base_path = "/workspaces/isaac_ros-dev/data/task1_captures"
 
         try:
             folder_probe = subprocess.run(
@@ -2492,7 +2476,7 @@ fi
                     "bash",
                     "-lc",
                     (
-                        "base='/home/mad/NOMAD/data/task1_captures'; "
+                        "base='/workspaces/isaac_ros-dev/data/task1_captures'; "
                         "[ -d \"$base\" ] || exit 2; "
                         "ls -1 \"$base\" 2>/dev/null | "
                         "grep -E '^[0-9]{8}_[0-9]{6}$' | sort -r | head -n1"
@@ -2545,7 +2529,7 @@ fi
             host_path = os.path.join(host_folder, filename)
             if os.path.isfile(host_path):
                 continue
-            container_path = f"/home/mad/NOMAD/data/task1_captures/{folder}/{filename}"
+            container_path = f"/workspaces/isaac_ros-dev/data/task1_captures/{folder}/{filename}"
             try:
                 subprocess.run(
                     ["docker", "cp", f"nomad_isaac_ros:{container_path}", host_path],
@@ -2605,6 +2589,15 @@ fi
         m = _FACE_RE.search(output or "")
         return m.group(1).lower() if m else "Unknown"
 
+    _DISTANCE_CM_RE = re.compile(
+        r"\[(?:distance|center_distance)=(\d+)cm\]", re.IGNORECASE
+    )
+
+    def _parse_distance_cm(output: str) -> Optional[int]:
+        """Extract the first distance_cm tag embedded in the capture message."""
+        m = _DISTANCE_CM_RE.search(output or "")
+        return int(m.group(1)) if m else None
+
     @app.post("/api/task/1/target/capture", tags=["Task 1"])
     async def task1_capture_target():
         """
@@ -2623,9 +2616,9 @@ fi
         # legitimate no-detect captures don't look like gateway outages.
         try:
             output = await _call_target_capture_with_retries(
-                max_attempts=3,
-                retry_delay_s=2.0,
-                timeout_s=45.0,
+                max_attempts=2,
+                retry_delay_s=1.0,
+                timeout_s=20.0,
             )
         except HTTPException as exc:
             detail_text = str(exc.detail or "").strip()
@@ -2693,6 +2686,7 @@ fi
                 "image_name": image_name,
                 "capture_folder": latest_folder,
                 "timestamp": now.isoformat(),
+                "distance_cm": _parse_distance_cm(output),
                 "position": {
                     "lat": state.gps_lat or 0.0,
                     "lon": state.gps_lon or 0.0,
@@ -2713,6 +2707,7 @@ fi
             "image_name": None,
             "capture_folder": None,
             "timestamp": now.isoformat(),
+            "distance_cm": _parse_distance_cm(output),
             "position": {
                 "lat": state.gps_lat or 0.0,
                 "lon": state.gps_lon or 0.0,
@@ -2789,11 +2784,12 @@ fi
         corners: list[dict[str, Any]]
 
     # Shared path for the corners JSON file consumed by the ROS2 service.
-    # Default matches target_localizer output_dir default (/home/mad/targets).
-    # Override via NOMAD_TARGET_OUTPUT_DIR env var for consistency.
+    # Must be on the host side of the rw bind-mount so both the API (host) and
+    # target_localizer (container) can access the same file.
+    # container /workspaces/isaac_ros-dev/data -> host /home/mad/workspaces/isaac_ros-dev/data
     _BUILDING_CORNERS_DIR = os.environ.get(
         "NOMAD_TARGET_OUTPUT_DIR",
-        "/home/mad/targets",
+        os.path.expanduser("~/workspaces/isaac_ros-dev/data/task1_captures"),
     )
 
     class PlaneOverrideRequest(BaseModel):
@@ -3645,9 +3641,14 @@ fi
                 ),
             )
 
+        # Wrap with shell `timeout` so the ros2 CLI fails fast when the service
+        # server is dead (stale DDS registrations from a crashed node make
+        # `ros2 service call` hang indefinitely without an outer time limit).
+        cli_timeout_s = max(5, int(timeout_s))
         shell_cmd = (
             base_env_cmd
-            + f"ros2 service call {service_name} {service_type} {shlex.quote(request_yaml)}"
+            + f"timeout {cli_timeout_s}"
+            + f" ros2 service call {service_name} {service_type} {shlex.quote(request_yaml)}"
         )
 
         try:
@@ -3655,7 +3656,7 @@ fi
                 ["docker", "exec", "nomad_isaac_ros", "bash", "-lc", shell_cmd],
                 capture_output=True,
                 text=True,
-                timeout=max(5, int(timeout_s) + 5),
+                timeout=cli_timeout_s + 10,
             )
         except subprocess.TimeoutExpired:
             raise HTTPException(
@@ -3673,6 +3674,12 @@ fi
             part for part in [result.stdout.strip(), result.stderr.strip()] if part
         ).strip()
         output = _sanitize_ros2_service_output(output)
+        if result.returncode == 124:
+            # shell `timeout` exits 124 when it kills the child
+            raise HTTPException(
+                status_code=504,
+                detail=f"ROS2 service call timed out: {service_name}",
+            )
         if result.returncode != 0:
             raise HTTPException(
                 status_code=502,
@@ -5046,77 +5053,99 @@ fi
             request.app.state.detection_last_update = 0.0
         return result
 
-    @app.post("/api/isaac/stop-nvblox", tags=["Isaac ROS"])
-    async def isaac_stop_nvblox():
+    def _relaunch_isaac_with_nvblox(enable_nvblox: bool) -> dict:
         """
-        Stop nvblox and the ROS-HTTP bridge without stopping the container.
-
-        nvblox and the ZED ROS node share the same composable container, so
-        the only way to stop nvblox is to tear that container down — which
-        also kills the camera and silences the video bridge. To keep video
-        alive we relaunch ZED standalone (zed_camera.launch.py) right after.
+        Relaunch the Isaac ROS bringup (nomad_zed_nvblox.launch.py) with the
+        nvblox composable node either enabled or disabled, leaving every
+        independent process alone:
+          - ros_http_bridge keeps running (no nvblox dependency).
+          - simple_video_bridge keeps running and reattaches to ZED via DDS
+            discovery once the new launch republishes the image topic.
+        nvblox and ZED share the same composable container in the upstream
+        zed_example.launch.py, so toggling nvblox does cycle ZED — expect a
+        few seconds of frame loss on the video bridge while ZED reinits.
         """
         container = "nomad_isaac_ros"
-        try:
-            for proc in [
-                "launch_nvblox_bridge\\.sh|launch_zed_nvblox\\.sh",
-                "nomad_zed_nvblox\\.launch\\.py|zed_example\\.launch\\.py",
-                "component_container",
-                "ros_http_bridge",
-                "target_localizer_node|target_localizer\\.launch\\.py",
-            ]:
-                subprocess.run(
-                    ["docker", "exec", container, "pkill", "-f", proc],
-                    capture_output=True,
-                    timeout=5,
-                )
-            # Clean stale FastRTPS SHM locks so the new ZED launch can bind.
+        # Kill the previous launch chain. ros_http_bridge and simple_video_bridge
+        # are intentionally absent from this list so they survive the toggle.
+        for proc in [
+            "launch_nvblox_bridge\\.sh|launch_zed_nvblox\\.sh",
+            "nomad_zed_nvblox\\.launch\\.py|zed_example\\.launch\\.py|sensors/zed\\.launch\\.py",
+            "component_container",
+            "obstacle_distance_bridge",
+            "target_localizer_node|target_localizer\\.launch\\.py",
+            "servo_tf_publisher",
+        ]:
             subprocess.run(
-                [
-                    "docker",
-                    "exec",
-                    container,
-                    "bash",
-                    "-c",
-                    "rm -f /dev/shm/fastrtps_* 2>/dev/null",
-                ],
+                ["docker", "exec", container, "pkill", "-f", proc],
                 capture_output=True,
                 timeout=5,
             )
+        # Clean stale FastRTPS SHM locks so the next launch can bind.
+        subprocess.run(
+            ["docker", "exec", container, "bash", "-c",
+             "rm -f /dev/shm/fastrtps_* 2>/dev/null"],
+            capture_output=True,
+            timeout=5,
+        )
 
-            # Relaunch ZED on its own so the video bridge keeps streaming.
-            # Use the nvblox_examples_bringup ZED-only launch (sensors/zed.launch.py)
-            # rather than upstream zed_wrapper/zed_camera.launch.py: it loads the
-            # same zed_common.yaml + zed2.yaml that the combined launch uses, so
-            # the depth-mode TensorRT model is already optimized/cached and ZED
-            # starts publishing within seconds. The upstream default config uses
-            # NEURAL_LIGHT depth which forces a 5+ minute one-time optimization
-            # the first time it's run, during which no topics are published.
-            # Detached so the API returns promptly; logs share /tmp/zed_nvblox.log.
-            zed_only_cmd = (
-                "GXF_LIB_DIRS=$(find /opt/ros/humble/share -path '*/gxf/lib' "
-                "-type d 2>/dev/null | tr '\\n' ':'); "
-                "export LD_LIBRARY_PATH=/opt/ros/humble/lib:"
-                "/opt/ros/humble/lib/aarch64-linux-gnu:/usr/local/zed/lib:"
-                "${GXF_LIB_DIRS}${LD_LIBRARY_PATH:-}; "
-                "source /opt/ros/humble/install/setup.bash 2>/dev/null || "
-                "source /opt/ros/humble/setup.bash 2>/dev/null; "
-                "source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null; "
-                "export EGL_PLATFORM=device; "
-                "ros2 launch nvblox_examples_bringup sensors/zed.launch.py "
-                "zed_camera_model:=zed2 run_standalone:=True "
-                ">> /tmp/zed_nvblox.log 2>&1 &"
-            )
-            subprocess.run(
-                ["docker", "exec", "-d", container, "bash", "-c", zed_only_cmd],
-                capture_output=True,
-                timeout=10,
-            )
+        flag = "true" if enable_nvblox else "false"
+        cmd = (
+            "GXF_LIB_DIRS=$(find /opt/ros/humble/share -path '*/gxf/lib' "
+            "-type d 2>/dev/null | tr '\\n' ':'); "
+            "export LD_LIBRARY_PATH=/opt/ros/humble/lib:"
+            "/opt/ros/humble/lib/aarch64-linux-gnu:/usr/local/zed/lib:"
+            "${GXF_LIB_DIRS}${LD_LIBRARY_PATH:-}; "
+            "source /opt/ros/humble/install/setup.bash 2>/dev/null || "
+            "source /opt/ros/humble/setup.bash 2>/dev/null; "
+            "source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null; "
+            "export EGL_PLATFORM=device; "
+            "ros2 launch /workspaces/isaac_ros-dev/config/launch/"
+            f"nomad_zed_nvblox.launch.py enable_nav2:=false enable_od:=false "
+            f"enable_nvblox:={flag} "
+            ">> /tmp/zed_nvblox.log 2>&1 &"
+        )
+        subprocess.run(
+            ["docker", "exec", "-d", container, "bash", "-c", cmd],
+            capture_output=True,
+            timeout=10,
+        )
+        return {
+            "success": True,
+            "nvblox_enabled": enable_nvblox,
+            "message": (
+                "Isaac ROS relaunched with nvblox "
+                + ("enabled" if enable_nvblox else "disabled")
+                + " (video bridge will reattach automatically)"
+            ),
+        }
 
-            return {
-                "success": True,
-                "message": "nvblox and bridge stopped; ZED relaunched standalone",
-            }
+    @app.post("/api/isaac/nvblox/start", tags=["Isaac ROS"])
+    async def isaac_nvblox_start():
+        """Bring nvblox up alongside the existing ZED bringup."""
+        try:
+            return _relaunch_isaac_with_nvblox(True)
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @app.post("/api/isaac/nvblox/stop", tags=["Isaac ROS"])
+    async def isaac_nvblox_stop():
+        """
+        Stop nvblox while keeping ZED, ros_http_bridge, target_localizer, and
+        the video bridge alive. The bringup is relaunched with
+        enable_nvblox:=false; obstacle_distance_bridge is skipped because its
+        source topic (/nvblox_node/combined_dynamic_map_slice) goes away.
+        """
+        try:
+            return _relaunch_isaac_with_nvblox(False)
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    # Backward-compatible alias used by the older Mission Planner button.
+    @app.post("/api/isaac/stop-nvblox", tags=["Isaac ROS"])
+    async def isaac_stop_nvblox():
+        try:
+            return _relaunch_isaac_with_nvblox(False)
         except Exception as e:
             return {"success": False, "error": str(e)}
 

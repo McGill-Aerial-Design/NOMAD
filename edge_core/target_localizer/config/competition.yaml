@@ -68,7 +68,7 @@ target_localizer:
 
     # ---- Team ----
     team_name: "MAD"
-    output_dir: "/home/mad/targets"
+    output_dir: "/workspaces/isaac_ros-dev/data/task1_captures"
 
     # ---- Landmark Detection (DISABLED for Task 1) ----
     # CONOPS Q&A #7 explicitly says no landmark info (doors, windows, paths)
