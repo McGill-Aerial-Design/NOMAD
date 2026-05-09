@@ -3821,7 +3821,13 @@ fi
             message = output
 
         if not success:
-            status = _status_for_vio_area_failure(message or output, default_status=502)
+            # Only apply VIO-specific status mapping for non-Trigger service types;
+            # for std_srvs/srv/Trigger (e.g. target_localizer) always use 502 so the
+            # capture endpoint's 502-catch block can handle it correctly.
+            if service_type == "std_srvs/srv/Trigger":
+                status = 502
+            else:
+                status = _status_for_vio_area_failure(message or output, default_status=502)
             raise HTTPException(
                 status_code=status,
                 detail=message
