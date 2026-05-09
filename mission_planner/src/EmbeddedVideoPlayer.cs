@@ -103,6 +103,7 @@ namespace NOMAD.MissionPlanner
                 SizeMode = PictureBoxSizeMode.Zoom,
             };
             _videoBox.DoubleClick += (s, e) => ToggleFullscreen();
+            _videoBox.Paint += OnVideoPaint;
             
             // Status bar
             _lblStatus = new Label
@@ -276,15 +277,17 @@ namespace NOMAD.MissionPlanner
 
         private async System.Threading.Tasks.Task SetHsvModeAsync(bool enabled)
         {
+            // Use LongRunClient (60s) — the video bridge relays the toggle through a
+            // secondary HTTP call, so the chained round-trip can exceed the 5s ApiClient timeout.
             if (enabled)
             {
-                var overlayResp = await JetsonApiService.ApiClient.PostAsync(
+                var overlayResp = await JetsonApiService.LongRunClient.PostAsync(
                     $"{_apiBaseUrl}/api/video/overlay/enable", null);
                 await EnsureRequestSucceededAsync(overlayResp, "overlay enable", requireSuccessField: true);
                 return;
             }
 
-            var overlayDisableResp = await JetsonApiService.ApiClient.PostAsync(
+            var overlayDisableResp = await JetsonApiService.LongRunClient.PostAsync(
                 $"{_apiBaseUrl}/api/video/overlay/disable", null);
             await EnsureRequestSucceededAsync(overlayDisableResp, "overlay disable", requireSuccessField: true);
         }
@@ -716,6 +719,34 @@ namespace NOMAD.MissionPlanner
             UpdateVideoDisplay(displayBitmap, width, height, generation);
         }
         
+        /// <summary>
+        /// Draws a center crosshair over the live video so the pilot can aim when
+        /// no HSV circles are detected. Only shown while a frame is live.
+        /// </summary>
+        private void OnVideoPaint(object sender, PaintEventArgs e)
+        {
+            if (_videoBox.Image == null) return;
+
+            int cx = _videoBox.Width / 2;
+            int cy = _videoBox.Height / 2;
+            const int arm = 18;
+            const int gap = 5;
+
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+
+            using (var outline = new Pen(Color.FromArgb(140, Color.Black), 4f))
+            using (var fore = new Pen(Color.FromArgb(220, Color.Cyan), 1.5f))
+            {
+                foreach (var pen in new[] { outline, fore })
+                {
+                    e.Graphics.DrawLine(pen, cx - arm, cy, cx - gap, cy);
+                    e.Graphics.DrawLine(pen, cx + gap, cy, cx + arm, cy);
+                    e.Graphics.DrawLine(pen, cx, cy - arm, cx, cy - gap);
+                    e.Graphics.DrawLine(pen, cx, cy + gap, cx, cy + arm);
+                }
+            }
+        }
+
         /// <summary>
         /// Updates PictureBox and fullscreen with a managed bitmap. Called on UI thread only.
         /// Rejects stale frames from previous stream sessions via generation check.

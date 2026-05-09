@@ -705,98 +705,100 @@ class TargetLocalizerNode(Node):
         new_targets: List[TargetRecord] = []
 
         if len(circles) == 0:
-            # Center-pixel depth fallback: if pilot has manually centered the
-            # target in the camera crosshair, use center-pixel depth to get
-            # a 3D position without relying on HSV circle detection.
-            if self.has_gps_fix or self.has_local_pose:
-                center_px = self.latest_rgb.shape[1] // 2
-                center_py = self.latest_rgb.shape[0] // 2
-                # Raw depth at center pixel for distance reporting
-                _chw = 5
-                _cy_c, _cx_c = center_py, center_px
-                _cy1 = max(0, _cy_c - _chw); _cy2 = min(depth.shape[0], _cy_c + _chw + 1)
-                _cx1 = max(0, _cx_c - _chw); _cx2 = min(depth.shape[1], _cx_c + _chw + 1)
-                _croi = depth[_cy1:_cy2, _cx1:_cx2]
-                _cvalid = _croi[np.isfinite(_croi) & (_croi > 0.1) & (_croi < 35.0)]
-                center_distance_m: Optional[float] = float(np.median(_cvalid)) if len(_cvalid) > 0 else None
+            # No circles detected — automatically use the frame center (crosshair)
+            # for localization. Always attempted; _pixel_to_world_enu falls back to
+            # local_pose when GPS is unavailable.
+            center_px = self.latest_rgb.shape[1] // 2
+            center_py = self.latest_rgb.shape[0] // 2
+            # Raw depth at center pixel for distance reporting
+            _chw = 5
+            _cy_c, _cx_c = center_py, center_px
+            _cy1 = max(0, _cy_c - _chw); _cy2 = min(depth.shape[0], _cy_c + _chw + 1)
+            _cx1 = max(0, _cx_c - _chw); _cx2 = min(depth.shape[1], _cx_c + _chw + 1)
+            _croi = depth[_cy1:_cy2, _cx1:_cx2]
+            _cvalid = _croi[np.isfinite(_croi) & (_croi > 0.1) & (_croi < 35.0)]
+            center_distance_m: Optional[float] = float(np.median(_cvalid)) if len(_cvalid) > 0 else None
 
-                world = self._pixel_to_world_enu(center_px, center_py, depth, captured_servo_pitch)
-                if world is not None:
-                    east, north, up = world
-                    observed_face, _ = self._resolve_observed_face()
-                    plane_hit = self.building.classify_nearest_plane(east, north, up)
-                    if observed_face is not None:
-                        face = observed_face
-                    elif plane_hit.face is not None:
-                        face = plane_hit.face
-                    else:
-                        face, _ = self.building.get_nearest_wall_face(east, north)
-                    horiz_from_left, height_agl = self.building.project_point_onto_face(
-                        east, north, up, face
-                    )
-                    height_agl = height_agl - self.ground_alt_offset
-                    target_letter = target_letter_from_index(self.next_target_index)
-                    description = self._generate_description(
-                        TargetColor.UNKNOWN, face, horiz_from_left, height_agl, plane_hit.kind
-                    )
-                    img_filename = f"target_{target_letter}.jpg"
-                    img_path = os.path.join(capture_dir, img_filename)
-                    annotated = rgb.copy()
-                    h, w = annotated.shape[:2]
-                    cv2.line(annotated, (w // 2 - 20, h // 2), (w // 2 + 20, h // 2), (0, 255, 255), 2)
-                    cv2.line(annotated, (w // 2, h // 2 - 20), (w // 2, h // 2 + 20), (0, 255, 255), 2)
-                    cv2.putText(annotated, f"{target_letter}: center-depth fallback", (10, 30),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-                    try:
-                        ok, buf = cv2.imencode(".jpg", annotated)
-                        if ok:
-                            with open(img_path, "wb") as _f:
-                                _f.write(buf.tobytes())
-                    except Exception as _imwrite_err:
-                        self.get_logger().warn(f"Image save failed (non-fatal): {_imwrite_err}")
-                        img_path = None
-                    record = TargetRecord(
-                        target_id=target_letter,
-                        color=TargetColor.UNKNOWN,
-                        face_label=plane_hit.label,
-                        height_agl=height_agl,
-                        horiz_from_left=horiz_from_left,
-                        east=east,
-                        north=north,
-                        up=up,
-                        description=description,
-                        timestamp=time.time(),
-                        confidence=0.0,
-                        image_path=img_path,
-                        plane_kind=plane_hit.kind,
-                        face_name=face.name,
-                        approved=False,
-                        raw_data={
-                            "east": east, "north": north, "up": up,
-                            "plane_kind": plane_hit.kind,
-                            "drone_lat": self.drone_lat,
-                            "drone_lon": self.drone_lon,
-                            "drone_heading": self.drone_heading,
-                            "servo_pitch": captured_servo_pitch,
-                            "drone_alt": self.drone_alt,
-                            "distance_m": center_distance_m,
-                            "center_fallback": True,
-                        },
-                    )
-                    self.targets.append(record)
-                    new_targets.append(record)
-                    self.next_target_index += 1
-                    dist_str = (
-                        f" [center_distance={center_distance_m * 100:.0f}cm]"
-                        if center_distance_m is not None else ""
-                    )
-                    self.get_logger().info(
-                        f"TARGET {record.target_id} (center-fallback): {description}{dist_str}"
-                    )
-            if not new_targets:
+            world = self._pixel_to_world_enu(center_px, center_py, depth, captured_servo_pitch)
+            if world is not None:
+                east, north, up = world
+                observed_face, _ = self._resolve_observed_face()
+                plane_hit = self.building.classify_nearest_plane(east, north, up)
+                if observed_face is not None:
+                    face = observed_face
+                elif plane_hit.face is not None:
+                    face = plane_hit.face
+                else:
+                    face, _ = self.building.get_nearest_wall_face(east, north)
+                horiz_from_left, height_agl = self.building.project_point_onto_face(
+                    east, north, up, face
+                )
+                height_agl = height_agl - self.ground_alt_offset
+                target_letter = target_letter_from_index(self.next_target_index)
+                description = self._generate_description(
+                    TargetColor.UNKNOWN, face, horiz_from_left, height_agl, plane_hit.kind
+                )
+                img_filename = f"target_{target_letter}.jpg"
+                img_path = os.path.join(capture_dir, img_filename)
+                annotated = rgb.copy()
+                h, w = annotated.shape[:2]
+                cv2.line(annotated, (w // 2 - 20, h // 2), (w // 2 + 20, h // 2), (0, 255, 255), 2)
+                cv2.line(annotated, (w // 2, h // 2 - 20), (w // 2, h // 2 + 20), (0, 255, 255), 2)
+                cv2.putText(annotated, f"{target_letter}: center-depth fallback", (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                try:
+                    ok, buf = cv2.imencode(".jpg", annotated)
+                    if ok:
+                        with open(img_path, "wb") as _f:
+                            _f.write(buf.tobytes())
+                except Exception as _imwrite_err:
+                    self.get_logger().warn(f"Image save failed (non-fatal): {_imwrite_err}")
+                    img_path = None
+                record = TargetRecord(
+                    target_id=target_letter,
+                    color=TargetColor.UNKNOWN,
+                    face_label=plane_hit.label,
+                    height_agl=height_agl,
+                    horiz_from_left=horiz_from_left,
+                    east=east,
+                    north=north,
+                    up=up,
+                    description=description,
+                    timestamp=time.time(),
+                    confidence=0.0,
+                    image_path=img_path,
+                    plane_kind=plane_hit.kind,
+                    face_name=face.name,
+                    approved=False,
+                    raw_data={
+                        "east": east, "north": north, "up": up,
+                        "plane_kind": plane_hit.kind,
+                        "drone_lat": self.drone_lat,
+                        "drone_lon": self.drone_lon,
+                        "drone_heading": self.drone_heading,
+                        "servo_pitch": captured_servo_pitch,
+                        "drone_alt": self.drone_alt,
+                        "distance_m": center_distance_m,
+                        "center_fallback": True,
+                    },
+                )
+                self.targets.append(record)
+                new_targets.append(record)
+                self.next_target_index += 1
+                dist_str = (
+                    f" [center_distance={center_distance_m * 100:.0f}cm]"
+                    if center_distance_m is not None else ""
+                )
+                self.get_logger().info(
+                    f"TARGET {record.target_id} (center-fallback): {description}{dist_str}"
+                )
+            else:
                 response.success = False
-                response.message = "No colored circles detected in current frame. Center the target and retry, or use crosshair alignment."
-                self.get_logger().warn("No circles found.")
+                response.message = (
+                    "No circles detected and depth is invalid at frame center "
+                    "(all NaN or out of range). Check ZED depth stream."
+                )
+                self.get_logger().warn("Crosshair fallback failed: center-pixel depth is invalid.")
                 return response
 
         self.get_logger().info(f"Detected {len(circles)} circle(s)")
