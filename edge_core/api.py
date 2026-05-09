@@ -2949,6 +2949,104 @@ fi
         except HTTPException:
             return {"success": True, "targets": [], "message": "Target localizer service unavailable"}
 
+    @app.get("/api/task/1/target/list_structured", tags=["Task 1"])
+    async def task1_list_targets_structured():
+        """
+        Return captured targets as structured JSON for the 3D building viewer.
+
+        The target_localizer node's save_targets service writes a debug file
+        with ENU coordinates. We parse that file and surface
+        ``[{id, color, face, height_agl, east, north, up, image, timestamp}]``
+        so the GCS can place markers on the 3D building model.
+        """
+        team_name = os.environ.get("NOMAD_TEAM_NAME", "MAD")
+        output_dir = os.environ.get(
+            "NOMAD_TARGET_OUTPUT_DIR_NODE",
+            os.path.expanduser("~/targets"),
+        )
+        debug_path = os.path.join(output_dir, f"Task_1_{team_name}_targets_debug.txt")
+
+        # Best-effort refresh: trigger a save so the file reflects the latest
+        # captures. Failure is non-fatal — we still try to read whatever's on
+        # disk so the viewer keeps working when the ROS service is down.
+        try:
+            _call_ros2_service_in_isaac_container_or_raise(
+                service_name="/target_localizer/save_targets",
+                service_type="std_srvs/srv/Trigger",
+                request_payload={},
+                timeout_s=5.0,
+            )
+        except Exception:
+            pass
+
+        if not os.path.isfile(debug_path):
+            return {"success": True, "targets": [], "source": debug_path, "missing": True}
+
+        targets: list[dict[str, Any]] = []
+        try:
+            with open(debug_path, "r") as f:
+                content = f.read()
+        except OSError as e:
+            return {"success": False, "targets": [], "error": str(e)}
+
+        # Parse the per-target blocks the node writes:
+        #   Target A:
+        #     Description: ...
+        #     Color: red
+        #     Face: north face
+        #     Height AGL: 2.10m
+        #     Horiz from left: 1.80m
+        #     World ENU: (12.30, -4.50, 2.10)
+        #     ...
+        import re as _re
+        for block in _re.split(r"\n(?=Target\s)", content):
+            m_id = _re.match(r"Target\s+([^:]+):", block)
+            if not m_id:
+                continue
+            tid = m_id.group(1).strip()
+            entry: dict[str, Any] = {"id": tid}
+
+            for key, pattern in (
+                ("description", r"Description:\s*(.+)"),
+                ("color", r"Color:\s*(\S+)"),
+                ("face", r"Face:\s*(.+)"),
+                ("image", r"Image:\s*(.+)"),
+                ("timestamp", r"Timestamp:\s*(.+)"),
+            ):
+                m = _re.search(pattern, block)
+                if m:
+                    entry[key] = m.group(1).strip()
+
+            m_height = _re.search(r"Height AGL:\s*([-\d.]+)", block)
+            if m_height:
+                try:
+                    entry["height_agl"] = float(m_height.group(1))
+                except ValueError:
+                    pass
+
+            m_horiz = _re.search(r"Horiz from left:\s*([-\d.]+)", block)
+            if m_horiz:
+                try:
+                    entry["horiz_from_left"] = float(m_horiz.group(1))
+                except ValueError:
+                    pass
+
+            m_enu = _re.search(
+                r"World ENU:\s*\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)",
+                block,
+            )
+            if m_enu:
+                try:
+                    entry["east"] = float(m_enu.group(1))
+                    entry["north"] = float(m_enu.group(2))
+                    entry["up"] = float(m_enu.group(3))
+                except ValueError:
+                    pass
+
+            targets.append(entry)
+
+        return {"success": True, "targets": targets, "count": len(targets), "source": debug_path}
+
     @app.get("/api/task/1/target/model", tags=["Task 1"])
     async def task1_print_building_model():
         """
