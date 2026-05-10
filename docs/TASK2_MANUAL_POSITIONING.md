@@ -1,7 +1,7 @@
-# Task 2: Manual Positioning + Nav2 Autonomous Approach + Spray
+# Task 2: Manual Trigger + ZED-Guided Autonomous Spray
 
-**Updated**: April 25, 2026
-**Status**: Nav2 approach restored (simplified 3m→2m)
+**Updated**: May 9, 2026
+**Status**: ZED wrapper depth + fixed firing geometry; nvblox not required for Task 2
 
 ---
 
@@ -9,11 +9,11 @@
 
 **Task 2** is an indoor fire extinguishing mission (AEAC 2026 CONOPS §5.2.4):
 
-- **Manual operator positioning** — Operator uses WASD controls to position drone within 3m of target
-- **Autonomous Nav2 approach** — System uses Nav2 NavigateToPose to approach from 3m to 2m (obstacle-avoiding)
-- **Autonomous spray sequence** — Once at 2m: aim, spray, verify, upload runs autonomously
-- **Obstacle avoidance** — Nav2 uses nvblox costmap; target sector excluded during approach
-- **3m radius obstacle check** — Pre-flight nvblox scan within 3m keeps RAM usage low
+- **Manual operator setup** — Operator flies until the ZED2i sees a target, typically up to about 5m camera range
+- **Autonomous approach/alignment** — After the Spray button, the UAS uses ZED wrapper detections/depth and GUIDED velocity/yaw-rate commands to reproduce the calibrated firing view
+- **Fixed firing geometry** — The target is driven to a tunable water-landing pixel and camera range before spraying
+- **Autonomous spray sequence** — Pre-photo, pump activation, post-photo, wetness/change verification, and upload run without further operator input
+- **Field tuning** — Mission Planner exposes the standoff, aim pixel, servo angle, gains, speed limits, timeout, and trigger range
 
 ### Competition Requirements (CONOPS)
 
@@ -36,9 +36,9 @@ From §5.2.4 and Table 6:
 ```
 Operator (Ground Station)
     |
-    | Manual WASD positioning into 3m engagement zone
+    | Manual WASD positioning until target is visible in ZED stream
     v
-GUIDED Mode Drone (≤3m from target)
+ GUIDED Mode Drone (target visible, typically ≤5.5m camera range)
     |
     | Operator clicks "Spray Target" button
     v
@@ -47,16 +47,14 @@ POST /api/spray/trigger
     v
 Edge Core - SprayController
     |
-    +-- APPROACH: Nav2 NavigateToPose (3m→2m)
-    |   |   Sends goal via /api/nav2/goal
-    |   |   nav2_goal_bridge dispatches to Nav2 stack
-    |   |   Nav2 plans path using nvblox costmap
-    |   |   /cmd_vel → ros_http_bridge → NavController → AP GUIDED
-    |   |   Falls back to direct velocity if Nav2 unavailable
+    +-- APPROACH: Direct GUIDED velocity toward target stand-off
+    |   |   Uses target position and ZED wrapper depth when available
+    |   |   Stops near approach point, then refines with visual servoing
     |   v
-    +-- AIM: Visual servoing
-    |   - Center target in camera via servo pitch
-    |   - Ballistic drop compensation by distance
+    +-- AIM: ZED visual servoing
+    |   - Align target to calibrated water-landing pixel
+    |   - Hold calibrated camera range before firing
+    |   - Use yaw or lateral velocity for horizontal correction
     +-- SPRAY: Activate water pump
     +-- VERIFY: Circle change detection (before/after comparison)
     +-- UPLOAD: Post photo to Google Drive
@@ -64,25 +62,16 @@ Edge Core - SprayController
 Sequence complete → ready for next target
 ```
 
-### Data Flow: Nav2 Approach
+### Data Flow: ZED-Guided Approach
 
 ```
-  SprayController ──goal_dict──> app.state.nav2_pending_goal
-       │                              │
-       │                              v
-       │                     nav2_goal_bridge (polls /api/nav2/pending)
-       │                              │
-       │                              v
-       │                     Nav2 NavigateToPose
-       │                     (nvblox costmap + DWB controller + Smac planner)
-       │                              │
-       │                              v
-       │                     /cmd_vel @ 20Hz
-       │                              │
-       │                              v
-       │                     ros_http_bridge → Edge Core → NavController → AP GUIDED
-       │                              │
-       │  <──result──── /api/nav2/result (goal_id, status, message)
+  ZED wrapper detections ──> /api/detections/update ──> app.state.detected_objects
+                                                     │
+                                                     v
+  Operator trigger ──> SprayController ──> NavController.send_velocity()
+                                                     │
+                                                     v
+                                      MAVLink GUIDED velocity/yaw-rate
        v
   SprayController continues to AIM state
 ```
@@ -92,16 +81,14 @@ Sequence complete → ready for next target
 ## Spray State Machine
 
 ```
-Trigger by operator (drone within 3m):
+Trigger by operator (target visible, within configured start range):
 
-APPROACH - Nav2 NavigateToPose from 3m to 2m
-|   Obstacle-avoiding path using nvblox costmap
-|   Target sector excluded from obstacle avoidance
+APPROACH - Direct velocity approach from >2m toward target
 |   Timeout: 20s → proceed from current position
-|   Fallback: direct velocity if Nav2 unavailable
 v
-AIM - Visual servoing to center target in camera
-|   Servo pitch adjusts for distance + ballistic drop
+AIM - ZED visual servoing to calibrated aim pixel and camera range
+|   Servo moves to calibrated nozzle fire angle
+|   Altitude/yaw/lateral/forward velocity refine the shot geometry
 v
 SPRAY - Activate water pump (500ms)
 |   v
@@ -115,9 +102,9 @@ v
 COMPLETE - Ready for next target
 ```
 
-**Key difference from previous version**: APPROACH is now Nav2-based
-(obstacle-avoiding) instead of direct velocity. This earns the
-**20-point autonomous extinguishing bonus** per CONOPS Table 6.
+**Key difference from previous version**: Task 2 no longer depends on nvblox.
+The scoring-critical portion is the autonomous sequence after the operator
+clicks Spray: approach from >2m, aim/align, extinguish, verify, and upload.
 
 ---
 
@@ -143,7 +130,7 @@ Response: 200 OK
     "skip_approach": false   # true if already within 2m
 }
 Error: 400 Bad Request
-    - Drone > 3m from target
+    - Drone > configured trigger range from target
     - Spray already active
 ```
 
@@ -157,9 +144,7 @@ Response: {
     "servo_angle": 85.5,
     "spray_count": 0,
     "verification_passed": false,
-    "nav2_goal_id": "a1b2c3d4",     # Nav2 goal tracking
-    "nav2_approach_active": true,    # waiting for Nav2 result
-    "approach_method": "nav2",       # "nav2" or "velocity"
+    "approach_method": "velocity",
     "upload_url": "",
     "error": null,
     "targets_engaged": 5,
@@ -170,22 +155,18 @@ Response: {
 
 ```
 POST /api/spray/abort
-Aborts current sequence, cancels Nav2 goal, returns to IDLE.
+Aborts current sequence, stops movement, returns to IDLE.
 ```
 
-### Nav2 Integration (used by spray approach)
+### Spray Calibration
 
 ```
-POST /api/nav2/goal
-  - Spray controller sends NavigateToPose goal here
-  - nav2_goal_bridge polls /api/nav2/pending to dispatch
+GET /api/spray/calibration
+  - Returns current Jetson spray/aim calibration
 
-GET /api/nav2/status
-  - Spray controller monitors approach progress
-
-POST /api/nav2/result
-  - nav2_goal_bridge reports goal completion
-  - Spray controller receives result via update_nav2_result()
+POST /api/spray/calibration
+  - Mission Planner pushes field-tuned spray values
+  - Persists to ~/.nomad/calibration/spray_calibration.json by default
 ```
 
 ---
@@ -196,49 +177,49 @@ POST /api/nav2/result
 
 1. Check drone battery, water level (baking soda solution loaded)
 2. Arm drone in GUIDED mode
-3. Verify VIO healthy (ZED + nvblox running)
-4. Verify Nav2 stack running (nav2_goal_bridge active)
+3. Verify VIO healthy and ZED wrapper detections/depth are updating
+4. Verify Mission Planner Spray calibration was pushed to the Jetson
 5. Hover at safe altitude
 
 ### During Mission
 
-1. **Position manually**: Use WASD controls to fly within 3m of target
+1. **Position manually**: Use WASD controls until the target is visible in the ZED stream
 2. **Confirm target visible**: Check live video feed — target detected (purple circle)
 3. **Trigger spray**: Click "Spray Target" button in Mission Planner
-4. **Monitor approach**: Watch Nav2 status — drone navigating to 2m
+4. **Monitor approach**: Drone autonomously approaches and aligns to the calibrated firing view
 5. **Monitor spray**: Watch servo aiming and spray confirmation
-6. **Repeat**: Move to next target (manual WASD back to 3m+ from next target)
+6. **Repeat**: Move to next target and reacquire it in the ZED stream
 
 ### Safety Stops
 
 - **Manual position adjustment**: Send WASD at any time (cancels autonomous aiming)
 - **Emergency abort**: Trigger `/api/spray/abort` endpoint
 - **Mission abort**: Switch to STABILIZE or ALT_HOLD mode
-- **Nav2 cancel**: Abort cancels both spray sequence AND Nav2 goal
+- **Movement stop**: Abort stops spray sequence and sends zero velocity
 
 ### Autonomous Extinguishing Points (CONOPS Table 6)
 
 To earn the 20-point autonomous extinguishing bonus, ALL of the following must be autonomous:
 
-1. ✅ **Approach from >2m** — Nav2 NavigateToPose (3m→2m)
-2. ✅ **Aiming** — Visual servoing with servo pitch + ballistic drop
+1. ✅ **Approach from >2m** — GUIDED velocity approach after operator trigger
+2. ✅ **Aiming** — ZED visual servoing to calibrated water-landing pixel/range
 3. ✅ **Extinguishing** — Water pump activation
 4. ✅ **Image capture + upload** — Circle change verify + Google Drive upload
 
 The system satisfies all four criteria. The operator only manually positions
-within 3m (which triggers the sequence), then all approach/aim/extinguish/upload
-is autonomous.
+until the target is visible and clicks the trigger; approach/aim/extinguish/upload
+then run autonomously.
 
 ---
 
-## Nav2 Approach Details
+## Approach Details
 
-### Why Nav2 (Simplified)
+### Why Fixed Firing Geometry
 
-- **Obstacle avoidance**: Nav2 uses nvblox 3D costmap — won't hit walls/furniture
+- **Reliability**: One calibrated standoff and aim pixel is easier to validate than a distance/angle table
 - **Compliance scoring**: 20 points for autonomous extinguishing requires autonomous approach from >2m
-- **Short range only**: 3m→2m, not full arena navigation
-- **RAM efficient**: 3m radius work area keeps nvblox costmap small
+- **Field tuning**: Mission Planner can adjust range, aim pixel, fire angle, gains, and limits during test flights
+- **No nvblox dependency**: Task 2 uses ZED wrapper detection/depth for target-relative alignment
 
 ### Approach Goal Computation
 
@@ -264,9 +245,9 @@ yaw = atan2(dy, dx)
 
 ### Obstacle Sector Exclusion
 
-During APPROACH, the target's angular direction is excluded from
-OBSTACLE_DISTANCE (72 sectors × 5°) so the drone can navigate
-toward the target without the costmap blocking that direction.
+During APPROACH, the target's angular direction can be excluded from
+OBSTACLE_DISTANCE (72 sectors × 5°) so proximity sensors do not fight the
+short motion toward the visible target.
 
 ```python
 # Compute target direction
@@ -278,13 +259,12 @@ excluded = {(center_sector + offset) % 72 for offset in range(-2, 3)}
 ```
 
 Exclusions are cleared when:
-- Approach completes (Nav2 succeeded or timeout)
-- Approach falls back to velocity mode
+- Approach completes or times out
 - Spray sequence is aborted
 
-### Fallback: Direct Velocity Approach
+### Direct Velocity Approach
 
-If Nav2 is unavailable (nav2_goal_bridge not running, goal rejected, or goal failed):
+The primary Task 2 approach uses simple proportional velocity toward the target:
 
 ```python
 # Simple proportional velocity toward target
@@ -295,7 +275,8 @@ vz = (dz / dist) * speed * 0.3    # slower vertical
 nav_controller.send_velocity(vx, vy, vz, 0)  # 10 Hz loop
 ```
 
-No obstacle avoidance in fallback mode — operator must verify clear path.
+No path planner is active in this Task 2 path — operator must verify a clear
+line before clicking Spray.
 
 ---
 
@@ -332,56 +313,50 @@ provides this autonomous declaration.
 
 ## Configuration
 
-### spray_controller.py Parameters
+### Spray Calibration Parameters
 
 ```python
-TRIGGER_MAX_DISTANCE_M = 3.0    # Max distance to trigger
-APPROACH_STOP_DISTANCE_M = 2.0  # Nav2 goal: 2m from target
-APPROACH_TIMEOUT_S = 20.0       # Nav2/velocity approach timeout
-NAV2_GOAL_SETTLE_TIME_S = 1.0   # Settle after Nav2 stops
-NAV2_STATUS_POLL_INTERVAL_S = 0.2  # Nav2 status check rate
-AIM_TOLERANCE_PX = 30           # Aiming accuracy (pixels)
-SPRAY_DURATION_MS = 500         # Pump duration
-SPRAY_SETTLE_TIME_S = 0.5       # Wait before verify
-MAX_SPRAY_ATTEMPTS = 2          # Retry on verify fail
-SERVO_GAIN = 0.1                # Servo responsiveness
+trigger_max_distance_m = 5.5    # Operator can start once target is visible at range
+target_camera_range_m = 3.8     # ZED-to-wall range at the calibrated firing view
+range_tolerance_m = 0.25        # Acceptable range error before spraying
+aim_pixel_x = 640               # Water landing pixel X in the ZED image
+aim_pixel_y = 390               # Water landing pixel Y in the ZED image
+aim_tolerance_px = 25           # Pixel lock tolerance
+servo_fire_angle_deg = 82.0     # Nozzle/camera servo firing angle
+forward_gain = 0.45             # Range-to-forward velocity gain
+yaw_gain = 0.0025               # Horizontal pixel-to-yaw-rate gain
+altitude_gain = 0.0010          # Vertical pixel-to-altitude velocity gain
+lock_hold_ms = 700              # Hold aim lock before spraying
+align_timeout_s = 20.0          # Proceed after timeout from current alignment
 ```
 
-### Nav2 Configuration (simplified for 3m approach)
-
-Nav2 uses the same stack as indoor navigation but only within
-the 3m engagement zone:
-
-- **Planner**: Smac Hybrid-A* (short paths, slow replan OK)
-- **Controller**: DWB Local Planner (20Hz velocity output)
-- **Costmap**: nvblox 3D → 2D projection (5Hz update)
-- **Max velocity**: 0.5 m/s (conservative indoor approach)
-- **Goal tolerance**: 0.3m position, 0.2 rad orientation
+These values can be pushed from Mission Planner Settings → Spray. The Jetson
+also persists them to `~/.nomad/calibration/spray_calibration.json`.
 
 ---
 
 ## Obstacle Avoidance
 
-### During Nav2 Approach (3m→2m)
+### During Task 2 Approach
 
-- **Primary**: Nav2 nvblox costmap — obstacle-avoiding path
-- **Target sector excluded**: OBSTACLE_DISTANCE override so flight controller doesn't fight Nav2
-- **3m radius costmap**: Keeps nvblox RAM low (~50MB vs ~200MB for full arena)
+- **Primary**: operator chooses a clear line, then autonomy runs a short visible-target approach
+- **Target sector excluded**: optional OBSTACLE_DISTANCE override so proximity data does not block the intended line to the target
+- **Speed-limited**: forward/lateral/altitude/yaw limits are field-tunable in Mission Planner
 
 ### Pre-Flight Obstacle Check
 
-Before the mission, a 3m radius nvblox occupancy check verifies
-the engagement zone is clear enough for approach:
+Before the mission, the operator verifies the engagement zone is clear enough
+for the short autonomous approach:
 
-- Checks nvblox occupancy map within 3m of target
-- Warns operator if dense obstacles detected
-- Does NOT abort the mission (operator can still try)
+- Confirms there is no obstacle between UAS and target
+- Confirms the nozzle arm clearance is safe
+- Confirms the target can remain in the ZED field of view while approaching
 
 ### Not Active During Spray
 
-After approach (AIM/SPRAY/VERIFY/UPLOAD states), the drone is
-stationary at 2m from target. Obstacle avoidance degrades to
-position hold only — no dynamic costmap needed.
+After approach (AIM/SPRAY/VERIFY/UPLOAD states), the drone should be close to
+the calibrated firing geometry. The controller sends only small correction
+velocities during aim; no dynamic costmap is required for this Task 2 path.
 
 ---
 
@@ -390,24 +365,20 @@ position hold only — no dynamic costmap needed.
 ### Visual Servoing (AIM state)
 
 ```
-Error = target center - image center
-If |error| < tolerance: DONE → proceed to SPRAY
+Error = target pixel - calibrated water-landing pixel
+Range error = ZED camera range - calibrated firing range
+If pixel and range remain locked for lock_hold_ms: proceed to SPRAY
 
-Servo pitch adjustment:
-  pitch_adjust = err_y * SERVO_GAIN
-  pitch_adjust += ballistic_drop(distance)
-  servo_angle = current - pitch_adjust
+Commands:
+  vx = range_error * forward_gain
+  yaw_rate or vy = pixel_x_error * gain
+  vz = pixel_y_error * altitude_gain
+  servo_angle = servo_fire_angle_deg
 ```
 
-**Ballistic Drop Compensation** (water nozzle at ~2 bar):
-
-| Distance | Drop Angle |
-|----------|-----------|
-| 1.0m | 0° |
-| 2.0m | 2° |
-| 3.0m | 5° |
-| 4.0m | 8° |
-| 5.0m | 12° |
+The recommended calibration is a single fixed firing geometry. Multi-distance
+servo tables remain possible, but they add field burden and should be treated as
+a fallback if the fixed standoff cannot meet the wetting requirement.
 
 ### Circle Change Verification (VERIFY state)
 
@@ -428,15 +399,7 @@ Servo pitch adjustment:
 
 ## Error Handling
 
-### During APPROACH (Nav2)
-
-- **Nav2 unavailable**: Fall back to direct velocity approach
-- **Nav2 goal rejected**: Fall back to direct velocity approach
-- **Nav2 goal failed**: Fall back to direct velocity approach
-- **Nav2 timeout (20s)**: Cancel Nav2 goal, proceed from current position
-- **NavController unavailable**: Mark APPROACH failed, abort sequence
-
-### During APPROACH (Velocity fallback)
+### During APPROACH
 
 - **NavController unavailable**: Mark failed
 - **Timeout**: Proceed from current position anyway
@@ -444,9 +407,9 @@ Servo pitch adjustment:
 
 ### During AIM (visual servoing)
 
-- Detection lost: Wait up to 15 seconds, then proceed
-- Servo error: Continue spray anyway
-- Timeout: Proceed with last-known servo angle
+- Detection lost: Stop movement briefly and wait for the target to reacquire
+- Servo error: Continue with the configured fire angle if movement alignment is good
+- Timeout: Stop movement and proceed from the current alignment
 
 ### During SPRAY
 
@@ -475,15 +438,15 @@ at end of flight window, not sensor feedback.
 
 - **VIO Status**: Tracking quality, message rate, source
 - **Distance to Target**: Real-time distance readout
-- **Nav2 Status**: Current approach state (pending/navigating/succeeded/failed)
+- **Spray Calibration**: Fixed firing range, aim pixel, gains, limits, and push-to-Jetson control
 - **Mode Status**: Current operational mode
 - **Spray Status**: Current state, approach method, spray count, verification result
 
 ### Controls
 
 - **Spray Button**: Triggers spray on target (operator selects target first)
-- **Abort Button**: Abort current spray + cancel Nav2 goal
-- **WASD Keys**: Manual positioning (3m engagement zone entry)
+- **Abort Button**: Abort current spray and stop movement
+- **WASD Keys**: Manual positioning until target is visible
 
 ---
 
@@ -495,15 +458,15 @@ at end of flight window, not sensor feedback.
 |-----------|--------|-------------|
 | Target Extinguishing | 70 | Per-target points (40 indoor / 30 outdoor) |
 | Autonomous Takeoff | 5 | ArduPilot GUIDED mode auto-takeoff |
-| **Autonomous Extinguishing** | **20** | **Nav2 approach + visual servo + spray + upload** |
+| **Autonomous Extinguishing** | **20** | **ZED-guided approach + visual servo + spray + upload** |
 | Autonomous Landing | 5 | ArduPilot RTL |
 | RTM SOP Compliance | 15 | Big City SOPs (Appendix F) |
 | Safe Landing | 5 | Guided landing at flight line |
 | **Total** | **120** | |
 
-The Nav2 approach is specifically designed to earn the
+The ZED-guided approach is specifically designed to earn the
 **20-point autonomous extinguishing** bonus, which requires:
-- All approach/positioning from >2m away (✅ Nav2 3m→2m)
+- All approach/positioning from >2m away (✅ trigger range up to 5.5m)
 - Aiming/target locking (✅ Visual servoing)
 - Successful extinguishing + image capture (✅ circle change verify + photo)
 - Upload (✅ Google Drive autonomous upload)
@@ -514,22 +477,19 @@ The Nav2 approach is specifically designed to earn the
 
 - [ ] Drone boots in GUIDED mode, VIO healthy
 - [ ] WASD positioning works over LTE/Tailscale
-- [ ] Nav2 stack starts correctly (container + nav2_goal_bridge)
-- [ ] Spray trigger validates 3m distance check
-- [ ] Nav2 NavigateToPose goal sent and accepted
-- [ ] Nav2 approaches to 2m with obstacle avoidance
-- [ ] Nav2 result reported back to spray controller
-- [ ] Velocity fallback works when Nav2 unavailable
-- [ ] Obstacle sector exclusion set/cleared correctly
-- [ ] Visual servoing centers target via servo pitch
-- [ ] Ballistic drop compensation adjusts angle by distance
+- [ ] ZED wrapper publishes current target detections with bbox and depth
+- [ ] Mission Planner Spray calibration pushes to `/api/spray/calibration`
+- [ ] Spray trigger validates configured start range
+- [ ] Direct velocity approach starts from >2m and converges toward firing range
+- [ ] Visual servoing moves target to calibrated water-landing pixel
+- [ ] Gain signs are verified for yaw/lateral and altitude correction
 - [ ] Water pump triggers and photo captured
 - [ ] Circle change verification detects >20% pixel change in target circle
 - [ ] Failed spray triggers retry (max 2 attempts)
 - [ ] Photo uploads to Google Drive with correct naming
-- [ ] Status updates reflect state transitions + Nav2 tracking
-- [ ] Abort cancels Nav2 goal + spray sequence + clears exclusions
-- [ ] Full sequence: WASD → trigger → Nav2 approach → aim → spray → verify → upload
+- [ ] Status updates reflect state transitions
+- [ ] Abort stops velocity commands and cancels spray sequence
+- [ ] Full sequence: WASD → trigger → approach → aim → spray → verify → upload
 
 ---
 
@@ -537,9 +497,9 @@ The Nav2 approach is specifically designed to earn the
 
 ### Current Limitations
 
-1. **Nav2 approach within 3m only** — Full arena navigation not implemented
-2. **No lateral aiming** — Servo only controls pitch, not drone XY position
-3. **Pre-flight obstacle check only** — Not dynamic during spray states
+1. **No obstacle-planning dependency in Task 2** — Operator must start from a safe line to target
+2. **Fixed firing geometry** — Best performance depends on a good wall calibration
+3. **Gain signs require flight validation** — Mission Planner exposes negative gains for quick inversion
 4. **No target tracking prediction** — Steps through targets one at a time
 
 ### Future Enhancements
@@ -555,10 +515,8 @@ The Nav2 approach is specifically designed to earn the
 ## References
 
 - **Spray Controller**: [edge_core/spray_controller.py](../edge_core/spray_controller.py)
-- **Nav2 Goal Bridge**: [edge_core/ros/nav2_goal_bridge.py](../edge_core/ros/nav2_goal_bridge.py)
 - **Nav Controller**: [edge_core/nav_controller.py](../edge_core/nav_controller.py)
-- **API Endpoints**: [edge_core/api.py](/api/spray/*, /api/nav2/*)
+- **API Endpoints**: [edge_core/api.py](/api/spray/*)
 - **Mission Planner UI**: [mission_planner/src/NOMADTask2View.cs](../mission_planner/src/NOMADTask2View.cs)
-- **Nav2 Integration Plan**: [docs/NAV2_INTEGRATION_PLAN.md](NAV2_INTEGRATION_PLAN.md)
 - **Architecture**: [docs/JETSON_NAV_ARCHITECTURE.md](JETSON_NAV_ARCHITECTURE.md)
 - **CONOPS**: 2026-AEAC-CONOPS-v1.3 §5.2.4 (Task 2: Fire Extinguishing)

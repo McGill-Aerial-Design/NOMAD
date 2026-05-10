@@ -2,7 +2,7 @@
 // NOMAD Task 2 View - Indoor Fire Extinguishing
 // ============================================================
 // Layout:
-//   Top:    Mission summary bar (VIO + Nav2 + mode at a glance)
+//   Top:    Mission summary bar (VIO + approach + mode at a glance)
 //   Left:   Detection list + target selection + spray controls
 //   Right:  Detailed status panels (approach, spray sequence, exclusion map)
 //   Tab 2:  3D SLAM View
@@ -34,7 +34,7 @@ namespace NOMAD.MissionPlanner
 
         // ---- Top status bar ----
         private Label _lblVioStatus;
-        private Label _lblNav2Status;
+        private Label _lblApproachStatus;
         private Label _lblModeStatus;
         private Label _lblObstacleStatus;
 
@@ -192,16 +192,16 @@ namespace NOMAD.MissionPlanner
             };
             bar.Controls.Add(_lblVioStatus);
 
-            // Nav2 status
-            _lblNav2Status = new Label
+            // Approach status
+            _lblApproachStatus = new Label
             {
-                Text = "Nav2: --",
+                Text = "Approach: --",
                 Font = new Font("Consolas", 10),
                 ForeColor = TEXT_SECONDARY,
                 Location = new Point(15, 32),
                 AutoSize = true,
             };
-            bar.Controls.Add(_lblNav2Status);
+            bar.Controls.Add(_lblApproachStatus);
 
             // Mode status
             _lblModeStatus = new Label
@@ -326,7 +326,7 @@ namespace NOMAD.MissionPlanner
             var workflowHint = new Label
             {
                 Text =
-                    "1. Fly to target (WASD) within 3m\n"
+                    "1. Fly until target is visible in ZED\n"
                     + "2. Select target in list above\n"
                     + "3. Click Spray Target",
                 Font = new Font("Segoe UI", 8),
@@ -474,7 +474,7 @@ namespace NOMAD.MissionPlanner
             var stateFlowLabel = new Label
             {
                 Text =
-                    "APPROACH (Nav2 3m->2m) -> AIM (visual servo)\n"
+                    "APPROACH (ZED-guided) -> AIM (visual servo)\n"
                     + "  -> SPRAY (500ms pump) -> VERIFY (circle change)\n"
                     + "  -> UPLOAD (Google Drive) -> COMPLETE",
                 Font = new Font("Consolas", 8),
@@ -496,7 +496,7 @@ namespace NOMAD.MissionPlanner
                     "Task 2: Indoor Fire Extinguishing\n\n"
                     + "Targets are purple circles (5-30cm) that turn BLUE when wet.\n"
                     + "Spray is slightly basic baking soda water.\n"
-                    + "Autonomous approach from 3m to 2m earns 20 bonus points.\n"
+                    + "Autonomous approach from >2m earns 20 bonus points.\n"
                     + "Photo uploads must be real-time and fully autonomous.",
                 Font = new Font("Segoe UI", 9),
                 ForeColor = TEXT_SECONDARY,
@@ -514,7 +514,7 @@ namespace NOMAD.MissionPlanner
 
             var wasdHint = new Label
             {
-                Text = "Use WASD controls in the Quick Panel for manual positioning within 3m of target.",
+                Text = "Use WASD controls in the Quick Panel until the target is visible in ZED.",
                 Font = new Font("Segoe UI", 9),
                 ForeColor = TEXT_MUTED,
                 Location = new Point(15, 42),
@@ -683,33 +683,33 @@ namespace NOMAD.MissionPlanner
 
         private void UpdateNav2UI(JObject nav2Data)
         {
-            if (_lblNav2Status == null)
+            if (_lblApproachStatus == null)
                 return;
 
             if (nav2Data == null)
             {
-                _lblNav2Status.Text = "Nav2: unavailable";
-                _lblNav2Status.ForeColor = ERROR_COLOR;
+                _lblApproachStatus.Text = "Approach: velocity";
+                _lblApproachStatus.ForeColor = TEXT_SECONDARY;
                 return;
             }
 
             var status = nav2Data["status"]?.ToString() ?? "unknown";
             var goalId = nav2Data["goal_id"]?.ToString() ?? "";
 
-            _lblNav2Status.Text = string.IsNullOrEmpty(goalId)
-                ? $"Nav2: {status}"
-                : $"Nav2: {status} (goal: {goalId.Substring(0, Math.Min(8, goalId.Length))})";
+            _lblApproachStatus.Text = string.IsNullOrEmpty(goalId)
+                ? "Approach: velocity"
+                : $"Approach: legacy Nav2 {status} (goal: {goalId.Substring(0, Math.Min(8, goalId.Length))})";
 
             if (status == "navigating" || status == "active")
-                _lblNav2Status.ForeColor = ACCENT_COLOR;
+                _lblApproachStatus.ForeColor = ACCENT_COLOR;
             else if (status == "succeeded")
-                _lblNav2Status.ForeColor = SUCCESS_COLOR;
+                _lblApproachStatus.ForeColor = SUCCESS_COLOR;
             else if (status == "failed" || status == "aborted")
-                _lblNav2Status.ForeColor = ERROR_COLOR;
+                _lblApproachStatus.ForeColor = ERROR_COLOR;
             else if (status == "idle" || status == "pending")
-                _lblNav2Status.ForeColor = TEXT_SECONDARY;
+                _lblApproachStatus.ForeColor = TEXT_SECONDARY;
             else
-                _lblNav2Status.ForeColor = TEXT_SECONDARY;
+                _lblApproachStatus.ForeColor = TEXT_SECONDARY;
         }
 
         private void UpdateObstacleUI(JObject obstacleData)
@@ -838,7 +838,7 @@ namespace NOMAD.MissionPlanner
             if (state == "approach")
             {
                 var approachText = nav2Active
-                    ? $"Approach: Nav2 (goal: {(string.IsNullOrEmpty(nav2GoalId) ? "--" : nav2GoalId.Substring(0, Math.Min(8, nav2GoalId.Length)))})"
+                    ? $"Approach: legacy Nav2 (goal: {(string.IsNullOrEmpty(nav2GoalId) ? "--" : nav2GoalId.Substring(0, Math.Min(8, nav2GoalId.Length)))})"
                     : (approachMethod == "velocity"
                             ? "Approach: direct velocity (no obstacle avoid)"
                             : "Approach: pending");

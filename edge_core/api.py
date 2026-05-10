@@ -4340,6 +4340,33 @@ fi
             )
         return spray_ctrl.abort()
 
+    @app.get("/api/spray/calibration", tags=["Spray"])
+    async def get_spray_calibration(request: Request):
+        """Return Task 2 field calibration values for spray alignment."""
+        spray_ctrl = getattr(request.app.state, "spray_controller", None)
+        if not spray_ctrl:
+            from .spray_controller import SprayController
+            return SprayController.get_calibration()
+        return spray_ctrl.get_calibration()
+
+    @app.post("/api/spray/calibration", tags=["Spray"])
+    async def update_spray_calibration(request: Request):
+        """
+        Update Task 2 field calibration values.
+
+        These values are intentionally field-tunable from Mission Planner so
+        test-flight calibration can adjust the fixed firing range, water landing
+        pixel, nozzle angle, spray duration, and visual-servo gains without code
+        changes.
+        """
+        body = await _parse_request_json_object(request)
+        persist = bool(body.pop("persist", True))
+        spray_ctrl = getattr(request.app.state, "spray_controller", None)
+        if not spray_ctrl:
+            from .spray_controller import SprayController
+            return SprayController.update_calibration(body, persist=persist)
+        return spray_ctrl.update_calibration(body, persist=persist)
+
     # ==================== Operational Mode (Section 9) ============================
 
     @app.get("/api/mode", tags=["Mode"])

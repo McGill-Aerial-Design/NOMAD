@@ -409,6 +409,29 @@ namespace NOMAD.MissionPlanner
         public int CameraTiltAngleRange { get; set; } = 45;
 
         // ============================================================
+        // Task 2 Spray Calibration
+        // ============================================================
+
+        public float SprayTargetCameraRangeM { get; set; } = 3.8f;
+        public float SprayRangeToleranceM { get; set; } = 0.25f;
+        public float SprayTriggerMaxDistanceM { get; set; } = 5.5f;
+        public int SprayAimPixelX { get; set; } = 640;
+        public int SprayAimPixelY { get; set; } = 390;
+        public int SprayAimTolerancePx { get; set; } = 25;
+        public float SprayServoFireAngleDeg { get; set; } = 82.0f;
+        public float SprayForwardGain { get; set; } = 0.45f;
+        public float SprayLateralGain { get; set; } = 0.0010f;
+        public float SprayAltitudeGain { get; set; } = 0.0010f;
+        public float SprayYawGain { get; set; } = 0.0025f;
+        public bool SprayUseYawAlignment { get; set; } = true;
+        public float SprayMaxForwardSpeedMps { get; set; } = 0.45f;
+        public float SprayMaxLateralSpeedMps { get; set; } = 0.25f;
+        public float SprayMaxAltitudeSpeedMps { get; set; } = 0.20f;
+        public float SprayMaxYawRateRadps { get; set; } = 0.35f;
+        public int SprayLockHoldMs { get; set; } = 700;
+        public float SprayAlignTimeoutS { get; set; } = 20.0f;
+
+        // ============================================================
         // Persistence
         // ============================================================
 
@@ -528,6 +551,30 @@ namespace NOMAD.MissionPlanner
             {
                 SlamMapRadiusM = 3.0f;
             }
+
+            SprayTargetCameraRangeM = Clamp(SprayTargetCameraRangeM, 0.5f, 8.0f, 3.8f);
+            SprayRangeToleranceM = Clamp(SprayRangeToleranceM, 0.05f, 1.0f, 0.25f);
+            SprayTriggerMaxDistanceM = Clamp(SprayTriggerMaxDistanceM, 1.0f, 8.0f, 5.5f);
+            if (SprayAimPixelX < 0 || SprayAimPixelX > 4000) SprayAimPixelX = 640;
+            if (SprayAimPixelY < 0 || SprayAimPixelY > 3000) SprayAimPixelY = 390;
+            if (SprayAimTolerancePx < 2 || SprayAimTolerancePx > 250) SprayAimTolerancePx = 25;
+            SprayServoFireAngleDeg = Clamp(SprayServoFireAngleDeg, 0.0f, 180.0f, 82.0f);
+            SprayForwardGain = Clamp(SprayForwardGain, 0.0f, 2.0f, 0.45f);
+            SprayLateralGain = Clamp(SprayLateralGain, -0.02f, 0.02f, 0.0010f);
+            SprayAltitudeGain = Clamp(SprayAltitudeGain, -0.02f, 0.02f, 0.0010f);
+            SprayYawGain = Clamp(SprayYawGain, -0.02f, 0.02f, 0.0025f);
+            SprayMaxForwardSpeedMps = Clamp(SprayMaxForwardSpeedMps, 0.05f, 2.0f, 0.45f);
+            SprayMaxLateralSpeedMps = Clamp(SprayMaxLateralSpeedMps, 0.05f, 1.0f, 0.25f);
+            SprayMaxAltitudeSpeedMps = Clamp(SprayMaxAltitudeSpeedMps, 0.05f, 1.0f, 0.20f);
+            SprayMaxYawRateRadps = Clamp(SprayMaxYawRateRadps, 0.05f, 2.0f, 0.35f);
+            if (SprayLockHoldMs < 100 || SprayLockHoldMs > 5000) SprayLockHoldMs = 700;
+            SprayAlignTimeoutS = Clamp(SprayAlignTimeoutS, 2.0f, 60.0f, 20.0f);
+        }
+
+        private static float Clamp(float value, float min, float max, float fallback)
+        {
+            if (float.IsNaN(value) || float.IsInfinity(value)) return fallback;
+            return Math.Max(min, Math.Min(max, value));
         }
 
         /// <summary>
@@ -608,6 +655,24 @@ namespace NOMAD.MissionPlanner
             CameraTiltPwmNeutral = defaults.CameraTiltPwmNeutral;
             CameraTiltPwmMax = defaults.CameraTiltPwmMax;
             CameraTiltAngleRange = defaults.CameraTiltAngleRange;
+            SprayTargetCameraRangeM = defaults.SprayTargetCameraRangeM;
+            SprayRangeToleranceM = defaults.SprayRangeToleranceM;
+            SprayTriggerMaxDistanceM = defaults.SprayTriggerMaxDistanceM;
+            SprayAimPixelX = defaults.SprayAimPixelX;
+            SprayAimPixelY = defaults.SprayAimPixelY;
+            SprayAimTolerancePx = defaults.SprayAimTolerancePx;
+            SprayServoFireAngleDeg = defaults.SprayServoFireAngleDeg;
+            SprayForwardGain = defaults.SprayForwardGain;
+            SprayLateralGain = defaults.SprayLateralGain;
+            SprayAltitudeGain = defaults.SprayAltitudeGain;
+            SprayYawGain = defaults.SprayYawGain;
+            SprayUseYawAlignment = defaults.SprayUseYawAlignment;
+            SprayMaxForwardSpeedMps = defaults.SprayMaxForwardSpeedMps;
+            SprayMaxLateralSpeedMps = defaults.SprayMaxLateralSpeedMps;
+            SprayMaxAltitudeSpeedMps = defaults.SprayMaxAltitudeSpeedMps;
+            SprayMaxYawRateRadps = defaults.SprayMaxYawRateRadps;
+            SprayLockHoldMs = defaults.SprayLockHoldMs;
+            SprayAlignTimeoutS = defaults.SprayAlignTimeoutS;
         }
     }
 }

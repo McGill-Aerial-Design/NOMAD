@@ -2,18 +2,18 @@
 NOMAD Edge Core - Task 2 Spray Controller (Hybrid Manual+Autonomous)
 
 Workflow:
-  Operator manually positions drone within 3m of target.
-  Upon spray trigger, system autonomously approaches to 2m and executes spray sequence.
+  Operator manually positions until the ZED sees the target.
+  Upon spray trigger, system autonomously approaches, aligns, and executes spray sequence.
 
 State Machine:
-  IDLE -> APPROACH (3m->2m) -> AIM -> SPRAY -> VERIFY -> UPLOAD -> COMPLETE
+  IDLE -> APPROACH -> AIM -> SPRAY -> VERIFY -> UPLOAD -> COMPLETE
 
 Features:
-  - Operator manual positioning (WASD) to enter 3m engagement zone
-  - Autonomous approach via MAVLink velocity commands (3m to 2m)
+  - Operator manual positioning (WASD) until target is visible
+  - Autonomous approach via MAVLink velocity commands
   - Pre-spray image capture for circle change verification
   - Circle change verification: color-agnostic before/after comparison (>20% change)
-  - Visual servoing: servo pitch + ballistic drop compensation
+  - Visual servoing: calibrated aim pixel, ZED range, velocity/yaw-rate control
   - Google Drive upload: posts proof photo autonomously
   - Calibration data loaded from ~/.nomad/calibration/spray_calibration.json
   - Obstacle avoidance sector exclusion during approach
@@ -23,6 +23,7 @@ Target: Python 3.13 | NVIDIA Jetson Orin Nano
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import math
@@ -39,7 +40,7 @@ logger = logging.getLogger("edge_core.spray_controller")
 class SprayState(Enum):
     """Spray sequence states."""
     IDLE = "idle"
-    APPROACH = "approach"    # Autonomous 3m->2m approach via Nav2
+    APPROACH = "approach"    # Autonomous visible-target approach
     AIM = "aim"              # Fine alignment with visual servoing
     SPRAY = "spray"          # Activating water pump
     VERIFY = "verify"        # Circle change detection (before/after comparison)
@@ -72,10 +73,10 @@ class SprayStatus:
     verification_passed: bool = False
     upload_url: str = ""
     error: Optional[str] = None
-    # Nav2 approach tracking
+    # Legacy Nav2 approach tracking (kept for API/status compatibility)
     nav2_goal_id: Optional[str] = None
     nav2_approach_active: bool = False
-    approach_method: str = ""  # "nav2" or "velocity"
+    approach_method: str = ""  # "velocity" for the current Task 2 path
     # Stats
     targets_engaged: int = 0
     targets_succeeded: int = 0
@@ -114,15 +115,46 @@ BALLISTIC_DROP_TABLE = {
 # Calibration file path — produced by bench calibration system (aeac_ws)
 CALIBRATION_FILE = os.path.expanduser("~/.nomad/calibration/spray_calibration.json")
 
+DEFAULT_SPRAY_CALIBRATION = {
+    # Fixed firing geometry. Calibrate these at the wall, then make the
+    # aircraft reproduce the same view before every shot.
+    "target_camera_range_m": 3.8,
+    "range_tolerance_m": 0.25,
+    "trigger_max_distance_m": 5.5,
+    "aim_pixel_x": 640,
+    "aim_pixel_y": 390,
+    "aim_tolerance_px": 25,
+    "servo_fire_angle_deg": 82.0,
+    "spray_duration_ms": 500,
+    # Visual-servo controller gains. Commands are velocity/yaw-rate setpoints;
+    # ArduPilot owns the actual pitch/roll attitude control.
+    "forward_gain": 0.45,
+    "lateral_gain": 0.0010,
+    "altitude_gain": 0.0010,
+    "yaw_gain": 0.0025,
+    "use_yaw_alignment": True,
+    "max_forward_speed_mps": 0.45,
+    "max_lateral_speed_mps": 0.25,
+    "max_altitude_speed_mps": 0.20,
+    "max_yaw_rate_radps": 0.35,
+    "lock_hold_ms": 700,
+    "align_timeout_s": 20.0,
+}
+
 
 def _load_calibration() -> dict:
     """Load bench calibration data from JSON file if available.
 
     Expected format:
         {
-            "ballistic_drop_table": {"2.0": 2.5, "3.0": 6.0, ...},
+            "target_camera_range_m": 3.8,
+            "range_tolerance_m": 0.25,
+            "trigger_max_distance_m": 5.5,
+            "aim_pixel_x": 640,
+            "aim_pixel_y": 390,
+            "servo_fire_angle_deg": 82.0,
             "spray_duration_ms": 600,
-            "servo_gain": 0.08,
+            "yaw_gain": 0.0025,
             "aim_tolerance_px": 25,
             "calibration_date": "2026-05-10",
             "notes": "Bench test results"
@@ -141,6 +173,12 @@ def _load_calibration() -> dict:
 
 # Apply calibration overrides at module load time
 _calibration = _load_calibration()
+_spray_calibration = copy.deepcopy(DEFAULT_SPRAY_CALIBRATION)
+_spray_calibration.update({
+    k: v
+    for k, v in _calibration.items()
+    if k in DEFAULT_SPRAY_CALIBRATION
+})
 if "ballistic_drop_table" in _calibration:
     BALLISTIC_DROP_TABLE = {
         float(k): float(v)
@@ -170,12 +208,12 @@ class SprayController:
     """
     Task 2 Hybrid Spray Controller.
 
-    Operator positions drone within 3m via WASD, then system autonomously
-    approaches to 2m (Nav2) and executes the spray sequence.
+    Operator positions until the ZED sees the target, then the system
+    autonomously approaches, aligns to a calibrated firing view, and sprays.
     """
 
     # Engagement parameters
-    TRIGGER_MAX_DISTANCE_M = 3.0
+    TRIGGER_MAX_DISTANCE_M = float(_spray_calibration["trigger_max_distance_m"])
     APPROACH_STOP_DISTANCE_M = 2.0
     APPROACH_SPEED_MPS = 0.5
     APPROACH_TIMEOUT_S = 20.0
@@ -185,10 +223,10 @@ class SprayController:
     NAV2_STATUS_POLL_INTERVAL_S = 0.2
 
     # Aiming parameters
-    AIM_TOLERANCE_PX = 30
+    AIM_TOLERANCE_PX = int(_spray_calibration["aim_tolerance_px"])
 
     # Spray parameters
-    SPRAY_DURATION_MS = 500
+    SPRAY_DURATION_MS = int(_spray_calibration["spray_duration_ms"])
     SPRAY_SETTLE_TIME_S = 0.5
     MAX_SPRAY_ATTEMPTS = 2
 
@@ -196,6 +234,23 @@ class SprayController:
     IMAGE_CENTER_X = 640
     IMAGE_CENTER_Y = 360
     SERVO_GAIN = 0.1
+
+    TARGET_CAMERA_RANGE_M = float(_spray_calibration["target_camera_range_m"])
+    RANGE_TOLERANCE_M = float(_spray_calibration["range_tolerance_m"])
+    AIM_PIXEL_X = float(_spray_calibration["aim_pixel_x"])
+    AIM_PIXEL_Y = float(_spray_calibration["aim_pixel_y"])
+    SERVO_FIRE_ANGLE_DEG = float(_spray_calibration["servo_fire_angle_deg"])
+    FORWARD_GAIN = float(_spray_calibration["forward_gain"])
+    LATERAL_GAIN = float(_spray_calibration["lateral_gain"])
+    ALTITUDE_GAIN = float(_spray_calibration["altitude_gain"])
+    YAW_GAIN = float(_spray_calibration["yaw_gain"])
+    USE_YAW_ALIGNMENT = bool(_spray_calibration["use_yaw_alignment"])
+    MAX_FORWARD_SPEED_MPS = float(_spray_calibration["max_forward_speed_mps"])
+    MAX_LATERAL_SPEED_MPS = float(_spray_calibration["max_lateral_speed_mps"])
+    MAX_ALTITUDE_SPEED_MPS = float(_spray_calibration["max_altitude_speed_mps"])
+    MAX_YAW_RATE_RADPS = float(_spray_calibration["max_yaw_rate_radps"])
+    LOCK_HOLD_MS = int(_spray_calibration["lock_hold_ms"])
+    ALIGN_TIMEOUT_S = float(_spray_calibration["align_timeout_s"])
 
     def __init__(
         self,
@@ -232,7 +287,7 @@ class SprayController:
         # Pre-spray image path for circle change verification
         self._pre_spray_image_path: Optional[str] = None
 
-        logger.info("Spray controller initialized (Nav2 approach + circle verify)")
+        logger.info("Spray controller initialized (ZED-guided spray + circle verify)")
 
     @property
     def status(self) -> SprayStatus:
@@ -286,6 +341,93 @@ class SprayController:
     def set_excluded_sectors_fn(self, fn: Callable[[set[int]], None]) -> None:
         """Set callback to update obstacle avoidance excluded sectors."""
         self._set_excluded_sectors_fn = fn
+
+    # ------------------------------------------------------------------ #
+    # Runtime calibration
+    # ------------------------------------------------------------------ #
+
+    @classmethod
+    def get_calibration(cls) -> dict:
+        """Return the field-tunable spray calibration currently in use."""
+        return {
+            "target_camera_range_m": cls.TARGET_CAMERA_RANGE_M,
+            "range_tolerance_m": cls.RANGE_TOLERANCE_M,
+            "trigger_max_distance_m": cls.TRIGGER_MAX_DISTANCE_M,
+            "aim_pixel_x": cls.AIM_PIXEL_X,
+            "aim_pixel_y": cls.AIM_PIXEL_Y,
+            "aim_tolerance_px": cls.AIM_TOLERANCE_PX,
+            "servo_fire_angle_deg": cls.SERVO_FIRE_ANGLE_DEG,
+            "spray_duration_ms": cls.SPRAY_DURATION_MS,
+            "forward_gain": cls.FORWARD_GAIN,
+            "lateral_gain": cls.LATERAL_GAIN,
+            "altitude_gain": cls.ALTITUDE_GAIN,
+            "yaw_gain": cls.YAW_GAIN,
+            "use_yaw_alignment": cls.USE_YAW_ALIGNMENT,
+            "max_forward_speed_mps": cls.MAX_FORWARD_SPEED_MPS,
+            "max_lateral_speed_mps": cls.MAX_LATERAL_SPEED_MPS,
+            "max_altitude_speed_mps": cls.MAX_ALTITUDE_SPEED_MPS,
+            "max_yaw_rate_radps": cls.MAX_YAW_RATE_RADPS,
+            "lock_hold_ms": cls.LOCK_HOLD_MS,
+            "align_timeout_s": cls.ALIGN_TIMEOUT_S,
+            "calibration_file": CALIBRATION_FILE,
+        }
+
+    @classmethod
+    def update_calibration(cls, updates: dict, *, persist: bool = True) -> dict:
+        """Apply Mission Planner field calibration values at runtime."""
+        numeric_fields = {
+            "target_camera_range_m": ("TARGET_CAMERA_RANGE_M", 0.5, 8.0),
+            "range_tolerance_m": ("RANGE_TOLERANCE_M", 0.05, 1.0),
+            "trigger_max_distance_m": ("TRIGGER_MAX_DISTANCE_M", 1.0, 8.0),
+            "aim_pixel_x": ("AIM_PIXEL_X", 0.0, 4000.0),
+            "aim_pixel_y": ("AIM_PIXEL_Y", 0.0, 3000.0),
+            "aim_tolerance_px": ("AIM_TOLERANCE_PX", 2.0, 250.0),
+            "servo_fire_angle_deg": ("SERVO_FIRE_ANGLE_DEG", 0.0, 180.0),
+            "spray_duration_ms": ("SPRAY_DURATION_MS", 50.0, 5000.0),
+            "forward_gain": ("FORWARD_GAIN", 0.0, 2.0),
+            "lateral_gain": ("LATERAL_GAIN", -0.02, 0.02),
+            "altitude_gain": ("ALTITUDE_GAIN", -0.02, 0.02),
+            "yaw_gain": ("YAW_GAIN", -0.02, 0.02),
+            "max_forward_speed_mps": ("MAX_FORWARD_SPEED_MPS", 0.05, 2.0),
+            "max_lateral_speed_mps": ("MAX_LATERAL_SPEED_MPS", 0.05, 1.0),
+            "max_altitude_speed_mps": ("MAX_ALTITUDE_SPEED_MPS", 0.05, 1.0),
+            "max_yaw_rate_radps": ("MAX_YAW_RATE_RADPS", 0.05, 2.0),
+            "lock_hold_ms": ("LOCK_HOLD_MS", 100.0, 5000.0),
+            "align_timeout_s": ("ALIGN_TIMEOUT_S", 2.0, 60.0),
+        }
+
+        for key, (attr, min_v, max_v) in numeric_fields.items():
+            if key not in updates:
+                continue
+            try:
+                value = float(updates[key])
+            except (TypeError, ValueError):
+                continue
+            value = max(min_v, min(max_v, value))
+            if attr in ("AIM_TOLERANCE_PX", "SPRAY_DURATION_MS", "LOCK_HOLD_MS"):
+                setattr(cls, attr, int(round(value)))
+            else:
+                setattr(cls, attr, value)
+
+        if "use_yaw_alignment" in updates:
+            cls.USE_YAW_ALIGNMENT = bool(updates["use_yaw_alignment"])
+
+        current = cls.get_calibration()
+        if persist:
+            try:
+                os.makedirs(os.path.dirname(CALIBRATION_FILE), exist_ok=True)
+                persisted = {
+                    k: v
+                    for k, v in current.items()
+                    if k != "calibration_file"
+                }
+                with open(CALIBRATION_FILE, "w") as f:
+                    json.dump(persisted, f, indent=2)
+                os.chmod(CALIBRATION_FILE, 0o600)
+            except Exception as e:
+                logger.warning(f"Failed to persist spray calibration: {e}")
+        logger.info(f"Updated spray calibration: {current}")
+        return current
 
     # ------------------------------------------------------------------ #
     # Trigger / Abort
@@ -410,7 +552,7 @@ class SprayController:
             if target is None:
                 return
 
-            # --- APPROACH (3m -> 2m via Nav2) ---
+            # --- APPROACH (visible target -> calibrated firing range) ---
             if not skip_approach:
                 self._set_state(SprayState.APPROACH)
                 if not self._approach_target(target):
@@ -492,7 +634,7 @@ class SprayController:
         return None
 
     # ------------------------------------------------------------------ #
-    # APPROACH (Nav2 primary, velocity fallback)
+    # APPROACH (direct velocity)
     # ------------------------------------------------------------------ #
 
     def _compute_approach_pose(self, target: SprayTarget) -> dict:
@@ -518,11 +660,11 @@ class SprayController:
         return {"x": approach_x, "y": approach_y, "z": approach_z, "yaw": yaw}
 
     def _approach_target(self, target: SprayTarget) -> bool:
-        """Autonomous approach from 3m to 2m. Returns False if aborted.
+        """Autonomous approach from trigger range to the coarse firing standoff.
 
         Uses direct velocity commands (not Nav2) because:
         - Nav2 is a 2D planner designed for ground robots — it ignores Z
-        - The approach is only ~1m (3m→2m), obstacle avoidance is unnecessary
+        - The approach is short and target-visible, so path planning is unnecessary
         - Velocity commands handle all 3 axes natively via MAVLink GUIDED
         - Nav2 has been reported to crash with vertical-level targets
         """
@@ -692,53 +834,169 @@ class SprayController:
     # ------------------------------------------------------------------ #
 
     def _aim_at_target(self, target: SprayTarget) -> bool:
-        """Visual servoing to center target in camera via servo pitch."""
+        """Visual-servo to the calibrated water landing pixel and range.
+
+        The camera may sit several meters behind the nozzle because of the
+        spray arm. We therefore do not chase image center; we reproduce a
+        calibrated firing geometry: target at AIM_PIXEL_X/Y and
+        TARGET_CAMERA_RANGE_M. The controller sends body velocity/yaw commands
+        and lets ArduPilot own attitude stabilization.
+        """
         if not self._get_detection_bbox_fn:
             logger.warning("No detection bbox function - skipping aim")
             return True
 
+        if self._servo:
+            fire_angle = max(0.0, min(180.0, self.SERVO_FIRE_ANGLE_DEG))
+            self._servo.set_camera_tilt(fire_angle)
+            with self._lock:
+                self._status.servo_angle = fire_angle
+
         aim_start = time.time()
-        max_aim_time = 15.0
+        lock_started_at: Optional[float] = None
+        last_command_time = 0.0
+
         while not self._check_abort():
-            if time.time() - aim_start > max_aim_time:
+            now = time.time()
+            if now - aim_start > self.ALIGN_TIMEOUT_S:
                 logger.warning("Aim timeout - proceeding with current alignment")
+                if self._nav:
+                    self._nav.stop_movement()
                 return True
 
-            bbox = self._get_detection_bbox_fn(target.target_id)
-            if bbox is None:
+            detection = self._get_detection_for_aim(target)
+            if detection is None:
+                lock_started_at = None
+                if self._nav and now - last_command_time > 0.25:
+                    self._nav.stop_movement()
+                    last_command_time = now
                 time.sleep(0.1)
                 continue
 
-            cx, cy, w, h = bbox
-            err_x = cx - self.IMAGE_CENTER_X
-            err_y = cy - self.IMAGE_CENTER_Y
+            cx = float(detection["cx"])
+            cy = float(detection["cy"])
+            camera_range_m = detection.get("range_m")
+            err_x = cx - self.AIM_PIXEL_X
+            err_y = cy - self.AIM_PIXEL_Y
+            range_error = 0.0
+            if camera_range_m is not None:
+                range_error = float(camera_range_m) - self.TARGET_CAMERA_RANGE_M
 
-            if (
+            pixel_locked = (
                 abs(err_x) < self.AIM_TOLERANCE_PX
                 and abs(err_y) < self.AIM_TOLERANCE_PX
-            ):
-                return True
+            )
+            range_locked = (
+                camera_range_m is None
+                or abs(range_error) < self.RANGE_TOLERANCE_M
+            )
 
-            if self._servo:
-                pitch_adjust = err_y * self.SERVO_GAIN
-                drone_pos = self._get_drone_position()
-                if drone_pos:
-                    dist = math.sqrt(
-                        (target.x - drone_pos[0]) ** 2
-                        + (target.y - drone_pos[1]) ** 2
+            if pixel_locked and range_locked:
+                if lock_started_at is None:
+                    lock_started_at = now
+                    if self._nav:
+                        self._nav.stop_movement()
+                elif (now - lock_started_at) * 1000.0 >= self.LOCK_HOLD_MS:
+                    if self._nav:
+                        self._nav.stop_movement()
+                    logger.info(
+                        "Spray aim lock acquired: "
+                        f"pixel=({cx:.0f},{cy:.0f}) err=({err_x:.0f},{err_y:.0f}) "
+                        f"range={camera_range_m if camera_range_m is not None else 'n/a'}"
                     )
-                    drop_angle = _interpolate_drop(dist)
-                    pitch_adjust += drop_angle
+                    return True
+                time.sleep(0.05)
+                continue
 
-                current_angle = self._status.servo_angle
-                new_angle = max(0, min(180, current_angle - pitch_adjust))
-                self._servo.set_camera_tilt(new_angle)
-                with self._lock:
-                    self._status.servo_angle = new_angle
+            lock_started_at = None
+
+            if self._nav:
+                # Positive range_error means target is too far, move forward.
+                vx = self._clamp(
+                    range_error * self.FORWARD_GAIN,
+                    -self.MAX_FORWARD_SPEED_MPS,
+                    self.MAX_FORWARD_SPEED_MPS,
+                )
+                # Positive err_x means target appears right. By default use yaw
+                # to bring it toward the calibrated water landing pixel. Lateral
+                # correction remains available for platforms with stable side-slip.
+                vy = 0.0
+                yaw_rate = 0.0
+                if self.USE_YAW_ALIGNMENT:
+                    yaw_rate = self._clamp(
+                        err_x * self.YAW_GAIN,
+                        -self.MAX_YAW_RATE_RADPS,
+                        self.MAX_YAW_RATE_RADPS,
+                    )
+                else:
+                    vy = self._clamp(
+                        err_x * self.LATERAL_GAIN,
+                        -self.MAX_LATERAL_SPEED_MPS,
+                        self.MAX_LATERAL_SPEED_MPS,
+                    )
+                # Positive err_y means target appears low. The gain sign is
+                # field-tunable because camera/nozzle mounting can invert the
+                # observed vertical response.
+                vz = self._clamp(
+                    err_y * self.ALTITUDE_GAIN,
+                    -self.MAX_ALTITUDE_SPEED_MPS,
+                    self.MAX_ALTITUDE_SPEED_MPS,
+                )
+
+                self._nav.send_velocity(vx, vy, vz, yaw_rate)
+                last_command_time = now
 
             time.sleep(0.1)
 
         return False
+
+    def _get_detection_for_aim(self, target: SprayTarget) -> Optional[dict]:
+        """Normalize the detection callback output for the aim controller."""
+        try:
+            raw = self._get_detection_bbox_fn(target)  # type: ignore[misc]
+        except TypeError:
+            raw = self._get_detection_bbox_fn(target.target_id)  # type: ignore[misc]
+
+        if raw is None:
+            return None
+
+        if isinstance(raw, dict):
+            cx = raw.get("cx")
+            cy = raw.get("cy")
+            if cx is None or cy is None:
+                bbox_x = raw.get("bbox_x", raw.get("x"))
+                bbox_y = raw.get("bbox_y", raw.get("y"))
+                bbox_w = raw.get("bbox_w", raw.get("w", 0))
+                bbox_h = raw.get("bbox_h", raw.get("h", 0))
+                if bbox_x is not None and bbox_y is not None:
+                    cx = float(bbox_x) + float(bbox_w or 0) / 2.0
+                    cy = float(bbox_y) + float(bbox_h or 0) / 2.0
+            if cx is None or cy is None:
+                return None
+            range_m = raw.get("range_m")
+            if range_m is None:
+                coords = [
+                    raw.get("det_x", raw.get("x_m", raw.get("x"))),
+                    raw.get("det_y", raw.get("y_m", raw.get("y"))),
+                    raw.get("det_z", raw.get("z_m", raw.get("z"))),
+                ]
+                try:
+                    if all(v is not None for v in coords):
+                        range_m = math.sqrt(sum(float(v) ** 2 for v in coords))
+                except (TypeError, ValueError):
+                    range_m = None
+            return {"cx": float(cx), "cy": float(cy), "range_m": range_m}
+
+        if isinstance(raw, tuple) and len(raw) >= 2:
+            cx, cy = raw[0], raw[1]
+            range_m = raw[4] if len(raw) >= 5 else None
+            return {"cx": float(cx), "cy": float(cy), "range_m": range_m}
+
+        return None
+
+    @staticmethod
+    def _clamp(value: float, min_value: float, max_value: float) -> float:
+        return max(min_value, min(max_value, value))
 
     # ------------------------------------------------------------------ #
     # CAPTURE PRE-SPRAY
