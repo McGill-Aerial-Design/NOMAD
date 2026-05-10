@@ -882,7 +882,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
         cache_max_stale_s = 20.0
 
         # Throttle probe frequency to avoid expensive docker exec churn.
-        if not force_refresh and cache and cache_age_s < 1.5:
+        if not force_refresh and cache and cache_age_s < 8.0:
             return {
                 "container_running": bool(cache.get("container_running", False)),
                 "nvblox_running": bool(cache.get("nvblox_running", False)),
@@ -2208,9 +2208,9 @@ fi
         """
         try:
             output = await _call_target_capture_with_retries(
-                max_attempts=2,
-                retry_delay_s=1.0,
-                timeout_s=20.0,
+                max_attempts=1,
+                retry_delay_s=0.5,
+                timeout_s=12.0,
             )
             return {
                 "success": True,
@@ -2601,9 +2601,9 @@ fi
         # legitimate no-detect captures don't look like gateway outages.
         try:
             output = await _call_target_capture_with_retries(
-                max_attempts=2,
-                retry_delay_s=1.0,
-                timeout_s=20.0,
+                max_attempts=1,
+                retry_delay_s=0.5,
+                timeout_s=12.0,
             )
         except HTTPException as exc:
             detail_text = str(exc.detail or "").strip()
@@ -2638,15 +2638,13 @@ fi
         latest_folder: Optional[str] = None
         images: list[str] = []
 
-        # Give host storage a grace period in case files are still syncing.
-        # The target_localizer creates capture folders inside the Isaac ROS
-        # container, and docker volume mounts may not sync instantly. Use a
-        # longer total window (3s) with 15 quick polls.
-        for _ in range(15):
+        # Give host storage a brief grace period for docker volume mount sync.
+        # 10×100ms = 1s max; fall through to docker cp mirror if still missing.
+        for _ in range(10):
             latest_folder, images = _latest_task1_capture_from_host()
             if latest_folder and images:
                 break
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.1)
 
         # If host capture path is not visible, mirror from container-local storage.
         if not latest_folder or not images:
@@ -3612,17 +3610,29 @@ fi
         retry_delay_s: float = 2.0,
         timeout_s: float = 45.0,
     ) -> str:
-        """Call target_localizer capture service with short retries for warmup races."""
+        """Call target_localizer capture service with short retries for warmup races.
+
+        Runs blocking subprocess work in a thread-pool executor so the event loop
+        stays free during the docker exec calls.  Uses cached isaac runtime state
+        and skips the redundant service-type round-trip for this known service.
+        """
         attempts = max(1, int(max_attempts))
         last_exc: HTTPException | None = None
+        loop = asyncio.get_event_loop()
+
+        def _blocking_capture() -> str:
+            return _call_ros2_service_in_isaac_container_or_raise(
+                service_name="/target_localizer/capture_target",
+                service_type="std_srvs/srv/Trigger",
+                request_payload={},
+                timeout_s=timeout_s,
+                skip_type_check=True,
+                force_refresh_runtime=False,
+            )
+
         for attempt in range(1, attempts + 1):
             try:
-                return _call_ros2_service_in_isaac_container_or_raise(
-                    service_name="/target_localizer/capture_target",
-                    service_type="std_srvs/srv/Trigger",
-                    request_payload={},
-                    timeout_s=timeout_s,
-                )
+                return await loop.run_in_executor(None, _blocking_capture)
             except HTTPException as exc:
                 last_exc = exc
                 detail = str(exc.detail)
@@ -3667,9 +3677,11 @@ fi
         service_type: str,
         request_payload: dict[str, Any],
         timeout_s: float = 30.0,
+        skip_type_check: bool = False,
+        force_refresh_runtime: bool = True,
     ) -> str:
         """Call a ROS2 service inside the active Isaac container stack."""
-        runtime = _probe_isaac_runtime_state(force_refresh=True)
+        runtime = _probe_isaac_runtime_state(force_refresh=force_refresh_runtime)
         if not runtime.get("container_running", False):
             raise HTTPException(
                 status_code=503,
@@ -3699,50 +3711,51 @@ fi
             "export ROS2CLI_NO_DAEMON=1; "
         )
 
-        type_check_cmd = base_env_cmd + f"ros2 service type {shlex.quote(service_name)}"
-        try:
-            type_result = subprocess.run(
-                ["docker", "exec", "nomad_isaac_ros", "bash", "-lc", type_check_cmd],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-        except subprocess.TimeoutExpired:
-            raise HTTPException(
-                status_code=504,
-                detail=f"ROS2 service probe timed out: {service_name}",
-            )
-        except Exception as e:
-            logger.error(f"ROS2 service probe failed ({service_name}): {e}")
-            raise HTTPException(
-                status_code=503,
-                detail=f"Failed to probe ROS2 service: {service_name}",
-            )
+        if not skip_type_check:
+            type_check_cmd = base_env_cmd + f"ros2 service type {shlex.quote(service_name)}"
+            try:
+                type_result = subprocess.run(
+                    ["docker", "exec", "nomad_isaac_ros", "bash", "-lc", type_check_cmd],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+            except subprocess.TimeoutExpired:
+                raise HTTPException(
+                    status_code=504,
+                    detail=f"ROS2 service probe timed out: {service_name}",
+                )
+            except Exception as e:
+                logger.error(f"ROS2 service probe failed ({service_name}): {e}")
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Failed to probe ROS2 service: {service_name}",
+                )
 
-        type_output = "\n".join(
-            part
-            for part in [
-                (type_result.stdout or "").strip(),
-                (type_result.stderr or "").strip(),
-            ]
-            if part
-        ).strip()
-        type_output = _sanitize_ros2_service_output(type_output)
-        if type_result.returncode != 0 or not type_output:
-            raise HTTPException(
-                status_code=503,
-                detail=type_output or f"ROS2 service not available: {service_name}",
-            )
+            type_output = "\n".join(
+                part
+                for part in [
+                    (type_result.stdout or "").strip(),
+                    (type_result.stderr or "").strip(),
+                ]
+                if part
+            ).strip()
+            type_output = _sanitize_ros2_service_output(type_output)
+            if type_result.returncode != 0 or not type_output:
+                raise HTTPException(
+                    status_code=503,
+                    detail=type_output or f"ROS2 service not available: {service_name}",
+                )
 
-        advertised_type = type_output.splitlines()[-1].strip()
-        if advertised_type != service_type:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    f"ROS2 service type mismatch for {service_name}: "
-                    f"expected {service_type}, got {advertised_type}"
-                ),
-            )
+            advertised_type = type_output.splitlines()[-1].strip()
+            if advertised_type != service_type:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        f"ROS2 service type mismatch for {service_name}: "
+                        f"expected {service_type}, got {advertised_type}"
+                    ),
+                )
 
         # Wrap with shell `timeout` so the ros2 CLI fails fast when the service
         # server is dead (stale DDS registrations from a crashed node make

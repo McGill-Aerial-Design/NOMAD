@@ -1009,208 +1009,125 @@ private ListBox _lstWalls;
             }
         }
 
+        private void RestoreCaptureButton()
+        {
+            _btnCapture.Enabled = true;
+            if (_lastDetectionCount > 0)
+            {
+                _btnCapture.BackColor = SUCCESS_COLOR;
+                _btnCapture.Text = $"● CAPTURE ({_lastDetectionCount} circle{(_lastDetectionCount > 1 ? "s" : "")})";
+            }
+            else
+            {
+                _btnCapture.BackColor = ACCENT_COLOR;
+                _btnCapture.Text = "CAPTURE (crosshair)";
+            }
+        }
+
         private async void BtnCapture_Click(object sender, EventArgs e)
         {
             _btnCapture.Enabled = false;
             _btnCapture.Text = "Capturing...";
             _txtResult.Text = "Sending capture command...";
             _txtResult.ForeColor = WARNING_COLOR;
-            
+
             try
             {
                 var result = await _sender.SendTask1Capture();
                 if (result.Success)
                 {
-                    _txtResult.ForeColor = SUCCESS_COLOR;
-                    
-                    // Download and display the captured image
-                    try
+                    if (!string.IsNullOrEmpty(result.Data))
                     {
-                        // Parse response data to get image filename and metadata
-                        if (!string.IsNullOrEmpty(result.Data))
-                        {
-                            var data = Newtonsoft.Json.Linq.JObject.Parse(result.Data);
+                        var data = Newtonsoft.Json.Linq.JObject.Parse(result.Data);
 
-                            // Helper: JValue(null).ToString() returns "" not null, so ?? doesn't catch it
-                            string Val(string key) {
-                                var t = data[key];
-                                return t != null && t.Type != Newtonsoft.Json.Linq.JTokenType.Null ? t.ToString() : null;
-                            }
-
-                            // Check API-level success (distinct from HTTP success)
-                            var apiSuccess = (bool?)data["success"] ?? false;
-                            if (!apiSuccess)
-                            {
-                                var error = Val("error") ?? "Unknown error";
-                                _txtResult.Text = $"[FAIL] {error}";
-                                _txtResult.ForeColor = ERROR_COLOR;
-                                return;
-                            }
-
-                            var imageName = Val("image_name");
-
-                            if (string.IsNullOrEmpty(imageName))
-                            {
-                                var output = Val("output") ?? Val("message") ?? Val("detail");
-                                var captureSummary = new StringBuilder();
-                                captureSummary.AppendLine("[OK] Capture Successful");
-                                if (!string.IsNullOrWhiteSpace(output))
-                                {
-                                    captureSummary.AppendLine(output);
-                                }
-                                else
-                                {
-                                    captureSummary.AppendLine("Target localization completed, but no image metadata was returned by the API.");
-                                }
-
-                                _txtResult.Text = captureSummary.ToString().TrimEnd();
-                                return;
-                            }
-
-                            // Extract enhanced metadata
-                            var timestamp = Val("timestamp") ?? DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ssZ");
-                            var headingDeg = Val("heading_deg") ?? "N/A";
-                            var pitchDeg = Val("pitch_deg") ?? "N/A";
-                            var rollDeg = Val("roll_deg") ?? "N/A";
-                            var cameraPitch = Val("camera_pitch_deg") ?? "N/A";
-                            var captureFolder = Val("capture_folder") ?? "N/A";
-                            var distanceM = Val("distance_m");
-                            var altAgl = Val("alt_agl_m");
-                            var rawOutput = Val("output") ?? Val("message") ?? Val("detail");
-                            // Strip "Added N target(s):\n" prefix (literal \n or real newline)
-                            var outputText = System.Text.RegularExpressions.Regex.Replace(
-                                rawOutput ?? "", @"(?i)^Added \d+ target\(s\):(\\n|\n|\r\n)?", "").TrimStart();
-
-                            var position = data["position"] as Newtonsoft.Json.Linq.JObject;
-                            var latStr = position?["lat"]?.ToString() ?? "N/A";
-                            var lonStr = position?["lon"]?.ToString() ?? "N/A";
-                            var altStr = position?["alt"]?.ToString() ?? "N/A";
-
-                            // Format comprehensive metadata display
-                            var metadataText = new StringBuilder();
-                            metadataText.AppendLine("[OK] Capture Successful");
-                            metadataText.AppendLine($"Time: {timestamp}");
-                            metadataText.AppendLine($"Position: {latStr}, {lonStr} @ {altStr}m");
-                            metadataText.AppendLine($"AHRS: Hdg={headingDeg} Pitch={pitchDeg} Roll={rollDeg}");
-                            metadataText.AppendLine($"Cam pitch: {cameraPitch}°  AGL: {(altAgl != null ? altAgl + "m" : "N/A")}");
-                            if (distanceM != null) metadataText.AppendLine($"Distance to target: {distanceM}m");
-                            metadataText.AppendLine($"Folder: {captureFolder}");
-                            int targetNum = (_uploadPanel?.TargetCount ?? 0) + 1;
-                            metadataText.Append($"Image: Target {targetNum} ({imageName})");
-                            
-                            _txtResult.Text = metadataText.ToString();
-                            
-                            if (!string.IsNullOrEmpty(imageName))
-                            {
-                                // Construct download URL (use folder-based endpoint)
-                                var folderName = Path.GetFileName(captureFolder.TrimEnd('/'));
-                                string imageUrl = $"http://{_config.EffectiveIP}:{_config.JetsonPort}/api/task/1/images/{folderName}/{imageName}";
-                                
-                                // Download image (use long-run client — JPEG can take >5s over WiFi)
-                                var imageBytes = await JetsonApiService.GetByteArrayAsync(imageUrl);
-
-                                // Save to local directory using queue-position name so files stay
-                                // consistent even after the user clears the Jetson's internal counter.
-                                var task1Dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NOMAD", "Task1");
-                                Directory.CreateDirectory(task1Dir);
-                                var ext = Path.GetExtension(imageName);
-                                if (string.IsNullOrEmpty(ext)) ext = ".jpg";
-                                var localImageName = $"target_{targetNum}_{folderName}{ext}";
-                                var localPath = Path.Combine(task1Dir, localImageName);
-                                File.WriteAllBytes(localPath, imageBytes);
-
-                                // Save metadata JSON file
-                                var jsonPath = Path.ChangeExtension(localPath, ".json");
-                                var metadata = new SnapshotMetadata
-                                {
-                                    FileName = imageName,
-                                    CaptureTime = DateTime.TryParse(timestamp, out var captureTime) ? captureTime : DateTime.Now,
-                                    Position = new PositionData
-                                    {
-                                        Lat = double.TryParse(latStr, out var lat) ? lat : 0,
-                                        Lon = double.TryParse(lonStr, out var lon) ? lon : 0,
-                                        Alt = double.TryParse(altStr, out var alt) ? alt : 0
-                                    },
-                                    HeadingDeg = double.TryParse(headingDeg, out var heading) ? heading : (double?)null,
-                                    PitchDeg = double.TryParse(pitchDeg, out var pitch) ? pitch : (double?)null,
-                                    RollDeg = double.TryParse(rollDeg, out var roll) ? roll : (double?)null,
-                                    CameraPitchDeg = double.TryParse(cameraPitch, out var cPitch) ? cPitch : (double?)null,
-                                    AltAglM = double.TryParse(altAgl, out var vAlt) ? vAlt : (double?)null,
-                                    DistanceM = double.TryParse(distanceM, out var dM) ? dM : (double?)null,
-                                    BuildingLocation = null,
-                                    RelativeDescription = outputText,
-                                };
-
-                                File.WriteAllText(jsonPath, Newtonsoft.Json.JsonConvert.SerializeObject(metadata, Newtonsoft.Json.Formatting.Indented));
-
-// Mirror successful captures into the Submit tab so
-                // operators can approve and upload without re-entering data.
-                var capturedColor = Val("color") ?? "Red";
-                if (!new[] { "Red", "Blue", "Green", "Yellow", "Orange", "Purple", "White", "Black", "Unknown" }.Contains(capturedColor))
-                    capturedColor = "Red";
-                var capturedPlane = "wall";
-                var outputLower = (outputText ?? "").ToLower();
-                if (outputLower.Contains("ground")) capturedPlane = "ground";
-                else if (outputLower.Contains("roof")) capturedPlane = "roof";
-                var capturedHeight = "";
-                var heightMatch = System.Text.RegularExpressions.Regex.Match(
-                    outputText ?? "", @"(\d+\.?\d*)\s*m\s+above\s+ground");
-                if (heightMatch.Success) capturedHeight = heightMatch.Groups[1].Value;
-
-                _uploadPanel?.AddCapturedImage(
-                    localPath,
-                    ExtractSuggestedTask1Description(outputText),
-                    capturedColor,
-                    capturedPlane,
-                    capturedHeight
-                );
-
-                                // Add thumbnail to gallery with enhanced metadata tooltip
-                                using (var ms = new MemoryStream(imageBytes))
-                                {
-                                    var originalImage = Image.FromStream(ms);
-                                    var thumbnail = originalImage.GetThumbnailImage(120, 90, null, IntPtr.Zero);
-                                    
-                                    var picBox = new PictureBox
-                                    {
-                                        Image = thumbnail,
-                                        Size = new Size(120, 90),
-                                        SizeMode = PictureBoxSizeMode.Zoom,
-                                        Margin = new Padding(5),
-                                        Cursor = Cursors.Hand,
-                                        Tag = new { Path = localPath, JsonPath = jsonPath, Metadata = metadataText.ToString() },
-                                    };
-                                    
-                                    picBox.MouseClick += (s, mevt) =>
-                                    {
-                                        ShowImageContextMenu(picBox, mevt.Location);
-                                    };
-                                    
-                                    // Enhanced tooltip with full metadata
-                                    var tooltip = new ToolTip();
-                                    var tooltipText = $"{imageName}\n" +
-                                                     $"Position: {latStr}, {lonStr}\n" +
-                                                     $"Heading: {headingDeg} Pitch: {pitchDeg} Roll: {rollDeg}\n" +
-                                                     $"Camera pitch: {cameraPitch}\n" +
-                                                     "";
-                                    tooltip.SetToolTip(picBox, tooltipText);
-                                    
-                                    _galleryPanel.Controls.Add(picBox);
-                                    _galleryPanel.ScrollControlIntoView(picBox);
-                                    
-                                    originalImage.Dispose();
-                                }
-                            }
+                        string Val(string key) {
+                            var t = data[key];
+                            return t != null && t.Type != Newtonsoft.Json.Linq.JTokenType.Null ? t.ToString() : null;
                         }
-                        else
+
+                        var apiSuccess = (bool?)data["success"] ?? false;
+                        if (!apiSuccess)
                         {
-                            // Fallback for old API version
-                            _txtResult.Text = $"[OK] Capture successful: {result.Message}";
+                            _txtResult.Text = $"[FAIL] {Val("error") ?? "Unknown error"}";
+                            _txtResult.ForeColor = ERROR_COLOR;
+                            return;
                         }
+
+                        var imageName = Val("image_name");
+
+                        if (string.IsNullOrEmpty(imageName))
+                        {
+                            var output = Val("output") ?? Val("message") ?? Val("detail");
+                            _txtResult.Text = "[OK] Capture Successful\n" + (string.IsNullOrWhiteSpace(output)
+                                ? "Target localization completed, but no image metadata was returned by the API."
+                                : output);
+                            _txtResult.ForeColor = SUCCESS_COLOR;
+                            return;
+                        }
+
+                        var timestamp = Val("timestamp") ?? DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ssZ");
+                        var headingDeg = Val("heading_deg") ?? "N/A";
+                        var pitchDeg = Val("pitch_deg") ?? "N/A";
+                        var rollDeg = Val("roll_deg") ?? "N/A";
+                        var cameraPitch = Val("camera_pitch_deg") ?? "N/A";
+                        var captureFolder = Val("capture_folder") ?? "N/A";
+                        var distanceM = Val("distance_m");
+                        var altAgl = Val("alt_agl_m");
+                        var rawOutput = Val("output") ?? Val("message") ?? Val("detail");
+                        var outputText = System.Text.RegularExpressions.Regex.Replace(
+                            rawOutput ?? "", @"(?i)^Added \d+ target\(s\):(\\n|\n|\r\n)?", "").TrimStart();
+
+                        var position = data["position"] as Newtonsoft.Json.Linq.JObject;
+                        var latStr = position?["lat"]?.ToString() ?? "N/A";
+                        var lonStr = position?["lon"]?.ToString() ?? "N/A";
+                        var altStr = position?["alt"]?.ToString() ?? "N/A";
+
+                        var metadataText = new StringBuilder();
+                        metadataText.AppendLine("[OK] Capture Successful");
+                        metadataText.AppendLine($"Time: {timestamp}");
+                        metadataText.AppendLine($"Position: {latStr}, {lonStr} @ {altStr}m");
+                        metadataText.AppendLine($"AHRS: Hdg={headingDeg} Pitch={pitchDeg} Roll={rollDeg}");
+                        metadataText.AppendLine($"Cam pitch: {cameraPitch}°  AGL: {(altAgl != null ? altAgl + "m" : "N/A")}");
+                        if (distanceM != null) metadataText.AppendLine($"Distance to target: {distanceM}m");
+                        metadataText.AppendLine($"Folder: {captureFolder}");
+                        int targetNum = (_uploadPanel?.TargetCount ?? 0) + 1;
+                        metadataText.Append($"Image: Target {targetNum} ({imageName}) — downloading...");
+
+                        _txtResult.Text = metadataText.ToString();
+                        _txtResult.ForeColor = SUCCESS_COLOR;
+
+                        // Re-enable button immediately — image download runs in background
+                        RestoreCaptureButton();
+
+                        var folderName = Path.GetFileName(captureFolder.TrimEnd('/'));
+                        string imageUrl = $"http://{_config.EffectiveIP}:{_config.JetsonPort}/api/task/1/images/{folderName}/{imageName}";
+                        var task1Dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NOMAD", "Task1");
+                        var ext = Path.GetExtension(imageName);
+                        if (string.IsNullOrEmpty(ext)) ext = ".jpg";
+                        var localImageName = $"target_{targetNum}_{folderName}{ext}";
+                        var localPath = Path.Combine(task1Dir, localImageName);
+
+                        // Snapshot all captures needed by the background task
+                        var snap_imageName = imageName;
+                        var snap_timestamp = timestamp;
+                        var snap_latStr = latStr; var snap_lonStr = lonStr; var snap_altStr = altStr;
+                        var snap_headingDeg = headingDeg; var snap_pitchDeg = pitchDeg; var snap_rollDeg = rollDeg;
+                        var snap_cameraPitch = cameraPitch; var snap_altAgl = altAgl; var snap_distanceM = distanceM;
+                        var snap_outputText = outputText;
+                        var snap_metaStr = metadataText.ToString().Replace("— downloading...", "");
+                        var snap_targetNum = targetNum;
+                        var snap_folderName = folderName;
+                        var snap_tooltipText = $"{imageName}\nPosition: {latStr}, {lonStr}\nHeading: {headingDeg} Pitch: {pitchDeg} Roll: {rollDeg}\nCamera pitch: {cameraPitch}";
+
+                        _ = DownloadCaptureImageAsync(
+                            imageUrl, localPath, snap_imageName, snap_timestamp, snap_latStr, snap_lonStr, snap_altStr,
+                            snap_headingDeg, snap_pitchDeg, snap_rollDeg, snap_cameraPitch, snap_altAgl, snap_distanceM,
+                            snap_outputText, snap_metaStr, snap_targetNum, snap_tooltipText);
                     }
-                    catch (Exception imgEx)
+                    else
                     {
-                        _txtResult.Text += $"\n[WARN] Image download failed: {imgEx.Message}";
+                        _txtResult.Text = $"[OK] Capture successful: {result.Message}";
+                        _txtResult.ForeColor = SUCCESS_COLOR;
                     }
                 }
                 else
@@ -1226,17 +1143,97 @@ private ListBox _lstWalls;
             }
             finally
             {
-                _btnCapture.Enabled = true;
-                if (_lastDetectionCount > 0)
+                // Safety net — button may already be restored above for the success path
+                if (!_btnCapture.Enabled)
+                    RestoreCaptureButton();
+            }
+        }
+
+        private async Task DownloadCaptureImageAsync(
+            string imageUrl, string localPath, string imageName, string timestamp,
+            string latStr, string lonStr, string altStr,
+            string headingDeg, string pitchDeg, string rollDeg, string cameraPitch,
+            string altAgl, string distanceM, string outputText, string metaStr,
+            int targetNum, string tooltipText)
+        {
+            try
+            {
+                var imageBytes = await JetsonApiService.GetByteArrayAsync(imageUrl);
+
+                Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
+                File.WriteAllBytes(localPath, imageBytes);
+
+                var jsonPath = Path.ChangeExtension(localPath, ".json");
+                var metadata = new SnapshotMetadata
                 {
-                    _btnCapture.BackColor = SUCCESS_COLOR;
-                    _btnCapture.Text = $"● CAPTURE ({_lastDetectionCount} circle{(_lastDetectionCount > 1 ? "s" : "")})";
-                }
-                else
+                    FileName = imageName,
+                    CaptureTime = DateTime.TryParse(timestamp, out var captureTime) ? captureTime : DateTime.Now,
+                    Position = new PositionData
+                    {
+                        Lat = double.TryParse(latStr, out var lat) ? lat : 0,
+                        Lon = double.TryParse(lonStr, out var lon) ? lon : 0,
+                        Alt = double.TryParse(altStr, out var alt) ? alt : 0
+                    },
+                    HeadingDeg = double.TryParse(headingDeg, out var heading) ? heading : (double?)null,
+                    PitchDeg = double.TryParse(pitchDeg, out var pitch) ? pitch : (double?)null,
+                    RollDeg = double.TryParse(rollDeg, out var roll) ? roll : (double?)null,
+                    CameraPitchDeg = double.TryParse(cameraPitch, out var cPitch) ? cPitch : (double?)null,
+                    AltAglM = double.TryParse(altAgl, out var vAlt) ? vAlt : (double?)null,
+                    DistanceM = double.TryParse(distanceM, out var dM) ? dM : (double?)null,
+                    BuildingLocation = null,
+                    RelativeDescription = outputText,
+                };
+                File.WriteAllText(jsonPath, Newtonsoft.Json.JsonConvert.SerializeObject(metadata, Newtonsoft.Json.Formatting.Indented));
+
+                var capturedColor = "Red";
+                var capturedPlane = "wall";
+                var outputLower = (outputText ?? "").ToLower();
+                if (outputLower.Contains("ground")) capturedPlane = "ground";
+                else if (outputLower.Contains("roof")) capturedPlane = "roof";
+                var capturedHeight = "";
+                var heightMatch = System.Text.RegularExpressions.Regex.Match(
+                    outputText ?? "", @"(\d+\.?\d*)\s*m\s+above\s+ground");
+                if (heightMatch.Success) capturedHeight = heightMatch.Groups[1].Value;
+
+                var suggestedDesc = ExtractSuggestedTask1Description(outputText);
+                var capturedImageBytes = imageBytes;
+                var capturedLocalPath = localPath;
+                var capturedJsonPath = jsonPath;
+
+                this.BeginInvoke(() =>
                 {
-                    _btnCapture.BackColor = ACCENT_COLOR;
-                    _btnCapture.Text = "CAPTURE (crosshair)";
-                }
+                    _uploadPanel?.AddCapturedImage(capturedLocalPath, suggestedDesc, capturedColor, capturedPlane, capturedHeight);
+
+                    using var ms = new MemoryStream(capturedImageBytes);
+                    var originalImage = Image.FromStream(ms);
+                    var thumbnail = originalImage.GetThumbnailImage(120, 90, null, IntPtr.Zero);
+                    var picBox = new PictureBox
+                    {
+                        Image = thumbnail,
+                        Size = new Size(120, 90),
+                        SizeMode = PictureBoxSizeMode.Zoom,
+                        Margin = new Padding(5),
+                        Cursor = Cursors.Hand,
+                        Tag = new { Path = capturedLocalPath, JsonPath = capturedJsonPath, Metadata = metaStr },
+                    };
+                    picBox.MouseClick += (s, mevt) => ShowImageContextMenu(picBox, mevt.Location);
+                    var tip = new ToolTip();
+                    tip.SetToolTip(picBox, tooltipText);
+                    _galleryPanel.Controls.Add(picBox);
+                    _galleryPanel.ScrollControlIntoView(picBox);
+                    originalImage.Dispose();
+
+                    // Update result text to confirm image saved
+                    if (_txtResult.Text.Contains("— downloading..."))
+                        _txtResult.Text = _txtResult.Text.Replace("— downloading...", "");
+                });
+            }
+            catch (Exception ex)
+            {
+                this.BeginInvoke(() =>
+                {
+                    _txtResult.Text = _txtResult.Text.Replace("— downloading...", $"[WARN] image download failed: {ex.Message}");
+                });
             }
         }
 
