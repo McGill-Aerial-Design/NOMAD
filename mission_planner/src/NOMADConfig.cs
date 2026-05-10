@@ -380,6 +380,14 @@ namespace NOMAD.MissionPlanner
         /// <summary>PWM (us) to reel straps out (must be &lt;1000 us).</summary>
         public int ReelPwmOut { get; set; } = 900;
 
+        // --- Strap reel servo (payload 2) ---
+        /// <summary>Cube servo output channel for payload 2 strap reel.</summary>
+        public int Reel2ServoChannel { get; set; } = 13;
+        /// <summary>PWM (us) to reel straps in on reel 2 (must be &gt;2000 us).</summary>
+        public int Reel2PwmIn { get; set; } = 2100;
+        /// <summary>PWM (us) to reel straps out on reel 2 (must be &lt;1000 us).</summary>
+        public int Reel2PwmOut { get; set; } = 900;
+
         // --- Water pump ---
         /// <summary>Cube servo output channel for the water pump.</summary>
         public int WaterPumpChannel { get; set; } = 13;
@@ -646,6 +654,9 @@ namespace NOMAD.MissionPlanner
             ReelServoChannel = defaults.ReelServoChannel;
             ReelPwmIn = defaults.ReelPwmIn;
             ReelPwmOut = defaults.ReelPwmOut;
+            Reel2ServoChannel = defaults.Reel2ServoChannel;
+            Reel2PwmIn = defaults.Reel2PwmIn;
+            Reel2PwmOut = defaults.Reel2PwmOut;
             WaterPumpChannel = defaults.WaterPumpChannel;
             WaterPumpPwmOn = defaults.WaterPumpPwmOn;
             WaterPumpPwmOff = defaults.WaterPumpPwmOff;

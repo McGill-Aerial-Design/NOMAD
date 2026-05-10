@@ -96,6 +96,7 @@ namespace NOMAD.MissionPlanner
         private NumericUpDown _numServo2Ch, _numServo2PwmMin, _numServo2PwmMax;
         private NumericUpDown _numServo3Ch, _numServo3PwmMin, _numServo3PwmMax;
         private NumericUpDown _numReelCh, _numReelPwmIn, _numReelPwmOut;
+        private NumericUpDown _numReel2Ch, _numReel2PwmIn, _numReel2PwmOut;
         private NumericUpDown _numPumpCh, _numPumpPwmOn, _numPumpPwmOff, _numPumpDuration;
         private NumericUpDown _numTiltCh, _numTiltPwmMin, _numTiltPwmNeutral, _numTiltPwmMax, _numTiltAngleRange;
         private NumericUpDown _numSprayRange, _numSprayRangeTol, _numSprayTriggerMax, _numSprayAimX, _numSprayAimY, _numSprayAimTol;
@@ -599,6 +600,17 @@ namespace NOMAD.MissionPlanner
             _numReelPwmOut = AddNumericUpDown(tab, 145, y, 60, 500, 999, 900);
             y += 32;
 
+            AddSectionLabel(tab, "Strap Reel (Payload 2)", ref y);
+            AddLabel(tab, "Channel:", 10, y);
+            _numReel2Ch = AddNumericUpDown(tab, 100, y, 50, 1, 99, 13);
+            y += 28;
+            AddLabel(tab, "PWM In (>2000):", 10, y);
+            _numReel2PwmIn  = AddNumericUpDown(tab, 145, y, 60, 2001, 2500, 2100);
+            y += 28;
+            AddLabel(tab, "PWM Out (<1000):", 10, y);
+            _numReel2PwmOut = AddNumericUpDown(tab, 145, y, 60, 500, 999, 900);
+            y += 32;
+
             AddSectionLabel(tab, "Water Pump", ref y);
             AddLabel(tab, "Channel:", 10, y);
             _numPumpCh = AddNumericUpDown(tab, 100, y, 50, 1, 99, 13);
@@ -896,6 +908,9 @@ namespace NOMAD.MissionPlanner
             _numReelCh.Value      = Config.ReelServoChannel;
             _numReelPwmIn.Value   = Config.ReelPwmIn;
             _numReelPwmOut.Value  = Config.ReelPwmOut;
+            _numReel2Ch.Value     = Config.Reel2ServoChannel;
+            _numReel2PwmIn.Value  = Config.Reel2PwmIn;
+            _numReel2PwmOut.Value = Config.Reel2PwmOut;
             _numPumpCh.Value      = Config.WaterPumpChannel;
             _numPumpPwmOn.Value   = Config.WaterPumpPwmOn;
             _numPumpPwmOff.Value  = Config.WaterPumpPwmOff;
@@ -1011,6 +1026,9 @@ namespace NOMAD.MissionPlanner
             Config.ReelServoChannel   = (int)_numReelCh.Value;
             Config.ReelPwmIn          = (int)_numReelPwmIn.Value;
             Config.ReelPwmOut         = (int)_numReelPwmOut.Value;
+            Config.Reel2ServoChannel  = (int)_numReel2Ch.Value;
+            Config.Reel2PwmIn         = (int)_numReel2PwmIn.Value;
+            Config.Reel2PwmOut        = (int)_numReel2PwmOut.Value;
             Config.WaterPumpChannel   = (int)_numPumpCh.Value;
             Config.WaterPumpPwmOn     = (int)_numPumpPwmOn.Value;
             Config.WaterPumpPwmOff    = (int)_numPumpPwmOff.Value;

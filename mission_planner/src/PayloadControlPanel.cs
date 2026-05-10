@@ -54,9 +54,9 @@ namespace NOMAD.MissionPlanner
         private readonly Timer[]   _dropResetTimers = new Timer[3];
         private readonly bool[]    _dropDropped     = { false, false, false }; // true = servo at PwmMax, retract available
 
-        // Reel safety
-        private bool  _reelActive;
-        private Timer _reelSafetyTimer;
+        // Reel safety (indexed: 0 = reel 1, 1 = reel 2)
+        private readonly bool[]  _reelActive       = new bool[2];
+        private readonly Timer[] _reelSafetyTimers = new Timer[2];
 
         // Tilt debounce
         private TrackBar _tiltSlider;
@@ -129,7 +129,7 @@ namespace NOMAD.MissionPlanner
             btnWater.Click += (s, e) => ShootWater();
             Controls.Add(btnWater);
 
-            // ---- Row 2: Strap reel (hold-to-reel, 10s safety limit) ----
+            // ---- Row 2: Strap reel 1 (hold-to-reel, 10s safety limit) ----
             y += DROP_H + ROW_GAP;
             x = 10;
 
@@ -145,20 +145,49 @@ namespace NOMAD.MissionPlanner
 
             var btnReelIn = MakeButton("⬆ Reel In", Color.FromArgb(50, 100, 50), 85, DROP_H);
             btnReelIn.Location = new Point(x, y);
-            btnReelIn.MouseDown  += (s, e) => StartReel(_config?.ReelPwmIn  ?? 2100);
-            btnReelIn.MouseUp    += (s, e) => StopReel();
-            btnReelIn.MouseLeave += (s, e) => { if (_reelActive) StopReel(); };
+            btnReelIn.MouseDown  += (s, e) => StartReel(0, _config?.ReelPwmIn  ?? 2100);
+            btnReelIn.MouseUp    += (s, e) => StopReel(0);
+            btnReelIn.MouseLeave += (s, e) => { if (_reelActive[0]) StopReel(0); };
             Controls.Add(btnReelIn);
             x += 89;
 
             var btnReelOut = MakeButton("⬇ Reel Out", Color.FromArgb(50, 50, 100), 88, DROP_H);
             btnReelOut.Location = new Point(x, y);
-            btnReelOut.MouseDown  += (s, e) => StartReel(_config?.ReelPwmOut ?? 900);
-            btnReelOut.MouseUp    += (s, e) => StopReel();
-            btnReelOut.MouseLeave += (s, e) => { if (_reelActive) StopReel(); };
+            btnReelOut.MouseDown  += (s, e) => StartReel(0, _config?.ReelPwmOut ?? 900);
+            btnReelOut.MouseUp    += (s, e) => StopReel(0);
+            btnReelOut.MouseLeave += (s, e) => { if (_reelActive[0]) StopReel(0); };
             Controls.Add(btnReelOut);
 
-            // ---- Row 3: Camera tilt slider ----
+            // ---- Row 3: Strap reel 2 ----
+            y += DROP_H + ROW_GAP;
+            x = 10;
+
+            Controls.Add(new Label
+            {
+                Text = "Reel P2:",
+                Font = new Font("Segoe UI", 9),
+                ForeColor = TEXT_SECONDARY,
+                Location = new Point(x, y + 4),
+                AutoSize = true,
+            });
+            x += 58;
+
+            var btnReel2In = MakeButton("⬆ Reel In", Color.FromArgb(50, 100, 50), 85, DROP_H);
+            btnReel2In.Location = new Point(x, y);
+            btnReel2In.MouseDown  += (s, e) => StartReel(1, _config?.Reel2PwmIn  ?? 2100);
+            btnReel2In.MouseUp    += (s, e) => StopReel(1);
+            btnReel2In.MouseLeave += (s, e) => { if (_reelActive[1]) StopReel(1); };
+            Controls.Add(btnReel2In);
+            x += 89;
+
+            var btnReel2Out = MakeButton("⬇ Reel Out", Color.FromArgb(50, 50, 100), 88, DROP_H);
+            btnReel2Out.Location = new Point(x, y);
+            btnReel2Out.MouseDown  += (s, e) => StartReel(1, _config?.Reel2PwmOut ?? 900);
+            btnReel2Out.MouseUp    += (s, e) => StopReel(1);
+            btnReel2Out.MouseLeave += (s, e) => { if (_reelActive[1]) StopReel(1); };
+            Controls.Add(btnReel2Out);
+
+            // ---- Row 4: Camera tilt slider ----
             y += DROP_H + ROW_GAP;
             x = 10;
 
@@ -421,40 +450,42 @@ namespace NOMAD.MissionPlanner
         // Strap reel  —  hold-to-reel, 10-second safety cut-off
         // ============================================================
 
-        private void StartReel(int pwmUs)
+        private void StartReel(int reelIdx, int pwmUs)
         {
-            _reelActive = true;
+            int channel = reelIdx == 0 ? (_config?.ReelServoChannel ?? 0) : (_config?.Reel2ServoChannel ?? 0);
+            _reelActive[reelIdx] = true;
 
-            // Safety: automatically stop after REEL_SAFETY_MS even if button stays held.
-            _reelSafetyTimer?.Stop();
-            _reelSafetyTimer?.Dispose();
-            _reelSafetyTimer = new Timer { Interval = REEL_SAFETY_MS };
-            _reelSafetyTimer.Tick += (s, e) =>
+            _reelSafetyTimers[reelIdx]?.Stop();
+            _reelSafetyTimers[reelIdx]?.Dispose();
+            var t = new Timer { Interval = REEL_SAFETY_MS };
+            t.Tick += (s, e) =>
             {
-                _reelSafetyTimer.Stop();
-                _reelSafetyTimer.Dispose();
-                _reelSafetyTimer = null;
-                _reelActive = false;
-                SendServoNow(_config?.ReelServoChannel ?? 0, 1500);
-                SetStatus("Reel stopped  (10s safety limit)", WARNING_COLOR);
+                t.Stop();
+                t.Dispose();
+                _reelSafetyTimers[reelIdx] = null;
+                _reelActive[reelIdx] = false;
+                SendServoNow(reelIdx == 0 ? (_config?.ReelServoChannel ?? 0) : (_config?.Reel2ServoChannel ?? 0), 1500);
+                SetStatus($"Reel P{reelIdx + 1} stopped  (10s safety limit)", WARNING_COLOR);
             };
-            _reelSafetyTimer.Start();
+            _reelSafetyTimers[reelIdx] = t;
+            t.Start();
 
-            SendServoNow(_config?.ReelServoChannel ?? 0, pwmUs);
-            SetStatus($"Reeling  ({pwmUs}µs) — hold button...", SUCCESS_COLOR);
+            SendServoNow(channel, pwmUs);
+            SetStatus($"Reel P{reelIdx + 1} ({pwmUs}µs) — hold button...", SUCCESS_COLOR);
         }
 
-        private void StopReel()
+        private void StopReel(int reelIdx)
         {
-            if (!_reelActive) return;
-            _reelActive = false;
+            if (!_reelActive[reelIdx]) return;
+            _reelActive[reelIdx] = false;
 
-            _reelSafetyTimer?.Stop();
-            _reelSafetyTimer?.Dispose();
-            _reelSafetyTimer = null;
+            _reelSafetyTimers[reelIdx]?.Stop();
+            _reelSafetyTimers[reelIdx]?.Dispose();
+            _reelSafetyTimers[reelIdx] = null;
 
-            SendServoNow(_config?.ReelServoChannel ?? 0, 1500);
-            SetStatus("Reel stopped", TEXT_SECONDARY);
+            int channel = reelIdx == 0 ? (_config?.ReelServoChannel ?? 0) : (_config?.Reel2ServoChannel ?? 0);
+            SendServoNow(channel, 1500);
+            SetStatus($"Reel P{reelIdx + 1} stopped", TEXT_SECONDARY);
         }
 
         /// <summary>
@@ -623,9 +654,12 @@ namespace NOMAD.MissionPlanner
                 _dropResetTimers[i]?.Dispose();
                 _dropResetTimers[i] = null;
             }
-            _reelSafetyTimer?.Stop();
-            _reelSafetyTimer?.Dispose();
-            _reelSafetyTimer = null;
+            for (int i = 0; i < _reelSafetyTimers.Length; i++)
+            {
+                _reelSafetyTimers[i]?.Stop();
+                _reelSafetyTimers[i]?.Dispose();
+                _reelSafetyTimers[i] = null;
+            }
             _tiltDebounceTimer?.Stop();
             _tiltDebounceTimer?.Dispose();
             _tiltDebounceTimer = null;
