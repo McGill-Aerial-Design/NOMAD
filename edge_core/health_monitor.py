@@ -111,16 +111,21 @@ class JetsonHealthMonitor:
     
     def __init__(
         self,
-        poll_interval: float = 2.0,
+        poll_interval: float = 5.0,
     ):
         self._poll_interval = poll_interval
-        
+
         self._health = JetsonHealth()
         self._lock = threading.RLock()
         self._state_manager = None  # Set via set_state_manager()
-        
+
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+
+        # Cached results to avoid spawning subprocesses every poll cycle
+        self._tailscale_cache: dict = {}
+        self._tailscale_cache_ts: float = 0.0
+        self._TAILSCALE_CACHE_TTL: float = 15.0
         
     @property
     def health(self) -> JetsonHealth:
@@ -254,52 +259,36 @@ class JetsonHealthMonitor:
             return 0.0
     
     def _get_gpu_info(self) -> dict:
-        """Get GPU load and frequency."""
+        """Get GPU load and frequency from sysfs (Jetson-native, no subprocess)."""
         result = {"load": 0.0, "freq": 0.0}
-        
-        # Try nvidia-smi first (for discrete GPUs)
-        try:
-            output = subprocess.check_output(
-                ["nvidia-smi", "--query-gpu=utilization.gpu,clocks.gr", 
-                 "--format=csv,noheader,nounits"],
-                timeout=2,
-                stderr=subprocess.DEVNULL,
-            ).decode()
-            parts = output.strip().split(",")
-            if len(parts) >= 2:
-                result["load"] = float(parts[0].strip())
-                result["freq"] = float(parts[1].strip())
-            return result
-        except Exception:
-            pass
-        
-        # Try sysfs for Jetson GPU info
-        # Paths vary by Jetson model -- try Orin Nano first, then older models
+
+        # Jetson sysfs paths — Orin Nano first, then TX2/Xavier fallbacks.
+        # Do NOT use nvidia-smi here: on Jetson it spawns a heavy process every call.
         load_candidates = [
-            "/sys/devices/platform/bus@0/17000000.gpu/load",   # Orin Nano
-            "/sys/devices/gpu.0/load",                          # TX2/Xavier
+            "/sys/devices/platform/bus@0/17000000.gpu/load",
+            "/sys/devices/gpu.0/load",
         ]
         freq_candidates = [
-            "/sys/devices/platform/bus@0/17000000.gpu/devfreq/17000000.gpu/cur_freq",  # Orin Nano
-            "/sys/devices/gpu.0/devfreq/17000000.gp10b/cur_freq",                      # TX2/Xavier
+            "/sys/devices/platform/bus@0/17000000.gpu/devfreq/17000000.gpu/cur_freq",
+            "/sys/devices/gpu.0/devfreq/17000000.gp10b/cur_freq",
         ]
-        
+
         try:
             for load_path in load_candidates:
                 if os.path.exists(load_path):
                     with open(load_path, "r") as f:
                         result["load"] = float(f.read().strip()) / 10.0
                     break
-                    
+
             for freq_path in freq_candidates:
                 if os.path.exists(freq_path):
                     with open(freq_path, "r") as f:
                         result["freq"] = float(f.read().strip()) / 1_000_000.0
                     break
-                    
+
         except Exception:
             pass
-            
+
         return result
     
     def _get_memory_info(self) -> dict:
@@ -446,31 +435,32 @@ class JetsonHealthMonitor:
         return 0.0
     
     def _get_tailscale_status(self) -> dict:
-        """Get Tailscale VPN status."""
-        result = {"connected": False, "ip": None}
-        
+        """Get Tailscale VPN status, cached for 15 s to avoid subprocess churn."""
+        now = time.time()
+        if now - self._tailscale_cache_ts < self._TAILSCALE_CACHE_TTL and self._tailscale_cache:
+            return self._tailscale_cache
+
+        result: dict = {"connected": False, "ip": None}
         try:
             output = subprocess.check_output(
                 ["tailscale", "status", "--json"],
-                timeout=2,
+                timeout=3,
                 stderr=subprocess.DEVNULL,
             ).decode()
-            
+
             import json
             data = json.loads(output)
-            
             result["connected"] = data.get("BackendState") == "Running"
-            
-            # Get our Tailscale IP
-            self_key = data.get("Self", {}).get("PublicKey")
-            if self_key and "TailscaleIPs" in data.get("Self", {}):
-                ips = data["Self"]["TailscaleIPs"]
-                if ips:
-                    result["ip"] = ips[0]
-                    
+            self_info = data.get("Self", {})
+            ips = self_info.get("TailscaleIPs", [])
+            if ips:
+                result["ip"] = ips[0]
+
         except Exception:
             pass
-            
+
+        self._tailscale_cache = result
+        self._tailscale_cache_ts = now
         return result
     
     def _compute_status(self, health: JetsonHealth) -> str:

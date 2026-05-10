@@ -120,7 +120,7 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// Health polling interval (ms).
         /// </summary>
-        public int HealthPollInterval { get; set; } = 2000;
+        public int HealthPollInterval { get; set; } = 5000;
 
         // ============================================================
         // MAVLink Dual Link Configuration

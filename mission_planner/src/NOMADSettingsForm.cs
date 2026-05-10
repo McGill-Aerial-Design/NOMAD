@@ -268,7 +268,7 @@ namespace NOMAD.MissionPlanner
             y += 30;
 
             AddLabel(tab, "Health Poll (ms):", 20, y);
-            _numHealthPollInterval = AddNumericUpDown(tab, 150, y, 80, 500, 30000, 2000);
+            _numHealthPollInterval = AddNumericUpDown(tab, 150, y, 80, 500, 30000, 5000);
             
             return tab;
         }
