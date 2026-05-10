@@ -343,6 +343,9 @@ class TargetLocalizerNode(Node):
         self.plane_override_srv = self.create_service(
             Trigger, "/target_localizer/set_target_plane", self._set_target_plane_callback
         )
+        self.delete_target_srv = self.create_service(
+            Trigger, "/target_localizer/delete_target", self._delete_target_callback
+        )
 
         self._detection_status_pub = self.create_publisher(
             Float64, "/target_localizer/detection_status", 10
@@ -1246,6 +1249,64 @@ class TargetLocalizerNode(Node):
         self.get_logger().info(f"Cleared {count} target(s)")
         response.success = True
         response.message = f"Cleared {count} target(s)."
+        return response
+
+    def _delete_target_callback(self, request, response):
+        """Remove a single target by ID, re-letter remaining targets, and delete its capture folder.
+
+        The API writes delete_target.json with {"target_id": "B"} before calling this service.
+        After deletion the remaining targets are re-lettered A, B, C... and next_target_index reset.
+        """
+        import json as _json
+        import shutil as _shutil
+        _config_override = "/workspaces/isaac_ros-dev/config/delete_target.json"
+        delete_path = _config_override if os.path.exists(_config_override) else os.path.join(self.output_dir, "delete_target.json")
+        if not os.path.exists(delete_path):
+            response.success = False
+            response.message = f"Delete request file not found: {delete_path}"
+            return response
+        try:
+            with open(delete_path, "r") as f:
+                data = _json.load(f)
+        except Exception as e:
+            response.success = False
+            response.message = f"Failed to read delete request: {e}"
+            return response
+
+        target_id = str(data.get("target_id", "")).strip().upper()
+        target = next((t for t in self.targets if t.target_id == target_id), None)
+        if target is None:
+            response.success = False
+            response.message = f"Target {target_id!r} not found"
+            return response
+
+        # Delete capture folder from disk (best-effort)
+        deleted_folder = None
+        if target.image_path:
+            capture_dir = os.path.dirname(target.image_path)
+            if os.path.isdir(capture_dir):
+                try:
+                    _shutil.rmtree(capture_dir)
+                    deleted_folder = capture_dir
+                    self.get_logger().info(f"Deleted capture folder: {capture_dir}")
+                except Exception as e:
+                    self.get_logger().warn(f"Could not delete capture folder {capture_dir}: {e}")
+
+        # Remove from list and re-letter remaining targets
+        self.targets = [t for t in self.targets if t.target_id != target_id]
+        for i, t in enumerate(self.targets):
+            t.target_id = chr(ord("A") + i)
+        self.next_target_index = len(self.targets)
+
+        self.get_logger().info(
+            f"Deleted target {target_id}; {len(self.targets)} target(s) remain, re-lettered."
+        )
+        response.success = True
+        response.message = (
+            f"Deleted target {target_id}. "
+            + (f"Removed folder: {deleted_folder}. " if deleted_folder else "")
+            + f"{len(self.targets)} target(s) remain."
+        )
         return response
 
     def _set_ground_alt_callback(self, request, response):

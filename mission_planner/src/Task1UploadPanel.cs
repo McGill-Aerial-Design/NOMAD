@@ -48,6 +48,10 @@ namespace NOMAD.MissionPlanner
         private System.Windows.Forms.Timer _viewerRefreshTimer;
         private bool _viewerRefreshInFlight;
 
+        // Triple-click guard for the Remove button
+        private int _removeClickCount;
+        private System.Windows.Forms.Timer _removeClickTimer;
+
         // Crash-safe persistence of user edits (approve/desc/color/plane/height)
         // keyed by image path. Sits next to the per-capture JSON files so a
         // GCS crash never loses 20 minutes of approval work.
@@ -604,13 +608,109 @@ namespace NOMAD.MissionPlanner
 
         private void BtnRemoveTarget_Click(object sender, EventArgs e)
         {
-            if (_targetGrid.SelectedRows.Count > 0)
+            if (_targetGrid.SelectedRows.Count == 0) return;
+
+            // Require three clicks within 1.5 s to prevent accidental deletion.
+            _removeClickCount++;
+
+            if (_removeClickTimer == null)
             {
-                foreach (DataGridViewRow row in _targetGrid.SelectedRows)
-                    if (!row.IsNewRow)
-                        _targetGrid.Rows.RemoveAt(row.Index);
-                RenumberTargets();
+                _removeClickTimer = new System.Windows.Forms.Timer { Interval = 1500 };
+                _removeClickTimer.Tick += (s, _) =>
+                {
+                    _removeClickTimer.Stop();
+                    _removeClickCount = 0;
+                    _btnRemoveTarget.Text = "- Remove";
+                    _lblStatus.Text = "Remove cancelled (triple-click timeout).";
+                    _lblStatus.ForeColor = TEXT_SECONDARY;
+                };
             }
+
+            if (_removeClickCount == 1)
+            {
+                _removeClickTimer.Stop();
+                _removeClickTimer.Start();
+                _btnRemoveTarget.Text = "- Remove (2 more)";
+                _lblStatus.Text = "Click 2 more times within 1.5 s to delete selected target(s).";
+                _lblStatus.ForeColor = WARNING_COLOR;
+                return;
+            }
+            if (_removeClickCount == 2)
+            {
+                _btnRemoveTarget.Text = "- Remove (1 more)";
+                return;
+            }
+
+            // Third click — actually delete.
+            _removeClickTimer.Stop();
+            _removeClickCount = 0;
+            _btnRemoveTarget.Text = "- Remove";
+            _ = DeleteSelectedTargetsAsync();
+        }
+
+        private async Task DeleteSelectedTargetsAsync()
+        {
+            var rows = _targetGrid.SelectedRows.Cast<DataGridViewRow>()
+                .Where(r => !r.IsNewRow)
+                .OrderByDescending(r => r.Index)
+                .ToList();
+
+            if (rows.Count == 0) return;
+
+            _btnRemoveTarget.Enabled = false;
+            _lblStatus.ForeColor = WARNING_COLOR;
+
+            // Collect target letters before removing rows (letters = row position A, B, C...)
+            // Must be computed from current order before any removal.
+            var allRows = _targetGrid.Rows.Cast<DataGridViewRow>().Where(r => !r.IsNewRow).ToList();
+            var deletions = rows.Select(row => new
+            {
+                Row = row,
+                Letter = (char)('A' + allRows.IndexOf(row)),
+                ImagePath = row.Cells["ImagePath"].Value?.ToString() ?? "",
+            }).ToList();
+
+            foreach (var d in deletions)
+            {
+                _lblStatus.Text = $"Deleting Target {d.Letter}...";
+
+                // 1. Delete local GCS files
+                var imgPath = d.ImagePath;
+                if (!string.IsNullOrEmpty(imgPath) && File.Exists(imgPath))
+                {
+                    try { File.Delete(imgPath); } catch { }
+                    var jsonPath = Path.ChangeExtension(imgPath, ".json");
+                    if (File.Exists(jsonPath)) try { File.Delete(jsonPath); } catch { }
+                }
+
+                // 2. Tell Jetson to remove target + capture folder
+                try
+                {
+                    var resp = await JetsonApiService.DeleteAsync($"/api/task/1/target/{d.Letter}");
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        var body = await resp.Content.ReadAsStringAsync();
+                        _lblStatus.Text = $"Jetson delete failed for {d.Letter}: HTTP {(int)resp.StatusCode} — {body}";
+                        _lblStatus.ForeColor = ERROR_COLOR;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _lblStatus.Text = $"Jetson unreachable during delete: {ex.Message}";
+                    _lblStatus.ForeColor = WARNING_COLOR;
+                    // Still remove locally even if Jetson call fails.
+                }
+
+                // 3. Remove from grid
+                if (_targetGrid.Rows.Contains(d.Row) && !d.Row.IsNewRow)
+                    _targetGrid.Rows.Remove(d.Row);
+            }
+
+            RenumberTargets();
+            SaveSubmitState();
+            _btnRemoveTarget.Enabled = true;
+            _lblStatus.Text = $"Deleted {deletions.Count} target(s). Local files and Jetson captures removed.";
+            _lblStatus.ForeColor = SUCCESS_COLOR;
         }
 
         private void BtnApprove_Click(object sender, EventArgs e)

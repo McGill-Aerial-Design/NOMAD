@@ -2722,6 +2722,27 @@ fi
         )
         return {"success": True, "output": output}
 
+    @app.delete("/api/task/1/target/{target_id}", tags=["Task 1"])
+    async def task1_delete_target(target_id: str):
+        """
+        Delete a single target by ID (A-Z).
+
+        Removes the target from the in-memory list, re-letters remaining targets,
+        and deletes the associated capture folder on the Jetson.
+        """
+        target_id = target_id.strip().upper()
+        if not target_id or len(target_id) != 1 or not target_id.isalpha():
+            raise HTTPException(status_code=400, detail=f"Invalid target_id: {target_id!r}")
+        delete_path = os.path.join(_BUILDING_CORNERS_DIR, "delete_target.json")
+        _atomic_write_json(delete_path, {"target_id": target_id}, indent=None)
+        output = _call_ros2_service_in_isaac_container_or_raise(
+            service_name="/target_localizer/delete_target",
+            service_type="std_srvs/srv/Trigger",
+            request_payload={},
+            timeout_s=15.0,
+        )
+        return {"success": True, "target_id": target_id, "output": output}
+
     @app.post("/api/task/1/target/ground_alt", tags=["Task 1"])
     async def task1_set_ground_alt():
         """
@@ -4668,166 +4689,149 @@ fi
         - isaac_ros: Isaac ROS bridge status
         - vio: VIO pipeline status
         """
-        services = {}
+        # ----------------------------------------------------------------
+        # All subprocess.run() calls are blocking and must NOT run on the
+        # FastAPI event loop — offload them to the default thread-pool so
+        # other requests (telemetry, health, video) stay responsive.
+        # ----------------------------------------------------------------
+        def _blocking_proc_checks() -> tuple:
+            """Collect service states that require blocking subprocesses."""
+            svc: dict = {}
 
-        # Check mavlink-router
-        try:
-            systemd_status = "inactive"
-            systemd_running = False
+            # --- mavlink-router ---
             try:
-                result = subprocess.run(
-                    ["systemctl", "is-active", "mavlink-router"],
-                    capture_output=True,
-                    text=True,
-                    timeout=2,
-                )
-                systemd_status = result.stdout.strip() or "inactive"
-                systemd_running = result.returncode == 0
-            except Exception:
-                pass
+                systemd_status = "inactive"
+                systemd_running = False
+                try:
+                    r = subprocess.run(
+                        ["systemctl", "is-active", "mavlink-router"],
+                        capture_output=True, text=True, timeout=2,
+                    )
+                    systemd_status = r.stdout.strip() or "inactive"
+                    systemd_running = r.returncode == 0
+                except Exception:
+                    pass
 
-            process_running = False
-            try:
-                process_result = subprocess.run(
-                    ["pgrep", "-f", "mavlink-routerd"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                process_running = process_result.returncode == 0
-            except Exception:
                 process_running = False
+                try:
+                    pr = subprocess.run(
+                        ["pgrep", "-f", "mavlink-routerd"],
+                        capture_output=True, text=True, timeout=3,
+                    )
+                    process_running = pr.returncode == 0
+                except Exception:
+                    pass
 
-            cubepilot_present = os.path.exists("/dev/ttyACM0")
-            if not cubepilot_present:
-                mavlink_status = "no_cubepilot"
-                mavlink_running = False
-            else:
-                mavlink_running = systemd_running or process_running
-                mavlink_status = "active" if mavlink_running else systemd_status
+                cubepilot_present = os.path.exists("/dev/ttyACM0")
+                if not cubepilot_present:
+                    svc["mavlink_router"] = {"status": "no_cubepilot", "running": False, "cubepilot_present": False}
+                else:
+                    mavlink_running = systemd_running or process_running
+                    svc["mavlink_router"] = {
+                        "status": "active" if mavlink_running else systemd_status,
+                        "running": mavlink_running,
+                        "cubepilot_present": True,
+                    }
+            except Exception as e:
+                svc["mavlink_router"] = {"status": "error", "error": str(e)}
 
-            services["mavlink_router"] = {
-                "status": mavlink_status,
-                "running": mavlink_running,
-                "cubepilot_present": cubepilot_present,
-            }
-        except Exception as e:
-            services["mavlink_router"] = {"status": "error", "error": str(e)}
-
-        # Check mediamtx
-        try:
-            result = subprocess.run(
-                ["systemctl", "is-active", "mediamtx"],
-                capture_output=True,
-                text=True,
-                timeout=2,
-            )
-            systemd_status = result.stdout.strip() or "inactive"
-            systemd_running = result.returncode == 0
-
-            process_running = False
+            # --- mediamtx ---
             try:
-                process_result = subprocess.run(
-                    ["pgrep", "-f", "mediamtx"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                process_running = process_result.returncode == 0
-            except Exception:
+                systemd_running = False
+                systemd_status = "inactive"
+                try:
+                    r = subprocess.run(
+                        ["systemctl", "is-active", "mediamtx"],
+                        capture_output=True, text=True, timeout=2,
+                    )
+                    systemd_status = r.stdout.strip() or "inactive"
+                    systemd_running = r.returncode == 0
+                except Exception:
+                    pass
+
                 process_running = False
+                try:
+                    pr = subprocess.run(
+                        ["pgrep", "-f", "mediamtx"],
+                        capture_output=True, text=True, timeout=3,
+                    )
+                    process_running = pr.returncode == 0
+                except Exception:
+                    pass
 
-            mediamtx_running = systemd_running or process_running
-            services["mediamtx"] = {
-                "status": "active" if mediamtx_running else systemd_status,
-                "running": mediamtx_running,
-            }
-        except Exception as e:
-            services["mediamtx"] = {"status": "error", "error": str(e)}
+                mediamtx_running = systemd_running or process_running
+                svc["mediamtx"] = {
+                    "status": "active" if mediamtx_running else systemd_status,
+                    "running": mediamtx_running,
+                }
+            except Exception as e:
+                svc["mediamtx"] = {"status": "error", "error": str(e)}
 
-        # Check noVNC (remote desktop web bridge)
-        try:
-            user_status = "inactive"
-            user_running = False
+            # --- noVNC ---
             try:
-                user_result = subprocess.run(
-                    ["systemctl", "--user", "is-active", "novnc"],
-                    capture_output=True,
-                    text=True,
-                    timeout=2,
-                )
-                user_status = user_result.stdout.strip() or "inactive"
-                user_running = user_result.returncode == 0
-            except Exception:
-                pass
+                user_running = False
+                user_status = "inactive"
+                try:
+                    r = subprocess.run(
+                        ["systemctl", "--user", "is-active", "novnc"],
+                        capture_output=True, text=True, timeout=2,
+                    )
+                    user_status = r.stdout.strip() or "inactive"
+                    user_running = r.returncode == 0
+                except Exception:
+                    pass
 
-            system_status = "inactive"
-            system_running = False
-            try:
-                system_result = subprocess.run(
-                    ["systemctl", "is-active", "novnc"],
-                    capture_output=True,
-                    text=True,
-                    timeout=2,
-                )
-                system_status = system_result.stdout.strip() or "inactive"
-                system_running = system_result.returncode == 0
-            except Exception:
-                pass
+                system_running = False
+                system_status = "inactive"
+                try:
+                    r = subprocess.run(
+                        ["systemctl", "is-active", "novnc"],
+                        capture_output=True, text=True, timeout=2,
+                    )
+                    system_status = r.stdout.strip() or "inactive"
+                    system_running = r.returncode == 0
+                except Exception:
+                    pass
 
-            websockify_running = False
-            x11vnc_running = False
-            try:
-                websockify_result = subprocess.run(
-                    ["pgrep", "-f", "[w]ebsockify.*6080"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                websockify_running = websockify_result.returncode == 0
+                websockify_running = x11vnc_running = False
+                try:
+                    websockify_running = subprocess.run(
+                        ["pgrep", "-f", "[w]ebsockify.*6080"],
+                        capture_output=True, text=True, timeout=3,
+                    ).returncode == 0
+                    x11vnc_running = subprocess.run(
+                        ["pgrep", "-f", "[x]11vnc.*-rfbport 5900"],
+                        capture_output=True, text=True, timeout=3,
+                    ).returncode == 0
+                except Exception:
+                    pass
 
-                x11vnc_result = subprocess.run(
-                    ["pgrep", "-f", "[x]11vnc.*-rfbport 5900"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                x11vnc_running = x11vnc_result.returncode == 0
-            except Exception:
-                websockify_running = False
-                x11vnc_running = False
+                novnc_running = user_running or system_running or (websockify_running and x11vnc_running)
+                svc["novnc"] = {
+                    "status": "active" if novnc_running else (user_status if user_status != "inactive" else system_status),
+                    "running": novnc_running,
+                    "url": "http://localhost:6080/vnc.html",
+                }
+            except Exception as e:
+                svc["novnc"] = {"status": "error", "error": str(e)}
 
-            novnc_running = (
-                user_running
-                or system_running
-                or (websockify_running and x11vnc_running)
-            )
-            novnc_status = (
-                "active"
-                if novnc_running
-                else (user_status if user_status != "inactive" else system_status)
-            )
+            # --- Isaac ROS runtime (docker ps + optional docker exec) ---
+            runtime_state = _probe_isaac_runtime_state(force_refresh=True)
+            return svc, runtime_state
 
-            services["novnc"] = {
-                "status": novnc_status,
-                "running": novnc_running,
-                "url": "http://localhost:6080/vnc.html",
-            }
-        except Exception as e:
-            services["novnc"] = {"status": "error", "error": str(e)}
+        # Run blocking work in thread pool — event loop stays free
+        loop = asyncio.get_event_loop()
+        proc_services, runtime_state = await loop.run_in_executor(None, _blocking_proc_checks)
 
-        # Edge Core is always running (we're responding)
-        services["edge_core"] = {
-            "status": "active",
-            "running": True,
-        }
-
-        runtime_state = _probe_isaac_runtime_state(force_refresh=True)
+        services = proc_services
         container_running = runtime_state["container_running"]
         nvblox_running = runtime_state["nvblox_running"]
         bridge_running = runtime_state["bridge_running"]
 
-        # Isaac ROS status
+        # Edge Core is always running (we're responding)
+        services["edge_core"] = {"status": "active", "running": True}
+
+        # Isaac ROS status (fast — reads app state, no subprocess)
         isaac_bridge = request.app.state.isaac_bridge
         if isaac_bridge:
             services["isaac_ros"] = {
@@ -4851,7 +4855,7 @@ fi
                 else "Isaac ROS bridge not enabled",
             }
 
-        # VIO status
+        # VIO status (fast — reads in-memory lock)
         vio_snapshot = _get_vio_snapshot(include_trajectory=True)
         external_vio_state = vio_snapshot["external_vio_state"]
         vio_trajectory = vio_snapshot["vio_trajectory"] or []
@@ -4871,17 +4875,13 @@ fi
                 "trajectory_points": len(vio_trajectory),
             }
 
-        # Target localization status (Task 1 target_localizer ROS2 node)
+        # Target localization status (fast — reads detection state lock)
         with request.app.state.detection_state_lock:
-            detection_enabled = bool(
-                getattr(request.app.state, "detection_enabled", True)
-            )
+            detection_enabled = bool(getattr(request.app.state, "detection_enabled", True))
             detection_last_update = request.app.state.detection_last_update
             detection_current_count = len(request.app.state.detected_objects)
             detection_history_count = len(request.app.state.detection_history)
-        age_seconds = (
-            time.time() - detection_last_update if detection_last_update > 0 else None
-        )
+        age_seconds = time.time() - detection_last_update if detection_last_update > 0 else None
         detection_fresh = age_seconds is not None and age_seconds <= 3.0
         services["detections"] = {
             "status": "active" if detection_enabled else "inactive",
@@ -4892,14 +4892,9 @@ fi
             "current_count": detection_current_count,
             "history_count": detection_history_count,
             "message": ("Running" if detection_enabled else "Stopped")
-            + (
-                f" ({detection_current_count} current, {detection_history_count} history)"
-                if detection_enabled
-                else ""
-            ),
+            + (f" ({detection_current_count} current, {detection_history_count} history)" if detection_enabled else ""),
         }
 
-        # Isaac ROS container summary (from shared probe)
         services["isaac_ros_container"] = {
             "status": "running" if container_running else "not_running",
             "running": container_running,

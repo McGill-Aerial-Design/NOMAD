@@ -27,6 +27,7 @@ namespace NOMAD.MissionPlanner
         
         private NOMADConfig _config;
         private System.Threading.Timer _pollTimer;
+        private int _isPollInFlight = 0; // Interlocked guard — prevents overlapping polls
         
         // Data history for graphs
         private readonly Queue<float> _cpuTempHistory = new Queue<float>();
@@ -697,61 +698,65 @@ namespace NOMAD.MissionPlanner
         
         private async void PollHealth()
         {
-            if (IsDisposed || !IsHandleCreated) return;
+            // Prevent overlapping polls — if the previous one is still in-flight, skip.
+            if (System.Threading.Interlocked.Exchange(ref _isPollInFlight, 1) == 1)
+                return;
 
             try
             {
-                // Fetch health/detailed for system metrics
-                var healthTask = JetsonApiService.GetAsync("/health/detailed");
-                // Fetch network/status for detailed network info
+                if (IsDisposed || !IsHandleCreated) return;
+
+                // Fire health + network in parallel — both are fast cached reads.
+                var healthTask  = JetsonApiService.GetAsync("/health/detailed");
                 var networkTask = JetsonApiService.GetAsync("/network/status");
-                // Fetch isaac/status for VIO drift stats
+
+                // Isaac status can be slow (docker introspection inside container).
+                // Start it in parallel but don't let it block the health/network update.
                 var isaacTask = JetsonApiService.GetAsync("/api/isaac/status");
 
-                await Task.WhenAll(healthTask, networkTask, isaacTask);
+                // Wait for the fast pair first.
+                await Task.WhenAll(healthTask, networkTask);
 
                 if (IsDisposed || !IsHandleCreated) return;
 
-                var healthResponse = await healthTask;
-                var networkResponse = await networkTask;
-                var isaacResponse = await isaacTask;
+                var healthResponse  = healthTask.Result;
+                var networkResponse = networkTask.Result;
 
-                if (healthResponse.IsSuccessStatusCode)
-                {
-                    var healthJson = await healthResponse.Content.ReadAsStringAsync();
-                    var healthData = JObject.Parse(healthJson);
-
-                    JObject networkData = null;
-                    if (networkResponse.IsSuccessStatusCode)
-                    {
-                        var networkJson = await networkResponse.Content.ReadAsStringAsync();
-                        networkData = JObject.Parse(networkJson);
-                    }
-
-                    JObject isaacData = null;
-                    if (isaacResponse.IsSuccessStatusCode)
-                    {
-                        var isaacJson = await isaacResponse.Content.ReadAsStringAsync();
-                        isaacData = JObject.Parse(isaacJson);
-                    }
-
-                    if (!IsDisposed && IsHandleCreated)
-                        this.BeginInvoke((Action)(() => UpdateUI(healthData, networkData, isaacData)));
-                }
-                else
+                if (!healthResponse.IsSuccessStatusCode)
                 {
                     if (!IsDisposed && IsHandleCreated)
                         this.BeginInvoke((Action)(() => UpdateStatusError($"HTTP {healthResponse.StatusCode}")));
+                    return;
+                }
+
+                var healthJson = await healthResponse.Content.ReadAsStringAsync();
+                var healthData = JObject.Parse(healthJson);
+
+                JObject networkData = null;
+                if (networkResponse.IsSuccessStatusCode)
+                {
+                    var networkJson = await networkResponse.Content.ReadAsStringAsync();
+                    networkData = JObject.Parse(networkJson);
+                }
+
+                // Update health + network immediately — don't wait for isaac.
+                if (!IsDisposed && IsHandleCreated)
+                    this.BeginInvoke((Action)(() => UpdateUI(healthData, networkData, null)));
+
+                // Now collect isaac result (it may already be done, or we wait a bit more).
+                var isaacCompleted = isaacTask.IsCompleted ||
+                    await Task.WhenAny(isaacTask, Task.Delay(2000)) == isaacTask;
+
+                if (isaacCompleted && isaacTask.IsCompletedSuccessfully && isaacTask.Result.IsSuccessStatusCode)
+                {
+                    var isaacJson = await isaacTask.Result.Content.ReadAsStringAsync();
+                    var isaacData = JObject.Parse(isaacJson);
+                    if (!IsDisposed && IsHandleCreated)
+                        this.BeginInvoke((Action)(() => UpdateDriftStats(isaacData)));
                 }
             }
-            catch (ObjectDisposedException)
-            {
-                // Control was disposed during async operation -- safe to ignore
-            }
-            catch (InvalidOperationException)
-            {
-                // Handle became invalid during async operation -- safe to ignore
-            }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
             catch (Exception ex)
             {
                 try
@@ -761,6 +766,10 @@ namespace NOMAD.MissionPlanner
                 }
                 catch (ObjectDisposedException) { }
                 catch (InvalidOperationException) { }
+            }
+            finally
+            {
+                System.Threading.Interlocked.Exchange(ref _isPollInFlight, 0);
             }
         }
         
@@ -854,9 +863,11 @@ namespace NOMAD.MissionPlanner
                 
                 // Draw graph
                 DrawGraph();
-                
-                // VIO Tilt Drift Stats (VO-006)
-                UpdateDriftStats(isaacData);
+
+                // VIO Tilt Drift Stats — only update when isaacData provided
+                // (poll loop fires it separately after the fast health update)
+                if (isaacData != null)
+                    UpdateDriftStats(isaacData);
 
                 // Check alerts
                 CheckAlerts(cpuTemp, gpuTemp, memUsed, diskUsed);
