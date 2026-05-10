@@ -6,9 +6,25 @@
     "4.0": 8.0,
     "5.0": 12.0
   },
+  "target_camera_range_m": 3.8,
+  "range_tolerance_m": 0.25,
+  "trigger_max_distance_m": 5.5,
+  "aim_pixel_x": 640,
+  "aim_pixel_y": 390,
+  "aim_tolerance_px": 25,
+  "servo_fire_angle_deg": 82.0,
   "spray_duration_ms": 500,
-  "servo_gain": 0.1,
-  "aim_tolerance_px": 30,
+  "forward_gain": 0.45,
+  "lateral_gain": 0.001,
+  "altitude_gain": 0.001,
+  "yaw_gain": 0.0025,
+  "use_yaw_alignment": true,
+  "max_forward_speed_mps": 0.45,
+  "max_lateral_speed_mps": 0.25,
+  "max_altitude_speed_mps": 0.2,
+  "max_yaw_rate_radps": 0.35,
+  "lock_hold_ms": 700,
+  "align_timeout_s": 20.0,
   "calibration_date": "",
-  "notes": "Default values — replace with bench calibration measurements"
+  "notes": "Calibrate a fixed firing geometry at the wall, then tune gains/signs during test flights."
 }

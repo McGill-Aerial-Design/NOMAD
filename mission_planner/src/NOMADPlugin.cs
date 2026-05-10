@@ -909,7 +909,7 @@ namespace NOMAD.MissionPlanner
         public MAVLinkConnectionManager ConnectionManager => _connectionManager;
 
         /// <summary>
-        /// Push servo calibration config to Jetson on every new connection so
+        /// Push servo/spray calibration config to Jetson on every new connection so
         /// the Jetson always uses the settings configured in the NOMAD Settings UI
         /// rather than its own defaults (e.g. after a NOMAD restart on the Jetson).
         /// </summary>
@@ -937,10 +937,41 @@ namespace NOMAD.MissionPlanner
                     var response = await JetsonApiService.PostAsync("/api/servo/camera/config", body);
                     System.Diagnostics.Debug.WriteLine(
                         $"NOMAD: Pushed servo config to Jetson — HTTP {(int)response.StatusCode}");
+
+                    var sprayBody = new System.Net.Http.StringContent(
+                        Newtonsoft.Json.JsonConvert.SerializeObject(new
+                        {
+                            target_camera_range_m = cfg.SprayTargetCameraRangeM,
+                            range_tolerance_m = cfg.SprayRangeToleranceM,
+                            trigger_max_distance_m = cfg.SprayTriggerMaxDistanceM,
+                            aim_pixel_x = cfg.SprayAimPixelX,
+                            aim_pixel_y = cfg.SprayAimPixelY,
+                            aim_tolerance_px = cfg.SprayAimTolerancePx,
+                            servo_fire_angle_deg = cfg.SprayServoFireAngleDeg,
+                            spray_duration_ms = cfg.WaterPumpDurationMs,
+                            forward_gain = cfg.SprayForwardGain,
+                            lateral_gain = cfg.SprayLateralGain,
+                            altitude_gain = cfg.SprayAltitudeGain,
+                            yaw_gain = cfg.SprayYawGain,
+                            use_yaw_alignment = cfg.SprayUseYawAlignment,
+                            max_forward_speed_mps = cfg.SprayMaxForwardSpeedMps,
+                            max_lateral_speed_mps = cfg.SprayMaxLateralSpeedMps,
+                            max_altitude_speed_mps = cfg.SprayMaxAltitudeSpeedMps,
+                            max_yaw_rate_radps = cfg.SprayMaxYawRateRadps,
+                            lock_hold_ms = cfg.SprayLockHoldMs,
+                            align_timeout_s = cfg.SprayAlignTimeoutS,
+                            persist = true,
+                        }),
+                        System.Text.Encoding.UTF8,
+                        "application/json");
+
+                    var sprayResponse = await JetsonApiService.PostAsync("/api/spray/calibration", sprayBody);
+                    System.Diagnostics.Debug.WriteLine(
+                        $"NOMAD: Pushed spray calibration to Jetson — HTTP {(int)sprayResponse.StatusCode}");
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"NOMAD: Failed to push servo config — {ex.Message}");
+                    System.Diagnostics.Debug.WriteLine($"NOMAD: Failed to push Jetson calibration — {ex.Message}");
                 }
             });
         }

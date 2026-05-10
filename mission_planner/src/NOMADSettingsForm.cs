@@ -98,6 +98,12 @@ namespace NOMAD.MissionPlanner
         private NumericUpDown _numReelCh, _numReelPwmIn, _numReelPwmOut;
         private NumericUpDown _numPumpCh, _numPumpPwmOn, _numPumpPwmOff, _numPumpDuration;
         private NumericUpDown _numTiltCh, _numTiltPwmMin, _numTiltPwmNeutral, _numTiltPwmMax, _numTiltAngleRange;
+        private NumericUpDown _numSprayRange, _numSprayRangeTol, _numSprayTriggerMax, _numSprayAimX, _numSprayAimY, _numSprayAimTol;
+        private NumericUpDown _numSprayServoAngle, _numSprayForwardGain, _numSprayLateralGain, _numSprayAltitudeGain, _numSprayYawGain;
+        private NumericUpDown _numSprayMaxForward, _numSprayMaxLateral, _numSprayMaxAltitude, _numSprayMaxYaw, _numSprayLockMs, _numSprayTimeout;
+        private CheckBox _chkSprayUseYaw;
+        private Button _btnPushSprayCalibration;
+        private Label _lblSprayCalibrationStatus;
         
         // Google Drive
         private Button _btnUploadGDrive;
@@ -158,6 +164,7 @@ namespace NOMAD.MissionPlanner
             _tabControl.TabPages.Add(CreateUiTab());
             _tabControl.TabPages.Add(CreateAlertsTab());
             _tabControl.TabPages.Add(CreateUploadsTab());
+            _tabControl.TabPages.Add(CreateSprayCalibrationTab());
             _tabControl.TabPages.Add(CreateServosTab());
 
             // Buttons at bottom
@@ -617,6 +624,90 @@ namespace NOMAD.MissionPlanner
             return tab;
         }
 
+        private TabPage CreateSprayCalibrationTab()
+        {
+            var tab = CreateTabPage("Spray");
+            int y = 10;
+
+            AddSectionLabel(tab, "Fixed Firing Geometry", ref y);
+            AddLabel(tab, "Camera range (m):", 10, y);
+            _numSprayRange = AddNumericUpDown(tab, 145, y, 70, 0.5m, 8.0m, 3.8m, 2);
+            AddLabel(tab, "Tolerance (m):", 230, y, Color.Gray);
+            _numSprayRangeTol = AddNumericUpDown(tab, 330, y, 60, 0.05m, 1.0m, 0.25m, 2);
+            y += 28;
+
+            AddLabel(tab, "Start max range (m):", 10, y);
+            _numSprayTriggerMax = AddNumericUpDown(tab, 145, y, 70, 1.0m, 8.0m, 5.5m, 1);
+            AddLabel(tab, "Operator can trigger before final approach.", 230, y, Color.Gray);
+            y += 28;
+
+            AddLabel(tab, "Aim pixel X:", 10, y);
+            _numSprayAimX = AddNumericUpDown(tab, 145, y, 70, 0, 4000, 640);
+            AddLabel(tab, "Y:", 230, y, Color.Gray);
+            _numSprayAimY = AddNumericUpDown(tab, 260, y, 70, 0, 3000, 390);
+            AddLabel(tab, "Tol px:", 345, y, Color.Gray);
+            _numSprayAimTol = AddNumericUpDown(tab, 405, y, 55, 2, 250, 25);
+            y += 28;
+
+            AddLabel(tab, "Nozzle fire angle:", 10, y);
+            _numSprayServoAngle = AddNumericUpDown(tab, 145, y, 70, 0, 180, 82, 1);
+            AddLabel(tab, "Pump duration uses Servos tab value.", 230, y, Color.Gray);
+            y += 36;
+
+            AddSectionLabel(tab, "Alignment Gains", ref y);
+            _chkSprayUseYaw = AddCheckBox(tab, "Use yaw for horizontal pixel alignment", 10, y);
+            y += 28;
+            AddLabel(tab, "Forward:", 10, y);
+            _numSprayForwardGain = AddNumericUpDown(tab, 80, y, 70, 0, 2, 0.45m, 3);
+            AddLabel(tab, "Yaw:", 170, y, Color.Gray);
+            _numSprayYawGain = AddNumericUpDown(tab, 215, y, 75, -0.02m, 0.02m, 0.0025m, 4);
+            y += 28;
+            AddLabel(tab, "Lateral:", 10, y);
+            _numSprayLateralGain = AddNumericUpDown(tab, 80, y, 75, -0.02m, 0.02m, 0.001m, 4);
+            AddLabel(tab, "Altitude:", 170, y, Color.Gray);
+            _numSprayAltitudeGain = AddNumericUpDown(tab, 240, y, 75, -0.02m, 0.02m, 0.001m, 4);
+            y += 36;
+
+            AddSectionLabel(tab, "Limits and Lock", ref y);
+            AddLabel(tab, "Max fwd:", 10, y);
+            _numSprayMaxForward = AddNumericUpDown(tab, 80, y, 60, 0.05m, 2, 0.45m, 2);
+            AddLabel(tab, "lat:", 155, y, Color.Gray);
+            _numSprayMaxLateral = AddNumericUpDown(tab, 190, y, 60, 0.05m, 1, 0.25m, 2);
+            AddLabel(tab, "alt:", 265, y, Color.Gray);
+            _numSprayMaxAltitude = AddNumericUpDown(tab, 300, y, 60, 0.05m, 1, 0.20m, 2);
+            y += 28;
+            AddLabel(tab, "Max yaw:", 10, y);
+            _numSprayMaxYaw = AddNumericUpDown(tab, 80, y, 60, 0.05m, 2, 0.35m, 2);
+            AddLabel(tab, "Lock ms:", 155, y, Color.Gray);
+            _numSprayLockMs = AddNumericUpDown(tab, 220, y, 70, 100, 5000, 700);
+            AddLabel(tab, "Timeout s:", 305, y, Color.Gray);
+            _numSprayTimeout = AddNumericUpDown(tab, 385, y, 55, 2, 60, 20, 1);
+            y += 40;
+
+            _btnPushSprayCalibration = new Button
+            {
+                Text = "Push to Jetson",
+                Location = new Point(10, y),
+                Size = new Size(130, 30),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(0, 122, 204),
+                ForeColor = Color.White,
+            };
+            _btnPushSprayCalibration.Click += async (s, e) => await PushSprayCalibration();
+            tab.Controls.Add(_btnPushSprayCalibration);
+
+            _lblSprayCalibrationStatus = new Label
+            {
+                Text = "",
+                Location = new Point(150, y + 6),
+                AutoSize = true,
+                ForeColor = Color.Gray,
+            };
+            tab.Controls.Add(_lblSprayCalibrationStatus);
+
+            return tab;
+        }
+
         // ============================================================
         // Helper Methods
         // ============================================================
@@ -815,6 +906,26 @@ namespace NOMAD.MissionPlanner
             _numTiltPwmMax.Value      = Config.CameraTiltPwmMax;
             _numTiltAngleRange.Value  = Config.CameraTiltAngleRange;
 
+            // Spray calibration
+            _numSprayRange.Value       = (decimal)Config.SprayTargetCameraRangeM;
+            _numSprayRangeTol.Value    = (decimal)Config.SprayRangeToleranceM;
+            _numSprayTriggerMax.Value  = (decimal)Config.SprayTriggerMaxDistanceM;
+            _numSprayAimX.Value        = Config.SprayAimPixelX;
+            _numSprayAimY.Value        = Config.SprayAimPixelY;
+            _numSprayAimTol.Value      = Config.SprayAimTolerancePx;
+            _numSprayServoAngle.Value  = (decimal)Config.SprayServoFireAngleDeg;
+            _numSprayForwardGain.Value = (decimal)Config.SprayForwardGain;
+            _numSprayLateralGain.Value = (decimal)Config.SprayLateralGain;
+            _numSprayAltitudeGain.Value= (decimal)Config.SprayAltitudeGain;
+            _numSprayYawGain.Value     = (decimal)Config.SprayYawGain;
+            _chkSprayUseYaw.Checked    = Config.SprayUseYawAlignment;
+            _numSprayMaxForward.Value  = (decimal)Config.SprayMaxForwardSpeedMps;
+            _numSprayMaxLateral.Value  = (decimal)Config.SprayMaxLateralSpeedMps;
+            _numSprayMaxAltitude.Value = (decimal)Config.SprayMaxAltitudeSpeedMps;
+            _numSprayMaxYaw.Value      = (decimal)Config.SprayMaxYawRateRadps;
+            _numSprayLockMs.Value      = Config.SprayLockHoldMs;
+            _numSprayTimeout.Value     = (decimal)Config.SprayAlignTimeoutS;
+
             UpdateDualLinkControlsState();
             UpdateRadioMasterConnTypeState();
         }
@@ -909,6 +1020,26 @@ namespace NOMAD.MissionPlanner
             Config.CameraTiltPwmNeutral= (int)_numTiltPwmNeutral.Value;
             Config.CameraTiltPwmMax    = (int)_numTiltPwmMax.Value;
             Config.CameraTiltAngleRange= (int)_numTiltAngleRange.Value;
+
+            // Spray calibration
+            Config.SprayTargetCameraRangeM = (float)_numSprayRange.Value;
+            Config.SprayRangeToleranceM = (float)_numSprayRangeTol.Value;
+            Config.SprayTriggerMaxDistanceM = (float)_numSprayTriggerMax.Value;
+            Config.SprayAimPixelX = (int)_numSprayAimX.Value;
+            Config.SprayAimPixelY = (int)_numSprayAimY.Value;
+            Config.SprayAimTolerancePx = (int)_numSprayAimTol.Value;
+            Config.SprayServoFireAngleDeg = (float)_numSprayServoAngle.Value;
+            Config.SprayForwardGain = (float)_numSprayForwardGain.Value;
+            Config.SprayLateralGain = (float)_numSprayLateralGain.Value;
+            Config.SprayAltitudeGain = (float)_numSprayAltitudeGain.Value;
+            Config.SprayYawGain = (float)_numSprayYawGain.Value;
+            Config.SprayUseYawAlignment = _chkSprayUseYaw.Checked;
+            Config.SprayMaxForwardSpeedMps = (float)_numSprayMaxForward.Value;
+            Config.SprayMaxLateralSpeedMps = (float)_numSprayMaxLateral.Value;
+            Config.SprayMaxAltitudeSpeedMps = (float)_numSprayMaxAltitude.Value;
+            Config.SprayMaxYawRateRadps = (float)_numSprayMaxYaw.Value;
+            Config.SprayLockHoldMs = (int)_numSprayLockMs.Value;
+            Config.SprayAlignTimeoutS = (float)_numSprayTimeout.Value;
         }
         
         private void SetComboBoxValue(ComboBox combo, string value)
@@ -1023,6 +1154,79 @@ namespace NOMAD.MissionPlanner
                 {
                     _btnUploadGDrive.Enabled = true;
                 }
+            }
+        }
+
+        private JObject BuildSprayCalibrationPayload(bool persist)
+        {
+            return new JObject
+            {
+                ["target_camera_range_m"] = Config.SprayTargetCameraRangeM,
+                ["range_tolerance_m"] = Config.SprayRangeToleranceM,
+                ["trigger_max_distance_m"] = Config.SprayTriggerMaxDistanceM,
+                ["aim_pixel_x"] = Config.SprayAimPixelX,
+                ["aim_pixel_y"] = Config.SprayAimPixelY,
+                ["aim_tolerance_px"] = Config.SprayAimTolerancePx,
+                ["servo_fire_angle_deg"] = Config.SprayServoFireAngleDeg,
+                ["spray_duration_ms"] = Config.WaterPumpDurationMs,
+                ["forward_gain"] = Config.SprayForwardGain,
+                ["lateral_gain"] = Config.SprayLateralGain,
+                ["altitude_gain"] = Config.SprayAltitudeGain,
+                ["yaw_gain"] = Config.SprayYawGain,
+                ["use_yaw_alignment"] = Config.SprayUseYawAlignment,
+                ["max_forward_speed_mps"] = Config.SprayMaxForwardSpeedMps,
+                ["max_lateral_speed_mps"] = Config.SprayMaxLateralSpeedMps,
+                ["max_altitude_speed_mps"] = Config.SprayMaxAltitudeSpeedMps,
+                ["max_yaw_rate_radps"] = Config.SprayMaxYawRateRadps,
+                ["lock_hold_ms"] = Config.SprayLockHoldMs,
+                ["align_timeout_s"] = Config.SprayAlignTimeoutS,
+                ["persist"] = persist,
+            };
+        }
+
+        private async System.Threading.Tasks.Task PushSprayCalibration()
+        {
+            try
+            {
+                _btnPushSprayCalibration.Enabled = false;
+                _lblSprayCalibrationStatus.Text = "Pushing...";
+                _lblSprayCalibrationStatus.ForeColor = Color.Yellow;
+
+                SaveSettings();
+                Config.Save();
+                JetsonApiService.Reconfigure(Config);
+
+                var json = BuildSprayCalibrationPayload(true).ToString(Newtonsoft.Json.Formatting.None);
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
+                var response = await JetsonApiService.PostAsync("/api/spray/calibration", content);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    _lblSprayCalibrationStatus.Text = "Spray calibration pushed";
+                    _lblSprayCalibrationStatus.ForeColor = Color.LimeGreen;
+                }
+                else
+                {
+                    var body = await response.Content.ReadAsStringAsync();
+                    string detail = body;
+                    try
+                    {
+                        var err = JObject.Parse(body);
+                        detail = err["detail"]?.ToString() ?? body;
+                    }
+                    catch { }
+                    _lblSprayCalibrationStatus.Text = $"Failed: {detail}";
+                    _lblSprayCalibrationStatus.ForeColor = Color.Red;
+                }
+            }
+            catch (Exception ex)
+            {
+                _lblSprayCalibrationStatus.Text = $"Error: {ex.Message}";
+                _lblSprayCalibrationStatus.ForeColor = Color.Red;
+            }
+            finally
+            {
+                _btnPushSprayCalibration.Enabled = true;
             }
         }
 

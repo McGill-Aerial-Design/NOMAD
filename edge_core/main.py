@@ -680,8 +680,67 @@ def run(
                 logger.error(f"Detection loop error: {e}")
             time.sleep(0.2)  # ~5 Hz
 
-    def _get_detection_bbox(target_id: int) -> tuple | None:
-        """Return the latest cached detection from the background thread."""
+    def _get_detection_bbox(target_or_id) -> dict | tuple | None:
+        """Return the freshest detection for spray visual servoing.
+
+        Prefer ZED-wrapper object detections because they include 2D bbox and
+        depth-backed 3D position. Fall back to the lightweight snapshot circle
+        detector if the ZED OD stream is unavailable.
+        """
+        try:
+            target_x = getattr(target_or_id, "x", None)
+            target_y = getattr(target_or_id, "y", None)
+            target_z = getattr(target_or_id, "z", None)
+            with app.state.detection_state_lock:
+                current = list(getattr(app.state, "detected_objects", []))
+
+            best = None
+            best_score = float("inf")
+            for det in current:
+                bbox_w = float(det.get("bbox_w", 0) or 0)
+                bbox_h = float(det.get("bbox_h", 0) or 0)
+                if bbox_w <= 0 or bbox_h <= 0:
+                    continue
+                if target_x is not None and target_y is not None and target_z is not None:
+                    try:
+                        dx = float(det.get("x", 0)) - float(target_x)
+                        dy = float(det.get("y", 0)) - float(target_y)
+                        dz = float(det.get("z", 0)) - float(target_z)
+                        score = dx * dx + dy * dy + dz * dz
+                    except (TypeError, ValueError):
+                        score = 0.0
+                else:
+                    score = -float(det.get("confidence", 0) or 0)
+                if score < best_score:
+                    best = det
+                    best_score = score
+
+            if best is not None:
+                bbox_x = float(best.get("bbox_x", 0) or 0)
+                bbox_y = float(best.get("bbox_y", 0) or 0)
+                bbox_w = float(best.get("bbox_w", 0) or 0)
+                bbox_h = float(best.get("bbox_h", 0) or 0)
+                det_x = float(best.get("x", 0) or 0)
+                det_y = float(best.get("y", 0) or 0)
+                det_z = float(best.get("z", 0) or 0)
+                range_m = (det_x * det_x + det_y * det_y + det_z * det_z) ** 0.5
+                return {
+                    "cx": bbox_x + bbox_w / 2.0,
+                    "cy": bbox_y + bbox_h / 2.0,
+                    "bbox_x": bbox_x,
+                    "bbox_y": bbox_y,
+                    "bbox_w": bbox_w,
+                    "bbox_h": bbox_h,
+                    "range_m": range_m,
+                    "x_m": det_x,
+                    "y_m": det_y,
+                    "z_m": det_z,
+                    "confidence": best.get("confidence", 0),
+                    "source": "zed_od",
+                }
+        except Exception as e:
+            logger.debug(f"ZED detection lookup failed, using snapshot fallback: {e}")
+
         with _detection_lock:
             return _latest_detection
 
@@ -819,4 +878,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
