@@ -565,31 +565,29 @@ main() {
     echo ""
 }
 
-# Cleanup handler
+# Cleanup handler — only runs on explicit interrupt (Ctrl+C / SIGTERM).
+# Do NOT attach to EXIT: the script exits normally after startup, and we
+# don't want to kill persistent daemons just because the launcher finished.
 cleanup() {
     echo ""
-    log_info "Shutting down NOMAD services..."
-    
-    # Edge Core is a persistent daemon (nohup'd or systemd-managed) -- do NOT kill it
-    # on script exit. Killing it on Ctrl+C defeats the purpose of nohup and leaves
-    # Mission Planner disconnected. Edge Core outlives this script by design.
-    log_info "Leaving Edge Core running (persistent daemon)"
-    
-    # Stop video bridge inside Docker container
+    log_info "Interrupt received — stopping transient session processes..."
+
+    # Edge Core and MAVLink Router are persistent daemons -- leave them running
+    # so Mission Planner keeps its connection after the terminal closes.
+    log_info "Leaving Edge Core and MAVLink Router running (persistent daemons)"
+
+    # Stop video bridge inside Docker container (session-scoped)
     docker exec nomad_isaac_ros pkill -f "simple_video_bridge" 2>/dev/null || true
-    
+
     # Stop any GStreamer processes
     pkill -f "gst-launch" 2>/dev/null || true
-    
-    # Stop MAVLink router
-    pkill -f "mavlink-routerd" 2>/dev/null || true
-    
-    log_ok "All services stopped"
+
+    log_ok "Done"
     echo "Goodbye!"
 }
 
 if [ "$TASK_MODE" != "healthcheck" ]; then
-    trap cleanup EXIT INT TERM
+    trap cleanup INT TERM
 fi
 
 main "$@"

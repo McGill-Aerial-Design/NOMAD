@@ -747,7 +747,7 @@ namespace NOMAD.MissionPlanner
                 var isaacCompleted = isaacTask.IsCompleted ||
                     await Task.WhenAny(isaacTask, Task.Delay(2000)) == isaacTask;
 
-                if (isaacCompleted && isaacTask.IsCompletedSuccessfully && isaacTask.Result.IsSuccessStatusCode)
+                if (isaacCompleted && isaacTask.Status == System.Threading.Tasks.TaskStatus.RanToCompletion && isaacTask.Result.IsSuccessStatusCode)
                 {
                     var isaacJson = await isaacTask.Result.Content.ReadAsStringAsync();
                     var isaacData = JObject.Parse(isaacJson);

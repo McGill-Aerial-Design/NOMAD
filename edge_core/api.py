@@ -839,10 +839,104 @@ def create_app(state_manager: StateManager) -> FastAPI:
         """Start high-rate ZMQ listener on API startup."""
         _start_high_rate_zmq_listener()
 
+    @app.on_event("startup")
+    async def _startup_mavlink_watchdog() -> None:
+        """Launch background mavlink-routerd watchdog."""
+        asyncio.create_task(_mavlink_watchdog_loop())
+
     @app.on_event("shutdown")
     async def _shutdown_high_rate_zmq_listener() -> None:
         """Stop high-rate ZMQ listener on API shutdown."""
         _stop_high_rate_zmq_listener()
+
+    async def _mavlink_watchdog_loop() -> None:
+        """Restart mavlink-routerd automatically if it exits unexpectedly.
+
+        Polls every 15 s. If /dev/ttyACM0 is present but mavlink-routerd is not
+        running, re-issues the same nohup command used by start_nomad_full.sh.
+        Backs off 60 s after each restart attempt to avoid thrashing.
+        """
+        # Give the rest of startup a head start before the first check.
+        await asyncio.sleep(30)
+        loop = asyncio.get_event_loop()
+        restart_cooldown_until: float = 0.0
+
+        while True:
+            try:
+                await asyncio.sleep(15)
+
+                if time.time() < restart_cooldown_until:
+                    continue
+
+                # Check whether the device is present and process is alive.
+                def _check() -> tuple[bool, bool]:
+                    has_device = os.path.exists("/dev/ttyACM0")
+                    try:
+                        r = subprocess.run(
+                            ["pgrep", "-f", "mavlink-routerd"],
+                            capture_output=True, text=True, timeout=3,
+                        )
+                        process_alive = r.returncode == 0
+                    except Exception:
+                        process_alive = True  # assume ok on probe failure
+                    return has_device, process_alive
+
+                has_device, process_alive = await loop.run_in_executor(None, _check)
+
+                if not has_device or process_alive:
+                    continue
+
+                # mavlink-routerd is dead but the CubePilot is connected — restart.
+                logger.warning("mavlink-routerd not running (CubePilot present) — restarting")
+
+                def _restart() -> bool:
+                    gcs_ip = os.environ.get("GCS_IP", "100.76.127.17")
+                    log_path = os.path.expanduser("~/nomad_logs/mavlink.log")
+                    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+                    try:
+                        # Ensure any stale instance is gone first
+                        subprocess.run(
+                            ["pkill", "-9", "-f", "mavlink-routerd"],
+                            capture_output=True, timeout=5,
+                        )
+                        time.sleep(1)
+                    except Exception:
+                        pass
+                    try:
+                        with open(log_path, "a") as lf:
+                            subprocess.Popen(
+                                [
+                                    "mavlink-routerd",
+                                    "-e", f"{gcs_ip}:14550",
+                                    "-e", "127.0.0.1:14550",
+                                    "/dev/ttyACM0",
+                                ],
+                                stdout=lf,
+                                stderr=lf,
+                                start_new_session=True,
+                            )
+                        time.sleep(2)
+                        r = subprocess.run(
+                            ["pgrep", "-f", "mavlink-routerd"],
+                            capture_output=True, text=True, timeout=3,
+                        )
+                        return r.returncode == 0
+                    except Exception as e:
+                        logger.error("mavlink-routerd restart failed: %s", e)
+                        return False
+
+                ok = await loop.run_in_executor(None, _restart)
+                if ok:
+                    logger.info("mavlink-routerd restarted successfully")
+                else:
+                    logger.error("mavlink-routerd restart failed — will retry in 60 s")
+
+                restart_cooldown_until = time.time() + 60.0
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("mavlink watchdog error: %s", e)
 
     def _docker_exec_pgrep(
         container: str, pattern: str, timeout_s: int = 5
