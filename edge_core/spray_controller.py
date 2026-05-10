@@ -59,6 +59,8 @@ class SprayTarget:
     z: float
     label: str = ""
     confidence: float = 0.0
+    image_only: bool = False
+    range_m: Optional[float] = None
 
 
 @dataclass
@@ -440,13 +442,24 @@ class SprayController:
                 return {"success": False, "error": "Spray sequence already active"}
 
             drone_pos = self._get_drone_position()
-            if drone_pos is None:
+            if drone_pos is None and not target.image_only:
                 return {"success": False, "error": "Cannot determine drone position"}
 
-            dx = target.x - drone_pos[0]
-            dy = target.y - drone_pos[1]
-            dz = target.z - drone_pos[2]
-            distance = math.sqrt(dx * dx + dy * dy + dz * dz)
+            if target.image_only:
+                range_m = None
+                try:
+                    if target.range_m is not None:
+                        candidate_range = float(target.range_m)
+                        if math.isfinite(candidate_range):
+                            range_m = candidate_range
+                except (TypeError, ValueError):
+                    range_m = None
+                distance = range_m if range_m is not None else self.TARGET_CAMERA_RANGE_M
+            else:
+                dx = target.x - drone_pos[0]
+                dy = target.y - drone_pos[1]
+                dz = target.z - drone_pos[2]
+                distance = math.sqrt(dx * dx + dy * dy + dz * dz)
 
             if distance > self.TRIGGER_MAX_DISTANCE_M:
                 return {
@@ -458,7 +471,7 @@ class SprayController:
                     ),
                 }
 
-            skip_approach = distance < self.APPROACH_STOP_DISTANCE_M
+            skip_approach = target.image_only or distance < self.APPROACH_STOP_DISTANCE_M
             self._current_target = target
             self._spray_count = 0
             self._abort_event.clear()

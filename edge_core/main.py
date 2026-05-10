@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import atexit
 import logging
+import math
 import os
 import signal
 import subprocess
@@ -617,16 +618,16 @@ def run(
     # ------------------------------------------------------------------ #
     import threading as _threading
 
-    _latest_detection: tuple | None = None
+    _latest_detection: dict | None = None
     _detection_lock = _threading.Lock()
     _detection_running = False
 
     def _detection_loop() -> None:
         """Background detection thread — continuously detects targets at ~5 Hz.
 
-        Uses NOMAD's built-in circle detector (contrast-based, color-agnostic).
-        Tuned for small targets (5-30cm) at 3-4m distance.
-        Caches the latest detection result for the spray controller to read.
+        Uses NOMAD's built-in circle detector (contrast/shape-based, no YOLO).
+        Caches the latest detection result for the spray controller and exposes
+        it through /api/detections so Mission Planner can select it.
         """
         nonlocal _latest_detection, _detection_running
         _detection_running = True
@@ -665,17 +666,85 @@ def run(
                     continue
 
                 circles = detector.detect(img)
+                current_detection = None
                 with _detection_lock:
                     if circles:
                         best = max(
                             circles, key=lambda c: c.confidence * c.radius
                         )
-                        _latest_detection = (
-                            best.cx, best.cy,
-                            best.radius * 2, best.radius * 2,
+                        bbox_w = float(best.radius * 2)
+                        bbox_h = float(best.radius * 2)
+                        bbox_x = float(best.cx - best.radius)
+                        bbox_y = float(best.cy - best.radius)
+                        current_detection = {
+                            "target_id": 1,
+                            "label": "task2_circle",
+                            "confidence": float(best.confidence * 100.0),
+                            "bbox_x": bbox_x,
+                            "bbox_y": bbox_y,
+                            "bbox_w": bbox_w,
+                            "bbox_h": bbox_h,
+                            "cx": float(best.cx),
+                            "cy": float(best.cy),
+                            "radius_px": float(best.radius),
+                            "source": "snapshot_circle",
+                            "image_only": True,
+                        }
+                        drone_state = state_manager.get_state()
+                        drone_pos = (
+                            getattr(drone_state, "vio_x", None),
+                            getattr(drone_state, "vio_y", None),
+                            getattr(drone_state, "vio_z", None),
                         )
+                        heading_deg = getattr(drone_state, "heading_deg", None)
+                        if all(v is not None for v in drone_pos) and heading_deg is not None:
+                            # Approximate a selectable target location straight
+                            # ahead. Final alignment is image-based; this only
+                            # lets the existing trigger/approach API work when
+                            # custom object detection is disabled.
+                            approx_range = float(SprayController.TARGET_CAMERA_RANGE_M)
+                            yaw = math.radians(float(heading_deg))
+                            current_detection["x"] = float(drone_pos[0]) + approx_range * math.cos(yaw)
+                            current_detection["y"] = float(drone_pos[1]) + approx_range * math.sin(yaw)
+                            current_detection["z"] = float(drone_pos[2])
+                            current_detection["range_m"] = approx_range
+                        _latest_detection = current_detection
                     else:
                         _latest_detection = None
+                with app.state.detection_state_lock:
+                    existing_depth_detection = None
+                    existing_age_s = None
+                    try:
+                        existing_age_s = time.time() - float(app.state.detection_last_update)
+                    except (TypeError, ValueError):
+                        existing_age_s = None
+                    for det in getattr(app.state, "detected_objects", []):
+                        if (
+                            isinstance(det, dict)
+                            and det.get("source") == "target_localizer_depth"
+                            and det.get("range_m") is not None
+                        ):
+                            existing_depth_detection = det
+                            break
+
+                    # Do not let the lightweight RGB snapshot detector clobber
+                    # the ROS-side circle+depth detection. The depth path is the
+                    # collision-critical source for forward/backward motion.
+                    preserve_depth_detection = (
+                        existing_depth_detection is not None
+                        and existing_age_s is not None
+                        and existing_age_s <= 1.0
+                    )
+                    if current_detection is not None:
+                        if not preserve_depth_detection:
+                            app.state.detected_objects = [current_detection]
+                            app.state.detection_last_update = time.time()
+                    elif (
+                        getattr(app.state, "detected_objects", [])
+                        and app.state.detected_objects[0].get("source") == "snapshot_circle"
+                    ):
+                        app.state.detected_objects = []
+                        app.state.detection_last_update = time.time()
             except Exception as e:
                 logger.error(f"Detection loop error: {e}")
             time.sleep(0.2)  # ~5 Hz
@@ -683,9 +752,9 @@ def run(
     def _get_detection_bbox(target_or_id) -> dict | tuple | None:
         """Return the freshest detection for spray visual servoing.
 
-        Prefer ZED-wrapper object detections because they include 2D bbox and
-        depth-backed 3D position. Fall back to the lightweight snapshot circle
-        detector if the ZED OD stream is unavailable.
+        Prefer the shape-based Task 2 circle detector. If another detection
+        source is publishing through /api/detections, use the freshest bbox and
+        range data available.
         """
         try:
             target_x = getattr(target_or_id, "x", None)
@@ -720,10 +789,19 @@ def run(
                 bbox_y = float(best.get("bbox_y", 0) or 0)
                 bbox_w = float(best.get("bbox_w", 0) or 0)
                 bbox_h = float(best.get("bbox_h", 0) or 0)
-                det_x = float(best.get("x", 0) or 0)
-                det_y = float(best.get("y", 0) or 0)
-                det_z = float(best.get("z", 0) or 0)
-                range_m = (det_x * det_x + det_y * det_y + det_z * det_z) ** 0.5
+                det_x = best.get("x")
+                det_y = best.get("y")
+                det_z = best.get("z")
+                range_m = best.get("range_m")
+                try:
+                    det_x_f = float(det_x) if det_x is not None else None
+                    det_y_f = float(det_y) if det_y is not None else None
+                    det_z_f = float(det_z) if det_z is not None else None
+                    if range_m is None and all(v is not None for v in (det_x_f, det_y_f, det_z_f)):
+                        range_m = (det_x_f * det_x_f + det_y_f * det_y_f + det_z_f * det_z_f) ** 0.5
+                except (TypeError, ValueError):
+                    det_x_f = det_y_f = det_z_f = None
+                    range_m = None
                 return {
                     "cx": bbox_x + bbox_w / 2.0,
                     "cy": bbox_y + bbox_h / 2.0,
@@ -732,11 +810,11 @@ def run(
                     "bbox_w": bbox_w,
                     "bbox_h": bbox_h,
                     "range_m": range_m,
-                    "x_m": det_x,
-                    "y_m": det_y,
-                    "z_m": det_z,
+                    "x_m": det_x_f,
+                    "y_m": det_y_f,
+                    "z_m": det_z_f,
                     "confidence": best.get("confidence", 0),
-                    "source": "zed_od",
+                    "source": best.get("source", "detections_api"),
                 }
         except Exception as e:
             logger.debug(f"ZED detection lookup failed, using snapshot fallback: {e}")

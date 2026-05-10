@@ -1462,23 +1462,41 @@ class TargetLocalizerNode(Node):
             depth_img = self.latest_depth
             depth_h, depth_w = (depth_img.shape if depth_img is not None else (0, 0))
 
-            def _depth_at(px: int, py: int) -> Optional[float]:
-                """Median depth in a small ROI around (px, py); None if invalid."""
+            def _depth_at(px: int, py: int, radius_px: int = 0) -> tuple[Optional[float], float]:
+                """Median registered depth near the circle center.
+
+                For Task 2 standoff we prefer the circle interior rather than a
+                single center pixel. ZED stereo can have small holes on glossy,
+                low-texture paper, so the median of valid pixels is more stable
+                and rejects isolated bad depth samples.
+                """
                 if depth_img is None or depth_h == 0 or depth_w == 0:
-                    return None
-                hw = 5
+                    return None, 0.0
+                hw = max(5, min(80, int(radius_px * 0.75))) if radius_px > 0 else 5
                 y1 = max(0, py - hw); y2 = min(depth_h, py + hw + 1)
                 x1 = max(0, px - hw); x2 = min(depth_w, px + hw + 1)
                 roi = depth_img[y1:y2, x1:x2]
-                valid = roi[np.isfinite(roi) & (roi > 0.1) & (roi < 35.0)]
+                if roi.size == 0:
+                    return None, 0.0
+
+                sample_mask = np.ones_like(roi, dtype=bool)
+                valid_mask = np.isfinite(roi) & (roi > 0.1) & (roi < 35.0)
+                if radius_px > 0:
+                    yy, xx = np.ogrid[y1:y2, x1:x2]
+                    sample_mask = (xx - px) ** 2 + (yy - py) ** 2 <= (hw * hw)
+                    valid_mask &= sample_mask
+
+                valid = roi[valid_mask]
+                sampled = int(np.count_nonzero(sample_mask))
+                valid_ratio = float(len(valid)) / float(sampled) if sampled > 0 else 0.0
                 if len(valid) == 0:
-                    return None
-                return float(np.median(valid))
+                    return None, 0.0
+                return float(np.median(valid)), valid_ratio
 
             circle_payloads = []
             top_distance: Optional[float] = None
             for d in circles[:5]:
-                dist = _depth_at(int(d.cx), int(d.cy))
+                dist, depth_valid_ratio = _depth_at(int(d.cx), int(d.cy), int(d.radius))
                 circle_payloads.append({
                     "cx": int(d.cx),
                     "cy": int(d.cy),
@@ -1486,6 +1504,7 @@ class TargetLocalizerNode(Node):
                     "color": d.color.value,
                     "confidence": round(float(d.confidence), 3),
                     "distance_m": round(dist, 3) if dist is not None else None,
+                    "depth_valid_ratio": round(depth_valid_ratio, 3),
                 })
                 if top_distance is None and dist is not None:
                     top_distance = round(dist, 3)
@@ -1493,7 +1512,7 @@ class TargetLocalizerNode(Node):
             # Center-pixel depth as a fallback distance when no circle is detected
             center_distance: Optional[float] = None
             if depth_img is not None:
-                center_distance = _depth_at(depth_w // 2, depth_h // 2)
+                center_distance, _ = _depth_at(depth_w // 2, depth_h // 2)
                 if center_distance is not None:
                     center_distance = round(center_distance, 3)
 
@@ -1564,3 +1583,4 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
+

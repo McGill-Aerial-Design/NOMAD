@@ -48,7 +48,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped, Twist
-from std_msgs.msg import Float32, Float32MultiArray
+from std_msgs.msg import Float32, Float32MultiArray, String
 
 # sensor_msgs for image metadata, HSV color verification, IMU and magnetometer data
 try:
@@ -257,6 +257,7 @@ class ROSHTTPBridge(Node):
         mesh_output_mode: str = "voxel",         # Runtime-selectable output mode: voxel-only
         servo_topic: str = "/nomad/servo/nozzle_angle",  # Nozzle servo angle
         detection_topic: str = "/zed/zed_node/obj_det/objects",  # ZED custom OD
+        detection_status_topic: str = "/target_localizer/detection_status_json",
         send_rate_hz: float = 30.0,
         enable_nav_control: bool = True,         # Enable velocity command forwarding
         enable_mesh: bool = True,                # Enable mesh forwarding
@@ -290,6 +291,7 @@ class ROSHTTPBridge(Node):
         self._mesh_output_mode = "voxel"
         self._enable_servo = enable_servo
         self._enable_detections = enable_detections and ZED_OD_AVAILABLE
+        self._enable_detection_status = enable_detections
         self._imu_topic = imu_topic
         self._mag_topic = mag_topic
         self._use_imu_attitude = use_imu_attitude and IMU_AVAILABLE
@@ -413,7 +415,7 @@ class ROSHTTPBridge(Node):
         self._last_detection_heartbeat_log_time = 0.0
         self._detection_heartbeat_interval_s = 1.0
         self._detection_camera_fresh_s = 2.5
-        self._latest_detections: list[DetectedObject] = []
+        self._latest_detections: list = []
         self._send_errors = 0
         self._last_send_time = 0.0
         # Back off VIO POSTs briefly on repeated failures to avoid overwhelming Edge Core.
@@ -516,6 +518,20 @@ class ROSHTTPBridge(Node):
             self.get_logger().info(f"Subscribed to detections: {detection_topic}")
         elif enable_detections and not ZED_OD_AVAILABLE:
             self.get_logger().warning("Detections requested but zed_interfaces not available")
+
+        # Subscribe to target_localizer circle/depth status. This path is the
+        # Task 2 preferred source because it pairs RGB circle detections with
+        # ZED depth_registered median range around the circle center.
+        if self._enable_detection_status:
+            self.create_subscription(
+                String,
+                detection_status_topic,
+                self._handle_detection_status_json,
+                sensor_qos,
+            )
+            self.get_logger().info(
+                f"Subscribed to circle/depth detection status: {detection_status_topic}"
+            )
         
         # Subscribe to camera image for HSV color verification.
         self._latest_image = None  # Raw image bytes
@@ -1617,6 +1633,83 @@ class ROSHTTPBridge(Node):
                 
         except Exception as e:
             self.get_logger().error(f"Detection processing error: {e}")
+
+    def _handle_detection_status_json(self, msg: String) -> None:
+        """Forward target_localizer RGB circle detections with ZED depth range.
+
+        target_localizer subscribes to /zed/*/depth/depth_registered and publishes
+        a compact JSON status with circle center/radius and median depth near each
+        circle. Keeping the depth sampling inside ROS avoids shipping full depth
+        images over HTTP.
+        """
+        if not self._enable_detection_status:
+            return
+
+        try:
+            status = json.loads(msg.data or "{}")
+            circles = status.get("circles")
+            if not isinstance(circles, list):
+                return
+
+            now = time.time()
+            detections: list[dict] = []
+            for index, circle in enumerate(circles[:5]):
+                if not isinstance(circle, dict):
+                    continue
+                try:
+                    cx = float(circle.get("cx"))
+                    cy = float(circle.get("cy"))
+                    radius = float(circle.get("radius"))
+                except (TypeError, ValueError):
+                    continue
+                if radius <= 0:
+                    continue
+
+                distance = circle.get("distance_m")
+                try:
+                    range_m = float(distance) if distance is not None else None
+                    if range_m is not None and not math.isfinite(range_m):
+                        range_m = None
+                except (TypeError, ValueError):
+                    range_m = None
+
+                raw_conf = circle.get("confidence", 0.0)
+                try:
+                    confidence = float(raw_conf)
+                    if confidence <= 1.0:
+                        confidence *= 100.0
+                except (TypeError, ValueError):
+                    confidence = 0.0
+
+                det = {
+                    "timestamp": now,
+                    "target_id": index + 1,
+                    "label": "task2_circle",
+                    "label_id": 2,
+                    "confidence": confidence,
+                    "bbox_x": cx - radius,
+                    "bbox_y": cy - radius,
+                    "bbox_w": radius * 2.0,
+                    "bbox_h": radius * 2.0,
+                    "cx": cx,
+                    "cy": cy,
+                    "radius_px": radius,
+                    "range_m": range_m,
+                    "distance_m": range_m,
+                    "depth_valid_ratio": circle.get("depth_valid_ratio"),
+                    "source": "target_localizer_depth",
+                    "image_only": True,
+                    "has_depth": range_m is not None,
+                }
+                detections.append(det)
+
+            with self._lock:
+                self._latest_detections = detections
+                self._detection_recv_count += 1
+
+            self._send_detections_to_edge_core(detections)
+        except Exception as e:
+            self.get_logger().error(f"Circle/depth status processing error: {e}")
     
     def _read_gpu_temp(self) -> float:
         """Read GPU temperature from sysfs (RM-005). Returns 0 on failure."""
@@ -2137,6 +2230,8 @@ def main():
                         help="Disable servo angle forwarding")
     parser.add_argument("--detection-topic", default="/zed/zed_node/obj_det/objects",
                         help="ZED custom object detection topic (ObjectsStamped)")
+    parser.add_argument("--detection-status-topic", default="/target_localizer/detection_status_json",
+                        help="target_localizer JSON status topic with circle centers and ZED depth")
     parser.add_argument("--disable-detections", action="store_true",
                         help="Disable object detection forwarding")
     parser.add_argument("--disable-imu-attitude", action="store_true",
@@ -2179,6 +2274,7 @@ def main():
         mesh_output_mode=args.mesh_output_mode,
         servo_topic=args.servo_topic,
         detection_topic=args.detection_topic,
+        detection_status_topic=args.detection_status_topic,
         send_rate_hz=args.rate,
         enable_nav_control=not args.disable_nav,
         enable_mesh=not args.disable_mesh,

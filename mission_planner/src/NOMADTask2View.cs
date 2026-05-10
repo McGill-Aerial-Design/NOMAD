@@ -911,15 +911,17 @@ namespace NOMAD.MissionPlanner
                 var history = detectionData["history"]?["detections"] as JArray;
                 var current = detectionData["current"]?["detections"] as JArray;
 
-                if (history != null)
+                var displayDetections = (current != null && current.Count > 0) ? current : history;
+
+                if (displayDetections != null)
                 {
-                    _cachedDetections = history;
-                    _lblDetectionCount.Text = $"Targets: {history.Count}";
+                    _cachedDetections = displayDetections;
+                    _lblDetectionCount.Text = $"Targets: {displayDetections.Count}";
 
                     var prevSel = _lstDetections.SelectedIndex;
                     _lstDetections.Items.Clear();
 
-                    foreach (var det in history)
+                    foreach (var det in displayDetections)
                     {
                         var label = det["label"]?.ToString() ?? "?";
                         var conf = det["confidence"]?.Value<double>() ?? 0;
@@ -927,9 +929,10 @@ namespace NOMAD.MissionPlanner
                         var x = det["x"]?.Value<double>() ?? 0;
                         var y = det["y"]?.Value<double>() ?? 0;
                         var z = det["z"]?.Value<double>() ?? 0;
+                        var source = det["source"]?.ToString() ?? "";
 
                         _lstDetections.Items.Add(
-                            $"{label} conf={conf:F0}% seen={seen} ({x:F1},{y:F1},{z:F1})"
+                            $"{label} conf={conf:F0}% {source} seen={seen} ({x:F1},{y:F1},{z:F1})"
                         );
                     }
 
@@ -1037,8 +1040,10 @@ namespace NOMAD.MissionPlanner
                     var detectJson = JObject.Parse(
                         await detectResp.Content.ReadAsStringAsync()
                     );
+                    var current = detectJson["current"]?["detections"] as JArray;
                     var history = detectJson["history"]?["detections"] as JArray;
-                    if (history == null || history.Count == 0)
+                    var detections = (current != null && current.Count > 0) ? current : history;
+                    if (detections == null || detections.Count == 0)
                     {
                         this.BeginInvoke(
                             (Action)(
@@ -1050,7 +1055,7 @@ namespace NOMAD.MissionPlanner
                         return;
                     }
 
-                    target = history[0];
+                    target = detections[0];
                 }
 
                 // Build spray trigger payload
@@ -1062,6 +1067,8 @@ namespace NOMAD.MissionPlanner
                     ["z"] = target["z"] ?? 0,
                     ["label"] = target["label"] ?? "",
                     ["confidence"] = target["confidence"] ?? 0,
+                    ["image_only"] = target["image_only"]?.Value<bool>() ?? false,
+                    ["range_m"] = target["range_m"] ?? target["distance_m"] ?? null,
                 };
 
                 var content = new StringContent(

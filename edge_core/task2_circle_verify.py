@@ -1,26 +1,26 @@
 """
 task2_circle_verify.py - Task 2 Circle Detection & Change Verification
 
-Color-agnostic circle detection for indoor fire extinguishing targets.
-Detects circles regardless of color (purple, blue, or any other),
-then verifies spray success by comparing before/after circle snapshots.
+Circle detection for indoor fire extinguishing targets.
+Detects pale purple/blue red-cabbage-paper circles on white backing, then
+verifies spray success by comparing before/after circle snapshots.
 
 Competition context (AEAC 2026 Task 2):
 - Targets are circles (5-30cm dia) on white plastic backing
 - Before spray: purple (red cabbage juice dyed paper)
 - After spray: turns blue (pH reaction with baking soda water)
-- Verification: circle change > 20% indicates successful hit
+- Verification: blue/cyan chemical response indicates successful hit
 
 Detection approach:
-- Grayscale Hough Circle Transform (primary) - works on any color circle
-- Contour-based circularity check (fallback) - uses edge detection + shape analysis
-- Neither method depends on HSV color filtering
+- Task 2 HSV/Lab segmentation for non-white purple/blue paper on white backing
+- Grayscale Hough Circle Transform fallback
+- Contour-based circularity fallback
 
 Verification approach:
 - Before spray: detect circles, store properties (position, radius, ROI pixels)
 - After spray: detect circles, match by proximity, compare
-- Change metric: pixel difference ratio within matched circle ROI
-- If > 20% of pixels changed significantly => verification passes
+- Primary metric: blue/cyan response increases within matched circle ROI
+- Supporting metric: pixel difference ratio within matched circle ROI
 
 Target: Python 3.13 | NVIDIA Jetson Orin Nano
 """
@@ -63,21 +63,24 @@ class CircleSnapshot:
 class CircleComparison:
     """Result of comparing before/after circle snapshots."""
     change_ratio: float        # fraction of pixels that changed (0.0 - 1.0)
-    verified: bool             # change_ratio > threshold
+    verified: bool             # chemical blue response detected
     matched_pairs: int         # number of before/after circle pairs matched
     details: str = ""          # human-readable summary
+    blue_after_ratio: float = 0.0
+    blue_increase_ratio: float = 0.0
 
 
 class Task2CircleDetector:
     """
-    Color-agnostic circle detector for Task 2 indoor targets.
+    Circle detector for Task 2 indoor red-cabbage-paper targets.
 
-    Uses two methods:
-    1. Hough Circle Transform on grayscale (primary)
-    2. Contour circularity on Canny edges (fallback/supplement)
+    Uses three methods:
+    1. HSV/Lab color segmentation for pale purple/blue paper on white backing
+    2. Hough Circle Transform on grayscale
+    3. Contour circularity on Canny edges
 
-    Neither method filters by color, so circles are detected regardless
-    of whether they are purple (pre-spray) or blue (post-spray).
+    This is intentionally not YOLO-based; the target class is simple and the
+    exact paper/lighting can be tuned with deterministic thresholds.
     """
 
     def __init__(
@@ -106,10 +109,10 @@ class Task2CircleDetector:
 
     def detect(self, bgr_image: np.ndarray) -> List[DetectedCircle]:
         """
-        Detect circles in a BGR image (color-agnostic).
+        Detect circles in a BGR image.
 
-        Runs Hough Circle Transform first, then supplements with
-        contour-based detection. Deduplicates overlapping results.
+        Runs Task 2 color/shape segmentation first, then supplements with Hough
+        and contour detection. Deduplicates overlapping results.
 
         Args:
             bgr_image: OpenCV BGR image (e.g., from ZED camera)
@@ -125,14 +128,21 @@ class Task2CircleDetector:
 
         detections: List[DetectedCircle] = []
 
-        # Method 1: Hough Circle Transform
-        hough_circles = self._detect_hough(blurred)
-        for c in hough_circles:
-            det = self._make_detection(c[0], c[1], c[2], bgr_image, "hough")
+        # Method 1: Task 2-specific color/shape segmentation
+        color_circles = self._detect_color_shape(bgr_image)
+        for c in color_circles:
+            det = self._make_detection(c[0], c[1], c[2], bgr_image, "color_shape")
             if det is not None:
                 detections.append(det)
 
-        # Method 2: Contour-based detection (catches circles Hough misses)
+        # Method 2: Hough Circle Transform
+        hough_circles = self._detect_hough(blurred)
+        for c in hough_circles:
+            det = self._make_detection(c[0], c[1], c[2], bgr_image, "hough")
+            if det is not None and not self._overlaps_existing(det, detections):
+                detections.append(det)
+
+        # Method 3: Contour-based detection (catches circles Hough misses)
         contour_circles = self._detect_contours(blurred)
         for c in contour_circles:
             det = self._make_detection(c[0], c[1], c[2], bgr_image, "contour")
@@ -140,6 +150,65 @@ class Task2CircleDetector:
                 detections.append(det)
 
         return detections
+
+    def _detect_color_shape(self, bgr_image: np.ndarray) -> List[Tuple[int, int, int]]:
+        """Detect pale purple/blue circular paper against white backing."""
+        hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
+        lab = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2LAB)
+        h_ch, s_ch, v_ch = cv2.split(hsv)
+        l_ch, a_ch, b_ch = cv2.split(lab)
+
+        # Purple dry target: H roughly 125-175 in OpenCV HSV, often low sat.
+        # Blue/cyan wet target: H roughly 85-130. The Lab chroma gate helps
+        # keep white plastic backing and glare out even when saturation is low.
+        purple_blue_hue = (
+            ((h_ch >= 85) & (h_ch <= 130))
+            | ((h_ch >= 125) & (h_ch <= 175))
+        )
+        chroma = (
+            (s_ch >= 12)
+            | (np.abs(a_ch.astype(np.int16) - 128) >= 4)
+            | (np.abs(b_ch.astype(np.int16) - 128) >= 4)
+        )
+        not_white = ~((s_ch <= 18) & (v_ch >= 185) & (l_ch >= 178))
+        mask = (purple_blue_hue & chroma & not_white & (v_ch >= 35)).astype(np.uint8) * 255
+
+        kernel_size = max(3, self.blur_kernel | 1)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        result: List[Tuple[int, int, int]] = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < math.pi * self.min_radius_px ** 2:
+                continue
+            if area > math.pi * self.max_radius_px ** 2:
+                continue
+
+            perimeter = cv2.arcLength(contour, True)
+            if perimeter < 1.0:
+                continue
+            circularity = (4.0 * math.pi * area) / (perimeter * perimeter)
+            if circularity < max(0.45, self.min_circularity - 0.15):
+                continue
+
+            hull = cv2.convexHull(contour)
+            hull_area = cv2.contourArea(hull)
+            if hull_area < 1.0:
+                continue
+            solidity = area / hull_area
+            if solidity < max(0.55, self.min_solidity - 0.15):
+                continue
+
+            (cx, cy), radius = cv2.minEnclosingCircle(contour)
+            cx, cy, radius = int(cx), int(cy), int(radius)
+            if radius < self.min_radius_px or radius > self.max_radius_px:
+                continue
+
+            result.append((cx, cy, radius))
+        return result
 
     def _detect_hough(self, gray_blurred: np.ndarray) -> List[Tuple[int, int, int]]:
         """Run Hough Circle Transform on preprocessed grayscale image."""
@@ -230,9 +299,11 @@ class Task2CircleDetector:
         mean_color = cv2.mean(bgr_image, mask=mask)[:3]
         mean_color = np.array(mean_color)
 
-        # Confidence: for Hough use the accumulator value proxy,
-        # for contour use circularity proxy
-        confidence = 0.8 if method == "hough" else 0.6
+        confidence = {
+            "color_shape": 0.90,
+            "hough": 0.75,
+            "contour": 0.60,
+        }.get(method, 0.50)
 
         return DetectedCircle(
             cx=cx,
@@ -264,14 +335,13 @@ class CircleChangeVerifier:
 
     Algorithm:
     1. Match circles between before/after by proximity (same position)
-    2. For each matched pair, compute pixel difference ratio within the circle ROI
-    3. If any matched circle shows > threshold change, verification passes
+    2. Measure blue/cyan chemical response inside the target circle
+    3. Measure generic pixel change as supporting evidence
+    4. Pass only when the blue response is present/increased
 
-    The change ratio is the fraction of pixels in the circle that changed
-    by more than a per-pixel threshold (default: 30/255 intensity difference).
-
-    A 20% change ratio threshold means: if more than 20% of the pixels
-    inside the target circle look different after spraying, the spray hit.
+    Rain or plain water can make the paper darker/glossier, so generic pixel
+    change alone is not enough. The scoring cue is the red-cabbage/baking-soda
+    shift from purple toward blue.
     """
 
     def __init__(
@@ -279,6 +349,8 @@ class CircleChangeVerifier:
         change_threshold: float = 0.20,
         pixel_diff_threshold: int = 30,
         match_distance_px: int = 50,
+        blue_after_threshold: float = 0.08,
+        blue_increase_threshold: float = 0.05,
     ):
         """
         Args:
@@ -288,10 +360,16 @@ class CircleChangeVerifier:
                 (0-255) to count as "changed" (default 30).
             match_distance_px: Max center distance to match before/after
                 circles as the same physical target (default 50px).
+            blue_after_threshold: Minimum fraction of target pixels that should
+                look blue/cyan after spray.
+            blue_increase_threshold: Minimum blue/cyan fraction increase from
+                before to after.
         """
         self.change_threshold = change_threshold
         self.pixel_diff_threshold = pixel_diff_threshold
         self.match_distance_px = match_distance_px
+        self.blue_after_threshold = blue_after_threshold
+        self.blue_increase_threshold = blue_increase_threshold
         self._detector = Task2CircleDetector()
 
     def capture_snapshot(
@@ -347,9 +425,9 @@ class CircleChangeVerifier:
             if before.circles and not after.circles:
                 return CircleComparison(
                     change_ratio=1.0,
-                    verified=True,
+                    verified=False,
                     matched_pairs=0,
-                    details="Circle disappeared after spray (likely hit)",
+                    details="Circle disappeared after spray; chemical blue response unknown",
                 )
             return CircleComparison(
                 change_ratio=0.0,
@@ -380,22 +458,39 @@ class CircleChangeVerifier:
         # Compute change for each matched pair
         best_ratio = 0.0
         best_details = ""
+        best_blue_after = 0.0
+        best_blue_increase = 0.0
 
         for b_circle, a_circle in matched:
-            ratio, detail = self._compute_circle_change(
+            ratio, blue_after, blue_increase, detail = self._compute_circle_change(
                 b_circle, a_circle, before.image, after.image
             )
-            if ratio > best_ratio:
+            score = max(ratio, blue_after + blue_increase)
+            best_score = max(best_ratio, best_blue_after + best_blue_increase)
+            if score > best_score:
                 best_ratio = ratio
+                best_blue_after = blue_after
+                best_blue_increase = blue_increase
                 best_details = detail
 
-        verified = best_ratio >= self.change_threshold
+        blue_verified = (
+            best_blue_after >= self.blue_after_threshold
+            and best_blue_increase >= self.blue_increase_threshold
+        )
+        blue_with_change_verified = (
+            best_ratio >= self.change_threshold
+            and best_blue_after >= self.blue_after_threshold
+            and best_blue_increase >= self.blue_increase_threshold * 0.5
+        )
+        verified = blue_verified or blue_with_change_verified
 
         return CircleComparison(
             change_ratio=best_ratio,
             verified=verified,
             matched_pairs=len(matched),
             details=best_details,
+            blue_after_ratio=best_blue_after,
+            blue_increase_ratio=best_blue_increase,
         )
 
     def _match_circles(
@@ -431,7 +526,7 @@ class CircleChangeVerifier:
         after_circle: DetectedCircle,
         before_img: np.ndarray,
         after_img: np.ndarray,
-    ) -> Tuple[float, str]:
+    ) -> Tuple[float, float, float, str]:
         """
         Compute the fraction of pixels that changed within a circle ROI.
 
@@ -446,6 +541,16 @@ class CircleChangeVerifier:
             # Recreate mask if not stored
             mask = np.zeros((h, w), dtype=np.uint8)
             cv2.circle(mask, (before_circle.cx, before_circle.cy), before_circle.radius, 255, -1)
+        else:
+            mask = mask.copy()
+
+        # Avoid the circle boundary where white backing, tape, and glare can
+        # dominate the color measurement.
+        erode_px = max(1, int(before_circle.radius * 0.08))
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (erode_px * 2 + 1, erode_px * 2 + 1)
+        )
+        mask = cv2.erode(mask, kernel, iterations=1)
 
         # Ensure images are same size
         if after_img.shape[:2] != before_img.shape[:2]:
@@ -462,10 +567,13 @@ class CircleChangeVerifier:
         total_pixels = int(np.count_nonzero(mask_bool))
 
         if total_pixels == 0:
-            return 0.0, "Empty circle mask"
+            return 0.0, 0.0, 0.0, "Empty circle mask"
 
         changed_pixels = int(np.count_nonzero((diff > self.pixel_diff_threshold) & mask_bool))
         change_ratio = changed_pixels / total_pixels
+        before_blue_ratio = self._blue_response_ratio(before_img, mask_bool)
+        after_blue_ratio = self._blue_response_ratio(after_img, mask_bool)
+        blue_increase = max(0.0, after_blue_ratio - before_blue_ratio)
 
         # Also compute color shift for details
         b_mean = before_circle.mean_color
@@ -479,7 +587,29 @@ class CircleChangeVerifier:
         detail = (
             f"change={change_ratio:.1%} pixels changed "
             f"({changed_pixels}/{total_pixels}), {color_detail}, "
-            f"threshold={self.change_threshold:.0%}"
+            f"blue_after={after_blue_ratio:.1%}, "
+            f"blue_increase={blue_increase:.1%}, "
+            f"thresholds=change:{self.change_threshold:.0%} "
+            f"blue:{self.blue_after_threshold:.0%}/+{self.blue_increase_threshold:.0%}"
         )
 
-        return change_ratio, detail
+        return change_ratio, after_blue_ratio, blue_increase, detail
+
+    @staticmethod
+    def _blue_response_ratio(bgr_img: np.ndarray, mask_bool: np.ndarray) -> float:
+        """Fraction of target pixels showing the blue/cyan baking-soda response."""
+        hsv = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2HSV)
+        hue = hsv[:, :, 0]
+        sat = hsv[:, :, 1]
+        val = hsv[:, :, 2]
+        blue_like = (
+            (hue >= 85)
+            & (hue <= 130)
+            & (sat >= 18)
+            & (val >= 35)
+            & mask_bool
+        )
+        total = int(np.count_nonzero(mask_bool))
+        if total <= 0:
+            return 0.0
+        return float(np.count_nonzero(blue_like)) / total

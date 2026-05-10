@@ -94,6 +94,13 @@ class SystemState(BaseModel):
     target_visible: bool = False  # Is a target currently detected?
     current_detection: Optional[DetectionInfo] = None  # Latest detection
 
+    # VIO pose in local NED/body-navigation frame for Task 2 approach logic
+    vio_x: Optional[float] = None
+    vio_y: Optional[float] = None
+    vio_z: Optional[float] = None
+    vio_yaw: Optional[float] = None
+    vio_confidence: Optional[float] = None
+
     # Time Synchronization
     time_synced: bool = False  # Is system time synchronized (NTP or GPS)?
 
@@ -121,4 +128,3 @@ class SystemState(BaseModel):
     def has_valid_gps(self) -> bool:
         """Check if GPS coordinates are available."""
         return self.gps_fix and self.gps_lat is not None and self.gps_lon is not None
-

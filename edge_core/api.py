@@ -534,6 +534,14 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 "source": source,
             }
 
+            state_manager.update_state(
+                vio_x=vio_request.x,
+                vio_y=vio_request.y,
+                vio_z=vio_request.z,
+                vio_yaw=vio_request.yaw,
+                vio_confidence=vio_request.confidence,
+            )
+
             # Store map-frame pose for SLAM 3D WebSocket (same frame as nvblox mesh vertices).
             # REP-103 map frame (X-forward, Y-left, Z-up); stable under ZED loop-closure corrections.
             app.state.slam_vio_ros_frame = {
@@ -4420,6 +4428,8 @@ fi
             z=body.get("z", 0.0),
             label=body.get("label", ""),
             confidence=body.get("confidence", 0.0),
+            image_only=bool(body.get("image_only", False)),
+            range_m=body.get("range_m", body.get("distance_m")),
         )
 
         result = spray_ctrl.trigger(target)

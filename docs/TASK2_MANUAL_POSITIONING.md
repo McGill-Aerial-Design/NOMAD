@@ -1,7 +1,7 @@
 # Task 2: Manual Trigger + ZED-Guided Autonomous Spray
 
 **Updated**: May 9, 2026
-**Status**: ZED wrapper depth + fixed firing geometry; nvblox not required for Task 2
+**Status**: Classical circle detection + fixed firing geometry; nvblox/YOLO not required for Task 2
 
 ---
 
@@ -10,7 +10,7 @@
 **Task 2** is an indoor fire extinguishing mission (AEAC 2026 CONOPS §5.2.4):
 
 - **Manual operator setup** — Operator flies until the ZED2i sees a target, typically up to about 5m camera range
-- **Autonomous approach/alignment** — After the Spray button, the UAS uses ZED wrapper detections/depth and GUIDED velocity/yaw-rate commands to reproduce the calibrated firing view
+- **Autonomous approach/alignment** — After the Spray button, the UAS uses the local circle detector, optional ZED depth, and GUIDED velocity/yaw-rate commands to reproduce the calibrated firing view
 - **Fixed firing geometry** — The target is driven to a tunable water-landing pixel and camera range before spraying
 - **Autonomous spray sequence** — Pre-photo, pump activation, post-photo, wetness/change verification, and upload run without further operator input
 - **Field tuning** — Mission Planner exposes the standoff, aim pixel, servo angle, gains, speed limits, timeout, and trigger range
@@ -48,10 +48,10 @@ POST /api/spray/trigger
 Edge Core - SprayController
     |
     +-- APPROACH: Direct GUIDED velocity toward target stand-off
-    |   |   Uses target position and ZED wrapper depth when available
+    |   |   Uses target position/depth when available
     |   |   Stops near approach point, then refines with visual servoing
     |   v
-    +-- AIM: ZED visual servoing
+    +-- AIM: Image visual servoing
     |   - Align target to calibrated water-landing pixel
     |   - Hold calibrated camera range before firing
     |   - Use yaw or lateral velocity for horizontal correction
@@ -65,7 +65,7 @@ Sequence complete → ready for next target
 ### Data Flow: ZED-Guided Approach
 
 ```
-  ZED wrapper detections ──> /api/detections/update ──> app.state.detected_objects
+  RGB snapshot ──> Task2CircleDetector ──> app.state.detected_objects
                                                      │
                                                      v
   Operator trigger ──> SprayController ──> NavController.send_velocity()
@@ -177,7 +177,7 @@ POST /api/spray/calibration
 
 1. Check drone battery, water level (baking soda solution loaded)
 2. Arm drone in GUIDED mode
-3. Verify VIO healthy and ZED wrapper detections/depth are updating
+3. Verify VIO healthy and Task 2 circle detections are updating
 4. Verify Mission Planner Spray calibration was pushed to the Jetson
 5. Hover at safe altitude
 
@@ -202,7 +202,7 @@ POST /api/spray/calibration
 To earn the 20-point autonomous extinguishing bonus, ALL of the following must be autonomous:
 
 1. ✅ **Approach from >2m** — GUIDED velocity approach after operator trigger
-2. ✅ **Aiming** — ZED visual servoing to calibrated water-landing pixel/range
+2. ✅ **Aiming** — image visual servoing to calibrated water-landing pixel/range
 3. ✅ **Extinguishing** — Water pump activation
 4. ✅ **Image capture + upload** — Circle change verify + Google Drive upload
 
@@ -219,7 +219,7 @@ then run autonomously.
 - **Reliability**: One calibrated standoff and aim pixel is easier to validate than a distance/angle table
 - **Compliance scoring**: 20 points for autonomous extinguishing requires autonomous approach from >2m
 - **Field tuning**: Mission Planner can adjust range, aim pixel, fire angle, gains, and limits during test flights
-- **No nvblox dependency**: Task 2 uses ZED wrapper detection/depth for target-relative alignment
+- **No nvblox/YOLO dependency**: Task 2 uses deterministic circle detection for target-relative alignment
 
 ### Approach Goal Computation
 
@@ -282,16 +282,47 @@ line before clicking Spray.
 
 ## Target Detection & Verification
 
-### Circle Detection (ZED Custom OD)
+### Circle Detection
 
-- ZED2i camera runs custom circle detection model (ONNX)
-- Detects colored circles (5-30cm) per CONOPS specifications
-- Reports bounding box, 3D position, label, confidence
-- Detection data flows via ros_http_bridge → `/api/detections/update`
+- Edge Core runs a deterministic Task 2 circle detector on RGB snapshots
+- Primary pass segments pale purple/blue red-cabbage paper from white backing
+- Hough/contour shape checks supplement the color pass
+- Current detections are exposed through `/api/detections` for Mission Planner selection
 
-### Circle Change Verification (color-agnostic)
+### Wall Distance / Standoff
 
-After spray, captures frame and checks for color shift:
+The distance source is the ZED wrapper registered depth image:
+
+```text
+/zed/zed_node/depth/depth_registered
+or
+/zed2i/zed_node/depth/depth_registered
+```
+
+`target_localizer_node.py` subscribes to this depth image and the rectified RGB
+image. For each detected circle it samples valid depth pixels inside the circle
+interior and reports the median as `distance_m`. The ROS HTTP bridge subscribes
+to `/target_localizer/detection_status_json`, converts those circles into
+`/api/detections` entries, and forwards the value as `range_m`.
+
+During spray aiming, `SprayController` uses:
+
+```python
+range_error = range_m - target_camera_range_m
+vx = range_error * forward_gain
+```
+
+So the aircraft moves forward only when the ZED depth says the target wall is
+farther than the calibrated firing distance. If ZED depth is missing, the
+controller falls back to pixel-only visual alignment and should be treated as a
+manual-standoff mode.
+
+### Circle Change Verification
+
+After spray, captures a frame and checks for the baking-soda chemical response
+inside the detected circle. Generic image change is only supporting evidence,
+because rain or plain water can darken the paper without producing a valid
+blue/cyan reaction.
 
 ```python
 # Purple (dry) → Blue (wet) in OpenCV HSV
@@ -300,14 +331,16 @@ After spray, captures frame and checks for color shift:
 
 hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 blue_mask = cv2.inRange(hsv, [100, 80, 50], [130, 255, 255])
-blue_ratio = count(blue_mask) / total_pixels
+blue_ratio = count(blue_mask) / target_circle_pixels
+blue_increase = blue_ratio_after - blue_ratio_before
 
-passed = blue_ratio > 0.15  # 15% blue = successful spray
+passed = blue_ratio_after >= 0.08 and blue_increase >= 0.05
 ```
 
 Per CONOPS FAQ Q31: For autonomy points, the **UAS** must declare
-the target extinguished — not the human operator. The circle change check
-provides this autonomous declaration.
+the target extinguished — not the human operator. The circle verification
+provides this autonomous declaration while reducing false positives from plain
+water or rain.
 
 ---
 
@@ -477,7 +510,7 @@ The ZED-guided approach is specifically designed to earn the
 
 - [ ] Drone boots in GUIDED mode, VIO healthy
 - [ ] WASD positioning works over LTE/Tailscale
-- [ ] ZED wrapper publishes current target detections with bbox and depth
+- [ ] `/api/detections` shows `task2_circle` from the local RGB detector
 - [ ] Mission Planner Spray calibration pushes to `/api/spray/calibration`
 - [ ] Spray trigger validates configured start range
 - [ ] Direct velocity approach starts from >2m and converges toward firing range
