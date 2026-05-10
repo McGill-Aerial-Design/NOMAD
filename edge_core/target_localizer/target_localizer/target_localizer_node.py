@@ -61,8 +61,10 @@ import numpy as np
 import cv2
 import math
 import os
+import threading
 import time
 import traceback
+import urllib.request
 from datetime import datetime
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -252,6 +254,11 @@ class TargetLocalizerNode(Node):
         self.ground_alt_offset: float = 0.0
 
         self._latest_detections_json: str = "{}"
+
+        # Push detection status to edge_core API (avoids docker exec polling)
+        _edge_core_host = os.environ.get("NOMAD_EDGE_CORE_HOST", "localhost")
+        self._edge_core_det_url = f"http://{_edge_core_host}:8000/api/task/1/target/detection_status/update"
+        self._edge_core_internal_token = (os.environ.get("NOMAD_INTERNAL_TOKEN") or "").strip() or None
 
         # Landmark detection timer
         self.last_landmark_time = 0.0
@@ -1508,6 +1515,25 @@ class TargetLocalizerNode(Node):
             self._detection_status_json_pub.publish(
                 String(data=self._latest_detections_json)
             )
+
+            # Push to edge_core in a daemon thread so the ROS timer callback returns immediately.
+            _payload = self._latest_detections_json.encode()
+            _url = self._edge_core_det_url
+            _token = self._edge_core_internal_token
+
+            def _push():
+                try:
+                    hdrs = {"Content-Type": "application/json"}
+                    if _token:
+                        hdrs["X-NOMAD-Internal-Token"] = _token
+                    urllib.request.urlopen(
+                        urllib.request.Request(_url, data=_payload, headers=hdrs, method="POST"),
+                        timeout=0.4,
+                    )
+                except Exception:
+                    pass
+
+            threading.Thread(target=_push, daemon=True).start()
         except Exception:
             pass
 

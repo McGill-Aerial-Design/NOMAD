@@ -317,6 +317,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
         ("POST", "/api/detections/update"),
         ("POST", "/api/nav/velocity"),
         ("POST", "/api/servo/camera/tilt"),
+        ("POST", "/api/task/1/target/detection_status/update"),
     }
     _INTERNAL_BRIDGE_MIN_TOKEN_LEN = 32
 
@@ -434,6 +435,10 @@ def create_app(state_manager: StateManager) -> FastAPI:
     app.state.detection_last_update: float = 0.0
     app.state.detection_last_source_timestamp = None
     app.state.detection_enabled: bool = True  # Desired ZED OD mode for circle detection
+
+    # Cached Task 1 detection status (populated by background poller, read by API)
+    app.state.task1_det_cache: dict = {"circle_count": 0, "success": True}
+    app.state.task1_det_cache_ts: float = 0.0
     app.state.foxglove_enabled: bool = False  # Foxglove bridge running state
     app.state.foxglove_port: int = 8765
     app.state.isaac_runtime_cache = {
@@ -844,6 +849,11 @@ def create_app(state_manager: StateManager) -> FastAPI:
         """Launch background mavlink-routerd watchdog."""
         asyncio.create_task(_mavlink_watchdog_loop())
 
+    @app.on_event("startup")
+    async def _startup_detection_status_poller() -> None:
+        """Launch background Task 1 detection status poller."""
+        asyncio.create_task(_detection_status_poll_loop())
+
     @app.on_event("shutdown")
     async def _shutdown_high_rate_zmq_listener() -> None:
         """Stop high-rate ZMQ listener on API shutdown."""
@@ -937,6 +947,29 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 break
             except Exception as e:
                 logger.error("mavlink watchdog error: %s", e)
+
+    async def _detection_status_poll_loop() -> None:
+        """Watchdog: logs a warning if target_localizer stops pushing detection status.
+
+        target_localizer_node.py pushes updates via POST to
+        /api/task/1/target/detection_status/update every ~0.5s.
+        This loop only checks that the cache is still fresh — no docker exec.
+        """
+        _STALE_WARN_S = 10.0  # warn if no push for this many seconds
+        await asyncio.sleep(15)  # let the node start before checking
+        while True:
+            await asyncio.sleep(5.0)
+            try:
+                age = time.time() - getattr(app.state, "task1_det_cache_ts", 0.0)
+                if age > _STALE_WARN_S:
+                    logger.warning(
+                        "Task 1 detection status cache is stale (%.0fs) — "
+                        "target_localizer may not be running", age
+                    )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.debug("detection status watchdog error: %s", e)
 
     def _docker_exec_pgrep(
         container: str, pattern: str, timeout_s: int = 5
@@ -2946,71 +2979,28 @@ fi
         )
         return {"success": True, "output": output}
 
+    @app.post("/api/task/1/target/detection_status/update", tags=["Task 1"])
+    async def task1_detection_status_push(request: Request):
+        """Internal: target_localizer_node pushes detection status here every ~0.5s."""
+        try:
+            data = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON body")
+        app.state.task1_det_cache = {"success": True, **data}
+        app.state.task1_det_cache_ts = time.time()
+        return {"ok": True}
+
     @app.get("/api/task/1/target/detections", tags=["Task 1"])
     async def task1_detection_status():
         """
         Get the current realtime HSV circle detection status.
 
-        Returns the count and details of circles currently visible in
-        the ZED camera frame, along with sensor status. The GCS can
-        poll this to show a live detection indicator before the pilot
-        triggers a capture.
+        Updated every ~0.5s by target_localizer_node via HTTP push.
+        The cache holds circle count, per-circle distances, and crosshair depth.
         """
-        # Prefer the rich JSON status (includes per-circle distance and a
-        # center-pixel fallback distance). Fall back to the Float64 count if
-        # the JSON topic isn't available.
-        try:
-            json_raw = subprocess.run(
-                [
-                    "docker", "exec", "nomad_isaac_ros", "bash", "-lc",
-                    (
-                        "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
-                        "source /workspaces/isaac_ros-dev/install/setup.bash >/dev/null 2>&1; "
-                        "ros2 topic echo /target_localizer/detection_status_json "
-                        "--once --field data 2>/dev/null"
-                    ),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if json_raw.returncode == 0 and json_raw.stdout.strip():
-                # `ros2 topic echo --field data` prints the raw string contents
-                # (often wrapped in single quotes by YAML escaping). Strip them.
-                payload = json_raw.stdout.strip()
-                if payload.startswith("'") and payload.endswith("'"):
-                    payload = payload[1:-1].replace("''", "'")
-                try:
-                    status = json.loads(payload)
-                    return {"success": True, **status}
-                except json.JSONDecodeError:
-                    pass
-        except Exception:
-            pass
-
-        try:
-            status_raw = subprocess.run(
-                [
-                    "docker", "exec", "nomad_isaac_ros", "bash", "-lc",
-                    (
-                        "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
-                        "source /workspaces/isaac_ros-dev/install/setup.bash >/dev/null 2>&1; "
-                        "ros2 topic echo /target_localizer/detection_status "
-                        "--once --no-arr 2>/dev/null | head -1"
-                    ),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            count_str = (status_raw.stdout or "").strip().split(":")[-1].strip() if status_raw.returncode == 0 else "0"
-            try:
-                circle_count = int(float(count_str))
-            except (ValueError, TypeError):
-                circle_count = 0
-            return {"success": True, "circle_count": circle_count}
-        except Exception as e:
-            return {"success": True, "circle_count": 0, "error": str(e)}
+        cache = getattr(app.state, "task1_det_cache", None) or {"circle_count": 0}
+        cache_age = time.time() - getattr(app.state, "task1_det_cache_ts", 0.0)
+        return {**cache, "cache_age_s": round(cache_age, 1)}
 
     @app.get("/api/task/1/target/list", tags=["Task 1"])
     async def task1_list_targets():
