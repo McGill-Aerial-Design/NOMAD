@@ -8,7 +8,9 @@
 
 using System;
 using System.Drawing;
+using System.Threading;
 using System.Threading.Tasks;
+using Timer = System.Windows.Forms.Timer;
 using System.Windows.Forms;
 using MissionPlanner;
 using MissionPlanner.Utilities;
@@ -44,7 +46,7 @@ namespace NOMAD.MissionPlanner
         private const int DROP_CLICKS_REQUIRED = 3;      // clicks needed to drop
         private const int DROP_RESET_MS        = 3000;   // ms before click count resets
         private const int REEL_SAFETY_MS       = 10_000; // max continuous reel time
-        private const int TILT_DEBOUNCE_MS     = 150;    // slider debounce before servo send
+        private const int TILT_SETTLE_MS       = 100;    // final send after slider stops moving
 
         private readonly NOMADConfig _config;
 
@@ -66,9 +68,21 @@ namespace NOMAD.MissionPlanner
 
         private Label _lblStatus;
 
+        // Serializes concurrent MAVLink servo commands to prevent giveComport contention.
+        private static readonly SemaphoreSlim s_mavlinkLock = new SemaphoreSlim(1, 1);
+
         // Shared tilt state so multiple panel instances stay in sync.
-        private static int s_lastTiltPulseUs = 1000;
+        private static int s_lastTiltPulseUs = 1250;
         private static event Action<int, PayloadControlPanel> CameraTiltChanged;
+
+        /// <summary>
+        /// Raise this to lock or unlock the camera tilt controls across all PayloadControlPanel instances.
+        /// Task 2 autonomy fires true on entry, false on exit.
+        /// </summary>
+        public static event Action<bool> AutonomousModeChanged;
+        public static void RaiseAutonomousModeChanged(bool isAutonomous) =>
+            AutonomousModeChanged?.Invoke(isAutonomous);
+
 
         // ============================================================
         // Construction
@@ -78,13 +92,16 @@ namespace NOMAD.MissionPlanner
         {
             _config = config;
             InitializeUI();
-            CameraTiltChanged += OnCameraTiltChangedExternally;
+            CameraTiltChanged    += OnCameraTiltChangedExternally;
+            AutonomousModeChanged += OnAutonomousModeChanged;
             this.Disposed += (s, e) =>
             {
-                CameraTiltChanged -= OnCameraTiltChangedExternally;
+                CameraTiltChanged    -= OnCameraTiltChangedExternally;
+                AutonomousModeChanged -= OnAutonomousModeChanged;
                 CleanupTimers();
             };
             ApplyTiltPulseQuietly(s_lastTiltPulseUs);
+            SyncDropStateFromMAVLink();
         }
 
         // ============================================================
@@ -231,19 +248,86 @@ namespace NOMAD.MissionPlanner
                 AutoSize  = true,
             };
             Controls.Add(_lblTiltValue);
+            x += 60;
+
+            // Down / Center / Up preset buttons
+            int tiltCenter = _config?.CameraTiltPwmNeutral ?? 1250;
+            foreach (var (label, value) in new (string, int)[] { ("▼", tiltMin), ("●", tiltCenter), ("▲", tiltMax) })
+            {
+                int v = value;
+                var btn = MakeButton(label, Color.FromArgb(60, 60, 70), 26, DROP_H);
+                btn.Location = new Point(x, y);
+                btn.Font = new Font("Segoe UI", 8);
+                btn.Click += (s, e) => ApplyTiltPulse(v);
+                Controls.Add(btn);
+                x += 30;
+            }
 
             // ---- Status label — below tilt row, full width ----
-            // Using a fixed y offset (not derived from DROP_H) to guarantee
-            // it never overlaps with the TrackBar regardless of DPI/theme.
+            y += DROP_H + ROW_GAP;
             _lblStatus = new Label
             {
                 Text      = "",
                 Font      = new Font("Segoe UI", 8),
                 ForeColor = TEXT_SECONDARY,
-                Location  = new Point(10, y + 32),
+                Location  = new Point(10, y),
                 AutoSize  = true,
             };
             Controls.Add(_lblStatus);
+
+            // Lock in the minimum height so the parent TableLayoutPanel row never clips content.
+            this.MinimumSize = new Size(300, y + 20);
+        }
+
+        // ============================================================
+        // Drop state sync from ArduPilot servo outputs
+        // ============================================================
+
+        /// <summary>
+        /// Subscribes to SERVO_OUTPUT_RAW once, reads the current PWM for each drop channel,
+        /// then unsubscribes. Restores button state so retract is available without re-dropping.
+        /// </summary>
+        private void SyncDropStateFromMAVLink()
+        {
+            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return;
+
+            MainV2.comPort.SubscribeToPacketType(
+                MAVLink.MAVLINK_MSG_ID.SERVO_OUTPUT_RAW,
+                msg =>
+                {
+                    try
+                    {
+                        var raw  = (MAVLink.mavlink_servo_output_raw_t)msg.data;
+                        var type = typeof(MAVLink.mavlink_servo_output_raw_t);
+
+                        int[] channels = { _config?.Servo1Channel ?? 0, _config?.Servo2Channel ?? 0, _config?.Servo3Channel ?? 0 };
+                        int[] pwmMaxes = { _config?.Servo1PwmMax  ?? 2000, _config?.Servo2PwmMax ?? 2000, _config?.Servo3PwmMax ?? 2000 };
+
+                        for (int i = 0; i < 3; i++)
+                        {
+                            int ch = channels[i];
+                            if (ch <= 0 || ch > 16) continue;
+                            var field = type.GetField($"servo{ch}_raw");
+                            if (field == null) continue;
+                            int pwm     = (ushort)field.GetValue(raw);
+                            bool dropped = Math.Abs(pwm - pwmMaxes[i]) < 50;
+                            int idx = i;
+                            BeginInvoke(new Action(() => SetDropButtonState(idx, dropped)));
+                        }
+                    }
+                    catch { }
+                    // Return false to auto-unsubscribe after the first message.
+                    return false;
+                }, 0, 0);
+        }
+
+        private void SetDropButtonState(int idx, bool dropped)
+        {
+            if (IsDisposed || _dropButtons[idx] == null) return;
+            _dropDropped[idx] = dropped;
+            int payload = idx + 1;
+            _dropButtons[idx].Text      = dropped ? $"Retract P{payload}" : $"Drop P{payload}";
+            _dropButtons[idx].BackColor = dropped ? DROP_COLOR_DROPPED : DROP_COLOR_IDLE;
         }
 
         // ============================================================
@@ -258,30 +342,35 @@ namespace NOMAD.MissionPlanner
         /// Note: this does NOT wait for the ACK — failure to deliver is silent
         /// from the caller's perspective (status is set asynchronously).
         /// </summary>
-        private bool TrySendServoMAVLink(int channel, int pwmUs)
+        // tryOnly=true: skip if a command is already in-flight (used for streaming tilt during drag).
+        // tryOnly=false: wait for the lock (used for drop/retract/settle sends that must not be dropped).
+        private bool TrySendServoMAVLink(int channel, int pwmUs, bool tryOnly = false)
         {
             if (channel <= 0) return false;
             if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen)
                 return false;
 
-            // Capture the current MAV identity on the UI thread, then fire
-            // the doCommand call from a background thread to avoid blocking.
-            byte sysid = MainV2.comPort.MAV.sysid;
+            byte sysid  = MainV2.comPort.MAV.sysid;
             byte compid = MainV2.comPort.MAV.compid;
 
-            Task.Run(() =>
+            Task.Run(async () =>
             {
+                bool acquired = tryOnly
+                    ? await s_mavlinkLock.WaitAsync(0).ConfigureAwait(false)
+                    : await s_mavlinkLock.WaitAsync(5000).ConfigureAwait(false);
+                if (!acquired) return;
                 try
                 {
-                    MainV2.comPort.doCommand(
+                    await MainV2.comPort.doCommandAsync(
                         sysid, compid,
                         MAVLink.MAV_CMD.DO_SET_SERVO,
-                        channel, pwmUs, 0, 0, 0, 0, 0);
+                        channel, pwmUs, 0, 0, 0, 0, 0,
+                        requireack: false, uicallback: null).ConfigureAwait(false);
                 }
-                catch
+                catch { }
+                finally
                 {
-                    // Swallow background MAVLink errors — the link health
-                    // panel and ACK timeouts surface real failures.
+                    s_mavlinkLock.Release();
                 }
             });
 
@@ -511,16 +600,14 @@ namespace NOMAD.MissionPlanner
 
         private async void ShootWater()
         {
-            int channel    = _config?.WaterPumpChannel    ?? 0;
-            int pwmOn      = _config?.WaterPumpPwmOn      ?? 2000;
-            int pwmOff     = _config?.WaterPumpPwmOff     ?? 1000;
-            int durationMs = _config?.WaterPumpDurationMs ?? 500;
+            int relay      = _config?.WaterPumpRelayNumber ?? 0;
+            int durationMs = _config?.WaterPumpDurationMs  ?? 500;
 
-            if (channel > 0 && TrySendServoMAVLink(channel, pwmOn))
+            if (TrySendRelayMAVLink(relay, true))
             {
                 SetStatus($"Water pump firing  ({durationMs}ms)...", SUCCESS_COLOR);
                 await Task.Delay(durationMs);
-                TrySendServoMAVLink(channel, pwmOff);
+                TrySendRelayMAVLink(relay, false);
                 SetStatus("Water pump done", SUCCESS_COLOR);
                 return;
             }
@@ -541,8 +628,37 @@ namespace NOMAD.MissionPlanner
             }
         }
 
+        private bool TrySendRelayMAVLink(int relayNumber, bool on)
+        {
+            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen)
+                return false;
+
+            byte sysid  = MainV2.comPort.MAV.sysid;
+            byte compid = MainV2.comPort.MAV.compid;
+
+            Task.Run(async () =>
+            {
+                await s_mavlinkLock.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    await MainV2.comPort.doCommandAsync(
+                        sysid, compid,
+                        MAVLink.MAV_CMD.DO_SET_RELAY,
+                        relayNumber, on ? 1 : 0, 0, 0, 0, 0, 0,
+                        requireack: true, uicallback: null).ConfigureAwait(false);
+                }
+                catch { }
+                finally
+                {
+                    s_mavlinkLock.Release();
+                }
+            });
+
+            return true;
+        }
+
         // ============================================================
-        // Camera tilt  —  debounced to avoid flooding MAVLink/API
+        // Camera tilt  —  stream on drag, settle-send on release
         // ============================================================
 
         private void OnTiltSliderChanged()
@@ -557,28 +673,31 @@ namespace NOMAD.MissionPlanner
             s_lastTiltPulseUs = pulseUs;
             CameraTiltChanged?.Invoke(pulseUs, this);
 
-            // Debounce: only send the servo command once the slider has been
-            // still for TILT_DEBOUNCE_MS. This prevents MAVLink/API flooding
-            // during fast drags which caused apparent slider freeze.
+            // Send immediately — drop if a previous command is still in-flight so
+            // rapid drag events never queue up and cause lag.
+            SendCameraTiltAsync(pulseUs, tryOnly: true);
+
+            // Restart settle timer so the final resting value is always committed
+            // even if the last few drag events were dropped.
             _tiltDebounceTimer?.Stop();
             _tiltDebounceTimer?.Dispose();
-            _tiltDebounceTimer = new Timer { Interval = TILT_DEBOUNCE_MS };
+            _tiltDebounceTimer = new Timer { Interval = TILT_SETTLE_MS };
             _tiltDebounceTimer.Tick += (s, e) =>
             {
                 _tiltDebounceTimer?.Stop();
                 _tiltDebounceTimer?.Dispose();
                 _tiltDebounceTimer = null;
                 if (_tiltSlider != null && !_tiltSlider.IsDisposed)
-                    SendCameraTiltAsync(_tiltSlider.Value);
+                    SendCameraTiltAsync(_tiltSlider.Value, tryOnly: false);
             };
             _tiltDebounceTimer.Start();
         }
 
-        private async void SendCameraTiltAsync(int pulseUs)
+        private async void SendCameraTiltAsync(int pulseUs, bool tryOnly = false)
         {
             int channel = _config?.CameraTiltChannel ?? 0;
 
-            if (TrySendServoMAVLink(channel, pulseUs))
+            if (TrySendServoMAVLink(channel, pulseUs, tryOnly))
                 return;
 
             // Fallback: Jetson API (angle-based endpoint)
@@ -603,6 +722,35 @@ namespace NOMAD.MissionPlanner
 
             if (InvokeRequired) { BeginInvoke(new Action(() => ApplyTiltPulseQuietly(pulseUs))); return; }
             ApplyTiltPulseQuietly(pulseUs);
+        }
+
+        private void OnAutonomousModeChanged(bool isAutonomous)
+        {
+            if (IsDisposed) return;
+            if (InvokeRequired) { BeginInvoke(new Action(() => OnAutonomousModeChanged(isAutonomous))); return; }
+
+            if (_tiltSlider != null) _tiltSlider.Enabled = !isAutonomous;
+            if (_lblTiltValue != null) _lblTiltValue.ForeColor = isAutonomous ? TEXT_SECONDARY : TEXT_PRIMARY;
+
+            // Disable all tilt-row controls (preset buttons follow the slider's parent area)
+            foreach (Control c in Controls)
+            {
+                if (c is Button btn && (btn.Text == "▼" || btn.Text == "●" || btn.Text == "▲"))
+                    btn.Enabled = !isAutonomous;
+            }
+
+            if (isAutonomous)
+                SetStatus("Camera tilt locked — autonomous mode active", WARNING_COLOR);
+            else
+                SetStatus("Camera tilt restored", TEXT_SECONDARY);
+        }
+
+        private void ApplyTiltPulse(int pulseUs)
+        {
+            ApplyTiltPulseQuietly(pulseUs);
+            s_lastTiltPulseUs = pulseUs;
+            CameraTiltChanged?.Invoke(pulseUs, this);
+            SendCameraTiltAsync(pulseUs, tryOnly: false);
         }
 
         private void ApplyTiltPulseQuietly(int pulseUs)

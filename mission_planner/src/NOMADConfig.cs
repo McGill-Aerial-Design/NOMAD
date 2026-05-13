@@ -388,13 +388,9 @@ namespace NOMAD.MissionPlanner
         /// <summary>PWM (us) to reel straps out on reel 2 (must be &lt;1000 us).</summary>
         public int Reel2PwmOut { get; set; } = 900;
 
-        // --- Water pump ---
-        /// <summary>Cube servo output channel for the water pump.</summary>
-        public int WaterPumpChannel { get; set; } = 13;
-        /// <summary>PWM (us) to activate the water pump.</summary>
-        public int WaterPumpPwmOn { get; set; } = 2000;
-        /// <summary>PWM (us) to stop the water pump.</summary>
-        public int WaterPumpPwmOff { get; set; } = 1000;
+        // --- Water pump (GPIO relay on Cube, DO_SET_RELAY) ---
+        /// <summary>ArduPilot relay number (0-indexed, matches RELAY1_PIN=0, RELAY2_PIN=1, …).</summary>
+        public int WaterPumpRelayNumber { get; set; } = 0;
         /// <summary>Duration (ms) the water pump fires per trigger.</summary>
         public int WaterPumpDurationMs { get; set; } = 500;
 
@@ -657,9 +653,7 @@ namespace NOMAD.MissionPlanner
             Reel2ServoChannel = defaults.Reel2ServoChannel;
             Reel2PwmIn = defaults.Reel2PwmIn;
             Reel2PwmOut = defaults.Reel2PwmOut;
-            WaterPumpChannel = defaults.WaterPumpChannel;
-            WaterPumpPwmOn = defaults.WaterPumpPwmOn;
-            WaterPumpPwmOff = defaults.WaterPumpPwmOff;
+            WaterPumpRelayNumber = defaults.WaterPumpRelayNumber;
             WaterPumpDurationMs = defaults.WaterPumpDurationMs;
             CameraTiltChannel = defaults.CameraTiltChannel;
             CameraTiltPwmMin = defaults.CameraTiltPwmMin;

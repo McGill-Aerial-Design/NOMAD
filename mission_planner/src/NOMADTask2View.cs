@@ -235,6 +235,17 @@ namespace NOMAD.MissionPlanner
             _btnResetVio.Click += async (s, e) => await _sender.ResetVioOriginAsync();
             bar.Controls.Add(_btnResetVio);
 
+            _lblNvbloxWarning = new Label
+            {
+                Text      = "",
+                Font      = new Font("Segoe UI", 8, FontStyle.Bold),
+                ForeColor = Color.Orange,
+                Location  = new Point(10, 90),
+                AutoSize  = true,
+                Visible   = false,
+            };
+            bar.Controls.Add(_lblNvbloxWarning);
+
             return bar;
         }
 
@@ -767,6 +778,9 @@ namespace NOMAD.MissionPlanner
             {
                 var currentMode = status["current_mode"]?.ToString() ?? "unknown";
                 _lblModeStatus.Text = $"Mode: {currentMode}";
+
+                bool isAutonomous = currentMode != "idle" && currentMode != "manual" && currentMode != "unknown";
+                PayloadControlPanel.RaiseAutonomousModeChanged(isAutonomous);
 
                 var nvbloxRestarting = status["nvblox_restarting"]?.Value<bool>() ?? false;
                 if (nvbloxRestarting)

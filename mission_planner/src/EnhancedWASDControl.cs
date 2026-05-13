@@ -211,7 +211,7 @@ namespace NOMAD.MissionPlanner
             this.BackColor = BG_COLOR;
             this.Dock = DockStyle.Fill;
             this.Padding = new Padding(10);
-            this.MinimumSize = new Size(400, 455);
+            this.MinimumSize = new Size(400, 520);
 
             var mainLayout = new TableLayoutPanel
             {
@@ -221,9 +221,9 @@ namespace NOMAD.MissionPlanner
                 BackColor = Color.Transparent,
             };
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));   // Enable/Status
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 185));  // Keyboard visual
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 220));  // Keyboard visual
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));   // Settings
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 140));  // Payload controls
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));   // Payload controls — fills remaining
             
             // Top row: Enable checkbox and status
             var topPanel = CreateTopPanel();
