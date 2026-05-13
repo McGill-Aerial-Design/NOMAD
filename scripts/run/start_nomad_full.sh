@@ -143,11 +143,13 @@ start_mavlink_router() {
         fi
     fi
     
-    nohup mavlink-routerd -e "$GCS_IP:14550" -e 127.0.0.1:14550 /dev/ttyACM0 > $LOG_DIR/mavlink.log 2>&1 &
+    # GCS LTE link goes to :14560 (14550 is reserved for the RadioMaster link
+    # so the NOMAD plugin can listen on both ports without collision).
+    nohup mavlink-routerd -e "$GCS_IP:14560" -e 127.0.0.1:14550 /dev/ttyACM0 > $LOG_DIR/mavlink.log 2>&1 &
     sleep 2
-    
+
     if pgrep -f mavlink-routerd > /dev/null; then
-        log_ok "MAVLink Router started (-> $GCS_IP:14550 + local Edge Core)"
+        log_ok "MAVLink Router started (-> $GCS_IP:14560 + local Edge Core)"
     else
         log_fail "MAVLink Router failed. Check $LOG_DIR/mavlink.log"
     fi

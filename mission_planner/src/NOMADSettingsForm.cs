@@ -59,7 +59,10 @@ namespace NOMAD.MissionPlanner
         private NumericUpDown _numPreferredReconnectDelay;
         private NumericUpDown _numHeartbeatTimeout;
         private NumericUpDown _numLinkMonitorInterval;
-        
+        private TextBox _txtRouterBindAddress;
+        private NumericUpDown _numRouterLocalPort;
+        private CheckBox _chkRouterDedup;
+
         // Tasks Tab
         private CheckBox _chkTask1Enabled;
         private CheckBox _chkTask1AutoCapture;
@@ -370,6 +373,32 @@ namespace NOMAD.MissionPlanner
 
             AddLabel(tab, "Monitor Interval (ms):", 40, y);
             _numLinkMonitorInterval = AddNumericUpDown(tab, 170, y, 80, 100, 5000, 500);
+            y += 35;
+
+            AddSectionLabel(tab, "Local Router (MAVProxy-style)", ref y);
+
+            AddLabel(tab, "Bind Address:", 40, y);
+            _txtRouterBindAddress = AddTextBox(tab, 170, y, 130);
+            y += 30;
+
+            AddLabel(tab, "Local UDP Port:", 40, y);
+            _numRouterLocalPort = AddNumericUpDown(tab, 170, y, 80, 1024, 65535, 14600);
+            y += 30;
+
+            _chkRouterDedup = AddCheckBox(tab, "Deduplicate cross-link packets", 40, y);
+            y += 30;
+
+            var hint = new Label
+            {
+                Text = "Configure Mission Planner's main connection as 'UDP' (server) on this port.\n" +
+                       "The router will push both LTE and RadioMaster traffic to MP — zero-gap failover.",
+                Font = new Font("Segoe UI", 8, FontStyle.Italic),
+                ForeColor = Color.FromArgb(150, 150, 150),
+                Location = new Point(40, y),
+                AutoSize = true,
+                MaximumSize = new Size(440, 0),
+            };
+            tab.Controls.Add(hint);
 
             return tab;
         }
@@ -861,7 +890,10 @@ namespace NOMAD.MissionPlanner
             _numPreferredReconnectDelay.Value = Config.PreferredLinkReconnectDelay;
             _numHeartbeatTimeout.Value = (decimal)Config.MavlinkHeartbeatTimeout;
             _numLinkMonitorInterval.Value = Config.LinkMonitorInterval;
-            
+            _txtRouterBindAddress.Text = Config.RouterBindAddress;
+            _numRouterLocalPort.Value = Math.Max(_numRouterLocalPort.Minimum, Math.Min(_numRouterLocalPort.Maximum, Config.RouterLocalPort));
+            _chkRouterDedup.Checked = Config.RouterDedupEnabled;
+
             // Tasks
             _chkTask1Enabled.Checked = Config.Task1Enabled;
             _chkTask1AutoCapture.Checked = Config.Task1AutoCapture;
@@ -977,7 +1009,11 @@ namespace NOMAD.MissionPlanner
             Config.PreferredLinkReconnectDelay = (int)_numPreferredReconnectDelay.Value;
             Config.MavlinkHeartbeatTimeout = (double)_numHeartbeatTimeout.Value;
             Config.LinkMonitorInterval = (int)_numLinkMonitorInterval.Value;
-            
+            Config.RouterBindAddress = string.IsNullOrWhiteSpace(_txtRouterBindAddress.Text)
+                ? "127.0.0.1" : _txtRouterBindAddress.Text.Trim();
+            Config.RouterLocalPort = (int)_numRouterLocalPort.Value;
+            Config.RouterDedupEnabled = _chkRouterDedup.Checked;
+
             // Tasks
             Config.Task1Enabled = _chkTask1Enabled.Checked;
             Config.Task1AutoCapture = _chkTask1AutoCapture.Checked;
@@ -1079,7 +1115,10 @@ namespace NOMAD.MissionPlanner
             _numPreferredReconnectDelay.Enabled = enabled;
             _numHeartbeatTimeout.Enabled = enabled;
             _numLinkMonitorInterval.Enabled = enabled;
-            
+            if (_txtRouterBindAddress != null) _txtRouterBindAddress.Enabled = enabled;
+            if (_numRouterLocalPort != null) _numRouterLocalPort.Enabled = enabled;
+            if (_chkRouterDedup != null) _chkRouterDedup.Enabled = enabled;
+
             if (enabled)
             {
                 UpdateRadioMasterConnTypeState();

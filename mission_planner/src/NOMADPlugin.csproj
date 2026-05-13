@@ -133,6 +133,7 @@
     <Compile Include="EnhancedHealthDashboard.cs" />
     <Compile Include="FoxglovePanel.cs" />
     <Compile Include="EnhancedWASDControl.cs" />
+    <Compile Include="GroundLinkRouter.cs" />
     <Compile Include="JetsonConnectionManager.cs" />
     <Compile Include="JetsonApiService.cs" />
     <Compile Include="JetsonHealthTab.cs" />

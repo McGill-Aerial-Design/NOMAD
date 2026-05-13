@@ -156,9 +156,10 @@ namespace NOMAD.MissionPlanner
         public int RadioMasterBaudRate { get; set; } = 420000;
 
         /// <summary>
-        /// LTE/Tailscale MAVLink UDP port on Jetson (forwarded from Cube).
+        /// LTE/Tailscale MAVLink UDP port the ground station listens on.
+        /// Default 14560 to avoid colliding with the RadioMaster default (14550).
         /// </summary>
-        public int LteMavlinkPort { get; set; } = 14550;
+        public int LteMavlinkPort { get; set; } = 14560;
 
         /// <summary>
         /// Enable automatic failover between links.
@@ -190,6 +191,44 @@ namespace NOMAD.MissionPlanner
         /// Link monitoring interval in milliseconds.
         /// </summary>
         public int LinkMonitorInterval { get; set; } = 500;
+
+        // ============================================================
+        // Ground-side MAVLink Router (MAVProxy-style multiplexer)
+        // ============================================================
+        // The router opens both source links itself (LTE UDP + RC UDP/COM),
+        // tracks per-link health from real packet flow, dedupes duplicates,
+        // and exposes a single merged UDP endpoint Mission Planner connects
+        // to (UDPCl to 127.0.0.1:<RouterLocalPort>). Failover is zero-gap
+        // because both source links are read in parallel at all times.
+
+        /// <summary>
+        /// Enable the local MAVLink router. When on, the plugin owns both
+        /// source links and Mission Planner should connect to the local
+        /// loopback endpoint instead of LTE/RC directly.
+        /// </summary>
+        public bool RouterEnabled { get; set; } = true;
+
+        /// <summary>Local UDP port the router serves the merged stream on.</summary>
+        public int RouterLocalPort { get; set; } = 14600;
+
+        /// <summary>Address the router binds for the local merged stream.</summary>
+        public string RouterBindAddress { get; set; } = "127.0.0.1";
+
+        /// <summary>
+        /// Deduplicate identical packets that arrive on both links (recommended).
+        /// Disable only for diagnostics — costs ~1.5x bandwidth to MP.
+        /// </summary>
+        public bool RouterDedupEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Optional outbound endpoint for LTE link. When non-empty, router
+        /// sends GCS-originated traffic to this host:port over UDP. Leave
+        /// empty to use the same endpoint packets were received from.
+        /// </summary>
+        public string LteRemoteHost { get; set; } = "";
+
+        /// <summary>Outbound UDP port for LTE link (0 = use last-rx port).</summary>
+        public int LteRemotePort { get; set; } = 0;
 
         // ============================================================
         // Task 1 Configuration (Outdoor Recon)
@@ -543,6 +582,14 @@ namespace NOMAD.MissionPlanner
             if (SshUsername == "nomad")
             {
                 SshUsername = "mad";
+            }
+
+            // Bump LTE MAVLink port off the RadioMaster default (14550) so the
+            // two links don't fight for the same UDP port on the GCS. Users
+            // who explicitly set a non-default value keep it.
+            if (LteMavlinkPort == 14550)
+            {
+                LteMavlinkPort = 14560;
             }
 
             // Keep FOV within a practical range for 3D view usability.

@@ -2,19 +2,8 @@
 // NOMAD Links View
 // ============================================================
 
-using System;
-using System.Collections.Generic;
 using System.Drawing;
-using System.IO;
-using System.IO.Compression;
-using System.Linq;
-using System.Reflection;
-using System.Text;
-using System.Threading.Tasks;
 using System.Windows.Forms;
-using MissionPlanner;
-using MissionPlanner.Utilities;
-using Newtonsoft.Json;
 
 namespace NOMAD.MissionPlanner
 {
@@ -23,14 +12,14 @@ namespace NOMAD.MissionPlanner
         private readonly MAVLinkConnectionManager _connectionManager;
         private readonly NOMADConfig _config;
         private LinkHealthPanel _linkPanel;
-        
+
         public NOMADLinksView(MAVLinkConnectionManager connectionManager, NOMADConfig config)
         {
             _connectionManager = connectionManager;
             _config = config;
             InitializeUI();
         }
-        
+
         private void InitializeUI()
         {
             if (_connectionManager != null)
@@ -39,50 +28,46 @@ namespace NOMAD.MissionPlanner
                 {
                     _linkPanel = new LinkHealthPanel(_connectionManager, _config);
                     _linkPanel.Dock = DockStyle.Fill;
-                    this.Controls.Add(_linkPanel);
+                    Controls.Add(_linkPanel);
                     return;
                 }
-                catch { }
+                catch { /* fall through to disabled view */ }
             }
-            
-            // Fallback if no connection manager
+
+            // Fallback: dual link not initialised
             var layout = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.TopDown,
+                BackColor = NOMADTheme.BG_DARK,
+                Padding = new Padding(24),
             };
-            
-            var descLabel = new Label
+
+            layout.Controls.Add(new Label
             {
-                Text = "Dual Link Failover Status\n\n" +
-                       "Monitor the health of both communication links:\n" +
-                       "- LTE/Tailscale: Primary long-range link via 4G\n" +
-                       "- RadioMaster: Backup RC link via ELRS",
-                Font = new Font("Segoe UI", 11),
-                ForeColor = TEXT_SECONDARY,
+                Text = "MAVLink Dual Link Router",
+                Font = new Font("Segoe UI", 14, FontStyle.Bold),
+                ForeColor = NOMADTheme.ACCENT,
                 AutoSize = true,
-                MaximumSize = new Size(600, 0),
-                Margin = new Padding(0, 0, 0, 20),
-            };
-            layout.Controls.Add(descLabel);
-            
-            var statusLabel = new Label
+                Margin = new Padding(0, 0, 0, 12),
+            });
+
+            layout.Controls.Add(new Label
             {
-                Text = _config.DualLinkEnabled 
-                    ? "[OK] Dual link monitoring is enabled" 
-                    : "[!] Dual link is disabled in settings",
-                Font = new Font("Segoe UI", 12, FontStyle.Bold),
-                ForeColor = _config.DualLinkEnabled ? SUCCESS_COLOR : WARNING_COLOR,
+                Text =
+                    "Dual link is disabled in settings.\n\n" +
+                    "When enabled, NOMAD opens both the LTE/Tailscale and RadioMaster sockets directly,\n" +
+                    "merges the two streams to a single local UDP endpoint and switches the outbound\n" +
+                    "side to whichever link is healthiest. Mission Planner connects to that local endpoint\n" +
+                    "as a UDP client — failover happens with no reconnect and no dropped packets.\n\n" +
+                    "Enable it in NOMAD → Settings → Connection.",
+                Font = new Font("Segoe UI", 10),
+                ForeColor = NOMADTheme.TEXT_SECONDARY,
                 AutoSize = true,
-            };
-            layout.Controls.Add(statusLabel);
-            
-            this.Controls.Add(layout);
+                MaximumSize = new Size(720, 0),
+            });
         }
-        
-        public void UpdateData()
-        {
-            // Link panel updates itself
-        }
+
+        public void UpdateData() { /* panel refreshes itself */ }
     }
 }

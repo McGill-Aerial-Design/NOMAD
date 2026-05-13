@@ -1,671 +1,539 @@
 // ============================================================
-// MAVLink Link Health Panel - UI for Dual Link Management
+// MAVLink Link Status panel
 // ============================================================
-// Visual display and control for MAVLink dual link failover:
-// - Real-time link status indicators
-// - Health meters for both LTE and RadioMaster links
-// - Manual link switching controls
-// - Failover history log
+// Real-time UI for the dual-link router. Shows live per-link
+// metrics (latency, loss, throughput, RSSI, heartbeat age) for
+// both LTE and RadioMaster, plus router controls, a throughput
+// sparkline per link, failover settings and event log. All data
+// comes from MAVLinkConnectionManager / GroundLinkRouter.
 // ============================================================
 
 using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace NOMAD.MissionPlanner
 {
-    /// <summary>
-    /// UI Panel for displaying and controlling dual MAVLink link status.
-    /// </summary>
     public class LinkHealthPanel : UserControl
     {
         // ============================================================
         // Fields
         // ============================================================
 
-        private MAVLinkConnectionManager _connectionManager;
-        private NOMADConfig _config;
-        private System.Windows.Forms.Timer _updateTimer;
+        private readonly MAVLinkConnectionManager _cm;
+        private readonly NOMADConfig _config;
+        private readonly Timer _refresh;
 
-        // UI Controls - Main status
-        private Panel _headerPanel;
-        private Label _lblActiveLink;
-        private Label _lblOverallStatus;
+        // Header
+        private Label _lblActive;
+        private Label _lblRouterStatus;
+        private Label _lblLocalEndpoint;
+        private Button _btnCopyEndpoint;
+        private Label _lblCopied;
 
-        // UI Controls - LTE Link
-        private Panel _lteLinkPanel;
-        private Label _lblLteStatus;
-        private Label _lblLteLatency;
-        private Label _lblLtePacketLoss;
-        private ProgressBar _prgLteHealth;
-        private Button _btnSwitchToLte;
-        private PictureBox _picLteIndicator;
+        // Link cards
+        private LinkCard _lteCard;
+        private LinkCard _radioCard;
 
-        // UI Controls - RadioMaster Link
-        private Panel _radioMasterPanel;
-        private Label _lblRadioMasterStatus;
-        private Label _lblRadioMasterLatency;
-        private Label _lblRadioMasterPacketLoss;
-        private ProgressBar _prgRadioMasterHealth;
-        private Button _btnSwitchToRadioMaster;
-        private PictureBox _picRadioMasterIndicator;
-        
-        // ToolTip for disabled buttons
-        private ToolTip _toolTip;
-
-        // UI Controls - Settings
-        private Panel _settingsPanel;
-        private CheckBox _chkAutoFailover;
-        private ComboBox _cmbPreferredLink;
+        // Settings row
+        private CheckBox _chkAuto;
+        private ComboBox _cmbPreferred;
+        private CheckBox _chkDedup;
         private CheckBox _chkAutoReconnect;
+        private Label _lblManualOverride;
+        private Button _btnReleaseOverride;
+        private Button _btnReset;
 
-        // UI Controls - Log
-        private ListBox _lstFailoverLog;
-        private readonly List<string> _failoverLog = new List<string>();
-
-        // Colors
-        private readonly Color _bgColor = Color.FromArgb(30, 30, 30);
-        private readonly Color _panelColor = Color.FromArgb(45, 45, 48);
-        private readonly Color _accentColor = Color.FromArgb(0, 122, 204);
-        private readonly Color _textColor = Color.White;
-        private readonly Color _subtextColor = Color.LightGray;
+        // Log
+        private ListBox _lstLog;
 
         // ============================================================
-        // Constructor
+        // Ctor
         // ============================================================
 
         public LinkHealthPanel(MAVLinkConnectionManager connectionManager, NOMADConfig config)
         {
-            _connectionManager = connectionManager ?? throw new ArgumentNullException(nameof(connectionManager));
+            _cm = connectionManager ?? throw new ArgumentNullException(nameof(connectionManager));
             _config = config ?? throw new ArgumentNullException(nameof(config));
-            
-            _toolTip = new ToolTip();
 
-            InitializeUI();
-            SubscribeToEvents();
-            StartUpdateTimer();
+            BackColor = NOMADTheme.BG_DARK;
+            Dock = DockStyle.Fill;
+            DoubleBuffered = true;
+
+            BuildUi();
+            HookEvents();
+
+            _refresh = new Timer { Interval = Math.Max(200, _config.LinkMonitorInterval) };
+            _refresh.Tick += (s, e) => RefreshAll();
+            _refresh.Start();
         }
 
         // ============================================================
-        // UI Initialization
+        // UI
         // ============================================================
 
-        private void InitializeUI()
+        private void BuildUi()
         {
-            this.BackColor = _bgColor;
-            this.Dock = DockStyle.Fill;
-            this.AutoScroll = true;
-            this.Padding = new Padding(10);
-
-            var mainLayout = new TableLayoutPanel
+            var root = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 5,
+                RowCount = 4,
                 BackColor = Color.Transparent,
+                Padding = new Padding(12),
             };
+            // Header + settings size to their content; the link row and the
+            // log row split the rest 60/40 so everything reflows with the window.
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 60));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 40));
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));   // Header
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 130));  // LTE Panel
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 130));  // RadioMaster Panel
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));  // Settings
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));   // Log
+            var header = BuildHeader();
+            header.Dock = DockStyle.Top;
+            header.Height = 90;
+            root.Controls.Add(header, 0, 0);
 
-            // Header
-            _headerPanel = CreateHeaderPanel();
-            mainLayout.Controls.Add(_headerPanel, 0, 0);
+            var linkRow = BuildLinkRow();
+            linkRow.Dock = DockStyle.Fill;
+            root.Controls.Add(linkRow, 0, 1);
 
-            // LTE Link Panel
-            _lteLinkPanel = CreateLinkPanel("LTE / Tailscale", LinkType.LTE, 
-                ref _lblLteStatus, ref _lblLteLatency, ref _lblLtePacketLoss, 
-                ref _prgLteHealth, ref _btnSwitchToLte, ref _picLteIndicator);
-            mainLayout.Controls.Add(_lteLinkPanel, 0, 1);
+            var settingsRow = BuildSettingsRow();
+            settingsRow.Dock = DockStyle.Top;
+            settingsRow.Height = 78;
+            root.Controls.Add(settingsRow, 0, 2);
 
-            // RadioMaster Panel
-            _radioMasterPanel = CreateLinkPanel("RadioMaster (14550)", LinkType.RadioMaster,
-                ref _lblRadioMasterStatus, ref _lblRadioMasterLatency, ref _lblRadioMasterPacketLoss,
-                ref _prgRadioMasterHealth, ref _btnSwitchToRadioMaster, ref _picRadioMasterIndicator);
-            mainLayout.Controls.Add(_radioMasterPanel, 0, 2);
+            var logPanel = BuildLogPanel();
+            logPanel.Dock = DockStyle.Fill;
+            root.Controls.Add(logPanel, 0, 3);
 
-            // Settings Panel
-            _settingsPanel = CreateSettingsPanel();
-            mainLayout.Controls.Add(_settingsPanel, 0, 3);
-
-            // Log Panel
-            var logPanel = CreateLogPanel();
-            mainLayout.Controls.Add(logPanel, 0, 4);
-
-            this.Controls.Add(mainLayout);
+            Controls.Add(root);
         }
 
-        private Panel CreateHeaderPanel()
+        private Panel BuildHeader()
         {
-            var panel = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = _panelColor,
-                Margin = new Padding(0, 0, 0, 5),
-                Padding = new Padding(15, 10, 15, 10),
-            };
+            var panel = MakeCard();
+            panel.Padding = new Padding(16, 10, 16, 10);
 
             var title = new Label
             {
-                Text = "MAVLink Dual Link Status",
+                Text = "MAVLink Link Status",
                 Font = new Font("Segoe UI", 14, FontStyle.Bold),
-                ForeColor = _accentColor,
-                Location = new Point(15, 8),
+                ForeColor = NOMADTheme.ACCENT,
+                Location = new Point(0, 4),
                 AutoSize = true,
             };
             panel.Controls.Add(title);
 
-            _lblActiveLink = new Label
+            _lblActive = new Label
             {
-                Text = "Active: NONE",
-                Font = new Font("Segoe UI", 11, FontStyle.Bold),
-                ForeColor = Color.Yellow,
-                Location = new Point(300, 10),
+                Text = "Active: —",
+                Font = new Font("Segoe UI", 12, FontStyle.Bold),
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
+                AutoSize = true,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
+            };
+            panel.Controls.Add(_lblActive);
+            panel.Resize += (s, e) =>
+            {
+                _lblActive.Location = new Point(panel.ClientSize.Width - _lblActive.Width - 16, 6);
+                LayoutEndpointRow(panel);
+            };
+
+            _lblRouterStatus = new Label
+            {
+                Text = "Router: …",
+                Font = new Font("Segoe UI", 9),
+                ForeColor = NOMADTheme.TEXT_SECONDARY,
+                Location = new Point(0, 36),
                 AutoSize = true,
             };
-            panel.Controls.Add(_lblActiveLink);
+            panel.Controls.Add(_lblRouterStatus);
 
-            _lblOverallStatus = new Label
+            _lblLocalEndpoint = new Label
             {
-                Text = "Monitoring...",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = _subtextColor,
-                Location = new Point(15, 38),
+                Text = "",
+                Font = new Font("Consolas", 9),
+                ForeColor = NOMADTheme.INFO,
+                Location = new Point(0, 56),
                 AutoSize = true,
             };
-            panel.Controls.Add(_lblOverallStatus);
+            panel.Controls.Add(_lblLocalEndpoint);
 
-            return panel;
-        }
-
-        private Panel CreateLinkPanel(string title, LinkType linkType,
-            ref Label lblStatus, ref Label lblLatency, ref Label lblPacketLoss,
-            ref ProgressBar prgHealth, ref Button btnSwitch, ref PictureBox picIndicator)
-        {
-            var panel = new Panel
+            _btnCopyEndpoint = new Button
             {
-                Dock = DockStyle.Fill,
-                BackColor = _panelColor,
-                Margin = new Padding(0, 0, 0, 5),
-                Padding = new Padding(10),
-            };
-
-            // Status indicator (colored circle)
-            picIndicator = new PictureBox
-            {
-                Size = new Size(20, 20),
-                Location = new Point(15, 15),
-                BackColor = Color.Transparent,
-            };
-            picIndicator.Paint += (s, e) =>
-            {
-                var color = GetIndicatorColor(linkType);
-                using (var brush = new SolidBrush(color))
-                {
-                    e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                    e.Graphics.FillEllipse(brush, 2, 2, 16, 16);
-                }
-            };
-            panel.Controls.Add(picIndicator);
-
-            // Title
-            var lblTitle = new Label
-            {
-                Text = title,
-                Font = new Font("Segoe UI", 11, FontStyle.Bold),
-                ForeColor = _textColor,
-                Location = new Point(45, 12),
-                AutoSize = true,
-            };
-            panel.Controls.Add(lblTitle);
-
-            // Status
-            lblStatus = new Label
-            {
-                Text = "Disconnected",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = Color.Red,
-                Location = new Point(45, 35),
-                AutoSize = true,
-            };
-            panel.Controls.Add(lblStatus);
-
-            // Metrics row
-            lblLatency = new Label
-            {
-                Text = "Latency: --ms",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = _subtextColor,
-                Location = new Point(45, 58),
-                Width = 120,
-            };
-            panel.Controls.Add(lblLatency);
-
-            lblPacketLoss = new Label
-            {
-                Text = "Loss: --%",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = _subtextColor,
-                Location = new Point(170, 58),
-                Width = 100,
-            };
-            panel.Controls.Add(lblPacketLoss);
-
-            // Health progress bar
-            var lblHealthLabel = new Label
-            {
-                Text = "Health:",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = _subtextColor,
-                Location = new Point(45, 82),
-                AutoSize = true,
-            };
-            panel.Controls.Add(lblHealthLabel);
-
-            prgHealth = new ProgressBar
-            {
-                Location = new Point(100, 80),
-                Size = new Size(200, 18),
-                Maximum = 100,
-                Style = ProgressBarStyle.Continuous,
-            };
-            panel.Controls.Add(prgHealth);
-
-            // Switch button
-            btnSwitch = new Button
-            {
-                Text = "Switch",
-                Location = new Point(320, 40),
-                Size = new Size(80, 30),
-                BackColor = _accentColor,
-                ForeColor = Color.White,
+                Text = "Copy",
+                Size = new Size(60, 22),
+                BackColor = NOMADTheme.BUTTON_BG,
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                Font = new Font("Segoe UI", 8),
                 Cursor = Cursors.Hand,
             };
-            btnSwitch.FlatAppearance.BorderSize = 0;
-            btnSwitch.Click += (s, e) => SwitchToLink(linkType);
-            panel.Controls.Add(btnSwitch);
+            _btnCopyEndpoint.FlatAppearance.BorderSize = 0;
+            _btnCopyEndpoint.Click += (s, e) => CopyEndpoint();
+            panel.Controls.Add(_btnCopyEndpoint);
 
+            _lblCopied = new Label
+            {
+                Text = "",
+                Font = new Font("Segoe UI", 8),
+                ForeColor = NOMADTheme.SUCCESS,
+                AutoSize = true,
+            };
+            panel.Controls.Add(_lblCopied);
+
+            panel.HandleCreated += (s, e) => LayoutEndpointRow(panel);
             return panel;
         }
 
-        private Panel CreateSettingsPanel()
+        private void LayoutEndpointRow(Panel panel)
         {
-            var panel = new Panel
+            if (_lblLocalEndpoint == null) return;
+            int x = _lblLocalEndpoint.Right + 8;
+            _btnCopyEndpoint.Location = new Point(x, 54);
+            _lblCopied.Location = new Point(_btnCopyEndpoint.Right + 8, 56);
+        }
+
+        private Panel BuildLinkRow()
+        {
+            var row = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                BackColor = _panelColor,
-                Margin = new Padding(0, 0, 0, 5),
-                Padding = new Padding(10),
+                ColumnCount = 2,
+                RowCount = 1,
+                BackColor = Color.Transparent,
+                Margin = new Padding(0, 6, 0, 0),
             };
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            row.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-            var title = new Label
+            _lteCard = new LinkCard("LTE / Tailscale", LinkType.LTE)
             {
-                Text = "Failover Settings",
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                ForeColor = _accentColor,
-                Location = new Point(15, 10),
-                AutoSize = true,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 0, 6, 0),
             };
-            panel.Controls.Add(title);
+            _lteCard.SetActiveRequested += (s, e) => _cm.SwitchToLink(LinkType.LTE);
 
-            // Auto-failover checkbox
-            _chkAutoFailover = new CheckBox
+            _radioCard = new LinkCard("RadioMaster", LinkType.RadioMaster)
             {
-                Text = "Enable Automatic Failover",
+                Dock = DockStyle.Fill,
+                Margin = new Padding(6, 0, 0, 0),
+            };
+            _radioCard.SetActiveRequested += (s, e) => _cm.SwitchToLink(LinkType.RadioMaster);
+
+            row.Controls.Add(_lteCard, 0, 0);
+            row.Controls.Add(_radioCard, 1, 0);
+            return row;
+        }
+
+        private Panel BuildSettingsRow()
+        {
+            var panel = MakeCard();
+            panel.Margin = new Padding(0, 6, 0, 0);
+
+            _chkAuto = new CheckBox
+            {
+                Text = "Auto-failover",
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
                 Font = new Font("Segoe UI", 9),
-                ForeColor = _textColor,
-                Location = new Point(15, 38),
+                Location = new Point(14, 12),
                 AutoSize = true,
-                Checked = _connectionManager.Config.AutoFailoverEnabled,
+                Checked = _cm.Config.AutoFailoverEnabled,
             };
-            _chkAutoFailover.CheckedChanged += (s, e) =>
+            _chkAuto.CheckedChanged += (s, e) =>
             {
-                _connectionManager.Config.AutoFailoverEnabled = _chkAutoFailover.Checked;
+                _cm.SetAutoFailoverEnabled(_chkAuto.Checked);
+                _config.AutoFailoverEnabled = _chkAuto.Checked;
+                PersistConfig();
             };
-            panel.Controls.Add(_chkAutoFailover);
+            panel.Controls.Add(_chkAuto);
 
-            // Preferred link
-            var lblPreferred = new Label
-            {
-                Text = "Preferred Link:",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = _textColor,
-                Location = new Point(250, 38),
-                AutoSize = true,
-            };
-            panel.Controls.Add(lblPreferred);
-
-            _cmbPreferredLink = new ComboBox
-            {
-                Location = new Point(350, 35),
-                Size = new Size(120, 25),
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Font = new Font("Segoe UI", 9),
-            };
-            _cmbPreferredLink.Items.AddRange(new object[] { "LTE", "RadioMaster", "None" });
-            _cmbPreferredLink.SelectedIndex = _connectionManager.Config.PreferredLink switch
-            {
-                LinkType.LTE => 0,
-                LinkType.RadioMaster => 1,
-                _ => 2
-            };
-            _cmbPreferredLink.SelectedIndexChanged += (s, e) =>
-            {
-                _connectionManager.Config.PreferredLink = _cmbPreferredLink.SelectedIndex switch
-                {
-                    0 => LinkType.LTE,
-                    1 => LinkType.RadioMaster,
-                    _ => LinkType.None
-                };
-            };
-            panel.Controls.Add(_cmbPreferredLink);
-
-            // Auto-reconnect to preferred
             _chkAutoReconnect = new CheckBox
             {
-                Text = "Auto-reconnect to preferred when available",
+                Text = "Return to preferred when healthy",
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
                 Font = new Font("Segoe UI", 9),
-                ForeColor = _textColor,
-                Location = new Point(15, 65),
+                Location = new Point(14, 38),
                 AutoSize = true,
-                Checked = _connectionManager.Config.AutoReconnectPreferred,
+                Checked = _cm.Config.AutoReconnectPreferred,
             };
             _chkAutoReconnect.CheckedChanged += (s, e) =>
             {
-                _connectionManager.Config.AutoReconnectPreferred = _chkAutoReconnect.Checked;
+                _cm.SetAutoReconnectPreferred(_chkAutoReconnect.Checked);
+                _config.AutoReconnectToPreferred = _chkAutoReconnect.Checked;
+                PersistConfig();
             };
             panel.Controls.Add(_chkAutoReconnect);
 
+            var lblPref = new Label { Text = "Preferred:", ForeColor = NOMADTheme.TEXT_SECONDARY, Font = new Font("Segoe UI", 9), Location = new Point(240, 13), AutoSize = true };
+            panel.Controls.Add(lblPref);
+
+            _cmbPreferred = new ComboBox
+            {
+                Location = new Point(310, 10),
+                Size = new Size(110, 22),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Font = new Font("Segoe UI", 9),
+            };
+            _cmbPreferred.Items.AddRange(new object[] { "LTE", "RadioMaster", "None" });
+            _cmbPreferred.SelectedIndex = _cm.Config.PreferredLink switch
+            {
+                LinkType.LTE => 0,
+                LinkType.RadioMaster => 1,
+                _ => 2,
+            };
+            _cmbPreferred.SelectedIndexChanged += (s, e) =>
+            {
+                var pref = _cmbPreferred.SelectedIndex switch
+                {
+                    0 => LinkType.LTE,
+                    1 => LinkType.RadioMaster,
+                    _ => LinkType.None,
+                };
+                _cm.SetPreferredLink(pref);
+                _config.PreferredMavlinkLink = pref switch
+                {
+                    LinkType.LTE => "LTE",
+                    LinkType.RadioMaster => "RadioMaster",
+                    _ => "None",
+                };
+                PersistConfig();
+            };
+            panel.Controls.Add(_cmbPreferred);
+
+            _chkDedup = new CheckBox
+            {
+                Text = "Deduplicate cross-link packets",
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
+                Font = new Font("Segoe UI", 9),
+                Location = new Point(450, 12),
+                AutoSize = true,
+                Checked = _cm.Config.RouterDedupEnabled,
+            };
+            _chkDedup.CheckedChanged += (s, e) =>
+            {
+                _cm.SetDedupEnabled(_chkDedup.Checked);
+                _config.RouterDedupEnabled = _chkDedup.Checked;
+                PersistConfig();
+            };
+            panel.Controls.Add(_chkDedup);
+
+            _lblManualOverride = new Label
+            {
+                Text = "",
+                ForeColor = NOMADTheme.WARNING,
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                Location = new Point(450, 38),
+                AutoSize = true,
+            };
+            panel.Controls.Add(_lblManualOverride);
+
+            _btnReleaseOverride = new Button
+            {
+                Text = "Release override",
+                Size = new Size(120, 24),
+                BackColor = NOMADTheme.BUTTON_BG,
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 8),
+                Visible = false,
+                Cursor = Cursors.Hand,
+            };
+            _btnReleaseOverride.FlatAppearance.BorderSize = 0;
+            _btnReleaseOverride.Click += (s, e) => _cm.SwitchToLink(LinkType.None);
+            panel.Controls.Add(_btnReleaseOverride);
+            panel.Resize += (s, e) =>
+            {
+                _btnReleaseOverride.Location = new Point(panel.ClientSize.Width - 140, 36);
+                _btnReset.Location = new Point(panel.ClientSize.Width - 140, 10);
+            };
+
+            _btnReset = new Button
+            {
+                Text = "Reset counters",
+                Size = new Size(120, 24),
+                BackColor = NOMADTheme.BUTTON_BG,
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 8),
+                Cursor = Cursors.Hand,
+            };
+            _btnReset.FlatAppearance.BorderSize = 0;
+            _btnReset.Click += (s, e) => _cm.ResetCounters();
+            panel.Controls.Add(_btnReset);
+
             return panel;
         }
 
-        private Panel CreateLogPanel()
+        private Panel BuildLogPanel()
         {
-            var panel = new Panel
+            var panel = MakeCard();
+            panel.Margin = new Padding(0, 6, 0, 0);
+            panel.Padding = new Padding(14, 8, 14, 12);
+
+            var grid = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                BackColor = _panelColor,
-                Margin = new Padding(0),
-                Padding = new Padding(10),
+                ColumnCount = 2,
+                RowCount = 2,
+                BackColor = Color.Transparent,
             };
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
             var title = new Label
             {
-                Text = "Failover Log",
+                Text = "Failover log",
                 Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                ForeColor = _accentColor,
-                Location = new Point(15, 10),
+                ForeColor = NOMADTheme.ACCENT,
                 AutoSize = true,
+                Margin = new Padding(0, 0, 0, 6),
             };
-            panel.Controls.Add(title);
+            grid.Controls.Add(title, 0, 0);
 
-            _lstFailoverLog = new ListBox
-            {
-                Location = new Point(15, 35),
-                Size = new Size(450, 120),
-                BackColor = Color.FromArgb(25, 25, 25),
-                ForeColor = _textColor,
-                Font = new Font("Consolas", 9),
-                BorderStyle = BorderStyle.None,
-            };
-            panel.Controls.Add(_lstFailoverLog);
-
-            // Clear button
             var btnClear = new Button
             {
                 Text = "Clear",
-                Location = new Point(380, 8),
                 Size = new Size(60, 22),
-                BackColor = Color.FromArgb(60, 60, 60),
-                ForeColor = _textColor,
+                BackColor = NOMADTheme.BUTTON_BG,
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Segoe UI", 8),
+                Cursor = Cursors.Hand,
+                Margin = new Padding(0, 0, 0, 6),
+                Anchor = AnchorStyles.Right,
             };
             btnClear.FlatAppearance.BorderSize = 0;
-            btnClear.Click += (s, e) =>
-            {
-                _failoverLog.Clear();
-                _lstFailoverLog.Items.Clear();
-            };
-            panel.Controls.Add(btnClear);
+            btnClear.Click += (s, e) => { _lstLog.Items.Clear(); };
+            grid.Controls.Add(btnClear, 1, 0);
 
-            // Resize handler
-            panel.Resize += (s, e) =>
+            _lstLog = new ListBox
             {
-                _lstFailoverLog.Width = panel.Width - 30;
-                _lstFailoverLog.Height = panel.Height - 50;
-                btnClear.Location = new Point(panel.Width - 90, 8);
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(25, 25, 25),
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
+                Font = new Font("Consolas", 9),
+                BorderStyle = BorderStyle.None,
+                IntegralHeight = false,
             };
+            grid.SetColumnSpan(_lstLog, 2);
+            grid.Controls.Add(_lstLog, 0, 1);
 
+            panel.Controls.Add(grid);
             return panel;
         }
 
-        // ============================================================
-        // Event Handling
-        // ============================================================
-
-        private void SubscribeToEvents()
+        private static Panel MakeCard()
         {
-            _connectionManager.LinkStatusChanged += OnLinkStatusChanged;
-            _connectionManager.FailoverOccurred += OnFailoverOccurred;
-            _connectionManager.ActiveLinkChanged += OnActiveLinkChanged;
-        }
-
-        private void OnLinkStatusChanged(object sender, LinkStatusChangedEventArgs e)
-        {
-            if (this.InvokeRequired)
+            return new Panel
             {
-                this.BeginInvoke(new Action(() => OnLinkStatusChanged(sender, e)));
-                return;
-            }
-
-            UpdateLinkDisplay(e.Link, e.Statistics, e.IsActive);
-        }
-
-        private void OnFailoverOccurred(object sender, FailoverEventArgs e)
-        {
-            if (this.InvokeRequired)
-            {
-                this.BeginInvoke(new Action(() => OnFailoverOccurred(sender, e)));
-                return;
-            }
-
-            var logEntry = $"[{e.Timestamp:HH:mm:ss}] {e.FromLink} → {e.ToLink}: {e.Reason}";
-            _failoverLog.Add(logEntry);
-            _lstFailoverLog.Items.Add(logEntry);
-
-            // Auto-scroll to bottom
-            if (_lstFailoverLog.Items.Count > 0)
-            {
-                _lstFailoverLog.SelectedIndex = _lstFailoverLog.Items.Count - 1;
-                _lstFailoverLog.SelectedIndex = -1;
-            }
-        }
-
-        private void OnActiveLinkChanged(object sender, LinkType newLink)
-        {
-            if (this.InvokeRequired)
-            {
-                this.BeginInvoke(new Action(() => OnActiveLinkChanged(sender, newLink)));
-                return;
-            }
-
-            UpdateActiveLinkDisplay(newLink);
-        }
-
-        // ============================================================
-        // UI Updates
-        // ============================================================
-
-        private void StartUpdateTimer()
-        {
-            _updateTimer = new System.Windows.Forms.Timer
-            {
-                Interval = _config.LinkMonitorInterval
-            };
-            _updateTimer.Tick += (s, e) => RefreshDisplay();
-            _updateTimer.Start();
-        }
-
-        private void RefreshDisplay()
-        {
-            UpdateLinkDisplay(LinkType.LTE, _connectionManager.LteStatistics, 
-                _connectionManager.ActiveLink == LinkType.LTE);
-            UpdateLinkDisplay(LinkType.RadioMaster, _connectionManager.RadioMasterStatistics,
-                _connectionManager.ActiveLink == LinkType.RadioMaster);
-            UpdateActiveLinkDisplay(_connectionManager.ActiveLink);
-            
-            // Force indicator repaint
-            _picLteIndicator?.Invalidate();
-            _picRadioMasterIndicator?.Invalidate();
-        }
-
-        private void UpdateLinkDisplay(LinkType linkType, LinkStatistics stats, bool isActive)
-        {
-            Label lblStatus, lblLatency, lblPacketLoss;
-            ProgressBar prgHealth;
-            Button btnSwitch;
-
-            if (linkType == LinkType.LTE)
-            {
-                lblStatus = _lblLteStatus;
-                lblLatency = _lblLteLatency;
-                lblPacketLoss = _lblLtePacketLoss;
-                prgHealth = _prgLteHealth;
-                btnSwitch = _btnSwitchToLte;
-            }
-            else
-            {
-                lblStatus = _lblRadioMasterStatus;
-                lblLatency = _lblRadioMasterLatency;
-                lblPacketLoss = _lblRadioMasterPacketLoss;
-                prgHealth = _prgRadioMasterHealth;
-                btnSwitch = _btnSwitchToRadioMaster;
-            }
-
-            // Update status
-            lblStatus.Text = stats.StatusText;
-            lblStatus.ForeColor = GetHealthColor(stats.Health);
-
-            // Update metrics
-            lblLatency.Text = stats.IsConnected ? $"Latency: {stats.LatencyMs:F0}ms" : "Latency: --";
-            lblPacketLoss.Text = stats.IsConnected ? $"Loss: {stats.PacketLossPercent:F1}%" : "Loss: --";
-
-            // Update health bar
-            prgHealth.Value = stats.IsConnected ? HealthToPercent(stats.Health) : 0;
-
-            // Update switch button
-            btnSwitch.Enabled = stats.IsConnected && !isActive;
-            btnSwitch.Text = isActive ? "ACTIVE" : "Switch";
-            btnSwitch.BackColor = isActive ? Color.ForestGreen : _accentColor;
-            
-            // Set tooltip for disabled button
-            if (!stats.IsConnected)
-            {
-                _toolTip.SetToolTip(btnSwitch, "Link is disconnected");
-            }
-            else if (isActive)
-            {
-                _toolTip.SetToolTip(btnSwitch, "This link is currently active");
-            }
-            else
-            {
-                _toolTip.SetToolTip(btnSwitch, $"Switch to {linkType} link");
-            }
-        }
-
-        private void UpdateActiveLinkDisplay(LinkType activeLink)
-        {
-            _lblActiveLink.Text = $"Active: {(activeLink == LinkType.None ? "NONE" : activeLink.ToString())}";
-            _lblActiveLink.ForeColor = activeLink switch
-            {
-                LinkType.LTE => Color.LimeGreen,
-                LinkType.RadioMaster => Color.Cyan,
-                _ => Color.Yellow
-            };
-
-            _lblOverallStatus.Text = _connectionManager.GetStatusSummary();
-        }
-
-        private Color GetIndicatorColor(LinkType linkType)
-        {
-            var stats = linkType == LinkType.LTE 
-                ? _connectionManager.LteStatistics 
-                : _connectionManager.RadioMasterStatistics;
-
-            return GetHealthColor(stats.Health);
-        }
-
-        private Color GetHealthColor(LinkHealth health)
-        {
-            return health switch
-            {
-                LinkHealth.Excellent => Color.LimeGreen,
-                LinkHealth.Good => Color.LightGreen,
-                LinkHealth.Fair => Color.Gold,
-                LinkHealth.Poor => Color.Orange,
-                LinkHealth.Critical => Color.OrangeRed,
-                LinkHealth.Disconnected => Color.Red,
-                _ => Color.Gray
-            };
-        }
-
-        private int HealthToPercent(LinkHealth health)
-        {
-            return health switch
-            {
-                LinkHealth.Excellent => 100,
-                LinkHealth.Good => 80,
-                LinkHealth.Fair => 60,
-                LinkHealth.Poor => 40,
-                LinkHealth.Critical => 20,
-                _ => 0
+                Dock = DockStyle.Fill,
+                BackColor = NOMADTheme.CARD_BG,
+                Padding = new Padding(14),
             };
         }
 
         // ============================================================
-        // Actions
+        // Event wiring
         // ============================================================
 
-        private void SwitchToLink(LinkType targetLink)
+        private void HookEvents()
         {
-            // Check if connection manager is initialized and connected
-            if (_connectionManager == null || !_connectionManager.IsMonitoring)
+            _cm.LinkStatusChanged += (s, e) =>
             {
-                MessageBox.Show(
-                    "Cannot switch link: MAVLink Connection Manager is not initialized or connected.\n\n" +
-                    "Please ensure MAVLink connection is established first.",
-                    "Connection Not Ready",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning
-                );
-                return;
-            }
-            
-            var result = _connectionManager.SwitchToLink(targetLink);
-            
-            if (!result)
+                if (IsHandleCreated && !IsDisposed) BeginInvoke((Action)(() => RefreshAll()));
+            };
+            _cm.FailoverOccurred += (s, e) =>
             {
-                MessageBox.Show(
-                    $"Cannot switch to {targetLink}.\nThe link may not be connected or healthy.",
-                    "Switch Failed",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning
-                );
-            }
-            else
+                if (IsHandleCreated && !IsDisposed) BeginInvoke((Action)(() => AppendLog(e)));
+            };
+            _cm.ActiveLinkChanged += (s, t) =>
             {
-                var logEntry = $"[{DateTime.Now:HH:mm:ss}] Manual switch to {targetLink}";
-                _failoverLog.Add(logEntry);
-                _lstFailoverLog.Items.Add(logEntry);
+                if (IsHandleCreated && !IsDisposed) BeginInvoke((Action)(() => RefreshAll()));
+            };
+            _cm.LogMessage += (s, msg) =>
+            {
+                if (IsHandleCreated && !IsDisposed)
+                    BeginInvoke((Action)(() => _lstLog.Items.Add($"[{DateTime.Now:HH:mm:ss}] {msg}")));
+            };
+        }
+
+        // ============================================================
+        // Refresh
+        // ============================================================
+
+        private void RefreshAll()
+        {
+            try
+            {
+                var lte = _cm.LteStatistics;
+                var radio = _cm.RadioMasterStatistics;
+                var active = _cm.ActiveLink;
+                var ovr = _cm.ManualOverride;
+
+                _lblActive.Text = $"Active: {(active == LinkType.None ? "—" : active.ToString())}";
+                _lblActive.ForeColor = active switch
+                {
+                    LinkType.LTE => NOMADTheme.SUCCESS,
+                    LinkType.RadioMaster => Color.MediumTurquoise,
+                    _ => NOMADTheme.WARNING,
+                };
+
+                bool running = _cm.IsMonitoring;
+                _lblRouterStatus.Text = running ? "Router: running — both links open" : "Router: stopped";
+                _lblRouterStatus.ForeColor = running ? NOMADTheme.TEXT_SECONDARY : NOMADTheme.ERROR;
+                _lblLocalEndpoint.Text = $"Local: {_cm.LocalMergedEndpoint}   (set Mission Planner connection to UDP server on this port)";
+
+                _lteCard.Update(lte, isActive: active == LinkType.LTE, isOverride: ovr == LinkType.LTE);
+                _radioCard.Update(radio, isActive: active == LinkType.RadioMaster, isOverride: ovr == LinkType.RadioMaster);
+
+                if (ovr == LinkType.None)
+                {
+                    _lblManualOverride.Text = "";
+                    _btnReleaseOverride.Visible = false;
+                }
+                else
+                {
+                    _lblManualOverride.Text = $"Manual override → {ovr}";
+                    _btnReleaseOverride.Visible = true;
+                }
             }
+            catch { /* ignore transient repaint errors */ }
+        }
+
+        private void AppendLog(FailoverEventArgs e)
+        {
+            string line = $"[{e.Timestamp:HH:mm:ss}] {e.FromLink} → {e.ToLink}   {e.Reason}";
+            _lstLog.Items.Add(line);
+            while (_lstLog.Items.Count > 200) _lstLog.Items.RemoveAt(0);
+            _lstLog.TopIndex = Math.Max(0, _lstLog.Items.Count - 1);
+        }
+
+        private void PersistConfig()
+        {
+            try { _config.Save(); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"NOMAD: persist failed - {ex.Message}"); }
+        }
+
+        private void CopyEndpoint()
+        {
+            try
+            {
+                Clipboard.SetText(_cm.LocalMergedEndpoint);
+                _lblCopied.Text = "copied";
+                var t = new Timer { Interval = 1500 };
+                t.Tick += (s, e) => { _lblCopied.Text = ""; t.Stop(); t.Dispose(); };
+                t.Start();
+            }
+            catch { }
         }
 
         // ============================================================
@@ -676,19 +544,327 @@ namespace NOMAD.MissionPlanner
         {
             if (disposing)
             {
-                _updateTimer?.Stop();
-                _updateTimer?.Dispose();
-                _toolTip?.Dispose();
+                _refresh?.Stop();
+                _refresh?.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+    }
 
-                if (_connectionManager != null)
-                {
-                    _connectionManager.LinkStatusChanged -= OnLinkStatusChanged;
-                    _connectionManager.FailoverOccurred -= OnFailoverOccurred;
-                    _connectionManager.ActiveLinkChanged -= OnActiveLinkChanged;
-                }
+    // ================================================================
+    // Per-link card
+    // ================================================================
+
+    internal class LinkCard : UserControl
+    {
+        private readonly LinkType _type;
+        private readonly string _title;
+
+        private Label _lblTitle;
+        private Label _lblHealth;
+        private Label _lblEndpoint;
+        private Label _lblLatency;
+        private Label _lblLoss;
+        private Label _lblRate;
+        private Label _lblFrames;
+        private Label _lblRssi;
+        private Label _lblHb;
+        private SparklinePanel _spark;
+        private Button _btnSetActive;
+        private Label _lblActiveBadge;
+
+        public event EventHandler SetActiveRequested;
+
+        public LinkCard(string title, LinkType type)
+        {
+            _title = title;
+            _type = type;
+            BackColor = NOMADTheme.CARD_BG;
+            DoubleBuffered = true;
+            Padding = new Padding(14, 12, 14, 12);
+            BuildUi();
+        }
+
+        private void BuildUi()
+        {
+            // One docked TableLayout that owns every cell, so everything
+            // reflows when the card resizes. Rows top-to-bottom:
+            //   0 title + active-badge
+            //   1 big health text
+            //   2 endpoint
+            //   3 sparkline (fills available space)
+            //   4 metrics grid (2 columns × 3 rows of labels)
+            //   5 button row
+            var grid = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 7,
+                BackColor = Color.Transparent,
+            };
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));        // title
+            grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));        // health
+            grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));        // endpoint
+            grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));    // sparkline (fixed)
+            grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));        // metrics
+            grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));        // button
+            grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));    // spacer absorbs slack
+
+            // Row 0: title + active badge (mini 2-column flex row)
+            var titleRow = new TableLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                ColumnCount = 2,
+                RowCount = 1,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                BackColor = Color.Transparent,
+                Margin = new Padding(0),
+            };
+            titleRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            titleRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+            _lblTitle = new Label
+            {
+                Text = _title,
+                Font = new Font("Segoe UI", 11, FontStyle.Bold),
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
+                AutoSize = true,
+                Margin = new Padding(0, 2, 0, 4),
+            };
+            titleRow.Controls.Add(_lblTitle, 0, 0);
+
+            _lblActiveBadge = new Label
+            {
+                Text = "ACTIVE",
+                Font = new Font("Segoe UI", 8, FontStyle.Bold),
+                ForeColor = Color.White,
+                BackColor = NOMADTheme.SUCCESS,
+                Padding = new Padding(6, 2, 6, 2),
+                AutoSize = true,
+                Visible = false,
+                Margin = new Padding(0, 2, 0, 4),
+                Anchor = AnchorStyles.Right,
+            };
+            titleRow.Controls.Add(_lblActiveBadge, 1, 0);
+            grid.Controls.Add(titleRow, 0, 0);
+
+            // Row 1: big health status
+            _lblHealth = new Label
+            {
+                Text = "DISCONNECTED",
+                Font = new Font("Segoe UI", 16, FontStyle.Bold),
+                ForeColor = NOMADTheme.ERROR,
+                AutoSize = true,
+                Margin = new Padding(0, 2, 0, 2),
+            };
+            grid.Controls.Add(_lblHealth, 0, 1);
+
+            // Row 2: endpoint
+            _lblEndpoint = new Label
+            {
+                Text = "—",
+                Font = new Font("Consolas", 9),
+                ForeColor = NOMADTheme.TEXT_MUTED,
+                AutoSize = true,
+                Margin = new Padding(0, 0, 0, 6),
+            };
+            grid.Controls.Add(_lblEndpoint, 0, 2);
+
+            // Row 3: sparkline (fixed 72px row, fills width)
+            _spark = new SparklinePanel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(28, 28, 30),
+                Margin = new Padding(0, 2, 0, 10),
+            };
+            grid.Controls.Add(_spark, 0, 3);
+
+            // Row 4: metrics — 2-column AutoSize sub-grid
+            var metrics = new TableLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                ColumnCount = 2,
+                RowCount = 3,
+                BackColor = Color.Transparent,
+                Margin = new Padding(0, 0, 0, 6),
+            };
+            metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            for (int r = 0; r < 3; r++) metrics.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            _lblLatency = MakeMetric();
+            _lblLoss = MakeMetric();
+            _lblRate = MakeMetric();
+            _lblFrames = MakeMetric();
+            _lblRssi = MakeMetric();
+            _lblHb = MakeMetric();
+
+            metrics.Controls.Add(_lblLatency, 0, 0);
+            metrics.Controls.Add(_lblFrames, 1, 0);
+            metrics.Controls.Add(_lblLoss, 0, 1);
+            metrics.Controls.Add(_lblRssi, 1, 1);
+            metrics.Controls.Add(_lblRate, 0, 2);
+            metrics.Controls.Add(_lblHb, 1, 2);
+            grid.Controls.Add(metrics, 0, 4);
+
+            // Row 5: action button
+            _btnSetActive = new Button
+            {
+                Text = "Set active",
+                Size = new Size(110, 28),
+                BackColor = NOMADTheme.BTN_PRIMARY,
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                Cursor = Cursors.Hand,
+                Anchor = AnchorStyles.Left,
+                Margin = new Padding(0, 4, 0, 0),
+            };
+            _btnSetActive.FlatAppearance.BorderSize = 0;
+            _btnSetActive.Click += (s, e) => SetActiveRequested?.Invoke(this, EventArgs.Empty);
+            grid.Controls.Add(_btnSetActive, 0, 5);
+
+            Controls.Add(grid);
+        }
+
+        private static Label MakeMetric()
+        {
+            return new Label
+            {
+                Font = new Font("Segoe UI", 9),
+                ForeColor = NOMADTheme.TEXT_SECONDARY,
+                AutoSize = true,
+                Text = "—",
+                Margin = new Padding(0, 2, 8, 2),
+            };
+        }
+
+        public void Update(LinkStatistics s, bool isActive, bool isOverride)
+        {
+            _lblEndpoint.Text = string.IsNullOrEmpty(s.Endpoint) ? "—" : s.Endpoint;
+
+            _lblHealth.Text = s.IsConnected ? s.Health.ToString().ToUpperInvariant() : "DISCONNECTED";
+            _lblHealth.ForeColor = HealthColor(s.Health, s.IsConnected);
+
+            _lblLatency.Text = s.IsConnected ? $"Latency: {s.LatencyMs,5:F0} ms" : "Latency:    — ms";
+            _lblLoss.Text = s.IsConnected ? $"Loss:    {s.PacketLossPercent,5:F1} %" : "Loss:       — %";
+
+            string rate = FormatRate(s.DataRateBps);
+            _lblRate.Text = $"Rate:  {rate}";
+
+            _lblFrames.Text = $"Frames: {s.PacketsReceived:N0}";
+            if (s.PacketsDuplicate > 0) _lblFrames.Text += $"  (+{s.PacketsDuplicate:N0} dup)";
+
+            _lblHb.Text = s.HeartbeatCount > 0
+                ? $"HB:    {s.HeartbeatCount:N0}   age {Math.Max(0, (DateTime.UtcNow - s.LastHeartbeat).TotalSeconds):F1}s"
+                : "HB:    —";
+
+            _lblRssi.Text = s.Rssi.HasValue
+                ? $"RSSI:  {s.Rssi.Value,3}  rem {s.RemRssi.GetValueOrDefault(0),3}"
+                : "RSSI:    —";
+
+            _spark.Push(s.DataRateBps, s.IsConnected ? HealthColor(s.Health, true) : NOMADTheme.TEXT_MUTED);
+
+            _lblActiveBadge.Visible = isActive;
+            _lblActiveBadge.BackColor = isOverride ? NOMADTheme.WARNING : NOMADTheme.SUCCESS;
+            _lblActiveBadge.Text = isOverride ? "ACTIVE (manual)" : "ACTIVE";
+
+            _btnSetActive.Enabled = !isActive;
+            _btnSetActive.BackColor = isActive ? NOMADTheme.BUTTON_BG : NOMADTheme.BTN_PRIMARY;
+        }
+
+        private static Color HealthColor(LinkHealth h, bool connected)
+        {
+            if (!connected) return NOMADTheme.ERROR;
+            return h switch
+            {
+                LinkHealth.Excellent => NOMADTheme.SUCCESS,
+                LinkHealth.Good => Color.LightGreen,
+                LinkHealth.Fair => Color.Gold,
+                LinkHealth.Poor => NOMADTheme.WARNING,
+                LinkHealth.Critical => Color.OrangeRed,
+                _ => NOMADTheme.ERROR,
+            };
+        }
+
+        private static string FormatRate(double bytesPerSec)
+        {
+            if (bytesPerSec < 1) return "  0 B/s";
+            if (bytesPerSec < 1024) return $"{bytesPerSec,5:F0} B/s";
+            if (bytesPerSec < 1024 * 1024) return $"{bytesPerSec / 1024.0,5:F1} KB/s";
+            return $"{bytesPerSec / (1024.0 * 1024.0),5:F1} MB/s";
+        }
+    }
+
+    // ================================================================
+    // Throughput sparkline
+    // ================================================================
+
+    internal class SparklinePanel : Panel
+    {
+        private readonly LinkedList<double> _values = new LinkedList<double>();
+        private Color _lineColor = NOMADTheme.ACCENT;
+        private const int MAX_POINTS = 80;
+
+        public SparklinePanel() { DoubleBuffered = true; }
+
+        public void Push(double value, Color color)
+        {
+            _values.AddLast(value);
+            while (_values.Count > MAX_POINTS) _values.RemoveFirst();
+            _lineColor = color;
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.Clear(BackColor);
+
+            // baseline
+            using (var basePen = new Pen(Color.FromArgb(60, 60, 60)))
+            {
+                g.DrawLine(basePen, 0, ClientSize.Height - 1, ClientSize.Width, ClientSize.Height - 1);
             }
 
-            base.Dispose(disposing);
+            if (_values.Count < 2) return;
+
+            double max = Math.Max(1, _values.Max());
+            int w = ClientSize.Width;
+            int h = ClientSize.Height;
+            float dx = (float)w / Math.Max(1, MAX_POINTS - 1);
+
+            var pts = new List<PointF>();
+            int i = 0;
+            int offset = MAX_POINTS - _values.Count;
+            foreach (var v in _values)
+            {
+                float x = (offset + i) * dx;
+                float y = (float)(h - 2 - (v / max) * (h - 6));
+                pts.Add(new PointF(x, y));
+                i++;
+            }
+
+            // soft fill under the line
+            using (var fillPath = new GraphicsPath())
+            using (var fillBrush = new SolidBrush(Color.FromArgb(50, _lineColor)))
+            {
+                fillPath.AddLine(pts[0].X, h, pts[0].X, pts[0].Y);
+                for (int k = 1; k < pts.Count; k++) fillPath.AddLine(pts[k - 1], pts[k]);
+                fillPath.AddLine(pts[pts.Count - 1].X, pts[pts.Count - 1].Y, pts[pts.Count - 1].X, h);
+                g.FillPath(fillBrush, fillPath);
+            }
+
+            using (var pen = new Pen(_lineColor, 1.5f))
+            {
+                for (int k = 1; k < pts.Count; k++)
+                    g.DrawLine(pen, pts[k - 1], pts[k]);
+            }
         }
     }
 }

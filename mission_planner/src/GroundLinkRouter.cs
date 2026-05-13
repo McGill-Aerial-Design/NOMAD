@@ -1,0 +1,919 @@
+// ============================================================
+// Ground-side MAVLink Router (MAVProxy-style multiplexer)
+// ============================================================
+// Owns both source links (LTE + RadioMaster) directly, parses
+// MAVLink v1/v2 frame boundaries, tracks real per-link health
+// from packet flow, dedupes duplicates that arrive on both
+// paths, and exposes a single merged UDP endpoint Mission
+// Planner connects to as a UDP client.
+//
+// Both source sockets stay open and reading at all times, so
+// failover is gap-free: the moment one link stops delivering
+// packets the other is already filling the merged stream.
+// Outbound (GCS-originated) traffic is forwarded to whichever
+// source link is currently "active" (the healthiest one).
+// ============================================================
+
+using System;
+using System.Collections.Generic;
+using System.IO.Ports;
+using System.Net;
+using System.Net.Sockets;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace NOMAD.MissionPlanner
+{
+    /// <summary>
+    /// Live statistics for a single source link, owned by the router.
+    /// </summary>
+    public class LinkSourceStats
+    {
+        public LinkType Type;
+        public string Endpoint = "";
+        public bool IsOpen;         // socket bound / serial open
+        public bool IsConnected;    // received traffic in the last few seconds
+        public LinkHealth Health = LinkHealth.Disconnected;
+
+        public double LatencyMs;          // smoothed heartbeat-interval deviation
+        public double PacketLossPercent;  // from sequence-number gaps
+        public double DataRateBps;        // EMA of received bytes/sec
+
+        public long FramesReceived;
+        public long FramesForwarded;      // after dedup
+        public long FramesDuplicate;
+        public long BytesReceived;
+        public long BytesSentOutbound;
+        public long FrameErrors;
+        public int HeartbeatCount;
+
+        public DateTime LastPacketTime;
+        public DateTime LastHeartbeatTime;
+
+        public int? Rssi;     // last RADIO_STATUS rssi (0-254, higher = better)
+        public int? RemRssi;  // remote RSSI from RADIO_STATUS
+
+        public IPEndPoint LastRemote; // last UDP sender (for outbound replies)
+    }
+
+    /// <summary>
+    /// Local UDP/serial multiplexer that mirrors two MAVLink links into
+    /// a single loopback endpoint for Mission Planner.
+    /// </summary>
+    public class GroundLinkRouter : IDisposable
+    {
+        // ============================================================
+        // Configuration
+        // ============================================================
+
+        public class RouterConfig
+        {
+            public string BindAddress = "127.0.0.1";
+            public int LocalPort = 14600;
+            public bool DedupEnabled = true;
+
+            // LTE
+            public int LteBindPort = 14560;          // we listen here for Jetson uplink (14560 to avoid RC default 14550)
+            public string LteRemoteHost = "";        // outbound to Jetson (empty = reply to LastRemote)
+            public int LteRemotePort = 0;
+
+            // RadioMaster
+            public bool RadioIsSerial;               // true = use serial port, false = UDP
+            public int RadioBindPort = 14550;        // UDP listen port (must differ from LteBindPort)
+            public string RadioComPort = "COM3";     // serial path
+            public int RadioBaudRate = 420000;
+
+            public bool AutoFailoverEnabled = true;
+            public LinkType PreferredLink = LinkType.LTE;
+            public bool AutoReconnectPreferred = true;
+            public int PreferredLinkReconnectDelaySec = 10;
+
+            public int StatsTickMs = 250;
+            public double HeartbeatTimeoutSec = 3.0;
+            public double FailoverCooldownSec = 2.0;
+        }
+
+        // ============================================================
+        // Public state
+        // ============================================================
+
+        public LinkSourceStats Lte { get; } = new LinkSourceStats { Type = LinkType.LTE, Health = LinkHealth.Disconnected };
+        public LinkSourceStats Radio { get; } = new LinkSourceStats { Type = LinkType.RadioMaster, Health = LinkHealth.Disconnected };
+
+        public LinkType ActiveLink { get; private set; } = LinkType.None;
+        public LinkType ManualOverride { get; private set; } = LinkType.None; // None = follow auto-failover
+        public IPEndPoint LocalEndpoint { get; private set; }
+        public bool IsRunning => _cts != null && !_cts.IsCancellationRequested;
+        public RouterConfig Config => _cfg;
+
+        public event EventHandler<LinkType> ActiveLinkChanged;
+        public event EventHandler<FailoverEventArgs> FailoverOccurred;
+        public event EventHandler StatsUpdated;
+        public event EventHandler<string> LogMessage;
+
+        // ============================================================
+        // Private state
+        // ============================================================
+
+        private readonly RouterConfig _cfg;
+        private CancellationTokenSource _cts;
+
+        // Sockets
+        private UdpClient _lteSock;
+        private UdpClient _radioSock;
+        private SerialPort _radioSerial;
+        private UdpClient _localSock;             // OS-assigned ephemeral port, used to push to MP and receive replies
+        private volatile IPEndPoint _mpEndpoint;  // destination MP listens on (127.0.0.1:LocalPort)
+
+        // Frame parsers (one per source, stateful — handles split datagrams/serial chunks)
+        private readonly MavlinkFrameParser _lteParser = new MavlinkFrameParser();
+        private readonly MavlinkFrameParser _radioParser = new MavlinkFrameParser();
+
+        // Dedup
+        private readonly object _dedupLock = new object();
+        private readonly Dictionary<DedupKey, DateTime> _seenFrames = new Dictionary<DedupKey, DateTime>();
+        private static readonly TimeSpan DEDUP_WINDOW = TimeSpan.FromMilliseconds(750);
+        private DateTime _nextDedupSweep = DateTime.MinValue;
+
+        // Health bookkeeping
+        private DateTime _lastFailover = DateTime.MinValue;
+        private DateTime _preferredHealthySince = DateTime.MinValue;
+        private DateTime _lastStatsTick = DateTime.MinValue;
+        private long _lteBytesAtLastTick;
+        private long _radioBytesAtLastTick;
+        // MAVLink seq is per-(sysid, compid); a single global last-seq mixes
+        // counters from multiple components and reports phantom loss. Track
+        // last-seen per (sysid << 8 | compid) tuple per link instead.
+        private readonly Dictionary<int, byte> _lteLastSeqByComp = new Dictionary<int, byte>();
+        private readonly Dictionary<int, byte> _radioLastSeqByComp = new Dictionary<int, byte>();
+        private long _lteSeenSeqCount;
+        private long _lteLostSeqCount;
+        private long _radioSeenSeqCount;
+        private long _radioLostSeqCount;
+
+        // Failover log (ring buffer)
+        private readonly LinkedList<FailoverEventArgs> _failoverLog = new LinkedList<FailoverEventArgs>();
+        private const int FAILOVER_LOG_MAX = 50;
+
+        // ============================================================
+        // Construction
+        // ============================================================
+
+        public GroundLinkRouter(RouterConfig cfg)
+        {
+            _cfg = cfg ?? throw new ArgumentNullException(nameof(cfg));
+            UpdateEndpointStrings();
+        }
+
+        public IReadOnlyCollection<FailoverEventArgs> FailoverLog
+        {
+            get { lock (_failoverLog) return new List<FailoverEventArgs>(_failoverLog); }
+        }
+
+        // ============================================================
+        // Lifecycle
+        // ============================================================
+
+        public void Start()
+        {
+            if (IsRunning) return;
+            _cts = new CancellationTokenSource();
+
+            // MP runs as UDP *server* and listens on (BindAddress:LocalPort).
+            // The router pushes packets out from an ephemeral source port; MP's
+            // replies come back on that same socket. This avoids the UDPCl
+            // catch-22 where MP never sends anything until it sees a heartbeat
+            // and the router never knows where to forward heartbeats to.
+            try
+            {
+                if (!IPAddress.TryParse(_cfg.BindAddress, out var ip)) ip = IPAddress.Loopback;
+                _mpEndpoint = new IPEndPoint(ip, _cfg.LocalPort);
+                _localSock = new UdpClient(0); // OS-assigned ephemeral port
+                LocalEndpoint = _mpEndpoint;
+            }
+            catch (Exception ex)
+            {
+                Log($"FATAL: could not allocate local socket → {_cfg.BindAddress}:{_cfg.LocalPort} — {ex.Message}");
+                Cleanup();
+                throw;
+            }
+
+            OpenLte();
+            OpenRadio();
+
+            // Set initial active link to preferred, even if neither is connected yet —
+            // it lets outbound packets flow through once a link comes up.
+            ActiveLink = _cfg.PreferredLink == LinkType.None ? LinkType.LTE : _cfg.PreferredLink;
+            ActiveLinkChanged?.Invoke(this, ActiveLink);
+
+            Task.Run(() => LocalRxLoop(_cts.Token));
+            Task.Run(() => StatsLoop(_cts.Token));
+            var src = (IPEndPoint)_localSock.Client.LocalEndPoint;
+            Log($"Router started: pushing merged stream → udp://{_cfg.BindAddress}:{_cfg.LocalPort} (router source :{src.Port})");
+        }
+
+        public void Stop()
+        {
+            if (!IsRunning) return;
+            try { _cts.Cancel(); } catch { }
+            Cleanup();
+            Log("Router stopped");
+        }
+
+        private void Cleanup()
+        {
+            try { _lteSock?.Close(); } catch { } _lteSock = null;
+            try { _radioSock?.Close(); } catch { } _radioSock = null;
+            try { if (_radioSerial?.IsOpen == true) _radioSerial.Close(); } catch { } _radioSerial = null;
+            try { _localSock?.Close(); } catch { } _localSock = null;
+            Lte.IsOpen = false; Lte.IsConnected = false; Lte.Health = LinkHealth.Disconnected;
+            Radio.IsOpen = false; Radio.IsConnected = false; Radio.Health = LinkHealth.Disconnected;
+        }
+
+        public void Dispose()
+        {
+            Stop();
+            try { _cts?.Dispose(); } catch { }
+        }
+
+        // ============================================================
+        // Source link setup
+        // ============================================================
+
+        private void OpenLte()
+        {
+            try
+            {
+                _lteSock = new UdpClient(new IPEndPoint(IPAddress.Any, _cfg.LteBindPort));
+                Lte.IsOpen = true;
+                Task.Run(() => UdpRxLoop(_lteSock, LinkType.LTE, _lteParser, _cts.Token));
+                Log($"LTE listening on udp://0.0.0.0:{_cfg.LteBindPort}");
+            }
+            catch (Exception ex)
+            {
+                Lte.IsOpen = false;
+                Log($"LTE bind failed on port {_cfg.LteBindPort}: {ex.Message}");
+            }
+        }
+
+        private void OpenRadio()
+        {
+            if (_cfg.RadioIsSerial)
+            {
+                try
+                {
+                    _radioSerial = new SerialPort(_cfg.RadioComPort, _cfg.RadioBaudRate, Parity.None, 8, StopBits.One)
+                    {
+                        ReadBufferSize = 65536,
+                        WriteBufferSize = 65536,
+                        ReadTimeout = SerialPort.InfiniteTimeout,
+                    };
+                    _radioSerial.Open();
+                    Radio.IsOpen = true;
+                    Task.Run(() => SerialRxLoop(_radioSerial, _cts.Token));
+                    Log($"RadioMaster opened serial {_cfg.RadioComPort} @ {_cfg.RadioBaudRate}");
+                }
+                catch (Exception ex)
+                {
+                    Radio.IsOpen = false;
+                    Log($"RadioMaster serial open failed ({_cfg.RadioComPort}): {ex.Message}");
+                }
+            }
+            else
+            {
+                if (_cfg.RadioBindPort == _cfg.LteBindPort)
+                {
+                    Log($"RadioMaster UDP port {_cfg.RadioBindPort} collides with LTE port — skipping RC bind");
+                    Radio.IsOpen = false;
+                    return;
+                }
+                try
+                {
+                    _radioSock = new UdpClient(new IPEndPoint(IPAddress.Any, _cfg.RadioBindPort));
+                    Radio.IsOpen = true;
+                    Task.Run(() => UdpRxLoop(_radioSock, LinkType.RadioMaster, _radioParser, _cts.Token));
+                    Log($"RadioMaster listening on udp://0.0.0.0:{_cfg.RadioBindPort}");
+                }
+                catch (Exception ex)
+                {
+                    Radio.IsOpen = false;
+                    Log($"RadioMaster UDP bind failed on port {_cfg.RadioBindPort}: {ex.Message}");
+                }
+            }
+        }
+
+        // ============================================================
+        // Receive loops
+        // ============================================================
+
+        private async Task UdpRxLoop(UdpClient sock, LinkType type, MavlinkFrameParser parser, CancellationToken ct)
+        {
+            var stats = type == LinkType.LTE ? Lte : Radio;
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    var result = await sock.ReceiveAsync().ConfigureAwait(false);
+                    stats.LastRemote = result.RemoteEndPoint;
+                    ProcessIncoming(type, parser, result.Buffer, result.Buffer.Length);
+                }
+                catch (ObjectDisposedException) { break; }
+                catch (SocketException) { break; }
+                catch (Exception ex) { Log($"{type} rx error: {ex.Message}"); await Task.Delay(100, ct).ContinueWith(_ => { }); }
+            }
+        }
+
+        private void SerialRxLoop(SerialPort port, CancellationToken ct)
+        {
+            var buf = new byte[4096];
+            while (!ct.IsCancellationRequested && port.IsOpen)
+            {
+                try
+                {
+                    int n = port.Read(buf, 0, buf.Length);
+                    if (n > 0) ProcessIncoming(LinkType.RadioMaster, _radioParser, buf, n);
+                }
+                catch (TimeoutException) { }
+                catch (Exception ex) { Log($"Radio serial rx error: {ex.Message}"); Thread.Sleep(100); }
+            }
+        }
+
+        private async Task LocalRxLoop(CancellationToken ct)
+        {
+            // _mpEndpoint is fixed at Start(); we just need to receive MP's
+            // command-side packets and forward them to the active link.
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    var result = await _localSock.ReceiveAsync().ConfigureAwait(false);
+                    ForwardOutbound(result.Buffer, result.Buffer.Length);
+                }
+                catch (ObjectDisposedException) { break; }
+                catch (SocketException) { break; }
+                catch (Exception ex) { Log($"Local rx error: {ex.Message}"); }
+            }
+        }
+
+        // ============================================================
+        // Frame processing
+        // ============================================================
+
+        private void ProcessIncoming(LinkType type, MavlinkFrameParser parser, byte[] buffer, int length)
+        {
+            var stats = type == LinkType.LTE ? Lte : Radio;
+            stats.BytesReceived += length;
+            stats.LastPacketTime = DateTime.UtcNow;
+            stats.IsConnected = true;
+
+            parser.Push(buffer, length, (frame) =>
+            {
+                stats.FramesReceived++;
+                UpdateSeqLoss(type, frame.Sysid, frame.Compid, frame.Seq);
+
+                if (frame.IsHeartbeat)
+                {
+                    var now = DateTime.UtcNow;
+                    if (stats.LastHeartbeatTime != DateTime.MinValue)
+                    {
+                        var dt = (now - stats.LastHeartbeatTime).TotalMilliseconds;
+                        // Heartbeats nominally arrive at 1Hz. Latency proxy = |dt - 1000|.
+                        // For more realistic ms numbers, smooth via EMA.
+                        double dev = Math.Max(0, Math.Abs(dt - 1000.0));
+                        stats.LatencyMs = stats.LatencyMs <= 0 ? dev : stats.LatencyMs * 0.7 + dev * 0.3;
+                    }
+                    stats.LastHeartbeatTime = now;
+                    stats.HeartbeatCount++;
+                }
+
+                if (frame.IsRadioStatus)
+                {
+                    // RADIO_STATUS XML field order (v1 wire order):
+                    //   rssi u8, remrssi u8, txbuf u8, noise u8, remnoise u8, rxerrors u16, fixed u16
+                    // MAVLink v2 sorts by descending field size on the wire, so it becomes:
+                    //   rxerrors u16, fixed u16, rssi u8, remrssi u8, txbuf u8, noise u8, remnoise u8
+                    if (frame.IsV2 && frame.PayloadLength >= 6)
+                    {
+                        stats.Rssi = frame.Payload[frame.PayloadOffset + 4];
+                        stats.RemRssi = frame.Payload[frame.PayloadOffset + 5];
+                    }
+                    else if (!frame.IsV2 && frame.PayloadLength >= 2)
+                    {
+                        stats.Rssi = frame.Payload[frame.PayloadOffset + 0];
+                        stats.RemRssi = frame.Payload[frame.PayloadOffset + 1];
+                    }
+                }
+
+                stats.FrameErrors = parser.CrcErrors;
+
+                bool isDuplicate = false;
+                if (_cfg.DedupEnabled)
+                {
+                    var key = new DedupKey(frame.Sysid, frame.Compid, frame.Msgid, frame.Seq);
+                    lock (_dedupLock)
+                    {
+                        if (_seenFrames.TryGetValue(key, out var t) && (DateTime.UtcNow - t) < DEDUP_WINDOW)
+                            isDuplicate = true;
+                        _seenFrames[key] = DateTime.UtcNow;
+
+                        if (DateTime.UtcNow >= _nextDedupSweep)
+                        {
+                            SweepDedup();
+                            _nextDedupSweep = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+                        }
+                    }
+                }
+
+                if (isDuplicate)
+                {
+                    stats.FramesDuplicate++;
+                }
+                else
+                {
+                    stats.FramesForwarded++;
+                    ForwardToMp(frame.Raw, frame.RawLength);
+                }
+            });
+        }
+
+        private void SweepDedup()
+        {
+            var cutoff = DateTime.UtcNow - DEDUP_WINDOW;
+            var stale = new List<DedupKey>();
+            foreach (var kvp in _seenFrames)
+                if (kvp.Value < cutoff) stale.Add(kvp.Key);
+            foreach (var k in stale) _seenFrames.Remove(k);
+        }
+
+        private void UpdateSeqLoss(LinkType type, byte sysid, byte compid, byte seq)
+        {
+            int key = (sysid << 8) | compid;
+            var dict = type == LinkType.LTE ? _lteLastSeqByComp : _radioLastSeqByComp;
+
+            if (dict.TryGetValue(key, out byte last))
+            {
+                int delta = (seq - last + 256) & 0xFF;
+                if (delta > 0)
+                {
+                    if (type == LinkType.LTE)
+                    {
+                        _lteSeenSeqCount++;
+                        if (delta > 1) _lteLostSeqCount += (delta - 1);
+                    }
+                    else
+                    {
+                        _radioSeenSeqCount++;
+                        if (delta > 1) _radioLostSeqCount += (delta - 1);
+                    }
+                }
+                // delta == 0 means duplicate seq from the same component — ignore.
+            }
+            dict[key] = seq;
+
+            if (type == LinkType.LTE)
+            {
+                long total = _lteSeenSeqCount + _lteLostSeqCount;
+                Lte.PacketLossPercent = total > 0 ? Math.Min(100, _lteLostSeqCount * 100.0 / total) : 0;
+            }
+            else
+            {
+                long total = _radioSeenSeqCount + _radioLostSeqCount;
+                Radio.PacketLossPercent = total > 0 ? Math.Min(100, _radioLostSeqCount * 100.0 / total) : 0;
+            }
+        }
+
+        // ============================================================
+        // Forwarding
+        // ============================================================
+
+        private void ForwardToMp(byte[] data, int length)
+        {
+            var ep = _mpEndpoint;
+            if (ep == null) return;
+            try { _localSock?.Send(data, length, ep); }
+            catch { /* socket closed or MP not listening yet */ }
+        }
+
+        private void ForwardOutbound(byte[] data, int length)
+        {
+            var target = ManualOverride != LinkType.None ? ManualOverride : ActiveLink;
+            if (target == LinkType.LTE && Lte.IsOpen)
+            {
+                SendLte(data, length);
+            }
+            else if (target == LinkType.RadioMaster && Radio.IsOpen)
+            {
+                SendRadio(data, length);
+            }
+        }
+
+        private void SendLte(byte[] data, int length)
+        {
+            try
+            {
+                IPEndPoint ep = null;
+                if (!string.IsNullOrEmpty(_cfg.LteRemoteHost) && _cfg.LteRemotePort > 0)
+                {
+                    if (IPAddress.TryParse(_cfg.LteRemoteHost, out var ip))
+                        ep = new IPEndPoint(ip, _cfg.LteRemotePort);
+                    else
+                    {
+                        var hostIp = Dns.GetHostAddresses(_cfg.LteRemoteHost);
+                        if (hostIp.Length > 0) ep = new IPEndPoint(hostIp[0], _cfg.LteRemotePort);
+                    }
+                }
+                if (ep == null) ep = Lte.LastRemote;
+                if (ep == null) return; // no destination yet
+                _lteSock?.Send(data, length, ep);
+                Lte.BytesSentOutbound += length;
+            }
+            catch { }
+        }
+
+        private void SendRadio(byte[] data, int length)
+        {
+            try
+            {
+                if (_cfg.RadioIsSerial)
+                {
+                    if (_radioSerial?.IsOpen == true)
+                    {
+                        _radioSerial.Write(data, 0, length);
+                        Radio.BytesSentOutbound += length;
+                    }
+                }
+                else
+                {
+                    var ep = Radio.LastRemote;
+                    if (ep == null || _radioSock == null) return;
+                    _radioSock.Send(data, length, ep);
+                    Radio.BytesSentOutbound += length;
+                }
+            }
+            catch { }
+        }
+
+        // ============================================================
+        // Stats / health / failover
+        // ============================================================
+
+        private async Task StatsLoop(CancellationToken ct)
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    Tick();
+                    StatsUpdated?.Invoke(this, EventArgs.Empty);
+                    await Task.Delay(_cfg.StatsTickMs, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) { break; }
+                catch (Exception ex) { Log($"Stats loop error: {ex.Message}"); }
+            }
+        }
+
+        private void Tick()
+        {
+            var now = DateTime.UtcNow;
+
+            // Throughput EMA
+            if (_lastStatsTick != DateTime.MinValue)
+            {
+                double secs = Math.Max(0.001, (now - _lastStatsTick).TotalSeconds);
+                double lteRate = (Lte.BytesReceived - _lteBytesAtLastTick) / secs;
+                double radioRate = (Radio.BytesReceived - _radioBytesAtLastTick) / secs;
+                Lte.DataRateBps = Lte.DataRateBps * 0.6 + lteRate * 0.4;
+                Radio.DataRateBps = Radio.DataRateBps * 0.6 + radioRate * 0.4;
+            }
+            _lastStatsTick = now;
+            _lteBytesAtLastTick = Lte.BytesReceived;
+            _radioBytesAtLastTick = Radio.BytesReceived;
+
+            // Heartbeat liveness
+            EvaluateLiveness(Lte, now);
+            EvaluateLiveness(Radio, now);
+
+            // Health classification
+            ClassifyHealth(Lte);
+            ClassifyHealth(Radio);
+
+            // Failover
+            if (_cfg.AutoFailoverEnabled && ManualOverride == LinkType.None)
+                EvaluateFailover(now);
+        }
+
+        private void EvaluateLiveness(LinkSourceStats s, DateTime now)
+        {
+            if (!s.IsOpen) { s.IsConnected = false; return; }
+            if (s.LastPacketTime == DateTime.MinValue) { s.IsConnected = false; return; }
+            var elapsed = (now - s.LastPacketTime).TotalSeconds;
+            // Treat link as connected if any packets within timeout window.
+            s.IsConnected = elapsed < _cfg.HeartbeatTimeoutSec;
+        }
+
+        private static void ClassifyHealth(LinkSourceStats s)
+        {
+            if (!s.IsOpen || !s.IsConnected) { s.Health = LinkHealth.Disconnected; return; }
+            double lat = s.LatencyMs;
+            double loss = s.PacketLossPercent;
+            if (lat < 50 && loss < 0.5) s.Health = LinkHealth.Excellent;
+            else if (lat < 150 && loss < 2) s.Health = LinkHealth.Good;
+            else if (lat < 300 && loss < 10) s.Health = LinkHealth.Fair;
+            else if (lat < 500 && loss < 25) s.Health = LinkHealth.Poor;
+            else s.Health = LinkHealth.Critical;
+        }
+
+        private void EvaluateFailover(DateTime now)
+        {
+            if ((now - _lastFailover).TotalSeconds < _cfg.FailoverCooldownSec) return;
+
+            var current = ActiveLink == LinkType.LTE ? Lte : ActiveLink == LinkType.RadioMaster ? Radio : null;
+            var alt = ActiveLink == LinkType.LTE ? Radio : Lte;
+            var altType = ActiveLink == LinkType.LTE ? LinkType.RadioMaster : LinkType.LTE;
+
+            bool currentFailed = current == null || !current.IsConnected ||
+                                 current.Health == LinkHealth.Disconnected ||
+                                 current.Health == LinkHealth.Critical;
+
+            bool altUsable = alt.IsConnected &&
+                             alt.Health != LinkHealth.Disconnected &&
+                             alt.Health != LinkHealth.Critical;
+
+            if (currentFailed && altUsable)
+            {
+                SetActiveLink(altType, current == null ? "no active link, falling back" : $"{ActiveLink} unhealthy ({current.Health})");
+                return;
+            }
+
+            // Return to preferred once it's been healthy for the configured delay
+            if (_cfg.AutoReconnectPreferred && _cfg.PreferredLink != LinkType.None && ActiveLink != _cfg.PreferredLink)
+            {
+                var pref = _cfg.PreferredLink == LinkType.LTE ? Lte : Radio;
+                bool prefGood = pref.IsConnected &&
+                                pref.Health != LinkHealth.Disconnected &&
+                                pref.Health != LinkHealth.Critical &&
+                                pref.Health != LinkHealth.Poor;
+                if (prefGood)
+                {
+                    if (_preferredHealthySince == DateTime.MinValue) _preferredHealthySince = now;
+                    else if ((now - _preferredHealthySince).TotalSeconds >= _cfg.PreferredLinkReconnectDelaySec)
+                    {
+                        SetActiveLink(_cfg.PreferredLink, "preferred link recovered");
+                        _preferredHealthySince = DateTime.MinValue;
+                    }
+                }
+                else _preferredHealthySince = DateTime.MinValue;
+            }
+            else _preferredHealthySince = DateTime.MinValue;
+        }
+
+        private void SetActiveLink(LinkType newActive, string reason)
+        {
+            if (newActive == ActiveLink) return;
+            var from = ActiveLink;
+            ActiveLink = newActive;
+            _lastFailover = DateTime.UtcNow;
+
+            var ev = new FailoverEventArgs
+            {
+                FromLink = from,
+                ToLink = newActive,
+                Reason = reason,
+                Timestamp = DateTime.UtcNow,
+            };
+            lock (_failoverLog)
+            {
+                _failoverLog.AddLast(ev);
+                while (_failoverLog.Count > FAILOVER_LOG_MAX) _failoverLog.RemoveFirst();
+            }
+
+            FailoverOccurred?.Invoke(this, ev);
+            ActiveLinkChanged?.Invoke(this, newActive);
+            Log($"Failover {from} → {newActive}: {reason}");
+        }
+
+        // ============================================================
+        // Public controls
+        // ============================================================
+
+        /// <summary>
+        /// Manually pin outbound to a link. Pass LinkType.None to release.
+        /// </summary>
+        public bool SetManualOverride(LinkType target)
+        {
+            ManualOverride = target;
+            if (target != LinkType.None) SetActiveLink(target, "manual override");
+            else Log("Manual override released — auto-failover resumed");
+            return true;
+        }
+
+        /// <summary>Reset cumulative counters and history.</summary>
+        public void ResetCounters()
+        {
+            Lte.FramesReceived = Lte.FramesForwarded = Lte.FramesDuplicate = 0;
+            Lte.BytesReceived = Lte.BytesSentOutbound = 0;
+            Radio.FramesReceived = Radio.FramesForwarded = Radio.FramesDuplicate = 0;
+            Radio.BytesReceived = Radio.BytesSentOutbound = 0;
+            _lteSeenSeqCount = _lteLostSeqCount = _radioSeenSeqCount = _radioLostSeqCount = 0;
+            _lteLastSeqByComp.Clear();
+            _radioLastSeqByComp.Clear();
+        }
+
+        /// <summary>Live single-line status for tooltips / dashboards.</summary>
+        public string GetStatusSummary()
+        {
+            string l(LinkSourceStats s) => s.IsConnected
+                ? $"{s.Health} {s.LatencyMs:F0}ms {s.PacketLossPercent:F1}%"
+                : "offline";
+            return $"Active: {ActiveLink}  |  LTE: {l(Lte)}  |  Radio: {l(Radio)}";
+        }
+
+        private void UpdateEndpointStrings()
+        {
+            Lte.Endpoint = $"udp://0.0.0.0:{_cfg.LteBindPort}";
+            Radio.Endpoint = _cfg.RadioIsSerial
+                ? $"{_cfg.RadioComPort} @ {_cfg.RadioBaudRate}"
+                : $"udp://0.0.0.0:{_cfg.RadioBindPort}";
+        }
+
+        private void Log(string msg)
+        {
+            try { Console.WriteLine($"NOMAD Router: {msg}"); } catch { }
+            try { LogMessage?.Invoke(this, msg); } catch { }
+        }
+
+        // ============================================================
+        // Dedup key
+        // ============================================================
+
+        private struct DedupKey : IEquatable<DedupKey>
+        {
+            public readonly byte Sysid;
+            public readonly byte Compid;
+            public readonly uint Msgid;
+            public readonly byte Seq;
+
+            public DedupKey(byte sysid, byte compid, uint msgid, byte seq)
+            { Sysid = sysid; Compid = compid; Msgid = msgid; Seq = seq; }
+
+            public bool Equals(DedupKey o) => Sysid == o.Sysid && Compid == o.Compid && Msgid == o.Msgid && Seq == o.Seq;
+            public override bool Equals(object o) => o is DedupKey k && Equals(k);
+            public override int GetHashCode()
+            {
+                unchecked
+                {
+                    int h = 17;
+                    h = h * 31 + Sysid;
+                    h = h * 31 + Compid;
+                    h = h * 31 + (int)Msgid;
+                    h = h * 31 + Seq;
+                    return h;
+                }
+            }
+        }
+    }
+
+    // ================================================================
+    // MAVLink frame parser
+    // ================================================================
+    // Lightweight byte-stream parser for v1 (STX 0xFE) and v2 (STX 0xFD)
+    // frames. Does not validate CRC — we trust the upstream and just need
+    // accurate frame boundaries for dedup/forwarding. Frame errors
+    // (resync events) are counted.
+    // ================================================================
+
+    internal class MavlinkFrameParser
+    {
+        public long CrcErrors;
+        public long FramesEmitted;
+
+        private const byte STX_V1 = 0xFE;
+        private const byte STX_V2 = 0xFD;
+        private const int MAX_FRAME = 280; // v2 + signature
+
+        private readonly byte[] _buf = new byte[MAX_FRAME];
+        private int _len;
+        private int _expected; // expected total frame length, 0 = unknown yet
+
+        public void Push(byte[] data, int length, Action<MavlinkFrame> onFrame)
+        {
+            for (int i = 0; i < length; i++)
+            {
+                byte b = data[i];
+
+                if (_len == 0)
+                {
+                    if (b == STX_V1 || b == STX_V2)
+                    {
+                        _buf[_len++] = b;
+                        _expected = 0;
+                    }
+                    continue;
+                }
+
+                if (_len < MAX_FRAME) _buf[_len++] = b;
+                else { Resync(); continue; }
+
+                if (_expected == 0 && _len >= 2)
+                {
+                    byte payloadLen = _buf[1];
+                    if (_buf[0] == STX_V1) _expected = 6 + payloadLen + 2; // header(6)+payload+crc(2)
+                    else
+                    {
+                        // v2: header(10)+payload+crc(2)+signature(13 if MAVLINK_IFLAG_SIGNED bit 0 of incompat_flags)
+                        bool signed = _len >= 3 && (_buf[2] & 0x01) != 0;
+                        _expected = 10 + payloadLen + 2 + (signed ? 13 : 0);
+                    }
+                    if (_expected > MAX_FRAME) { Resync(); continue; }
+                }
+
+                if (_expected > 0 && _len >= _expected)
+                {
+                    EmitFrame(onFrame);
+                    _len = 0; _expected = 0;
+                }
+            }
+        }
+
+        private void Resync()
+        {
+            CrcErrors++;
+            // Find next STX in current buffer to recover (cheap heuristic)
+            for (int j = 1; j < _len; j++)
+            {
+                if (_buf[j] == STX_V1 || _buf[j] == STX_V2)
+                {
+                    int rem = _len - j;
+                    Buffer.BlockCopy(_buf, j, _buf, 0, rem);
+                    _len = rem;
+                    _expected = 0;
+                    return;
+                }
+            }
+            _len = 0; _expected = 0;
+        }
+
+        private void EmitFrame(Action<MavlinkFrame> onFrame)
+        {
+            FramesEmitted++;
+            bool v2 = _buf[0] == STX_V2;
+            byte payloadLen = _buf[1];
+
+            byte seq, sysid, compid;
+            uint msgid;
+            int payloadOffset;
+
+            if (v2)
+            {
+                seq = _buf[4];
+                sysid = _buf[5];
+                compid = _buf[6];
+                msgid = (uint)(_buf[7] | (_buf[8] << 8) | (_buf[9] << 16));
+                payloadOffset = 10;
+            }
+            else
+            {
+                seq = _buf[2];
+                sysid = _buf[3];
+                compid = _buf[4];
+                msgid = _buf[5];
+                payloadOffset = 6;
+            }
+
+            // We have to copy the raw frame because the parser reuses _buf.
+            var raw = new byte[_expected];
+            Buffer.BlockCopy(_buf, 0, raw, 0, _expected);
+
+            onFrame(new MavlinkFrame
+            {
+                Raw = raw,
+                RawLength = _expected,
+                IsV2 = v2,
+                Sysid = sysid,
+                Compid = compid,
+                Msgid = msgid,
+                Seq = seq,
+                Payload = raw,
+                PayloadOffset = payloadOffset,
+                PayloadLength = payloadLen,
+            });
+        }
+    }
+
+    internal struct MavlinkFrame
+    {
+        public byte[] Raw;
+        public int RawLength;
+        public bool IsV2;
+        public byte Sysid;
+        public byte Compid;
+        public uint Msgid;
+        public byte Seq;
+        public byte[] Payload;       // alias of Raw — payload begins at PayloadOffset
+        public int PayloadOffset;
+        public int PayloadLength;
+
+        public bool IsHeartbeat => Msgid == 0; // MAVLINK_MSG_ID_HEARTBEAT
+        public bool IsRadioStatus => Msgid == 109; // RADIO_STATUS
+    }
+}

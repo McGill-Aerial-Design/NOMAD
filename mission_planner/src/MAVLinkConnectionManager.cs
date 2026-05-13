@@ -1,61 +1,37 @@
 // ============================================================
-// MAVLink Connection Manager - Dual Link Failover
+// MAVLink Connection Manager — façade over GroundLinkRouter
 // ============================================================
-// Manages dual MAVLink connections with automatic failover:
-// 1. Primary: LTE link via Tailscale (Jetson UDP forward)
-// 2. Secondary: RadioMaster transmitter on UDP port 14550
-//
-// Features:
-// - Real-time link quality monitoring
-// - Automatic failover on connection loss
-// - Manual link switching
-// - Link health statistics
+// Owns a GroundLinkRouter and projects its live state into the
+// LinkStatistics / event surface the rest of the plugin already
+// consumes (LinkHealthPanel, NOMADDashboardView, NOMADLinksView).
+// All real I/O and health tracking happens in the router; this
+// class is the public API + glue.
 // ============================================================
 
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using System.Diagnostics;
-using System.Net;
-using System.Net.NetworkInformation;
-using System.Net.Sockets;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Windows.Forms;
-using MissionPlanner;
-using MissionPlanner.Comms;
-using MissionPlanner.Utilities;
 
 namespace NOMAD.MissionPlanner
 {
-    /// <summary>
-    /// Link type enumeration for MAVLink connections.
-    /// </summary>
     public enum LinkType
     {
-        /// <summary>Primary LTE/Tailscale link via Jetson</summary>
         LTE,
-        /// <summary>Secondary RadioMaster transmitter link</summary>
         RadioMaster,
-        /// <summary>No active link</summary>
         None
     }
 
-    /// <summary>
-    /// Link health status for monitoring.
-    /// </summary>
     public enum LinkHealth
     {
-        Excellent,  // < 50ms latency, 0% packet loss
-        Good,       // < 150ms latency, < 2% packet loss  
-        Fair,       // < 300ms latency, < 10% packet loss
-        Poor,       // < 500ms latency, < 25% packet loss
-        Critical,   // > 500ms latency or > 25% packet loss
+        Excellent,
+        Good,
+        Fair,
+        Poor,
+        Critical,
         Disconnected
     }
 
     /// <summary>
-    /// Statistics for a single MAVLink link.
+    /// Snapshot of one link's health for UI consumers.
     /// </summary>
     public class LinkStatistics
     {
@@ -66,14 +42,17 @@ namespace NOMAD.MissionPlanner
         public LinkHealth Health { get; set; }
         public double LatencyMs { get; set; }
         public double PacketLossPercent { get; set; }
-        public long PacketsReceived { get; set; }
-        public long PacketsSent { get; set; }
+        public long PacketsReceived { get; set; }   // forwarded (unique) frames
+        public long PacketsDuplicate { get; set; }
+        public long PacketsSent { get; set; }       // outbound bytes count, just informational
         public long BytesReceived { get; set; }
         public long BytesSent { get; set; }
         public DateTime LastHeartbeat { get; set; }
         public DateTime LastPacketTime { get; set; }
         public int HeartbeatCount { get; set; }
         public double DataRateBps { get; set; }
+        public int? Rssi { get; set; }
+        public int? RemRssi { get; set; }
 
         public string HealthColor => Health switch
         {
@@ -91,19 +70,13 @@ namespace NOMAD.MissionPlanner
             : "Disconnected";
     }
 
-    /// <summary>
-    /// Event arguments for link status changes.
-    /// </summary>
     public class LinkStatusChangedEventArgs : EventArgs
     {
         public LinkType Link { get; set; }
         public LinkStatistics Statistics { get; set; }
         public bool IsActive { get; set; }
     }
-    
-    /// <summary>
-    /// Snapshot of link status for UI display.
-    /// </summary>
+
     public class LinkStatusSnapshot
     {
         public bool LTEConnected { get; set; }
@@ -115,9 +88,6 @@ namespace NOMAD.MissionPlanner
         public string ActiveLink { get; set; }
     }
 
-    /// <summary>
-    /// Event arguments for failover events.
-    /// </summary>
     public class FailoverEventArgs : EventArgs
     {
         public LinkType FromLink { get; set; }
@@ -126,164 +96,86 @@ namespace NOMAD.MissionPlanner
         public DateTime Timestamp { get; set; }
     }
 
-    /// <summary>
-    /// Manages dual MAVLink connections with automatic failover support.
-    /// </summary>
     public class MAVLinkConnectionManager : IDisposable
     {
-        // ============================================================
-        // Constants
-        // ============================================================
-
-        /// <summary>Default RadioMaster UDP port</summary>
-        public const int RADIOMASTER_PORT = 14550;
-
-        /// <summary>Default LTE/Tailscale UDP port on Jetson</summary>
-        public const int LTE_PORT = 14550;
-
-        /// <summary>Heartbeat timeout before considering link dead (seconds)</summary>
-        public const double HEARTBEAT_TIMEOUT_SEC = 3.0;
-
-        /// <summary>Minimum time between automatic failovers (seconds)</summary>
-        public const double FAILOVER_COOLDOWN_SEC = 5.0;
-
-        /// <summary>Number of missed heartbeats before failover</summary>
-        public const int MISSED_HEARTBEATS_THRESHOLD = 3;
-
         // ============================================================
         // Configuration
         // ============================================================
 
-        /// <summary>Configuration for the connection manager</summary>
+        /// <summary>
+        /// Connection configuration. Mostly mirrors NOMADConfig fields and
+        /// is translated into a GroundLinkRouter.RouterConfig at Start time.
+        /// </summary>
         public class ConnectionConfig
         {
-            /// <summary>Jetson Tailscale IP for LTE link</summary>
             public string JetsonTailscaleIP { get; set; } = "100.85.121.98";
+            public int LtePort { get; set; } = 14560;
 
-            /// <summary>UDP port for LTE link on Jetson</summary>
-            public int LtePort { get; set; } = LTE_PORT;
-
-            /// <summary>RadioMaster connection type: "UDP" or "COM"</summary>
             public string RadioMasterConnectionType { get; set; } = "UDP";
-
-            /// <summary>Local port for RadioMaster (typically 14550) - used for UDP connection</summary>
-            public int RadioMasterPort { get; set; } = RADIOMASTER_PORT;
-
-            /// <summary>
-            /// Serial port for RadioMaster - used for COM/serial connection.
-            /// Windows examples: "COM3", "COM4"
-            /// Linux examples: "/dev/ttyUSB0", "/dev/ttyACM0"
-            /// </summary>
-            public string RadioMasterComPort { get; set; } = 
+            public int RadioMasterPort { get; set; } = 14550;
+            public string RadioMasterComPort { get; set; } =
                 Environment.OSVersion.Platform == PlatformID.Win32NT ? "COM3" : "/dev/ttyUSB0";
-
-            /// <summary>Baud rate for RadioMaster COM port (ELRS typically 420000 or 115200)</summary>
             public int RadioMasterBaudRate { get; set; } = 420000;
 
-            /// <summary>Enable automatic failover</summary>
             public bool AutoFailoverEnabled { get; set; } = true;
-
-            /// <summary>Preferred link when both available</summary>
             public LinkType PreferredLink { get; set; } = LinkType.LTE;
-
-            /// <summary>Link monitoring interval (ms)</summary>
-            public int MonitorIntervalMs { get; set; } = 500;
-
-            /// <summary>Auto-reconnect to preferred link when available</summary>
             public bool AutoReconnectPreferred { get; set; } = true;
-
-            /// <summary>Seconds to wait before switching back to preferred link</summary>
             public int PreferredLinkReconnectDelaySec { get; set; } = 10;
+            public int MonitorIntervalMs { get; set; } = 250;
+            public double HeartbeatTimeoutSec { get; set; } = 3.0;
+
+            // Router endpoint (where MP connects to as UDPCl)
+            public string RouterBindAddress { get; set; } = "127.0.0.1";
+            public int RouterLocalPort { get; set; } = 14600;
+            public bool RouterDedupEnabled { get; set; } = true;
         }
 
         // ============================================================
-        // Fields
+        // State
         // ============================================================
 
         private ConnectionConfig _config;
-        private LinkType _activeLink = LinkType.None;
+        private GroundLinkRouter _router;
         private readonly object _lock = new object();
         private bool _disposed;
 
-        // Link statistics
         private readonly LinkStatistics _lteStats;
-        private readonly LinkStatistics _radioMasterStats;
-
-        // Monitoring
-        private CancellationTokenSource _monitorCts;
-        private Task _monitorTask;
-        private DateTime _lastFailoverTime = DateTime.MinValue;
-        private DateTime _preferredLinkAvailableSince = DateTime.MinValue;
-
-        // Heartbeat tracking
-        private DateTime _lteLastHeartbeat = DateTime.MinValue;
-        private DateTime _radioMasterLastHeartbeat = DateTime.MinValue;
-        private int _lteMissedHeartbeats = 0;
-        private int _radioMasterMissedHeartbeats = 0;
-
-        // Packet tracking for statistics
-        private long _ltePacketsTotal = 0;
-        private long _ltePacketsLost = 0;
-        private long _radioMasterPacketsTotal = 0;
-        private long _radioMasterPacketsLost = 0;
-        private readonly Queue<double> _lteLatencyHistory = new Queue<double>();
-        private readonly Queue<double> _radioMasterLatencyHistory = new Queue<double>();
-        private const int LATENCY_HISTORY_SIZE = 20;
-
-        // UDP listeners for monitoring
-#pragma warning disable CS0649
-        private UdpClient _lteMonitor;
-        private UdpClient _radioMasterMonitor;
-#pragma warning restore CS0649
+        private readonly LinkStatistics _radioStats;
 
         // ============================================================
         // Events
         // ============================================================
 
-        /// <summary>Fired when link status changes</summary>
         public event EventHandler<LinkStatusChangedEventArgs> LinkStatusChanged;
-
-        /// <summary>Fired when automatic failover occurs</summary>
         public event EventHandler<FailoverEventArgs> FailoverOccurred;
-
-        /// <summary>Fired when active link changes (manual or automatic)</summary>
         public event EventHandler<LinkType> ActiveLinkChanged;
+        public event EventHandler<string> LogMessage;
 
         // ============================================================
         // Properties
         // ============================================================
 
-        /// <summary>Current active link type</summary>
-        public LinkType ActiveLink
-        {
-            get { lock (_lock) return _activeLink; }
-        }
-
-        /// <summary>Current configuration</summary>
+        public LinkType ActiveLink => _router?.ActiveLink ?? LinkType.None;
+        public LinkType ManualOverride => _router?.ManualOverride ?? LinkType.None;
         public ConnectionConfig Config => _config;
-
-        /// <summary>LTE link statistics</summary>
         public LinkStatistics LteStatistics => _lteStats;
+        public LinkStatistics RadioMasterStatistics => _radioStats;
+        public bool IsMonitoring => _router?.IsRunning == true;
+        public string LocalMergedEndpoint => _router?.LocalEndpoint != null
+            ? $"udp://{_router.LocalEndpoint.Address}:{_router.LocalEndpoint.Port}"
+            : $"udp://{_config.RouterBindAddress}:{_config.RouterLocalPort}";
 
-        /// <summary>RadioMaster link statistics</summary>
-        public LinkStatistics RadioMasterStatistics => _radioMasterStats;
+        public IReadOnlyCollection<FailoverEventArgs> FailoverLog =>
+            _router?.FailoverLog ?? (IReadOnlyCollection<FailoverEventArgs>)Array.Empty<FailoverEventArgs>();
 
-        /// <summary>Whether monitoring is active</summary>
-        public bool IsMonitoring => _monitorTask != null && !_monitorTask.IsCompleted;
-
-        /// <summary>Returns true if LTE link is healthy enough to use</summary>
-        public bool IsLteHealthy => _lteStats.IsConnected && 
-            _lteStats.Health != LinkHealth.Disconnected && 
+        public bool IsLteHealthy => _lteStats.IsConnected &&
+            _lteStats.Health != LinkHealth.Disconnected &&
             _lteStats.Health != LinkHealth.Critical;
 
-        /// <summary>Returns true if RadioMaster link is healthy enough to use</summary>
-        public bool IsRadioMasterHealthy => _radioMasterStats.IsConnected && 
-            _radioMasterStats.Health != LinkHealth.Disconnected && 
-            _radioMasterStats.Health != LinkHealth.Critical;
+        public bool IsRadioMasterHealthy => _radioStats.IsConnected &&
+            _radioStats.Health != LinkHealth.Disconnected &&
+            _radioStats.Health != LinkHealth.Critical;
 
-        /// <summary>
-        /// Gets a snapshot of the current link status for UI display.
-        /// </summary>
         public LinkStatusSnapshot GetLinkStatus()
         {
             lock (_lock)
@@ -293,16 +185,16 @@ namespace NOMAD.MissionPlanner
                     LTEConnected = _lteStats.IsConnected,
                     LTELatencyMs = _lteStats.LatencyMs,
                     LTEPacketLoss = _lteStats.PacketLossPercent,
-                    RadioConnected = _radioMasterStats.IsConnected,
-                    RadioLatencyMs = _radioMasterStats.LatencyMs,
-                    RadioPacketLoss = _radioMasterStats.PacketLossPercent,
-                    ActiveLink = _activeLink.ToString()
+                    RadioConnected = _radioStats.IsConnected,
+                    RadioLatencyMs = _radioStats.LatencyMs,
+                    RadioPacketLoss = _radioStats.PacketLossPercent,
+                    ActiveLink = ActiveLink.ToString()
                 };
             }
         }
 
         // ============================================================
-        // Constructor
+        // Construction
         // ============================================================
 
         public MAVLinkConnectionManager(ConnectionConfig config = null)
@@ -312,556 +204,206 @@ namespace NOMAD.MissionPlanner
             _lteStats = new LinkStatistics
             {
                 Type = LinkType.LTE,
-                Name = "LTE/Tailscale",
-                Endpoint = $"{_config.JetsonTailscaleIP}:{_config.LtePort}",
+                Name = "LTE / Tailscale",
+                Endpoint = $"udp://0.0.0.0:{_config.LtePort}",
                 Health = LinkHealth.Disconnected
             };
-
-            // Build RadioMaster endpoint based on connection type
-            string radioMasterEndpoint = _config.RadioMasterConnectionType == "COM"
-                ? $"{_config.RadioMasterComPort} @ {_config.RadioMasterBaudRate}"
-                : $"localhost:{_config.RadioMasterPort}";
-
-            _radioMasterStats = new LinkStatistics
+            _radioStats = new LinkStatistics
             {
                 Type = LinkType.RadioMaster,
                 Name = "RadioMaster",
-                Endpoint = radioMasterEndpoint,
+                Endpoint = string.Equals(_config.RadioMasterConnectionType, "COM", StringComparison.OrdinalIgnoreCase)
+                    ? $"{_config.RadioMasterComPort} @ {_config.RadioMasterBaudRate}"
+                    : $"udp://0.0.0.0:{_config.RadioMasterPort}",
                 Health = LinkHealth.Disconnected
             };
         }
 
-        // ============================================================
-        // Public Methods
-        // ============================================================
-
-        /// <summary>
-        /// Update configuration at runtime.
-        /// </summary>
         public void UpdateConfig(ConnectionConfig config)
         {
             lock (_lock)
             {
                 _config = config ?? throw new ArgumentNullException(nameof(config));
-                _lteStats.Endpoint = $"{_config.JetsonTailscaleIP}:{_config.LtePort}";
+                _lteStats.Endpoint = $"udp://0.0.0.0:{_config.LtePort}";
+                _radioStats.Endpoint = string.Equals(_config.RadioMasterConnectionType, "COM", StringComparison.OrdinalIgnoreCase)
+                    ? $"{_config.RadioMasterComPort} @ {_config.RadioMasterBaudRate}"
+                    : $"udp://0.0.0.0:{_config.RadioMasterPort}";
             }
         }
 
-        /// <summary>
-        /// Start monitoring both links.
-        /// </summary>
+        // ============================================================
+        // Lifecycle
+        // ============================================================
+
         public void StartMonitoring()
         {
-            if (_monitorTask != null && !_monitorTask.IsCompleted)
-                return;
+            if (_router?.IsRunning == true) return;
 
-            // Initialize active link to preferred link on startup
-            if (_activeLink == LinkType.None && _config.PreferredLink != LinkType.None)
+            // Clean up any previous (stopped) router instance to release sockets.
+            if (_router != null)
             {
-                _activeLink = _config.PreferredLink;
-                Console.WriteLine($"NOMAD: Initial active link set to {_activeLink}");
-                ActiveLinkChanged?.Invoke(this, _activeLink);
+                try { _router.Dispose(); } catch { }
+                _router = null;
             }
 
-            _monitorCts = new CancellationTokenSource();
-            _monitorTask = Task.Run(() => MonitorLoop(_monitorCts.Token));
-        }
+            var rc = new GroundLinkRouter.RouterConfig
+            {
+                BindAddress = _config.RouterBindAddress,
+                LocalPort = _config.RouterLocalPort,
+                DedupEnabled = _config.RouterDedupEnabled,
+                LteBindPort = _config.LtePort,
+                LteRemoteHost = _config.JetsonTailscaleIP,
+                LteRemotePort = _config.LtePort,
+                RadioIsSerial = string.Equals(_config.RadioMasterConnectionType, "COM", StringComparison.OrdinalIgnoreCase),
+                RadioBindPort = _config.RadioMasterPort,
+                RadioComPort = _config.RadioMasterComPort,
+                RadioBaudRate = _config.RadioMasterBaudRate,
+                AutoFailoverEnabled = _config.AutoFailoverEnabled,
+                PreferredLink = _config.PreferredLink,
+                AutoReconnectPreferred = _config.AutoReconnectPreferred,
+                PreferredLinkReconnectDelaySec = _config.PreferredLinkReconnectDelaySec,
+                StatsTickMs = Math.Max(100, _config.MonitorIntervalMs),
+                HeartbeatTimeoutSec = Math.Max(0.5, _config.HeartbeatTimeoutSec),
+            };
 
-        /// <summary>
-        /// Stop monitoring.
-        /// </summary>
-        public void StopMonitoring()
-        {
-            _monitorCts?.Cancel();
+            _router = new GroundLinkRouter(rc);
+            _router.StatsUpdated += OnRouterStatsUpdated;
+            _router.FailoverOccurred += (s, e) => FailoverOccurred?.Invoke(this, e);
+            _router.ActiveLinkChanged += (s, t) => ActiveLinkChanged?.Invoke(this, t);
+            _router.LogMessage += (s, msg) => LogMessage?.Invoke(this, msg);
+
             try
             {
-                _monitorTask?.Wait(2000);
-            }
-            catch { }
-
-            _lteMonitor?.Close();
-            _radioMasterMonitor?.Close();
-        }
-
-        /// <summary>
-        /// Manually switch to a specific link.
-        /// </summary>
-        /// <param name="targetLink">Link to switch to</param>
-        /// <param name="force">Force switch even if link is unhealthy</param>
-        /// <returns>True if switch was successful</returns>
-        public bool SwitchToLink(LinkType targetLink, bool force = false)
-        {
-            lock (_lock)
-            {
-                if (targetLink == _activeLink)
-                    return true;
-
-                var stats = targetLink == LinkType.LTE ? _lteStats : _radioMasterStats;
-                
-                if (!force && !stats.IsConnected)
-                {
-                    Console.WriteLine($"NOMAD: Cannot switch to {targetLink} - link not connected");
-                    return false;
-                }
-
-                var oldLink = _activeLink;
-                _activeLink = targetLink;
-
-                Console.WriteLine($"NOMAD: Manual switch from {oldLink} to {targetLink}");
-                
-                // Attempt to switch Mission Planner's connection
-                SwitchMissionPlannerConnection(targetLink);
-
-                ActiveLinkChanged?.Invoke(this, targetLink);
-                return true;
-            }
-        }
-
-        /// <summary>
-        /// Get the best available link based on current health.
-        /// </summary>
-        public LinkType GetBestAvailableLink()
-        {
-            lock (_lock)
-            {
-                bool lteOk = IsLteHealthy;
-                bool rmOk = IsRadioMasterHealthy;
-
-                // If neither available, return None
-                if (!lteOk && !rmOk)
-                    return LinkType.None;
-
-                // If only one available, use it
-                if (lteOk && !rmOk)
-                    return LinkType.LTE;
-                if (!lteOk && rmOk)
-                    return LinkType.RadioMaster;
-
-                // Both available - use preferred or better health
-                if (_config.PreferredLink != LinkType.None)
-                    return _config.PreferredLink;
-
-                // Compare health
-                return CompareHealth(_lteStats, _radioMasterStats) >= 0 
-                    ? LinkType.LTE 
-                    : LinkType.RadioMaster;
-            }
-        }
-
-        /// <summary>
-        /// Get combined status summary for display.
-        /// </summary>
-        public string GetStatusSummary()
-        {
-            lock (_lock)
-            {
-                var active = _activeLink == LinkType.None ? "NONE" : _activeLink.ToString();
-                var lteStatus = _lteStats.IsConnected ? $"[OK] {_lteStats.LatencyMs:F0}ms" : "[X] Offline";
-                var rmStatus = _radioMasterStats.IsConnected ? $"[OK] {_radioMasterStats.LatencyMs:F0}ms" : "[X] Offline";
-                
-                return $"Active: {active} | LTE: {lteStatus} | Radio: {rmStatus}";
-            }
-        }
-
-        /// <summary>
-        /// Process incoming MAVLink heartbeat for link monitoring.
-        /// Call this from the MAVLink message handler.
-        /// </summary>
-        public void ProcessHeartbeat(LinkType fromLink)
-        {
-            lock (_lock)
-            {
-                var now = DateTime.UtcNow;
-                
-                if (fromLink == LinkType.LTE)
-                {
-                    var timeSinceLast = _lteLastHeartbeat == DateTime.MinValue 
-                        ? 0 
-                        : (now - _lteLastHeartbeat).TotalMilliseconds;
-                    
-                    _lteLastHeartbeat = now;
-                    _lteStats.LastHeartbeat = now;
-                    _lteStats.HeartbeatCount++;
-                    _lteStats.IsConnected = true;
-                    _lteMissedHeartbeats = 0;
-                    
-                    // Update latency estimate (heartbeat interval)
-                    if (timeSinceLast > 0 && timeSinceLast < 5000)
-                    {
-                        UpdateLatency(_lteLatencyHistory, timeSinceLast / 2); // Approximate RTT
-                        _lteStats.LatencyMs = GetAverageLatency(_lteLatencyHistory);
-                    }
-                    
-                    UpdateLinkHealth(_lteStats);
-                }
-                else if (fromLink == LinkType.RadioMaster)
-                {
-                    var timeSinceLast = _radioMasterLastHeartbeat == DateTime.MinValue 
-                        ? 0 
-                        : (now - _radioMasterLastHeartbeat).TotalMilliseconds;
-                    
-                    _radioMasterLastHeartbeat = now;
-                    _radioMasterStats.LastHeartbeat = now;
-                    _radioMasterStats.HeartbeatCount++;
-                    _radioMasterStats.IsConnected = true;
-                    _radioMasterMissedHeartbeats = 0;
-                    
-                    if (timeSinceLast > 0 && timeSinceLast < 5000)
-                    {
-                        UpdateLatency(_radioMasterLatencyHistory, timeSinceLast / 2);
-                        _radioMasterStats.LatencyMs = GetAverageLatency(_radioMasterLatencyHistory);
-                    }
-                    
-                    UpdateLinkHealth(_radioMasterStats);
-                }
-            }
-        }
-
-        /// <summary>
-        /// Track packet statistics for a link.
-        /// </summary>
-        public void TrackPacket(LinkType link, int bytesReceived, bool wasLost = false)
-        {
-            lock (_lock)
-            {
-                var stats = link == LinkType.LTE ? _lteStats : _radioMasterStats;
-                
-                stats.PacketsReceived++;
-                stats.BytesReceived += bytesReceived;
-                stats.LastPacketTime = DateTime.UtcNow;
-                
-                if (link == LinkType.LTE)
-                {
-                    _ltePacketsTotal++;
-                    if (wasLost) _ltePacketsLost++;
-                    _lteStats.PacketLossPercent = _ltePacketsTotal > 0 
-                        ? (_ltePacketsLost * 100.0 / _ltePacketsTotal) 
-                        : 0;
-                }
-                else
-                {
-                    _radioMasterPacketsTotal++;
-                    if (wasLost) _radioMasterPacketsLost++;
-                    _radioMasterStats.PacketLossPercent = _radioMasterPacketsTotal > 0 
-                        ? (_radioMasterPacketsLost * 100.0 / _radioMasterPacketsTotal) 
-                        : 0;
-                }
-            }
-        }
-
-        // ============================================================
-        // Private Methods
-        // ============================================================
-
-        private async Task MonitorLoop(CancellationToken ct)
-        {
-            Console.WriteLine("NOMAD: Link monitoring started");
-
-            while (!ct.IsCancellationRequested)
-            {
-                try
-                {
-                    // Check link health
-                    CheckLinkHealth();
-
-                    // Auto-failover logic
-                    if (_config.AutoFailoverEnabled)
-                    {
-                        CheckAndPerformFailover();
-                    }
-
-                    // Check for return to preferred link
-                    if (_config.AutoReconnectPreferred)
-                    {
-                        CheckPreferredLinkReturn();
-                    }
-
-                    // Raise status events
-                    RaiseLinkStatusEvents();
-
-                    await Task.Delay(_config.MonitorIntervalMs, ct);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"NOMAD: Monitor error: {ex.Message}");
-                    await Task.Delay(1000, ct);
-                }
-            }
-
-            Console.WriteLine("NOMAD: Link monitoring stopped");
-        }
-
-        private void CheckLinkHealth()
-        {
-            var now = DateTime.UtcNow;
-
-            lock (_lock)
-            {
-                // Check LTE heartbeat timeout
-                if (_lteStats.IsConnected)
-                {
-                    var elapsed = (now - _lteLastHeartbeat).TotalSeconds;
-                    if (elapsed > HEARTBEAT_TIMEOUT_SEC)
-                    {
-                        _lteMissedHeartbeats++;
-                        if (_lteMissedHeartbeats >= MISSED_HEARTBEATS_THRESHOLD)
-                        {
-                            _lteStats.IsConnected = false;
-                            _lteStats.Health = LinkHealth.Disconnected;
-                            Console.WriteLine($"NOMAD: LTE link disconnected (no heartbeat for {elapsed:F1}s)");
-                        }
-                    }
-                }
-
-                // Check RadioMaster heartbeat timeout
-                if (_radioMasterStats.IsConnected)
-                {
-                    var elapsed = (now - _radioMasterLastHeartbeat).TotalSeconds;
-                    if (elapsed > HEARTBEAT_TIMEOUT_SEC)
-                    {
-                        _radioMasterMissedHeartbeats++;
-                        if (_radioMasterMissedHeartbeats >= MISSED_HEARTBEATS_THRESHOLD)
-                        {
-                            _radioMasterStats.IsConnected = false;
-                            _radioMasterStats.Health = LinkHealth.Disconnected;
-                            Console.WriteLine($"NOMAD: RadioMaster link disconnected (no heartbeat for {elapsed:F1}s)");
-                        }
-                    }
-                }
-
-                // Update health based on metrics
-                if (_lteStats.IsConnected)
-                    UpdateLinkHealth(_lteStats);
-                if (_radioMasterStats.IsConnected)
-                    UpdateLinkHealth(_radioMasterStats);
-            }
-        }
-
-        private void CheckAndPerformFailover()
-        {
-            lock (_lock)
-            {
-                // Check cooldown
-                if ((DateTime.UtcNow - _lastFailoverTime).TotalSeconds < FAILOVER_COOLDOWN_SEC)
-                    return;
-
-                var currentStats = _activeLink == LinkType.LTE ? _lteStats : _radioMasterStats;
-                var alternateStats = _activeLink == LinkType.LTE ? _radioMasterStats : _lteStats;
-                var alternateLink = _activeLink == LinkType.LTE ? LinkType.RadioMaster : LinkType.LTE;
-
-                // Check if current link is failed
-                bool currentFailed = !currentStats.IsConnected || 
-                                     currentStats.Health == LinkHealth.Disconnected ||
-                                     currentStats.Health == LinkHealth.Critical;
-
-                bool alternateBetter = alternateStats.IsConnected && 
-                                       alternateStats.Health != LinkHealth.Disconnected &&
-                                       alternateStats.Health != LinkHealth.Critical;
-
-                if (currentFailed && alternateBetter)
-                {
-                    PerformFailover(_activeLink, alternateLink, "Primary link failed");
-                }
-                // Also failover if alternate is significantly better
-                else if (alternateStats.IsConnected && 
-                         currentStats.Health == LinkHealth.Poor &&
-                         (alternateStats.Health == LinkHealth.Excellent || alternateStats.Health == LinkHealth.Good))
-                {
-                    PerformFailover(_activeLink, alternateLink, "Better link available");
-                }
-            }
-        }
-
-        private void CheckPreferredLinkReturn()
-        {
-            lock (_lock)
-            {
-                if (_activeLink == _config.PreferredLink)
-                {
-                    _preferredLinkAvailableSince = DateTime.MinValue;
-                    return;
-                }
-
-                var preferredStats = _config.PreferredLink == LinkType.LTE ? _lteStats : _radioMasterStats;
-                
-                // Check if preferred link is healthy
-                bool preferredHealthy = preferredStats.IsConnected &&
-                                        preferredStats.Health != LinkHealth.Disconnected &&
-                                        preferredStats.Health != LinkHealth.Critical &&
-                                        preferredStats.Health != LinkHealth.Poor;
-
-                if (preferredHealthy)
-                {
-                    if (_preferredLinkAvailableSince == DateTime.MinValue)
-                    {
-                        _preferredLinkAvailableSince = DateTime.UtcNow;
-                    }
-                    else if ((DateTime.UtcNow - _preferredLinkAvailableSince).TotalSeconds >= _config.PreferredLinkReconnectDelaySec)
-                    {
-                        PerformFailover(_activeLink, _config.PreferredLink, "Preferred link recovered");
-                        _preferredLinkAvailableSince = DateTime.MinValue;
-                    }
-                }
-                else
-                {
-                    _preferredLinkAvailableSince = DateTime.MinValue;
-                }
-            }
-        }
-
-        private void PerformFailover(LinkType from, LinkType to, string reason)
-        {
-            Console.WriteLine($"NOMAD: FAILOVER {from} -> {to}: {reason}");
-            
-            _activeLink = to;
-            _lastFailoverTime = DateTime.UtcNow;
-
-            // Switch Mission Planner's active connection
-            SwitchMissionPlannerConnection(to);
-
-            // Fire events
-            FailoverOccurred?.Invoke(this, new FailoverEventArgs
-            {
-                FromLink = from,
-                ToLink = to,
-                Reason = reason,
-                Timestamp = DateTime.UtcNow
-            });
-
-            ActiveLinkChanged?.Invoke(this, to);
-
-            // Show notification
-            try
-            {
-                MainV2.instance?.BeginInvoke((Action)(() =>
-                {
-                    CustomMessageBox.Show(
-                        $"MAVLink Failover: {from} → {to}\nReason: {reason}",
-                        "NOMAD Link Failover",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning
-                    );
-                }));
-            }
-            catch { }
-        }
-
-        private void SwitchMissionPlannerConnection(LinkType targetLink)
-        {
-            // This method would ideally switch Mission Planner's active connection
-            // Mission Planner supports multiple MAVLink connections via MainV2.Comports
-            // 
-            // For now, we provide guidance - the user configures MP with both connections
-            // and this manager tracks which should be "active"
-            //
-            // Future enhancement: Programmatically switch MP's primary connection
-            
-            try
-            {
-                // Log the switch request
-                Console.WriteLine($"NOMAD: Requesting MP connection switch to {targetLink}");
-                
-                // Access Mission Planner's connection list
-                if (MainV2.Comports != null && MainV2.Comports.Count > 1)
-                {
-                    // Find the connection matching target link
-                    // Convention: First connection is typically the primary (LTE)
-                    //             Second connection is secondary (RadioMaster)
-                    int targetIndex = targetLink == LinkType.LTE ? 0 : 1;
-                    
-                    if (targetIndex < MainV2.Comports.Count)
-                    {
-                        var targetConnection = MainV2.Comports[targetIndex];
-                        if (targetConnection?.BaseStream?.IsOpen == true)
-                        {
-                            // Set as primary connection
-                            MainV2.comPort = targetConnection;
-                            Console.WriteLine($"NOMAD: Switched to connection {targetIndex} ({targetLink})");
-                        }
-                    }
-                }
+                _router.Start();
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"NOMAD: Error switching MP connection: {ex.Message}");
+                Console.WriteLine($"NOMAD: router failed to start — {ex.Message}");
             }
         }
 
-        private void UpdateLinkHealth(LinkStatistics stats)
+        public void StopMonitoring()
         {
-            double latency = stats.LatencyMs;
-            double loss = stats.PacketLossPercent;
-
-            if (!stats.IsConnected)
-            {
-                stats.Health = LinkHealth.Disconnected;
-            }
-            else if (latency < 50 && loss < 0.5)
-            {
-                stats.Health = LinkHealth.Excellent;
-            }
-            else if (latency < 150 && loss < 2)
-            {
-                stats.Health = LinkHealth.Good;
-            }
-            else if (latency < 300 && loss < 10)
-            {
-                stats.Health = LinkHealth.Fair;
-            }
-            else if (latency < 500 && loss < 25)
-            {
-                stats.Health = LinkHealth.Poor;
-            }
-            else
-            {
-                stats.Health = LinkHealth.Critical;
-            }
+            try { _router?.Stop(); } catch { }
         }
 
-        private void UpdateLatency(Queue<double> history, double latency)
+        /// <summary>
+        /// Tear down the running router and start a fresh one using the current
+        /// <see cref="Config"/>. Use after <see cref="UpdateConfig"/> when network
+        /// settings (ports, bindings, link type) have changed and the router
+        /// needs to rebind its sockets.
+        /// </summary>
+        public void RestartRouter()
         {
-            history.Enqueue(latency);
-            while (history.Count > LATENCY_HISTORY_SIZE)
-                history.Dequeue();
+            StopMonitoring();
+            StartMonitoring();
         }
 
-        private double GetAverageLatency(Queue<double> history)
+        /// <summary>
+        /// Manual override of the active outbound link. Pass LinkType.None to
+        /// release the override and resume auto-failover.
+        /// </summary>
+        public bool SwitchToLink(LinkType target, bool force = false)
         {
-            if (history.Count == 0) return 0;
-            double sum = 0;
-            foreach (var l in history) sum += l;
-            return sum / history.Count;
+            if (_router == null) return false;
+            _router.SetManualOverride(target);
+            return true;
         }
 
-        private int CompareHealth(LinkStatistics a, LinkStatistics b)
+        /// <summary>
+        /// Live setter for auto-failover. Updates the running router so the
+        /// change takes effect immediately (no restart required).
+        /// </summary>
+        public void SetAutoFailoverEnabled(bool enabled)
         {
-            // Returns positive if a is better, negative if b is better
-            int healthCompare = (int)b.Health - (int)a.Health; // Lower enum = better
-            if (healthCompare != 0) return healthCompare;
-            
-            // Same health level - compare latency
-            return (int)(b.LatencyMs - a.LatencyMs); // Lower latency = better
+            _config.AutoFailoverEnabled = enabled;
+            if (_router != null) _router.Config.AutoFailoverEnabled = enabled;
         }
 
-        private void RaiseLinkStatusEvents()
+        /// <summary>Live setter for auto-reconnect-to-preferred.</summary>
+        public void SetAutoReconnectPreferred(bool enabled)
         {
+            _config.AutoReconnectPreferred = enabled;
+            if (_router != null) _router.Config.AutoReconnectPreferred = enabled;
+        }
+
+        /// <summary>Live setter for cross-link dedup.</summary>
+        public void SetDedupEnabled(bool enabled)
+        {
+            _config.RouterDedupEnabled = enabled;
+            if (_router != null) _router.Config.DedupEnabled = enabled;
+        }
+
+        /// <summary>Live setter for the preferred link.</summary>
+        public void SetPreferredLink(LinkType link)
+        {
+            _config.PreferredLink = link;
+            if (_router != null) _router.Config.PreferredLink = link;
+        }
+
+        public LinkType GetBestAvailableLink()
+        {
+            bool lteOk = IsLteHealthy;
+            bool rmOk = IsRadioMasterHealthy;
+            if (!lteOk && !rmOk) return LinkType.None;
+            if (lteOk && !rmOk) return LinkType.LTE;
+            if (!lteOk && rmOk) return LinkType.RadioMaster;
+            return _config.PreferredLink != LinkType.None ? _config.PreferredLink : LinkType.LTE;
+        }
+
+        public string GetStatusSummary() => _router?.GetStatusSummary()
+            ?? $"Active: {ActiveLink} | LTE: offline | Radio: offline";
+
+        /// <summary>
+        /// Legacy hook kept for source-compat with older callers. The router
+        /// derives heartbeats from packet flow directly, so this is a no-op.
+        /// </summary>
+        public void ProcessHeartbeat(LinkType fromLink) { /* no-op: router owns heartbeats */ }
+
+        public void TrackPacket(LinkType link, int bytesReceived, bool wasLost = false) { /* no-op */ }
+
+        public void ResetCounters() => _router?.ResetCounters();
+
+        // ============================================================
+        // Bridging router → LinkStatistics
+        // ============================================================
+
+        private void OnRouterStatsUpdated(object sender, EventArgs e)
+        {
+            if (_router == null) return;
+            ProjectStats(_router.Lte, _lteStats);
+            ProjectStats(_router.Radio, _radioStats);
+
             LinkStatusChanged?.Invoke(this, new LinkStatusChangedEventArgs
             {
                 Link = LinkType.LTE,
                 Statistics = _lteStats,
-                IsActive = _activeLink == LinkType.LTE
+                IsActive = ActiveLink == LinkType.LTE,
             });
-
             LinkStatusChanged?.Invoke(this, new LinkStatusChangedEventArgs
             {
                 Link = LinkType.RadioMaster,
-                Statistics = _radioMasterStats,
-                IsActive = _activeLink == LinkType.RadioMaster
+                Statistics = _radioStats,
+                IsActive = ActiveLink == LinkType.RadioMaster,
             });
+        }
+
+        private static void ProjectStats(LinkSourceStats src, LinkStatistics dst)
+        {
+            dst.IsConnected = src.IsConnected;
+            dst.Health = src.Health;
+            dst.LatencyMs = src.LatencyMs;
+            dst.PacketLossPercent = src.PacketLossPercent;
+            dst.PacketsReceived = src.FramesForwarded;
+            dst.PacketsDuplicate = src.FramesDuplicate;
+            dst.BytesReceived = src.BytesReceived;
+            dst.BytesSent = src.BytesSentOutbound;
+            dst.LastHeartbeat = src.LastHeartbeatTime;
+            dst.LastPacketTime = src.LastPacketTime;
+            dst.HeartbeatCount = src.HeartbeatCount;
+            dst.DataRateBps = src.DataRateBps;
+            dst.Rssi = src.Rssi;
+            dst.RemRssi = src.RemRssi;
         }
 
         // ============================================================
@@ -872,11 +414,8 @@ namespace NOMAD.MissionPlanner
         {
             if (_disposed) return;
             _disposed = true;
-
-            StopMonitoring();
-            _monitorCts?.Dispose();
-            _lteMonitor?.Dispose();
-            _radioMasterMonitor?.Dispose();
+            try { _router?.Dispose(); } catch { }
+            _router = null;
         }
     }
 }

@@ -368,50 +368,8 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public override bool Loop()
         {
-            // Feed MAVLink heartbeats to connection manager for link monitoring
-            if (_connectionManager != null && MainV2.comPort?.BaseStream?.IsOpen == true)
-            {
-                // Determine which link this heartbeat came from.
-                // BaseStream.ToString() returns the class name (e.g. "UdpSerial"),
-                // NOT the remote IP, so we cannot match on TailscaleIP there.
-                // Instead use index-based classification (convention: 0 = LTE,
-                // 1 = RadioMaster) or fall back to stream-type heuristics.
-                try
-                {
-                    var linkType = LinkType.RadioMaster; // safe default
-
-                    if (MainV2.Comports?.Count > 1)
-                    {
-                        // Multi-link: index 0 = LTE (Tailscale), index 1+ = RadioMaster
-                        int idx = MainV2.Comports.IndexOf(MainV2.comPort);
-                        if (idx >= 0)
-                        {
-                            linkType = idx == 0 ? LinkType.LTE : LinkType.RadioMaster;
-                        }
-                        else
-                        {
-                            // comPort not in Comports list -- fall back to stream type
-                            var st = MainV2.comPort.BaseStream?.GetType().Name ?? "";
-                            if (st.IndexOf("Udp", StringComparison.OrdinalIgnoreCase) >= 0)
-                                linkType = LinkType.LTE;
-                        }
-                    }
-                    else
-                    {
-                        // Single connection: UDP = LTE (Tailscale tunnel),
-                        // serial/COM = RadioMaster
-                        var streamType = MainV2.comPort.BaseStream?.GetType().Name ?? "";
-                        if (streamType.IndexOf("Udp", StringComparison.OrdinalIgnoreCase) >= 0)
-                        {
-                            linkType = LinkType.LTE;
-                        }
-                    }
-
-                    _connectionManager.ProcessHeartbeat(linkType);
-                }
-                catch { /* ignore monitoring errors */ }
-            }
-            
+            // GroundLinkRouter owns the source sockets directly and derives
+            // heartbeat/loss stats from real packet flow — nothing to do here.
             return true;
         }
 
@@ -677,7 +635,46 @@ namespace NOMAD.MissionPlanner
                     _config = form.Config;
                     _config.Save();
                     _sender.UpdateConfig(_config);
+                    ApplyDualLinkSettings();
                 }
+            }
+        }
+
+        /// <summary>
+        /// Bring the live router in sync with the (now-saved) config. Handles
+        /// all three transitions: enabled→disabled, disabled→enabled, and
+        /// changes while still enabled (rebind sockets to new ports/bindings).
+        /// </summary>
+        private void ApplyDualLinkSettings()
+        {
+            try
+            {
+                if (!_config.DualLinkEnabled)
+                {
+                    if (_connectionManager != null)
+                    {
+                        _connectionManager.StopMonitoring();
+                        _connectionManager.Dispose();
+                        _connectionManager = null;
+                        Console.WriteLine("NOMAD: Dual link disabled — router stopped");
+                    }
+                    return;
+                }
+
+                if (_connectionManager == null)
+                {
+                    InitializeConnectionManager();
+                    Console.WriteLine("NOMAD: Dual link enabled — router started");
+                    return;
+                }
+
+                _connectionManager.UpdateConfig(BuildLinkConfig());
+                _connectionManager.RestartRouter();
+                Console.WriteLine("NOMAD: Router restarted with new config");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"NOMAD: Failed to apply dual link settings — {ex.Message}");
             }
         }
         
@@ -804,29 +801,42 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// Initialize the MAVLink connection manager for dual link failover.
         /// </summary>
+        /// <summary>
+        /// Build the ConnectionConfig the router needs from the current NOMADConfig.
+        /// Pulled out so both first-init and settings-save paths produce identical configs.
+        /// </summary>
+        private MAVLinkConnectionManager.ConnectionConfig BuildLinkConfig()
+        {
+            return new MAVLinkConnectionManager.ConnectionConfig
+            {
+                JetsonTailscaleIP = _config.TailscaleIP,
+                LtePort = _config.LteMavlinkPort,
+                RadioMasterPort = _config.RadioMasterPort,
+                AutoFailoverEnabled = _config.AutoFailoverEnabled,
+                PreferredLink = _config.PreferredMavlinkLink switch
+                {
+                    "LTE" => LinkType.LTE,
+                    "RadioMaster" => LinkType.RadioMaster,
+                    _ => LinkType.None
+                },
+                AutoReconnectPreferred = _config.AutoReconnectToPreferred,
+                PreferredLinkReconnectDelaySec = _config.PreferredLinkReconnectDelay,
+                MonitorIntervalMs = _config.LinkMonitorInterval,
+                RadioMasterConnectionType = _config.RadioMasterConnectionType,
+                RadioMasterComPort = _config.RadioMasterComPort,
+                RadioMasterBaudRate = _config.RadioMasterBaudRate,
+                RouterBindAddress = _config.RouterBindAddress,
+                RouterLocalPort = _config.RouterLocalPort,
+                RouterDedupEnabled = _config.RouterDedupEnabled,
+                HeartbeatTimeoutSec = _config.MavlinkHeartbeatTimeout,
+            };
+        }
+
         private void InitializeConnectionManager()
         {
             try
             {
-                var linkConfig = new MAVLinkConnectionManager.ConnectionConfig
-                {
-                    JetsonTailscaleIP = _config.TailscaleIP,
-                    LtePort = _config.LteMavlinkPort,
-                    RadioMasterPort = _config.RadioMasterPort,
-                    AutoFailoverEnabled = _config.AutoFailoverEnabled,
-                    PreferredLink = _config.PreferredMavlinkLink switch
-                    {
-                        "LTE" => LinkType.LTE,
-                        "RadioMaster" => LinkType.RadioMaster,
-                        _ => LinkType.None
-                    },
-                    AutoReconnectPreferred = _config.AutoReconnectToPreferred,
-                    PreferredLinkReconnectDelaySec = _config.PreferredLinkReconnectDelay,
-                    MonitorIntervalMs = _config.LinkMonitorInterval,
-                    RadioMasterConnectionType = _config.RadioMasterConnectionType,
-                    RadioMasterComPort = _config.RadioMasterComPort,
-                    RadioMasterBaudRate = _config.RadioMasterBaudRate
-                };
+                var linkConfig = BuildLinkConfig();
 
                 _connectionManager = new MAVLinkConnectionManager(linkConfig);
                 
