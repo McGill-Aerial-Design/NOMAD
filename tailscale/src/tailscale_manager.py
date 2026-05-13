@@ -178,41 +178,83 @@ class TailscaleManager:
 
         logger.info("TailscaleManager stopped")
 
-    async def reconnect(self) -> bool:
+    async def reconnect(self) -> tuple[bool, str]:
         """
-        Force reconnection attempt.
+        Force a full Tailscale session restart.
 
-        Returns:
-            True if reconnection successful
+        Runs ``tailscale down`` then ``tailscale up`` so a wedged DERP or
+        stale session is actually re-established. A plain ``tailscale up``
+        on an already-up daemon is a no-op and doesn't fix stuck sessions.
+
+        Tries each command first as the current user (works when the user is
+        a tailscale operator, e.g. ``tailscale set --operator=mad``) and
+        falls back to ``sudo -n`` (non-interactive). Returns a (ok, detail)
+        tuple so the caller can surface the real failure reason.
         """
-        logger.info("Attempting Tailscale reconnection...")
+        logger.info("Attempting Tailscale reconnection (down + up)...")
+
+        async def run_with_fallback(args: list[str]) -> tuple[int, str, str]:
+            """Run tailscale command, fall back to sudo -n on permission error."""
+            code, out, err = await self._run_command(args)
+            err_l = (err or "").lower()
+            needs_sudo = (
+                code != 0
+                and (
+                    "permission denied" in err_l
+                    or "operator" in err_l
+                    or "must be root" in err_l
+                    or "access denied" in err_l
+                )
+            )
+            if needs_sudo:
+                logger.debug(f"tailscale needed sudo; retrying: {args}")
+                code, out, err = await self._run_command(["sudo", "-n", *args])
+            return code, out, err
+
+        # --accept-risk=lose-ssh: required when the caller's own connection
+        # rides Tailscale (the GCS pinging us over LTE/Tailscale is the whole
+        # point of the Reconnect button, so the user is implicitly accepting
+        # this risk). Without it tailscale refuses with "aborted, no changes
+        # made".
+        risk_flags = ["--accept-risk=lose-ssh"]
 
         try:
-            # Run tailscale up
-            exit_code, stdout, stderr = await self._run_command(
-                ["tailscale", "up", f"--hostname={self._hostname}"]
+            # Step 1: bring the session down (ignore failure — it might already be down)
+            down_code, _, down_err = await run_with_fallback(
+                ["tailscale", "down", *risk_flags]
             )
+            if down_code != 0:
+                logger.debug(f"tailscale down returned {down_code}: {down_err.strip()}")
 
-            if exit_code != 0:
-                logger.error(f"Tailscale up failed: {stderr}")
-                return False
+            # Short pause so the daemon settles before we ask it to come back up
+            await asyncio.sleep(0.5)
 
-            # Wait for connection
+            # Step 2: bring it back up — this is the operation we actually need to succeed
+            up_code, _, up_err = await run_with_fallback(
+                ["tailscale", "up", f"--hostname={self._hostname}", *risk_flags]
+            )
+            if up_code != 0:
+                detail = (up_err or "tailscale up failed").strip().splitlines()[0]
+                logger.error(f"Tailscale up failed (exit {up_code}): {detail}")
+                return False, detail
+
+            # Give the daemon time to establish; tailscale up can return before
+            # the connection is fully usable.
             await asyncio.sleep(5)
 
-            # Check status
             await self._check_status()
 
             if self.is_connected:
-                logger.info(f"Tailscale reconnected (IP: {self.ip_address})")
-                return True
-            else:
-                logger.warning("Tailscale reconnection attempt completed but not connected")
-                return False
+                msg = f"reconnected (IP {self.ip_address})"
+                logger.info(f"Tailscale {msg}")
+                return True, msg
+
+            logger.warning("Tailscale reconnect completed but daemon still not connected")
+            return False, "daemon not connected after up"
 
         except Exception as e:
             logger.error(f"Reconnection error: {e}")
-            return False
+            return False, str(e)
 
     async def _monitor_loop(self) -> None:
         """Background monitoring loop."""

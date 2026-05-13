@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -56,6 +57,11 @@ class ModemStatus:
     imei: str | None = None
     model: str | None = None
 
+    # NetworkManager / connection-profile fields
+    nm_connection_name: str | None = None  # e.g. "NOMAD-LTE"
+    nm_connection_state: str | None = None  # "activated", "activating", ...
+    apn: str | None = None
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for API response."""
         return {
@@ -67,6 +73,11 @@ class ModemStatus:
             "technology": self.technology,
             "ip_address": self.ip_address,
             "interface": self.interface,
+            "imei": self.imei,
+            "model": self.model,
+            "nm_connection_name": self.nm_connection_name,
+            "nm_connection_state": self.nm_connection_state,
+            "apn": self.apn,
         }
 
 
@@ -139,11 +150,22 @@ class NetworkMonitor:
         await monitor.stop()
     """
 
+    # NetworkManager connection profiles to look for, in priority order.
+    # Includes both the canonical "NOMAD-LTE" name and the typical CDC-ECM
+    # cellular-router profile ("LTE-ECM") used by USB tethered LTE modems
+    # that expose themselves as an Ethernet device rather than a true
+    # cellular modem (these never appear in mmcli).
+    NOMAD_LTE_CONNECTION_CANDIDATES = ["NOMAD-LTE", "LTE-ECM"]
+    # Substrings used to identify an LTE profile when none of the named
+    # candidates exist (case-insensitive match against NM connection name).
+    LTE_NAME_HINTS = ("lte", "ecm", "wwan", "cellular", "modem", "4g", "5g")
+
     def __init__(
         self,
         gcs_tailscale_ip: str | None = None,
         check_interval: float = 30.0,
         internet_check_host: str = "8.8.8.8",
+        nm_connection_name: str | None = None,
     ):
         """
         Initialize network monitor.
@@ -152,10 +174,17 @@ class NetworkMonitor:
             gcs_tailscale_ip: Tailscale IP of Ground Control Station
             check_interval: Seconds between status checks
             internet_check_host: Host to ping for internet connectivity
+            nm_connection_name: NetworkManager profile name owning the LTE
+                modem (default ``NOMAD-LTE``; overridable via
+                ``NOMAD_LTE_CONNECTION`` env var).
         """
         self._gcs_ip = gcs_tailscale_ip
         self._check_interval = check_interval
         self._internet_host = internet_check_host
+        explicit = nm_connection_name or os.environ.get("NOMAD_LTE_CONNECTION")
+        self._nm_conn_candidates = (
+            [explicit] if explicit else list(self.NOMAD_LTE_CONNECTION_CANDIDATES)
+        )
 
         self._status = NetworkStatus()
         self._running = False
@@ -268,87 +297,330 @@ class NetworkMonitor:
 
     async def _check_modem_status(self) -> ModemStatus | None:
         """
-        Query 4G/LTE modem status via ModemManager (mmcli).
+        Query 4G/LTE modem status.
+
+        Combines two sources:
+        - ``mmcli`` (ModemManager) for the modem-hardware view: model, carrier,
+          technology, RSRP, IMEI.
+        - ``nmcli`` (NetworkManager) for the connection-profile view:
+          NOMAD-LTE state, bound interface and IPv4 address.
+
+        Either source on its own is incomplete. ``mmcli`` doesn't always
+        surface the interface/IP the kernel ended up using, and ``nmcli``
+        doesn't expose RF signal strength. We merge them.
 
         Returns:
-            ModemStatus or None if modem not available
+            ModemStatus or None if no modem and no LTE connection are found.
         """
+        status = ModemStatus()
+        got_anything = False
+
+        # ---- Pass 1: NetworkManager (lightweight, works even without MM) ----
+        # Try each configured candidate in order, fall back to fuzzy LTE match.
         try:
-            # List modems
-            exit_code, stdout, stderr = await self._run_command(["mmcli", "-L"])
+            nm_info = None
+            for cand in self._nm_conn_candidates:
+                nm_info = await self._query_nm_connection(cand)
+                if nm_info:
+                    break
+            if nm_info is None:
+                nm_info = await self._query_nm_connection_fuzzy()
+            if nm_info:
+                status.nm_connection_name = nm_info.get("name")
+                status.nm_connection_state = nm_info.get("state")
+                status.interface = nm_info.get("interface")
+                status.ip_address = nm_info.get("ip4")
+                status.apn = nm_info.get("apn")
+                # NM "activated" => data session is up
+                if nm_info.get("state") == "activated":
+                    status.connected = True
+                got_anything = True
+        except Exception as e:
+            logger.debug(f"nmcli query failed: {e}")
 
-            if exit_code != 0 or "No modems" in stdout:
-                logger.debug("No modem found via mmcli")
-                return None
-
-            # Parse modem index (e.g., "/org/freedesktop/ModemManager1/Modem/0")
-            modem_match = re.search(r"/Modem/(\d+)", stdout)
-            if not modem_match:
-                return None
-
-            modem_idx = modem_match.group(1)
-
-            # Get modem info
-            exit_code, stdout, stderr = await self._run_command(
-                ["mmcli", "-m", modem_idx]
-            )
-
-            if exit_code != 0:
-                return None
-
-            status = ModemStatus()
-
-            # Parse modem output
-            # State
-            if "state: 'connected'" in stdout.lower():
-                status.connected = True
-            elif "state:" in stdout:
-                status.connected = False
-
-            # Model
-            model_match = re.search(r"model:\s*(.+)", stdout, re.IGNORECASE)
-            if model_match:
-                status.model = model_match.group(1).strip()
-
-            # Access technology
-            tech_match = re.search(
-                r"access tech:\s*(.+)", stdout, re.IGNORECASE
-            )
-            if tech_match:
-                status.technology = tech_match.group(1).strip()
-
-            # Operator/carrier
-            operator_match = re.search(
-                r"operator name:\s*(.+)", stdout, re.IGNORECASE
-            )
-            if operator_match:
-                status.carrier = operator_match.group(1).strip()
-
-            # Get signal info
-            exit_code, stdout, stderr = await self._run_command(
-                ["mmcli", "-m", modem_idx, "--signal-get"]
-            )
-
-            if exit_code == 0:
-                # Parse RSRP (LTE reference signal)
-                rsrp_match = re.search(r"rsrp:\s*([-\d.]+)\s*dBm", stdout)
-                if rsrp_match:
-                    status.signal_strength_dbm = int(float(rsrp_match.group(1)))
+        # ---- Pass 2: ModemManager (probe every modem, not just /Modem/0) ----
+        try:
+            mm_info = await self._query_modemmanager()
+            if mm_info:
+                # Don't let a later mmcli "disconnected" flip an NM "activated"
+                # — NM is authoritative for the data session.
+                if not status.connected:
+                    status.connected = mm_info.get("connected", False)
+                status.model = mm_info.get("model") or status.model
+                status.carrier = mm_info.get("carrier") or status.carrier
+                status.technology = (
+                    mm_info.get("technology") or status.technology
+                )
+                status.imei = mm_info.get("imei") or status.imei
+                status.signal_strength_dbm = mm_info.get("rsrp_dbm")
+                if status.signal_strength_dbm is not None:
                     status.signal_quality = _rsrp_to_quality(
                         status.signal_strength_dbm
                     )
                     status.signal_percent = _rsrp_to_percent(
                         status.signal_strength_dbm
                     )
-
-            return status
-
+                # Fall back to mmcli-reported interface if NM didn't have one.
+                if not status.interface:
+                    status.interface = mm_info.get("interface")
+                got_anything = True
         except FileNotFoundError:
             logger.debug("mmcli not found - ModemManager not installed")
-            return None
         except Exception as e:
-            logger.error(f"Modem status check error: {e}")
+            logger.debug(f"mmcli query failed: {e}")
+
+        # ---- Pass 3: derive interface/IP from `ip addr` if still missing ----
+        if got_anything and (not status.interface or not status.ip_address):
+            try:
+                iface, ip4 = await self._guess_modem_interface()
+                if not status.interface:
+                    status.interface = iface
+                if not status.ip_address:
+                    status.ip_address = ip4
+            except Exception as e:
+                logger.debug(f"interface guess failed: {e}")
+
+        return status if got_anything else None
+
+    async def _query_nm_connection(self, conn_name: str) -> dict[str, Any] | None:
+        """
+        Look up a NetworkManager connection by name. Returns dict with
+        state/interface/ip4/apn, or None if NetworkManager is missing or the
+        connection doesn't exist.
+        """
+        # Confirm the profile exists at all.
+        exit_code, stdout, _ = await self._run_command(
+            ["nmcli", "-t", "-f", "NAME,TYPE,DEVICE,STATE", "connection", "show"]
+        )
+        if exit_code != 0:
             return None
+
+        matched = None
+        for line in stdout.splitlines():
+            # Format: NAME:TYPE:DEVICE:STATE
+            parts = line.split(":")
+            if len(parts) < 4:
+                continue
+            name, ctype, device, state = parts[0], parts[1], parts[2], parts[3]
+            if name == conn_name:
+                matched = {
+                    "name": name,
+                    "type": ctype,
+                    "device": device or None,
+                    "state": state or None,
+                }
+                break
+
+        if not matched:
+            return None
+
+        # Pull APN + ipv4 details from the connection profile.
+        exit_code, stdout, _ = await self._run_command(
+            [
+                "nmcli",
+                "-t",
+                "-f",
+                "gsm.apn,GENERAL.STATE,IP4.ADDRESS,GENERAL.DEVICES",
+                "connection",
+                "show",
+                matched["name"],
+            ]
+        )
+        result: dict[str, Any] = {
+            "name": matched["name"],
+            "state": matched["state"],
+            "interface": matched.get("device"),
+        }
+        if exit_code == 0:
+            for line in stdout.splitlines():
+                if ":" not in line:
+                    continue
+                k, _, v = line.partition(":")
+                v = v.strip()
+                if not v:
+                    continue
+                key = k.strip().lower()
+                if key == "gsm.apn":
+                    result["apn"] = v
+                elif key == "ip4.address[1]" or key == "ip4.address":
+                    # nmcli prints "192.0.2.10/24"
+                    result["ip4"] = v.split("/")[0]
+                elif key == "general.devices":
+                    result["interface"] = v
+                elif key == "general.state":
+                    # Overrides the brief state from `connection show`.
+                    # Formats like "100 (activated)" — extract the word.
+                    word = re.search(r"\((\w+)\)", v)
+                    if word:
+                        result["state"] = word.group(1)
+                    else:
+                        result["state"] = v
+        return result
+
+    async def _query_nm_connection_fuzzy(self) -> dict[str, Any] | None:
+        """
+        Locate an LTE NetworkManager profile by heuristic when no named
+        candidate matched. Picks, in order:
+
+        1. Any *activated* connection of type ``gsm``/``cdma``/``wwan``.
+        2. Any *activated* connection whose name looks LTE-related (matches
+           ``LTE_NAME_HINTS``). This catches USB tethered modems running in
+           CDC-ECM mode, which appear as 802-3-ethernet to NM.
+        3. Same as 2 but allowing inactive profiles, so a configured-but-
+           down modem still surfaces in the UI.
+
+        Returns the same dict shape as ``_query_nm_connection``.
+        """
+        exit_code, stdout, _ = await self._run_command(
+            ["nmcli", "-t", "-f", "NAME,TYPE,DEVICE,STATE", "connection", "show"]
+        )
+        if exit_code != 0:
+            return None
+
+        # Walk the connections once; classify each into a bucket
+        cellular_active: list[dict[str, Any]] = []
+        named_active: list[dict[str, Any]] = []
+        named_inactive: list[dict[str, Any]] = []
+
+        for line in stdout.splitlines():
+            parts = line.split(":")
+            if len(parts) < 4:
+                continue
+            name, ctype, device, state = parts
+            row = {
+                "name": name,
+                "type": ctype,
+                "device": device or None,
+                "state": state or None,
+            }
+            name_lower = name.lower()
+            looks_lte = any(h in name_lower for h in self.LTE_NAME_HINTS)
+
+            if state and ctype in ("gsm", "cdma", "wwan"):
+                cellular_active.append(row)
+            elif state and looks_lte:
+                named_active.append(row)
+            elif looks_lte:
+                named_inactive.append(row)
+
+        match = (
+            (cellular_active[0] if cellular_active else None)
+            or (named_active[0] if named_active else None)
+            or (named_inactive[0] if named_inactive else None)
+        )
+        if match is None:
+            return None
+
+        # Re-use _query_nm_connection's IP/APN lookup for the resolved name.
+        full = await self._query_nm_connection(match["name"])
+        return full if full else match
+
+    async def _query_modemmanager(self) -> dict[str, Any] | None:
+        """
+        Iterate over every modem ModemManager knows about, return aggregated
+        info for the first one that reports any usable data.
+        """
+        exit_code, stdout, _ = await self._run_command(["mmcli", "-L"])
+        if exit_code != 0 or "No modems" in stdout:
+            return None
+
+        modem_idxs = re.findall(r"/Modem/(\d+)", stdout)
+        if not modem_idxs:
+            return None
+
+        for idx in modem_idxs:
+            info = await self._read_modem(idx)
+            if info:
+                return info
+        return None
+
+    async def _read_modem(self, idx: str) -> dict[str, Any] | None:
+        """Pull a single modem's full picture out of mmcli."""
+        exit_code, stdout, _ = await self._run_command(["mmcli", "-m", idx])
+        if exit_code != 0:
+            return None
+
+        info: dict[str, Any] = {}
+
+        # State — mmcli writes "state: 'connected'" but versions vary.
+        state_match = re.search(r"state:\s*'?(\w+)'?", stdout, re.IGNORECASE)
+        if state_match:
+            info["connected"] = state_match.group(1).lower() == "connected"
+
+        for key_re, dest in (
+            (r"model:\s*(.+)", "model"),
+            (r"access tech(?:nologies)?:\s*(.+)", "technology"),
+            (r"operator name:\s*(.+)", "carrier"),
+            (r"\bimei:\s*(.+)", "imei"),
+            (r"primary port:\s*(\S+)", "interface"),
+        ):
+            m = re.search(key_re, stdout, re.IGNORECASE)
+            if m:
+                val = m.group(1).strip()
+                # mmcli often pads with "--" for unset values
+                if val and val not in ("--", "unknown"):
+                    info[dest] = val
+
+        # Signal — try --signal-get first (works on most recent mmcli versions)
+        exit_code, sig_out, _ = await self._run_command(
+            ["mmcli", "-m", idx, "--signal-get"]
+        )
+        rsrp = None
+        if exit_code == 0:
+            m = re.search(r"rsrp:\s*([-\d.]+)\s*dBm", sig_out)
+            if m:
+                rsrp = int(float(m.group(1)))
+
+        # Fall back to the generic "signal quality" percent from mmcli -m
+        if rsrp is None:
+            m = re.search(r"signal quality:\s*(\d+)%", stdout, re.IGNORECASE)
+            if m:
+                # Reverse-map the percent into a rough dBm; better than nothing.
+                pct = int(m.group(1))
+                rsrp = int(round(pct / 100.0 * 96 - 140))
+
+        if rsrp is not None:
+            info["rsrp_dbm"] = rsrp
+
+        # If we couldn't infer the kernel interface, try the bearer info.
+        if "interface" not in info:
+            exit_code, b_out, _ = await self._run_command(
+                ["mmcli", "-m", idx, "--bearer", "0"]
+            )
+            if exit_code == 0:
+                m = re.search(r"interface:\s*(\S+)", b_out, re.IGNORECASE)
+                if m and m.group(1) not in ("--", "unknown"):
+                    info["interface"] = m.group(1).strip()
+
+        return info if info else None
+
+    async def _guess_modem_interface(self) -> tuple[str | None, str | None]:
+        """
+        Last-ditch fallback when neither ModemManager nor NetworkManager
+        gave us an interface name. Walk ``ip -4 addr`` and pick the first
+        wwan*/usb*/cdc-wdm* interface that has an IPv4.
+        """
+        exit_code, stdout, _ = await self._run_command(
+            ["ip", "-4", "-o", "addr", "show"]
+        )
+        if exit_code != 0:
+            return None, None
+        for line in stdout.splitlines():
+            # "3: wwan0    inet 10.50.10.2/30 ..."
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            iface = parts[1]
+            if not (
+                iface.startswith("wwan")
+                or iface.startswith("usb")
+                or iface.startswith("cdc")
+                or iface.startswith("ppp")
+            ):
+                continue
+            ip4 = parts[3].split("/")[0]
+            return iface, ip4
+        return None, None
 
     async def _determine_connection_type(self) -> ConnectionType:
         """Determine primary network connection type."""

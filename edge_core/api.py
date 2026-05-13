@@ -1995,14 +1995,11 @@ fi
             gcs_reachable = bool(getattr(status, "tailscale_reachable", False))
 
             if getattr(status, "modem", None):
-                modem_obj = status.modem
-                modem = {
-                    "connected": modem_obj.connected,
-                    "signal_strength_dbm": modem_obj.signal_strength_dbm,
-                    "signal_quality": modem_obj.signal_quality.value,
-                    "carrier": modem_obj.carrier,
-                    "technology": modem_obj.technology,
-                }
+                # ModemStatus.to_dict() already includes every field the
+                # GCS-side dashboard needs (interface, ip_address, NM
+                # connection name/state, APN, model, IMEI). Use it directly
+                # rather than hand-picking a subset.
+                modem = status.modem.to_dict()
         return {
             "tailscale": tailscale,
             "modem": modem,
@@ -2019,12 +2016,12 @@ fi
                 status_code=503, detail="Tailscale manager not initialized"
             )
 
-        ok = await tailscale_manager.reconnect()
+        ok, detail = await tailscale_manager.reconnect()
         return {
             "success": ok,
-            "message": "Tailscale reconnection triggered"
-            if ok
-            else "Failed to trigger reconnection",
+            "message": detail
+            if detail
+            else ("Tailscale reconnected" if ok else "Failed to trigger reconnection"),
         }
 
     @app.get("/network/ping/{host}", tags=["Network"])

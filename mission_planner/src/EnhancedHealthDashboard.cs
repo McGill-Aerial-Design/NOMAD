@@ -64,7 +64,6 @@ namespace NOMAD.MissionPlanner
         private ProgressBar _prgMemory, _prgDisk;
         
         // Network labels
-        private Label _lblTailscaleStatus;
         private Label _lblTailscaleIP;
         private Label _lblVioStatus;
         
@@ -73,6 +72,8 @@ namespace NOMAD.MissionPlanner
         private Label _lblGcsReachable;
         private Label _lblModemStatus;
         private Label _lblModemSignal;
+        private Label _lblModemConnection;   // "NOMAD-LTE: activated"
+        private Label _lblModemInterface;    // "wwan0  10.50.10.2"
         private Label _lblPeerCount;
         private Button _btnReconnectTailscale;
         
@@ -322,6 +323,12 @@ namespace NOMAD.MissionPlanner
         
         private Panel CreateNetworkPanel()
         {
+            // Outer panel is a vertical docked layout that gracefully resizes:
+            //   row 0: title strip
+            //   row 1: Edge Network group (AutoSize, holds Tailscale + reachability + modem)
+            //   row 2: VIO Pipeline group (AutoSize)
+            //   row 3: VIO Tilt Drift group (AutoSize)
+            //   row 4: percent-100 spacer to absorb slack
             var panel = new Panel
             {
                 Dock = DockStyle.Fill,
@@ -330,243 +337,237 @@ namespace NOMAD.MissionPlanner
                 Padding = new Padding(10),
                 AutoScroll = true,
             };
-            
-            var title = new Label
+
+            var grid = new TableLayoutPanel
             {
-                Text = "Network & VIO",
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                ColumnCount = 1,
+                BackColor = Color.Transparent,
+            };
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));  // title
+            grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));  // Edge Network group
+            grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));  // VIO Pipeline group
+            grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));  // VIO Tilt Drift group
+
+            grid.Controls.Add(BuildTitleStrip(), 0, 0);
+            grid.Controls.Add(BuildEdgeNetworkGroup(), 0, 1);
+            grid.Controls.Add(BuildVioPipelineGroup(), 0, 2);
+            grid.Controls.Add(BuildVioDriftGroup(), 0, 3);
+
+            panel.Controls.Add(grid);
+            return panel;
+        }
+
+        // --- Network panel: title strip -------------------------------------
+
+        private Control BuildTitleStrip()
+        {
+            var strip = new TableLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                Height = 32,
+                ColumnCount = 2,
+                RowCount = 1,
+                BackColor = Color.Transparent,
+                Margin = new Padding(0, 0, 0, 6),
+            };
+            strip.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            strip.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+            strip.Controls.Add(new Label
+            {
+                Text = "Edge Diagnostics",
                 Font = new Font("Segoe UI", 11, FontStyle.Bold),
                 ForeColor = Color.FromArgb(100, 200, 100),
-                Location = new Point(10, 10),
                 AutoSize = true,
-            };
-            panel.Controls.Add(title);
-            
-            // Reconnect Button
+                Margin = new Padding(0, 6, 0, 0),
+            }, 0, 0);
+
             _btnReconnectTailscale = new Button
             {
                 Text = "Reconnect",
-                Location = new Point(240, 7),
-                Size = new Size(70, 22),
+                Size = new Size(80, 24),
                 BackColor = Color.FromArgb(60, 60, 65),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Segoe UI", 8),
+                Anchor = AnchorStyles.Right,
+                Margin = new Padding(0, 3, 0, 0),
+                Cursor = Cursors.Hand,
             };
             _btnReconnectTailscale.FlatAppearance.BorderSize = 0;
             _btnReconnectTailscale.Click += async (s, e) => await TriggerTailscaleReconnect();
-            panel.Controls.Add(_btnReconnectTailscale);
-            
-            int yOffset = 38;
-            
-            // Tailscale Status
-            var lblTsTitle = new Label
+            strip.Controls.Add(_btnReconnectTailscale, 1, 0);
+
+            return strip;
+        }
+
+        // --- Edge Network group ---------------------------------------------
+        // Owns everything related to the link from this Jetson to the GCS:
+        // Tailscale (IP + peers, no redundant "connected" line — that's on
+        // the Link Status page), reachability, and the cellular modem.
+
+        private GroupBox BuildEdgeNetworkGroup()
+        {
+            var group = new GroupBox
             {
-                Text = "Tailscale:",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = Color.LightGray,
-                Location = new Point(10, yOffset),
-                AutoSize = true,
-            };
-            panel.Controls.Add(lblTsTitle);
-            
-            _lblTailscaleStatus = new Label
-            {
-                Text = "Unknown",
+                Text = "Edge Network",
+                ForeColor = Color.FromArgb(120, 200, 255),
                 Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                ForeColor = Color.Yellow,
-                Location = new Point(90, yOffset),
+                BackColor = Color.FromArgb(40, 40, 43),
                 AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Padding = new Padding(8, 4, 8, 8),
+                Margin = new Padding(0, 0, 0, 6),
+                Dock = DockStyle.Top,
             };
-            panel.Controls.Add(_lblTailscaleStatus);
-            
-            _lblPeerCount = new Label
+
+            var rows = new TableLayoutPanel
             {
-                Text = "",
-                Font = new Font("Segoe UI", 8),
-                ForeColor = Color.Gray,
-                Location = new Point(180, yOffset),
+                Dock = DockStyle.Top,
                 AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                ColumnCount = 2,
+                BackColor = Color.Transparent,
+                Margin = new Padding(0, 14, 0, 0),
             };
-            panel.Controls.Add(_lblPeerCount);
-            yOffset += 22;
-            
-            // Tailscale IP
-            var lblIpTitle = new Label
+            rows.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
+            rows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+            _lblTailscaleIP = AddKvRow(rows, "Tailscale:", "--", Color.White, new Font("Consolas", 9));
+            _lblPeerCount = AddKvRow(rows, "Peers:", "--", Color.LightGray, new Font("Segoe UI", 9));
+            _lblInternetStatus = AddKvRow(rows, "Internet:", "--", Color.Gray, new Font("Segoe UI", 9, FontStyle.Bold));
+            _lblGcsReachable = AddKvRow(rows, "GCS reach:", "--", Color.Gray, new Font("Segoe UI", 9, FontStyle.Bold));
+
+            // Modem sub-section header (just a coloured separator label)
+            var modemHeader = new Label
             {
-                Text = "Tailscale IP:",
+                Text = "LTE modem",
+                Font = new Font("Segoe UI", 9, FontStyle.Bold | FontStyle.Italic),
+                ForeColor = Color.FromArgb(255, 180, 100),
+                AutoSize = true,
+                Margin = new Padding(0, 8, 0, 2),
+            };
+            rows.SetColumnSpan(modemHeader, 2);
+            rows.Controls.Add(modemHeader, 0, rows.RowCount);
+            rows.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            rows.RowCount++;
+
+            _lblModemConnection = AddKvRow(rows, "Profile:", "--", Color.LightGray, new Font("Segoe UI", 9));
+            _lblModemStatus = AddKvRow(rows, "Carrier:", "--", Color.Gray, new Font("Segoe UI", 9));
+            _lblModemSignal = AddKvRow(rows, "Signal:", "--", Color.Gray, new Font("Consolas", 9));
+            _lblModemInterface = AddKvRow(rows, "Bind:", "--", Color.LightGray, new Font("Consolas", 9));
+
+            group.Controls.Add(rows);
+            return group;
+        }
+
+        /// <summary>
+        /// Helper: append a "label : value" row to a 2-column TableLayoutPanel.
+        /// Returns the value Label so the caller can mutate it later.
+        /// </summary>
+        private static Label AddKvRow(TableLayoutPanel host, string key, string value, Color valueColor, Font valueFont)
+        {
+            host.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            int row = host.RowCount;
+            host.RowCount = row + 1;
+
+            var k = new Label
+            {
+                Text = key,
                 Font = new Font("Segoe UI", 9),
                 ForeColor = Color.LightGray,
-                Location = new Point(10, yOffset),
                 AutoSize = true,
+                Margin = new Padding(0, 2, 6, 2),
             };
-            panel.Controls.Add(lblIpTitle);
-            
-            _lblTailscaleIP = new Label
+            host.Controls.Add(k, 0, row);
+
+            var v = new Label
             {
-                Text = "--",
-                Font = new Font("Consolas", 9),
-                ForeColor = Color.White,
-                Location = new Point(90, yOffset),
+                Text = value,
+                Font = valueFont,
+                ForeColor = valueColor,
                 AutoSize = true,
+                Margin = new Padding(0, 2, 0, 2),
             };
-            panel.Controls.Add(_lblTailscaleIP);
-            yOffset += 22;
-            
-            // Internet Reachability
-            var lblInternetTitle = new Label
-            {
-                Text = "Internet:",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = Color.LightGray,
-                Location = new Point(10, yOffset),
-                AutoSize = true,
-            };
-            panel.Controls.Add(lblInternetTitle);
-            
-            _lblInternetStatus = new Label
-            {
-                Text = "--",
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                ForeColor = Color.Gray,
-                Location = new Point(90, yOffset),
-                AutoSize = true,
-            };
-            panel.Controls.Add(_lblInternetStatus);
-            yOffset += 22;
-            
-            // GCS Reachability
-            var lblGcsTitle = new Label
-            {
-                Text = "GCS:",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = Color.LightGray,
-                Location = new Point(10, yOffset),
-                AutoSize = true,
-            };
-            panel.Controls.Add(lblGcsTitle);
-            
-            _lblGcsReachable = new Label
-            {
-                Text = "--",
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                ForeColor = Color.Gray,
-                Location = new Point(90, yOffset),
-                AutoSize = true,
-            };
-            panel.Controls.Add(_lblGcsReachable);
-            yOffset += 22;
-            
-            // Modem Status
-            var lblModemTitle = new Label
-            {
-                Text = "Modem:",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = Color.LightGray,
-                Location = new Point(10, yOffset),
-                AutoSize = true,
-            };
-            panel.Controls.Add(lblModemTitle);
-            
-            _lblModemStatus = new Label
-            {
-                Text = "--",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = Color.Gray,
-                Location = new Point(90, yOffset),
-                AutoSize = true,
-            };
-            panel.Controls.Add(_lblModemStatus);
-            
-            _lblModemSignal = new Label
-            {
-                Text = "",
-                Font = new Font("Segoe UI", 8),
-                ForeColor = Color.Gray,
-                Location = new Point(180, yOffset),
-                AutoSize = true,
-            };
-            panel.Controls.Add(_lblModemSignal);
-            yOffset += 25;
-            
-            // VIO Status
-            var vioGroup = new GroupBox
+            host.Controls.Add(v, 1, row);
+            return v;
+        }
+
+        // --- VIO Pipeline group ---------------------------------------------
+
+        private GroupBox BuildVioPipelineGroup()
+        {
+            var group = new GroupBox
             {
                 Text = "VIO Pipeline",
                 ForeColor = Color.FromArgb(255, 150, 50),
                 Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                Location = new Point(10, yOffset),
-                Size = new Size(300, 75),
                 BackColor = Color.FromArgb(40, 40, 43),
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Padding = new Padding(8, 4, 8, 8),
+                Margin = new Padding(0, 0, 0, 6),
+                Dock = DockStyle.Top,
             };
-            
             _lblVioStatus = new Label
             {
                 Text = "Status: Unknown\nConfidence: --\nRate: -- Hz",
                 Font = new Font("Consolas", 9),
                 ForeColor = Color.White,
-                Location = new Point(15, 20),
-                Size = new Size(270, 50),
+                AutoSize = true,
+                Margin = new Padding(0, 14, 0, 0),
+                Dock = DockStyle.Top,
             };
-            vioGroup.Controls.Add(_lblVioStatus);
-            
-            panel.Controls.Add(vioGroup);
-            yOffset += 80;
+            group.Controls.Add(_lblVioStatus);
+            return group;
+        }
 
-            // VIO Tilt Drift Stats (VO-006)
-            var driftGroup = new GroupBox
+        // --- VIO Tilt Drift group -------------------------------------------
+
+        private GroupBox BuildVioDriftGroup()
+        {
+            var group = new GroupBox
             {
                 Text = "VIO Tilt Drift",
                 ForeColor = Color.FromArgb(100, 200, 255),
                 Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                Location = new Point(10, yOffset),
-                Size = new Size(300, 80),
                 BackColor = Color.FromArgb(40, 40, 43),
-            };
-
-            _lblDriftCycles = new Label
-            {
-                Text = "Cycles: --",
-                Font = new Font("Consolas", 9),
-                ForeColor = Color.White,
-                Location = new Point(15, 20),
                 AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Padding = new Padding(8, 4, 8, 8),
+                Margin = new Padding(0, 0, 0, 6),
+                Dock = DockStyle.Top,
             };
-            driftGroup.Controls.Add(_lblDriftCycles);
 
-            _lblDriftAvg = new Label
+            var grid = new TableLayoutPanel
             {
-                Text = "Avg: --",
-                Font = new Font("Consolas", 9),
-                ForeColor = Color.White,
-                Location = new Point(120, 20),
+                Dock = DockStyle.Top,
                 AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                ColumnCount = 2,
+                BackColor = Color.Transparent,
+                Margin = new Padding(0, 14, 0, 0),
             };
-            driftGroup.Controls.Add(_lblDriftAvg);
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-            _lblDriftMax = new Label
-            {
-                Text = "Max: --",
-                Font = new Font("Consolas", 9),
-                ForeColor = Color.White,
-                Location = new Point(15, 42),
-                AutoSize = true,
-            };
-            driftGroup.Controls.Add(_lblDriftMax);
+            _lblDriftCycles = new Label { Text = "Cycles: --", Font = new Font("Consolas", 9), ForeColor = Color.White, AutoSize = true, Margin = new Padding(0, 2, 8, 2) };
+            _lblDriftAvg = new Label { Text = "Avg: --", Font = new Font("Consolas", 9), ForeColor = Color.White, AutoSize = true, Margin = new Padding(0, 2, 8, 2) };
+            _lblDriftMax = new Label { Text = "Max: --", Font = new Font("Consolas", 9), ForeColor = Color.White, AutoSize = true, Margin = new Padding(0, 2, 8, 2) };
+            _lblDriftWarning = new Label { Text = "", Font = new Font("Segoe UI", 9, FontStyle.Bold), ForeColor = Color.Orange, AutoSize = true, Visible = false, Margin = new Padding(0, 2, 0, 2) };
 
-            _lblDriftWarning = new Label
-            {
-                Text = "",
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                ForeColor = Color.Orange,
-                Location = new Point(120, 42),
-                AutoSize = true,
-                Visible = false,
-            };
-            driftGroup.Controls.Add(_lblDriftWarning);
-
-            panel.Controls.Add(driftGroup);
-
-            return panel;
+            grid.Controls.Add(_lblDriftCycles, 0, 0);
+            grid.Controls.Add(_lblDriftAvg, 1, 0);
+            grid.Controls.Add(_lblDriftMax, 0, 1);
+            grid.Controls.Add(_lblDriftWarning, 1, 1);
+            group.Controls.Add(grid);
+            return group;
         }
         
         private Panel CreateGraphPanel()
@@ -823,19 +824,20 @@ namespace NOMAD.MissionPlanner
                 }
                 else
                 {
-                    // Fallback to basic tailscale info from /health/detailed
+                    // Fallback to basic tailscale info from /health/detailed.
                     var tsConnected = data["tailscale_connected"]?.Value<bool>() ?? false;
                     var tsIp = data["tailscale_ip"]?.ToString() ?? "--";
-                    _lblTailscaleStatus.Text = tsConnected ? "Connected" : "Disconnected";
-                    _lblTailscaleStatus.ForeColor = tsConnected ? Color.LimeGreen : Color.Red;
-                    _lblTailscaleIP.Text = tsIp;
-                    _lblPeerCount.Text = "";
+                    _lblTailscaleIP.Text = tsConnected ? tsIp : "(daemon down)";
+                    _lblTailscaleIP.ForeColor = tsConnected ? Color.White : Color.Orange;
+                    _lblPeerCount.Text = "--";
                     _lblInternetStatus.Text = "--";
                     _lblInternetStatus.ForeColor = Color.Gray;
                     _lblGcsReachable.Text = "--";
                     _lblGcsReachable.ForeColor = Color.Gray;
+                    _lblModemConnection.Text = "--";
                     _lblModemStatus.Text = "--";
-                    _lblModemSignal.Text = "";
+                    _lblModemSignal.Text = "--";
+                    _lblModemInterface.Text = "--";
                 }
                 
                 // VIO Status (from /health/detailed or /health)
@@ -894,68 +896,52 @@ namespace NOMAD.MissionPlanner
                     var latency = tailscale["latency_ms"];
                     
                     bool isConnected = status.Equals("connected", StringComparison.OrdinalIgnoreCase);
-                    _lblTailscaleStatus.Text = isConnected ? "Connected" : status.Replace("_", " ");
-                    _lblTailscaleStatus.ForeColor = isConnected ? Color.LimeGreen : 
-                        (status == "connecting" ? Color.Yellow : Color.Red);
-                    _lblTailscaleIP.Text = ip ?? "--";
-                    _lblPeerCount.Text = peerCount > 0 ? $"({peerCount} peers)" : "";
+                    // Tailscale "connected" status is now implied by the Link Status
+                    // page showing live LTE traffic, so this panel just shows the IP.
+                    // When the daemon is down (or in a weird state) we colour the IP
+                    // line so the diagnostic is still surfaced here.
+                    _lblTailscaleIP.Text = string.IsNullOrEmpty(ip) || ip == "--"
+                        ? (isConnected ? "(no IP)" : status.Replace("_", " "))
+                        : ip;
+                    _lblTailscaleIP.ForeColor = isConnected
+                        ? Color.White
+                        : (status == "connecting" ? Color.Yellow : Color.Orange);
+                    _lblPeerCount.Text = peerCount > 0 ? peerCount.ToString() : "0";
+                    _lblPeerCount.ForeColor = peerCount > 0 ? Color.LightGray : Color.Gray;
                 }
                 else
                 {
-                    _lblTailscaleStatus.Text = "Not Available";
-                    _lblTailscaleStatus.ForeColor = Color.Gray;
-                    _lblTailscaleIP.Text = "--";
-                    _lblPeerCount.Text = "";
+                    _lblTailscaleIP.Text = "(daemon down)";
+                    _lblTailscaleIP.ForeColor = Color.Orange;
+                    _lblPeerCount.Text = "--";
                 }
-                
+
                 // Internet reachability
                 var internetReachable = networkData["internet_reachable"]?.Value<bool>() ?? false;
                 _lblInternetStatus.Text = internetReachable ? "Reachable" : "Unreachable";
                 _lblInternetStatus.ForeColor = internetReachable ? Color.LimeGreen : Color.Red;
-                
-                // GCS reachability
+
+                // GCS reachability (Jetson → GCS via Tailscale)
                 var gcsReachable = networkData["gcs_reachable"]?.Value<bool>() ?? false;
                 _lblGcsReachable.Text = gcsReachable ? "Reachable" : "Unreachable";
                 _lblGcsReachable.ForeColor = gcsReachable ? Color.LimeGreen : Color.Red;
-                
-                // Modem status
+
+                // Modem
                 var modem = networkData["modem"];
                 if (modem != null && modem.Type != JTokenType.Null)
                 {
-                    var modemConnected = modem["connected"]?.Value<bool>() ?? false;
-                    var carrier = modem["carrier"]?.ToString() ?? "";
-                    var technology = modem["technology"]?.ToString() ?? "";
-                    var signalQuality = modem["signal_quality"]?.ToString() ?? "";
-                    var signalDbm = modem["signal_strength_dbm"];
-                    
-                    if (modemConnected)
-                    {
-                        _lblModemStatus.Text = string.IsNullOrEmpty(carrier) ? "Connected" : carrier;
-                        _lblModemStatus.ForeColor = Color.LimeGreen;
-                        
-                        // Signal info
-                        string signalText = "";
-                        if (!string.IsNullOrEmpty(technology))
-                            signalText = technology;
-                        if (signalDbm != null && signalDbm.Type != JTokenType.Null)
-                            signalText += $" ({signalDbm}dBm)";
-                        else if (!string.IsNullOrEmpty(signalQuality))
-                            signalText += $" ({signalQuality})";
-                        _lblModemSignal.Text = signalText;
-                        _lblModemSignal.ForeColor = GetSignalColor(signalQuality);
-                    }
-                    else
-                    {
-                        _lblModemStatus.Text = "Disconnected";
-                        _lblModemStatus.ForeColor = Color.Red;
-                        _lblModemSignal.Text = "";
-                    }
+                    UpdateModemFields(modem);
                 }
                 else
                 {
-                    _lblModemStatus.Text = "Not Available";
+                    _lblModemConnection.Text = "Not detected";
+                    _lblModemConnection.ForeColor = Color.Gray;
+                    _lblModemStatus.Text = "--";
                     _lblModemStatus.ForeColor = Color.Gray;
-                    _lblModemSignal.Text = "";
+                    _lblModemSignal.Text = "--";
+                    _lblModemSignal.ForeColor = Color.Gray;
+                    _lblModemInterface.Text = "--";
+                    _lblModemInterface.ForeColor = Color.Gray;
                 }
             }
             catch (Exception ex)
@@ -963,7 +949,91 @@ namespace NOMAD.MissionPlanner
                 System.Diagnostics.Debug.WriteLine($"Network status error: {ex.Message}");
             }
         }
-        
+
+        /// <summary>
+        /// Populate the four LTE-modem rows from the /network/status modem
+        /// object. Treats the NM "Profile" row as authoritative for the
+        /// data-session state (NOMAD-LTE: activated vs activating vs not
+        /// configured), since mmcli sometimes shows "connected" before the
+        /// NM connection has finished bringing the interface up.
+        /// </summary>
+        private void UpdateModemFields(JToken modem)
+        {
+            var connected = modem["connected"]?.Value<bool>() ?? false;
+            var carrier = modem["carrier"]?.ToString() ?? "";
+            var technology = modem["technology"]?.ToString() ?? "";
+            var signalQuality = modem["signal_quality"]?.ToString() ?? "";
+            var signalDbm = modem["signal_strength_dbm"];
+            var signalPercent = modem["signal_percent"];
+            var nmName = modem["nm_connection_name"]?.ToString() ?? "";
+            var nmState = modem["nm_connection_state"]?.ToString() ?? "";
+            var iface = modem["interface"]?.ToString() ?? "";
+            var ip4 = modem["ip_address"]?.ToString() ?? "";
+
+            // Profile row: "NOMAD-LTE: activated"
+            if (!string.IsNullOrEmpty(nmName))
+            {
+                _lblModemConnection.Text = string.IsNullOrEmpty(nmState)
+                    ? nmName
+                    : $"{nmName} ({nmState})";
+                _lblModemConnection.ForeColor = nmState == "activated"
+                    ? Color.LimeGreen
+                    : nmState == "activating" ? Color.Yellow : Color.Orange;
+            }
+            else
+            {
+                _lblModemConnection.Text = "(no NM profile)";
+                _lblModemConnection.ForeColor = Color.Gray;
+            }
+
+            // Carrier row
+            if (!string.IsNullOrEmpty(carrier))
+            {
+                _lblModemStatus.Text = string.IsNullOrEmpty(technology)
+                    ? carrier
+                    : $"{carrier} · {technology}";
+                _lblModemStatus.ForeColor = connected ? Color.LimeGreen : Color.Orange;
+            }
+            else
+            {
+                _lblModemStatus.Text = connected ? "Connected (no carrier name)" : "Disconnected";
+                _lblModemStatus.ForeColor = connected ? Color.LightGreen : Color.Red;
+            }
+
+            // Signal row: "-92 dBm · Good · 50%"
+            if (signalDbm != null && signalDbm.Type != JTokenType.Null)
+            {
+                var parts = new System.Collections.Generic.List<string>
+                {
+                    $"{signalDbm} dBm"
+                };
+                if (!string.IsNullOrEmpty(signalQuality)) parts.Add(Capitalize(signalQuality));
+                if (signalPercent != null && signalPercent.Type != JTokenType.Null)
+                    parts.Add($"{signalPercent}%");
+                _lblModemSignal.Text = string.Join("  ·  ", parts);
+                _lblModemSignal.ForeColor = GetSignalColor(signalQuality);
+            }
+            else if (!string.IsNullOrEmpty(signalQuality))
+            {
+                _lblModemSignal.Text = Capitalize(signalQuality);
+                _lblModemSignal.ForeColor = GetSignalColor(signalQuality);
+            }
+            else
+            {
+                _lblModemSignal.Text = "--";
+                _lblModemSignal.ForeColor = Color.Gray;
+            }
+
+            // Bind row: "wwan0  10.50.10.2"
+            string ifPart = string.IsNullOrEmpty(iface) ? "--" : iface;
+            string ipPart = string.IsNullOrEmpty(ip4) ? "(no IP)" : ip4;
+            _lblModemInterface.Text = $"{ifPart}  {ipPart}";
+            _lblModemInterface.ForeColor = !string.IsNullOrEmpty(ip4) ? Color.White : Color.Orange;
+        }
+
+        private static string Capitalize(string s) =>
+            string.IsNullOrEmpty(s) ? s : char.ToUpper(s[0]) + s.Substring(1).Replace('_', ' ');
+
         private Color GetSignalColor(string quality)
         {
             return quality?.ToLower() switch
@@ -978,41 +1048,68 @@ namespace NOMAD.MissionPlanner
         
         private async Task TriggerTailscaleReconnect()
         {
+            // Reconnect runs `tailscale down && tailscale up` on the Jetson.
+            // It can take 5-10s; keep the user oriented with a clear progress
+            // label on the button and a final result message.
             try
             {
                 _btnReconnectTailscale.Enabled = false;
-                _btnReconnectTailscale.Text = "...";
-                
+                _btnReconnectTailscale.Text = "Restarting…";
+
                 var response = await JetsonApiService.PostAsync("/network/reconnect");
-                
-                if (response.IsSuccessStatusCode)
+                string detail;
+                bool success;
+
+                try
                 {
                     var json = await response.Content.ReadAsStringAsync();
                     var data = JObject.Parse(json);
-                    var success = data["success"]?.Value<bool>() ?? false;
-                    
-                    if (success)
-                    {
-                        AddAlert($"[{DateTime.Now:HH:mm:ss}] Tailscale reconnection triggered");
-                    }
-                    else
-                    {
-                        AddAlert($"[{DateTime.Now:HH:mm:ss}] Tailscale reconnect failed");
-                    }
+                    success = data["success"]?.Value<bool>() ?? false;
+                    detail = data["message"]?.ToString() ?? "(no detail)";
+                }
+                catch
+                {
+                    success = false;
+                    detail = $"HTTP {(int)response.StatusCode}";
+                }
+
+                if (success)
+                {
+                    AddAlert($"[{DateTime.Now:HH:mm:ss}] Tailscale {detail}");
+                    _btnReconnectTailscale.Text = "✓ Reconnected";
+                    _btnReconnectTailscale.ForeColor = Color.LimeGreen;
                 }
                 else
                 {
-                    AddAlert($"[{DateTime.Now:HH:mm:ss}] Reconnect request failed: HTTP {response.StatusCode}");
+                    AddAlert($"[{DateTime.Now:HH:mm:ss}] Tailscale reconnect failed: {detail}");
+                    _btnReconnectTailscale.Text = "✗ Failed";
+                    _btnReconnectTailscale.ForeColor = Color.OrangeRed;
                 }
+
+                // Revert button text after 3s so it stays useful.
+                _ = Task.Delay(3000).ContinueWith(_ =>
+                {
+                    if (IsDisposed) return;
+                    try
+                    {
+                        BeginInvoke((Action)(() =>
+                        {
+                            _btnReconnectTailscale.Text = "Reconnect";
+                            _btnReconnectTailscale.ForeColor = Color.White;
+                        }));
+                    }
+                    catch { }
+                });
             }
             catch (Exception ex)
             {
                 AddAlert($"[{DateTime.Now:HH:mm:ss}] Reconnect error: {ex.Message}");
+                _btnReconnectTailscale.Text = "Reconnect";
+                _btnReconnectTailscale.ForeColor = Color.White;
             }
             finally
             {
                 _btnReconnectTailscale.Enabled = true;
-                _btnReconnectTailscale.Text = "Reconnect";
             }
         }
         
