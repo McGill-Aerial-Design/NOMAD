@@ -181,6 +181,8 @@
     <Compile Include="SnapshotManager.cs" />
 <Compile Include="GoogleDriveUploadService.cs" />
     <Compile Include="Task1UploadPanel.cs" />
+    <Compile Include="Task2PayloadPanel.cs" />
+    <Compile Include="Task2UploadPanel.cs" />
     <Compile Include="TelemetryInjector.cs" />
     <Compile Include="Rviz2View.cs" />
     <Compile Include="ZedCalibrationView.cs" />
