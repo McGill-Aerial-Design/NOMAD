@@ -785,7 +785,10 @@ private ListBox _lstWalls;
                     {
                         var json = Newtonsoft.Json.Linq.JObject.Parse(body);
                         var msg = json["output"]?.ToString() ?? json["message"]?.ToString() ?? "";
-                        var m = System.Text.RegularExpressions.Regex.Match(msg, @"([\d.]+)m");
+                        // Backend formats: "Ground altitude set to -78.50m. All heights..."
+                        // The leading minus must be captured; the old regex dropped it and
+                        // displayed e.g. "78.50m" instead of "-78.50m".
+                        var m = System.Text.RegularExpressions.Regex.Match(msg, @"(-?\d+(?:\.\d+)?)\s*m");
                         if (m.Success) altStr = m.Groups[1].Value + "m";
                     }
                     catch { }
@@ -822,22 +825,61 @@ private ListBox _lstWalls;
             _btnRegenDescriptions.Text = "Regenerating...";
             try
             {
-                var response = await JetsonApiService.PostAsync("/api/task/1/target/regenerate", null);
+                // PostLongRunAsync: the regenerate service may iterate over every
+                // captured target. Even with the in-container service proxy
+                // (sub-100ms typical) this is the right client to use — short
+                // 5s timeout caused this button to silently TaskCancel.
+                var response = await JetsonApiService.PostLongRunAsync("/api/task/1/target/regenerate", null);
+                var body = await response.Content.ReadAsStringAsync();
                 if (response.IsSuccessStatusCode)
                 {
-                    _txtResult.Text = "[OK] Target descriptions regenerated from raw data.";
+                    // Surface the backend's "Regenerated N/M target description(s)."
+                    // so the operator sees real feedback instead of a generic OK.
+                    string detail = null;
+                    try
+                    {
+                        var json = Newtonsoft.Json.Linq.JObject.Parse(body);
+                        detail = json["output"]?.ToString() ?? json["message"]?.ToString();
+                    }
+                    catch { }
+                    var ok = string.IsNullOrWhiteSpace(detail)
+                        ? "Target descriptions regenerated from raw data."
+                        : detail.Trim();
+                    _txtResult.Text = $"[OK] {ok} Reopen the Submit panel to see updated text.";
                     _txtResult.ForeColor = SUCCESS_COLOR;
+                    // _txtResult lives further down the layout and can scroll
+                    // out of view; show a MessageBox so the operator always
+                    // gets visible confirmation.
+                    MessageBox.Show(
+                        ok + "\n\nReopen the Submit panel to see updated descriptions.",
+                        "Descriptions Regenerated",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
                 }
                 else
                 {
-                    _txtResult.Text = $"[FAIL] Regenerate failed: {response.StatusCode}";
+                    string detail = null;
+                    try
+                    {
+                        var json = Newtonsoft.Json.Linq.JObject.Parse(body);
+                        detail = json["detail"]?.ToString();
+                    }
+                    catch { }
+                    var err = string.IsNullOrWhiteSpace(detail)
+                        ? $"Regenerate failed: {response.StatusCode}"
+                        : $"Regenerate failed: {detail}";
+                    _txtResult.Text = "[FAIL] " + err;
                     _txtResult.ForeColor = ERROR_COLOR;
+                    MessageBox.Show(err, "Regenerate Failed",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
             catch (Exception ex)
             {
                 _txtResult.Text = $"[FAIL] {ex.Message}";
                 _txtResult.ForeColor = ERROR_COLOR;
+                MessageBox.Show(ex.Message, "Regenerate Failed",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
@@ -1301,9 +1343,25 @@ private ListBox _lstWalls;
                                 int count = (int?)data["circle_count"] ?? 0;
                                 double? topDist = (double?)data["top_distance_m"];
                                 double? centerDist = (double?)data["center_distance_m"];
+                                // ground_alt_offset is published continuously by the
+                                // target_localizer node. Poll it here so the offset
+                                // label survives a Mission Planner restart -- the value
+                                // lives in the ROS node, not in this process.
+                                double? groundOffset = (double?)data["ground_alt_offset"];
                                 this.BeginInvoke(new Action(() =>
                                 {
                                     _lastDetectionCount = count;
+
+                                    if (_lblGroundAlt != null && !_lblGroundAlt.IsDisposed
+                                        && groundOffset.HasValue && Math.Abs(groundOffset.Value) > 1e-6)
+                                    {
+                                        var newText = $"Offset: {groundOffset.Value:F2}m";
+                                        if (_lblGroundAlt.Text != newText)
+                                        {
+                                            _lblGroundAlt.Text = newText;
+                                            _lblGroundAlt.ForeColor = SUCCESS_COLOR;
+                                        }
+                                    }
 
                                     if (_lblDetectionStatus != null && !_lblDetectionStatus.IsDisposed)
                                     {

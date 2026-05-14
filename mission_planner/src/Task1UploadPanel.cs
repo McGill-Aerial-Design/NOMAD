@@ -195,6 +195,81 @@ namespace NOMAD.MissionPlanner
                 _lblStatus.Text = approvedCount > 0
                     ? $"{_targetGrid.Rows.Count} capture(s) restored ({approvedCount} pre-approved)"
                     : $"{_targetGrid.Rows.Count} capture(s) restored — approve before uploading";
+
+                // Fire-and-forget overlay of fresh backend descriptions so the
+                // operator sees regenerate-button results without reopening the
+                // panel. Local user edits (saved state) still win.
+                _ = OverlayBackendDescriptionsAsync(LoadSubmitState());
+            }
+        }
+
+        // Pull /api/task/1/target/list_structured and replace each row's
+        // Description cell with the backend-side text, unless the operator has
+        // an explicit saved override. The mapping is positional: backend
+        // targets are A,B,C,...; grid rows are loaded in capture order so row
+        // 0 → A, row 1 → B, etc. Failures are non-fatal — we keep the
+        // capture-time RelativeDescription already in the cell.
+        private async Task OverlayBackendDescriptionsAsync(Dictionary<string, SubmitRowState> savedState)
+        {
+            try
+            {
+                var resp = await JetsonApiService.GetAsync("/api/task/1/target/list_structured");
+                if (!resp.IsSuccessStatusCode) return;
+                var body = await resp.Content.ReadAsStringAsync();
+                var json = Newtonsoft.Json.Linq.JObject.Parse(body);
+                var targets = json["targets"] as Newtonsoft.Json.Linq.JArray;
+                if (targets == null) return;
+                var byLetter = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var t in targets)
+                {
+                    var id = t["id"]?.ToString();
+                    var desc = t["description"]?.ToString();
+                    if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(desc))
+                        byLetter[id] = desc;
+                }
+                if (byLetter.Count == 0) return;
+
+                if (_targetGrid.IsDisposed) return;
+                if (_targetGrid.InvokeRequired)
+                {
+                    _targetGrid.Invoke((Action)(() => ApplyBackendDescriptions(byLetter, savedState)));
+                }
+                else
+                {
+                    ApplyBackendDescriptions(byLetter, savedState);
+                }
+            }
+            catch { /* network/parse failure: keep local descriptions */ }
+        }
+
+        private void ApplyBackendDescriptions(
+            Dictionary<string, string> byLetter,
+            Dictionary<string, SubmitRowState> savedState)
+        {
+            _restoringState = true;
+            try
+            {
+                for (int i = 0; i < _targetGrid.Rows.Count; i++)
+                {
+                    var letter = IndexToTargetLetter(i);
+                    if (!byLetter.TryGetValue(letter, out var desc)) continue;
+                    var row = _targetGrid.Rows[i];
+                    var imagePath = row.Cells["ImagePath"].Value?.ToString();
+                    if (!string.IsNullOrEmpty(imagePath) && savedState.TryGetValue(imagePath, out var saved)
+                        && !string.IsNullOrEmpty(saved?.Description))
+                    {
+                        // Operator explicitly edited this row — don't clobber.
+                        continue;
+                    }
+                    // Strip any legacy color/Target-letter/distance crud so the
+                    // cell text is the canonical color-free body the upload step
+                    // will prefix with the table's Color value.
+                    row.Cells["Description"].Value = NormalizeBackendDescription(desc);
+                }
+            }
+            finally
+            {
+                _restoringState = false;
             }
         }
 
@@ -666,7 +741,7 @@ namespace NOMAD.MissionPlanner
             var deletions = rows.Select(row => new
             {
                 Row = row,
-                Letter = (char)('A' + allRows.IndexOf(row)),
+                Letter = IndexToTargetLetter(allRows.IndexOf(row)),
                 ImagePath = row.Cells["ImagePath"].Value?.ToString() ?? "",
             }).ToList();
 
@@ -848,14 +923,14 @@ namespace NOMAD.MissionPlanner
             if (string.IsNullOrEmpty(plane)) return;
 
             // Target letters are assigned in capture order: row 0 = A, row 1 = B, ...
-            string targetId = ((char)('A' + rowIndex)).ToString();
+            string targetId = IndexToTargetLetter(rowIndex);
             try
             {
                 _lblStatus.Text = $"Sending plane override for target {targetId} ({plane})...";
                 _lblStatus.ForeColor = TEXT_SECONDARY;
                 var json = JsonConvert.SerializeObject(new { plane_kind = plane });
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
-                var resp = await JetsonApiService.PostAsync(
+                var resp = await JetsonApiService.PostLongRunAsync(
                     $"/api/task/1/target/{targetId}/plane_override", content);
                 if (!resp.IsSuccessStatusCode)
                     throw new Exception($"HTTP {(int)resp.StatusCode}");
@@ -887,20 +962,53 @@ namespace NOMAD.MissionPlanner
                 bool approved = (bool?)row.Cells["Approved"].Value ?? false;
                 if (!approved) continue;
 
-                char letter = (char)('A' + letterIndex++);
+                string letter = IndexToTargetLetter(letterIndex++);
                 var color = row.Cells["Color"].Value?.ToString() ?? "";
                 var description = row.Cells["Description"].Value?.ToString() ?? "";
 
                 if (!string.IsNullOrEmpty(description))
                 {
-                    string fullDesc = description;
-                    if (!description.StartsWith(color, StringComparison.OrdinalIgnoreCase))
-                        fullDesc = $"{color} target - {description}";
+                    // Backend returns the color-free spatial body, e.g.
+                    //   "on the south face of the building, 1.5m above ground, 1.7m from the SE corner."
+                    // The table's Color column is the single source of truth for target color.
+                    // NormalizeBackendDescription only strips legacy capture text saved before
+                    // the backend was changed (color word, "Target X:" prefix, [distance=...] tag).
+                    var body = NormalizeBackendDescription(description);
+                    var fullDesc = string.IsNullOrEmpty(color)
+                        ? body
+                        : $"{color} target {body}".TrimEnd();
                     lines.Add($"Target {letter}: {fullDesc}");
                 }
             }
 
             return string.Join("\n\n", lines);
+        }
+
+        // Legacy stripper for descriptions saved before the backend dropped
+        // color from _generate_description. Removes (in order):
+        //   - leading "Target X:" / "Target X -" prefix
+        //   - leading "<color> target" or "Unknown target" phrase
+        //   - trailing "[distance=NNcm]" / "[center_distance=NNcm]" tag
+        // Color words use a closed vocabulary so freeform operator text like
+        // "near red door" isn't accidentally stripped.
+        private static readonly System.Text.RegularExpressions.Regex _backendPrefixRegex =
+            new System.Text.RegularExpressions.Regex(
+                @"^\s*(?:Target\s+[A-Za-z]+\s*[:\-]\s*)?" +
+                @"(?:(?:red|blue|green|yellow|orange|purple|pink|black|white|brown|gray|grey|unknown)" +
+                @"\s+target\s*(?:-\s*)?)?",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        private static readonly System.Text.RegularExpressions.Regex _distanceTagRegex =
+            new System.Text.RegularExpressions.Regex(
+                @"\s*\[(?:center_)?distance=\d+(?:\.\d+)?\s*cm\]\s*$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        private static string NormalizeBackendDescription(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
+            var s = _backendPrefixRegex.Replace(raw.Trim(), string.Empty).Trim();
+            s = _distanceTagRegex.Replace(s, string.Empty).Trim();
+            return s;
         }
 
         private async void BtnUpload_Click(object sender, EventArgs e)
@@ -923,7 +1031,7 @@ namespace NOMAD.MissionPlanner
             foreach (DataGridViewRow row in _targetGrid.Rows)
             {
                 if (!((bool?)row.Cells["Approved"].Value ?? false)) continue;
-                char checkLetter = (char)('A' + checkIdx++);
+                string checkLetter = IndexToTargetLetter(checkIdx++);
                 var desc = row.Cells["Description"].Value?.ToString();
                 if (string.IsNullOrWhiteSpace(desc))
                 {
@@ -972,7 +1080,7 @@ namespace NOMAD.MissionPlanner
                     if (string.IsNullOrEmpty(txtFileId))
                         throw new Exception("Failed to upload Task_1_MAD_targets.txt to Google Drive.");
 
-                    var imageResults = new List<(char letter, string filename, string fileId)>();
+                    var imageResults = new List<(string letter, string filename, string fileId)>();
                     var errors = new List<string>();
                     int imgIdx = 0;
 
@@ -980,7 +1088,7 @@ namespace NOMAD.MissionPlanner
                     {
                         if (!((bool?)row.Cells["Approved"].Value ?? false)) continue;
 
-                        char letter = (char)('A' + imgIdx++);
+                        string letter = IndexToTargetLetter(imgIdx++);
                         var imagePath = row.Cells["ImagePath"].Value?.ToString() ?? "";
 
                         if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
@@ -1147,7 +1255,27 @@ namespace NOMAD.MissionPlanner
         private string TargetIdForRow(int rowIndex)
         {
             if (rowIndex < 0 || rowIndex >= _targetGrid.Rows.Count) return null;
-            return ((char)('A' + rowIndex)).ToString();
+            return IndexToTargetLetter(rowIndex);
+        }
+
+        /// <summary>
+        /// Map 0->A, 25->Z, 26->AA, 27->AB, 51->AZ, 52->BA, ... Mirrors the
+        /// backend's target_letter_from_index() so IDs stay consistent across
+        /// the GCS table, the Jetson debug file, and the uploaded .txt.
+        /// Past Z the old (char)('A' + n) produced '[', '\', ']', etc.
+        /// </summary>
+        internal static string IndexToTargetLetter(int index)
+        {
+            if (index < 0) return "?";
+            string letters = string.Empty;
+            int n = index;
+            while (true)
+            {
+                letters = ((char)('A' + (n % 26))).ToString() + letters;
+                n = n / 26 - 1;
+                if (n < 0) break;
+            }
+            return letters;
         }
 
         private void OnViewerTargetHovered(string targetId)

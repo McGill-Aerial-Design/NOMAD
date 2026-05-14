@@ -130,13 +130,16 @@ class DroneStatePublisher(Node):
                 hdg_msg.data = float(heading)
                 self._hdg_pub.publish(hdg_msg)
 
-            # Publish local pose (using altitude as Z for AGL estimate)
+            # Publish local pose (using altitude as Z for AGL estimate).
+            # Prefer alt_agl_m (rangefinder/baro AGL from MAVLink) over gps_alt
+            # (WGS84 MSL, useless without a GPS fix and unsuitable as AGL).
             pose_msg = PoseStamped()
             pose_msg.header.stamp = now
             pose_msg.header.frame_id = "map"
-            # Local position: use altitude AGL as Z. X/Y are zero since
-            # we only need altitude for the target_localizer's back-projection.
-            pose_msg.pose.position.z = float(alt) if alt is not None else 0.0
+            agl = state.get("alt_agl_m")
+            if agl is None:
+                agl = alt  # fallback to whatever altitude the status reports
+            pose_msg.pose.position.z = float(agl) if agl is not None else 0.0
             # Convert heading to quaternion (yaw only, in ENU: Z-up)
             if heading is not None:
                 yaw_rad = math.radians(float(heading))

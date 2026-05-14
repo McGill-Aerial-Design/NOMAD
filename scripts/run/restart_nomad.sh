@@ -58,6 +58,7 @@ fi
 if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^nomad_isaac_ros$'; then
     docker exec nomad_isaac_ros pkill -f "launch_nvblox_bridge\.sh|launch_zed_nvblox\.sh" 2>/dev/null || true
     docker exec nomad_isaac_ros pkill -f "simple_video_bridge" 2>/dev/null || true
+    docker exec nomad_isaac_ros pkill -f "launch_bridge\.sh" 2>/dev/null || true
     docker exec nomad_isaac_ros pkill -f "ros_http_bridge" 2>/dev/null || true
     docker exec nomad_isaac_ros pkill -f "ros2 launch" 2>/dev/null || true
     docker exec nomad_isaac_ros pkill -f "component_container" 2>/dev/null || true

@@ -2203,6 +2203,231 @@ class ROSHTTPBridge(Node):
         }
 
 
+# ============================================================================
+# Inbound HTTP service-call proxy
+# ----------------------------------------------------------------------------
+# Hosts a tiny HTTP server (default 127.0.0.1:8101) that accepts POSTed JSON
+# {"service", "type", "args", "timeout_s"} and dispatches it to a long-lived
+# rclpy node with cached service clients. This replaces the slow
+# `docker exec ... ros2 service call ...` round-trip used by edge_core/api.py
+# with an in-process rclpy call (sub-100ms once the client is cached).
+# ============================================================================
+
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer  # noqa: E402
+from rclpy.executors import MultiThreadedExecutor  # noqa: E402
+from rclpy.callback_groups import ReentrantCallbackGroup  # noqa: E402
+
+try:
+    from rosidl_runtime_py.utilities import get_service as _get_service_type
+    from rosidl_runtime_py.set_message import set_message_fields as _set_message_fields
+    _ROSIDL_AVAILABLE = True
+except Exception as _e_rosidl:
+    _ROSIDL_AVAILABLE = False
+    _ROSIDL_IMPORT_ERROR = str(_e_rosidl)
+
+
+class _ServiceProxyNode(Node):
+    """Long-lived ROS2 node that caches service clients and dispatches calls
+    on behalf of the inbound HTTP server. Clients are created lazily on first
+    request and reused thereafter, eliminating per-call DDS discovery cost."""
+
+    def __init__(self):
+        super().__init__("nomad_service_proxy")
+        self._cbg = ReentrantCallbackGroup()
+        self._client_cache = {}  # key: (service_name, type_str) -> Client
+        self._client_cache_lock = threading.Lock()
+
+    def _get_or_create_client(self, service_name: str, type_str: str):
+        key = (service_name, type_str)
+        with self._client_cache_lock:
+            client = self._client_cache.get(key)
+            if client is not None:
+                return client
+            srv_cls = _get_service_type(type_str)
+            client = self.create_client(
+                srv_cls, service_name, callback_group=self._cbg
+            )
+            self._client_cache[key] = client
+            return client
+
+    def call_service(
+        self,
+        service_name: str,
+        type_str: str,
+        args: dict,
+        timeout_s: float,
+    ):
+        """Synchronously invoke a ROS service. Raises TimeoutError or
+        RuntimeError on failure; returns the response message on success."""
+        srv_cls = _get_service_type(type_str)
+        client = self._get_or_create_client(service_name, type_str)
+
+        # Discovery may not have completed for a freshly-started server, so
+        # give the first call a chance to find it. Cap the discovery wait at
+        # half the budget so we still have time to actually call the service.
+        discover_budget = max(0.5, min(2.0, timeout_s / 2.0))
+        if not client.wait_for_service(timeout_sec=discover_budget):
+            raise RuntimeError(f"service unavailable: {service_name}")
+
+        req = srv_cls.Request()
+        if args:
+            try:
+                _set_message_fields(req, args)
+            except Exception as e:
+                raise ValueError(f"bad request args for {service_name}: {e}")
+
+        future = client.call_async(req)
+        done = threading.Event()
+        future.add_done_callback(lambda _f: done.set())
+        remaining = max(0.1, timeout_s - discover_budget)
+        if not done.wait(remaining):
+            try:
+                client.remove_pending_request(future)
+            except Exception:
+                pass
+            raise TimeoutError(f"service call timed out: {service_name}")
+        if future.exception() is not None:
+            raise RuntimeError(
+                f"service call raised: {service_name}: {future.exception()}"
+            )
+        return future.result()
+
+
+def _serialize_service_response(resp) -> tuple[bool, str, dict]:
+    """Extract (success, message, extra_fields) from a ROS service response.
+    Handles Trigger, FilePath, Empty, and any service with success/message."""
+    success = bool(getattr(resp, "success", True))
+    message = getattr(resp, "message", "") or ""
+    extras = {}
+    for slot in getattr(resp, "__slots__", ()):
+        if slot in ("_success", "_message"):
+            continue
+        name = slot.lstrip("_")
+        if name in ("success", "message"):
+            continue
+        try:
+            val = getattr(resp, name)
+        except Exception:
+            continue
+        if isinstance(val, (str, int, float, bool)) or val is None:
+            extras[name] = val
+    return success, message, extras
+
+
+class _ServiceCallHandler(BaseHTTPRequestHandler):
+    # Silence the default per-request stderr access log.
+    def log_message(self, fmt, *args):
+        return
+
+    def _send_json(self, status: int, obj: dict):
+        body = json.dumps(obj).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):  # noqa: N802
+        if self.path == "/health":
+            self._send_json(200, {"ok": True, "node": "nomad_service_proxy"})
+            return
+        self._send_json(404, {"detail": "not found"})
+
+    def do_POST(self):  # noqa: N802
+        if self.path != "/srv/call":
+            self._send_json(404, {"detail": "not found"})
+            return
+        try:
+            n = int(self.headers.get("Content-Length", "0"))
+        except Exception:
+            n = 0
+        raw = self.rfile.read(n) if n > 0 else b""
+        try:
+            payload = json.loads(raw.decode("utf-8")) if raw else {}
+        except Exception as e:
+            self._send_json(400, {"detail": f"invalid JSON: {e}"})
+            return
+
+        service = payload.get("service")
+        type_str = payload.get("type")
+        args = payload.get("args") or {}
+        try:
+            timeout_s = float(payload.get("timeout_s") or 10.0)
+        except Exception:
+            timeout_s = 10.0
+        if not service or not type_str:
+            self._send_json(400, {"detail": "service and type are required"})
+            return
+
+        proxy: _ServiceProxyNode = self.server.proxy  # type: ignore[attr-defined]
+        try:
+            resp = proxy.call_service(service, type_str, args, timeout_s)
+        except TimeoutError as e:
+            self._send_json(504, {"detail": str(e)})
+            return
+        except RuntimeError as e:
+            msg = str(e)
+            status = 503 if "unavailable" in msg else 502
+            self._send_json(status, {"detail": msg})
+            return
+        except ValueError as e:
+            self._send_json(400, {"detail": str(e)})
+            return
+        except Exception as e:
+            import traceback as _tb
+            tb = _tb.format_exc()
+            logger.error(f"Service proxy call failed for {service}: {e}\n{tb}")
+            self._send_json(502, {"detail": f"{type(e).__name__}: {e}"})
+            return
+
+        success, message, extras = _serialize_service_response(resp)
+        if not success:
+            self._send_json(
+                502, {"detail": message or "service reported failure"}
+            )
+            return
+        self._send_json(
+            200, {"success": True, "message": message, "fields": extras}
+        )
+
+
+def _start_service_proxy(port: int) -> Optional[_ServiceProxyNode]:
+    """Spin up the service-proxy node + HTTP server in background threads.
+    Returns the node on success, None if the dependency stack is missing."""
+    if not _ROSIDL_AVAILABLE:
+        logger.error(
+            f"Service proxy disabled: rosidl_runtime_py unavailable ({_ROSIDL_IMPORT_ERROR})"
+        )
+        return None
+    try:
+        node = _ServiceProxyNode()
+    except Exception as e:
+        logger.error(f"Service proxy node init failed: {e}")
+        return None
+
+    executor = MultiThreadedExecutor(num_threads=4)
+    executor.add_node(node)
+    threading.Thread(
+        target=executor.spin, daemon=True, name="ros-srv-proxy-spin"
+    ).start()
+
+    try:
+        httpd = ThreadingHTTPServer(("127.0.0.1", port), _ServiceCallHandler)
+    except OSError as e:
+        logger.error(f"Service proxy HTTP bind failed on port {port}: {e}")
+        try:
+            node.destroy_node()
+        except Exception:
+            pass
+        return None
+    httpd.proxy = node  # type: ignore[attr-defined]
+    threading.Thread(
+        target=httpd.serve_forever, daemon=True, name="ros-srv-proxy-http"
+    ).start()
+    logger.info(f"ROS service proxy listening on 127.0.0.1:{port}")
+    return node
+
+
 def main():
     parser = argparse.ArgumentParser(description="ROS2-HTTP Bridge for NOMAD")
     parser.add_argument("--host", default="172.17.0.1", help="Edge Core host")
@@ -2286,7 +2511,15 @@ def main():
         high_rate_zmq_endpoint=args.high_rate_zmq_endpoint,
         high_rate_zmq_pub_mode=args.high_rate_zmq_pub_mode,
     )
-    
+
+    # Inbound service-call proxy: lets edge_core/api.py invoke ROS services
+    # over a local HTTP call instead of shelling out via `docker exec ros2`.
+    try:
+        proxy_port = int(os.environ.get("NOMAD_ROS_SERVICE_PROXY_PORT", "8101"))
+    except Exception:
+        proxy_port = 8101
+    _start_service_proxy(proxy_port)
+
     try:
         rclpy.spin(bridge)
     except KeyboardInterrupt:

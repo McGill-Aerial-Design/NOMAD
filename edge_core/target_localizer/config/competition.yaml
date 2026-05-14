@@ -51,11 +51,14 @@ target_localizer:
       # Names are operator-facing and appear in target descriptions, e.g.
       # "3.2m from the NW corner". Use short labels -- "NW", "NE", "A", "B".
       #
-      # Set corner_names to [] to fall back to the rectangle.* convenience
-      # path below.
-      corner_names: []
-      corner_lats: []
-      corner_lons: []
+      # Set corner_names to [""] (single empty entry) to fall back to the
+      # rectangle.* convenience path below. ROS 2 Humble cannot infer the
+      # type of a literal empty YAML list against a declared string-array
+      # parameter and will raise ParameterUninitializedException on launch,
+      # so use a sentinel empty string instead of [].
+      corner_names: [""]
+      corner_lats: [0.0]
+      corner_lons: [0.0]
 
       # ---- Rectangle convenience fallback ----
       # Used only when corner_names is empty. Generates a 4-corner rectangle

@@ -233,6 +233,7 @@ class TargetLocalizerNode(Node):
         self.drone_lon: float = 0.0
         self.has_gps_fix: bool = False
         self.has_local_pose: bool = False
+        self.has_mavros_pose: bool = False  # set when /mavros/local_position/pose arrives
         self.drone_local_east: float = 0.0
         self.drone_local_north: float = 0.0
         self.drone_alt: float = 0.0  # AGL from rangefinder or baro
@@ -459,15 +460,22 @@ class TargetLocalizerNode(Node):
     def _pose_callback(self, msg: PoseStamped):
         self.drone_local_east = msg.pose.position.x
         self.drone_local_north = msg.pose.position.y
-        # Z from local pose is AGL if EKF origin is at ground level
+        # MAVROS local_position/pose Z is the authoritative AGL (published by
+        # drone_state_publisher from MAVLink alt_agl_m). ZED odom's z is the
+        # camera-frame origin (~0) and must NOT be used as altitude.
         self.drone_alt = msg.pose.position.z
         self.has_local_pose = True
+        self.has_mavros_pose = True
 
     def _zed_odom_callback(self, msg: Odometry):
         pose = msg.pose.pose
+        # ZED VIO is the primary east/north source (better than MAVROS without RTK).
         self.drone_local_east = pose.position.x
         self.drone_local_north = pose.position.y
-        self.drone_alt = pose.position.z
+        # Do NOT trust ZED z as altitude — it's the visual-odometry origin.
+        # Only fall back to it if MAVROS hasn't produced any pose yet.
+        if not self.has_mavros_pose:
+            self.drone_alt = pose.position.z
         self.has_local_pose = True
 
         # Fallback heading from odometry quaternion when compass is unavailable.
@@ -614,9 +622,13 @@ class TargetLocalizerNode(Node):
         """
         Generate a natural-language target description.
 
-        Output follows the format in CONOPS Appendix D:
-          "<Color> target on the <face> face of the building, <height>m
-           above ground, <horizontal reference>."
+        Output is the COLOR-FREE spatial body, e.g.
+          "on the <face> face of the building, <height>m above ground,
+           <horizontal reference>."
+
+        Color is intentionally NOT included: the Mission Planner submission
+        table is the single source of truth for target color. The C# side
+        prefixes "<Color> target " in front of this body at upload time.
 
         plane_kind is 'wall', 'ground', or 'roof'.
         """
@@ -628,20 +640,17 @@ class TargetLocalizerNode(Node):
 
         if plane_kind == "ground" or height_agl < 0.3:
             return (
-                f"{color.value.capitalize()} target on the ground near the "
-                f"{face_name} face of the building, {height_rounded}m above ground, "
-                f"{ref_phrase}."
+                f"on the ground near the {face_name} face of the building, "
+                f"{height_rounded}m above ground, {ref_phrase}."
             )
         if plane_kind == "roof":
             return (
-                f"{color.value.capitalize()} target on the roof near the "
-                f"{face_name} face of the building, {height_rounded}m above ground, "
-                f"{ref_phrase}."
+                f"on the roof near the {face_name} face of the building, "
+                f"{height_rounded}m above ground, {ref_phrase}."
             )
         return (
-            f"{color.value.capitalize()} target on the {face_name} face "
-            f"of the building, {height_rounded}m above ground, "
-            f"{ref_phrase}."
+            f"on the {face_name} face of the building, "
+            f"{height_rounded}m above ground, {ref_phrase}."
         )
 
     def _resolve_observed_face(self) -> Tuple[Optional["Face"], str]:
@@ -754,10 +763,13 @@ class TargetLocalizerNode(Node):
                     face = plane_hit.face
                 else:
                     face, _ = self.building.get_nearest_wall_face(east, north)
+                # Subtract ground_alt_offset BEFORE projecting: the projection
+                # clamps height_agl to [0, building.height+0.05] in the building
+                # frame, so a post-projection subtraction would either clip the
+                # offset away or push a ground target to a large negative value.
                 horiz_from_left, height_agl = self.building.project_point_onto_face(
-                    east, north, up, face
+                    east, north, up - self.ground_alt_offset, face
                 )
-                height_agl = height_agl - self.ground_alt_offset
                 target_letter = target_letter_from_index(self.next_target_index)
                 description = self._generate_description(
                     TargetColor.UNKNOWN, face, horiz_from_left, height_agl, plane_hit.kind
@@ -933,11 +945,12 @@ class TargetLocalizerNode(Node):
             else:
                 face, _ = self.building.get_nearest_wall_face(east, north)
 
-            # Project onto face
+            # Project onto face. Pre-subtract ground_alt_offset so the
+            # projection's [0, building.height] clamp operates in
+            # ground-relative coordinates.
             horiz_from_left, height_agl = self.building.project_point_onto_face(
-                east, north, up, face
+                east, north, up - self.ground_alt_offset, face
             )
-            height_agl = height_agl - self.ground_alt_offset
 
             # Deduplication check
             if self._is_duplicate(east, north, up):
@@ -1037,14 +1050,12 @@ class TargetLocalizerNode(Node):
 
         if new_targets:
             response.success = True
-            lines = []
-            for t in new_targets:
-                dist_m = (t.raw_data or {}).get("distance_m")
-                dist_part = (
-                    f" [distance={dist_m * 100:.0f}cm]"
-                    if dist_m is not None else ""
-                )
-                lines.append(f"Target {t.target_id}: {t.description}{dist_part}")
+            # Description is the spatial body only -- no color, no distance.
+            # Mission Planner prepends "<Color> target " from the table column;
+            # raw slant-range stays in t.raw_data["distance_m"] for diagnostics
+            # but is intentionally NOT in user-visible text (the operator wants
+            # description = building-relative geometry only).
+            lines = [f"Target {t.target_id}: {t.description}" for t in new_targets]
             response.message = "\n".join(lines)
         else:
             # A filter-only result means HSV detection is working, but no NEW
@@ -1364,10 +1375,10 @@ class TargetLocalizerNode(Node):
             else:
                 face, _ = self.building.get_nearest_wall_face(east, north)
 
+        # Pre-subtract offset (see _capture_callback for rationale).
         horiz_from_left, height_agl = self.building.project_point_onto_face(
-            east, north, up, face
+            east, north, up - self.ground_alt_offset, face
         )
-        height_agl = height_agl - self.ground_alt_offset
 
         if plane_kind == "ground":
             height_agl = max(0.0, height_agl)

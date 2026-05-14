@@ -988,19 +988,23 @@ launch_ros_http_bridge() {
     load_bridge_auth_env
 
     # Bridge script is available via volume mount at /workspaces/isaac_ros-dev/edge_core/
-    # Kill any existing bridge processes to prevent duplicates with proper reaping
+    # Kill any existing bridge AND its restart-loop wrapper to prevent duplicates.
+    # The wrapper (launch_bridge.sh) respawns the bridge on exit; missing it on a
+    # re-run produces two concurrent loops fighting for port 8101 and DDS slots.
     docker exec "$CONTAINER_NAME" bash -c '
+        pkill -f "[l]aunch_bridge\.sh" 2>/dev/null || true
         pkill -f "[r]os_http_bridge\.py" 2>/dev/null || true
-        # Wait for process to terminate (max 3 seconds)
+        # Wait for processes to terminate (max 3 seconds)
         timeout=6
         while [ $timeout -gt 0 ]; do
-            if ! pgrep -f "[r]os_http_bridge\.py" >/dev/null 2>&1; then
+            if ! pgrep -f "[l]aunch_bridge\.sh|[r]os_http_bridge\.py" >/dev/null 2>&1; then
                 break
             fi
             sleep 0.5
             timeout=$((timeout - 1))
         done
         # Force kill if still running
+        pkill -9 -f "[l]aunch_bridge\.sh" 2>/dev/null || true
         pkill -9 -f "[r]os_http_bridge\.py" 2>/dev/null || true
         sleep 0.5
     '
