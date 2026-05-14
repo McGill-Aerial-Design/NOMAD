@@ -3761,6 +3761,11 @@ fi
         except Exception:
             return False
 
+    _ROS_SERVICE_PROXY_URL = os.environ.get(
+        "NOMAD_ROS_SERVICE_PROXY_URL",
+        "http://127.0.0.1:8101/srv/call",
+    )
+
     def _call_ros2_service_in_isaac_container_or_raise(
         service_name: str,
         service_type: str,
@@ -3769,166 +3774,90 @@ fi
         skip_type_check: bool = False,
         force_refresh_runtime: bool = True,
     ) -> str:
-        """Call a ROS2 service inside the active Isaac container stack."""
-        runtime = _probe_isaac_runtime_state(force_refresh=force_refresh_runtime)
-        if not runtime.get("container_running", False):
-            raise HTTPException(
-                status_code=503,
-                detail="Isaac ROS container stack is not running",
-            )
+        """Call a ROS2 service inside the active Isaac container stack via the
+        nomad_ros_http_bridge service proxy (a long-lived rclpy node with cached
+        service clients). This replaces the prior `docker exec ros2 service call`
+        path, which paid 5-15s of Python/rclpy cold-start per call.
 
-        # Only enforce nvblox process availability for nvblox-specific service calls.
-        # Task-1 target_localizer calls should be allowed whenever the service is
-        # discoverable, even if nvblox runtime probes are temporarily stale.
-        requires_nvblox_runtime = service_name.startswith("/nvblox_node/")
-        if requires_nvblox_runtime and not runtime.get("nvblox_running", False):
-            raise HTTPException(
-                status_code=503,
-                detail="Isaac ROS nvblox stack is not running",
-            )
+        Latency: ~5-50ms once the client is cached (first call may take longer
+        while DDS discovery completes)."""
+        # Runtime probes are intentionally skipped here: the proxy IS the
+        # liveness signal. If the container/bridge is down we get URLError and
+        # surface a 503; if a specific service isn't advertised we get the
+        # proxy's own 503 via `service unavailable`. The old `docker exec`
+        # probes added ~800ms-1.2s per call (four docker round-trips) for no
+        # information we don't already learn from the call itself.
 
         _ensure_file_path_parent_dir_in_isaac_container_or_raise(
             service_type=service_type,
             request_payload=request_payload,
         )
 
-        request_yaml = json.dumps(request_payload)
-        base_env_cmd = (
-            "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
-            "source /workspaces/isaac_ros-dev/install/setup.bash >/dev/null 2>&1; "
-            "export ROS2CLI_DISABLE_DAEMON=1; "
-            "export ROS2CLI_NO_DAEMON=1; "
-        )
+        import urllib.request
+        import urllib.error
 
-        if not skip_type_check:
-            type_check_cmd = base_env_cmd + f"ros2 service type {shlex.quote(service_name)}"
+        body = json.dumps(
+            {
+                "service": service_name,
+                "type": service_type,
+                "args": request_payload or {},
+                "timeout_s": float(timeout_s),
+            }
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            _ROS_SERVICE_PROXY_URL,
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        # Allow proxy headroom over the in-proxy timeout so we observe its
+        # 504 rather than killing the connection ourselves.
+        http_timeout = max(timeout_s + 5.0, 10.0)
+        try:
+            with urllib.request.urlopen(req, timeout=http_timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
             try:
-                type_result = subprocess.run(
-                    ["docker", "exec", "nomad_isaac_ros", "bash", "-lc", type_check_cmd],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-            except subprocess.TimeoutExpired:
+                err_body = json.loads(e.read().decode("utf-8"))
+                detail = err_body.get("detail") or str(e)
+            except Exception:
+                detail = str(e)
+            if e.code == 504:
                 raise HTTPException(
                     status_code=504,
-                    detail=f"ROS2 service probe timed out: {service_name}",
+                    detail=f"ROS2 service call timed out: {service_name}",
                 )
-            except Exception as e:
-                logger.error(f"ROS2 service probe failed ({service_name}): {e}")
+            if e.code == 503:
                 raise HTTPException(
                     status_code=503,
-                    detail=f"Failed to probe ROS2 service: {service_name}",
+                    detail=detail or f"ROS2 service not available: {service_name}",
                 )
-
-            type_output = "\n".join(
-                part
-                for part in [
-                    (type_result.stdout or "").strip(),
-                    (type_result.stderr or "").strip(),
-                ]
-                if part
-            ).strip()
-            type_output = _sanitize_ros2_service_output(type_output)
-            if type_result.returncode != 0 or not type_output:
-                raise HTTPException(
-                    status_code=503,
-                    detail=type_output or f"ROS2 service not available: {service_name}",
-                )
-
-            advertised_type = type_output.splitlines()[-1].strip()
-            if advertised_type != service_type:
-                raise HTTPException(
-                    status_code=503,
-                    detail=(
-                        f"ROS2 service type mismatch for {service_name}: "
-                        f"expected {service_type}, got {advertised_type}"
-                    ),
-                )
-
-        # Wrap with shell `timeout` so the ros2 CLI fails fast when the service
-        # server is dead (stale DDS registrations from a crashed node make
-        # `ros2 service call` hang indefinitely without an outer time limit).
-        cli_timeout_s = max(5, int(timeout_s))
-        shell_cmd = (
-            base_env_cmd
-            + f"timeout {cli_timeout_s}"
-            + f" ros2 service call {service_name} {service_type} {shlex.quote(request_yaml)}"
-        )
-
-        try:
-            result = subprocess.run(
-                ["docker", "exec", "nomad_isaac_ros", "bash", "-lc", shell_cmd],
-                capture_output=True,
-                text=True,
-                timeout=cli_timeout_s + 10,
-            )
-        except subprocess.TimeoutExpired:
-            raise HTTPException(
-                status_code=504,
-                detail=f"ROS2 service call timed out: {service_name}",
-            )
-        except Exception as e:
-            logger.error(f"ROS2 service exec failed ({service_name}): {e}")
-            raise HTTPException(
-                status_code=503,
-                detail=f"Failed to execute ROS2 service call: {service_name}",
-            )
-
-        output = "\n".join(
-            part for part in [result.stdout.strip(), result.stderr.strip()] if part
-        ).strip()
-        output = _sanitize_ros2_service_output(output)
-        if result.returncode == 124:
-            # shell `timeout` exits 124 when it kills the child
-            raise HTTPException(
-                status_code=504,
-                detail=f"ROS2 service call timed out: {service_name}",
-            )
-        if result.returncode != 0:
-            raise HTTPException(
-                status_code=502,
-                detail=output or f"ROS2 service call failed: {service_name}",
-            )
-
-        success_match = re.search(
-            r"\bsuccess\s*[:=]\s*(true|false)\b",
-            output,
-            flags=re.IGNORECASE,
-        )
-        success = (
-            True if not success_match else (success_match.group(1).lower() == "true")
-        )
-
-        message_match = re.search(
-            r"message\s*[:=]\s*['\"]?([^\n'\"]+)",
-            output,
-            flags=re.IGNORECASE,
-        )
-        if message_match:
-            message = message_match.group(1).strip()
-        elif service_type == "nvblox_msgs/srv/FilePath":
-            message = (
-                f"{service_name} returned success={'true' if success else 'false'}"
-            )
-        else:
-            message = output
-
-        if not success:
-            # Only apply VIO-specific status mapping for non-Trigger service types;
-            # for std_srvs/srv/Trigger (e.g. target_localizer) always use 502 so the
-            # capture endpoint's 502-catch block can handle it correctly.
+            # 502 / 400 / other: service-reported failure or bad args.
+            # Preserve the VIO-area status mapping for nvblox-style failures
+            # so existing handlers continue to surface meaningful codes.
             if service_type == "std_srvs/srv/Trigger":
                 status = 502
             else:
-                status = _status_for_vio_area_failure(message or output, default_status=502)
+                status = _status_for_vio_area_failure(detail, default_status=e.code or 502)
             raise HTTPException(
                 status_code=status,
-                detail=message
-                or output
-                or f"ROS2 service reported failure: {service_name}",
+                detail=detail or f"ROS2 service reported failure: {service_name}",
+            )
+        except urllib.error.URLError as e:
+            reason = getattr(e, "reason", str(e))
+            logger.error(f"ROS service proxy unreachable ({service_name}): {reason}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"ROS service proxy unreachable: {reason}",
+            )
+        except Exception as e:
+            logger.error(f"ROS service proxy call failed ({service_name}): {e}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"ROS service proxy call failed: {e}",
             )
 
+        message = (data or {}).get("message") or ""
         return message or f"ROS2 service call succeeded: {service_name}"
 
     @app.post("/api/vio/area/save", tags=["VIO"])
@@ -4433,6 +4362,50 @@ fi
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result.get("error"))
         return result
+
+    # ============================================================
+    # Task 2 spray artifacts (manual flow + last-artifacts download)
+    # ============================================================
+    @app.post("/api/task/2/spray/manual/start", tags=["Task 2", "Spray"])
+    async def task2_spray_manual_start():
+        """Begin a manual spray session: capture before-image, start video."""
+        from .task2_spray_artifacts import get_artifact_manager
+        sess = get_artifact_manager().start_session(source="manual")
+        return sess.to_dict()
+
+    @app.post("/api/task/2/spray/manual/stop", tags=["Task 2", "Spray"])
+    async def task2_spray_manual_stop():
+        """End the active manual spray session: capture after-image, stop video."""
+        from .task2_spray_artifacts import get_artifact_manager
+        sess = get_artifact_manager().stop_session()
+        if sess is None:
+            raise HTTPException(status_code=400, detail="No active spray session")
+        return sess.to_dict()
+
+    @app.get("/api/task/2/spray/last_artifacts", tags=["Task 2", "Spray"])
+    async def task2_spray_last_artifacts():
+        """Return the most recently completed spray session (auto or manual)."""
+        from .task2_spray_artifacts import get_artifact_manager
+        sess = get_artifact_manager().last()
+        if sess is None:
+            raise HTTPException(status_code=404, detail="No spray sessions yet")
+        return sess.to_dict()
+
+    @app.get("/api/task/2/spray/artifact", tags=["Task 2", "Spray"])
+    async def task2_spray_artifact(path: str = Query(..., description="Server-side artifact path")):
+        """Stream an artifact file (image or video) recorded by the spray session.
+
+        Restricted to files under ~/.nomad/spray_sessions to prevent path traversal.
+        """
+        from .task2_spray_artifacts import SESSIONS_ROOT
+        from fastapi.responses import FileResponse
+        real = os.path.realpath(path)
+        root = os.path.realpath(SESSIONS_ROOT)
+        if not real.startswith(root + os.sep) and real != root:
+            raise HTTPException(status_code=403, detail="Path outside session root")
+        if not os.path.exists(real):
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        return FileResponse(real)
 
     @app.post("/api/spray/abort", tags=["Spray"])
     async def abort_spray(request: Request):
@@ -6385,6 +6358,35 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \\
         if not success:
             raise HTTPException(status_code=500, detail="Failed to disable overlay")
         return {"success": True, "overlay": False}
+
+    @app.post("/api/video/overlay/detectors", tags=["Video"])
+    async def set_video_overlay_detectors(
+        task1: bool = Query(False, description="Enable Task 1 (HSV color circles) detector"),
+        task2: bool = Query(False, description="Enable Task 2 (shape circles) detector"),
+    ):
+        """Independently enable/disable the Task 1 and Task 2 overlay detectors.
+        Disable both to skip overlay processing entirely (saves CPU)."""
+        mgr = get_video_stream_manager()
+        if not mgr:
+            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
+        ok = mgr.set_overlay_detectors(task1, task2)
+        if not ok:
+            raise HTTPException(status_code=500, detail="Failed to set detectors")
+        return {"success": True, "task1_enabled": task1, "task2_enabled": task2}
+
+    @app.post("/api/video/overlay/mode", tags=["Video"])
+    async def set_video_overlay_mode(
+        mode: str = Query(..., description="Overlay detector mode: task1 | task2")
+    ):
+        """Switch the live overlay detector. task1=color HSV circles,
+        task2=color-agnostic shape (Hough+contour) circles."""
+        mgr = get_video_stream_manager()
+        if not mgr:
+            raise HTTPException(status_code=503, detail="Video stream manager not initialized")
+        ok = mgr.set_overlay_mode(mode)
+        if not ok:
+            raise HTTPException(status_code=400, detail=f"Failed to set overlay mode: {mode}")
+        return {"success": True, "mode": mode}
 
     @app.get("/api/video/overlay/status", tags=["Video"])
     async def get_video_overlay_status():

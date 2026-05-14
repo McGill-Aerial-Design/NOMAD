@@ -485,6 +485,22 @@ def run(
 
     spray_controller.set_capture_photo_fn(_capture_photo)
 
+    # Spray artifact manager — provides /api/task/2/spray/manual/* and
+    # last_artifacts for the Mission Planner Submit panel. Reuses the same
+    # capture function so the before/after snapshots match the autonomous flow.
+    try:
+        from .task2_spray_artifacts import get_artifact_manager
+        _art_mgr = get_artifact_manager()
+        _art_mgr.set_capture_photo_fn(_capture_photo)
+        spray_controller.set_artifact_callbacks(
+            start_fn=lambda before_path: _art_mgr.start_session(
+                source="autonomous", before_path=before_path,
+            ),
+            stop_fn=lambda after_path: _art_mgr.stop_session(after_path=after_path),
+        )
+    except Exception as e:
+        logger.warning(f"Spray artifact manager init failed: {e}")
+
     # set_verify_hsv_fn: check if target region shifted from purple to blue
     def _verify_hsv(photo_path: str) -> bool:
         """Analyze sprayed target for purple-to-blue color shift."""

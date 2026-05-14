@@ -286,8 +286,17 @@ class SprayController:
         self._upload_fn: Optional[Callable[[str, str], str]] = None
         self._get_detection_bbox_fn: Optional[Callable[[int], Optional[tuple]]] = None
 
-        # Pre-spray image path for circle change verification
+        # Pre/post-spray image paths for circle change verification.
+        # Reused by the artifact manager so we don't double-capture.
         self._pre_spray_image_path: Optional[str] = None
+        self._post_spray_image_path: Optional[str] = None
+
+        # Optional artifact-session callbacks so an external manager
+        # (task2_spray_artifacts) can record before/after images and video
+        # for the autonomous flow. The hooks receive the already-captured
+        # snapshot path so the artifact manager doesn't re-capture.
+        self._artifact_start_fn: Optional[Callable[[Optional[str]], None]] = None
+        self._artifact_stop_fn: Optional[Callable[[Optional[str]], None]] = None
 
         logger.info("Spray controller initialized (ZED-guided spray + circle verify)")
 
@@ -309,6 +318,21 @@ class SprayController:
 
     def set_capture_photo_fn(self, fn: Callable) -> None:
         self._capture_photo_fn = fn
+
+    def set_artifact_callbacks(
+        self,
+        start_fn: Optional[Callable[[Optional[str]], None]],
+        stop_fn:  Optional[Callable[[Optional[str]], None]],
+    ) -> None:
+        """Register artifact-session hooks for the autonomous flow.
+
+        start_fn(before_path) is called once the pre-spray snapshot is on disk
+        (or with None if capture failed). stop_fn(after_path) is called when
+        the spray sequence ends, with the post-spray verification snapshot
+        path (or None when no post-snapshot was taken — e.g. early failure).
+        """
+        self._artifact_start_fn = start_fn
+        self._artifact_stop_fn  = stop_fn
 
     def set_verify_hsv_fn(self, fn: Callable) -> None:
         """Legacy HSV verify callback (fallback if circle change unavailable)."""
@@ -476,6 +500,7 @@ class SprayController:
             self._spray_count = 0
             self._abort_event.clear()
             self._pre_spray_image_path = None
+            self._post_spray_image_path = None
 
             self._status.state = (
                 SprayState.AIM.value if skip_approach
@@ -630,6 +655,14 @@ class SprayController:
             self._status.state = state.value
             if error:
                 self._status.error = error
+        # When the autonomous sequence ends, finalise any open artifact
+        # session so the Submit panel can pick it up via /last_artifacts.
+        if state in (SprayState.COMPLETE, SprayState.FAILED, SprayState.ABORTED):
+            if self._artifact_stop_fn is not None:
+                try:
+                    self._artifact_stop_fn(self._post_spray_image_path)
+                except Exception as e:
+                    logger.warning(f"Artifact stop hook failed: {e}")
 
     def _check_abort(self) -> bool:
         return self._abort_event.is_set()
@@ -1023,18 +1056,26 @@ class SprayController:
         if self._pre_spray_image_path is not None:
             return  # Already captured
 
+        captured_path: Optional[str] = None
         try:
             if self._capture_photo_fn:
-                path = self._capture_photo_fn()
-                if path:
-                    self._pre_spray_image_path = path
-                    logger.info(f"Pre-spray image captured: {path}")
+                captured_path = self._capture_photo_fn()
+                if captured_path:
+                    self._pre_spray_image_path = captured_path
+                    logger.info(f"Pre-spray image captured: {captured_path}")
                 else:
                     logger.warning("Pre-spray capture returned no path")
             else:
                 logger.warning("No capture_photo_fn for pre-spray snapshot")
         except Exception as e:
             logger.error(f"Pre-spray capture error: {e}")
+
+        # Hand the same path to the artifact manager so it doesn't re-capture.
+        if self._artifact_start_fn is not None:
+            try:
+                self._artifact_start_fn(captured_path)
+            except Exception as e:
+                logger.warning(f"Artifact start hook failed: {e}")
 
     # ------------------------------------------------------------------ #
     # SPRAY
@@ -1076,6 +1117,7 @@ class SprayController:
                 if self._capture_photo_fn:
                     post_path = self._capture_photo_fn()
                 if post_path:
+                    self._post_spray_image_path = post_path
                     result = self._verify_circle_change_fn(
                         self._pre_spray_image_path, post_path
                     )
@@ -1099,6 +1141,7 @@ class SprayController:
                 if self._capture_photo_fn:
                     photo_path = self._capture_photo_fn()
                 if photo_path:
+                    self._post_spray_image_path = photo_path
                     return self._verify_hsv_fn(photo_path)
                 else:
                     logger.warning("Could not capture photo for HSV verify")

@@ -595,6 +595,37 @@ class VideoStreamManager:
             logger.error(f"Error toggling overlay: {e}")
             return False
 
+    def set_overlay_detectors(self, task1: bool, task2: bool) -> bool:
+        """Independently enable/disable the Task 1 and Task 2 detectors."""
+        if not self.is_relay_running():
+            return False
+        try:
+            url = (
+                f"http://localhost:{self.relay_http_port}/overlay/detectors"
+                f"?task1={'1' if task1 else '0'}&task2={'1' if task2 else '0'}"
+            )
+            req = Request(url, method='POST')
+            with urlopen(req, timeout=5) as response:
+                data = json.loads(response.read().decode())
+            return data.get("success", False)
+        except Exception as e:
+            logger.error(f"Error setting detectors: {e}")
+            return False
+
+    def set_overlay_mode(self, mode: str) -> bool:
+        """Set the bridge's overlay detector mode (task1 | task2)."""
+        if not self.is_relay_running():
+            return False
+        try:
+            url = f"http://localhost:{self.relay_http_port}/overlay/mode?mode={mode}"
+            req = Request(url, method='POST')
+            with urlopen(req, timeout=5) as response:
+                data = json.loads(response.read().decode())
+            return data.get("success", False)
+        except Exception as e:
+            logger.error(f"Error setting overlay mode: {e}")
+            return False
+
     def get_overlay_status(self) -> dict:
         """Get current overlay status from the video bridge."""
         if not self.is_relay_running():

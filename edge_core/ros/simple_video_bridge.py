@@ -133,8 +133,19 @@ class VideoStreamNode(Node):
         self._last_restart_time = 0.0
         self._restart_lock = threading.Lock()
 
-        # Detection overlay
+        # Detection overlay — two independent detectors:
+        #   task1: color HSV circle detector (Task 1 reconnaissance)
+        #   task2: color-agnostic shape circle detector (Task 2 spray targets)
+        # Either or both can run at the same time. The legacy
+        # `_overlay_enabled` flag mirrors "any detector on" for the existing
+        # /overlay/enable + /overlay/disable APIs.
+        self._overlay_task1 = False
+        self._overlay_task2 = False
+        # Mirrors "any detector on" so the old /overlay/enable API and
+        # frame-loop guard keep working unchanged.
         self._overlay_enabled = False
+        # Legacy mode hint — last detector explicitly switched to via /overlay/mode.
+        self._overlay_mode = "task1"
         self._detections = []
         self._detections_lock = threading.Lock()
         # Local HSV circle detection runs inline at ~5 Hz so the livestream
@@ -358,13 +369,21 @@ class VideoStreamNode(Node):
             if self._overlay_enabled:
                 if (now - self._hsv_last_run_ts) >= self._hsv_min_interval:
                     self._hsv_last_run_ts = now
-                    try:
-                        hsv_dets = self._detect_hsv_circles(cv_image)
-                        with self._detections_lock:
-                            self._detections = hsv_dets
-                    except Exception as hsv_err:
-                        if self.frame_count % 150 == 0:
-                            self.get_logger().warn(f'HSV detect error: {hsv_err}')
+                    dets = []
+                    if self._overlay_task1:
+                        try:
+                            dets.extend(self._detect_hsv_circles(cv_image))
+                        except Exception as det_err:
+                            if self.frame_count % 150 == 0:
+                                self.get_logger().warn(f'HSV detect error: {det_err}')
+                    if self._overlay_task2:
+                        try:
+                            dets.extend(self._detect_shape_circles(cv_image))
+                        except Exception as det_err:
+                            if self.frame_count % 150 == 0:
+                                self.get_logger().warn(f'Shape detect error: {det_err}')
+                    with self._detections_lock:
+                        self._detections = dets
                 self.draw_detections(cv_image)
 
             # Ensure contiguous C-order for zero-copy tobytes
@@ -660,26 +679,141 @@ class VideoStreamNode(Node):
                 })
         return out
 
+    def _detect_shape_circles(self, frame):
+        """Color-agnostic circular-shape detector for Task 2.
+
+        Combines HoughCircles + contour-circularity so any roughly circular
+        shape (regardless of its color) is highlighted. Average colour
+        verification (purple→blue change) is done by the spray controller,
+        not here — this overlay just picks shapes.
+        """
+        import cv2
+        h, w = frame.shape[:2]
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.medianBlur(gray, 5)
+        out = []
+        claimed = []  # list of (cx, cy, r) we've already accepted
+
+        # ---- 1. Hough circles ----
+        try:
+            min_r = 12
+            max_r = max(40, min(h, w) // 2)
+            circles = cv2.HoughCircles(
+                gray, cv2.HOUGH_GRADIENT, dp=1.2, minDist=min_r * 2,
+                param1=120, param2=35, minRadius=min_r, maxRadius=max_r,
+            )
+            if circles is not None:
+                for c in circles[0]:
+                    cx, cy, r = int(c[0]), int(c[1]), int(c[2])
+                    claimed.append((cx, cy, r))
+                    out.append({
+                        "label": "circle",
+                        "hsv_color": "circle",
+                        "confidence": 0.85,
+                        "bbox_x": float(max(0, cx - r)),
+                        "bbox_y": float(max(0, cy - r)),
+                        "bbox_w": float(min(w, 2 * r)),
+                        "bbox_h": float(min(h, 2 * r)),
+                        "_src_w": w,
+                        "_src_h": h,
+                    })
+        except cv2.error:
+            pass
+
+        # ---- 2. Contour-circularity fallback (catches lower-contrast circles) ----
+        try:
+            edges = cv2.Canny(gray, 60, 140)
+            edges = cv2.dilate(
+                edges, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+                iterations=1,
+            )
+            contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            min_r = 12
+            max_r = max(40, min(h, w) // 2)
+            min_area = math.pi * min_r * min_r
+            max_area = math.pi * max_r * max_r
+            for c in contours:
+                area = cv2.contourArea(c)
+                if area < min_area or area > max_area:
+                    continue
+                perim = cv2.arcLength(c, True)
+                if perim < 1.0:
+                    continue
+                circularity = (4.0 * math.pi * area) / (perim * perim)
+                if circularity < 0.78:
+                    continue
+                hull = cv2.convexHull(c)
+                hull_area = cv2.contourArea(hull)
+                if hull_area < 1.0 or area / hull_area < 0.85:
+                    continue
+                (cx_f, cy_f), radius = cv2.minEnclosingCircle(c)
+                cx, cy, r = int(cx_f), int(cy_f), int(radius)
+                if r < min_r or r > max_r:
+                    continue
+                # Skip if a Hough circle already claimed this region.
+                if any(((cx - ex) ** 2 + (cy - ey) ** 2) ** 0.5 < max(r, er) * 0.7
+                       for ex, ey, er in claimed):
+                    continue
+                claimed.append((cx, cy, r))
+                x, y, bw, bh = cv2.boundingRect(c)
+                out.append({
+                    "label": "circle",
+                    "hsv_color": "circle",
+                    "confidence": float(min(circularity, area / hull_area)),
+                    "bbox_x": float(x),
+                    "bbox_y": float(y),
+                    "bbox_w": float(bw),
+                    "bbox_h": float(bh),
+                    "_src_w": w,
+                    "_src_h": h,
+                })
+        except cv2.error:
+            pass
+
+        return out
+
+    def set_overlay_mode(self, mode: str) -> bool:
+        """Legacy mode setter: "task1" turns on T1 only; "task2" turns on T2 only."""
+        normalized = (mode or "").strip().lower()
+        if normalized == "task1":
+            return self.set_overlay_detectors(task1=True, task2=False)
+        if normalized == "task2":
+            return self.set_overlay_detectors(task1=False, task2=True)
+        return False
+
+    def set_overlay_detectors(self, task1: bool, task2: bool) -> bool:
+        """Independently enable/disable the Task 1 and Task 2 detectors."""
+        self._overlay_task1 = bool(task1)
+        self._overlay_task2 = bool(task2)
+        any_on = self._overlay_task1 or self._overlay_task2
+        self._overlay_enabled = any_on
+        self._overlay_mode = (
+            "task2" if (self._overlay_task2 and not self._overlay_task1)
+            else ("task1" if self._overlay_task1 and not self._overlay_task2 else "both")
+        )
+        with self._detections_lock:
+            self._detections = []
+        self._hsv_last_run_ts = 0.0
+        self.get_logger().info(
+            f"Overlay detectors: task1={self._overlay_task1} task2={self._overlay_task2}"
+        )
+        return True
+
     def start_overlay(self):
+        # Default: enable Task 1 (preserves prior behaviour for /overlay/enable).
         if self._overlay_enabled:
             return
-        self._overlay_enabled = True
-        # Local HSV runs inline on each frame; no HTTP fetch thread needed.
-        # The fetch loop previously pulled ZED YOLO detections, but for
-        # Task 1 circle targets HSV is the authoritative detector.
-        self.get_logger().info("Detection overlay enabled (local HSV)")
+        self.set_overlay_detectors(task1=True, task2=self._overlay_task2)
+        self.get_logger().info("Detection overlay enabled")
 
     def stop_overlay(self):
-        if not self._overlay_enabled:
+        if not self._overlay_enabled and not (self._overlay_task1 or self._overlay_task2):
             return
-        self._overlay_enabled = False
+        self.set_overlay_detectors(task1=False, task2=False)
         self._overlay_stop.set()
         if self._overlay_thread:
             self._overlay_thread.join(timeout=2)
             self._overlay_thread = None
-        with self._detections_lock:
-            self._detections = []
-        self._hsv_last_run_ts = 0.0
         self.get_logger().info("Detection overlay disabled")
 
 
@@ -760,6 +894,9 @@ class ControlServer(BaseHTTPRequestHandler):
             self._send_json(200, {
                 'enabled': self.video_node._overlay_enabled if self.video_node else False,
                 'detection_count': det_count,
+                'task1_enabled': self.video_node._overlay_task1 if self.video_node else False,
+                'task2_enabled': self.video_node._overlay_task2 if self.video_node else False,
+                'mode': self.video_node._overlay_mode if self.video_node else 'task1',
             })
 
         else:
@@ -792,6 +929,28 @@ class ControlServer(BaseHTTPRequestHandler):
                 self._send_json(200, {'success': True, 'overlay': False})
             else:
                 self._send_json(503, {'success': False, 'message': 'No video node'})
+
+        elif parsed.path == '/overlay/detectors':
+            query = parse_qs(parsed.query)
+            t1 = query.get('task1', ['0'])[0].lower() in ('1', 'true', 'on', 'yes')
+            t2 = query.get('task2', ['0'])[0].lower() in ('1', 'true', 'on', 'yes')
+            if not self.video_node:
+                self._send_json(503, {'success': False, 'message': 'No video node'})
+            else:
+                self.video_node.set_overlay_detectors(task1=t1, task2=t2)
+                self._send_json(200, {
+                    'success': True, 'task1_enabled': t1, 'task2_enabled': t2,
+                })
+
+        elif parsed.path == '/overlay/mode':
+            query = parse_qs(parsed.query)
+            mode = query.get('mode', [''])[0]
+            if not self.video_node:
+                self._send_json(503, {'success': False, 'message': 'No video node'})
+            elif self.video_node.set_overlay_mode(mode):
+                self._send_json(200, {'success': True, 'mode': mode})
+            else:
+                self._send_json(400, {'success': False, 'message': f'Invalid mode: {mode}'})
 
         elif parsed.path == '/restart':
             if self.video_node:
