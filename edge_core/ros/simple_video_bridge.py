@@ -676,6 +676,7 @@ class VideoStreamNode(Node):
                     "bbox_h": float(bh),
                     "_src_w": w,
                     "_src_h": h,
+                    "_detector": "task1",
                 })
         return out
 
@@ -716,6 +717,8 @@ class VideoStreamNode(Node):
                         "bbox_h": float(min(h, 2 * r)),
                         "_src_w": w,
                         "_src_h": h,
+                        "_detector": "task2",
+                        "_method": "hough",
                     })
         except cv2.error:
             pass
@@ -766,6 +769,8 @@ class VideoStreamNode(Node):
                     "bbox_h": float(bh),
                     "_src_w": w,
                     "_src_h": h,
+                    "_detector": "task2",
+                    "_method": "contour",
                 })
         except cv2.error:
             pass
@@ -885,6 +890,18 @@ class ControlServer(BaseHTTPRequestHandler):
                 self.wfile.write(self.video_node._latest_jpeg)
             else:
                 self._send_json(503, {'error': 'No frame available'})
+
+        elif parsed.path == '/detections':
+            query = parse_qs(parsed.query)
+            wanted = (query.get('source', ['all'])[0] or 'all').lower()
+            dets = []
+            if self.video_node:
+                with self.video_node._detections_lock:
+                    src = list(self.video_node._detections)
+                for d in src:
+                    if wanted == 'all' or d.get('_detector') == wanted:
+                        dets.append(d)
+            self._send_json(200, {'count': len(dets), 'detections': dets})
 
         elif parsed.path == '/overlay/status':
             det_count = 0

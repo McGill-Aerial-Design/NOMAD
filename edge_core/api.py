@@ -4364,6 +4364,54 @@ fi
         return result
 
     # ============================================================
+    # Task 2 detections (live shape-detector results from video bridge)
+    # ============================================================
+    @app.get("/api/task/2/detections", tags=["Task 2"])
+    async def task2_detections():
+        """Return the live Task 2 (shape) circle detections drawn by the
+        video overlay. Used by the Mission Planner Detect & Spray tab so the
+        operator picks from the same circles they see boxed on the video.
+
+        Envelope mirrors /api/detections so the existing UI can consume it
+        unchanged: targets are image-only (no world coordinates) since the
+        shape detector runs on the 2D RGB frame.
+        """
+        mgr = get_video_stream_manager()
+        if not mgr:
+            return {"current": {"detections": []}, "history": {"detections": []}}
+
+        raw = mgr.get_overlay_detections(source="task2")
+        out = []
+        for idx, d in enumerate(raw.get("detections", [])):
+            cx = d.get("bbox_x", 0.0) + d.get("bbox_w", 0.0) / 2.0
+            cy = d.get("bbox_y", 0.0) + d.get("bbox_h", 0.0) / 2.0
+            out.append({
+                "target_id": idx,
+                "label": d.get("label", "circle"),
+                "confidence": d.get("confidence", 0.0),
+                "source": d.get("_method") or d.get("_detector") or "task2",
+                "seen_count": 1,
+                # No world-frame coords — shape detector is image-only.
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0,
+                "image_only": True,
+                # Pixel info (handy for visual servo / UI debugging).
+                "pixel_x": cx,
+                "pixel_y": cy,
+                "bbox_x": d.get("bbox_x"),
+                "bbox_y": d.get("bbox_y"),
+                "bbox_w": d.get("bbox_w"),
+                "bbox_h": d.get("bbox_h"),
+                "src_w": d.get("_src_w"),
+                "src_h": d.get("_src_h"),
+            })
+        return {
+            "current": {"detections": out, "count": len(out)},
+            "history": {"detections": [], "count": 0},
+        }
+
+    # ============================================================
     # Task 2 spray artifacts (manual flow + last-artifacts download)
     # ============================================================
     @app.post("/api/task/2/spray/manual/start", tags=["Task 2", "Spray"])

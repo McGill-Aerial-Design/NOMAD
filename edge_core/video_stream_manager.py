@@ -595,6 +595,19 @@ class VideoStreamManager:
             logger.error(f"Error toggling overlay: {e}")
             return False
 
+    def get_overlay_detections(self, source: str = "all") -> dict:
+        """Fetch the bridge's current overlay detections, optionally filtered
+        by detector source (\"task1\" / \"task2\" / \"all\")."""
+        if not self.is_relay_running():
+            return {"count": 0, "detections": []}
+        try:
+            url = f"http://localhost:{self.relay_http_port}/detections?source={source}"
+            with urlopen(url, timeout=5) as response:
+                return json.loads(response.read().decode())
+        except Exception as e:
+            logger.error(f"Error fetching overlay detections: {e}")
+            return {"count": 0, "detections": []}
+
     def set_overlay_detectors(self, task1: bool, task2: bool) -> bool:
         """Independently enable/disable the Task 1 and Task 2 detectors."""
         if not self.is_relay_running():

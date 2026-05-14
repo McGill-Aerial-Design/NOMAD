@@ -538,7 +538,7 @@ namespace NOMAD.MissionPlanner
                 var vioTask = JetsonApiService.GetAsync("/api/vio/status");
                 var obstacleTask = JetsonApiService.GetAsync("/api/obstacle_distance");
                 var nav2Task = JetsonApiService.GetAsync("/api/nav2/status");
-                var detectionTask = JetsonApiService.GetAsync("/api/detections");
+                var detectionTask = JetsonApiService.GetAsync("/api/task/2/detections");
                 var exclMapTask = JetsonApiService.GetAsync("/api/task/2/exclusion_map");
 
                 await Task.WhenAll(modeTask, sprayTask, vioTask, obstacleTask, nav2Task, detectionTask, exclMapTask);
@@ -827,7 +827,7 @@ namespace NOMAD.MissionPlanner
             try
             {
                 _btnRefreshDetections.Enabled = false;
-                var resp = await JetsonApiService.GetAsync("/api/detections");
+                var resp = await JetsonApiService.GetAsync("/api/task/2/detections");
                 if (resp.IsSuccessStatusCode)
                 {
                     var json = JObject.Parse(await resp.Content.ReadAsStringAsync());
@@ -863,7 +863,7 @@ namespace NOMAD.MissionPlanner
                 }
                 else
                 {
-                    var detectResp = await JetsonApiService.GetAsync("/api/detections");
+                    var detectResp = await JetsonApiService.GetAsync("/api/task/2/detections");
                     if (!detectResp.IsSuccessStatusCode)
                     {
                         BeginInvoke((Action)(() => _lblSprayError.Text = "No detections available"));

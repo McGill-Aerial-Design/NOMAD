@@ -328,3 +328,100 @@ Full audit of the requirements document against codebase. Audited 2026-03-19.
 4. **TD-007** — Building geometry output (low priority, Task 1 specific)
 5. **Ballistic drop table** — Calibrate with real nozzle measurements
 6. **Field testing** — All new features need Jetson deployment and flight testing
+
+---
+
+## Task 2 Page Revamp -- Follow-ups
+
+Items left over after the Task 2 view refactor (Video|Tabs layout, shape
+overlay, manual+auto Submit flow, spray-state-driven tilt lock).
+
+### T2-1: Detection list ↔ overlay mismatch
+- **Files**: `mission_planner/src/NOMADTask2View.cs`, `edge_core/api.py`,
+  `edge_core/ros/simple_video_bridge.py`
+- **Problem**: The video overlay now draws shape-based circles (Task 2
+  detector) but the spray-target list still pulls from `/api/detections`,
+  which is the ZED YOLO/HSV pipeline. Operators select targets that may
+  not match what they see drawn on the video.
+- **Fix**: Either expose the bridge's shape-detector results through a new
+  `/api/task/2/detections` endpoint and have the Detect & Spray tab read
+  from there, or feed the shape detector into the existing detection
+  pipeline so both UI elements stay in sync.
+- [x] Decide source of truth (bridge — shape detector results are authoritative for Task 2)
+- [x] Wire detection list to that source (new `/api/task/2/detections` endpoint)
+- [x] Verify selection coordinates match overlay-drawn boxes (UI uses same bbox)
+- [ ] Follow-up: thread depth lookup so spray controller can run real approach
+      instead of `image_only=True` (currently every shape detection is treated
+      as already-in-range)
+
+### T2-2: Color-agnostic verification not actually wired
+- **File**: `edge_core/task2_circle_verify.py`,
+  `edge_core/spray_controller.py` (`_verify_spray`)
+- **Problem**: The agreed verification semantics are "any circle shape,
+  then check ≥20% average colour change inside it." The new overlay
+  matches that, but `_verify_spray` still calls `task2_circle_verify`,
+  which has purple→blue HSV gates baked in. Autonomous flow can fail
+  verify on a perfectly good spray when the target isn't the expected hue.
+- **Fix**: Replace the colour-gated verifier with a colour-agnostic
+  before/after delta on the matched circle ROI (mean LAB ΔE or
+  ‖ΔBGR‖ over a configurable threshold, default 20%).
+- [ ] Add colour-agnostic verifier
+- [ ] Switch `_verify_circle_change_fn` over
+- [ ] Keep HSV verify as opt-in fallback for sanity
+
+### T2-3: Manual flow has no spray-controller interlock
+- **Files**: `mission_planner/src/Task2UploadPanel.cs`,
+  `edge_core/task2_spray_artifacts.py`, `edge_core/spray_controller.py`
+- **Problem**: Clicking *Manual Start* mid-autonomous-spray silently
+  finalises the autonomous artifact session and starts a new one. The
+  Abort button only stops the autonomous controller, not the manual
+  recording. Operators can foot-gun this trivially.
+- **Fix**: Disable manual Start/Stop while spray state ∈
+  {approach, aim, spray, verify, upload}; make manual sessions abortable
+  from the same Abort button; or merge both flows behind a single
+  session state machine.
+- [ ] Gate manual buttons on spray-active state
+- [ ] Route Abort to whichever session is live
+- [ ] Surface the active session source in the Submit panel header
+
+### T2-4: No artifact retention policy
+- **File**: `edge_core/task2_spray_artifacts.py`
+- **Problem**: `~/.nomad/spray_sessions/` accumulates indefinitely — every
+  session keeps two JPEGs and a multi-MB MP4. After a few flight days
+  the SD card will fill.
+- **Fix**: On session-end (and on startup), keep the last N sessions
+  (default 20) and delete the rest. Optionally also enforce a total-size
+  cap.
+- [ ] Implement retention sweep
+- [ ] Add `NOMAD_SPRAY_KEEP_LAST` env override
+- [ ] Log how many sessions/MB were freed
+
+### T2-5: Drive upload roundtrip is wasteful
+- **Files**: `mission_planner/src/Task2UploadPanel.cs`,
+  `edge_core/spray_controller.py` (`_upload_fn`),
+  `edge_core/api.py`
+- **Problem**: The Submit panel pulls every artifact down from the Jetson
+  over the link, then pushes the same bytes back up to Google Drive.
+  Wastes bandwidth and is fragile on flaky cell links.
+- **Fix**: Add a server-side upload endpoint
+  (`POST /api/task/2/spray/upload`) that uploads the requested artifacts
+  directly from the Jetson and returns Drive URLs. Mission Planner only
+  has to trigger and display results.
+- [ ] Implement Jetson-side Drive upload using existing `_upload_fn`
+- [ ] Replace `Task2UploadPanel.UploadArtifactsFromJson` round-trip
+- [ ] Keep client-side upload as fallback when Jetson lacks token
+
+### T2-6: Shape detector cosmetic rough edges
+- **File**: `edge_core/ros/simple_video_bridge.py`
+- **Problems**:
+  - No spatial dedupe between Hough and contour passes — the same circle
+    sometimes gets two boxes.
+  - `set_overlay_detectors` clears `_detections` on every call; harmless
+    repeated state pushes from the status poll cause a brief flicker.
+  - `Task2PayloadPanel` still subscribes to
+    `PayloadControlPanel.AutonomousModeChanged` even though nothing
+    raises it anymore — works fine via the direct `SetTiltLocked` call,
+    but the dead subscription is misleading.
+- [ ] Add minDist-style dedupe across detector passes
+- [ ] Skip the `_detections` clear when the new state matches the old
+- [ ] Drop the dead event subscription in Task2PayloadPanel
