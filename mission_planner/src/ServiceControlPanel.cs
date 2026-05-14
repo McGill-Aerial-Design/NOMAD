@@ -78,6 +78,12 @@ namespace NOMAD.MissionPlanner
         // SLAM
         private Label _lblSlamStatus;
         private Button _btnClearSlam;
+
+        // Detector overlays — let the operator turn each circle detector
+        // on/off independently to free CPU when one isn't needed.
+        private CheckBox _chkDetectorTask1;
+        private CheckBox _chkDetectorTask2;
+        private Label    _lblDetectorStatus;
         
         // Status text
         private Label _lblLastUpdate;
@@ -203,6 +209,53 @@ namespace NOMAD.MissionPlanner
             // === SLAM Service ===
             AddServiceRow("SLAM / Mesh", ref _lblSlamStatus, ref _btnClearSlam, ref yOffset, "Clear");
             _btnClearSlam.Click += async (s, e) => await ClearSlamAsync();
+
+            // === Circle Detector Toggles ===
+            yOffset += 8;
+            var lblDetectorTitle = new Label
+            {
+                Text = "Circle Detectors:",
+                Location = new Point(ServiceLeftCol, yOffset),
+                Size = new Size(140, 22),
+                ForeColor = Color.LightGray,
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+            };
+            _servicesPanel.Controls.Add(lblDetectorTitle);
+
+            _chkDetectorTask1 = new CheckBox
+            {
+                Text = "Task 1 (HSV color)",
+                Location = new Point(ServiceStatusCol, yOffset + 2),
+                Size = new Size(150, 20),
+                ForeColor = Color.LightGray,
+                BackColor = Color.Transparent,
+            };
+            _chkDetectorTask1.CheckedChanged += async (s, e) => await PushDetectorState();
+            _servicesPanel.Controls.Add(_chkDetectorTask1);
+
+            _chkDetectorTask2 = new CheckBox
+            {
+                Text = "Task 2 (shape)",
+                Location = new Point(ServiceStatusCol + 155, yOffset + 2),
+                Size = new Size(130, 20),
+                ForeColor = Color.LightGray,
+                BackColor = Color.Transparent,
+            };
+            _chkDetectorTask2.CheckedChanged += async (s, e) => await PushDetectorState();
+            _servicesPanel.Controls.Add(_chkDetectorTask2);
+
+            yOffset += 26;
+            _lblDetectorStatus = new Label
+            {
+                Text = "—",
+                Location = new Point(ServiceStatusCol, yOffset),
+                Size = new Size(380, 18),
+                ForeColor = Color.Gray,
+                Font = new Font("Segoe UI", 8),
+            };
+            _servicesPanel.Controls.Add(_lblDetectorStatus);
+            yOffset += 22;
+            _ = RefreshDetectorState();
             
             // Separator
             yOffset += 10;
@@ -333,6 +386,65 @@ namespace NOMAD.MissionPlanner
             _logPanel.Controls.Add(lblLogTitle);
         }
         
+        private async Task PushDetectorState()
+        {
+            try
+            {
+                bool t1 = _chkDetectorTask1?.Checked ?? false;
+                bool t2 = _chkDetectorTask2?.Checked ?? false;
+                bool any = t1 || t2;
+
+                // Make sure overlay is enabled when at least one detector is on,
+                // and disabled (saves CPU) when both are off.
+                if (any)
+                {
+                    await JetsonApiService.PostAsync("/api/video/overlay/enable");
+                    var resp = await JetsonApiService.PostAsync(
+                        $"/api/video/overlay/detectors?task1={(t1 ? "true" : "false")}&task2={(t2 ? "true" : "false")}");
+                    SetDetectorStatus(resp.IsSuccessStatusCode
+                        ? $"Active — task1={t1} task2={t2}"
+                        : $"HTTP {(int)resp.StatusCode}");
+                }
+                else
+                {
+                    var resp = await JetsonApiService.PostAsync("/api/video/overlay/disable");
+                    SetDetectorStatus(resp.IsSuccessStatusCode
+                        ? "Both detectors disabled"
+                        : $"HTTP {(int)resp.StatusCode}");
+                }
+            }
+            catch (Exception ex)
+            {
+                SetDetectorStatus($"Error: {ex.Message}");
+            }
+        }
+
+        private async Task RefreshDetectorState()
+        {
+            try
+            {
+                var resp = await JetsonApiService.GetAsync("/api/video/overlay/status");
+                if (!resp.IsSuccessStatusCode) return;
+                var json = JObject.Parse(await resp.Content.ReadAsStringAsync());
+                bool t1 = json["task1_enabled"]?.Value<bool>() ?? false;
+                bool t2 = json["task2_enabled"]?.Value<bool>() ?? false;
+                BeginInvoke(new Action(() =>
+                {
+                    if (_chkDetectorTask1 != null) _chkDetectorTask1.Checked = t1;
+                    if (_chkDetectorTask2 != null) _chkDetectorTask2.Checked = t2;
+                    SetDetectorStatus($"Active — task1={t1} task2={t2}");
+                }));
+            }
+            catch { }
+        }
+
+        private void SetDetectorStatus(string text)
+        {
+            if (_lblDetectorStatus == null) return;
+            if (InvokeRequired) { BeginInvoke(new Action(() => SetDetectorStatus(text))); return; }
+            _lblDetectorStatus.Text = text;
+        }
+
         private void AddServiceRow(string serviceName, ref Label statusLabel, ref Button actionButton, ref int yOffset, string buttonText = "Restart")
         {
             int leftCol = ServiceLeftCol;
