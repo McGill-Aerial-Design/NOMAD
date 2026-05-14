@@ -16,6 +16,11 @@ CHECK_INTERVAL=30          # Seconds between checks
 MAX_RETRIES=3              # Max reconnect attempts before giving up
 RETRY_DELAY=10             # Seconds between retry attempts
 LOG_TAG="tailscale-watchdog"
+# Operator user — must match `tailscale set --operator=<user>` on the Jetson
+# (defaults to "mad"). When the daemon has any non-default prefs set, a bare
+# `tailscale up` refuses with "requires mentioning all non-default flags",
+# so we mention them here.
+OPERATOR="${TS_OPERATOR:-mad}"
 
 # ============================================================
 # Helper Functions
@@ -120,8 +125,14 @@ restart_tailscale_service() {
 reconnect_tailscale() {
     log_info "Attempting to reconnect Tailscale..."
     
-    # Try to bring up Tailscale
-    tailscale up --hostname="$HOSTNAME" 2>&1 | while read -r line; do
+    # Try to bring up Tailscale. We pass --accept-risk=lose-ssh because the
+    # control link to the operator may itself ride Tailscale (LTE/Tailscale
+    # link from GCS to Jetson), and --operator=$OPERATOR mirrors the value
+    # set on the daemon so the partial-prefs check passes.
+    tailscale up \
+        --hostname="$HOSTNAME" \
+        --operator="$OPERATOR" \
+        --accept-risk=lose-ssh 2>&1 | while read -r line; do
         log_info "tailscale up: $line"
     done
     
