@@ -51,17 +51,14 @@ namespace NOMAD.MissionPlanner
 
         private static readonly SemaphoreSlim s_mavlinkLock = new SemaphoreSlim(1, 1);
 
-        // Listen to the main panel's tilt event so both panels stay in sync.
         public Task2PayloadPanel(NOMADConfig config)
         {
             _config = config;
             InitializeUI();
-            // Reuse the same shared tilt source as PayloadControlPanel by
-            // subscribing through PayloadControlPanel's static API surface.
-            PayloadControlPanel.AutonomousModeChanged += OnExternalLockChanged;
+            // Tilt lock is driven by NOMADTask2View's spray-state poll calling
+            // SetTiltLocked() directly — no event subscription needed here.
             this.Disposed += (s, e) =>
             {
-                PayloadControlPanel.AutonomousModeChanged -= OnExternalLockChanged;
                 _tiltDebounceTimer?.Stop();
                 _tiltDebounceTimer?.Dispose();
             };
@@ -86,8 +83,6 @@ namespace NOMAD.MissionPlanner
                 locked ? "Camera tilt locked — autonomous spray active" : "Camera tilt unlocked",
                 locked ? WARNING_COLOR : TEXT_SECONDARY);
         }
-
-        private void OnExternalLockChanged(bool isAutonomous) => SetTiltLocked(isAutonomous);
 
         private void InitializeUI()
         {

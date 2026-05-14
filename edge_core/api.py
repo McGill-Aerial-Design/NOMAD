@@ -4385,17 +4385,33 @@ fi
         for idx, d in enumerate(raw.get("detections", [])):
             cx = d.get("bbox_x", 0.0) + d.get("bbox_w", 0.0) / 2.0
             cy = d.get("bbox_y", 0.0) + d.get("bbox_h", 0.0) / 2.0
+            # range_m is populated by the bridge when ZED depth is available
+            # at the circle center. When present we drop image_only so the
+            # spray controller can run a real approach instead of assuming
+            # the drone is already in firing range.
+            range_m = d.get("range_m")
+            try:
+                range_val = float(range_m) if range_m is not None else None
+            except (TypeError, ValueError):
+                range_val = None
+            has_range = range_val is not None and math.isfinite(range_val)
             out.append({
                 "target_id": idx,
                 "label": d.get("label", "circle"),
                 "confidence": d.get("confidence", 0.0),
                 "source": d.get("_method") or d.get("_detector") or "task2",
                 "seen_count": 1,
-                # No world-frame coords — shape detector is image-only.
+                # No world-frame coords — shape detector is 2D — so the
+                # target stays image_only=True. range_m (when present) lets
+                # the spray controller decide between skip-approach and a
+                # real image-space approach driven by the bbox/range, instead
+                # of always assuming the drone is already in firing range.
                 "x": 0.0,
                 "y": 0.0,
                 "z": 0.0,
                 "image_only": True,
+                "range_m": range_val,
+                "distance_m": range_val,
                 # Pixel info (handy for visual servo / UI debugging).
                 "pixel_x": cx,
                 "pixel_y": cy,
@@ -4438,6 +4454,107 @@ fi
         if sess is None:
             raise HTTPException(status_code=404, detail="No spray sessions yet")
         return sess.to_dict()
+
+    @app.post("/api/task/2/spray/upload", tags=["Task 2", "Spray"])
+    async def task2_spray_upload(request: Request):
+        """Upload spray artifacts to Google Drive directly from the Jetson.
+
+        Avoids the Mission Planner round-trip: instead of downloading every
+        artifact over the link and re-uploading, this endpoint uses the
+        already-wired ``gdrive_upload`` module on the edge. Mission Planner
+        only triggers the upload and renders the resulting Drive file ids.
+
+        Request body (all optional — defaults to last session's paths):
+            {
+              "session_id": "abcd1234",        # optional, lookup by id
+              "before_image_path": "/.../before.jpg",
+              "after_image_path":  "/.../after.jpg",
+              "video_path":        "/.../spray.mp4",
+              "name_prefix": "task2"           # filename prefix
+            }
+        Returns:
+            {"ok": N, "fail": M, "results": [
+                {"path": "...", "name": "...", "file_id": "...", "error": null},
+                ...
+            ]}
+        """
+        from .task2_spray_artifacts import SESSIONS_ROOT, get_artifact_manager
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                body = {}
+        except Exception:
+            body = {}
+
+        sess_dict: dict = {}
+        sid = body.get("session_id")
+        if sid:
+            last = get_artifact_manager().last()
+            if last and last.session_id == sid:
+                sess_dict = last.to_dict()
+        if not sess_dict and not any(
+            body.get(k) for k in ("before_image_path", "after_image_path", "video_path")
+        ):
+            last = get_artifact_manager().last()
+            if last is None:
+                raise HTTPException(status_code=404, detail="No spray sessions available")
+            sess_dict = last.to_dict()
+
+        before_path = body.get("before_image_path") or sess_dict.get("before_image_path")
+        after_path = body.get("after_image_path") or sess_dict.get("after_image_path")
+        video_path = body.get("video_path") or sess_dict.get("video_path")
+        prefix = (body.get("name_prefix") or "task2").strip() or "task2"
+
+        try:
+            from .gdrive_upload import upload_to_gdrive, gdrive_ready
+        except ImportError as e:
+            raise HTTPException(
+                status_code=503, detail=f"Google Drive client unavailable: {e}"
+            )
+        if not gdrive_ready():
+            raise HTTPException(
+                status_code=503,
+                detail="Google Drive not configured on Jetson (no OAuth token)",
+            )
+
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        root = os.path.realpath(SESSIONS_ROOT)
+
+        def _safe(path: Optional[str]) -> Optional[str]:
+            if not path:
+                return None
+            real = os.path.realpath(path)
+            if not (real.startswith(root + os.sep) or real == root):
+                return None
+            return real if os.path.exists(real) else None
+
+        targets = [
+            (f"{prefix}_before", _safe(before_path)),
+            (f"{prefix}_after", _safe(after_path)),
+            (f"{prefix}_spray", _safe(video_path)),
+        ]
+
+        results = []
+        ok = 0
+        fail = 0
+        for label, path in targets:
+            if path is None:
+                continue
+            ext = os.path.splitext(path)[1] or ".bin"
+            fname = f"{label}_{ts}{ext}"
+            try:
+                file_id = upload_to_gdrive(path, fname)
+                if file_id:
+                    ok += 1
+                    results.append({"path": path, "name": fname, "file_id": file_id, "error": None})
+                else:
+                    fail += 1
+                    results.append({"path": path, "name": fname, "file_id": None, "error": "upload returned no id"})
+            except Exception as e:
+                fail += 1
+                results.append({"path": path, "name": fname, "file_id": None, "error": str(e)})
+
+        return {"ok": ok, "fail": fail, "results": results}
 
     @app.get("/api/task/2/spray/artifact", tags=["Task 2", "Spray"])
     async def task2_spray_artifact(path: str = Query(..., description="Server-side artifact path")):

@@ -495,7 +495,17 @@ class SprayController:
                     ),
                 }
 
-            skip_approach = target.image_only or distance < self.APPROACH_STOP_DISTANCE_M
+            # Image-only with a known range still warrants a real approach
+            # whenever we're outside firing standoff. The Task 2 shape
+            # detector now provides per-circle depth, so we can servo
+            # forward instead of assuming we're already in range.
+            if target.image_only:
+                skip_approach = (
+                    (target.range_m is None)
+                    or (distance < self.APPROACH_STOP_DISTANCE_M)
+                )
+            else:
+                skip_approach = distance < self.APPROACH_STOP_DISTANCE_M
             self._current_target = target
             self._spray_count = 0
             self._abort_event.clear()
@@ -715,7 +725,118 @@ class SprayController:
         - Nav2 has been reported to crash with vertical-level targets
         """
         self._set_approach_sectors(target, exclude=True)
+        if target.image_only:
+            # No world coords — fly the approach in image+range space using
+            # the bbox center and the bridge's depth lookup. This is the
+            # Task 2 shape-detector path.
+            return self._approach_via_image(target)
         return self._approach_via_velocity(target)
+
+    def _approach_via_image(self, target: SprayTarget) -> bool:
+        """Image-space approach for image_only targets with known range.
+
+        Drives forward (and lightly nudges yaw/lateral/altitude to keep the
+        circle on the calibrated aim pixel) until the visual servo reports
+        range < APPROACH_STOP_DISTANCE_M. Falls through to AIM on timeout so
+        the operator isn't stranded mid-flight.
+        """
+        if not self._nav:
+            logger.error("NavController not available for image approach")
+            self._set_state(SprayState.FAILED, error="NavController unavailable")
+            return False
+        if not self._get_detection_bbox_fn:
+            logger.warning("No detection bbox function — skipping image approach")
+            return True
+
+        with self._lock:
+            self._status.approach_method = "image"
+
+        # Camera tilt to firing pose so the visual range_m is comparable to
+        # the calibrated TARGET_CAMERA_RANGE_M during aim.
+        if self._servo:
+            fire_angle = max(0.0, min(180.0, self.SERVO_FIRE_ANGLE_DEG))
+            self._servo.set_camera_tilt(fire_angle)
+
+        approach_start = time.time()
+        last_command_time = 0.0
+        no_detection_streak = 0
+
+        while not self._check_abort():
+            now = time.time()
+            if now - approach_start > self.APPROACH_TIMEOUT_S:
+                logger.warning("Image approach timeout — proceeding to aim")
+                if self._nav:
+                    self._nav.stop_movement()
+                self._set_approach_sectors(target, exclude=False)
+                return True
+
+            detection = self._get_detection_for_aim(target)
+            if detection is None:
+                no_detection_streak += 1
+                if self._nav and now - last_command_time > 0.25:
+                    self._nav.stop_movement()
+                    last_command_time = now
+                if no_detection_streak > 30:  # ~3s without a detection
+                    logger.warning("Image approach lost target — bailing to aim")
+                    self._set_approach_sectors(target, exclude=False)
+                    return True
+                time.sleep(0.1)
+                continue
+            no_detection_streak = 0
+
+            cx = float(detection["cx"])
+            cy = float(detection["cy"])
+            camera_range_m = detection.get("range_m")
+            if camera_range_m is None:
+                # No depth on this frame — hold and wait for one.
+                if self._nav:
+                    self._nav.stop_movement()
+                time.sleep(0.1)
+                continue
+
+            range_m = float(camera_range_m)
+            with self._lock:
+                self._status.distance_to_target = range_m
+
+            if range_m <= self.APPROACH_STOP_DISTANCE_M:
+                logger.info(f"Image approach complete at {range_m:.2f}m")
+                if self._nav:
+                    self._nav.stop_movement()
+                self._set_approach_sectors(target, exclude=False)
+                return True
+
+            # Forward velocity scales with how far we still have to go,
+            # capped by the configured approach speed. Same lateral/yaw/
+            # altitude correction shape as _aim_at_target so the circle
+            # stays visible while we close in.
+            err_x = cx - self.AIM_PIXEL_X
+            err_y = cy - self.AIM_PIXEL_Y
+            forward_excess = range_m - self.APPROACH_STOP_DISTANCE_M
+            vx = self._clamp(forward_excess * 0.5, 0.0, self.APPROACH_SPEED_MPS)
+            vy = 0.0
+            yaw_rate = 0.0
+            if self.USE_YAW_ALIGNMENT:
+                yaw_rate = self._clamp(
+                    err_x * self.YAW_GAIN,
+                    -self.MAX_YAW_RATE_RADPS,
+                    self.MAX_YAW_RATE_RADPS,
+                )
+            else:
+                vy = self._clamp(
+                    err_x * self.LATERAL_GAIN,
+                    -self.MAX_LATERAL_SPEED_MPS,
+                    self.MAX_LATERAL_SPEED_MPS,
+                )
+            vz = self._clamp(
+                err_y * self.ALTITUDE_GAIN,
+                -self.MAX_ALTITUDE_SPEED_MPS,
+                self.MAX_ALTITUDE_SPEED_MPS,
+            )
+            self._nav.send_velocity(vx, vy, vz, yaw_rate)
+            last_command_time = now
+            time.sleep(0.1)
+
+        return False
 
     def _approach_via_nav2(self, target: SprayTarget) -> Optional[bool]:
         """Approach using Nav2 NavigateToPose.

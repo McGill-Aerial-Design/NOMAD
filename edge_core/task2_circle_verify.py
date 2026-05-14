@@ -329,6 +329,175 @@ class Task2CircleDetector:
         return False
 
 
+class ColorAgnosticCircleVerifier:
+    """
+    Color-agnostic before/after spray verifier.
+
+    Detects any circular shape (no hue gates) in both images, matches them
+    by proximity, and reports verified=True when the mean Lab color delta
+    (deltaE) or mean BGR difference inside the matched ROI exceeds the
+    configured threshold. Use this when the target paper colour is not
+    known ahead of time (Task 2 dry-run / variant chemistry).
+    """
+
+    def __init__(
+        self,
+        change_threshold: float = 0.20,
+        match_distance_px: int = 50,
+        pixel_diff_threshold: int = 30,
+    ):
+        # change_threshold is interpreted as a fraction (e.g. 0.20 == 20%).
+        # We use it two ways:
+        #   1. Fraction of pixels in the ROI that exceed pixel_diff_threshold.
+        #   2. Mean Lab deltaE inside the ROI, normalised by a 100-unit scale.
+        # Passing either gate flips verified=True.
+        self.change_threshold = change_threshold
+        self.match_distance_px = match_distance_px
+        self.pixel_diff_threshold = pixel_diff_threshold
+        self._detector = Task2CircleDetector()
+
+    def capture_snapshot(
+        self, bgr_image: np.ndarray, image_path: Optional[str] = None
+    ) -> CircleSnapshot:
+        circles = self._detector.detect(bgr_image)
+        return CircleSnapshot(circles=circles, image=bgr_image, image_path=image_path)
+
+    def capture_snapshot_from_file(self, image_path: str) -> CircleSnapshot:
+        img = cv2.imread(image_path)
+        if img is None:
+            logger.warning(f"Cannot read image: {image_path}")
+            return CircleSnapshot(circles=[], image_path=image_path)
+        return self.capture_snapshot(img, image_path)
+
+    def compare(
+        self,
+        before: CircleSnapshot,
+        after: CircleSnapshot,
+    ) -> CircleComparison:
+        if before.image is None or after.image is None:
+            return CircleComparison(
+                change_ratio=0.0, verified=False, matched_pairs=0,
+                details="Missing image data for pixel comparison",
+            )
+
+        h, w = before.image.shape[:2]
+        after_img = after.image
+        if after_img.shape[:2] != (h, w):
+            after_img = cv2.resize(after_img, (w, h))
+
+        # Match circles when both images have detections; otherwise fall back
+        # to the union of detected circles (after only, before only).
+        matched: List[Tuple[DetectedCircle, DetectedCircle]] = []
+        if before.circles and after.circles:
+            matched = self._match_circles(before.circles, after.circles)
+
+        # Choose ROIs to measure. If no match, use whatever circle we have.
+        roi_circles: List[DetectedCircle] = []
+        if matched:
+            roi_circles = [m[0] for m in matched]
+        elif before.circles:
+            roi_circles = before.circles
+        elif after.circles:
+            roi_circles = after.circles
+        else:
+            return CircleComparison(
+                change_ratio=0.0, verified=False, matched_pairs=0,
+                details="No circles detected in either image",
+            )
+
+        best_ratio = 0.0
+        best_delta_e = 0.0
+        best_details = ""
+
+        for c in roi_circles:
+            ratio, delta_e, detail = self._measure_roi_change(
+                c, before.image, after_img
+            )
+            score = max(ratio, delta_e / 100.0)
+            best_score = max(best_ratio, best_delta_e / 100.0)
+            if score > best_score:
+                best_ratio = ratio
+                best_delta_e = delta_e
+                best_details = detail
+
+        verified = (
+            best_ratio >= self.change_threshold
+            or (best_delta_e / 100.0) >= self.change_threshold
+        )
+
+        return CircleComparison(
+            change_ratio=best_ratio,
+            verified=verified,
+            matched_pairs=len(matched),
+            details=best_details,
+        )
+
+    def _match_circles(
+        self,
+        before_circles: List[DetectedCircle],
+        after_circles: List[DetectedCircle],
+    ) -> List[Tuple[DetectedCircle, DetectedCircle]]:
+        matched = []
+        used_after = set()
+        for b in before_circles:
+            best_dist = float("inf")
+            best_idx = -1
+            for i, a in enumerate(after_circles):
+                if i in used_after:
+                    continue
+                dist = math.sqrt((b.cx - a.cx) ** 2 + (b.cy - a.cy) ** 2)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_idx = i
+            if best_idx >= 0 and best_dist < self.match_distance_px:
+                matched.append((b, after_circles[best_idx]))
+                used_after.add(best_idx)
+        return matched
+
+    def _measure_roi_change(
+        self,
+        circle: DetectedCircle,
+        before_img: np.ndarray,
+        after_img: np.ndarray,
+    ) -> Tuple[float, float, str]:
+        h, w = before_img.shape[:2]
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.circle(mask, (circle.cx, circle.cy), circle.radius, 255, -1)
+        erode_px = max(1, int(circle.radius * 0.10))
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (erode_px * 2 + 1, erode_px * 2 + 1)
+        )
+        mask = cv2.erode(mask, kernel, iterations=1)
+        mask_bool = mask > 0
+        total = int(np.count_nonzero(mask_bool))
+        if total == 0:
+            return 0.0, 0.0, "Empty ROI mask"
+
+        # 1) BGR pixel-change ratio.
+        before_gray = cv2.cvtColor(before_img, cv2.COLOR_BGR2GRAY)
+        after_gray = cv2.cvtColor(after_img, cv2.COLOR_BGR2GRAY)
+        diff = cv2.absdiff(before_gray, after_gray)
+        changed = int(np.count_nonzero((diff > self.pixel_diff_threshold) & mask_bool))
+        ratio = changed / total
+
+        # 2) Mean Lab deltaE inside the ROI (perceptual colour shift).
+        before_lab = cv2.cvtColor(before_img, cv2.COLOR_BGR2LAB).astype(np.float32)
+        after_lab = cv2.cvtColor(after_img, cv2.COLOR_BGR2LAB).astype(np.float32)
+        b_mean = cv2.mean(before_lab, mask=mask)[:3]
+        a_mean = cv2.mean(after_lab, mask=mask)[:3]
+        delta_e = float(
+            math.sqrt(sum((a - b) ** 2 for a, b in zip(a_mean, b_mean)))
+        )
+
+        detail = (
+            f"change={ratio:.1%} pixels ({changed}/{total}), "
+            f"lab_delta_e={delta_e:.1f}, "
+            f"thresholds=change:{self.change_threshold:.0%} "
+            f"or delta_e>={self.change_threshold*100:.0f}"
+        )
+        return ratio, delta_e, detail
+
+
 class CircleChangeVerifier:
     """
     Verifies spray success by comparing circle snapshots before and after.

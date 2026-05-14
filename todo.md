@@ -350,9 +350,12 @@ overlay, manual+auto Submit flow, spray-state-driven tilt lock).
 - [x] Decide source of truth (bridge — shape detector results are authoritative for Task 2)
 - [x] Wire detection list to that source (new `/api/task/2/detections` endpoint)
 - [x] Verify selection coordinates match overlay-drawn boxes (UI uses same bbox)
-- [ ] Follow-up: thread depth lookup so spray controller can run real approach
-      instead of `image_only=True` (currently every shape detection is treated
-      as already-in-range)
+- [x] Follow-up: thread depth lookup so spray controller can run real approach
+      instead of treating every shape detection as already-in-range. Bridge now
+      subscribes to ZED depth and tags each shape circle with `range_m`; the
+      `/api/task/2/detections` endpoint forwards it; spray controller honours
+      it via a new image-space `_approach_via_image` loop that closes range
+      using the bbox center + per-frame depth instead of world coords.
 
 ### T2-2: Color-agnostic verification not actually wired
 - **File**: `edge_core/task2_circle_verify.py`,
@@ -365,9 +368,9 @@ overlay, manual+auto Submit flow, spray-state-driven tilt lock).
 - **Fix**: Replace the colour-gated verifier with a colour-agnostic
   before/after delta on the matched circle ROI (mean LAB ΔE or
   ‖ΔBGR‖ over a configurable threshold, default 20%).
-- [ ] Add colour-agnostic verifier
-- [ ] Switch `_verify_circle_change_fn` over
-- [ ] Keep HSV verify as opt-in fallback for sanity
+- [x] Add colour-agnostic verifier (`ColorAgnosticCircleVerifier` in `task2_circle_verify.py`)
+- [x] Switch `_verify_circle_change_fn` over (default; HSV `CircleChangeVerifier` opt-in)
+- [x] Keep HSV verify as opt-in fallback for sanity (`NOMAD_SPRAY_VERIFY=hsv`)
 
 ### T2-3: Manual flow has no spray-controller interlock
 - **Files**: `mission_planner/src/Task2UploadPanel.cs`,
@@ -380,9 +383,9 @@ overlay, manual+auto Submit flow, spray-state-driven tilt lock).
   {approach, aim, spray, verify, upload}; make manual sessions abortable
   from the same Abort button; or merge both flows behind a single
   session state machine.
-- [ ] Gate manual buttons on spray-active state
-- [ ] Route Abort to whichever session is live
-- [ ] Surface the active session source in the Submit panel header
+- [x] Gate manual buttons on spray-active state (`ApplySessionInterlock`)
+- [x] Route Abort to whichever session is live (new "Abort live session" button)
+- [x] Surface the active session source in the Submit panel header
 
 ### T2-4: No artifact retention policy
 - **File**: `edge_core/task2_spray_artifacts.py`
@@ -392,9 +395,9 @@ overlay, manual+auto Submit flow, spray-state-driven tilt lock).
 - **Fix**: On session-end (and on startup), keep the last N sessions
   (default 20) and delete the rest. Optionally also enforce a total-size
   cap.
-- [ ] Implement retention sweep
-- [ ] Add `NOMAD_SPRAY_KEEP_LAST` env override
-- [ ] Log how many sessions/MB were freed
+- [x] Implement retention sweep (`sweep_old_sessions` runs on init + finalise)
+- [x] Add `NOMAD_SPRAY_KEEP_LAST` env override (default 20)
+- [x] Log how many sessions/MB were freed
 
 ### T2-5: Drive upload roundtrip is wasteful
 - **Files**: `mission_planner/src/Task2UploadPanel.cs`,
@@ -407,9 +410,9 @@ overlay, manual+auto Submit flow, spray-state-driven tilt lock).
   (`POST /api/task/2/spray/upload`) that uploads the requested artifacts
   directly from the Jetson and returns Drive URLs. Mission Planner only
   has to trigger and display results.
-- [ ] Implement Jetson-side Drive upload using existing `_upload_fn`
-- [ ] Replace `Task2UploadPanel.UploadArtifactsFromJson` round-trip
-- [ ] Keep client-side upload as fallback when Jetson lacks token
+- [x] Implement Jetson-side Drive upload using existing `_upload_fn` (`POST /api/task/2/spray/upload`)
+- [x] Replace `Task2UploadPanel.UploadArtifactsFromJson` round-trip (now calls server endpoint)
+- [x] Keep client-side upload as fallback when Jetson lacks token (503 → `ClientSideUploadFallback`)
 
 ### T2-6: Shape detector cosmetic rough edges
 - **File**: `edge_core/ros/simple_video_bridge.py`
@@ -422,6 +425,6 @@ overlay, manual+auto Submit flow, spray-state-driven tilt lock).
     `PayloadControlPanel.AutonomousModeChanged` even though nothing
     raises it anymore — works fine via the direct `SetTiltLocked` call,
     but the dead subscription is misleading.
-- [ ] Add minDist-style dedupe across detector passes
-- [ ] Skip the `_detections` clear when the new state matches the old
-- [ ] Drop the dead event subscription in Task2PayloadPanel
+- [x] Add minDist-style dedupe across detector passes (`_dedupe_detections`)
+- [x] Skip the `_detections` clear when the new state matches the old
+- [x] Drop the dead event subscription in Task2PayloadPanel

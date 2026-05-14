@@ -161,6 +161,18 @@ class VideoStreamNode(Node):
         self._overlay_stop = threading.Event()
         self._overlay_last_error_log_ts = 0.0
 
+        # Latest depth frame (Task 2 shape detector range lookup). Stored at
+        # native ZED resolution; circle centers are scaled in from the
+        # streaming frame size at sample time.
+        self._latest_depth = None  # numpy float32 in meters
+        self._latest_depth_shape = None  # (h, w) of the depth frame
+        self._latest_depth_ts = 0.0
+        self._depth_lock = threading.Lock()
+        self._depth_topic = os.environ.get(
+            "NOMAD_TASK2_DEPTH_TOPIC", "/zed/zed_node/depth/depth_registered"
+        )
+        self._depth_sub = None
+
         # Probe encoder
         self._encoder_name, self._encoder_fragment = _probe_encoder()
         self.get_logger().info(f'Using encoder: {self._encoder_name}')
@@ -172,6 +184,7 @@ class VideoStreamNode(Node):
 
         # Subscribe to ROS2
         self._subscribe_to_topic(source_topic)
+        self._subscribe_depth(self._depth_topic)
 
         # Start encoder thread (picks frames from _pending_frame, pushes to GStreamer)
         self._encode_thread = threading.Thread(target=self._encode_loop, daemon=True,
@@ -310,6 +323,84 @@ class VideoStreamNode(Node):
         self.source_topic = topic
         self.get_logger().info(f'Subscribed to: {topic}')
 
+    def _subscribe_depth(self, topic: str):
+        """Subscribe to the ZED depth topic so the Task 2 shape detector can
+        attach a per-circle range. Best-effort — failures are non-fatal; the
+        detections just won't carry range_m and the spray controller will
+        keep treating Task 2 picks as image_only.
+        """
+        try:
+            depth_qos = QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                durability=DurabilityPolicy.VOLATILE,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1,
+            )
+            if self._depth_sub is not None:
+                self.destroy_subscription(self._depth_sub)
+                self._depth_sub = None
+            self._depth_sub = self.create_subscription(
+                Image, topic, self._depth_callback, depth_qos
+            )
+            self.get_logger().info(f'Subscribed to depth: {topic}')
+        except Exception as e:
+            self.get_logger().warn(f'Depth subscription failed ({topic}): {e}')
+
+    def _depth_callback(self, msg: Image):
+        """Cache the latest depth frame as float32 meters."""
+        try:
+            enc = msg.encoding.lower()
+            if enc == '32fc1':
+                arr = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+                depth = arr.astype(np.float32, copy=False)
+            elif enc in ('16uc1', 'mono16'):
+                arr = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+                depth = arr.astype(np.float32) * 0.001  # mm -> m
+            else:
+                return
+            with self._depth_lock:
+                self._latest_depth = depth
+                self._latest_depth_shape = depth.shape[:2]
+                self._latest_depth_ts = time.time()
+        except Exception as e:
+            if self.frame_count % 300 == 0:
+                self.get_logger().warn(f'Depth callback error: {e}')
+
+    def _sample_depth_at(self, px_stream: float, py_stream: float,
+                         stream_w: int, stream_h: int) -> "float | None":
+        """Sample median depth (meters) in a small ROI around (px, py).
+
+        Inputs are in stream-frame pixels (after the bridge's resize); they
+        are rescaled into the native depth frame before sampling. Returns
+        None when no valid pixels are available or no depth is yet cached.
+        """
+        with self._depth_lock:
+            depth = self._latest_depth
+            dshape = self._latest_depth_shape
+            ts = self._latest_depth_ts
+        if depth is None or dshape is None:
+            return None
+        # Stale depth (>2s) is worse than no depth.
+        if time.time() - ts > 2.0:
+            return None
+        dh, dw = dshape
+        if stream_w <= 0 or stream_h <= 0:
+            return None
+        sx = dw / float(stream_w)
+        sy = dh / float(stream_h)
+        cx = int(round(px_stream * sx))
+        cy = int(round(py_stream * sy))
+        if not (0 <= cx < dw and 0 <= cy < dh):
+            return None
+        for half in (5, 12, 20, 30):
+            x1 = max(0, cx - half); x2 = min(dw, cx + half + 1)
+            y1 = max(0, cy - half); y2 = min(dh, cy + half + 1)
+            roi = depth[y1:y2, x1:x2]
+            valid = roi[np.isfinite(roi) & (roi > 0.1) & (roi < 35.0)]
+            if valid.size >= 8:
+                return float(np.median(valid))
+        return None
+
     def switch_topic(self, new_topic: str) -> bool:
         try:
             self.get_logger().info(f'Switching topic: {self.source_topic} -> {new_topic}')
@@ -382,6 +473,7 @@ class VideoStreamNode(Node):
                         except Exception as det_err:
                             if self.frame_count % 150 == 0:
                                 self.get_logger().warn(f'Shape detect error: {det_err}')
+                    dets = self._dedupe_detections(dets)
                     with self._detections_lock:
                         self._detections = dets
                 self.draw_detections(cv_image)
@@ -707,6 +799,7 @@ class VideoStreamNode(Node):
                 for c in circles[0]:
                     cx, cy, r = int(c[0]), int(c[1]), int(c[2])
                     claimed.append((cx, cy, r))
+                    rng = self._sample_depth_at(cx, cy, w, h)
                     out.append({
                         "label": "circle",
                         "hsv_color": "circle",
@@ -719,6 +812,7 @@ class VideoStreamNode(Node):
                         "_src_h": h,
                         "_detector": "task2",
                         "_method": "hough",
+                        "range_m": rng,
                     })
         except cv2.error:
             pass
@@ -759,6 +853,7 @@ class VideoStreamNode(Node):
                     continue
                 claimed.append((cx, cy, r))
                 x, y, bw, bh = cv2.boundingRect(c)
+                rng = self._sample_depth_at(cx, cy, w, h)
                 out.append({
                     "label": "circle",
                     "hsv_color": "circle",
@@ -771,6 +866,7 @@ class VideoStreamNode(Node):
                     "_src_h": h,
                     "_detector": "task2",
                     "_method": "contour",
+                    "range_m": rng,
                 })
         except cv2.error:
             pass
@@ -787,9 +883,17 @@ class VideoStreamNode(Node):
         return False
 
     def set_overlay_detectors(self, task1: bool, task2: bool) -> bool:
-        """Independently enable/disable the Task 1 and Task 2 detectors."""
-        self._overlay_task1 = bool(task1)
-        self._overlay_task2 = bool(task2)
+        """Independently enable/disable the Task 1 and Task 2 detectors.
+
+        Idempotent: repeated state pushes (from the periodic status poll) that
+        don't actually change the detector mask are no-ops, so they don't
+        clear the detection list — which was producing brief overlay flicker.
+        """
+        new_t1, new_t2 = bool(task1), bool(task2)
+        if new_t1 == self._overlay_task1 and new_t2 == self._overlay_task2:
+            return True
+        self._overlay_task1 = new_t1
+        self._overlay_task2 = new_t2
         any_on = self._overlay_task1 or self._overlay_task2
         self._overlay_enabled = any_on
         self._overlay_mode = (
@@ -803,6 +907,44 @@ class VideoStreamNode(Node):
             f"Overlay detectors: task1={self._overlay_task1} task2={self._overlay_task2}"
         )
         return True
+
+    @staticmethod
+    def _dedupe_detections(dets):
+        """Spatially dedupe across detector passes.
+
+        Two detections collide when their bbox centers are within
+        max(r_a, r_b) * 0.7 — the same minDist-style rule used inside each
+        detector — to prevent the Hough + contour passes (or Task 1 + Task 2
+        running together) from drawing two boxes around one physical circle.
+        Higher-confidence detections win.
+        """
+        out = []
+        for d in sorted(dets, key=lambda x: -float(x.get('confidence', 0) or 0)):
+            try:
+                bx = float(d.get('bbox_x', 0) or 0)
+                by = float(d.get('bbox_y', 0) or 0)
+                bw = float(d.get('bbox_w', 0) or 0)
+                bh = float(d.get('bbox_h', 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if bw <= 0 or bh <= 0:
+                continue
+            cx, cy = bx + bw / 2.0, by + bh / 2.0
+            r = max(bw, bh) / 2.0
+            collide = False
+            for k in out:
+                kbx = float(k.get('bbox_x', 0) or 0)
+                kby = float(k.get('bbox_y', 0) or 0)
+                kbw = float(k.get('bbox_w', 0) or 0)
+                kbh = float(k.get('bbox_h', 0) or 0)
+                kcx, kcy = kbx + kbw / 2.0, kby + kbh / 2.0
+                kr = max(kbw, kbh) / 2.0
+                if ((cx - kcx) ** 2 + (cy - kcy) ** 2) ** 0.5 < max(r, kr) * 0.7:
+                    collide = True
+                    break
+            if not collide:
+                out.append(d)
+        return out
 
     def start_overlay(self):
         # Default: enable Task 1 (preserves prior behaviour for /overlay/enable).

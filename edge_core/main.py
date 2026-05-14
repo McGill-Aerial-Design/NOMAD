@@ -531,14 +531,33 @@ def run(
     # set_verify_circle_change_fn: color-agnostic circle detection before/after
     # Compares circles in pre/post spray images. If >20% pixel change, pass.
     def _verify_circle_change(pre_spray_path: str, post_spray_path: str) -> bool:
-        """Compare pre/post spray images using color-agnostic circle detection."""
+        """Compare pre/post spray images using color-agnostic circle detection.
+
+        Primary verifier (ColorAgnosticCircleVerifier) does any-shape detection
+        plus a colour-agnostic mean Lab deltaE / pixel-change delta inside the
+        matched ROI — passes on >=20% change regardless of hue. The HSV-gated
+        CircleChangeVerifier remains available as an opt-in fallback for
+        Task 2 runs where we know the paper chemistry is purple→blue: set
+        NOMAD_SPRAY_VERIFY=hsv to enable it.
+        """
         try:
-            from .task2_circle_verify import CircleChangeVerifier
-            verifier = CircleChangeVerifier(
-                change_threshold=0.20,
-                pixel_diff_threshold=30,
-                match_distance_px=50,
+            from .task2_circle_verify import (
+                ColorAgnosticCircleVerifier,
+                CircleChangeVerifier,
             )
+            verify_mode = (os.environ.get("NOMAD_SPRAY_VERIFY") or "").strip().lower()
+            if verify_mode == "hsv":
+                verifier = CircleChangeVerifier(
+                    change_threshold=0.20,
+                    pixel_diff_threshold=30,
+                    match_distance_px=50,
+                )
+            else:
+                verifier = ColorAgnosticCircleVerifier(
+                    change_threshold=0.20,
+                    pixel_diff_threshold=30,
+                    match_distance_px=50,
+                )
             before = verifier.capture_snapshot_from_file(pre_spray_path)
             after = verifier.capture_snapshot_from_file(post_spray_path)
             result = verifier.compare(before, after)
@@ -772,6 +791,56 @@ def run(
         source is publishing through /api/detections, use the freshest bbox and
         range data available.
         """
+        # Image-only targets (Task 2 shape detector) live in the bridge —
+        # they never enter app.state.detected_objects, so prefer the bridge's
+        # current task2 circle list when the spray target is image_only.
+        image_only = bool(getattr(target_or_id, "image_only", False))
+        if image_only:
+            try:
+                from .video_stream_manager import get_video_stream_manager as _gvm
+                _mgr = _gvm()
+                if _mgr is not None:
+                    raw = _mgr.get_overlay_detections(source="task2")
+                    shape_dets = raw.get("detections", []) if isinstance(raw, dict) else []
+                    best = None
+                    best_score = float("inf")
+                    for d in shape_dets:
+                        try:
+                            bw = float(d.get("bbox_w", 0) or 0)
+                            bh = float(d.get("bbox_h", 0) or 0)
+                        except (TypeError, ValueError):
+                            continue
+                        if bw <= 0 or bh <= 0:
+                            continue
+                        # Pick the highest-confidence circle currently visible.
+                        score = -float(d.get("confidence", 0) or 0)
+                        if score < best_score:
+                            best = d
+                            best_score = score
+                    if best is not None:
+                        bx = float(best.get("bbox_x", 0) or 0)
+                        by = float(best.get("bbox_y", 0) or 0)
+                        bw = float(best.get("bbox_w", 0) or 0)
+                        bh = float(best.get("bbox_h", 0) or 0)
+                        rng = best.get("range_m")
+                        try:
+                            rng_f = float(rng) if rng is not None else None
+                        except (TypeError, ValueError):
+                            rng_f = None
+                        return {
+                            "cx": bx + bw / 2.0,
+                            "cy": by + bh / 2.0,
+                            "bbox_x": bx,
+                            "bbox_y": by,
+                            "bbox_w": bw,
+                            "bbox_h": bh,
+                            "range_m": rng_f,
+                            "confidence": best.get("confidence", 0),
+                            "source": "task2_shape",
+                        }
+            except Exception as e:
+                logger.debug(f"Task 2 shape detection lookup failed: {e}")
+
         try:
             target_x = getattr(target_or_id, "x", None)
             target_y = getattr(target_or_id, "y", None)

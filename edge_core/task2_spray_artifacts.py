@@ -42,6 +42,70 @@ DEFAULT_RTSP_URL = os.environ.get(
 )
 
 
+def _retention_keep_last() -> int:
+    """How many of the most recent spray sessions to retain on disk."""
+    raw = os.environ.get("NOMAD_SPRAY_KEEP_LAST", "20")
+    try:
+        n = int(raw)
+        return max(1, n)
+    except (TypeError, ValueError):
+        return 20
+
+
+def _dir_size_bytes(path: str) -> int:
+    total = 0
+    try:
+        for root, _dirs, files in os.walk(path):
+            for f in files:
+                try:
+                    total += os.path.getsize(os.path.join(root, f))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return total
+
+
+def sweep_old_sessions(keep_last: Optional[int] = None) -> None:
+    """Delete all but the most recent `keep_last` spray sessions.
+
+    Called once at process start and again on every session finalisation so
+    ~/.nomad/spray_sessions/ stays bounded across multi-day flights.
+    """
+    keep = keep_last if keep_last is not None else _retention_keep_last()
+    try:
+        if not os.path.isdir(SESSIONS_ROOT):
+            return
+        entries = []
+        for name in os.listdir(SESSIONS_ROOT):
+            full = os.path.join(SESSIONS_ROOT, name)
+            if not os.path.isdir(full):
+                continue
+            try:
+                mtime = os.path.getmtime(full)
+            except OSError:
+                continue
+            entries.append((mtime, full))
+        if len(entries) <= keep:
+            return
+        entries.sort(reverse=True)  # newest first
+        to_delete = entries[keep:]
+        freed_bytes = 0
+        for _mtime, full in to_delete:
+            freed_bytes += _dir_size_bytes(full)
+            try:
+                shutil.rmtree(full)
+            except OSError as e:
+                logger.warning(f"Spray retention: failed to remove {full}: {e}")
+        logger.info(
+            "Spray retention sweep: removed %d session(s), freed %.1f MB "
+            "(kept newest %d under %s)",
+            len(to_delete), freed_bytes / (1024 * 1024), keep, SESSIONS_ROOT,
+        )
+    except Exception as e:
+        logger.warning(f"Spray retention sweep failed: {e}")
+
+
 @dataclass
 class SpraySession:
     session_id: str
@@ -67,6 +131,8 @@ class SprayArtifactManager:
         self._current: Optional[SpraySession] = None
         self._last:    Optional[SpraySession] = None
         self._ffmpeg_proc: Optional[subprocess.Popen] = None
+        # Bound disk usage at startup — old runs might have accumulated.
+        sweep_old_sessions()
 
     # ------------------------------------------------------------------ #
     def set_capture_photo_fn(self, fn: Callable[[], Optional[str]]) -> None:
@@ -143,6 +209,8 @@ class SprayArtifactManager:
         self._last = sess
         self._current = None
         logger.info(f"Spray session {sess.session_id} finalised: {sess.to_dict()}")
+        # Keep ~/.nomad/spray_sessions bounded — runs every finalisation.
+        sweep_old_sessions()
         return sess
 
     # ------------------------------------------------------------------ #
