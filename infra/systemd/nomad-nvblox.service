@@ -13,8 +13,8 @@ Group=mad
 WorkingDirectory=/home/mad/NOMAD
 EnvironmentFile=/home/mad/NOMAD/config/nomad.env
 
-ExecStart=/home/mad/NOMAD/scripts/services/nvblox.sh start
-ExecStop=/home/mad/NOMAD/scripts/services/nvblox.sh stop
+ExecStart=/bin/bash /home/mad/NOMAD/scripts/services/nvblox.sh start
+ExecStop=/bin/bash /home/mad/NOMAD/scripts/services/nvblox.sh stop
 
 StandardOutput=journal
 StandardError=journal

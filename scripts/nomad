@@ -71,11 +71,11 @@ run_one() {
     local svc="$1"; shift
     local action="$1"; shift || true
     local script="$SERVICES_DIR/${svc}.sh"
-    if [ ! -x "$script" ]; then
-        echo "[nomad] no such service: $svc (script $script missing or not executable)" >&2
+    if [ ! -f "$script" ]; then
+        echo "[nomad] no such service: $svc (script $script missing)" >&2
         return 2
     fi
-    "$script" "$action" "$@"
+    bash "$script" "$action" "$@"
 }
 
 cmd_list() {
@@ -142,7 +142,7 @@ cmd_status_all() {
     local s rc=0
     for s in "${SERVICE_ORDER[@]}"; do
         printf "  %-22s " "$s"
-        "$SERVICES_DIR/${s}.sh" status || rc=$?
+           bash "$SERVICES_DIR/${s}.sh" status || rc=$?
     done
     return $rc
 }

@@ -13,8 +13,8 @@ Group=mad
 WorkingDirectory=/home/mad/NOMAD
 EnvironmentFile=/home/mad/NOMAD/config/nomad.env
 
-ExecStart=/home/mad/NOMAD/scripts/services/video_bridge.sh start
-ExecStop=/home/mad/NOMAD/scripts/services/video_bridge.sh stop
+ExecStart=/bin/bash /home/mad/NOMAD/scripts/services/video_bridge.sh start
+ExecStop=/bin/bash /home/mad/NOMAD/scripts/services/video_bridge.sh stop
 
 StandardOutput=journal
 StandardError=journal

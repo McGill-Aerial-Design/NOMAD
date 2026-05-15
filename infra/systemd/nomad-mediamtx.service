@@ -14,8 +14,8 @@ Group=mad
 WorkingDirectory=/home/mad/NOMAD
 EnvironmentFile=/home/mad/NOMAD/config/nomad.env
 
-ExecStart=/home/mad/NOMAD/scripts/services/mediamtx.sh start
-ExecStop=/home/mad/NOMAD/scripts/services/mediamtx.sh stop
+ExecStart=/bin/bash /home/mad/NOMAD/scripts/services/mediamtx.sh start
+ExecStop=/bin/bash /home/mad/NOMAD/scripts/services/mediamtx.sh stop
 
 StandardOutput=journal
 StandardError=journal
