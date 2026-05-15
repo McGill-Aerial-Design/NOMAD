@@ -811,6 +811,8 @@ namespace NOMAD.MissionPlanner
             {
                 JetsonTailscaleIP = _config.TailscaleIP,
                 LtePort = _config.LteMavlinkPort,
+                LteRemoteHost = _config.LteRemoteHost,
+                LteRemotePort = _config.LteRemotePort,
                 RadioMasterPort = _config.RadioMasterPort,
                 AutoFailoverEnabled = _config.AutoFailoverEnabled,
                 PreferredLink = _config.PreferredMavlinkLink switch

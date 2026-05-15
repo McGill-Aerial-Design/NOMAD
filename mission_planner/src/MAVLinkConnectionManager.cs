@@ -110,6 +110,8 @@ namespace NOMAD.MissionPlanner
         {
             public string JetsonTailscaleIP { get; set; } = "100.85.121.98";
             public int LtePort { get; set; } = 14560;
+            public string LteRemoteHost { get; set; } = "";
+            public int LteRemotePort { get; set; } = 0;
 
             public string RadioMasterConnectionType { get; set; } = "UDP";
             public int RadioMasterPort { get; set; } = 14550;
@@ -252,8 +254,8 @@ namespace NOMAD.MissionPlanner
                 LocalPort = _config.RouterLocalPort,
                 DedupEnabled = _config.RouterDedupEnabled,
                 LteBindPort = _config.LtePort,
-                LteRemoteHost = _config.JetsonTailscaleIP,
-                LteRemotePort = _config.LtePort,
+                LteRemoteHost = _config.LteRemoteHost,
+                LteRemotePort = _config.LteRemotePort,
                 RadioIsSerial = string.Equals(_config.RadioMasterConnectionType, "COM", StringComparison.OrdinalIgnoreCase),
                 RadioBindPort = _config.RadioMasterPort,
                 RadioComPort = _config.RadioMasterComPort,

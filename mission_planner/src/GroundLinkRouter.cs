@@ -409,7 +409,7 @@ namespace NOMAD.MissionPlanner
                 bool isDuplicate = false;
                 if (_cfg.DedupEnabled)
                 {
-                    var key = new DedupKey(frame.Sysid, frame.Compid, frame.Msgid, frame.Seq);
+                    var key = new DedupKey(frame.Sysid, frame.Compid, frame.Msgid, frame.Seq, frame.RawHash);
                     lock (_dedupLock)
                     {
                         if (_seenFrames.TryGetValue(key, out var t) && (DateTime.UtcNow - t) < DEDUP_WINDOW)
@@ -752,11 +752,12 @@ namespace NOMAD.MissionPlanner
             public readonly byte Compid;
             public readonly uint Msgid;
             public readonly byte Seq;
+            public readonly uint RawHash;
 
-            public DedupKey(byte sysid, byte compid, uint msgid, byte seq)
-            { Sysid = sysid; Compid = compid; Msgid = msgid; Seq = seq; }
+            public DedupKey(byte sysid, byte compid, uint msgid, byte seq, uint rawHash)
+            { Sysid = sysid; Compid = compid; Msgid = msgid; Seq = seq; RawHash = rawHash; }
 
-            public bool Equals(DedupKey o) => Sysid == o.Sysid && Compid == o.Compid && Msgid == o.Msgid && Seq == o.Seq;
+            public bool Equals(DedupKey o) => Sysid == o.Sysid && Compid == o.Compid && Msgid == o.Msgid && Seq == o.Seq && RawHash == o.RawHash;
             public override bool Equals(object o) => o is DedupKey k && Equals(k);
             public override int GetHashCode()
             {
@@ -767,6 +768,7 @@ namespace NOMAD.MissionPlanner
                     h = h * 31 + Compid;
                     h = h * 31 + (int)Msgid;
                     h = h * 31 + Seq;
+                    h = h * 31 + (int)RawHash;
                     return h;
                 }
             }
@@ -883,6 +885,7 @@ namespace NOMAD.MissionPlanner
             // We have to copy the raw frame because the parser reuses _buf.
             var raw = new byte[_expected];
             Buffer.BlockCopy(_buf, 0, raw, 0, _expected);
+            uint rawHash = ComputeFnv1a(raw, _expected);
 
             onFrame(new MavlinkFrame
             {
@@ -893,10 +896,25 @@ namespace NOMAD.MissionPlanner
                 Compid = compid,
                 Msgid = msgid,
                 Seq = seq,
+                RawHash = rawHash,
                 Payload = raw,
                 PayloadOffset = payloadOffset,
                 PayloadLength = payloadLen,
             });
+        }
+
+        private static uint ComputeFnv1a(byte[] data, int length)
+        {
+            unchecked
+            {
+                uint hash = 2166136261u;
+                for (int i = 0; i < length; i++)
+                {
+                    hash ^= data[i];
+                    hash *= 16777619u;
+                }
+                return hash;
+            }
         }
     }
 
@@ -909,6 +927,7 @@ namespace NOMAD.MissionPlanner
         public byte Compid;
         public uint Msgid;
         public byte Seq;
+        public uint RawHash;
         public byte[] Payload;       // alias of Raw — payload begins at PayloadOffset
         public int PayloadOffset;
         public int PayloadLength;
