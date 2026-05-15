@@ -216,16 +216,20 @@ namespace NOMAD.MissionPlanner
             {
                 Text = "Circle Detectors:",
                 Location = new Point(ServiceLeftCol, yOffset),
-                Size = new Size(140, 22),
+                Size = new Size(110, 22),
                 ForeColor = Color.LightGray,
                 Font = new Font("Segoe UI", 9, FontStyle.Bold),
             };
             _servicesPanel.Controls.Add(lblDetectorTitle);
 
+            // Checkboxes shift right of the title label so the indicator boxes
+            // aren't hidden behind the (transparent but click-blocking) label
+            // bounds. Spacing here matches the screenshot-driven layout.
+            int detectorCol = ServiceLeftCol + 130;
             _chkDetectorTask1 = new CheckBox
             {
                 Text = "Task 1 (HSV color)",
-                Location = new Point(ServiceStatusCol, yOffset + 2),
+                Location = new Point(detectorCol, yOffset + 2),
                 Size = new Size(150, 20),
                 ForeColor = Color.LightGray,
                 BackColor = Color.Transparent,
@@ -236,7 +240,7 @@ namespace NOMAD.MissionPlanner
             _chkDetectorTask2 = new CheckBox
             {
                 Text = "Task 2 (shape)",
-                Location = new Point(ServiceStatusCol + 155, yOffset + 2),
+                Location = new Point(detectorCol + 155, yOffset + 2),
                 Size = new Size(130, 20),
                 ForeColor = Color.LightGray,
                 BackColor = Color.Transparent,

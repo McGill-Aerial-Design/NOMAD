@@ -784,20 +784,50 @@ class VideoStreamNode(Node):
         h, w = frame.shape[:2]
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray = cv2.medianBlur(gray, 5)
+        # Color-agnostic edge-support map: a real circular paper target has a
+        # crisp, mostly-continuous boundary against whatever's behind it. Wall
+        # texture and lighting gradients produce Hough/contour "circles" whose
+        # perimeter isn't actually backed by edge pixels — we reject those by
+        # sampling points around the candidate's perimeter and requiring that
+        # a high fraction land on Canny edges.
+        edge_map = cv2.Canny(gray, 60, 140)
+        edge_map = cv2.dilate(
+            edge_map, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+            iterations=1,
+        )
+        _MIN_EDGE_SUPPORT = 0.55     # fraction of perimeter samples on an edge
+        _MAX_CIRCLES_PER_FRAME = 6
+
+        def _passes_edge_gate(cx_i: int, cy_i: int, r_i: int) -> bool:
+            if r_i <= 0:
+                return False
+            n = max(24, int(2 * math.pi * r_i / 4))
+            angles = np.linspace(0.0, 2.0 * math.pi, n, endpoint=False)
+            xs = (cx_i + r_i * np.cos(angles)).astype(np.int32)
+            ys = (cy_i + r_i * np.sin(angles)).astype(np.int32)
+            in_bounds = (xs >= 0) & (xs < w) & (ys >= 0) & (ys < h)
+            if not in_bounds.any():
+                return False
+            xs = xs[in_bounds]; ys = ys[in_bounds]
+            hits = int(np.count_nonzero(edge_map[ys, xs]))
+            return (hits / float(xs.size)) >= _MIN_EDGE_SUPPORT
+
         out = []
         claimed = []  # list of (cx, cy, r) we've already accepted
 
         # ---- 1. Hough circles ----
         try:
-            min_r = 12
+            min_r = 18
             max_r = max(40, min(h, w) // 2)
             circles = cv2.HoughCircles(
-                gray, cv2.HOUGH_GRADIENT, dp=1.2, minDist=min_r * 2,
-                param1=120, param2=35, minRadius=min_r, maxRadius=max_r,
+                gray, cv2.HOUGH_GRADIENT, dp=1.2, minDist=min_r * 3,
+                param1=120, param2=60, minRadius=min_r, maxRadius=max_r,
             )
             if circles is not None:
                 for c in circles[0]:
                     cx, cy, r = int(c[0]), int(c[1]), int(c[2])
+                    if not _passes_edge_gate(cx, cy, r):
+                        continue
                     claimed.append((cx, cy, r))
                     rng = self._sample_depth_at(cx, cy, w, h)
                     out.append({
@@ -825,7 +855,7 @@ class VideoStreamNode(Node):
                 iterations=1,
             )
             contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            min_r = 12
+            min_r = 18
             max_r = max(40, min(h, w) // 2)
             min_area = math.pi * min_r * min_r
             max_area = math.pi * max_r * max_r
@@ -837,11 +867,11 @@ class VideoStreamNode(Node):
                 if perim < 1.0:
                     continue
                 circularity = (4.0 * math.pi * area) / (perim * perim)
-                if circularity < 0.78:
+                if circularity < 0.85:
                     continue
                 hull = cv2.convexHull(c)
                 hull_area = cv2.contourArea(hull)
-                if hull_area < 1.0 or area / hull_area < 0.85:
+                if hull_area < 1.0 or area / hull_area < 0.90:
                     continue
                 (cx_f, cy_f), radius = cv2.minEnclosingCircle(c)
                 cx, cy, r = int(cx_f), int(cy_f), int(radius)
@@ -850,6 +880,8 @@ class VideoStreamNode(Node):
                 # Skip if a Hough circle already claimed this region.
                 if any(((cx - ex) ** 2 + (cy - ey) ** 2) ** 0.5 < max(r, er) * 0.7
                        for ex, ey, er in claimed):
+                    continue
+                if not _passes_edge_gate(cx, cy, r):
                     continue
                 claimed.append((cx, cy, r))
                 x, y, bw, bh = cv2.boundingRect(c)
@@ -871,6 +903,11 @@ class VideoStreamNode(Node):
         except cv2.error:
             pass
 
+        # Cap to top-N by confidence so a noisy frame can never spam the
+        # overlay (and downstream targeting) with 20+ candidates.
+        if len(out) > _MAX_CIRCLES_PER_FRAME:
+            out.sort(key=lambda d: float(d.get("confidence", 0.0)), reverse=True)
+            out = out[:_MAX_CIRCLES_PER_FRAME]
         return out
 
     def set_overlay_mode(self, mode: str) -> bool:

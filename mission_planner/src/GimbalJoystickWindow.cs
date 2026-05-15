@@ -2,7 +2,7 @@
 // NOMAD Caddx Gimbal Joystick — Floating Dockable Window
 // ============================================================
 // Rate-controlled 2D joystick that streams MAV_CMD_DO_MOUNT_CONTROL
-// angle commands (pitch/yaw) to the Caddx brushless gimbal mount on
+// angle commands (pitch/roll) to the Caddx brushless gimbal mount on
 // the Cube Orange. Mode buttons send MAV_CMD_DO_MOUNT_CONFIGURE.
 //
 // This is independent from the ZED tilt servo (PayloadControlPanel),
@@ -47,11 +47,12 @@ namespace NOMAD.MissionPlanner
         // ============================================================
         private const int   STREAM_HZ          = 20;
         private const float DEFAULT_MAX_RATE   = 60f;   // deg/sec at full stick
-        // Matches MNT1_PITCH_MIN/MAX, MNT1_YAW_MIN/MAX on the Caddx mount.
+        private const float KEY_NUDGE_DEG      = 2.0f;
+        // Matches the mount pitch/roll limits on the Caddx mount.
         private const float PITCH_MIN_DEG      = -90f;
         private const float PITCH_MAX_DEG      =  90f;
-        private const float YAW_MIN_DEG        = -170f;
-        private const float YAW_MAX_DEG        =  170f;
+        private const float ROLL_MIN_DEG       = -30f;
+        private const float ROLL_MAX_DEG       =  30f;
         private const float STICK_DEADZONE     = 0.06f;
 
         // ============================================================
@@ -59,37 +60,29 @@ namespace NOMAD.MissionPlanner
         // ============================================================
         private readonly NOMADConfig _config;
 
-        // Stick: normalized [-1,1] x = yaw rate, y = pitch rate (up = +pitch).
+        // Stick: normalized [-1,1] x = roll rate, y = pitch rate (up = +pitch).
         private float _stickX, _stickY;
         // Integrated target angles (deg). Caddx serial driver in AP only accepts
         // angle commands, so we integrate stick rate → angle locally.
-        private float _targetPitch, _targetYaw;
+        private float _targetPitch, _targetRoll;
         private float _maxRateDegSec = DEFAULT_MAX_RATE;
-        // Gimbal device id (0 = broadcast / primary). MNT1 = 1, MNT2 = 2 if multi-mount.
-        private byte _gimbalDeviceId = 0;
-        // Latching gimbal-manager flags: pitch+yaw lock to world-frame by default.
-        private GimbalManagerFlags _flags = GimbalManagerFlags.PITCH_LOCK | GimbalManagerFlags.YAW_LOCK;
+        // Mount mode currently selected for the Caddx mount.
+        private MountMode _mountMode = MountMode.MavlinkTargeting;
         private string _modeLabel = "MAVLINK";
 
-        // Mirror of mavlink_msgs GIMBAL_MANAGER_FLAGS bitmask — kept local so we
-        // don't depend on this enum being present in the bundled MAVLink build.
-        [Flags]
-        private enum GimbalManagerFlags : uint
+        private enum MountMode
         {
-            NONE          = 0,
-            RETRACT       = 1,
-            NEUTRAL       = 2,
-            ROLL_LOCK     = 4,
-            PITCH_LOCK    = 8,
-            YAW_LOCK      = 16,
-            RC_EXCLUSIVE  = 32,
-            RC_MIXED      = 64,
+            Retract = 0,
+            Neutral = 1,
+            MavlinkTargeting = 2,
+            RcTargeting = 3,
         }
 
         // UI
         private JoystickPad _pad;
-        private Label _lblPitch, _lblYaw, _lblMode, _lblStatus, _lblRate;
+        private Label _lblPitch, _lblRoll, _lblMode, _lblStatus, _lblRate;
         private TrackBar _trkRate;
+        private Panel _ratePanel;
         private Button _btnRetract, _btnNeutral, _btnRcTgt, _btnMavTgt, _btnCenter, _btnLevel;
         private CheckBox _chkTopMost;
         private Timer _streamTimer;
@@ -110,6 +103,8 @@ namespace NOMAD.MissionPlanner
             MinimumSize = new Size(360, 460);
             ClientSize = new Size(380, 500);
             ShowInTaskbar = false;
+            KeyPreview = true;
+            KeyDown += OnWindowKeyDown;
 
             // Position near top-right corner of screen
             try
@@ -125,9 +120,9 @@ namespace NOMAD.MissionPlanner
             _streamTimer.Tick += OnStreamTick;
             _streamTimer.Start();
 
-            // No explicit "mode set" call needed for gimbal-manager v2 — sending
-            // PITCHYAW with pitch/yaw lock flags is sufficient. Optionally we could
-            // call DO_GIMBAL_MANAGER_CONFIGURE to claim primary control sysid.
+            // Default to MAVLink targeting so the first joystick or keyboard input
+            // immediately drives the mount.
+            SendMountConfigure(_mountMode);
             UpdateModeLabel();
 
             FormClosed += (s, e) =>
@@ -166,58 +161,64 @@ namespace NOMAD.MissionPlanner
 
             // Target readouts
             _lblPitch = MakeReadout("Pitch:  +0.0°", new Point(20, 268));
-            _lblYaw   = MakeReadout("Yaw:    +0.0°", new Point(190, 268));
+            _lblRoll  = MakeReadout("Roll:   +0.0°", new Point(190, 268));
             _lblMode  = MakeReadout("Mode: MAVLINK", new Point(20, 290));
-            Controls.Add(_lblPitch); Controls.Add(_lblYaw); Controls.Add(_lblMode);
+            Controls.Add(_lblPitch); Controls.Add(_lblRoll); Controls.Add(_lblMode);
 
             // Rate slider
-            Controls.Add(new Label
+            _ratePanel = new Panel
+            {
+                Location = new Point(12, 314),
+                Size = new Size(356, 48),
+                BackColor = Color.FromArgb(50, 50, 58),
+            };
+            _ratePanel.SendToBack();
+            Controls.Add(_ratePanel);
+
+            _ratePanel.Controls.Add(new Label
             {
                 Text = "Max Rate (deg/s):",
-                Location = new Point(20, 322),
+                Location = new Point(8, 9),
                 AutoSize = true,
                 ForeColor = NOMADTheme.TEXT_SECONDARY,
             });
             _trkRate = new TrackBar
             {
-                Location = new Point(150, 318),
+                Location = new Point(126, 3),
                 Size = new Size(140, 30),
                 Minimum = 10, Maximum = 180,
                 Value = (int)DEFAULT_MAX_RATE,
                 TickStyle = TickStyle.None,
-                BackColor = NOMADTheme.BG_DARK,
+                BackColor = Color.FromArgb(50, 50, 58),
             };
             _trkRate.ValueChanged += (s, e) =>
             {
                 _maxRateDegSec = _trkRate.Value;
                 _lblRate.Text = $"{_trkRate.Value}";
             };
-            Controls.Add(_trkRate);
+            _ratePanel.Controls.Add(_trkRate);
+            _trkRate.SendToBack();
             _lblRate = new Label
             {
                 Text = $"{_trkRate.Value}",
-                Location = new Point(295, 322),
+                Location = new Point(270, 9),
                 AutoSize = true,
                 ForeColor = NOMADTheme.TEXT_PRIMARY,
             };
-            Controls.Add(_lblRate);
+            _ratePanel.Controls.Add(_lblRate);
 
             // Mode buttons row 1: control modes (gimbal-manager flag presets)
             int y = 354;
-            _btnMavTgt  = MakeButton("MAVLink Tgt", new Point(12,  y), 95, c => SetModePreset("MAVLINK",
-                                            GimbalManagerFlags.PITCH_LOCK | GimbalManagerFlags.YAW_LOCK));
-            _btnRcTgt   = MakeButton("RC Tgt",      new Point(112, y), 80, c => SetModePreset("RC",
-                                            GimbalManagerFlags.RC_EXCLUSIVE));
-            _btnNeutral = MakeButton("Neutral",     new Point(197, y), 80, c => SetModePreset("NEUTRAL",
-                                            GimbalManagerFlags.NEUTRAL));
-            _btnRetract = MakeButton("Retract",     new Point(282, y), 80, c => SetModePreset("RETRACT",
-                                            GimbalManagerFlags.RETRACT));
+            _btnMavTgt  = MakeButton("MAVLink Tgt", new Point(12,  y), 95, c => SetModePreset("MAVLINK", MountMode.MavlinkTargeting));
+            _btnRcTgt   = MakeButton("RC Tgt",      new Point(112, y), 80, c => SetModePreset("RC", MountMode.RcTargeting));
+            _btnNeutral = MakeButton("Neutral",     new Point(197, y), 80, c => SetModePreset("NEUTRAL", MountMode.Neutral));
+            _btnRetract = MakeButton("Retract",     new Point(282, y), 80, c => SetModePreset("RETRACT", MountMode.Retract));
             Controls.Add(_btnMavTgt); Controls.Add(_btnRcTgt); Controls.Add(_btnNeutral); Controls.Add(_btnRetract);
 
             // Quick angle presets
             y = 388;
             _btnCenter = MakeButton("Center (0°/0°)",   new Point(12, y), 130, c => SnapAngles(0, 0));
-            _btnLevel  = MakeButton("Look Down (-90°)", new Point(150, y), 130, c => SnapAngles(-90, _targetYaw));
+            _btnLevel  = MakeButton("Look Down (-90°)", new Point(150, y), 130, c => SnapAngles(-90, _targetRoll));
             Controls.Add(_btnCenter); Controls.Add(_btnLevel);
 
             _chkTopMost = new CheckBox
@@ -243,7 +244,7 @@ namespace NOMAD.MissionPlanner
             // Hint
             Controls.Add(new Label
             {
-                Text = "Drag pad: pitch (Y) / yaw (X). Release = stop.",
+                Text = "Drag pad: pitch (Y) / roll (X). Arrow keys nudge both axes. Release = stop.",
                 Location = new Point(12, 452),
                 AutoSize = true,
                 ForeColor = NOMADTheme.TEXT_SECONDARY,
@@ -289,30 +290,31 @@ namespace NOMAD.MissionPlanner
             if (active)
             {
                 _targetPitch += sy * _maxRateDegSec * dt;
-                _targetYaw   += sx * _maxRateDegSec * dt;
+                _targetRoll  -= sx * _maxRateDegSec * dt;
 
                 if (_targetPitch < PITCH_MIN_DEG) _targetPitch = PITCH_MIN_DEG;
                 if (_targetPitch > PITCH_MAX_DEG) _targetPitch = PITCH_MAX_DEG;
-                if (_targetYaw   < YAW_MIN_DEG)   _targetYaw   = YAW_MIN_DEG;
-                if (_targetYaw   > YAW_MAX_DEG)   _targetYaw   = YAW_MAX_DEG;
+                if (_targetRoll  < ROLL_MIN_DEG)  _targetRoll  = ROLL_MIN_DEG;
+                if (_targetRoll  > ROLL_MAX_DEG)  _targetRoll  = ROLL_MAX_DEG;
             }
 
             _lblPitch.Text = $"Pitch: {_targetPitch,+6:0.0}°";
-            _lblYaw.Text   = $"Yaw:   {_targetYaw,+6:0.0}°";
+            _lblRoll.Text  = $"Roll:  {_targetRoll,+6:0.0}°";
 
-            // RETRACT/NEUTRAL latching modes: no streaming.
-            if ((_flags & (GimbalManagerFlags.RETRACT | GimbalManagerFlags.NEUTRAL)) != 0)
+            // Only MAVLink targeting streams our local stick state.
+            if (_mountMode != MountMode.MavlinkTargeting)
                 return;
 
             // Only send while the stick is active. Once released, the gimbal holds
             // its last commanded angle on its own — no need to keep pinging.
             if (active)
-                SendPitchYawAngle(_targetPitch, _targetYaw);
+                SendPitchRollAngle(_targetPitch, _targetRoll);
         }
 
-        // Send DO_GIMBAL_MANAGER_PITCHYAW with absolute angles (rates = NaN).
-        // Caddx serial mount driver in ArduPilot only honours the angle path.
-        private void SendPitchYawAngle(float pitchDeg, float yawDeg)
+        // Send DO_MOUNT_CONTROL with absolute pitch/roll angles.
+        // The Caddx mount exposes roll instead of yaw, so we drive the legacy
+        // mount-control path directly.
+        private void SendPitchRollAngle(float pitchDeg, float rollDeg)
         {
             if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return;
             if (_inflight) return; // drop overlapping frames during fast drag
@@ -320,9 +322,6 @@ namespace NOMAD.MissionPlanner
 
             byte sysid  = MainV2.comPort.MAV.sysid;
             byte compid = MainV2.comPort.MAV.compid;
-            // Always include PITCH_LOCK | YAW_LOCK for absolute earth-frame angles.
-            float flagsF = (float)(uint)(_flags | GimbalManagerFlags.PITCH_LOCK | GimbalManagerFlags.YAW_LOCK);
-            byte devId = _gimbalDeviceId;
 
             Task.Run(async () =>
             {
@@ -330,15 +329,44 @@ namespace NOMAD.MissionPlanner
                 {
                     await MainV2.comPort.doCommandAsync(
                         sysid, compid,
-                        MAVLink.MAV_CMD.DO_GIMBAL_MANAGER_PITCHYAW,
-                        pitchDeg, yawDeg,
-                        float.NaN, float.NaN,
-                        flagsF, 0f, devId,
+                        MAVLink.MAV_CMD.DO_MOUNT_CONTROL,
+                        pitchDeg, rollDeg,
+                        0f, 0f,
+                        0f, 0f, 2f,
                         requireack: false, uicallback: null).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
-                    BeginInvoke(new Action(() => SetStatus("Angle send failed: " + ex.Message, NOMADTheme.ERROR)));
+                    BeginInvoke(new Action(() => SetStatus("Mount send failed: " + ex.Message, NOMADTheme.ERROR)));
+                }
+                finally { _inflight = false; }
+            });
+        }
+
+        private void SendMountConfigure(MountMode mode)
+        {
+            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return;
+            if (_inflight) return;
+            _inflight = true;
+
+            byte sysid = MainV2.comPort.MAV.sysid;
+            byte compid = MainV2.comPort.MAV.compid;
+
+            Task.Run(async () =>
+            {
+                try
+                {
+                    await MainV2.comPort.doCommandAsync(
+                        sysid, compid,
+                        MAVLink.MAV_CMD.DO_MOUNT_CONFIGURE,
+                        (float)mode,
+                        1f, 1f, 1f,
+                        2f, 2f, 2f,
+                        requireack: false, uicallback: null).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    BeginInvoke(new Action(() => SetStatus("Mount mode failed: " + ex.Message, NOMADTheme.ERROR)));
                 }
                 finally { _inflight = false; }
             });
@@ -347,15 +375,14 @@ namespace NOMAD.MissionPlanner
         // ============================================================
         // Mode preset — latches a flag combo and pings the gimbal manager once
         // ============================================================
-        private void SetModePreset(string label, GimbalManagerFlags flags)
+        private void SetModePreset(string label, MountMode mode)
         {
-            _flags = flags;
+            _mountMode = mode;
             _modeLabel = label;
             UpdateModeLabel();
             SetStatus($"Mode → {label}", NOMADTheme.TEXT_PRIMARY);
 
-            // One-shot kick: send current angles so the mode flag takes effect.
-            SendPitchYawAngle(_targetPitch, _targetYaw);
+            SendMountConfigure(mode);
         }
 
         private void UpdateModeLabel()
@@ -364,18 +391,62 @@ namespace NOMAD.MissionPlanner
             _lblMode.Text = $"Mode: {_modeLabel}";
         }
 
-        private void SnapAngles(float pitch, float yaw)
+        private void SnapAngles(float pitch, float roll)
         {
-            // Presets only make sense in MAVLink-controlled flag states.
-            if ((_flags & (GimbalManagerFlags.RETRACT | GimbalManagerFlags.NEUTRAL | GimbalManagerFlags.RC_EXCLUSIVE)) != 0)
+            if (_mountMode != MountMode.MavlinkTargeting)
             {
-                _flags = GimbalManagerFlags.PITCH_LOCK | GimbalManagerFlags.YAW_LOCK;
+                _mountMode = MountMode.MavlinkTargeting;
                 _modeLabel = "MAVLINK";
                 UpdateModeLabel();
             }
             _targetPitch = pitch;
-            _targetYaw = yaw;
-            SendPitchYawAngle(pitch, yaw);
+            _targetRoll = roll;
+            SendPitchRollAngle(pitch, roll);
+        }
+
+        private void OnWindowKeyDown(object sender, KeyEventArgs e)
+        {
+            float pitchDelta = 0f;
+            float rollDelta = 0f;
+
+            switch (e.KeyCode)
+            {
+                case Keys.Up:
+                    pitchDelta = KEY_NUDGE_DEG;
+                    break;
+                case Keys.Down:
+                    pitchDelta = -KEY_NUDGE_DEG;
+                    break;
+                case Keys.Left:
+                    rollDelta = KEY_NUDGE_DEG;
+                    break;
+                case Keys.Right:
+                    rollDelta = -KEY_NUDGE_DEG;
+                    break;
+                default:
+                    return;
+            }
+
+            if (_mountMode != MountMode.MavlinkTargeting)
+            {
+                _mountMode = MountMode.MavlinkTargeting;
+                _modeLabel = "MAVLINK";
+                UpdateModeLabel();
+            }
+
+            _targetPitch = Clamp(_targetPitch + pitchDelta, PITCH_MIN_DEG, PITCH_MAX_DEG);
+            _targetRoll = Clamp(_targetRoll + rollDelta, ROLL_MIN_DEG, ROLL_MAX_DEG);
+            SendPitchRollAngle(_targetPitch, _targetRoll);
+
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+        }
+
+        private static float Clamp(float value, float min, float max)
+        {
+            if (value < min) return min;
+            if (value > max) return max;
+            return value;
         }
 
         private void SetStatus(string text, Color color)
@@ -487,8 +558,8 @@ namespace NOMAD.MissionPlanner
                     var sz = g.MeasureString("PITCH+", f);
                     g.DrawString("PITCH+", f, brush, cx - sz.Width / 2, cy - r - sz.Height - 1);
                     g.DrawString("PITCH-", f, brush, cx - sz.Width / 2, cy + r + 1);
-                    g.DrawString("YAW-",  f, brush, cx - r - g.MeasureString("YAW-", f).Width - 2, cy - 7);
-                    g.DrawString("YAW+",  f, brush, cx + r + 2, cy - 7);
+                    g.DrawString("ROLL+",  f, brush, cx - r - g.MeasureString("ROLL+", f).Width - 2, cy - 7);
+                    g.DrawString("ROLL-",  f, brush, cx + r + 2, cy - 7);
                 }
             }
         }
