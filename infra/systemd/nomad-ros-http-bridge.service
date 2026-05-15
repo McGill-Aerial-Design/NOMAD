@@ -1,0 +1,24 @@
+[Unit]
+Description=NOMAD ROS<->HTTP Bridge (in container)
+After=nomad-isaac-ros-container.service nomad-edge-core.service
+Requires=nomad-isaac-ros-container.service
+Wants=nomad-edge-core.service
+PartOf=nomad.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=mad
+Group=mad
+WorkingDirectory=/home/mad/NOMAD
+EnvironmentFile=/home/mad/NOMAD/config/nomad.env
+
+ExecStart=/home/mad/NOMAD/scripts/services/ros_http_bridge.sh start
+ExecStop=/home/mad/NOMAD/scripts/services/ros_http_bridge.sh stop
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nomad-ros-http-bridge
+
+[Install]
+WantedBy=nomad.target

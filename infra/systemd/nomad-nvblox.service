@@ -1,0 +1,24 @@
+[Unit]
+Description=NOMAD nvblox Mapping (opt-in)
+After=nomad-zed-wrapper.service
+Requires=nomad-isaac-ros-container.service nomad-zed-wrapper.service
+# NOTE: not in [Install].WantedBy=nomad.target by default. Operator-enabled
+# only. To enable: `sudo systemctl enable nomad-nvblox.service`.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=mad
+Group=mad
+WorkingDirectory=/home/mad/NOMAD
+EnvironmentFile=/home/mad/NOMAD/config/nomad.env
+
+ExecStart=/home/mad/NOMAD/scripts/services/nvblox.sh start
+ExecStop=/home/mad/NOMAD/scripts/services/nvblox.sh stop
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nomad-nvblox
+
+[Install]
+WantedBy=nomad.target

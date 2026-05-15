@@ -283,9 +283,12 @@ def run(
     # Mesh bridge is not auto-started; mesh data arrives via ros_http_bridge
     # (POST /api/task/2/slam/mesh/update -> GET /api/task/2/slam/mesh)
 
-    # Initialize video stream manager with auto-start
-    # This runs in background and will auto-start the video relay when container is ready
-    enable_video_auto_start = os.environ.get("NOMAD_VIDEO_AUTO_START", "true").lower() == "true"
+    # Video stream manager: API endpoints (/api/video/start, /api/video/stop)
+    # remain available. The in-process auto-start thread is OFF by default —
+    # nomad-video-bridge.service is the single owner of the bridge process.
+    # Set NOMAD_VIDEO_AUTO_START=true in config/nomad.env to restore the
+    # in-process safety net (not recommended; it fights the systemd unit).
+    enable_video_auto_start = os.environ.get("NOMAD_VIDEO_AUTO_START", "false").lower() == "true"
     init_video_stream_manager(
         container_name="nomad_isaac_ros",
         auto_start=enable_video_auto_start

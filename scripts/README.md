@@ -1,76 +1,100 @@
 # Scripts
 
-Organized into subfolders by purpose.
+NOMAD runtime is structured around **one CLI** (`scripts/nomad`) that
+dispatches to **one script per service** (`scripts/services/*.sh`). Each
+service script implements `start | stop | restart | status | logs` and owns
+*only* its own processes — no cross-service pkills.
 
-## Folder Layout
+## Layout
 
 ```
 scripts/
-  build/        Build and compilation scripts
-  run/          Runtime and startup scripts
-  setup/        One-time setup and provisioning
-  dev/          Local development tools
-  task1/        Task 1 AI image processing
-  hardware/     Hardware test utilities
+  nomad                CLI dispatcher — the single entry point
+  lib/common.sh        Shared helpers (logging, env loader, kill helpers)
+  services/            One script per service (8 total)
+  setup/               One-time provisioning (run once on a fresh Jetson)
+  build/               Build / compile helpers
+  dev/                 Local development + ad-hoc diagnostics
+  hardware/            Low-level hardware test utilities
 ```
 
-## build/
+## CLI quickstart
 
-| Script | Description |
-|--------|-------------|
-| `build_plugin_windows.ps1` | Build the Mission Planner C# plugin on Windows |
+```bash
+nomad list                    # show all services and their autostart flags
+nomad start all               # start the autostart set (see config/nomad.env)
+nomad stop all
+nomad status                  # status of all services
+nomad start video_bridge      # start a single service
+nomad restart ros_http_bridge
+nomad logs zed_wrapper        # tail logs for one service
+```
 
-## run/
+## Services
 
-| Script | Description |
-|--------|-------------|
-| `start_nomad_full.sh` | Full system startup (Edge Core, MAVLink, MediaMTX, Isaac ROS) |
-| `start_isaac_ros_auto.sh` | Isaac ROS container lifecycle (start/stop/restart/status/logs/shell) |
-| `restart_nomad.sh` | Kill all NOMAD processes and restart everything |
-| `launch_nvblox_performance.sh` | Launch nvblox with memory-optimized config for Orin Nano |
+The 8 services, in start order. **`all` covers every service whose
+`NOMAD_AUTOSTART_*` flag in `config/nomad.env` is true.** By default nvblox
+is OFF; everything else is ON.
+
+| Service               | Where               | Owns                                                |
+|-----------------------|---------------------|-----------------------------------------------------|
+| `edge_core`           | host                | `edge_core.main` FastAPI process                    |
+| `mavlink_router`      | host                | `mavlink-routerd`                                   |
+| `mediamtx`            | host                | `mediamtx` RTSP server                              |
+| `isaac_ros_container` | host (Docker)       | the `nomad_isaac_ros` container (`sleep infinity`)  |
+| `zed_wrapper`         | in container        | `ros2 launch zed_wrapper zed_camera.launch.py` + helper nodes |
+| `ros_http_bridge`     | in container        | `ros_http_bridge.py` (with restart loop)            |
+| `video_bridge`        | in container (via API) | `simple_video_bridge.py` via Edge Core's `/api/video/start` |
+| `nvblox`              | in container        | `nomad_zed_nvblox.launch.py` — **opt-in only**      |
+
+Services can be started/stopped **independently**. Stopping `nvblox` doesn't
+touch ZED; stopping `zed_wrapper` doesn't touch the container; stopping
+`isaac_ros_container` does cascade (everything inside it dies with it).
+
+## One-time setup
+
+```bash
+sudo bash infra/systemd/install.sh          # install per-service systemd units
+bash scripts/setup/provision_isaac_ros.sh   # clone ZED wrapper, install SDK, build packages
+```
+
+After provisioning, the container can be torn down and recreated without
+re-running provisioning (the SDK install and apt deps are persisted into the
+image via `docker commit`).
+
+## Configuration
+
+**Everything** lives in `config/nomad.env`. There is no `jetson.env` and no
+inline `export` statements in scripts. Edit `config/nomad.env`, then:
+
+```bash
+nomad restart all                           # apply changes
+# or, if running under systemd:
+sudo systemctl restart nomad.target
+```
+
+To toggle autostart for a service (e.g. enable nvblox at boot), edit the
+corresponding `NOMAD_AUTOSTART_*` flag, then re-run `sudo bash
+infra/systemd/install.sh` to reconcile the enabled set.
 
 ## setup/
 
-| Script | Description |
-|--------|-------------|
-| `setup_jetson.sh` | Full Jetson initial setup (deps, Tailscale, venv, MAVLink, firewall) |
-| `setup_service.sh` | Install systemd `nomad.service` for Edge Core |
-| `setup_ssh_jetson.ps1` | Set up passwordless SSH from Windows to Jetson |
-| `fix_power_mode_25w_v2.sh` | Add 25W MAXN power mode to Jetson Orin Nano |
+| Script                     | Description                                              |
+|----------------------------|----------------------------------------------------------|
+| `provision_isaac_ros.sh`   | One-time: clone ZED wrapper, install ZED SDK + apt deps in container, build packages, commit image |
+| `setup_jetson.sh`          | Full Jetson initial setup (deps, Tailscale, venv, MAVLink, firewall) |
+| `setup_service.sh`         | (legacy) shim — prefer `infra/systemd/install.sh`        |
+| `setup_ssh_jetson.ps1`     | Passwordless SSH from Windows to Jetson                  |
+| `fix_power_mode_25w_v2.sh` | Add 25W MAXN power mode                                  |
 
 ## dev/
 
-| Script | Description |
-|--------|-------------|
-| `run_dev.ps1` | Run Edge Core in simulation mode on Windows |
-| `run_dev.sh` | Run Edge Core in simulation mode on Linux/macOS |
+Diagnostics, USB / ZED probes, and Windows simulation entry points
+(`run_dev.ps1`, `run_dev.sh`). The historic `restart_nvblox.sh`,
+`restart_bridge.sh`, `full_restart_ros.sh`, `ros_full_launch.sh` are gone —
+their behavior is now `nomad restart nvblox`, `nomad restart ros_http_bridge`,
+etc.
 
-The `dev/` directory also contains 50+ diagnostic and test scripts for ZED camera, USB, ROS, nvblox, and mesh debugging. Key ones include:
+## build/ and hardware/
 
-| Script | Description |
-|--------|-------------|
-| `check_nvblox.sh` | Check nvblox node status |
-| `check_mesh_topics.sh` | Check mesh topic publishing |
-| `diag_zed.sh` | ZED camera diagnostics |
-| `diag_zed_usb.sh` | ZED USB connection diagnostics |
-| `full_restart_ros.sh` | Full restart of ROS components |
-| `restart_nvblox.sh` | Restart nvblox node |
-| `restart_bridge.sh` | Restart the ros_http_bridge |
-| `ros_full_launch.sh` | Full ROS launch for development |
-
-```bash
-# Windows
-.\scripts\dev\run_dev.ps1
-
-# Linux/macOS
-./scripts/dev/run_dev.sh
-```
-
-Sets `NOMAD_SIM_MODE=true` for mock hardware. API at `http://localhost:8000/docs`.
-
-## hardware/
-
-| Script | Description |
-|--------|-------------|
-| `servo_test.c` | Low-level GPIO servo test (C, uses gpiochip0) |
-| `sw_servo_test.py` | Servo sweep test wrapper (compiles and runs servo_test.c) |
+Unchanged. See the files in those directories.

@@ -1,0 +1,10 @@
+# nomad.target — pulls in the NOMAD autostart set.
+# Each nomad-*.service WantedBy=nomad.target only if that service's
+# NOMAD_AUTOSTART_* flag is true (install.sh enforces this).
+[Unit]
+Description=NOMAD - all autostart services
+After=network-online.target docker.service tailscaled.service
+Wants=network-online.target
+
+[Install]
+WantedBy=multi-user.target

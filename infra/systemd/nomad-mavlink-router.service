@@ -1,0 +1,25 @@
+[Unit]
+Description=NOMAD MAVLink Router
+After=network-online.target
+Wants=network-online.target
+PartOf=nomad.target
+
+[Service]
+Type=forking
+User=mad
+Group=mad
+WorkingDirectory=/home/mad/NOMAD
+EnvironmentFile=/home/mad/NOMAD/config/nomad.env
+
+ExecStart=/home/mad/NOMAD/scripts/services/mavlink_router.sh start
+ExecStop=/home/mad/NOMAD/scripts/services/mavlink_router.sh stop
+
+Restart=on-failure
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nomad-mavlink-router
+
+[Install]
+WantedBy=nomad.target

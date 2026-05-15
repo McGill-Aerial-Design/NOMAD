@@ -59,9 +59,10 @@ namespace NOMAD.MissionPlanner
             { "Video Stream Check", "pgrep -f gst-launch && echo 'Video Stream: Running' || echo 'Video Stream: Not running'" },
             { "Isaac ROS Status", "docker inspect -f '{{.State.Status}}' nomad_isaac_ros 2>/dev/null || echo 'Container not found'" },
             { "Git Status", "cd ~/NOMAD && git log --oneline -5 && echo '' && git status -s" },
-            { "Start NOMAD", "cd ~/NOMAD && nohup bash scripts/run/start_nomad_full.sh all > /tmp/nomad_startup.log 2>&1 & echo 'NOMAD starting in background. Check /tmp/nomad_startup.log'" },
-            { "Stop NOMAD", "cd ~/NOMAD && bash scripts/run/restart_nomad.sh 2>/dev/null; pkill -f edge_core.main; pkill -f gst-launch; echo 'NOMAD services stopped'" },
-            { "Restart NOMAD", "cd ~/NOMAD && bash scripts/run/restart_nomad.sh" },
+            { "Start NOMAD", "cd ~/NOMAD && bash scripts/nomad start all" },
+            { "Stop NOMAD", "cd ~/NOMAD && bash scripts/nomad stop all" },
+            { "Restart NOMAD", "cd ~/NOMAD && bash scripts/nomad restart all" },
+            { "NOMAD Status", "cd ~/NOMAD && bash scripts/nomad status" },
             { "Pull Latest Code", "cd ~/NOMAD && git pull origin main" },
         };
         

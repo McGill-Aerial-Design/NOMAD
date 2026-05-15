@@ -1,0 +1,34 @@
+[Unit]
+Description=NOMAD Edge Core API
+Documentation=https://github.com/NOMAD/edge_core
+After=network-online.target tailscaled.service
+Wants=network-online.target
+PartOf=nomad.target
+
+[Service]
+Type=simple
+User=mad
+Group=mad
+WorkingDirectory=/home/mad/NOMAD
+EnvironmentFile=/home/mad/NOMAD/config/nomad.env
+
+ExecStart=/home/mad/NOMAD/venv/bin/python3 -m edge_core.main \
+    --host ${NOMAD_API_HOST} --port ${NOMAD_API_PORT} --log-level info
+
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+LimitNOFILE=65536
+LimitNPROC=4096
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nomad-edge-core
+
+[Install]
+WantedBy=nomad.target

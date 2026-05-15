@@ -128,12 +128,14 @@ echo -e "${GREEN}MAVLink Router configured to send to $GCS_TAILSCALE_IP:14550${N
 # ============================================================
 echo -e "\n${YELLOW}[6/7] Setting up environment configuration...${NC}"
 
-# Copy environment file
-cp "$NOMAD_HOME/config/env/jetson.env" "$NOMAD_HOME/.env"
-
-# Update Tailscale IPs if they've changed
-sed -i "s/TAILSCALE_IP=.*/TAILSCALE_IP=$CURRENT_IP/" "$NOMAD_HOME/.env"
-sed -i "s/GCS_IP=.*/GCS_IP=$GCS_TAILSCALE_IP/" "$NOMAD_HOME/.env"
+# Set the GCS IP in the canonical config (config/nomad.env is the single source
+# of truth — no more separate jetson.env or .env files).
+NOMAD_ENV="$NOMAD_HOME/config/nomad.env"
+if [ -f "$NOMAD_ENV" ]; then
+    sed -i "s|^GCS_IP=.*|GCS_IP=$GCS_TAILSCALE_IP|" "$NOMAD_ENV"
+else
+    echo "WARNING: $NOMAD_ENV not found; copy it from the repo before continuing"
+fi
 
 echo -e "${GREEN}Environment configured with:${NC}"
 echo "  Jetson IP: $CURRENT_IP"
@@ -171,16 +173,16 @@ echo -e "\n${YELLOW}Network Configuration:${NC}"
 echo "  Jetson Tailscale IP: $CURRENT_IP"
 echo "  Ground Station IP:   $GCS_TAILSCALE_IP"
 
-echo -e "\n${YELLOW}To start NOMAD Edge Core:${NC}"
-echo "  cd $NOMAD_HOME"
-echo "  source venv/bin/activate"
-echo "  python -m edge_core.main"
+echo -e "\n${YELLOW}One-time provisioning of the Isaac ROS container:${NC}"
+echo "  bash $NOMAD_HOME/scripts/setup/provision_isaac_ros.sh"
 
-echo -e "\n${YELLOW}Or use systemd service:${NC}"
-echo "  sudo cp $NOMAD_HOME/infra/nomad.service /etc/systemd/system/"
-echo "  sudo systemctl daemon-reload"
-echo "  sudo systemctl enable nomad"
-echo "  sudo systemctl start nomad"
+echo -e "\n${YELLOW}Install systemd units (per-service) and reconcile autostart:${NC}"
+echo "  sudo bash $NOMAD_HOME/infra/systemd/install.sh"
+
+echo -e "\n${YELLOW}Start everything in the autostart set:${NC}"
+echo "  $NOMAD_HOME/scripts/nomad start all"
+echo "  # or, under systemd:"
+echo "  sudo systemctl start nomad.target"
 
 echo -e "\n${YELLOW}Test from Ground Station:${NC}"
 echo "  curl http://$CURRENT_IP:8000/health"

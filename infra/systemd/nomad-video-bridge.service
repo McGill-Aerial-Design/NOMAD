@@ -1,0 +1,24 @@
+[Unit]
+Description=NOMAD Video Bridge (RTSP relay)
+After=nomad-edge-core.service nomad-mediamtx.service nomad-isaac-ros-container.service
+Wants=nomad-zed-wrapper.service
+Requires=nomad-edge-core.service nomad-isaac-ros-container.service
+PartOf=nomad.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=mad
+Group=mad
+WorkingDirectory=/home/mad/NOMAD
+EnvironmentFile=/home/mad/NOMAD/config/nomad.env
+
+ExecStart=/home/mad/NOMAD/scripts/services/video_bridge.sh start
+ExecStop=/home/mad/NOMAD/scripts/services/video_bridge.sh stop
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nomad-video-bridge
+
+[Install]
+WantedBy=nomad.target

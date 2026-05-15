@@ -546,15 +546,12 @@ namespace NOMAD.MissionPlanner
 
         /// <summary>
         /// Restart all NOMAD services via SSH (doesn't rely on HTTP API).
-        /// Stops existing services and runs start_nomad_full.sh script.
+        /// Stops every service in reverse order, then starts the autostart set.
         /// </summary>
         public async Task<CommandResult> RestartAllServicesViaSSHAsync()
         {
-            // Use dedicated restart script that properly kills all processes (including ZED)
-            // and restarts NOMAD services in background
-            var command = "cd ~/NOMAD && bash scripts/run/restart_nomad.sh";
-            
-            return await ExecuteSSHCommandAsync(command, 30);
+            var command = "cd ~/NOMAD && bash scripts/nomad restart all";
+            return await ExecuteSSHCommandAsync(command, 60);
         }
 
         /// <summary>

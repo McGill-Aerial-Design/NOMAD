@@ -1,0 +1,25 @@
+[Unit]
+Description=NOMAD MediaMTX RTSP Server
+After=network-online.target
+Wants=network-online.target
+PartOf=nomad.target
+
+[Service]
+Type=forking
+User=mad
+Group=mad
+WorkingDirectory=/home/mad/NOMAD
+EnvironmentFile=/home/mad/NOMAD/config/nomad.env
+
+ExecStart=/home/mad/NOMAD/scripts/services/mediamtx.sh start
+ExecStop=/home/mad/NOMAD/scripts/services/mediamtx.sh stop
+
+Restart=on-failure
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nomad-mediamtx
+
+[Install]
+WantedBy=nomad.target

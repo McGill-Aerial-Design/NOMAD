@@ -2007,23 +2007,6 @@ fi
             "gcs_reachable": gcs_reachable,
         }
 
-    @app.post("/network/reconnect", tags=["Network"])
-    async def network_reconnect(request: Request):
-        """Trigger Tailscale reconnection."""
-        tailscale_manager = request.app.state.tailscale_manager
-        if not tailscale_manager:
-            raise HTTPException(
-                status_code=503, detail="Tailscale manager not initialized"
-            )
-
-        ok, detail = await tailscale_manager.reconnect()
-        return {
-            "success": ok,
-            "message": detail
-            if detail
-            else ("Tailscale reconnected" if ok else "Failed to trigger reconnection"),
-        }
-
     @app.get("/network/ping/{host}", tags=["Network"])
     async def network_ping(host: str):
         try:

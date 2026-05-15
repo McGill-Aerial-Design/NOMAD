@@ -1,0 +1,175 @@
+#!/bin/bash
+# =============================================================================
+# `nomad` — single CLI for all NOMAD services.
+#
+# Usage:
+#   nomad start <service|all>
+#   nomad stop <service|all>
+#   nomad restart <service|all>
+#   nomad status [service]
+#   nomad logs <service> [tail args]
+#   nomad list
+#   nomad config       # show resolved config/nomad.env values
+#
+# Services (start order = listed order):
+#   edge_core, mavlink_router, mediamtx,
+#   isaac_ros_container, ros_http_bridge, zed_wrapper,
+#   video_bridge, nvblox
+#
+# `all` operates on the autostart set from config/nomad.env
+# (NOMAD_AUTOSTART_* flags). Note: nvblox defaults to false.
+# =============================================================================
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+. "$SCRIPT_DIR/lib/common.sh"
+load_nomad_env || exit 1
+
+SERVICES_DIR="$SCRIPT_DIR/services"
+
+# Canonical service order — host daemons first, then container, then in-
+# container services in dependency order. `all` follows this for `start`
+# and reverses it for `stop`.
+SERVICE_ORDER=(
+    edge_core
+    mavlink_router
+    mediamtx
+    isaac_ros_container
+    ros_http_bridge
+    zed_wrapper
+    video_bridge
+    nvblox
+)
+
+# Map a CLI name to the autostart flag key.
+autostart_key_for() {
+    case "$1" in
+        edge_core)            echo "EDGE_CORE" ;;
+        mavlink_router)       echo "MAVLINK_ROUTER" ;;
+        mediamtx)             echo "MEDIAMTX" ;;
+        isaac_ros_container)  echo "ISAAC_ROS_CONTAINER" ;;
+        zed_wrapper)          echo "ZED_WRAPPER" ;;
+        ros_http_bridge)      echo "ROS_HTTP_BRIDGE" ;;
+        video_bridge)         echo "VIDEO_BRIDGE" ;;
+        nvblox)               echo "NVBLOX" ;;
+        *) return 1 ;;
+    esac
+}
+
+is_known_service() {
+    local s
+    for s in "${SERVICE_ORDER[@]}"; do
+        [ "$s" = "$1" ] && return 0
+    done
+    return 1
+}
+
+run_one() {
+    local svc="$1"; shift
+    local action="$1"; shift || true
+    local script="$SERVICES_DIR/${svc}.sh"
+    if [ ! -x "$script" ]; then
+        echo "[nomad] no such service: $svc (script $script missing or not executable)" >&2
+        return 2
+    fi
+    "$script" "$action" "$@"
+}
+
+cmd_list() {
+    printf "%-22s %-10s %s\n" "SERVICE" "AUTOSTART" "DESCRIPTION"
+    printf "%-22s %-10s %s\n" "edge_core"           "$NOMAD_AUTOSTART_EDGE_CORE"           "Edge Core REST API (host)"
+    printf "%-22s %-10s %s\n" "mavlink_router"      "$NOMAD_AUTOSTART_MAVLINK_ROUTER"      "MAVLink Router (host)"
+    printf "%-22s %-10s %s\n" "mediamtx"            "$NOMAD_AUTOSTART_MEDIAMTX"            "RTSP server (host)"
+    printf "%-22s %-10s %s\n" "isaac_ros_container" "$NOMAD_AUTOSTART_ISAAC_ROS_CONTAINER" "Long-running Docker container"
+    printf "%-22s %-10s %s\n" "ros_http_bridge"     "$NOMAD_AUTOSTART_ROS_HTTP_BRIDGE"     "ROS<->HTTP bridge (in container)"
+    printf "%-22s %-10s %s\n" "zed_wrapper"         "$NOMAD_AUTOSTART_ZED_WRAPPER"         "ZED camera node (in container)"
+    printf "%-22s %-10s %s\n" "video_bridge"        "$NOMAD_AUTOSTART_VIDEO_BRIDGE"        "RTSP relay (via Edge Core API)"
+    printf "%-22s %-10s %s\n" "nvblox"              "$NOMAD_AUTOSTART_NVBLOX"              "nvblox mapping (in container)"
+}
+
+cmd_config() {
+    grep -E '^[A-Z][A-Z0-9_]*=' "$NOMAD_ENV_FILE" | sort
+}
+
+cmd_start_all() {
+    local s rc=0
+    for s in "${SERVICE_ORDER[@]}"; do
+        local key
+        key="$(autostart_key_for "$s")"
+        local var="NOMAD_AUTOSTART_$key"
+        if [ "${!var:-false}" != "true" ]; then
+            echo "[nomad] skip $s (NOMAD_AUTOSTART_${key}=false)"
+            continue
+        fi
+        run_one "$s" start || rc=$?
+    done
+    return $rc
+}
+
+cmd_stop_all() {
+    local s rc=0 reversed=()
+    # Reverse SERVICE_ORDER.
+    for s in "${SERVICE_ORDER[@]}"; do
+        reversed=("$s" "${reversed[@]}")
+    done
+    for s in "${reversed[@]}"; do
+        run_one "$s" stop || rc=$?
+    done
+    return $rc
+}
+
+cmd_status_all() {
+    local s rc=0
+    for s in "${SERVICE_ORDER[@]}"; do
+        printf "  %-22s " "$s"
+        "$SERVICES_DIR/${s}.sh" status || rc=$?
+    done
+    return $rc
+}
+
+usage() {
+    sed -n '2,/^# ===/p' "$0" | sed 's/^# \{0,1\}//'
+    exit "${1:-0}"
+}
+
+main() {
+    local action="${1:-}"
+    case "$action" in
+        ""|-h|--help|help) usage 0 ;;
+        list)   cmd_list ;;
+        config) cmd_config ;;
+        start|stop|restart|status|logs)
+            local target="${2:-}"
+            if [ "$action" = "status" ] && [ -z "$target" ]; then
+                cmd_status_all; exit $?
+            fi
+            if [ -z "$target" ]; then
+                echo "[nomad] $action requires a service name or 'all'" >&2
+                exit 2
+            fi
+            shift 2
+            if [ "$target" = "all" ]; then
+                case "$action" in
+                    start)   cmd_start_all ;;
+                    stop)    cmd_stop_all ;;
+                    restart) cmd_stop_all; sleep 1; cmd_start_all ;;
+                    status)  cmd_status_all ;;
+                    logs)    echo "[nomad] 'logs all' is not supported; pick one service" >&2; exit 2 ;;
+                esac
+                exit $?
+            fi
+            if ! is_known_service "$target"; then
+                echo "[nomad] unknown service: $target (try: nomad list)" >&2
+                exit 2
+            fi
+            run_one "$target" "$action" "$@"
+            ;;
+        *)
+            echo "[nomad] unknown command: $action" >&2
+            usage 2
+            ;;
+    esac
+}
+
+main "$@"

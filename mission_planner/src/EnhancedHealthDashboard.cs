@@ -75,8 +75,7 @@ namespace NOMAD.MissionPlanner
         private Label _lblModemConnection;   // "NOMAD-LTE: activated"
         private Label _lblModemInterface;    // "wwan0  10.50.10.2"
         private Label _lblPeerCount;
-        private Button _btnReconnectTailscale;
-        
+
         // Graph panel for drawing
         private PictureBox _graphBox;
         private ComboBox _cmbGraphType;
@@ -385,22 +384,6 @@ namespace NOMAD.MissionPlanner
                 AutoSize = true,
                 Margin = new Padding(0, 6, 0, 0),
             }, 0, 0);
-
-            _btnReconnectTailscale = new Button
-            {
-                Text = "Reconnect",
-                Size = new Size(80, 24),
-                BackColor = Color.FromArgb(60, 60, 65),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 8),
-                Anchor = AnchorStyles.Right,
-                Margin = new Padding(0, 3, 0, 0),
-                Cursor = Cursors.Hand,
-            };
-            _btnReconnectTailscale.FlatAppearance.BorderSize = 0;
-            _btnReconnectTailscale.Click += async (s, e) => await TriggerTailscaleReconnect();
-            strip.Controls.Add(_btnReconnectTailscale, 1, 0);
 
             return strip;
         }
@@ -1044,73 +1027,6 @@ namespace NOMAD.MissionPlanner
                 "poor" => Color.Orange,
                 _ => Color.Gray
             };
-        }
-        
-        private async Task TriggerTailscaleReconnect()
-        {
-            // Reconnect runs `tailscale down && tailscale up` on the Jetson.
-            // It can take 5-10s; keep the user oriented with a clear progress
-            // label on the button and a final result message.
-            try
-            {
-                _btnReconnectTailscale.Enabled = false;
-                _btnReconnectTailscale.Text = "Restarting…";
-
-                var response = await JetsonApiService.PostAsync("/network/reconnect");
-                string detail;
-                bool success;
-
-                try
-                {
-                    var json = await response.Content.ReadAsStringAsync();
-                    var data = JObject.Parse(json);
-                    success = data["success"]?.Value<bool>() ?? false;
-                    detail = data["message"]?.ToString() ?? "(no detail)";
-                }
-                catch
-                {
-                    success = false;
-                    detail = $"HTTP {(int)response.StatusCode}";
-                }
-
-                if (success)
-                {
-                    AddAlert($"[{DateTime.Now:HH:mm:ss}] Tailscale {detail}");
-                    _btnReconnectTailscale.Text = "✓ Reconnected";
-                    _btnReconnectTailscale.ForeColor = Color.LimeGreen;
-                }
-                else
-                {
-                    AddAlert($"[{DateTime.Now:HH:mm:ss}] Tailscale reconnect failed: {detail}");
-                    _btnReconnectTailscale.Text = "✗ Failed";
-                    _btnReconnectTailscale.ForeColor = Color.OrangeRed;
-                }
-
-                // Revert button text after 3s so it stays useful.
-                _ = Task.Delay(3000).ContinueWith(_ =>
-                {
-                    if (IsDisposed) return;
-                    try
-                    {
-                        BeginInvoke((Action)(() =>
-                        {
-                            _btnReconnectTailscale.Text = "Reconnect";
-                            _btnReconnectTailscale.ForeColor = Color.White;
-                        }));
-                    }
-                    catch { }
-                });
-            }
-            catch (Exception ex)
-            {
-                AddAlert($"[{DateTime.Now:HH:mm:ss}] Reconnect error: {ex.Message}");
-                _btnReconnectTailscale.Text = "Reconnect";
-                _btnReconnectTailscale.ForeColor = Color.White;
-            }
-            finally
-            {
-                _btnReconnectTailscale.Enabled = true;
-            }
         }
         
         private async Task TriggerGitUpdate()

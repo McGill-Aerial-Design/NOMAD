@@ -110,49 +110,66 @@ NOMAD/
 |       |-- NOMADViewBase.cs             # Base view class
 |
 |-- scripts/
-|   |-- build/              # Build scripts
-|   |   |-- build_plugin_windows.ps1     # C# plugin build
-|   |-- run/                # Runtime/startup scripts
-|   |   |-- start_nomad_full.sh          # Full system startup
-|   |   |-- start_isaac_ros_auto.sh      # Isaac ROS container lifecycle
-|   |   |-- restart_nomad.sh             # Kill-all and restart
-|   |   |-- launch_nvblox_performance.sh # Performance-tuned nvblox launch
-|   |-- setup/              # One-time setup scripts
-|   |   |-- setup_jetson.sh              # Full Jetson initial setup
-|   |   |-- setup_service.sh             # systemd nomad.service install
+|   |-- nomad                            # Single CLI dispatcher (start|stop|restart|status|logs)
+|   |-- lib/common.sh                    # Shared service-script helpers
+|   |-- services/                        # One script per service (8 total)
+|   |   |-- edge_core.sh                 # Host: Edge Core API
+|   |   |-- mavlink_router.sh            # Host: MAVLink Router
+|   |   |-- mediamtx.sh                  # Host: RTSP server
+|   |   |-- isaac_ros_container.sh       # Host: Isaac ROS Docker container (sleep infinity)
+|   |   |-- zed_wrapper.sh               # In container: ZED ROS2 wrapper + helper nodes
+|   |   |-- ros_http_bridge.sh           # In container: ros_http_bridge.py
+|   |   |-- video_bridge.sh              # In container (via API): simple_video_bridge.py
+|   |   |-- nvblox.sh                    # In container: nvblox (OPT-IN, not autostarted)
+|   |-- build/                           # Build / compile helpers
+|   |-- setup/
+|   |   |-- provision_isaac_ros.sh       # One-time: ZED SDK install + colcon build
+|   |   |-- setup_jetson.sh              # Jetson initial setup
 |   |   |-- setup_ssh_jetson.ps1         # SSH key setup (Windows)
-|   |   |-- fix_power_mode_25w_v2.sh     # Jetson 25W power mode config
-|   |-- dev/                # Development tools
+|   |   |-- fix_power_mode_25w_v2.sh     # 25W MAXN power mode
+|   |-- dev/                             # Development tools + ad-hoc diagnostics
 |   |   |-- run_dev.ps1                  # Windows sim mode
 |   |   |-- run_dev.sh                   # Linux/macOS sim mode
-|   |-- hardware/           # Hardware test utilities
+|   |-- hardware/                        # Hardware test utilities
 |       |-- servo_test.c                 # GPIO servo test (C)
 |       |-- sw_servo_test.py             # Servo sweep test (Python)
 |
-|-- tailscale/              # VPN configuration and managers
+|-- infra/systemd/                       # One systemd unit per service + install.sh
+|   |-- nomad.target                     # Pulls in the autostart set
+|   |-- nomad-edge-core.service
+|   |-- nomad-mavlink-router.service
+|   |-- nomad-mediamtx.service
+|   |-- nomad-isaac-ros-container.service
+|   |-- nomad-zed-wrapper.service
+|   |-- nomad-ros-http-bridge.service
+|   |-- nomad-video-bridge.service
+|   |-- nomad-nvblox.service             # opt-in
+|   |-- install.sh                       # Install + reconcile from config/nomad.env
+|
+|-- tailscale/                           # VPN configuration and managers
 |   |-- src/
 |       |-- tailscale_manager.py         # Tailscale monitoring
 |       |-- network_monitor.py           # 4G/LTE monitoring
 |
 |-- config/
-|   |-- env/jetson.env      # Environment variables (IPs, paths)
-|   |-- video_streams.json  # MediaMTX stream configuration
+|   |-- nomad.env                        # SINGLE SOURCE OF TRUTH for runtime config
+|   |-- video_streams.json               # MediaMTX stream configuration
 ```
 
 ---
 
 ## 3. Key Configuration File
 
-**Location**: `config/env/jetson.env`
+**Location**: `config/nomad.env`
 
-This file contains:
-- Jetson Tailscale IP (`TAILSCALE_IP=100.85.121.98`)
-- Ground Station IP (`GCS_IP=100.76.127.17`)
-- Home paths (`/home/mad/NOMAD/`)
-- Port configuration
-- Feature flags
+This is the **only** runtime config file. Every script and the Edge Core
+systemd unit reads it via `EnvironmentFile=`. It contains:
 
-Always check this file for actual IP addresses and paths.
+- Service autostart flags (`NOMAD_AUTOSTART_*` — nvblox defaults to false)
+- Jetson / GCS IPs, ports, auth tokens
+- Per-service tuning (ZED resolution, ROS bridge rate, nvblox profile path)
+
+Edit it in place; then `nomad restart all` (or `sudo systemctl restart nomad.target`).
 
 ---
 
