@@ -134,7 +134,7 @@ cmd_restart_all() {
     cmd_stop_all || rc=$?
     cleanup_orphans || true
     sleep 1
-    cmd_start_all || rc=$?
+    sudo -n systemctl restart nomad.target || rc=$?
     return $rc
 }
 
