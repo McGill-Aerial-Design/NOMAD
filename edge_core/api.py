@@ -5330,18 +5330,45 @@ fi
         request: Request,
         enable_od: bool = Query(
             default=False,
-            description="Enable ZED object detection (less stable on current stack)",
+            description=(
+                "Enable ZED object detection. When the value differs from "
+                "NVBLOX_ENABLE_OD in config/nomad.env, the legacy in-process "
+                "relaunch path is used (which bypasses systemd). Otherwise "
+                "this just starts nomad-nvblox.service."
+            ),
         ),
     ):
         """
-        Launch nvblox inside a running Isaac ROS container.
+        Bring nvblox up.
 
-        Lightweight alternative to /api/isaac/start: does NOT install deps
-        or rebuild packages.  Assumes the container is already running and
-        packages are already built.  ros_http_bridge is NOT touched — manage
-        it independently via /api/isaac/bridge/start.
+        Default path delegates to `systemctl start nomad-nvblox.service`. The
+        `enable_od` query knob keeps the legacy runtime-toggle path for the
+        circle-detector flow, which restarts nvblox/ZED with the OD flag
+        flipped — that path does NOT go through systemd. Prefer setting
+        NVBLOX_ENABLE_OD in config/nomad.env and using the systemd unit for
+        steady-state operation.
         """
+        config_default_od = (os.environ.get("NVBLOX_ENABLE_OD", "false").lower() == "true")
         loop = asyncio.get_event_loop()
+
+        if enable_od == config_default_od:
+            result = await loop.run_in_executor(
+                None, lambda: _systemctl("start", ("nomad-nvblox.service",))
+            )
+            if result.get("success"):
+                request.app.state.detection_enabled = enable_od
+                request.app.state.detection_last_update = 0.0
+            return result
+
+        # Caller wants a different OD state than config/nomad.env; fall back
+        # to the in-process relaunch helper. Log the divergence so it's
+        # debuggable when systemd's view of nomad-nvblox.service drifts.
+        logger.warning(
+            "isaac_launch_nvblox: enable_od=%s differs from NVBLOX_ENABLE_OD=%s; "
+            "using legacy relaunch path (bypasses systemd). Edit "
+            "config/nomad.env and restart nomad-nvblox.service for a clean state.",
+            enable_od, config_default_od,
+        )
         result = await loop.run_in_executor(
             None, lambda: _launch_nvblox_bridge_with_od(enable_od=enable_od)
         )
@@ -5419,28 +5446,21 @@ fi
         """
         Start the ROS-HTTP bridge inside the Isaac ROS container.
 
-        Independent of nvblox — runs whenever the container is up.
-        Idempotent: safe to call when bridge is already running.
+        Delegates to nomad-ros-http-bridge.service so systemd remains
+        authoritative. Idempotent: systemctl start is a no-op when already
+        active. Auth env (NOMAD_API_KEY, NOMAD_INTERNAL_TOKEN) is read from
+        config/nomad.env at unit-start time.
         """
-        api_key = (os.environ.get("NOMAD_API_KEY") or "").strip()
-        internal_token = (os.environ.get("NOMAD_INTERNAL_TOKEN") or "").strip()
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None, lambda: _start_ros_http_bridge(api_key, internal_token)
+        return await asyncio.get_event_loop().run_in_executor(
+            None, lambda: _systemctl("start", ("nomad-ros-http-bridge.service",))
         )
 
     @app.post("/api/isaac/bridge/stop", tags=["Isaac ROS"])
     async def isaac_bridge_stop():
-        """Stop the ROS-HTTP bridge inside the Isaac ROS container."""
-        container = "nomad_isaac_ros"
-        try:
-            subprocess.run(
-                ["docker", "exec", container, "pkill", "-f", "ros_http_bridge"],
-                capture_output=True, timeout=5,
-            )
-            return {"success": True, "message": "ros_http_bridge stopped"}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        """Stop the ROS-HTTP bridge via its systemd unit."""
+        return await asyncio.get_event_loop().run_in_executor(
+            None, lambda: _systemctl("stop", ("nomad-ros-http-bridge.service",))
+        )
 
     def _relaunch_isaac_with_nvblox(enable_nvblox: bool) -> dict:
         """
@@ -5511,32 +5531,28 @@ fi
 
     @app.post("/api/isaac/nvblox/start", tags=["Isaac ROS"])
     async def isaac_nvblox_start():
-        """Bring nvblox up alongside the existing ZED bringup."""
-        try:
-            return _relaunch_isaac_with_nvblox(True)
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        """Bring nvblox up via systemd. Idempotent."""
+        return await asyncio.get_event_loop().run_in_executor(
+            None, lambda: _systemctl("start", ("nomad-nvblox.service",))
+        )
 
     @app.post("/api/isaac/nvblox/stop", tags=["Isaac ROS"])
     async def isaac_nvblox_stop():
         """
-        Stop nvblox while keeping ZED, ros_http_bridge, target_localizer, and
-        the video bridge alive. The bringup is relaunched with
-        enable_nvblox:=false; obstacle_distance_bridge is skipped because its
-        source topic (/nvblox_node/combined_dynamic_map_slice) goes away.
+        Stop nvblox via systemd. ZED, ros_http_bridge, target_localizer, and
+        the video bridge are unaffected (they're owned by separate units and
+        don't depend on nvblox).
         """
-        try:
-            return _relaunch_isaac_with_nvblox(False)
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        return await asyncio.get_event_loop().run_in_executor(
+            None, lambda: _systemctl("stop", ("nomad-nvblox.service",))
+        )
 
     # Backward-compatible alias used by the older Mission Planner button.
     @app.post("/api/isaac/stop-nvblox", tags=["Isaac ROS"])
     async def isaac_stop_nvblox():
-        try:
-            return _relaunch_isaac_with_nvblox(False)
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        return await asyncio.get_event_loop().run_in_executor(
+            None, lambda: _systemctl("stop", ("nomad-nvblox.service",))
+        )
 
     # ==================== Foxglove Bridge ====================
     # The foxglove_bridge ROS2 package exposes all ROS2 topics via WebSocket
