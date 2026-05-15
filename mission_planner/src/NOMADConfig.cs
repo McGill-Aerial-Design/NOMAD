@@ -592,6 +592,11 @@ namespace NOMAD.MissionPlanner
                 LteMavlinkPort = 14560;
             }
 
+            // Keep the old high-level dual-link toggle and the newer local
+            // router toggle in lockstep unless a future UI exposes them
+            // separately.
+            RouterEnabled = DualLinkEnabled;
+
             // Keep FOV within a practical range for 3D view usability.
             if (SlamCameraFovDeg < 30.0f || SlamCameraFovDeg > 140.0f)
             {

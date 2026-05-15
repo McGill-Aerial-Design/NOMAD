@@ -152,7 +152,7 @@ namespace NOMAD.MissionPlanner
                 _jetsonConnectionManager.StartPolling();
 
                 // Initialize MAVLink dual link connection manager
-                if (_config.DualLinkEnabled)
+                if (_config.DualLinkEnabled && _config.RouterEnabled)
                 {
                     InitializeConnectionManager();
                 }
@@ -649,14 +649,14 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                if (!_config.DualLinkEnabled)
+                if (!_config.DualLinkEnabled || !_config.RouterEnabled)
                 {
                     if (_connectionManager != null)
                     {
                         _connectionManager.StopMonitoring();
                         _connectionManager.Dispose();
                         _connectionManager = null;
-                        Console.WriteLine("NOMAD: Dual link disabled — router stopped");
+                        Console.WriteLine("NOMAD: Dual link/router disabled — MAVLink sockets released for direct Mission Planner connection");
                     }
                     return;
                 }

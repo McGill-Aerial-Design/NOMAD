@@ -326,7 +326,7 @@ namespace NOMAD.MissionPlanner
 
             AddSectionLabel(tab, "MAVLink Dual Link (LTE + RadioMaster)", ref y);
 
-            _chkDualLinkEnabled = AddCheckBox(tab, "Enable Dual Link Management", 20, y, Color.LimeGreen);
+            _chkDualLinkEnabled = AddCheckBox(tab, "Enable NOMAD dual-link router", 20, y, Color.LimeGreen);
             _chkDualLinkEnabled.CheckedChanged += (s, e) => UpdateDualLinkControlsState();
             y += 35;
 
@@ -390,8 +390,8 @@ namespace NOMAD.MissionPlanner
 
             var hint = new Label
             {
-                Text = "Configure Mission Planner's main connection as 'UDP' (server) on this port.\n" +
-                       "The router will push both LTE and RadioMaster traffic to MP — zero-gap failover.",
+                Text = "Enabled: connect Mission Planner to UDP 14600 for merged LTE/RadioMaster failover.\n" +
+                       "Disabled: connect Mission Planner directly to LTE UDP 14560 or RadioMaster UDP 14550.",
                 Font = new Font("Segoe UI", 8, FontStyle.Italic),
                 ForeColor = Color.FromArgb(150, 150, 150),
                 Location = new Point(40, y),
@@ -993,6 +993,7 @@ namespace NOMAD.MissionPlanner
             
             // Dual Link
             Config.DualLinkEnabled = _chkDualLinkEnabled.Checked;
+            Config.RouterEnabled = _chkDualLinkEnabled.Checked;
             Config.RadioMasterConnectionType = _cmbRadioMasterConnType.SelectedIndex == 1 ? "COM" : "UDP";
             Config.RadioMasterPort = (int)_numRadioMasterPort.Value;
             Config.RadioMasterComPort = _cmbRadioMasterComPort.SelectedItem?.ToString() ?? "COM3";

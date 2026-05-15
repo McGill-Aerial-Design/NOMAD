@@ -132,7 +132,7 @@ namespace NOMAD.MissionPlanner
 
         // Dedup
         private readonly object _dedupLock = new object();
-        private readonly Dictionary<DedupKey, DateTime> _seenFrames = new Dictionary<DedupKey, DateTime>();
+        private readonly Dictionary<DedupKey, DedupSeen> _seenFrames = new Dictionary<DedupKey, DedupSeen>();
         private static readonly TimeSpan DEDUP_WINDOW = TimeSpan.FromMilliseconds(750);
         private DateTime _nextDedupSweep = DateTime.MinValue;
 
@@ -152,13 +152,13 @@ namespace NOMAD.MissionPlanner
         private long _radioSeenSeqCount;
         private long _radioLostSeqCount;
 
-        // Parameter downloads are request/response transactions. Let the first
-        // source that answers a request own the PARAM_VALUE stream so Mission
-        // Planner does not see interleaved LTE/RadioMaster copies.
+        // Parameter downloads are request/response transactions. Keep each
+        // transaction pinned to one link so the flight controller does not get
+        // duplicate PARAM_REQUEST_* bursts through LTE and RadioMaster at once.
         private readonly object _paramLock = new object();
-        private LinkType _paramValueSource = LinkType.None;
-        private DateTime _lastParamValueTime = DateTime.MinValue;
-        private static readonly TimeSpan PARAM_VALUE_SOURCE_TIMEOUT = TimeSpan.FromSeconds(2);
+        private LinkType _paramTransactionSource = LinkType.None;
+        private DateTime _lastParamActivityTime = DateTime.MinValue;
+        private static readonly TimeSpan PARAM_TRANSACTION_TIMEOUT = TimeSpan.FromSeconds(4);
 
         // Failover log (ring buffer)
         private readonly LinkedList<FailoverEventArgs> _failoverLog = new LinkedList<FailoverEventArgs>();
@@ -255,7 +255,7 @@ namespace NOMAD.MissionPlanner
             {
                 _lteSock = new UdpClient(new IPEndPoint(IPAddress.Any, _cfg.LteBindPort));
                 Lte.IsOpen = true;
-                Task.Run(() => UdpRxLoop(_lteSock, LinkType.LTE, _lteParser, _cts.Token));
+                Task.Run(() => UdpRxLoop(_lteSock, LinkType.LTE, _cts.Token));
                 Log($"LTE listening on udp://0.0.0.0:{_cfg.LteBindPort}");
             }
             catch (Exception ex)
@@ -300,7 +300,7 @@ namespace NOMAD.MissionPlanner
                 {
                     _radioSock = new UdpClient(new IPEndPoint(IPAddress.Any, _cfg.RadioBindPort));
                     Radio.IsOpen = true;
-                    Task.Run(() => UdpRxLoop(_radioSock, LinkType.RadioMaster, _radioParser, _cts.Token));
+                    Task.Run(() => UdpRxLoop(_radioSock, LinkType.RadioMaster, _cts.Token));
                     Log($"RadioMaster listening on udp://0.0.0.0:{_cfg.RadioBindPort}");
                 }
                 catch (Exception ex)
@@ -315,21 +315,47 @@ namespace NOMAD.MissionPlanner
         // Receive loops
         // ============================================================
 
-        private async Task UdpRxLoop(UdpClient sock, LinkType type, MavlinkFrameParser parser, CancellationToken ct)
+        private async Task UdpRxLoop(UdpClient sock, LinkType type, CancellationToken ct)
         {
-            var stats = type == LinkType.LTE ? Lte : Radio;
             while (!ct.IsCancellationRequested)
             {
                 try
                 {
                     var result = await sock.ReceiveAsync().ConfigureAwait(false);
+                    var effectiveType = ClassifyUdpSource(type, result.RemoteEndPoint);
+                    var stats = effectiveType == LinkType.LTE ? Lte : Radio;
+                    var effectiveParser = effectiveType == LinkType.LTE ? _lteParser : _radioParser;
                     stats.LastRemote = result.RemoteEndPoint;
-                    ProcessIncoming(type, parser, result.Buffer, result.Buffer.Length);
+                    ProcessIncoming(effectiveType, effectiveParser, result.Buffer, result.Buffer.Length);
                 }
                 catch (ObjectDisposedException) { break; }
                 catch (SocketException) { break; }
                 catch (Exception ex) { Log($"{type} rx error: {ex.Message}"); await Task.Delay(100, ct).ContinueWith(_ => { }); }
             }
+        }
+
+        private LinkType ClassifyUdpSource(LinkType socketType, IPEndPoint remote)
+        {
+            if (socketType == LinkType.RadioMaster && IsTailscaleAddress(remote?.Address))
+            {
+                Log($"LTE telemetry arrived on RadioMaster UDP port {_cfg.RadioBindPort} from {remote}; treating it as LTE. Check Jetson GCS_PORT_LTE should be {_cfg.LteBindPort}.");
+                return LinkType.LTE;
+            }
+
+            return socketType;
+        }
+
+        private static bool IsTailscaleAddress(IPAddress address)
+        {
+            if (address == null) return false;
+            var bytes = address.GetAddressBytes();
+            if (bytes.Length == 4) return bytes[0] == 100;
+            if (address.IsIPv4MappedToIPv6)
+            {
+                bytes = address.MapToIPv4().GetAddressBytes();
+                return bytes.Length == 4 && bytes[0] == 100;
+            }
+            return false;
         }
 
         private void SerialRxLoop(SerialPort port, CancellationToken ct)
@@ -416,14 +442,18 @@ namespace NOMAD.MissionPlanner
                 stats.FrameErrors = parser.CrcErrors;
 
                 bool isDuplicate = false;
-                if (_cfg.DedupEnabled)
+                if (_cfg.DedupEnabled && !frame.IsParamValue)
                 {
                     var key = new DedupKey(frame.Sysid, frame.Compid, frame.Msgid, frame.Seq, frame.RawHash);
                     lock (_dedupLock)
                     {
-                        if (_seenFrames.TryGetValue(key, out var t) && (DateTime.UtcNow - t) < DEDUP_WINDOW)
+                        if (_seenFrames.TryGetValue(key, out var seen) &&
+                            seen.Source != type &&
+                            (DateTime.UtcNow - seen.Timestamp) < DEDUP_WINDOW)
+                        {
                             isDuplicate = true;
-                        _seenFrames[key] = DateTime.UtcNow;
+                        }
+                        _seenFrames[key] = new DedupSeen(type, DateTime.UtcNow);
 
                         if (DateTime.UtcNow >= _nextDedupSweep)
                         {
@@ -454,7 +484,7 @@ namespace NOMAD.MissionPlanner
             var cutoff = DateTime.UtcNow - DEDUP_WINDOW;
             var stale = new List<DedupKey>();
             foreach (var kvp in _seenFrames)
-                if (kvp.Value < cutoff) stale.Add(kvp.Key);
+                if (kvp.Value.Timestamp < cutoff) stale.Add(kvp.Key);
             foreach (var k in stale) _seenFrames.Remove(k);
         }
 
@@ -515,8 +545,8 @@ namespace NOMAD.MissionPlanner
                 parsedFrame = true;
                 if (frame.IsParamRequest)
                 {
-                    ResetParamValueSource();
-                    ForwardToAllOpenLinks(frame.Raw, frame.RawLength);
+                    var source = SelectParamTransactionSource();
+                    ForwardToLink(source, frame.Raw, frame.RawLength);
                 }
                 else
                     ForwardOutboundFrame(frame.Raw, frame.RawLength);
@@ -529,20 +559,19 @@ namespace NOMAD.MissionPlanner
         private void ForwardOutboundFrame(byte[] data, int length)
         {
             var target = ManualOverride != LinkType.None ? ManualOverride : ActiveLink;
-            if (target == LinkType.LTE && Lte.IsOpen)
-            {
-                SendLte(data, length);
-            }
-            else if (target == LinkType.RadioMaster && Radio.IsOpen)
-            {
-                SendRadio(data, length);
-            }
+            ForwardToLink(target, data, length);
         }
 
-        private void ForwardToAllOpenLinks(byte[] data, int length)
+        private void ForwardToLink(LinkType target, byte[] data, int length)
         {
-            if (Lte.IsOpen) SendLte(data, length);
-            if (Radio.IsOpen) SendRadio(data, length);
+            if (target == LinkType.LTE && Lte.IsOpen)
+                SendLte(data, length);
+            else if (target == LinkType.RadioMaster && Radio.IsOpen)
+                SendRadio(data, length);
+            else if (Lte.IsOpen)
+                SendLte(data, length);
+            else if (Radio.IsOpen)
+                SendRadio(data, length);
         }
 
         private bool ShouldForwardParamValue(LinkType source)
@@ -550,24 +579,48 @@ namespace NOMAD.MissionPlanner
             lock (_paramLock)
             {
                 var now = DateTime.UtcNow;
-                if (_paramValueSource == LinkType.None || (now - _lastParamValueTime) > PARAM_VALUE_SOURCE_TIMEOUT)
-                    _paramValueSource = source;
+                if (_paramTransactionSource == LinkType.None || (now - _lastParamActivityTime) > PARAM_TRANSACTION_TIMEOUT)
+                    _paramTransactionSource = source;
 
-                if (source != _paramValueSource)
+                if (source != _paramTransactionSource)
                     return false;
 
-                _lastParamValueTime = now;
+                _lastParamActivityTime = now;
                 return true;
             }
         }
 
-        private void ResetParamValueSource()
+        private LinkType SelectParamTransactionSource()
         {
             lock (_paramLock)
             {
-                _paramValueSource = LinkType.None;
-                _lastParamValueTime = DateTime.MinValue;
+                var now = DateTime.UtcNow;
+                if (_paramTransactionSource != LinkType.None && (now - _lastParamActivityTime) <= PARAM_TRANSACTION_TIMEOUT)
+                {
+                    _lastParamActivityTime = now;
+                    return _paramTransactionSource;
+                }
+
+                var preferred = ManualOverride != LinkType.None ? ManualOverride : ActiveLink;
+                if (IsLinkUsable(preferred))
+                    _paramTransactionSource = preferred;
+                else if (IsLinkUsable(LinkType.LTE))
+                    _paramTransactionSource = LinkType.LTE;
+                else if (IsLinkUsable(LinkType.RadioMaster))
+                    _paramTransactionSource = LinkType.RadioMaster;
+                else
+                    _paramTransactionSource = preferred == LinkType.None ? LinkType.LTE : preferred;
+
+                _lastParamActivityTime = now;
+                return _paramTransactionSource;
             }
+        }
+
+        private bool IsLinkUsable(LinkType link)
+        {
+            if (link == LinkType.LTE) return Lte.IsOpen && Lte.IsConnected;
+            if (link == LinkType.RadioMaster) return Radio.IsOpen && Radio.IsConnected;
+            return false;
         }
 
         private void SendLte(byte[] data, int length)
@@ -834,6 +887,18 @@ namespace NOMAD.MissionPlanner
                     h = h * 31 + (int)RawHash;
                     return h;
                 }
+            }
+        }
+
+        private struct DedupSeen
+        {
+            public readonly LinkType Source;
+            public readonly DateTime Timestamp;
+
+            public DedupSeen(LinkType source, DateTime timestamp)
+            {
+                Source = source;
+                Timestamp = timestamp;
             }
         }
     }
