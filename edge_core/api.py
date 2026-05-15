@@ -140,6 +140,15 @@ COMMAND_WHITELIST: dict[str, str] = {
     "restart_isaac":       "sudo -n systemctl restart nomad-isaac-ros-container.service nomad-zed-wrapper.service nomad-ros-http-bridge.service 2>&1 && echo restarted || echo failed",
     "start_nvblox":        "sudo -n systemctl start   nomad-nvblox.service 2>&1 && echo started || echo failed",
     "stop_nvblox":         "sudo -n systemctl stop    nomad-nvblox.service 2>&1 && echo stopped || echo failed",
+    "restart_nvblox":      "sudo -n systemctl restart nomad-nvblox.service 2>&1 && echo restarted || echo failed",
+
+    # --- Individual ZED + ROS bridge control (per-unit) ---
+    "start_zed":           "sudo -n systemctl start   nomad-zed-wrapper.service 2>&1 && echo started || echo failed",
+    "stop_zed":            "sudo -n systemctl stop    nomad-zed-wrapper.service 2>&1 && echo stopped || echo failed",
+    "restart_zed":         "sudo -n systemctl restart nomad-zed-wrapper.service 2>&1 && echo restarted || echo failed",
+    "start_ros_bridge":    "sudo -n systemctl start   nomad-ros-http-bridge.service 2>&1 && echo started || echo failed",
+    "stop_ros_bridge":     "sudo -n systemctl stop    nomad-ros-http-bridge.service 2>&1 && echo stopped || echo failed",
+    "restart_ros_bridge":  "sudo -n systemctl restart nomad-ros-http-bridge.service 2>&1 && echo restarted || echo failed",
 
     # --- Bring everything up / down (autostart set per config/nomad.env) ---
     "start_all":           "sudo -n systemctl start   nomad.target 2>&1 && echo started || echo failed",

@@ -56,10 +56,22 @@ namespace NOMAD.MissionPlanner
         /// <summary>MAV_CMD_SET_EKF_SOURCE_SET (42007) - Switch EKF source</summary>
         public const ushort CMD_SET_EKF_SOURCE = 42007;
 
-        // Security: Whitelist of allowed service names (defense-in-depth)
+        // Security: Whitelist of allowed service names (defense-in-depth).
+        // Each name maps to a *_<name> command_name in Edge Core's
+        // COMMAND_WHITELIST (see edge_core/api.py). The mapping happens in the
+        // per-action switch statements below.
         private static readonly System.Collections.Generic.HashSet<string> ALLOWED_SERVICES = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "nomad", "edge_core", "mediamtx", "mavlink-router", "isaac-ros", "zed-service", "novnc"
+            "nomad", "edge_core",
+            "mediamtx",
+            "mavlink-router",
+            "isaac",            // = whole Isaac ROS stack (container + zed + ros_http_bridge)
+            "zed",              // = nomad-zed-wrapper.service
+            "ros_bridge",       // = nomad-ros-http-bridge.service
+            "video_bridge",     // = nomad-video-bridge.service
+            "nvblox",           // = nomad-nvblox.service (opt-in)
+            "all",              // = nomad.target (autostart set)
+            "novnc"
         };
 
         // ============================================================
@@ -568,6 +580,12 @@ namespace NOMAD.MissionPlanner
                 "mediamtx" => "start_mediamtx",
                 "mavlink-router" => "start_mavlink",
                 "nomad" or "edge_core" => "start_nomad",
+                "isaac" => "start_isaac",
+                "zed" => "start_zed",
+                "ros_bridge" => "start_ros_bridge",
+                "video_bridge" => "start_video_bridge",
+                "nvblox" => "start_nvblox",
+                "all" => "start_all",
                 "novnc" => "start_novnc",
                 _ => $"start_{serviceName}"
             };
@@ -589,6 +607,12 @@ namespace NOMAD.MissionPlanner
                 "mediamtx" => "stop_mediamtx",
                 "mavlink-router" => "stop_mavlink",
                 "nomad" or "edge_core" => "stop_nomad",
+                "isaac" => "stop_isaac",
+                "zed" => "stop_zed",
+                "ros_bridge" => "stop_ros_bridge",
+                "video_bridge" => "stop_video_bridge",
+                "nvblox" => "stop_nvblox",
+                "all" => "stop_all",
                 "novnc" => "stop_novnc",
                 _ => $"stop_{serviceName}"
             };
@@ -607,12 +631,18 @@ namespace NOMAD.MissionPlanner
             // Map service names to whitelisted command names
             string commandName = serviceName switch
             {
-                "mediamtx" => "restart_video",
+                "mediamtx" => "restart_video",            // restarts mediamtx + video_bridge
                 "mavlink-router" => "restart_mavlink",
-                "nomad" => "restart_edge_core",
+                "nomad" or "edge_core" => "restart_edge_core",
+                "isaac" => "restart_isaac",
+                "zed" => "restart_zed",
+                "ros_bridge" => "restart_ros_bridge",
+                "video_bridge" => "restart_video_bridge",
+                "nvblox" => "restart_nvblox",
+                "all" => "restart_all",
                 _ => $"restart_{serviceName}" // Fallback
             };
-            
+
             return await ExecuteTerminalCommandParsedAsync(commandName, 15);
         }
 
@@ -629,7 +659,12 @@ namespace NOMAD.MissionPlanner
             {
                 "mediamtx" => "status_mediamtx",
                 "mavlink-router" => "status_mavlink",
-                "nomad" => "status_nomad",
+                "nomad" or "edge_core" => "status_nomad",
+                "isaac" => "status_isaac",
+                "zed" => "status_zed",
+                "ros_bridge" => "status_ros_bridge",
+                "video_bridge" => "status_video",
+                "nvblox" => "status_nvblox",
                 "novnc" => "status_novnc",
                 _ => $"status_{serviceName}" // Fallback
             };
