@@ -27,6 +27,14 @@ if [ ! -f "$ENV_FILE" ]; then
     echo "[install] config not found: $ENV_FILE" >&2
     exit 1
 fi
+
+echo "[install] repairing script executable permissions"
+find "$REPO_ROOT/scripts" "$REPO_ROOT/tailscale/scripts" \
+    -type f \( -name '*.sh' -o -name nomad \) -exec chmod 0755 {} +
+chmod 0755 "$REPO_ROOT/scripts/nomad" \
+    "$REPO_ROOT/infra/systemd/install.sh" \
+    "$REPO_ROOT/infra/docker/ros_entrypoint.sh" 2>/dev/null || true
+
 # shellcheck disable=SC1090
 . "$ENV_FILE"
 
