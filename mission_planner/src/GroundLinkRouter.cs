@@ -128,6 +128,7 @@ namespace NOMAD.MissionPlanner
         // Frame parsers (one per source, stateful — handles split datagrams/serial chunks)
         private readonly MavlinkFrameParser _lteParser = new MavlinkFrameParser();
         private readonly MavlinkFrameParser _radioParser = new MavlinkFrameParser();
+        private readonly MavlinkFrameParser _localParser = new MavlinkFrameParser();
 
         // Dedup
         private readonly object _dedupLock = new object();
@@ -150,6 +151,14 @@ namespace NOMAD.MissionPlanner
         private long _lteLostSeqCount;
         private long _radioSeenSeqCount;
         private long _radioLostSeqCount;
+
+        // Parameter downloads are request/response transactions. Let the first
+        // source that answers a request own the PARAM_VALUE stream so Mission
+        // Planner does not see interleaved LTE/RadioMaster copies.
+        private readonly object _paramLock = new object();
+        private LinkType _paramValueSource = LinkType.None;
+        private DateTime _lastParamValueTime = DateTime.MinValue;
+        private static readonly TimeSpan PARAM_VALUE_SOURCE_TIMEOUT = TimeSpan.FromSeconds(2);
 
         // Failover log (ring buffer)
         private readonly LinkedList<FailoverEventArgs> _failoverLog = new LinkedList<FailoverEventArgs>();
@@ -430,6 +439,10 @@ namespace NOMAD.MissionPlanner
                 }
                 else
                 {
+                    if (frame.IsParamValue && !ShouldForwardParamValue(type))
+                    {
+                        return;
+                    }
                     stats.FramesForwarded++;
                     ForwardToMp(frame.Raw, frame.RawLength);
                 }
@@ -496,6 +509,25 @@ namespace NOMAD.MissionPlanner
 
         private void ForwardOutbound(byte[] data, int length)
         {
+            bool parsedFrame = false;
+            _localParser.Push(data, length, (frame) =>
+            {
+                parsedFrame = true;
+                if (frame.IsParamRequest)
+                {
+                    ResetParamValueSource();
+                    ForwardToAllOpenLinks(frame.Raw, frame.RawLength);
+                }
+                else
+                    ForwardOutboundFrame(frame.Raw, frame.RawLength);
+            });
+
+            if (!parsedFrame)
+                ForwardOutboundFrame(data, length);
+        }
+
+        private void ForwardOutboundFrame(byte[] data, int length)
+        {
             var target = ManualOverride != LinkType.None ? ManualOverride : ActiveLink;
             if (target == LinkType.LTE && Lte.IsOpen)
             {
@@ -504,6 +536,37 @@ namespace NOMAD.MissionPlanner
             else if (target == LinkType.RadioMaster && Radio.IsOpen)
             {
                 SendRadio(data, length);
+            }
+        }
+
+        private void ForwardToAllOpenLinks(byte[] data, int length)
+        {
+            if (Lte.IsOpen) SendLte(data, length);
+            if (Radio.IsOpen) SendRadio(data, length);
+        }
+
+        private bool ShouldForwardParamValue(LinkType source)
+        {
+            lock (_paramLock)
+            {
+                var now = DateTime.UtcNow;
+                if (_paramValueSource == LinkType.None || (now - _lastParamValueTime) > PARAM_VALUE_SOURCE_TIMEOUT)
+                    _paramValueSource = source;
+
+                if (source != _paramValueSource)
+                    return false;
+
+                _lastParamValueTime = now;
+                return true;
+            }
+        }
+
+        private void ResetParamValueSource()
+        {
+            lock (_paramLock)
+            {
+                _paramValueSource = LinkType.None;
+                _lastParamValueTime = DateTime.MinValue;
             }
         }
 
@@ -934,5 +997,7 @@ namespace NOMAD.MissionPlanner
 
         public bool IsHeartbeat => Msgid == 0; // MAVLINK_MSG_ID_HEARTBEAT
         public bool IsRadioStatus => Msgid == 109; // RADIO_STATUS
+        public bool IsParamRequest => Msgid == 20 || Msgid == 21; // PARAM_REQUEST_READ / PARAM_REQUEST_LIST
+        public bool IsParamValue => Msgid == 22; // PARAM_VALUE
     }
 }
