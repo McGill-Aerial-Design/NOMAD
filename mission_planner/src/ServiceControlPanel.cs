@@ -77,7 +77,7 @@ namespace NOMAD.MissionPlanner
 
         // SLAM
         private Label _lblSlamStatus;
-        private Button _btnClearSlam;
+        private Button _btnStopSlam;
 
         // Detector overlays — let the operator turn each circle detector
         // on/off independently to free CPU when one isn't needed.
@@ -207,8 +207,8 @@ namespace NOMAD.MissionPlanner
             _btnStartBridges.Click += async (s, e) => await StartVideoBridgesAsync();
             
             // === SLAM Service ===
-            AddServiceRow("SLAM / Mesh", ref _lblSlamStatus, ref _btnClearSlam, ref yOffset, "Clear");
-            _btnClearSlam.Click += async (s, e) => await ClearSlamAsync();
+            AddServiceRow("SLAM / Mesh", ref _lblSlamStatus, ref _btnStopSlam, ref yOffset, "Stop SLAM");
+            _btnStopSlam.Click += async (s, e) => await StopSlamAsync();
 
             // === Circle Detector Toggles ===
             yOffset += 8;
@@ -1446,42 +1446,20 @@ namespace NOMAD.MissionPlanner
                 LogMessage($"Failed to start bridges: {result.Message}");
         }
 
-        private async Task ClearSlamAsync()
+        private async Task StopSlamAsync()
         {
-            LogMessage("Clearing SLAM mesh...");
-            var result = await _sender.ClearSlamAsync();
+            LogMessage("Stopping SLAM / nvblox...");
+            UpdateStatusLabel(_lblSlamStatus, false, "Stopping...");
+            var result = await _sender.StopSlamAsync();
             if (result.Success)
             {
-                bool nvbloxCleared = true;
-                string displayMessage = "SLAM mesh cleared";
-
-                try
-                {
-                    if (!string.IsNullOrWhiteSpace(result.Data))
-                    {
-                        var payload = JObject.Parse(result.Data);
-                        nvbloxCleared = payload["nvblox_cleared"]?.Value<bool>() ?? true;
-                        string apiMessage = payload["message"]?.Value<string>();
-                        string nvbloxMessage = payload["nvblox_message"]?.Value<string>();
-
-                        if (!string.IsNullOrWhiteSpace(apiMessage))
-                            displayMessage = apiMessage;
-
-                        if (!nvbloxCleared && !string.IsNullOrWhiteSpace(nvbloxMessage))
-                            displayMessage += $" | {nvbloxMessage}";
-                    }
-                }
-                catch
-                {
-                    // Keep generic success message when payload parsing fails.
-                }
-
-                LogMessage(displayMessage);
-                UpdateStatusLabel(_lblSlamStatus, nvbloxCleared, nvbloxCleared ? "Cleared" : "Cache Cleared");
+                LogMessage("SLAM / nvblox stopped");
+                UpdateStatusLabel(_lblSlamStatus, false, "Stopped");
             }
             else
             {
-                LogMessage($"Clear failed: {result.Message}");
+                LogMessage($"Stop failed: {result.Message}");
+                UpdateStatusLabel(_lblSlamStatus, false, "Stop Failed");
             }
         }
         

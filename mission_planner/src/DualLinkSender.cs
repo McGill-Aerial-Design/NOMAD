@@ -734,6 +734,14 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
+        /// Stop SLAM resources by stopping nvblox.
+        /// </summary>
+        public async Task<CommandResult> StopSlamAsync()
+        {
+            return await StopNvbloxAsync();
+        }
+
+        /// <summary>
         /// Start target localization without stopping the Isaac ROS container.
         /// </summary>
         public async Task<CommandResult> StartTargetLocalizationAsync()
