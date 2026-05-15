@@ -794,7 +794,25 @@ namespace NOMAD.MissionPlanner
                     var y = det["y"]?.Value<double>() ?? 0;
                     var z = det["z"]?.Value<double>() ?? 0;
                     var source = det["source"]?.ToString() ?? "";
-                    _lstDetections.Items.Add($"{label} conf={conf:F0}% {source} seen={seen} ({x:F1},{y:F1},{z:F1})");
+                    bool imageOnly = det["image_only"]?.Value<bool>() ?? false;
+                    string posStr;
+                    if (imageOnly)
+                    {
+                        // Task 2 shape detector is 2D-only — show pixel
+                        // coords + range so the list isn't just "(0,0,0)".
+                        var px = det["pixel_x"]?.Value<double>() ?? 0;
+                        var py = det["pixel_y"]?.Value<double>() ?? 0;
+                        var rngTok = det["range_m"];
+                        bool hasRng = rngTok != null && rngTok.Type != JTokenType.Null;
+                        posStr = hasRng
+                            ? $"px=({px:F0},{py:F0}) r={rngTok.Value<double>():F2}m"
+                            : $"px=({px:F0},{py:F0})";
+                    }
+                    else
+                    {
+                        posStr = $"({x:F1},{y:F1},{z:F1})";
+                    }
+                    _lstDetections.Items.Add($"{label} conf={conf:F0}% {source} seen={seen} {posStr}");
                 }
 
                 if (prevSel >= 0 && prevSel < _lstDetections.Items.Count)

@@ -4395,10 +4395,18 @@ fi
             except (TypeError, ValueError):
                 range_val = None
             has_range = range_val is not None and math.isfinite(range_val)
+            # Bridge stores confidence as a 0–1 fraction; the rest of the
+            # detection API (and the Mission Planner UI) expects a 0–100
+            # percentage, so scale here once.
+            try:
+                conf_frac = float(d.get("confidence", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                conf_frac = 0.0
+            conf_pct = conf_frac * 100.0 if conf_frac <= 1.0 else conf_frac
             out.append({
                 "target_id": idx,
                 "label": d.get("label", "circle"),
-                "confidence": d.get("confidence", 0.0),
+                "confidence": conf_pct,
                 "source": d.get("_method") or d.get("_detector") or "task2",
                 "seen_count": 1,
                 # No world-frame coords — shape detector is 2D — so the

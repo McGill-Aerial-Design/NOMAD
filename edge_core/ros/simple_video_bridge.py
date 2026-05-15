@@ -784,33 +784,61 @@ class VideoStreamNode(Node):
         h, w = frame.shape[:2]
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray = cv2.medianBlur(gray, 5)
-        # Color-agnostic edge-support map: a real circular paper target has a
-        # crisp, mostly-continuous boundary against whatever's behind it. Wall
-        # texture and lighting gradients produce Hough/contour "circles" whose
-        # perimeter isn't actually backed by edge pixels — we reject those by
-        # sampling points around the candidate's perimeter and requiring that
-        # a high fraction land on Canny edges.
-        edge_map = cv2.Canny(gray, 60, 140)
-        edge_map = cv2.dilate(
-            edge_map, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
-            iterations=1,
+        # Target model: a red/blue/purple paper circle on a white plastic
+        # backing. We accept a candidate circle only when (a) its interior is
+        # mostly one of those hues and (b) the thin ring just outside it is
+        # mostly white. This rejects wall-texture false positives without
+        # depending on the exact paper color (cabbage juice can read red,
+        # purple or blue depending on pH and lighting).
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        h_ch = hsv[:, :, 0]; s_ch = hsv[:, :, 1]; v_ch = hsv[:, :, 2]
+        # Red wraps the hue circle (0..10 and 170..179). Blue/purple ~ 100..160.
+        target_color_mask = (
+            (((h_ch <= 10) | (h_ch >= 170)) & (s_ch >= 60) & (v_ch >= 50))
+            | ((h_ch >= 100) & (h_ch <= 160) & (s_ch >= 40) & (v_ch >= 50))
         )
-        _MIN_EDGE_SUPPORT = 0.55     # fraction of perimeter samples on an edge
+        # White backing: low saturation, high value.
+        white_mask = (s_ch <= 40) & (v_ch >= 180)
+        _MIN_INTERIOR_COLOR = 0.55   # fraction of inner disk in target hue
+        _MIN_RING_WHITE     = 0.45   # fraction of outer ring in white
         _MAX_CIRCLES_PER_FRAME = 6
 
         def _passes_edge_gate(cx_i: int, cy_i: int, r_i: int) -> bool:
             if r_i <= 0:
                 return False
-            n = max(24, int(2 * math.pi * r_i / 4))
-            angles = np.linspace(0.0, 2.0 * math.pi, n, endpoint=False)
-            xs = (cx_i + r_i * np.cos(angles)).astype(np.int32)
-            ys = (cy_i + r_i * np.sin(angles)).astype(np.int32)
-            in_bounds = (xs >= 0) & (xs < w) & (ys >= 0) & (ys < h)
-            if not in_bounds.any():
+            # Interior: a disk at 0.7 * r — avoids the rim where anti-aliasing
+            # and shadows blur the hue.
+            inner_r = max(2, int(r_i * 0.7))
+            y0 = max(0, cy_i - inner_r); y1 = min(h, cy_i + inner_r + 1)
+            x0 = max(0, cx_i - inner_r); x1 = min(w, cx_i + inner_r + 1)
+            if y1 <= y0 or x1 <= x0:
                 return False
-            xs = xs[in_bounds]; ys = ys[in_bounds]
-            hits = int(np.count_nonzero(edge_map[ys, xs]))
-            return (hits / float(xs.size)) >= _MIN_EDGE_SUPPORT
+            yy, xx = np.ogrid[y0:y1, x0:x1]
+            inside = (xx - cx_i) ** 2 + (yy - cy_i) ** 2 <= inner_r * inner_r
+            inside_count = int(inside.sum())
+            if inside_count <= 0:
+                return False
+            interior_hits = int(np.count_nonzero(
+                target_color_mask[y0:y1, x0:x1] & inside
+            ))
+            if (interior_hits / inside_count) < _MIN_INTERIOR_COLOR:
+                return False
+            # Outer ring: annulus from r*1.10 to r*1.40 — should be white backing.
+            outer_r = int(r_i * 1.40)
+            ry0 = max(0, cy_i - outer_r); ry1 = min(h, cy_i + outer_r + 1)
+            rx0 = max(0, cx_i - outer_r); rx1 = min(w, cx_i + outer_r + 1)
+            if ry1 <= ry0 or rx1 <= rx0:
+                return False
+            yy2, xx2 = np.ogrid[ry0:ry1, rx0:rx1]
+            d2 = (xx2 - cx_i) ** 2 + (yy2 - cy_i) ** 2
+            ring = (d2 >= int(r_i * 1.10) ** 2) & (d2 <= outer_r * outer_r)
+            ring_count = int(ring.sum())
+            if ring_count <= 0:
+                return False
+            ring_white = int(np.count_nonzero(
+                white_mask[ry0:ry1, rx0:rx1] & ring
+            ))
+            return (ring_white / ring_count) >= _MIN_RING_WHITE
 
         out = []
         claimed = []  # list of (cx, cy, r) we've already accepted
