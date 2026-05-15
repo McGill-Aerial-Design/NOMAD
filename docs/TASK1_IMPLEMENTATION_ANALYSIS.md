@@ -470,7 +470,7 @@ The `health_monitor.py` reports:
 All Task 1 communication (video, API, MAVLink) flows over Tailscale VPN:
 - RTSP: `rtsp://100.85.121.98:8554/primary`
 - API: `http://100.85.121.98:8000`
-- MAVLink: `100.85.121.98:14550`
+- MAVLink LTE/Tailscale: `100.85.121.98:14560`
 
 **Status:** Tailscale has been reliable in testing. If the 4G/LTE modem is connected, backup connectivity exists.
 

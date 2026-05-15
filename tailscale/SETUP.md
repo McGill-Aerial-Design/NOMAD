@@ -146,7 +146,7 @@ Update [mavlink-router main.conf](../transport/mavlink_router/main.conf):
 [UdpEndpoint groundstation]
 Mode=Normal
 Address=100.y.y.y  # Ground Station Tailscale IP
-Port=14550
+Port=14560
 ```
 
 **Find Ground Station IP:**
@@ -160,15 +160,15 @@ Replace `100.y.y.y` in the config with this IP.
 
 ### Mission Planner Connection
 
-**Connect to Jetson via Tailscale:**
+**Connect through the NOMAD plugin router:**
 
 1. Open Mission Planner
 2. Select connection type: **UDP**
-3. Port: **14550**
+3. Port: **14600**
 4. Click **Connect**
-5. Mission Planner will listen for telemetry from Jetson
+5. Mission Planner will listen to the plugin's merged stream
 
-**Note:** The Jetson pushes telemetry to the Ground Station IP configured in mavlink-router.
+**Note:** The Jetson pushes LTE telemetry to the Ground Station on UDP 14560. The RadioMaster feed uses UDP 14550. The NOMAD plugin combines both and publishes the selected merged stream locally on UDP 14600.
 
 ### API Access
 
@@ -288,7 +288,7 @@ sudo ufw enable
 sudo ufw allow from 100.0.0.0/8 to any port 22 proto tcp     # SSH
 sudo ufw allow from 100.0.0.0/8 to any port 8000 proto tcp   # API
 sudo ufw allow from 100.0.0.0/8 to any port 8554 proto tcp   # RTSP
-sudo ufw allow from 100.0.0.0/8 to any port 14550 proto udp  # MAVLink
+sudo ufw allow from 100.0.0.0/8 to any port 14560 proto udp  # MAVLink LTE
 ```
 
 ---
@@ -379,14 +379,14 @@ sudo nano /etc/mavlink-router/main.conf
 **Verify MAVLink Traffic:**
 ```bash
 # On Ground Station
-sudo tcpdump -i any port 14550 -vv
+sudo tcpdump -i any port 14560 -vv
 ```
 
 **Check Windows Firewall:**
 
 ```powershell
 # On Ground Station (PowerShell as Admin)
-New-NetFirewallRule -DisplayName "MAVLink UDP" -Direction Inbound -Protocol UDP -LocalPort 14550 -Action Allow
+New-NetFirewallRule -DisplayName "MAVLink LTE UDP" -Direction Inbound -Protocol UDP -LocalPort 14560 -Action Allow
 ```
 
 ---
@@ -524,7 +524,9 @@ curl http://<jetson-tailscale-ip>:8000/health
 ```
 
 **Mission Planner:**
-- Connection: UDP, Port 14550
+- Main connection: UDP, Port 14600
+- NOMAD plugin LTE input: UDP, Port 14560
+- NOMAD plugin RadioMaster input: UDP, Port 14550
 - Jetson API: `http://<jetson-tailscale-ip>:8000`
 - Video: `rtsp://<jetson-tailscale-ip>:8554/primary`
 

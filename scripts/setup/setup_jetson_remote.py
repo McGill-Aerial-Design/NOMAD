@@ -101,12 +101,12 @@ Port=14550
 [UdpEndpoint groundstation]
 Mode=Normal
 Address={GCS_IP}
-Port=14550
+Port=14560
 '''
     
     # Write config
     run_command(ssh, f"echo '{mavlink_conf}' | sudo tee /etc/mavlink-router/main.conf > /dev/null")
-    print(f"MAVLink Router configured to send telemetry to {GCS_IP}:14550")
+    print(f"MAVLink Router configured to send LTE telemetry to {GCS_IP}:14560")
     
     # Enable MAVLink Router service
     run_command(ssh, "sudo systemctl enable mavlink-router")
@@ -122,7 +122,7 @@ Port=14550
         "sudo ufw allow from 100.0.0.0/8 to any port 22 proto tcp comment 'SSH-Tailscale'",
         "sudo ufw allow from 100.0.0.0/8 to any port 8000 proto tcp comment 'API-Tailscale'",
         "sudo ufw allow from 100.0.0.0/8 to any port 8554 proto tcp comment 'RTSP-Tailscale'",
-        "sudo ufw allow from 100.0.0.0/8 to any port 14550 proto udp comment 'MAVLink-Tailscale'",
+        "sudo ufw allow from 100.0.0.0/8 to any port 14560 proto udp comment 'MAVLink-LTE-Tailscale'",
         "sudo ufw --force enable",
     ]
     for cmd in firewall_cmds:
@@ -136,7 +136,8 @@ NOMAD_HOST=0.0.0.0
 NOMAD_PORT=8000
 TAILSCALE_IP={JETSON_IP}
 GCS_IP={GCS_IP}
-GCS_PORT=14550
+GCS_PORT_LTE=14560
+GCS_PORT_LOCAL=14550
 MAVLINK_UART_DEV=/dev/ttyTHS1
 MAVLINK_UART_BAUD=921600
 NOMAD_ENABLE_VISION=true
@@ -168,7 +169,9 @@ To test from Windows:
   curl http://{JETSON_IP}:8000/health
   
 Mission Planner:
-  Connect UDP port 14550 (listen mode)
+  Main connection: UDP port 14600 (NOMAD plugin merged router)
+  Plugin LTE input: UDP port 14560
+  Plugin RadioMaster input: UDP port 14550
 """)
     
     ssh.close()

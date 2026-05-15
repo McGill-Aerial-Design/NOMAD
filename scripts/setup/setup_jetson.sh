@@ -121,7 +121,7 @@ sudo sed -i "s/Address=.*/Address=$GCS_TAILSCALE_IP/" /etc/mavlink-router/main.c
 sudo systemctl enable mavlink-router
 sudo systemctl restart mavlink-router
 
-echo -e "${GREEN}MAVLink Router configured to send to $GCS_TAILSCALE_IP:14550${NC}"
+echo -e "${GREEN}MAVLink Router configured to send LTE telemetry to $GCS_TAILSCALE_IP:14560${NC}"
 
 # ============================================================
 # 6. Configure Environment
@@ -150,13 +150,13 @@ echo -e "\n${YELLOW}[7/7] Configuring firewall...${NC}"
 sudo ufw allow from 100.0.0.0/8 to any port 22 proto tcp comment "SSH via Tailscale"
 sudo ufw allow from 100.0.0.0/8 to any port 8000 proto tcp comment "NOMAD API via Tailscale"
 sudo ufw allow from 100.0.0.0/8 to any port 8554 proto tcp comment "RTSP via Tailscale"
-sudo ufw allow from 100.0.0.0/8 to any port 14550 proto udp comment "MAVLink via Tailscale"
+sudo ufw allow from 100.0.0.0/8 to any port 14560 proto udp comment "MAVLink LTE via Tailscale"
 
 # Also allow local network
 sudo ufw allow from 192.168.0.0/16 to any port 22 proto tcp comment "SSH Local"
 sudo ufw allow from 192.168.0.0/16 to any port 8000 proto tcp comment "NOMAD API Local"
 sudo ufw allow from 192.168.0.0/16 to any port 8554 proto tcp comment "RTSP Local"
-sudo ufw allow from 192.168.0.0/16 to any port 14550 proto udp comment "MAVLink Local"
+sudo ufw allow from 192.168.0.0/16 to any port 14550 proto udp comment "MAVLink RadioMaster Local"
 
 sudo ufw --force enable
 

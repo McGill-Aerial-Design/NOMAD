@@ -88,7 +88,7 @@ If using UFW:
 ```bash
 sudo ufw allow from 100.0.0.0/8 to any port 22 proto tcp   # SSH
 sudo ufw allow from 100.0.0.0/8 to any port 8000 proto tcp # API
-sudo ufw allow from 100.0.0.0/8 to any port 14550 proto udp # MAVLink
+sudo ufw allow from 100.0.0.0/8 to any port 14560 proto udp # MAVLink LTE
 sudo ufw enable
 ```
 
@@ -101,7 +101,7 @@ sudo ufw enable
 
 ```bash
 curl http://<jetson-tailscale-ip>:8000/health
-nc -uzv <jetson-tailscale-ip> 14550
+nc -uzv <jetson-tailscale-ip> 14560
 ```
 
 ## 9) Troubleshooting

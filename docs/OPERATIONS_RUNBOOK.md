@@ -84,7 +84,7 @@ Jetson Orin Nano (100.85.121.98)
 |    nav controller, servo controller, VIO pipeline     |
 |                                                       |
 |  MAVLink Router (host process)                        |
-|    /dev/ttyACM0 -> UDP 14550 (GCS), 14551 (local)    |
+|    /dev/ttyACM0 -> UDP 14560 (GCS), 14550 (local)    |
 |                                                       |
 |  MediaMTX (bare metal, port 8554)                     |
 |    RTSP endpoint: rtsp://100.85.121.98:8554/primary   |
@@ -101,7 +101,8 @@ Jetson Orin Nano (100.85.121.98)
 Ground Station (100.76.127.17)
 +-------------------------------------------------------+
 |  Mission Planner + NOMAD Plugin                       |
-|  MAVLink telemetry via UDP 14550                      |
+|  Plugin inputs: LTE 14560 + RadioMaster 14550         |
+|  Mission Planner connects to merged UDP 14600         |
 |  RTSP video via rtsp://100.85.121.98:8554/primary     |
 +-------------------------------------------------------+
 ```
@@ -120,8 +121,10 @@ Ground Station (100.76.127.17)
 |---------|------|----------|
 | Edge Core API | 8000 | TCP/HTTP |
 | MediaMTX RTSP | 8554 | TCP/RTSP |
-| MAVLink Telemetry | 14550 | UDP |
-| MAVLink Local | 14551 | UDP |
+| MAVLink LTE/Tailscale | 14560 | UDP |
+| MAVLink RadioMaster | 14550 | UDP |
+| MAVLink Plugin Router | 14600 | UDP |
+| MAVLink Local | 14550 | UDP |
 | SSH | 22 | TCP |
 
 ---
@@ -152,7 +155,7 @@ sudo systemctl start nomad
 systemctl status nomad
 
 # 2. Start MAVLink Router
-mavlink-routerd -e 100.76.127.17:14550 -e 127.0.0.1:14551 /dev/ttyACM0 &
+mavlink-routerd -e 100.76.127.17:14560 -e 127.0.0.1:14550 /dev/ttyACM0 &
 
 # 3. Start Isaac ROS (Task 2 only)
 ~/NOMAD/scripts/run/start_isaac_ros_auto.sh start
@@ -204,7 +207,7 @@ Invoke-WebRequest -Uri 'http://100.85.121.98:8000/health' -UseBasicParsing
    .\fetch-libvlc.ps1
    .\copy-libvlc.ps1
    ```
-4. Connect: Open Mission Planner, select UDP port 14550, click CONNECT.
+4. Connect: Open Mission Planner, select UDP port 14600 to use the NOMAD plugin's merged LTE/RadioMaster stream, click CONNECT.
 5. Open NOMAD panel: **View** -> **NOMAD Control Panel**.
 
 ---
@@ -356,7 +359,7 @@ sudo usermod -a -G dialout $USER
 
 # Restart MAVLink Router
 pkill mavlink-routerd
-mavlink-routerd -e 100.76.127.17:14550 -e 127.0.0.1:14551 /dev/ttyACM0 &
+mavlink-routerd -e 100.76.127.17:14560 -e 127.0.0.1:14550 /dev/ttyACM0 &
 ```
 
 ### ZED Camera Not Detected

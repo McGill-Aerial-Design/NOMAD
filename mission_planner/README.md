@@ -25,6 +25,7 @@ The primary interface features a modern sidebar navigation design:
 ### MAVLink Dual Link Failover
 - **Primary Link**: LTE/Tailscale via Jetson mavlink-router
 - **Secondary Link**: RadioMaster transmitter (UDP 14550 or COM port)
+- **Merged Link**: NOMAD plugin local router on UDP 14600 for Mission Planner
 - **Automatic Failover**: Switches links on connection loss
 - **Health Monitoring**: Real-time latency and packet loss tracking
 - **Manual Override**: Switch links manually via Link Status panel
@@ -284,8 +285,12 @@ Real-time monitoring:
 3. Configure RadioMaster connection:
    - **UDP Mode**: Default port 14550
    - **COM Port Mode**: Select serial port and baud rate
-4. Click **Test Connection** to verify
-5. Click **OK** to save
+4. Configure LTE MAVLink input:
+   - **UDP Mode**: Default port 14560
+5. Configure Mission Planner's main connection:
+   - **UDP Mode**: Default port 14600 for the plugin's merged router output
+6. Click **Test Connection** to verify
+7. Click **OK** to save
 
 ### RadioMaster ELRS Connection
 
@@ -293,7 +298,8 @@ The plugin supports two connection modes for RadioMaster ELRS:
 
 **UDP Mode (Default):**
 - RadioMaster transmitter outputs MAVLink over USB
-- Mission Planner listens on UDP port 14550
+- NOMAD plugin listens for RadioMaster input on UDP port 14550
+- Mission Planner connects to the plugin's merged output on UDP port 14600
 - Works when RadioMaster is in WiFi bridge mode
 
 **COM Port Mode:**

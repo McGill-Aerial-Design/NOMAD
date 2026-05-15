@@ -57,7 +57,9 @@ Tailscale provides:
 
 | Service | Port | Protocol | Description |
 |---------|------|----------|-------------|
-| MAVLink | 14550 | UDP | Telemetry to Mission Planner |
+| MAVLink LTE/Tailscale | 14560 | UDP | Telemetry to Mission Planner |
+| MAVLink RadioMaster | 14550 | UDP | Local radio link on Ground Station |
+| MAVLink Plugin Router | 14600 | UDP | Local merged stream for Mission Planner |
 | HTTP API | 8000 | TCP | Edge Core REST API |
 | SSH | 22 | TCP | Remote terminal |
 | RTSP Primary | 8554 | TCP | ZED left camera stream |

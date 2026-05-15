@@ -159,7 +159,7 @@ configure_firewall() {
     ufw allow from 100.0.0.0/8 to any port 22 proto tcp 2>/dev/null || true    # SSH
     ufw allow from 100.0.0.0/8 to any port 8000 proto tcp 2>/dev/null || true  # API
     ufw allow from 100.0.0.0/8 to any port 8554 proto tcp 2>/dev/null || true  # RTSP
-    ufw allow from 100.0.0.0/8 to any port 14550 proto udp 2>/dev/null || true # MAVLink
+    ufw allow from 100.0.0.0/8 to any port 14560 proto udp 2>/dev/null || true # MAVLink LTE
     
     log "Firewall configured for Tailscale"
 }
@@ -242,7 +242,9 @@ print_next_steps() {
     echo ""
     echo "4. Configure Mission Planner:"
     echo "   Jetson IP: $ip"
-    echo "   MAVLink: UDP port 14550"
+    echo "   Main MAVLink connection: UDP port 14600"
+    echo "   NOMAD plugin LTE input: UDP port 14560"
+    echo "   NOMAD plugin RadioMaster input: UDP port 14550"
     echo "   API: http://$ip:8000"
     echo ""
     echo "============================================================"

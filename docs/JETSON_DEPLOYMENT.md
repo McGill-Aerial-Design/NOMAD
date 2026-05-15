@@ -293,7 +293,7 @@ sudo systemctl status nomad
 sudo systemctl start nomad
 
 # Start MAVLink Router manually
-GCS_IP=100.76.127.17 mavlink-routerd -e ${GCS_IP}:14550 -e 127.0.0.1:14550 /dev/ttyACM0 &
+GCS_IP=100.76.127.17 mavlink-routerd -e ${GCS_IP}:14560 -e 127.0.0.1:14550 /dev/ttyACM0 &
 
 # Start Isaac ROS (Task 2 only)
 ~/NOMAD/scripts/run/start_isaac_ros_auto.sh start
@@ -538,7 +538,9 @@ nano ~/NOMAD/config/env/jetson.env
 |------|----------|---------|-----------|
 | 8000 | TCP | Edge Core API | Inbound |
 | 8554 | TCP | RTSP Video | Inbound |
-| 14550 | UDP | MAVLink Telemetry | Outbound to GCS |
+| 14560 | UDP | MAVLink LTE/Tailscale | Outbound to GCS |
+| 14550 | UDP | MAVLink local/RadioMaster | Local Edge Core / ground radio |
+| 14600 | UDP | MAVLink plugin router | Ground Station local merged stream |
 | 22 | TCP | SSH | Inbound |
 
 ---

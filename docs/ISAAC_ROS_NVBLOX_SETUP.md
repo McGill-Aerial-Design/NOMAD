@@ -22,7 +22,7 @@ Everything needed to get nvblox running with a ZED camera on the Jetson Orin Nan
 Host (Jetson Orin Nano, JetPack 6.2)
   |-- Edge Core API       (systemd / start_nomad_full.sh, port 8000)
   |-- MediaMTX             (RTSP server, port 8554)
-  |-- MAVLink Router       (telemetry, port 14550)
+  |-- MAVLink Router       (LTE telemetry port 14560, local port 14550)
   |-- Tailscale VPN        (systemd)
   |
   +-- Docker: nomad_isaac_ros  (isaac_ros_dev-aarch64 image)

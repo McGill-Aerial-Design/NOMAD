@@ -416,8 +416,10 @@ ssh mad@100.85.121.98 "cd ~/NOMAD && git log --oneline -1"
 | Service | Port | Protocol | Location |
 |---------|------|----------|----------|
 | Edge Core API | 8000 | TCP | Jetson |
-| MAVLink Telemetry | 14550 | UDP | Jetson -> GCS |
-| MAVLink Local | 14551 | UDP | Jetson (localhost) |
+| MAVLink LTE/Tailscale | 14560 | UDP | Jetson -> GCS |
+| MAVLink RadioMaster | 14550 | UDP | GCS local radio link |
+| MAVLink Plugin Router | 14600 | UDP | Mission Planner local merged link |
+| MAVLink Local | 14550 | UDP | Jetson localhost / Edge Core |
 | RTSP Video | 8554 | TCP | Jetson (MediaMTX) |
 | SSH | 22 | TCP | Jetson |
 

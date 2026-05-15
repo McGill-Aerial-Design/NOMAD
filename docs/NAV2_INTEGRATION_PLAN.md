@@ -271,7 +271,7 @@ bt_navigator:
 mavros:
   ros__parameters:
     fcu_url: "/dev/ttyACM0:921600"  # Serial to Cube Orange
-    gcs_url: "udp://:14550@100.76.127.17:14550"  # Tailscale to GCS
+    gcs_url: "udp://:14560@100.76.127.17:14560"  # Tailscale to GCS
     target_system_id: 1
     target_component_id: 1
     

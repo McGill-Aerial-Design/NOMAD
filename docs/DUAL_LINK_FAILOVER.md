@@ -22,7 +22,7 @@ This document describes the MAVLink dual link failover system for NOMAD, which a
 
 ### Primary Link: LTE via Tailscale
 - **Path**: Cube (USB) → Jetson (mavlink-router) → Tailscale VPN → Ground Station
-- **Port**: UDP 14550
+- **Port**: UDP 14560
 - **Typical Latency**: 50-200ms
 - **Range**: Unlimited (cellular coverage)
 - **Best For**: Long-range missions, beyond visual line of sight (BVLOS)
@@ -64,7 +64,7 @@ Baud=921600
 [UdpEndpoint groundstation]
 Mode=Normal
 Address=100.x.x.x      # Your ground station Tailscale IP
-Port=14550
+Port=14560
 ```
 
 ### 2. RadioMaster Configuration
@@ -78,16 +78,20 @@ Configure your RadioMaster TX to output MAVLink via USB:
 ### 3. Mission Planner Configuration
 
 #### Option A: Dual UDP Connections (Recommended)
-1. **First Connection (LTE)**:
-   - UDP, Local Port 14550
-   - This receives data from Jetson via Tailscale
+1. **NOMAD plugin LTE input**:
+   - UDP, Local Port 14560
+   - Receives data from Jetson via Tailscale
 
-2. **Second Connection (RadioMaster)**:
-   - UDP, Local Port 14551 (or connect RadioMaster serial directly)
-   - Set RadioMaster to output on this port
+2. **NOMAD plugin RadioMaster input**:
+   - UDP, Local Port 14550 (or connect RadioMaster serial directly)
+   - Receives data from RadioMaster
+
+3. **Mission Planner main connection**:
+   - UDP, Local Port 14600
+   - Connects to the NOMAD plugin's merged stream for instant failover
 
 #### Option B: Single Port with External Routing
-- Use a local UDP router to merge both streams to port 14550
+- Use the NOMAD plugin local router to merge LTE 14560 and RadioMaster 14550 into Mission Planner port 14600
 - NOMAD plugin detects source by packet characteristics
 
 ### 4. NOMAD Plugin Configuration
@@ -96,9 +100,11 @@ In Mission Planner, go to **NOMAD Menu → Settings**:
 
 1. **Enable Dual Link Management**: ✓
 2. **RadioMaster Port**: 14550 (or your configured port)
-3. **Enable Automatic Failover**: ✓
-4. **Preferred Link**: LTE (Tailscale) - primary for long range
-5. **Auto-reconnect to preferred**: ✓ - returns to LTE when available
+3. **LTE MAVLink Port**: 14560
+4. **Local Router Port**: 14600
+5. **Enable Automatic Failover**: ✓
+6. **Preferred Link**: LTE (Tailscale) - primary for long range
+7. **Auto-reconnect to preferred**: ✓ - returns to LTE when available
 
 ## Link Health Monitoring
 

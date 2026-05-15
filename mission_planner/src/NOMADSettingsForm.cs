@@ -348,7 +348,7 @@ namespace NOMAD.MissionPlanner
             y += 30;
 
             AddLabel(tab, "LTE MAVLink Port:", 40, y);
-            _numLteMavlinkPort = AddNumericUpDown(tab, 170, y, 80, 1, 65535, 14550);
+            _numLteMavlinkPort = AddNumericUpDown(tab, 170, y, 80, 1, 65535, 14560);
             y += 35;
 
             AddSectionLabel(tab, "Failover Settings", ref y);
