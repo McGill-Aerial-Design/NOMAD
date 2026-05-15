@@ -598,13 +598,12 @@ validate_nav2_config() {
 # Launch ZED + nvblox
 # =========================================================================
 launch_zed_nvblox() {
-    # Allow operators to skip nvblox while keeping the ZED node (and therefore
-    # the video bridge) running. Set NOMAD_DISABLE_NVBLOX=1 to take this path.
-    # The ZED ROS node is composed into the same container as nvblox in the
-    # default launch, so killing nvblox there also kills video — this flag
-    # avoids that coupling by routing to the standalone zed_camera launch.
-    if [ "${NOMAD_DISABLE_NVBLOX:-0}" = "1" ] || [ "${NOMAD_DISABLE_NVBLOX:-}" = "true" ]; then
-        log_warn "NOMAD_DISABLE_NVBLOX set -- launching ZED only (no nvblox/nav2)"
+    # Task 1 and Task 2 don't consume the nvblox occupancy/ESDF outputs, so
+    # nvblox is disabled by default — it just burns GPU/memory and makes the
+    # ZED node fragile because they share a composable container. Operators
+    # who do need nvblox can opt back in with NOMAD_DISABLE_NVBLOX=0.
+    if [ "${NOMAD_DISABLE_NVBLOX:-1}" != "0" ] && [ "${NOMAD_DISABLE_NVBLOX:-1}" != "false" ]; then
+        log_info "nvblox disabled (NOMAD_DISABLE_NVBLOX=${NOMAD_DISABLE_NVBLOX:-1}) -- launching ZED only"
         launch_zed_only
         return
     fi
@@ -958,10 +957,17 @@ export LD_LIBRARY_PATH=/opt/ros/humble/lib:/opt/ros/humble/lib/aarch64-linux-gnu
 source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/setup.bash 2>/dev/null
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 export EGL_PLATFORM=device
-# Keep ZED at 360p (default downscale 2.0) to save GPU memory.
-# 720p causes cudaErrorIllegalAddress when nvblox allocates GPU memory.
-# sed -i 's/pub_downscale_factor: 2\.0/pub_downscale_factor: 1.0/' \
-#     /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml 2>/dev/null
+# nvblox is disabled in this code path, so the old 360p/720p GPU-memory
+# workaround no longer applies. Configure the ZED wrapper to grab at HD1080
+# and publish at native resolution (downscale 1.0) so Task 1 / Task 2 vision
+# get the full 1080p frame.
+ZED_CFG=/workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml
+if [ -f "$ZED_CFG" ]; then
+    sed -i -E "s/^([[:space:]]*grab_resolution:[[:space:]]*)['\"]?[A-Za-z0-9]+['\"]?/\1'HD1080'/" "$ZED_CFG" 2>/dev/null || true
+    sed -i -E "s/^([[:space:]]*pub_resolution:[[:space:]]*)['\"]?[A-Za-z0-9]+['\"]?/\1'NATIVE'/" "$ZED_CFG" 2>/dev/null || true
+    sed -i -E "s/^([[:space:]]*pub_downscale_factor:[[:space:]]*).*/\11.0/" "$ZED_CFG" 2>/dev/null || true
+    echo "[init] Patched ZED config -> grab=HD1080 pub=NATIVE downscale=1.0"
+fi
 ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i
 LAUNCH_SCRIPT
     docker cp "$_zed_tmp" "$CONTAINER_NAME:/tmp/launch_zed_only.sh"

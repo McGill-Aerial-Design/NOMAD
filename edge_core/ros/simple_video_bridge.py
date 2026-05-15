@@ -98,8 +98,8 @@ class VideoStreamNode(Node):
 
     _MIN_RESTART_INTERVAL = 5.0
 
-    def __init__(self, source_topic: str, width: int = 848, height: int = 480,
-                 fps: int = 15, bitrate: int = 1500, rtsp_path: str = "primary"):
+    def __init__(self, source_topic: str, width: int = 1920, height: int = 1080,
+                 fps: int = 30, bitrate: int = 2500, rtsp_path: str = "primary"):
         super().__init__('simple_video_bridge')
 
         self.bridge = CvBridge()
@@ -1229,10 +1229,10 @@ def main(args=None):
     parser = argparse.ArgumentParser(description='Simple Video Bridge for NOMAD')
     parser.add_argument('--source-topic', type=str,
                        default='/zed/zed_node/rgb/image_rect_color')
-    parser.add_argument('--width', type=int, default=848)
-    parser.add_argument('--height', type=int, default=480)
-    parser.add_argument('--fps', type=int, default=15)
-    parser.add_argument('--bitrate', type=int, default=1500,
+    parser.add_argument('--width', type=int, default=1920)
+    parser.add_argument('--height', type=int, default=1080)
+    parser.add_argument('--fps', type=int, default=30)
+    parser.add_argument('--bitrate', type=int, default=2500,
                        help='H264 bitrate in kbps')
     parser.add_argument('--http-port', type=int, default=9200)
     parser.add_argument('--rtsp-path', type=str, default='primary')
