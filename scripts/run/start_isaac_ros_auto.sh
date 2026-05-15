@@ -984,20 +984,63 @@ source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 export EGL_PLATFORM=device
 # nvblox is disabled in this code path, so the old 360p/720p GPU-memory
-# workaround no longer applies. Configure every common.yaml the ZED wrapper
-# might pick up (install/, src/, /opt/ros) so Task 1 / Task 2 vision get the
-# full 1080p frame at native resolution.
-for ZED_CFG in \
-    /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml \
-    /workspaces/isaac_ros-dev/src/zed-ros2-wrapper/zed_wrapper/config/common.yaml \
-    /opt/ros/humble/share/zed_wrapper/config/common.yaml \
-    $(find / -path '*/zed_wrapper/config/common.yaml' 2>/dev/null); do
-    [ -f "$ZED_CFG" ] || continue
-    sed -i -E "s/^([[:space:]]*grab_resolution:[[:space:]]*)['\"]?[A-Za-z0-9]+['\"]?/\1'HD1080'/" "$ZED_CFG" 2>/dev/null || true
-    sed -i -E "s/^([[:space:]]*pub_resolution:[[:space:]]*)['\"]?[A-Za-z0-9]+['\"]?/\1'NATIVE'/" "$ZED_CFG" 2>/dev/null || true
-    sed -i -E "s/^([[:space:]]*pub_downscale_factor:[[:space:]]*).*/\11.0/" "$ZED_CFG" 2>/dev/null || true
-    echo "[init] Patched ZED config: $ZED_CFG -> grab=HD1080 pub=NATIVE downscale=1.0"
-done
+# workaround no longer applies. Current ZED wrapper releases use
+# common_stereo.yaml plus camera-model YAMLs, not common.yaml, so patch the
+# actual files the wrapper can load before the node starts.
+python3 <<'PYEOF_ZED_ONLY_CONFIG'
+from pathlib import Path
+import re
+
+roots = [
+    Path("/workspaces/isaac_ros-dev/install"),
+    Path("/workspaces/isaac_ros-dev/src"),
+    Path("/opt/ros/humble/share"),
+]
+paths = []
+for root in roots:
+    if root.exists():
+        paths.extend(root.glob("**/zed_wrapper/config/*.yaml"))
+
+def set_key(text: str, key: str, value: str) -> str:
+    pattern = rf"(?m)^(\s*{re.escape(key)}\s*:\s*).*$"
+    if re.search(pattern, text):
+        return re.sub(pattern, rf"\g<1>{value}", text)
+    return text.rstrip() + f"\n{key}: {value}\n"
+
+patched = []
+for path in sorted(set(paths)):
+    name = path.name
+    if name not in {"common_stereo.yaml", "common.yaml", "zed2i.yaml", "zed2.yaml"}:
+        continue
+    try:
+        text = path.read_text()
+    except Exception as exc:
+        print(f"[init] WARNING: cannot read {path}: {exc}")
+        continue
+
+    updated = text
+    if name in {"common_stereo.yaml", "common.yaml"}:
+        updated = set_key(updated, "pub_resolution", "'NATIVE'")
+        updated = set_key(updated, "pub_downscale_factor", "1.0")
+        updated = set_key(updated, "publish_raw", "true")
+        updated = set_key(updated, "publish_left_right", "true")
+        updated = set_key(updated, "publish_mag", "true")
+    if name in {"zed2i.yaml", "zed2.yaml", "common.yaml"}:
+        updated = set_key(updated, "grab_resolution", "'HD1080'")
+
+    if updated != text:
+        try:
+            path.write_text(updated)
+            patched.append(str(path))
+        except Exception as exc:
+            print(f"[init] WARNING: cannot patch {path}: {exc}")
+
+if patched:
+    for path in patched:
+        print(f"[init] Patched ZED config: {path} -> HD1080/native/full-res publish")
+else:
+    print("[init] WARNING: no ZED wrapper config YAMLs patched")
+PYEOF_ZED_ONLY_CONFIG
 
 # ZED + Isaac ROS Nitros crash on launch with:
 #   "intraprocess communication allowed only with volatile durability"
@@ -1005,9 +1048,77 @@ done
 # intra-process comms ON in its composable container, and that combination
 # throws std::invalid_argument before the camera ever publishes a frame.
 # Disabling intra-process comms at launch time keeps the node alive.
+ZED_IPC_ARGS=()
+ZED_LAUNCH_FILE=$(python3 - <<'PYEOF_ZED_LAUNCH'
+try:
+    from ament_index_python.packages import get_package_share_directory
+    from pathlib import Path
+    print(Path(get_package_share_directory("zed_wrapper")) / "launch" / "zed_camera.launch.py")
+except Exception:
+    pass
+PYEOF_ZED_LAUNCH
+)
+if [ -n "$ZED_LAUNCH_FILE" ] && grep -q "enable_ipc" "$ZED_LAUNCH_FILE" 2>/dev/null; then
+    ZED_IPC_ARGS+=(enable_ipc:=false)
+    echo "[init] ZED launch supports enable_ipc; launching with enable_ipc:=false"
+elif [ -n "$ZED_LAUNCH_FILE" ] && grep -q "use_intra_process_comms" "$ZED_LAUNCH_FILE" 2>/dev/null; then
+    python3 - "$ZED_LAUNCH_FILE" <<'PYEOF_DISABLE_ZED_IPC'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+updated = re.sub(
+    r"(['\"]use_intra_process_comms['\"]\s*:\s*)True",
+    r"\1False",
+    text,
+)
+if updated != text:
+    path.write_text(updated)
+    print(f"[init] Patched {path} to disable use_intra_process_comms")
+else:
+    print(f"[init] WARNING: found use_intra_process_comms in {path} but did not find a hard-coded True to patch")
+PYEOF_DISABLE_ZED_IPC
+else
+    echo "[init] WARNING: ZED launch enable_ipc argument not found; launching without IPC override"
+fi
+
 ros2 launch zed_wrapper zed_camera.launch.py \
     camera_model:=zed2i \
-    --ros-args --log-level WARN
+    camera_name:=zed \
+    "${ZED_IPC_ARGS[@]}" \
+    --ros-args --log-level WARN &
+ZED_PID=$!
+
+# Keep the common NOMAD helper nodes alive even when we bypass nvblox. These
+# are normally provided by config/launch/nomad_zed_nvblox.launch.py and are
+# still needed for Task 1/2 localization, snapshots, and camera/servo TF.
+sleep 3
+ros2 run tf2_ros static_transform_publisher \
+    --x 0 --y 0 --z 0 \
+    --roll 0 --pitch 0 --yaw 0 \
+    --frame-id zed_left_camera_frame_optical \
+    --child-frame-id zed_left_camera_optical_frame \
+    >/tmp/zed_optical_alias.log 2>&1 &
+PYTHONPATH=/workspaces/isaac_ros-dev/edge_core/target_localizer:${PYTHONPATH:-} \
+    python3 -m target_localizer.target_localizer_node \
+    --ros-args \
+    -p output_dir:=/workspaces/isaac_ros-dev/data/task1_captures \
+    -p team_name:=MAD \
+    -r /zed2i/zed_node/rgb/image_rect_color:=/zed/zed_node/rgb/color/rect/image \
+    -r /zed2i/zed_node/depth/depth_registered:=/zed/zed_node/depth/depth_registered \
+    -r /zed2i/zed_node/rgb/camera_info:=/zed/zed_node/rgb/color/rect/camera_info \
+    >/tmp/target_localizer.log 2>&1 &
+python3 /workspaces/isaac_ros-dev/edge_core/ros/servo_tf_publisher.py \
+    --host 172.17.0.1 \
+    --port 8000 \
+    --tf-rate 20.0 \
+    --poll-rate 10.0 \
+    --odom-topic /zed/zed_node/odom \
+    >/tmp/servo_tf_publisher.log 2>&1 &
+
+wait "$ZED_PID"
 LAUNCH_SCRIPT
     docker cp "$_zed_tmp" "$CONTAINER_NAME:/tmp/launch_zed_only.sh"
     rm -f "$_zed_tmp"
@@ -1016,7 +1127,7 @@ LAUNCH_SCRIPT
     docker exec -d "$CONTAINER_NAME" bash -c \
         "bash /tmp/launch_zed_only.sh > /tmp/zed_nvblox.log 2>&1 & echo \$! > /tmp/zed_nvblox.pid"
 
-    log_info "ZED wrapper launched (logs: /tmp/zed_nvblox.log inside container)"
+    log_info "ZED wrapper + NOMAD helper nodes launched (logs: /tmp/zed_nvblox.log inside container)"
 }
 
 # =========================================================================
@@ -1067,9 +1178,15 @@ export PYTHONPATH=/workspaces/isaac_ros-dev:${PYTHONPATH:-}
 # Wait for ZED node to fully start and DDS discovery to complete
 # (ZED + nvblox take ~20-30s to init)
 sleep 30
+BRIDGE_MESH_ARGS=()
+if [ "${NOMAD_DISABLE_NVBLOX:-1}" = "0" ] || [ "${NOMAD_DISABLE_NVBLOX:-1}" = "false" ]; then
+    BRIDGE_MESH_ARGS+=(--mesh-topic /nvblox_node/color_layer_marker)
+else
+    BRIDGE_MESH_ARGS+=(--disable-mesh)
+fi
 # Restart loop: bridge survives nvblox crashes without losing telemetry/VIO.
 while true; do
-    python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --mag-topic /zed/zed_node/imu/mag --mesh-topic /nvblox_node/color_layer_marker --high-rate-transport zmq
+    python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py --host localhost --port 8000 --rate 30 --vio-topic /zed/zed_node/odom --mag-topic /zed/zed_node/imu/mag "${BRIDGE_MESH_ARGS[@]}" --high-rate-transport zmq
     echo "ros_http_bridge exited (rc=$?), restarting in 10s..."
     sleep 10
 done
@@ -1085,6 +1202,7 @@ BRIDGE_SCRIPT
     if [ -n "${NOMAD_INTERNAL_TOKEN:-}" ]; then
         bridge_env_args+=("-e" "NOMAD_INTERNAL_TOKEN=$NOMAD_INTERNAL_TOKEN")
     fi
+    bridge_env_args+=("-e" "NOMAD_DISABLE_NVBLOX=${NOMAD_DISABLE_NVBLOX:-1}")
 
     if [ ${#bridge_env_args[@]} -gt 0 ]; then
         docker exec "${bridge_env_args[@]}" -d "$CONTAINER_NAME" bash -c \
@@ -1214,20 +1332,23 @@ case "${1:-start}" in
 
         launch_zed_nvblox
 
-        # Wait for ZED topics
-        log_info "Waiting for ZED topics..."
+        # Wait for ZED data, not just advertised topic names. The ZED wrapper
+        # can advertise topics before the camera starts publishing, especially
+        # on first boot while SDK depth models are optimizing.
+        log_info "Waiting for ZED odometry data..."
         WAIT_START=$(date +%s)
         ZED_READY=false
-        while [ $(($(date +%s) - WAIT_START)) -lt 30 ]; do
+        ZED_WAIT_TIMEOUT="${NOMAD_ZED_READY_TIMEOUT_S:-300}"
+        while [ $(($(date +%s) - WAIT_START)) -lt "$ZED_WAIT_TIMEOUT" ]; do
             if docker exec "$CONTAINER_NAME" bash -c \
-                "$ROS_SETUP; timeout 2 ros2 topic list 2>/dev/null | grep -q '/zed/zed_node/.*image'" 2>/dev/null; then
+                "$ROS_SETUP; $WS_SETUP; timeout 4 ros2 topic echo --once /zed/zed_node/odom >/dev/null 2>&1" 2>/dev/null; then
                 ZED_READY=true
                 log_info "ZED ready after $(($(date +%s) - WAIT_START))s"
                 break
             fi
-            sleep 1
+            sleep 2
         done
-        [ "$ZED_READY" = false ] && log_warn "ZED topics not detected after 30s, continuing..."
+        [ "$ZED_READY" = false ] && log_warn "ZED odometry data not detected after ${ZED_WAIT_TIMEOUT}s, continuing..."
 
         launch_ros_http_bridge
         trigger_edge_core_video_start
