@@ -298,6 +298,11 @@ namespace NOMAD.MissionPlanner
             _btnRviz2 = CreateSidebarButton("RViz2 (Remote)");
             _btnRviz2.Click += (s, e) => ShowView("Rviz2");
             navPanel.Controls.Add(_btnRviz2);
+
+            // Caddx Gimbal joystick — opens floating window instead of swapping view
+            var btnGimbal = CreateSidebarButton("Caddx Gimbal");
+            btnGimbal.Click += (s, e) => GimbalJoystickWindow.ShowSingleton(_config, this.FindForm());
+            navPanel.Controls.Add(btnGimbal);
             
             // IMPORTANT: In Windows Forms, docking order is reverse of Z-order
             // Add navPanel FIRST (will be at back, fills remaining space)
