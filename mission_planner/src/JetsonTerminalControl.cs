@@ -59,10 +59,14 @@ namespace NOMAD.MissionPlanner
             { "Video Stream Check", "pgrep -f gst-launch && echo 'Video Stream: Running' || echo 'Video Stream: Not running'" },
             { "Isaac ROS Status", "docker inspect -f '{{.State.Status}}' nomad_isaac_ros 2>/dev/null || echo 'Container not found'" },
             { "Git Status", "cd ~/NOMAD && git log --oneline -5 && echo '' && git status -s" },
-            { "Start NOMAD", "cd ~/NOMAD && bash scripts/nomad start all" },
-            { "Stop NOMAD", "cd ~/NOMAD && bash scripts/nomad stop all" },
-            { "Restart NOMAD", "cd ~/NOMAD && bash scripts/nomad restart all" },
-            { "NOMAD Status", "cd ~/NOMAD && bash scripts/nomad status" },
+            // Drive systemd directly so unit state stays accurate. Sudoers
+            // grants the `mad` user NOPASSWD on these specific commands
+            // (infra/systemd/install.sh). Restart/Stop use nohup so the SSH
+            // call returns before Edge Core is taken down.
+            { "Start NOMAD", "sudo -n systemctl start nomad.target && echo started || echo failed" },
+            { "Stop NOMAD", "nohup bash -c 'sleep 2 && sudo -n systemctl stop nomad.target' > /dev/null 2>&1 & echo 'stop scheduled (~2s)'" },
+            { "Restart NOMAD", "nohup bash -c 'sleep 2 && sudo -n systemctl restart nomad.target' > /dev/null 2>&1 & echo 'restart scheduled (~2s)'" },
+            { "NOMAD Status", "systemctl is-active nomad-edge-core nomad-mavlink-router nomad-mediamtx nomad-isaac-ros-container nomad-zed-wrapper nomad-ros-http-bridge nomad-video-bridge nomad-nvblox | paste -d' ' <(echo -e 'edge_core\\nmavlink_router\\nmediamtx\\nisaac_container\\nzed_wrapper\\nros_http_bridge\\nvideo_bridge\\nnvblox') -" },
             { "Pull Latest Code", "cd ~/NOMAD && git pull origin main" },
         };
         

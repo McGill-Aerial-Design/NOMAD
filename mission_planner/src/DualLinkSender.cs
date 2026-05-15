@@ -558,12 +558,17 @@ namespace NOMAD.MissionPlanner
 
         /// <summary>
         /// Restart all NOMAD services via SSH (doesn't rely on HTTP API).
-        /// Stops every service in reverse order, then starts the autostart set.
+        /// Restarts nomad.target — the systemd target that pulls in the
+        /// autostart set. Sudoers grants the `mad` user NOPASSWD for this
+        /// exact command (see infra/systemd/install.sh).
         /// </summary>
         public async Task<CommandResult> RestartAllServicesViaSSHAsync()
         {
-            var command = "cd ~/NOMAD && bash scripts/nomad restart all";
-            return await ExecuteSSHCommandAsync(command, 60);
+            // Use systemctl (not `scripts/nomad`) so systemd remains the
+            // single source of truth for each unit's state. nohup+sleep lets
+            // the SSH call return before Edge Core is taken down.
+            var command = "nohup bash -c 'sleep 2 && sudo -n systemctl restart nomad.target' > /dev/null 2>&1 & echo 'restart scheduled (~2s)'";
+            return await ExecuteSSHCommandAsync(command, 30);
         }
 
         /// <summary>
