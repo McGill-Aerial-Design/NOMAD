@@ -18,6 +18,8 @@
 #
 # `all` operates on the autostart set from config/nomad.env
 # (NOMAD_AUTOSTART_* flags). Note: nvblox defaults to false.
+# `restart all` performs a hard reset: stop services, kill stale launch
+# children, then start the autostart set again.
 # =============================================================================
 set -u
 
@@ -119,6 +121,23 @@ cmd_stop_all() {
     return $rc
 }
 
+cleanup_orphans() {
+    if container_running; then
+        kill_pattern_in_container 'simple_video_bridge|ros_http_bridge\.py|nomad_zed_nvblox\.launch\.py|zed_camera\.launch\.py|target_localizer_node|servo_tf_publisher|obstacle_distance_bridge|component_container_isolated|component_container_mt' 10
+        in_container "rm -f /dev/shm/fastrtps_* /tmp/zed_nvblox.pid /tmp/ros_bridge.pid /tmp/target_localizer.pid /tmp/video_bridge.pid 2>/dev/null || true"
+    fi
+    kill_pattern_host 'edge_core\.main|mediamtx|mavlink-routerd' 5
+}
+
+cmd_restart_all() {
+    local rc=0
+    cmd_stop_all || rc=$?
+    cleanup_orphans || true
+    sleep 1
+    cmd_start_all || rc=$?
+    return $rc
+}
+
 cmd_status_all() {
     local s rc=0
     for s in "${SERVICE_ORDER[@]}"; do
@@ -153,7 +172,7 @@ main() {
                 case "$action" in
                     start)   cmd_start_all ;;
                     stop)    cmd_stop_all ;;
-                    restart) cmd_stop_all; sleep 1; cmd_start_all ;;
+                    restart) cmd_restart_all ;;
                     status)  cmd_status_all ;;
                     logs)    echo "[nomad] 'logs all' is not supported; pick one service" >&2; exit 2 ;;
                 esac

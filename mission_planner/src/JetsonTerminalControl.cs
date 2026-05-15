@@ -65,7 +65,7 @@ namespace NOMAD.MissionPlanner
             // call returns before Edge Core is taken down.
             { "Start NOMAD", "sudo -n systemctl start nomad.target && echo started || echo failed" },
             { "Stop NOMAD", "nohup bash -c 'sleep 2 && sudo -n systemctl stop nomad.target' > /dev/null 2>&1 & echo 'stop scheduled (~2s)'" },
-            { "Restart NOMAD", "nohup bash -c 'sleep 2 && sudo -n systemctl restart nomad.target' > /dev/null 2>&1 & echo 'restart scheduled (~2s)'" },
+            { "Restart NOMAD", "nohup bash -c 'sleep 2 && ~/NOMAD/scripts/nomad restart all' > /dev/null 2>&1 & echo 'restart scheduled (~2s)'" },
             { "NOMAD Status", "systemctl is-active nomad-edge-core nomad-mavlink-router nomad-mediamtx nomad-isaac-ros-container nomad-zed-wrapper nomad-ros-http-bridge nomad-video-bridge nomad-nvblox | paste -d' ' <(echo -e 'edge_core\\nmavlink_router\\nmediamtx\\nisaac_container\\nzed_wrapper\\nros_http_bridge\\nvideo_bridge\\nnvblox') -" },
             { "Pull Latest Code", "cd ~/NOMAD && git pull origin main" },
         };
