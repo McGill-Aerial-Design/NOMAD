@@ -1102,7 +1102,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
         if container_running:
             nvblox_probe = _docker_exec_pgrep(
                 "nomad_isaac_ros",
-                "component_container_mt|component_container_isolated|component_container|nvblox_container|zed_example.launch.py|nomad_zed_nvblox.launch.py",
+                "nvblox_node|nvblox_container|nvblox_examples_bringup|nomad_zed_nvblox\\.launch\\.py",
                 timeout_s=5,
             )
             bridge_probe = _docker_exec_pgrep(
@@ -5341,36 +5341,26 @@ fi
         """
         Bring nvblox up.
 
-        Default path delegates to `systemctl start nomad-nvblox.service`. The
-        `enable_od` query knob keeps the legacy runtime-toggle path for the
-        circle-detector flow, which restarts nvblox/ZED with the OD flag
-        flipped — that path does NOT go through systemd. Prefer setting
-        NVBLOX_ENABLE_OD in config/nomad.env and using the systemd unit for
-        steady-state operation.
+        This delegates to `systemctl start nomad-nvblox.service`. If the
+        requested `enable_od` value differs from `NVBLOX_ENABLE_OD` in
+        config/nomad.env, return a clear error instead of relaunching the
+        stack outside systemd.
         """
         config_default_od = (os.environ.get("NVBLOX_ENABLE_OD", "false").lower() == "true")
         loop = asyncio.get_event_loop()
 
-        if enable_od == config_default_od:
-            result = await loop.run_in_executor(
-                None, lambda: _systemctl("start", ("nomad-nvblox.service",))
-            )
-            if result.get("success"):
-                request.app.state.detection_enabled = enable_od
-                request.app.state.detection_last_update = 0.0
-            return result
+        if enable_od != config_default_od:
+            return {
+                "success": False,
+                "error": (
+                    "enable_od does not match NVBLOX_ENABLE_OD in config/nomad.env. "
+                    "Update config/nomad.env and restart nomad-nvblox.service so "
+                    "systemd remains the single owner of nvblox."
+                ),
+            }
 
-        # Caller wants a different OD state than config/nomad.env; fall back
-        # to the in-process relaunch helper. Log the divergence so it's
-        # debuggable when systemd's view of nomad-nvblox.service drifts.
-        logger.warning(
-            "isaac_launch_nvblox: enable_od=%s differs from NVBLOX_ENABLE_OD=%s; "
-            "using legacy relaunch path (bypasses systemd). Edit "
-            "config/nomad.env and restart nomad-nvblox.service for a clean state.",
-            enable_od, config_default_od,
-        )
         result = await loop.run_in_executor(
-            None, lambda: _launch_nvblox_bridge_with_od(enable_od=enable_od)
+            None, lambda: _systemctl("start", ("nomad-nvblox.service",))
         )
         if result.get("success"):
             request.app.state.detection_enabled = enable_od

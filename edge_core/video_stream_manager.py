@@ -39,13 +39,14 @@ DEFAULT_RELAY_HTTP_PORT = 9200
 DEFAULT_RTSP_URL = "rtsp://172.17.0.1:8554/primary"
 DEFAULT_TOPIC = "/zed/zed_node/rgb/color/rect/image"
 
-# Stream settings — 1080p30 at a low bitrate. The Orin Nano's x264enc runs in
-# ultrafast/zerolatency, and 2500 kbps is enough for 1080p30 over the link
-# without saturating it (Task 1/2 ops are line-of-sight, not cinema).
-DEFAULT_WIDTH = 1920
-DEFAULT_HEIGHT = 1080
-DEFAULT_FPS = 30
-DEFAULT_BITRATE = 2500  # kbps — low-bitrate 1080p30
+# Stream settings — 720p30 at a low bitrate. Picks up overrides from
+# config/nomad.env (VIDEO_BRIDGE_WIDTH/HEIGHT/FPS/BITRATE) so we don't have
+# to edit code to change resolution. 1080p is available — but on the Orin
+# Nano 8GB, ZED + nvblox at 1080p exhausts GPU memory.
+DEFAULT_WIDTH = int(os.environ.get("VIDEO_BRIDGE_WIDTH", "1280"))
+DEFAULT_HEIGHT = int(os.environ.get("VIDEO_BRIDGE_HEIGHT", "720"))
+DEFAULT_FPS = int(os.environ.get("VIDEO_BRIDGE_FPS", "30"))
+DEFAULT_BITRATE = int(os.environ.get("VIDEO_BRIDGE_BITRATE", "2500"))  # kbps
 
 
 @dataclass

@@ -21,6 +21,13 @@ PATTERN='nomad_zed_nvblox\.launch\.py|nvblox_node|nvblox_examples_bringup'
 LAUNCH_SCRIPT_PATH=/tmp/nomad_nvblox_launch.sh
 LAUNCH_LOG=/tmp/nomad_nvblox.log
 
+to_container_path() {
+    printf '%s' "$1" | sed 's#^/home/mad/NOMAD#\/workspaces\/isaac_ros-dev#'
+}
+
+NVBLOX_LAUNCH_CONTAINER="$(to_container_path "$NVBLOX_LAUNCH")"
+NVBLOX_CONFIG_CONTAINER="$(to_container_path "$NVBLOX_CONFIG")"
+
 zed_ready() {
     in_container "source /opt/ros/humble/setup.bash 2>/dev/null; source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null; timeout 4 ros2 topic echo --once /zed/zed_node/odom >/dev/null 2>&1"
 }
@@ -32,7 +39,7 @@ nvblox_built() {
 apply_overlay() {
     in_container "$(cat <<EOS
 set -u
-NOMAD_CFG="$NVBLOX_CONFIG"
+NOMAD_CFG="$NVBLOX_CONFIG_CONTAINER"
 for base in \
     \$(python3 -c 'from ament_index_python.packages import get_package_share_directory; print(get_package_share_directory(\"nvblox_examples_bringup\"))' 2>/dev/null)/config/nvblox/nvblox_base.yaml \
     /workspaces/isaac_ros-dev/install/nvblox_examples_bringup/share/nvblox_examples_bringup/config/nvblox/nvblox_base.yaml; do
@@ -55,7 +62,7 @@ write_launch_script() {
         ros_setup_prelude
         cat <<EOS
 mkdir -p /workspaces/isaac_ros-dev/data 2>/dev/null || true
-ros2 launch "$NVBLOX_LAUNCH" \\
+ros2 launch "$NVBLOX_LAUNCH_CONTAINER" \
     enable_nav2:=${NVBLOX_ENABLE_NAV2} \\
     enable_od:=${NVBLOX_ENABLE_OD}
 EOS
