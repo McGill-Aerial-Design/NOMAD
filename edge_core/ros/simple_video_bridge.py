@@ -68,7 +68,11 @@ _ZED_KNOWN_IMAGE_TOPICS = [
 def _probe_encoder():
     """Probe available H.264 software encoder.
 
-    Returns (element_name, pipeline_fragment_template).
+    Returns (element_name, pipeline_fragment_template). x264enc is strongly
+    preferred — at 1080p30 openh264enc saturates the Orin Nano CPU and the
+    pipeline stalls (no frames reach RTSP), while x264enc in
+    ultrafast/zerolatency keeps up. Install with `apt install
+    gstreamer1.0-plugins-ugly` if missing.
     """
     for name, fragment in [
         (

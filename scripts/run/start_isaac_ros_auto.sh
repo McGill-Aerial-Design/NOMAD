@@ -468,6 +468,7 @@ install_dependencies() {
             gir1.2-gst-plugins-base-1.0 \
             gstreamer1.0-plugins-good \
             gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly \
             gstreamer1.0-rtsp \
             gstreamer1.0-x
         pip3 install --no-cache-dir requests transforms3d 'numpy<2' 2>/dev/null || true
@@ -983,17 +984,30 @@ source /opt/ros/humble/install/setup.bash 2>/dev/null || source /opt/ros/humble/
 source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
 export EGL_PLATFORM=device
 # nvblox is disabled in this code path, so the old 360p/720p GPU-memory
-# workaround no longer applies. Configure the ZED wrapper to grab at HD1080
-# and publish at native resolution (downscale 1.0) so Task 1 / Task 2 vision
-# get the full 1080p frame.
-ZED_CFG=/workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml
-if [ -f "$ZED_CFG" ]; then
+# workaround no longer applies. Configure every common.yaml the ZED wrapper
+# might pick up (install/, src/, /opt/ros) so Task 1 / Task 2 vision get the
+# full 1080p frame at native resolution.
+for ZED_CFG in \
+    /workspaces/isaac_ros-dev/install/zed_wrapper/share/zed_wrapper/config/common.yaml \
+    /workspaces/isaac_ros-dev/src/zed-ros2-wrapper/zed_wrapper/config/common.yaml \
+    /opt/ros/humble/share/zed_wrapper/config/common.yaml \
+    $(find / -path '*/zed_wrapper/config/common.yaml' 2>/dev/null); do
+    [ -f "$ZED_CFG" ] || continue
     sed -i -E "s/^([[:space:]]*grab_resolution:[[:space:]]*)['\"]?[A-Za-z0-9]+['\"]?/\1'HD1080'/" "$ZED_CFG" 2>/dev/null || true
     sed -i -E "s/^([[:space:]]*pub_resolution:[[:space:]]*)['\"]?[A-Za-z0-9]+['\"]?/\1'NATIVE'/" "$ZED_CFG" 2>/dev/null || true
     sed -i -E "s/^([[:space:]]*pub_downscale_factor:[[:space:]]*).*/\11.0/" "$ZED_CFG" 2>/dev/null || true
-    echo "[init] Patched ZED config -> grab=HD1080 pub=NATIVE downscale=1.0"
-fi
-ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i
+    echo "[init] Patched ZED config: $ZED_CFG -> grab=HD1080 pub=NATIVE downscale=1.0"
+done
+
+# ZED + Isaac ROS Nitros crash on launch with:
+#   "intraprocess communication allowed only with volatile durability"
+# Nitros publishes some topics TRANSIENT_LOCAL; zed_camera.launch.py turns
+# intra-process comms ON in its composable container, and that combination
+# throws std::invalid_argument before the camera ever publishes a frame.
+# Disabling intra-process comms at launch time keeps the node alive.
+ros2 launch zed_wrapper zed_camera.launch.py \
+    camera_model:=zed2i \
+    --ros-args --log-level WARN
 LAUNCH_SCRIPT
     docker cp "$_zed_tmp" "$CONTAINER_NAME:/tmp/launch_zed_only.sh"
     rm -f "$_zed_tmp"
