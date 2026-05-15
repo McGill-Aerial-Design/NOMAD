@@ -948,6 +948,31 @@ LAUNCH_SCRIPT
 launch_zed_only() {
     log_info "Launching ZED wrapper only (camera_model:=zed2i)..."
 
+    # Same cleanup the nvblox path does: kill any stale ZED / nvblox / bridge
+    # / composable-container processes from a previous boot AND clear FastRTPS
+    # shared-memory locks. Without this, DDS discovery on the new ZED node can
+    # silently fail (the old shm slots are still owned by dead PIDs), which in
+    # turn means /api/video/start finds no ZED topic and ros_http_bridge sits
+    # idle. Mirrors the block in launch_zed_nvblox.
+    docker exec "$CONTAINER_NAME" bash -c '
+        for pattern in "[l]aunch_nvblox_bridge" "[l]aunch_zed_nvblox" "[n]omad_zed_nvblox" "[z]ed_example.launch" "[c]omponent_container" "[s]imple_video_bridge" "[r]os_http_bridge" "[z]ed_camera.launch"; do
+            pkill -f "$pattern" 2>/dev/null || true
+        done
+        timeout=10
+        while [ $timeout -gt 0 ]; do
+            if ! pgrep -f "[l]aunch_nvblox_bridge|[l]aunch_zed_nvblox|[n]omad_zed_nvblox|[z]ed_example\.launch|[c]omponent_container|[s]imple_video_bridge|[r]os_http_bridge|[z]ed_camera\.launch" >/dev/null 2>&1; then
+                break
+            fi
+            sleep 0.5
+            timeout=$((timeout - 1))
+        done
+        for pattern in "[l]aunch_nvblox_bridge" "[l]aunch_zed_nvblox" "[n]omad_zed_nvblox" "[z]ed_example.launch" "[c]omponent_container" "[s]imple_video_bridge" "[r]os_http_bridge" "[z]ed_camera.launch"; do
+            pkill -9 -f "$pattern" 2>/dev/null || true
+        done
+        sleep 1
+        rm -f /dev/shm/fastrtps_* 2>/dev/null || true
+    '
+
     local _zed_tmp
     _zed_tmp=$(mktemp /tmp/launch_zed_only.XXXXXX.sh)
     cat > "$_zed_tmp" << 'LAUNCH_SCRIPT'
