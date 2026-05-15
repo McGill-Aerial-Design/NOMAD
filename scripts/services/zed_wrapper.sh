@@ -28,7 +28,9 @@ write_launch_script() {
     tmp=$(mktemp)
     {
         echo "#!/bin/bash"
-        echo "set -u"
+        # NOTE: NO `set -u` here. ROS2's setup.bash references unset vars
+        # internally and aborts immediately under -u, with stderr swallowed by
+        # `2>/dev/null`. That manifests as a silent exit-1 from this launcher.
         ros_setup_prelude
         cat <<'EOS'
 # Patch ZED wrapper config files in-place to NOMAD tuning before launch.
@@ -100,8 +102,7 @@ fi
 ros2 launch zed_wrapper zed_camera.launch.py \
     camera_model:="${ZED_CAMERA_MODEL}" \
     camera_name:="${ZED_CAMERA_NAME}" \
-    "${IPC_ARGS[@]}" \
-    --ros-args --log-level WARN &
+    "${IPC_ARGS[@]}" &
 ZED_PID=$!
 
 # Helper nodes that follow the camera lifecycle. They are intentionally NOT

@@ -283,17 +283,13 @@ def run(
     # Mesh bridge is not auto-started; mesh data arrives via ros_http_bridge
     # (POST /api/task/2/slam/mesh/update -> GET /api/task/2/slam/mesh)
 
-    # Video stream manager: API endpoints (/api/video/start, /api/video/stop)
-    # remain available. The in-process auto-start thread is OFF by default —
-    # nomad-video-bridge.service is the single owner of the bridge process.
-    # Set NOMAD_VIDEO_AUTO_START=true in config/nomad.env to restore the
-    # in-process safety net (not recommended; it fights the systemd unit).
-    enable_video_auto_start = os.environ.get("NOMAD_VIDEO_AUTO_START", "false").lower() == "true"
-    init_video_stream_manager(
-        container_name="nomad_isaac_ros",
-        auto_start=enable_video_auto_start
-    )
-    logger.info(f"Video stream manager initialized (auto_start={enable_video_auto_start})")
+    # Video stream manager. The /api/video/start and /api/video/stop endpoints
+    # remain the only way to bring the bridge up/down. The systemd unit
+    # nomad-video-bridge.service is the SINGLE OWNER of that lifecycle; the
+    # in-process auto-start thread was removed to eliminate ownership races.
+    # A crash-recovery watchdog still runs (see VideoStreamManager).
+    init_video_stream_manager(container_name="nomad_isaac_ros")
+    logger.info("Video stream manager initialized (owner: nomad-video-bridge.service)")
 
     # ZED camera is owned by the ROS2 wrapper inside the Isaac ROS container
     # (for nvblox, video bridge, etc.). Task 1 captures use the RTSP stream.

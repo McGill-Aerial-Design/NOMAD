@@ -226,7 +226,7 @@ class VideoStreamManager:
         """Internal start implementation returning (success, message)."""
         with self._lock:
             # Check if a bridge is already running (from any launch path:
-            # start_isaac_ros_auto.sh, auto_start thread, or prior API call).
+            # nomad-video-bridge.service, watchdog re-launch, or prior API call).
             # Don't kill a working bridge just because _started is False
             # (e.g., after Edge Core restart).
             if self.is_relay_running(require_recent_frames=True):
@@ -667,74 +667,45 @@ def get_video_stream_manager() -> Optional[VideoStreamManager]:
 
 def init_video_stream_manager(
     container_name: str = DEFAULT_CONTAINER_NAME,
-    auto_start: bool = True,
+    auto_start: bool = False,  # kept in signature for backward compat; ignored
     **kwargs
 ) -> VideoStreamManager:
     """
     Initialize the global video stream manager.
-    
+
+    Lifecycle ownership: `nomad-video-bridge.service` is the SINGLE owner of
+    the simple_video_bridge process. Edge Core exposes /api/video/start and
+    /api/video/stop for explicit operator control (used by the systemd unit
+    and Mission Planner), but does NOT auto-start the bridge in-process —
+    that would race with the systemd unit.
+
+    The `auto_start` kwarg is accepted for backward compatibility but is
+    ignored. To bring the bridge up, start the systemd unit.
+
+    A crash-recovery watchdog still runs. It restarts the bridge only if the
+    relay died unexpectedly; explicit stops (POST /api/video/stop, which is
+    what `systemctl stop nomad-video-bridge.service` ultimately calls) set
+    `_user_stopped=True`, and the watchdog will not resurrect the bridge in
+    that case.
+
     Args:
-        container_name: Name of the Isaac ROS Docker container
-        auto_start: Whether to auto-start the simple video bridge when container is ready
-        **kwargs: Additional arguments passed to VideoStreamManager
-        
+        container_name: Isaac ROS Docker container name.
+        auto_start: deprecated; ignored.
+
     Returns:
-        The initialized VideoStreamManager instance
+        The initialized VideoStreamManager instance.
     """
     global _video_stream_manager
     _video_stream_manager = VideoStreamManager(container_name=container_name, **kwargs)
-    
+
     if auto_start:
-        # Start in background thread to not block startup.
-        # This is a SAFETY NET — the primary bridge launch is done by
-        # start_isaac_ros_auto.sh after ZED topics are confirmed ready.
-        # We wait long enough for that to happen first, then only start
-        # a bridge if none is already running.
-        def _delayed_start():
-            # Wait for container to be running
-            for i in range(45):
-                if _video_stream_manager.is_container_running():
-                    break
-                time.sleep(2)
-            else:
-                logger.warning("Container not ready after 90s, video bridge not started")
-                return
+        logger.warning(
+            "init_video_stream_manager(auto_start=True) is deprecated and ignored. "
+            "nomad-video-bridge.service owns the bridge lifecycle; "
+            "set NOMAD_VIDEO_AUTO_START=false (the default) in config/nomad.env."
+        )
 
-            # Wait for the primary bridge (started by start_isaac_ros_auto.sh)
-            # to come online. ZED takes 15-30s to init, plus bridge has sleep 8.
-            # Check periodically — if it's already running, we're done.
-            logger.info("Waiting for video bridge (started by Isaac ROS startup)...")
-            for i in range(30):  # Wait up to 60 seconds
-                if _video_stream_manager.is_relay_running():
-                    _video_stream_manager._started = True
-                    logger.info("Video bridge already running (started by Isaac ROS startup)")
-                    return
-                time.sleep(2)
-
-            # Safety net: primary bridge didn't start, launch one ourselves.
-            # Retry a few times to survive transient startup races.
-            logger.warning("Video bridge not detected after 60s, starting as safety net...")
-            max_attempts = 3
-            for attempt in range(1, max_attempts + 1):
-                ok, msg = _video_stream_manager.start_with_reason()
-                if ok:
-                    logger.info(f"Video bridge safety net started on attempt {attempt}/{max_attempts}")
-                    return
-
-                logger.warning(
-                    f"Video bridge safety net attempt {attempt}/{max_attempts} failed: {msg}"
-                )
-                if attempt < max_attempts:
-                    time.sleep(10)
-
-            logger.error("Video bridge safety net failed after all retry attempts")
-
-        thread = threading.Thread(target=_delayed_start, daemon=True, name="video-delayed-start")
-        thread.start()
-
-    # Start persistent watchdog regardless of auto_start flag.
-    # It begins polling 120 s after init so the delayed-start thread
-    # has time to bring the bridge up before the watchdog first checks.
+    # Crash-recovery watchdog only. It will not initiate a first start.
     def _start_watchdog_after_delay():
         time.sleep(120)
         _video_stream_manager._watchdog_thread = threading.Thread(
@@ -744,7 +715,8 @@ def init_video_stream_manager(
         )
         _video_stream_manager._watchdog_thread.start()
 
-    threading.Thread(target=_start_watchdog_after_delay, daemon=True, name="video-watchdog-init").start()
-    logger.info("Video bridge watchdog scheduled (starts in 120 s)")
+    threading.Thread(target=_start_watchdog_after_delay, daemon=True,
+                     name="video-watchdog-init").start()
+    logger.info("Video bridge crash-recovery watchdog scheduled (starts in 120s)")
 
     return _video_stream_manager

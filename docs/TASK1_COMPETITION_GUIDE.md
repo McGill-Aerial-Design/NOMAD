@@ -1,5 +1,11 @@
 # Task 1: Fire Reconnaissance — Competition Guide
 
+> **Refactor note:** anywhere this guide says
+> `./scripts/run/start_nomad_full.sh task1`, run instead:
+> `nomad start all`. To push Task-1 ArduPilot params: the file is now
+> `config/profiles/task1_outdoor.params` (loaded by
+> `scripts/run/load_params.py task1`).
+
 **AEAC 2026 | CONOPS v1.3 | NOMAD System**
 
 This document is the definitive reference for operating NOMAD's Task 1 pipeline during competition. It covers: what the CONOPS requires, how NOMAD implements each requirement, step-by-step instructions for competition day, and checklists.

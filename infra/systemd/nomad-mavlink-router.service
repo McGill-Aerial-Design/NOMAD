@@ -5,7 +5,10 @@ Wants=network-online.target
 PartOf=nomad.target
 
 [Service]
-Type=forking
+# oneshot+RemainAfterExit because mavlink_router.sh's `start` action backgrounds
+# mavlink-routerd with nohup and exits 0. Type=forking would need a PIDFile.
+Type=oneshot
+RemainAfterExit=yes
 User=mad
 Group=mad
 WorkingDirectory=/home/mad/NOMAD
@@ -13,9 +16,6 @@ EnvironmentFile=/home/mad/NOMAD/config/nomad.env
 
 ExecStart=/home/mad/NOMAD/scripts/services/mavlink_router.sh start
 ExecStop=/home/mad/NOMAD/scripts/services/mavlink_router.sh stop
-
-Restart=on-failure
-RestartSec=5
 
 StandardOutput=journal
 StandardError=journal

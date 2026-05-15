@@ -1,5 +1,10 @@
 # NOMAD nvblox Visualization Quick Reference
 
+> **Refactor note:** start nvblox via `nomad start nvblox` (or
+> `sudo systemctl start nomad-nvblox.service`). nvblox is opt-in and is NOT
+> in the autostart set. References below to `start_isaac_ros_auto.sh` are
+> pre-refactor — the equivalent today is the per-service `nomad` CLI.
+
 ## Overview
 This document describes how to run nvblox 3D mesh visualization with the ZED camera on the Jetson.
 

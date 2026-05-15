@@ -3,7 +3,14 @@
 #
 # Only the Isaac ROS container runs in Docker. Everything else
 # (Edge Core, MediaMTX, MAVLink Router) runs natively on the
-# Jetson host, managed by start_nomad_full.sh and systemd.
+# Jetson host as per-service systemd units. See:
+#   infra/systemd/nomad-*.service     - one unit per NOMAD service
+#   scripts/services/*.sh             - the script each unit runs
+#   scripts/nomad                     - the unified CLI
+#
+# In production this compose file is NOT used to manage the lifecycle;
+# nomad-isaac-ros-container.service owns the container. This compose file
+# remains useful for `docker compose build` and ad-hoc local testing only.
 #
 # Prerequisites:
 #   1. Build the official Isaac ROS dev base image first:
@@ -156,8 +163,8 @@ services:
           echo '[init] ERROR: ZED not ready after 60 seconds. Check camera connection.';
         fi;
 
-        echo '[init] Note: Video bridge will be launched by Edge Core (VideoStreamManager) via /api/video/start';
-        echo '[init] Note: ros_http_bridge is launched externally by scripts/run/start_isaac_ros_auto.sh (single owner; canonical launcher with restart loop and full args).';
+        echo '[init] Note: Video bridge is launched by nomad-video-bridge.service (single owner; calls Edge Core /api/video/start).';
+        echo '[init] Note: ros_http_bridge is launched by nomad-ros-http-bridge.service (single owner; restart loop is in scripts/services/ros_http_bridge.sh).';
 
         echo '[init] Launching drone state publisher (Edge Core -> ROS topics for target_localizer)...';
         python3 /workspaces/isaac_ros-dev/edge_core/ros/drone_state_publisher.py --host localhost --port 8000 --rate 10 > /tmp/drone_state_pub.log 2>&1 &
@@ -186,9 +193,11 @@ services:
         max-file: "5"
 
   # ============================================================
-  # Host-side services (NOT containerized):
-  #   - Edge Core API:    systemd (nomad.service) or start_nomad_full.sh
-  #   - MediaMTX:         start_nomad_full.sh (single binary, port 8554)
-  #   - MAVLink Router:   start_nomad_full.sh (mavlink-routerd, port 14550)
-  #   - Tailscale VPN:    systemd (tailscaled.service)
+  # Host-side services (NOT containerized) — each managed by its own
+  # systemd unit (infra/systemd/nomad-*.service):
+  #   - Edge Core API:    nomad-edge-core.service          (port 8000)
+  #   - MediaMTX:         nomad-mediamtx.service           (port 8554)
+  #   - MAVLink Router:   nomad-mavlink-router.service     (port 14550)
+  #   - Video Bridge:     nomad-video-bridge.service       (calls /api/video/start)
+  #   - Tailscale VPN:    tailscaled.service               (system package)
   # ============================================================

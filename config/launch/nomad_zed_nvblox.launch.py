@@ -17,13 +17,15 @@
 #                                                          -> zed_left_camera_frame_optical
 #                                                             -> zed_left_camera_optical_frame (alias)
 #
-# NOTE: ZED config patches (publish_left_right, pub_downscale_factor, publish_mag, etc.)
-# are applied by start_isaac_ros_auto.sh BEFORE this launch file runs because ZED
-# reads them at initialization time. They affect common_stereo.yaml on disk.
+# NOTE: ZED config patches (publish_left_right, pub_downscale_factor, publish_mag,
+# depth_confidence, etc.) are applied by scripts/services/zed_wrapper.sh BEFORE
+# the ZED node starts — ZED reads these at initialization time. The values come
+# from config/nomad.env (ZED_* variables) and are written into common_stereo.yaml
+# on disk.
 #
-# NOTE: nvblox parameter overrides (voxel_size, ESDF mode, rates, etc.)
-# are applied by the startup script which copies config/nvblox_performance.yaml
-# over the installed nvblox_base.yaml BEFORE this launch file runs.
+# NOTE: nvblox parameter overrides (voxel_size, ESDF mode, rates, etc.) are
+# applied by scripts/services/nvblox.sh, which copies config/nvblox_performance.yaml
+# over the installed nvblox_base.yaml BEFORE invoking this launch file.
 #
 # Usage (inside Isaac ROS container):
 #   ros2 launch /workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py
@@ -55,10 +57,10 @@ def generate_launch_description():
     )
 
     # Config files for ZED node (loaded in priority order, later overrides earlier).
-    # common_stereo.yaml is patched by start_isaac_ros_auto.sh before launch:
-    #   - publish_left_right: true  (lazy-published; only streams when subscribed)
-    #   - publish_raw: true
-    #   - pub_downscale_factor: 2.0 (360p — 720p causes CUDA OOM with nvblox on 8GB Orin Nano)
+    # common_stereo.yaml is patched by scripts/services/zed_wrapper.sh before launch:
+    #   - publish_left_right, publish_raw, publish_mag (lazy-published)
+    #   - pub_downscale_factor — defaults to 1.0 (NATIVE); set to 2.0 (360p) if
+    #     running nvblox alongside ZED on 8GB Orin Nano to avoid CUDA OOM
     zed_stereo_config = os.path.join(
         zed_wrapper_dir, "config", "common_stereo.yaml"
     )
@@ -71,7 +73,7 @@ def generate_launch_description():
         nvblox_bringup_dir, "config", "sensors", "zed2.yaml"
     )
 
-    # nvblox config files (copied/patched by start_isaac_ros_auto.sh before launch)
+    # nvblox config files (copied/patched by scripts/services/nvblox.sh before launch)
     nvblox_base_config = os.path.join(
         nvblox_bringup_dir, "config", "nvblox", "nvblox_base.yaml"
     )

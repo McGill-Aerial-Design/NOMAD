@@ -23,7 +23,7 @@ write_launch_script() {
     tmp=$(mktemp)
     {
         echo "#!/bin/bash"
-        echo "set -u"
+        # No `set -u`: ROS2's setup.bash isn't -u clean and would abort silently.
         ros_setup_prelude
         cat <<'EOS'
 export PYTHONPATH=/workspaces/isaac_ros-dev:${PYTHONPATH:-}

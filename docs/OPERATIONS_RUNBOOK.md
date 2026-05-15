@@ -1,5 +1,22 @@
 # NOMAD Operations Runbook
 
+> **NOTE (refactor):** NOMAD now runs as one systemd unit per service. The
+> single CLI is `scripts/nomad` and the single config file is
+> `config/nomad.env`. The old startup scripts (`start_nomad_full.sh`,
+> `start_isaac_ros_auto.sh`, `restart_nomad.sh`) have been removed.
+>
+> | Old command                                   | New command                                  |
+> |-----------------------------------------------|----------------------------------------------|
+> | `bash scripts/run/start_nomad_full.sh all`    | `nomad start all` or `sudo systemctl start nomad.target` |
+> | `bash scripts/run/restart_nomad.sh`           | `nomad restart all` or `sudo systemctl restart nomad.target` |
+> | `bash scripts/run/start_isaac_ros_auto.sh start` | `nomad start isaac_ros_container && nomad start zed_wrapper && nomad start ros_http_bridge` |
+> | `bash scripts/dev/restart_bridge.sh`          | `nomad restart ros_http_bridge`              |
+> | `bash scripts/dev/restart_nvblox.sh`          | `nomad restart nvblox`                       |
+> | edit `config/env/jetson.env`                  | edit `config/nomad.env`                      |
+>
+> nvblox is no longer in the autostart set — start it on demand via
+> `nomad start nvblox` or enable the unit with `sudo systemctl enable --now nomad-nvblox`.
+
 Reference guide for operating the NOMAD system during development and competition.
 
 **Jetson IP (Tailscale):** 100.85.121.98  

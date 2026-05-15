@@ -90,33 +90,69 @@ class Task1CapturesList(BaseModel):
     count: int
 
 
-# Whitelist of allowed terminal commands for safety
-# NOTE: mediamtx and mavlink-routerd run as bare processes (started by
-# scripts/run/start_nomad_full.sh), NOT as systemd services.  Only nomad
-# (edge_core) has a real systemd unit.  Status checks therefore use
-# pgrep and restarts use pkill + nohup.
+# Whitelist of allowed terminal commands.
+#
+# Every NOMAD service is now a per-service systemd unit (see
+# infra/systemd/nomad-*.service) wrapping a script under scripts/services/.
+# These whitelist entries delegate to `systemctl` or the `nomad` CLI so that
+# the Mission Planner terminal panel cannot create out-of-band processes that
+# fight the systemd-managed lifecycle.
+#
+# Service<->unit map:
+#   edge_core      -> nomad-edge-core.service
+#   mediamtx       -> nomad-mediamtx.service
+#   mavlink_router -> nomad-mavlink-router.service
+#   video_bridge   -> nomad-video-bridge.service
+#   isaac_ros      -> nomad-isaac-ros-container.service (+ zed_wrapper, ros_http_bridge)
+#   nvblox         -> nomad-nvblox.service (opt-in)
+#
+# `sudo -n systemctl ...` requires a sudoers entry granting the `mad` user
+# passwordless control of the nomad-*.service units; the setup script installs
+# that. Where sudo isn't available we fall back to the `nomad` CLI which uses
+# script-level process management.
 COMMAND_WHITELIST: dict[str, str] = {
-    # --- Service status (pgrep for bare processes, systemctl for systemd) ---
-    "status_mediamtx": "pgrep -x mediamtx > /dev/null && echo active || echo inactive",
-    "status_mavlink": "pgrep -f mavlink-routerd > /dev/null && echo active || echo inactive",
+    # --- Service status ---
+    "status_nomad":      "systemctl is-active nomad-edge-core.service",
+    "status_mediamtx":   "systemctl is-active nomad-mediamtx.service",
+    "status_mavlink":    "systemctl is-active nomad-mavlink-router.service",
+    "status_video":      "systemctl is-active nomad-video-bridge.service",
+    "status_isaac":      "systemctl is-active nomad-isaac-ros-container.service",
+    "status_zed":        "systemctl is-active nomad-zed-wrapper.service",
+    "status_ros_bridge": "systemctl is-active nomad-ros-http-bridge.service",
+    "status_nvblox":     "systemctl is-active nomad-nvblox.service",
     "status_novnc": "if systemctl --user is-active --quiet novnc 2>/dev/null || systemctl is-active --quiet novnc 2>/dev/null || (pgrep -f '[w]ebsockify.*6080' >/dev/null && pgrep -f '[x]11vnc.*-rfbport 5900' >/dev/null); then echo active; else echo inactive; fi",
-    "status_nomad": "systemctl is-active nomad",
-    # --- Service restart ---
-    "restart_video": "pkill -x mediamtx 2>/dev/null; sleep 1; nohup mediamtx ~/NOMAD/infra/mediamtx.yml > ~/nomad_logs/mediamtx.log 2>&1 & sleep 1; pgrep -x mediamtx > /dev/null && echo restarted || echo failed",
-    "restart_mavlink": "pkill -9 mavlink-routerd 2>/dev/null; sleep 3; for i in {1..5}; do lsof -i :14550 2>/dev/null || break; [ $i -lt 5 ] && sleep 1; done; [ -e /dev/ttyACM0 ] && { GCS=${GCS_IP:-100.76.127.17}; nohup mavlink-routerd -e \"${GCS}:14550\" -e 127.0.0.1:14550 /dev/ttyACM0 > ~/nomad_logs/mavlink.log 2>&1 & sleep 2; pgrep -f mavlink-routerd > /dev/null && echo restarted || (cat ~/nomad_logs/mavlink.log; echo failed); } || echo 'no CubePilot'",
-    "restart_edge_core": "nohup bash -c 'sleep 2 && sudo systemctl restart nomad' > /dev/null 2>&1 & echo 'restart scheduled'",
-    # --- Service start / stop ---
-    "start_mediamtx": "pgrep -x mediamtx > /dev/null && echo 'already running' || (nohup mediamtx ~/NOMAD/infra/mediamtx.yml > ~/nomad_logs/mediamtx.log 2>&1 & sleep 1; echo started)",
-    "stop_mediamtx": "pkill -x mediamtx 2>&1 && echo stopped || echo 'not running'",
-    "start_mavlink": "[ -e /dev/ttyACM0 ] && { pgrep -f mavlink-routerd > /dev/null && echo 'already running' || { GCS=${GCS_IP:-100.76.127.17}; nohup mavlink-routerd -e \"${GCS}:14550\" -e 127.0.0.1:14550 /dev/ttyACM0 > ~/nomad_logs/mavlink.log 2>&1 & sleep 2; pgrep -f mavlink-routerd > /dev/null && echo started || (cat ~/nomad_logs/mavlink.log; echo failed); }; } || echo 'no CubePilot'",
-    "stop_mavlink": "pkill -f mavlink-routerd 2>&1 && echo stopped || echo 'not running'",
+
+    # --- Per-service start / stop / restart (delegate to systemd) ---
+    "start_nomad":         "sudo -n systemctl start   nomad-edge-core.service 2>&1 && echo started || echo failed",
+    "stop_nomad":          "nohup bash -c 'sleep 2 && sudo -n systemctl stop nomad-edge-core.service' > /dev/null 2>&1 & echo 'stop scheduled'",
+    "restart_edge_core":   "nohup bash -c 'sleep 2 && sudo -n systemctl restart nomad-edge-core.service' > /dev/null 2>&1 & echo 'restart scheduled'",
+    "start_mediamtx":      "sudo -n systemctl start   nomad-mediamtx.service 2>&1 && echo started || echo failed",
+    "stop_mediamtx":       "sudo -n systemctl stop    nomad-mediamtx.service 2>&1 && echo stopped || echo failed",
+    "restart_video":       "sudo -n systemctl restart nomad-mediamtx.service && sudo -n systemctl restart nomad-video-bridge.service 2>&1 && echo restarted || echo failed",
+    "start_mavlink":       "sudo -n systemctl start   nomad-mavlink-router.service 2>&1 && echo started || echo failed",
+    "stop_mavlink":        "sudo -n systemctl stop    nomad-mavlink-router.service 2>&1 && echo stopped || echo failed",
+    "restart_mavlink":     "sudo -n systemctl restart nomad-mavlink-router.service 2>&1 && echo restarted || echo failed",
+    "start_video_bridge":  "sudo -n systemctl start   nomad-video-bridge.service 2>&1 && echo started || echo failed",
+    "stop_video_bridge":   "sudo -n systemctl stop    nomad-video-bridge.service 2>&1 && echo stopped || echo failed",
+    "restart_video_bridge":"sudo -n systemctl restart nomad-video-bridge.service 2>&1 && echo restarted || echo failed",
+    "start_isaac":         "sudo -n systemctl start   nomad-isaac-ros-container.service nomad-zed-wrapper.service nomad-ros-http-bridge.service 2>&1 && echo started || echo failed",
+    "stop_isaac":          "sudo -n systemctl stop    nomad-ros-http-bridge.service nomad-zed-wrapper.service nomad-isaac-ros-container.service 2>&1 && echo stopped || echo failed",
+    "restart_isaac":       "sudo -n systemctl restart nomad-isaac-ros-container.service nomad-zed-wrapper.service nomad-ros-http-bridge.service 2>&1 && echo restarted || echo failed",
+    "start_nvblox":        "sudo -n systemctl start   nomad-nvblox.service 2>&1 && echo started || echo failed",
+    "stop_nvblox":         "sudo -n systemctl stop    nomad-nvblox.service 2>&1 && echo stopped || echo failed",
+
+    # --- Bring everything up / down (autostart set per config/nomad.env) ---
+    "start_all":           "sudo -n systemctl start   nomad.target 2>&1 && echo started || echo failed",
+    "stop_all":            "sudo -n systemctl stop    nomad.target 2>&1 && echo stopped || echo failed",
+    "restart_all":         "nohup bash -c 'sleep 2 && sudo -n systemctl restart nomad.target' > /dev/null 2>&1 & echo 'restart scheduled'",
+
+    # --- noVNC (unchanged: not part of the NOMAD systemd target) ---
     "start_novnc": "if ss -ltn | grep -q ':6080 '; then echo 'already running'; else mkdir -p ~/nomad_logs; pgrep -x Xvfb >/dev/null || (screen=${NOVNC_GEOMETRY:-1920x1080}x24; nohup Xvfb :1 -screen 0 \"$screen\" -ac +extension RANDR > ~/nomad_logs/xvfb.log 2>&1 & sleep 1); pgrep -x openbox >/dev/null || (DISPLAY=:1 nohup openbox-session > ~/nomad_logs/openbox.log 2>&1 & sleep 1); command -v tint2 >/dev/null 2>&1 && (pgrep -x tint2 >/dev/null || (DISPLAY=:1 nohup tint2 > ~/nomad_logs/tint2.log 2>&1 & sleep 1)); if ! ss -ltn | grep -q ':5900 '; then x11vnc -display :1 -rfbport 5900 -localhost -forever -shared -repeat -xkb -noxdamage -noxfixes -noxrecord -bg -passwd ${NOVNC_VNC_PASSWORD:-skibidi123} -o ~/nomad_logs/x11vnc.log >/dev/null 2>&1; fi; for i in 1 2 3 4 5 6 7 8 9 10; do ss -ltn | grep -q ':5900 ' && break; sleep 1; done; if ! ss -ltn | grep -q ':5900 '; then echo failed; exit 1; fi; nohup websockify --heartbeat 30 --web /usr/share/novnc/ 6080 localhost:5900 > ~/nomad_logs/novnc.log 2>&1 & for i in 1 2 3 4 5 6 7 8 9 10; do ss -ltn | grep -q ':6080 ' && break; sleep 1; done; ss -ltn | grep -q ':6080 ' && echo started || (echo failed; exit 1); fi",
     "stop_novnc": "stopped=0; pkill -f '[w]ebsockify.*6080' 2>/dev/null && stopped=1; pkill -f '[x]11vnc.*-rfbport 5900' 2>/dev/null && stopped=1; pkill -x tint2 2>/dev/null && stopped=1; pkill -x openbox 2>/dev/null && stopped=1; pkill -f '[X]vfb :1' 2>/dev/null && stopped=1; [ $stopped -eq 1 ] && echo stopped || echo 'not running'",
-    "start_nomad": "sudo systemctl start nomad 2>&1 && echo started || echo failed",
-    "stop_nomad": "nohup bash -c 'sleep 2 && sudo systemctl stop nomad' > /dev/null 2>&1 & echo 'stop scheduled'",
+
     # --- System commands ---
-    "reboot_jetson": "nohup bash -c 'sleep 2 && sudo reboot' > /dev/null 2>&1 & echo 'reboot scheduled'",
-    "shutdown_jetson": "nohup bash -c 'sleep 2 && sudo shutdown -h now' > /dev/null 2>&1 & echo 'shutdown scheduled'",
+    "reboot_jetson": "nohup bash -c 'sleep 2 && sudo -n reboot' > /dev/null 2>&1 & echo 'reboot scheduled'",
+    "shutdown_jetson": "nohup bash -c 'sleep 2 && sudo -n shutdown -h now' > /dev/null 2>&1 & echo 'shutdown scheduled'",
     "check_disk": "df -h",
     "check_memory": "free -h",
     "check_processes": "ps aux | head -20",
@@ -852,10 +888,12 @@ def create_app(state_manager: StateManager) -> FastAPI:
         """Start high-rate ZMQ listener on API startup."""
         _start_high_rate_zmq_listener()
 
-    @app.on_event("startup")
-    async def _startup_mavlink_watchdog() -> None:
-        """Launch background mavlink-routerd watchdog."""
-        asyncio.create_task(_mavlink_watchdog_loop())
+    # NOTE: mavlink-routerd respawn is now owned by nomad-mavlink-router.service
+    # (Restart=on-failure). The in-process watchdog that used to live here was
+    # removed to eliminate the race where Edge Core and systemd would both try
+    # to relaunch the router on the same crash. The watchdog *function* below
+    # is retained for now in case it needs to be re-enabled for a non-systemd
+    # deployment, but it is no longer scheduled at startup.
 
     @app.on_event("startup")
     async def _startup_detection_status_poller() -> None:
@@ -5217,162 +5255,66 @@ fi
             **isaac_bridge.get_status(),
         }
 
+    # Per-service systemd units that make up the Isaac ROS stack. Listed in
+    # dependency order — start in this order, stop in reverse.
+    ISAAC_STACK_UNITS = (
+        "nomad-isaac-ros-container.service",
+        "nomad-zed-wrapper.service",
+        "nomad-ros-http-bridge.service",
+    )
+
+    def _systemctl(verb: str, units: tuple[str, ...]) -> dict:
+        """Call `sudo -n systemctl <verb> <unit>...` and surface the result."""
+        cmd = ["sudo", "-n", "systemctl", verb, *units]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            return {
+                "success": proc.returncode == 0,
+                "stdout": proc.stdout,
+                "stderr": proc.stderr,
+                "command": " ".join(cmd),
+            }
+        except subprocess.TimeoutExpired:
+            return {"success": False, "error": "systemctl timed out", "command": " ".join(cmd)}
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "command": " ".join(cmd)}
+
     @app.post("/api/isaac/start", tags=["Isaac ROS"])
     async def isaac_start():
         """
-        Start Isaac ROS container and services.
+        Start the Isaac ROS stack (container + ZED wrapper + ROS-HTTP bridge).
 
-        This runs the start_isaac_ros_auto.sh script which:
-        1. Starts the Docker container
-        2. Installs dependencies
-        3. Launches ZED + Nvblox
-        4. Starts the ROS-HTTP bridge
+        Delegates to systemd. nvblox is intentionally NOT started here — it is
+        opt-in via /api/isaac/launch-nvblox or `systemctl start nomad-nvblox`.
         """
-        script_path = os.path.expanduser("~/NOMAD/scripts/run/start_isaac_ros_auto.sh")
-
-        if not os.path.exists(script_path):
-            return {
-                "success": False,
-                "error": f"Script not found: {script_path}",
-            }
-
-        startup_guard_window_s = 90.0
-        last_start_ts = float(
-            getattr(app.state, "isaac_startup_last_initiated", 0.0) or 0.0
-        )
-        if (
-            last_start_ts > 0.0
-            and (time.time() - last_start_ts) < startup_guard_window_s
-        ):
-            try:
-                runtime_state = _probe_isaac_runtime_state(force_refresh=True)
-                if (
-                    runtime_state["container_running"]
-                    and runtime_state["nvblox_running"]
-                    and runtime_state["bridge_running"]
-                ):
-                    app.state.isaac_startup_last_initiated = 0.0
-                else:
-                    return {
-                        "success": True,
-                        "message": "Isaac ROS startup already in progress. Check status in 30-60 seconds.",
-                        "startup_in_progress": True,
-                    }
-            except Exception:
-                return {
-                    "success": True,
-                    "message": "Isaac ROS startup already in progress. Check status in 30-60 seconds.",
-                    "startup_in_progress": True,
-                }
-
-        # Avoid duplicate startup attempts while stack is already running.
-        try:
-            container_running = False
-            nvblox_running = False
-            bridge_running = False
-
-            result = subprocess.run(
-                [
-                    "docker",
-                    "ps",
-                    "--filter",
-                    "name=nomad_isaac_ros",
-                    "--format",
-                    "{{.Status}}",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            container_running = bool(result.stdout.strip())
-
-            if container_running:
-                result = subprocess.run(
-                    [
-                        "docker",
-                        "exec",
-                        "nomad_isaac_ros",
-                        "bash",
-                        "-c",
-                        "ps aux | grep -v grep | grep -c component_container 2>/dev/null || echo 0",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                nvblox_running = int(result.stdout.strip() or "0") > 0
-
-                result = subprocess.run(
-                    [
-                        "docker",
-                        "exec",
-                        "nomad_isaac_ros",
-                        "bash",
-                        "-c",
-                        "ps aux | grep -v grep | grep -c ros_http_bridge 2>/dev/null || echo 0",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                bridge_running = int(result.stdout.strip() or "0") > 0
-
-            if container_running and nvblox_running and bridge_running:
-                app.state.isaac_startup_last_initiated = 0.0
-                return {
-                    "success": True,
-                    "message": "Isaac ROS stack already running. Skipping duplicate start.",
-                    "already_running": True,
-                }
-        except Exception:
-            # Fall through to normal startup path on probe failures.
-            pass
-
-        try:
-            # Run in background
-            process = subprocess.Popen(
-                ["bash", script_path, "start"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-            app.state.isaac_startup_last_initiated = time.time()
-
-            # Don't wait for completion - it takes a while
+        # If everything is already healthy, short-circuit.
+        runtime_state = _probe_isaac_runtime_state(force_refresh=True)
+        if runtime_state["container_running"] and runtime_state["bridge_running"]:
             return {
                 "success": True,
-                "message": "Isaac ROS startup initiated. Check status in 30-60 seconds.",
-                "pid": process.pid,
+                "message": "Isaac ROS stack already running.",
+                "already_running": True,
             }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-            }
+
+        app.state.isaac_startup_last_initiated = time.time()
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: _systemctl("start", ISAAC_STACK_UNITS)
+        )
+        if result["success"]:
+            result["message"] = (
+                "Isaac ROS stack starting via systemd. Check status in 30-60s."
+            )
+        return result
 
     @app.post("/api/isaac/stop", tags=["Isaac ROS"])
     async def isaac_stop():
-        """Stop Isaac ROS container and services."""
-        script_path = os.path.expanduser("~/NOMAD/scripts/run/start_isaac_ros_auto.sh")
-
-        try:
-            result = subprocess.run(
-                ["bash", script_path, "stop"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-
-            return {
-                "success": result.returncode == 0,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-            }
+        """Stop the Isaac ROS stack (also stops nvblox if running)."""
+        # Stop in reverse order so dependents go down first.
+        units = ("nomad-nvblox.service",) + tuple(reversed(ISAAC_STACK_UNITS))
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: _systemctl("stop", units)
+        )
+        return result
 
     @app.post("/api/isaac/launch-nvblox", tags=["Isaac ROS"])
     async def isaac_launch_nvblox(

@@ -39,15 +39,18 @@ logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 log = logging.getLogger("load_params")
 
 def _resolve_param_dir() -> Path:
+    # Canonical location for ArduPilot parameter sets. The old config/params/
+    # directory held a stale subset of these files and has been removed; the
+    # profiles in config/profiles/ are the single source of truth.
     env = os.environ.get("NOMAD_DIR")
-    if env and (Path(env) / "config" / "params").is_dir():
-        return Path(env) / "config" / "params"
+    if env and (Path(env) / "config" / "profiles").is_dir():
+        return Path(env) / "config" / "profiles"
     here = Path(__file__).resolve()
     for ancestor in here.parents:
-        cand = ancestor / "config" / "params"
+        cand = ancestor / "config" / "profiles"
         if cand.is_dir():
             return cand
-    return Path("/home/mad/NOMAD/config/params")
+    return Path("/home/mad/NOMAD/config/profiles")
 
 
 PARAM_DIR = _resolve_param_dir()
@@ -80,9 +83,12 @@ def resolve_task_file(task: str) -> Path:
     direct = Path(task)
     if direct.is_file():
         return direct
-    candidate = PARAM_DIR / f"{task}.param"
-    if task in ("task1", "task2"):
-        candidate = PARAM_DIR / f"{task}_{'gps' if task == 'task1' else 'vio'}.param"
+    # task1 -> task1_outdoor.params, task2 -> task2_indoor.params
+    aliases = {
+        "task1": "task1_outdoor.params",
+        "task2": "task2_indoor.params",
+    }
+    candidate = PARAM_DIR / aliases.get(task, f"{task}.params")
     if not candidate.is_file():
         raise FileNotFoundError(
             f"Unknown task {task!r}. Expected one of task1/task2 or a path to a .param file."

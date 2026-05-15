@@ -1,5 +1,11 @@
 # NOMAD Video Streaming System
 
+> **Refactor note:** the bridge is now owned by
+> `nomad-video-bridge.service` (single owner). Edge Core's in-process
+> auto-start thread has been removed. To restart the bridge:
+> `nomad restart video_bridge`. The `/api/video/start` and
+> `/api/video/stop` endpoints remain available for manual control.
+
 Software-encoded video streaming with dynamic topic switching via REST API.
 
 ## Architecture

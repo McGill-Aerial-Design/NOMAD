@@ -1,5 +1,17 @@
 # Isaac ROS + nvblox + ZED -- Complete Setup Guide
 
+> **Refactor note:** one-time provisioning now lives in
+> `scripts/setup/provision_isaac_ros.sh`. Day-to-day lifecycle is managed by
+> per-service systemd units:
+> ```
+> nomad start isaac_ros_container   # the container itself
+> nomad start zed_wrapper           # ZED ROS2 wrapper
+> nomad start ros_http_bridge       # bridge to Edge Core
+> nomad start nvblox                # nvblox (opt-in)
+> ```
+> Wherever this guide says `./scripts/run/start_isaac_ros_auto.sh`, use the
+> commands above instead.
+
 Everything needed to get nvblox running with a ZED camera on the Jetson Orin Nano.
 
 ---

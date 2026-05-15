@@ -1,5 +1,11 @@
 # NOMAD Jetson Orin Nano Deployment Guide
 
+> **Refactor note (2026-05):** runtime is now systemd-based. Use
+> `scripts/nomad` and edit `config/nomad.env`. References below to
+> `start_nomad_full.sh`, `start_isaac_ros_auto.sh`, `restart_nomad.sh`, or
+> `config/env/jetson.env` are pre-refactor — see `scripts/README.md` and
+> `docs/OPERATIONS_RUNBOOK.md` for the current commands.
+
 **Last Updated:** May 9, 2026  
 **Target:** NVIDIA Jetson Orin Nano (JetPack 5.x / Ubuntu 22.04)
 

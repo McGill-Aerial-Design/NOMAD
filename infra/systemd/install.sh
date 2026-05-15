@@ -42,6 +42,48 @@ UNITS=(
     nomad-nvblox.service
 )
 
+# -----------------------------------------------------------------------------
+# Install sudoers fragment so the `mad` user can drive nomad-*.service units
+# without a password prompt. This is what allows Edge Core's COMMAND_WHITELIST
+# (status_/start_/stop_/restart_*) and Mission Planner's terminal panel to
+# manage services via `sudo -n systemctl ...` without interactive auth.
+#
+# Scope is intentionally tight: only the nomad-* systemctl verbs, plus
+# reboot/shutdown which Mission Planner already supports.
+# -----------------------------------------------------------------------------
+SUDOERS_DST=/etc/sudoers.d/nomad
+SUDOERS_CONTENT=$(cat <<'EOF'
+# Managed by infra/systemd/install.sh — do not edit by hand.
+# Grants the `mad` user passwordless control of NOMAD systemd units.
+Cmnd_Alias NOMAD_SYSTEMCTL = \
+    /bin/systemctl start nomad-*, \
+    /bin/systemctl stop nomad-*, \
+    /bin/systemctl restart nomad-*, \
+    /bin/systemctl reload nomad-*, \
+    /bin/systemctl start nomad.target, \
+    /bin/systemctl stop nomad.target, \
+    /bin/systemctl restart nomad.target, \
+    /bin/systemctl enable nomad-*, \
+    /bin/systemctl disable nomad-*, \
+    /bin/systemctl daemon-reload
+Cmnd_Alias NOMAD_POWER = /sbin/reboot, /sbin/shutdown
+mad ALL=(root) NOPASSWD: NOMAD_SYSTEMCTL, NOMAD_POWER
+EOF
+)
+SUDOERS_TMP=$(mktemp)
+printf '%s\n' "$SUDOERS_CONTENT" > "$SUDOERS_TMP"
+chmod 0440 "$SUDOERS_TMP"
+if visudo -cf "$SUDOERS_TMP" >/dev/null 2>&1; then
+    install -m 0440 -o root -g root "$SUDOERS_TMP" "$SUDOERS_DST"
+    echo "[install] installed $SUDOERS_DST"
+else
+    echo "[install] ERROR: sudoers fragment failed visudo validation; not installing" >&2
+    visudo -cf "$SUDOERS_TMP" || true
+    rm -f "$SUDOERS_TMP"
+    exit 1
+fi
+rm -f "$SUDOERS_TMP"
+
 echo "[install] copying units to $DEST"
 for u in "${UNITS[@]}"; do
     install -m 0644 "$THIS_DIR/$u" "$DEST/$u"

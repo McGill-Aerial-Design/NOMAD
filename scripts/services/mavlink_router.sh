@@ -30,8 +30,12 @@ svc_start() {
         return 0
     fi
     if [ ! -e "$MAVLINK_UART_DEV" ]; then
-        log_warn "CubePilot not present at $MAVLINK_UART_DEV; refusing to start"
-        return 1
+        # Not a software failure — the FC just isn't plugged in. Exit 0 so the
+        # unit becomes "active (exited)" with a warning in the journal, instead
+        # of polluting nomad.target with a hardware-state-driven failure.
+        # When the FC is connected, `nomad restart mavlink_router` brings it up.
+        log_warn "CubePilot not present at $MAVLINK_UART_DEV; staying down (plug in and restart this unit)"
+        return 0
     fi
     local gcs
     gcs="$(discover_gcs_ip)"

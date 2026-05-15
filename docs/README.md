@@ -65,7 +65,7 @@ Key configuration files and their purposes:
 | `config/profiles/task2_indoor.params` | Task 2 operational config | Task 2 | Indoor nav2 constraints, obstacle avoidance safety limits |
 | `config/nav2_drone.yaml` | Nav2 stack configuration | Task 2 | Navigation controller, planner, recovery behaviors |
 | `config/video_streams.json` | MediaMTX RTSP streams | All | ZED camera RTSP, mask stream URLs for Mission Planner |
-| `config/env/jetson.env` | Environment variables | All | Tailscale IPs, home paths, port configuration |
+| `config/nomad.env` | Environment variables (single source of truth) | All | Tailscale IPs, home paths, port configuration, autostart flags |
 
 
 - [analysis/codebase_analysis.md](analysis/codebase_analysis.md) - Code quality
