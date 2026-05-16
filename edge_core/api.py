@@ -279,8 +279,6 @@ def create_app(state_manager: StateManager) -> FastAPI:
     # Cached Task 1 detection status (populated by background poller, read by API)
     app.state.task1_det_cache: dict = {"circle_count": 0, "success": True}
     app.state.task1_det_cache_ts: float = 0.0
-    app.state.foxglove_enabled: bool = False  # Foxglove bridge running state
-    app.state.foxglove_port: int = 8765
     app.state.isaac_runtime_cache = {
         "timestamp": 0.0,
         "container_running": False,
@@ -523,6 +521,12 @@ def create_app(state_manager: StateManager) -> FastAPI:
 
             history = app.state.detection_history
             for det in dict_detections:
+                # Task 2 (shape/circle) targets are image_only: they ship with
+                # x=y=z=0 and rely on the spray pipeline's image-space approach
+                # instead of 3D dedup. Skip them here so they don't pollute the
+                # 3D detection history with phantom origin-clustered entries.
+                if det.get("image_only"):
+                    continue
                 x_val = det.get("x")
                 y_val = det.get("y")
                 z_val = det.get("z")
@@ -727,7 +731,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
         """
         # Give the rest of startup a head start before the first check.
         await asyncio.sleep(30)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         restart_cooldown_until: float = 0.0
 
         while True:

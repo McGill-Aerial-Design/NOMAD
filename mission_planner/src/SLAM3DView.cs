@@ -1147,7 +1147,7 @@ namespace NOMAD.MissionPlanner
                         lock (_poseLock) { _servoPulseUs = pulseUs; }
                     }
                 }
-                catch { }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
             };
             _servoTimer.Start();
         }
@@ -1217,7 +1217,7 @@ namespace NOMAD.MissionPlanner
                         hsvText = $"HSV: OK ({total})";
                 }
             }
-            catch { }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
 
             try
             {
@@ -1241,7 +1241,7 @@ namespace NOMAD.MissionPlanner
                         : "Servo: Not available";
                 }
             }
-            catch { }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
 
             UpdatePerceptionStatusSafe($"{hsvText} | {servoText}");
         }

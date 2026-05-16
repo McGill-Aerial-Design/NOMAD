@@ -225,7 +225,7 @@ namespace NOMAD.MissionPlanner
             {
                 await JetsonApiService.PostAsync($"/api/video/overlay/mode?mode={mode}");
             }
-            catch { }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
         }
 
         // ============================================================
@@ -812,7 +812,7 @@ namespace NOMAD.MissionPlanner
                 var totalTargets = exclMapData["total_targets"]?.Value<int>() ?? 0;
                 _lblTargetCount.Text = $"Hit targets: {totalTargets}";
             }
-            catch { }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
         }
 
         // ============================================================

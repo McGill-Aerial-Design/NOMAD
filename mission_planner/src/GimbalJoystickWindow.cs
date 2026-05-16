@@ -13,6 +13,7 @@
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using MissionPlanner;
@@ -325,8 +326,19 @@ namespace NOMAD.MissionPlanner
 
             Task.Run(async () =>
             {
+                bool acquired = false;
                 try
                 {
+                    // Share the process-wide MAVLink lock with the payload panels
+                    // -- MainV2.comPort serializes poorly when two callers issue
+                    // doCommandAsync concurrently.
+                    acquired = await PayloadControlPanel.s_mavlinkLock
+                        .WaitAsync(1000).ConfigureAwait(false);
+                    if (!acquired)
+                    {
+                        BeginInvoke(new Action(() => SetStatus("Mount send busy", NOMADTheme.WARNING)));
+                        return;
+                    }
                     await MainV2.comPort.doCommandAsync(
                         sysid, compid,
                         MAVLink.MAV_CMD.DO_MOUNT_CONTROL,
@@ -339,7 +351,11 @@ namespace NOMAD.MissionPlanner
                 {
                     BeginInvoke(new Action(() => SetStatus("Mount send failed: " + ex.Message, NOMADTheme.ERROR)));
                 }
-                finally { _inflight = false; }
+                finally
+                {
+                    if (acquired) PayloadControlPanel.s_mavlinkLock.Release();
+                    _inflight = false;
+                }
             });
         }
 
@@ -354,8 +370,16 @@ namespace NOMAD.MissionPlanner
 
             Task.Run(async () =>
             {
+                bool acquired = false;
                 try
                 {
+                    acquired = await PayloadControlPanel.s_mavlinkLock
+                        .WaitAsync(2000).ConfigureAwait(false);
+                    if (!acquired)
+                    {
+                        BeginInvoke(new Action(() => SetStatus("Mount mode busy", NOMADTheme.WARNING)));
+                        return;
+                    }
                     await MainV2.comPort.doCommandAsync(
                         sysid, compid,
                         MAVLink.MAV_CMD.DO_MOUNT_CONFIGURE,
@@ -368,7 +392,11 @@ namespace NOMAD.MissionPlanner
                 {
                     BeginInvoke(new Action(() => SetStatus("Mount mode failed: " + ex.Message, NOMADTheme.ERROR)));
                 }
-                finally { _inflight = false; }
+                finally
+                {
+                    if (acquired) PayloadControlPanel.s_mavlinkLock.Release();
+                    _inflight = false;
+                }
             });
         }
 

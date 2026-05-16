@@ -68,7 +68,7 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         topics = await loop.run_in_executor(None, mgr.list_topics)
         return {"topics": [t.to_dict() for t in topics], "count": len(topics)}
 
@@ -457,10 +457,14 @@ def register_video_slam_routes(app, ctx) -> None:
 
         try:
             content_type = request.headers.get("content-type", "application/json")
+            # Deserialization of multi-MB mesh payloads is offloaded to a worker
+            # thread so the Uvicorn event loop stays responsive to MAVLink
+            # bridging, video commands, and heartbeats during the 100-300ms
+            # parse window.
             if "msgpack" in content_type and MSGPACK_AVAILABLE:
-                mesh_data = msgpack.unpackb(raw, raw=False)
+                mesh_data = await asyncio.to_thread(msgpack.unpackb, raw, raw=False)
             else:
-                mesh_data = json.loads(raw)
+                mesh_data = await asyncio.to_thread(json.loads, raw)
         except Exception:
             return JSONResponse({"error": "Invalid payload"}, status_code=400)
 

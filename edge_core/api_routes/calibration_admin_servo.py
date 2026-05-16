@@ -730,15 +730,21 @@ echo $!
 
         nomad_dir = os.path.expanduser("~/NOMAD")
 
-        try:
-            # Step 1: git stash
-            stash_result = subprocess.run(
-                ["git", "stash"],
+        # git stash/pull can take tens of seconds when the working tree is
+        # large; run them in a worker thread so MAVLink bridging and video
+        # commands keep flowing on the event loop.
+        def _run(cmd: list[str], timeout: int) -> subprocess.CompletedProcess:
+            return subprocess.run(
+                cmd,
                 cwd=nomad_dir,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=timeout,
             )
+
+        try:
+            # Step 1: git stash
+            stash_result = await asyncio.to_thread(_run, ["git", "stash"], 30)
             stash_output_text = "\n".join(
                 part for part in [stash_result.stdout, stash_result.stderr] if part
             ).lower()
@@ -758,12 +764,8 @@ echo $!
             )
 
             # Step 2: git pull
-            pull_result = subprocess.run(
-                ["git", "pull", "origin", "main"],
-                cwd=nomad_dir,
-                capture_output=True,
-                text=True,
-                timeout=60,
+            pull_result = await asyncio.to_thread(
+                _run, ["git", "pull", "origin", "main"], 60
             )
             results["steps"].append(
                 {
@@ -780,12 +782,10 @@ echo $!
                 errors.append("Git pull failed")
             else:
                 # Step 3: chmod +x scripts
-                chmod_result = subprocess.run(
+                chmod_result = await asyncio.to_thread(
+                    _run,
                     ["bash", "-c", "find scripts -name '*.sh' -exec chmod +x {} +"],
-                    cwd=nomad_dir,
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
+                    10,
                 )
                 results["steps"].append(
                     {
@@ -808,12 +808,8 @@ echo $!
                     errors.append(f"chmod +x scripts/**/*.sh failed: {chmod_error}")
 
             if stash_created:
-                stash_pop_result = subprocess.run(
-                    ["git", "stash", "pop"],
-                    cwd=nomad_dir,
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
+                stash_pop_result = await asyncio.to_thread(
+                    _run, ["git", "stash", "pop"], 30
                 )
                 results["steps"].append(
                     {

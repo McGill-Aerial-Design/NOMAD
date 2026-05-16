@@ -68,8 +68,11 @@ namespace NOMAD.MissionPlanner
 
         private Label _lblStatus;
 
-        // Serializes concurrent MAVLink servo commands to prevent giveComport contention.
-        private static readonly SemaphoreSlim s_mavlinkLock = new SemaphoreSlim(1, 1);
+        // Serializes concurrent MAVLink servo commands to prevent giveComport
+        // contention. Shared with the gimbal joystick and Task 2 payload panel
+        // because MainV2.comPort's internal state is process-wide -- panel-local
+        // semaphores let those callers race each other and corrupt the port.
+        internal static readonly SemaphoreSlim s_mavlinkLock = new SemaphoreSlim(1, 1);
 
         // Shared tilt state so multiple panel instances stay in sync.
         private static int s_lastTiltPulseUs = 1250;

@@ -255,9 +255,6 @@ Edit it in place; then `nomad restart all` (or `sudo systemctl restart nomad.tar
 - `POST /api/isaac/bridge/stop` - Stop ROS <-> HTTP bridge
 - `POST /api/isaac/nvblox/start` - Start nvblox node inside container
 - `POST /api/isaac/nvblox/stop` - Stop nvblox node inside container
-- `POST /api/isaac/foxglove/start` - Start Foxglove bridge
-- `POST /api/isaac/foxglove/stop` - Stop Foxglove bridge
-- `GET /api/isaac/foxglove/status` - Foxglove bridge status
 - `GET /api/isaac/logs` - Isaac ROS container logs
 - `GET /api/isaac/vio` - VIO state from Isaac ROS
 - `GET /api/isaac/detections` - Latest detections from Isaac ROS

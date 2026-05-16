@@ -123,7 +123,7 @@ def register_isaac_routes(app, ctx) -> None:
             }
 
         app.state.isaac_startup_last_initiated = time.time()
-        result = await asyncio.get_event_loop().run_in_executor(
+        result = await asyncio.get_running_loop().run_in_executor(
             None, lambda: _systemctl("start", ISAAC_STACK_UNITS)
         )
         if result["success"]:
@@ -137,7 +137,7 @@ def register_isaac_routes(app, ctx) -> None:
         """Stop the Isaac ROS stack (also stops nvblox if running)."""
         # Stop in reverse order so dependents go down first.
         units = ("nomad-nvblox.service",) + tuple(reversed(ISAAC_STACK_UNITS))
-        result = await asyncio.get_event_loop().run_in_executor(
+        result = await asyncio.get_running_loop().run_in_executor(
             None, lambda: _systemctl("stop", units)
         )
         return result
@@ -164,7 +164,7 @@ def register_isaac_routes(app, ctx) -> None:
         stack outside systemd.
         """
         config_default_od = (os.environ.get("NVBLOX_ENABLE_OD", "false").lower() == "true")
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         if enable_od != config_default_od:
             return {
@@ -258,14 +258,14 @@ def register_isaac_routes(app, ctx) -> None:
         active. Auth env (NOMAD_API_KEY, NOMAD_INTERNAL_TOKEN) is read from
         config/nomad.env at unit-start time.
         """
-        return await asyncio.get_event_loop().run_in_executor(
+        return await asyncio.get_running_loop().run_in_executor(
             None, lambda: _systemctl("start", ("nomad-ros-http-bridge.service",))
         )
 
     @app.post("/api/isaac/bridge/stop", tags=["Isaac ROS"])
     async def isaac_bridge_stop():
         """Stop the ROS-HTTP bridge via its systemd unit."""
-        return await asyncio.get_event_loop().run_in_executor(
+        return await asyncio.get_running_loop().run_in_executor(
             None, lambda: _systemctl("stop", ("nomad-ros-http-bridge.service",))
         )
 
@@ -339,7 +339,7 @@ def register_isaac_routes(app, ctx) -> None:
     @app.post("/api/isaac/nvblox/start", tags=["Isaac ROS"])
     async def isaac_nvblox_start():
         """Bring nvblox up via systemd. Idempotent."""
-        return await asyncio.get_event_loop().run_in_executor(
+        return await asyncio.get_running_loop().run_in_executor(
             None, lambda: _systemctl("start", ("nomad-nvblox.service",))
         )
 
@@ -350,291 +350,49 @@ def register_isaac_routes(app, ctx) -> None:
         the video bridge are unaffected (they're owned by separate units and
         don't depend on nvblox).
         """
-        return await asyncio.get_event_loop().run_in_executor(
+        return await asyncio.get_running_loop().run_in_executor(
             None, lambda: _systemctl("stop", ("nomad-nvblox.service",))
         )
 
     # Backward-compatible alias used by the older Mission Planner button.
     @app.post("/api/isaac/stop-nvblox", tags=["Isaac ROS"])
     async def isaac_stop_nvblox():
-        return await asyncio.get_event_loop().run_in_executor(
+        return await asyncio.get_running_loop().run_in_executor(
             None, lambda: _systemctl("stop", ("nomad-nvblox.service",))
         )
 
-    # ==================== Foxglove Bridge ====================
-    # The foxglove_bridge ROS2 package exposes all ROS2 topics via WebSocket
-    # so Foxglove Studio can visualize them. Default port 8765.
-    # This runs independently of nvblox — start/stop without relaunching.
-
-    def _strip_host_port(host_value: str) -> str:
-        host_value = (host_value or "").strip()
-        if not host_value:
-            return ""
-        if host_value.startswith("["):
-            end = host_value.find("]")
-            if end > 1:
-                return host_value[1:end]
-        if host_value.count(":") == 1:
-            return host_value.rsplit(":", 1)[0]
-        return host_value
-
-    def _resolve_foxglove_host(request: Request) -> str:
-        forwarded_host = (request.headers.get("x-forwarded-host") or "").split(",", 1)[
-            0
-        ]
-        host = _strip_host_port(forwarded_host)
-        if host:
-            return host
-
-        host_header = (request.headers.get("host") or "").split(",", 1)[0]
-        host = _strip_host_port(host_header)
-        if host:
-            return host
-
-        if request.url.hostname:
-            return request.url.hostname
-
-        for env_name in ("FOXGLOVE_WS_HOST", "TAILSCALE_IP", "NOMAD_API_HOST"):
-            env_host = (os.environ.get(env_name) or "").strip()
-            if env_host:
-                return env_host
-
-        return "127.0.0.1"
-
-    def _foxglove_ws_url(request: Request, port: int) -> str:
-        return f"ws://{_resolve_foxglove_host(request)}:{int(port)}"
-
-    @app.post("/api/isaac/foxglove/start", tags=["Isaac ROS"])
-    async def foxglove_start(
-        request: Request,
-        port: int = Query(
-            default=8765, description="WebSocket port for Foxglove Studio"
-        ),
-    ):
-        """
-        Start Foxglove bridge inside the Isaac ROS container.
-
-        Opens a WebSocket server that Foxglove Studio can connect to for
-        visualizing ROS2 topics (pointclouds, meshes, TF, images, etc.).
-
-        Connect Foxglove Studio to: ws://<jetson-ip>:<port>
-        """
-        container = "nomad_isaac_ros"
-        try:
-            # Check if already running
-            probe = subprocess.run(
-                ["docker", "exec", container, "bash", "-c", "pgrep -f foxglove_bridge"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if probe.returncode == 0:
-                active_port = int(getattr(request.app.state, "foxglove_port", port))
-                request.app.state.foxglove_port = active_port
-                return {
-                    "success": True,
-                    "message": f"Foxglove bridge already running on port {active_port}",
-                    "already_running": True,
-                    "url": _foxglove_ws_url(request, active_port),
-                }
-
-            # Launch foxglove_bridge in background
-            # Try ros2 launch first (installed package), fall back to ros2 run
-            launch_cmd = f"""#!/bin/bash
-source /opt/ros/humble/setup.bash 2>/dev/null
-source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null
-
-# Check if foxglove_bridge package is available
-if ! ros2 pkg list 2>/dev/null | grep -q foxglove_bridge; then
-    echo "Installing foxglove_bridge..."
-    apt-get update -qq && apt-get install -y -qq ros-humble-foxglove-bridge 2>&1
-fi
-
-ros2 run foxglove_bridge foxglove_bridge --ros-args \\
-    -p port:={port} \\
-    -p address:=0.0.0.0 \\
-    -p capabilities:='["clientPublish","connectionGraph","assets"]' \\
-    -p send_buffer_limit:=10000000
-"""
-            subprocess.run(
-                [
-                    "docker",
-                    "exec",
-                    container,
-                    "bash",
-                    "-c",
-                    f"cat > /tmp/start_foxglove.sh << 'EOFSCRIPT'\n{launch_cmd}\nEOFSCRIPT\nchmod +x /tmp/start_foxglove.sh",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=True,
-            )
-
-            subprocess.run(
-                [
-                    "docker",
-                    "exec",
-                    "-d",
-                    container,
-                    "bash",
-                    "-c",
-                    "bash /tmp/start_foxglove.sh > /tmp/foxglove_bridge.log 2>&1",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-
-            # Wait briefly for startup
-            time.sleep(3)
-            verify = subprocess.run(
-                ["docker", "exec", container, "bash", "-c", "pgrep -f foxglove_bridge"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if verify.returncode == 0:
-                request.app.state.foxglove_enabled = True
-                request.app.state.foxglove_port = int(port)
-                return {
-                    "success": True,
-                    "message": f"Foxglove bridge started on port {port}",
-                    "url": _foxglove_ws_url(request, int(port)),
-                }
-            else:
-                log_tail = subprocess.run(
-                    [
-                        "docker",
-                        "exec",
-                        container,
-                        "tail",
-                        "-20",
-                        "/tmp/foxglove_bridge.log",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                return {
-                    "success": False,
-                    "error": "Foxglove bridge failed to start",
-                    "logs": (log_tail.stdout or log_tail.stderr or "")[-400:],
-                }
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    @app.post("/api/isaac/foxglove/stop", tags=["Isaac ROS"])
-    async def foxglove_stop(request: Request):
-        """Stop Foxglove bridge."""
-        container = "nomad_isaac_ros"
-        try:
-            subprocess.run(
-                ["docker", "exec", container, "pkill", "-f", "foxglove_bridge"],
-                capture_output=True,
-                timeout=5,
-            )
-            request.app.state.foxglove_enabled = False
-            return {"success": True, "message": "Foxglove bridge stopped"}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    @app.get("/api/isaac/foxglove/status", tags=["Isaac ROS"])
-    async def foxglove_status(request: Request):
-        """Check if Foxglove bridge is running."""
-        container = "nomad_isaac_ros"
-        try:
-            probe = subprocess.run(
-                ["docker", "exec", container, "bash", "-c", "pgrep -f foxglove_bridge"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            running = probe.returncode == 0
-            port = int(getattr(request.app.state, "foxglove_port", 8765))
-            return {
-                "running": running,
-                "url": _foxglove_ws_url(request, port) if running else None,
-            }
-        except Exception as e:
-            return {"running": False, "error": str(e)}
+    # Subprocess endpoints below offload blocking docker-exec / tail calls to
+    # a worker thread so the Uvicorn event loop stays responsive to MAVLink
+    # bridging, heartbeats, and video commands during polling.
+    async def _run_subprocess(*args, **kwargs):
+        return await asyncio.to_thread(subprocess.run, *args, **kwargs)
 
     @app.get("/api/isaac/logs", tags=["Isaac ROS"])
     async def isaac_logs(
         log_type: str = Query(
-            default="all", description="Log type: all, zed, bridge, foxglove"
+            default="all", description="Log type: all, zed, bridge"
         ),
     ):
         """Get Isaac ROS container logs."""
+        # docker-exec tail blocks ~5s on timeout; offload to a worker thread so
+        # the event loop keeps servicing MAVLink/video traffic.
+        def _tail(path: str, lines: int) -> subprocess.CompletedProcess:
+            return subprocess.run(
+                ["docker", "exec", "nomad_isaac_ros", "tail", f"-{lines}", path],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+
         try:
             if log_type == "zed":
-                result = subprocess.run(
-                    [
-                        "docker",
-                        "exec",
-                        "nomad_isaac_ros",
-                        "tail",
-                        "-50",
-                        "/tmp/zed_nvblox.log",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
+                result = await asyncio.to_thread(_tail, "/tmp/zed_nvblox.log", 50)
             elif log_type == "bridge":
-                result = subprocess.run(
-                    [
-                        "docker",
-                        "exec",
-                        "nomad_isaac_ros",
-                        "tail",
-                        "-50",
-                        "/tmp/ros_bridge.log",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-            elif log_type == "foxglove":
-                result = subprocess.run(
-                    [
-                        "docker",
-                        "exec",
-                        "nomad_isaac_ros",
-                        "tail",
-                        "-50",
-                        "/tmp/foxglove_bridge.log",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
+                result = await asyncio.to_thread(_tail, "/tmp/ros_bridge.log", 50)
             else:
-                zed_result = subprocess.run(
-                    [
-                        "docker",
-                        "exec",
-                        "nomad_isaac_ros",
-                        "tail",
-                        "-25",
-                        "/tmp/zed_nvblox.log",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                bridge_result = subprocess.run(
-                    [
-                        "docker",
-                        "exec",
-                        "nomad_isaac_ros",
-                        "tail",
-                        "-25",
-                        "/tmp/ros_bridge.log",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
+                zed_result, bridge_result = (
+                    await asyncio.to_thread(_tail, "/tmp/zed_nvblox.log", 25),
+                    await asyncio.to_thread(_tail, "/tmp/ros_bridge.log", 25),
                 )
                 return {
                     "zed_nvblox": zed_result.stdout

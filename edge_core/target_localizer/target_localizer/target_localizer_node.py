@@ -5,18 +5,16 @@ Main ROS 2 node for AEAC 2026 Task 1 automated target description.
 
 Workflow:
   1. Subscribe to ZED RGB + depth, drone pose (MAVROS), servo angle
-  2. Continuously run YOLO landmark detection in background to
-     auto-populate the building model with doors, windows, etc.
-  3. On button press (service call or joystick trigger):
+  2. On button press (service call or joystick trigger):
      a. Capture current ZED frame
      b. Run HSV circle detection
      c. Back-project detections to 3D using depth + TF
       d. Classify nearest analytical plane (4 walls + ground + roof)
           and project onto nearest wall face for references
-     e. Find nearest landmark/corner
+     e. Find nearest corner
      f. Generate natural-language description from template
      g. Append to target list (with deduplication)
-  4. On "save" command, write target list to .txt file
+  3. On "save" command, write target list to .txt file
 
 Topics subscribed:
   - /zed2i/zed_node/rgb/image_rect_color (sensor_msgs/Image)
@@ -41,7 +39,6 @@ Parameters (set via YAML config):
     (only used when corner_names is empty -- rectangle convenience fallback)
   - team_name
   - output_dir
-  - yolo_model_path  (Task 1: leave empty; CONOPS provides no landmark info)
   - dedup_radius_m
 """
 
@@ -70,7 +67,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from .building_model import BuildingModel, Face, gps_to_local
-from .detectors import CircleDetector, LandmarkDetector, ColorVerifier, TargetColor
+from .detectors import CircleDetector, ColorVerifier, TargetColor
 
 
 def target_letter_from_index(i: int) -> str:
@@ -128,11 +125,8 @@ class TargetLocalizerNode(Node):
         self.declare_parameter("building.rectangle.orientation_deg", 0.0)
         self.declare_parameter("team_name", "MAD")
         self.declare_parameter("output_dir", "/home/mad/targets")
-        self.declare_parameter("yolo_model_path", "")
         self.declare_parameter("dedup_radius_m", 0.5)
         self.declare_parameter("min_confidence", 0.35)
-        self.declare_parameter("landmark_detect_rate_hz", 2.0)
-        self.declare_parameter("auto_landmark_detection", False)
         # HSV circle detector knobs. Exposed so we can tune live via
         #   ros2 param set /target_localizer circle.min_circularity 0.65
         # without rebuilding the container.
@@ -212,16 +206,6 @@ class TargetLocalizerNode(Node):
             blur_kernel=int(self.get_parameter("circle.blur_kernel").value),
         )
 
-        yolo_path = self.get_parameter("yolo_model_path").value
-        self.landmark_detector = (
-            LandmarkDetector(
-                model_path=yolo_path,
-                conf_threshold=0.35,
-            )
-            if yolo_path
-            else None
-        )
-
         self.color_verifier = ColorVerifier()
         self.bridge = CvBridge()
 
@@ -260,11 +244,6 @@ class TargetLocalizerNode(Node):
         _edge_core_host = os.environ.get("NOMAD_EDGE_CORE_HOST", "localhost")
         self._edge_core_det_url = f"http://{_edge_core_host}:8000/api/task/1/target/detection_status/update"
         self._edge_core_internal_token = (os.environ.get("NOMAD_INTERNAL_TOKEN") or "").strip() or None
-
-        # Landmark detection timer
-        self.last_landmark_time = 0.0
-        lm_rate = self.get_parameter("landmark_detect_rate_hz").value
-        self.landmark_interval = 1.0 / max(lm_rate, 0.1)
 
         # ----- QoS ----- #
         sensor_qos = QoSProfile(
@@ -366,13 +345,6 @@ class TargetLocalizerNode(Node):
         for name, types in self.get_service_names_and_types():
             if "target_localizer" in name:
                 self.get_logger().info(f"Registered service: {name} types={types}")
-
-        # ----- Background landmark detection timer ----- #
-        if (
-            self.get_parameter("auto_landmark_detection").value
-            and self.landmark_detector
-        ):
-            self.create_timer(self.landmark_interval, self._landmark_timer_callback)
 
         # Periodic input health watchdog so startup issues are visible in logs.
         self.create_timer(5.0, self._input_watchdog_callback)
@@ -1084,54 +1056,6 @@ class TargetLocalizerNode(Node):
     # ================================================================ #
     #  Background landmark detection
     # ================================================================ #
-    def _landmark_timer_callback(self):
-        """Periodically run YOLO landmark detection to build up the model."""
-        if self.latest_rgb is None or self.latest_depth is None:
-            return
-        if not self.intrinsics_received:
-            return
-        if not self.has_gps_fix and not self.has_local_pose:
-            return
-        if self.landmark_detector is None:
-            return
-
-        rgb = self.latest_rgb.copy()
-        depth = self.latest_depth.copy()
-
-        landmarks = self.landmark_detector.detect(rgb)
-
-        for lm in landmarks:
-            world = self._pixel_to_world_enu(lm.cx, lm.cy, depth)
-            if world is None:
-                continue
-
-            east, north, up = world
-            self.building.add_landmark_from_3d(
-                east,
-                north,
-                up,
-                kind=lm.kind,
-                confidence=lm.confidence,
-                drone_lat=self.drone_lat,
-                drone_lon=self.drone_lon,
-                drone_heading_deg=self.drone_heading,
-                drone_local_east=(
-                    self.drone_local_east
-                    if (self.has_local_pose and not self.has_gps_fix)
-                    else None
-                ),
-                drone_local_north=(
-                    self.drone_local_north
-                    if (self.has_local_pose and not self.has_gps_fix)
-                    else None
-                ),
-            )
-
-        if landmarks:
-            self.get_logger().debug(
-                f"Registered {len(landmarks)} landmark detection(s) into building model."
-            )
-
     # ================================================================ #
     #  Save targets to file
     # ================================================================ #

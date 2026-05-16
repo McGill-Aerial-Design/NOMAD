@@ -6,7 +6,7 @@
   <description>
     Automated target detection, localization, and natural-language description
     generation for AEAC 2026 Task 1 Fire Reconnaissance.
-    Uses HSV for colored circle targets and YOLO for landmark detection.
+    Uses HSV color segmentation for colored circle targets.
   </description>
   <maintainer email="avionics@mcgilldroneclub.com">MAD Avionics</maintainer>
   <license>MIT</license>

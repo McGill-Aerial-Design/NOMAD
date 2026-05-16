@@ -89,12 +89,6 @@ def generate_launch_description():
         description="Enable ZED custom object detection (YOLO26 circle detection) - DISABLED by default to prevent VRAM exhaustion and composable node instability on 8GB Jetson Orin Nano",
     )
 
-    enable_foxglove_arg = DeclareLaunchArgument(
-        "enable_foxglove",
-        default_value="false",
-        description="Enable Foxglove bridge for ROS2 topic visualization in Foxglove Studio (WebSocket on port 8765)",
-    )
-
     enable_nvblox_arg = DeclareLaunchArgument(
         "enable_nvblox",
         default_value="true",
@@ -155,25 +149,6 @@ def generate_launch_description():
         ],
         name="target_localizer",
         output="screen",
-    )
-
-    foxglove_bridge = ExecuteProcess(
-        cmd=[
-            "ros2",
-            "run",
-            "foxglove_bridge",
-            "foxglove_bridge",
-            "--ros-args",
-            "-p",
-            "port:=8765",
-            "-p",
-            "address:=0.0.0.0",
-            "-p",
-            "send_buffer_limit:=10000000",
-        ],
-        name="foxglove_bridge",
-        output="screen",
-        condition=IfCondition(LaunchConfiguration("enable_foxglove")),
     )
 
     # Static TF alias: ZED URDF uses "zed_left_camera_frame_optical" but
@@ -285,7 +260,6 @@ def generate_launch_description():
     return LaunchDescription(
         [
             enable_od_arg,
-            enable_foxglove_arg,
             enable_nvblox_arg,
             # Split ZED + nvblox (enable_nvblox:=true)
             zed_state_publisher,
@@ -298,6 +272,5 @@ def generate_launch_description():
             target_localizer,
             servo_tf_publisher,
             obstacle_distance_bridge,
-            foxglove_bridge,
         ]
     )

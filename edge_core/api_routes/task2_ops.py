@@ -335,7 +335,7 @@ def register_task2_routes(app, ctx) -> None:
         """
         attempts = max(1, int(max_attempts))
         last_exc: HTTPException | None = None
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def _blocking_capture() -> str:
             return _call_ros2_service_in_isaac_container_or_raise(

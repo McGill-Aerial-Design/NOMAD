@@ -54,7 +54,7 @@ The full API is auto-documented at `/docs` (Swagger UI). Major endpoint groups:
 | Nav2 | `/api/nav2/*` | Autonomous path goals, feedback, results |
 | Servo | `/api/servo/*` | Camera tilt, shooter, RC bridge, config |
 | Spray | `/api/spray/*` | Spray trigger, abort, status |
-| Isaac ROS | `/api/isaac/*` | Container start/stop, nvblox, foxglove, logs |
+| Isaac ROS | `/api/isaac/*` | Container start/stop, nvblox, logs |
 | Detections | `/api/detections/*` | Start/stop pipeline, history, summary |
 | Video | `/api/video/*` | Source switching, start/stop, overlay, bridges |
 | Terminal | `/api/terminal/*` | Whitelisted commands, logs |

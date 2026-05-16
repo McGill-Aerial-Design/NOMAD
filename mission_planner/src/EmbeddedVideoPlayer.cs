@@ -41,7 +41,6 @@ namespace NOMAD.MissionPlanner
         private ComboBox _cmbTopic;
         private Form _fullscreenForm;
         private PictureBox _fullscreenBox;
-        private Bitmap _lastFrame;
         private List<(string Name, string Display)> _topics = new List<(string, string)>();
         
         // Unified HSV toggle (ROS2 detection lifecycle + video overlay)
@@ -674,15 +673,6 @@ namespace NOMAD.MissionPlanner
             }
             catch { }
 
-            // Clear captured frame to prevent GDI+ leak on repeated Stop/Start
-            try
-            {
-                var oldLastFrame = _lastFrame;
-                _lastFrame = null;
-                oldLastFrame?.Dispose();
-            }
-            catch { }
-
             _lblStatus.Text = "Stopped";
             _lblStatus.ForeColor = Color.Gray;
         }
@@ -815,12 +805,12 @@ namespace NOMAD.MissionPlanner
                     _fullscreenBox.Image = (Bitmap)displayBitmap.Clone();
                     oldFull?.Dispose();
                 }
-                
-                // Store managed copy for snapshots (not native frame)
-                var oldLastFrame = _lastFrame;
-                _lastFrame = (Bitmap)displayBitmap.Clone();
-                oldLastFrame?.Dispose();
-                
+
+                // Snapshots clone _videoBox.Image on demand inside TakeSnapshot
+                // -- the old per-frame _lastFrame clone burned 30+ MB/s in GC
+                // pressure at 720p/30 FPS for a feature that fires once on a
+                // button press.
+
                 if (_frameCount % 30 == 1)
                 {
                     _lblStatus.Text = $"Streaming {width}x{height}";
@@ -900,9 +890,16 @@ namespace NOMAD.MissionPlanner
         
         public void TakeSnapshot()
         {
-            if (_lastFrame == null) { _lblStatus.Text = "No frame available"; return; }
+            // Clone the active frame on demand instead of paying a per-frame
+            // clone cost. _videoBox.Image is only mutated on the UI thread, so
+            // this is safe to read here.
+            var source = _videoBox?.Image as Bitmap;
+            if (source == null) { _lblStatus.Text = "No frame available"; return; }
             var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), $"NOMAD_{DateTime.Now:yyyyMMdd_HHmmss}.png");
-            _lastFrame.Save(path);
+            using (var snap = (Bitmap)source.Clone())
+            {
+                snap.Save(path);
+            }
             _lblStatus.Text = $"Saved: {Path.GetFileName(path)}";
             _lblStatus.ForeColor = Color.LimeGreen;
         }
@@ -938,7 +935,6 @@ namespace NOMAD.MissionPlanner
                     catch { }
                 }
                 StopStream();
-                _lastFrame?.Dispose();
                 _lifecycleLock.Dispose();
                 if (_fullscreenForm != null && !_fullscreenForm.IsDisposed)
                     _fullscreenForm.Close();

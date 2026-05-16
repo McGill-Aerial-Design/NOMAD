@@ -10,6 +10,8 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 using NOMAD.MissionPlanner.SLAM3D.Models;
 using OpenTK.Graphics.OpenGL;
 
@@ -96,6 +98,19 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
         private long _lastMeshRebuildStamp = -1;
         private DateTime _lastMeshRebuild = DateTime.MinValue;
 
+        // ---- Background rebuild handoff ----
+        // Face culling + vertex generation for thousands of voxels blocks the
+        // GCS UI thread when run inside GlControl_Paint. Instead we offload the
+        // rebuild to Task.Run and stash the result here. The GL thread swaps
+        // the staged arrays into _voxelVerts on the next paint -- no GL calls
+        // happen off-thread, so the GL context stays single-owner.
+        private int _rebuildInFlight; // 0/1, Interlocked
+        private float[] _stagedVerts;
+        private int[] _stagedIndices;
+        private int _stagedIndexCount;
+        private int _stagedRenderedCount;
+        private bool _hasStagedMesh;
+
         // ---- Thread safety ----
         private readonly object _meshLock = new object();
 
@@ -161,8 +176,22 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
         /// </summary>
         public void ProcessPendingRebuild()
         {
+            // Step 1: if a background rebuild finished since the last paint,
+            // adopt its arrays. This runs on the GL thread and is the only
+            // place that mutates _voxelVerts/_voxelIndices used by Render().
             lock (_meshLock)
             {
+                if (_hasStagedMesh)
+                {
+                    _voxelVerts = _stagedVerts;
+                    _voxelIndices = _stagedIndices;
+                    _voxelIndexCount = _stagedIndexCount;
+                    _lastRenderedCount = _stagedRenderedCount;
+                    _stagedVerts = null;
+                    _stagedIndices = null;
+                    _hasStagedMesh = false;
+                }
+
                 if (!_pendingMeshUpdate || !_meshDirty)
                 {
                     _pendingMeshUpdate = false;
@@ -170,18 +199,39 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
                 }
 
                 long elapsedMs = ElapsedMsSince(_lastMeshRebuildStamp);
-                if (elapsedMs >= (long)_minRebuildInterval.TotalMilliseconds)
-                {
-                    if (_focusSphereEnabled && !_parityMode)
-                    {
-                        CullOutsideFocusSphere();
-                    }
+                if (elapsedMs < (long)_minRebuildInterval.TotalMilliseconds)
+                    return;
 
-                    // Preserve exact nvblox geometry; do not synthesize gap voxels.
-                    RebuildVoxelMesh();
-                    _pendingMeshUpdate = false;
-                }
+                // Don't schedule a second rebuild while one is already in
+                // flight -- the running task will pick up any new voxels via
+                // _meshDirty before it finishes.
+                if (Interlocked.CompareExchange(ref _rebuildInFlight, 1, 0) != 0)
+                    return;
+
+                if (_focusSphereEnabled && !_parityMode)
+                    CullOutsideFocusSphere();
+
+                _pendingMeshUpdate = false;
             }
+
+            // Step 2: offload the face-culling + vertex array generation to
+            // the thread pool. Cubes-by-the-thousand can take tens of ms; doing
+            // it on the GL/UI thread craters Mission Planner's framerate.
+            Task.Run(() =>
+            {
+                try
+                {
+                    RebuildVoxelMeshIntoStaging();
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Background voxel rebuild failed: {ex}");
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref _rebuildInFlight, 0);
+                }
+            });
         }
 
         /// <summary>
@@ -361,21 +411,51 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
 
         // ==================== Private: Mesh Building ====================
 
-        private void RebuildVoxelMesh()
+        // Builds the mesh under the lock and stashes results into the staging
+        // arrays. Safe to run on a Task.Run thread because it touches no GL
+        // state -- the GL thread adopts the arrays inside ProcessPendingRebuild.
+        private void RebuildVoxelMeshIntoStaging()
         {
-            _lastMeshRebuild = DateTime.UtcNow;
-            _lastMeshRebuildStamp = Stopwatch.GetTimestamp();
-            _meshDirty = false;
-            _lastRenderedCount = _persistedBlocks.Count;
+            // Snapshot voxel state under the lock so the foreach below can run
+            // without contending with WebSocket ingestion. The copy cost is
+            // dwarfed by the cull/vertex pass.
+            KeyValuePair<long, uint>[] snapshot;
+            Dictionary<long, int> lastSeenCopy;
+            double vs;
+            float half;
+            int parityCount;
+            int meshGenSnapshot;
+            int voxelMaxAgeSnapshot;
+            bool parityModeSnapshot;
+            HashSet<long> occupancyLookup;
+            lock (_meshLock)
+            {
+                _lastMeshRebuild = DateTime.UtcNow;
+                _lastMeshRebuildStamp = Stopwatch.GetTimestamp();
+                _meshDirty = false;
+                parityCount = _persistedBlocks.Count;
 
-            double vs = _currentVoxelSize;
-            float half = (float)(vs * 0.5 * _renderCubeScale);
+                snapshot = new KeyValuePair<long, uint>[_persistedBlocks.Count];
+                int idx = 0;
+                occupancyLookup = new HashSet<long>(_persistedBlocks.Count);
+                foreach (var kvp in _persistedBlocks)
+                {
+                    snapshot[idx++] = kvp;
+                    occupancyLookup.Add(kvp.Key);
+                }
+                lastSeenCopy = new Dictionary<long, int>(_voxelLastSeen);
+                vs = _currentVoxelSize;
+                half = (float)(vs * 0.5 * _renderCubeScale);
+                meshGenSnapshot = _meshGeneration;
+                voxelMaxAgeSnapshot = _voxelMaxAge;
+                parityModeSnapshot = _parityMode;
+            }
 
-            var verts = new List<float>(_persistedBlocks.Count * 100);
-            var indices = new List<int>(_persistedBlocks.Count * 36);
+            var verts = new List<float>(snapshot.Length * 100);
+            var indices = new List<int>(snapshot.Length * 36);
             int vertOffset = 0;
 
-            foreach (var kvp in _persistedBlocks)
+            foreach (var kvp in snapshot)
             {
                 UnpackVoxelKey(kvp.Key, out int ix, out int iy, out int iz);
                 // Center cube in its grid cell: floor-based quantization maps
@@ -396,32 +476,44 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
 
                 // Age-based brightness decay: fade voxels toward DecayMinBrightness
                 // as they approach _voxelMaxAge without being refreshed by nvblox.
-                if (!_parityMode && _voxelMaxAge > 0 && _voxelMaxAge != int.MaxValue)
+                if (!parityModeSnapshot && voxelMaxAgeSnapshot > 0 && voxelMaxAgeSnapshot != int.MaxValue)
                 {
-                    int lastSeen = _voxelLastSeen.TryGetValue(kvp.Key, out int ls) ? ls : 0;
-                    float ageFrac = Math.Max(0f, Math.Min(1f, (float)(_meshGeneration - lastSeen) / _voxelMaxAge));
+                    int lastSeen = lastSeenCopy.TryGetValue(kvp.Key, out int ls) ? ls : 0;
+                    float ageFrac = Math.Max(0f, Math.Min(1f, (float)(meshGenSnapshot - lastSeen) / voxelMaxAgeSnapshot));
                     float brightness = 1f - ageFrac * (1f - DecayMinBrightness);
                     cr *= brightness; cg *= brightness; cb *= brightness;
                 }
 
                 // Face-culled cube: only emit faces not adjacent to another voxel
-                if (!_persistedBlocks.ContainsKey(PackVoxelKey(ix + 1, iy, iz)))
+                if (!occupancyLookup.Contains(PackVoxelKey(ix + 1, iy, iz)))
                     AddQuad(verts, indices, ref vertOffset, cx + half, cy - half, cz - half, cx + half, cy + half, cz - half, cx + half, cy + half, cz + half, cx + half, cy - half, cz + half, cr, cg, cb, 1, 0, 0);
-                if (!_persistedBlocks.ContainsKey(PackVoxelKey(ix - 1, iy, iz)))
+                if (!occupancyLookup.Contains(PackVoxelKey(ix - 1, iy, iz)))
                     AddQuad(verts, indices, ref vertOffset, cx - half, cy - half, cz + half, cx - half, cy + half, cz + half, cx - half, cy + half, cz - half, cx - half, cy - half, cz - half, cr, cg, cb, -1, 0, 0);
-                if (!_persistedBlocks.ContainsKey(PackVoxelKey(ix, iy + 1, iz)))
+                if (!occupancyLookup.Contains(PackVoxelKey(ix, iy + 1, iz)))
                     AddQuad(verts, indices, ref vertOffset, cx - half, cy + half, cz - half, cx - half, cy + half, cz + half, cx + half, cy + half, cz + half, cx + half, cy + half, cz - half, cr, cg, cb, 0, 1, 0);
-                if (!_persistedBlocks.ContainsKey(PackVoxelKey(ix, iy - 1, iz)))
+                if (!occupancyLookup.Contains(PackVoxelKey(ix, iy - 1, iz)))
                     AddQuad(verts, indices, ref vertOffset, cx - half, cy - half, cz + half, cx - half, cy - half, cz - half, cx + half, cy - half, cz - half, cx + half, cy - half, cz + half, cr, cg, cb, 0, -1, 0);
-                if (!_persistedBlocks.ContainsKey(PackVoxelKey(ix, iy, iz + 1)))
+                if (!occupancyLookup.Contains(PackVoxelKey(ix, iy, iz + 1)))
                     AddQuad(verts, indices, ref vertOffset, cx - half, cy - half, cz + half, cx + half, cy - half, cz + half, cx + half, cy + half, cz + half, cx - half, cy + half, cz + half, cr, cg, cb, 0, 0, 1);
-                if (!_persistedBlocks.ContainsKey(PackVoxelKey(ix, iy, iz - 1)))
+                if (!occupancyLookup.Contains(PackVoxelKey(ix, iy, iz - 1)))
                     AddQuad(verts, indices, ref vertOffset, cx + half, cy - half, cz - half, cx - half, cy - half, cz - half, cx - half, cy + half, cz - half, cx + half, cy + half, cz - half, cr, cg, cb, 0, 0, -1);
             }
 
-            _voxelVerts = verts.ToArray();
-            _voxelIndices = indices.ToArray();
-            _voxelIndexCount = indices.Count;
+            float[] finalVerts = verts.ToArray();
+            int[] finalIndices = indices.ToArray();
+            int finalCount = indices.Count;
+
+            // Hand the new arrays to the GL thread atomically. The next paint
+            // (which calls ProcessPendingRebuild) will swap them into the
+            // active _voxelVerts/_voxelIndices used by Render().
+            lock (_meshLock)
+            {
+                _stagedVerts = finalVerts;
+                _stagedIndices = finalIndices;
+                _stagedIndexCount = finalCount;
+                _stagedRenderedCount = parityCount;
+                _hasStagedMesh = true;
+            }
         }
 
         private static void AddQuad(List<float> verts, List<int> indices, ref int offset,

@@ -29,6 +29,8 @@ import argparse
 import json
 import logging
 import math
+import queue
+import threading
 import time
 from typing import Optional
 from urllib.request import Request, urlopen
@@ -94,6 +96,18 @@ class ObstacleDistanceBridge(Node):
         # Sector exclusion for spray approach (SP-005)
         # Set of sector indices to exclude (report as max distance)
         self._excluded_sectors: set[int] = set()
+
+        # Background HTTP sender. The ROS timer drops payloads onto this queue
+        # instead of calling urlopen() inline -- a stalled Edge Core API would
+        # otherwise block the timer for up to 1s and crater the 5 Hz obstacle
+        # avoidance stream. Matches the _mesh_sender_loop pattern in
+        # ros_http_bridge.py.
+        self._send_queue: "queue.Queue[list[int]]" = queue.Queue(maxsize=4)
+        self._sender_stop = threading.Event()
+        self._sender_thread = threading.Thread(
+            target=self._sender_loop, name="obstacle-distance-sender", daemon=True
+        )
+        self._sender_thread.start()
 
         # QoS for nvblox map slice (best effort, volatile)
         qos = QoSProfile(
@@ -241,33 +255,53 @@ class ObstacleDistanceBridge(Node):
         return distances_cm.tolist()
 
     def _send_obstacle_distance(self, distances: list[int]) -> None:
-        """Send obstacle distances to Edge Core API."""
+        """Hand off distances to the background sender (non-blocking)."""
         try:
-            payload = json.dumps({
-                "distances": distances,
-                "increment": int(SECTOR_WIDTH_DEG),
-                "min_distance": MIN_DISTANCE_CM,
-                "max_distance": MAX_DISTANCE_CM,
-                "angle_offset": 0,
-                "frame": 0,  # MAV_FRAME_BODY_FRD
-            }).encode("utf-8")
+            self._send_queue.put_nowait(distances)
+        except queue.Full:
+            # Drop the new sample rather than block the ROS timer; the next
+            # tick (5 Hz) will deliver a fresh sweep.
+            try:
+                _ = self._send_queue.get_nowait()
+                self._send_queue.put_nowait(distances)
+            except (queue.Empty, queue.Full):
+                pass
 
-            req = Request(
-                f"{self._base_url}/api/obstacle_distance",
-                data=payload,
-                method="POST",
-            )
-            req.add_header("Content-Type", "application/json")
-            req.add_header("Connection", "keep-alive")
+    def _sender_loop(self) -> None:
+        """Background thread: posts queued sweeps to the Edge Core API."""
+        while not self._sender_stop.is_set():
+            try:
+                distances = self._send_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                payload = json.dumps({
+                    "distances": distances,
+                    "increment": int(SECTOR_WIDTH_DEG),
+                    "min_distance": MIN_DISTANCE_CM,
+                    "max_distance": MAX_DISTANCE_CM,
+                    "angle_offset": 0,
+                    "frame": 0,  # MAV_FRAME_BODY_FRD
+                }).encode("utf-8")
 
-            with urlopen(req, timeout=1.0) as resp:
-                if resp.status == 200:
-                    self._send_count += 1
+                req = Request(
+                    f"{self._base_url}/api/obstacle_distance",
+                    data=payload,
+                    method="POST",
+                )
+                req.add_header("Content-Type", "application/json")
+                req.add_header("Connection", "keep-alive")
 
-        except URLError:
-            pass
-        except Exception as e:
-            self.get_logger().debug(f"Send error: {e}")
+                with urlopen(req, timeout=1.0) as resp:
+                    if resp.status == 200:
+                        self._send_count += 1
+            except URLError:
+                pass
+            except Exception as e:
+                try:
+                    self.get_logger().debug(f"Send error: {e}")
+                except Exception:
+                    pass
 
     def get_stats(self) -> dict:
         """Get bridge statistics."""

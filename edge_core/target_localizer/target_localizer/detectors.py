@@ -1,19 +1,14 @@
 """
 detectors.py
 
-Target and landmark detection for AEAC 2026 Task 1.
+Target detection for AEAC 2026 Task 1.
 
 Target detection (colored circles):
   - Uses HSV color segmentation + contour analysis
   - No neural network needed; circles are solid-color on building surfaces
   - Classifies: black, white, red, yellow, blue, green (per ConOps)
 
-Landmark detection (doors, windows):
-  - Uses YOLO model via TensorRT / OpenCV DNN
-  - Auto-registers detected landmarks into the building model
-
-Both detectors output bounding boxes and class labels. The main node
-handles 3D back-projection using depth and TF data.
+The main node handles 3D back-projection using depth and TF data.
 """
 
 import math
@@ -45,16 +40,6 @@ class CircleDetection:
     confidence: float    # detection confidence [0, 1]
     bbox: Tuple[int, int, int, int]  # (x1, y1, x2, y2)
     mask: Optional[np.ndarray] = None  # binary mask of the detection
-
-
-@dataclass
-class LandmarkDetection:
-    """A detected landmark (door, window, etc.)."""
-    cx: int
-    cy: int
-    kind: str            # "door", "window"
-    confidence: float
-    bbox: Tuple[int, int, int, int]
 
 
 # ------------------------------------------------------------------ #
@@ -234,155 +219,10 @@ class CircleDetector:
         return False
 
 
-class LandmarkDetector:
-    """
-    Detects building landmarks (doors, windows) using a YOLO model.
-
-    The model should be trained or fine-tuned to detect:
-      - door / doorway
-      - window
-
-    Accepts either:
-      - TensorRT engine file (.engine) for Jetson deployment
-      - ONNX model file (.onnx) for development/testing
-    """
-
-    # YOLO class names (adjust to match your trained model)
-    CLASS_NAMES = {
-        0: "door",
-        1: "window",
-    }
-
-    def __init__(self,
-                 model_path: str,
-                 input_size: Tuple[int, int] = (640, 640),
-                 conf_threshold: float = 0.4,
-                 nms_threshold: float = 0.45,
-                 use_tensorrt: bool = True):
-        """
-        Args:
-            model_path: Path to ONNX or TensorRT engine file.
-            input_size: Model input resolution (width, height).
-            conf_threshold: Minimum detection confidence.
-            nms_threshold: NMS IoU threshold.
-            use_tensorrt: If True, attempt to load as TensorRT engine.
-        """
-        self.input_size = input_size
-        self.conf_threshold = conf_threshold
-        self.nms_threshold = nms_threshold
-        self.net = None
-        self.use_tensorrt = use_tensorrt
-        self.model_path = model_path
-
-        self._load_model()
-
-    def _load_model(self):
-        """Load the YOLO model via OpenCV DNN."""
-        try:
-            if self.model_path.endswith('.onnx'):
-                self.net = cv2.dnn.readNetFromONNX(self.model_path)
-                if self.use_tensorrt:
-                    self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
-                    self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
-                else:
-                    self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-                    self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
-            print(f"[LandmarkDetector] Model loaded from {self.model_path}")
-        except Exception as e:
-            print(f"[LandmarkDetector] WARNING: Could not load model: {e}")
-            print("[LandmarkDetector] Landmark detection will be disabled.")
-            self.net = None
-
-    def detect(self, bgr_image: np.ndarray) -> List[LandmarkDetection]:
-        """Run YOLO inference and return detected landmarks."""
-        if self.net is None:
-            return []
-
-        h, w = bgr_image.shape[:2]
-        blob = cv2.dnn.blobFromImage(
-            bgr_image, 1/255.0, self.input_size,
-            swapRB=True, crop=False
-        )
-        self.net.setInput(blob)
-
-        try:
-            outputs = self.net.forward()
-        except Exception as e:
-            print(f"[LandmarkDetector] Inference error: {e}")
-            return []
-
-        return self._postprocess(outputs, w, h)
-
-    def _postprocess(self, outputs: np.ndarray,
-                     img_w: int, img_h: int) -> List[LandmarkDetection]:
-        """Parse YOLO output tensor into LandmarkDetection list."""
-        detections = []
-        # YOLO output shape: (1, num_classes+4, num_detections) for YOLOv8
-        # or (1, num_detections, num_classes+5) for YOLOv5
-        # Adjust based on your model variant
-
-        if len(outputs.shape) == 3:
-            out = outputs[0]
-            # YOLOv8 format: (num_classes+4, N) -> transpose to (N, num_classes+4)
-            if out.shape[0] < out.shape[1]:
-                out = out.T
-
-            boxes = []
-            confidences = []
-            class_ids = []
-
-            for row in out:
-                # row: [cx, cy, w, h, class_scores...]
-                if len(row) < 5:
-                    continue
-                scores = row[4:]
-                class_id = int(np.argmax(scores))
-                conf = float(scores[class_id])
-
-                if conf < self.conf_threshold:
-                    continue
-                if class_id not in self.CLASS_NAMES:
-                    continue
-
-                cx_norm = row[0] / self.input_size[0]
-                cy_norm = row[1] / self.input_size[1]
-                w_norm = row[2] / self.input_size[0]
-                h_norm = row[3] / self.input_size[1]
-
-                x1 = int((cx_norm - w_norm / 2) * img_w)
-                y1 = int((cy_norm - h_norm / 2) * img_h)
-                x2 = int((cx_norm + w_norm / 2) * img_w)
-                y2 = int((cy_norm + h_norm / 2) * img_h)
-
-                boxes.append([x1, y1, x2 - x1, y2 - y1])
-                confidences.append(conf)
-                class_ids.append(class_id)
-
-            # NMS
-            if boxes:
-                indices = cv2.dnn.NMSBoxes(
-                    boxes, confidences,
-                    self.conf_threshold, self.nms_threshold
-                )
-                if len(indices) > 0:
-                    for i in indices.flatten():
-                        x1, y1, w, h = boxes[i]
-                        cx = x1 + w // 2
-                        cy = y1 + h // 2
-                        detections.append(LandmarkDetection(
-                            cx=cx, cy=cy,
-                            kind=self.CLASS_NAMES[class_ids[i]],
-                            confidence=confidences[i],
-                            bbox=(x1, y1, x1 + w, y1 + h)
-                        ))
-
-        return detections
-
-
 class ColorVerifier:
     """
-    Independent HSV color verification for cross-checking YOLO or
-    circle detector color output. Used as a sanity check.
+    Independent HSV color verification used to cross-check the circle
+    detector's color classification.
     """
 
     @staticmethod

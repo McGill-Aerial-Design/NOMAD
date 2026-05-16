@@ -348,13 +348,17 @@ namespace NOMAD.MissionPlanner
 
         private static bool IsTailscaleAddress(IPAddress address)
         {
+            // Tailscale uses the 100.64.0.0/10 CGNAT range. A bare bytes[0]==100
+            // check would also match public 100.0.0.0/8 IPs (e.g. 100.0.0.1
+            // through 100.63.255.255), so verify the top two bits of the second
+            // octet are 01 (64-127).
             if (address == null) return false;
             var bytes = address.GetAddressBytes();
-            if (bytes.Length == 4) return bytes[0] == 100;
+            if (bytes.Length == 4) return bytes[0] == 100 && (bytes[1] & 0xC0) == 64;
             if (address.IsIPv4MappedToIPv6)
             {
                 bytes = address.MapToIPv4().GetAddressBytes();
-                return bytes.Length == 4 && bytes[0] == 100;
+                return bytes.Length == 4 && bytes[0] == 100 && (bytes[1] & 0xC0) == 64;
             }
             return false;
         }

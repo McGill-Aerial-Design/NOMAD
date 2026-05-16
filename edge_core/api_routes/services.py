@@ -189,7 +189,7 @@ def register_services_routes(app, ctx) -> None:
             return svc, runtime_state
 
         # Run blocking work in thread pool — event loop stays free
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         proc_services, runtime_state = await loop.run_in_executor(None, _blocking_proc_checks)
 
         services = proc_services

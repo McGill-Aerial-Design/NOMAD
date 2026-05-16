@@ -73,15 +73,6 @@ target_localizer:
     team_name: "MAD"
     output_dir: "/workspaces/isaac_ros-dev/data/task1_captures"
 
-    # ---- Landmark Detection (DISABLED for Task 1) ----
-    # CONOPS Q&A #7 explicitly says no landmark info (doors, windows, paths)
-    # will be provided. We have no training data for a doors/windows YOLO and
-    # the corner-relative descriptions in CONOPS Appendix D are sufficient on
-    # their own, so leave this off.
-    yolo_model_path: ""
-    landmark_detect_rate_hz: 2.0
-    auto_landmark_detection: false
-
     # ---- Target Detection ----
     dedup_radius_m: 0.5         # Targets within this 3D distance are merged
 
