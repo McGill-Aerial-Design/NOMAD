@@ -18,6 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Patterns this service owns. Each is anchored enough to avoid clashing with
 # nvblox or the ROS-HTTP bridge.
 PATTERN_LAUNCH='zed_camera\.launch\.py'
+PATTERN_ZED_RUNTIME='component_container_isolated.*zed_container|zed_state_publisher'
 PATTERN_HELPERS='target_localizer\.target_localizer_node|servo_tf_publisher\.py|zed_left_camera_frame_optical'
 
 LAUNCH_SCRIPT_PATH=/tmp/nomad_zed_wrapper_launch.sh
@@ -146,6 +147,7 @@ svc_start() {
 
     # Only kill the patterns this service owns.
     kill_pattern_in_container "$PATTERN_LAUNCH" 5
+    kill_pattern_in_container "$PATTERN_ZED_RUNTIME" 5
     kill_pattern_in_container "$PATTERN_HELPERS" 5
 
     # Clean stale FastRTPS shared-memory locks left by our own previous PIDs.
@@ -167,7 +169,7 @@ svc_start() {
         bash -c "nohup bash $LAUNCH_SCRIPT_PATH > $LAUNCH_LOG 2>&1 &"
 
     log_info "waiting for /zed/zed_node/odom to publish (timeout ${ZED_READY_TIMEOUT_S}s)"
-    if wait_for "docker exec $ISAAC_CONTAINER_NAME bash -c 'source /opt/ros/humble/setup.bash 2>/dev/null; source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null; timeout 4 ros2 topic echo --no-daemon --once /zed/zed_node/odom >/dev/null 2>&1'" \
+    if wait_for "docker exec $ISAAC_CONTAINER_NAME bash -c 'source /opt/ros/humble/setup.bash 2>/dev/null; source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null; timeout 8 ros2 topic info --no-daemon /zed/zed_node/odom 2>/dev/null | grep -Eq \"Publisher count: [1-9]\"'" \
             "$ZED_READY_TIMEOUT_S"; then
         log_ok "ZED publishing odometry"
         return 0
@@ -183,6 +185,7 @@ svc_stop() {
     fi
     log_info "stopping zed launch + helper nodes"
     kill_pattern_in_container "$PATTERN_LAUNCH" 5
+    kill_pattern_in_container "$PATTERN_ZED_RUNTIME" 5
     kill_pattern_in_container "$PATTERN_HELPERS" 5
     log_ok "stopped"
 }
