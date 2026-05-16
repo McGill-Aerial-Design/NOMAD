@@ -83,7 +83,7 @@ Windows Ground Station:                  ↓
 
 ### Phase 1: ROS2-to-HTTP Bridge (Jetson - Python)
 
-**File**: `edge_core/ros_mesh_bridge.py` (NEW)
+**File**: `edge_core/ros_http_bridge.py` (replaces archived `ros_mesh_bridge.py`)
 
 ```python
 import rclpy
@@ -365,7 +365,7 @@ msgpack>=1.0.0            # Binary serialization (optional)
 
 ### MVP (Minimum Viable Product) - 2 days
 - [x] Design document (this file)
-- [x] ROS2-to-HTTP bridge implementation (`edge_core/ros_mesh_bridge.py`)
+- [x] ROS2-to-HTTP bridge implementation (`edge_core/ros_http_bridge.py`)
 - [x] Basic Helix Toolkit viewport (`mission_planner/src/SLAM3DView.cs`)
 - [x] Mesh streaming and rendering
 - [x] Third-person view only

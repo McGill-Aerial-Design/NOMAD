@@ -69,8 +69,7 @@ The drone is now a standard ArduCopter quadcopter (not the originally-specified 
   - [mission_planner/src/EmbeddedVideoPlayer.cs:89](mission_planner/src/EmbeddedVideoPlayer.cs#L89)
   - [mission_planner/src/Rviz2View.cs:187](mission_planner/src/Rviz2View.cs#L187)
   - [mission_planner/src/ZedCalibrationView.cs:172](mission_planner/src/ZedCalibrationView.cs#L172)
-  - [mission_planner/src/FoxglovePanel.cs:393](mission_planner/src/FoxglovePanel.cs#L393)
-- **Why it blocks:** if the GCS-side IP override is used (different network on competition day), these screens silently break.
+  - **Why it blocks:** if the GCS-side IP override is used (different network on competition day), these screens silently break.
 - **Fix:** pull from `NOMADConfig.Instance.EffectiveJetsonIp` (or whatever the canonical accessor is — verify in [NOMADConfig.cs](mission_planner/src/NOMADConfig.cs)).
 
 ### 1.7 mavlink-router GCS endpoint hardcoded
@@ -134,7 +133,7 @@ The drone is now a standard ArduCopter quadcopter (not the originally-specified 
 | 3.1 | [api.py:2598](edge_core/api.py#L2598) `building_location` (also Blocker 1.1) | Once 1.1 is fixed, expose face geometry in `/api/task/1/target/capture` payload too |
 | 3.2 | [SLAM3DView.cs](mission_planner/src/SLAM3DView.cs) P3-7 (todo.md) | Incremental geometry updates still deferred. Acceptable on Pi 5 if FPS > 15. Verify during indoor test. |
 | 3.3 | [EnhancedHealthDashboard.cs](mission_planner/src/EnhancedHealthDashboard.cs) | 5 s polling — fine, but consider 10 s on Pi 5 since SLAM3D shares the render thread. |
-| 3.4 | [Rviz2View.cs](mission_planner/src/Rviz2View.cs), [FoxglovePanel.cs](mission_planner/src/FoxglovePanel.cs), [ZedCalibrationView.cs](mission_planner/src/ZedCalibrationView.cs) | Mark as "experimental" or remove from main menu — they're rarely used in flight and add tab clutter on a small screen. |
+| 3.4 | [Rviz2View.cs](mission_planner/src/Rviz2View.cs), [ZedCalibrationView.cs](mission_planner/src/ZedCalibrationView.cs) | Mark as "experimental" or remove from main menu — they're rarely used in flight and add tab clutter on a small screen. |
 | 3.5 | Hardcoded subprocess timeouts in [api.py](edge_core/api.py) | Accept `NOMAD_SUBPROCESS_TIMEOUT` env var. |
 | 3.6 | Bridge endpoints use `172.17.0.1` | Works because Edge Core binds 0.0.0.0; revisit if Docker network mode changes. |
 
@@ -158,12 +157,9 @@ The drone is now a standard ArduCopter quadcopter (not the originally-specified 
 
 All flagged files are properly `.gitignore`'d. Verified:
 
-- `.env` (OpenRouter key) — ignored ✓
 - `client_secret_*.json` (Google OAuth client) — ignored ✓
 - `nomad-*.json` (likely a service account) — ignored ✓
 - `*.tar.gz`, `*.zip`, `*.log` — ignored ✓
-
-**No action needed**, but: rotate the OpenRouter key in `.env` if anyone outside the team has had access to a Jetson image.
 
 ---
 
@@ -206,7 +202,7 @@ All flagged files are properly `.gitignore`'d. Verified:
 - **Important 2.10 — Mode selector dynamic:** combobox now populates from `/api/mode` `available_modes`.
 - **Important 2.1 — VIO stats display:** VIO card in [NOMADTask2View.cs](mission_planner/src/NOMADTask2View.cs) now shows health, tracking quality %, rate, source (polls `/api/vio/status`).
 - **Important 2.2 — Obstacle distance display:** new GET `/api/obstacle_distance` exposes latest 72-sector snapshot + nearest-obstacle summary; Task 2 view renders `Nearest obstacle: X.XX m @ N°` with color-coded severity.
-- **NOMADConfig base URL wiring:** [EmbeddedVideoPlayer.cs](mission_planner/src/EmbeddedVideoPlayer.cs), [Rviz2View.cs](mission_planner/src/Rviz2View.cs), [ZedCalibrationView.cs](mission_planner/src/ZedCalibrationView.cs), [FoxglovePanel.cs](mission_planner/src/FoxglovePanel.cs) — replaced hardcoded `100.85.121.98` IPs with `NOMADConfig.Load().EffectiveIP/EffectiveBaseUrl`.
+- **NOMADConfig base URL wiring:** [EmbeddedVideoPlayer.cs](mission_planner/src/EmbeddedVideoPlayer.cs), [Rviz2View.cs](mission_planner/src/Rviz2View.cs), [ZedCalibrationView.cs](mission_planner/src/ZedCalibrationView.cs) — replaced hardcoded `100.85.121.98` IPs with `NOMADConfig.Load().EffectiveIP/EffectiveBaseUrl`.
 - **Python SyntaxWarnings:** escape sequences in embedded bash strings in [api.py](edge_core/api.py) doubled (`\.` → `\\.`).
 - **Visibility pause for Task 2 poll timer:** `_modePollTimer` now pauses when tab is hidden.
 - **mavlink-router static config:** added comment clarifying that `start_nomad_full.sh` discovers GCS IP dynamically and bypasses `main.conf`.

@@ -251,7 +251,6 @@ ZED camera automatically selected via `SystemState.camera` interface.
 
 ## Related Documentation
 
-- [Task 1 AI Processing](task1_ai_processing.md) - AI-powered scene description
 - [Task 1 Competition Guide](../TASK1_COMPETITION_GUIDE.md) - Full competition-day procedure, checklists, CONOPS compliance
 - [../architecture.md](../architecture.md) - System architecture overview
 - [../JETSON_DEPLOYMENT.md](../JETSON_DEPLOYMENT.md) - Jetson setup guide

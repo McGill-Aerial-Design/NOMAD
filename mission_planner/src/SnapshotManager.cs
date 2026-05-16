@@ -85,15 +85,8 @@ namespace NOMAD.MissionPlanner
         public string TargetColor { get; set; }
         public string RelativeDescription { get; set; }
         public string JsonDataPath { get; set; }
-        public bool HasMetadata => !string.IsNullOrEmpty(JsonDataPath) && File.Exists(JsonDataPath);
-
-        // AI Description fields
-        public string AiDescription { get; set; }
-        public string AiProvider { get; set; }
-        public string AiModel { get; set; }
-        public DateTime? AiGeneratedAt { get; set; }
-        public bool HasAiDescription => !string.IsNullOrEmpty(AiDescription);
-    }
+    public bool HasMetadata => !string.IsNullOrEmpty(JsonDataPath) && File.Exists(JsonDataPath);
+}
 
     /// <summary>
     /// Snapshot manager panel for viewing and organizing captures.

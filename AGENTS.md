@@ -91,7 +91,7 @@ NOMAD/
 |       |-- Task1UploadPanel.cs          # Target grid + Google Drive upload
 |       |-- PayloadControlPanel.cs       # Payload drop / water shooter
 |       |-- GoogleDriveUploadService.cs  # GDrive upload service
-|       |-- AIDescriptionService.cs      # AI description generation
+
 |       |-- DualLinkSender.cs            # HTTP/MAVLink dual-path sender
 |       |-- NotificationPanel.cs + NotificationService.cs # Toast notification system
 |       |-- MAVLinkConnectionManager.cs  # MAVLink telemetry mgmt
@@ -101,9 +101,8 @@ NOMAD/
 |       |-- SnapshotManager.cs           # ZED snapshot mgmt
 |       |-- BuildingViewer3D.cs          # 3D building viewer
 |       |-- ZedCalibrationView.cs        # ZED calibration UI
-|       |-- FoxglovePanel.cs             # Foxglove integration
-|       |-- Rviz2View.cs                 # RViz2 integration
-|       |-- MapOverlayManager.cs         # Map overlay manager
+| |-- Rviz2View.cs # RViz2 integration (noVNC)
+| |-- MapOverlayManager.cs # Map overlay manager
 |       |-- BoundaryManager.cs           # Geofence boundary manager
 |       |-- MissionConfig.cs + NOMADConfig.cs # Configuration models
 |       |-- NOMADTheme.cs                # UI theming

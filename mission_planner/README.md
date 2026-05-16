@@ -85,7 +85,6 @@ The Video view includes comprehensive manual drone control:
 | `src/PayloadControlPanel.cs` | Payload drop / water shooter |
 | `src/Task1UploadPanel.cs` | Target grid + Google Drive upload |
 | `src/GoogleDriveUploadService.cs` | Google Drive upload service |
-| `src/AIDescriptionService.cs` | AI description generation |
 | `src/ServiceControlPanel.cs` | Service status / control panel |
 | `src/NotificationPanel.cs` | Toast notification UI |
 | `src/NotificationService.cs` | Toast notification service |
@@ -94,7 +93,6 @@ The Video view includes comprehensive manual drone control:
 | `src/SnapshotManager.cs` | ZED snapshot management |
 | `src/BuildingViewer3D.cs` | 3D building viewer |
 | `src/ZedCalibrationView.cs` | ZED calibration UI |
-| `src/FoxglovePanel.cs` | Foxglove integration |
 | `src/Rviz2View.cs` | RViz2 integration |
 | `src/MapOverlayManager.cs` | Map overlay manager |
 | `src/BoundaryManager.cs` | Geofence boundary manager |

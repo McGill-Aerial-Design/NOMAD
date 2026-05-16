@@ -4,14 +4,6 @@
 
 ### `/features/`
 - [task1_photo_capture.md](features/task1_photo_capture.md) - Task 1 photo capture with metadata and EXIF embedding
-- [task1_ai_processing.md](features/task1_ai_processing.md) - AI-powered scene description (Gemini/Ollama)
-
-### `/planning/`
-- [dependency_injection.md](planning/dependency_injection.md) - Dependency injection refactoring notes
-- [NAV2_INTEGRATION_PLAN.md](NAV2_INTEGRATION_PLAN.md) - Nav2 integration planning
-
-### `/analysis/`
-- [codebase_analysis.md](analysis/codebase_analysis.md) - MCP-based codebase analysis report
 
 ### Root docs
 - [architecture.md](architecture.md) - Overall system architecture
@@ -37,7 +29,6 @@
 ### Task 1 (Outdoor Recon)
 - [TASK1_COMPETITION_GUIDE.md](TASK1_COMPETITION_GUIDE.md) - **Competition guide** — operations, checklists, CONOPS compliance, scoring strategy
 - [features/task1_photo_capture.md](features/task1_photo_capture.md) - Photo capture system
-- [features/task1_ai_processing.md](features/task1_ai_processing.md) - AI scene description
 - [../edge_core/target_localizer/README.md](../edge_core/target_localizer/README.md) - Target localizer ROS 2 node (detection, 3D positioning, description generation)
 
 ### Task 2 (Indoor Autonomous)
@@ -48,9 +39,6 @@
 - [architecture.md](architecture.md) - System design
 - [DUAL_LINK_FAILOVER.md](DUAL_LINK_FAILOVER.md) - Telemetry redundancy
 - [VIDEO_STREAMING.md](VIDEO_STREAMING.md) - Video streaming
-
-### Development
-- [planning/dependency_injection.md](planning/dependency_injection.md) - Refactoring plans
 
 ---
 
@@ -67,8 +55,6 @@ Key configuration files and their purposes:
 | `config/video_streams.json` | MediaMTX RTSP streams | All | ZED camera RTSP, mask stream URLs for Mission Planner |
 | `config/nomad.env` | Environment variables (single source of truth) | All | Tailscale IPs, home paths, port configuration, autostart flags |
 
-
-- [analysis/codebase_analysis.md](analysis/codebase_analysis.md) - Code quality
 
 ---
 
