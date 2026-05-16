@@ -296,7 +296,9 @@ namespace NOMAD.MissionPlanner
                 SetStatus("Capturing after image, finalising recording…", ACCENT_COLOR);
                 Log("manual.stop → POST /api/task/2/spray/manual/stop");
 
-                var resp = await JetsonApiService.PostAsync("/api/task/2/spray/manual/stop");
+                // Long-run client: finalising the mp4 + capturing the after
+                // frame routinely exceeds the 5s default client timeout.
+                var resp = await JetsonApiService.PostLongRunAsync("/api/task/2/spray/manual/stop");
                 if (!resp.IsSuccessStatusCode)
                 {
                     var body = await resp.Content.ReadAsStringAsync();
@@ -424,7 +426,8 @@ namespace NOMAD.MissionPlanner
                     Log("abort → POST /api/task/2/spray/manual/stop (manual)");
                     // Cleanest abort for a manual session is to finalise it —
                     // ffmpeg/mp4 needs an orderly close or the file is corrupt.
-                    var resp = await JetsonApiService.PostAsync("/api/task/2/spray/manual/stop");
+                    // Long-run client because finalising the mp4 can exceed 5s.
+                    var resp = await JetsonApiService.PostLongRunAsync("/api/task/2/spray/manual/stop");
                     _manualSessionOpen = false;
                     SetStatus(resp.IsSuccessStatusCode
                         ? "Manual session ended (aborted)"
@@ -526,7 +529,9 @@ namespace NOMAD.MissionPlanner
                     body.ToString(Newtonsoft.Json.Formatting.None),
                     Encoding.UTF8, "application/json");
                 Log("upload → POST /api/task/2/spray/upload (Jetson-side)");
-                var resp = await JetsonApiService.PostAsync("/api/task/2/spray/upload", content);
+                // Long-run client: pushing the spray video to Drive routinely
+                // takes longer than the 5s default client timeout.
+                var resp = await JetsonApiService.PostLongRunAsync("/api/task/2/spray/upload", content);
 
                 if ((int)resp.StatusCode == 503)
                 {

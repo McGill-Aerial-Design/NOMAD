@@ -123,8 +123,8 @@ namespace NOMAD.MissionPlanner
         private UdpClient _lteSock;
         private UdpClient _radioSock;
         private SerialPort _radioSerial;
-        private UdpClient _localSock;             // OS-assigned ephemeral port, used to push to MP and receive replies
-        private volatile IPEndPoint _mpEndpoint;  // destination MP listens on (127.0.0.1:LocalPort)
+        private UdpClient _localSock;             // bound to LocalPort; MP connects here as a UDP client
+        private volatile IPEndPoint _mpEndpoint;  // ephemeral endpoint MP sends from (captured on first received packet)
 
         // Frame parsers (one per source, stateful — handles split datagrams/serial chunks)
         private readonly MavlinkFrameParser _lteParser = new MavlinkFrameParser();
@@ -189,17 +189,16 @@ namespace NOMAD.MissionPlanner
             if (IsRunning) return;
             _cts = new CancellationTokenSource();
 
-            // MP runs as UDP *server* and listens on (BindAddress:LocalPort).
-            // The router pushes packets out from an ephemeral source port; MP's
-            // replies come back on that same socket. This avoids the UDPCl
-            // catch-22 where MP never sends anything until it sees a heartbeat
-            // and the router never knows where to forward heartbeats to.
+            // MP connects as a UDP *client* to (BindAddress:LocalPort), so the
+            // router has to bind the local socket on LocalPort and act as the
+            // server. MP's ephemeral source endpoint is captured on the first
+            // received packet, then used as the return path for downlink frames.
             try
             {
                 if (!IPAddress.TryParse(_cfg.BindAddress, out var ip)) ip = IPAddress.Loopback;
-                _mpEndpoint = new IPEndPoint(ip, _cfg.LocalPort);
-                _localSock = new UdpClient(0); // OS-assigned ephemeral port
-                LocalEndpoint = _mpEndpoint;
+                _localSock = new UdpClient(new IPEndPoint(ip, _cfg.LocalPort));
+                _mpEndpoint = null; // set when MP first sends to us
+                LocalEndpoint = (IPEndPoint)_localSock.Client.LocalEndPoint;
             }
             catch (Exception ex)
             {
@@ -218,8 +217,7 @@ namespace NOMAD.MissionPlanner
 
             Task.Run(() => LocalRxLoop(_cts.Token));
             Task.Run(() => StatsLoop(_cts.Token));
-            var src = (IPEndPoint)_localSock.Client.LocalEndPoint;
-            Log($"Router started: pushing merged stream → udp://{_cfg.BindAddress}:{_cfg.LocalPort} (router source :{src.Port})");
+            Log($"Router started: listening for Mission Planner on udp://{_cfg.BindAddress}:{_cfg.LocalPort}");
         }
 
         public void Stop()
@@ -380,13 +378,14 @@ namespace NOMAD.MissionPlanner
 
         private async Task LocalRxLoop(CancellationToken ct)
         {
-            // _mpEndpoint is fixed at Start(); we just need to receive MP's
-            // command-side packets and forward them to the active link.
+            // MP is a UDP client — its source endpoint is ephemeral, so latch it
+            // on the first inbound packet and use it as the downlink destination.
             while (!ct.IsCancellationRequested)
             {
                 try
                 {
                     var result = await _localSock.ReceiveAsync().ConfigureAwait(false);
+                    _mpEndpoint = result.RemoteEndPoint;
                     ForwardOutbound(result.Buffer, result.Buffer.Length);
                 }
                 catch (ObjectDisposedException) { break; }

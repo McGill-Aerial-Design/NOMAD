@@ -43,6 +43,7 @@ from typing import Optional
 from urllib.error import URLError
 
 import rclpy
+import rclpy.time
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from nav_msgs.msg import Odometry
@@ -800,10 +801,12 @@ class ROSHTTPBridge(Node):
             )
             if self._tf_buffer is not None:
                 try:
-                    import rclpy.duration
+                    # Query the latest available transform without blocking.
+                    # rclpy.spin() is single-threaded — waiting with a timeout
+                    # inside this callback would freeze the TF listener that
+                    # populates the buffer, capping odometry to <20Hz.
                     _tf_t = self._tf_buffer.lookup_transform(
-                        "map", self._camera_frame, msg.header.stamp,
-                        timeout=rclpy.duration.Duration(seconds=0.05))
+                        "map", self._camera_frame, rclpy.time.Time())
                     slam_x = _tf_t.transform.translation.x
                     slam_y = _tf_t.transform.translation.y
                     slam_z = _tf_t.transform.translation.z

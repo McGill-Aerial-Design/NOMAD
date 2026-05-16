@@ -940,14 +940,16 @@ namespace NOMAD.MissionPlanner
             
             try
             {
-                // Create SET_POSITION_TARGET_LOCAL_NED message
-                // This uses velocity control in the LOCAL_NED frame
+                // Create SET_POSITION_TARGET_LOCAL_NED message in BODY_OFFSET_NED
+                // so vx/vy/vz are applied as Front/Right/Down relative to the
+                // vehicle's heading. LOCAL_NED would lock W/S/A/D to North/East
+                // regardless of yaw.
                 var msg = new MAVLink.mavlink_set_position_target_local_ned_t
                 {
                     time_boot_ms = (uint)Environment.TickCount,
                     target_system = MainV2.comPort.MAV.sysid,
                     target_component = MainV2.comPort.MAV.compid,
-                    coordinate_frame = (byte)MAVLink.MAV_FRAME.LOCAL_NED,
+                    coordinate_frame = (byte)MAVLink.MAV_FRAME.BODY_OFFSET_NED,
                     
                     // Type mask for velocity + yaw rate control
                     // Bits 0-2: Ignore position (set)
@@ -962,10 +964,10 @@ namespace NOMAD.MissionPlanner
                     // Position (ignored)
                     x = 0, y = 0, z = 0,
                     
-                    // Velocity (NED frame)
-                    vx = _vx,   // North (forward)
-                    vy = _vy,   // East (right)
-                    vz = _vz,   // Down (positive down)
+                    // Velocity (body-offset NED frame): X=forward, Y=right, Z=down
+                    vx = _vx,   // forward
+                    vy = _vy,   // right
+                    vz = _vz,   // down (positive down)
                     
                     // Acceleration (ignored)
                     afx = 0, afy = 0, afz = 0,

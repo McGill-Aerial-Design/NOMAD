@@ -205,8 +205,18 @@ def register_system_routes(app, ctx) -> None:
             "gcs_reachable": gcs_reachable,
         }
 
+    # Allow IPv4 dotted quads and DNS hostnames (RFC 1123 labels). Rejects any
+    # leading '-' so the value cannot be interpreted as a ping(8) flag, plus
+    # whitespace, shell metacharacters, and anything else outside [A-Za-z0-9.-].
+    _PING_HOST_RE = re.compile(
+        r"^(?=.{1,253}$)(?!-)[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?"
+        r"(?:\.(?!-)[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?)*$"
+    )
+
     @app.get("/network/ping/{host}", tags=["Network"])
     async def network_ping(host: str):
+        if not _PING_HOST_RE.match(host):
+            raise HTTPException(status_code=400, detail="Invalid host")
         try:
             result = await asyncio.to_thread(
                 subprocess.run,
