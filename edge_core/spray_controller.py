@@ -245,6 +245,21 @@ class SprayController:
     LOCK_HOLD_MS = int(_spray_calibration["lock_hold_ms"])
     ALIGN_TIMEOUT_S = float(_spray_calibration["align_timeout_s"])
 
+    # Stereo parallax correction. Detection runs on the ZED left image, but
+    # the spray nozzle is colocated with the ZED *right* camera. The target's
+    # x in the right image differs from the left image by fx*baseline/Z, so we
+    # subtract that shift from err_x to aim in the nozzle frame. Value is
+    # fx_pub (px) * baseline (m) for the *published* stream — depends on
+    # ZED_GRAB_RESOLUTION and ZED_PUB_DOWNSCALE_FACTOR. Source of truth is
+    # NOMAD_STEREO_FX_BASELINE_PX_M in config/nomad.env; default 32 px·m
+    # matches ZED2i HD720 + downscale 2.0 (fx≈267 px, baseline 0.12 m).
+    STEREO_FX_BASELINE_PX_M = float(
+        os.environ.get(
+            "NOMAD_STEREO_FX_BASELINE_PX_M",
+            _spray_calibration.get("stereo_fx_baseline_px_m", 32.0),
+        )
+    )
+
     def __init__(
         self,
         nav_controller: Any = None,
@@ -640,6 +655,34 @@ class SprayController:
             return (x, y, z)
         return None
 
+    def _aim_err_x(self, cx: float, range_m: Optional[float]) -> float:
+        """Aim error in the right-camera (nozzle) image frame.
+
+        cx and AIM_PIXEL_X are in left-image pixels. Right-image x = left - fx*baseline/Z.
+        AIM_PIXEL_X was calibrated at TARGET_CAMERA_RANGE_M, so its baked-in
+        parallax is fx*baseline/TARGET_CAMERA_RANGE_M.
+        """
+        raw = cx - self.AIM_PIXEL_X
+        if range_m is None or range_m < 0.3:
+            return raw
+        parallax_dx = self.STEREO_FX_BASELINE_PX_M * (
+            1.0 / float(range_m) - 1.0 / self.TARGET_CAMERA_RANGE_M
+        )
+        return raw - parallax_dx
+
+    def _get_drone_yaw_rad(self) -> float:
+        """Current drone yaw (radians, NED: 0=North, CW positive). Falls back to heading_deg, then 0."""
+        if not self._state:
+            return 0.0
+        state = self._state.get_state()
+        yaw = getattr(state, 'vio_yaw', None)
+        if yaw is not None:
+            return float(yaw)
+        heading_deg = getattr(state, 'heading_deg', None)
+        if heading_deg is not None:
+            return math.radians(float(heading_deg))
+        return 0.0
+
     # ------------------------------------------------------------------ #
     # APPROACH (direct velocity)
     # ------------------------------------------------------------------ #
@@ -734,7 +777,7 @@ class SprayController:
             # capped by the configured approach speed. Same lateral/yaw/
             # altitude correction shape as _aim_at_target so the circle
             # stays visible while we close in.
-            err_x = cx - self.AIM_PIXEL_X
+            err_x = self._aim_err_x(cx, range_m)
             err_y = cy - self.AIM_PIXEL_Y
             forward_excess = range_m - self.APPROACH_STOP_DISTANCE_M
             vx = self._clamp(forward_excess * 0.5, 0.0, self.APPROACH_SPEED_MPS)
@@ -804,9 +847,17 @@ class SprayController:
 
             norm = max(distance, 0.1)
             speed = min(self.APPROACH_SPEED_MPS, distance * 0.5)
-            vx = (dx / norm) * speed
-            vy = (dy / norm) * speed
-            vz = (dz / norm) * speed * 0.3
+            # World NED delta (dx=North, dy=East, dz=Down) -> body FLU velocity
+            # (vx=Forward, vy=Left, vz=Up) for NavController.send_velocity.
+            yaw = self._get_drone_yaw_rad()
+            cos_y = math.cos(yaw)
+            sin_y = math.sin(yaw)
+            fwd = cos_y * dx + sin_y * dy
+            left = sin_y * dx - cos_y * dy
+            up = -dz
+            vx = (fwd / norm) * speed
+            vy = (left / norm) * speed
+            vz = (up / norm) * speed * 0.3
             self._nav.send_velocity(vx, vy, vz, 0)
             time.sleep(0.1)
 
@@ -838,7 +889,12 @@ class SprayController:
             return
         dx = target.x - drone_pos[0]
         dy = target.y - drone_pos[1]
-        angle_deg = math.degrees(math.atan2(dy, dx)) % 360
+        # Bearing to target in world NED (0=North, CW positive). Convert to
+        # body-frame bearing (0=drone forward) since obstacle_distance_bridge
+        # publishes sectors in MAV_FRAME_BODY_FRD.
+        world_bearing_rad = math.atan2(dy, dx)
+        body_bearing_rad = world_bearing_rad - self._get_drone_yaw_rad()
+        angle_deg = math.degrees(body_bearing_rad) % 360
         center_sector = int(angle_deg / 5) % 72
 
         sectors = set()
@@ -894,7 +950,7 @@ class SprayController:
             cx = float(detection["cx"])
             cy = float(detection["cy"])
             camera_range_m = detection.get("range_m")
-            err_x = cx - self.AIM_PIXEL_X
+            err_x = self._aim_err_x(cx, camera_range_m)
             err_y = cy - self.AIM_PIXEL_Y
             range_error = 0.0
             if camera_range_m is not None:

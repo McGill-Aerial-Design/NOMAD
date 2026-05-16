@@ -572,10 +572,11 @@ namespace NOMAD.MissionPlanner
 
         private void ForwardOutbound(byte[] data, int length)
         {
-            bool parsedFrame = false;
+            // Only forward fully-parsed frames. Partial chunks stay buffered in
+            // _localParser until the rest arrives — forwarding the raw partial
+            // here would re-send those bytes again inside the completed frame.
             _localParser.Push(data, length, (frame) =>
             {
-                parsedFrame = true;
                 if (frame.IsParamRequest)
                 {
                     var source = SelectParamTransactionSource();
@@ -584,9 +585,6 @@ namespace NOMAD.MissionPlanner
                 else
                     ForwardOutboundFrame(frame.Raw, frame.RawLength);
             });
-
-            if (!parsedFrame)
-                ForwardOutboundFrame(data, length);
         }
 
         private void ForwardOutboundFrame(byte[] data, int length)
