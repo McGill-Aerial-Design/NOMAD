@@ -75,10 +75,7 @@ class SprayStatus:
     verification_passed: bool = False
     upload_url: str = ""
     error: Optional[str] = None
-    # Legacy Nav2 approach tracking (kept for API/status compatibility)
-    nav2_goal_id: Optional[str] = None
-    nav2_approach_active: bool = False
-    approach_method: str = ""  # "velocity" for the current Task 2 path
+    approach_method: str = ""  # "image" or "velocity" for the current Task 2 path
     # Stats
     targets_engaged: int = 0
     targets_succeeded: int = 0
@@ -95,8 +92,6 @@ class SprayStatus:
             "verification_passed": self.verification_passed,
             "upload_url": self.upload_url,
             "error": self.error,
-            "nav2_goal_id": self.nav2_goal_id,
-            "nav2_approach_active": self.nav2_approach_active,
             "approach_method": self.approach_method,
             "targets_engaged": self.targets_engaged,
             "targets_succeeded": self.targets_succeeded,
@@ -220,10 +215,6 @@ class SprayController:
     APPROACH_SPEED_MPS = 0.5
     APPROACH_TIMEOUT_S = 20.0
 
-    # Nav2 approach parameters
-    NAV2_GOAL_SETTLE_TIME_S = 1.0
-    NAV2_STATUS_POLL_INTERVAL_S = 0.2
-
     # Aiming parameters
     AIM_TOLERANCE_PX = int(_spray_calibration["aim_tolerance_px"])
 
@@ -272,10 +263,6 @@ class SprayController:
         self._thread: Optional[threading.Thread] = None
         self._abort_event = threading.Event()
 
-        # Nav2 callbacks (set by main.py)
-        self._send_nav2_goal_fn: Optional[Callable[[dict], dict]] = None
-        self._get_nav2_status_fn: Optional[Callable[[], dict]] = None
-        self._cancel_nav2_goal_fn: Optional[Callable[[], None]] = None
         # Obstacle avoidance sector exclusion callback
         self._set_excluded_sectors_fn: Optional[Callable[[set[int]], None]] = None
 
@@ -351,18 +338,6 @@ class SprayController:
 
     def set_detection_bbox_fn(self, fn: Callable) -> None:
         self._get_detection_bbox_fn = fn
-
-    def set_nav2_goal_fn(self, fn: Callable[[dict], dict]) -> None:
-        """Set callback to send Nav2 navigation goal."""
-        self._send_nav2_goal_fn = fn
-
-    def set_nav2_status_fn(self, fn: Callable[[], dict]) -> None:
-        """Set callback to read current Nav2 navigation status."""
-        self._get_nav2_status_fn = fn
-
-    def set_nav2_cancel_fn(self, fn: Callable[[], None]) -> None:
-        """Set callback to cancel current Nav2 goal."""
-        self._cancel_nav2_goal_fn = fn
 
     def set_excluded_sectors_fn(self, fn: Callable[[set[int]], None]) -> None:
         """Set callback to update obstacle avoidance excluded sectors."""
@@ -522,8 +497,6 @@ class SprayController:
             self._status.spray_count = 0
             self._status.verification_passed = False
             self._status.error = None
-            self._status.nav2_goal_id = None
-            self._status.nav2_approach_active = False
             self._status.approach_method = ""
             self._status.targets_engaged += 1
 
@@ -551,14 +524,6 @@ class SprayController:
         """Abort the current spray sequence."""
         self._abort_event.set()
 
-        # Cancel Nav2 goal if active
-        if self._cancel_nav2_goal_fn and self._status.nav2_approach_active:
-            try:
-                self._cancel_nav2_goal_fn()
-                logger.info("Nav2 goal cancelled on spray abort")
-            except Exception as e:
-                logger.warning(f"Nav2 cancel failed on abort: {e}")
-
         # Stop drone movement
         if self._nav:
             self._nav.stop_movement()
@@ -572,22 +537,8 @@ class SprayController:
 
         with self._lock:
             self._status.state = SprayState.ABORTED.value
-            self._status.nav2_approach_active = False
         logger.info("Spray sequence aborted")
         return {"success": True, "message": "Spray sequence aborted"}
-
-    def update_nav2_result(self, goal_id: str, status: str, message: str = "") -> None:
-        """Called by API when Nav2 reports a goal result."""
-        with self._lock:
-            if (
-                self._status.nav2_goal_id == goal_id
-                and self._status.nav2_approach_active
-            ):
-                self._status.nav2_approach_active = False
-                logger.info(
-                    f"Nav2 approach result: goal={goal_id} status={status} "
-                    f"msg={message}"
-                )
 
     # ------------------------------------------------------------------ #
     # Sequence runner
@@ -693,42 +644,16 @@ class SprayController:
     # APPROACH (direct velocity)
     # ------------------------------------------------------------------ #
 
-    def _compute_approach_pose(self, target: SprayTarget) -> dict:
-        """Compute the 2m approach pose for Nav2 NavigateToPose goal."""
-        drone_pos = self._get_drone_position()
-        if drone_pos is None:
-            dx, dy, dz = target.x, target.y, target.z
-        else:
-            dx = target.x - drone_pos[0]
-            dy = target.y - drone_pos[1]
-            dz = target.z - drone_pos[2]
-
-        dist = math.sqrt(dx * dx + dy * dy + dz * dz)
-        if dist < 0.1:
-            return {"x": target.x, "y": target.y, "z": target.z, "yaw": 0.0}
-
-        nx, ny, nz = dx / dist, dy / dist, dz / dist
-        approach_dist = self.APPROACH_STOP_DISTANCE_M
-        approach_x = target.x - nx * approach_dist
-        approach_y = target.y - ny * approach_dist
-        approach_z = target.z - nz * approach_dist
-        yaw = math.atan2(dy, dx)
-        return {"x": approach_x, "y": approach_y, "z": approach_z, "yaw": yaw}
-
     def _approach_target(self, target: SprayTarget) -> bool:
         """Autonomous approach from trigger range to the coarse firing standoff.
 
-        Uses direct velocity commands (not Nav2) because:
-        - Nav2 is a 2D planner designed for ground robots — it ignores Z
-        - The approach is short and target-visible, so path planning is unnecessary
-        - Velocity commands handle all 3 axes natively via MAVLink GUIDED
-        - Nav2 has been reported to crash with vertical-level targets
+        Nav2 has been removed (it was a 2D ground-robot planner that crashed
+        on vertical targets). The spray flow now uses pure visual servoing:
+        image-space approach when we have a bbox + depth, otherwise direct
+        velocity in the drone's world frame.
         """
         self._set_approach_sectors(target, exclude=True)
-        if target.image_only:
-            # No world coords — fly the approach in image+range space using
-            # the bbox center and the bridge's depth lookup. This is the
-            # Task 2 shape-detector path.
+        if self._get_detection_bbox_fn is not None:
             return self._approach_via_image(target)
         return self._approach_via_velocity(target)
 
@@ -840,84 +765,6 @@ class SprayController:
             last_command_time = now
             time.sleep(0.1)
 
-        return False
-
-    def _approach_via_nav2(self, target: SprayTarget) -> Optional[bool]:
-        """Approach using Nav2 NavigateToPose.
-
-        Returns: True=succeeded, False=aborted, None=should fall back.
-        """
-        if not self._send_nav2_goal_fn:
-            return None
-
-        approach_pose = self._compute_approach_pose(target)
-        goal_dict = {"type": "navigate_to_pose", "pose": approach_pose}
-
-        try:
-            result = self._send_nav2_goal_fn(goal_dict)
-        except Exception as e:
-            logger.error(f"Failed to send Nav2 goal: {e}")
-            return None
-
-        if not result.get("success", False):
-            logger.warning(f"Nav2 goal rejected: {result.get('error', 'unknown')}")
-            return None
-
-        goal_id = result.get("goal_id", "")
-        with self._lock:
-            self._status.nav2_goal_id = goal_id
-            self._status.nav2_approach_active = True
-            self._status.approach_method = "nav2"
-
-        logger.info(f"Nav2 approach goal sent: id={goal_id}")
-
-        # Wait for Nav2 result
-        approach_start = time.time()
-        while not self._check_abort():
-            if time.time() - approach_start > self.APPROACH_TIMEOUT_S:
-                logger.warning(f"Nav2 approach timeout ({self.APPROACH_TIMEOUT_S}s)")
-                if self._cancel_nav2_goal_fn:
-                    try:
-                        self._cancel_nav2_goal_fn()
-                    except Exception:
-                        pass
-                with self._lock:
-                    self._status.nav2_approach_active = False
-                # Timeout: proceed from current position
-                self._set_approach_sectors(target, exclude=False)
-                return True
-
-            # Check if Nav2 result was reported
-            with self._lock:
-                if not self._status.nav2_approach_active:
-                    # Result received via update_nav2_result()
-                    if self._get_nav2_status_fn:
-                        nav2_status = self._get_nav2_status_fn()
-                        final_status = nav2_status.get("status", "unknown")
-                    else:
-                        final_status = "unknown"
-
-                    if final_status == "succeeded":
-                        logger.info("Nav2 approach succeeded")
-                        time.sleep(self.NAV2_GOAL_SETTLE_TIME_S)
-                        self._update_distance_to_target(target)
-                        self._set_approach_sectors(target, exclude=False)
-                        return True
-                    elif final_status == "cancelled":
-                        if self._check_abort():
-                            return False
-                        return None  # Non-abort cancel, fall back
-                    else:
-                        logger.warning(f"Nav2 approach result: {final_status}")
-                        return None
-
-            self._update_distance_to_target(target)
-            time.sleep(self.NAV2_STATUS_POLL_INTERVAL_S)
-
-        # Aborted
-        with self._lock:
-            self._status.nav2_approach_active = False
-        self._set_approach_sectors(target, exclude=False)
         return False
 
     def _approach_via_velocity(self, target: SprayTarget) -> bool:

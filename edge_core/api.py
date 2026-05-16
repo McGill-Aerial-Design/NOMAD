@@ -244,11 +244,6 @@ def create_app(state_manager: StateManager) -> FastAPI:
     # Latest OBSTACLE_DISTANCE snapshot cached for UI consumers (GET /api/obstacle_distance)
     app.state.obstacle_distance_last: Optional[dict] = None
 
-    # Nav2 goal state (Jetson-side obstacle avoidance via nav2 stack)
-    app.state.nav2_pending_goal = None  # Goal waiting to be picked up by bridge
-    app.state.nav2_current_status = {"status": "idle"}  # Latest feedback from bridge
-    app.state.nav2_last_result = None  # Last completed goal result
-
     # VIO state from external sources (ROS bridge)
     app.state.external_vio_state: Optional[dict] = None
     app.state.slam_vio_ros_frame: Optional[dict] = None  # ROS-frame pose for SLAM 3D
@@ -265,6 +260,9 @@ def create_app(state_manager: StateManager) -> FastAPI:
     app.state.vio_trajectory: list[dict] = []  # List of {x, y, z, timestamp} points
     app.state.vio_trajectory_max_points: int = 1000  # Keep last N points
     app.state.vio_state_lock = threading.Lock()
+    # Dedicated lock for SLAM mesh state (large 30MB+ updates) so writers don't
+    # race on slam_mesh_version / slam_mesh_data when multiple POSTs land.
+    app.state.slam_mesh_lock = threading.Lock()
     app.state.exclusion_map: list[dict] = []
 
     # Object detection state (HSV circle detection via ZED custom OD)
@@ -1305,12 +1303,7 @@ if [ ! -f "$NOMAD_LAUNCH" ]; then
     exit 2
 fi
 
-NAV2_FLAG=false
-if [ "${{NOMAD_ENABLE_NAV2:-false}}" = "true" ] && [ "$ENABLE_OD" != "true" ]; then
-    NAV2_FLAG=true
-fi
-
-ros2 launch "$NOMAD_LAUNCH" enable_nav2:=$NAV2_FLAG enable_od:=$ENABLE_OD &
+ros2 launch "$NOMAD_LAUNCH" enable_od:=$ENABLE_OD &
 echo $! > /tmp/zed_nvblox.pid
 
 # Wait for launch process to stabilize before starting bridge.

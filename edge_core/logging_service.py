@@ -241,21 +241,44 @@ def cleanup_old_logs(log_dir: str | None = None) -> int:
             return 0
         
         cutoff = datetime.now() - timedelta(hours=MAX_LOG_AGE_HOURS)
-        
+
         # Find all log files (*.json mission logs)
         log_files = glob.glob(os.path.join(log_dir, "*.json"))
-        
+
+        # Phase 1: age-based deletion.
+        survivors: list[tuple[str, float, int]] = []  # (path, mtime, size)
         for log_file in log_files:
             try:
-                mtime = datetime.fromtimestamp(os.path.getmtime(log_file))
-                if mtime < cutoff:
+                mtime = os.path.getmtime(log_file)
+                if datetime.fromtimestamp(mtime) < cutoff:
+                    size = os.path.getsize(log_file)
                     os.remove(log_file)
                     deleted += 1
+                    continue
+                size = os.path.getsize(log_file)
+                survivors.append((log_file, mtime, size))
             except OSError:
                 # Skip files we can't access (don't crash)
                 pass
+
+        # Phase 2: directory-size cap. Delete oldest survivors until total
+        # bytes drop below MAX_LOG_DIR_SIZE_MB.
+        size_budget = MAX_LOG_DIR_SIZE_MB * 1024 * 1024
+        total_size = sum(s for _, _, s in survivors)
+        if total_size > size_budget:
+            # Oldest first so newest mission evidence is preserved longest.
+            survivors.sort(key=lambda t: t[1])
+            for path, _mtime, size in survivors:
+                if total_size <= size_budget:
+                    break
+                try:
+                    os.remove(path)
+                    deleted += 1
+                    total_size -= size
+                except OSError:
+                    pass
     except Exception:
         # Fail silently - cleanup errors should not stop startup
         pass
-    
+
     return deleted

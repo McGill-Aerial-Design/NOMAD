@@ -827,12 +827,8 @@ def register_task2_routes(app, ctx) -> None:
             else "Failed to request GUIDED mode",
         }
 
-    # ==================== Nav2 Obstacle Avoidance (Jetson-side) ====================
-    # ArduCopter has no onboard obstacle avoidance. Nav2 runs on the Jetson with
-    # nvblox costmap and generates obstacle-avoiding /cmd_vel. The nav2_goal_bridge
-    # (ROS2 node inside the container) polls these endpoints to receive goals and
-    # report feedback/results back.
-
+    # Nav2 was removed -- Task 2 autonomy now relies on pure visual servoing.
+    # The helper below is kept because other endpoints in this module use it.
     async def _parse_request_json_object(request: Request) -> dict[str, Any]:
         """Parse request JSON and enforce object payloads with controlled 400s."""
         try:
@@ -846,111 +842,6 @@ def register_task2_routes(app, ctx) -> None:
         return body
 
     ctx.parse_request_json_object = _parse_request_json_object
-
-    @app.get("/api/nav2/status", tags=["Nav2"])
-    async def nav2_status(request: Request):
-        """Get current Nav2 navigation status and feedback."""
-        return {
-            "status": request.app.state.nav2_current_status,
-            "pending_goal": request.app.state.nav2_pending_goal is not None,
-            "last_result": request.app.state.nav2_last_result,
-        }
-
-    @app.post("/api/nav2/goal", tags=["Nav2"])
-    async def nav2_send_goal(request: Request):
-        """
-        Send a navigation goal to Nav2 for obstacle-avoiding autonomous flight.
-
-        Goal types:
-        - navigate_to_pose: Single pose {x, y, z, yaw} in odom frame
-        - navigate_through_poses: List of poses to follow as one path
-        - follow_waypoints: List of waypoints (stops at each)
-        - cancel: Cancel current navigation
-
-        Example (navigate_to_pose):
-            {"type": "navigate_to_pose", "pose": {"x": 2.0, "y": 1.0, "z": 0.0, "yaw": 0.0}}
-
-        Example (follow_waypoints):
-            {"type": "follow_waypoints", "waypoints": [
-                {"x": 1.0, "y": 0.0, "yaw": 0.0},
-                {"x": 2.0, "y": 1.0, "yaw": 1.57}
-            ]}
-        """
-        body = await _parse_request_json_object(request)
-        goal_type = body.get("type", "navigate_to_pose")
-
-        if goal_type == "cancel":
-            request.app.state.nav2_pending_goal = {
-                "type": "cancel",
-                "id": f"cancel_{datetime.now(timezone.utc).timestamp():.0f}",
-            }
-            return {"success": True, "message": "Cancel requested"}
-
-        import uuid
-
-        goal_id = str(uuid.uuid4())[:8]
-
-        goal = {"id": goal_id, "type": goal_type}
-        if goal_type == "navigate_to_pose":
-            goal["pose"] = body.get("pose", {})
-        elif goal_type == "navigate_through_poses":
-            goal["poses"] = body.get("poses", [])
-        elif goal_type == "follow_waypoints":
-            goal["waypoints"] = body.get("waypoints", [])
-        else:
-            raise HTTPException(
-                status_code=400, detail=f"Unknown goal type: {goal_type}"
-            )
-
-        request.app.state.nav2_pending_goal = goal
-        request.app.state.nav2_current_status = {
-            "status": "pending",
-            "goal_id": goal_id,
-        }
-        return {"success": True, "goal_id": goal_id, "type": goal_type}
-
-    @app.get("/api/nav2/pending", tags=["Nav2"])
-    async def nav2_pending(request: Request):
-        """
-        Poll for pending navigation goal (called by nav2_goal_bridge inside container).
-        Returns the goal and clears it so it's only dispatched once.
-        """
-        goal = request.app.state.nav2_pending_goal
-        if goal:
-            request.app.state.nav2_pending_goal = None
-            return {"goal": goal}
-        return {"goal": None}
-
-    @app.post("/api/nav2/feedback", tags=["Nav2"])
-    async def nav2_feedback(request: Request):
-        """Receive navigation feedback from nav2_goal_bridge."""
-        body = await _parse_request_json_object(request)
-        request.app.state.nav2_current_status = body
-        return {"success": True}
-
-    @app.post("/api/nav2/result", tags=["Nav2"])
-    async def nav2_result(request: Request):
-        """Receive navigation result from nav2_goal_bridge."""
-        body = await _parse_request_json_object(request)
-        request.app.state.nav2_last_result = body
-        request.app.state.nav2_current_status = {
-            "status": body.get("status", "unknown"),
-            "goal_id": body.get("goal_id"),
-            "message": body.get("message"),
-        }
-
-        # Notify spray controller of Nav2 result (unblocks APPROACH state)
-        spray_ctrl = getattr(request.app.state, "spray_controller", None)
-        if spray_ctrl:
-            try:
-                spray_ctrl.update_nav2_result(
-                    goal_id=body.get("goal_id", ""),
-                    status=body.get("status", "unknown"),
-                    message=body.get("message", ""),
-                )
-            except Exception:
-                pass  # spray controller may not be active
-        return {"success": True}
 
     # ==================== Spray Controller (SP-001 to SP-008) =====================
 
@@ -970,7 +861,7 @@ def register_task2_routes(app, ctx) -> None:
         Requires target_id, x, y, z coordinates. Drone must be within 3m of target (operator positioned via WASD).
 
         The sequence runs fully autonomously (SP-002):
-        APPROACH (3m->2m via Nav2) -> AIM -> SPRAY -> VERIFY (circle change) -> UPLOAD -> COMPLETE
+        APPROACH (3m->2m via visual servoing) -> AIM -> SPRAY -> VERIFY (circle change) -> UPLOAD -> COMPLETE
         """
         spray_ctrl = getattr(request.app.state, "spray_controller", None)
         if not spray_ctrl:

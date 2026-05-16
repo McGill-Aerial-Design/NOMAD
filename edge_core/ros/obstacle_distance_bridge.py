@@ -191,59 +191,54 @@ class ObstacleDistanceBridge(Node):
         origin_y = grid.info.origin.position.y
 
         # Grid data as numpy array
-        data = np.array(grid.data, dtype=np.int8).reshape(height, width)
+        data = np.asarray(grid.data, dtype=np.int8).reshape(height, width)
 
         # Drone position is at center of the grid (nvblox centers slice on robot)
-        # Convert to grid coordinates
-        center_world_x = origin_x + (width * resolution) / 2.0
-        center_world_y = origin_y + (height * resolution) / 2.0
         center_gx = width / 2.0
         center_gy = height / 2.0
 
-        # Maximum raycast distance in grid cells
+        # Maximum raycast distance in grid cells; half-cell step for accuracy
         max_range_cells = int(MAX_DISTANCE_CM / 100.0 / resolution)
-        # Step size for raycasting (half a cell for accuracy)
         step_size = 0.5
+        num_steps = max(1, int(max_range_cells / step_size) - 1)
 
-        distances = [MAX_DISTANCE_CM] * NUM_SECTORS
+        # Step distances along each ray (in grid cells). Shape: (num_steps,)
+        t = (np.arange(1, num_steps + 1, dtype=np.float32)) * step_size
 
-        for sector in range(NUM_SECTORS):
-            # Angle for this sector (degrees -> radians)
-            # OBSTACLE_DISTANCE convention: 0 = forward (body frame), CW positive
-            # We need to rotate by drone yaw to get world-frame angle
-            sector_angle_body_deg = sector * SECTOR_WIDTH_DEG
-            sector_angle_world_rad = (
-                math.radians(sector_angle_body_deg) + self._drone_yaw_rad
-            )
+        # Per-sector direction vectors. Shape: (NUM_SECTORS, 1)
+        sector_indices = np.arange(NUM_SECTORS, dtype=np.float32)
+        angles_rad = np.radians(sector_indices * SECTOR_WIDTH_DEG) + self._drone_yaw_rad
+        dx = np.cos(angles_rad)[:, None]
+        dy = np.sin(angles_rad)[:, None]
 
-            # Direction in grid coordinates
-            # Grid: X = columns (east), Y = rows (north in ROS convention)
-            dx = math.cos(sector_angle_world_rad)  # east component
-            dy = math.sin(sector_angle_world_rad)  # north component (grid Y)
+        # Grid coordinates for every (sector, step). Shape: (NUM_SECTORS, num_steps)
+        gx = (center_gx + dx * t[None, :]).astype(np.int32)
+        gy = (center_gy + dy * t[None, :]).astype(np.int32)
 
-            # Raycast along this direction
-            dist_m = MAX_DISTANCE_CM / 100.0
-            for step in range(1, int(max_range_cells / step_size)):
-                t = step * step_size
-                gx = int(center_gx + dx * t)
-                gy = int(center_gy + dy * t)
+        in_bounds = (gx >= 0) & (gx < width) & (gy >= 0) & (gy < height)
+        gx_safe = np.clip(gx, 0, width - 1)
+        gy_safe = np.clip(gy, 0, height - 1)
 
-                # Check bounds
-                if gx < 0 or gx >= width or gy < 0 or gy >= height:
-                    break
+        cells = data[gy_safe, gx_safe]
+        occupied = (cells >= 50) & in_bounds
 
-                # Check occupancy
-                cell_value = data[gy, gx]
-                if cell_value >= 50:  # occupied
-                    dist_m = t * resolution
-                    break
+        # First stop along each ray: either an occupied cell, or leaving bounds.
+        stop = occupied | (~in_bounds)
+        any_stop = stop.any(axis=1)
+        first_idx = np.argmax(stop, axis=1)
 
-            distances[sector] = max(
-                MIN_DISTANCE_CM,
-                min(MAX_DISTANCE_CM, int(dist_m * 100))
-            )
+        rows = np.arange(NUM_SECTORS)
+        hit_occupied = any_stop & occupied[rows, first_idx]
+        dist_m = np.where(
+            hit_occupied,
+            t[first_idx] * resolution,
+            MAX_DISTANCE_CM / 100.0,
+        )
 
-        return distances
+        distances_cm = np.clip(
+            (dist_m * 100.0).astype(np.int32), MIN_DISTANCE_CM, MAX_DISTANCE_CM
+        )
+        return distances_cm.tolist()
 
     def _send_obstacle_distance(self, distances: list[int]) -> None:
         """Send obstacle distances to Edge Core API."""

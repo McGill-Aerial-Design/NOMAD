@@ -606,43 +606,9 @@ def run(
         app.state.excluded_sectors = sectors
 
     spray_controller.set_excluded_sectors_fn(_set_excluded_sectors)
-        # Nav2 callback wiring for autonomous approach (3m to 2m)
-    import uuid as _uuid
-    from datetime import datetime as _dt, timezone as _tz
 
-    def _send_nav2_goal(goal_dict: dict) -> dict:
-        """Send Nav2 navigation goal via app.state."""
-        try:
-            goal_type = goal_dict.get("type", "navigate_to_pose")
-            if goal_type == "cancel":
-                app.state.nav2_pending_goal = {"type": "cancel", "id": f"cancel_{int(time.time())}"}
-                return {"success": True, "goal_id": "cancel"}
-            goal_id = _uuid.uuid4().hex[:8]
-            app.state.nav2_pending_goal = {
-                "type": goal_type,
-                "id": goal_id,
-                "pose": goal_dict.get("pose", {}),
-                "timestamp": _dt.now(_tz.utc).isoformat(),
-            }
-            app.state.nav2_current_status = {"status": "pending", "goal_id": goal_id}
-            logger.info(f"Nav2 goal sent: id={goal_id} type={goal_type}")
-            return {"success": True, "goal_id": goal_id, "type": goal_type}
-        except Exception as e:
-            logger.error(f"Nav2 goal send error: {e}")
-            return {"success": False, "error": str(e)}
-
-    def _get_nav2_status() -> dict:
-        """Read current Nav2 navigation status."""
-        return getattr(app.state, 'nav2_current_status', None) or {"status": "idle"}
-
-    def _cancel_nav2_goal() -> None:
-        """Cancel current Nav2 goal."""
-        app.state.nav2_pending_goal = {"type": "cancel", "id": f"cancel_{int(time.time())}"}
-        logger.info("Nav2 goal cancel requested")
-
-    spray_controller.set_nav2_goal_fn(_send_nav2_goal)
-    spray_controller.set_nav2_status_fn(_get_nav2_status)
-    spray_controller.set_nav2_cancel_fn(_cancel_nav2_goal)
+    # Nav2 was removed; spray controller now relies on visual servoing for
+    # the approach phase, so no nav2 goal/status/cancel wiring is needed here.
 
     # ------------------------------------------------------------------ #
     # Continuous detection thread for visual servoing AIM phase.

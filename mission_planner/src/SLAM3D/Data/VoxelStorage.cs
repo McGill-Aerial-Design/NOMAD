@@ -421,15 +421,26 @@ namespace NOMAD.MissionPlanner.SLAM3D.Data
             while (_voxels.Count > MaxVoxels && _insertionOrder.Count > 0)
             {
                 long oldKey = _insertionOrder.Dequeue();
-                
+
                 // Skip if already removed
                 if (!_occupancySet.Contains(oldKey)) continue;
-                
+
                 _voxels.Remove(oldKey);
                 _lastSeen.Remove(oldKey);
                 _unseenCount.Remove(oldKey);
                 _occupancySet.Remove(oldKey);
                 _totalEvicted++;
+            }
+
+            // Drain dead keys from the queue so it doesn't grow unbounded when
+            // occlusion removes voxels but Count never breaches MaxVoxels.
+            while (_insertionOrder.Count > Math.Max(MaxVoxels, _voxels.Count * 2))
+            {
+                long checkKey = _insertionOrder.Dequeue();
+                if (_occupancySet.Contains(checkKey))
+                {
+                    _insertionOrder.Enqueue(checkKey); // Re-queue if still alive
+                }
             }
         }
         

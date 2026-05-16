@@ -487,8 +487,14 @@ def register_task1_routes(app, ctx) -> None:
         m = _DISTANCE_CM_RE.search(output or "")
         return int(m.group(1)) if m else None
 
+    class Task1CaptureRequest(BaseModel):
+        # Match the field names the Mission Planner C# client sends.
+        heading_deg: Optional[float] = None
+        gimbal_pitch_deg: Optional[float] = None
+        lidar_distance_m: Optional[float] = None
+
     @app.post("/api/task/1/target/capture", tags=["Task 1"])
-    async def task1_capture_target():
+    async def task1_capture_target(request: Request):
         """
         Trigger the target_localizer ROS 2 node to detect and describe targets.
 
@@ -497,7 +503,36 @@ def register_task1_routes(app, ctx) -> None:
         and generates a ConOps-compliant description.
 
         Returns structured metadata for Mission Planner compatibility.
+
+        The C# client may include heading/gimbal/lidar overrides in the body —
+        when present, push them into the shared state manager before triggering
+        the capture so the ROS 2 node sees the operator-supplied values.
         """
+        # Parse the body defensively: an empty / missing body is fine, and any
+        # field omitted from the JSON simply leaves state untouched.
+        try:
+            raw = await request.json()
+        except Exception:
+            raw = None
+        overrides: Optional[Task1CaptureRequest] = None
+        if isinstance(raw, dict):
+            try:
+                overrides = Task1CaptureRequest.model_validate(raw)
+            except Exception:
+                overrides = None
+
+        if overrides is not None:
+            update_fields = {
+                k: v
+                for k, v in overrides.model_dump().items()
+                if v is not None
+            }
+            if update_fields:
+                try:
+                    request.app.state.state_manager.update_state(**update_fields)
+                except Exception as exc:
+                    logger.warning("Task1 capture override update failed: %s", exc)
+
         # The helper maps any `success: false` response (including the
         # application-level "no circles detected" case) to HTTPException 502,
         # which the client then shows as a scary "HTTP 502 Bad Gateway".

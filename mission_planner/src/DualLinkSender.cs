@@ -507,7 +507,7 @@ namespace NOMAD.MissionPlanner
                     Arguments = sshArgs,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
-                    RedirectStandardInput = true,  // Required for password prompts
+                    RedirectStandardInput = false, // Let interactive password prompts pass through
                     UseShellExecute = false,
                     CreateNoWindow = false,  // Show console window for password entry
                     WindowStyle = System.Diagnostics.ProcessWindowStyle.Normal

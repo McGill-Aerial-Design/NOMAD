@@ -537,18 +537,16 @@ namespace NOMAD.MissionPlanner
                 var sprayTask = JetsonApiService.GetAsync("/api/spray/status");
                 var vioTask = JetsonApiService.GetAsync("/api/vio/status");
                 var obstacleTask = JetsonApiService.GetAsync("/api/obstacle_distance");
-                var nav2Task = JetsonApiService.GetAsync("/api/nav2/status");
                 var detectionTask = JetsonApiService.GetAsync("/api/task/2/detections");
                 var exclMapTask = JetsonApiService.GetAsync("/api/task/2/exclusion_map");
 
-                await Task.WhenAll(modeTask, sprayTask, vioTask, obstacleTask, nav2Task, detectionTask, exclMapTask);
+                await Task.WhenAll(modeTask, sprayTask, vioTask, obstacleTask, detectionTask, exclMapTask);
                 if (IsDisposed || !IsHandleCreated) return;
 
                 JObject modeData = await ReadJson(modeTask);
                 JObject sprayData = await ReadJson(sprayTask);
                 JObject vioData = await ReadJson(vioTask);
                 JObject obstacleData = await ReadJson(obstacleTask);
-                JObject nav2Data = await ReadJson(nav2Task);
                 JObject detectionData = await ReadJson(detectionTask);
                 JObject exclMapData = await ReadJson(exclMapTask);
 
@@ -556,7 +554,7 @@ namespace NOMAD.MissionPlanner
                 {
                     BeginInvoke((Action)(() => UpdateAllUI(
                         modeData, sprayData, vioData, obstacleData,
-                        nav2Data, detectionData, exclMapData)));
+                        detectionData, exclMapData)));
                 }
             }
             catch (ObjectDisposedException) { }
@@ -577,13 +575,12 @@ namespace NOMAD.MissionPlanner
 
         private void UpdateAllUI(
             JObject modeData, JObject sprayData, JObject vioData,
-            JObject obstacleData, JObject nav2Data, JObject detectionData,
+            JObject obstacleData, JObject detectionData,
             JObject exclMapData)
         {
             try
             {
                 UpdateVioUI(vioData);
-                UpdateNav2UI(nav2Data);
                 UpdateObstacleUI(obstacleData);
                 UpdateModeUI(modeData);
                 UpdateSprayUI(sprayData);
@@ -612,28 +609,8 @@ namespace NOMAD.MissionPlanner
                 : health == "degraded" ? WARNING_COLOR : ERROR_COLOR;
         }
 
-        private void UpdateNav2UI(JObject nav2Data)
-        {
-            if (_lblApproachStatus == null) return;
-            if (nav2Data == null)
-            {
-                _lblApproachStatus.Text = "Approach: velocity";
-                _lblApproachStatus.ForeColor = TEXT_SECONDARY;
-                return;
-            }
-
-            var status = nav2Data["status"]?.ToString() ?? "unknown";
-            var goalId = nav2Data["goal_id"]?.ToString() ?? "";
-            _lblApproachStatus.Text = string.IsNullOrEmpty(goalId)
-                ? "Approach: velocity"
-                : $"Approach: legacy Nav2 {status} (goal: {goalId.Substring(0, Math.Min(8, goalId.Length))})";
-
-            _lblApproachStatus.ForeColor =
-                status == "navigating" || status == "active" ? ACCENT_COLOR :
-                status == "succeeded" ? SUCCESS_COLOR :
-                status == "failed" || status == "aborted" ? ERROR_COLOR :
-                TEXT_SECONDARY;
-        }
+        // Nav2 was removed; the spray controller now drives APPROACH via
+        // visual servoing. UpdateSprayUI already reflects the chosen method.
 
         private void UpdateObstacleUI(JObject obstacleData)
         {
@@ -697,8 +674,6 @@ namespace NOMAD.MissionPlanner
             var error = sprayData["error"]?.ToString();
             var distance = sprayData["distance_to_target"]?.Value<double>() ?? 0.0;
             var approachMethod = sprayData["approach_method"]?.ToString() ?? "";
-            var nav2Active = sprayData["nav2_approach_active"]?.Value<bool>() ?? false;
-            var nav2GoalId = sprayData["nav2_goal_id"]?.ToString() ?? "";
             var engaged = sprayData["targets_engaged"]?.Value<int>() ?? 0;
             var succeeded = sprayData["targets_succeeded"]?.Value<int>() ?? 0;
             var failed = sprayData["targets_failed"]?.Value<int>() ?? 0;
@@ -720,10 +695,13 @@ namespace NOMAD.MissionPlanner
 
             if (state == "approach")
             {
-                _lblApproachMethod.Text = nav2Active
-                    ? $"Approach: legacy Nav2 (goal: {(string.IsNullOrEmpty(nav2GoalId) ? "--" : nav2GoalId.Substring(0, Math.Min(8, nav2GoalId.Length)))})"
-                    : (approachMethod == "velocity" ? "Approach: direct velocity (no obstacle avoid)" : "Approach: pending");
-                _lblApproachMethod.ForeColor = nav2Active ? ACCENT_COLOR : WARNING_COLOR;
+                _lblApproachMethod.Text = approachMethod switch
+                {
+                    "image"    => "Approach: visual servoing (image)",
+                    "velocity" => "Approach: direct velocity (no obstacle avoid)",
+                    _          => "Approach: pending",
+                };
+                _lblApproachMethod.ForeColor = WARNING_COLOR;
             }
             else
             {

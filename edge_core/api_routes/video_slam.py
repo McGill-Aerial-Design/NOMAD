@@ -487,6 +487,11 @@ def register_video_slam_routes(app, ctx) -> None:
             # Store in app state
             if not hasattr(request.app.state, "slam_mesh_data"):
                 request.app.state.slam_mesh_data = {}
+            if not hasattr(request.app.state, "slam_mesh_lock"):
+                # Defensive: lazy-init for old app instances that predate the
+                # dedicated lock created during app startup.
+                import threading as _threading
+                request.app.state.slam_mesh_lock = _threading.Lock()
 
             # Compute item count based on mode
             item_count = len(mesh_data.get("blocks", mesh_data.get("voxels", [])))
@@ -508,29 +513,35 @@ def register_video_slam_routes(app, ctx) -> None:
                     )
                     request.app.state._mesh_ingest_frame_mismatch_logged = True
 
-            request.app.state.slam_mesh_data = {
-                "mesh": mesh_data,
-                "received_at": datetime.now(timezone.utc).isoformat(),
-                "block_count": item_count,
-                "total_blocks": total_items,
-                "mode": mode,
-                "frame_id": "map",
-            }
+            # Single critical section: swap the mesh payload and bump the
+            # version counter together so readers never observe a new version
+            # with stale mesh data (or vice-versa). 30 MB writes are heavy
+            # but the lock is only held during the assignment, not the
+            # network read above.
+            with request.app.state.slam_mesh_lock:
+                request.app.state.slam_mesh_data = {
+                    "mesh": mesh_data,
+                    "received_at": datetime.now(timezone.utc).isoformat(),
+                    "block_count": item_count,
+                    "total_blocks": total_items,
+                    "mode": mode,
+                    "frame_id": "map",
+                }
 
-            # Store drone pose from mesh data (from TF lookup in ros_http_bridge)
-            if "drone_position" in mesh_data and mesh_data["drone_position"]:
-                request.app.state.slam_mesh_data["drone_position"] = mesh_data[
-                    "drone_position"
-                ]
-            if "drone_attitude" in mesh_data and mesh_data["drone_attitude"]:
-                request.app.state.slam_mesh_data["drone_attitude"] = mesh_data[
-                    "drone_attitude"
-                ]
+                # Store drone pose from mesh data (from TF lookup in ros_http_bridge)
+                if "drone_position" in mesh_data and mesh_data["drone_position"]:
+                    request.app.state.slam_mesh_data["drone_position"] = mesh_data[
+                        "drone_position"
+                    ]
+                if "drone_attitude" in mesh_data and mesh_data["drone_attitude"]:
+                    request.app.state.slam_mesh_data["drone_attitude"] = mesh_data[
+                        "drone_attitude"
+                    ]
 
-            # Increment version counter for delta tracking
-            request.app.state.slam_mesh_version = (
-                getattr(request.app.state, "slam_mesh_version", 0) + 1
-            )
+                # Increment version counter for delta tracking
+                request.app.state.slam_mesh_version = (
+                    getattr(request.app.state, "slam_mesh_version", 0) + 1
+                )
 
             return {"status": "ok", "items_received": item_count, "mode": mode}
 
@@ -943,23 +954,28 @@ def register_video_slam_routes(app, ctx) -> None:
                 prev_voxel_size = prev_mesh.get("voxel_size", 0.05)
 
         # Replace with a cleared-but-valid state so the GET endpoint
-        # still returns available=True and clients see clear=True
-        request.app.state.slam_mesh_data = {
-            "mesh": {
-                "voxels": [],
-                "voxel_size": prev_voxel_size,
-                "total_voxels": 0,
+        # still returns available=True and clients see clear=True.
+        # Take the mesh lock so this clear doesn't race an in-flight POST.
+        if not hasattr(request.app.state, "slam_mesh_lock"):
+            import threading as _threading
+            request.app.state.slam_mesh_lock = _threading.Lock()
+        with request.app.state.slam_mesh_lock:
+            request.app.state.slam_mesh_data = {
+                "mesh": {
+                    "voxels": [],
+                    "voxel_size": prev_voxel_size,
+                    "total_voxels": 0,
+                    "mode": "voxel",
+                    "clear": True,
+                },
+                "received_at": datetime.now(timezone.utc).isoformat(),
+                "block_count": 0,
+                "total_blocks": 0,
                 "mode": "voxel",
-                "clear": True,
-            },
-            "received_at": datetime.now(timezone.utc).isoformat(),
-            "block_count": 0,
-            "total_blocks": 0,
-            "mode": "voxel",
-        }
-        request.app.state.slam_mesh_version = (
-            getattr(request.app.state, "slam_mesh_version", 0) + 1
-        )
+            }
+            request.app.state.slam_mesh_version = (
+                getattr(request.app.state, "slam_mesh_version", 0) + 1
+            )
 
         response_payload = {
             "success": nvblox_cleared,

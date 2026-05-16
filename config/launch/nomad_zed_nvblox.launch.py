@@ -1,4 +1,4 @@
-# NOMAD ZED + nvblox + Nav2 + Custom Object Detection Launch File
+# NOMAD ZED + nvblox + Custom Object Detection Launch File
 #
 # ZED and nvblox run in SEPARATE composable containers so a nvblox SIGABRT
 # (CUDA memory error) does not kill the ZED node. Video, VIO, and telemetry
@@ -9,8 +9,9 @@
 # - Servo TF publisher (servo_mount -> camera_link dynamic transform)
 # - Static TF alias: zed_left_camera_frame_optical -> zed_left_camera_optical_frame
 # - Obstacle distance bridge (nvblox ESDF -> MAVLink OBSTACLE_DISTANCE)
-# - Nav2 stack with nvblox costmap for Jetson-side obstacle avoidance (optional)
-# - Nav2 goal bridge (Edge Core API -> Nav2 actions) (optional)
+#
+# Nav2 was removed -- Task 2 autonomy uses pure visual servoing. nvblox stays as
+# an opt-in mapping tool and the SLAM 3D viewer keeps reading its mesh.
 #
 # TF Tree (complete chain):
 #   map -> odom -> zed_camera_link -> zed_camera_center -> zed_left_camera_frame
@@ -30,7 +31,6 @@
 # Usage (inside Isaac ROS container):
 #   ros2 launch /workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py
 #   ros2 launch .../nomad_zed_nvblox.launch.py enable_nvblox:=false
-#   ros2 launch .../nomad_zed_nvblox.launch.py enable_nav2:=true
 
 import os
 from launch import LaunchDescription
@@ -83,19 +83,10 @@ def generate_launch_description():
 
     xacro_path = os.path.join(zed_wrapper_dir, "urdf", "zed_descr.urdf.xacro")
 
-    # Nav2 config for omnidirectional drone
-    nav2_params_file = "/workspaces/isaac_ros-dev/config/nav2_drone.yaml"
-
     enable_od_arg = DeclareLaunchArgument(
         "enable_od",
         default_value="false",
         description="Enable ZED custom object detection (YOLO26 circle detection) - DISABLED by default to prevent VRAM exhaustion and composable node instability on 8GB Jetson Orin Nano",
-    )
-
-    enable_nav2_arg = DeclareLaunchArgument(
-        "enable_nav2",
-        default_value="false",
-        description="Enable Nav2 stack for Jetson-side obstacle avoidance with nvblox costmap (disabled by default to prevent duplicate instances from repeated launches)",
     )
 
     enable_foxglove_arg = DeclareLaunchArgument(
@@ -153,36 +144,6 @@ def generate_launch_description():
         name="obstacle_distance_bridge",
         output="screen",
         condition=IfCondition(LaunchConfiguration("enable_nvblox")),
-    )
-
-    # Nav2 stack
-    nav2_bringup_dir = get_package_share_directory("nav2_bringup")
-    nav2_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(nav2_bringup_dir, "launch", "navigation_launch.py")
-        ),
-        launch_arguments={
-            "use_sim_time": "false",
-            "params_file": nav2_params_file,
-            "autostart": "true",
-        }.items(),
-        condition=IfCondition(LaunchConfiguration("enable_nav2")),
-    )
-
-    nav2_goal_bridge = ExecuteProcess(
-        cmd=[
-            "python3",
-            "/workspaces/isaac_ros-dev/edge_core/ros/nav2_goal_bridge.py",
-            "--host",
-            "172.17.0.1",
-            "--port",
-            "8000",
-            "--rate",
-            "2.0",
-        ],
-        name="nav2_goal_bridge",
-        output="screen",
-        condition=IfCondition(LaunchConfiguration("enable_nav2")),
     )
 
     # Task 1 target localizer: HSV circle detection for capture operations
@@ -324,7 +285,6 @@ def generate_launch_description():
     return LaunchDescription(
         [
             enable_od_arg,
-            enable_nav2_arg,
             enable_foxglove_arg,
             enable_nvblox_arg,
             # Split ZED + nvblox (enable_nvblox:=true)
@@ -338,8 +298,6 @@ def generate_launch_description():
             target_localizer,
             servo_tf_publisher,
             obstacle_distance_bridge,
-            nav2_launch,
-            nav2_goal_bridge,
             foxglove_bridge,
         ]
     )

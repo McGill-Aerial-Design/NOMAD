@@ -956,8 +956,8 @@ namespace NOMAD.MissionPlanner
                     // Bit 9: Ignore force (set)
                     // Bit 10: Ignore yaw (set)
                     // Bit 11: Use yaw rate (clear)
-                    // 0b0000_0101_1100_0111 = 0x05C7 - velocity + yaw rate
-                    type_mask = 0x05C7,
+                    // 0b0000_0111_1100_0111 = 0x07C7 - velocity + yaw rate (Force bit set so ArduPilot ignores forces)
+                    type_mask = 0x07C7,
                     
                     // Position (ignored)
                     x = 0, y = 0, z = 0,

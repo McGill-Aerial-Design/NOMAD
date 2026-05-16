@@ -317,7 +317,7 @@ def register_isaac_routes(app, ctx) -> None:
             "source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null; "
             "export EGL_PLATFORM=device; "
             "ros2 launch /workspaces/isaac_ros-dev/config/launch/"
-            f"nomad_zed_nvblox.launch.py enable_nav2:=false enable_od:=false "
+            f"nomad_zed_nvblox.launch.py enable_od:=false "
             f"enable_nvblox:={flag} "
             ">> /tmp/zed_nvblox.log 2>&1 &"
         )
