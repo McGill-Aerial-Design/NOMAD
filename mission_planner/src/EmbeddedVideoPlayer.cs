@@ -674,6 +674,15 @@ namespace NOMAD.MissionPlanner
             }
             catch { }
 
+            // Clear captured frame to prevent GDI+ leak on repeated Stop/Start
+            try
+            {
+                var oldLastFrame = _lastFrame;
+                _lastFrame = null;
+                oldLastFrame?.Dispose();
+            }
+            catch { }
+
             _lblStatus.Text = "Stopped";
             _lblStatus.ForeColor = Color.Gray;
         }

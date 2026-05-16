@@ -129,13 +129,22 @@ reconnect_tailscale() {
     # control link to the operator may itself ride Tailscale (LTE/Tailscale
     # link from GCS to Jetson), and --operator=$OPERATOR mirrors the value
     # set on the daemon so the partial-prefs check passes.
-    tailscale up \
+    # Wrap with timeout so a stuck DBus IPC call does not hang the watchdog.
+    timeout 60 tailscale up \
         --hostname="$HOSTNAME" \
         --operator="$OPERATOR" \
         --accept-risk=lose-ssh 2>&1 | while read -r line; do
         log_info "tailscale up: $line"
     done
-    
+    local tailscale_exit=${PIPESTATUS[0]}
+    if [[ $tailscale_exit -eq 124 ]]; then
+        log_warn "tailscale up timed out after 60s (DBus IPC may be locked)"
+        return 1
+    elif [[ $tailscale_exit -ne 0 ]]; then
+        log_warn "tailscale up returned exit code $tailscale_exit"
+        return 1
+    fi
+
     sleep 5
     
     if check_tailscale_connected; then

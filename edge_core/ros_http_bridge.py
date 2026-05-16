@@ -1275,8 +1275,6 @@ class ROSHTTPBridge(Node):
         if self._use_high_rate_zmq:
             if self._send_high_rate_zmq(HIGH_RATE_MSG_TYPE_CMD_VEL, payload):
                 self._cmd_vel_send_zmq_count += 1
-                self._cmd_vel_send_count += 1
-                self._last_cmd_vel_send_time = time.time()
                 zmq_sent = True
             else:
                 self._bump_send_errors()
@@ -1285,11 +1283,17 @@ class ROSHTTPBridge(Node):
         # HTTP as a secondary path with the same payload so API-side monotonic
         # dedupe can safely drop duplicates.
         if zmq_sent and self._high_rate_transport != "both":
+            self._cmd_vel_send_count += 1
+            self._last_cmd_vel_send_time = time.time()
             return
 
         if not self._use_high_rate_http:
+            if zmq_sent:
+                self._cmd_vel_send_count += 1
+                self._last_cmd_vel_send_time = time.time()
             return
-        
+
+        http_sent = False
         try:
             data = json.dumps(payload).encode("utf-8")
             accepted_http_statuses = (200, 409) if (zmq_sent and self._high_rate_transport == "both") else (200,)
@@ -1300,11 +1304,11 @@ class ROSHTTPBridge(Node):
                 accepted_statuses=accepted_http_statuses,
             ):
                 self._cmd_vel_send_http_count += 1
-                self._cmd_vel_send_count += 1
+                http_sent = True
                 self._last_cmd_vel_send_time = time.time()
             else:
                 self._bump_send_errors()
-                    
+
         except URLError as e:
             self._bump_send_errors()
             if self._send_errors % 100 == 1:
@@ -1312,6 +1316,12 @@ class ROSHTTPBridge(Node):
         except Exception as e:
             self._bump_send_errors()
             self.get_logger().error(f"cmd_vel send error: {e}")
+
+        # Increment aggregate counter exactly once per distinct payload event
+        if zmq_sent or http_sent:
+            self._cmd_vel_send_count += 1
+            if self._last_cmd_vel_send_time == 0.0:
+                self._last_cmd_vel_send_time = time.time()
     
     def _handle_servo_angle(self, msg: Float32) -> None:
         """
@@ -1825,15 +1835,21 @@ class ROSHTTPBridge(Node):
             if self._use_high_rate_zmq:
                 zmq_ok = self._send_high_rate_zmq(HIGH_RATE_MSG_TYPE_DETECTIONS, payload)
                 if zmq_ok:
-                    self._detection_send_count += 1
+                    self._detection_send_zmq_count += 1
 
             # HTTP fallback (or dual-send in "both" mode)
+            http_ok = False
             if not zmq_ok or self._high_rate_transport == "both":
                 data = json.dumps(payload).encode("utf-8")
                 if self._http_post("/api/detections/update", data, timeout=0.25):
-                    self._detection_send_count += 1
+                    self._detection_send_http_count += 1
+                    http_ok = True
                 else:
                     self._bump_send_errors()
+
+            # Count exactly once per distinct payload event
+            if zmq_ok or http_ok:
+                self._detection_send_count += 1
         except URLError as e:
             self._bump_send_errors()
             if self._send_errors % 100 == 1:

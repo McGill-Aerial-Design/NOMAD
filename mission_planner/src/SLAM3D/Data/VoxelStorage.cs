@@ -286,11 +286,18 @@ namespace NOMAD.MissionPlanner.SLAM3D.Data
         /// <summary>
         /// Unpack a voxel key to grid coordinates.
         /// </summary>
+        // Coordinate offset for packing: half of the 20-bit range so that a
+        // signed coordinate in [-0x80000, 0x7FFFF] survives a round-trip
+        // through the 20-bit mask. Using 0x100000 here (the full range) wraps
+        // positive inputs to negative on unpack.
+        private const int PACK_OFFSET = 0x80000;
+        private const long PACK_MASK = 0xFFFFF;
+
         public static (int x, int y, int z) UnpackKey(long key)
         {
-            int x = (int)((key >> 40) & 0xFFFFF) - 0x100000;
-            int y = (int)((key >> 20) & 0xFFFFF) - 0x100000;
-            int z = (int)(key & 0xFFFFF) - 0x100000;
+            int x = (int)((key >> 40) & PACK_MASK) - PACK_OFFSET;
+            int y = (int)((key >> 20) & PACK_MASK) - PACK_OFFSET;
+            int z = (int)(key & PACK_MASK) - PACK_OFFSET;
             return (x, y, z);
         }
         
@@ -310,9 +317,9 @@ namespace NOMAD.MissionPlanner.SLAM3D.Data
         /// </summary>
         public static void UnpackKey(long key, out int x, out int y, out int z)
         {
-            x = (int)((key >> 40) & 0xFFFFF) - 0x100000;
-            y = (int)((key >> 20) & 0xFFFFF) - 0x100000;
-            z = (int)(key & 0xFFFFF) - 0x100000;
+            x = (int)((key >> 40) & PACK_MASK) - PACK_OFFSET;
+            y = (int)((key >> 20) & PACK_MASK) - PACK_OFFSET;
+            z = (int)(key & PACK_MASK) - PACK_OFFSET;
         }
 
         /// <summary>
@@ -410,9 +417,9 @@ namespace NOMAD.MissionPlanner.SLAM3D.Data
         
         private static long PackKey(int x, int y, int z)
         {
-            long lx = (long)(x + 0x100000) & 0xFFFFF;
-            long ly = (long)(y + 0x100000) & 0xFFFFF;
-            long lz = (long)(z + 0x100000) & 0xFFFFF;
+            long lx = (long)(x + PACK_OFFSET) & PACK_MASK;
+            long ly = (long)(y + PACK_OFFSET) & PACK_MASK;
+            long lz = (long)(z + PACK_OFFSET) & PACK_MASK;
             return (lx << 40) | (ly << 20) | lz;
         }
         
