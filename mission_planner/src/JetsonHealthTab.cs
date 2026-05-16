@@ -175,8 +175,16 @@ namespace NOMAD.MissionPlanner
             yOffset += 30;
         }
         
+        // Reentrancy guard: when network latency exceeds the timer period
+        // (2s) the timer callback would otherwise stack overlapping polls,
+        // congesting the thread pool. Matches the guard pattern used in
+        // ServiceControlPanel and EnhancedHealthDashboard.
+        private int _pollInFlight;
+
         private async void PollJetsonHealth()
         {
+            if (System.Threading.Interlocked.Exchange(ref _pollInFlight, 1) == 1)
+                return;
             try
             {
                 var response = await JetsonApiService.ApiClient.GetAsync($"{JetsonApiService.BaseUrl}/health");
@@ -198,8 +206,12 @@ namespace NOMAD.MissionPlanner
             {
                 this.BeginInvoke((Action)(() => UpdateStatusError(ex.Message)));
             }
+            finally
+            {
+                System.Threading.Interlocked.Exchange(ref _pollInFlight, 0);
+            }
         }
-        
+
         private void UpdateHealthUI(JObject data)
         {
             try

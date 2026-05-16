@@ -28,8 +28,7 @@ import json
 import logging
 import math
 import threading
-from urllib.request import Request, urlopen
-from urllib.error import URLError
+from http.client import HTTPConnection, HTTPException
 
 import rclpy
 from rclpy.node import Node
@@ -55,6 +54,14 @@ class DroneStatePublisher(Node):
         super().__init__("drone_state_publisher")
 
         self._base_url = f"http://{host}:{port}"
+        # Persistent keep-alive connection: urllib.request.urlopen does NOT
+        # pool sockets, so polling at 10 Hz across two endpoints would burn
+        # 20 TCP handshakes/sec and leave thousands of sockets in TIME_WAIT.
+        # http.client.HTTPConnection reuses the same TCP socket.
+        self._http_host = host
+        self._http_port = port
+        self._http_conn = HTTPConnection(host, port, timeout=0.5)
+        self._http_lock = threading.Lock()
 
         sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -84,18 +91,33 @@ class DroneStatePublisher(Node):
         )
 
     def _http_get_json(self, path: str, timeout: float = 0.5):
-        """GET JSON from Edge Core. Returns dict or None on failure."""
-        try:
-            url = f"{self._base_url}{path}"
-            req = Request(url, method="GET")
-            req.add_header("Connection", "keep-alive")
-            with urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except URLError:
-            return None
-        except Exception as e:
-            self.get_logger().debug(f"HTTP error ({path}): {e}")
-            return None
+        """GET JSON from Edge Core over a pooled keep-alive connection.
+
+        Returns dict or None on failure. On any error we close and lazily
+        reopen the connection on the next call so a stuck socket cannot
+        permanently wedge the publisher.
+        """
+        with self._http_lock:
+            try:
+                self._http_conn.timeout = timeout
+                self._http_conn.request(
+                    "GET", path, headers={"Connection": "keep-alive"}
+                )
+                resp = self._http_conn.getresponse()
+                body = resp.read()
+                if resp.status != 200:
+                    return None
+                return json.loads(body.decode("utf-8"))
+            except (HTTPException, OSError, ValueError) as e:
+                self.get_logger().debug(f"HTTP error ({path}): {e}")
+                try:
+                    self._http_conn.close()
+                except Exception:
+                    pass
+                self._http_conn = HTTPConnection(
+                    self._http_host, self._http_port, timeout=timeout
+                )
+                return None
 
     def _poll_and_publish(self) -> None:
         """Poll Edge Core and publish all drone state topics."""

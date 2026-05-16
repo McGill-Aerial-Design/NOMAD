@@ -78,10 +78,11 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
         {
             if (voxels == null || voxels.Count == 0)
             {
-                _vertexData = null;
-                _indexData = null;
+                // Keep backing buffers allocated for reuse; just zero counts.
                 _indexCount = 0;
                 _lastVoxelCount = 0;
+                _lastVertexCount = 0;
+                _lastIndexCount = 0;
                 _dataUploaded = false;
                 return;
             }
@@ -92,8 +93,20 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
 
             // 24 vertices per cube (4 per face, 6 faces), 9 floats per vertex
             // 36 indices per cube (6 per face, 6 faces)
-            _vertexData = new float[count * 24 * 9];
-            _indexData = new int[count * 36];
+            int vertFloats = count * 24 * 9;
+            int idxInts = count * 36;
+
+            // Reuse backing buffers across rebuilds to keep multi-MB arrays
+            // off the LOH. Grow with headroom (1.5x) so steady-state map
+            // changes do not reallocate every frame.
+            if (_vertexData == null || _vertexData.Length < vertFloats)
+            {
+                _vertexData = new float[(int)(vertFloats * 1.5)];
+            }
+            if (_indexData == null || _indexData.Length < idxInts)
+            {
+                _indexData = new int[(int)(idxInts * 1.5)];
+            }
 
             int vIdx = 0;
             int iIdx = 0;
@@ -243,12 +256,17 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
             if (_dataUploaded || _vertexData == null || _indexData == null) return;
             if (!_buffersInitialized) InitializeBuffers();
 
+            // Upload only the used prefix of the reusable backing buffers,
+            // not their full capacity.
+            int vertFloats = _lastVertexCount * 9;
+            int idxInts = _lastIndexCount;
+
             GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
-            GL.BufferData(BufferTarget.ArrayBuffer, (IntPtr)(_vertexData.Length * sizeof(float)),
+            GL.BufferData(BufferTarget.ArrayBuffer, (IntPtr)(vertFloats * sizeof(float)),
                           _vertexData, BufferUsageHint.DynamicDraw);
 
             GL.BindBuffer(BufferTarget.ElementArrayBuffer, _ibo);
-            GL.BufferData(BufferTarget.ElementArrayBuffer, (IntPtr)(_indexData.Length * sizeof(int)),
+            GL.BufferData(BufferTarget.ElementArrayBuffer, (IntPtr)(idxInts * sizeof(int)),
                           _indexData, BufferUsageHint.DynamicDraw);
 
             GL.BindBuffer(BufferTarget.ArrayBuffer, 0);

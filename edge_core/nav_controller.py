@@ -164,7 +164,11 @@ class NavController:
         self._last_velocity_cmd: Optional[VelocityCommand] = None
         self._last_command_time = 0.0
         self._command_count = 0
-        self._rate_timestamp = time.time()
+        # Monotonic clock for all interval/age/timeout math: time_manager
+        # forces GPS wall-clock syncs at runtime, so time.time() can jump
+        # backwards or forwards and either trip the velocity watchdog falsely
+        # or blind it while the drone keeps moving.
+        self._rate_timestamp = time.monotonic()
         
         # VIO state reference (set by main orchestrator)
         self._vio_confidence = 0.0
@@ -273,7 +277,7 @@ class NavController:
             )
             
             self._last_velocity_cmd = cmd
-            self._last_command_time = time.time()
+            self._last_command_time = time.monotonic()
             self._command_count += 1
             
             # Update status
@@ -321,7 +325,7 @@ class NavController:
             if not state.armed:
                 return False
             
-            self._last_command_time = time.time()
+            self._last_command_time = time.monotonic()
             self._status.mode = NavMode.POSITION
         
         # Send position target via MAVLink
@@ -344,13 +348,13 @@ class NavController:
         
         while not self._stop_event.is_set():
             try:
-                start_time = time.time()
-                
+                start_time = time.monotonic()
+
                 self._check_command_timeout()
                 self._check_flight_mode()
                 self._update_rate()
-                
-                elapsed = time.time() - start_time
+
+                elapsed = time.monotonic() - start_time
                 if elapsed < interval:
                     time.sleep(interval - elapsed)
                     
@@ -364,7 +368,7 @@ class NavController:
             if self._status.mode not in (NavMode.VELOCITY, NavMode.POSITION):
                 return
             
-            now = time.time()
+            now = time.monotonic()
             age = now - self._last_command_time
             self._status.last_command_age_ms = int(age * 1000)
             
@@ -386,7 +390,7 @@ class NavController:
     
     def _update_rate(self) -> None:
         """Update command rate calculation."""
-        now = time.time()
+        now = time.monotonic()
         elapsed = now - self._rate_timestamp
         
         if elapsed >= 1.0:

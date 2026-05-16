@@ -661,15 +661,16 @@ namespace NOMAD.MissionPlanner
             // Clear video display to prevent painting stale/freed frame data
             try
             {
+                // _videoBox.Image and _fullscreenBox.Image now alias the
+                // same Bitmap (see UpdateVideoDisplay), so clear fullscreen
+                // first without disposing and then dispose once via videoBox.
+                if (_fullscreenBox != null && !_fullscreenBox.IsDisposed)
+                {
+                    _fullscreenBox.Image = null;
+                }
                 var oldImage = _videoBox?.Image;
                 if (_videoBox != null) _videoBox.Image = null;
                 oldImage?.Dispose();
-                if (_fullscreenBox != null && !_fullscreenBox.IsDisposed)
-                {
-                    var oldFull = _fullscreenBox.Image;
-                    _fullscreenBox.Image = null;
-                    oldFull?.Dispose();
-                }
             }
             catch { }
 
@@ -797,14 +798,19 @@ namespace NOMAD.MissionPlanner
             {
                 var oldImage = _videoBox.Image;
                 _videoBox.Image = displayBitmap;
-                oldImage?.Dispose();
-                
+
                 if (_fullscreenBox != null && !_fullscreenBox.IsDisposed)
                 {
-                    var oldFull = _fullscreenBox.Image;
-                    _fullscreenBox.Image = (Bitmap)displayBitmap.Clone();
-                    oldFull?.Dispose();
+                    // Share the same bitmap with the fullscreen PictureBox to
+                    // avoid a per-frame Clone() that would push 3-8 MB onto
+                    // the LOH at 30 FPS. Both PictureBoxes paint from the UI
+                    // thread, so concurrent reads are safe. The previous
+                    // frame is disposed once, after both references are
+                    // swapped.
+                    _fullscreenBox.Image = displayBitmap;
                 }
+
+                oldImage?.Dispose();
 
                 // Snapshots clone _videoBox.Image on demand inside TakeSnapshot
                 // -- the old per-frame _lastFrame clone burned 30+ MB/s in GC
@@ -827,6 +833,13 @@ namespace NOMAD.MissionPlanner
         {
             if (_fullscreenForm != null && !_fullscreenForm.IsDisposed)
             {
+                // Detach the shared bitmap before closing so the form's
+                // control disposal cannot free a Bitmap still held by
+                // _videoBox.Image.
+                if (_fullscreenBox != null && !_fullscreenBox.IsDisposed)
+                {
+                    _fullscreenBox.Image = null;
+                }
                 _fullscreenForm.Close();
                 _fullscreenForm = null;
                 _fullscreenBox = null;

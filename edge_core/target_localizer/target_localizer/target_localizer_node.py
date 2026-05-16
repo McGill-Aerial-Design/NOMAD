@@ -58,6 +58,7 @@ import numpy as np
 import cv2
 import math
 import os
+import shutil
 import threading
 import time
 import traceback
@@ -125,6 +126,9 @@ class TargetLocalizerNode(Node):
         self.declare_parameter("building.rectangle.orientation_deg", 0.0)
         self.declare_parameter("team_name", "MAD")
         self.declare_parameter("output_dir", "/home/mad/targets")
+        # Keep at most this many timestamped capture folders. Older ones are
+        # swept on each new capture to keep the Jetson NVMe bounded.
+        self.declare_parameter("capture_retention_keep_last", 200)
         self.declare_parameter("dedup_radius_m", 0.5)
         self.declare_parameter("min_confidence", 0.35)
         # HSV circle detector knobs. Exposed so we can tune live via
@@ -139,6 +143,9 @@ class TargetLocalizerNode(Node):
         # Load parameters
         self.team_name = self.get_parameter("team_name").value
         self.output_dir = self.get_parameter("output_dir").value
+        self._capture_retention_keep_last = int(
+            self.get_parameter("capture_retention_keep_last").value
+        )
         self.dedup_radius = self.get_parameter("dedup_radius_m").value
 
         self.min_confidence = float(self.get_parameter("min_confidence").value)
@@ -647,6 +654,39 @@ class TargetLocalizerNode(Node):
     # ================================================================ #
     #  Target capture (button press)
     # ================================================================ #
+    def _sweep_old_captures(self, keep_last: int) -> None:
+        """Keep the newest `keep_last` timestamped capture folders.
+
+        Mirrors task2_spray_artifacts.sweep_old_sessions() so Task 1 disk
+        growth is bounded across long deployments.
+        """
+        if keep_last <= 0 or not os.path.isdir(self.output_dir):
+            return
+        entries = []
+        for name in os.listdir(self.output_dir):
+            full = os.path.join(self.output_dir, name)
+            if not os.path.isdir(full):
+                continue
+            # Skip non-timestamp folders (e.g. ad-hoc artifacts).
+            if len(name) < 8 or not name[:8].isdigit():
+                continue
+            try:
+                mtime = os.path.getmtime(full)
+            except OSError:
+                continue
+            entries.append((mtime, full))
+        if len(entries) <= keep_last:
+            return
+        entries.sort(reverse=True)  # newest first
+        for _mtime, full in entries[keep_last:]:
+            try:
+                shutil.rmtree(full)
+            except OSError as e:
+                self.get_logger().warn(
+                    f"Capture retention: could not remove {full}: {e}"
+                )
+
+    # ================================================================ #
     def _capture_callback(self, request, response):
         """Service handler for ~/capture_target."""
         self.get_logger().info("=== CAPTURE TARGET triggered ===")
@@ -695,6 +735,14 @@ class TargetLocalizerNode(Node):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         capture_dir = os.path.join(self.output_dir, timestamp)
         os.makedirs(capture_dir, exist_ok=True)
+
+        # Bound disk growth: in a long competition deployment unsupervised
+        # capture folders fill the Jetson NVMe. Mirrors task2_spray_artifacts
+        # .sweep_old_sessions(): keep the most recent N timestamped folders.
+        try:
+            self._sweep_old_captures(keep_last=self._capture_retention_keep_last)
+        except Exception as e:
+            self.get_logger().warn(f"Capture retention sweep failed: {e}")
 
         # Snapshot current data (including servo angle to avoid stale value for 3D back-projection)
         rgb = self.latest_rgb.copy()

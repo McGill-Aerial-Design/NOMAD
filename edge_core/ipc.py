@@ -111,7 +111,10 @@ class ZMQPublisher:
 
     def start(self) -> None:
         """Start the publisher and bind/connect to endpoint."""
-        self._context = zmq.Context()
+        # Use the process-wide singleton context.  Creating a fresh
+        # zmq.Context() per publisher/subscriber spawns its own I/O
+        # threads, leaking threads across the lifetime of the process.
+        self._context = zmq.Context.instance()
         self._socket = self._context.socket(zmq.PUB)
         self._socket.setsockopt(zmq.LINGER, self.linger_ms)
         if self.snd_hwm is not None:
@@ -134,9 +137,9 @@ class ZMQPublisher:
         if self._socket:
             self._socket.close()
             self._socket = None
-        if self._context:
-            self._context.term()
-            self._context = None
+        # Do NOT term() the context: it is the shared process-wide
+        # singleton and other publishers/subscribers still need it.
+        self._context = None
         logger.info("ZMQ Publisher stopped")
 
     def send(self, message: IPCMessage) -> None:
@@ -209,7 +212,9 @@ class ZMQSubscriber:
 
     def start(self) -> None:
         """Start the subscriber and connect/bind to endpoint."""
-        self._context = zmq.Context()
+        # See ZMQPublisher.start() -- share the singleton context to avoid
+        # per-instance I/O thread leakage.
+        self._context = zmq.Context.instance()
         self._socket = self._context.socket(zmq.SUB)
         self._socket.setsockopt(zmq.LINGER, self.linger_ms)
         self._socket.setsockopt_string(zmq.SUBSCRIBE, self.topic)
@@ -231,9 +236,8 @@ class ZMQSubscriber:
         if self._socket:
             self._socket.close()
             self._socket = None
-        if self._context:
-            self._context.term()
-            self._context = None
+        # Shared singleton context -- do not term().
+        self._context = None
         logger.info("ZMQ Subscriber stopped")
 
     def receive(self) -> IPCMessage | None:

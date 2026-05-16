@@ -192,6 +192,14 @@ class VIOData:
     body_roll: float = 0.0
     body_pitch: float = 0.0
     body_yaw: float = 0.0
+    # Raw camera quaternion from the ZED odom topic. Used by
+    # _get_drone_body_pose() to isolate the gimbal pitch via quaternion
+    # composition instead of scalar Euler subtraction (which is only valid
+    # when roll/yaw are zero).
+    ros_qx: float = 0.0
+    ros_qy: float = 0.0
+    ros_qz: float = 0.0
+    ros_qw: float = 1.0
     frame_id: str = "ros_odom"  # Explicit frame identifier: REP-103 (X-fwd, Y-left, Z-up)
 
 
@@ -786,6 +794,10 @@ class ROSHTTPBridge(Node):
             # co-registered with voxel blocks through ZED loop-closure corrections.
             slam_x, slam_y, slam_z = pose.position.x, pose.position.y, pose.position.z
             slam_roll, slam_pitch, slam_yaw = ros_roll, ros_pitch, ros_yaw
+            slam_qx, slam_qy, slam_qz, slam_qw = (
+                pose.orientation.x, pose.orientation.y,
+                pose.orientation.z, pose.orientation.w,
+            )
             if self._tf_buffer is not None:
                 try:
                     import rclpy.duration
@@ -795,9 +807,12 @@ class ROSHTTPBridge(Node):
                     slam_x = _tf_t.transform.translation.x
                     slam_y = _tf_t.transform.translation.y
                     slam_z = _tf_t.transform.translation.z
+                    slam_qx = _tf_t.transform.rotation.x
+                    slam_qy = _tf_t.transform.rotation.y
+                    slam_qz = _tf_t.transform.rotation.z
+                    slam_qw = _tf_t.transform.rotation.w
                     slam_roll, slam_pitch, slam_yaw = self._quat_to_euler(
-                        _tf_t.transform.rotation.x, _tf_t.transform.rotation.y,
-                        _tf_t.transform.rotation.z, _tf_t.transform.rotation.w)
+                        slam_qx, slam_qy, slam_qz, slam_qw)
                 except Exception:
                     pass  # Keep odom-frame fallback values
 
@@ -825,6 +840,10 @@ class ROSHTTPBridge(Node):
                 body_roll=body_roll,
                 body_pitch=body_pitch,
                 body_yaw=body_yaw,
+                ros_qx=slam_qx,
+                ros_qy=slam_qy,
+                ros_qz=slam_qz,
+                ros_qw=slam_qw,
             )
 
             with self._lock:
@@ -2028,42 +2047,47 @@ class ROSHTTPBridge(Node):
         if vio is None:
             return None
 
-        # Camera pose in odom frame (from ZED odom topic)
+        # Camera pose in the SLAM (map or odom) frame.
         cx, cy, cz = vio.ros_x, vio.ros_y, vio.ros_z
-        c_roll, c_pitch, c_yaw = vio.ros_roll, vio.ros_pitch, vio.ros_yaw
+        qx, qy, qz, qw = vio.ros_qx, vio.ros_qy, vio.ros_qz, vio.ros_qw
 
-        # Mirror VIO attitude mapping: pitch corrected by servo tilt only.
-        body_roll = c_roll
-        body_pitch = c_pitch - self._gimbal_pitch_rad
-        body_yaw = c_yaw
+        # Isolate the gimbal rotation via quaternion composition:
+        #   body_quat = camera_quat * inv(servo_quat)
+        # where the servo is a pure pitch rotation about the Y axis.
+        # Scalar Euler subtraction (c_pitch - gimbal_pitch) is only valid
+        # when roll and yaw are zero -- under roll/yaw it produces wild
+        # cross-axis coupling and corrupts the 3D viewer.  This mirrors
+        # servo_tf_publisher.py exactly.
+        servo_pitch = self._gimbal_pitch_rad
+        sq_y = math.sin(-servo_pitch / 2.0)
+        sq_w = math.cos(-servo_pitch / 2.0)
 
-        # Compute the mount offset vector rotated into the odom frame,
-        # then subtract it from the camera position to get body position.
-        # Mount offset is in body frame: (forward, lateral, down).
+        bqx = qw * 0.0  + qx * sq_w + qy * 0.0  - qz * sq_y
+        bqy = qw * sq_y - qx * 0.0  + qy * sq_w + qz * 0.0
+        bqz = qw * 0.0  + qx * sq_y + qy * 0.0  + qz * sq_w
+        bqw = qw * sq_w - qx * 0.0  - qy * sq_y - qz * 0.0
+
+        n = math.sqrt(bqx * bqx + bqy * bqy + bqz * bqz + bqw * bqw)
+        if n > 1e-9:
+            bqx /= n
+            bqy /= n
+            bqz /= n
+            bqw /= n
+
+        # Rotate mount offset by body quaternion: R_body * mount_offset
         mx, my, mz = self._gimbal_mount_offset
-
-        # Rotation matrix from body orientation (simplified: roll≈0 for a drone)
-        cos_p = math.cos(body_pitch)
-        sin_p = math.sin(body_pitch)
-        cos_y = math.cos(body_yaw)
-        sin_y = math.sin(body_yaw)
-        cos_r = math.cos(body_roll)
-        sin_r = math.sin(body_roll)
-
-        # Full rotation of mount offset from body frame to odom frame
-        # R = Rz(yaw) * Ry(pitch) * Rx(roll) applied to (mx, my, mz)
-        # Then add servo pitch rotation on top for camera offset
-        #
-        # But we want: body_pos = camera_pos - R_body * (mount_offset)
-        # because camera_pos = body_pos + R_body * mount_offset (no servo
-        # contribution to translation since servo is pure rotation at pivot)
-        ox = (cos_y * cos_p) * mx + (cos_y * sin_p * sin_r - sin_y * cos_r) * my + (cos_y * sin_p * cos_r + sin_y * sin_r) * mz
-        oy = (sin_y * cos_p) * mx + (sin_y * sin_p * sin_r + cos_y * cos_r) * my + (sin_y * sin_p * cos_r - cos_y * sin_r) * mz
-        oz = (-sin_p) * mx + (cos_p * sin_r) * my + (cos_p * cos_r) * mz
+        tx = 2.0 * (bqy * mz - bqz * my)
+        ty = 2.0 * (bqz * mx - bqx * mz)
+        tz = 2.0 * (bqx * my - bqy * mx)
+        ox = mx + bqw * tx + (bqy * tz - bqz * ty)
+        oy = my + bqw * ty + (bqz * tx - bqx * tz)
+        oz = mz + bqw * tz + (bqx * ty - bqy * tx)
 
         body_x = cx - ox
         body_y = cy - oy
         body_z = cz - oz
+
+        body_roll, body_pitch, body_yaw = self._quat_to_euler(bqx, bqy, bqz, bqw)
 
         return {
             "position": {
@@ -2122,8 +2146,15 @@ class ROSHTTPBridge(Node):
                 continue
 
             # Serialize off the ROS executor thread (this can take hundreds of ms).
+            # Prefer msgpack: ~3-10x faster + 2-5x smaller than JSON for dense
+            # nvblox meshes. The receiving Edge Core endpoint detects msgpack
+            # via the content-type header.
             try:
-                data = json.dumps(mesh_dict).encode("utf-8")
+                if MSGPACK_AVAILABLE:
+                    data = msgpack.packb(mesh_dict, use_bin_type=True)
+                    ctype = "application/x-msgpack"
+                else:
+                    data = json.dumps(mesh_dict).encode("utf-8")
             except Exception as e:
                 self._bump_send_errors()
                 self.get_logger().error(f"Mesh serialize error: {e}")

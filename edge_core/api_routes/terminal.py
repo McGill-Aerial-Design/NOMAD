@@ -4,6 +4,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -35,6 +36,57 @@ try:
     import msgpack
 except ImportError:  # pragma: no cover - optional Jetson dependency
     msgpack = None
+
+def _run_subprocess_group(
+    cmd,
+    *,
+    shell: bool,
+    timeout: float,
+    cwd: Optional[str] = None,
+) -> subprocess.CompletedProcess:
+    """Run a subprocess with timeout, killing the whole process group on hang.
+
+    subprocess.run() with timeout sends SIGKILL only to the immediate shell.
+    Children spawned by the shell (ping, curl, ssh, ...) survive as zombies
+    re-parented to init. This helper puts the child in its own session via
+    start_new_session=True so we can os.killpg() the entire tree.
+
+    On non-POSIX hosts, falls back to subprocess.run() unchanged.
+    """
+    if os.name != "posix":
+        return subprocess.run(
+            cmd,
+            shell=shell,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=cwd,
+        )
+
+    proc = subprocess.Popen(
+        cmd,
+        shell=shell,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=cwd,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        # Drain pipes so they're not left half-open in the FD table.
+        try:
+            stdout, stderr = proc.communicate(timeout=1.0)
+        except Exception:
+            stdout, stderr = "", ""
+        raise subprocess.TimeoutExpired(cmd, timeout, output=stdout, stderr=stderr)
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+
 
 def register_terminal_routes(app, ctx) -> None:
 
@@ -83,22 +135,18 @@ def register_terminal_routes(app, ctx) -> None:
             # (safe because the command itself is whitelisted)
             if "|" in command_str or ">" in command_str or "<" in command_str:
                 result = await asyncio.to_thread(
-                    subprocess.run,
+                    _run_subprocess_group,
                     command_str,
                     shell=True,
-                    capture_output=True,
-                    text=True,
                     timeout=request.timeout,
                 )
             else:
                 # For simple commands, use shell=False with list
                 cmd_parts = shlex.split(command_str)
                 result = await asyncio.to_thread(
-                    subprocess.run,
+                    _run_subprocess_group,
                     cmd_parts,
                     shell=False,
-                    capture_output=True,
-                    text=True,
                     timeout=request.timeout,
                 )
 
@@ -161,10 +209,9 @@ def register_terminal_routes(app, ctx) -> None:
             wrapped_cmd = f'{command_str}\necho "__NOMAD_CWD__$(pwd)"'
 
             result = await asyncio.to_thread(
-                subprocess.run,
+                _run_subprocess_group,
                 ["bash", "-c", wrapped_cmd],
-                capture_output=True,
-                text=True,
+                shell=False,
                 timeout=request.timeout,
                 cwd=work_dir,
             )

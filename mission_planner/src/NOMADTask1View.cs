@@ -1246,12 +1246,21 @@ private ListBox _lstWalls;
                 {
                     _uploadPanel?.AddCapturedImage(capturedLocalPath, suggestedDesc, capturedColor, capturedPlane, capturedHeight);
 
-                    using var ms = new MemoryStream(capturedImageBytes);
-                    var originalImage = Image.FromStream(ms);
-                    var thumbnail = originalImage.GetThumbnailImage(120, 90, null, IntPtr.Zero);
+                    // Draw the thumbnail onto an independent Bitmap so it does
+                    // not retain a lazy reference to the disposed MemoryStream.
+                    // GDI+ otherwise reads from the freed stream during paint
+                    // and brings down the host with an uncatchable exception.
+                    Bitmap thumb = new Bitmap(120, 90);
+                    using (var ms = new MemoryStream(capturedImageBytes))
+                    using (var originalImage = Image.FromStream(ms))
+                    using (var g = Graphics.FromImage(thumb))
+                    {
+                        g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                        g.DrawImage(originalImage, 0, 0, 120, 90);
+                    }
                     var picBox = new PictureBox
                     {
-                        Image = thumbnail,
+                        Image = thumb,
                         Size = new Size(120, 90),
                         SizeMode = PictureBoxSizeMode.Zoom,
                         Margin = new Padding(5),
@@ -1263,7 +1272,6 @@ private ListBox _lstWalls;
                     tip.SetToolTip(picBox, tooltipText);
                     _galleryPanel.Controls.Add(picBox);
                     _galleryPanel.ScrollControlIntoView(picBox);
-                    originalImage.Dispose();
 
                     // Update result text to confirm image saved
                     if (_txtResult.Text.Contains("— downloading..."))
@@ -1683,31 +1691,33 @@ private ListBox _lstWalls;
                         {
                             try
                             {
+                                Bitmap thumb = new Bitmap(120, 90);
                                 using (var ms = new MemoryStream(imageBytes))
+                                using (var originalImage = Image.FromStream(ms))
+                                using (var g = Graphics.FromImage(thumb))
                                 {
-                                    var originalImage = Image.FromStream(ms);
-                                    var thumbnail = originalImage.GetThumbnailImage(120, 90, null, IntPtr.Zero);
-
-                                    var picBox = new PictureBox
-                                    {
-                                        Image = thumbnail,
-                                        Size = new Size(120, 90),
-                                        SizeMode = PictureBoxSizeMode.Zoom,
-                                        Margin = new Padding(5),
-                                        Cursor = Cursors.Hand,
-                                        Tag = new { Path = localPath, JsonPath = jsonPath, Metadata = "" },
-                                    };
-
-                                    picBox.MouseClick += (s, mevt) => ShowImageContextMenu(picBox, mevt.Location);
-
-                                    var tooltip = new ToolTip();
-                                    var lat = meta?.Position?.Lat.ToString("F6") ?? "N/A";
-                                    var lon = meta?.Position?.Lon.ToString("F6") ?? "N/A";
-                                    tooltip.SetToolTip(picBox, $"{Path.GetFileName(imagePath)}\nPos: {lat}, {lon}");
-
-                                    _galleryPanel.Controls.Add(picBox);
-                                    originalImage.Dispose();
+                                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                                    g.DrawImage(originalImage, 0, 0, 120, 90);
                                 }
+
+                                var picBox = new PictureBox
+                                {
+                                    Image = thumb,
+                                    Size = new Size(120, 90),
+                                    SizeMode = PictureBoxSizeMode.Zoom,
+                                    Margin = new Padding(5),
+                                    Cursor = Cursors.Hand,
+                                    Tag = new { Path = localPath, JsonPath = jsonPath, Metadata = "" },
+                                };
+
+                                picBox.MouseClick += (s, mevt) => ShowImageContextMenu(picBox, mevt.Location);
+
+                                var tooltip = new ToolTip();
+                                var lat = meta?.Position?.Lat.ToString("F6") ?? "N/A";
+                                var lon = meta?.Position?.Lon.ToString("F6") ?? "N/A";
+                                tooltip.SetToolTip(picBox, $"{Path.GetFileName(imagePath)}\nPos: {lat}, {lon}");
+
+                                _galleryPanel.Controls.Add(picBox);
                             }
                             catch { }
                         }));

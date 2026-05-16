@@ -240,18 +240,34 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         /// <param name="source">EKF source to switch to (1=GPS, 2=Vision, 3=OptFlow)</param>
         /// <returns>Command result</returns>
-        public Task<CommandResult> SetEkfSource(EkfSource source)
+        public async Task<CommandResult> SetEkfSource(EkfSource source)
         {
+            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen)
+            {
+                return new CommandResult
+                {
+                    Success = false,
+                    Message = "MAVLink not connected",
+                    Method = "MAVLink"
+                };
+            }
+
+            // Serialize MAVLink writes via the process-wide s_mavlinkLock so
+            // a concurrent PayloadControlPanel/Task2PayloadPanel/joystick
+            // write cannot corrupt the serial stream.
+            bool acquired = false;
             try
             {
-                if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen)
+                acquired = await PayloadControlPanel.s_mavlinkLock
+                    .WaitAsync(5000).ConfigureAwait(false);
+                if (!acquired)
                 {
-                    return Task.FromResult(new CommandResult
+                    return new CommandResult
                     {
                         Success = false,
-                        Message = "MAVLink not connected",
+                        Message = "MAVLink port busy (lock timeout)",
                         Method = "MAVLink"
-                    });
+                    };
                 }
 
                 // Send MAV_CMD_SET_EKF_SOURCE_SET (42007)
@@ -272,21 +288,25 @@ namespace NOMAD.MissionPlanner
                     _ => $"Unknown ({(int)source})"
                 };
 
-                return Task.FromResult(new CommandResult
+                return new CommandResult
                 {
                     Success = true,
                     Message = $"EKF source switched to {sourceName}",
                     Method = "MAVLink"
-                });
+                };
             }
             catch (Exception ex)
             {
-                return Task.FromResult(new CommandResult
+                return new CommandResult
                 {
                     Success = false,
                     Message = $"EKF source switch failed: {ex.Message}",
                     Method = "MAVLink"
-                });
+                };
+            }
+            finally
+            {
+                if (acquired) PayloadControlPanel.s_mavlinkLock.Release();
             }
         }
 
@@ -524,7 +544,11 @@ namespace NOMAD.MissionPlanner
 
                     if (!exited)
                     {
-                        process.Kill();
+                        // Race: the process may exit between the timeout check and
+                        // Kill(), which raises InvalidOperationException. Swallow
+                        // that specific case -- the process is already gone.
+                        try { process.Kill(); }
+                        catch (InvalidOperationException) { }
                         // Observe the abandoned stdout/stderr reads so they don't surface
                         // as TaskScheduler.UnobservedTaskException once the killed process
                         // closes the pipes. Result is intentionally discarded.
@@ -1173,7 +1197,7 @@ namespace NOMAD.MissionPlanner
         // MAVLink Communication
         // ============================================================
 
-        private Task<CommandResult> SendMAVLinkCommand(
+        private async Task<CommandResult> SendMAVLinkCommand(
             ushort commandId,
             float param1 = 0,
             float param2 = 0,
@@ -1183,20 +1207,34 @@ namespace NOMAD.MissionPlanner
             float param6 = 0,
             float param7 = 0)
         {
+            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen)
+            {
+                return new CommandResult
+                {
+                    Success = false,
+                    Message = "MAVLink not connected",
+                    Method = "MAVLink"
+                };
+            }
+
+            // Serialize MAVLink writes via the shared s_mavlinkLock so this
+            // call cannot interleave with PayloadControlPanel, Task2PayloadPanel,
+            // or GimbalJoystickWindow writes to the same serial port.
+            bool acquired = false;
             try
             {
-                // Check if connected
-                if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen)
+                acquired = await PayloadControlPanel.s_mavlinkLock
+                    .WaitAsync(5000).ConfigureAwait(false);
+                if (!acquired)
                 {
-                    return Task.FromResult(new CommandResult
+                    return new CommandResult
                     {
                         Success = false,
-                        Message = "MAVLink not connected",
+                        Message = "MAVLink port busy (lock timeout)",
                         Method = "MAVLink"
-                    });
+                    };
                 }
 
-                // Build COMMAND_LONG message
                 var command = new MAVLink.mavlink_command_long_t
                 {
                     target_system = MainV2.comPort.MAV.sysid,
@@ -1212,26 +1250,27 @@ namespace NOMAD.MissionPlanner
                     param7 = param7
                 };
 
-                // Send the packet
                 MainV2.comPort.sendPacket(command, MainV2.comPort.MAV.sysid, MainV2.comPort.MAV.compid);
 
-                // Note: For proper ACK handling, would need to wait for
-                // COMMAND_ACK message. Simplified implementation here.
-                return Task.FromResult(new CommandResult
+                return new CommandResult
                 {
                     Success = true,
                     Message = $"MAVLink command {commandId} sent",
                     Method = "MAVLink"
-                });
+                };
             }
             catch (Exception ex)
             {
-                return Task.FromResult(new CommandResult
+                return new CommandResult
                 {
                     Success = false,
                     Message = $"MAVLink error: {ex.Message}",
                     Method = "MAVLink"
-                });
+                };
+            }
+            finally
+            {
+                if (acquired) PayloadControlPanel.s_mavlinkLock.Release();
             }
         }
 

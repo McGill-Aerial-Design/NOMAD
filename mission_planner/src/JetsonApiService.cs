@@ -57,16 +57,19 @@ namespace NOMAD.MissionPlanner
             {
                 _config = config ?? throw new ArgumentNullException(nameof(config));
 
-                // Dispose old clients if re-initializing
-                _apiClient?.Dispose();
-                _longRunClient?.Dispose();
-
-                _apiClient = new HttpClient
+                // Build the new clients first, then atomically swap.  Do NOT
+                // Dispose() the previous clients here: a background poll
+                // (PollJetsonHealth, PollSprayStatus, ...) may still be awaiting
+                // a SendAsync call on them and ObjectDisposedException would
+                // surface as an unobserved task exception.  Letting the old
+                // instances drop out of scope means the GC reclaims them after
+                // in-flight requests finish.
+                var newApiClient = new HttpClient
                 {
                     Timeout = TimeSpan.FromSeconds(Math.Max(1, config.HttpTimeoutSeconds))
                 };
 
-                _longRunClient = new HttpClient
+                var newLongRunClient = new HttpClient
                 {
                     Timeout = TimeSpan.FromSeconds(60)
                 };
@@ -74,11 +77,12 @@ namespace NOMAD.MissionPlanner
                 // Set API key header if configured
                 if (!string.IsNullOrEmpty(config.JetsonApiKey))
                 {
-                    _apiClient.DefaultRequestHeaders.Remove("X-API-Key");
-                    _apiClient.DefaultRequestHeaders.Add("X-API-Key", config.JetsonApiKey);
-                    _longRunClient.DefaultRequestHeaders.Remove("X-API-Key");
-                    _longRunClient.DefaultRequestHeaders.Add("X-API-Key", config.JetsonApiKey);
+                    newApiClient.DefaultRequestHeaders.Add("X-API-Key", config.JetsonApiKey);
+                    newLongRunClient.DefaultRequestHeaders.Add("X-API-Key", config.JetsonApiKey);
                 }
+
+                _apiClient = newApiClient;
+                _longRunClient = newLongRunClient;
 
                 _initialized = true;
             }
