@@ -167,7 +167,7 @@ svc_start() {
         bash -c "nohup bash $LAUNCH_SCRIPT_PATH > $LAUNCH_LOG 2>&1 &"
 
     log_info "waiting for /zed/zed_node/odom to publish (timeout ${ZED_READY_TIMEOUT_S}s)"
-    if wait_for "docker exec $ISAAC_CONTAINER_NAME bash -c 'source /opt/ros/humble/setup.bash 2>/dev/null; source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null; timeout 4 ros2 topic echo --once /zed/zed_node/odom >/dev/null 2>&1'" \
+    if wait_for "docker exec $ISAAC_CONTAINER_NAME bash -c 'source /opt/ros/humble/setup.bash 2>/dev/null; source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null; timeout 4 ros2 topic echo --no-daemon --once /zed/zed_node/odom >/dev/null 2>&1'" \
             "$ZED_READY_TIMEOUT_S"; then
         log_ok "ZED publishing odometry"
         return 0

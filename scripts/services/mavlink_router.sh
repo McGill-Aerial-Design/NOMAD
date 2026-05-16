@@ -39,17 +39,26 @@ svc_start() {
     fi
     local gcs
     gcs="$(discover_gcs_ip)"
-    log_info "starting (GCS: $gcs:$GCS_PORT_LTE, local: 127.0.0.1:$GCS_PORT_LOCAL)"
-    nohup mavlink-routerd \
-        -e "$gcs:$GCS_PORT_LTE" \
-        -e "127.0.0.1:$GCS_PORT_LOCAL" \
-        "$MAVLINK_UART_DEV" \
-        > "$LOG_FILE_DEFAULT" 2>&1 &
-    sleep 2
-    if pgrep -f "$PATTERN" >/dev/null 2>&1; then
-        log_ok "started"
-        return 0
-    fi
+    local attempts delay attempt
+    attempts="${MAVLINK_ROUTER_START_ATTEMPTS:-10}"
+    delay="${MAVLINK_ROUTER_START_RETRY_DELAY:-2}"
+    for attempt in $(seq 1 "$attempts"); do
+        log_info "starting (attempt $attempt/$attempts, GCS: $gcs:$GCS_PORT_LTE, local: 127.0.0.1:$GCS_PORT_LOCAL)"
+        nohup mavlink-routerd \
+            -e "$gcs:$GCS_PORT_LTE" \
+            -e "127.0.0.1:$GCS_PORT_LOCAL" \
+            "$MAVLINK_UART_DEV" \
+            > "$LOG_FILE_DEFAULT" 2>&1 &
+        sleep 2
+        if pgrep -f "$PATTERN" >/dev/null 2>&1; then
+            log_ok "started"
+            return 0
+        fi
+        if [ "$attempt" -lt "$attempts" ]; then
+            log_warn "start attempt $attempt failed; retrying in ${delay}s (see $LOG_FILE_DEFAULT)"
+            sleep "$delay"
+        fi
+    done
     log_fail "failed to start; see $LOG_FILE_DEFAULT"
     return 1
 }
