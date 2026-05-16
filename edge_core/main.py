@@ -18,7 +18,6 @@ import os
 import signal
 import subprocess
 import sys
-from pathlib import Path
 from typing import Any
 
 # Ensure user-local libs (e.g. libturbojpeg for pyzed) are discoverable
@@ -40,10 +39,6 @@ import time
 import uvicorn
 import asyncio
 
-sys.path.insert (
-    0, str(Path(__file__).resolve().parent.parent / "tailscale" / "src" )
-)
-
 from .api import ( create_app,
                   set_isaac_bridge,
                   set_health_monitor,
@@ -62,8 +57,8 @@ from .nav_controller import NavController
 from .state import StateManager
 from .time_manager import TimeSyncService, TimeSyncStatus
 from .health_monitor import JetsonHealthMonitor
-from tailscale_manager import init_tailscale_manager
-from network_monitor import init_network_monitor
+from tailscale.src.tailscale_manager import init_tailscale_manager
+from tailscale.src.network_monitor import init_network_monitor
 
 # Conditional import for Isaac ROS bridge (ROS2 environment only)
 try:
@@ -247,12 +242,11 @@ def run(
     network_monitor = init_network_monitor(gcs_tailscale_ip=gcs_ip)
     set_network_monitor(app, network_monitor)
 
+    @app.on_event("startup")
     async def _start_network_services():
         await tailscale_manager.start()
         await network_monitor.start()
-
-    asyncio.run(_start_network_services())
-    logger.info("Tailscale manager + network monitor started")
+        logger.info("Tailscale manager + network monitor started")
 
 
     # Initialize Isaac ROS bridge (Task 2 only - requires NOMAD_ENABLE_ISAAC_ROS=true)

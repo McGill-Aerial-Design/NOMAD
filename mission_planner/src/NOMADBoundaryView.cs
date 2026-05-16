@@ -171,8 +171,23 @@ namespace NOMAD.MissionPlanner
             // 3) Import/Export card (bottom)
             var importCard = CreateCard("IMPORT / EXPORT");
             importCard.Dock = DockStyle.Top;
-            importCard.Height = 105;
+            importCard.Height = 130;
             importCard.Margin = new Padding(0, 3, 0, 0);
+
+            // Auto-draw toggle: when checked, AutoDrawBoundariesIfEnabled()
+            // pushes imported/edited polygons to the map without a manual
+            // refresh. Named so AutoDrawBoundariesIfEnabled can Find it.
+            var chkAutoDraw = new CheckBox
+            {
+                Name = "chkAutoDraw",
+                Text = "Auto-draw on map",
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 8),
+                Location = new Point(10, 92),
+                AutoSize = true,
+                Checked = true,
+            };
+            importCard.Controls.Add(chkAutoDraw);
 
             var lblImport = new Label { Text = "Import:", Font = new Font("Segoe UI", 7.5f, FontStyle.Bold), ForeColor = TEXT_SECONDARY, Location = new Point(10, 42), AutoSize = true };
             importCard.Controls.Add(lblImport);

@@ -1785,7 +1785,25 @@ class ROSHTTPBridge(Node):
             self.get_logger().error(f"Circle/depth status processing error: {e}")
     
     def _read_gpu_temp(self) -> float:
-        """Read GPU temperature from sysfs (RM-005). Returns 0 on failure."""
+        """Read GPU temperature for thermal throttling (RM-005).
+
+        The bridge runs inside the nomad_isaac_ros container, which does NOT
+        mount /sys/devices/virtual/thermal. Falling back to a direct sysfs
+        read would always fail and silently disable throttling. Instead, ask
+        the Edge Core /health endpoint (host-side, has sysfs access) for the
+        Jetson GPU temperature. The sysfs path is still attempted as a
+        last-ditch fallback in case the bridge ever runs natively.
+        """
+        health = self._http_get_json("/health", timeout=0.3)
+        if health:
+            jetson = health.get("jetson") if isinstance(health, dict) else None
+            if isinstance(jetson, dict):
+                gpu_temp = jetson.get("gpu_temp")
+                if gpu_temp is not None:
+                    try:
+                        return float(gpu_temp)
+                    except (TypeError, ValueError):
+                        pass
         try:
             with open("/sys/devices/virtual/thermal/thermal_zone1/temp", "r") as f:
                 return float(f.read().strip()) / 1000.0

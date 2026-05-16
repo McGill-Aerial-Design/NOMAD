@@ -50,8 +50,12 @@ namespace NOMAD.MissionPlanner.SLAM3D.Data
         // Unseen count for occlusion-based removal
         private readonly Dictionary<long, int> _unseenCount = new Dictionary<long, int>();
         
-        // Insertion order for LRU eviction
-        private readonly Queue<long> _insertionOrder = new Queue<long>();
+        // LRU eviction queue. Each entry records the generation it was enqueued
+        // at so re-observations can supersede older entries: an old (key, gen)
+        // pair is "stale" if _lastSeen[key] != gen and must be skipped on
+        // eviction, otherwise re-seen voxels would be evicted as if they were
+        // never touched (FIFO instead of LRU).
+        private readonly Queue<(long Key, int Gen)> _insertionOrder = new Queue<(long, int)>();
         private readonly HashSet<long> _queuedForEviction = new HashSet<long>();
         
         // Occupancy set for quick existence checks
@@ -164,11 +168,15 @@ namespace NOMAD.MissionPlanner.SLAM3D.Data
                         _voxels[key] = color;
                         _lastSeen[key] = _generation;
                         _unseenCount[key] = 0; // Reset unseen count when seen
-                        
+
+                        // Enqueue every observation (new or re-seen). The
+                        // generation tag lets EvictOldVoxels skip stale entries
+                        // so re-observed voxels move to the back of the LRU.
+                        _insertionOrder.Enqueue((key, _generation));
+
                         if (isNew)
                         {
                             _occupancySet.Add(key);
-                            _insertionOrder.Enqueue(key);
                             added++;
                             _totalAdded++;
                         }
@@ -354,10 +362,11 @@ namespace NOMAD.MissionPlanner.SLAM3D.Data
                     _lastSeen[key] = _generation;
                     _unseenCount[key] = 0;
 
+                    _insertionOrder.Enqueue((key, _generation));
+
                     if (isNew)
                     {
                         _occupancySet.Add(key);
-                        _insertionOrder.Enqueue(key);
                         added++;
                         _totalAdded++;
                     }
@@ -427,10 +436,17 @@ namespace NOMAD.MissionPlanner.SLAM3D.Data
         {
             while (_voxels.Count > MaxVoxels && _insertionOrder.Count > 0)
             {
-                long oldKey = _insertionOrder.Dequeue();
+                var (oldKey, oldGen) = _insertionOrder.Dequeue();
 
                 // Skip if already removed
                 if (!_occupancySet.Contains(oldKey)) continue;
+
+                // Skip stale LRU entry — the voxel was re-observed at a later
+                // generation, so a fresher entry exists deeper in the queue.
+                if (_lastSeen.TryGetValue(oldKey, out int lastGen) && lastGen != oldGen)
+                {
+                    continue;
+                }
 
                 _voxels.Remove(oldKey);
                 _lastSeen.Remove(oldKey);
@@ -439,15 +455,22 @@ namespace NOMAD.MissionPlanner.SLAM3D.Data
                 _totalEvicted++;
             }
 
-            // Drain dead keys from the queue so it doesn't grow unbounded when
-            // occlusion removes voxels but Count never breaches MaxVoxels.
-            while (_insertionOrder.Count > Math.Max(MaxVoxels, _voxels.Count * 2))
+            // Drain dead/stale entries from the queue so it doesn't grow
+            // unbounded when occlusion removes voxels or re-observations leave
+            // superseded entries behind.
+            int maxQueue = Math.Max(MaxVoxels, _voxels.Count * 2);
+            int scanned = 0;
+            int scanLimit = _insertionOrder.Count;
+            while (_insertionOrder.Count > maxQueue && scanned < scanLimit)
             {
-                long checkKey = _insertionOrder.Dequeue();
-                if (_occupancySet.Contains(checkKey))
+                var (checkKey, checkGen) = _insertionOrder.Dequeue();
+                scanned++;
+                if (!_occupancySet.Contains(checkKey)) continue;
+                if (_lastSeen.TryGetValue(checkKey, out int lastGen) && lastGen != checkGen)
                 {
-                    _insertionOrder.Enqueue(checkKey); // Re-queue if still alive
+                    continue; // stale duplicate — drop
                 }
+                _insertionOrder.Enqueue((checkKey, checkGen));
             }
         }
         

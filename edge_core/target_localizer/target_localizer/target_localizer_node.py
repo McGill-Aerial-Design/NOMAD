@@ -430,11 +430,8 @@ class TargetLocalizerNode(Node):
         self.drone_heading = msg.data
 
     def _pose_callback(self, msg: PoseStamped):
-        self.drone_local_east = msg.pose.position.x
-        self.drone_local_north = msg.pose.position.y
-        # MAVROS local_position/pose Z is the authoritative AGL (published by
-        # drone_state_publisher from MAVLink alt_agl_m). ZED odom's z is the
-        # camera-frame origin (~0) and must NOT be used as altitude.
+        # drone_state_publisher only fills z (AGL); x/y are hardcoded to 0.0
+        # and would clobber the authoritative ZED VIO east/north estimate.
         self.drone_alt = msg.pose.position.z
         self.has_local_pose = True
         self.has_mavros_pose = True
