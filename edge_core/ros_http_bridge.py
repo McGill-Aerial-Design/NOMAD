@@ -40,7 +40,6 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, asdict
 from http.client import HTTPConnection
 from typing import Optional
-from urllib.request import Request, urlopen
 from urllib.error import URLError
 
 import rclpy
@@ -417,6 +416,9 @@ class ROSHTTPBridge(Node):
         self._detection_camera_fresh_s = 2.5
         self._latest_detections: list = []
         self._send_errors = 0
+        # _send_errors is incremented from multiple threads (ROS executor, mesh sender,
+        # detection timer). Python's `+=` on ints is not atomic, so guard it.
+        self._send_errors_lock = threading.Lock()
         self._last_send_time = 0.0
         # Back off VIO POSTs briefly on repeated failures to avoid overwhelming Edge Core.
         self._vio_send_backoff_s = 0.0
@@ -435,7 +437,8 @@ class ROSHTTPBridge(Node):
         # Background mesh sender: decouples ROS callback from HTTP blocking.
         # Uses a threading.Event + single-slot pattern so only the latest
         # mesh payload is sent; stale data is discarded automatically.
-        self._mesh_pending_data: Optional[bytes] = None
+        # Latest mesh dict awaiting JSON encoding + HTTP send in the sender thread.
+        self._mesh_pending_dict: Optional[dict] = None
         self._mesh_pending_lock = threading.Lock()
         self._mesh_send_event = threading.Event()
         self._mesh_sender_stop = threading.Event()
@@ -1013,6 +1016,50 @@ class ROSHTTPBridge(Node):
                 except Exception:
                     pass
 
+    def _bump_send_errors(self) -> None:
+        """Thread-safe increment of the cross-thread error counter."""
+        with self._send_errors_lock:
+            self._send_errors += 1
+
+    def _http_get_json(self, path: str, timeout: float = 0.2) -> Optional[dict]:
+        """GET JSON over the pooled keep-alive HTTPConnection.
+
+        Shares ``_http_conn`` / ``_http_lock`` with ``_http_post`` so polling
+        timers do not strand sockets in TIME_WAIT (which urllib.urlopen does on
+        every call, since it does not pool across calls).
+        """
+        with self._http_lock:
+            effective_timeout = max(0.05, timeout)
+            try:
+                headers = self._build_internal_headers(keep_alive=True)
+                self._http_conn.timeout = effective_timeout
+                self._http_conn.request("GET", path, headers=headers)
+                resp = self._http_conn.getresponse()
+                body = resp.read()
+                if resp.status != 200:
+                    return None
+                try:
+                    return json.loads(body.decode("utf-8"))
+                except (UnicodeDecodeError, ValueError):
+                    return None
+            except Exception:
+                try:
+                    self._http_conn.close()
+                except Exception:
+                    pass
+                try:
+                    self._http_conn = HTTPConnection(
+                        self._host, self._port, timeout=self._http_timeout_default_s
+                    )
+                except Exception:
+                    pass
+                return None
+            finally:
+                try:
+                    self._http_conn.timeout = self._http_timeout_default_s
+                except Exception:
+                    pass
+
     def _build_internal_headers(
         self,
         content_type: Optional[str] = None,
@@ -1176,7 +1223,7 @@ class ROSHTTPBridge(Node):
                 self._vio_send_zmq_count += 1
                 self._vio_send_count += 1
             else:
-                self._send_errors += 1
+                self._bump_send_errors()
 
         if not self._use_high_rate_http:
             return
@@ -1196,7 +1243,7 @@ class ROSHTTPBridge(Node):
                 self._vio_send_backoff_s = 0.0
                 self._last_vio_http_send_time = now
             else:
-                self._send_errors += 1
+                self._bump_send_errors()
                 self._vio_send_backoff_s = (
                     0.05 if self._vio_send_backoff_s <= 0.0
                     else min(self._vio_backoff_max_s, self._vio_send_backoff_s * 2.0)
@@ -1205,11 +1252,11 @@ class ROSHTTPBridge(Node):
                 self._last_vio_http_send_time = now
 
         except URLError as e:
-            self._send_errors += 1
+            self._bump_send_errors()
             if self._send_errors % 100 == 1:
                 self.get_logger().warning(f"Failed to send VIO: {e}")
         except Exception as e:
-            self._send_errors += 1
+            self._bump_send_errors()
             self.get_logger().error(f"Send error: {e}")
     
     def _send_cmd_vel_to_edge_core(self, cmd: VelocityCommand) -> None:
@@ -1232,7 +1279,7 @@ class ROSHTTPBridge(Node):
                 self._last_cmd_vel_send_time = time.time()
                 zmq_sent = True
             else:
-                self._send_errors += 1
+                self._bump_send_errors()
 
         # Keep ZMQ as the primary path. In explicit "both" mode, also send
         # HTTP as a secondary path with the same payload so API-side monotonic
@@ -1256,14 +1303,14 @@ class ROSHTTPBridge(Node):
                 self._cmd_vel_send_count += 1
                 self._last_cmd_vel_send_time = time.time()
             else:
-                self._send_errors += 1
+                self._bump_send_errors()
                     
         except URLError as e:
-            self._send_errors += 1
+            self._bump_send_errors()
             if self._send_errors % 100 == 1:
                 self.get_logger().warning(f"Failed to send cmd_vel: {e}")
         except Exception as e:
-            self._send_errors += 1
+            self._bump_send_errors()
             self.get_logger().error(f"cmd_vel send error: {e}")
     
     def _handle_servo_angle(self, msg: Float32) -> None:
@@ -1361,14 +1408,14 @@ class ROSHTTPBridge(Node):
             if self._http_post(path, b"", timeout=0.2):
                 self._servo_send_count += 1
             else:
-                self._send_errors += 1
+                self._bump_send_errors()
                     
         except URLError as e:
-            self._send_errors += 1
+            self._bump_send_errors()
             if self._send_errors % 100 == 1:
                 self.get_logger().warning(f"Failed to send servo angle: {e}")
         except Exception as e:
-            self._send_errors += 1
+            self._bump_send_errors()
             self.get_logger().error(f"Servo send error: {e}")
 
     def _handle_camera_info(self, msg: 'CameraInfo') -> None:
@@ -1766,7 +1813,9 @@ class ROSHTTPBridge(Node):
                     source_timestamp = None
 
             payload = {
-                "detections": [asdict(d) for d in detections],
+                "detections": [
+                    d if isinstance(d, dict) else asdict(d) for d in detections
+                ],
                 "count": len(detections),
                 "source_timestamp": source_timestamp,
             }
@@ -1784,13 +1833,13 @@ class ROSHTTPBridge(Node):
                 if self._http_post("/api/detections/update", data, timeout=0.25):
                     self._detection_send_count += 1
                 else:
-                    self._send_errors += 1
+                    self._bump_send_errors()
         except URLError as e:
-            self._send_errors += 1
+            self._bump_send_errors()
             if self._send_errors % 100 == 1:
                 self.get_logger().warning(f"Failed to send detections: {e}")
         except Exception as e:
-            self._send_errors += 1
+            self._bump_send_errors()
             self.get_logger().error(f"Detection send error: {e}")
     
 
@@ -1876,17 +1925,10 @@ class ROSHTTPBridge(Node):
             return
         self._mesh_mode_last_poll = now
 
-        try:
-            url = f"{self._base_url}/api/task/2/slam/mesh/mode"
-            headers = self._build_internal_headers()
-            req = Request(url, headers=headers)
-            with urlopen(req, timeout=0.1) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-
+        # Pooled GET to avoid leaking TIME_WAIT sockets via urllib.urlopen.
+        data = self._http_get_json("/api/task/2/slam/mesh/mode", timeout=0.1)
+        if data is not None:
             self._mesh_output_mode = "voxel"
-        except Exception:
-            # Keep last known mode on transient API/network errors.
-            pass
 
     def _poll_gimbal_angle(self) -> None:
         """Poll camera gimbal servo angle from Edge Core API.
@@ -1899,12 +1941,10 @@ class ROSHTTPBridge(Node):
             return
         self._gimbal_last_poll = now
 
+        data = self._http_get_json("/api/servo/camera/tilt", timeout=0.1)
+        if data is None:
+            return  # Keep last known angle
         try:
-            url = f"{self._base_url}/api/servo/camera/tilt"
-            headers = self._build_internal_headers()
-            req = Request(url, headers=headers)
-            with urlopen(req, timeout=0.1) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
             feedback_angle = data.get("feedback_angle")
             if feedback_angle is None:
                 feedback_angle = data.get("angle", 90.0)
@@ -1913,8 +1953,8 @@ class ROSHTTPBridge(Node):
             self._gimbal_angle_deg = angle
             # 90 deg = level forward (pitch = 0)
             self._gimbal_pitch_rad = math.radians(angle - 90.0)
-        except Exception:
-            pass  # Keep last known angle
+        except (TypeError, ValueError):
+            pass
 
     def _get_drone_body_pose(self) -> Optional[dict]:
         """
@@ -1991,37 +2031,29 @@ class ROSHTTPBridge(Node):
     def _send_mesh_to_edge_core(self, mesh_data: dict) -> None:
         """Queue mesh data for background send to edge_core (non-blocking).
 
-        Serializes JSON on the caller thread (ROS callback) and hands off
-        the bytes to the background mesh sender. If the sender is still
-        busy with a previous payload, the old one is replaced — only the
-        latest mesh matters.
+        JSON serialization is *deferred* to the background ``_mesh_sender_loop``
+        so the ROS executor thread is never blocked encoding a multi-MB mesh
+        payload — that would back up high-rate topics (cmd_vel, odom, servo).
+        If the sender is still busy with a previous payload, the old dict is
+        replaced; only the latest mesh matters.
         """
         if not self._enable_mesh:
             return
 
-        try:
-            # Keep mesh payload format aligned with API defaults for compatibility.
-            data = json.dumps(mesh_data).encode("utf-8")
-            ctype = "application/json"
-        except Exception as e:
-            self._send_errors += 1
-            self.get_logger().error(f"Mesh serialize error: {e}")
-            return
-
         with self._mesh_pending_lock:
-            if self._mesh_pending_data is not None:
+            if self._mesh_pending_dict is not None:
                 # Previous payload was still pending -- it will never reach
                 # edge_core. Bump a counter so operators can see coalescing
                 # is happening and decide whether to raise the bridge rate
                 # or move to incremental mesh patching.
                 self._mesh_coalesced_count += 1
-            self._mesh_pending_data = data
-            self._mesh_pending_ctype = ctype
+            self._mesh_pending_dict = mesh_data
+            self._mesh_pending_ctype = "application/json"
             self._mesh_pending_meta = mesh_data.get('mode', 'voxel'), mesh_data.get('total_voxels', 0)
         self._mesh_send_event.set()
 
     def _mesh_sender_loop(self) -> None:
-        """Background thread that sends queued mesh data via HTTP."""
+        """Background thread that serializes and sends queued mesh data via HTTP."""
         while not self._mesh_sender_stop.is_set():
             # Wait for data or stop signal
             self._mesh_send_event.wait(timeout=1.0)
@@ -2031,12 +2063,20 @@ class ROSHTTPBridge(Node):
 
             # Grab the latest payload (atomic swap)
             with self._mesh_pending_lock:
-                data = self._mesh_pending_data
+                mesh_dict = self._mesh_pending_dict
                 ctype = getattr(self, '_mesh_pending_ctype', 'application/json')
                 meta = getattr(self, '_mesh_pending_meta', ('voxel', 0))
-                self._mesh_pending_data = None
+                self._mesh_pending_dict = None
 
-            if data is None:
+            if mesh_dict is None:
+                continue
+
+            # Serialize off the ROS executor thread (this can take hundreds of ms).
+            try:
+                data = json.dumps(mesh_dict).encode("utf-8")
+            except Exception as e:
+                self._bump_send_errors()
+                self.get_logger().error(f"Mesh serialize error: {e}")
                 continue
 
             try:
@@ -2049,9 +2089,9 @@ class ROSHTTPBridge(Node):
                             f"Mesh sent: {count} voxels (mode={mode})"
                         )
                 else:
-                    self._send_errors += 1
+                    self._bump_send_errors()
             except Exception as e:
-                self._send_errors += 1
+                self._bump_send_errors()
                 if self._send_errors % 50 == 1:
                     self.get_logger().warning(f"Failed to send mesh: {e}")
 

@@ -163,13 +163,22 @@ int main(int argc, char *argv[]) {
     char buf[32];
     
     while (running) {
-        /* Check for new pulse width command */
+        /* Check for new pulse width command. Multiple commands may arrive
+         * coalesced (e.g. "1500\n1600\n"); honor the LAST complete one so
+         * rapid servo updates from visual servoing never drop the freshest
+         * setpoint. atoi() alone would parse only the first integer. */
         int n = read(STDIN_FILENO, buf, sizeof(buf) - 1);
         if (n > 0) {
             buf[n] = '\0';
-            int new_pulse = atoi(buf);
-            if (new_pulse >= 500 && new_pulse <= 2500) {
-                pulse_us = new_pulse;
+            char *last_nl = strrchr(buf, '\n');
+            if (last_nl) {
+                *last_nl = '\0';
+                char *prev_nl = strrchr(buf, '\n');
+                char *line = prev_nl ? prev_nl + 1 : buf;
+                int new_pulse = atoi(line);
+                if (new_pulse >= 500 && new_pulse <= 2500) {
+                    pulse_us = new_pulse;
+                }
             }
         }
         

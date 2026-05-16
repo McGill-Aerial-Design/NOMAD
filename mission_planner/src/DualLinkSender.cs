@@ -525,10 +525,15 @@ namespace NOMAD.MissionPlanner
                     if (!exited)
                     {
                         process.Kill();
-                        return new CommandResult 
-                        { 
-                            Success = false, 
-                            Message = $"SSH command timed out after {timeoutSeconds}s (host unreachable or command hung)" 
+                        // Observe the abandoned stdout/stderr reads so they don't surface
+                        // as TaskScheduler.UnobservedTaskException once the killed process
+                        // closes the pipes. Result is intentionally discarded.
+                        _ = outputTask.ContinueWith(t => { var _ = t.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+                        _ = errorTask.ContinueWith(t => { var _ = t.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+                        return new CommandResult
+                        {
+                            Success = false,
+                            Message = $"SSH command timed out after {timeoutSeconds}s (host unreachable or command hung)"
                         };
                     }
 

@@ -703,29 +703,37 @@ namespace NOMAD.MissionPlanner
             try
             {
                 var lockData = frame.LockBits(Rectangle.Empty, null, SkiaSharp.SKColorType.Bgra8888);
-                displayBitmap = new Bitmap(frame.Width, frame.Height, PixelFormat.Format32bppPArgb);
-                var bmpData = displayBitmap.LockBits(
-                    new Rectangle(0, 0, frame.Width, frame.Height),
-                    System.Drawing.Imaging.ImageLockMode.WriteOnly,
-                    PixelFormat.Format32bppPArgb);
                 try
                 {
-                    var srcStride = 4 * frame.Width;
-                    var dstStride = bmpData.Stride;
-                    var rowBytes = Math.Min(srcStride, dstStride);
-                    unsafe
+                    displayBitmap = new Bitmap(frame.Width, frame.Height, PixelFormat.Format32bppPArgb);
+                    var bmpData = displayBitmap.LockBits(
+                        new Rectangle(0, 0, frame.Width, frame.Height),
+                        System.Drawing.Imaging.ImageLockMode.WriteOnly,
+                        PixelFormat.Format32bppPArgb);
+                    try
                     {
-                        byte* src = (byte*)lockData.Scan0;
-                        byte* dst = (byte*)bmpData.Scan0;
-                        for (int y = 0; y < frame.Height; y++)
+                        var srcStride = 4 * frame.Width;
+                        var dstStride = bmpData.Stride;
+                        var rowBytes = Math.Min(srcStride, dstStride);
+                        unsafe
                         {
-                            Buffer.MemoryCopy(src + y * srcStride, dst + y * dstStride, dstStride, rowBytes);
+                            byte* src = (byte*)lockData.Scan0;
+                            byte* dst = (byte*)bmpData.Scan0;
+                            for (int y = 0; y < frame.Height; y++)
+                            {
+                                Buffer.MemoryCopy(src + y * srcStride, dst + y * dstStride, dstStride, rowBytes);
+                            }
                         }
+                    }
+                    finally
+                    {
+                        displayBitmap.UnlockBits(bmpData);
                     }
                 }
                 finally
                 {
-                    displayBitmap.UnlockBits(bmpData);
+                    // Release the native GStreamer-backed lock so the unmanaged buffer is reclaimed.
+                    try { frame.UnlockBits(lockData); } catch { }
                 }
             }
             catch

@@ -135,11 +135,13 @@ class MavlinkService:
                 alt_raw = getattr(msg, "alt", 0)          # mm above MSL
                 rel_alt_raw = getattr(msg, "relative_alt", 0)  # mm above home/ground
                 gps_fix = bool(lat_raw or lon_raw)
-                # GLOBAL_POSITION_INT encodes lat/lon in 1e7 degrees, alt in mm
-                gps_lat = lat_raw / 1e7 if lat_raw else None
-                gps_lon = lon_raw / 1e7 if lon_raw else None
-                gps_alt = alt_raw / 1000.0 if alt_raw else None          # mm -> m MSL
-                alt_agl_m = rel_alt_raw / 1000.0 if rel_alt_raw else None  # mm -> m AGL
+                # GLOBAL_POSITION_INT encodes lat/lon in 1e7 degrees, alt in mm.
+                # Gate on gps_fix (not `if lat_raw`) so a drone exactly on the
+                # equator (lat_raw == 0) is not falsely reported as no-position.
+                gps_lat = lat_raw / 1e7 if gps_fix else None
+                gps_lon = lon_raw / 1e7 if gps_fix else None
+                gps_alt = alt_raw / 1000.0 if gps_fix else None          # mm -> m MSL
+                alt_agl_m = rel_alt_raw / 1000.0 if gps_fix else None    # mm -> m AGL
                 self.state_manager.update_state(
                     gps_fix=gps_fix,
                     gps_lat=gps_lat,

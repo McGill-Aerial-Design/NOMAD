@@ -66,6 +66,10 @@ namespace NOMAD.MissionPlanner
         private string _lastError = null;
         private bool _disposed = false;
         private bool _isPolling = false;
+        // Reentrancy guard: prevents the timer from stacking up CheckConnectionAsync
+        // calls if HTTP responses lag behind the poll interval (mirrors the pattern
+        // used in EnhancedHealthDashboard).
+        private int _checkInFlight = 0;
         
         // ============================================================
         // Events
@@ -142,9 +146,15 @@ namespace NOMAD.MissionPlanner
             // Initial check immediately
             _ = CheckConnectionAsync();
             
-            // Start periodic polling using config interval
+            // Start periodic polling using config interval.
+            // Reentrancy-guarded so a slow HTTP roundtrip cannot stack thread-pool work.
             _pollTimer = new Timer(
-                async _ => await CheckConnectionAsync(),
+                async _ =>
+                {
+                    if (Interlocked.Exchange(ref _checkInFlight, 1) == 1) return;
+                    try { await CheckConnectionAsync(); }
+                    finally { Interlocked.Exchange(ref _checkInFlight, 0); }
+                },
                 null,
                 _config.HealthPollInterval,
                 _config.HealthPollInterval

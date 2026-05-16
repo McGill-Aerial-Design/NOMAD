@@ -556,6 +556,10 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
 
         private void QueueForEviction(long key)
         {
+            // Parity mode disables both EvictOldVoxels and ExpireOldVoxels, so any
+            // keys queued here would never be drained -- _voxelInsertionOrder would
+            // grow unbounded for the duration of a parity validation run.
+            if (_parityMode) return;
             if (_queuedForEviction.Add(key))
                 _voxelInsertionOrder.Enqueue(key);
         }
