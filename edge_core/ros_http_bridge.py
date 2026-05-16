@@ -1218,28 +1218,40 @@ class ROSHTTPBridge(Node):
 
         payload = asdict(vio)
 
+        zmq_sent = False
         if self._use_high_rate_zmq:
             if self._send_high_rate_zmq(HIGH_RATE_MSG_TYPE_VIO, payload):
                 self._vio_send_zmq_count += 1
-                self._vio_send_count += 1
+                zmq_sent = True
             else:
                 self._bump_send_errors()
 
+        if zmq_sent and self._high_rate_transport != "both":
+            self._vio_send_count += 1
+            return
+
         if not self._use_high_rate_http:
+            if zmq_sent:
+                self._vio_send_count += 1
             return
 
         now = time.time()
         if now < self._vio_backoff_until:
+            if zmq_sent:
+                self._vio_send_count += 1
             return
 
         if (now - self._last_vio_http_send_time) < self._vio_http_min_interval_s:
+            if zmq_sent:
+                self._vio_send_count += 1
             return
 
+        http_sent = False
         try:
             data = json.dumps(payload).encode("utf-8")
             if self._http_post("/api/vio/update", data, timeout=self._vio_http_timeout_s):
                 self._vio_send_http_count += 1
-                self._vio_send_count += 1
+                http_sent = True
                 self._vio_send_backoff_s = 0.0
                 self._last_vio_http_send_time = now
             else:
@@ -1258,6 +1270,10 @@ class ROSHTTPBridge(Node):
         except Exception as e:
             self._bump_send_errors()
             self.get_logger().error(f"Send error: {e}")
+
+        # Increment aggregate counter exactly once per distinct payload event
+        if zmq_sent or http_sent:
+            self._vio_send_count += 1
     
     def _send_cmd_vel_to_edge_core(self, cmd: VelocityCommand) -> None:
         """
