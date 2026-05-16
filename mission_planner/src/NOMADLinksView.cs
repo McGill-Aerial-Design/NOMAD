@@ -31,7 +31,11 @@ namespace NOMAD.MissionPlanner
                     Controls.Add(_linkPanel);
                     return;
                 }
-                catch { /* fall through to disabled view */ }
+                catch (System.Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"NOMAD: LinkHealthPanel failed to initialize - {ex}");
+                    /* fall through to disabled view */
+                }
             }
 
             // Fallback: dual link not initialised
@@ -41,6 +45,8 @@ namespace NOMAD.MissionPlanner
                 FlowDirection = FlowDirection.TopDown,
                 BackColor = NOMADTheme.BG_DARK,
                 Padding = new Padding(24),
+                AutoScroll = true,
+                WrapContents = false,
             };
 
             layout.Controls.Add(new Label
@@ -66,6 +72,8 @@ namespace NOMAD.MissionPlanner
                 AutoSize = true,
                 MaximumSize = new Size(720, 0),
             });
+
+            Controls.Add(layout);
         }
 
         public void UpdateData() { /* panel refreshes itself */ }

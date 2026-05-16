@@ -69,6 +69,7 @@ namespace NOMAD.MissionPlanner
             _refresh = new Timer { Interval = Math.Max(200, _config.LinkMonitorInterval) };
             _refresh.Tick += (s, e) => RefreshAll();
             _refresh.Start();
+            RefreshAll();
         }
 
         // ============================================================
@@ -85,17 +86,16 @@ namespace NOMAD.MissionPlanner
                 BackColor = Color.Transparent,
                 Padding = new Padding(12),
             };
-            // Header + settings size to their content; the link row and the
-            // log row split the rest 60/40 so everything reflows with the window.
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            // Fixed header/settings rows keep WinForms from collapsing the
+            // panel during the first layout pass; the live rows split the rest.
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 60));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 88));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 40));
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
             var header = BuildHeader();
-            header.Dock = DockStyle.Top;
-            header.Height = 90;
+            header.Dock = DockStyle.Fill;
             root.Controls.Add(header, 0, 0);
 
             var linkRow = BuildLinkRow();
@@ -103,8 +103,7 @@ namespace NOMAD.MissionPlanner
             root.Controls.Add(linkRow, 0, 1);
 
             var settingsRow = BuildSettingsRow();
-            settingsRow.Dock = DockStyle.Top;
-            settingsRow.Height = 78;
+            settingsRow.Dock = DockStyle.Fill;
             root.Controls.Add(settingsRow, 0, 2);
 
             var logPanel = BuildLogPanel();
@@ -193,7 +192,7 @@ namespace NOMAD.MissionPlanner
 
         private void LayoutEndpointRow(Panel panel)
         {
-            if (_lblLocalEndpoint == null) return;
+            if (_lblLocalEndpoint == null || _btnCopyEndpoint == null || _lblCopied == null) return;
             int x = _lblLocalEndpoint.Right + 8;
             _btnCopyEndpoint.Location = new Point(x, 54);
             _lblCopied.Location = new Point(_btnCopyEndpoint.Right + 8, 56);
@@ -348,11 +347,6 @@ namespace NOMAD.MissionPlanner
             _btnReleaseOverride.FlatAppearance.BorderSize = 0;
             _btnReleaseOverride.Click += (s, e) => _cm.SwitchToLink(LinkType.None);
             panel.Controls.Add(_btnReleaseOverride);
-            panel.Resize += (s, e) =>
-            {
-                _btnReleaseOverride.Location = new Point(panel.ClientSize.Width - 140, 36);
-                _btnReset.Location = new Point(panel.ClientSize.Width - 140, 10);
-            };
 
             _btnReset = new Button
             {
@@ -367,8 +361,18 @@ namespace NOMAD.MissionPlanner
             _btnReset.FlatAppearance.BorderSize = 0;
             _btnReset.Click += (s, e) => _cm.ResetCounters();
             panel.Controls.Add(_btnReset);
+            panel.Resize += (s, e) => LayoutSettingsButtons(panel);
+            panel.HandleCreated += (s, e) => LayoutSettingsButtons(panel);
 
             return panel;
+        }
+
+        private void LayoutSettingsButtons(Panel panel)
+        {
+            if (_btnReleaseOverride == null || _btnReset == null) return;
+            int x = Math.Max(14, panel.ClientSize.Width - 140);
+            _btnReleaseOverride.Location = new Point(x, 42);
+            _btnReset.Location = new Point(x, 14);
         }
 
         private Panel BuildLogPanel()
@@ -506,7 +510,10 @@ namespace NOMAD.MissionPlanner
                     _btnReleaseOverride.Visible = true;
                 }
             }
-            catch { /* ignore transient repaint errors */ }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"NOMAD: link panel refresh failed - {ex}");
+            }
         }
 
         private void AppendLog(FailoverEventArgs e)

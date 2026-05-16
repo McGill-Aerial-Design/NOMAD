@@ -3,13 +3,14 @@
 // ============================================================
 // Owns both source links (LTE + RadioMaster) directly, parses
 // MAVLink v1/v2 frame boundaries, tracks real per-link health
-// from packet flow, dedupes duplicates that arrive on both
-// paths, and exposes a single merged UDP endpoint Mission
-// Planner connects to as a UDP client.
+// from packet flow, and exposes a single local UDP endpoint
+// Mission Planner connects to as a UDP client.
 //
 // Both source sockets stay open and reading at all times, so
-// failover is gap-free: the moment one link stops delivering
-// packets the other is already filling the merged stream.
+// failover is fast because both source links are read and scored
+// at all times, but Mission Planner only receives one coherent
+// MAVLink stream at a time. This avoids duplicate/interleaved
+// parameter streams during ArduPilot parameter downloads.
 // Outbound (GCS-originated) traffic is forwarded to whichever
 // source link is currently "active" (the healthiest one).
 // ============================================================
@@ -441,42 +442,74 @@ namespace NOMAD.MissionPlanner
 
                 stats.FrameErrors = parser.CrcErrors;
 
-                bool isDuplicate = false;
-                if (_cfg.DedupEnabled && !frame.IsParamValue)
-                {
-                    var key = new DedupKey(frame.Sysid, frame.Compid, frame.Msgid, frame.Seq, frame.RawHash);
-                    lock (_dedupLock)
-                    {
-                        if (_seenFrames.TryGetValue(key, out var seen) &&
-                            seen.Source != type &&
-                            (DateTime.UtcNow - seen.Timestamp) < DEDUP_WINDOW)
-                        {
-                            isDuplicate = true;
-                        }
-                        _seenFrames[key] = new DedupSeen(type, DateTime.UtcNow);
+                MaybePromoteReceivingLink(type);
 
-                        if (DateTime.UtcNow >= _nextDedupSweep)
-                        {
-                            SweepDedup();
-                            _nextDedupSweep = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-                        }
-                    }
-                }
-
-                if (isDuplicate)
+                bool isDuplicate = IsCrossLinkDuplicate(type, frame);
+                bool shouldForward = ShouldForwardInbound(type, frame);
+                if (isDuplicate && !shouldForward)
                 {
                     stats.FramesDuplicate++;
                 }
-                else
+
+                if (shouldForward)
                 {
-                    if (frame.IsParamValue && !ShouldForwardParamValue(type))
-                    {
-                        return;
-                    }
                     stats.FramesForwarded++;
                     ForwardToMp(frame.Raw, frame.RawLength);
                 }
             });
+        }
+
+        private bool IsCrossLinkDuplicate(LinkType source, MavlinkFrame frame)
+        {
+            if (!_cfg.DedupEnabled || frame.IsParamValue)
+                return false;
+
+            var key = new DedupKey(frame.Sysid, frame.Compid, frame.Msgid, frame.Seq, frame.RawHash);
+            bool duplicate = false;
+            lock (_dedupLock)
+            {
+                if (_seenFrames.TryGetValue(key, out var seen) &&
+                    seen.Source != source &&
+                    (DateTime.UtcNow - seen.Timestamp) < DEDUP_WINDOW)
+                {
+                    duplicate = true;
+                }
+                _seenFrames[key] = new DedupSeen(source, DateTime.UtcNow);
+
+                if (DateTime.UtcNow >= _nextDedupSweep)
+                {
+                    SweepDedup();
+                    _nextDedupSweep = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+                }
+            }
+            return duplicate;
+        }
+
+        private bool ShouldForwardInbound(LinkType source, MavlinkFrame frame)
+        {
+            if (frame.IsParamValue)
+                return ShouldForwardParamValue(source);
+
+            if (ManualOverride != LinkType.None)
+                return source == ManualOverride;
+
+            var target = ManualOverride != LinkType.None ? ManualOverride : ActiveLink;
+            if (target == LinkType.None)
+                target = _cfg.PreferredLink == LinkType.None ? LinkType.LTE : _cfg.PreferredLink;
+
+            if (source == target)
+                return true;
+
+            return !IsLinkUsable(target) && IsLinkUsable(source);
+        }
+
+        private void MaybePromoteReceivingLink(LinkType source)
+        {
+            if (ManualOverride != LinkType.None || source == ActiveLink)
+                return;
+
+            if (!IsLinkUsable(ActiveLink) && IsLinkUsable(source))
+                SetActiveLink(source, "active link idle, alternate link receiving traffic");
         }
 
         private void SweepDedup()
@@ -546,7 +579,7 @@ namespace NOMAD.MissionPlanner
                 if (frame.IsParamRequest)
                 {
                     var source = SelectParamTransactionSource();
-                    ForwardToLink(source, frame.Raw, frame.RawLength);
+                    ForwardToLink(source, frame.Raw, frame.RawLength, allowFallback: ManualOverride == LinkType.None);
                 }
                 else
                     ForwardOutboundFrame(frame.Raw, frame.RawLength);
@@ -559,18 +592,18 @@ namespace NOMAD.MissionPlanner
         private void ForwardOutboundFrame(byte[] data, int length)
         {
             var target = ManualOverride != LinkType.None ? ManualOverride : ActiveLink;
-            ForwardToLink(target, data, length);
+            ForwardToLink(target, data, length, allowFallback: ManualOverride == LinkType.None);
         }
 
-        private void ForwardToLink(LinkType target, byte[] data, int length)
+        private void ForwardToLink(LinkType target, byte[] data, int length, bool allowFallback = true)
         {
             if (target == LinkType.LTE && Lte.IsOpen)
                 SendLte(data, length);
             else if (target == LinkType.RadioMaster && Radio.IsOpen)
                 SendRadio(data, length);
-            else if (Lte.IsOpen)
+            else if (allowFallback && Lte.IsOpen)
                 SendLte(data, length);
-            else if (Radio.IsOpen)
+            else if (allowFallback && Radio.IsOpen)
                 SendRadio(data, length);
         }
 
@@ -578,6 +611,9 @@ namespace NOMAD.MissionPlanner
         {
             lock (_paramLock)
             {
+                if (ManualOverride != LinkType.None)
+                    return source == ManualOverride;
+
                 var now = DateTime.UtcNow;
                 if (_paramTransactionSource == LinkType.None || (now - _lastParamActivityTime) > PARAM_TRANSACTION_TIMEOUT)
                     _paramTransactionSource = source;
@@ -602,7 +638,9 @@ namespace NOMAD.MissionPlanner
                 }
 
                 var preferred = ManualOverride != LinkType.None ? ManualOverride : ActiveLink;
-                if (IsLinkUsable(preferred))
+                if (ManualOverride != LinkType.None)
+                    _paramTransactionSource = ManualOverride;
+                else if (IsLinkUsable(preferred))
                     _paramTransactionSource = preferred;
                 else if (IsLinkUsable(LinkType.LTE))
                     _paramTransactionSource = LinkType.LTE;
@@ -833,6 +871,12 @@ namespace NOMAD.MissionPlanner
             _lteSeenSeqCount = _lteLostSeqCount = _radioSeenSeqCount = _radioLostSeqCount = 0;
             _lteLastSeqByComp.Clear();
             _radioLastSeqByComp.Clear();
+            lock (_dedupLock) _seenFrames.Clear();
+            lock (_paramLock)
+            {
+                _paramTransactionSource = LinkType.None;
+                _lastParamActivityTime = DateTime.MinValue;
+            }
         }
 
         /// <summary>Live single-line status for tooltips / dashboards.</summary>

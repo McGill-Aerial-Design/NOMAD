@@ -873,7 +873,7 @@ namespace NOMAD.MissionPlanner
             _chkAutoStartHudVideo.Checked = Config.AutoStartHudVideo;
             
             // Dual Link
-            _chkDualLinkEnabled.Checked = Config.DualLinkEnabled;
+            _chkDualLinkEnabled.Checked = Config.DualLinkEnabled && Config.RouterEnabled;
             _cmbRadioMasterConnType.SelectedIndex = Config.RadioMasterConnectionType == "COM" ? 1 : 0;
             _numRadioMasterPort.Value = Config.RadioMasterPort;
             SetComboBoxValue(_cmbRadioMasterComPort, Config.RadioMasterComPort);
