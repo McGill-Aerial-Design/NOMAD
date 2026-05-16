@@ -300,8 +300,13 @@ namespace NOMAD.MissionPlanner
                         var raw  = (MAVLink.mavlink_servo_output_raw_t)msg.data;
                         var type = typeof(MAVLink.mavlink_servo_output_raw_t);
 
-                        int[] channels = { _config?.Servo1Channel ?? 0, _config?.Servo2Channel ?? 0, _config?.Servo3Channel ?? 0 };
-                        int[] pwmMaxes = { _config?.Servo1PwmMax  ?? 2000, _config?.Servo2PwmMax ?? 2000, _config?.Servo3PwmMax ?? 2000 };
+                        int[] channels  = { _config?.Servo1Channel ?? 0, _config?.Servo2Channel ?? 0, _config?.Servo3Channel ?? 0 };
+                        int[] dropPwms  =
+                        {
+                            ServoPwm(_config?.Servo1PwmMin ?? 1000, _config?.Servo1PwmMax ?? 2000, _config?.Servo1Reversed ?? false).drop,
+                            ServoPwm(_config?.Servo2PwmMin ?? 1000, _config?.Servo2PwmMax ?? 2000, _config?.Servo2Reversed ?? false).drop,
+                            ServoPwm(_config?.Servo3PwmMin ?? 1000, _config?.Servo3PwmMax ?? 2000, _config?.Servo3Reversed ?? false).drop,
+                        };
 
                         for (int i = 0; i < 3; i++)
                         {
@@ -309,8 +314,8 @@ namespace NOMAD.MissionPlanner
                             if (ch <= 0 || ch > 16) continue;
                             var field = type.GetField($"servo{ch}_raw");
                             if (field == null) continue;
-                            int pwm     = (ushort)field.GetValue(raw);
-                            bool dropped = Math.Abs(pwm - pwmMaxes[i]) < 50;
+                            int pwm      = (ushort)field.GetValue(raw);
+                            bool dropped = Math.Abs(pwm - dropPwms[i]) < 50;
 
                             // For payload 1, also check the secondary servo channel.
                             if (i == 0 && !dropped)
@@ -321,8 +326,9 @@ namespace NOMAD.MissionPlanner
                                     var field2 = type.GetField($"servo{ch2}_raw");
                                     if (field2 != null)
                                     {
-                                        int pwm2 = (ushort)field2.GetValue(raw);
-                                        dropped = Math.Abs(pwm2 - (_config?.Servo1bPwmMax ?? 2000)) < 50;
+                                        int pwm2     = (ushort)field2.GetValue(raw);
+                                        int dropPwm2 = ServoPwm(_config?.Servo1bPwmMin ?? 1000, _config?.Servo1bPwmMax ?? 2000, _config?.Servo1bReversed ?? false).drop;
+                                        dropped = Math.Abs(pwm2 - dropPwm2) < 50;
                                     }
                                 }
                             }
@@ -345,6 +351,17 @@ namespace NOMAD.MissionPlanner
             _dropButtons[idx].Text      = dropped ? $"Retract P{payload}" : $"Drop P{payload}";
             _dropButtons[idx].BackColor = dropped ? DROP_COLOR_DROPPED : DROP_COLOR_IDLE;
         }
+
+        // ============================================================
+        // Servo helpers
+        // ============================================================
+
+        /// <summary>
+        /// Returns the PWM to use for drop and retract given the configured min/max and
+        /// whether the servo is mounted in reverse (inverted).
+        /// </summary>
+        private static (int drop, int retract) ServoPwm(int pwmMin, int pwmMax, bool reversed)
+            => reversed ? (pwmMin, pwmMax) : (pwmMax, pwmMin);
 
         // ============================================================
         // MAVLink servo helper
@@ -456,11 +473,19 @@ namespace NOMAD.MissionPlanner
             switch (payloadNumber)
             {
                 case 1:
-                    channel   = _config?.Servo1Channel  ?? 0; pwmDrop  = _config?.Servo1PwmMax  ?? 2000;
-                    channel2  = _config?.Servo1bChannel ?? 0; pwmDrop2 = _config?.Servo1bPwmMax ?? 2000;
+                    (pwmDrop,  _) = ServoPwm(_config?.Servo1PwmMin  ?? 1000, _config?.Servo1PwmMax  ?? 2000, _config?.Servo1Reversed  ?? false);
+                    (pwmDrop2, _) = ServoPwm(_config?.Servo1bPwmMin ?? 1000, _config?.Servo1bPwmMax ?? 2000, _config?.Servo1bReversed ?? false);
+                    channel  = _config?.Servo1Channel  ?? 0;
+                    channel2 = _config?.Servo1bChannel ?? 0;
                     break;
-                case 2: channel = _config?.Servo2Channel ?? 0; pwmDrop = _config?.Servo2PwmMax ?? 2000; break;
-                case 3: channel = _config?.Servo3Channel ?? 0; pwmDrop = _config?.Servo3PwmMax ?? 2000; break;
+                case 2:
+                    (pwmDrop, _) = ServoPwm(_config?.Servo2PwmMin ?? 1000, _config?.Servo2PwmMax ?? 2000, _config?.Servo2Reversed ?? false);
+                    channel = _config?.Servo2Channel ?? 0;
+                    break;
+                case 3:
+                    (pwmDrop, _) = ServoPwm(_config?.Servo3PwmMin ?? 1000, _config?.Servo3PwmMax ?? 2000, _config?.Servo3Reversed ?? false);
+                    channel = _config?.Servo3Channel ?? 0;
+                    break;
                 default: return;
             }
 
@@ -521,11 +546,19 @@ namespace NOMAD.MissionPlanner
             switch (payloadNumber)
             {
                 case 1:
-                    channel  = _config?.Servo1Channel  ?? 0; pwmMin  = _config?.Servo1PwmMin  ?? 1000;
-                    channel2 = _config?.Servo1bChannel ?? 0; pwmMin2 = _config?.Servo1bPwmMin ?? 1000;
+                    (_, pwmMin)  = ServoPwm(_config?.Servo1PwmMin  ?? 1000, _config?.Servo1PwmMax  ?? 2000, _config?.Servo1Reversed  ?? false);
+                    (_, pwmMin2) = ServoPwm(_config?.Servo1bPwmMin ?? 1000, _config?.Servo1bPwmMax ?? 2000, _config?.Servo1bReversed ?? false);
+                    channel  = _config?.Servo1Channel  ?? 0;
+                    channel2 = _config?.Servo1bChannel ?? 0;
                     break;
-                case 2: channel = _config?.Servo2Channel ?? 0; pwmMin = _config?.Servo2PwmMin ?? 1000; break;
-                case 3: channel = _config?.Servo3Channel ?? 0; pwmMin = _config?.Servo3PwmMin ?? 1000; break;
+                case 2:
+                    (_, pwmMin) = ServoPwm(_config?.Servo2PwmMin ?? 1000, _config?.Servo2PwmMax ?? 2000, _config?.Servo2Reversed ?? false);
+                    channel = _config?.Servo2Channel ?? 0;
+                    break;
+                case 3:
+                    (_, pwmMin) = ServoPwm(_config?.Servo3PwmMin ?? 1000, _config?.Servo3PwmMax ?? 2000, _config?.Servo3Reversed ?? false);
+                    channel = _config?.Servo3Channel ?? 0;
+                    break;
                 default: return;
             }
 

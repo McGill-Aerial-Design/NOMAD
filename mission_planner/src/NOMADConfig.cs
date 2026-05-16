@@ -396,6 +396,8 @@ namespace NOMAD.MissionPlanner
         public int Servo1PwmMin { get; set; } = 1000;
         /// <summary>PWM (us) when payload 1 primary servo is open/released (drop position).</summary>
         public int Servo1PwmMax { get; set; } = 2000;
+        /// <summary>When true, Min is the drop position and Max is the retracted position (servo mounted inverted).</summary>
+        public bool Servo1Reversed { get; set; } = false;
 
         /// <summary>Cube servo output channel for payload 1 drop servo (secondary). Set to 0 to disable.</summary>
         public int Servo1bChannel { get; set; } = 0;
@@ -403,6 +405,8 @@ namespace NOMAD.MissionPlanner
         public int Servo1bPwmMin { get; set; } = 1000;
         /// <summary>PWM (us) when payload 1 secondary servo is open/released (drop position).</summary>
         public int Servo1bPwmMax { get; set; } = 2000;
+        /// <summary>When true, Min is the drop position and Max is the retracted position (servo mounted inverted).</summary>
+        public bool Servo1bReversed { get; set; } = false;
 
         /// <summary>Cube servo output channel for payload 2 drop servo.</summary>
         public int Servo2Channel { get; set; } = 10;
@@ -410,6 +414,8 @@ namespace NOMAD.MissionPlanner
         public int Servo2PwmMin { get; set; } = 1000;
         /// <summary>PWM (us) when payload 2 servo is open/released (drop position).</summary>
         public int Servo2PwmMax { get; set; } = 2000;
+        /// <summary>When true, Min is the drop position and Max is the retracted position (servo mounted inverted).</summary>
+        public bool Servo2Reversed { get; set; } = false;
 
         /// <summary>Cube servo output channel for payload 3 drop servo.</summary>
         public int Servo3Channel { get; set; } = 11;
@@ -417,6 +423,8 @@ namespace NOMAD.MissionPlanner
         public int Servo3PwmMin { get; set; } = 1000;
         /// <summary>PWM (us) when payload 3 servo is open/released (drop position).</summary>
         public int Servo3PwmMax { get; set; } = 2000;
+        /// <summary>When true, Min is the drop position and Max is the retracted position (servo mounted inverted).</summary>
+        public bool Servo3Reversed { get; set; } = false;
 
         // --- Strap reel servo (payload 1) ---
         /// <summary>Cube servo output channel for payload 1 strap reel.</summary>

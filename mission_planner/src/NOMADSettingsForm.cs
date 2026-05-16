@@ -96,9 +96,13 @@ namespace NOMAD.MissionPlanner
         
         // Servos Tab
         private NumericUpDown _numServo1Ch, _numServo1PwmMin, _numServo1PwmMax;
+        private CheckBox _chkServo1Rev;
         private NumericUpDown _numServo1bCh, _numServo1bPwmMin, _numServo1bPwmMax;
+        private CheckBox _chkServo1bRev;
         private NumericUpDown _numServo2Ch, _numServo2PwmMin, _numServo2PwmMax;
+        private CheckBox _chkServo2Rev;
         private NumericUpDown _numServo3Ch, _numServo3PwmMin, _numServo3PwmMax;
+        private CheckBox _chkServo3Rev;
         private NumericUpDown _numReelCh, _numReelPwmIn, _numReelPwmOut;
         private NumericUpDown _numReel2Ch, _numReel2PwmIn, _numReel2PwmOut;
         private NumericUpDown _numPumpRelay, _numPumpDuration;
@@ -613,12 +617,13 @@ namespace NOMAD.MissionPlanner
                 row += 28;
             }
 
-            AddSectionLabel(tab, "Drop Servos (PWM Max = drop position)", ref y);
-            AddServoRow("Payload 1 (A):", ref y, out _numServo1Ch,  out _numServo1PwmMin,  out _numServo1PwmMax,  9,  1000, 2000);
-            AddServoRow("Payload 1 (B):", ref y, out _numServo1bCh, out _numServo1bPwmMin, out _numServo1bPwmMax, 0,  1000, 2000);
+            AddSectionLabel(tab, "Drop Servos (PWM Max = drop position, Rev = servo mounted inverted)", ref y);
+            int yRow;
+            yRow = y; AddServoRow("Payload 1 (A):", ref y, out _numServo1Ch,  out _numServo1PwmMin,  out _numServo1PwmMax,  9,  1000, 2000); _chkServo1Rev  = AddCheckBox(tab, "Rev", 395, yRow);
+            yRow = y; AddServoRow("Payload 1 (B):", ref y, out _numServo1bCh, out _numServo1bPwmMin, out _numServo1bPwmMax, 0,  1000, 2000); _chkServo1bRev = AddCheckBox(tab, "Rev", 395, yRow);
             _numServo1bCh.Minimum = 0; // 0 = disabled; AddServoRow hardcodes min=1 which would reject 0
-            AddServoRow("Payload 2:", ref y, out _numServo2Ch, out _numServo2PwmMin, out _numServo2PwmMax, 10, 1000, 2000);
-            AddServoRow("Payload 3:", ref y, out _numServo3Ch, out _numServo3PwmMin, out _numServo3PwmMax, 11, 1000, 2000);
+            yRow = y; AddServoRow("Payload 2:", ref y, out _numServo2Ch, out _numServo2PwmMin, out _numServo2PwmMax, 10, 1000, 2000); _chkServo2Rev = AddCheckBox(tab, "Rev", 395, yRow);
+            yRow = y; AddServoRow("Payload 3:", ref y, out _numServo3Ch, out _numServo3PwmMin, out _numServo3PwmMax, 11, 1000, 2000); _chkServo3Rev = AddCheckBox(tab, "Rev", 395, yRow);
             y += 4;
 
             AddSectionLabel(tab, "Strap Reel (Payload 1)", ref y);
@@ -930,15 +935,19 @@ namespace NOMAD.MissionPlanner
             _numServo1Ch.Value     = Config.Servo1Channel;
             _numServo1PwmMin.Value = Config.Servo1PwmMin;
             _numServo1PwmMax.Value = Config.Servo1PwmMax;
+            _chkServo1Rev.Checked  = Config.Servo1Reversed;
             _numServo1bCh.Value    = Config.Servo1bChannel;
             _numServo1bPwmMin.Value= Config.Servo1bPwmMin;
             _numServo1bPwmMax.Value= Config.Servo1bPwmMax;
+            _chkServo1bRev.Checked = Config.Servo1bReversed;
             _numServo2Ch.Value    = Config.Servo2Channel;
             _numServo2PwmMin.Value= Config.Servo2PwmMin;
             _numServo2PwmMax.Value= Config.Servo2PwmMax;
+            _chkServo2Rev.Checked = Config.Servo2Reversed;
             _numServo3Ch.Value    = Config.Servo3Channel;
             _numServo3PwmMin.Value= Config.Servo3PwmMin;
             _numServo3PwmMax.Value= Config.Servo3PwmMax;
+            _chkServo3Rev.Checked = Config.Servo3Reversed;
             _numReelCh.Value      = Config.ReelServoChannel;
             _numReelPwmIn.Value   = Config.ReelPwmIn;
             _numReelPwmOut.Value  = Config.ReelPwmOut;
@@ -1054,15 +1063,19 @@ namespace NOMAD.MissionPlanner
             Config.Servo1Channel      = (int)_numServo1Ch.Value;
             Config.Servo1PwmMin       = (int)_numServo1PwmMin.Value;
             Config.Servo1PwmMax       = (int)_numServo1PwmMax.Value;
+            Config.Servo1Reversed     = _chkServo1Rev.Checked;
             Config.Servo1bChannel     = (int)_numServo1bCh.Value;
             Config.Servo1bPwmMin      = (int)_numServo1bPwmMin.Value;
             Config.Servo1bPwmMax      = (int)_numServo1bPwmMax.Value;
+            Config.Servo1bReversed    = _chkServo1bRev.Checked;
             Config.Servo2Channel      = (int)_numServo2Ch.Value;
             Config.Servo2PwmMin       = (int)_numServo2PwmMin.Value;
             Config.Servo2PwmMax       = (int)_numServo2PwmMax.Value;
+            Config.Servo2Reversed     = _chkServo2Rev.Checked;
             Config.Servo3Channel      = (int)_numServo3Ch.Value;
             Config.Servo3PwmMin       = (int)_numServo3PwmMin.Value;
             Config.Servo3PwmMax       = (int)_numServo3PwmMax.Value;
+            Config.Servo3Reversed     = _chkServo3Rev.Checked;
             Config.ReelServoChannel   = (int)_numReelCh.Value;
             Config.ReelPwmIn          = (int)_numReelPwmIn.Value;
             Config.ReelPwmOut         = (int)_numReelPwmOut.Value;
