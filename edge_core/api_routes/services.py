@@ -182,7 +182,10 @@ def register_services_routes(app, ctx) -> None:
                 svc["novnc"] = {"status": "error", "error": str(e)}
 
             # --- Isaac ROS runtime (docker ps + optional docker exec) ---
-            runtime_state = _probe_isaac_runtime_state(force_refresh=True)
+            # Honor the 8s probe cache: Mission Planner polls this endpoint
+            # every ~3s and a force-refresh here spawns 4 docker subprocesses
+            # per poll, flooding logs and adding latency.
+            runtime_state = _probe_isaac_runtime_state(force_refresh=False)
             return svc, runtime_state
 
         # Run blocking work in thread pool — event loop stays free

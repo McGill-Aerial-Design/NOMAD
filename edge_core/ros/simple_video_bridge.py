@@ -456,8 +456,14 @@ class VideoStreamNode(Node):
 
             # Resize to target (this is fast if already the right size)
             if cv_image.shape[1] != self.width or cv_image.shape[0] != self.height:
+                # INTER_AREA for downscale: best anti-aliasing, preserves edge
+                # gradients that HoughCircles/contour-circularity rely on.
+                # INTER_LINEAR if upscaling.
+                interp = (cv2.INTER_AREA
+                          if cv_image.shape[1] > self.width
+                          else cv2.INTER_LINEAR)
                 cv_image = cv2.resize(cv_image, (self.width, self.height),
-                                      interpolation=cv2.INTER_NEAREST)
+                                      interpolation=interp)
 
             # Overlay detections if enabled. Run local HSV detection at ~5 Hz
             # so circles show up in the livestream exactly as they do on capture.
@@ -646,25 +652,7 @@ class VideoStreamNode(Node):
             ry = (y2 - y1) // 2
             
             if 'circle' in label.lower() and rx > 0 and ry > 0:
-                # Use ellipse fitting parameters if available, otherwise use bbox
-                ellipse_w = det.get('ellipse_half_w')
-                ellipse_h = det.get('ellipse_half_h')
-                ellipse_angle = det.get('ellipse_angle', 0.0)
-                
-                if ellipse_w is not None and ellipse_h is not None:
-                    # Scale ellipse parameters to frame size
-                    ellipse_w = int(float(ellipse_w) * sx)
-                    ellipse_h = int(float(ellipse_h) * sy)
-                    ellipse_angle = float(ellipse_angle)
-                    if ellipse_w > 0 and ellipse_h > 0:
-                        cv2.ellipse(frame, (cx, cy), (ellipse_w, ellipse_h), ellipse_angle, 0, 360, color, 2)
-                    else:
-                        # Fallback to bbox-derived ellipse
-                        cv2.ellipse(frame, (cx, cy), (rx, ry), 0, 0, 360, color, 2)
-                else:
-                    # Use bbox-derived ellipse
-                    cv2.ellipse(frame, (cx, cy), (rx, ry), 0, 0, 360, color, 2)
-                    
+                cv2.ellipse(frame, (cx, cy), (rx, ry), 0, 0, 360, color, 2)
                 cv2.drawMarker(frame, (cx, cy), color, cv2.MARKER_CROSS, 10, 1)
             else:
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
@@ -712,7 +700,7 @@ class VideoStreamNode(Node):
         """Local HSV circle detector mirroring target_localizer/detectors.py.
 
         Populates self._detections with dicts shaped for draw_detections:
-        bbox_x/y/w/h, label, confidence, hsv_color, ellipse_*.
+        bbox_x/y/w/h, label, confidence, hsv_color.
         """
         import cv2
         h, w = frame.shape[:2]

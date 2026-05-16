@@ -815,20 +815,24 @@ class SprayController:
             vx = self._clamp(forward_excess * 0.5, 0.0, self.APPROACH_SPEED_MPS)
             vy = 0.0
             yaw_rate = 0.0
+            # NavController expects ROS convention: +vy=left, +vz=up, +yaw=CCW.
+            # Target right of aim (err_x>0) → yaw right (CW, negative) or strafe
+            # right (negative vy). Target low in frame (err_y>0) → descend
+            # (negative vz). Gains remain positive in calibration.
             if self.USE_YAW_ALIGNMENT:
                 yaw_rate = self._clamp(
-                    err_x * self.YAW_GAIN,
+                    -err_x * self.YAW_GAIN,
                     -self.MAX_YAW_RATE_RADPS,
                     self.MAX_YAW_RATE_RADPS,
                 )
             else:
                 vy = self._clamp(
-                    err_x * self.LATERAL_GAIN,
+                    -err_x * self.LATERAL_GAIN,
                     -self.MAX_LATERAL_SPEED_MPS,
                     self.MAX_LATERAL_SPEED_MPS,
                 )
             vz = self._clamp(
-                err_y * self.ALTITUDE_GAIN,
+                -err_y * self.ALTITUDE_GAIN,
                 -self.MAX_ALTITUDE_SPEED_MPS,
                 self.MAX_ALTITUDE_SPEED_MPS,
             )
@@ -1084,28 +1088,27 @@ class SprayController:
                     -self.MAX_FORWARD_SPEED_MPS,
                     self.MAX_FORWARD_SPEED_MPS,
                 )
-                # Positive err_x means target appears right. By default use yaw
-                # to bring it toward the calibrated water landing pixel. Lateral
-                # correction remains available for platforms with stable side-slip.
+                # NavController expects ROS convention (+vy=left, +vz=up,
+                # +yaw=CCW). Positive err_x means target appears right of aim,
+                # which requires a right-going correction → negative vy or
+                # negative (CW) yaw_rate. Positive err_y means target appears
+                # low in frame, which requires descending → negative vz.
                 vy = 0.0
                 yaw_rate = 0.0
                 if self.USE_YAW_ALIGNMENT:
                     yaw_rate = self._clamp(
-                        err_x * self.YAW_GAIN,
+                        -err_x * self.YAW_GAIN,
                         -self.MAX_YAW_RATE_RADPS,
                         self.MAX_YAW_RATE_RADPS,
                     )
                 else:
                     vy = self._clamp(
-                        err_x * self.LATERAL_GAIN,
+                        -err_x * self.LATERAL_GAIN,
                         -self.MAX_LATERAL_SPEED_MPS,
                         self.MAX_LATERAL_SPEED_MPS,
                     )
-                # Positive err_y means target appears low. The gain sign is
-                # field-tunable because camera/nozzle mounting can invert the
-                # observed vertical response.
                 vz = self._clamp(
-                    err_y * self.ALTITUDE_GAIN,
+                    -err_y * self.ALTITUDE_GAIN,
                     -self.MAX_ALTITUDE_SPEED_MPS,
                     self.MAX_ALTITUDE_SPEED_MPS,
                 )

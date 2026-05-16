@@ -685,18 +685,28 @@ def run(
         )
         bridge_port = int(os.environ.get("NOMAD_BRIDGE_HTTP_PORT", "9200"))
         snap_url = f"http://172.17.0.1:{bridge_port}/snapshot"
+        # simple_video_bridge refreshes /snapshot every ~2s; polling faster
+        # just re-decodes and re-detects the same JPEG. Skip when the payload
+        # hash hasn't moved so we don't burn Jetson CPU on duplicate work.
+        last_payload_hash: int | None = None
 
         while _detection_running:
             try:
                 resp = _requests.get(snap_url, timeout=1)
                 if resp.status_code != 200:
-                    time.sleep(0.2)
+                    time.sleep(0.5)
                     continue
+
+                payload_hash = hash(resp.content)
+                if payload_hash == last_payload_hash:
+                    time.sleep(0.5)
+                    continue
+                last_payload_hash = payload_hash
 
                 arr = _np.frombuffer(resp.content, dtype=_np.uint8)
                 img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
                 if img is None:
-                    time.sleep(0.2)
+                    time.sleep(0.5)
                     continue
 
                 circles = detector.detect(img)
@@ -781,7 +791,7 @@ def run(
                         app.state.detection_last_update = time.time()
             except Exception as e:
                 logger.error(f"Detection loop error: {e}")
-            time.sleep(0.2)  # ~5 Hz
+            time.sleep(0.5)  # ~2 Hz; bridge snapshot only refreshes every 2s
 
     def _get_detection_bbox(target_or_id) -> dict | tuple | None:
         """Return the freshest detection for spray visual servoing.

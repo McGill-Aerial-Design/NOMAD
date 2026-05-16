@@ -232,12 +232,13 @@ class NavController:
         Send velocity command to the vehicle.
         
         This is the main entry point for ROS2 nav2/nvblox velocity commands.
-        Commands are in body frame (forward, right, up).
-        
+        Commands are in ROS REP-103 convention (FLU body frame); they are
+        negated to MAVLink BODY_OFFSET_NED (FRD) inside _send_velocity_mavlink.
+
         Args:
             vx: Forward velocity (m/s, positive = forward)
-            vy: Lateral velocity (m/s, positive = right)
-            vz: Vertical velocity (m/s, positive = up)
+            vy: Lateral velocity (m/s, positive = LEFT)
+            vz: Vertical velocity (m/s, positive = UP)
             yaw_rate: Yaw rate (rad/s, positive = CCW)
             source: Command source identifier
             
