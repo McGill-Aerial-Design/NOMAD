@@ -505,21 +505,16 @@ class TargetLocalizerNode(Node):
                     break
 
         if depth is None:
-            # Last resort: use global frame median. If the ZED depth is mostly NaN
-            # (e.g. textureless wall, strong reflections), use any valid pixel to
-            # at least produce a rough geolocalization rather than hard failing.
-            global_valid = depth_image[
-                np.isfinite(depth_image) & (depth_image > 0.1) & (depth_image < 35.0)
-            ]
-            if len(global_valid) >= 10:
-                depth = float(np.median(global_valid))
-                self.get_logger().warn(
-                    f"Depth at ({px},{py}) all-NaN in ±100px window; "
-                    f"using global frame median {depth:.2f}m "
-                    f"({len(global_valid)} valid pixels in frame)"
-                )
-            else:
-                return None
+            # No valid depth within a 100px window around the target pixel.
+            # Do NOT fall back to the global frame median: a target on a near
+            # wall surrounded by a deep empty room would be geolocated tens of
+            # meters past the wall, which can mislead navigation and obstacle
+            # avoidance. Invalidate instead.
+            self.get_logger().warn(
+                f"Depth at ({px},{py}) all-NaN in ±100px window; "
+                f"refusing to geolocalize (no global-median fallback)"
+            )
+            return None
 
         # Pixel to camera-frame 3D (OpenCV convention: Z forward, X right, Y down)
         cam_x = (px - self.camera_cx) * depth / self.camera_fx

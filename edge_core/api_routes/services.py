@@ -40,6 +40,12 @@ def register_services_routes(app, ctx) -> None:
     _probe_isaac_runtime_state = ctx.probe_isaac_runtime_state
     _get_vio_snapshot = ctx.get_vio_snapshot
 
+    # TTL cache for the subprocess probe results (systemctl/pgrep). Mission
+    # Planner polls /api/services/status at ~1-2 Hz, which would otherwise fan
+    # out to ~10 subprocesses per poll and thrash the OS process table.
+    _proc_cache: dict = {"ts": 0.0, "data": None, "lock": asyncio.Lock()}
+    _PROC_CACHE_TTL_S = 2.0
+
     # ==================== Services Status Endpoint ====================
 
     @app.get("/api/services/status", tags=["System"])
@@ -188,9 +194,22 @@ def register_services_routes(app, ctx) -> None:
             runtime_state = _probe_isaac_runtime_state(force_refresh=False)
             return svc, runtime_state
 
-        # Run blocking work in thread pool — event loop stays free
-        loop = asyncio.get_running_loop()
-        proc_services, runtime_state = await loop.run_in_executor(None, _blocking_proc_checks)
+        # Run blocking work in thread pool — event loop stays free.
+        # TTL-cache the result so high-frequency polls don't spawn ~10
+        # subprocesses per request.
+        now = time.time()
+        if _proc_cache["data"] is not None and (now - _proc_cache["ts"]) < _PROC_CACHE_TTL_S:
+            proc_services, runtime_state = _proc_cache["data"]
+        else:
+            async with _proc_cache["lock"]:
+                now = time.time()
+                if _proc_cache["data"] is not None and (now - _proc_cache["ts"]) < _PROC_CACHE_TTL_S:
+                    proc_services, runtime_state = _proc_cache["data"]
+                else:
+                    loop = asyncio.get_running_loop()
+                    proc_services, runtime_state = await loop.run_in_executor(None, _blocking_proc_checks)
+                    _proc_cache["data"] = (proc_services, runtime_state)
+                    _proc_cache["ts"] = time.time()
 
         services = proc_services
         container_running = runtime_state["container_running"]
