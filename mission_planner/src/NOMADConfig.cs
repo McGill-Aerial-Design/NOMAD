@@ -390,12 +390,19 @@ namespace NOMAD.MissionPlanner
         // ============================================================
 
         // --- Payload drop servos ---
-        /// <summary>Cube servo output channel for payload 1 drop servo.</summary>
+        /// <summary>Cube servo output channel for payload 1 drop servo (primary).</summary>
         public int Servo1Channel { get; set; } = 9;
-        /// <summary>PWM (us) when payload 1 servo is locked/closed.</summary>
+        /// <summary>PWM (us) when payload 1 primary servo is locked/closed.</summary>
         public int Servo1PwmMin { get; set; } = 1000;
-        /// <summary>PWM (us) when payload 1 servo is open/released (drop position).</summary>
+        /// <summary>PWM (us) when payload 1 primary servo is open/released (drop position).</summary>
         public int Servo1PwmMax { get; set; } = 2000;
+
+        /// <summary>Cube servo output channel for payload 1 drop servo (secondary). Set to 0 to disable.</summary>
+        public int Servo1bChannel { get; set; } = 0;
+        /// <summary>PWM (us) when payload 1 secondary servo is locked/closed.</summary>
+        public int Servo1bPwmMin { get; set; } = 1000;
+        /// <summary>PWM (us) when payload 1 secondary servo is open/released (drop position).</summary>
+        public int Servo1bPwmMax { get; set; } = 2000;
 
         /// <summary>Cube servo output channel for payload 2 drop servo.</summary>
         public int Servo2Channel { get; set; } = 10;

@@ -42,6 +42,63 @@ def register_task1_routes(app, ctx) -> None:
     def _call_ros2_service_in_isaac_container_or_raise(*args, **kwargs):
         return ctx.call_ros2_service_in_isaac_container_or_raise(*args, **kwargs)
 
+    def _is_transient_target_capture_error(detail: str) -> bool:
+        msg = (detail or "").strip().lower()
+        transient_markers = (
+            "no rgb or depth image available",
+            "camera intrinsics not yet received",
+            "ros2 service not available: /target_localizer/capture_target",
+            "failed to probe ros2 service: /target_localizer/capture_target",
+            "isaac ros container stack is not running",
+            "isaac ros nvblox stack is not running",
+            "ros2 service call timed out: /target_localizer/capture_target",
+        )
+        return any(marker in msg for marker in transient_markers)
+
+    async def _call_target_capture_with_retries(
+        *,
+        max_attempts: int = 3,
+        retry_delay_s: float = 2.0,
+        timeout_s: float = 45.0,
+    ) -> str:
+        attempts = max(1, int(max_attempts))
+        last_exc: HTTPException | None = None
+        loop = asyncio.get_event_loop()
+
+        def _blocking_capture() -> str:
+            return _call_ros2_service_in_isaac_container_or_raise(
+                service_name="/target_localizer/capture_target",
+                service_type="std_srvs/srv/Trigger",
+                request_payload={},
+                timeout_s=timeout_s,
+                skip_type_check=True,
+                force_refresh_runtime=False,
+            )
+
+        for attempt in range(1, attempts + 1):
+            try:
+                return await loop.run_in_executor(None, _blocking_capture)
+            except HTTPException as exc:
+                last_exc = exc
+                detail = str(exc.detail)
+                should_retry = (
+                    attempt < attempts and _is_transient_target_capture_error(detail)
+                )
+                if should_retry:
+                    logger.warning(
+                        "Task1 capture transient failure (attempt %s/%s): %s",
+                        attempt,
+                        attempts,
+                        detail,
+                    )
+                    await asyncio.sleep(max(0.1, float(retry_delay_s)))
+                    continue
+                raise
+
+        if last_exc is not None:
+            raise last_exc
+        raise HTTPException(status_code=503, detail="Target capture unavailable")
+
     # ==================== Task 1: Recon (Outdoor) ====================
 
     @app.post("/api/task/1/capture", tags=["Task 1"])

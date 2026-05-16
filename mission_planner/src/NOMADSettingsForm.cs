@@ -96,6 +96,7 @@ namespace NOMAD.MissionPlanner
         
         // Servos Tab
         private NumericUpDown _numServo1Ch, _numServo1PwmMin, _numServo1PwmMax;
+        private NumericUpDown _numServo1bCh, _numServo1bPwmMin, _numServo1bPwmMax;
         private NumericUpDown _numServo2Ch, _numServo2PwmMin, _numServo2PwmMax;
         private NumericUpDown _numServo3Ch, _numServo3PwmMin, _numServo3PwmMax;
         private NumericUpDown _numReelCh, _numReelPwmIn, _numReelPwmOut;
@@ -613,7 +614,9 @@ namespace NOMAD.MissionPlanner
             }
 
             AddSectionLabel(tab, "Drop Servos (PWM Max = drop position)", ref y);
-            AddServoRow("Payload 1:", ref y, out _numServo1Ch, out _numServo1PwmMin, out _numServo1PwmMax, 9,  1000, 2000);
+            AddServoRow("Payload 1 (A):", ref y, out _numServo1Ch,  out _numServo1PwmMin,  out _numServo1PwmMax,  9,  1000, 2000);
+            AddServoRow("Payload 1 (B):", ref y, out _numServo1bCh, out _numServo1bPwmMin, out _numServo1bPwmMax, 0,  1000, 2000);
+            _numServo1bCh.Minimum = 0; // 0 = disabled; AddServoRow hardcodes min=1 which would reject 0
             AddServoRow("Payload 2:", ref y, out _numServo2Ch, out _numServo2PwmMin, out _numServo2PwmMax, 10, 1000, 2000);
             AddServoRow("Payload 3:", ref y, out _numServo3Ch, out _numServo3PwmMin, out _numServo3PwmMax, 11, 1000, 2000);
             y += 4;
@@ -924,9 +927,12 @@ namespace NOMAD.MissionPlanner
             _chkAudioAlerts.Checked = Config.AudioAlerts;
             
             // Servos
-            _numServo1Ch.Value    = Config.Servo1Channel;
-            _numServo1PwmMin.Value= Config.Servo1PwmMin;
-            _numServo1PwmMax.Value= Config.Servo1PwmMax;
+            _numServo1Ch.Value     = Config.Servo1Channel;
+            _numServo1PwmMin.Value = Config.Servo1PwmMin;
+            _numServo1PwmMax.Value = Config.Servo1PwmMax;
+            _numServo1bCh.Value    = Config.Servo1bChannel;
+            _numServo1bPwmMin.Value= Config.Servo1bPwmMin;
+            _numServo1bPwmMax.Value= Config.Servo1bPwmMax;
             _numServo2Ch.Value    = Config.Servo2Channel;
             _numServo2PwmMin.Value= Config.Servo2PwmMin;
             _numServo2PwmMax.Value= Config.Servo2PwmMax;
@@ -1048,6 +1054,9 @@ namespace NOMAD.MissionPlanner
             Config.Servo1Channel      = (int)_numServo1Ch.Value;
             Config.Servo1PwmMin       = (int)_numServo1PwmMin.Value;
             Config.Servo1PwmMax       = (int)_numServo1PwmMax.Value;
+            Config.Servo1bChannel     = (int)_numServo1bCh.Value;
+            Config.Servo1bPwmMin      = (int)_numServo1bPwmMin.Value;
+            Config.Servo1bPwmMax      = (int)_numServo1bPwmMax.Value;
             Config.Servo2Channel      = (int)_numServo2Ch.Value;
             Config.Servo2PwmMin       = (int)_numServo2PwmMin.Value;
             Config.Servo2PwmMax       = (int)_numServo2PwmMax.Value;

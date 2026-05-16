@@ -311,6 +311,22 @@ namespace NOMAD.MissionPlanner
                             if (field == null) continue;
                             int pwm     = (ushort)field.GetValue(raw);
                             bool dropped = Math.Abs(pwm - pwmMaxes[i]) < 50;
+
+                            // For payload 1, also check the secondary servo channel.
+                            if (i == 0 && !dropped)
+                            {
+                                int ch2 = _config?.Servo1bChannel ?? 0;
+                                if (ch2 > 0 && ch2 <= 16)
+                                {
+                                    var field2 = type.GetField($"servo{ch2}_raw");
+                                    if (field2 != null)
+                                    {
+                                        int pwm2 = (ushort)field2.GetValue(raw);
+                                        dropped = Math.Abs(pwm2 - (_config?.Servo1bPwmMax ?? 2000)) < 50;
+                                    }
+                                }
+                            }
+
                             int idx = i;
                             BeginInvoke(new Action(() => SetDropButtonState(idx, dropped)));
                         }
@@ -436,9 +452,13 @@ namespace NOMAD.MissionPlanner
         {
             int idx = payloadNumber - 1;
             int channel, pwmDrop;
+            int channel2 = 0, pwmDrop2 = 2000;
             switch (payloadNumber)
             {
-                case 1: channel = _config?.Servo1Channel ?? 0; pwmDrop = _config?.Servo1PwmMax ?? 2000; break;
+                case 1:
+                    channel   = _config?.Servo1Channel  ?? 0; pwmDrop  = _config?.Servo1PwmMax  ?? 2000;
+                    channel2  = _config?.Servo1bChannel ?? 0; pwmDrop2 = _config?.Servo1bPwmMax ?? 2000;
+                    break;
                 case 2: channel = _config?.Servo2Channel ?? 0; pwmDrop = _config?.Servo2PwmMax ?? 2000; break;
                 case 3: channel = _config?.Servo3Channel ?? 0; pwmDrop = _config?.Servo3PwmMax ?? 2000; break;
                 default: return;
@@ -454,7 +474,9 @@ namespace NOMAD.MissionPlanner
 
             if (TrySendServoMAVLink(channel, pwmDrop))
             {
-                SetStatus($"Payload {payloadNumber} dropped  (MAVLink ch{channel} {pwmDrop}us)", SUCCESS_COLOR);
+                if (channel2 > 0) TrySendServoMAVLink(channel2, pwmDrop2);
+                string ch2info = channel2 > 0 ? $" + ch{channel2}" : "";
+                SetStatus($"Payload {payloadNumber} dropped  (MAVLink ch{channel}{ch2info} {pwmDrop}us)", SUCCESS_COLOR);
                 success = true;
             }
             else
@@ -467,6 +489,8 @@ namespace NOMAD.MissionPlanner
                         $"/api/servo/channel/{channel}/pwm?pwm={pwmDrop}");
                     if (resp.IsSuccessStatusCode)
                     {
+                        if (channel2 > 0)
+                            await JetsonApiService.PostAsync($"/api/servo/channel/{channel2}/pwm?pwm={pwmDrop2}");
                         SetStatus($"Payload {payloadNumber} dropped  (API ch{channel})", SUCCESS_COLOR);
                         success = true;
                     }
@@ -493,9 +517,13 @@ namespace NOMAD.MissionPlanner
         {
             int idx = payloadNumber - 1;
             int channel, pwmMin;
+            int channel2 = 0, pwmMin2 = 1000;
             switch (payloadNumber)
             {
-                case 1: channel = _config?.Servo1Channel ?? 0; pwmMin = _config?.Servo1PwmMin ?? 1000; break;
+                case 1:
+                    channel  = _config?.Servo1Channel  ?? 0; pwmMin  = _config?.Servo1PwmMin  ?? 1000;
+                    channel2 = _config?.Servo1bChannel ?? 0; pwmMin2 = _config?.Servo1bPwmMin ?? 1000;
+                    break;
                 case 2: channel = _config?.Servo2Channel ?? 0; pwmMin = _config?.Servo2PwmMin ?? 1000; break;
                 case 3: channel = _config?.Servo3Channel ?? 0; pwmMin = _config?.Servo3PwmMin ?? 1000; break;
                 default: return;
@@ -515,7 +543,9 @@ namespace NOMAD.MissionPlanner
 
             if (TrySendServoMAVLink(channel, pwmMin))
             {
-                SetStatus($"Payload {payloadNumber} retracted  (MAVLink ch{channel} {pwmMin}us)", SUCCESS_COLOR);
+                if (channel2 > 0) TrySendServoMAVLink(channel2, pwmMin2);
+                string ch2info = channel2 > 0 ? $" + ch{channel2}" : "";
+                SetStatus($"Payload {payloadNumber} retracted  (MAVLink ch{channel}{ch2info} {pwmMin}us)", SUCCESS_COLOR);
                 return;
             }
 
@@ -524,6 +554,8 @@ namespace NOMAD.MissionPlanner
             {
                 var resp = await JetsonApiService.PostAsync(
                     $"/api/servo/channel/{channel}/pwm?pwm={pwmMin}");
+                if (resp.IsSuccessStatusCode && channel2 > 0)
+                    await JetsonApiService.PostAsync($"/api/servo/channel/{channel2}/pwm?pwm={pwmMin2}");
                 SetStatus(resp.IsSuccessStatusCode
                     ? $"Payload {payloadNumber} retracted  (API ch{channel})"
                     : $"Retract failed: HTTP {(int)resp.StatusCode}",
