@@ -28,6 +28,8 @@ TimeoutStopSec=30
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
+RuntimeDirectory=nomad
+RuntimeDirectoryMode=0755
 ReadWritePaths=/home/mad/NOMAD /home/mad/nomad_logs /home/mad/.nomad /run/nomad
 
 StandardOutput=journal
