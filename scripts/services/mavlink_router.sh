@@ -11,6 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 PATTERN='mavlink-routerd'
 LOG_FILE_DEFAULT="${NOMAD_LOG_DIR:-/tmp}/mavlink.log"
+EMPTY_CONF_DEFAULT="${NOMAD_LOG_DIR:-/tmp}/mavlink-router-empty.conf"
 
 discover_gcs_ip() {
     if [ -n "${GCS_IP:-}" ]; then
@@ -46,7 +47,7 @@ build_gcs_endpoints() {
 }
 
 svc_start() {
-    if pgrep -f "$PATTERN" >/dev/null 2>&1; then
+    if pgrep -x "$PATTERN" >/dev/null 2>&1; then
         log_ok "already running"
         return 0
     fi
@@ -62,17 +63,26 @@ svc_start() {
     gcs="$(discover_gcs_ip)"
     local endpoints
     mapfile -t endpoints < <(build_gcs_endpoints "$gcs")
+    local empty_conf="${MAVLINK_ROUTER_EMPTY_CONF:-$EMPTY_CONF_DEFAULT}"
+    mkdir -p "$(dirname "$empty_conf")"
+    cat > "$empty_conf" <<EOF
+[General]
+TcpServerPort=5760
+ReportStats=true
+MavlinkDialect=ardupilotmega
+EOF
     local attempts delay attempt
     attempts="${MAVLINK_ROUTER_START_ATTEMPTS:-10}"
     delay="${MAVLINK_ROUTER_START_RETRY_DELAY:-2}"
     for attempt in $(seq 1 "$attempts"); do
         log_info "starting (attempt $attempt/$attempts, endpoints: ${endpoints[*]})"
         nohup mavlink-routerd \
+            -c "$empty_conf" \
             "${endpoints[@]}" \
-            "$MAVLINK_UART_DEV" \
+            "$MAVLINK_UART_DEV:${MAVLINK_UART_BAUD:-921600}" \
             > "$LOG_FILE_DEFAULT" 2>&1 &
         sleep 2
-        if pgrep -f "$PATTERN" >/dev/null 2>&1; then
+        if pgrep -x "$PATTERN" >/dev/null 2>&1; then
             log_ok "started"
             return 0
         fi
@@ -87,11 +97,30 @@ svc_start() {
 
 svc_stop() {
     log_info "stopping"
-    kill_pattern_host "$PATTERN" 5
+    pkill -x "$PATTERN" 2>/dev/null || true
+    local i=0
+    while [ $i -lt 10 ]; do
+        if ! pgrep -x "$PATTERN" >/dev/null 2>&1; then
+            log_ok "stopped"
+            return 0
+        fi
+        sleep 0.5
+        i=$((i + 1))
+    done
+    pkill -9 -x "$PATTERN" 2>/dev/null || true
     log_ok "stopped"
 }
 
-svc_status() { status_pattern_host "$PATTERN"; }
+svc_status() {
+    local pids
+    pids=$(pgrep -x "$PATTERN" 2>/dev/null || true)
+    if [ -n "$pids" ]; then
+        log_ok "running (PID: $(echo "$pids" | tr '\n' ' '))"
+        return 0
+    fi
+    log_warn "not running"
+    return 1
+}
 
 svc_logs() {
     [ -f "$LOG_FILE_DEFAULT" ] && tail -n 50 -F "$LOG_FILE_DEFAULT" || \

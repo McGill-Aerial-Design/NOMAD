@@ -396,7 +396,7 @@ namespace NOMAD.MissionPlanner
             dst.Health = src.Health;
             dst.LatencyMs = src.LatencyMs;
             dst.PacketLossPercent = src.PacketLossPercent;
-            dst.PacketsReceived = src.FramesForwarded;
+            dst.PacketsReceived = src.FramesReceived;
             dst.PacketsDuplicate = src.FramesDuplicate;
             dst.BytesReceived = src.BytesReceived;
             dst.BytesSent = src.BytesSentOutbound;

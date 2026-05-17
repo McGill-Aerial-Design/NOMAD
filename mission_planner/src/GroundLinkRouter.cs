@@ -783,22 +783,22 @@ namespace NOMAD.MissionPlanner
             // Grade the MAVLink telemetry stream, not physical RF distance.
             // Heartbeat jitter is useful as a secondary signal, but ELRS and
             // serial/USB buffering can make it noisy even when packets are live.
-            if (packetAge > 5.0 || hbAge > 8.0 || loss >= 40.0 ||
+            if (packetAge > 5.0 || hbAge > 8.0 ||
                 (s.FramesReceived > 50 && rate < 5.0))
             {
                 s.Health = LinkHealth.Critical;
             }
-            else if (hbAge > 4.0 || loss >= 25.0 ||
+            else if (hbAge > 4.0 ||
                      (s.FramesReceived > 100 && rate < 20.0))
             {
                 s.Health = LinkHealth.Poor;
             }
-            else if (hbAge > 2.5 || loss >= 10.0 || jitter >= 1500.0 ||
+            else if (hbAge > 2.5 || loss >= 40.0 || jitter >= 1500.0 ||
                      (s.FramesReceived > 100 && rate < 80.0))
             {
                 s.Health = LinkHealth.Fair;
             }
-            else if (loss >= 3.0 || jitter >= 800.0 ||
+            else if (loss >= 10.0 || jitter >= 800.0 ||
                      (s.FramesReceived > 100 && rate < 250.0))
             {
                 s.Health = LinkHealth.Good;
