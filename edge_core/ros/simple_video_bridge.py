@@ -444,6 +444,20 @@ class VideoStreamNode(Node):
                 return float(np.median(valid))
         return None
 
+    def _estimate_task2_diameter_m(self, bbox_w: float, bbox_h: float,
+                                   range_m: "float | None",
+                                   frame_w: int, frame_h: int) -> "float | None":
+        """Estimate physical target diameter from pixel size and ZED range."""
+        if range_m is None or range_m <= 0.0 or frame_w <= 0 or frame_h <= 0:
+            return None
+        hfov_deg = float(os.environ.get("NOMAD_TASK2_HFOV_DEG", "110.0"))
+        vfov_deg = float(os.environ.get("NOMAD_TASK2_VFOV_DEG", "70.0"))
+        angular_w = math.radians(hfov_deg) * (bbox_w / float(frame_w))
+        angular_h = math.radians(vfov_deg) * (bbox_h / float(frame_h))
+        diam_w = 2.0 * range_m * math.tan(max(angular_w, 0.0) * 0.5)
+        diam_h = 2.0 * range_m * math.tan(max(angular_h, 0.0) * 0.5)
+        return float((diam_w + diam_h) * 0.5)
+
     def switch_topic(self, new_topic: str) -> bool:
         try:
             self.get_logger().info(f'Switching topic: {self.source_topic} -> {new_topic}')
@@ -1087,19 +1101,29 @@ class VideoStreamNode(Node):
             pad = max(2, int(radius * 0.08))
             x0 = max(0, x - pad)
             y0 = max(0, y - pad)
+            bbox_w = float(min(w - x0, bw + pad * 2))
+            bbox_h = float(min(h - y0, bh + pad * 2))
+            diameter_m = self._estimate_task2_diameter_m(bbox_w, bbox_h, rng, w, h)
+            if diameter_m is not None:
+                min_diameter = float(os.environ.get("NOMAD_TASK2_MIN_DIAMETER_M", "0.04"))
+                max_diameter = float(os.environ.get("NOMAD_TASK2_MAX_DIAMETER_M", "0.35"))
+                if diameter_m < min_diameter or diameter_m > max_diameter:
+                    continue
+
             out.append({
                 "label": "circle",
                 "hsv_color": "purple_blue",
                 "confidence": float(confidence),
                 "bbox_x": float(x0),
                 "bbox_y": float(y0),
-                "bbox_w": float(min(w - x0, bw + pad * 2)),
-                "bbox_h": float(min(h - y0, bh + pad * 2)),
+                "bbox_w": bbox_w,
+                "bbox_h": bbox_h,
                 "_src_w": w,
                 "_src_h": h,
                 "_detector": "task2",
                 "_method": "color_blob",
                 "range_m": rng,
+                "diameter_m": diameter_m,
             })
 
         if len(out) > max_candidates:
