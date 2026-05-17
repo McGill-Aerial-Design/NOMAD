@@ -757,7 +757,7 @@ namespace NOMAD.MissionPlanner
             _lblHealth.Text = s.IsConnected ? s.Health.ToString().ToUpperInvariant() : "DISCONNECTED";
             _lblHealth.ForeColor = HealthColor(s.Health, s.IsConnected);
 
-            _lblLatency.Text = s.IsConnected ? $"Latency: {s.LatencyMs,5:F0} ms" : "Latency:    — ms";
+            _lblLatency.Text = s.IsConnected ? $"HB jitter: {s.LatencyMs,5:F0} ms" : "HB jitter:    — ms";
             _lblLoss.Text = s.IsConnected ? $"Loss:    {s.PacketLossPercent,5:F1} %" : "Loss:       — %";
 
             string rate = FormatRate(s.DataRateBps);

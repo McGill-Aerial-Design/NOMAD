@@ -36,7 +36,7 @@ namespace NOMAD.MissionPlanner
         public bool IsConnected;    // received traffic in the last few seconds
         public LinkHealth Health = LinkHealth.Disconnected;
 
-        public double LatencyMs;          // smoothed heartbeat-interval deviation
+        public double LatencyMs;          // smoothed heartbeat-interval deviation, not RF round-trip latency
         public double PacketLossPercent;  // from sequence-number gaps
         public double DataRateBps;        // EMA of received bytes/sec
 
@@ -749,8 +749,8 @@ namespace NOMAD.MissionPlanner
             EvaluateLiveness(Radio, now);
 
             // Health classification
-            ClassifyHealth(Lte);
-            ClassifyHealth(Radio);
+            ClassifyHealth(Lte, now);
+            ClassifyHealth(Radio, now);
 
             // Failover
             if (_cfg.AutoFailoverEnabled && ManualOverride == LinkType.None)
@@ -766,16 +766,47 @@ namespace NOMAD.MissionPlanner
             s.IsConnected = elapsed < _cfg.HeartbeatTimeoutSec;
         }
 
-        private static void ClassifyHealth(LinkSourceStats s)
+        private static void ClassifyHealth(LinkSourceStats s, DateTime now)
         {
             if (!s.IsOpen || !s.IsConnected) { s.Health = LinkHealth.Disconnected; return; }
-            double lat = s.LatencyMs;
+
+            double packetAge = s.LastPacketTime == DateTime.MinValue
+                ? double.PositiveInfinity
+                : (now - s.LastPacketTime).TotalSeconds;
+            double hbAge = s.LastHeartbeatTime == DateTime.MinValue
+                ? double.PositiveInfinity
+                : (now - s.LastHeartbeatTime).TotalSeconds;
             double loss = s.PacketLossPercent;
-            if (lat < 50 && loss < 0.5) s.Health = LinkHealth.Excellent;
-            else if (lat < 150 && loss < 2) s.Health = LinkHealth.Good;
-            else if (lat < 300 && loss < 10) s.Health = LinkHealth.Fair;
-            else if (lat < 500 && loss < 25) s.Health = LinkHealth.Poor;
-            else s.Health = LinkHealth.Critical;
+            double jitter = s.LatencyMs;
+            double rate = s.DataRateBps;
+
+            // Grade the MAVLink telemetry stream, not physical RF distance.
+            // Heartbeat jitter is useful as a secondary signal, but ELRS and
+            // serial/USB buffering can make it noisy even when packets are live.
+            if (packetAge > 5.0 || hbAge > 8.0 || loss >= 40.0 ||
+                (s.FramesReceived > 50 && rate < 5.0))
+            {
+                s.Health = LinkHealth.Critical;
+            }
+            else if (hbAge > 4.0 || loss >= 25.0 ||
+                     (s.FramesReceived > 100 && rate < 20.0))
+            {
+                s.Health = LinkHealth.Poor;
+            }
+            else if (hbAge > 2.5 || loss >= 10.0 || jitter >= 1500.0 ||
+                     (s.FramesReceived > 100 && rate < 80.0))
+            {
+                s.Health = LinkHealth.Fair;
+            }
+            else if (loss >= 3.0 || jitter >= 800.0 ||
+                     (s.FramesReceived > 100 && rate < 250.0))
+            {
+                s.Health = LinkHealth.Good;
+            }
+            else
+            {
+                s.Health = LinkHealth.Excellent;
+            }
         }
 
         private void EvaluateFailover(DateTime now)
@@ -867,8 +898,10 @@ namespace NOMAD.MissionPlanner
         {
             Lte.FramesReceived = Lte.FramesForwarded = Lte.FramesDuplicate = 0;
             Lte.BytesReceived = Lte.BytesSentOutbound = 0;
+            Lte.PacketLossPercent = 0;
             Radio.FramesReceived = Radio.FramesForwarded = Radio.FramesDuplicate = 0;
             Radio.BytesReceived = Radio.BytesSentOutbound = 0;
+            Radio.PacketLossPercent = 0;
             _lteSeenSeqCount = _lteLostSeqCount = _radioSeenSeqCount = _radioLostSeqCount = 0;
             _lteLastSeqByComp.Clear();
             _radioLastSeqByComp.Clear();
