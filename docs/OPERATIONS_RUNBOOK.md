@@ -81,7 +81,7 @@ Jetson Orin Nano (100.85.121.98)
 |  nomad.service (systemd)                              |
 |    Edge Core API (FastAPI, port 8000)                 |
 |    Subsystems: health monitor, network monitor,       |
-|    nav controller, servo controller, VIO pipeline     |
+|    nav controller, servo controller, spray controller |
 |                                                       |
 |  MAVLink Router (host process)                        |
 |    /dev/ttyACM0 -> UDP 14560 (GCS), 14550 (local)    |
@@ -241,40 +241,40 @@ Invoke-WebRequest -Uri 'http://100.85.121.98:8000/health' -UseBasicParsing
     curl -X POST http://100.85.121.98:8000/api/task/1/capture
     ```
 
-### Phase 4: Task 2 (Indoor Extinguish)
+### Phase 4: Task 2 (Outdoor approach → manual indoor)
 
-16. Start Isaac ROS:
+> Task 2 does **not** use VIO. Positioning is GPS + barometer with optical
+> flow as a velocity backup. Indoors the pilot flies manually
+> (STABILIZE or ALT_HOLD). The Jetson autonomy runs only for the one
+> outdoor target chosen to claim the 20-pt autonomy gate.
+
+16. Start the Isaac ROS container (ZED wrapper + video bridge only — nvblox is opt-in and **off** for the comp):
     ```bash
     curl -X POST http://100.85.121.98:8000/api/isaac/start
     ```
-    Or via SSH: `~/NOMAD/scripts/run/start_isaac_ros_auto.sh start`
 
-17. Verify VIO:
+17. Verify `gdrive_ready=true`:
     ```bash
-    curl -s http://100.85.121.98:8000/api/vio/status | python3 -m json.tool
+    curl -s http://100.85.121.98:8000/api/health | python3 -m json.tool | grep -i gdrive
     ```
 
-18. Reset VIO origin at takeoff position:
-    ```bash
-    curl -X POST http://100.85.121.98:8000/api/vio/reset_origin
-    ```
+18. Confirm GPS lock and HDOP < 1.5 on Mission Planner before takeoff.
 
-19. Verify video stream is available at `rtsp://100.85.121.98:8554/primary`.
+19. Verify video stream at `rtsp://100.85.121.98:8554/primary`.
 
-20. During flight, monitor VIO confidence (keep above 0.8).
+20. Outdoor segment: take off in LOITER, transit to building in GUIDED or LOITER, follow the RTM SOP checklist in the NOMAD Task 2 view.
 
-21. Register target hits:
-    ```bash
-    curl -X POST http://100.85.121.98:8000/api/task/2/target_hit \
-      -H "Content-Type: application/json" \
-      -d '{"x": 1.5, "y": 2.3, "z": 0.5}'
-    ```
+21. Choose ONE outdoor target nearest the doorway. Position the drone so the ZED2i sees it at 3 – 5 m range, then press **Auto Spray (autonomy gate)** in the NOMAD plugin. The spray controller takes over: APPROACH → AIM → SPRAY → VERIFY → UPLOAD.
+
+22. For remaining outdoor + all indoor targets, fly manually. Use **Manual Spray** to fire the water pump without invoking the autonomous approach.
 
 ### Emergency Procedures
 
-- **Loss of VIO during flight:** Immediately switch to STABILIZE mode via RC, hover, navigate visually to exit.
-- **Loss of communication:** MAVLink failsafe triggers RTL after 30s. Indoors: switch to STABILIZE and land manually.
-- **Thermal throttling:** Land if VIO confidence drops below 0.5. Allow 5 minutes cooldown.
+- **GPS quality collapse:** switch EKF source to OF (RC aux switch) and fly STABILIZE / ALT_HOLD. Do NOT attempt autonomous spray after a source switch.
+- **Loss of C2 link:** RC/GCS failsafe will Land. Operator must monitor for kill-switch need.
+- **Geofence breach:** FENCE_ACTION=Land triggers immediately. If aircraft is heading further out, **flip RC12 to kill motors**.
+- **Hard boundary / loss of control:** Disarm via the **CH5 arming switch** (motors cut immediately because `MOT_SAFE_DISARM=1`). For a softer recovery (GPS glitch, wind), flip **RC12 → LAND mode** to descend at current location instead of cutting motors.
+- **Thermal throttling on Jetson:** complete current spray, return to launch, allow 5 min cooldown.
 - **Emergency shutdown:** `ssh mad@100.85.121.98 "sudo shutdown now"` -- or pull power if unreachable.
 
 ---

@@ -1,82 +1,137 @@
 # ============================================================
-# NOMAD Task 2: Indoor Fire Extinguishing
+# NOMAD Task 2: Fire Extinguishing (outdoor → indoor)
 # ============================================================
 # Competition: AEAC 2026
-# Mission: VIO-based indoor navigation and fire extinguishing
-# Platform: Multirotor drone with ZED 2i camera
+# Platform: ArduCopter quadcopter
+# Mission:
+#   1. Autonomous outdoor takeoff + transit to building via GPS.
+#   2. Autonomous engagement of ONE outdoor target (CONOPS autonomy
+#      points only require a single successful demonstration).
+#   3. Manual pilot control for indoor targets (no VIO — GPS will be
+#      degraded indoors and we are NOT relying on visual-inertial
+#      odometry this year).
 #
-# SAFETY: Always verify these parameters match your aircraft
-# before flight. Incorrect settings can cause loss of control.
+# Positioning sources (in priority order):
+#   1. GPS (primary) — works outdoors and inside the doorway region.
+#   2. Optical flow (velocity-only backup if GPS quality drops).
+#   3. Barometer (altitude — no rangefinder is installed).
+#
+# SAFETY: This is the same airframe and same kill switch (RC12) as
+#         Task 1. FRR-critical params are flagged below.
 # ============================================================
 
-# ==================== Position Source ====================
-# Task 2 uses Visual Inertial Odometry (VIO) for navigation
-# GPS is disabled indoors - rely on ZED camera tracking
+# ==================== Position Source (EKF3) ====================
+# Primary: GPS for pos/vel + baro for altitude + compass for yaw.
+EKF3_SRC1_POSXY,3        # GPS
+EKF3_SRC1_VELXY,3        # GPS
+EKF3_SRC1_POSZ,1         # Baro
+EKF3_SRC1_YAW,1          # Compass
 
-EKF3_SRC1_POSXY,6      # External Navigation (VIO)
-EKF3_SRC1_VELXY,6      # External Navigation (VIO)
-EKF3_SRC1_POSZ,6       # External Navigation (VIO)
-EKF3_SRC1_YAW,6        # External Navigation (VIO)
+# Secondary: GPS again (second module, or same module degraded).
+EKF3_SRC2_POSXY,3
+EKF3_SRC2_VELXY,3
+EKF3_SRC2_POSZ,1
+EKF3_SRC2_YAW,1
 
-# Backup also External Nav (no GPS indoors)
-EKF3_SRC2_POSXY,6      # External Navigation
-EKF3_SRC2_VELXY,6      # External Navigation
-EKF3_SRC2_POSZ,6       # External Navigation
-EKF3_SRC2_YAW,6        # External Navigation
+# Tertiary: optical flow velocity + baro altitude.
+# Used if GPS HDOP spikes near/inside the doorway. Without a
+# rangefinder, OF can only provide velocity (no position-hold).
+EKF3_SRC3_POSXY,0        # None
+EKF3_SRC3_VELXY,5        # Optical flow
+EKF3_SRC3_POSZ,1         # Baro
+EKF3_SRC3_YAW,1          # Compass
 
-# Tertiary Source: Optical Flow (additional backup)
-EKF3_SRC3_POSXY,0      # None (optical flow doesn't provide position)
-EKF3_SRC3_VELXY,5      # Optical Flow
-EKF3_SRC3_POSZ,1       # Baro
-EKF3_SRC3_YAW,1        # Compass (if available)
+EK3_SRC_OPTIONS,1        # Allow runtime source switching via RC aux
 
-# ==================== GPS Configuration ====================
-GPS_TYPE,0             # Disable GPS for indoor flight
-
-# ==================== External Navigation ====================
-VISO_TYPE,2            # VIO vision position estimate
-
-# EKF tuning for VIO
-EK3_SRC_OPTIONS,1      # External Nav enabled
-EK3_POSNE_M_NSE,0.5    # Position noise
-EK3_VELD_M_NSE,0.7     # Vertical velocity noise
-EK3_VELNE_M_NSE,0.5    # Horizontal velocity noise
+# ==================== GPS ====================
+GPS_TYPE,1
+GPS_AUTO_SWITCH,1
+EK3_GPS_CHECK,255
 
 # ==================== Compass ====================
-# Disabled for indoor - magnetic interference
-COMPASS_USE,0          # Disable primary compass
-COMPASS_USE2,0         # Disable secondary compass
+# Re-enable compass for Task 2 (was disabled in old VIO profile).
+# Manual pilot indoors needs heading; compass distortion indoors is
+# tolerable when not autonomous.
+COMPASS_USE,1
+COMPASS_USE2,1
 
-# ==================== Altitude ====================
-# Use VIO for altitude (rangefinder optional backup)
-RNGFND1_TYPE,25        # Rangefinder type (if equipped)
-RNGFND1_MAX_CM,1000    # 10m max range
+# ==================== Altitude (baro only, no rangefinder) ====================
+EK3_ALT_SOURCE,0         # Baro primary
+ALT_OFFSET,0
+RNGFND1_TYPE,0           # No rangefinder installed
 
-# ==================== Flight Limits ====================
-# Conservative limits for indoor flight
-FENCE_ENABLE,1         # Enable geofence
-FENCE_ALT_MAX,10       # Max altitude 10m AGL
-FENCE_ACTION,3         # Brake on fence breach
+# ==================== Optical Flow ====================
+# FLOW_TYPE depends on installed sensor (PX4Flow, HereFlow, etc.).
+# Push the correct value from MP once the FC is on the bench.
+# FLOW_TYPE,X            # set on FC
+
+# ==================== Geofence ====================
+# Task 2 traffic enters the UAM corridor at 20–35 m (RTM SOP 3.2)
+# and may climb to 50 m on Yield-to-Medevac. Fence ceiling raised
+# accordingly. Polygon fence (from MP boundary) is the active one.
+FENCE_ENABLE,1
+FENCE_TYPE,7             # Alt + circular + polygon
+FENCE_ALT_MAX,55         # Covers 50 m yield altitude + 5 m margin
+FENCE_RADIUS,400         # Conservative outdoor circle
+FENCE_ACTION,2           # Always Land on breach (no AFS terminate)
+FENCE_MARGIN,2
 
 # ==================== Failsafe ====================
-FS_EKF_ACTION,1        # Land on EKF failure
-FS_GCS_ENABLE,0        # GCS failsafe disabled (indoor)
-FS_THR_ENABLE,0        # Throttle failsafe disabled
+# Re-enabled (was disabled in old indoor profile). CONOPS §4.5 says
+# C2-link loss must terminate; we land + rely on RC12 kill for final
+# termination.
+FS_THR_ENABLE,1          # RC throttle failsafe ON
+FS_THR_VALUE,975
+FS_OPTIONS,0
+FS_GCS_ENABLE,1          # GCS failsafe ON
+FS_SHORT_ACTION,1        # Land
+FS_LONG_ACTION,1         # Land
+FS_SHORT_TIMEOUT,1.5
+FS_LONG_TIMEOUT,5
+FS_EKF_ACTION,1          # Land on EKF failure
+FS_EKF_THRESH,0.8
 
-# ==================== Loiter/Position Hold ====================
-LOIT_SPEED,250         # 2.5 m/s max loiter speed (slow for indoor)
-LOIT_ACC_MAX,250       # 2.5 m/s^2 acceleration
-WPNAV_SPEED,300        # 3 m/s waypoint speed
+# Battery failsafe — match installed pack thresholds.
+BATT_FS_LOW_ACT,2        # Low: Land
+BATT_FS_CRT_ACT,2        # Critical: Land
 
-# ==================== Camera/Gimbal ====================
-# ZED2i connected to Jetson via USB, not ArduPilot
-MNT_TYPE,0             # No gimbal via ArduPilot
+# ==================== Kill Switch & Auto-Land ====================
+# CONOPS §4.9.c "kill switch" is the CH5 arming switch. CH5-LOW
+# disarms; MOT_SAFE_DISARM=1 cuts PWM immediately. No dedicated
+# emergency-stop channel needed.
+MOT_SAFE_DISARM,1
+
+# RC12 = pilot-triggered auto-LAND. Flip HIGH → FC enters LAND mode
+# and descends at current location. Useful indoors when the manual
+# pilot wants a controlled descent without risking the disarm-at-
+# altitude that the arming switch would cause.
+RC12_OPTION,18           # Switch to LAND flight mode
+RC12_DZ,30
+
+BRD_SAFETY_DEFLT,1
+BRD_SAFETYENABLE,1
+
+# ==================== Speed limits (slow for indoor ops) ====================
+LOIT_SPEED,250           # 2.5 m/s loiter
+LOIT_ACC_MAX,250         # 2.5 m/s² accel
+WPNAV_SPEED,300          # 3 m/s waypoint
+PILOT_SPEED_DN,150       # 1.5 m/s descent
+PILOT_SPEED_UP,250       # 2.5 m/s climb
+
+# ==================== Camera / Servo ====================
+# Camera tilt + water pump are driven through the Cube Orange via
+# MAVLink from edge_core/servo_controller.py.
+MNT_TYPE,0
 
 # ==================== Logging ====================
-LOG_BITMASK,176126     # Comprehensive logging
-LOG_DISARMED,0         # Don't log when disarmed
+LOG_BITMASK,176126
+LOG_DISARMED,0
 
 # ==================== Notes ====================
-# VIO position streaming via edge_core/vio_pipeline.py
-# VISION_POSITION_ESTIMATE messages at 30Hz
-# ZED camera must be initialized before arming
+# - VIO is intentionally OFF. EKF3_SRC*_*=6 (ExtNav) is forbidden in
+#   this profile.
+# - Indoor operation is fully manual (STABILIZE or ALT_HOLD). The
+#   autonomous spray sequence is intended for the ONE outdoor target
+#   nearest the doorway, to satisfy the 20-pt autonomy gate without
+#   risking the run on indoor autonomy.
+# - To load: ./scripts/run/load_params.py task2

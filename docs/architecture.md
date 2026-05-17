@@ -2,7 +2,7 @@
 
 ## Domains
 - Transport (A): tailscale, link bonding/failover via 4G/WiFi + ELRS.
-- Edge Core (B): FastAPI orchestrator, watchdog/time-sync, Task 1 recon logic, Task 2 VIO + CV + gimbal control.
+- Edge Core (B): FastAPI orchestrator, watchdog/time-sync, Task 1 recon logic, Task 2 spray controller + CV + servo/gimbal control. (VIO has been removed — Task 2 uses GPS + barometer + optical flow.)
 - Mission Planner (C): Centralized control plugin with RTSP video viewer, ELRS tunneling, indoor nudge, telemetry injection, task controls.
 
 ## Process Separation

@@ -1,5 +1,14 @@
 # Jetson-Centric Navigation Architecture
 
+> ⚠️ **STALE — DO NOT TRUST FOR COMPETITION OPERATIONS (May 2026).**
+> This document describes an earlier Task 2 architecture built around
+> ZED VIO and Nav2. **VIO has been removed from the flight plan.**
+> Task 2 now uses GPS + barometer + optical-flow backup, with the
+> pilot in command (manual indoors). The Jetson is responsible for
+> video, target detection, and the autonomous spray sequence on
+> exactly one target. See `README.md` for the current architecture.
+> Sections below are kept for historical reference only.
+
 This document describes the **Jetson-centric navigation architecture** for NOMAD **Task 2 (Indoor)**. In this configuration, the Jetson handles all autonomous navigation while ArduPilot operates purely as a low-level flight controller in GUIDED mode.
 
 **Note:** Task 1 (Outdoor) uses traditional RC pilot control via ELRS directly to ArduPilot. The Jetson is mounted for video streaming only during Task 1.

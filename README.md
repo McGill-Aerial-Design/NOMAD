@@ -6,8 +6,8 @@ Drone system for two distinct competition tasks:
 
 | Task | Environment | Flight Control | Positioning | Jetson Role |
 |------|-------------|----------------|-------------|-------------|
-| **Task 1** (Outdoor Recon) | Outdoor | RC Pilot (ELRS) | GPS/RTK | Video/Imaging only |
-| **Task 2** (Indoor Extinguish) | Indoor | Autonomous (Nav2) | ZED VIO | Full navigation |
+| **Task 1** (Outdoor Recon) | Outdoor | RC Pilot (ELRS) | GPS + baro (optical flow backup) | Video + target localization |
+| **Task 2** (Fire Extinguishing) | Outdoor + Indoor | RC Pilot (manual indoors); autonomous spray for 1 outdoor target | GPS + baro (optical flow backup) | Video + autonomous aim/spray on 1 target |
 
 ---
 
@@ -19,13 +19,13 @@ Drone system for two distinct competition tasks:
 - GPS/RTK positioning for outdoor operation
 - No autonomous navigation
 
-### Task 2: Indoor Fire Extinguishing  
-- **Jetson-centric autonomous navigation** (Nav2/Nvblox)
-- ArduPilot in GUIDED mode as flight controller only
-- ZED 2i Visual-Inertial Odometry for indoor positioning
-- YOLO target detection
-- **WASD controls** available for human intervention over LTE if needed
-- See [JETSON_NAV_ARCHITECTURE.md](docs/JETSON_NAV_ARCHITECTURE.md)
+### Task 2: Fire Extinguishing (outdoor + indoor)
+- **GPS-based outdoor approach + manual indoor piloting** — no VIO.
+- ArduPilot in GUIDED for the outdoor autonomous segment; STABILIZE / ALT_HOLD indoors.
+- ZED 2i provides RGB + depth for target detection and autonomous aim.
+- Autonomous spray sequence runs on **one (outdoor) target** to satisfy the
+  20-pt autonomy gate; remaining targets are sprayed manually.
+- Pilot retains RC control at all times. Kill switch = CH5 arming (disarm cuts motors). RC12 = pilot-triggered auto-LAND for soft recoveries.
 
 ---
 
@@ -52,50 +52,44 @@ Drone system for two distinct competition tasks:
 +---------------------------------------------------------------+
 ```
 
-### Task 2: Indoor (Jetson Autonomous)
+### Task 2: Outdoor approach → manual indoor
 ```
 +---------------------------------------------------------------+
 |                    GROUND STATION                              |
 |  Mission Planner + NOMAD Plugin                                |
-|  +-- Status Display (Health, VIO, Nav)                        |
-|  +-- WASD Controls (backup intervention over LTE)             |
-|                    |                                           |
-|            Tailscale VPN (4G/LTE)                             |
+|  +-- RTM checklist + spray status                             |
+|  +-- Manual flight via ELRS                                   |
+|            Tailscale VPN (4G/LTE for video + API)             |
 +---------------------------------------------------------------+
                      |
 +---------------------------------------------------------------+
 |                    JETSON ORIN NANO                            |
-|  +-- Edge Core (Python 3.13)                                  |
-|  |   +-- NavController (velocity commands to AP)              |
-|  |   +-- VIO Pipeline (position feedback to AP)               |
-|  |   +-- MavlinkService (GUIDED mode control)                 |
+|  +-- Edge Core (Python)                                        |
+|  |   +-- SprayController (1 autonomous target)                 |
+|  |   +-- ServoController (camera tilt + water pump)            |
+|  |   +-- MavlinkService (GUIDED for 1-target auto)             |
 |  |                                                             |
-|  +-- Isaac ROS (Docker)                                       |
-|      +-- Nav2 (autonomous path planning)                      |
-|      +-- Nvblox (3D obstacle mapping)                         |
-|      +-- ros_http_bridge (ROS -> Edge Core)                   |
+|  +-- Isaac ROS container (ZED wrapper + video bridge)          |
 +---------------------------------------------------------------+
-                     |
-            mavlink-router
                      |
 +---------------------------------------------------------------+
 |               CUBE ORANGE (ArduPilot)                          |
-|  GUIDED mode - flight controller only                          |
-|  +-- Attitude control                                          |
-|  +-- Motor mixing                                              |
-|  +-- Failsafe logic                                            |
+|  RC pilot in command. Modes: STABILIZE / ALT_HOLD / LOITER /   |
+|  GUIDED (transient, during the one autonomous spray).          |
+|  Kill = CH5 disarm; RC12 = auto-LAND (CONOPS §4.9.c).          |
 +---------------------------------------------------------------+
 ```
 
 ### Task 1 vs Task 2 Differences
-| Component | Task 1 (Outdoor) | Task 2 (Indoor) |
-|-----------|------------------|-----------------|
-| Flight Control | RC Pilot via ELRS | Jetson NavController |
-| ArduPilot Mode | Normal (pilot control) | GUIDED (velocity commands) |
-| Position Source | GPS/RTK | ZED VIO |
-| Isaac ROS | Not used | Active (Nvblox, Nav2) |
-| Jetson Role | Video streaming only | Full autonomous navigation |
-| WASD Controls | Not used | Backup human intervention |
+| Component | Task 1 (Outdoor) | Task 2 (Out → In) |
+|-----------|------------------|-------------------|
+| Flight Control | RC Pilot via ELRS | RC Pilot via ELRS + GUIDED for 1 auto spray |
+| ArduPilot Mode | LOITER / AUTO / GUIDED | STABILIZE / ALT_HOLD indoors; GUIDED outdoors |
+| Position Source | GPS + baro (OF backup) | GPS + baro (OF backup) — no VIO |
+| Isaac ROS | ZED wrapper for capture | ZED wrapper for spray aim |
+| Jetson Role | Video + target localization | Video + 1-target autonomous aim/spray |
+| Kill Switch | CH5 disarm (PWM cut) | CH5 disarm (PWM cut) |
+| Auto-LAND   | RC12 → LAND mode | RC12 → LAND mode |
 
 ---
 

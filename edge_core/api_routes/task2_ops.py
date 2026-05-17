@@ -884,12 +884,21 @@ def register_task2_routes(app, ctx) -> None:
     @app.post("/api/spray/trigger", tags=["Spray"])
     async def trigger_spray(request: Request):
         """
-        Trigger autonomous spray sequence on a target (SP-001).
+        Trigger spray sequence on a target (SP-001).
 
-        Requires target_id, x, y, z coordinates. Drone must be within 3m of target (operator positioned via WASD).
+        Body fields:
+            target_id, x, y, z, label, confidence, image_only, range_m
+            require_autonomy (bool, default False): when true, the
+                trigger is refused if the drone is already inside
+                AUTONOMY_MIN_RANGE_M (2.5 m). This is the toggle used
+                by the GCS "Auto Spray (autonomy gate)" button — it
+                prevents the operator from silently forfeiting the
+                CONOPS 20-pt autonomy gate by triggering too close.
+                Manual sprays leave it false.
 
-        The sequence runs fully autonomously (SP-002):
-        APPROACH (3m->2m via visual servoing) -> AIM -> SPRAY -> VERIFY (circle change) -> UPLOAD -> COMPLETE
+        Drone must be within TRIGGER_MAX_DISTANCE_M (default 5.5 m).
+        Sequence (autonomy path): APPROACH → AIM → SPRAY → VERIFY → UPLOAD.
+        Sequence (manual / image-only / inside 2 m): AIM immediately.
         """
         spray_ctrl = getattr(request.app.state, "spray_controller", None)
         if not spray_ctrl:
@@ -911,7 +920,8 @@ def register_task2_routes(app, ctx) -> None:
             range_m=body.get("range_m", body.get("distance_m")),
         )
 
-        result = spray_ctrl.trigger(target)
+        require_autonomy = bool(body.get("require_autonomy", False))
+        result = spray_ctrl.trigger(target, require_autonomy=require_autonomy)
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result.get("error"))
         return result

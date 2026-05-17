@@ -1,8 +1,12 @@
 # Mission Planner 3D SLAM Visualization Implementation Plan
 
+> ⚠️ **HISTORICAL** (May 2026). VIO + nvblox were removed from the
+> flight plan; the 3D SLAM tab in the plugin is now optional and
+> shows nothing unless nvblox is manually started. Document retained
+> for design history only.
+
 **Feature**: Real-time 3D mapping visualization in Mission Planner plugin  
-**Status**: Design Phase  
-**Priority**: High (improves Task 2 situational awareness)  
+**Status**: Historical (superseded)  
 **Date**: February 2, 2026
 
 ---

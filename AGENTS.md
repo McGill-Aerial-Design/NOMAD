@@ -450,18 +450,18 @@ The Jetson connects via Tailscale VPN for:
 | Nav2 Integration Plan | `docs/NAV2_INTEGRATION_PLAN.md` |
 | Task 2 Manual Positioning | `docs/TASK2_MANUAL_POSITIONING.md` |
 | **Task 1 Competition Guide** | **`docs/TASK1_COMPETITION_GUIDE.md`** |
-| **TODO / Requirements Audit** | **`todo.md`** |
+| **Pre-comp audit** | **`COMPETITION_READINESS.md`** |
 | Edge Core README | `edge_core/README.md` |
 | Target Localizer README | `edge_core/target_localizer/README.md` |
 | Mission Planner README | `mission_planner/README.md` |
 | Scripts README | `scripts/README.md` |
 | This Quick Reference | `AGENTS.md` |
 
-> **IMPORTANT**: Always check `todo.md` before starting work. It contains:
-> - A full requirements audit (REQ-1 to REQ-7) with detailed implementation notes
-> - Priority-ordered list of missing features (NV-008, operational modes, spray sequence)
-> - nvblox config switching notes (requires node restart, 2-3s blind window)
-> - Note: `config/nvblox_indoor.yaml` referenced in todo.md does not yet exist
+> **IMPORTANT**: Check `COMPETITION_READINESS.md` before flight-day work.
+> - VIO has been removed; Task 2 uses GPS + barometer + optical flow.
+> - Task 2 spray workflow = 1 autonomous + N manual (CONOPS Q&A #10 gate).
+> - Kill = CH5 arming switch (disarm + `MOT_SAFE_DISARM=1`). RC12 = `RC12_OPTION,18` (auto-LAND).
+> - Param files: `config/profiles/task1_outdoor.params` and `task2_indoor.params`.
 
 ---
 

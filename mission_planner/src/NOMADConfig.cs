@@ -448,6 +448,16 @@ namespace NOMAD.MissionPlanner
         /// <summary>Duration (ms) the water pump fires per trigger.</summary>
         public int WaterPumpDurationMs { get; set; } = 500;
 
+        // --- Water pump RC pass-through ---
+        // When non-zero, the operator can hold a transmitter switch on
+        // this RC input channel to fire the pump directly via the FC
+        // (bypassing Mission Planner / Jetson). 0 = disabled. Valid
+        // channels: 5–16. The Settings form's "Apply RC mapping"
+        // button writes RC{n}_OPTION on the Cube — option code is
+        // chosen from the relay number (RELAY1 → 28, RELAY2 → 34,
+        // RELAY3 → 35, RELAY4 → 36).
+        public int WaterPumpRcChannel { get; set; } = 0;
+
         // --- Camera tilt servo (Cube MAVLink primary, Edge Core Cube fallback) ---
         // ZED camera tilt calibration points:
         //   700 us  → pointing down  (−45° from level)

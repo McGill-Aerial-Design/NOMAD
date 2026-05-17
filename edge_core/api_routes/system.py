@@ -137,6 +137,16 @@ def register_system_routes(app, ctx) -> None:
             "running": target_localizer_running,
         }
 
+        # Google Drive upload readiness — surfaces whether the OAuth
+        # token is present so the GCS can warn before Task 1/Task 2
+        # upload tries to run. CONOPS §5.2.3.6.f and §5.2.4.4.f file
+        # uploads silently fail without this.
+        try:
+            from ..gdrive_upload import gdrive_ready
+            response["gdrive_ready"] = bool(gdrive_ready())
+        except Exception:
+            response["gdrive_ready"] = False
+
         return response
 
     @app.get("/health/detailed", tags=["System"])

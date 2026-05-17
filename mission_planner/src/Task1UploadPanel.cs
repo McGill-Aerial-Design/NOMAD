@@ -1075,15 +1075,18 @@ namespace NOMAD.MissionPlanner
                 if (string.IsNullOrEmpty(txtContent))
                     throw new Exception("No approved targets to upload.");
 
-                var tempTxtPath = Path.Combine(Path.GetTempPath(), "Task_1_MAD_targets.txt");
+                // CONOPS §5.2.3.6.f: file MUST be named Task_1_<TeamName>_targets.txt.
+                var teamSlug = (MissionConfig.Load().TeamName ?? "MAD").Replace(" ", "_");
+                var targetsFileName = $"Task_1_{teamSlug}_targets.txt";
+                var tempTxtPath = Path.Combine(Path.GetTempPath(), targetsFileName);
                 try
                 {
                     File.WriteAllText(tempTxtPath, txtContent);
 
                     _lblStatus.Text = "Uploading targets file...";
-                    var txtFileId = await gdrive.UploadFileAsync(tempTxtPath, "Task_1_MAD_targets.txt");
+                    var txtFileId = await gdrive.UploadFileAsync(tempTxtPath, targetsFileName);
                     if (string.IsNullOrEmpty(txtFileId))
-                        throw new Exception("Failed to upload Task_1_MAD_targets.txt to Google Drive.");
+                        throw new Exception($"Failed to upload {targetsFileName} to Google Drive.");
 
                     var imageResults = new List<(string letter, string filename, string fileId)>();
                     var errors = new List<string>();
@@ -1120,7 +1123,7 @@ namespace NOMAD.MissionPlanner
                     var sb = new StringBuilder();
                     sb.AppendLine("=== UPLOAD SUCCESSFUL ===");
                     sb.AppendLine();
-                    sb.AppendLine($"Task_1_MAD_targets.txt uploaded (ID: {txtFileId})");
+                    sb.AppendLine($"{targetsFileName} uploaded (ID: {txtFileId})");
                     sb.AppendLine();
 
                     if (imageResults.Count > 0)

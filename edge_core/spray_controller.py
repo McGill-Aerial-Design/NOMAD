@@ -216,6 +216,14 @@ class SprayController:
     APPROACH_SPEED_MPS = 0.5
     APPROACH_TIMEOUT_S = 20.0
 
+    # CONOPS §5.2.4 / Q&A #10: full autonomy points require the
+    # autonomous approach to start from more than 2 m. If the operator
+    # triggers a "force autonomy" spray inside this radius, the AIM
+    # state will run immediately and the autonomy criterion fails. We
+    # gate triggers with require_autonomy=True at 2.5 m to leave
+    # margin for ZED depth jitter.
+    AUTONOMY_MIN_RANGE_M = 2.5
+
     # Aiming parameters
     AIM_TOLERANCE_PX = int(_spray_calibration["aim_tolerance_px"])
 
@@ -453,8 +461,18 @@ class SprayController:
     # Trigger / Abort
     # ------------------------------------------------------------------ #
 
-    def trigger(self, target: SprayTarget) -> dict:
-        """Trigger autonomous spray sequence on target."""
+    def trigger(self, target: SprayTarget, *, require_autonomy: bool = False) -> dict:
+        """Trigger spray sequence on target.
+
+        Args:
+            target: SprayTarget to engage.
+            require_autonomy: When True, refuse the trigger if the
+                drone is already inside ``AUTONOMY_MIN_RANGE_M``. This
+                protects the CONOPS Q&A #10 autonomy gate (autonomous
+                approach must start from beyond 2 m). The Mission
+                Planner "Auto Spray (autonomy gate)" button sets this
+                True; manual sprays leave it False.
+        """
         with self._lock:
             if self.is_active:
                 return {"success": False, "error": "Spray sequence already active"}
@@ -496,6 +514,25 @@ class SprayController:
                         f"{self.TRIGGER_MAX_DISTANCE_M}m). Position manually "
                         f"within {self.TRIGGER_MAX_DISTANCE_M}m before triggering."
                     ),
+                }
+
+            # CONOPS Q&A #10 autonomy gate: the autonomous approach must
+            # cross the 2 m envelope, otherwise the auto-extinguish 20 pts
+            # are forfeited. Refuse the trigger when the operator asked
+            # for an autonomy-claim run but the drone is already too
+            # close to demonstrate the approach.
+            if require_autonomy and distance < self.AUTONOMY_MIN_RANGE_M:
+                return {
+                    "success": False,
+                    "error": (
+                        f"Autonomy gate failed: drone is {distance:.2f}m from "
+                        f"target — must be >= {self.AUTONOMY_MIN_RANGE_M:.1f}m for "
+                        f"the autonomous approach to count (CONOPS Q&A #10). "
+                        f"Back the drone up and retry. For a manual spray, use "
+                        f"the manual button instead."
+                    ),
+                    "distance": round(distance, 2),
+                    "min_required_m": self.AUTONOMY_MIN_RANGE_M,
                 }
 
             # Image-only with a known range still warrants a real approach
@@ -1224,7 +1261,10 @@ class SprayController:
     def _capture_and_upload(self, target: SprayTarget) -> None:
         """Capture photo and upload to Google Drive.
 
-        Filename: Task_2_MAD_target_<n>.jpg (matches CONOPS Section 5.2.4)
+        Filename: Task_2_<team>_target_<n>.jpg (CONOPS §5.2.4.4.f).
+        Team name is taken from NOMAD_TEAM_NAME env var (matching the
+        target_localizer node default and the Mission Planner
+        MissionConfig.TeamName).
         """
         try:
             photo_path = None
@@ -1234,7 +1274,8 @@ class SprayController:
                 logger.warning("Could not capture photo for upload")
                 return
 
-            filename = f"Task_2_MAD_target_{target.target_id}.jpg"
+            team_name = os.environ.get("NOMAD_TEAM_NAME", "MAD").replace(" ", "_")
+            filename = f"Task_2_{team_name}_target_{target.target_id}.jpg"
             if self._upload_fn:
                 url = self._upload_fn(photo_path, filename)
                 with self._lock:

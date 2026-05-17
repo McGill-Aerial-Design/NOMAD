@@ -1,13 +1,15 @@
 # Task 2: Manual Trigger + ZED-Guided Autonomous Spray
 
-**Updated**: May 9, 2026
-**Status**: Classical circle detection + fixed firing geometry; nvblox/YOLO not required for Task 2
+**Updated**: May 17, 2026
+**Status**: Classical circle detection + fixed firing geometry; nvblox/YOLO not required for Task 2.
+**Positioning**: GPS + barometer + optical-flow backup (NO VIO this year).
+**Mission shape**: pilot in command for the whole flight. Autonomous spray demonstrated on **one outdoor target** to claim the 20-point autonomy gate; remaining targets sprayed manually. Indoor segment is fully piloted.
 
 ---
 
 ## Overview
 
-**Task 2** is an indoor fire extinguishing mission (AEAC 2026 CONOPS §5.2.4):
+**Task 2** is the AEAC 2026 fire-extinguishing task (CONOPS §5.2.4). It is flown both outdoors (corridor + outdoor targets) and indoors (manual through the 3.5 m × 3 m doorway).
 
 - **Manual operator setup** — Operator flies until the ZED2i sees a target, typically up to about 5m camera range
 - **Autonomous approach/alignment** — After the Spray button, the UAS uses the local circle detector, optional ZED depth, and GUIDED velocity/yaw-rate commands to reproduce the calibrated firing view
