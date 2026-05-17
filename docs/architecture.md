@@ -10,7 +10,7 @@
 - `edge_core/nav_controller.py` + `mavlink_interface.py`: FC velocity/position command routing and MAVLink telemetry.
 - `edge_core/target_localizer/`: HSV circle detection, building model, 3D back-projection, description generation.
 - `edge_core/isaac_ros_bridge.py` + `video_stream_manager.py`: Isaac ROS / nvblox lifecycle and video pipeline.
-- `edge_core/servo_controller.py` + `rc_servo_bridge.py`: Camera tilt / water shooter PWM and RC channel mapping.
+- `edge_core/servo_controller.py`: Cube Orange servo and relay commands controlled by the plugin, API, or autonomy code.
 - `transport`: mavlink routing; keep FC-facing ports stable.
 
 ## Data Flow (high-level)

@@ -123,6 +123,7 @@ DEFAULT_SPRAY_CALIBRATION = {
     "aim_tolerance_px": 25,
     "servo_fire_angle_deg": 82.0,
     "spray_duration_ms": 500,
+    "water_pump_relay_number": 0,
     # Visual-servo controller gains. Commands are velocity/yaw-rate setpoints;
     # ArduPilot owns the actual pitch/roll attitude control.
     "forward_gain": 0.45,
@@ -220,6 +221,7 @@ class SprayController:
 
     # Spray parameters
     SPRAY_DURATION_MS = int(_spray_calibration["spray_duration_ms"])
+    WATER_PUMP_RELAY_NUMBER = int(_spray_calibration["water_pump_relay_number"])
     SPRAY_SETTLE_TIME_S = 0.5
     MAX_SPRAY_ATTEMPTS = 2
 
@@ -374,6 +376,7 @@ class SprayController:
             "aim_tolerance_px": cls.AIM_TOLERANCE_PX,
             "servo_fire_angle_deg": cls.SERVO_FIRE_ANGLE_DEG,
             "spray_duration_ms": cls.SPRAY_DURATION_MS,
+            "water_pump_relay_number": cls.WATER_PUMP_RELAY_NUMBER,
             "forward_gain": cls.FORWARD_GAIN,
             "lateral_gain": cls.LATERAL_GAIN,
             "altitude_gain": cls.ALTITUDE_GAIN,
@@ -400,6 +403,7 @@ class SprayController:
             "aim_tolerance_px": ("AIM_TOLERANCE_PX", 2.0, 250.0),
             "servo_fire_angle_deg": ("SERVO_FIRE_ANGLE_DEG", 0.0, 180.0),
             "spray_duration_ms": ("SPRAY_DURATION_MS", 50.0, 5000.0),
+            "water_pump_relay_number": ("WATER_PUMP_RELAY_NUMBER", 0.0, 15.0),
             "forward_gain": ("FORWARD_GAIN", 0.0, 2.0),
             "lateral_gain": ("LATERAL_GAIN", -0.02, 0.02),
             "altitude_gain": ("ALTITUDE_GAIN", -0.02, 0.02),
@@ -420,7 +424,7 @@ class SprayController:
             except (TypeError, ValueError):
                 continue
             value = max(min_v, min(max_v, value))
-            if attr in ("AIM_TOLERANCE_PX", "SPRAY_DURATION_MS", "LOCK_HOLD_MS"):
+            if attr in ("AIM_TOLERANCE_PX", "SPRAY_DURATION_MS", "LOCK_HOLD_MS", "WATER_PUMP_RELAY_NUMBER"):
                 setattr(cls, attr, int(round(value)))
             else:
                 setattr(cls, attr, value)
@@ -1124,6 +1128,10 @@ class SprayController:
             return True
 
         logger.info(f"Spraying target (attempt {self._spray_count})")
+        try:
+            self._servo.configure_water_pump_relay(int(self.WATER_PUMP_RELAY_NUMBER))
+        except Exception as e:
+            logger.warning(f"Failed to configure water pump relay: {e}")
         success = self._servo.trigger_water_shooter(
             duration_ms=self.SPRAY_DURATION_MS
         )

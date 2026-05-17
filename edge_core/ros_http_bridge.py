@@ -1368,7 +1368,7 @@ class ROSHTTPBridge(Node):
         The nozzle servo is controlled via the Edge Core HTTP API.
         A ROS node (e.g. a fire detection pipeline) publishes a Float32
         angle to /nomad/servo/nozzle_angle, and this bridge forwards it
-        to Edge Core which drives the physical servo on GPIO Pin 15.
+        to Edge Core which commands the Cube Orange servo output.
 
         Float32 value: angle in degrees (0-180, where 90 is center).
 
@@ -1441,7 +1441,7 @@ class ROSHTTPBridge(Node):
         Send servo angle to Edge Core via HTTP POST.
         
         Uses the /api/servo/camera/tilt endpoint which controls the
-        nozzle servo on Jetson GPIO Pin 15 via bit-bang PWM.
+        nozzle servo through the Cube Orange over MAVLink.
         
         Rate limited to 10 Hz to avoid overwhelming the servo controller.
         """

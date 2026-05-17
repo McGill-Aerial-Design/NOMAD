@@ -3,12 +3,11 @@
 // ============================================================
 // Drop servos, strap reel and camera tilt are all wired to the
 // Cube Orange and commanded via MAVLink DO_SET_SERVO (primary).
-// Jetson HTTP API is used as a fallback when MAVLink is absent.
+// Edge Core HTTP is used as a fallback to command the Cube from the Jetson.
 // ============================================================
 
 using System;
 using System.Drawing;
-using System.Threading;
 using System.Threading.Tasks;
 using Timer = System.Windows.Forms.Timer;
 using System.Windows.Forms;
@@ -20,7 +19,7 @@ namespace NOMAD.MissionPlanner
     /// <summary>
     /// Payload controls: 3 × drop servo, strap reel (hold-to-reel),
     /// water pump trigger, and ZED camera tilt slider.
-    /// MAVLink DO_SET_SERVO is tried first; Jetson API is the fallback.
+    /// MAVLink DO_SET_SERVO is tried first; Edge Core's Cube command API is the fallback.
     /// </summary>
     public class PayloadControlPanel : UserControl
     {
@@ -37,10 +36,6 @@ namespace NOMAD.MissionPlanner
         private static readonly Color DROP_COLOR_ARM1    = Color.FromArgb(200, 110, 0);   // 1st click — orange
         private static readonly Color DROP_COLOR_ARM2    = Color.FromArgb(220, 50,  0);   // 2nd click — red-orange
         private static readonly Color DROP_COLOR_DROPPED = Color.FromArgb(50, 90, 130);   // dropped — steel blue → retract mode
-
-        // Used only for the Jetson API angle-conversion fallback.
-        private const int SERVO_PULSE_MIN_US = 500;
-        private const int SERVO_PULSE_MAX_US = 2500;
 
         // Safety limits
         private const int DROP_CLICKS_REQUIRED = 3;      // clicks needed to drop
@@ -67,12 +62,6 @@ namespace NOMAD.MissionPlanner
         private bool     _suppressTiltEvent;
 
         private Label _lblStatus;
-
-        // Serializes concurrent MAVLink servo commands to prevent giveComport
-        // contention. Shared with the gimbal joystick and Task 2 payload panel
-        // because MainV2.comPort's internal state is process-wide -- panel-local
-        // semaphores let those callers race each other and corrupt the port.
-        internal static readonly SemaphoreSlim s_mavlinkLock = new SemaphoreSlim(1, 1);
 
         // Shared tilt state so multiple panel instances stay in sync.
         private static int s_lastTiltPulseUs = 1250;
@@ -367,53 +356,6 @@ namespace NOMAD.MissionPlanner
             => reversed ? (pwmMin, pwmMax) : (pwmMax, pwmMin);
 
         // ============================================================
-        // MAVLink servo helper
-        // ============================================================
-
-        /// <summary>
-        /// Send a DO_SET_SERVO command via MAVLink. Always non-blocking:
-        /// the synchronous ACK round-trip (which can stall hundreds of ms)
-        /// is dispatched on a worker thread so the UI thread never freezes.
-        /// Returns true if the link is open and the command was dispatched.
-        /// Note: this does NOT wait for the ACK — failure to deliver is silent
-        /// from the caller's perspective (status is set asynchronously).
-        /// </summary>
-        // tryOnly=true: skip if a command is already in-flight (used for streaming tilt during drag).
-        // tryOnly=false: wait for the lock (used for drop/retract/settle sends that must not be dropped).
-        private bool TrySendServoMAVLink(int channel, int pwmUs, bool tryOnly = false)
-        {
-            if (channel <= 0) return false;
-            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen)
-                return false;
-
-            byte sysid  = MainV2.comPort.MAV.sysid;
-            byte compid = MainV2.comPort.MAV.compid;
-
-            Task.Run(async () =>
-            {
-                bool acquired = tryOnly
-                    ? await s_mavlinkLock.WaitAsync(0).ConfigureAwait(false)
-                    : await s_mavlinkLock.WaitAsync(5000).ConfigureAwait(false);
-                if (!acquired) return;
-                try
-                {
-                    await MainV2.comPort.doCommandAsync(
-                        sysid, compid,
-                        MAVLink.MAV_CMD.DO_SET_SERVO,
-                        channel, pwmUs, 0, 0, 0, 0, 0,
-                        requireack: false, uicallback: null).ConfigureAwait(false);
-                }
-                catch { }
-                finally
-                {
-                    s_mavlinkLock.Release();
-                }
-            });
-
-            return true;
-        }
-
-        // ============================================================
         // Drop payload  —  3-click confirmation
         // ============================================================
 
@@ -500,37 +442,16 @@ namespace NOMAD.MissionPlanner
 
             bool success = false;
 
-            if (TrySendServoMAVLink(channel, pwmDrop))
+            if (await CubeOutputController.SendServoPwmAsync(channel, pwmDrop))
             {
-                if (channel2 > 0) TrySendServoMAVLink(channel2, pwmDrop2);
+                if (channel2 > 0) await CubeOutputController.SendServoPwmAsync(channel2, pwmDrop2);
                 string ch2info = channel2 > 0 ? $" + ch{channel2}" : "";
-                SetStatus($"Payload {payloadNumber} dropped  (MAVLink ch{channel}{ch2info} {pwmDrop}us)", SUCCESS_COLOR);
+                SetStatus($"Payload {payloadNumber} dropped  (Cube ch{channel}{ch2info} {pwmDrop}us)", SUCCESS_COLOR);
                 success = true;
             }
             else
             {
-                // Fallback: Jetson API
-                SetStatus("MAVLink unavailable — falling back to API...", WARNING_COLOR);
-                try
-                {
-                    var resp = await JetsonApiService.PostAsync(
-                        $"/api/servo/channel/{channel}/pwm?pwm={pwmDrop}");
-                    if (resp.IsSuccessStatusCode)
-                    {
-                        if (channel2 > 0)
-                            await JetsonApiService.PostAsync($"/api/servo/channel/{channel2}/pwm?pwm={pwmDrop2}");
-                        SetStatus($"Payload {payloadNumber} dropped  (API ch{channel})", SUCCESS_COLOR);
-                        success = true;
-                    }
-                    else
-                    {
-                        SetStatus($"Drop failed: HTTP {(int)resp.StatusCode}", ERROR_COLOR);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    SetStatus($"Drop failed: {ex.Message}", ERROR_COLOR);
-                }
+                SetStatus("Drop failed: Cube output command unavailable", ERROR_COLOR);
             }
 
             if (success)
@@ -577,30 +498,15 @@ namespace NOMAD.MissionPlanner
             _dropButtons[idx].Text = $"Drop P{payloadNumber}";
             _dropButtons[idx].BackColor = DROP_COLOR_IDLE;
 
-            if (TrySendServoMAVLink(channel, pwmMin))
+            if (await CubeOutputController.SendServoPwmAsync(channel, pwmMin))
             {
-                if (channel2 > 0) TrySendServoMAVLink(channel2, pwmMin2);
+                if (channel2 > 0) await CubeOutputController.SendServoPwmAsync(channel2, pwmMin2);
                 string ch2info = channel2 > 0 ? $" + ch{channel2}" : "";
-                SetStatus($"Payload {payloadNumber} retracted  (MAVLink ch{channel}{ch2info} {pwmMin}us)", SUCCESS_COLOR);
+                SetStatus($"Payload {payloadNumber} retracted  (Cube ch{channel}{ch2info} {pwmMin}us)", SUCCESS_COLOR);
                 return;
             }
 
-            SetStatus("MAVLink unavailable — falling back to API...", WARNING_COLOR);
-            try
-            {
-                var resp = await JetsonApiService.PostAsync(
-                    $"/api/servo/channel/{channel}/pwm?pwm={pwmMin}");
-                if (resp.IsSuccessStatusCode && channel2 > 0)
-                    await JetsonApiService.PostAsync($"/api/servo/channel/{channel2}/pwm?pwm={pwmMin2}");
-                SetStatus(resp.IsSuccessStatusCode
-                    ? $"Payload {payloadNumber} retracted  (API ch{channel})"
-                    : $"Retract failed: HTTP {(int)resp.StatusCode}",
-                    resp.IsSuccessStatusCode ? SUCCESS_COLOR : ERROR_COLOR);
-            }
-            catch (Exception ex)
-            {
-                SetStatus($"Retract failed: {ex.Message}", ERROR_COLOR);
-            }
+            SetStatus("Retract failed: Cube output command unavailable", ERROR_COLOR);
         }
 
         // ============================================================
@@ -646,20 +552,12 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Fire-and-forget servo command for time-critical paths (reel MouseDown/Up).
-        /// Tries MAVLink synchronously; falls back to API asynchronously if needed.
+        /// Fire-and-forget Cube servo command for time-critical paths (reel MouseDown/Up).
         /// </summary>
         private async void SendServoNow(int channel, int pwmUs)
         {
             if (channel <= 0) return;
-            if (TrySendServoMAVLink(channel, pwmUs)) return;
-
-            try
-            {
-                await JetsonApiService.PostAsync(
-                    $"/api/servo/channel/{channel}/pwm?pwm={pwmUs}");
-            }
-            catch { }
+            await CubeOutputController.SendServoPwmAsync(channel, pwmUs);
         }
 
         // ============================================================
@@ -671,58 +569,11 @@ namespace NOMAD.MissionPlanner
             int relay      = _config?.WaterPumpRelayNumber ?? 0;
             int durationMs = _config?.WaterPumpDurationMs  ?? 500;
 
-            if (TrySendRelayMAVLink(relay, true))
-            {
-                SetStatus($"Water pump firing  ({durationMs}ms)...", SUCCESS_COLOR);
-                await Task.Delay(durationMs);
-                TrySendRelayMAVLink(relay, false);
-                SetStatus("Water pump done", SUCCESS_COLOR);
-                return;
-            }
-
-            SetStatus("Triggering water pump via API...", WARNING_COLOR);
-            try
-            {
-                var resp = await JetsonApiService.PostAsync(
-                    $"/api/servo/shooter/trigger?duration_ms={durationMs}");
-                SetStatus(resp.IsSuccessStatusCode
-                    ? "Water pump triggered"
-                    : $"Pump failed: HTTP {(int)resp.StatusCode}",
-                    resp.IsSuccessStatusCode ? SUCCESS_COLOR : ERROR_COLOR);
-            }
-            catch (Exception ex)
-            {
-                SetStatus($"Pump error: {ex.Message}", ERROR_COLOR);
-            }
-        }
-
-        private bool TrySendRelayMAVLink(int relayNumber, bool on)
-        {
-            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen)
-                return false;
-
-            byte sysid  = MainV2.comPort.MAV.sysid;
-            byte compid = MainV2.comPort.MAV.compid;
-
-            Task.Run(async () =>
-            {
-                await s_mavlinkLock.WaitAsync().ConfigureAwait(false);
-                try
-                {
-                    await MainV2.comPort.doCommandAsync(
-                        sysid, compid,
-                        MAVLink.MAV_CMD.DO_SET_RELAY,
-                        relayNumber, on ? 1 : 0, 0, 0, 0, 0, 0,
-                        requireack: true, uicallback: null).ConfigureAwait(false);
-                }
-                catch { }
-                finally
-                {
-                    s_mavlinkLock.Release();
-                }
-            });
-
-            return true;
+            SetStatus($"Water pump firing  ({durationMs}ms)...", SUCCESS_COLOR);
+            bool success = await CubeOutputController.FireRelayAsync(relay, durationMs);
+            SetStatus(
+                success ? "Water pump done" : "Pump failed: Cube relay command unavailable",
+                success ? SUCCESS_COLOR : ERROR_COLOR);
         }
 
         // ============================================================
@@ -765,22 +616,7 @@ namespace NOMAD.MissionPlanner
         {
             int channel = _config?.CameraTiltChannel ?? 0;
 
-            if (TrySendServoMAVLink(channel, pulseUs, tryOnly))
-                return;
-
-            // Fallback: Jetson API (angle-based endpoint)
-            try
-            {
-                if (string.IsNullOrEmpty(_config?.EffectiveIP)) return;
-
-                double angle = (pulseUs - SERVO_PULSE_MIN_US) * 180.0
-                             / (SERVO_PULSE_MAX_US - SERVO_PULSE_MIN_US);
-                angle = Math.Max(0, Math.Min(180, angle));
-
-                await JetsonApiService.PostAsync(
-                    $"/api/servo/camera/tilt?angle={angle.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}");
-            }
-            catch { }
+            await CubeOutputController.SendServoPwmAsync(channel, pulseUs, tryOnly);
         }
 
         private void OnCameraTiltChangedExternally(int pulseUs, PayloadControlPanel source)

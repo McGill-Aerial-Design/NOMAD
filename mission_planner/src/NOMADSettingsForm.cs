@@ -313,7 +313,7 @@ namespace NOMAD.MissionPlanner
 
             AddSectionLabel(tab, "Nozzle Servo", ref y);
 
-            AddLabel(tab, "Controlled via Edge Core API (Jetson GPIO Pin 15).", 20, y, Color.FromArgb(180, 180, 180));
+            AddLabel(tab, "Controlled through Cube Orange servo outputs.", 20, y, Color.FromArgb(180, 180, 180));
             y += 20;
             AddLabel(tab, "Use the nozzle slider in WASD Controls to adjust.", 20, y, Color.FromArgb(180, 180, 180));
 
@@ -1241,6 +1241,7 @@ namespace NOMAD.MissionPlanner
                 ["aim_tolerance_px"] = Config.SprayAimTolerancePx,
                 ["servo_fire_angle_deg"] = Config.SprayServoFireAngleDeg,
                 ["spray_duration_ms"] = Config.WaterPumpDurationMs,
+                ["water_pump_relay_number"] = Config.WaterPumpRelayNumber,
                 ["forward_gain"] = Config.SprayForwardGain,
                 ["lateral_gain"] = Config.SprayLateralGain,
                 ["altitude_gain"] = Config.SprayAltitudeGain,

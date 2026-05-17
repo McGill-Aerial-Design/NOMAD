@@ -57,8 +57,8 @@ These components activate automatically once physically connected:
 
 - ZED2i Camera (USB3)
 - Cube Orange Flight Controller (USB, `/dev/ttyACM0`)
-- Camera Tilt Servo (GPIO 85)
-- Water Shooter GPIO (GPIO 50)
+- Camera tilt servo on Cube Orange servo output
+- Water shooter on Cube Orange relay output
 
 ### Typical Metrics (Idle)
 
@@ -287,8 +287,8 @@ Invoke-WebRequest -Uri 'http://100.85.121.98:8000/health' -UseBasicParsing
 |-----------|-----------|-------------|-------------|
 | ZED 2i Camera | USB-C to USB-A (USB 3.0 cable) | Top USB 3.0 port (blue) | Detected via `lsusb` |
 | Cube Orange FC | USB-C to USB-A | Bottom USB port | `/dev/ttyACM0` |
-| Camera Tilt Servo | GPIO PWM | gpiochip0/line85 | Controlled via Edge Core API |
-| Water Shooter | GPIO output | gpiochip0/line50 | Controlled via Edge Core API |
+| Camera Tilt Servo | Cube servo output | Mission Planner config | Controlled via Cube MAVLink |
+| Water Shooter | Cube relay output | Mission Planner config | Controlled via Cube MAVLink |
 | Jetson Power | 5V 4A from PDB or USB-C PD 45W+ | Power input | -- |
 
 ### Mounting Notes
@@ -306,7 +306,7 @@ lsusb | grep -i stereolabs
 # Flight controller
 ls /dev/ttyACM0
 
-# Servo and GPIO
+# Cube servo and relay
 curl -s http://localhost:8000/api/servo/status | python3 -m json.tool
 
 # Tilt camera to 45 degrees
@@ -492,9 +492,9 @@ sudo usermod -a -G dialout $USER
 #### Servo / Spray / Video / Terminal / Network
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/servo/status` | GET | Servo and GPIO status |
+| `/api/servo/status` | GET | Cube servo and relay status |
 | `/api/servo/camera/tilt?angle=N` | POST | Set camera servo angle (0-180) |
-| `/api/servo/shooter/trigger?duration_ms=N` | POST | Trigger water shooter GPIO |
+| `/api/servo/shooter/trigger?duration_ms=N` | POST | Trigger water shooter Cube relay |
 | `/api/spray/status` | GET | Spray controller state |
 | `/api/spray/trigger` | POST | Trigger spray sequence |
 | `/api/spray/abort` | POST | Abort spray sequence |

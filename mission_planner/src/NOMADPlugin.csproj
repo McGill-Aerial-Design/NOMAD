@@ -127,6 +127,7 @@
     <!-- Source Files -->
     <Compile Include="BoundaryManager.cs" />
     <Compile Include="BuildingViewer3D.cs" />
+    <Compile Include="CubeOutputController.cs" />
     <Compile Include="DualLinkSender.cs" />
     <Compile Include="EkfSourceControlPanel.cs" />
     <Compile Include="EmbeddedVideoPlayer.cs" />

@@ -51,8 +51,7 @@ NOMAD/
 |   |-- health_monitor.py   # Jetson hardware monitoring
 |   |-- mavlink_interface.py # MAVLink telemetry + command interface
 |   |-- nav_controller.py   # Velocity / position command routing
-|   |-- servo_controller.py # Camera tilt / water shooter PWM
-|   |-- rc_servo_bridge.py # RC channel -> servo angle bridge
+|   |-- servo_controller.py # Cube Orange servo / relay commands
 |   |-- spray_controller.py # Fire-extinguisher spray control
 |   |-- operational_mode.py # Operational mode state machine
 |   |-- video_stream_manager.py # Video bridge / overlay / source switching
@@ -287,16 +286,14 @@ Edit it in place; then `nomad restart all` (or `sudo systemctl restart nomad.tar
 - `POST /api/video/overlay/disable` - Disable OSD overlay
 
 ### Servo / Nozzle Control
-- `GET /api/servo/status` - Get servo and GPIO output status
+- `GET /api/servo/status` - Get Cube servo and relay output status
 - `POST /api/servo/enable` - Enable servo output
 - `POST /api/servo/disable` - Disable servo output
 - `GET /api/servo/camera/tilt` - Get current camera tilt angle
 - `POST /api/servo/camera/tilt?angle={0-180}` - Set camera servo angle
 - `GET /api/servo/camera/config` - Get servo config (min/max pulse, etc.)
 - `POST /api/servo/camera/config` - Update servo config
-- `POST /api/servo/shooter/trigger?duration_ms={ms}` - Trigger water shooter GPIO
-- `GET /api/servo/rc/status` - RC-to-servo bridge status (channel, last value, angle)
-- `POST /api/servo/rc/channel?channel={1-18}` - Change which RC channel controls servo
+- `POST /api/servo/shooter/trigger?duration_ms={ms}` - Trigger water shooter Cube relay
 - ROS topic: `/nomad/servo/nozzle_angle` (Float32) - Autonomous servo control via ros_http_bridge
 
 ### Mode

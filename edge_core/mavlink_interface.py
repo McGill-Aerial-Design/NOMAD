@@ -22,9 +22,6 @@ class MavlinkService:
         # Time sync service reference (set externally)
         self._time_sync_service: Any = None
 
-        # RC servo bridge reference (set externally)
-        self._rc_servo_bridge: Any = None
-
         # SERVO_OUTPUT_RAW: last seen PWM per channel (1-indexed, us). Updated from
         # SERVO_OUTPUT_RAW messages so callers can read actual FC servo outputs.
         self._servo_output: dict[int, int] = {}
@@ -33,10 +30,6 @@ class MavlinkService:
     def set_time_sync_service(self, service: Any) -> None:
         """Set the TimeSyncService to receive GPS time updates."""
         self._time_sync_service = service
-
-    def set_rc_servo_bridge(self, bridge: Any) -> None:
-        """Set the RCServoBridge to receive RC channel updates."""
-        self._rc_servo_bridge = bridge
 
     def get_servo_output_pwm(self, channel: int) -> "int | None":
         """Return the last SERVO_OUTPUT_RAW PWM (us) for channel (1-indexed), or None."""
@@ -101,8 +94,6 @@ class MavlinkService:
                     "ATTITUDE", "SYSTEM_TIME",
                     "SERVO_OUTPUT_RAW",  # actual FC PWM outputs for camera tilt TF
                 ]
-                if self._rc_servo_bridge is not None:
-                    msg_types.append("RC_CHANNELS")
                 msg = self._conn.recv_match(
                     type=msg_types,
                     blocking=True,
@@ -178,14 +169,6 @@ class MavlinkService:
                         val = getattr(msg, attr, 0)
                         if val and val > 0:
                             self._servo_output[ch] = val
-            elif msg_type == "RC_CHANNELS":
-                # Forward RC channel data to servo bridge
-                if self._rc_servo_bridge is not None:
-                    try:
-                        self._rc_servo_bridge.on_rc_channels(msg)
-                    except Exception:
-                        pass
-
     def _update_connection_status(self, now: float) -> None:
         if self._last_heartbeat and (now - self._last_heartbeat) > self.disconnect_timeout:
             if self.state_manager.get_state().connected:
@@ -551,6 +534,27 @@ class MavlinkService:
         except Exception as e:
             import logging
             logging.getLogger(__name__).debug(f"Payload trigger error: {e}")
+            return False
+
+    def set_relay(self, relay_number: int, enabled: bool) -> bool:
+        """Set a Cube Orange relay through MAV_CMD_DO_SET_RELAY."""
+        if self._conn is None:
+            return False
+
+        try:
+            self._conn.mav.command_long_send(
+                self._conn.target_system,
+                self._conn.target_component,
+                mavutil.mavlink.MAV_CMD_DO_SET_RELAY,
+                0,
+                int(relay_number),
+                1 if enabled else 0,
+                0, 0, 0, 0, 0,
+            )
+            return True
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).debug(f"Relay command error: {e}")
             return False
 
     def stop_velocity(self) -> bool:

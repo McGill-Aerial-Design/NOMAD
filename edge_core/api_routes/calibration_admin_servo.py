@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import HTTPException, Query, Request, WebSocket
+from fastapi import Body, HTTPException, Path, Query, Request, WebSocket
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse
 from fastapi.websockets import WebSocketDisconnect
@@ -30,6 +30,14 @@ from ..api_models import (
     NavPositionRequest,
     NavVelocityRequest,
 )
+
+
+class CameraTiltConfigPayload(BaseModel):
+    channel: Optional[int] = None
+    pwm_down: Optional[int] = None
+    pwm_neutral: Optional[int] = None
+    pwm_up: Optional[int] = None
+    angle_range_deg: Optional[float] = None
 
 try:
     import msgpack
@@ -1014,7 +1022,7 @@ echo $!
             raise HTTPException(status_code=500, detail=f"Failed to save token: {e}")
 
     # ==================== Servo Control Endpoints ====================
-    # Control camera tilt servo and water shooter via PWM
+    # Control Cube Orange servo outputs and relays via MAVLink.
     #
     # Camera tilt servo calibration (ZED camera on channel 14):
     #   700 us  → pointing down  (−45° pitch)
@@ -1086,6 +1094,30 @@ echo $!
         except Exception as e:
             logger.error(f"Servo status error: {e}")
             return {"available": False, "error": str(e), "servos": {}}
+
+    @app.post("/api/servo/channel/{channel}/pwm", tags=["Servo"])
+    async def set_servo_channel_pwm(
+        channel: int = Path(..., ge=1, le=16, description="Cube servo output channel"),
+        pwm: int = Query(..., ge=500, le=2500, description="PWM command in microseconds"),
+    ):
+        """Set a Cube Orange servo output via MAV_CMD_DO_SET_SERVO."""
+        try:
+            from ..servo_controller import get_servo_controller
+
+            controller = get_servo_controller()
+            if not controller or not controller.is_available():
+                raise HTTPException(
+                    status_code=503, detail="Servo controller not available"
+                )
+            if not controller.set_channel_pwm(channel, pwm):
+                raise HTTPException(status_code=500, detail="Failed to send Cube servo PWM")
+            return {"status": "ok", "channel": channel, "pwm": pwm}
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Set Cube servo PWM error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
 
     @app.post("/api/servo/camera/tilt", tags=["Servo"])
     async def set_camera_tilt(
@@ -1179,34 +1211,76 @@ echo $!
 
     @app.post("/api/servo/camera/config", tags=["Servo"])
     async def set_camera_tilt_config(
-        channel: int = Query(..., ge=1, le=16, description="ArduPilot servo output channel (1-indexed)"),
-        pwm_down: int = Query(700, ge=500, le=2500, description="PWM us for camera fully down"),
-        pwm_neutral: int = Query(1250, ge=500, le=2500, description="PWM us for camera level"),
-        pwm_up: int = Query(1450, ge=500, le=2500, description="PWM us for camera fully up"),
-        angle_range_deg: float = Query(45.0, ge=1.0, le=90.0, description="Physical range in degrees each way"),
+        config: Optional[CameraTiltConfigPayload] = Body(None),
+        channel: Optional[int] = Query(None, ge=1, le=16, description="ArduPilot servo output channel (1-indexed)"),
+        pwm_down: Optional[int] = Query(None, ge=500, le=2500, description="PWM us for camera fully down"),
+        pwm_neutral: Optional[int] = Query(None, ge=500, le=2500, description="PWM us for camera level"),
+        pwm_up: Optional[int] = Query(None, ge=500, le=2500, description="PWM us for camera fully up"),
+        angle_range_deg: Optional[float] = Query(None, ge=1.0, le=90.0, description="Physical range in degrees each way"),
     ):
         """Update camera tilt servo calibration (called by Mission Planner on connect)."""
+        body = config or CameraTiltConfigPayload()
+        next_config = {
+            "channel": channel if channel is not None else body.channel,
+            "pwm_down": pwm_down if pwm_down is not None else body.pwm_down,
+            "pwm_neutral": pwm_neutral if pwm_neutral is not None else body.pwm_neutral,
+            "pwm_up": pwm_up if pwm_up is not None else body.pwm_up,
+            "angle_range_deg": angle_range_deg if angle_range_deg is not None else body.angle_range_deg,
+        }
+        for key, value in next_config.items():
+            if value is None:
+                next_config[key] = _camera_tilt_config[key]
+
+        channel_i = int(next_config["channel"])
+        pwm_down_i = int(next_config["pwm_down"])
+        pwm_neutral_i = int(next_config["pwm_neutral"])
+        pwm_up_i = int(next_config["pwm_up"])
+        angle_range_f = float(next_config["angle_range_deg"])
+
+        if not 1 <= channel_i <= 16:
+            raise HTTPException(status_code=422, detail="channel must be 1-16")
+        if not all(500 <= pwm <= 2500 for pwm in (pwm_down_i, pwm_neutral_i, pwm_up_i)):
+            raise HTTPException(status_code=422, detail="PWM values must be 500-2500 us")
+        if not 1.0 <= angle_range_f <= 90.0:
+            raise HTTPException(status_code=422, detail="angle_range_deg must be 1-90")
+
         _camera_tilt_config.update({
-            "channel": channel,
-            "pwm_down": pwm_down,
-            "pwm_neutral": pwm_neutral,
-            "pwm_up": pwm_up,
-            "angle_range_deg": angle_range_deg,
+            "channel": channel_i,
+            "pwm_down": pwm_down_i,
+            "pwm_neutral": pwm_neutral_i,
+            "pwm_up": pwm_up_i,
+            "angle_range_deg": angle_range_f,
         })
+
+        applied = False
+        try:
+            from ..servo_controller import get_servo_controller
+
+            controller = get_servo_controller()
+            if controller is not None:
+                applied = controller.configure_camera_tilt_mavlink(channel_i)
+        except Exception as e:
+            logger.error(f"Failed to apply camera tilt servo channel: {e}")
+
         logger.info(
-            f"Camera tilt config updated: ch={channel} down={pwm_down}us "
-            f"neutral={pwm_neutral}us up={pwm_up}us range=±{angle_range_deg}°"
+            f"Camera tilt config updated: ch={channel_i} down={pwm_down_i}us "
+            f"neutral={pwm_neutral_i}us up={pwm_up_i}us range=±{angle_range_f}°"
         )
-        return dict(_camera_tilt_config)
+        response = dict(_camera_tilt_config)
+        response["applied"] = applied
+        return response
 
     @app.post("/api/servo/shooter/trigger", tags=["Servo"])
     async def trigger_water_shooter(
         duration_ms: int = Query(
             200, ge=50, le=2000, description="Trigger duration in milliseconds"
         ),
+        relay_number: Optional[int] = Query(
+            None, ge=0, le=15, description="Cube relay number to trigger"
+        ),
     ):
         """
-        Trigger water shooter servo.
+        Trigger water pump through Cube Orange relay output.
 
         Args:
             duration_ms: How long to activate shooter (50-2000ms)
@@ -1223,6 +1297,8 @@ echo $!
                     status_code=503, detail="Servo controller not available"
                 )
 
+            if relay_number is not None:
+                controller.configure_water_pump_relay(relay_number)
             success = controller.trigger_water_shooter(duration_ms)
 
             if success:
@@ -1282,65 +1358,5 @@ echo $!
             raise
         except Exception as e:
             logger.error(f"Disable servos error: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
-
-    # ── RC Servo Bridge ───────────────────────────────────────────────
-
-    @app.get("/api/servo/rc/status", tags=["Servo"])
-    async def get_rc_servo_status():
-        """
-        Get RC-to-servo bridge status.
-
-        Shows which RC channel is mapped to the nozzle servo,
-        the last received RC value, and the last commanded angle.
-        """
-        try:
-            from ..rc_servo_bridge import get_rc_servo_bridge
-
-            bridge = get_rc_servo_bridge()
-            if bridge is None:
-                return {"active": False, "error": "RC servo bridge not initialized"}
-
-            return bridge.get_status()
-
-        except ImportError:
-            return {"active": False, "error": "RC servo bridge module not available"}
-        except Exception as e:
-            logger.error(f"RC servo status error: {e}")
-            return {"active": False, "error": str(e)}
-
-    @app.post("/api/servo/rc/channel", tags=["Servo"])
-    async def set_rc_servo_channel(
-        channel: int = Query(..., ge=1, le=18, description="RC channel number (1-18)"),
-    ):
-        """
-        Change which RC channel controls the servo (runtime).
-
-        Args:
-            channel: RC channel number (1-18). Common choices:
-                - Channel 6: Knob/potentiometer
-                - Channel 7: 3-position switch
-                - Channel 8: Slider
-        """
-        try:
-            from ..rc_servo_bridge import get_rc_servo_bridge
-
-            bridge = get_rc_servo_bridge()
-            if bridge is None:
-                raise HTTPException(
-                    status_code=503, detail="RC servo bridge not initialized"
-                )
-
-            bridge.set_channel(channel)
-            return {
-                "status": "ok",
-                "rc_channel": channel,
-                "message": f"RC servo bridge now using channel {channel}",
-            }
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Set RC channel error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 

@@ -332,7 +332,7 @@ namespace NOMAD.MissionPlanner
                     // Share the process-wide MAVLink lock with the payload panels
                     // -- MainV2.comPort serializes poorly when two callers issue
                     // doCommandAsync concurrently.
-                    acquired = await PayloadControlPanel.s_mavlinkLock
+                    acquired = await CubeOutputController.MavlinkLock
                         .WaitAsync(1000).ConfigureAwait(false);
                     if (!acquired)
                     {
@@ -353,7 +353,7 @@ namespace NOMAD.MissionPlanner
                 }
                 finally
                 {
-                    if (acquired) PayloadControlPanel.s_mavlinkLock.Release();
+                    if (acquired) CubeOutputController.MavlinkLock.Release();
                     _inflight = false;
                 }
             });
@@ -373,7 +373,7 @@ namespace NOMAD.MissionPlanner
                 bool acquired = false;
                 try
                 {
-                    acquired = await PayloadControlPanel.s_mavlinkLock
+                    acquired = await CubeOutputController.MavlinkLock
                         .WaitAsync(2000).ConfigureAwait(false);
                     if (!acquired)
                     {
@@ -394,7 +394,7 @@ namespace NOMAD.MissionPlanner
                 }
                 finally
                 {
-                    if (acquired) PayloadControlPanel.s_mavlinkLock.Release();
+                    if (acquired) CubeOutputController.MavlinkLock.Release();
                     _inflight = false;
                 }
             });

@@ -115,8 +115,7 @@ NOMAD/
 │   ├── state.py            # State manager
 │   ├── mavlink_interface.py  # MAVLink flight controller comms
 │   ├── nav_controller.py     # Velocity/position command logic
-│   ├── servo_controller.py # Camera tilt / water shooter PWM
-│   ├── rc_servo_bridge.py  # RC channel -> servo angle bridge
+│   ├── servo_controller.py # Cube Orange servo / relay commands
 │   ├── spray_controller.py # Fire-extinguisher spray control
 │   ├── operational_mode.py # Operational mode state machine
 │   ├── video_stream_manager.py # Video bridge / overlay management
