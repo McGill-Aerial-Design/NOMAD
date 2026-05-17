@@ -794,6 +794,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
 
                 def _restart() -> bool:
                     gcs_ip = os.environ.get("GCS_IP", "100.76.127.17")
+                    gcs_extra_ips = os.environ.get("GCS_EXTRA_IPS", "")
                     gcs_port_lte = os.environ.get("GCS_PORT_LTE", "14560")
                     gcs_port_local = os.environ.get("GCS_PORT_LOCAL", "14550")
                     mavlink_uart_dev = os.environ.get("MAVLINK_UART_DEV", "/dev/ttyACM0")
@@ -809,12 +810,21 @@ def create_app(state_manager: StateManager) -> FastAPI:
                     except Exception:
                         pass
                     try:
+                        endpoint_ips: list[str] = []
+                        for ip in [gcs_ip, *gcs_extra_ips.replace(",", " ").split()]:
+                            ip = ip.strip()
+                            if ip and ip not in endpoint_ips:
+                                endpoint_ips.append(ip)
+                        endpoints: list[str] = []
+                        for ip in endpoint_ips:
+                            endpoints.extend(["-e", f"{ip}:{gcs_port_lte}"])
+                        endpoints.extend(["-e", f"127.0.0.1:{gcs_port_local}"])
+
                         with open(log_path, "a") as lf:
                             subprocess.Popen(
                                 [
                                     "mavlink-routerd",
-                                    "-e", f"{gcs_ip}:{gcs_port_lte}",
-                                    "-e", f"127.0.0.1:{gcs_port_local}",
+                                    *endpoints,
                                     mavlink_uart_dev,
                                 ],
                                 stdout=lf,

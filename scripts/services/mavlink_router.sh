@@ -24,6 +24,27 @@ discover_gcs_ip() {
     echo "${ip:-192.168.1.255}"
 }
 
+build_gcs_endpoints() {
+    local primary="$1"
+    local endpoints=()
+    local seen=" "
+    local all_ips="$primary ${GCS_EXTRA_IPS:-}"
+    local ip
+
+    all_ips="${all_ips//,/ }"
+    for ip in $all_ips; do
+        [ -n "$ip" ] || continue
+        case "$seen" in
+            *" $ip "*) continue ;;
+        esac
+        seen="${seen}${ip} "
+        endpoints+=("-e" "$ip:$GCS_PORT_LTE")
+    done
+
+    endpoints+=("-e" "127.0.0.1:$GCS_PORT_LOCAL")
+    printf '%s\n' "${endpoints[@]}"
+}
+
 svc_start() {
     if pgrep -f "$PATTERN" >/dev/null 2>&1; then
         log_ok "already running"
@@ -39,14 +60,15 @@ svc_start() {
     fi
     local gcs
     gcs="$(discover_gcs_ip)"
+    local endpoints
+    mapfile -t endpoints < <(build_gcs_endpoints "$gcs")
     local attempts delay attempt
     attempts="${MAVLINK_ROUTER_START_ATTEMPTS:-10}"
     delay="${MAVLINK_ROUTER_START_RETRY_DELAY:-2}"
     for attempt in $(seq 1 "$attempts"); do
-        log_info "starting (attempt $attempt/$attempts, GCS: $gcs:$GCS_PORT_LTE, local: 127.0.0.1:$GCS_PORT_LOCAL)"
+        log_info "starting (attempt $attempt/$attempts, endpoints: ${endpoints[*]})"
         nohup mavlink-routerd \
-            -e "$gcs:$GCS_PORT_LTE" \
-            -e "127.0.0.1:$GCS_PORT_LOCAL" \
+            "${endpoints[@]}" \
             "$MAVLINK_UART_DEV" \
             > "$LOG_FILE_DEFAULT" 2>&1 &
         sleep 2
