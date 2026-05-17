@@ -395,7 +395,7 @@ namespace NOMAD.MissionPlanner
 
             var hint = new Label
             {
-                Text = "Enabled: connect Mission Planner to UDP 14600 for merged LTE/RadioMaster failover.\n" +
+                Text = "Enabled: connect Mission Planner as UDP Client / UDPCl to 127.0.0.1:14600 for merged LTE/RadioMaster failover.\n" +
                        "Disabled: connect Mission Planner directly to LTE UDP 14560 or RadioMaster UDP 14550.",
                 Font = new Font("Segoe UI", 8, FontStyle.Italic),
                 ForeColor = Color.FromArgb(150, 150, 150),
