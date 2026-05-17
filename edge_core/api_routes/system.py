@@ -373,6 +373,7 @@ def register_system_routes(app, ctx) -> None:
             return
         await websocket.accept()
         last_mesh_timestamp = None
+        last_mesh_version = None
         frame_count = 0
         has_last_good_attitude = False
         last_good_roll = 0.0
@@ -398,11 +399,28 @@ def register_system_routes(app, ctx) -> None:
                 ):
                     stored = websocket.app.state.slam_mesh_data
                     mesh_ts = stored.get("received_at")
+                    mesh_version = getattr(websocket.app.state, "slam_mesh_version", 0)
                     if mesh_ts and mesh_ts != last_mesh_timestamp:
                         last_mesh_timestamp = mesh_ts
-                        has_mesh = True
-                        frame["type"] = "mesh"
-                        frame["mesh"] = stored.get("mesh")
+                        send_full = last_mesh_version is None
+                        last_mesh_version = mesh_version
+                        mesh_payload = (
+                            stored.get("websocket_full")
+                            if send_full
+                            else stored.get("websocket_delta")
+                        ) or stored.get("mesh")
+                        has_payload_changes = bool(
+                            send_full
+                            or mesh_payload.get("clear")
+                            or mesh_payload.get("voxels")
+                            or mesh_payload.get("blocks")
+                            or mesh_payload.get("removed")
+                        ) if isinstance(mesh_payload, dict) else bool(mesh_payload)
+                        if has_payload_changes:
+                            has_mesh = True
+                            frame["type"] = "mesh"
+                            frame["mesh"] = mesh_payload
+                            frame["mesh_version"] = mesh_version
                         # Expose the mesh's ROS-time timestamp so clients can
                         # measure mesh/pose skew and reason about staleness.
                         frame["mesh_ts"] = mesh_ts

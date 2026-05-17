@@ -31,6 +31,36 @@ from ..api_models import (
     NavVelocityRequest,
 )
 
+VIO_AREA_MAP_ROOT = os.path.realpath(
+    os.environ.get(
+        "NOMAD_VIO_AREA_MAP_ROOT",
+        "/workspaces/isaac_ros-dev/data/area_maps",
+    )
+)
+
+
+def normalize_vio_area_file_path_or_raise(
+    file_path: str,
+    *,
+    root: Optional[str] = None,
+) -> str:
+    """Resolve a VIO/nvblox map path and confine it to the configured map root."""
+    normalized = (file_path or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="file_path is required")
+
+    root_real = os.path.realpath(root or VIO_AREA_MAP_ROOT)
+    if not os.path.isabs(normalized):
+        normalized = os.path.join(root_real, normalized)
+    real = os.path.realpath(normalized)
+    if not (real == root_real or real.startswith(root_real + os.sep)):
+        raise HTTPException(
+            status_code=403,
+            detail=f"file_path must be under {root_real}",
+        )
+    return real
+
+
 try:
     import msgpack
 except ImportError:  # pragma: no cover - optional Jetson dependency
@@ -176,23 +206,16 @@ def register_task2_routes(app, ctx) -> None:
             request.app.state.vio_trajectory = []
         return {"success": True, "cleared_points": count}
 
-    def _normalize_vio_area_file_path_or_raise(file_path: str) -> str:
-        """Validate and normalize area-map file paths from API requests."""
-        normalized = (file_path or "").strip()
-        if not normalized:
-            raise HTTPException(status_code=400, detail="file_path is required")
-        return normalized
-
     def _resolve_nvblox_empty_map_path(file_path: Optional[str] = None) -> str:
         """Resolve baseline map path used for non-restart nvblox clear workflow."""
         if file_path and str(file_path).strip():
-            return _normalize_vio_area_file_path_or_raise(str(file_path))
+            return normalize_vio_area_file_path_or_raise(str(file_path))
 
         env_path = (os.getenv("NVBLOX_EMPTY_MAP_PATH") or "").strip()
         if env_path:
-            return env_path
+            return normalize_vio_area_file_path_or_raise(env_path)
 
-        return "/workspaces/isaac_ros-dev/data/area_maps/empty_map.nvblx"
+        return normalize_vio_area_file_path_or_raise("empty_map.nvblx")
 
     def _status_for_vio_area_failure(message: str, default_status: int) -> int:
         """Map backend failure text to HTTP status while preserving safe defaults."""
@@ -495,7 +518,7 @@ def register_task2_routes(app, ctx) -> None:
     @app.post("/api/vio/area/save", tags=["VIO"])
     async def vio_area_save(area_request: VIOAreaSaveRequest, request: Request):
         """Save relocalization map via direct ZED area map backend or nvblox map service."""
-        file_path = _normalize_vio_area_file_path_or_raise(area_request.file_path)
+        file_path = normalize_vio_area_file_path_or_raise(area_request.file_path)
         camera_service = request.app.state.camera_service
 
         if camera_service and hasattr(camera_service, "save_area_map"):
@@ -540,7 +563,7 @@ def register_task2_routes(app, ctx) -> None:
     @app.post("/api/vio/area/load", tags=["VIO"])
     async def vio_area_load(area_request: VIOAreaLoadRequest, request: Request):
         """Load relocalization map via direct ZED area map backend or nvblox map service."""
-        file_path = _normalize_vio_area_file_path_or_raise(area_request.file_path)
+        file_path = normalize_vio_area_file_path_or_raise(area_request.file_path)
         camera_service = request.app.state.camera_service
 
         if camera_service and hasattr(camera_service, "load_area_map"):
@@ -580,7 +603,7 @@ def register_task2_routes(app, ctx) -> None:
     @app.post("/api/vio/area/relocalize", tags=["VIO"])
     async def vio_area_relocalize(area_request: VIOAreaLoadRequest, request: Request):
         """Load relocalization map and trigger tracking reset with backend-explicit response."""
-        file_path = _normalize_vio_area_file_path_or_raise(area_request.file_path)
+        file_path = normalize_vio_area_file_path_or_raise(area_request.file_path)
         camera_service = request.app.state.camera_service
 
         if camera_service and hasattr(camera_service, "load_area_map"):
@@ -653,40 +676,44 @@ def register_task2_routes(app, ctx) -> None:
     @app.post("/api/vio/reset_origin", tags=["VIO"])
     async def vio_reset_origin(request: Request):
         """Reset VIO tracking origin with backend-explicit status."""
-        # Clear trajectory on reset
-        with request.app.state.vio_state_lock:
-            request.app.state.vio_trajectory = []
-
         camera_service = request.app.state.camera_service
         if camera_service and hasattr(camera_service, "reset_tracking"):
             backend = "direct_zed_area_map"
             try:
                 reset_ok = bool(camera_service.reset_tracking())
-                return {
-                    "success": reset_ok,
-                    "reset_counter": 0,
-                    "backend": backend,
-                    "message": (
-                        "Tracking origin reset via direct ZED backend; trajectory cleared"
-                        if reset_ok
-                        else "Failed to reset tracking via direct ZED backend; trajectory cleared"
-                    ),
-                }
             except Exception as e:
                 logger.error(f"Direct camera reset_tracking failed: {e}")
-                return {
-                    "success": False,
-                    "reset_counter": 0,
-                    "backend": backend,
-                    "message": f"Direct ZED reset_tracking failed; trajectory cleared: {e}",
-                }
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Direct ZED reset_tracking failed: {e}",
+                )
+            if not reset_ok:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Direct camera reset_tracking returned failure",
+                )
+            with request.app.state.vio_state_lock:
+                request.app.state.vio_trajectory = []
+            return {
+                "success": True,
+                "reset_counter": 0,
+                "backend": backend,
+                "message": "Tracking origin reset via direct ZED backend; trajectory cleared",
+            }
 
-        # Keep existing fallback behavior for ros_http_bridge-managed VIO.
+        backend = "ros_service_proxy"
+        message = _call_ros2_service_in_isaac_container_or_raise(
+            service_name="/zed/zed_node/reset_pos_tracking",
+            service_type="std_srvs/srv/Trigger",
+            request_payload={},
+        )
+        with request.app.state.vio_state_lock:
+            request.app.state.vio_trajectory = []
         return {
             "success": True,
             "reset_counter": 0,
-            "backend": "nvblox_map_service",
-            "message": "Trajectory cleared (VIO reset managed via ROS bridge fallback)",
+            "backend": backend,
+            "message": f"{message}; trajectory cleared",
         }
 
     @app.get("/api/vio/calibration", tags=["VIO"])
@@ -777,6 +804,8 @@ def register_task2_routes(app, ctx) -> None:
             yaw=pos_request.yaw,
             source=pos_request.source,
         )
+        if not success:
+            raise HTTPException(status_code=409, detail="Position target rejected")
 
         return {
             "success": success,

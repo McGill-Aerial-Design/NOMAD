@@ -601,6 +601,12 @@ class SprayController:
 
                 self._set_state(SprayState.SPRAY)
                 if not self._spray_target():
+                    with self._lock:
+                        self._status.targets_failed += 1
+                    self._set_state(
+                        SprayState.FAILED,
+                        error="Water shooter trigger failed",
+                    )
                     return
 
                 # --- VERIFY ---
@@ -1125,19 +1131,25 @@ class SprayController:
         """Activate water pump."""
         if not self._servo:
             logger.error("ServoController not available for spray")
-            return True
+            return False
 
         logger.info(f"Spraying target (attempt {self._spray_count})")
         try:
-            self._servo.configure_water_pump_relay(int(self.WATER_PUMP_RELAY_NUMBER))
+            if not self._servo.configure_water_pump_relay(
+                int(self.WATER_PUMP_RELAY_NUMBER)
+            ):
+                logger.warning("Failed to configure water pump relay")
+                return False
         except Exception as e:
             logger.warning(f"Failed to configure water pump relay: {e}")
+            return False
         success = self._servo.trigger_water_shooter(
             duration_ms=self.SPRAY_DURATION_MS
         )
         if not success:
             logger.warning("Water shooter trigger returned failure")
-        return True  # proceed regardless
+            return False
+        return True
 
     # ------------------------------------------------------------------ #
     # VERIFY (circle change detection, HSV fallback)

@@ -191,6 +191,13 @@ class ServoController:
         duration_s = max(0.05, min(float(duration_ms) / 1000.0, 5.0))
         relay = self._water_pump_relay_number
         if not self._mavlink_service.set_relay(relay, True):
+            # The command may still have reached the FC even if COMMAND_ACK was
+            # lost or negative. Always issue a best-effort off command before
+            # reporting failure so the pump cannot be left energized.
+            try:
+                self._mavlink_service.set_relay(relay, False)
+            except Exception:
+                pass
             return False
         self._last_relay_trigger = time.time()
         try:

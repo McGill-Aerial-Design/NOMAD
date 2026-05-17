@@ -135,6 +135,12 @@ class NavController:
     MAX_VELOCITY_XY = 2.0   # m/s horizontal
     MAX_VELOCITY_Z = 1.0    # m/s vertical
     MAX_YAW_RATE = 1.0      # rad/s
+
+    # Maximum local position targets relative to the VIO origin. Position
+    # commands are less frequently used than velocity commands, so reject
+    # outliers instead of silently clipping to a surprising destination.
+    MAX_POSITION_XY_M = 50.0
+    MAX_POSITION_Z_M = 20.0
     
     # Minimum VIO confidence to accept commands
     MIN_VIO_CONFIDENCE = 0.3
@@ -334,6 +340,22 @@ class NavController:
                 logger.warning(
                     "Vehicle not in GUIDED mode (%s) - refusing position command",
                     state.flight_mode,
+                )
+                return False
+
+            horizontal_distance = (x * x + y * y) ** 0.5
+            if horizontal_distance > self.MAX_POSITION_XY_M:
+                logger.warning(
+                    "Position target rejected: horizontal distance %.1fm exceeds %.1fm",
+                    horizontal_distance,
+                    self.MAX_POSITION_XY_M,
+                )
+                return False
+            if abs(z) > self.MAX_POSITION_Z_M:
+                logger.warning(
+                    "Position target rejected: |z| %.1fm exceeds %.1fm",
+                    abs(z),
+                    self.MAX_POSITION_Z_M,
                 )
                 return False
             
