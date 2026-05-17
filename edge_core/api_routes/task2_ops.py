@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 import os
 import re
 import shlex
@@ -18,7 +19,6 @@ from starlette.responses import JSONResponse
 
 from ..api_models import (
     COMMAND_WHITELIST,
-    MSGPACK_AVAILABLE,
     Task1CapturesList,
     Task2HitRequest,
     TerminalCommandRequest,
@@ -31,10 +31,35 @@ from ..api_models import (
     NavVelocityRequest,
 )
 
-try:
-    import msgpack
-except ImportError:  # pragma: no cover - optional Jetson dependency
-    msgpack = None
+VIO_AREA_MAP_ROOT = os.path.realpath(
+    os.environ.get(
+        "NOMAD_VIO_AREA_MAP_ROOT",
+        "/workspaces/isaac_ros-dev/data/area_maps",
+    )
+)
+
+
+def normalize_vio_area_file_path_or_raise(
+    file_path: str,
+    *,
+    root: Optional[str] = None,
+) -> str:
+    """Resolve a VIO/nvblox map path and confine it to the configured map root."""
+    normalized = (file_path or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="file_path is required")
+
+    root_real = os.path.realpath(root or VIO_AREA_MAP_ROOT)
+    if not os.path.isabs(normalized):
+        normalized = os.path.join(root_real, normalized)
+    real = os.path.realpath(normalized)
+    if not (real == root_real or real.startswith(root_real + os.sep)):
+        raise HTTPException(
+            status_code=403,
+            detail=f"file_path must be under {root_real}",
+        )
+    return real
+
 
 def register_task2_routes(app, ctx) -> None:
     logger = ctx.logger
@@ -105,10 +130,13 @@ def register_task2_routes(app, ctx) -> None:
         if external_vio_state:
             # External VIO confidence is 0-1 scale
             confidence_0_1 = external_vio_state.get("confidence", 0)
+            vio_fresh = bool(external_vio_state.get("fresh", False))
             return {
-                "health": "healthy" if confidence_0_1 > 0.5 else "degraded",
+                "health": "healthy" if confidence_0_1 > 0.5 and vio_fresh else "degraded",
                 "tracking_confidence": confidence_0_1,  # 0-1 scale
-                "position_valid": True,
+                "position_valid": vio_fresh,
+                "age_seconds": external_vio_state.get("age_seconds"),
+                "max_age_seconds": external_vio_state.get("max_age_seconds"),
                 "message_rate_hz": 30.0,
                 "reset_counter": 0,
                 "source": external_vio_state.get("source", "external"),
@@ -141,6 +169,7 @@ def register_task2_routes(app, ctx) -> None:
         if external_vio_state:
             payload = dict(external_vio_state)
             payload["source"] = "ros_http_bridge"
+            payload["valid"] = bool(payload.get("fresh", False))
             return payload
 
         return {
@@ -176,23 +205,16 @@ def register_task2_routes(app, ctx) -> None:
             request.app.state.vio_trajectory = []
         return {"success": True, "cleared_points": count}
 
-    def _normalize_vio_area_file_path_or_raise(file_path: str) -> str:
-        """Validate and normalize area-map file paths from API requests."""
-        normalized = (file_path or "").strip()
-        if not normalized:
-            raise HTTPException(status_code=400, detail="file_path is required")
-        return normalized
-
     def _resolve_nvblox_empty_map_path(file_path: Optional[str] = None) -> str:
         """Resolve baseline map path used for non-restart nvblox clear workflow."""
         if file_path and str(file_path).strip():
-            return _normalize_vio_area_file_path_or_raise(str(file_path))
+            return normalize_vio_area_file_path_or_raise(str(file_path))
 
         env_path = (os.getenv("NVBLOX_EMPTY_MAP_PATH") or "").strip()
         if env_path:
-            return env_path
+            return normalize_vio_area_file_path_or_raise(env_path)
 
-        return "/workspaces/isaac_ros-dev/data/area_maps/empty_map.nvblx"
+        return normalize_vio_area_file_path_or_raise("empty_map.nvblx")
 
     def _status_for_vio_area_failure(message: str, default_status: int) -> int:
         """Map backend failure text to HTTP status while preserving safe defaults."""
@@ -495,7 +517,7 @@ def register_task2_routes(app, ctx) -> None:
     @app.post("/api/vio/area/save", tags=["VIO"])
     async def vio_area_save(area_request: VIOAreaSaveRequest, request: Request):
         """Save relocalization map via direct ZED area map backend or nvblox map service."""
-        file_path = _normalize_vio_area_file_path_or_raise(area_request.file_path)
+        file_path = normalize_vio_area_file_path_or_raise(area_request.file_path)
         camera_service = request.app.state.camera_service
 
         if camera_service and hasattr(camera_service, "save_area_map"):
@@ -540,7 +562,7 @@ def register_task2_routes(app, ctx) -> None:
     @app.post("/api/vio/area/load", tags=["VIO"])
     async def vio_area_load(area_request: VIOAreaLoadRequest, request: Request):
         """Load relocalization map via direct ZED area map backend or nvblox map service."""
-        file_path = _normalize_vio_area_file_path_or_raise(area_request.file_path)
+        file_path = normalize_vio_area_file_path_or_raise(area_request.file_path)
         camera_service = request.app.state.camera_service
 
         if camera_service and hasattr(camera_service, "load_area_map"):
@@ -580,7 +602,7 @@ def register_task2_routes(app, ctx) -> None:
     @app.post("/api/vio/area/relocalize", tags=["VIO"])
     async def vio_area_relocalize(area_request: VIOAreaLoadRequest, request: Request):
         """Load relocalization map and trigger tracking reset with backend-explicit response."""
-        file_path = _normalize_vio_area_file_path_or_raise(area_request.file_path)
+        file_path = normalize_vio_area_file_path_or_raise(area_request.file_path)
         camera_service = request.app.state.camera_service
 
         if camera_service and hasattr(camera_service, "load_area_map"):
@@ -653,40 +675,44 @@ def register_task2_routes(app, ctx) -> None:
     @app.post("/api/vio/reset_origin", tags=["VIO"])
     async def vio_reset_origin(request: Request):
         """Reset VIO tracking origin with backend-explicit status."""
-        # Clear trajectory on reset
-        with request.app.state.vio_state_lock:
-            request.app.state.vio_trajectory = []
-
         camera_service = request.app.state.camera_service
         if camera_service and hasattr(camera_service, "reset_tracking"):
             backend = "direct_zed_area_map"
             try:
                 reset_ok = bool(camera_service.reset_tracking())
-                return {
-                    "success": reset_ok,
-                    "reset_counter": 0,
-                    "backend": backend,
-                    "message": (
-                        "Tracking origin reset via direct ZED backend; trajectory cleared"
-                        if reset_ok
-                        else "Failed to reset tracking via direct ZED backend; trajectory cleared"
-                    ),
-                }
             except Exception as e:
                 logger.error(f"Direct camera reset_tracking failed: {e}")
-                return {
-                    "success": False,
-                    "reset_counter": 0,
-                    "backend": backend,
-                    "message": f"Direct ZED reset_tracking failed; trajectory cleared: {e}",
-                }
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Direct ZED reset_tracking failed: {e}",
+                )
+            if not reset_ok:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Direct camera reset_tracking returned failure",
+                )
+            with request.app.state.vio_state_lock:
+                request.app.state.vio_trajectory = []
+            return {
+                "success": True,
+                "reset_counter": 0,
+                "backend": backend,
+                "message": "Tracking origin reset via direct ZED backend; trajectory cleared",
+            }
 
-        # Keep existing fallback behavior for ros_http_bridge-managed VIO.
+        backend = "ros_service_proxy"
+        message = _call_ros2_service_in_isaac_container_or_raise(
+            service_name="/zed/zed_node/reset_pos_tracking",
+            service_type="std_srvs/srv/Trigger",
+            request_payload={},
+        )
+        with request.app.state.vio_state_lock:
+            request.app.state.vio_trajectory = []
         return {
             "success": True,
             "reset_counter": 0,
-            "backend": "nvblox_map_service",
-            "message": "Trajectory cleared (VIO reset managed via ROS bridge fallback)",
+            "backend": backend,
+            "message": f"{message}; trajectory cleared",
         }
 
     @app.get("/api/vio/calibration", tags=["VIO"])
@@ -777,6 +803,8 @@ def register_task2_routes(app, ctx) -> None:
             yaw=pos_request.yaw,
             source=pos_request.source,
         )
+        if not success:
+            raise HTTPException(status_code=409, detail="Position target rejected")
 
         return {
             "success": success,
@@ -856,12 +884,21 @@ def register_task2_routes(app, ctx) -> None:
     @app.post("/api/spray/trigger", tags=["Spray"])
     async def trigger_spray(request: Request):
         """
-        Trigger autonomous spray sequence on a target (SP-001).
+        Trigger spray sequence on a target (SP-001).
 
-        Requires target_id, x, y, z coordinates. Drone must be within 3m of target (operator positioned via WASD).
+        Body fields:
+            target_id, x, y, z, label, confidence, image_only, range_m
+            require_autonomy (bool, default False): when true, the
+                trigger is refused if the drone is already inside
+                AUTONOMY_MIN_RANGE_M (2.5 m). This is the toggle used
+                by the GCS "Auto Spray (autonomy gate)" button — it
+                prevents the operator from silently forfeiting the
+                CONOPS 20-pt autonomy gate by triggering too close.
+                Manual sprays leave it false.
 
-        The sequence runs fully autonomously (SP-002):
-        APPROACH (3m->2m via visual servoing) -> AIM -> SPRAY -> VERIFY (circle change) -> UPLOAD -> COMPLETE
+        Drone must be within TRIGGER_MAX_DISTANCE_M (default 5.5 m).
+        Sequence (autonomy path): APPROACH → AIM → SPRAY → VERIFY → UPLOAD.
+        Sequence (manual / image-only / inside 2 m): AIM immediately.
         """
         spray_ctrl = getattr(request.app.state, "spray_controller", None)
         if not spray_ctrl:
@@ -883,7 +920,8 @@ def register_task2_routes(app, ctx) -> None:
             range_m=body.get("range_m", body.get("distance_m")),
         )
 
-        result = spray_ctrl.trigger(target)
+        require_autonomy = bool(body.get("require_autonomy", False))
+        result = spray_ctrl.trigger(target, require_autonomy=require_autonomy)
         if not result["success"]:
             raise HTTPException(status_code=400, detail=result.get("error"))
         return result

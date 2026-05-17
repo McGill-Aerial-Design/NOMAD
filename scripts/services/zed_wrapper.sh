@@ -52,6 +52,7 @@ DESIRED = {
         "publish_mag":            GET('ZED_PUBLISH_MAG','true'),
         "depth_confidence":       GET('ZED_DEPTH_CONFIDENCE','50'),
         "depth_texture_conf":     GET('ZED_DEPTH_TEXTURE_CONF','70'),
+        "depth_mode":             f"'{GET('ZED_DEPTH_MODE','NEURAL_LIGHT')}'",
     },
     "zed2i.yaml": { "grab_resolution": f"'{GET('ZED_GRAB_RESOLUTION','HD1080')}'" },
     "zed2.yaml":  { "grab_resolution": f"'{GET('ZED_GRAB_RESOLUTION','HD1080')}'" },
@@ -116,15 +117,22 @@ ros2 run tf2_ros static_transform_publisher \
     --child-frame-id zed_left_camera_optical_frame \
     >/tmp/nomad_zed_optical_alias.log 2>&1 &
 
-PYTHONPATH=/workspaces/isaac_ros-dev/edge_core/target_localizer:${PYTHONPATH:-} \
-    python3 -m target_localizer.target_localizer_node \
-    --ros-args \
-    -p output_dir:=/workspaces/isaac_ros-dev/data/task1_captures \
-    -p team_name:=MAD \
-    -r /zed2i/zed_node/rgb/image_rect_color:=/zed/zed_node/rgb/color/rect/image \
-    -r /zed2i/zed_node/depth/depth_registered:=/zed/zed_node/depth/depth_registered \
-    -r /zed2i/zed_node/rgb/camera_info:=/zed/zed_node/rgb/color/rect/camera_info \
-    >/tmp/nomad_target_localizer.log 2>&1 &
+case "${NOMAD_TARGET_LOCALIZER_AUTO_START:-false}" in
+    1|true|TRUE|yes|YES|on|ON)
+        PYTHONPATH=/workspaces/isaac_ros-dev/edge_core/target_localizer:${PYTHONPATH:-} \
+            python3 -m target_localizer.target_localizer_node \
+            --ros-args \
+            -p output_dir:=/workspaces/isaac_ros-dev/data/task1_captures \
+            -p team_name:=MAD \
+            -r /zed2i/zed_node/rgb/image_rect_color:=/zed/zed_node/rgb/color/rect/image \
+            -r /zed2i/zed_node/depth/depth_registered:=/zed/zed_node/depth/depth_registered \
+            -r /zed2i/zed_node/rgb/camera_info:=/zed/zed_node/rgb/color/rect/camera_info \
+            >/tmp/nomad_target_localizer.log 2>&1 &
+        ;;
+    *)
+        echo "[zed-wrapper] target_localizer auto-start disabled"
+        ;;
+esac
 
 python3 /workspaces/isaac_ros-dev/edge_core/ros/servo_tf_publisher.py \
     --host 172.17.0.1 \
@@ -160,7 +168,9 @@ svc_start() {
     for v in ZED_CAMERA_MODEL ZED_CAMERA_NAME ZED_PUB_RESOLUTION \
              ZED_PUB_DOWNSCALE_FACTOR ZED_PUBLISH_RAW ZED_PUBLISH_LEFT_RIGHT \
              ZED_PUBLISH_MAG ZED_DEPTH_CONFIDENCE ZED_DEPTH_TEXTURE_CONF \
-             ZED_GRAB_RESOLUTION NOMAD_API_PORT ROS_HTTP_BRIDGE_VIO_TOPIC; do
+             ZED_DEPTH_MODE \
+             ZED_GRAB_RESOLUTION NOMAD_API_PORT ROS_HTTP_BRIDGE_VIO_TOPIC \
+             NOMAD_TARGET_LOCALIZER_AUTO_START; do
         env_args+=("-e" "${v}=${!v}")
     done
 

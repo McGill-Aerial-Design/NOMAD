@@ -383,8 +383,8 @@ namespace NOMAD.MissionPlanner
         // ============================================================
         // Servo Configuration (Cube Orange AUX Outputs via MAVLink)
         // All payloads, reels, water pump and camera tilt are wired to the
-        // Cube and commanded via MAVLink DO_SET_SERVO. The Jetson API is
-        // used only as a fallback when the MAVLink link is unavailable.
+        // Cube and commanded via MAVLink DO_SET_SERVO. Edge Core is used only
+        // as a fallback path to send the same Cube MAVLink commands.
         // Channel numbers correspond to ArduPilot servo output numbers
         // (e.g. 9 = SERVO9 = AUX1 on most Cube builds).
         // ============================================================
@@ -448,7 +448,17 @@ namespace NOMAD.MissionPlanner
         /// <summary>Duration (ms) the water pump fires per trigger.</summary>
         public int WaterPumpDurationMs { get; set; } = 500;
 
-        // --- Camera tilt servo (MAVLink primary, Jetson API fallback) ---
+        // --- Water pump RC pass-through ---
+        // When non-zero, the operator can hold a transmitter switch on
+        // this RC input channel to fire the pump directly via the FC
+        // (bypassing Mission Planner / Jetson). 0 = disabled. Valid
+        // channels: 5–16. The Settings form's "Apply RC mapping"
+        // button writes RC{n}_OPTION on the Cube — option code is
+        // chosen from the relay number (RELAY1 → 28, RELAY2 → 34,
+        // RELAY3 → 35, RELAY4 → 36).
+        public int WaterPumpRcChannel { get; set; } = 0;
+
+        // --- Camera tilt servo (Cube MAVLink primary, Edge Core Cube fallback) ---
         // ZED camera tilt calibration points:
         //   700 us  → pointing down  (−45° from level)
         //   1250 us → straight/level ( 0°)

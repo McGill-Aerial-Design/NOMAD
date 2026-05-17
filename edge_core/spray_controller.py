@@ -123,6 +123,7 @@ DEFAULT_SPRAY_CALIBRATION = {
     "aim_tolerance_px": 25,
     "servo_fire_angle_deg": 82.0,
     "spray_duration_ms": 500,
+    "water_pump_relay_number": 0,
     # Visual-servo controller gains. Commands are velocity/yaw-rate setpoints;
     # ArduPilot owns the actual pitch/roll attitude control.
     "forward_gain": 0.45,
@@ -215,11 +216,20 @@ class SprayController:
     APPROACH_SPEED_MPS = 0.5
     APPROACH_TIMEOUT_S = 20.0
 
+    # CONOPS §5.2.4 / Q&A #10: full autonomy points require the
+    # autonomous approach to start from more than 2 m. If the operator
+    # triggers a "force autonomy" spray inside this radius, the AIM
+    # state will run immediately and the autonomy criterion fails. We
+    # gate triggers with require_autonomy=True at 2.5 m to leave
+    # margin for ZED depth jitter.
+    AUTONOMY_MIN_RANGE_M = 2.5
+
     # Aiming parameters
     AIM_TOLERANCE_PX = int(_spray_calibration["aim_tolerance_px"])
 
     # Spray parameters
     SPRAY_DURATION_MS = int(_spray_calibration["spray_duration_ms"])
+    WATER_PUMP_RELAY_NUMBER = int(_spray_calibration["water_pump_relay_number"])
     SPRAY_SETTLE_TIME_S = 0.5
     MAX_SPRAY_ATTEMPTS = 2
 
@@ -374,6 +384,7 @@ class SprayController:
             "aim_tolerance_px": cls.AIM_TOLERANCE_PX,
             "servo_fire_angle_deg": cls.SERVO_FIRE_ANGLE_DEG,
             "spray_duration_ms": cls.SPRAY_DURATION_MS,
+            "water_pump_relay_number": cls.WATER_PUMP_RELAY_NUMBER,
             "forward_gain": cls.FORWARD_GAIN,
             "lateral_gain": cls.LATERAL_GAIN,
             "altitude_gain": cls.ALTITUDE_GAIN,
@@ -400,6 +411,7 @@ class SprayController:
             "aim_tolerance_px": ("AIM_TOLERANCE_PX", 2.0, 250.0),
             "servo_fire_angle_deg": ("SERVO_FIRE_ANGLE_DEG", 0.0, 180.0),
             "spray_duration_ms": ("SPRAY_DURATION_MS", 50.0, 5000.0),
+            "water_pump_relay_number": ("WATER_PUMP_RELAY_NUMBER", 0.0, 15.0),
             "forward_gain": ("FORWARD_GAIN", 0.0, 2.0),
             "lateral_gain": ("LATERAL_GAIN", -0.02, 0.02),
             "altitude_gain": ("ALTITUDE_GAIN", -0.02, 0.02),
@@ -420,7 +432,7 @@ class SprayController:
             except (TypeError, ValueError):
                 continue
             value = max(min_v, min(max_v, value))
-            if attr in ("AIM_TOLERANCE_PX", "SPRAY_DURATION_MS", "LOCK_HOLD_MS"):
+            if attr in ("AIM_TOLERANCE_PX", "SPRAY_DURATION_MS", "LOCK_HOLD_MS", "WATER_PUMP_RELAY_NUMBER"):
                 setattr(cls, attr, int(round(value)))
             else:
                 setattr(cls, attr, value)
@@ -449,8 +461,18 @@ class SprayController:
     # Trigger / Abort
     # ------------------------------------------------------------------ #
 
-    def trigger(self, target: SprayTarget) -> dict:
-        """Trigger autonomous spray sequence on target."""
+    def trigger(self, target: SprayTarget, *, require_autonomy: bool = False) -> dict:
+        """Trigger spray sequence on target.
+
+        Args:
+            target: SprayTarget to engage.
+            require_autonomy: When True, refuse the trigger if the
+                drone is already inside ``AUTONOMY_MIN_RANGE_M``. This
+                protects the CONOPS Q&A #10 autonomy gate (autonomous
+                approach must start from beyond 2 m). The Mission
+                Planner "Auto Spray (autonomy gate)" button sets this
+                True; manual sprays leave it False.
+        """
         with self._lock:
             if self.is_active:
                 return {"success": False, "error": "Spray sequence already active"}
@@ -492,6 +514,25 @@ class SprayController:
                         f"{self.TRIGGER_MAX_DISTANCE_M}m). Position manually "
                         f"within {self.TRIGGER_MAX_DISTANCE_M}m before triggering."
                     ),
+                }
+
+            # CONOPS Q&A #10 autonomy gate: the autonomous approach must
+            # cross the 2 m envelope, otherwise the auto-extinguish 20 pts
+            # are forfeited. Refuse the trigger when the operator asked
+            # for an autonomy-claim run but the drone is already too
+            # close to demonstrate the approach.
+            if require_autonomy and distance < self.AUTONOMY_MIN_RANGE_M:
+                return {
+                    "success": False,
+                    "error": (
+                        f"Autonomy gate failed: drone is {distance:.2f}m from "
+                        f"target — must be >= {self.AUTONOMY_MIN_RANGE_M:.1f}m for "
+                        f"the autonomous approach to count (CONOPS Q&A #10). "
+                        f"Back the drone up and retry. For a manual spray, use "
+                        f"the manual button instead."
+                    ),
+                    "distance": round(distance, 2),
+                    "min_required_m": self.AUTONOMY_MIN_RANGE_M,
                 }
 
             # Image-only with a known range still warrants a real approach
@@ -579,11 +620,15 @@ class SprayController:
             if not skip_approach:
                 self._set_state(SprayState.APPROACH)
                 if not self._approach_target(target):
+                    if not self._check_abort():
+                        self._set_state(SprayState.FAILED, error="Approach failed")
                     return
 
             # --- AIM ---
             self._set_state(SprayState.AIM)
             if not self._aim_at_target(target):
+                if not self._check_abort():
+                    self._set_state(SprayState.FAILED, error="Aim failed")
                 return
 
             # --- CAPTURE PRE-SPRAY SNAPSHOT ---
@@ -597,6 +642,12 @@ class SprayController:
 
                 self._set_state(SprayState.SPRAY)
                 if not self._spray_target():
+                    with self._lock:
+                        self._status.targets_failed += 1
+                    self._set_state(
+                        SprayState.FAILED,
+                        error="Water shooter trigger failed",
+                    )
                     return
 
                 # --- VERIFY ---
@@ -705,9 +756,12 @@ class SprayController:
         velocity in the drone's world frame.
         """
         self._set_approach_sectors(target, exclude=True)
-        if self._get_detection_bbox_fn is not None:
-            return self._approach_via_image(target)
-        return self._approach_via_velocity(target)
+        try:
+            if self._get_detection_bbox_fn is not None:
+                return self._approach_via_image(target)
+            return self._approach_via_velocity(target)
+        finally:
+            self._set_approach_sectors(target, exclude=False)
 
     def _approach_via_image(self, target: SprayTarget) -> bool:
         """Image-space approach for image_only targets with known range.
@@ -1121,15 +1175,25 @@ class SprayController:
         """Activate water pump."""
         if not self._servo:
             logger.error("ServoController not available for spray")
-            return True
+            return False
 
         logger.info(f"Spraying target (attempt {self._spray_count})")
+        try:
+            if not self._servo.configure_water_pump_relay(
+                int(self.WATER_PUMP_RELAY_NUMBER)
+            ):
+                logger.warning("Failed to configure water pump relay")
+                return False
+        except Exception as e:
+            logger.warning(f"Failed to configure water pump relay: {e}")
+            return False
         success = self._servo.trigger_water_shooter(
             duration_ms=self.SPRAY_DURATION_MS
         )
         if not success:
             logger.warning("Water shooter trigger returned failure")
-        return True  # proceed regardless
+            return False
+        return True
 
     # ------------------------------------------------------------------ #
     # VERIFY (circle change detection, HSV fallback)
@@ -1197,7 +1261,10 @@ class SprayController:
     def _capture_and_upload(self, target: SprayTarget) -> None:
         """Capture photo and upload to Google Drive.
 
-        Filename: Task_2_MAD_target_<n>.jpg (matches CONOPS Section 5.2.4)
+        Filename: Task_2_<team>_target_<n>.jpg (CONOPS §5.2.4.4.f).
+        Team name is taken from NOMAD_TEAM_NAME env var (matching the
+        target_localizer node default and the Mission Planner
+        MissionConfig.TeamName).
         """
         try:
             photo_path = None
@@ -1207,7 +1274,8 @@ class SprayController:
                 logger.warning("Could not capture photo for upload")
                 return
 
-            filename = f"Task_2_MAD_target_{target.target_id}.jpg"
+            team_name = os.environ.get("NOMAD_TEAM_NAME", "MAD").replace(" ", "_")
+            filename = f"Task_2_{team_name}_target_{target.target_id}.jpg"
             if self._upload_fn:
                 url = self._upload_fn(photo_path, filename)
                 with self._lock:

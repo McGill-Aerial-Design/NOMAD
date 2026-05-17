@@ -144,8 +144,6 @@ def log_task1_capture(
     target_text: str,
     target_gps: dict[str, float],
     drone_state: dict[str, Any],
-    landmark_name: str,
-    offset_meters: dict[str, float],
     log_dir: Path | str | None = None,
 ) -> Path:
     """
@@ -155,8 +153,6 @@ def log_task1_capture(
         target_text: Generated relative text description
         target_gps: Target GPS coordinates {lat, lon, alt}
         drone_state: Drone state at capture time
-        landmark_name: Name of nearest landmark
-        offset_meters: Offset from landmark {north, east}
         log_dir: Custom log directory
 
     Returns:
@@ -166,8 +162,6 @@ def log_task1_capture(
         "target_text": target_text,
         "target_gps": target_gps,
         "drone_state": drone_state,
-        "nearest_landmark": landmark_name,
-        "offset_from_landmark_m": offset_meters,
     }
 
     return log_mission_event(task_id="1", data=data, log_dir=log_dir)

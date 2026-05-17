@@ -11,8 +11,9 @@
 #   3. Starts the container (`nomad start isaac_ros_container`).
 #   4. Installs the ZED SDK inside the container.
 #   5. Installs ROS2 / GStreamer apt deps inside the container.
-#   6. Builds zed_wrapper / zed_components / nvblox packages with colcon.
-#   7. Persists the resulting state into the image with `docker commit`.
+#   6. Builds and installs CUDA-enabled OpenCV for Python image processing.
+#   7. Builds zed_wrapper / zed_components / nvblox packages with colcon.
+#   8. Persists the resulting state into the image with `docker commit`.
 #
 # After this, runtime service scripts assume provisioning is done and will
 # fail loudly with an actionable message if it isn't.
@@ -120,6 +121,10 @@ install_apt_deps() {
     ' 2>&1 | tail -5
 }
 
+install_opencv_cuda() {
+    "$REPO_ROOT/scripts/setup/install_opencv_cuda_container.sh"
+}
+
 build_packages() {
     log_info "building ROS packages (zed + nvblox). First run takes 15-30 minutes."
     in_container "
@@ -146,6 +151,7 @@ main() {
     ensure_container
     install_zed_sdk
     install_apt_deps
+    install_opencv_cuda
     build_packages
     persist_image
     log_ok "provisioning complete. You can now run: nomad start all"

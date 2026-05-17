@@ -68,17 +68,29 @@ namespace NOMAD.MissionPlanner
         private ListBox _lstDetections;
         private Label _lblDetectionCount;
         private Button _btnRefreshDetections;
-        private Button _btnSprayTarget;
+        private Button _btnAutoSpray;        // Autonomy-gated (1× per mission)
+        private Button _btnManualSpray;      // Manual fire (no approach gate)
         private Button _btnAbortSpray;
         private Label _lblDistToTarget;
+        private Label _lblAutonomyState;     // "Autonomy gate: not yet claimed" / "Claimed (target X)"
         private Label _lblTargetCount;
         private Button _btnResetMap;
         private Button _btnResetVio;
+
+        // ---- RTM Checklist (Task 2 RTM SOPs, CONOPS Appendix F) ----
+        private List<CheckBox> _rtmCheckboxes = new List<CheckBox>();
+        private Label _lblRtmProgress;
+        private Button _btnRtmReset;
 
         private System.Threading.Timer _modePollTimer;
         private int _modePollInFlight;
         private volatile bool _sprayInProgress;
         private JArray _cachedDetections = new JArray();
+        // True once an autonomous spray attempt has actually completed
+        // successfully. The "Auto Spray" button is hidden after this so
+        // the team can't accidentally re-trigger and risk failing the
+        // claim on a second attempt.
+        private bool _autonomyClaimed;
 
         public NOMADTask2View(
             DualLinkSender sender,
@@ -161,13 +173,18 @@ namespace NOMAD.MissionPlanner
             detectTab.Controls.Add(CreateDetectSprayPanel());
             _tabControl.TabPages.Add(detectTab);
 
-            // Tab 2: Submit
+            // Tab 2: RTM Checklist (CONOPS Appendix F — 15 pts)
+            var rtmTab = new TabPage("RTM SOPs") { BackColor = NOMADTheme.BG_DARK, Padding = new Padding(0) };
+            rtmTab.Controls.Add(CreateRtmChecklistPanel());
+            _tabControl.TabPages.Add(rtmTab);
+
+            // Tab 3: Submit
             var submitTab = new TabPage("Submit") { BackColor = CARD_BG, Padding = new Padding(0) };
             _uploadPanel = new Task2UploadPanel(_config) { Dock = DockStyle.Fill };
             submitTab.Controls.Add(_uploadPanel);
             _tabControl.TabPages.Add(submitTab);
 
-            // Tab 3: Status
+            // Tab 4: Status
             var statusTab = new TabPage("Status") { BackColor = NOMADTheme.BG_DARK, Padding = new Padding(0) };
             statusTab.Controls.Add(CreateStatusPanel());
             _tabControl.TabPages.Add(statusTab);
@@ -247,7 +264,7 @@ namespace NOMAD.MissionPlanner
             {
                 Dock = DockStyle.Top,
                 BackColor = CARD_BG,
-                Height = 280 + 130 + 150 + 80,
+                Height = 280 + 175 + 150 + 80,
             };
 
             // ---- Detections card (docks at bottom of inner; added first) ----
@@ -295,31 +312,55 @@ namespace NOMAD.MissionPlanner
             };
             detectCard.Controls.Add(_lblDistToTarget);
 
-            // ---- Spray card ----
+            // ---- Spray card (autonomy-claim flow + manual flow) ----
+            // Strategy for Task 2 scoring (CONOPS §5.2.4 + Q&A #10):
+            //   - Pick ONE outdoor target near the doorway and run the
+            //     autonomous spray sequence on it. That claims the
+            //     20-pt autonomy gate.
+            //   - Spray every other target manually (no autonomous
+            //     approach), maximising the chance of hits on
+            //     additional indoor + outdoor circles.
+            // The two buttons below enforce this split.
             var sprayCard = CreateCard("SPRAY CONTROLS");
             sprayCard.Dock = DockStyle.Top;
-            sprayCard.Height = 130;
+            sprayCard.Height = 175;
 
-            _btnSprayTarget = CreateButton("Spray Target", ACCENT_COLOR, 140, 38);
-            _btnSprayTarget.Location = new Point(15, 38);
-            _btnSprayTarget.Font = new Font("Segoe UI", 11, FontStyle.Bold);
-            _btnSprayTarget.Click += (s, e) => UiAsync.Run(this, TriggerSpray, nameof(TriggerSpray));
-            sprayCard.Controls.Add(_btnSprayTarget);
+            _lblAutonomyState = new Label
+            {
+                Text = "Autonomy gate: NOT CLAIMED — use Auto Spray on the first target",
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                ForeColor = WARNING_COLOR,
+                Location = new Point(15, 36),
+                AutoSize = true,
+            };
+            sprayCard.Controls.Add(_lblAutonomyState);
 
-            _btnAbortSpray = CreateButton("ABORT", ERROR_COLOR, 90, 38);
-            _btnAbortSpray.Location = new Point(165, 38);
+            _btnAutoSpray = CreateButton("Auto Spray (1×)", ACCENT_COLOR, 180, 42);
+            _btnAutoSpray.Location = new Point(15, 60);
+            _btnAutoSpray.Font = new Font("Segoe UI", 11, FontStyle.Bold);
+            _btnAutoSpray.Click += (s, e) => UiAsync.Run(this, TriggerAutoSpray, nameof(TriggerAutoSpray));
+            sprayCard.Controls.Add(_btnAutoSpray);
+
+            _btnManualSpray = CreateButton("Manual Spray", INFO_COLOR, 140, 42);
+            _btnManualSpray.Location = new Point(205, 60);
+            _btnManualSpray.Font = new Font("Segoe UI", 11, FontStyle.Bold);
+            _btnManualSpray.Click += (s, e) => UiAsync.Run(this, TriggerManualSpray, nameof(TriggerManualSpray));
+            sprayCard.Controls.Add(_btnManualSpray);
+
+            _btnAbortSpray = CreateButton("ABORT", ERROR_COLOR, 90, 42);
+            _btnAbortSpray.Location = new Point(355, 60);
             _btnAbortSpray.Font = new Font("Segoe UI", 11, FontStyle.Bold);
             _btnAbortSpray.Click += (s, e) => UiAsync.Run(this, AbortSpray, nameof(AbortSpray));
             sprayCard.Controls.Add(_btnAbortSpray);
 
             sprayCard.Controls.Add(new Label
             {
-                Text = "1. Position drone with WASD until target visible\n"
-                     + "2. Select target in list above\n"
-                     + "3. Click Spray Target",
-                Font = new Font("Segoe UI", 8),
+                Text = "Auto Spray:   pick outdoor target, drone ≥2.5m from it, full APPROACH→AIM→SPRAY→VERIFY→UPLOAD.\n"
+                     + "Manual Spray: pilot is in firing range, water pump fires; servo aims at last detection.\n"
+                     + "ABORT:        cancels any in-flight sequence and re-arms both buttons.",
+                Font = new Font("Consolas", 8),
                 ForeColor = TEXT_MUTED,
-                Location = new Point(265, 38),
+                Location = new Point(15, 112),
                 AutoSize = true,
             });
 
@@ -492,6 +533,144 @@ namespace NOMAD.MissionPlanner
             panel.Controls.Add(seqCard);
             panel.Controls.Add(bar);
             return panel;
+        }
+
+        // ============================================================
+        // RTM SOP checklist (CONOPS Appendix F, 15 pts)
+        // ============================================================
+        // This is a pilot-aid: every line is a radio call the team
+        // needs to make to ATC in the right order. Operator ticks the
+        // box as each call is completed. Worth 15 pts for full
+        // compliance, 10 for one error, 0 otherwise — so a missed call
+        // is worse than a slightly wrong one.
+        private static readonly (string phase, string text)[] RTM_CHECKLIST =
+        {
+            ("Setup", "Radio check: \"<Callsign> to base, radio check\" — receive signal rating"),
+            ("Dispatch", "Dispatch briefing: respond \"<Callsign> to dispatch, go ahead\""),
+            ("Dispatch", "After briefing complete: transmit \"<Callsign> Wilco\""),
+            ("Takeoff", "Request takeoff: \"<Callsign> to base, request takeoff\""),
+            ("Takeoff", "Acknowledge clearance: \"Cleared to takeoff, <Callsign>\""),
+            ("Takeoff", "After airborne: \"<Callsign> takeoff complete\""),
+            ("Corridor", "Climb to 20–35 m UAM corridor (hold ≥30 s)"),
+            ("Corridor", "Entering corridor: \"<Callsign> entering corridor\""),
+            ("Corridor", "Leaving corridor (approach building): \"<Callsign> has left the corridor\""),
+            ("Building", "Crossing search-volume boundary: \"<Callsign> operating near the building\""),
+            ("Engagement", "Auto Spray (1×) — claim autonomy gate"),
+            ("Engagement", "Manual sprays for remaining targets"),
+            ("Return", "Climb back into UAM corridor: \"<Callsign> entering corridor\""),
+            ("Return", "Leaving corridor at vertiport: \"<Callsign> has left the corridor\""),
+            ("Landing", "Request landing: \"<Callsign> to base, request landing\""),
+            ("Landing", "Acknowledge clearance: \"Cleared to land, <Callsign>\""),
+            ("Landing", "After touchdown: \"<Callsign> landed\""),
+        };
+
+        private Panel CreateRtmChecklistPanel()
+        {
+            var root = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = NOMADTheme.BG_DARK,
+                Padding = new Padding(10),
+            };
+
+            // Scrollable list (fills remainder).
+            var listHost = new Panel
+            {
+                Dock = DockStyle.Fill,
+                AutoScroll = true,
+                BackColor = NOMADTheme.BG_DARK,
+            };
+
+            int y = 4;
+            string lastPhase = null;
+            foreach (var (phase, text) in RTM_CHECKLIST)
+            {
+                if (phase != lastPhase)
+                {
+                    var hdr = new Label
+                    {
+                        Text = $"── {phase} ──",
+                        Font = new Font("Consolas", 10, FontStyle.Bold),
+                        ForeColor = ACCENT_COLOR,
+                        Location = new Point(0, y),
+                        AutoSize = true,
+                    };
+                    listHost.Controls.Add(hdr);
+                    y += 24;
+                    lastPhase = phase;
+                }
+
+                var cb = new CheckBox
+                {
+                    Text = text,
+                    Font = new Font("Segoe UI", 9),
+                    ForeColor = TEXT_PRIMARY,
+                    Location = new Point(12, y),
+                    AutoSize = true,
+                    AutoCheck = true,
+                    BackColor = NOMADTheme.BG_DARK,
+                };
+                cb.CheckedChanged += (s, e) => UpdateRtmProgress();
+                _rtmCheckboxes.Add(cb);
+                listHost.Controls.Add(cb);
+                y += 22;
+            }
+
+            // Bottom progress bar (docked bottom, drawn first so list fills above).
+            var bottomBar = new Panel
+            {
+                Dock = DockStyle.Bottom,
+                Height = 40,
+                BackColor = CARD_BG,
+                Padding = new Padding(8, 6, 8, 6),
+            };
+
+            _lblRtmProgress = new Label
+            {
+                Text = "Progress: 0 / " + RTM_CHECKLIST.Length,
+                Font = new Font("Consolas", 11, FontStyle.Bold),
+                ForeColor = WARNING_COLOR,
+                Dock = DockStyle.Left,
+                AutoSize = false,
+                Width = 220,
+                TextAlign = ContentAlignment.MiddleLeft,
+            };
+            bottomBar.Controls.Add(_lblRtmProgress);
+
+            _btnRtmReset = CreateButton("Reset checklist", ERROR_COLOR, 140, 28);
+            _btnRtmReset.Dock = DockStyle.Right;
+            _btnRtmReset.Click += (s, e) =>
+            {
+                foreach (var cb in _rtmCheckboxes) cb.Checked = false;
+            };
+            bottomBar.Controls.Add(_btnRtmReset);
+
+            // Header row (docked top).
+            var header = new Label
+            {
+                Text = "Big City RTM SOPs — tick each call as it is made.\n"
+                     + "ICAO phonetic alphabet · 3-digit headings clockwise from magnetic north · full callsign at start of each exchange.",
+                Font = new Font("Segoe UI", 9),
+                ForeColor = TEXT_PRIMARY,
+                Dock = DockStyle.Top,
+                Height = 44,
+                Padding = new Padding(0, 0, 0, 8),
+            };
+
+            root.Controls.Add(listHost);   // fills
+            root.Controls.Add(bottomBar);  // bottom
+            root.Controls.Add(header);     // top
+            return root;
+        }
+
+        private void UpdateRtmProgress()
+        {
+            int done = _rtmCheckboxes.Count(c => c.Checked);
+            int total = _rtmCheckboxes.Count;
+            if (_lblRtmProgress == null) return;
+            _lblRtmProgress.Text = $"Progress: {done} / {total}";
+            _lblRtmProgress.ForeColor = done == total ? SUCCESS_COLOR
+                : done >= total / 2 ? WARNING_COLOR : ERROR_COLOR;
         }
 
         private Label MakeRow(Panel parent, string text, int y)
@@ -776,7 +955,22 @@ namespace NOMAD.MissionPlanner
             }
 
             bool active = ACTIVE_SPRAY_STATES.Contains(state);
-            _btnSprayTarget.Enabled = !active;
+            // Autonomy claim is recorded when a sequence that included
+            // an APPROACH phase reaches the verified state. The
+            // backend doesn't currently surface the "required_autonomy"
+            // flag back on /api/spray/status; we proxy it via the fact
+            // that a verified target was engaged via APPROACH (i.e.
+            // approach_method is "image" or "velocity" — both started
+            // from outside the 2 m envelope).
+            if (state == "complete" && verified && !string.IsNullOrEmpty(approachMethod) && !_autonomyClaimed)
+            {
+                _autonomyClaimed = true;
+                _lblAutonomyState.Text = $"Autonomy gate: CLAIMED (target {sprayData["target_id"]?.Value<int>() ?? -1}) ✓";
+                _lblAutonomyState.ForeColor = SUCCESS_COLOR;
+            }
+
+            _btnAutoSpray.Enabled = !active && !_autonomyClaimed;
+            _btnManualSpray.Enabled = !active;
             _btnAbortSpray.Enabled = active;
 
             // Spray-state-driven tilt lock — only active when spray is mid-run.
@@ -879,13 +1073,17 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private async Task TriggerSpray()
+        private Task TriggerAutoSpray() => TriggerSprayInternal(requireAutonomy: true);
+        private Task TriggerManualSpray() => TriggerSprayInternal(requireAutonomy: false);
+
+        private async Task TriggerSprayInternal(bool requireAutonomy)
         {
             if (_sprayInProgress) return;
             _sprayInProgress = true;
             try
             {
-                _btnSprayTarget.Enabled = false;
+                _btnAutoSpray.Enabled = false;
+                _btnManualSpray.Enabled = false;
 
                 JToken target = null;
                 int selIdx = -1;
@@ -902,7 +1100,7 @@ namespace NOMAD.MissionPlanner
                     if (!detectResp.IsSuccessStatusCode)
                     {
                         BeginInvoke((Action)(() => _lblSprayError.Text = "No detections available"));
-                        _btnSprayTarget.Enabled = true;
+                        ReenableSprayButtons();
                         return;
                     }
                     var detectJson = JObject.Parse(await detectResp.Content.ReadAsStringAsync());
@@ -912,7 +1110,7 @@ namespace NOMAD.MissionPlanner
                     if (detections == null || detections.Count == 0)
                     {
                         BeginInvoke((Action)(() => _lblSprayError.Text = "No detections -- cannot spray"));
-                        _btnSprayTarget.Enabled = true;
+                        ReenableSprayButtons();
                         return;
                     }
                     target = detections[0];
@@ -928,6 +1126,7 @@ namespace NOMAD.MissionPlanner
                     ["confidence"] = target["confidence"] ?? 0,
                     ["image_only"] = target["image_only"]?.Value<bool>() ?? false,
                     ["range_m"] = target["range_m"] ?? target["distance_m"] ?? null,
+                    ["require_autonomy"] = requireAutonomy,
                 };
 
                 var content = new StringContent(payload.ToString(), Encoding.UTF8, "application/json");
@@ -939,10 +1138,20 @@ namespace NOMAD.MissionPlanner
                     var skipApproach = result["skip_approach"]?.Value<bool>() ?? false;
                     BeginInvoke((Action)(() =>
                     {
-                        _lblSprayState.Text = skipApproach
-                            ? "State: SKIPPED APPROACH (already <2m)"
-                            : "State: APPROACH STARTING";
+                        if (requireAutonomy)
+                        {
+                            _lblSprayState.Text = "State: APPROACH (autonomy claim in progress)";
+                            _lblAutonomyState.Text = "Autonomy gate: claim in progress…";
+                            _lblAutonomyState.ForeColor = ACCENT_COLOR;
+                        }
+                        else
+                        {
+                            _lblSprayState.Text = skipApproach
+                                ? "State: MANUAL SPRAY (no approach)"
+                                : "State: APPROACH (manual mode)";
+                        }
                         _lblSprayState.ForeColor = ACCENT_COLOR;
+                        _lblSprayError.Visible = false;
                     }));
                 }
                 else
@@ -956,7 +1165,7 @@ namespace NOMAD.MissionPlanner
                         _lblSprayError.Text = $"Spray failed: {detail}";
                         _lblSprayError.Visible = true;
                     }));
-                    _btnSprayTarget.Enabled = true;
+                    ReenableSprayButtons();
                 }
             }
             catch (Exception ex)
@@ -966,9 +1175,18 @@ namespace NOMAD.MissionPlanner
                     _lblSprayError.Text = $"Error: {ex.Message}";
                     _lblSprayError.Visible = true;
                 }));
-                _btnSprayTarget.Enabled = true;
+                ReenableSprayButtons();
             }
             finally { _sprayInProgress = false; }
+        }
+
+        private void ReenableSprayButtons()
+        {
+            BeginInvoke((Action)(() =>
+            {
+                _btnAutoSpray.Enabled = !_autonomyClaimed;
+                _btnManualSpray.Enabled = true;
+            }));
         }
 
         private async Task AbortSpray()

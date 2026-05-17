@@ -16,6 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 PATTERN='ros_http_bridge\.py|nomad_ros_http_bridge_launch'
 LAUNCH_SCRIPT_PATH=/tmp/nomad_ros_http_bridge_launch.sh
+BRIDGE_SCRIPT_PATH=/tmp/nomad_ros_http_bridge.py
 LAUNCH_LOG=/tmp/nomad_ros_http_bridge.log
 
 write_launch_script() {
@@ -38,11 +39,16 @@ ARGS=(
     --mesh-topic /nvblox_node/color_layer_marker
 )
 
+case "${NOMAD_DETECTIONS_AUTO_START:-false}" in
+    1|true|TRUE|yes|YES|on|ON) ;;
+    *) ARGS+=(--disable-detections) ;;
+esac
+
 # Restart loop: keeps VIO telemetry flowing through transient crashes.
 # Trap SIGTERM so `docker exec ... pkill` cleanly stops the wrapper.
 trap 'kill -TERM "$BRIDGE_PID" 2>/dev/null; exit 0' TERM INT
 while true; do
-    python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py "${ARGS[@]}" &
+    python3 /tmp/nomad_ros_http_bridge.py "${ARGS[@]}" &
     BRIDGE_PID=$!
     wait "$BRIDGE_PID"
     rc=$?
@@ -65,6 +71,8 @@ svc_start() {
     fi
 
     kill_pattern_in_container "$PATTERN" 5
+    docker cp "$NOMAD_REPO_ROOT/edge_core/ros_http_bridge.py" \
+        "$ISAAC_CONTAINER_NAME:$BRIDGE_SCRIPT_PATH" >/dev/null
     write_launch_script
 
     local env_args=(

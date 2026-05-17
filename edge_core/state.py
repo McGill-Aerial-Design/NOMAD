@@ -52,6 +52,12 @@ class StateManager:
 
     def get_state(self) -> SystemState:
         with self._lock:
+            now = time.monotonic()
+            if (
+                self._raw_state
+                and now - self._last_model_update >= self.MODEL_UPDATE_INTERVAL
+            ):
+                self._rebuild_state_locked(now)
             return self._state
 
     def update_state(self, **fields: Any) -> SystemState:
@@ -73,14 +79,9 @@ class StateManager:
             self._raw_state.update(fields)
             
             # Only rebuild Pydantic model at configured interval (10Hz)
-            now = time.time()
+            now = time.monotonic()
             if now - self._last_model_update >= self.MODEL_UPDATE_INTERVAL:
-                data = self._state.model_dump()
-                data.update(self._raw_state)
-                data["timestamp"] = datetime.now(timezone.utc)
-                self._state = SystemState(**data)
-                self._raw_state.clear()  # Reset after applying
-                self._last_model_update = now
+                self._rebuild_state_locked(now)
             
             return self._state
 
@@ -105,5 +106,14 @@ class StateManager:
             data["timestamp"] = datetime.now(timezone.utc)
             self._state = SystemState(**data)
             self._raw_state.clear()
-            self._last_model_update = time.time()
+            self._last_model_update = time.monotonic()
             return self._state
+
+    def _rebuild_state_locked(self, monotonic_now: float) -> None:
+        """Apply pending raw fields to the immutable SystemState snapshot."""
+        data = self._state.model_dump()
+        data.update(self._raw_state)
+        data["timestamp"] = datetime.now(timezone.utc)
+        self._state = SystemState(**data)
+        self._raw_state.clear()
+        self._last_model_update = monotonic_now

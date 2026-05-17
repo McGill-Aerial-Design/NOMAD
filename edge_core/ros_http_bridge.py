@@ -567,7 +567,7 @@ class ROSHTTPBridge(Node):
                 f"{TARGET_LOCALIZER_IMPORT_ERROR}"
             )
 
-        if IMAGE_AVAILABLE:
+        if IMAGE_AVAILABLE and (self._enable_detections or self._enable_detection_status):
             image_topic = "/zed/zed_node/rgb/color/rect/image"
             image_qos = QoSProfile(
                 reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -590,6 +590,10 @@ class ROSHTTPBridge(Node):
                 image_qos,
             )
             self.get_logger().info(f"Subscribed to camera info: {camera_info_topic}")
+        elif IMAGE_AVAILABLE:
+            self.get_logger().info(
+                "Camera image subscription disabled because detections are disabled"
+            )
 
         # ZED camera intrinsics (will be populated from camera_info if available)
         # Default ZED 2i HD720 intrinsics as fallback
@@ -1110,9 +1114,14 @@ class ROSHTTPBridge(Node):
         if self._zmq_publisher is not None:
             return
         if not IPC_AVAILABLE:
-            self.get_logger().warning(
-                f"High-rate ZMQ transport unavailable: IPC import failed ({IPC_IMPORT_ERROR})"
-            )
+            now = time.monotonic()
+            if now - self._last_zmq_error_log >= self._http_warn_interval_s:
+                self.get_logger().warning(
+                    "High-rate ZMQ transport unavailable: "
+                    f"IPC import failed ({IPC_IMPORT_ERROR}); using HTTP only"
+                )
+                self._last_zmq_error_log = now
+            self._use_high_rate_zmq = False
             self._activate_high_rate_http_fallback(
                 "high-rate ZMQ transport dependencies are unavailable"
             )
@@ -1359,7 +1368,7 @@ class ROSHTTPBridge(Node):
         The nozzle servo is controlled via the Edge Core HTTP API.
         A ROS node (e.g. a fire detection pipeline) publishes a Float32
         angle to /nomad/servo/nozzle_angle, and this bridge forwards it
-        to Edge Core which drives the physical servo on GPIO Pin 15.
+        to Edge Core which commands the Cube Orange servo output.
 
         Float32 value: angle in degrees (0-180, where 90 is center).
 
@@ -1432,7 +1441,7 @@ class ROSHTTPBridge(Node):
         Send servo angle to Edge Core via HTTP POST.
         
         Uses the /api/servo/camera/tilt endpoint which controls the
-        nozzle servo on Jetson GPIO Pin 15 via bit-bang PWM.
+        nozzle servo through the Cube Orange over MAVLink.
         
         Rate limited to 10 Hz to avoid overwhelming the servo controller.
         """

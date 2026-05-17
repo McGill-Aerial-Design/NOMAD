@@ -449,9 +449,9 @@ http://100.85.121.98:8000/docs
 ### Servo / Spray / Video / Terminal
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/servo/status` | GET | Servo and GPIO status |
+| `/api/servo/status` | GET | Cube servo and relay status |
 | `/api/servo/camera/tilt?angle=N` | POST | Set camera servo angle |
-| `/api/servo/shooter/trigger?duration_ms=N` | POST | Trigger water shooter GPIO |
+| `/api/servo/shooter/trigger?duration_ms=N` | POST | Trigger water shooter Cube relay |
 | `/api/spray/status` | GET | Spray controller state |
 | `/api/spray/trigger` | POST | Trigger spray sequence |
 | `/api/video/status` | GET | Video pipeline status |

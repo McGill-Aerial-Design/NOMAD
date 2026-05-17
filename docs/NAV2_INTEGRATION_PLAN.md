@@ -1,9 +1,15 @@
 # Nav2 Integration Architecture Plan
 ## NOMAD Task 2 - Full ROS2 Navigation Stack
 
+> ⚠️ **HISTORICAL / NOT USED IN COMPETITION (May 2026).**
+> Nav2 was removed from the flight plan. Task 2 is flown manually
+> indoors, with one autonomous spray sequence on an outdoor target.
+> Positioning is GPS + barometer + optical flow — no VIO, no Nav2.
+> Document retained for design history only.
+
 **Version**: 1.0  
 **Date**: January 29, 2026  
-**Status**: Design & Verification Phase
+**Status**: Historical (superseded May 2026)
 
 ---
 

@@ -48,7 +48,7 @@ The Video view includes comprehensive manual drone control:
 - **Payload Controls**: Drop mechanisms and water pump control
 
 ### Core Functionality
-- **Task 1 (Recon)**: Capture snapshot and calculate target position relative to landmarks
+- **Task 1 (Recon)**: Capture snapshot and calculate target position relative to building corners
 - **Task 2 (Extinguish)**: Manage exclusion map and target hit registration
 - **Embedded Video**: Built-in RTSP player with low-latency streaming (LibVLC)
 - **Telemetry Display**: Real-time position and connection status

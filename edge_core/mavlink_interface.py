@@ -22,21 +22,16 @@ class MavlinkService:
         # Time sync service reference (set externally)
         self._time_sync_service: Any = None
 
-        # RC servo bridge reference (set externally)
-        self._rc_servo_bridge: Any = None
-
         # SERVO_OUTPUT_RAW: last seen PWM per channel (1-indexed, us). Updated from
         # SERVO_OUTPUT_RAW messages so callers can read actual FC servo outputs.
         self._servo_output: dict[int, int] = {}
         self._servo_output_lock = threading.Lock()
+        self._ack_condition = threading.Condition()
+        self._command_acks: list[dict[str, Any]] = []
 
     def set_time_sync_service(self, service: Any) -> None:
         """Set the TimeSyncService to receive GPS time updates."""
         self._time_sync_service = service
-
-    def set_rc_servo_bridge(self, bridge: Any) -> None:
-        """Set the RCServoBridge to receive RC channel updates."""
-        self._rc_servo_bridge = bridge
 
     def get_servo_output_pwm(self, channel: int) -> "int | None":
         """Return the last SERVO_OUTPUT_RAW PWM (us) for channel (1-indexed), or None."""
@@ -65,11 +60,8 @@ class MavlinkService:
         if not self._conn:
             return
         try:
-            self._conn.mav.command_long_send(
-                self._conn.target_system,
-                self._conn.target_component,
+            self._send_command_long_and_wait_ack(
                 mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
-                0,
                 1 if should_arm else 0,
                 0,
                 0,
@@ -98,11 +90,9 @@ class MavlinkService:
             try:
                 msg_types = [
                     "HEARTBEAT", "SYS_STATUS", "GLOBAL_POSITION_INT",
-                    "ATTITUDE", "SYSTEM_TIME",
+                    "ATTITUDE", "SYSTEM_TIME", "COMMAND_ACK",
                     "SERVO_OUTPUT_RAW",  # actual FC PWM outputs for camera tilt TF
                 ]
-                if self._rc_servo_bridge is not None:
-                    msg_types.append("RC_CHANNELS")
                 msg = self._conn.recv_match(
                     type=msg_types,
                     blocking=True,
@@ -170,6 +160,8 @@ class MavlinkService:
                     time_boot_ms = getattr(msg, "time_boot_ms", 0)
                     if time_unix_usec > 0:
                         self._time_sync_service.update_gps_time(time_unix_usec, time_boot_ms)
+            elif msg_type == "COMMAND_ACK":
+                self._record_command_ack(msg)
             elif msg_type == "SERVO_OUTPUT_RAW":
                 # Cache actual FC PWM per channel (1-indexed, channels 1-16).
                 with self._servo_output_lock:
@@ -178,13 +170,60 @@ class MavlinkService:
                         val = getattr(msg, attr, 0)
                         if val and val > 0:
                             self._servo_output[ch] = val
-            elif msg_type == "RC_CHANNELS":
-                # Forward RC channel data to servo bridge
-                if self._rc_servo_bridge is not None:
-                    try:
-                        self._rc_servo_bridge.on_rc_channels(msg)
-                    except Exception:
-                        pass
+
+    def _record_command_ack(self, msg: Any) -> None:
+        ack = {
+            "command": int(getattr(msg, "command", -1)),
+            "result": int(getattr(msg, "result", -1)),
+            "timestamp": time.monotonic(),
+        }
+        with self._ack_condition:
+            self._command_acks.append(ack)
+            self._command_acks = self._command_acks[-25:]
+            self._ack_condition.notify_all()
+
+    def _wait_command_ack(
+        self,
+        command_id: int,
+        *,
+        since: float,
+        timeout_s: float = 0.75,
+    ) -> bool:
+        accepted = {
+            mavutil.mavlink.MAV_RESULT_ACCEPTED,
+            mavutil.mavlink.MAV_RESULT_IN_PROGRESS,
+        }
+        deadline = time.monotonic() + timeout_s
+        with self._ack_condition:
+            while True:
+                for ack in reversed(self._command_acks):
+                    if ack["timestamp"] < since:
+                        break
+                    if ack["command"] == int(command_id):
+                        return ack["result"] in accepted
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._ack_condition.wait(timeout=remaining)
+
+    def _send_command_long_and_wait_ack(
+        self,
+        command_id: int,
+        *params: float,
+        timeout_s: float = 0.75,
+    ) -> bool:
+        if self._conn is None:
+            return False
+        padded = list(params[:7]) + [0.0] * max(0, 7 - len(params))
+        start = time.monotonic()
+        self._conn.mav.command_long_send(
+            self._conn.target_system,
+            self._conn.target_component,
+            command_id,
+            0,
+            *padded[:7],
+        )
+        return self._wait_command_ack(command_id, since=start, timeout_s=timeout_s)
 
     def _update_connection_status(self, now: float) -> None:
         if self._last_heartbeat and (now - self._last_heartbeat) > self.disconnect_timeout:
@@ -537,20 +576,33 @@ class MavlinkService:
             return False
         
         try:
-            self._conn.mav.command_long_send(
-                self._conn.target_system,
-                self._conn.target_component,
+            return self._send_command_long_and_wait_ack(
                 mavutil.mavlink.MAV_CMD_DO_SET_SERVO,
-                0,                  # confirmation
                 servo_channel,      # param1: servo instance (1-indexed)
                 pwm_value,          # param2: PWM value (us)
                 0, 0, 0, 0, 0,      # param3-7: unused
             )
-            return True
             
         except Exception as e:
             import logging
             logging.getLogger(__name__).debug(f"Payload trigger error: {e}")
+            return False
+
+    def set_relay(self, relay_number: int, enabled: bool) -> bool:
+        """Set a Cube Orange relay through MAV_CMD_DO_SET_RELAY."""
+        if self._conn is None:
+            return False
+
+        try:
+            return self._send_command_long_and_wait_ack(
+                mavutil.mavlink.MAV_CMD_DO_SET_RELAY,
+                int(relay_number),
+                1 if enabled else 0,
+                0, 0, 0, 0, 0,
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).debug(f"Relay command error: {e}")
             return False
 
     def stop_velocity(self) -> bool:
@@ -687,16 +739,12 @@ class MavlinkService:
         
         try:
             # Custom mode for Copter
-            self._conn.mav.command_long_send(
-                self._conn.target_system,
-                self._conn.target_component,
+            return self._send_command_long_and_wait_ack(
                 mavutil.mavlink.MAV_CMD_DO_SET_MODE,
-                0,              # confirmation
                 1,              # base mode (MAV_MODE_FLAG_CUSTOM_MODE_ENABLED)
                 mode_id,        # custom mode
                 0, 0, 0, 0, 0,  # unused params
             )
-            return True
             
         except Exception as e:
             import logging

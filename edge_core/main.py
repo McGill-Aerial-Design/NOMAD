@@ -74,13 +74,6 @@ try:
 except ImportError:
     SERVO_AVAILABLE = False
 
-# RC channel to servo bridge
-try:
-    from .rc_servo_bridge import init_rc_servo_bridge, shutdown_rc_servo_bridge, get_rc_servo_bridge
-    RC_SERVO_BRIDGE_AVAILABLE = True
-except ImportError:
-    RC_SERVO_BRIDGE_AVAILABLE = False
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -105,7 +98,7 @@ nav_controller: NavController | None = None
 # Isaac ROS bridge (Task 2 only - requires ROS2 environment)
 isaac_bridge: "IsaacROSBridge | None" = None
 
-# Servo controller for camera tilt and water shooter
+# Servo controller for Cube Orange servo and relay outputs
 servo_controller_initialized: bool = False
 
 tailscale_manager = None
@@ -147,13 +140,6 @@ def cleanup() -> None:
         pass
 
     spray_controller = None
-
-    # Shutdown RC servo bridge
-    if RC_SERVO_BRIDGE_AVAILABLE:
-        try:
-            shutdown_rc_servo_bridge()
-        except Exception:
-            pass
 
     # Shutdown servo controller (safety - disable PWM outputs)
     if servo_controller_initialized and SERVO_AVAILABLE:
@@ -213,6 +199,7 @@ def run(
     logger.info("=" * 50)
     logger.info(f"Host: {host}:{port}")
     logger.info("=" * 50)
+    app.state.mavlink_service = mavlink_service
 
     # Cleanup old logs before starting services (non-blocking, fail-safe)
     try:
@@ -287,22 +274,17 @@ def run(
     # ZED camera is owned by the ROS2 wrapper inside the Isaac ROS container
     # (for nvblox, video bridge, etc.). Task 1 captures use the RTSP stream.
 
-    # Initialize servo controller for camera tilt and water shooter
+    # Initialize servo controller for Cube Orange servo and relay outputs.
+    # Mission Planner owns the camera tilt servo output mapping and pushes it
+    # through POST /api/servo/camera/config after connecting.
     global servo_controller_initialized
     enable_servos = os.environ.get("NOMAD_ENABLE_SERVOS", "true").lower() == "true"
-    # Camera tilt servo can be driven from the flight controller PWM outputs.
-    # Use environment variable NOMAD_CAMERA_TILT_SERVO_CHANNEL to select channel (1-indexed).
-    try:
-        camera_tilt_channel = int(os.environ.get("NOMAD_CAMERA_TILT_SERVO_CHANNEL", "6"))
-    except ValueError:
-        camera_tilt_channel = 6
-        logger.warning("Invalid NOMAD_CAMERA_TILT_SERVO_CHANNEL value, using default 6")
 
     if enable_servos and SERVO_AVAILABLE:
         try:
-            if init_servo_controller(mavlink_service=mavlink_service, camera_tilt_channel=camera_tilt_channel):
+            if init_servo_controller(mavlink_service=mavlink_service):
                 servo_controller_initialized = True
-                logger.info("Servo controller initialized for camera tilt and water shooter")
+                logger.info("Servo controller initialized for Mission Planner controlled servos")
             else:
                 logger.warning("Servo controller initialization failed - PWM pins or MAVLink may not be configured")
         except Exception as e:
@@ -335,30 +317,6 @@ def run(
 
     # Start MAVLink service
     mavlink_service.set_time_sync_service(time_sync_service)
-    
-    # Initialize RC-to-servo bridge (maps ELRS controller knob to nozzle servo)
-    try:
-        rc_channel = int(os.environ.get("NOMAD_RC_SERVO_CHANNEL", "6"))
-    except ValueError:
-        rc_channel = 6
-        logger.warning("Invalid NOMAD_RC_SERVO_CHANNEL value, using default channel 6")
-    enable_rc_servo = os.environ.get("NOMAD_ENABLE_RC_SERVO", "true").lower() == "true"
-    if enable_rc_servo and servo_controller_initialized and RC_SERVO_BRIDGE_AVAILABLE:
-        try:
-            bridge = init_rc_servo_bridge(
-                servo_controller=get_servo_controller(),
-                rc_channel=rc_channel,
-                enabled=True,
-            )
-            if bridge:
-                mavlink_service.set_rc_servo_bridge(bridge)
-                logger.info(f"RC servo bridge started (channel {rc_channel} -> nozzle servo)")
-            else:
-                logger.warning("RC servo bridge failed to start")
-        except Exception as e:
-            logger.error(f"Failed to start RC servo bridge: {e}")
-    elif not enable_rc_servo:
-        logger.info("RC servo bridge disabled (set NOMAD_ENABLE_RC_SERVO=true to enable)")
     
     mavlink_service.start()
     logger.info("MAVLink service started")
@@ -606,6 +564,20 @@ def run(
 
         while _detection_running:
             try:
+                with app.state.detection_state_lock:
+                    detection_enabled = bool(
+                        getattr(app.state, "detection_enabled", False)
+                    )
+                    if not detection_enabled:
+                        app.state.detected_objects = []
+                        app.state.detection_last_update = 0.0
+                if not detection_enabled:
+                    time.sleep(0.5)
+                    last_payload_hash = None
+                    with _detection_lock:
+                        _latest_detection = None
+                    continue
+
                 resp = _requests.get(snap_url, timeout=1)
                 if resp.status_code != 200:
                     time.sleep(0.5)

@@ -28,6 +28,11 @@ namespace NOMAD.MissionPlanner
         private NOMADConfig _config;
         private System.Threading.Timer _pollTimer;
         private int _isPollInFlight = 0; // Interlocked guard — prevents overlapping polls
+        private DateTime _lastHealthSuccessUtc = DateTime.MinValue;
+        private DateTime _lastIsaacPollUtc = DateTime.MinValue;
+        private static readonly TimeSpan OfflineGrace = TimeSpan.FromSeconds(15);
+        private static readonly TimeSpan OptionalEndpointBudget = TimeSpan.FromMilliseconds(1200);
+        private static readonly TimeSpan IsaacPollInterval = TimeSpan.FromSeconds(15);
         
         // Data history for graphs
         private readonly Queue<float> _cpuTempHistory = new Queue<float>();
@@ -690,21 +695,12 @@ namespace NOMAD.MissionPlanner
             {
                 if (IsDisposed || !IsHandleCreated) return;
 
-                // Fire health + network in parallel — both are fast cached reads.
-                var healthTask  = JetsonApiService.GetAsync("/health/detailed");
-                var networkTask = JetsonApiService.GetAsync("/network/status");
-
-                // Isaac status can be slow (docker introspection inside container).
-                // Start it in parallel but don't let it block the health/network update.
-                var isaacTask = JetsonApiService.GetAsync("/api/isaac/status");
-
-                // Wait for the fast pair first.
-                await Task.WhenAll(healthTask, networkTask);
+                // Health is authoritative for the top-level Healthy/Offline
+                // label. Network/Isaac are diagnostic and must never be allowed
+                // to flip the whole Jetson panel offline.
+                var healthResponse = await JetsonApiService.GetAsync("/health/detailed");
 
                 if (IsDisposed || !IsHandleCreated) return;
-
-                var healthResponse  = healthTask.Result;
-                var networkResponse = networkTask.Result;
 
                 if (!healthResponse.IsSuccessStatusCode)
                 {
@@ -716,26 +712,22 @@ namespace NOMAD.MissionPlanner
                 var healthJson = await healthResponse.Content.ReadAsStringAsync();
                 var healthData = JObject.Parse(healthJson);
 
-                JObject networkData = null;
-                if (networkResponse.IsSuccessStatusCode)
-                {
-                    var networkJson = await networkResponse.Content.ReadAsStringAsync();
-                    networkData = JObject.Parse(networkJson);
-                }
+                var networkData = await TryGetOptionalJsonAsync(
+                    "/network/status", OptionalEndpointBudget, useLongRunClient: false);
 
-                // Update health + network immediately — don't wait for isaac.
+                // Update health + network immediately.
                 if (!IsDisposed && IsHandleCreated)
                     this.BeginInvoke((Action)(() => UpdateUI(healthData, networkData, null)));
 
-                // Now collect isaac result (it may already be done, or we wait a bit more).
-                var isaacCompleted = isaacTask.IsCompleted ||
-                    await Task.WhenAny(isaacTask, Task.Delay(2000)) == isaacTask;
-
-                if (isaacCompleted && isaacTask.Status == System.Threading.Tasks.TaskStatus.RanToCompletion && isaacTask.Result.IsSuccessStatusCode)
+                // Isaac status shells into ROS/Docker and is consistently much
+                // slower than hardware health. Poll it at a lower rate using
+                // the long-running client so it cannot starve health checks.
+                if (DateTime.UtcNow - _lastIsaacPollUtc >= IsaacPollInterval)
                 {
-                    var isaacJson = await isaacTask.Result.Content.ReadAsStringAsync();
-                    var isaacData = JObject.Parse(isaacJson);
-                    if (!IsDisposed && IsHandleCreated)
+                    _lastIsaacPollUtc = DateTime.UtcNow;
+                    var isaacData = await TryGetOptionalJsonAsync(
+                        "/api/isaac/status", TimeSpan.FromSeconds(5), useLongRunClient: true);
+                    if (isaacData != null && !IsDisposed && IsHandleCreated)
                         this.BeginInvoke((Action)(() => UpdateDriftStats(isaacData)));
                 }
             }
@@ -756,6 +748,40 @@ namespace NOMAD.MissionPlanner
                 System.Threading.Interlocked.Exchange(ref _isPollInFlight, 0);
             }
         }
+
+        private async Task<JObject> TryGetOptionalJsonAsync(string path, TimeSpan budget, bool useLongRunClient)
+        {
+            try
+            {
+                var requestTask = useLongRunClient
+                    ? JetsonApiService.GetLongRunAsync(path)
+                    : JetsonApiService.GetAsync(path);
+                var completed = await Task.WhenAny(requestTask, Task.Delay(budget));
+                if (completed != requestTask)
+                {
+                    _ = requestTask.ContinueWith(t =>
+                    {
+                        if (t.IsFaulted)
+                            System.Diagnostics.Debug.WriteLine($"Optional health endpoint {path} failed late: {t.Exception?.GetBaseException().Message}");
+                        else if (t.Status == TaskStatus.RanToCompletion)
+                            t.Result.Dispose();
+                    });
+                    return null;
+                }
+
+                using (var response = await requestTask)
+                {
+                    if (!response.IsSuccessStatusCode) return null;
+                    var json = await response.Content.ReadAsStringAsync();
+                    return JObject.Parse(json);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Optional health endpoint {path} error: {ex.Message}");
+                return null;
+            }
+        }
         
         public void RefreshHealth()
         {
@@ -770,6 +796,8 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
+                _lastHealthSuccessUtc = DateTime.UtcNow;
+
                 // Overall Status
                 var status = data["status"]?.ToString() ?? "unknown";
                 UpdateOverallStatus(status);
@@ -1224,6 +1252,13 @@ namespace NOMAD.MissionPlanner
         
         private void UpdateStatusError(string error)
         {
+            if (_lastHealthSuccessUtc != DateTime.MinValue &&
+                DateTime.UtcNow - _lastHealthSuccessUtc < OfflineGrace)
+            {
+                _lblLastUpdate.Text = $"Last update: {DateTime.Now:HH:mm:ss} (missed poll: {error})";
+                return;
+            }
+
             _lblOverallStatus.Text = "● OFFLINE";
             _lblOverallStatus.ForeColor = Color.Red;
             _lblLastUpdate.Text = $"Error: {error}";

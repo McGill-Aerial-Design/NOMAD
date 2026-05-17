@@ -2,7 +2,7 @@
 
 ## Domains
 - Transport (A): tailscale, link bonding/failover via 4G/WiFi + ELRS.
-- Edge Core (B): FastAPI orchestrator, watchdog/time-sync, Task 1 recon logic, Task 2 VIO + CV + gimbal control.
+- Edge Core (B): FastAPI orchestrator, watchdog/time-sync, Task 1 recon logic, Task 2 spray controller + CV + servo/gimbal control. (VIO has been removed — Task 2 uses GPS + barometer + optical flow.)
 - Mission Planner (C): Centralized control plugin with RTSP video viewer, ELRS tunneling, indoor nudge, telemetry injection, task controls.
 
 ## Process Separation
@@ -10,7 +10,7 @@
 - `edge_core/nav_controller.py` + `mavlink_interface.py`: FC velocity/position command routing and MAVLink telemetry.
 - `edge_core/target_localizer/`: HSV circle detection, building model, 3D back-projection, description generation.
 - `edge_core/isaac_ros_bridge.py` + `video_stream_manager.py`: Isaac ROS / nvblox lifecycle and video pipeline.
-- `edge_core/servo_controller.py` + `rc_servo_bridge.py`: Camera tilt / water shooter PWM and RC channel mapping.
+- `edge_core/servo_controller.py`: Cube Orange servo and relay commands controlled by the plugin, API, or autonomy code.
 - `transport`: mavlink routing; keep FC-facing ports stable.
 
 ## Data Flow (high-level)

@@ -258,7 +258,7 @@ namespace NOMAD.MissionPlanner
             bool acquired = false;
             try
             {
-                acquired = await PayloadControlPanel.s_mavlinkLock
+                acquired = await CubeOutputController.MavlinkLock
                     .WaitAsync(5000).ConfigureAwait(false);
                 if (!acquired)
                 {
@@ -306,7 +306,7 @@ namespace NOMAD.MissionPlanner
             }
             finally
             {
-                if (acquired) PayloadControlPanel.s_mavlinkLock.Release();
+                if (acquired) CubeOutputController.MavlinkLock.Release();
             }
         }
 
@@ -1223,7 +1223,7 @@ namespace NOMAD.MissionPlanner
             bool acquired = false;
             try
             {
-                acquired = await PayloadControlPanel.s_mavlinkLock
+                acquired = await CubeOutputController.MavlinkLock
                     .WaitAsync(5000).ConfigureAwait(false);
                 if (!acquired)
                 {
@@ -1270,7 +1270,7 @@ namespace NOMAD.MissionPlanner
             }
             finally
             {
-                if (acquired) PayloadControlPanel.s_mavlinkLock.Release();
+                if (acquired) CubeOutputController.MavlinkLock.Release();
             }
         }
 

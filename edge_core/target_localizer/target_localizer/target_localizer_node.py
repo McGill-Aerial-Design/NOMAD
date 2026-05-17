@@ -212,6 +212,7 @@ class TargetLocalizerNode(Node):
             min_solidity=float(self.get_parameter("circle.min_solidity").value),
             blur_kernel=int(self.get_parameter("circle.blur_kernel").value),
         )
+        self.get_logger().info(f"Circle detector backend: {self.circle_detector.backend}")
 
         self.color_verifier = ColorVerifier()
         self.bridge = CvBridge()
@@ -258,40 +259,45 @@ class TargetLocalizerNode(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
         )
+        zed_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
 
         # ----- Subscribers ----- #
         self.rgb_sub = self.create_subscription(
             Image,
             "/zed2i/zed_node/rgb/image_rect_color",
             self._rgb_callback,
-            sensor_qos,
+            zed_qos,
         )
         self.rgb_sub_direct = self.create_subscription(
-            Image, "/zed/zed_node/rgb/color/rect/image", self._rgb_callback, sensor_qos
+            Image, "/zed/zed_node/rgb/color/rect/image", self._rgb_callback, zed_qos
         )
         self.depth_sub = self.create_subscription(
             Image,
             "/zed2i/zed_node/depth/depth_registered",
             self._depth_callback,
-            sensor_qos,
+            zed_qos,
         )
         self.depth_sub_direct = self.create_subscription(
             Image,
             "/zed/zed_node/depth/depth_registered",
             self._depth_callback,
-            sensor_qos,
+            zed_qos,
         )
         self.cam_info_sub = self.create_subscription(
             CameraInfo,
             "/zed2i/zed_node/rgb/camera_info",
             self._cam_info_callback,
-            sensor_qos,
+            zed_qos,
         )
         self.cam_info_sub_direct = self.create_subscription(
             CameraInfo,
             "/zed/zed_node/rgb/color/rect/camera_info",
             self._cam_info_callback,
-            sensor_qos,
+            zed_qos,
         )
         self.gps_sub = self.create_subscription(
             NavSatFix, "/mavros/global_position/global", self._gps_callback, sensor_qos
@@ -306,7 +312,7 @@ class TargetLocalizerNode(Node):
             PoseStamped, "/mavros/local_position/pose", self._pose_callback, sensor_qos
         )
         self.zed_odom_sub = self.create_subscription(
-            Odometry, "/zed/zed_node/odom", self._zed_odom_callback, sensor_qos
+            Odometry, "/zed/zed_node/odom", self._zed_odom_callback, zed_qos
         )
         self.servo_sub = self.create_subscription(
             Float64, "/servo/angle", self._servo_callback, sensor_qos
@@ -1094,9 +1100,6 @@ class TargetLocalizerNode(Node):
         return False
 
     # ================================================================ #
-    #  Background landmark detection
-    # ================================================================ #
-    # ================================================================ #
     #  Save targets to file
     # ================================================================ #
     def _save_callback(self, request, response):
@@ -1532,7 +1535,7 @@ class TargetLocalizerNode(Node):
             pass
 
     def _print_model_callback(self, request, response):
-        """Print the current building model with landmarks."""
+        """Print the current building model summary."""
         summary = self.building.get_summary()
         self.get_logger().info(f"\n{summary}")
         response.success = True

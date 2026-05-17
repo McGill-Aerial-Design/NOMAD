@@ -18,7 +18,7 @@ Task 1 is scored out of **100 points** across 5 criteria:
 
 | Criterion | Max Points | Key Rules |
 |-----------|-----------|-----------|
-| **Target Detection & Location Accuracy** | 25 | Text-based description of each target's 3D position + colour. Descriptions must use landmarks as references, no GPS/numerical coordinates. **All distances must be expressed to decimetre (0.1m) precision only** — no finer (CONOPS §5.2.3.6b). Accuracy scoring: ≤0.5m=×100%, ≤1m=×75%, ≤1.5m=×50%, >1.5m=×0%. Correct colour=×100%, wrong/missing=×50%. |
+| **Target Detection & Location Accuracy** | 25 | Text-based description of each target's 3D position + colour. Descriptions reference the building face and the nearest GPS-derived corner, no raw lat/lon/numerical coordinates. **All distances must be expressed to decimetre (0.1m) precision only** — no finer (CONOPS §5.2.3.6b). Accuracy scoring: ≤0.5m=×100%, ≤1m=×75%, ≤1.5m=×50%, >1.5m=×0%. Correct colour=×100%, wrong/missing=×50%. |
 | **Equipment Delivery** | 20 | Carry combo of radio (5pt), O₂ tank (5pt), ladder (10pt) to staging areas (32" landing pads). ≤2m from pad=×100%, >2m=×50%. No airdrops. |
 | **Distance Flown** | 30 | Laps on a 400m–1km course en route to the scene. Highest laps=30pt, lowest=10pt, linear scale. |
 | **Payload Fraction** | 20 | `MIN(PF, 0.35)/0.35 × 20pt` where `PF = payload_weight / total_takeoff_weight`. |
@@ -30,8 +30,8 @@ Task 1 is scored out of **100 points** across 5 criteria:
 2. **Scene boundary**: 15m from building perimeter, up to 10m AGL.
 3. **Target characteristics**: Circle 5–30cm diameter, colours: black, white, red, yellow, blue, green. Outdoor only (no indoor targets in Task 1). May be inclined or partially obstructed.
 4. **Target descriptions** must be:
-   - Text-based, using **landmarks** as reference points (not GPS/numerical coordinates)
-   - 3D position fixed unambiguously (height above ground + horizontal offset from a landmark)
+   - Text-based, referencing the building face and nearest GPS-derived corner (not raw lat/lon)
+   - 3D position fixed unambiguously (height above ground + horizontal offset from a corner)
    - Expressed to **decimetre (0.1m) precision only** — no finer (e.g. "1.4m" not "1.37m"). This is a hard format rule, not just an accuracy goal.
    - Uploaded as **`Task_1_MAD_targets.txt`** to team Google Drive folder by end of flight window
    - Format: see CONOPS Appendix D examples
@@ -56,7 +56,7 @@ Task 1 is scored out of **100 points** across 5 criteria:
 | Natural-language description | `_generate_description()` outputs CONOPS Appendix D format: `"<Colour> target on the <face> face of the building, <height>m above ground, <distance>m from the <corner>."` | ✅ Implemented |
 | Colour cross-verification | `ColorVerifier` double-checks HSV classification on the ROI independently | ✅ Implemented |
 | Deduplication (same target seen twice) | 3D distance check within `dedup_radius_m` (default 0.5m) | ✅ Implemented |
-| No GPS/numerical coordinates in description | Template engine uses face names, corner names, landmark references only | ✅ Implemented |
+| No raw lat/lon in description | Template engine uses face names and GPS-derived corner names only | ✅ Implemented |
 | Decimetre accuracy (0.1m) | Height and distance rounded to 1 decimal place | ✅ Implemented |
 | Save to `Task_1_MAD_targets.txt` | `~/save_targets` service writes the .txt file with format `Target A: <description>` | ✅ Implemented |
 | Upload to Google Drive | `Task1UploadPanel.cs` — in-Mission-Planner grid editor + upload via `GoogleDriveUploadService` | ✅ Implemented |
@@ -67,7 +67,7 @@ Task 1 is scored out of **100 points** across 5 criteria:
 
 **Score analysis — CRITICAL GAP**: Our system computes "distance from corner" by comparing the target's GPS-derived 3D position against a building model whose corner GPS coordinates we manually estimate from satellite imagery. **The camera never sees the building corners** — it only sees the colored circle. The "1.8m from the NW corner" description is entirely a math result from the prior model, not a visual measurement.
 
-**CONOPS provides only a single lat/lon to identify which building (not where on the building**, Q&A #6), plus dimensions to reconstruct the 3D exterior (Q&A #7). No door/window/landmark locations are given.
+**CONOPS provides only a single lat/lon to identify which building (not where on the building**, Q&A #6), plus dimensions to reconstruct the 3D exterior (Q&A #7).
 
 This means our corner GPS coordinates are only as good as our satellite imagery analysis. A 5° orientation error on a 10m building shifts corner positions by ~0.87m — enough to push every target description from the ×100% tier (≤0.5m) into the ×75% tier (≤1.0m). A 10° error gives ~1.74m error → ×0% tier.
 
@@ -194,7 +194,7 @@ Annotated image saved                   Target record appended
 |-----------|----------|------|
 | **target_localizer_node.py** | `edge_core/target_localizer/` | Main ROS 2 node. HSV detection, 3D back-projection, face classification, description generation, deduplication, file output. |
 | **building_model.py** | `edge_core/target_localizer/` | Arbitrary N-corner polygon building geometry. Face naming (8 compass buckets), corner references, plane classification (wall/ground/roof), nearest-reference search. |
-| **detectors.py** | `edge_core/target_localizer/` | `CircleDetector` (HSV segmentation + contour analysis), `LandmarkDetector` (YOLO, disabled for Task 1), `ColorVerifier` (independent cross-check). |
+| **detectors.py** | `edge_core/target_localizer/` | `CircleDetector` (HSV segmentation + contour analysis), `ColorVerifier` (independent cross-check). |
 | **geospatial.py** | `edge_core/` | Pure math: GPS↔NED conversions, raycasting, Haversine distance, bearing. |
 | **competition.yaml** | `edge_core/target_localizer/config/` | Building corners, dimensions, team name, HSV tuning params. |
 | **building_corners.json** | `/home/mad/targets/` | Corner calibration data written by API, read by `set_building_corners` service. Created on-site during flight. |
@@ -502,7 +502,7 @@ Both states always allow capture. The crosshair fallback handles partially obstr
    - In Mission Planner → Task 1 → **Submit** tab: edit description text directly in the grid.
    - Or manually edit the .txt file on the Jetson via SSH.
    - **Decimetre precision check**: Ensure ALL distances are expressed to 0.1m only (one decimal place). No "1.37m" — must be "1.4m". No integers alone like "2m" — must be "2.0m". This is a hard CONOPS rule (§5.2.3.6b).
-   - **No GPS coordinates**: Ensure no lat/lon or numerical coordinate system appears anywhere in the file. Only landmark-based relative descriptions are allowed.
+   - **No raw lat/lon coordinates**: Ensure no GPS lat/lon appears anywhere in the file. Only face + corner relative descriptions are allowed.
 
 4. **Upload to Google Drive**:
    - In Mission Planner → Task 1 → **Submit** tab → **"Upload to Google Drive"** button.
@@ -722,7 +722,7 @@ The target_localizer ROS services are independent of Edge Core — they continue
 | `GET` | `/api/task/1/target/detections` | Get current frame detection overlay data. |
 | `GET` | `/api/task/1/target/list` | List captured targets. |
 | `GET` | `/api/task/1/target/list_structured` | Structured target list (with metadata). |
-| `GET` | `/api/task/1/target/model` | Print building model summary (faces, corners, landmarks). |
+| `GET` | `/api/task/1/target/model` | Print building model summary (faces, corners). |
 | `POST` | `/api/task/1/building/corner` | Save one building corner GPS (on-site calibration). |
 | `GET` | `/api/task/1/building/corners` | List saved building corners. |
 | `DELETE` | `/api/task/1/building/corners` | Clear all building corners. |

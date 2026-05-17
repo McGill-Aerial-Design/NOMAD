@@ -961,6 +961,7 @@ namespace NOMAD.MissionPlanner
                             aim_tolerance_px = cfg.SprayAimTolerancePx,
                             servo_fire_angle_deg = cfg.SprayServoFireAngleDeg,
                             spray_duration_ms = cfg.WaterPumpDurationMs,
+                            water_pump_relay_number = cfg.WaterPumpRelayNumber,
                             forward_gain = cfg.SprayForwardGain,
                             lateral_gain = cfg.SprayLateralGain,
                             altitude_gain = cfg.SprayAltitudeGain,

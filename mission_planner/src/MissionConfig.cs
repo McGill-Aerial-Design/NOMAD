@@ -257,7 +257,13 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// Team name/identifier.
         /// </summary>
-        public string TeamName { get; set; } = "McGill MAD";
+        // Single source of truth for the team name. Used to build:
+        //   - Task_1_<TeamName>_targets.txt (CONOPS §5.2.3.6.f)
+        //   - Task_2_<TeamName>_target_<n>.jpg (CONOPS §5.2.4.4.f)
+        // Match this to what is registered with AEAC. "MAD" matches the
+        // Jetson-side default (target_localizer node param) so the file
+        // name is consistent across the GCS and the drone.
+        public string TeamName { get; set; } = "MAD";
 
         /// <summary>
         /// Team callsign for RTM communications (e.g., "Nomad 101A").

@@ -7,6 +7,7 @@
 // ============================================================
 
 using System;
+using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
@@ -56,6 +57,13 @@ namespace NOMAD.MissionPlanner
             lock (_lock)
             {
                 _config = config ?? throw new ArgumentNullException(nameof(config));
+
+                // Mission Planner opens several status panels at once.  The
+                // .NET Framework default per-host connection limit is too low
+                // for parallel health/video/service polls and causes healthy
+                // requests to queue behind slow diagnostic endpoints.
+                ServicePointManager.DefaultConnectionLimit = Math.Max(
+                    ServicePointManager.DefaultConnectionLimit, 16);
 
                 // Build the new clients first, then atomically swap.  Do NOT
                 // Dispose() the previous clients here: a background poll
@@ -173,6 +181,17 @@ namespace NOMAD.MissionPlanner
         public static Task<string> GetStringAsync(string path)
         {
             return ApiClient.GetStringAsync($"{BaseUrl}{path}");
+        }
+
+        /// <summary>
+        /// Perform a GET request using the long-running client.
+        /// Use for diagnostic endpoints that may shell out or inspect Docker.
+        /// </summary>
+        /// <param name="path">Relative path.</param>
+        /// <returns>HTTP response.</returns>
+        public static Task<HttpResponseMessage> GetLongRunAsync(string path)
+        {
+            return LongRunClient.GetAsync($"{BaseUrl}{path}");
         }
 
         /// <summary>

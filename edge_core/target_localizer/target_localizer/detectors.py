@@ -12,12 +12,17 @@ The main node handles 3D back-projection using depth and TF data.
 """
 
 import math
+import os
+import logging
 
 import cv2
 import numpy as np
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 from enum import Enum
+
+
+logger = logging.getLogger(__name__)
 
 
 class TargetColor(Enum):
@@ -117,6 +122,52 @@ class CircleDetector:
         self.min_solidity = min_solidity
         self.blur_kernel = blur_kernel
         self.morph_kernel = morph_kernel
+        requested = os.environ.get("NOMAD_CIRCLE_USE_GPU", "auto").strip().lower()
+        self._gpu_requested = requested not in ("0", "false", "no", "off", "cpu")
+        self._gpu_enabled = False
+        self._gpu_backend = "cpu"
+        self._cuda_blur = None
+        self._cuda_morph_open = None
+        self._cuda_morph_close = None
+        if self._gpu_requested:
+            self._init_cuda()
+
+    @property
+    def backend(self) -> str:
+        return self._gpu_backend if self._gpu_enabled else "cpu"
+
+    def _init_cuda(self) -> None:
+        try:
+            device_count = cv2.cuda.getCudaEnabledDeviceCount()
+        except Exception as exc:
+            logger.warning("CircleDetector OpenCV CUDA probe failed: %s", exc)
+            return
+        if device_count < 1:
+            logger.warning("CircleDetector GPU requested but OpenCV sees no CUDA devices")
+            return
+
+        try:
+            cv2.cuda.setDevice(0)
+            self._cuda_blur = cv2.cuda.createGaussianFilter(
+                cv2.CV_8UC3,
+                cv2.CV_8UC3,
+                (self.blur_kernel, self.blur_kernel),
+                0,
+            )
+            morph_k = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (self.morph_kernel, self.morph_kernel)
+            )
+            self._cuda_morph_open = cv2.cuda.createMorphologyFilter(
+                cv2.MORPH_OPEN, cv2.CV_8UC1, morph_k
+            )
+            self._cuda_morph_close = cv2.cuda.createMorphologyFilter(
+                cv2.MORPH_CLOSE, cv2.CV_8UC1, morph_k
+            )
+            self._gpu_enabled = True
+            self._gpu_backend = "opencv-cuda"
+            logger.info("CircleDetector using OpenCV CUDA on device 0")
+        except Exception as exc:
+            logger.warning("CircleDetector OpenCV CUDA initialization failed: %s", exc)
 
     def detect(self, bgr_image: np.ndarray) -> List[CircleDetection]:
         """
@@ -128,24 +179,23 @@ class CircleDetector:
         Returns:
             List of CircleDetection with pixel coordinates and color.
         """
-        # Preprocess
-        blurred = cv2.GaussianBlur(bgr_image, (self.blur_kernel, self.blur_kernel), 0)
-        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
+        masks_by_color = None
+        if self._gpu_enabled:
+            try:
+                masks_by_color = self._build_masks_cuda(bgr_image)
+            except Exception as exc:
+                logger.warning("CircleDetector OpenCV CUDA path failed; using CPU: %s", exc)
+                self._gpu_enabled = False
+                self._gpu_backend = "cpu"
+        if masks_by_color is None:
+            blurred = cv2.GaussianBlur(bgr_image, (self.blur_kernel, self.blur_kernel), 0)
+            hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
+            masks_by_color = self._build_masks_cpu(hsv)
 
         detections = []
-        morph_k = cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE, (self.morph_kernel, self.morph_kernel)
-        )
 
         for color in COLOR_PRIORITY:
-            # Build mask from all HSV ranges for this color
-            mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
-            for lower, upper in HSV_RANGES[color]:
-                mask |= cv2.inRange(hsv, lower, upper)
-
-            # Morphological cleanup
-            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, morph_k)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, morph_k)
+            mask = masks_by_color[color]
 
             # Find contours
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -158,6 +208,46 @@ class CircleDetector:
                         detections.append(det)
 
         return detections
+
+    def _build_masks_cpu(self, hsv: np.ndarray) -> dict:
+        masks_by_color = {}
+        for color in COLOR_PRIORITY:
+            mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
+            for lower, upper in HSV_RANGES[color]:
+                mask |= cv2.inRange(hsv, lower, upper)
+            mask = self._morph_cpu(mask)
+            masks_by_color[color] = mask
+        return masks_by_color
+
+    def _build_masks_cuda(self, bgr_image: np.ndarray) -> dict:
+        gpu_bgr = cv2.cuda_GpuMat()
+        gpu_bgr.upload(bgr_image)
+        gpu_blurred = self._cuda_blur.apply(gpu_bgr)
+        gpu_hsv = cv2.cuda.cvtColor(gpu_blurred, cv2.COLOR_BGR2HSV)
+        masks_by_color = {}
+        for color in COLOR_PRIORITY:
+            gpu_mask = None
+            for lower, upper in HSV_RANGES[color]:
+                range_mask = cv2.cuda.inRange(
+                    gpu_hsv,
+                    tuple(int(v) for v in lower),
+                    tuple(int(v) for v in upper),
+                )
+                if gpu_mask is None:
+                    gpu_mask = range_mask
+                else:
+                    gpu_mask = cv2.cuda.bitwise_or(gpu_mask, range_mask)
+            gpu_mask = self._cuda_morph_open.apply(gpu_mask)
+            gpu_mask = self._cuda_morph_close.apply(gpu_mask)
+            masks_by_color[color] = gpu_mask.download()
+        return masks_by_color
+
+    def _morph_cpu(self, mask: np.ndarray) -> np.ndarray:
+        morph_k = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (self.morph_kernel, self.morph_kernel)
+        )
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, morph_k)
+        return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, morph_k)
 
     def _evaluate_contour(self, contour: np.ndarray,
                           color: TargetColor,

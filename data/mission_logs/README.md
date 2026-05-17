@@ -36,11 +36,6 @@ Each Task 1 capture log contains:
       "flight_mode": "GUIDED",
       "battery_voltage": 12.5,
       "timestamp": "2025-12-07T14:30:52.000000+00:00"
-    },
-    "nearest_landmark": "Red Car",
-    "offset_from_landmark_m": {
-      "north": 1.5,
-      "east": 0.5
     }
   }
 }

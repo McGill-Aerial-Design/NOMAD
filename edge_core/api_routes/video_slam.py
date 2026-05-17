@@ -36,6 +36,100 @@ try:
 except ImportError:  # pragma: no cover - optional Jetson dependency
     msgpack = None
 
+
+def _voxel_key(voxel: dict, voxel_size: float) -> Optional[tuple[int, int, int]]:
+    pos = voxel.get("p") if isinstance(voxel, dict) else None
+    if not isinstance(pos, list) or len(pos) < 3 or voxel_size <= 0:
+        return None
+    try:
+        return (
+            int(round(float(pos[0]) / voxel_size)),
+            int(round(float(pos[1]) / voxel_size)),
+            int(round(float(pos[2]) / voxel_size)),
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def _voxel_value(voxel: dict) -> tuple:
+    color = voxel.get("c") if isinstance(voxel, dict) else None
+    if isinstance(color, list):
+        return tuple(color[:4])
+    return ()
+
+
+def build_mesh_websocket_delta(
+    mesh_data: dict,
+    previous_index: Optional[dict[tuple[int, int, int], tuple]] = None,
+    previous_meta: Optional[dict[str, Any]] = None,
+) -> tuple[dict, dict[tuple[int, int, int], tuple], dict[str, Any]]:
+    """Build the smallest WebSocket mesh payload supported by the SLAM client."""
+    previous_index = previous_index or {}
+    previous_meta = previous_meta or {}
+    mode = mesh_data.get("mode")
+
+    if mode != "voxel":
+        full = dict(mesh_data)
+        full["clear"] = True
+        return full, {}, {"mode": mode, "voxel_size": mesh_data.get("voxel_size")}
+
+    try:
+        voxel_size = float(mesh_data.get("voxel_size") or 0.0)
+    except (TypeError, ValueError):
+        voxel_size = 0.0
+
+    voxels = mesh_data.get("voxels")
+    if not isinstance(voxels, list) or voxel_size <= 0:
+        full = dict(mesh_data)
+        full["clear"] = True
+        return full, {}, {"mode": mode, "voxel_size": voxel_size}
+
+    current_index: dict[tuple[int, int, int], tuple] = {}
+    current_voxels: dict[tuple[int, int, int], dict] = {}
+    for voxel in voxels:
+        if not isinstance(voxel, dict):
+            continue
+        key = _voxel_key(voxel, voxel_size)
+        if key is None:
+            continue
+        current_index[key] = _voxel_value(voxel)
+        current_voxels[key] = voxel
+
+    force_full = (
+        not previous_index
+        or previous_meta.get("mode") != mode
+        or float(previous_meta.get("voxel_size") or 0.0) != voxel_size
+        or bool(mesh_data.get("clear"))
+    )
+    meta = {"mode": mode, "voxel_size": voxel_size}
+    if force_full:
+        full = dict(mesh_data)
+        full["clear"] = True
+        return full, current_index, meta
+
+    changed = [
+        current_voxels[key]
+        for key, value in current_index.items()
+        if previous_index.get(key) != value
+    ]
+    removed = [
+        {"x": key[0], "y": key[1], "z": key[2]}
+        for key in previous_index.keys() - current_index.keys()
+    ]
+    delta = {
+        "mode": "voxel",
+        "voxels": changed,
+        "removed": removed,
+        "voxel_size": voxel_size,
+        "total_voxels": mesh_data.get("total_voxels", len(current_index)),
+        "sent_voxels": len(changed),
+        "clear": False,
+        "frame_id": mesh_data.get("frame_id", "map"),
+        "timestamp": mesh_data.get("timestamp"),
+    }
+    return delta, current_index, meta
+
+
 def register_video_slam_routes(app, ctx) -> None:
     logger = ctx.logger
     _get_vio_snapshot = ctx.get_vio_snapshot
@@ -90,7 +184,7 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        status = mgr.get_status()
+        status = await asyncio.to_thread(mgr.get_status)
         return status.to_dict()
 
     @app.post("/api/video/source", tags=["Video"])
@@ -114,11 +208,11 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        success = mgr.switch_topic(topic)
+        success = await asyncio.to_thread(mgr.switch_topic, topic)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to switch video source")
 
-        status = mgr.get_status()
+        status = await asyncio.to_thread(mgr.get_status)
         return {
             "success": True,
             "topic": topic,
@@ -135,7 +229,7 @@ def register_video_slam_routes(app, ctx) -> None:
         if not mgr:
             return {"active": False, "topic": None, "rtsp_url": None}
 
-        status = mgr.get_status()
+        status = await asyncio.to_thread(mgr.get_status)
         return {
             "active": status.streaming,
             "topic": status.current_topic,
@@ -156,25 +250,17 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        success, reason = mgr.start_with_reason()
+        success, reason = await asyncio.to_thread(mgr.start_with_reason)
         if not success:
             raise HTTPException(
                 status_code=500, detail=f"Failed to start video stream: {reason}"
             )
 
-        overlay_enabled = False
-        with request.app.state.detection_state_lock:
-            detection_enabled = bool(
-                getattr(request.app.state, "detection_enabled", True)
-            )
-        if detection_enabled:
-            overlay_enabled = mgr.set_overlay(True)
-
         return {
             "success": True,
             "rtsp_url": mgr.get_rtsp_url(),
             "message": "Video pipeline started",
-            "overlay_enabled": overlay_enabled,
+            "overlay_enabled": False,
         }
 
     @app.post("/api/video/stop", tags=["Video"])
@@ -188,7 +274,7 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        success = mgr.stop()
+        success = await asyncio.to_thread(mgr.stop)
         return {
             "success": success,
             "message": "Video pipeline stopped" if success else "Failed to stop",
@@ -207,30 +293,20 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        mgr.stop()
-        import asyncio
-
+        await asyncio.to_thread(mgr.stop)
         await asyncio.sleep(2)
 
-        success, reason = mgr.start_with_reason()
+        success, reason = await asyncio.to_thread(mgr.start_with_reason)
         if not success:
             raise HTTPException(
                 status_code=500, detail=f"Failed to restart video stream: {reason}"
             )
 
-        overlay_enabled = False
-        with request.app.state.detection_state_lock:
-            detection_enabled = bool(
-                getattr(request.app.state, "detection_enabled", True)
-            )
-        if detection_enabled:
-            overlay_enabled = mgr.set_overlay(True)
-
         return {
             "success": True,
             "rtsp_url": mgr.get_rtsp_url(),
             "message": "Video pipeline restarted",
-            "overlay_enabled": overlay_enabled,
+            "overlay_enabled": False,
         }
 
     @app.post("/api/video/bridges/start", tags=["Video"])
@@ -258,7 +334,7 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        logs = mgr.get_logs(lines)
+        logs = await asyncio.to_thread(mgr.get_logs, lines)
         return {"logs": logs}
 
     @app.get("/api/video/bridges", tags=["Video"])
@@ -276,7 +352,7 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        status = mgr.get_status()
+        status = await asyncio.to_thread(mgr.get_status)
 
         # Map our single bridge status to primary/secondary format
         # "playing" = streaming active, "stopped" = not streaming
@@ -315,7 +391,7 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        success = mgr.set_overlay(True)
+        success = await asyncio.to_thread(mgr.set_overlay, True)
         if not success:
             raise HTTPException(
                 status_code=500,
@@ -332,7 +408,7 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        success = mgr.set_overlay(False)
+        success = await asyncio.to_thread(mgr.set_overlay, False)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to disable overlay")
         return {"success": True, "overlay": False}
@@ -347,7 +423,7 @@ def register_video_slam_routes(app, ctx) -> None:
         mgr = get_video_stream_manager()
         if not mgr:
             raise HTTPException(status_code=503, detail="Video stream manager not initialized")
-        ok = mgr.set_overlay_detectors(task1, task2)
+        ok = await asyncio.to_thread(mgr.set_overlay_detectors, task1, task2)
         if not ok:
             raise HTTPException(status_code=500, detail="Failed to set detectors")
         return {"success": True, "task1_enabled": task1, "task2_enabled": task2}
@@ -361,7 +437,7 @@ def register_video_slam_routes(app, ctx) -> None:
         mgr = get_video_stream_manager()
         if not mgr:
             raise HTTPException(status_code=503, detail="Video stream manager not initialized")
-        ok = mgr.set_overlay_mode(mode)
+        ok = await asyncio.to_thread(mgr.set_overlay_mode, mode)
         if not ok:
             raise HTTPException(status_code=400, detail=f"Failed to set overlay mode: {mode}")
         return {"success": True, "mode": mode}
@@ -375,7 +451,7 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        return mgr.get_overlay_status()
+        return await asyncio.to_thread(mgr.get_overlay_status)
 
     # ==================== SLAM 3D Mesh Endpoints ====================
     # These endpoints stream nvblox 3D mesh data for Mission Planner visualization
@@ -511,14 +587,27 @@ def register_video_slam_routes(app, ctx) -> None:
             # network read above.
             with request.app.state.slam_mesh_lock:
                 next_version = getattr(request.app.state, "slam_mesh_version", 0) + 1
+                previous_index = getattr(request.app.state, "slam_mesh_voxel_index", {})
+                previous_meta = getattr(request.app.state, "slam_mesh_voxel_meta", {})
+                websocket_delta, current_index, current_meta = build_mesh_websocket_delta(
+                    mesh_data,
+                    previous_index=previous_index,
+                    previous_meta=previous_meta,
+                )
+                websocket_full = dict(mesh_data)
+                websocket_full["clear"] = True
                 request.app.state.slam_mesh_data = {
                     "mesh": mesh_data,
+                    "websocket_full": websocket_full,
+                    "websocket_delta": websocket_delta,
                     "received_at": datetime.now(timezone.utc).isoformat(),
                     "block_count": item_count,
                     "total_blocks": total_items,
                     "mode": mode,
                     "frame_id": "map",
                 }
+                request.app.state.slam_mesh_voxel_index = current_index
+                request.app.state.slam_mesh_voxel_meta = current_meta
 
                 # Store drone pose from mesh data (from TF lookup in ros_http_bridge)
                 if "drone_position" in mesh_data and mesh_data["drone_position"]:
@@ -691,14 +780,28 @@ def register_video_slam_routes(app, ctx) -> None:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
-        # Return a full snapshot with an explicit marker so clients can
-        # resynchronize without Edge Core retaining historical mesh copies.
+        if since == current_version - 1:
+            return {
+                "available": True,
+                "changed": True,
+                "version": current_version,
+                "resync_required": False,
+                "mesh": mesh_state.get("websocket_delta") or mesh_state.get("mesh"),
+                "drone_position": mesh_state.get("drone_position"),
+                "drone_attitude": mesh_state.get("drone_attitude"),
+                "timestamp": mesh_state.get(
+                    "received_at", datetime.now(timezone.utc).isoformat()
+                ),
+            }
+
+        # Return a full snapshot with an explicit marker when the caller is
+        # too far behind for the single latest delta to be applied safely.
         return {
             "available": True,
             "changed": True,
             "version": current_version,
             "resync_required": True,
-            "mesh": mesh_state.get("mesh"),
+            "mesh": mesh_state.get("websocket_full") or mesh_state.get("mesh"),
             "drone_position": mesh_state.get("drone_position"),
             "drone_attitude": mesh_state.get("drone_attitude"),
             "timestamp": mesh_state.get(
@@ -938,18 +1041,30 @@ def register_video_slam_routes(app, ctx) -> None:
             import threading as _threading
             request.app.state.slam_mesh_lock = _threading.Lock()
         with request.app.state.slam_mesh_lock:
+            empty_mesh = {
+                "voxels": [],
+                "removed": [],
+                "voxel_size": prev_voxel_size,
+                "total_voxels": 0,
+                "sent_voxels": 0,
+                "mode": "voxel",
+                "clear": True,
+                "frame_id": "map",
+            }
             request.app.state.slam_mesh_data = {
-                "mesh": {
-                    "voxels": [],
-                    "voxel_size": prev_voxel_size,
-                    "total_voxels": 0,
-                    "mode": "voxel",
-                    "clear": True,
-                },
+                "mesh": empty_mesh,
+                "websocket_full": empty_mesh,
+                "websocket_delta": empty_mesh,
                 "received_at": datetime.now(timezone.utc).isoformat(),
                 "block_count": 0,
                 "total_blocks": 0,
                 "mode": "voxel",
+                "frame_id": "map",
+            }
+            request.app.state.slam_mesh_voxel_index = {}
+            request.app.state.slam_mesh_voxel_meta = {
+                "mode": "voxel",
+                "voxel_size": prev_voxel_size,
             }
             request.app.state.slam_mesh_version = (
                 getattr(request.app.state, "slam_mesh_version", 0) + 1

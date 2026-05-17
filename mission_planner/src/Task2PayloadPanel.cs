@@ -13,12 +13,9 @@
 
 using System;
 using System.Drawing;
-using System.Threading;
 using System.Threading.Tasks;
 using Timer = System.Windows.Forms.Timer;
 using System.Windows.Forms;
-using MissionPlanner;
-using MissionPlanner.Utilities;
 
 namespace NOMAD.MissionPlanner
 {
@@ -32,8 +29,6 @@ namespace NOMAD.MissionPlanner
         private static readonly Color ERROR_COLOR   = NOMADTheme.ERROR;
         private static readonly Color ACCENT_COLOR  = NOMADTheme.ACCENT;
 
-        private const int SERVO_PULSE_MIN_US = 500;
-        private const int SERVO_PULSE_MAX_US = 2500;
         private const int TILT_SETTLE_MS     = 100;
 
         private readonly NOMADConfig _config;
@@ -48,8 +43,6 @@ namespace NOMAD.MissionPlanner
         private Timer    _tiltDebounceTimer;
         private bool     _suppressTiltEvent;
         private bool     _tiltLocked;
-
-        private static readonly SemaphoreSlim s_mavlinkLock = new SemaphoreSlim(1, 1);
 
         public Task2PayloadPanel(NOMADConfig config)
         {
@@ -222,46 +215,7 @@ namespace NOMAD.MissionPlanner
         private async void SendCameraTiltAsync(int pulseUs, bool tryOnly = false)
         {
             int channel = _config?.CameraTiltChannel ?? 0;
-            if (TrySendServoMAVLink(channel, pulseUs, tryOnly)) return;
-
-            try
-            {
-                if (string.IsNullOrEmpty(_config?.EffectiveIP)) return;
-                double angle = (pulseUs - SERVO_PULSE_MIN_US) * 180.0
-                             / (SERVO_PULSE_MAX_US - SERVO_PULSE_MIN_US);
-                angle = Math.Max(0, Math.Min(180, angle));
-                await JetsonApiService.PostAsync(
-                    $"/api/servo/camera/tilt?angle={angle.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}");
-            }
-            catch { }
-        }
-
-        private bool TrySendServoMAVLink(int channel, int pwmUs, bool tryOnly = false)
-        {
-            if (channel <= 0) return false;
-            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return false;
-
-            byte sysid  = MainV2.comPort.MAV.sysid;
-            byte compid = MainV2.comPort.MAV.compid;
-
-            Task.Run(async () =>
-            {
-                bool acquired = tryOnly
-                    ? await s_mavlinkLock.WaitAsync(0).ConfigureAwait(false)
-                    : await s_mavlinkLock.WaitAsync(5000).ConfigureAwait(false);
-                if (!acquired) return;
-                try
-                {
-                    await MainV2.comPort.doCommandAsync(
-                        sysid, compid,
-                        MAVLink.MAV_CMD.DO_SET_SERVO,
-                        channel, pwmUs, 0, 0, 0, 0, 0,
-                        requireack: false, uicallback: null).ConfigureAwait(false);
-                }
-                catch { }
-                finally { s_mavlinkLock.Release(); }
-            });
-            return true;
+            await CubeOutputController.SendServoPwmAsync(channel, pulseUs, tryOnly);
         }
 
         // ============================================================
@@ -272,51 +226,11 @@ namespace NOMAD.MissionPlanner
             int relay      = _config?.WaterPumpRelayNumber ?? 0;
             int durationMs = _config?.WaterPumpDurationMs  ?? 500;
 
-            if (TrySendRelayMAVLink(relay, true))
-            {
-                SetStatus($"Water pump firing  ({durationMs}ms)...", SUCCESS_COLOR);
-                await Task.Delay(durationMs);
-                TrySendRelayMAVLink(relay, false);
-                SetStatus("Water pump done", SUCCESS_COLOR);
-                return;
-            }
-
-            SetStatus("Triggering water pump via API...", WARNING_COLOR);
-            try
-            {
-                var resp = await JetsonApiService.PostAsync(
-                    $"/api/servo/shooter/trigger?duration_ms={durationMs}");
-                SetStatus(resp.IsSuccessStatusCode
-                    ? "Water pump triggered"
-                    : $"Pump failed: HTTP {(int)resp.StatusCode}",
-                    resp.IsSuccessStatusCode ? SUCCESS_COLOR : ERROR_COLOR);
-            }
-            catch (Exception ex)
-            {
-                SetStatus($"Pump error: {ex.Message}", ERROR_COLOR);
-            }
-        }
-
-        private bool TrySendRelayMAVLink(int relayNumber, bool on)
-        {
-            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return false;
-            byte sysid  = MainV2.comPort.MAV.sysid;
-            byte compid = MainV2.comPort.MAV.compid;
-            Task.Run(async () =>
-            {
-                await s_mavlinkLock.WaitAsync().ConfigureAwait(false);
-                try
-                {
-                    await MainV2.comPort.doCommandAsync(
-                        sysid, compid,
-                        MAVLink.MAV_CMD.DO_SET_RELAY,
-                        relayNumber, on ? 1 : 0, 0, 0, 0, 0, 0,
-                        requireack: true, uicallback: null).ConfigureAwait(false);
-                }
-                catch { }
-                finally { s_mavlinkLock.Release(); }
-            });
-            return true;
+            SetStatus($"Water pump firing  ({durationMs}ms)...", SUCCESS_COLOR);
+            bool success = await CubeOutputController.FireRelayAsync(relay, durationMs);
+            SetStatus(
+                success ? "Water pump done" : "Pump failed: Cube relay command unavailable",
+                success ? SUCCESS_COLOR : ERROR_COLOR);
         }
 
         // ============================================================

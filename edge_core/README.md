@@ -12,8 +12,7 @@ Onboard services for the Jetson Orin Nano (Python 3.13).
 | `models.py` | Pydantic models (DetectionInfo, etc.) |
 | `mavlink_interface.py` | MAVLink telemetry + command interface with flight controller |
 | `nav_controller.py` | Velocity / position command routing to ArduPilot |
-| `servo_controller.py` | Camera tilt / water shooter PWM via C helper |
-| `rc_servo_bridge.py` | RC channel -> servo angle bridge |
+| `servo_controller.py` | Cube Orange servo / relay commands via MAVLink |
 | `spray_controller.py` | Fire-extinguisher spray control (Task 2) |
 | `operational_mode.py` | Operational mode state machine |
 | `video_stream_manager.py` | Video bridge / overlay / source switching |
@@ -52,7 +51,7 @@ The full API is auto-documented at `/docs` (Swagger UI). Major endpoint groups:
 | VIO | `/api/vio/*` | Pose, trajectory, calibration, area save/load |
 | Navigation | `/api/nav/*` | Velocity/position commands, stop, guided mode |
 | Nav2 | `/api/nav2/*` | Autonomous path goals, feedback, results |
-| Servo | `/api/servo/*` | Camera tilt, shooter, RC bridge, config |
+| Servo | `/api/servo/*` | Cube servo PWM, camera tilt, shooter relay, config |
 | Spray | `/api/spray/*` | Spray trigger, abort, status |
 | Isaac ROS | `/api/isaac/*` | Container start/stop, nvblox, logs |
 | Detections | `/api/detections/*` | Start/stop pipeline, history, summary |

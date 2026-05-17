@@ -2,71 +2,115 @@
 # NOMAD Task 1: Outdoor Reconnaissance
 # ============================================================
 # Competition: AEAC 2026
-# Mission: GPS-based reconnaissance with ZED2i camera
-# Platform: Winged/Fixed-wing aircraft
+# Platform: ArduCopter quadcopter
+# Mission: GPS-guided outdoor recon with ZED2i target capture.
+# Pilot: RC pilot in command (ELRS). Jetson supplies video + target
+#        localization only — it does NOT command flight in Task 1.
 #
-# SAFETY: Always verify these parameters match your aircraft
-# before flight. Incorrect settings can cause loss of control.
+# SAFETY: Verify every parameter against your airframe before flight.
+#         FRR-critical params are flagged below.
 # ============================================================
 
-# ==================== Position Source ====================
-# Task 1 uses GPS for primary navigation
-# ZED camera is for visual capture only, not navigation
+# ==================== Position Source (EKF3) ====================
+# Primary: GPS for horizontal pos/vel, baro for altitude, compass for yaw.
+EKF3_SRC1_POSXY,3        # GPS
+EKF3_SRC1_VELXY,3        # GPS
+EKF3_SRC1_POSZ,1         # Baro
+EKF3_SRC1_YAW,1          # Compass
 
-EKF3_SRC1_POSXY,3      # GPS
-EKF3_SRC1_VELXY,3      # GPS
-EKF3_SRC1_POSZ,1       # Baro
-EKF3_SRC1_YAW,1        # Compass
+# Backup (still GPS — second GPS or same module).
+EKF3_SRC2_POSXY,3        # GPS
+EKF3_SRC2_VELXY,3        # GPS
+EKF3_SRC2_POSZ,1         # Baro
+EKF3_SRC2_YAW,1          # Compass
 
-# Backup also GPS
-EKF3_SRC2_POSXY,3      # GPS
-EKF3_SRC2_VELXY,3      # GPS
-EKF3_SRC2_POSZ,1       # Baro
-EKF3_SRC2_YAW,1        # Compass
+# Tertiary: optical flow + baro fallback (no rangefinder, so OF scale
+# is limited but it lets us hold position if GPS quality collapses).
+EKF3_SRC3_POSXY,0        # None (OF cannot provide absolute position)
+EKF3_SRC3_VELXY,5        # Optical flow
+EKF3_SRC3_POSZ,1         # Baro
+EKF3_SRC3_YAW,1          # Compass
 
-# ==================== GPS Configuration ====================
-GPS_TYPE,1             # Auto-detect GPS
-GPS_AUTO_SWITCH,1      # Enable GPS switching
-EK3_GPS_CHECK,255      # Enable all GPS checks
+EK3_SRC_OPTIONS,1        # Allow runtime source switching
+
+# ==================== GPS ====================
+GPS_TYPE,1               # Auto-detect primary GPS
+GPS_AUTO_SWITCH,1        # Allow switching to better GPS
+EK3_GPS_CHECK,255        # Enable all GPS pre-arm checks
 
 # ==================== Compass ====================
-COMPASS_USE,1          # Enable primary compass
-COMPASS_USE2,1         # Enable secondary compass
+COMPASS_USE,1
+COMPASS_USE2,1
 
 # ==================== Altitude ====================
-EK3_ALT_SOURCE,0       # Primary: Baro
-ALT_OFFSET,0           # Altitude offset (m)
+EK3_ALT_SOURCE,0         # Baro primary
+ALT_OFFSET,0
 
-# ==================== Flight Limits ====================
-# Adjust these for your competition requirements
-FENCE_ENABLE,1         # Enable geofence
-FENCE_TYPE,7           # All fences (alt + circle + polygon)
-FENCE_ALT_MAX,120      # Max altitude (m)
-FENCE_RADIUS,800       # Max radius from home (m)
+# ==================== Optical Flow (no rangefinder) ====================
+# FLOW_TYPE depends on physical sensor — set on FC, not pushed here.
+# Without a rangefinder, OF altitude scaling is unreliable; OF is used
+# only as a velocity backup, not for altitude or position-hold.
 
-# ==================== Failsafe ====================
-FS_GCS_ENABLE,1        # GCS failsafe enabled
-FS_THR_ENABLE,1        # Throttle failsafe enabled
-FS_LONG_TIMEOUT,5      # Long failsafe timeout (s)
-FS_SHORT_TIMEOUT,1.5   # Short failsafe timeout (s)
+# ==================== Geofence (CONOPS §4.2) ====================
+# CONOPS soft boundary = warning, hard = auto-terminate. ArduCopter
+# does not natively distinguish two boundaries — we use FENCE for the
+# hard boundary (Always Land) and RC12 motor-emergency-stop as the
+# pilot-driven kill for any other case.
+FENCE_ENABLE,1
+FENCE_TYPE,7             # Alt + circular + polygon
+FENCE_ALT_MAX,120        # 120 m AGL ceiling (well above 400 ft cap headroom)
+FENCE_RADIUS,800         # 800 m circular fallback (polygon overrides)
+FENCE_ACTION,2           # Always Land on breach (closest to terminate)
+FENCE_MARGIN,2           # 2 m soft margin before action triggers
 
-# ==================== Airspeed (if equipped) ====================
-ARSPD_TYPE,0           # 0=disabled, 1=analog, etc.
-ARSPD_USE,0            # Don't use airspeed for now
+# ==================== Failsafe — RC / GCS / EKF / Battery ====================
+# CONOPS §4.5: any C2-link loss must terminate. We can't auto-terminate
+# without AFS, but RC failsafe → Land (motor cut by RC12 if needed).
+FS_THR_ENABLE,1          # RC throttle failsafe enabled (CONOPS requirement)
+FS_THR_VALUE,975         # Below-min PWM that triggers FS
+FS_OPTIONS,0             # Default: don't continue mission on FS
+FS_GCS_ENABLE,1          # GCS link failsafe enabled
+FS_SHORT_ACTION,1        # On short FS: Land
+FS_LONG_ACTION,1         # On long FS: Land
+FS_SHORT_TIMEOUT,1.5
+FS_LONG_TIMEOUT,5
+FS_EKF_ACTION,1          # On EKF failure: Land
+FS_EKF_THRESH,0.8
 
-# ==================== Camera/Gimbal ====================
-# Note: ZED2i connected to Jetson, not directly to ArduPilot
-# These settings are for a separate gimbal if equipped
+# Battery failsafe — set thresholds to match installed pack.
+BATT_FS_LOW_ACT,2        # Low: Land
+BATT_FS_CRT_ACT,2        # Critical: Land
 
-MNT_TYPE,0             # No gimbal configured via ArduPilot
-CAM_TRIGG_TYPE,0       # Camera trigger type
+# ==================== Kill Switch & Auto-Land ====================
+# CONOPS §4.9.c "kill switch" is the CH5 arming switch. ArduCopter
+# disarms on CH5-LOW; with MOT_SAFE_DISARM=1 the FC cuts PWM to all
+# motors immediately, satisfying the FRR kill demonstration in every
+# flight mode. No dedicated motor-emergency-stop channel is needed.
+MOT_SAFE_DISARM,1        # Cut PWM to motors immediately on disarm
+
+# RC12 = pilot-triggered auto-LAND switch. Flip HIGH and the FC
+# switches to LAND mode (controlled descent to current location).
+# Used for "uncontrolled but not lost" situations: GPS glitch,
+# heavy wind, or as a softer alternative to disarming mid-flight.
+RC12_OPTION,18           # Switch to LAND flight mode
+RC12_DZ,30
+
+# Pre-arm safety switch retained (judges may inspect).
+BRD_SAFETY_DEFLT,1
+BRD_SAFETYENABLE,1
+
+# ==================== Motor / ESC ====================
+# Standard quad-X. Verify FRAME_CLASS/TYPE against your build.
+# FRAME_CLASS,1           # Quad (do not push if unsure)
+# FRAME_TYPE,1            # X frame
 
 # ==================== Logging ====================
-LOG_BITMASK,176126     # Comprehensive logging
-LOG_DISARMED,0         # Don't log when disarmed
+LOG_BITMASK,176126       # Full logging (FRR review)
+LOG_DISARMED,0
 
 # ==================== Notes ====================
-# ZED2i camera is controlled by Jetson via edge_core API
-# Video stream available at rtsp://jetson-ip:8554/live
-# Capture commands sent via Mission Planner NOMAD plugin
-
+# - ZED2i is owned by the Jetson over USB. Edge Core exposes
+#   /api/task/1/target/capture for target localizer triggers.
+# - Video stream: rtsp://<jetson-ip>:8554/primary
+# - Telemetry path: Cube → mavlink-routerd → MP via 14550/14560.
+# - To load these params: ./scripts/run/load_params.py task1

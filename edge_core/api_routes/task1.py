@@ -944,7 +944,7 @@ def register_task1_routes(app, ctx) -> None:
     @app.get("/api/task/1/target/model", tags=["Task 1"])
     async def task1_print_building_model():
         """
-        Print the current building model summary (landmark counts, face info).
+        Print the current building model summary (corners, face info).
 
         Calls the ~/print_model service on the target_localizer node.
         """
