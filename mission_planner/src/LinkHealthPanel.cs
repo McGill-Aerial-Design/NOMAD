@@ -494,7 +494,7 @@ namespace NOMAD.MissionPlanner
                 bool running = _cm.IsMonitoring;
                 _lblRouterStatus.Text = running ? "Router: running — both links open" : "Router: stopped";
                 _lblRouterStatus.ForeColor = running ? NOMADTheme.TEXT_SECONDARY : NOMADTheme.ERROR;
-                _lblLocalEndpoint.Text = $"Local: {_cm.LocalMergedEndpoint}   (set Mission Planner connection to UDP server on this port)";
+                _lblLocalEndpoint.Text = $"Local: {_cm.LocalMergedEndpoint}   (set Mission Planner to UDP Client / UDPCl to this port)";
 
                 _lteCard.Update(lte, isActive: active == LinkType.LTE, isOverride: ovr == LinkType.LTE);
                 _radioCard.Update(radio, isActive: active == LinkType.RadioMaster, isOverride: ovr == LinkType.RadioMaster);
