@@ -1,4 +1,5 @@
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -7,9 +8,10 @@ from fastapi import HTTPException
 
 from edge_core.api_routes.task2_ops import normalize_vio_area_file_path_or_raise
 from edge_core.api_routes.video_slam import build_mesh_websocket_delta
-from edge_core.nav_controller import NavController
+from edge_core.nav_controller import NavController, NavMode
 from edge_core.servo_controller import ServoController
 from edge_core.spray_controller import SprayController
+from edge_core.state import StateManager
 
 
 class TestVIOAreaPathValidation(unittest.TestCase):
@@ -102,8 +104,52 @@ class TestNavPositionBounds(unittest.TestCase):
                 return SimpleNamespace(armed=True, flight_mode="GUIDED")
 
         controller = NavController(FakeMavlink(), FakeState())
+        controller._update_status(mode=NavMode.STANDBY)
         controller.set_vio_state(confidence=1.0, healthy=True)
         self.assertFalse(controller.send_position(100.0, 0.0, 0.0, 0.0))
+
+    def test_stale_vio_rejects_velocity(self):
+        class FakeMavlink:
+            def __init__(self):
+                self.velocity_calls = []
+
+            def send_velocity_command(self, *args):
+                self.velocity_calls.append(args)
+                return True
+
+        class FakeState:
+            def get_state(self):
+                return SimpleNamespace(armed=True, flight_mode="GUIDED")
+
+        mavlink = FakeMavlink()
+        controller = NavController(mavlink, FakeState())
+        controller._update_status(mode=NavMode.STANDBY)
+        controller._vio_max_age_s = 0.1
+        controller.set_vio_state(
+            confidence=1.0,
+            healthy=True,
+            received_monotonic=time.monotonic() - 1.0,
+        )
+
+        self.assertFalse(controller.send_velocity(0.1, 0.0, 0.0, 0.0))
+        self.assertEqual(mavlink.velocity_calls, [])
+
+
+class TestStateManagerBatching(unittest.TestCase):
+    def test_get_state_flushes_pending_update_after_interval(self):
+        original_interval = StateManager.MODEL_UPDATE_INTERVAL
+        StateManager.MODEL_UPDATE_INTERVAL = 0.01
+        try:
+            manager = StateManager()
+            manager.update_state(battery_voltage=11.1)
+            self.assertEqual(manager.get_state().battery_voltage, 11.1)
+
+            manager.update_state(battery_voltage=12.2)
+            time.sleep(0.02)
+
+            self.assertEqual(manager.get_state().battery_voltage, 12.2)
+        finally:
+            StateManager.MODEL_UPDATE_INTERVAL = original_interval
 
 
 if __name__ == "__main__":

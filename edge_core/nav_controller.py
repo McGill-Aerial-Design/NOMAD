@@ -16,6 +16,7 @@ Target: Python 3.13 | NVIDIA Jetson Orin Nano
 
 import logging
 import math
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -77,6 +78,7 @@ class NavStatus:
     command_rate_hz: float = 0.0
     guided_mode_active: bool = False
     vio_healthy: bool = False
+    vio_age_ms: Optional[int] = None
     armed: bool = False
     error_message: Optional[str] = None
     
@@ -94,6 +96,7 @@ class NavStatus:
             "command_rate_hz": self.command_rate_hz,
             "guided_mode_active": self.guided_mode_active,
             "vio_healthy": self.vio_healthy,
+            "vio_age_ms": self.vio_age_ms,
             "armed": self.armed,
             "error_message": self.error_message,
             "cmd_vx": self.cmd_vx,
@@ -179,6 +182,8 @@ class NavController:
         # VIO state reference (set by main orchestrator)
         self._vio_confidence = 0.0
         self._vio_healthy = False
+        self._vio_last_update_monotonic: float | None = None
+        self._vio_max_age_s = self._read_positive_float("NOMAD_VIO_MAX_AGE_S", 1.0)
         
         mode_desc = "nav2 mode" if nav2_enabled else "API mode"
         logger.info(f"NavController initialized ({mode_desc})")
@@ -223,12 +228,24 @@ class NavController:
         self._update_status(mode=NavMode.DISABLED)
         logger.info("NavController stopped")
     
-    def set_vio_state(self, confidence: float, healthy: bool) -> None:
+    def set_vio_state(
+        self,
+        confidence: float,
+        healthy: bool,
+        received_monotonic: float | None = None,
+    ) -> None:
         """Update VIO health status (called by VIO pipeline)."""
         with self._lock:
             self._vio_confidence = confidence
             self._vio_healthy = healthy
-            self._status.vio_healthy = healthy
+            self._vio_last_update_monotonic = (
+                received_monotonic if received_monotonic is not None else time.monotonic()
+            )
+            vio_fresh = self._is_vio_fresh_locked()
+            self._status.vio_healthy = healthy and vio_fresh
+            self._status.vio_age_ms = self._vio_age_ms_locked()
+            if healthy and vio_fresh:
+                self._status.health = NavHealth.HEALTHY
     
     def send_velocity(
         self,
@@ -262,8 +279,14 @@ class NavController:
                 return False
             
             # Check VIO health
-            if not self._vio_healthy:
-                logger.warning(f"VIO unhealthy (confidence={self._vio_confidence:.2f}) - refusing velocity command")
+            if not self._is_vio_ready_locked():
+                age_ms = self._vio_age_ms_locked()
+                age_text = "unknown" if age_ms is None else f"{age_ms}ms"
+                logger.warning(
+                    "VIO unhealthy or stale (confidence=%.2f, age=%s) - refusing velocity command",
+                    self._vio_confidence,
+                    age_text,
+                )
                 return False
             
             # Check armed state
@@ -329,8 +352,14 @@ class NavController:
             if self._status.mode == NavMode.DISABLED:
                 return False
             
-            if not self._vio_healthy:
-                logger.warning("VIO unhealthy - refusing position command")
+            if not self._is_vio_ready_locked():
+                age_ms = self._vio_age_ms_locked()
+                age_text = "unknown" if age_ms is None else f"{age_ms}ms"
+                logger.warning(
+                    "VIO unhealthy or stale (confidence=%.2f, age=%s) - refusing position command",
+                    self._vio_confidence,
+                    age_text,
+                )
                 return False
             
             state = self._state_manager.get_state()
@@ -386,6 +415,7 @@ class NavController:
 
                 self._check_command_timeout()
                 self._check_flight_mode()
+                self._check_vio_freshness()
                 self._update_rate()
 
                 elapsed = time.monotonic() - start_time
@@ -421,6 +451,23 @@ class NavController:
         with self._lock:
             self._status.guided_mode_active = state.flight_mode == "GUIDED"
             self._status.armed = state.armed
+
+    def _check_vio_freshness(self) -> None:
+        """Expire VIO health when updates stop arriving."""
+        with self._lock:
+            fresh = self._is_vio_fresh_locked()
+            self._status.vio_age_ms = self._vio_age_ms_locked()
+            self._status.vio_healthy = self._vio_healthy and fresh
+            if self._vio_healthy and not fresh:
+                self._status.health = NavHealth.DEGRADED
+                if self._status.mode in (NavMode.VELOCITY, NavMode.POSITION, NavMode.VISUAL_SERVO):
+                    logger.warning("VIO stale - stopping active navigation")
+                    self._send_stop_velocity()
+                    self._status.mode = NavMode.STANDBY
+                    self._status.cmd_vx = 0.0
+                    self._status.cmd_vy = 0.0
+                    self._status.cmd_vz = 0.0
+                    self._status.cmd_yaw_rate = 0.0
     
     def _update_rate(self) -> None:
         """Update command rate calculation."""
@@ -497,6 +544,7 @@ class NavController:
                 vio_healthy=kwargs.get("vio_healthy", self._status.vio_healthy),
                 armed=kwargs.get("armed", self._status.armed),
                 error_message=kwargs.get("error_message", self._status.error_message),
+                vio_age_ms=kwargs.get("vio_age_ms", self._status.vio_age_ms),
                 cmd_vx=kwargs.get("cmd_vx", self._status.cmd_vx),
                 cmd_vy=kwargs.get("cmd_vy", self._status.cmd_vy),
                 cmd_vz=kwargs.get("cmd_vz", self._status.cmd_vz),
@@ -515,3 +563,37 @@ class NavController:
         if not math.isfinite(value):
             raise ValueError("Navigation command values must be finite")
         return max(min_val, min(max_val, value))
+
+    @staticmethod
+    def _read_positive_float(env_name: str, default: float) -> float:
+        raw = os.environ.get(env_name, str(default)).strip()
+        try:
+            value = float(raw)
+            if value <= 0.0:
+                raise ValueError("value must be positive")
+            return value
+        except Exception:
+            logger.warning(
+                "Invalid %s='%s'; falling back to %.2fs",
+                env_name,
+                raw,
+                default,
+            )
+            return default
+
+    def _vio_age_ms_locked(self) -> int | None:
+        if self._vio_last_update_monotonic is None:
+            return None
+        return int(max(0.0, time.monotonic() - self._vio_last_update_monotonic) * 1000)
+
+    def _is_vio_fresh_locked(self) -> bool:
+        if self._vio_last_update_monotonic is None:
+            return False
+        return (time.monotonic() - self._vio_last_update_monotonic) <= self._vio_max_age_s
+
+    def _is_vio_ready_locked(self) -> bool:
+        return (
+            self._vio_healthy
+            and self._vio_confidence >= self.MIN_VIO_CONFIDENCE
+            and self._is_vio_fresh_locked()
+        )

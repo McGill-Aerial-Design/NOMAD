@@ -116,9 +116,13 @@ def register_system_routes(app, ctx) -> None:
         external_vio = _get_vio_snapshot()["external_vio_state"]
         if external_vio:
             confidence_0_1 = external_vio.get("confidence", 0)
+            vio_fresh = bool(external_vio.get("fresh", False))
             response["vio"] = {
-                "health": "healthy" if confidence_0_1 > 0.5 else "degraded",
+                "health": "healthy" if confidence_0_1 > 0.5 and vio_fresh else "degraded",
                 "tracking_confidence": confidence_0_1,
+                "position_valid": vio_fresh,
+                "age_seconds": external_vio.get("age_seconds"),
+                "max_age_seconds": external_vio.get("max_age_seconds"),
                 "message_rate_hz": 30.0,
             }
 
@@ -148,9 +152,13 @@ def register_system_routes(app, ctx) -> None:
         external_vio = _get_vio_snapshot()["external_vio_state"]
         if external_vio:
             confidence_0_1 = external_vio.get("confidence", 0)
+            vio_fresh = bool(external_vio.get("fresh", False))
             result["vio"] = {
-                "health": "healthy" if confidence_0_1 > 0.5 else "degraded",
+                "health": "healthy" if confidence_0_1 > 0.5 and vio_fresh else "degraded",
                 "tracking_confidence": confidence_0_1,
+                "position_valid": vio_fresh,
+                "age_seconds": external_vio.get("age_seconds"),
+                "max_age_seconds": external_vio.get("max_age_seconds"),
                 "message_rate_hz": external_vio.get("message_rate_hz", 30.0),
                 "source": external_vio.get("source", "unknown"),
             }
@@ -306,11 +314,14 @@ def register_system_routes(app, ctx) -> None:
                 external_vio = _get_vio_snapshot()["external_vio_state"]
                 if external_vio:
                     confidence_0_1 = external_vio.get("confidence", 0)
+                    vio_fresh = bool(external_vio.get("fresh", False))
                     data["external_vio_state"] = external_vio
                     data["vio_status"] = {
-                        "health": "healthy" if confidence_0_1 > 0.5 else "degraded",
+                        "health": "healthy" if confidence_0_1 > 0.5 and vio_fresh else "degraded",
                         "tracking_confidence": confidence_0_1,
-                        "position_valid": True,
+                        "position_valid": vio_fresh,
+                        "age_seconds": external_vio.get("age_seconds"),
+                        "max_age_seconds": external_vio.get("max_age_seconds"),
                         "message_rate_hz": external_vio.get("message_rate_hz", 30.0),
                         "reset_counter": 0,
                         "source": external_vio.get("source", "external"),

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 import os
 import re
 import shlex
@@ -18,7 +19,6 @@ from starlette.responses import JSONResponse
 
 from ..api_models import (
     COMMAND_WHITELIST,
-    MSGPACK_AVAILABLE,
     Task1CapturesList,
     Task2HitRequest,
     TerminalCommandRequest,
@@ -60,11 +60,6 @@ def normalize_vio_area_file_path_or_raise(
         )
     return real
 
-
-try:
-    import msgpack
-except ImportError:  # pragma: no cover - optional Jetson dependency
-    msgpack = None
 
 def register_task2_routes(app, ctx) -> None:
     logger = ctx.logger
@@ -135,10 +130,13 @@ def register_task2_routes(app, ctx) -> None:
         if external_vio_state:
             # External VIO confidence is 0-1 scale
             confidence_0_1 = external_vio_state.get("confidence", 0)
+            vio_fresh = bool(external_vio_state.get("fresh", False))
             return {
-                "health": "healthy" if confidence_0_1 > 0.5 else "degraded",
+                "health": "healthy" if confidence_0_1 > 0.5 and vio_fresh else "degraded",
                 "tracking_confidence": confidence_0_1,  # 0-1 scale
-                "position_valid": True,
+                "position_valid": vio_fresh,
+                "age_seconds": external_vio_state.get("age_seconds"),
+                "max_age_seconds": external_vio_state.get("max_age_seconds"),
                 "message_rate_hz": 30.0,
                 "reset_counter": 0,
                 "source": external_vio_state.get("source", "external"),
@@ -171,6 +169,7 @@ def register_task2_routes(app, ctx) -> None:
         if external_vio_state:
             payload = dict(external_vio_state)
             payload["source"] = "ros_http_bridge"
+            payload["valid"] = bool(payload.get("fresh", False))
             return payload
 
         return {

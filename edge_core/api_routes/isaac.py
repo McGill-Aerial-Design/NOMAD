@@ -50,7 +50,10 @@ def register_isaac_routes(app, ctx) -> None:
         Returns information about the perception backend,
         VIO state, and exclusion map status.
         """
-        runtime_state = _probe_isaac_runtime_state(force_refresh=True)
+        runtime_state = await asyncio.to_thread(
+            _probe_isaac_runtime_state,
+            force_refresh=True,
+        )
         container_running = runtime_state["container_running"]
         nvblox_running = runtime_state["nvblox_running"]
         bridge_running = runtime_state["bridge_running"]
@@ -114,7 +117,10 @@ def register_isaac_routes(app, ctx) -> None:
         opt-in via /api/isaac/launch-nvblox or `systemctl start nomad-nvblox`.
         """
         # If everything is already healthy, short-circuit.
-        runtime_state = _probe_isaac_runtime_state(force_refresh=True)
+        runtime_state = await asyncio.to_thread(
+            _probe_isaac_runtime_state,
+            force_refresh=True,
+        )
         if runtime_state["container_running"] and runtime_state["bridge_running"]:
             return {
                 "success": True,

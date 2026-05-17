@@ -583,11 +583,15 @@ class SprayController:
             if not skip_approach:
                 self._set_state(SprayState.APPROACH)
                 if not self._approach_target(target):
+                    if not self._check_abort():
+                        self._set_state(SprayState.FAILED, error="Approach failed")
                     return
 
             # --- AIM ---
             self._set_state(SprayState.AIM)
             if not self._aim_at_target(target):
+                if not self._check_abort():
+                    self._set_state(SprayState.FAILED, error="Aim failed")
                 return
 
             # --- CAPTURE PRE-SPRAY SNAPSHOT ---
@@ -715,9 +719,12 @@ class SprayController:
         velocity in the drone's world frame.
         """
         self._set_approach_sectors(target, exclude=True)
-        if self._get_detection_bbox_fn is not None:
-            return self._approach_via_image(target)
-        return self._approach_via_velocity(target)
+        try:
+            if self._get_detection_bbox_fn is not None:
+                return self._approach_via_image(target)
+            return self._approach_via_velocity(target)
+        finally:
+            self._set_approach_sectors(target, exclude=False)
 
     def _approach_via_image(self, target: SprayTarget) -> bool:
         """Image-space approach for image_only targets with known range.

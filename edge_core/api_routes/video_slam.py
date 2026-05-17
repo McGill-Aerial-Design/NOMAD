@@ -184,7 +184,7 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        status = mgr.get_status()
+        status = await asyncio.to_thread(mgr.get_status)
         return status.to_dict()
 
     @app.post("/api/video/source", tags=["Video"])
@@ -208,11 +208,11 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        success = mgr.switch_topic(topic)
+        success = await asyncio.to_thread(mgr.switch_topic, topic)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to switch video source")
 
-        status = mgr.get_status()
+        status = await asyncio.to_thread(mgr.get_status)
         return {
             "success": True,
             "topic": topic,
@@ -229,7 +229,7 @@ def register_video_slam_routes(app, ctx) -> None:
         if not mgr:
             return {"active": False, "topic": None, "rtsp_url": None}
 
-        status = mgr.get_status()
+        status = await asyncio.to_thread(mgr.get_status)
         return {
             "active": status.streaming,
             "topic": status.current_topic,
@@ -250,7 +250,7 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        success, reason = mgr.start_with_reason()
+        success, reason = await asyncio.to_thread(mgr.start_with_reason)
         if not success:
             raise HTTPException(
                 status_code=500, detail=f"Failed to start video stream: {reason}"
@@ -274,7 +274,7 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        success = mgr.stop()
+        success = await asyncio.to_thread(mgr.stop)
         return {
             "success": success,
             "message": "Video pipeline stopped" if success else "Failed to stop",
@@ -293,12 +293,10 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        mgr.stop()
-        import asyncio
-
+        await asyncio.to_thread(mgr.stop)
         await asyncio.sleep(2)
 
-        success, reason = mgr.start_with_reason()
+        success, reason = await asyncio.to_thread(mgr.start_with_reason)
         if not success:
             raise HTTPException(
                 status_code=500, detail=f"Failed to restart video stream: {reason}"
@@ -336,7 +334,7 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        logs = mgr.get_logs(lines)
+        logs = await asyncio.to_thread(mgr.get_logs, lines)
         return {"logs": logs}
 
     @app.get("/api/video/bridges", tags=["Video"])
@@ -354,7 +352,7 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        status = mgr.get_status()
+        status = await asyncio.to_thread(mgr.get_status)
 
         # Map our single bridge status to primary/secondary format
         # "playing" = streaming active, "stopped" = not streaming
@@ -393,7 +391,7 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        success = mgr.set_overlay(True)
+        success = await asyncio.to_thread(mgr.set_overlay, True)
         if not success:
             raise HTTPException(
                 status_code=500,
@@ -410,7 +408,7 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        success = mgr.set_overlay(False)
+        success = await asyncio.to_thread(mgr.set_overlay, False)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to disable overlay")
         return {"success": True, "overlay": False}
@@ -425,7 +423,7 @@ def register_video_slam_routes(app, ctx) -> None:
         mgr = get_video_stream_manager()
         if not mgr:
             raise HTTPException(status_code=503, detail="Video stream manager not initialized")
-        ok = mgr.set_overlay_detectors(task1, task2)
+        ok = await asyncio.to_thread(mgr.set_overlay_detectors, task1, task2)
         if not ok:
             raise HTTPException(status_code=500, detail="Failed to set detectors")
         return {"success": True, "task1_enabled": task1, "task2_enabled": task2}
@@ -439,7 +437,7 @@ def register_video_slam_routes(app, ctx) -> None:
         mgr = get_video_stream_manager()
         if not mgr:
             raise HTTPException(status_code=503, detail="Video stream manager not initialized")
-        ok = mgr.set_overlay_mode(mode)
+        ok = await asyncio.to_thread(mgr.set_overlay_mode, mode)
         if not ok:
             raise HTTPException(status_code=400, detail=f"Failed to set overlay mode: {mode}")
         return {"success": True, "mode": mode}
@@ -453,7 +451,7 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=503, detail="Video stream manager not initialized"
             )
 
-        return mgr.get_overlay_status()
+        return await asyncio.to_thread(mgr.get_overlay_status)
 
     # ==================== SLAM 3D Mesh Endpoints ====================
     # These endpoints stream nvblox 3D mesh data for Mission Planner visualization
