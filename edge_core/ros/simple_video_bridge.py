@@ -340,7 +340,9 @@ class VideoStreamNode(Node):
             self.destroy_subscription(self.subscription)
 
         image_qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
+            # Camera streams should use sensor-style QoS. This avoids DDS
+            # delivery stalls seen with ZED image topics after wrapper restarts.
+            reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
@@ -359,7 +361,7 @@ class VideoStreamNode(Node):
         """
         try:
             depth_qos = QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
+                reliability=ReliabilityPolicy.BEST_EFFORT,
                 durability=DurabilityPolicy.VOLATILE,
                 history=HistoryPolicy.KEEP_LAST,
                 depth=1,
@@ -1044,59 +1046,57 @@ class VideoStreamNode(Node):
             pass
 
         # ---- 2. Contour-circularity fallback (catches lower-contrast circles) ----
-        try:
-            edges = cv2.Canny(gray, 45, 120)
-            edges = cv2.dilate(
-                edges, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
-                iterations=1,
-            )
-            contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            min_area = math.pi * min_r * min_r
-            max_area = math.pi * max_r * max_r
-            for c in contours:
-                area = cv2.contourArea(c)
-                if area < min_area or area > max_area:
-                    continue
-                perim = cv2.arcLength(c, True)
-                if perim < 1.0:
-                    continue
-                circularity = (4.0 * math.pi * area) / (perim * perim)
-                if circularity < 0.72:
-                    continue
-                hull = cv2.convexHull(c)
-                hull_area = cv2.contourArea(hull)
-                if hull_area < 1.0 or area / hull_area < 0.78:
-                    continue
-                (cx_f, cy_f), radius = cv2.minEnclosingCircle(c)
-                cx, cy, r = int(cx_f), int(cy_f), int(radius)
-                if r < min_r or r > max_r:
-                    continue
-                # Skip if a Hough circle already claimed this region.
-                if any(((cx - ex) ** 2 + (cy - ey) ** 2) ** 0.5 < max(r, er) * 0.7
-                       for ex, ey, er in claimed):
-                    continue
-                if not _passes_edge_gate(cx, cy, r):
-                    continue
-                claimed.append((cx, cy, r))
-                x, y, bw, bh = cv2.boundingRect(c)
-                rng = self._sample_depth_at(cx, cy, w, h)
-                out.append({
-                    "label": "circle",
-                    "hsv_color": "circle",
-                    "confidence": float(min(circularity, area / hull_area)),
-                    "bbox_x": float(x),
-                    "bbox_y": float(y),
-                    "bbox_w": float(bw),
-                    "bbox_h": float(bh),
-                    "_src_w": w,
-                    "_src_h": h,
-                    "_detector": "task2",
-                    "_method": "contour",
-                    "range_m": rng,
-                })
-        except cv2.error:
-            pass
-
+        # At HD720, contours are expensive. Only run them when Hough did not
+        # produce a gated circle in this frame.
+        if not claimed:
+            try:
+                edges = cv2.Canny(gray, 45, 120)
+                edges = cv2.dilate(
+                    edges, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+                    iterations=1,
+                )
+                contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                min_area = math.pi * min_r * min_r
+                max_area = math.pi * max_r * max_r
+                for c in contours:
+                    area = cv2.contourArea(c)
+                    if area < min_area or area > max_area:
+                        continue
+                    perim = cv2.arcLength(c, True)
+                    if perim < 1.0:
+                        continue
+                    circularity = (4.0 * math.pi * area) / (perim * perim)
+                    if circularity < 0.72:
+                        continue
+                    hull = cv2.convexHull(c)
+                    hull_area = cv2.contourArea(hull)
+                    if hull_area < 1.0 or area / hull_area < 0.78:
+                        continue
+                    (cx_f, cy_f), radius = cv2.minEnclosingCircle(c)
+                    cx, cy, r = int(cx_f), int(cy_f), int(radius)
+                    if r < min_r or r > max_r:
+                        continue
+                    if not _passes_edge_gate(cx, cy, r):
+                        continue
+                    claimed.append((cx, cy, r))
+                    x, y, bw, bh = cv2.boundingRect(c)
+                    rng = self._sample_depth_at(cx, cy, w, h)
+                    out.append({
+                        "label": "circle",
+                        "hsv_color": "circle",
+                        "confidence": float(min(circularity, area / hull_area)),
+                        "bbox_x": float(x),
+                        "bbox_y": float(y),
+                        "bbox_w": float(bw),
+                        "bbox_h": float(bh),
+                        "_src_w": w,
+                        "_src_h": h,
+                        "_detector": "task2",
+                        "_method": "contour",
+                        "range_m": rng,
+                    })
+            except cv2.error:
+                pass
         # Cap to top-N by confidence so a noisy frame can never spam the
         # overlay (and downstream targeting) with 20+ candidates.
         if len(out) > _MAX_CIRCLES_PER_FRAME:
