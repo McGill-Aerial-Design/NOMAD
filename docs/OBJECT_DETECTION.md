@@ -76,7 +76,7 @@ Detection is enabled by default in the updated launch file:
 ros2 launch /workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py
 
 # Without detection
-ros2 launch /workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py enable_od:=false
+ros2 launch /workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py enable_nvblox:=true
 ```
 
 ## Configuration

@@ -244,7 +244,7 @@ The canonical NOMAD stack (used for Mission Planner parity with RViz) launches
 
 Manual launch inside the container (canonical):
 ```bash
-ros2 launch nomad_zed_nvblox.launch.py enable_nav2:=true
+ros2 launch nomad_zed_nvblox.launch.py enable_nvblox:=true
 python3 /workspaces/isaac_ros-dev/edge_core/ros_http_bridge.py \
     --host localhost --port 8000 --rate 30 \
     --vio-topic /zed/zed_node/odom \

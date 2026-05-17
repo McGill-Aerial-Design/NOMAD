@@ -42,7 +42,6 @@ def register_detection_routes(app, ctx) -> None:
     logger = ctx.logger
     _probe_isaac_runtime_state = ctx.probe_isaac_runtime_state
     _docker_exec_bash_success = ctx.docker_exec_bash_success
-    _launch_nvblox_bridge_with_od = ctx.launch_nvblox_bridge_with_od
     _parse_request_json_object = ctx.parse_request_json_object
     _apply_detections_update = ctx.apply_detections_update
 
@@ -53,14 +52,14 @@ def register_detection_routes(app, ctx) -> None:
     @app.post("/api/detections/start", tags=["Detections"])
     async def start_detections(request: Request):
         """
-        Start ROS2 target detection by relaunching nvblox with OD enabled.
+        Enable detection consumption and the video overlay.
 
-        This keeps launch behavior consistent with NOMAD's custom launch file.
+        The target_localizer is owned by zed_wrapper; this endpoint no longer
+        relaunches nvblox or the camera stack.
         """
         runtime_state = _probe_isaac_runtime_state(force_refresh=True)
         stack_running = (
             runtime_state.get("container_running", False)
-            and runtime_state.get("nvblox_running", False)
             and runtime_state.get("bridge_running", False)
         )
 
@@ -102,47 +101,33 @@ def register_detection_routes(app, ctx) -> None:
 
                 return {
                     "success": True,
-                    "message": "Detections already running; skipped relaunch.",
+                    "message": "Detections enabled.",
                     "detection_enabled": True,
                     "already_running": True,
                 }
-
-        result = _launch_nvblox_bridge_with_od(enable_od=True)
-        if result.get("success"):
-            with request.app.state.detection_state_lock:
-                request.app.state.detection_enabled = True
-                request.app.state.detection_last_update = 0.0
-                request.app.state.detected_objects = []
-
-            # Keep operator UX consistent: enabling detections should enable overlay.
-            mgr = get_video_stream_manager()
-            if mgr:
-                if mgr.set_overlay(True):
-                    logger.info("Video overlay enabled after detections/start")
-                else:
-                    logger.warning(
-                        "Detections started, but video overlay could not be enabled"
-                    )
-        return result
+        return {
+            "success": False,
+            "error": "Detection runtime is not ready; start zed_wrapper and ros_http_bridge.",
+            "runtime": runtime_state,
+        }
 
     @app.post("/api/detections/stop", tags=["Detections"])
     async def stop_detections(request: Request):
         """
-        Stop ROS2 target detection by relaunching nvblox with OD disabled.
+        Disable detection consumption and video overlay.
 
-        nvblox mapping remains available; only custom object detection is disabled.
+        This does not stop zed_wrapper or nvblox; it only stops Edge Core from
+        treating incoming detections as active operator-facing detections.
         """
-        result = _launch_nvblox_bridge_with_od(enable_od=False)
-        if result.get("success"):
-            with request.app.state.detection_state_lock:
-                request.app.state.detection_enabled = False
-                request.app.state.detection_last_update = 0.0
-                request.app.state.detected_objects = []
+        with request.app.state.detection_state_lock:
+            request.app.state.detection_enabled = False
+            request.app.state.detection_last_update = 0.0
+            request.app.state.detected_objects = []
 
-            mgr = get_video_stream_manager()
-            if mgr:
-                mgr.set_overlay(False)
-        return result
+        mgr = get_video_stream_manager()
+        if mgr:
+            mgr.set_overlay(False)
+        return {"success": True, "message": "Detections disabled."}
 
     @app.get("/api/detections/status", tags=["Detections"])
     async def get_detections_status(request: Request):

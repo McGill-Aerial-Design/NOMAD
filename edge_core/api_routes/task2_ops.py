@@ -1166,8 +1166,8 @@ def register_task2_routes(app, ctx) -> None:
         """
         Switch operational mode.
 
-        Coordinates servo, VIO source, nvblox config, and obstacle avoidance.
-        Drone must be hovering for modes that require nvblox restart.
+        Coordinates servo, VIO source, and obstacle avoidance. nvblox is an
+        optional service controlled separately from Mission Planner.
 
         Valid modes: outdoor_transit, outdoor_survey, indoor_nav,
                      spray_approach, emergency

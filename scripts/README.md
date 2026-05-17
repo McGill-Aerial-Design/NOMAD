@@ -73,9 +73,10 @@ nomad restart all                           # apply changes
 sudo systemctl restart nomad.target
 ```
 
-To toggle autostart for a service (e.g. enable nvblox at boot), edit the
-corresponding `NOMAD_AUTOSTART_*` flag, then re-run `sudo bash
-infra/systemd/install.sh` to reconcile the enabled set.
+To toggle autostart for a normal service, edit the corresponding
+`NOMAD_AUTOSTART_*` flag, then re-run `sudo bash infra/systemd/install.sh` to
+reconcile the enabled set. nvblox is manual-only and is started from Mission
+Planner Service Control when needed.
 
 ## setup/
 

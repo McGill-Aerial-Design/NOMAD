@@ -1,225 +1,37 @@
-# NOMAD ZED + nvblox + Custom Object Detection Launch File
+# NOMAD nvblox-only launch file.
 #
-# ZED and nvblox run in SEPARATE composable containers so a nvblox SIGABRT
-# (CUDA memory error) does not kill the ZED node. Video, VIO, and telemetry
-# survive nvblox crashes.
-#
-# Adds:
-# - camera=zed2 for the ZED 2 (with correct config stack)
-# - Servo TF publisher (servo_mount -> camera_link dynamic transform)
-# - Static TF alias: zed_left_camera_frame_optical -> zed_left_camera_optical_frame
-# - Obstacle distance bridge (nvblox ESDF -> MAVLink OBSTACLE_DISTANCE)
-#
-# Nav2 was removed -- Task 2 autonomy uses pure visual servoing. nvblox stays as
-# an opt-in mapping tool and the SLAM 3D viewer keeps reading its mesh.
-#
-# TF Tree (complete chain):
-#   map -> odom -> zed_camera_link -> zed_camera_center -> zed_left_camera_frame
-#                                                          -> zed_left_camera_frame_optical
-#                                                             -> zed_left_camera_optical_frame (alias)
-#
-# NOTE: ZED config patches (publish_left_right, pub_downscale_factor, publish_mag,
-# depth_confidence, etc.) are applied by scripts/services/zed_wrapper.sh BEFORE
-# the ZED node starts — ZED reads these at initialization time. The values come
-# from config/nomad.env (ZED_* variables) and are written into common_stereo.yaml
-# on disk.
-#
-# NOTE: nvblox parameter overrides (voxel_size, ESDF mode, rates, etc.) are
-# applied by scripts/services/nvblox.sh, which copies config/nvblox_performance.yaml
-# over the installed nvblox_base.yaml BEFORE invoking this launch file.
-#
-# Usage (inside Isaac ROS container):
-#   ros2 launch /workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py
-#   ros2 launch .../nomad_zed_nvblox.launch.py enable_nvblox:=false
+# The ZED wrapper, Task 1 target_localizer, optical-frame alias, and servo TF
+# publisher are owned by scripts/services/zed_wrapper.sh. This launch file is
+# intentionally limited to optional nvblox mapping and its obstacle-distance
+# bridge so starting/stopping nvblox cannot cycle the camera or duplicate helper
+# nodes. Competition deployments can leave nomad-nvblox.service disabled.
 
-import os
 from launch import LaunchDescription
-from launch.actions import (
-    IncludeLaunchDescription,
-    DeclareLaunchArgument,
-    ExecuteProcess,
-)
-from launch.conditions import IfCondition, UnlessCondition
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import Command, LaunchConfiguration
-from launch_ros.actions import ComposableNodeContainer, Node
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import ComposableNodeContainer
 from launch_ros.descriptions import ComposableNode
 from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
     nvblox_bringup_dir = get_package_share_directory("nvblox_examples_bringup")
-    zed_wrapper_dir = get_package_share_directory("zed_wrapper")
 
-    # ZED-only launch (no nvblox) — used when enable_nvblox:=false.
-    zed_only_launch = os.path.join(
-        nvblox_bringup_dir, "launch", "sensors", "zed.launch.py"
+    nvblox_base_config = (
+        f"{nvblox_bringup_dir}/config/nvblox/nvblox_base.yaml"
     )
-
-    # Config files for ZED node (loaded in priority order, later overrides earlier).
-    # common_stereo.yaml is patched by scripts/services/zed_wrapper.sh before launch:
-    #   - publish_left_right, publish_raw, publish_mag (lazy-published)
-    #   - pub_downscale_factor — defaults to 1.0 (NATIVE); set to 2.0 (360p) if
-    #     running nvblox alongside ZED on 8GB Orin Nano to avoid CUDA OOM
-    zed_stereo_config = os.path.join(
-        zed_wrapper_dir, "config", "common_stereo.yaml"
-    )
-    # nvblox bringup's ZED overrides (sensors.publish_mag etc.)
-    nvblox_zed_common_config = os.path.join(
-        nvblox_bringup_dir, "config", "sensors", "zed_common.yaml"
-    )
-    # Camera-model-specific params (grab_resolution, min_depth, max_depth for ZED 2)
-    nvblox_zed2_config = os.path.join(
-        nvblox_bringup_dir, "config", "sensors", "zed2.yaml"
-    )
-
-    # nvblox config files (copied/patched by scripts/services/nvblox.sh before launch)
-    nvblox_base_config = os.path.join(
-        nvblox_bringup_dir, "config", "nvblox", "nvblox_base.yaml"
-    )
-    nvblox_zed_config = os.path.join(
-        nvblox_bringup_dir, "config", "nvblox", "specializations", "nvblox_zed.yaml"
-    )
-
-    xacro_path = os.path.join(zed_wrapper_dir, "urdf", "zed_descr.urdf.xacro")
-
-    enable_od_arg = DeclareLaunchArgument(
-        "enable_od",
-        default_value="false",
-        description="Enable ZED custom object detection (YOLO26 circle detection) - DISABLED by default to prevent VRAM exhaustion and composable node instability on 8GB Jetson Orin Nano",
+    nvblox_zed_config = (
+        f"{nvblox_bringup_dir}/config/nvblox/specializations/nvblox_zed.yaml"
     )
 
     enable_nvblox_arg = DeclareLaunchArgument(
         "enable_nvblox",
         default_value="true",
-        description="Launch ZED + nvblox in SEPARATE containers (true) or ZED standalone only (false). Separate containers mean nvblox SIGABRT does not kill ZED.",
+        description="Start the single optional nvblox mapper.",
     )
 
-    # Servo TF publisher: publishes servo_mount -> camera_link at 20 Hz
-    # reflecting the current servo pitch angle, and publishes odom -> base_link
-    # by inverting the camera odom pose so the full TF chain is connected.
-    servo_tf_publisher = ExecuteProcess(
-        cmd=[
-            "python3",
-            "/workspaces/isaac_ros-dev/edge_core/ros/servo_tf_publisher.py",
-            "--host",
-            "172.17.0.1",
-            "--port",
-            "8000",
-            "--tf-rate",
-            "20.0",
-            "--poll-rate",
-            "10.0",
-            "--odom-topic",
-            "/zed/zed_node/odom",
-        ],
-        name="servo_tf_publisher",
-        output="screen",
-    )
-
-    # Obstacle distance bridge: converts nvblox 2D ESDF slice to
-    # MAVLink OBSTACLE_DISTANCE for ArduPilot obstacle avoidance.
-    # Skipped when nvblox is disabled — its source topic wouldn't exist.
-    obstacle_distance_bridge = ExecuteProcess(
-        cmd=[
-            "python3",
-            "/workspaces/isaac_ros-dev/edge_core/ros/obstacle_distance_bridge.py",
-            "--host",
-            "172.17.0.1",
-            "--port",
-            "8000",
-            "--rate",
-            "5.0",
-            "--buffer",
-            "2.0",
-            "--topic",
-            "/nvblox_node/combined_dynamic_map_slice",
-        ],
-        name="obstacle_distance_bridge",
-        output="screen",
-        condition=IfCondition(LaunchConfiguration("enable_nvblox")),
-    )
-
-    # Task 1 target localizer: HSV circle detection for capture operations
-    target_localizer = ExecuteProcess(
-        cmd=[
-            "/bin/bash",
-            "-c",
-            ". /opt/ros/humble/setup.bash && . /workspaces/isaac_ros-dev/install/setup.bash && PYTHONPATH=/workspaces/isaac_ros-dev/edge_core/target_localizer:$PYTHONPATH exec python3 -m target_localizer.target_localizer_node --ros-args -p output_dir:=/workspaces/isaac_ros-dev/data/task1_captures -p team_name:=MAD -r /zed2i/zed_node/rgb/image_rect_color:=/zed/zed_node/rgb/color/rect/image -r /zed2i/zed_node/depth/depth_registered:=/zed/zed_node/depth/depth_registered -r /zed2i/zed_node/rgb/camera_info:=/zed/zed_node/rgb/color/rect/camera_info",
-        ],
-        name="target_localizer",
-        output="screen",
-    )
-
-    # Static TF alias: ZED URDF uses "zed_left_camera_frame_optical" but
-    # the ZED node publishes images with frame_id "zed_left_camera_optical_frame".
-    optical_frame_alias = Node(
-        package="tf2_ros",
-        executable="static_transform_publisher",
-        name="optical_frame_alias",
-        arguments=[
-            "--x", "0", "--y", "0", "--z", "0",
-            "--roll", "0", "--pitch", "0", "--yaw", "0",
-            "--frame-id", "zed_left_camera_frame_optical",
-            "--child-frame-id", "zed_left_camera_optical_frame",
-        ],
-    )
-
-    # --- SPLIT: ZED and nvblox in separate composable containers ---
-    #
-    # Previously both lived in one component_container_mt (via zed_example.launch.py).
-    # A nvblox SIGABRT (CUDA OOM) would kill the entire container, taking ZED
-    # and the video bridge down with it. Now each gets its own process — nvblox
-    # can crash and ZED keeps streaming/publishing VIO.
-
-    # Robot state publisher so ZED URDF is available on /robot_description.
-    zed_state_publisher = Node(
-        package="robot_state_publisher",
-        namespace="zed",
-        executable="robot_state_publisher",
-        name="zed_state_publisher",
-        output="screen",
-        parameters=[{
-            "robot_description": Command([
-                "xacro", " ", xacro_path, " ",
-                "camera_name:=zed camera_model:=zed2",
-            ])
-        }],
-        condition=IfCondition(LaunchConfiguration("enable_nvblox")),
-    )
-
-    # ZED standalone container — isolated from nvblox CUDA context.
-    zed_split_container = ComposableNodeContainer(
-        name="zed_container",
-        namespace="",
-        package="rclcpp_components",
-        executable="component_container_mt",
-        composable_node_descriptions=[
-            ComposableNode(
-                package="zed_components",
-                namespace="zed",
-                name="zed_node",
-                plugin="stereolabs::ZedCamera",
-                parameters=[
-                    # Priority order: later files override earlier.
-                    # common_stereo.yaml is patched by startup script at boot.
-                    zed_stereo_config,
-                    nvblox_zed_common_config,
-                    nvblox_zed2_config,
-                    {
-                        "general.camera_name": "zed",
-                        "general.camera_model": "zed2",
-                    },
-                ],
-            )
-        ],
-        output="screen",
-        condition=IfCondition(LaunchConfiguration("enable_nvblox")),
-    )
-
-    # nvblox in its own separate container — subscribes to ZED topics via DDS.
-    # If this container crashes, ZED keeps running.
-    nvblox_split_container = ComposableNodeContainer(
+    nvblox_container = ComposableNodeContainer(
         name="nvblox_node_container",
         namespace="",
         package="rclcpp_components",
@@ -247,30 +59,30 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("enable_nvblox")),
     )
 
-    # ZED standalone only (no nvblox) — when enable_nvblox:=false.
-    zed_only = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(zed_only_launch),
-        launch_arguments={
-            "zed_camera_model": "zed2",
-            "run_standalone": "True",
-        }.items(),
-        condition=UnlessCondition(LaunchConfiguration("enable_nvblox")),
+    obstacle_distance_bridge = ExecuteProcess(
+        cmd=[
+            "python3",
+            "/workspaces/isaac_ros-dev/edge_core/ros/obstacle_distance_bridge.py",
+            "--host",
+            "172.17.0.1",
+            "--port",
+            "8000",
+            "--rate",
+            "5.0",
+            "--buffer",
+            "2.0",
+            "--topic",
+            "/nvblox_node/combined_dynamic_map_slice",
+        ],
+        name="obstacle_distance_bridge",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("enable_nvblox")),
     )
 
     return LaunchDescription(
         [
-            enable_od_arg,
             enable_nvblox_arg,
-            # Split ZED + nvblox (enable_nvblox:=true)
-            zed_state_publisher,
-            zed_split_container,
-            nvblox_split_container,
-            # ZED only (enable_nvblox:=false)
-            zed_only,
-            # Common nodes (always run)
-            optical_frame_alias,
-            target_localizer,
-            servo_tf_publisher,
+            nvblox_container,
             obstacle_distance_bridge,
         ]
     )

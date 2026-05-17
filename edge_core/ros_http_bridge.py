@@ -262,7 +262,6 @@ class ROSHTTPBridge(Node):
         mag_topic: str = "/zed/zed_node/imu/mag",   # Magnetometer for heading
         cmd_vel_topic: str = "/cmd_vel",         # Nav2 velocity commands
         mesh_topic: str = "/nvblox_node/color_layer_marker",   # Nvblox marker topic
-        mesh_output_mode: str = "voxel",         # Runtime-selectable output mode: voxel-only
         servo_topic: str = "/nomad/servo/nozzle_angle",  # Nozzle servo angle
         detection_topic: str = "/zed/zed_node/obj_det/objects",  # ZED custom OD
         detection_status_topic: str = "/target_localizer/detection_status_json",
@@ -296,7 +295,6 @@ class ROSHTTPBridge(Node):
         self._enable_nav_control = enable_nav_control
         self._enable_mesh = enable_mesh and MARKER_AVAILABLE
         self._mesh_topic = (mesh_topic or "/nvblox_node/color_layer_marker").strip() or "/nvblox_node/color_layer_marker"
-        self._mesh_output_mode = "voxel"
         self._enable_servo = enable_servo
         self._enable_detections = enable_detections and ZED_OD_AVAILABLE
         self._enable_detection_status = enable_detections
@@ -625,8 +623,6 @@ class ROSHTTPBridge(Node):
         self._gimbal_mount_offset = (0.10, 0.0, -0.05)  # (x, y, z) base_link -> servo_mount in body frame
         self._gimbal_last_poll = 0.0
         self._gimbal_poll_interval = 0.5     # Poll servo angle every 500ms
-        self._mesh_mode_last_poll = 0.0
-        self._mesh_mode_poll_interval = 1.0  # Poll runtime mesh output mode every 1s
         
         # Thermal-aware detection rate throttling (RM-005)
         self._gpu_temp_c = 0.0
@@ -661,8 +657,6 @@ class ROSHTTPBridge(Node):
         self.create_timer(0.5, self._send_detection_heartbeat)
         # Poll gimbal angle on its own timer to avoid blocking VIO send timer work.
         self.create_timer(self._gimbal_poll_interval, self._poll_gimbal_angle)
-        # Poll runtime mesh output mode from Edge Core (voxel-only) without restart.
-        self.create_timer(self._mesh_mode_poll_interval, self._poll_mesh_output_mode)
 
         self.get_logger().info(
             f"High-rate transport mode: {self._high_rate_transport}"
@@ -682,10 +676,7 @@ class ROSHTTPBridge(Node):
             self.get_logger().info("Navigation control ENABLED - forwarding cmd_vel to Edge Core")
         if self._enable_mesh:
             self.get_logger().info("Mesh forwarding ENABLED - forwarding nvblox mesh to Edge Core")
-            self.get_logger().info(
-                f"Mesh output mode: {self._mesh_output_mode} "
-                "(runtime toggle via /api/task/2/slam/mesh/mode)"
-            )
+            self.get_logger().info("Mesh output format: voxel")
     
     def _handle_vio(self, msg: Odometry) -> None:
         """Handle VIO odometry from ZED ROS2 driver."""
@@ -1990,18 +1981,6 @@ class ROSHTTPBridge(Node):
         except Exception as e:
             self.get_logger().error(f"Voxel marker processing error: {e}")
 
-    def _poll_mesh_output_mode(self) -> None:
-        """Poll Edge Core for runtime mesh output mode (voxel-only)."""
-        now = time.time()
-        if now - self._mesh_mode_last_poll < self._mesh_mode_poll_interval:
-            return
-        self._mesh_mode_last_poll = now
-
-        # Pooled GET to avoid leaking TIME_WAIT sockets via urllib.urlopen.
-        data = self._http_get_json("/api/task/2/slam/mesh/mode", timeout=0.1)
-        if data is not None:
-            self._mesh_output_mode = "voxel"
-
     def _poll_gimbal_angle(self) -> None:
         """Poll camera gimbal servo angle from Edge Core API.
 
@@ -2311,7 +2290,7 @@ class ROSHTTPBridge(Node):
             "high_rate_zmq_pub_mode": self._high_rate_zmq_pub_mode,
             "nav_control_enabled": self._enable_nav_control,
             "mesh_enabled": self._enable_mesh,
-            "mesh_output_mode": self._mesh_output_mode,
+            "mesh_format": "voxel",
             "servo_enabled": self._enable_servo,
             "detections_enabled": self._enable_detections,
             # VO-006: tilt cycle drift stats
@@ -2566,8 +2545,6 @@ def main():
                         help="Navigation velocity command topic")
     parser.add_argument("--mesh-topic", default="/nvblox_node/color_layer_marker",
                         help="Nvblox marker topic (visualization_msgs/Marker CUBE_LIST)")
-    parser.add_argument("--mesh-output-mode", default="voxel", choices=["voxel"],
-                        help="Mesh payload mode sent to Edge Core")
     parser.add_argument("--rate", type=float, default=30.0, help="Send rate Hz")
     parser.add_argument("--disable-nav", action="store_true",
                         help="Disable navigation control (cmd_vel forwarding)")
@@ -2620,7 +2597,6 @@ def main():
         mag_topic=args.mag_topic,
         cmd_vel_topic=args.cmd_vel_topic,
         mesh_topic=args.mesh_topic,
-        mesh_output_mode=args.mesh_output_mode,
         servo_topic=args.servo_topic,
         detection_topic=args.detection_topic,
         detection_status_topic=args.detection_status_topic,

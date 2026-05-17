@@ -16,7 +16,6 @@ import logging
 import math
 import os
 import signal
-import subprocess
 import sys
 from typing import Any
 
@@ -385,52 +384,7 @@ def run(
     )
     app.state.mode_manager = mode_manager
 
-    # nvblox restart callback: kill composable node, overlay correct config, relaunch
-    def _restart_nvblox(config_name: str) -> bool:
-        """Restart nvblox inside Isaac ROS container with a different config."""
-        container = "nomad_isaac_ros"
-        if config_name == "indoor":
-            src_cfg = "/workspaces/isaac_ros-dev/config/nvblox_indoor.yaml"
-        else:
-            src_cfg = "/workspaces/isaac_ros-dev/config/nvblox_performance.yaml"
-        try:
-            # Kill existing nvblox launch (the PID written by start script)
-            subprocess.run(
-                ["docker", "exec", container, "bash", "-c",
-                 "kill $(cat /tmp/zed_nvblox.pid 2>/dev/null) 2>/dev/null; sleep 2"],
-                timeout=10, capture_output=True,
-            )
-            # Overlay config onto installed nvblox_base.yaml and relaunch
-            relaunch_script = (
-                "source /opt/ros/humble/setup.bash 2>/dev/null; "
-                "source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null; "
-                "export LD_LIBRARY_PATH=/usr/local/zed/lib:$LD_LIBRARY_PATH; "
-                f'NVBLOX_BASE=$(python3 -c "from ament_index_python.packages import get_package_share_directory; '
-                f"print(get_package_share_directory('nvblox_examples_bringup'))\" 2>/dev/null)/config/nvblox/nvblox_base.yaml; "
-                f"cp {src_cfg} $NVBLOX_BASE; "
-                'NOMAD_LAUNCH=/workspaces/isaac_ros-dev/config/launch/nomad_zed_nvblox.launch.py; '
-                'if [ -f "$NOMAD_LAUNCH" ]; then '
-                '  ros2 launch "$NOMAD_LAUNCH" & echo $! > /tmp/zed_nvblox.pid; '
-                'else '
-                '  ros2 launch nvblox_examples_bringup zed_example.launch.py camera:=zed2 & echo $! > /tmp/zed_nvblox.pid; '
-                'fi'
-            )
-            result = subprocess.run(
-                ["docker", "exec", "-d", container, "bash", "-c", relaunch_script],
-                timeout=15, capture_output=True,
-            )
-            success = result.returncode == 0
-            if success:
-                logger.info(f"nvblox restarted with config: {config_name}")
-            else:
-                logger.error(f"nvblox restart failed: {result.stderr.decode()}")
-            return success
-        except Exception as e:
-            logger.error(f"nvblox restart error: {e}")
-            return False
-
-    mode_manager.set_nvblox_restart_fn(_restart_nvblox)
-    logger.info("Operational mode manager initialized")
+    logger.info("Operational mode manager initialized (nvblox is a single optional service)")
 
     # Initialize spray controller (SP-001 to SP-008)
     spray_controller = SprayController(

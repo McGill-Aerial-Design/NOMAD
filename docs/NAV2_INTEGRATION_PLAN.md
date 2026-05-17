@@ -135,7 +135,7 @@ depth:
 
 **Configuration**:
 ```yaml
-# nvblox_config.yaml
+# nvblox_performance.yaml
 nvblox_node:
   ros__parameters:
     voxel_size: 0.15  # 15cm - revised from 0.05 for Orin Nano performance
@@ -607,7 +607,7 @@ def generate_launch_description():
                 '/launch/nvblox_nav2.launch.py'
             ]),
             launch_arguments={
-                'config': './config/nvblox_config.yaml'
+                'config': './config/nvblox_performance.yaml'
             }.items()
         ),
 

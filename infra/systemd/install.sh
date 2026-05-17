@@ -111,7 +111,6 @@ declare -A FLAG=(
     [nomad-zed-wrapper.service]="$NOMAD_AUTOSTART_ZED_WRAPPER"
     [nomad-ros-http-bridge.service]="$NOMAD_AUTOSTART_ROS_HTTP_BRIDGE"
     [nomad-video-bridge.service]="$NOMAD_AUTOSTART_VIDEO_BRIDGE"
-    [nomad-nvblox.service]="$NOMAD_AUTOSTART_NVBLOX"
 )
 
 for u in "${!FLAG[@]}"; do
@@ -123,6 +122,9 @@ for u in "${!FLAG[@]}"; do
         systemctl disable "$u" 2>/dev/null || true
     fi
 done
+
+echo "[install] disable nomad-nvblox.service (manual-only; start from Mission Planner Service Control)"
+systemctl disable nomad-nvblox.service 2>/dev/null || true
 
 # Remove the legacy single-unit setup if it lingers.
 if systemctl list-unit-files nomad.service >/dev/null 2>&1; then
@@ -138,6 +140,7 @@ cat <<EOF
     nomad status             # check each service
     journalctl -u nomad-edge-core -f
 
-To enable nvblox on this host:
-    sudo systemctl enable --now nomad-nvblox.service
+To run nvblox on this host:
+    Start it from Mission Planner Service Control, or run:
+    sudo systemctl start nomad-nvblox.service
 EOF

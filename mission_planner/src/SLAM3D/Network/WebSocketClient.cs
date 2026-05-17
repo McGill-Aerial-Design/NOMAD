@@ -177,6 +177,10 @@ namespace NOMAD.MissionPlanner.SLAM3D.Network
                 {
                     _webSocket = new ClientWebSocket();
                     _webSocket.Options.KeepAliveInterval = TimeSpan.FromSeconds(5);
+                    if (!string.IsNullOrEmpty(ApiKey))
+                    {
+                        _webSocket.Options.SetRequestHeader("X-API-Key", ApiKey);
+                    }
                     
                     string wsUrl = BuildWebSocketUrl();
                     OnStatusChanged?.Invoke("Connecting...");
@@ -306,12 +310,6 @@ namespace NOMAD.MissionPlanner.SLAM3D.Network
                 .Replace("https://", "wss://")
                 .Replace("http://", "ws://")
                 .TrimEnd('/') + "/ws/slam";
-            
-            if (!string.IsNullOrEmpty(ApiKey))
-            {
-                wsUrl += $"?token={Uri.EscapeDataString(ApiKey)}";
-            }
-            
             return wsUrl;
         }
         

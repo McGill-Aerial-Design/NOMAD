@@ -468,6 +468,15 @@ class SprayController:
                             range_m = candidate_range
                 except (TypeError, ValueError):
                     range_m = None
+                if range_m is None:
+                    return {
+                        "success": False,
+                        "error": (
+                            "Target has no valid depth/range estimate. Wait for "
+                            "ZED depth on the detection or move to a view where "
+                            "the circle center has valid depth before triggering spray."
+                        ),
+                    }
                 distance = range_m if range_m is not None else self.TARGET_CAMERA_RANGE_M
             else:
                 dx = target.x - drone_pos[0]

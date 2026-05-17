@@ -35,12 +35,8 @@ ARGS=(
     --vio-topic "${ROS_HTTP_BRIDGE_VIO_TOPIC}"
     --mag-topic "${ROS_HTTP_BRIDGE_MAG_TOPIC}"
     --high-rate-transport "${ROS_HTTP_BRIDGE_TRANSPORT}"
+    --mesh-topic /nvblox_node/color_layer_marker
 )
-if [ "${NOMAD_AUTOSTART_NVBLOX:-false}" = "true" ]; then
-    ARGS+=(--mesh-topic /nvblox_node/color_layer_marker)
-else
-    ARGS+=(--disable-mesh)
-fi
 
 # Restart loop: keeps VIO telemetry flowing through transient crashes.
 # Trap SIGTERM so `docker exec ... pkill` cleanly stops the wrapper.
@@ -77,7 +73,6 @@ svc_start() {
         "-e" "ROS_HTTP_BRIDGE_VIO_TOPIC=$ROS_HTTP_BRIDGE_VIO_TOPIC"
         "-e" "ROS_HTTP_BRIDGE_MAG_TOPIC=$ROS_HTTP_BRIDGE_MAG_TOPIC"
         "-e" "ROS_HTTP_BRIDGE_TRANSPORT=$ROS_HTTP_BRIDGE_TRANSPORT"
-        "-e" "NOMAD_AUTOSTART_NVBLOX=$NOMAD_AUTOSTART_NVBLOX"
     )
     [ -n "${NOMAD_API_KEY:-}" ]        && env_args+=("-e" "NOMAD_API_KEY=$NOMAD_API_KEY")
     [ -n "${NOMAD_INTERNAL_TOKEN:-}" ] && env_args+=("-e" "NOMAD_INTERNAL_TOKEN=$NOMAD_INTERNAL_TOKEN")

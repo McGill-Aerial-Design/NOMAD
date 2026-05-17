@@ -19,6 +19,7 @@ using System.Drawing;
 using System.IO;
 using System.Net.Http;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Newtonsoft.Json.Linq;
@@ -51,6 +52,7 @@ namespace NOMAD.MissionPlanner
         private ProgressBar _progress;
 
         private System.Threading.Timer _statusPollTimer;
+        private int _statusPollInFlight;
         private string _lastSprayState = "idle";
         private string _lastUploadedSessionKey = "";   // dedupe auto-uploads
         private volatile bool _uploadInFlight;
@@ -334,6 +336,7 @@ namespace NOMAD.MissionPlanner
         private async void PollSprayStatus()
         {
             if (IsDisposed) return;
+            if (Interlocked.Exchange(ref _statusPollInFlight, 1) == 1) return;
             try
             {
                 var resp = await JetsonApiService.GetAsync("/api/spray/status");
@@ -349,7 +352,15 @@ namespace NOMAD.MissionPlanner
 
                 BeginInvoke(new Action(() => ApplySessionInterlock(state, autonomousActive)));
 
-                if (justCompleted && _chkAutoUpload != null && _chkAutoUpload.Checked && !_uploadInFlight)
+                bool autoUploadEnabled = false;
+                if (!IsDisposed && IsHandleCreated)
+                {
+                    autoUploadEnabled = InvokeRequired
+                        ? (bool)Invoke(new Func<bool>(() => _chkAutoUpload != null && _chkAutoUpload.Checked))
+                        : (_chkAutoUpload != null && _chkAutoUpload.Checked);
+                }
+
+                if (justCompleted && autoUploadEnabled && !_uploadInFlight)
                 {
                     BeginInvoke(new Action(async () =>
                     {
@@ -359,6 +370,10 @@ namespace NOMAD.MissionPlanner
                 }
             }
             catch { }
+            finally
+            {
+                Interlocked.Exchange(ref _statusPollInFlight, 0);
+            }
         }
 
         /// <summary>

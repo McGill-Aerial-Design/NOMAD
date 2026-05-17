@@ -17,7 +17,7 @@
 #   video_bridge, nvblox
 #
 # `all` operates on the autostart set from config/nomad.env
-# (NOMAD_AUTOSTART_* flags). Note: nvblox defaults to false.
+# (NOMAD_AUTOSTART_* flags). nvblox is manual-only and is never part of `all`.
 # `restart all` performs a hard reset: stop services, kill stale launch
 # children, then start the autostart set again.
 # =============================================================================
@@ -87,7 +87,7 @@ cmd_list() {
     printf "%-22s %-10s %s\n" "ros_http_bridge"     "$NOMAD_AUTOSTART_ROS_HTTP_BRIDGE"     "ROS<->HTTP bridge (in container)"
     printf "%-22s %-10s %s\n" "zed_wrapper"         "$NOMAD_AUTOSTART_ZED_WRAPPER"         "ZED camera node (in container)"
     printf "%-22s %-10s %s\n" "video_bridge"        "$NOMAD_AUTOSTART_VIDEO_BRIDGE"        "RTSP relay (via Edge Core API)"
-    printf "%-22s %-10s %s\n" "nvblox"              "$NOMAD_AUTOSTART_NVBLOX"              "nvblox mapping (in container)"
+    printf "%-22s %-10s %s\n" "nvblox"              "manual"                              "nvblox mapping (Mission Planner start only)"
 }
 
 cmd_config() {
@@ -97,6 +97,10 @@ cmd_config() {
 cmd_start_all() {
     local s rc=0
     for s in "${SERVICE_ORDER[@]}"; do
+        if [ "$s" = "nvblox" ]; then
+            echo "[nomad] skip nvblox (manual-only; start from Mission Planner Service Control)"
+            continue
+        fi
         local key
         key="$(autostart_key_for "$s")"
         local var="NOMAD_AUTOSTART_$key"

@@ -24,6 +24,7 @@ using System.Drawing;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using MissionPlanner;
@@ -61,7 +62,6 @@ namespace NOMAD.MissionPlanner
         private Label _lblVerification;
         private Label _lblSprayTargets;
         private Label _lblSprayError;
-        private Label _lblNvbloxWarning;
 
         // ---- Detect & Spray tab ----
         private ListBox _lstDetections;
@@ -75,6 +75,7 @@ namespace NOMAD.MissionPlanner
         private Button _btnResetVio;
 
         private System.Threading.Timer _modePollTimer;
+        private int _modePollInFlight;
         private volatile bool _sprayInProgress;
         private JArray _cachedDetections = new JArray();
 
@@ -408,17 +409,6 @@ namespace NOMAD.MissionPlanner
             _lblApproachStatus = MakeRow(bar, "Approach: --", 32);
             _lblModeStatus = MakeRow(bar, "Mode: --", 54);
             _lblObstacleStatus = MakeRow(bar, "Obstacles: --", 76);
-            _lblNvbloxWarning = new Label
-            {
-                Text = "",
-                Font = new Font("Segoe UI", 8, FontStyle.Bold),
-                ForeColor = Color.Orange,
-                Location = new Point(10, 100),
-                AutoSize = true,
-                Visible = false,
-            };
-            bar.Controls.Add(_lblNvbloxWarning);
-
             // ---- Spray sequence detail card ----
             var seqCard = CreateCard("SPRAY SEQUENCE STATUS");
             seqCard.Dock = DockStyle.Top;
@@ -531,6 +521,7 @@ namespace NOMAD.MissionPlanner
         private async void PollModeAndSpray()
         {
             if (IsDisposed || !IsHandleCreated) return;
+            if (Interlocked.Exchange(ref _modePollInFlight, 1) == 1) return;
             try
             {
                 var modeTask = JetsonApiService.GetAsync("/api/mode");
@@ -560,6 +551,10 @@ namespace NOMAD.MissionPlanner
             catch (ObjectDisposedException) { }
             catch (InvalidOperationException) { }
             catch (Exception) { }
+            finally
+            {
+                Interlocked.Exchange(ref _modePollInFlight, 0);
+            }
         }
 
         private static async Task<JObject> ReadJson(Task<HttpResponseMessage> task)
@@ -654,14 +649,6 @@ namespace NOMAD.MissionPlanner
 
             var currentMode = status["current_mode"]?.ToString() ?? "unknown";
             _lblModeStatus.Text = $"Mode: {currentMode}";
-
-            var nvbloxRestarting = status["nvblox_restarting"]?.Value<bool>() ?? false;
-            if (_lblNvbloxWarning != null)
-            {
-                _lblNvbloxWarning.Visible = nvbloxRestarting;
-                if (nvbloxRestarting)
-                    _lblNvbloxWarning.Text = "nvblox restarting -- obstacle avoidance offline";
-            }
         }
 
         private void UpdateSprayUI(JObject sprayData)

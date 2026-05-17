@@ -14,8 +14,8 @@
 > | `bash scripts/dev/restart_nvblox.sh`          | `nomad restart nvblox`                       |
 > | edit `config/env/jetson.env`                  | edit `config/nomad.env`                      |
 >
-> nvblox is no longer in the autostart set — start it on demand via
-> `nomad start nvblox` or enable the unit with `sudo systemctl enable --now nomad-nvblox`.
+> nvblox is not in the autostart set. Start it only on demand from Mission
+> Planner Service Control, or manually with `sudo systemctl start nomad-nvblox`.
 
 Reference guide for operating the NOMAD system during development and competition.
 

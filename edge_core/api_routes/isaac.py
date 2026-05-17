@@ -143,44 +143,16 @@ def register_isaac_routes(app, ctx) -> None:
         return result
 
     @app.post("/api/isaac/launch-nvblox", tags=["Isaac ROS"])
-    async def isaac_launch_nvblox(
-        request: Request,
-        enable_od: bool = Query(
-            default=False,
-            description=(
-                "Enable ZED object detection. When the value differs from "
-                "NVBLOX_ENABLE_OD in config/nomad.env, the legacy in-process "
-                "relaunch path is used (which bypasses systemd). Otherwise "
-                "this just starts nomad-nvblox.service."
-            ),
-        ),
-    ):
+    async def isaac_launch_nvblox(request: Request):
         """
-        Bring nvblox up.
-
-        This delegates to `systemctl start nomad-nvblox.service`. If the
-        requested `enable_od` value differs from `NVBLOX_ENABLE_OD` in
-        config/nomad.env, return a clear error instead of relaunching the
-        stack outside systemd.
+        Bring the single optional nvblox mapper up via systemd.
         """
-        config_default_od = (os.environ.get("NVBLOX_ENABLE_OD", "false").lower() == "true")
         loop = asyncio.get_running_loop()
-
-        if enable_od != config_default_od:
-            return {
-                "success": False,
-                "error": (
-                    "enable_od does not match NVBLOX_ENABLE_OD in config/nomad.env. "
-                    "Update config/nomad.env and restart nomad-nvblox.service so "
-                    "systemd remains the single owner of nvblox."
-                ),
-            }
-
         result = await loop.run_in_executor(
             None, lambda: _systemctl("start", ("nomad-nvblox.service",))
         )
         if result.get("success"):
-            request.app.state.detection_enabled = enable_od
+            request.app.state.detection_enabled = False
             request.app.state.detection_last_update = 0.0
         return result
 
@@ -268,73 +240,6 @@ def register_isaac_routes(app, ctx) -> None:
         return await asyncio.get_running_loop().run_in_executor(
             None, lambda: _systemctl("stop", ("nomad-ros-http-bridge.service",))
         )
-
-    def _relaunch_isaac_with_nvblox(enable_nvblox: bool) -> dict:
-        """
-        Relaunch the Isaac ROS bringup (nomad_zed_nvblox.launch.py) with the
-        nvblox composable node either enabled or disabled, leaving every
-        independent process alone:
-          - ros_http_bridge keeps running (no nvblox dependency).
-          - simple_video_bridge keeps running and reattaches to ZED via DDS
-            discovery once the new launch republishes the image topic.
-        nvblox and ZED share the same composable container in the upstream
-        zed_example.launch.py, so toggling nvblox does cycle ZED — expect a
-        few seconds of frame loss on the video bridge while ZED reinits.
-        """
-        container = "nomad_isaac_ros"
-        # Kill the previous launch chain. ros_http_bridge and simple_video_bridge
-        # are intentionally absent from this list so they survive the toggle.
-        for proc in [
-            "launch_nvblox_bridge\\.sh|launch_zed_nvblox\\.sh",
-            "nomad_zed_nvblox\\.launch\\.py|zed_example\\.launch\\.py|sensors/zed\\.launch\\.py",
-            "component_container",
-            "obstacle_distance_bridge",
-            "target_localizer_node|target_localizer\\.launch\\.py",
-            "servo_tf_publisher",
-        ]:
-            subprocess.run(
-                ["docker", "exec", container, "pkill", "-f", proc],
-                capture_output=True,
-                timeout=5,
-            )
-        # Clean stale FastRTPS SHM locks so the next launch can bind.
-        subprocess.run(
-            ["docker", "exec", container, "bash", "-c",
-             "rm -f /dev/shm/fastrtps_* 2>/dev/null"],
-            capture_output=True,
-            timeout=5,
-        )
-
-        flag = "true" if enable_nvblox else "false"
-        cmd = (
-            "GXF_LIB_DIRS=$(find /opt/ros/humble/share -path '*/gxf/lib' "
-            "-type d 2>/dev/null | tr '\\n' ':'); "
-            "export LD_LIBRARY_PATH=/opt/ros/humble/lib:"
-            "/opt/ros/humble/lib/aarch64-linux-gnu:/usr/local/zed/lib:"
-            "${GXF_LIB_DIRS}${LD_LIBRARY_PATH:-}; "
-            "source /opt/ros/humble/install/setup.bash 2>/dev/null || "
-            "source /opt/ros/humble/setup.bash 2>/dev/null; "
-            "source /workspaces/isaac_ros-dev/install/setup.bash 2>/dev/null; "
-            "export EGL_PLATFORM=device; "
-            "ros2 launch /workspaces/isaac_ros-dev/config/launch/"
-            f"nomad_zed_nvblox.launch.py enable_od:=false "
-            f"enable_nvblox:={flag} "
-            ">> /tmp/zed_nvblox.log 2>&1 &"
-        )
-        subprocess.run(
-            ["docker", "exec", "-d", container, "bash", "-c", cmd],
-            capture_output=True,
-            timeout=10,
-        )
-        return {
-            "success": True,
-            "nvblox_enabled": enable_nvblox,
-            "message": (
-                "Isaac ROS relaunched with nvblox "
-                + ("enabled" if enable_nvblox else "disabled")
-                + " (video bridge will reattach automatically)"
-            ),
-        }
 
     @app.post("/api/isaac/nvblox/start", tags=["Isaac ROS"])
     async def isaac_nvblox_start():

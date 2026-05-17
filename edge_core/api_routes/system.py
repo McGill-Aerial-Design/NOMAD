@@ -122,15 +122,14 @@ def register_system_routes(app, ctx) -> None:
                 "message_rate_hz": 30.0,
             }
 
-        # Target localizer (Task 1 detection) readiness
-        enable_od = os.environ.get("ENABLE_OD", "false").strip().lower() == "true"
+        # Target localizer (Task 1 detection) readiness. It is owned by
+        # zed_wrapper, not by the optional nvblox service.
         try:
             isaac_cache = getattr(request.app.state, "isaac_runtime_cache", {}) or {}
             target_localizer_running = bool(isaac_cache.get("target_localizer_running", False))
         except Exception:
             target_localizer_running = False
         response["target_localizer"] = {
-            "enable_od": enable_od,
             "running": target_localizer_running,
         }
 
@@ -280,7 +279,10 @@ def register_system_routes(app, ctx) -> None:
                 pass
             await websocket.close(code=4003, reason="NOMAD_API_KEY is required for remote WebSocket access")
             return False
-        token = websocket.query_params.get("token", "")
+        token = (
+            websocket.headers.get("X-API-Key")
+            or websocket.query_params.get("token", "")
+        )
         if not hmac.compare_digest(token, _NOMAD_API_KEY):
             await websocket.close(code=4003, reason="Unauthorized")
             return False

@@ -63,8 +63,7 @@ write_launch_script() {
         cat <<EOS
 mkdir -p /workspaces/isaac_ros-dev/data 2>/dev/null || true
 ros2 launch "$NVBLOX_LAUNCH_CONTAINER" \
-    enable_nav2:=${NVBLOX_ENABLE_NAV2} \\
-    enable_od:=${NVBLOX_ENABLE_OD}
+    enable_nvblox:=true
 EOS
     } > "$tmp"
     docker cp "$tmp" "$ISAAC_CONTAINER_NAME:$LAUNCH_SCRIPT_PATH" >/dev/null
@@ -87,9 +86,8 @@ svc_start() {
     apply_overlay
     write_launch_script
 
-    log_info "launching nvblox (enable_nav2=$NVBLOX_ENABLE_NAV2 enable_od=$NVBLOX_ENABLE_OD)"
-    docker exec -e NVBLOX_ENABLE_NAV2="$NVBLOX_ENABLE_NAV2" -e NVBLOX_ENABLE_OD="$NVBLOX_ENABLE_OD" \
-        -d "$ISAAC_CONTAINER_NAME" \
+    log_info "launching nvblox"
+    docker exec -d "$ISAAC_CONTAINER_NAME" \
         bash -c "nohup bash $LAUNCH_SCRIPT_PATH > $LAUNCH_LOG 2>&1 &"
 
     if wait_for "docker exec $ISAAC_CONTAINER_NAME pgrep -f 'nvblox_node|nomad_zed_nvblox'" 60; then

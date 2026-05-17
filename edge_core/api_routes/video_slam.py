@@ -41,7 +41,6 @@ def register_video_slam_routes(app, ctx) -> None:
     _get_vio_snapshot = ctx.get_vio_snapshot
     _resolve_nvblox_empty_map_path = ctx.resolve_nvblox_empty_map_path
     _isaac_container_file_exists = ctx.isaac_container_file_exists
-    _launch_nvblox_bridge_with_od = ctx.launch_nvblox_bridge_with_od
 
     def _call_ros2_service_in_isaac_container_or_raise(*args, **kwargs):
         return ctx.call_ros2_service_in_isaac_container_or_raise(*args, **kwargs)
@@ -382,38 +381,6 @@ def register_video_slam_routes(app, ctx) -> None:
     # These endpoints stream nvblox 3D mesh data for Mission Planner visualization
     # Mesh data is received from ros_http_bridge running inside the Isaac ROS container
 
-    @app.get("/api/task/2/slam/mesh/mode", tags=["Task 2", "SLAM"])
-    async def get_slam_mesh_mode(request: Request):
-        """Get current runtime mesh output mode requested by Edge Core."""
-        mode = "voxel"
-        request.app.state.slam_mesh_output_mode = mode
-        return {
-            "mesh_output_mode": mode,
-            "supported_modes": ["voxel"],
-            "runtime_toggle": False,
-        }
-
-    @app.post("/api/task/2/slam/mesh/mode", tags=["Task 2", "SLAM"])
-    async def set_slam_mesh_mode(
-        request: Request, mode: str = Query(..., description="Mesh output mode: voxel")
-    ):
-        """Set runtime mesh output mode for ros_http_bridge without restart."""
-        normalized = "voxel"
-
-        previous = (
-            str(getattr(request.app.state, "slam_mesh_output_mode", "voxel"))
-            .strip()
-            .lower()
-        )
-        request.app.state.slam_mesh_output_mode = normalized
-        return {
-            "success": True,
-            "mesh_output_mode": normalized,
-            "previous_mesh_output_mode": previous,
-            "applies_without_restart": False,
-            "bridge_poll_interval_s": 0.0,
-        }
-
     @app.post("/api/task/2/slam/mesh/update", tags=["Task 2", "SLAM"])
     async def update_slam_mesh(request: Request):
         """
@@ -563,22 +530,12 @@ def register_video_slam_routes(app, ctx) -> None:
                         "drone_attitude"
                     ]
 
-                # Increment version counter for delta tracking
+                # Increment version counter. Do not retain full historical mesh
+                # payloads here: dense nvblox frames can be tens of MB each, and
+                # retaining many copies can exhaust the Jetson. Clients that miss
+                # a version resync from the current snapshot instead.
                 request.app.state.slam_mesh_version = next_version
-                history = getattr(request.app.state, "slam_mesh_delta_history", None)
-                if not isinstance(history, list):
-                    history = []
-                    request.app.state.slam_mesh_delta_history = history
-                history.append(
-                    {
-                        "version": next_version,
-                        "mesh": mesh_data,
-                        "drone_position": request.app.state.slam_mesh_data.get("drone_position"),
-                        "drone_attitude": request.app.state.slam_mesh_data.get("drone_attitude"),
-                        "timestamp": request.app.state.slam_mesh_data["received_at"],
-                    }
-                )
-                del history[:-30]
+                request.app.state.slam_mesh_delta_history = []
 
             return {"status": "ok", "items_received": item_count, "mode": mode}
 
@@ -698,13 +655,15 @@ def register_video_slam_routes(app, ctx) -> None:
         Get incremental mesh updates (delta) since last request.
 
         Uses a version counter on app.state that is bumped on each
-        POST to /mesh/update.  Pass ?since=N with the last known version
-        to receive only newer data.
+        POST to /mesh/update. Because nvblox now has one voxel output format
+        and dense frames are large, this endpoint no longer retains historical
+        full-frame deltas. If the caller is behind, it receives the latest
+        snapshot with resync_required=true.
 
         Returns:
             - changed: Whether new data is available
             - version: Current mesh version counter
-            - mesh: Full mesh payload (only when changed is True)
+            - mesh: Current mesh snapshot when resync_required is True
         """
         try:
             since = int(request.query_params.get("since", 0))
@@ -723,7 +682,6 @@ def register_video_slam_routes(app, ctx) -> None:
 
         with request.app.state.slam_mesh_lock:
             mesh_state = getattr(request.app.state, "slam_mesh_data", None)
-            history = list(getattr(request.app.state, "slam_mesh_delta_history", []) or [])
 
         if not mesh_state:
             return {
@@ -733,40 +691,8 @@ def register_video_slam_routes(app, ctx) -> None:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
-        oldest_retained_version = (
-            min((entry.get("version", current_version) for entry in history), default=current_version)
-            if history
-            else current_version
-        )
-        if since < oldest_retained_version - 1:
-            return {
-                "available": True,
-                "changed": True,
-                "version": current_version,
-                "resync_required": True,
-                "mesh": mesh_state.get("mesh"),
-                "drone_position": mesh_state.get("drone_position"),
-                "drone_attitude": mesh_state.get("drone_attitude"),
-                "timestamp": mesh_state.get(
-                    "received_at", datetime.now(timezone.utc).isoformat()
-                ),
-            }
-
-        updates = [entry for entry in history if entry.get("version", 0) > since]
-        if updates:
-            return {
-                "available": True,
-                "changed": True,
-                "version": current_version,
-                "updates": updates,
-                "count": len(updates),
-                "timestamp": updates[-1].get(
-                    "timestamp", datetime.now(timezone.utc).isoformat()
-                ),
-            }
-
-        # The caller is older than the retained delta history. Return a full
-        # snapshot with an explicit marker so clients can resynchronize.
+        # Return a full snapshot with an explicit marker so clients can
+        # resynchronize without Edge Core retaining historical mesh copies.
         return {
             "available": True,
             "changed": True,
@@ -849,7 +775,7 @@ def register_video_slam_routes(app, ctx) -> None:
         2) Load baseline map snapshot (manual-reset flow).
         3) Fallback to native nvblox clear service.
         4) Fallback to ZED tracking reset services.
-        5) Relaunch only when explicitly requested via relaunch_if_needed=true.
+        5) If nvblox is unavailable, report that it must be started explicitly.
         """
         nvblox_cleared = False
         nvblox_message = ""
@@ -985,36 +911,13 @@ def register_video_slam_routes(app, ctx) -> None:
                 except Exception as e:
                     clear_warnings.append(f"{service_name} failed: {e}")
 
-        # Optional hard fallback: relaunch stack only if explicitly requested.
+        # nvblox is operator-started only. Do not relaunch it from map-clear
+        # flows; the Mission Planner service control panel owns starting it.
         if not nvblox_cleared and relaunch_if_needed:
-            try:
-                with request.app.state.detection_state_lock:
-                    detection_enabled = bool(
-                        getattr(request.app.state, "detection_enabled", True)
-                    )
-
-                relaunch_result = _launch_nvblox_bridge_with_od(
-                    enable_od=detection_enabled
-                )
-                if relaunch_result.get("success"):
-                    nvblox_cleared = True
-                    clear_strategy = "stack_relaunch"
-                    nvblox_message = relaunch_result.get(
-                        "message", "nvblox stack relaunched"
-                    )
-                    logger.info("nvblox map reset via stack relaunch")
-                else:
-                    nvblox_message = relaunch_result.get(
-                        "error", "Failed to relaunch nvblox stack"
-                    )
-                    logger.warning(f"Failed to reset nvblox map: {nvblox_message}")
-            except HTTPException as e:
-                logger.warning(f"Failed to reset nvblox map: {e.detail}")
-                nvblox_message = str(e.detail)
-                nvblox_error_status = e.status_code
-            except Exception as e:
-                logger.warning(f"Failed to reset nvblox map: {e}")
-                nvblox_message = str(e)
+            nvblox_message = (
+                "Map clear service is unavailable; start nvblox from Mission Planner "
+                "Service Control and retry."
+            )
 
         if not nvblox_cleared and not nvblox_message:
             nvblox_message = "No non-restart map clear service is available in current nvblox runtime"
@@ -1051,15 +954,7 @@ def register_video_slam_routes(app, ctx) -> None:
             request.app.state.slam_mesh_version = (
                 getattr(request.app.state, "slam_mesh_version", 0) + 1
             )
-            request.app.state.slam_mesh_delta_history = [
-                {
-                    "version": request.app.state.slam_mesh_version,
-                    "mesh": request.app.state.slam_mesh_data["mesh"],
-                    "drone_position": None,
-                    "drone_attitude": None,
-                    "timestamp": request.app.state.slam_mesh_data["received_at"],
-                }
-            ]
+            request.app.state.slam_mesh_delta_history = []
 
         response_payload = {
             "success": nvblox_cleared,

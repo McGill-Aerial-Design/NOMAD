@@ -17,12 +17,16 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+!scripts/build/
+!scripts/build/*.sh
 develop-eggs/
 dist/
 downloads/
 eggs/
 .eggs/
 lib/
+!scripts/lib/
+!scripts/lib/*.sh
 lib64/
 parts/
 sdist/

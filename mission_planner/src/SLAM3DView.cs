@@ -117,12 +117,8 @@ namespace NOMAD.MissionPlanner
         private TextBox _txtMapPath;
         private TextBox _txtStatusLog;
         private CheckBox _chkShowGrid, _chkShowTrajectory, _chkAutoUpdate;
-        private ComboBox _combDroneType, _combMeshMode;
+        private ComboBox _combDroneType;
         private NumericUpDown _numLength, _numWidth, _numHeight, _numHeadingOffset, _numFov, _numMapRadius;
-        private string _meshOutputMode = "voxel";
-        private bool _meshModeApplyInFlight;
-        private bool _meshModeRefreshInFlight;
-        private bool _meshModeSelectionInternal;
         private int _meshUpdateCount;
         private int _totalBlocks;
         private const int MaxStatusLogLines = 120;
@@ -156,7 +152,6 @@ namespace NOMAD.MissionPlanner
             StartUpdateLoop();
             StartServoPolling();
             StartPerceptionStatusPolling();
-            _ = RefreshMeshModeFromServerAsync(updateStatus: false);
         }
 
         private void InitializeSlamComponents()
@@ -286,22 +281,7 @@ namespace NOMAD.MissionPlanner
             _controlPanel.Controls.Add(_chkAutoUpdate);
             x += 55;
 
-            _controlPanel.Controls.Add(CreateLabel("Mesh:", x, y + 6));
-            x += 38;
-            _combMeshMode = new ComboBox
-            {
-                Location = new Point(x, y + 2),
-                Size = new Size(78, 22),
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                ForeColor = Color.White,
-                BackColor = Color.FromArgb(60, 60, 60),
-                Font = new Font("Segoe UI", 8.5f),
-            };
-            _combMeshMode.Items.Add("Voxel");
-            _combMeshMode.SelectedIndexChanged += CombMeshMode_SelectedIndexChanged;
-            _combMeshMode.SelectedIndex = 0;
-            _combMeshMode.Enabled = false;
-            _controlPanel.Controls.Add(_combMeshMode);
+            _controlPanel.Controls.Add(CreateLabel("Mesh: Voxel", x, y + 6));
 
             // Second row: drone config
             y += 34;
@@ -902,8 +882,6 @@ namespace NOMAD.MissionPlanner
                 : $"Status: {status}";
             UpdateStatusSafe(text);
 
-            if (status.IndexOf("Connected", StringComparison.OrdinalIgnoreCase) >= 0)
-                _ = RefreshMeshModeFromServerAsync(updateStatus: false);
         }
 
         private void HandleWebSocketError(string error)
@@ -1288,46 +1266,6 @@ namespace NOMAD.MissionPlanner
             _btnToggleCamera.Text = $"View: {modeName}";
         }
 
-        private async void CombMeshMode_SelectedIndexChanged(object sender, EventArgs e)
-        {
-            if (_combMeshMode == null || _meshModeSelectionInternal || _meshModeApplyInFlight)
-                return;
-
-            // Voxel-only mode: keep the control as a status indicator.
-            if (_meshOutputMode == "voxel")
-                return;
-
-            _meshModeApplyInFlight = true;
-            _combMeshMode.Enabled = false;
-            try
-            {
-                var response = await JetsonApiService.PostAsync("/api/task/2/slam/mesh/mode?mode=voxel");
-                if (response.IsSuccessStatusCode)
-                {
-                    _meshOutputMode = "voxel";
-                    UpdateStatusSafe("Status: Mesh mode set to voxel");
-                    AppendStatusLogSafe("Mesh mode set to voxel");
-                }
-                else
-                {
-                    SetMeshModeSelection("voxel");
-                    UpdateStatusSafe($"Status: Mesh mode change failed ({(int)response.StatusCode})");
-                    AppendStatusLogSafe($"Mesh mode change failed ({(int)response.StatusCode})");
-                }
-            }
-            catch (Exception ex)
-            {
-                SetMeshModeSelection("voxel");
-                UpdateStatusSafe($"Status: Mesh mode change failed ({ex.Message})");
-                AppendStatusLogSafe($"Mesh mode change failed ({ex.Message})");
-            }
-            finally
-            {
-                _combMeshMode.Enabled = true;
-                _meshModeApplyInFlight = false;
-            }
-        }
-
         private async void BtnClearMesh_Click(object sender, EventArgs e)
         {
             try
@@ -1629,70 +1567,6 @@ namespace NOMAD.MissionPlanner
                 Message = $"{actionName} failed",
                 Method = "HTTP",
             };
-        }
-
-        private static string NormalizeMeshMode(string mode)
-        {
-            return "voxel";
-        }
-
-        private void SetMeshModeSelection(string mode)
-        {
-            if (_combMeshMode == null)
-                return;
-
-            string target = NormalizeMeshMode(mode) == "voxel" ? "Voxel" : "Block";
-            string current = _combMeshMode.SelectedItem?.ToString() ?? "";
-            if (string.Equals(current, target, StringComparison.OrdinalIgnoreCase))
-                return;
-
-            _meshModeSelectionInternal = true;
-            try
-            {
-                _combMeshMode.SelectedItem = target;
-            }
-            finally
-            {
-                _meshModeSelectionInternal = false;
-            }
-        }
-
-        private async Task RefreshMeshModeFromServerAsync(bool updateStatus)
-        {
-            if (_meshModeRefreshInFlight)
-                return;
-
-            _meshModeRefreshInFlight = true;
-            try
-            {
-                var response = await JetsonApiService.GetAsync("/api/task/2/slam/mesh/mode");
-                if (!response.IsSuccessStatusCode)
-                    return;
-
-                var body = await response.Content.ReadAsStringAsync();
-                var obj = JObject.Parse(body);
-                string mode = NormalizeMeshMode(obj["mesh_output_mode"]?.ToString());
-                _meshOutputMode = mode;
-
-                if (_combMeshMode != null)
-                {
-                    if (_combMeshMode.InvokeRequired)
-                        _combMeshMode.BeginInvoke(new Action(() => SetMeshModeSelection(mode)));
-                    else
-                        SetMeshModeSelection(mode);
-                }
-
-                if (updateStatus)
-                    UpdateStatusSafe("Status: Mesh mode is voxel");
-            }
-            catch
-            {
-                // Keep last-known mode when endpoint is unavailable.
-            }
-            finally
-            {
-                _meshModeRefreshInFlight = false;
-            }
         }
 
         private async Task SaveAreaMapAsync()
