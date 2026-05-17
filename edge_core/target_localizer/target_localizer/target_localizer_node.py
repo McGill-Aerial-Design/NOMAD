@@ -1100,9 +1100,6 @@ class TargetLocalizerNode(Node):
         return False
 
     # ================================================================ #
-    #  Background landmark detection
-    # ================================================================ #
-    # ================================================================ #
     #  Save targets to file
     # ================================================================ #
     def _save_callback(self, request, response):
@@ -1538,7 +1535,7 @@ class TargetLocalizerNode(Node):
             pass
 
     def _print_model_callback(self, request, response):
-        """Print the current building model with landmarks."""
+        """Print the current building model summary."""
         summary = self.building.get_summary()
         self.get_logger().info(f"\n{summary}")
         response.success = True

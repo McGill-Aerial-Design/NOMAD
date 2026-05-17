@@ -435,7 +435,6 @@ sudo usermod -a -G dialout $USER
 | Task 2 params | `/home/mad/NOMAD/config/params/task2_vio.param` | VIO task configuration |
 | Task 1 profile | `/home/mad/NOMAD/config/profiles/task1_outdoor.params` | Outdoor flight profile |
 | Task 2 profile | `/home/mad/NOMAD/config/profiles/task2_indoor.params` | Indoor flight profile |
-| Landmarks | `/home/mad/NOMAD/config/landmarks.json` | Known landmark positions |
 
 ### Key API Endpoints
 

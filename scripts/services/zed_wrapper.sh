@@ -52,6 +52,7 @@ DESIRED = {
         "publish_mag":            GET('ZED_PUBLISH_MAG','true'),
         "depth_confidence":       GET('ZED_DEPTH_CONFIDENCE','50'),
         "depth_texture_conf":     GET('ZED_DEPTH_TEXTURE_CONF','70'),
+        "depth_mode":             f"'{GET('ZED_DEPTH_MODE','NEURAL_LIGHT')}'",
     },
     "zed2i.yaml": { "grab_resolution": f"'{GET('ZED_GRAB_RESOLUTION','HD1080')}'" },
     "zed2.yaml":  { "grab_resolution": f"'{GET('ZED_GRAB_RESOLUTION','HD1080')}'" },
@@ -167,6 +168,7 @@ svc_start() {
     for v in ZED_CAMERA_MODEL ZED_CAMERA_NAME ZED_PUB_RESOLUTION \
              ZED_PUB_DOWNSCALE_FACTOR ZED_PUBLISH_RAW ZED_PUBLISH_LEFT_RIGHT \
              ZED_PUBLISH_MAG ZED_DEPTH_CONFIDENCE ZED_DEPTH_TEXTURE_CONF \
+             ZED_DEPTH_MODE \
              ZED_GRAB_RESOLUTION NOMAD_API_PORT ROS_HTTP_BRIDGE_VIO_TOPIC \
              NOMAD_TARGET_LOCALIZER_AUTO_START; do
         env_args+=("-e" "${v}=${!v}")

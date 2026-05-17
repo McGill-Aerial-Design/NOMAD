@@ -17,7 +17,7 @@ public satellite imagery, then load the corner GPS list here.
 
 import math
 import numpy as np
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Union
 from enum import Enum
 
@@ -96,22 +96,6 @@ class FaceID(str, Enum):
 #  Data classes
 # ------------------------------------------------------------------ #
 @dataclass
-class Landmark:
-    """A detected landmark on a building face. Currently unused for Task 1
-    (no landmark info is provided by CONOPS), kept as a hook for future use."""
-    kind: str
-    face_name: str
-    horiz_from_left: float
-    height_agl: float
-    confidence: float = 1.0
-    detections: int = 1
-
-    @property
-    def description_name(self) -> str:
-        return f"the {self.kind}"
-
-
-@dataclass
 class Corner:
     """A named corner of the building polygon (local ENU)."""
     name: str           # e.g. "NW", "north corner", "A"
@@ -141,23 +125,6 @@ class Face:
     plane_point_north: float
     normal_east: float
     normal_north: float
-    landmarks: List[Landmark] = field(default_factory=list)
-
-    def add_landmark(self, lm: Landmark, merge_radius: float = 0.5):
-        """Add a landmark, merging with existing if within merge_radius."""
-        for existing in self.landmarks:
-            if existing.kind != lm.kind:
-                continue
-            dh = abs(existing.horiz_from_left - lm.horiz_from_left)
-            dv = abs(existing.height_agl - lm.height_agl)
-            if dh < merge_radius and dv < merge_radius:
-                n = existing.detections
-                existing.horiz_from_left = (existing.horiz_from_left * n + lm.horiz_from_left) / (n + 1)
-                existing.height_agl = (existing.height_agl * n + lm.height_agl) / (n + 1)
-                existing.confidence = max(existing.confidence, lm.confidence)
-                existing.detections += 1
-                return
-        self.landmarks.append(lm)
 
 
 @dataclass
@@ -503,97 +470,25 @@ class BuildingModel:
                                face: Face,
                                horiz_from_left: float,
                                height_agl: float) -> Tuple[str, float, str]:
-        """Find the nearest face-corner (or detected landmark) for a point on
-        a face, and return a human-readable phrase.
-
-        Today this only considers the two corners that bound the face plus any
-        landmarks registered on it. CONOPS does NOT provide landmark info, so in
-        practice the corners are what gets used.
+        """Find the nearest face-corner for a point on a face, and return a
+        human-readable phrase.
 
         Returns:
             (ref_name, horizontal_distance_m, full_phrase)
         """
-        candidates: List[dict] = []
+        dist_left = abs(horiz_from_left)
+        dist_right = abs(horiz_from_left - face.width)
 
-        candidates.append({
-            'name': face.corner_left.description_name,
-            'horiz': 0.0,
-            'height': 0.0,
-            'dist_h': abs(horiz_from_left),
-            'is_corner': True,
-        })
-        candidates.append({
-            'name': face.corner_right.description_name,
-            'horiz': face.width,
-            'height': 0.0,
-            'dist_h': abs(horiz_from_left - face.width),
-            'is_corner': True,
-        })
-
-        for lm in face.landmarks:
-            candidates.append({
-                'name': lm.description_name,
-                'horiz': lm.horiz_from_left,
-                'height': lm.height_agl,
-                'dist_h': abs(horiz_from_left - lm.horiz_from_left),
-                'is_corner': False,
-                'kind': lm.kind,
-            })
-
-        candidates.sort(key=lambda c: c['dist_h'])
-        best = candidates[0]
-
-        horiz_diff = horiz_from_left - best['horiz']
-        horiz_dist = abs(horiz_diff)
-        horiz_dist_rounded = round(horiz_dist, 1)
-
-        if best['is_corner']:
-            phrase = f"{horiz_dist_rounded}m from the {best['name']}"
+        if dist_left <= dist_right:
+            ref_name = face.corner_left.description_name
+            horiz_dist = dist_left
         else:
-            if horiz_dist_rounded < 0.2:
-                h_phrase = f"directly at {best['name']}"
-            elif horiz_diff > 0:
-                h_phrase = (
-                    f"{horiz_dist_rounded}m to the right of {best['name']} "
-                    f"when facing the building from outside"
-                )
-            else:
-                h_phrase = (
-                    f"{horiz_dist_rounded}m to the left of {best['name']} "
-                    f"when facing the building from outside"
-                )
+            ref_name = face.corner_right.description_name
+            horiz_dist = dist_right
 
-            vert_diff = height_agl - best.get('height', 0.0)
-            if abs(vert_diff) > 0.3:
-                v_dist = round(abs(vert_diff), 1)
-                if vert_diff > 0:
-                    h_phrase += f" and {v_dist}m above it"
-                else:
-                    h_phrase += f" and {v_dist}m below it"
-            phrase = h_phrase
-
-        return best['name'], horiz_dist_rounded, phrase
-
-    def add_landmark_from_3d(self,
-                             point_east: float,
-                             point_north: float,
-                             point_up: float,
-                             kind: str,
-                             confidence: float,
-                             **_ignored):
-        """Register a detected landmark on the nearest wall plane. Kept for
-        API compatibility; CONOPS Task 1 does not currently exercise this."""
-        face, _ = self.get_nearest_wall_face(point_east, point_north)
-        horiz_from_left, height_agl = self.project_point_onto_face(
-            point_east, point_north, point_up, face
-        )
-        face.add_landmark(Landmark(
-            kind=kind,
-            face_name=face.name,
-            horiz_from_left=horiz_from_left,
-            height_agl=height_agl,
-            confidence=confidence,
-        ))
+        horiz_dist_rounded = round(horiz_dist, 1)
+        phrase = f"{horiz_dist_rounded}m from the {ref_name}"
+        return ref_name, horiz_dist_rounded, phrase
 
     # ------------------------------------------------------------ #
     #  Diagnostics
@@ -611,11 +506,9 @@ class BuildingModel:
         lines.append("")
         lines.append("Faces:")
         for f in self.faces:
-            lm_count = len(f.landmarks)
             lines.append(
                 f"  {f.name} face: width={f.width:.2f}m, "
                 f"normal_heading={f.outward_normal_deg:.1f} deg, "
-                f"left={f.corner_left.name}, right={f.corner_right.name}, "
-                f"{lm_count} landmarks"
+                f"left={f.corner_left.name}, right={f.corner_right.name}"
             )
         return "\n".join(lines)

@@ -891,7 +891,7 @@ namespace NOMAD.MissionPlanner
                 var colorCell = _targetGrid.Rows[e.RowIndex].Cells["Color"];
                 if (string.IsNullOrEmpty(descCell.Value?.ToString()) && colorCell.Value != null)
                 {
-                    descCell.Value = $"{colorCell.Value} target on the [face] of the building, [X]m above ground, [Y]m from [landmark].";
+                    descCell.Value = $"{colorCell.Value} target on the [face] of the building, [X]m above ground, [Y]m from the [corner] corner.";
                 }
             }
         }
