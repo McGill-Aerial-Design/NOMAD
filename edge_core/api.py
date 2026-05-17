@@ -290,7 +290,9 @@ def create_app(state_manager: StateManager) -> FastAPI:
     app.state.detection_state_lock = threading.Lock()
     app.state.detection_last_update: float = 0.0
     app.state.detection_last_source_timestamp = None
-    app.state.detection_enabled: bool = True  # Desired ZED OD mode for circle detection
+    app.state.detection_enabled: bool = os.environ.get(
+        "NOMAD_DETECTIONS_AUTO_START", "false"
+    ).strip().lower() in ("1", "true", "yes", "on")
 
     # Cached Task 1 detection status (populated by background poller, read by API)
     app.state.task1_det_cache: dict = {"circle_count": 0, "success": True}
@@ -951,10 +953,21 @@ def create_app(state_manager: StateManager) -> FastAPI:
         bridge_running = False
         target_localizer_running = False
         if container_running:
-            nvblox_probe = _docker_exec_pgrep(
+            nvblox_node_probe = _docker_exec_bash_success(
                 "nomad_isaac_ros",
-                "nvblox_node|nvblox_container|nvblox_examples_bringup|nomad_zed_nvblox\\.launch\\.py",
-                timeout_s=5,
+                "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
+                "source /workspaces/isaac_ros-dev/install/setup.bash >/dev/null 2>&1; "
+                "ROS2CLI_DISABLE_DAEMON=1 ros2 node list 2>/dev/null | "
+                "grep -Eq '(^|/)nvblox(_node)?$|(^|/)nvblox_node$'",
+                timeout_s=6,
+            )
+            nvblox_marker_pub_probe = _docker_exec_bash_success(
+                "nomad_isaac_ros",
+                "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
+                "source /workspaces/isaac_ros-dev/install/setup.bash >/dev/null 2>&1; "
+                "ROS2CLI_DISABLE_DAEMON=1 ros2 topic info /nvblox_node/color_layer_marker 2>/dev/null | "
+                "grep -Eq 'Publisher count: [1-9]'",
+                timeout_s=6,
             )
             bridge_probe = _docker_exec_pgrep(
                 "nomad_isaac_ros",
@@ -967,10 +980,14 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 timeout_s=5,
             )
 
-            if nvblox_probe is None and cache_age_s < cache_max_stale_s:
+            if (
+                nvblox_node_probe is None
+                and nvblox_marker_pub_probe is None
+                and cache_age_s < cache_max_stale_s
+            ):
                 nvblox_running = bool(cache.get("nvblox_running", False))
             else:
-                nvblox_running = bool(nvblox_probe)
+                nvblox_running = bool(nvblox_node_probe) or bool(nvblox_marker_pub_probe)
 
             if bridge_probe is None and cache_age_s < cache_max_stale_s:
                 bridge_running = bool(cache.get("bridge_running", False))

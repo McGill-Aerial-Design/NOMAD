@@ -33,6 +33,7 @@ import json
 import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
+from collections import deque
 
 
 # HSV ranges mirror edge_core/target_localizer/target_localizer/detectors.py so
@@ -115,6 +116,9 @@ class VideoStreamNode(Node):
         self.source_topic = source_topic
         self.frame_count = 0
         self.error_count = 0
+        self.dropped_count = 0
+        self.throttled_count = 0
+        self.push_fail_count = 0
         self.start_time = time.time()
         self.last_frame_time = 0.0
         self.subscription = None
@@ -124,8 +128,24 @@ class VideoStreamNode(Node):
         # --- Threaded encoder: ROS callback drops frame into _pending_frame,
         # encoder thread picks it up at its own pace. ---
         self._pending_frame = None  # numpy array or None
+        self._frame_lock = threading.Lock()
         self._frame_event = threading.Event()
         self._encode_stop = threading.Event()
+        self._frame_timestamps = deque(maxlen=max(120, fps * 8))
+        self._stats_lock = threading.Lock()
+        self._perf_stats = {
+            "callback_count": 0,
+            "callback_total_ms": 0.0,
+            "callback_max_ms": 0.0,
+            "convert_total_ms": 0.0,
+            "resize_total_ms": 0.0,
+            "overlay_total_ms": 0.0,
+            "enqueue_total_ms": 0.0,
+            "encode_count": 0,
+            "wrap_total_ms": 0.0,
+            "push_total_ms": 0.0,
+            "push_max_ms": 0.0,
+        }
 
         # Frame pacing
         self._min_frame_interval = 1.0 / fps
@@ -218,9 +238,10 @@ class VideoStreamNode(Node):
         return (
             f'appsrc name=source is-live=true format=time '
             f'max-buffers=1 block=false '
-            f'caps=video/x-raw,format=BGR,width={width},height={height},framerate={fps}/1 ! '
+            f'caps=video/x-raw,format=BGRA,width={width},height={height},framerate={fps}/1 ! '
             f'queue max-size-buffers=1 max-size-time=0 max-size-bytes=0 leaky=downstream ! '
             f'videoconvert n-threads={threads} ! '
+            f'video/x-raw,format=I420,width={width},height={height},framerate={fps}/1 ! '
             f'{encoder_str} ! '
             f'h264parse config-interval=-1 ! '
             f'rtspclientsink location=rtsp://172.17.0.1:8554/{self.rtsp_path} protocols=tcp '
@@ -316,7 +337,7 @@ class VideoStreamNode(Node):
             self.destroy_subscription(self.subscription)
 
         image_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
@@ -335,7 +356,7 @@ class VideoStreamNode(Node):
         """
         try:
             depth_qos = QoSProfile(
-                reliability=ReliabilityPolicy.BEST_EFFORT,
+                reliability=ReliabilityPolicy.RELIABLE,
                 durability=DurabilityPolicy.VOLATILE,
                 history=HistoryPolicy.KEEP_LAST,
                 depth=1,
@@ -420,18 +441,22 @@ class VideoStreamNode(Node):
         """Receive ROS image — minimal work, just stash for encoder thread."""
         now = time.time()
         if now - self._last_push_time < self._min_frame_interval * 0.8:
+            self.throttled_count += 1
             return
 
         try:
-            import cv2
+            cb_start = time.perf_counter()
+            convert_start = cb_start
+            cv2 = None
 
             encoding = msg.encoding.lower()
-            if encoding in ('bgra8', 'rgba8', '8uc4'):
+            if encoding in ('bgra8', '8uc4'):
                 cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+            elif encoding == 'rgba8':
+                import cv2
                 if encoding == 'rgba8':
-                    cv_image = cv2.cvtColor(cv_image, cv2.COLOR_RGBA2BGR)
-                else:
-                    cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGRA2BGR)
+                    cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+                    cv_image = cv2.cvtColor(cv_image, cv2.COLOR_RGBA2BGRA)
             elif encoding in ('16uc1', 'mono16', '32fc1'):
                 raw_depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
                 if self.frame_count % 60 == 0:
@@ -448,14 +473,24 @@ class VideoStreamNode(Node):
                         f'range=[{vmin:.2f}, {vmax:.2f}]'
                     )
                 cv_image = self._normalize_depth_image(raw_depth, encoding)
+                import cv2
+                cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2BGRA)
             elif encoding in ('mono8', '8uc1'):
                 cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
-                cv_image = cv2.cvtColor(cv_image, cv2.COLOR_GRAY2BGR)
+                import cv2
+                cv_image = cv2.cvtColor(cv_image, cv2.COLOR_GRAY2BGRA)
             else:
                 cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+                import cv2
+                cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2BGRA)
+            convert_ms = (time.perf_counter() - convert_start) * 1000.0
 
             # Resize to target (this is fast if already the right size)
+            resize_ms = 0.0
             if cv_image.shape[1] != self.width or cv_image.shape[0] != self.height:
+                if cv2 is None:
+                    import cv2
+                resize_start = time.perf_counter()
                 # INTER_AREA for downscale: best anti-aliasing, preserves edge
                 # gradients that HoughCircles/contour-circularity rely on.
                 # INTER_LINEAR if upscaling.
@@ -464,38 +499,55 @@ class VideoStreamNode(Node):
                           else cv2.INTER_LINEAR)
                 cv_image = cv2.resize(cv_image, (self.width, self.height),
                                       interpolation=interp)
+                resize_ms = (time.perf_counter() - resize_start) * 1000.0
 
             # Overlay detections if enabled. Run local HSV detection at ~5 Hz
             # so circles show up in the livestream exactly as they do on capture.
+            overlay_ms = 0.0
             if self._overlay_enabled:
+                if cv2 is None:
+                    import cv2
+                overlay_start = time.perf_counter()
+                overlay_frame = cv2.cvtColor(cv_image, cv2.COLOR_BGRA2BGR)
                 if (now - self._hsv_last_run_ts) >= self._hsv_min_interval:
                     self._hsv_last_run_ts = now
                     dets = []
                     if self._overlay_task1:
                         try:
-                            dets.extend(self._detect_hsv_circles(cv_image))
+                            dets.extend(self._detect_hsv_circles(overlay_frame))
                         except Exception as det_err:
                             if self.frame_count % 150 == 0:
                                 self.get_logger().warn(f'HSV detect error: {det_err}')
                     if self._overlay_task2:
                         try:
-                            dets.extend(self._detect_shape_circles(cv_image))
+                            dets.extend(self._detect_shape_circles(overlay_frame))
                         except Exception as det_err:
                             if self.frame_count % 150 == 0:
                                 self.get_logger().warn(f'Shape detect error: {det_err}')
                     dets = self._dedupe_detections(dets)
                     with self._detections_lock:
                         self._detections = dets
-                self.draw_detections(cv_image)
+                self.draw_detections(overlay_frame)
+                cv_image = cv2.cvtColor(overlay_frame, cv2.COLOR_BGR2BGRA)
+                overlay_ms = (time.perf_counter() - overlay_start) * 1000.0
 
             # Ensure contiguous C-order for zero-copy tobytes
             if not cv_image.flags['C_CONTIGUOUS']:
                 cv_image = np.ascontiguousarray(cv_image)
 
             # Drop frame into single slot for encoder thread
-            self._pending_frame = cv_image
+            enqueue_start = time.perf_counter()
+            with self._frame_lock:
+                if self._pending_frame is not None:
+                    self.dropped_count += 1
+                self._pending_frame = cv_image
             self._frame_event.set()
             self._last_push_time = now
+            enqueue_ms = (time.perf_counter() - enqueue_start) * 1000.0
+            callback_ms = (time.perf_counter() - cb_start) * 1000.0
+            self._record_callback_perf(
+                callback_ms, convert_ms, resize_ms, overlay_ms, enqueue_ms
+            )
 
         except Exception as e:
             if self.frame_count % 100 == 0:
@@ -512,8 +564,9 @@ class VideoStreamNode(Node):
             self._frame_event.clear()
 
             # Grab the latest frame (atomic swap)
-            frame = self._pending_frame
-            self._pending_frame = None
+            with self._frame_lock:
+                frame = self._pending_frame
+                self._pending_frame = None
             if frame is None:
                 continue
 
@@ -534,26 +587,86 @@ class VideoStreamNode(Node):
                     pass
 
             # Push to GStreamer
+            wrap_start = time.perf_counter()
             data = frame.tobytes()
             buf = Gst.Buffer.new_wrapped(data)
             buf.pts = self._pts_counter * frame_duration
+            buf.dts = buf.pts
             buf.duration = frame_duration
             self._pts_counter += 1
+            wrap_ms = (time.perf_counter() - wrap_start) * 1000.0
 
+            push_start = time.perf_counter()
             ret = self.appsrc.emit('push-buffer', buf)
+            push_ms = (time.perf_counter() - push_start) * 1000.0
+            self._record_encode_perf(wrap_ms, push_ms)
 
             if ret != Gst.FlowReturn.OK:
+                self.push_fail_count += 1
                 if ret in (Gst.FlowReturn.FLUSHING, Gst.FlowReturn.ERROR):
                     self._pipeline_ok = False
                 continue
 
             self.frame_count += 1
             self.last_frame_time = now
+            with self._stats_lock:
+                self._frame_timestamps.append(now)
             if self.frame_count % 300 == 0:
-                elapsed = now - self.start_time
-                fps = self.frame_count / elapsed if elapsed > 0 else 0
+                fps = self._current_fps()
                 self.get_logger().info(
-                    f'Streaming: {self.frame_count} frames, {fps:.1f} fps avg')
+                    f'Streaming: {self.frame_count} frames, {fps:.1f} fps current')
+
+    def _record_callback_perf(self, callback_ms: float, convert_ms: float,
+                              resize_ms: float, overlay_ms: float,
+                              enqueue_ms: float) -> None:
+        with self._stats_lock:
+            self._perf_stats["callback_count"] += 1
+            self._perf_stats["callback_total_ms"] += callback_ms
+            self._perf_stats["callback_max_ms"] = max(
+                self._perf_stats["callback_max_ms"], callback_ms
+            )
+            self._perf_stats["convert_total_ms"] += convert_ms
+            self._perf_stats["resize_total_ms"] += resize_ms
+            self._perf_stats["overlay_total_ms"] += overlay_ms
+            self._perf_stats["enqueue_total_ms"] += enqueue_ms
+
+    def _record_encode_perf(self, wrap_ms: float, push_ms: float) -> None:
+        with self._stats_lock:
+            self._perf_stats["encode_count"] += 1
+            self._perf_stats["wrap_total_ms"] += wrap_ms
+            self._perf_stats["push_total_ms"] += push_ms
+            self._perf_stats["push_max_ms"] = max(
+                self._perf_stats["push_max_ms"], push_ms
+            )
+
+    def _current_fps(self) -> float:
+        with self._stats_lock:
+            times = list(self._frame_timestamps)
+        if len(times) < 2:
+            return 0.0
+        elapsed = times[-1] - times[0]
+        if elapsed <= 0:
+            return 0.0
+        return (len(times) - 1) / elapsed
+
+    def perf_snapshot(self) -> dict:
+        with self._stats_lock:
+            stats = dict(self._perf_stats)
+        cb_count = max(int(stats["callback_count"]), 1)
+        enc_count = max(int(stats["encode_count"]), 1)
+        return {
+            "callback_avg_ms": stats["callback_total_ms"] / cb_count,
+            "callback_max_ms": stats["callback_max_ms"],
+            "convert_avg_ms": stats["convert_total_ms"] / cb_count,
+            "resize_avg_ms": stats["resize_total_ms"] / cb_count,
+            "overlay_avg_ms": stats["overlay_total_ms"] / cb_count,
+            "enqueue_avg_ms": stats["enqueue_total_ms"] / cb_count,
+            "wrap_avg_ms": stats["wrap_total_ms"] / enc_count,
+            "push_avg_ms": stats["push_total_ms"] / enc_count,
+            "push_max_ms": stats["push_max_ms"],
+            "callback_count": stats["callback_count"],
+            "encode_count": stats["encode_count"],
+        }
 
     # ---- Depth normalization ----
 
@@ -1064,16 +1177,25 @@ class ControlServer(BaseHTTPRequestHandler):
                 else None
             )
             elapsed = now - self.video_node.start_time if self.video_node else 1
+            avg_fps = (
+                self.video_node.frame_count / max(elapsed, 1)
+                if self.video_node else 0
+            )
             self._send_json(200, {
                 'streaming': receiving_frames,
                 'pipeline_playing': pipeline_playing,
                 'source_topic': self.video_node.source_topic if self.video_node else '',
-                'fps': self.video_node.frame_count / max(elapsed, 1) if self.video_node else 0,
+                'fps': self.video_node._current_fps() if self.video_node else 0,
+                'avg_fps': avg_fps,
                 'frame_count': self.video_node.frame_count if self.video_node else 0,
                 'error_count': self.video_node.error_count if self.video_node else 0,
+                'dropped_count': self.video_node.dropped_count if self.video_node else 0,
+                'throttled_count': self.video_node.throttled_count if self.video_node else 0,
+                'push_fail_count': self.video_node.push_fail_count if self.video_node else 0,
                 'last_frame_age_s': last_frame_age,
                 'rtsp_url': f'rtsp://localhost:8554/{self.video_node.rtsp_path}' if self.video_node else '',
                 'encoder': self.video_node._encoder_name if self.video_node else '',
+                'perf': self.video_node.perf_snapshot() if self.video_node else {},
             })
 
         elif parsed.path == '/topics':

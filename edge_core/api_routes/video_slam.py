@@ -162,19 +162,11 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=500, detail=f"Failed to start video stream: {reason}"
             )
 
-        overlay_enabled = False
-        with request.app.state.detection_state_lock:
-            detection_enabled = bool(
-                getattr(request.app.state, "detection_enabled", True)
-            )
-        if detection_enabled:
-            overlay_enabled = mgr.set_overlay(True)
-
         return {
             "success": True,
             "rtsp_url": mgr.get_rtsp_url(),
             "message": "Video pipeline started",
-            "overlay_enabled": overlay_enabled,
+            "overlay_enabled": False,
         }
 
     @app.post("/api/video/stop", tags=["Video"])
@@ -218,19 +210,11 @@ def register_video_slam_routes(app, ctx) -> None:
                 status_code=500, detail=f"Failed to restart video stream: {reason}"
             )
 
-        overlay_enabled = False
-        with request.app.state.detection_state_lock:
-            detection_enabled = bool(
-                getattr(request.app.state, "detection_enabled", True)
-            )
-        if detection_enabled:
-            overlay_enabled = mgr.set_overlay(True)
-
         return {
             "success": True,
             "rtsp_url": mgr.get_rtsp_url(),
             "message": "Video pipeline restarted",
-            "overlay_enabled": overlay_enabled,
+            "overlay_enabled": False,
         }
 
     @app.post("/api/video/bridges/start", tags=["Video"])

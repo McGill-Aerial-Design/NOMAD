@@ -606,6 +606,20 @@ def run(
 
         while _detection_running:
             try:
+                with app.state.detection_state_lock:
+                    detection_enabled = bool(
+                        getattr(app.state, "detection_enabled", False)
+                    )
+                    if not detection_enabled:
+                        app.state.detected_objects = []
+                        app.state.detection_last_update = 0.0
+                if not detection_enabled:
+                    time.sleep(0.5)
+                    last_payload_hash = None
+                    with _detection_lock:
+                        _latest_detection = None
+                    continue
+
                 resp = _requests.get(snap_url, timeout=1)
                 if resp.status_code != 200:
                     time.sleep(0.5)
