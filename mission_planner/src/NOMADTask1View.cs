@@ -1219,7 +1219,22 @@ private ListBox _lstWalls;
                 }
                 else
                 {
-                    _txtResult.Text = $"[FAIL] Capture failed: {result.Message}";
+                    string detail = null;
+                    if (!string.IsNullOrEmpty(result.Data))
+                    {
+                        try
+                        {
+                            var errJson = Newtonsoft.Json.Linq.JObject.Parse(result.Data);
+                            detail = errJson["detail"]?.ToString()
+                                  ?? errJson["error"]?.ToString()
+                                  ?? errJson["message"]?.ToString();
+                        }
+                        catch { /* response body wasn't JSON */ }
+                    }
+                    var combined = string.IsNullOrWhiteSpace(detail)
+                        ? result.Message
+                        : $"{result.Message} — {detail}";
+                    _txtResult.Text = $"[FAIL] Capture failed: {combined}";
                     _txtResult.ForeColor = ERROR_COLOR;
                 }
             }

@@ -548,9 +548,9 @@ def register_task1_routes(app, ctx) -> None:
         # legitimate no-detect captures don't look like gateway outages.
         try:
             output = await _call_target_capture_with_retries(
-                max_attempts=1,
-                retry_delay_s=0.5,
-                timeout_s=12.0,
+                max_attempts=4,
+                retry_delay_s=1.5,
+                timeout_s=30.0,
             )
         except HTTPException as exc:
             detail_text = str(exc.detail or "").strip()
