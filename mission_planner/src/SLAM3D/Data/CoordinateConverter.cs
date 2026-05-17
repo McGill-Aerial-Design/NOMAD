@@ -13,14 +13,14 @@ namespace NOMAD.MissionPlanner.SLAM3D.Data
     /// </summary>
     /// <remarks>
     /// Frame conventions:
-    /// - ROS REP-103 (odom): X-forward, Y-left, Z-up
+    /// - ROS REP-103 (map/odom): X-forward, Y-left, Z-up
     /// - OpenGL: X-right, Y-up, Z-out (toward viewer)
     /// - NED: X-north, Y-east, Z-down
     /// </remarks>
     public static class CoordinateConverter
     {
         /// <summary>
-        /// Convert ROS odom frame position to OpenGL frame.
+        /// Convert ROS map/odom frame position to OpenGL frame.
         /// </summary>
         /// <remarks>
         /// ROS: X-forward, Y-left, Z-up
@@ -33,7 +33,7 @@ namespace NOMAD.MissionPlanner.SLAM3D.Data
         }
         
         /// <summary>
-        /// Convert OpenGL frame position to ROS odom frame.
+        /// Convert OpenGL frame position to ROS map/odom frame.
         /// </summary>
         public static (float x, float y, float z) OpenGLToRos(float glX, float glY, float glZ)
         {

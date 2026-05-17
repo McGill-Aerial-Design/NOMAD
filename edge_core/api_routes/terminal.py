@@ -89,17 +89,13 @@ def _run_subprocess_group(
 
 
 def register_terminal_routes(app, ctx) -> None:
+    _require_terminal_api_key = ctx.require_terminal_api_key
 
-    def _require_terminal_api_key() -> None:
-        """
-        Guard for terminal/admin routes.
-
-        When NOMAD_API_KEY is configured, APIKeyMiddleware enforces X-API-Key.
-        When NOMAD_API_KEY is not configured, treat this as development mode and
-        allow execution so Mission Planner operations (e.g., Git Update) continue
-        to work.
-        """
-        return
+    def _terminal_exec_enabled() -> bool:
+        return (
+            (os.environ.get("NOMAD_ENABLE_TERMINAL_EXEC") or "").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
 
     # ==================== Terminal Endpoints ======================================
 
@@ -191,6 +187,14 @@ def register_terminal_routes(app, ctx) -> None:
         the client can track directory changes across commands.
         """
         _require_terminal_api_key()
+        if not _terminal_exec_enabled():
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Arbitrary terminal execution is disabled. Set "
+                    "NOMAD_ENABLE_TERMINAL_EXEC=true only for trusted maintenance windows."
+                ),
+            )
 
         import os
 

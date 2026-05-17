@@ -44,6 +44,7 @@ namespace NOMAD.MissionPlanner.SLAM3D.Network
         public float BodyRoll { get; set; }
         public float BodyPitch { get; set; }
         public float BodyYaw { get; set; }
+        public bool HasBodyAttitude { get; set; }
         public bool AttitudeValid { get; set; }
         
         // Velocity (optional)
@@ -320,8 +321,8 @@ namespace NOMAD.MissionPlanner.SLAM3D.Network
             var frame = new SlamFrame
             {
                 RawJson = jobj,
-                // Canonical SLAM frame identifier end-to-end: "odom" (REP-103).
-                FrameId = jobj["frame_id"]?.ToString() ?? "odom",
+                // Canonical SLAM frame identifier end-to-end: "map" (REP-103 axes).
+                FrameId = jobj["frame_id"]?.ToString() ?? "map",
                 FrameNumber = jobj["ts"]?.Value<int>() ?? 0,
             };
             
@@ -343,9 +344,13 @@ namespace NOMAD.MissionPlanner.SLAM3D.Network
             if (TryGetFloat(jobj["yaw"], out float yaw)) frame.Yaw = yaw;
             
             // Parse body attitude (with gimbal compensation)
-            if (TryGetFloat(jobj["body_roll"], out float bodyRoll)) frame.BodyRoll = bodyRoll;
-            if (TryGetFloat(jobj["body_pitch"], out float bodyPitch)) frame.BodyPitch = bodyPitch;
-            if (TryGetFloat(jobj["body_yaw"], out float bodyYaw)) frame.BodyYaw = bodyYaw;
+            bool hasBodyRoll = TryGetFloat(jobj["body_roll"], out float bodyRoll);
+            bool hasBodyPitch = TryGetFloat(jobj["body_pitch"], out float bodyPitch);
+            bool hasBodyYaw = TryGetFloat(jobj["body_yaw"], out float bodyYaw);
+            if (hasBodyRoll) frame.BodyRoll = bodyRoll;
+            if (hasBodyPitch) frame.BodyPitch = bodyPitch;
+            if (hasBodyYaw) frame.BodyYaw = bodyYaw;
+            frame.HasBodyAttitude = hasBodyRoll && hasBodyPitch && hasBodyYaw;
             
             // Parse velocity
             if (TryGetFloat(jobj["vx"], out float vx)) frame.VelocityX = vx;

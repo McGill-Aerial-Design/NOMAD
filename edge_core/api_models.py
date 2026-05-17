@@ -1,8 +1,9 @@
 """Shared request/response models and command contracts for Edge Core API routes."""
 
+import math
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 
 # msgpack for efficient mesh deserialization (optional)
 try:
@@ -96,7 +97,7 @@ COMMAND_WHITELIST: dict[str, str] = {
     "restart_all":         "nohup bash -c 'sleep 2 && /home/mad/NOMAD/scripts/nomad restart all' > /dev/null 2>&1 & echo 'restart scheduled'",
 
     # --- noVNC (unchanged: not part of the NOMAD systemd target) ---
-    "start_novnc": "if ss -ltn | grep -q ':6080 '; then echo 'already running'; else mkdir -p ~/nomad_logs; pgrep -x Xvfb >/dev/null || (screen=${NOVNC_GEOMETRY:-1920x1080}x24; nohup Xvfb :1 -screen 0 \"$screen\" -ac +extension RANDR > ~/nomad_logs/xvfb.log 2>&1 & sleep 1); pgrep -x openbox >/dev/null || (DISPLAY=:1 nohup openbox-session > ~/nomad_logs/openbox.log 2>&1 & sleep 1); command -v tint2 >/dev/null 2>&1 && (pgrep -x tint2 >/dev/null || (DISPLAY=:1 nohup tint2 > ~/nomad_logs/tint2.log 2>&1 & sleep 1)); if ! ss -ltn | grep -q ':5900 '; then x11vnc -display :1 -rfbport 5900 -localhost -forever -shared -repeat -xkb -noxdamage -noxfixes -noxrecord -bg -passwd ${NOVNC_VNC_PASSWORD:-skibidi123} -o ~/nomad_logs/x11vnc.log >/dev/null 2>&1; fi; for i in 1 2 3 4 5 6 7 8 9 10; do ss -ltn | grep -q ':5900 ' && break; sleep 1; done; if ! ss -ltn | grep -q ':5900 '; then echo failed; exit 1; fi; nohup websockify --heartbeat 30 --web /usr/share/novnc/ 6080 localhost:5900 > ~/nomad_logs/novnc.log 2>&1 & for i in 1 2 3 4 5 6 7 8 9 10; do ss -ltn | grep -q ':6080 ' && break; sleep 1; done; ss -ltn | grep -q ':6080 ' && echo started || (echo failed; exit 1); fi",
+    "start_novnc": "if ss -ltn | grep -q ':6080 '; then echo 'already running'; else if [ -z \"${NOVNC_VNC_PASSWORD:-}\" ]; then echo 'NOVNC_VNC_PASSWORD required'; exit 1; fi; mkdir -p ~/nomad_logs; pgrep -x Xvfb >/dev/null || (screen=${NOVNC_GEOMETRY:-1920x1080}x24; nohup Xvfb :1 -screen 0 \"$screen\" -ac +extension RANDR > ~/nomad_logs/xvfb.log 2>&1 & sleep 1); pgrep -x openbox >/dev/null || (DISPLAY=:1 nohup openbox-session > ~/nomad_logs/openbox.log 2>&1 & sleep 1); command -v tint2 >/dev/null 2>&1 && (pgrep -x tint2 >/dev/null || (DISPLAY=:1 nohup tint2 > ~/nomad_logs/tint2.log 2>&1 & sleep 1)); if ! ss -ltn | grep -q ':5900 '; then x11vnc -display :1 -rfbport 5900 -localhost -forever -shared -repeat -xkb -noxdamage -noxfixes -noxrecord -bg -passwd \"$NOVNC_VNC_PASSWORD\" -o ~/nomad_logs/x11vnc.log >/dev/null 2>&1; fi; for i in 1 2 3 4 5 6 7 8 9 10; do ss -ltn | grep -q ':5900 ' && break; sleep 1; done; if ! ss -ltn | grep -q ':5900 '; then echo failed; exit 1; fi; nohup websockify --heartbeat 30 --web /usr/share/novnc/ 6080 localhost:5900 > ~/nomad_logs/novnc.log 2>&1 & for i in 1 2 3 4 5 6 7 8 9 10; do ss -ltn | grep -q ':6080 ' && break; sleep 1; done; ss -ltn | grep -q ':6080 ' && echo started || (echo failed; exit 1); fi",
     "stop_novnc": "stopped=0; pkill -f '[w]ebsockify.*6080' 2>/dev/null && stopped=1; pkill -f '[x]11vnc.*-rfbport 5900' 2>/dev/null && stopped=1; pkill -x tint2 2>/dev/null && stopped=1; pkill -x openbox 2>/dev/null && stopped=1; pkill -f '[X]vfb :1' 2>/dev/null && stopped=1; [ $stopped -eq 1 ] && echo stopped || echo 'not running'",
 
     # --- System commands ---
@@ -120,6 +121,10 @@ class TerminalCommandRequest(BaseModel):
     command_name: str  # Must be a key in COMMAND_WHITELIST
     timeout: int = 10
 
+    @validator("timeout")
+    def _clamp_terminal_run_timeout(cls, value: int) -> int:
+        return max(1, min(int(value), 60))
+
 
 class TerminalExecRequest(BaseModel):
     """Request model for arbitrary terminal command execution."""
@@ -127,6 +132,10 @@ class TerminalExecRequest(BaseModel):
     command: str
     timeout: int = 30
     cwd: Optional[str] = None  # Working directory (persistent cd support)
+
+    @validator("timeout")
+    def _clamp_terminal_exec_timeout(cls, value: int) -> int:
+        return max(1, min(int(value), 120))
 
 
 class TerminalCommandResponse(BaseModel):
@@ -195,6 +204,13 @@ class NavVelocityRequest(BaseModel):
     yaw_rate: float  # Yaw rate (rad/s)
     source: str = "nav2"
 
+    @validator("timestamp", "vx", "vy", "vz", "yaw_rate")
+    def _finite_velocity_float(cls, value: float) -> float:
+        value = float(value)
+        if not math.isfinite(value):
+            raise ValueError("must be finite")
+        return value
+
 
 class NavPositionRequest(BaseModel):
     """Request model for navigation position target."""
@@ -204,6 +220,13 @@ class NavPositionRequest(BaseModel):
     z: float  # Down position (NED meters)
     yaw: float  # Heading (radians)
     source: str = "nav2"
+
+    @validator("x", "y", "z", "yaw")
+    def _finite_position_float(cls, value: float) -> float:
+        value = float(value)
+        if not math.isfinite(value):
+            raise ValueError("must be finite")
+        return value
 
 
 class GDriveUploadRequest(BaseModel):

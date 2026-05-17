@@ -25,6 +25,10 @@ LimitNPROC=4096
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/home/mad/NOMAD /home/mad/nomad_logs /home/mad/.nomad /run/nomad
 
 StandardOutput=journal
 StandardError=journal

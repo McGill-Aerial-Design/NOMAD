@@ -89,7 +89,7 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        // ---- Drone pose (raw from WS, REP-103 odom frame: X-forward, Y-left, Z-up) ----
+        // ---- Drone pose (raw from WS, REP-103 map frame: X-forward, Y-left, Z-up) ----
         private float _dronePosX, _dronePosY, _dronePosZ;
         private float _droneRollRaw, _dronePitchRaw, _droneYawRaw;
         private bool _attitudeValid = true; // Tracks server-reported attitude_valid flag
@@ -176,7 +176,7 @@ namespace NOMAD.MissionPlanner
 
             _webSocketClient.ReconnectDelayMs = 1000;
             _webSocketClient.MaxReconnectDelayMs = 10000;
-            _webSocketClient.MaxMessageSize = 10 * 1024 * 1024;
+            _webSocketClient.MaxMessageSize = 64 * 1024 * 1024;
             _webSocketClient.ReceiveTimeoutSec = 30;
             _webSocketClient.OnStatusChanged += HandleWebSocketStatusChanged;
             _webSocketClient.OnError += HandleWebSocketError;
@@ -928,12 +928,12 @@ namespace NOMAD.MissionPlanner
                 return;
 
             var frameJson = frame.RawJson ?? new JObject();
-            // Canonical SLAM frame identifier end-to-end: "odom" (REP-103).
+            // Canonical SLAM frame identifier end-to-end: "map" (REP-103 axes).
             // Bridge, ws_slam, and mesh endpoint all emit this exact string.
-            string frameId = string.IsNullOrWhiteSpace(frame.FrameId) ? "odom" : frame.FrameId;
-            if (!string.Equals(frameId, "odom", StringComparison.OrdinalIgnoreCase))
+            string frameId = string.IsNullOrWhiteSpace(frame.FrameId) ? "map" : frame.FrameId;
+            if (!string.Equals(frameId, "map", StringComparison.OrdinalIgnoreCase))
             {
-                Debug.WriteLine($"[SLAM3D] Unexpected frame_id: {frameId} (expected odom)");
+                Debug.WriteLine($"[SLAM3D] Unexpected frame_id: {frameId} (expected map)");
             }
 
             bool hasPosePositionInFrame = false;

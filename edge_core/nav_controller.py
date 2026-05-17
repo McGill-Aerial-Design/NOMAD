@@ -265,6 +265,12 @@ class NavController:
             if not state.armed:
                 logger.warning("Vehicle not armed - refusing velocity command")
                 return False
+            if state.flight_mode != "GUIDED":
+                logger.warning(
+                    "Vehicle not in GUIDED mode (%s) - refusing velocity command",
+                    state.flight_mode,
+                )
+                return False
             
             # Create command
             cmd = VelocityCommand(
@@ -323,6 +329,12 @@ class NavController:
             
             state = self._state_manager.get_state()
             if not state.armed:
+                return False
+            if state.flight_mode != "GUIDED":
+                logger.warning(
+                    "Vehicle not in GUIDED mode (%s) - refusing position command",
+                    state.flight_mode,
+                )
                 return False
             
             self._last_command_time = time.monotonic()
@@ -478,4 +490,6 @@ class NavController:
     @staticmethod
     def _clamp(value: float, min_val: float, max_val: float) -> float:
         """Clamp value to range."""
+        if not math.isfinite(value):
+            raise ValueError("Navigation command values must be finite")
         return max(min_val, min(max_val, value))

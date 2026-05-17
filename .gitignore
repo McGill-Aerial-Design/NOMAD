@@ -125,6 +125,8 @@ mission_planner/src/bin/
 mission_planner/src/obj/
 mission_planner/plugins-dist/*.dll
 mission_planner/plugins-dist/*.pdb
+mission_planner/packaging/libvlc-windows/
+!mission_planner/packaging/libvlc-windows/README.md
 
 # User config (contains Tailscale IPs, etc.)
 mission_planner/nomad_config.json

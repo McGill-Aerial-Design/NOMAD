@@ -1,4 +1,6 @@
 import asyncio
+import hmac
+import ipaddress
 import json
 import os
 import re
@@ -40,6 +42,7 @@ def register_system_routes(app, ctx) -> None:
     logger = ctx.logger
     _get_vio_snapshot = ctx.get_vio_snapshot
     _NOMAD_API_KEY = ctx.nomad_api_key
+    _ALLOW_INSECURE_REMOTE = bool(getattr(ctx, "allow_insecure_remote", False))
 
     # ==================== Root / Health ====================
 
@@ -263,7 +266,20 @@ def register_system_routes(app, ctx) -> None:
     async def _validate_ws_token(websocket: WebSocket) -> bool:
         """Validate API key token on WebSocket connect. Returns True if authorised."""
         if _NOMAD_API_KEY is None:
-            return True
+            if _ALLOW_INSECURE_REMOTE:
+                return True
+            client_host = ""
+            if websocket.client is not None and websocket.client.host is not None:
+                client_host = websocket.client.host.strip().lower()
+            if client_host.startswith("::ffff:"):
+                client_host = client_host.split("::ffff:", 1)[1]
+            try:
+                if ipaddress.ip_address(client_host).is_loopback:
+                    return True
+            except ValueError:
+                pass
+            await websocket.close(code=4003, reason="NOMAD_API_KEY is required for remote WebSocket access")
+            return False
         token = websocket.query_params.get("token", "")
         if not hmac.compare_digest(token, _NOMAD_API_KEY):
             await websocket.close(code=4003, reason="Unauthorized")

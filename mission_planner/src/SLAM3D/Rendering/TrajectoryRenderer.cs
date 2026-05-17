@@ -95,7 +95,7 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
         }
 
         /// <summary>
-        /// Add a trajectory point from ROS odom frame coordinates.
+        /// Add a trajectory point from ROS map/odom frame coordinates.
         /// Converts to OpenGL: gx = -y, gy = z, gz = -x
         /// </summary>
         public void AddPointFromRos(float rosX, float rosY, float rosZ, float minDistanceM = 0.05f)

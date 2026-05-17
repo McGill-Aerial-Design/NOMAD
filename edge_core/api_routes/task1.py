@@ -122,6 +122,14 @@ def register_task1_routes(app, ctx) -> None:
                 "mode": "target_localizer",
             }
         except HTTPException as exc:
+            if (
+                (os.environ.get("NOMAD_ENABLE_TASK1_CAPTURE_FALLBACK") or "")
+                .strip()
+                .lower()
+                not in {"1", "true", "yes", "on"}
+            ):
+                raise
+
             # Fallback to the live detections cache so Task 1 capture can still
             # produce useful output when the target_localizer service is unavailable.
             detail = str(exc.detail)

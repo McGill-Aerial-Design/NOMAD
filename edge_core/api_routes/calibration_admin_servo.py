@@ -50,6 +50,8 @@ def register_calibration_admin_servo_routes(app, ctx) -> None:
 
         This is intended for manual magnetometer calibration via noVNC.
         """
+        _require_terminal_api_key()
+
         viewer_bin = shutil.which("ZED_Sensor_Viewer") or shutil.which(
             "zed_sensor_viewer"
         )
@@ -237,11 +239,76 @@ def register_calibration_admin_servo_routes(app, ctx) -> None:
             ),
         )
 
+    @app.post("/api/calibration/imu/reset_biases", tags=["Calibration"])
+    async def reset_imu_biases():
+        """
+        Reset ZED IMU bias values using the ZED calibration tool.
+
+        This requires exclusive camera access. Refuse to run while the Isaac ROS
+        container is active because ZED wrapper/nvblox may hold the camera.
+        """
+        _require_terminal_api_key()
+
+        runtime_state = _probe_isaac_runtime_state(force_refresh=True)
+        if runtime_state.get("container_running", False):
+            raise HTTPException(
+                status_code=409,
+                detail="Stop Isaac ROS before resetting IMU biases; the ZED camera must be idle.",
+            )
+
+        candidates = [
+            "ZED_Sensor_Calibration",
+            "zed_sensor_calibration",
+            "ZED_Calibration",
+        ]
+        calibration_bin = None
+        for name in candidates:
+            calibration_bin = shutil.which(name)
+            if calibration_bin:
+                break
+        if not calibration_bin:
+            raise HTTPException(
+                status_code=500,
+                detail="ZED IMU calibration tool not found in PATH",
+            )
+
+        def _run_reset() -> subprocess.CompletedProcess:
+            return subprocess.run(
+                [calibration_bin, "--cimu"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+        try:
+            result = await asyncio.to_thread(_run_reset)
+        except subprocess.TimeoutExpired:
+            raise HTTPException(status_code=504, detail="ZED IMU bias reset timed out")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to run IMU reset: {e}")
+
+        output = "\n".join(part for part in [result.stdout, result.stderr] if part).strip()
+        if result.returncode != 0:
+            raise HTTPException(
+                status_code=500,
+                detail=output or f"{os.path.basename(calibration_bin)} exited with {result.returncode}",
+            )
+
+        logger.info("ZED IMU biases reset using %s", calibration_bin)
+        return {
+            "success": True,
+            "tool": os.path.basename(calibration_bin),
+            "output": output,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
     @app.post("/api/tools/rviz2/start", tags=["Tools"])
     async def start_rviz2(request: Request):
         """
         Launch RViz2 inside the Isaac ROS container and show it via noVNC.
         """
+        _require_terminal_api_key()
+
         display = (
             os.environ.get("NOMAD_CAL_DISPLAY") or os.environ.get("DISPLAY") or ":1"
         )
@@ -629,6 +696,8 @@ echo $!
 
         Attempts to stop RViz2 inside the Isaac ROS container and on the host.
         """
+        _require_terminal_api_key()
+
         container = "nomad_isaac_ros"
         runtime_state = _probe_isaac_runtime_state(force_refresh=True)
 

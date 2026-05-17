@@ -156,7 +156,7 @@ namespace NOMAD.MissionPlanner.SLAM3D
             // Update pose with anti-jitter filtering
             if (frame.AttitudeValid)
             {
-                // Convert ROS odom frame (X-forward, Y-left, Z-up) to OpenGL (X-right, Y-up, Z-toward)
+                // Convert ROS map frame (X-forward, Y-left, Z-up) to OpenGL (X-right, Y-up, Z-toward)
                 float rosX = frame.X;
                 float rosY = frame.Y;
                 float rosZ = frame.Z;
@@ -167,7 +167,7 @@ namespace NOMAD.MissionPlanner.SLAM3D
 
                 // Use body attitude if available (magnetometer-corrected yaw)
                 float rollDeg, pitchDeg, yawDeg;
-                if (frame.BodyYaw != 0 || frame.BodyRoll != 0 || frame.BodyPitch != 0)
+                if (frame.HasBodyAttitude)
                 {
                     rollDeg = frame.BodyRoll * 180f / MathHelper.PI;
                     pitchDeg = frame.BodyPitch * 180f / MathHelper.PI;
@@ -238,7 +238,7 @@ namespace NOMAD.MissionPlanner.SLAM3D
                             float rosY = pos[1].Value<float>();
                             float rosZ = pos[2].Value<float>();
 
-                            // ROS odom: X-forward, Y-left, Z-up
+                            // ROS map/odom: X-forward, Y-left, Z-up
                             // OpenGL: X-right, Y-up, Z-toward
                             // Mapping: gx = -y, gy = z, gz = -x
                             float gx = -rosY;

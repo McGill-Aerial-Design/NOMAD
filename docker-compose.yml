@@ -161,6 +161,8 @@ services:
 
         if [ "$$ZED_READY" = "false" ]; then
           echo '[init] ERROR: ZED not ready after 60 seconds. Check camera connection.';
+          kill $$NVBLOX_PID 2>/dev/null || true;
+          exit 1;
         fi;
 
         echo '[init] Note: Video bridge is launched by nomad-video-bridge.service (single owner; calls Edge Core /api/video/start).';

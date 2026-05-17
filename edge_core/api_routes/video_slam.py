@@ -430,6 +430,26 @@ def register_video_slam_routes(app, ctx) -> None:
         # return 413 but now also bump a visible counter the UI can surface
         # instead of disappearing silently.
         max_payload_bytes = 32 * 1024 * 1024
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                declared_size = int(content_length)
+            except ValueError:
+                declared_size = -1
+            if declared_size > max_payload_bytes:
+                request.app.state.slam_mesh_drops = (
+                    getattr(request.app.state, "slam_mesh_drops", 0) + 1
+                )
+                request.app.state.slam_mesh_last_drop_bytes = declared_size
+                request.app.state.slam_mesh_last_drop_reason = "payload_too_large"
+                return JSONResponse(
+                    {
+                        "error": "Payload too large",
+                        "bytes": declared_size,
+                        "limit": max_payload_bytes,
+                    },
+                    status_code=413,
+                )
         try:
             raw = await request.body()
         except Exception:
@@ -523,6 +543,7 @@ def register_video_slam_routes(app, ctx) -> None:
             # but the lock is only held during the assignment, not the
             # network read above.
             with request.app.state.slam_mesh_lock:
+                next_version = getattr(request.app.state, "slam_mesh_version", 0) + 1
                 request.app.state.slam_mesh_data = {
                     "mesh": mesh_data,
                     "received_at": datetime.now(timezone.utc).isoformat(),
@@ -543,9 +564,21 @@ def register_video_slam_routes(app, ctx) -> None:
                     ]
 
                 # Increment version counter for delta tracking
-                request.app.state.slam_mesh_version = (
-                    getattr(request.app.state, "slam_mesh_version", 0) + 1
+                request.app.state.slam_mesh_version = next_version
+                history = getattr(request.app.state, "slam_mesh_delta_history", None)
+                if not isinstance(history, list):
+                    history = []
+                    request.app.state.slam_mesh_delta_history = history
+                history.append(
+                    {
+                        "version": next_version,
+                        "mesh": mesh_data,
+                        "drone_position": request.app.state.slam_mesh_data.get("drone_position"),
+                        "drone_attitude": request.app.state.slam_mesh_data.get("drone_attitude"),
+                        "timestamp": request.app.state.slam_mesh_data["received_at"],
+                    }
                 )
+                del history[:-30]
 
             return {"status": "ok", "items_received": item_count, "mode": mode}
 
@@ -688,7 +721,10 @@ def register_video_slam_routes(app, ctx) -> None:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
-        mesh_state = getattr(request.app.state, "slam_mesh_data", None)
+        with request.app.state.slam_mesh_lock:
+            mesh_state = getattr(request.app.state, "slam_mesh_data", None)
+            history = list(getattr(request.app.state, "slam_mesh_delta_history", []) or [])
+
         if not mesh_state:
             return {
                 "available": True,
@@ -697,10 +733,45 @@ def register_video_slam_routes(app, ctx) -> None:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
+        oldest_retained_version = (
+            min((entry.get("version", current_version) for entry in history), default=current_version)
+            if history
+            else current_version
+        )
+        if since < oldest_retained_version - 1:
+            return {
+                "available": True,
+                "changed": True,
+                "version": current_version,
+                "resync_required": True,
+                "mesh": mesh_state.get("mesh"),
+                "drone_position": mesh_state.get("drone_position"),
+                "drone_attitude": mesh_state.get("drone_attitude"),
+                "timestamp": mesh_state.get(
+                    "received_at", datetime.now(timezone.utc).isoformat()
+                ),
+            }
+
+        updates = [entry for entry in history if entry.get("version", 0) > since]
+        if updates:
+            return {
+                "available": True,
+                "changed": True,
+                "version": current_version,
+                "updates": updates,
+                "count": len(updates),
+                "timestamp": updates[-1].get(
+                    "timestamp", datetime.now(timezone.utc).isoformat()
+                ),
+            }
+
+        # The caller is older than the retained delta history. Return a full
+        # snapshot with an explicit marker so clients can resynchronize.
         return {
             "available": True,
             "changed": True,
             "version": current_version,
+            "resync_required": True,
             "mesh": mesh_state.get("mesh"),
             "drone_position": mesh_state.get("drone_position"),
             "drone_attitude": mesh_state.get("drone_attitude"),
@@ -980,6 +1051,15 @@ def register_video_slam_routes(app, ctx) -> None:
             request.app.state.slam_mesh_version = (
                 getattr(request.app.state, "slam_mesh_version", 0) + 1
             )
+            request.app.state.slam_mesh_delta_history = [
+                {
+                    "version": request.app.state.slam_mesh_version,
+                    "mesh": request.app.state.slam_mesh_data["mesh"],
+                    "drone_position": None,
+                    "drone_attitude": None,
+                    "timestamp": request.app.state.slam_mesh_data["received_at"],
+                }
+            ]
 
         response_payload = {
             "success": nvblox_cleared,

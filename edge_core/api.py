@@ -143,10 +143,15 @@ def create_app(state_manager: StateManager) -> FastAPI:
         allow_headers=["*"],
     )
 
-    # API key authentication middleware
-    # If NOMAD_API_KEY is set, require X-API-Key header on non-exempt endpoints.
-    # If NOMAD_API_KEY is not set, skip authentication (development mode).
+    # API key authentication middleware.
+    # If NOMAD_API_KEY is set, require X-API-Key on non-exempt endpoints.
+    # If NOMAD_API_KEY is not set, allow loopback-only development traffic and
+    # reject remote clients unless NOMAD_ALLOW_INSECURE_REMOTE=true is explicit.
     _NOMAD_API_KEY = (os.environ.get("NOMAD_API_KEY") or "").strip() or None
+    _ALLOW_INSECURE_REMOTE = (
+        (os.environ.get("NOMAD_ALLOW_INSECURE_REMOTE") or "").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
     _AUTH_EXEMPT_PATHS = {"/", "/health", "/docs", "/redoc", "/openapi.json"}
     _INTERNAL_BRIDGE_TOKEN_HEADER = "X-NOMAD-Internal-Token"
     _INTERNAL_BRIDGE_TOKEN = (
@@ -173,10 +178,23 @@ def create_app(state_manager: StateManager) -> FastAPI:
         )
         _INTERNAL_BRIDGE_TOKEN = None
 
+    if _NOMAD_API_KEY is None:
+        logger.warning(
+            "NOMAD_API_KEY is not configured; only loopback clients are allowed "
+            "unless NOMAD_ALLOW_INSECURE_REMOTE=true"
+        )
     if _NOMAD_API_KEY is not None and _INTERNAL_BRIDGE_TOKEN is None:
         logger.warning(
             "NOMAD_INTERNAL_TOKEN is not configured; internal bridge bypass disabled"
         )
+
+    def _require_admin_api_key() -> None:
+        """Require a configured API key for high-risk terminal/admin routes."""
+        if _NOMAD_API_KEY is None:
+            raise HTTPException(
+                status_code=403,
+                detail="Admin/terminal routes require NOMAD_API_KEY to be configured",
+            )
 
     def _is_loopback_client(request: Request) -> bool:
         client_host = ""
@@ -209,15 +227,23 @@ def create_app(state_manager: StateManager) -> FastAPI:
     class APIKeyMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
             if _NOMAD_API_KEY is None:
-                # Development mode - no authentication
-                return await call_next(request)
+                if _ALLOW_INSECURE_REMOTE or _is_loopback_client(request):
+                    return await call_next(request)
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "detail": (
+                            "NOMAD_API_KEY is not configured; remote API access is disabled"
+                        )
+                    },
+                )
             request_path = request.url.path.rstrip("/") or "/"
             if request_path in _AUTH_EXEMPT_PATHS:
                 return await call_next(request)
             if _is_internal_bridge_request(request, request_path):
                 return await call_next(request)
             provided_key = request.headers.get("X-API-Key")
-            if provided_key != _NOMAD_API_KEY:
+            if not provided_key or not hmac.compare_digest(provided_key, _NOMAD_API_KEY):
                 return JSONResponse(
                     status_code=401,
                     content={"detail": "Invalid or missing API key"},
@@ -263,6 +289,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
     # Dedicated lock for SLAM mesh state (large 30MB+ updates) so writers don't
     # race on slam_mesh_version / slam_mesh_data when multiple POSTs land.
     app.state.slam_mesh_lock = threading.Lock()
+    app.state.slam_mesh_delta_history: list[dict] = []
     app.state.exclusion_map: list[dict] = []
 
     # Object detection state (HSV circle detection via ZED custom OD)
@@ -698,6 +725,8 @@ def create_app(state_manager: StateManager) -> FastAPI:
         dispatch_nav_velocity=_dispatch_nav_velocity,
         apply_detections_update=_apply_detections_update,
         nomad_api_key=_NOMAD_API_KEY,
+        allow_insecure_remote=_ALLOW_INSECURE_REMOTE,
+        require_terminal_api_key=_require_admin_api_key,
     )
 
     @app.on_event("startup")
@@ -1712,15 +1741,6 @@ fi
     from .api_routes.terminal import register_terminal_routes
     register_terminal_routes(app, ctx)
 
-    def _require_terminal_api_key() -> None:
-        """
-        Guard for terminal/admin routes.
-
-        When NOMAD_API_KEY is configured, APIKeyMiddleware enforces X-API-Key.
-        When NOMAD_API_KEY is not configured, this remains development mode.
-        """
-        return
-
     from .api_routes.services import register_services_routes
     register_services_routes(app, ctx)
 
@@ -1736,7 +1756,6 @@ fi
     from .api_routes.video_slam import register_video_slam_routes
     register_video_slam_routes(app, ctx)
 
-    ctx.require_terminal_api_key = _require_terminal_api_key
     from .api_routes.calibration_admin_servo import register_calibration_admin_servo_routes
     register_calibration_admin_servo_routes(app, ctx)
 
