@@ -247,6 +247,10 @@ namespace NOMAD.MissionPlanner
                 DrawCornerLabels();
 
                 _glControl.SwapBuffers();
+
+                // GDI overlay (text). Drawn after SwapBuffers so it sits on top
+                // of the GL surface and survives until the next Paint cycle.
+                DrawOverlay2D();
             }
             catch
             {
@@ -407,6 +411,139 @@ namespace NOMAD.MissionPlanner
                 }
                 GL.End();
             }
+        }
+
+        // ==================== 2D overlay (compass + wall labels) ====================
+
+        private void DrawOverlay2D()
+        {
+            if (_viewW <= 0 || _viewH <= 0) return;
+            try
+            {
+                using (var g = Graphics.FromHwnd(_glControl.Handle))
+                {
+                    g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+                    DrawWallLabels2D(g);
+                    DrawCompass2D(g);
+                }
+            }
+            catch { /* GDI/GL race on resize — skip this frame. */ }
+        }
+
+        // Compass rose in the top-right that rotates with the camera so the user
+        // always knows where world-north is. yaw=0 looks north; rotating the
+        // camera right (yaw+) makes N swing left on the compass.
+        private void DrawCompass2D(Graphics g)
+        {
+            const int RADIUS = 34;
+            const int MARGIN = 12;
+            float cx = _viewW - MARGIN - RADIUS;
+            float cy = MARGIN + RADIUS;
+
+            using (var bg = new SolidBrush(Color.FromArgb(160, 18, 18, 22)))
+                g.FillEllipse(bg, cx - RADIUS, cy - RADIUS, RADIUS * 2, RADIUS * 2);
+            using (var ring = new Pen(Color.FromArgb(220, 200, 200, 210), 1.5f))
+                g.DrawEllipse(ring, cx - RADIUS, cy - RADIUS, RADIUS * 2, RADIUS * 2);
+
+            float yaw = _yawDeg * (float)Math.PI / 180f;
+            // Screen-space unit vector pointing to world-north in current view.
+            float nx = -(float)Math.Sin(yaw);
+            float ny = -(float)Math.Cos(yaw); // screen Y is inverted (down = +)
+
+            // Tick marks at the 4 cardinals.
+            var ticks = new (string label, float ang, Color color)[]
+            {
+                ("N", 0f,                       Color.FromArgb(255, 90, 90)),
+                ("E", (float)(Math.PI * 0.5),   Color.White),
+                ("S", (float)Math.PI,           Color.White),
+                ("W", (float)(Math.PI * 1.5),   Color.White),
+            };
+
+            using (var font = new Font("Segoe UI", 8.5f, FontStyle.Bold))
+            using (var pen = new Pen(Color.FromArgb(200, 200, 200, 210), 1f))
+            {
+                foreach (var (label, ang, color) in ticks)
+                {
+                    float c = (float)Math.Cos(ang);
+                    float s = (float)Math.Sin(ang);
+                    // Rotate the cardinal direction (originally +Y for N) by the
+                    // camera yaw so N tracks the world-north direction onscreen.
+                    float ux =  nx * c - ny * s;
+                    float uy =  ny * c + nx * s;
+                    float ix = cx + ux * (RADIUS - 3);
+                    float iy = cy + uy * (RADIUS - 3);
+                    float ox = cx + ux * (RADIUS - 9);
+                    float oy = cy + uy * (RADIUS - 9);
+                    g.DrawLine(pen, ox, oy, ix, iy);
+
+                    float tx = cx + ux * (RADIUS - 18);
+                    float ty = cy + uy * (RADIUS - 18);
+                    using (var br = new SolidBrush(color))
+                    {
+                        var sz = g.MeasureString(label, font);
+                        g.DrawString(label, font, br, tx - sz.Width / 2, ty - sz.Height / 2);
+                    }
+                }
+
+                // N-pointing arrow (red) on top of ticks.
+                using (var arrowPen = new Pen(Color.FromArgb(255, 90, 90), 2.2f))
+                {
+                    g.DrawLine(arrowPen, cx, cy, cx + nx * (RADIUS - 12), cy + ny * (RADIUS - 12));
+                }
+                using (var dot = new SolidBrush(Color.FromArgb(220, 220, 220)))
+                    g.FillEllipse(dot, cx - 2.5f, cy - 2.5f, 5, 5);
+            }
+        }
+
+        // Wall label = "{corner1}-{corner2}", drawn at the wall midpoint projected
+        // to screen. Walls behind the camera or off-screen are skipped.
+        private void DrawWallLabels2D(Graphics g)
+        {
+            if (_corners.Count < 2) return;
+
+            using (var font = new Font("Segoe UI", 9f, FontStyle.Bold))
+            using (var br = new SolidBrush(Color.FromArgb(245, 245, 250)))
+            using (var shadow = new SolidBrush(Color.FromArgb(180, 0, 0, 0)))
+            {
+                for (int i = 0; i < _corners.Count; i++)
+                {
+                    var a = _corners[i];
+                    var b = _corners[(i + 1) % _corners.Count];
+                    string label = $"{NameOrIndex(a.Name, i)}-{NameOrIndex(b.Name, (i + 1) % _corners.Count)}";
+
+                    // Mid-wall at half-height in GL coords (E, up, -N).
+                    Vector3 mid = new Vector3(
+                        (a.East + b.East) * 0.5f,
+                        _buildingHeight * 0.5f,
+                        -(a.North + b.North) * 0.5f);
+
+                    if (!WorldToScreen(mid, out var pt)) continue;
+
+                    var sz = g.MeasureString(label, font);
+                    float x = pt.X - sz.Width / 2;
+                    float y = pt.Y - sz.Height / 2;
+                    g.FillRectangle(shadow, x - 3, y - 1, sz.Width + 6, sz.Height + 2);
+                    g.DrawString(label, font, br, x, y);
+                }
+            }
+        }
+
+        private static string NameOrIndex(string name, int idx)
+            => string.IsNullOrWhiteSpace(name) ? ((char)('A' + (idx % 26))).ToString() : name;
+
+        private bool WorldToScreen(Vector3 world, out PointF screen)
+        {
+            screen = PointF.Empty;
+            Vector4 clip = Vector4.Transform(new Vector4(world, 1f), _viewProj);
+            if (clip.W <= 0.0001f) return false;
+            float ndcX = clip.X / clip.W;
+            float ndcY = clip.Y / clip.W;
+            if (ndcX < -1.2f || ndcX > 1.2f || ndcY < -1.2f || ndcY > 1.2f) return false;
+            screen = new PointF(
+                (ndcX * 0.5f + 0.5f) * _viewW,
+                (1f - (ndcY * 0.5f + 0.5f)) * _viewH);
+            return true;
         }
 
         private void DrawCornerLabels()
