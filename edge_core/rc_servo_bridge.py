@@ -10,7 +10,7 @@ Architecture:
   -> Jetson MavlinkService -> RCServoBridge -> ServoController -> GPIO PWM
 
 Configuration:
-  RC_CHANNEL:       Which channel to read (1-18, default 6)
+  RC_CHANNEL:       Which channel to read (1-18, default 9)
   RC_MIN/RC_MAX:    Expected RC PWM range  (default 1000-2000 us)
   SERVO_MIN/MAX:    Target servo angle range (default 0-180 deg)
   DEADBAND:         Ignore changes smaller than this (default 5 us)
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class RCServoConfig:
     """Configuration for the RC-to-servo mapping."""
-    rc_channel: int = 6            # RC channel number (1-18)
+    rc_channel: int = 9            # RC channel number (1-18)
     rc_min: int = 1000             # RC PWM low end (us)
     rc_max: int = 2000             # RC PWM high end (us)
     servo_min_angle: float = 0.0   # Servo angle at rc_min
@@ -189,7 +189,7 @@ _bridge: Optional[RCServoBridge] = None
 
 def init_rc_servo_bridge(
     servo_controller,
-    rc_channel: int = 6,
+    rc_channel: int = 9,
     enabled: bool = True,
 ) -> Optional[RCServoBridge]:
     """

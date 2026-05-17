@@ -338,11 +338,11 @@ def run(
     
     # Initialize RC-to-servo bridge (maps ELRS controller knob to nozzle servo)
     try:
-        rc_channel = int(os.environ.get("NOMAD_RC_SERVO_CHANNEL", "6"))
+        rc_channel = int(os.environ.get("NOMAD_RC_SERVO_CHANNEL", "9"))
     except ValueError:
-        rc_channel = 6
-        logger.warning("Invalid NOMAD_RC_SERVO_CHANNEL value, using default channel 6")
-    enable_rc_servo = os.environ.get("NOMAD_ENABLE_RC_SERVO", "true").lower() == "true"
+        rc_channel = 9
+        logger.warning("Invalid NOMAD_RC_SERVO_CHANNEL value, using default channel 9")
+    enable_rc_servo = os.environ.get("NOMAD_ENABLE_RC_SERVO", "false").lower() == "true"
     if enable_rc_servo and servo_controller_initialized and RC_SERVO_BRIDGE_AVAILABLE:
         try:
             bridge = init_rc_servo_bridge(
