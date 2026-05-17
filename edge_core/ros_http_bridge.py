@@ -693,7 +693,7 @@ class ROSHTTPBridge(Node):
                     f"VIO degraded: high covariance ({pos_var:.4f})", throttle_duration_sec=5.0)
 
                 # VO-005: Auto-level servo on sustained tracking loss
-                now = time.time()
+                now = time.monotonic()
                 # Edge case: if we have never seen a healthy sample yet, start the timer
                 # from the first degraded sample so sustained loss still triggers leveling.
                 if self._vio_healthy_time <= 0:
@@ -711,7 +711,7 @@ class ROSHTTPBridge(Node):
                 # covariance is degraded; consumers can down-weight via confidence.
             else:
                 # VIO is healthy - reset tracking loss state
-                self._vio_healthy_time = time.time()
+                self._vio_healthy_time = time.monotonic()
                 self._vio_loss_servo_leveled = False
 
             # Derive confidence from covariance (lower variance = higher confidence)
@@ -994,7 +994,7 @@ class ROSHTTPBridge(Node):
                 if resp.status in accepted_statuses:
                     return True
 
-                now = time.time()
+                now = time.monotonic()
                 last_warn = self._last_http_error_log.get(path, 0.0)
                 if now - last_warn >= self._http_warn_interval_s:
                     self.get_logger().warning(
@@ -1003,7 +1003,7 @@ class ROSHTTPBridge(Node):
                     self._last_http_error_log[path] = now
                 return False
             except Exception as e:
-                now = time.time()
+                now = time.monotonic()
                 last_warn = self._last_http_error_log.get(path, 0.0)
                 if now - last_warn >= self._http_warn_interval_s:
                     self.get_logger().warning(
@@ -1100,7 +1100,7 @@ class ROSHTTPBridge(Node):
                 self._zmq_restart_backoff_s * 2.0,
             )
         )
-        self._zmq_restart_retry_after = time.time() + self._zmq_restart_backoff_s
+        self._zmq_restart_retry_after = time.monotonic() + self._zmq_restart_backoff_s
         return self._zmq_restart_backoff_s
 
     def _start_high_rate_publisher(self) -> None:
@@ -1118,7 +1118,7 @@ class ROSHTTPBridge(Node):
             )
             return
 
-        now = time.time()
+        now = time.monotonic()
         if now < self._zmq_restart_retry_after:
             return
 
@@ -1141,7 +1141,7 @@ class ROSHTTPBridge(Node):
         except Exception as e:
             self._zmq_publisher = None
             backoff_s = self._schedule_high_rate_zmq_restart()
-            now = time.time()
+            now = time.monotonic()
             if now - self._last_zmq_error_log >= self._http_warn_interval_s:
                 self.get_logger().warning(
                     "Failed to start high-rate ZMQ publisher "
@@ -1212,7 +1212,7 @@ class ROSHTTPBridge(Node):
             except Exception:
                 pass
             backoff_s = self._schedule_high_rate_zmq_restart()
-            now = time.time()
+            now = time.monotonic()
             if now - self._last_zmq_error_log >= self._http_warn_interval_s:
                 self.get_logger().warning(
                     f"High-rate ZMQ publish failed ({msg_type}): {e}; "
@@ -1248,7 +1248,7 @@ class ROSHTTPBridge(Node):
                 self._vio_send_count += 1
             return
 
-        now = time.time()
+        now = time.monotonic()
         if now < self._vio_backoff_until:
             if zmq_sent:
                 self._vio_send_count += 1
@@ -1313,13 +1313,13 @@ class ROSHTTPBridge(Node):
         # dedupe can safely drop duplicates.
         if zmq_sent and self._high_rate_transport != "both":
             self._cmd_vel_send_count += 1
-            self._last_cmd_vel_send_time = time.time()
+            self._last_cmd_vel_send_time = time.monotonic()
             return
 
         if not self._use_high_rate_http:
             if zmq_sent:
                 self._cmd_vel_send_count += 1
-                self._last_cmd_vel_send_time = time.time()
+                self._last_cmd_vel_send_time = time.monotonic()
             return
 
         http_sent = False
@@ -1334,7 +1334,7 @@ class ROSHTTPBridge(Node):
             ):
                 self._cmd_vel_send_http_count += 1
                 http_sent = True
-                self._last_cmd_vel_send_time = time.time()
+                self._last_cmd_vel_send_time = time.monotonic()
             else:
                 self._bump_send_errors()
 
@@ -1350,7 +1350,7 @@ class ROSHTTPBridge(Node):
         if zmq_sent or http_sent:
             self._cmd_vel_send_count += 1
             if self._last_cmd_vel_send_time == 0.0:
-                self._last_cmd_vel_send_time = time.time()
+                self._last_cmd_vel_send_time = time.monotonic()
     
     def _handle_servo_angle(self, msg: Float32) -> None:
         """
@@ -1437,7 +1437,7 @@ class ROSHTTPBridge(Node):
         Rate limited to 10 Hz to avoid overwhelming the servo controller.
         """
         # Rate limit servo commands (max 10 Hz)
-        now = time.time()
+        now = time.monotonic()
         if now - self._last_servo_send_time < 0.1:
             return
         self._last_servo_send_time = now
@@ -1494,7 +1494,7 @@ class ROSHTTPBridge(Node):
                 self._image_height = msg.height
                 self._image_encoding = msg.encoding if hasattr(msg, 'encoding') and msg.encoding else 'rgb8'
                 self._image_step = int(msg.step) if hasattr(msg, 'step') and msg.step else 0
-                self._last_image_receive_time = time.time()
+                self._last_image_receive_time = time.monotonic()
         except Exception:
             pass
 
@@ -1503,7 +1503,7 @@ class ROSHTTPBridge(Node):
         if not self._enable_detections:
             return
 
-        now = time.time()
+        now = time.monotonic()
         if (now - self._last_detection_send_time) < self._detection_heartbeat_interval_s:
             return
 
@@ -1830,7 +1830,7 @@ class ROSHTTPBridge(Node):
         Rate limited to 5 Hz normally, throttled to 3 Hz when GPU temp
         exceeds 85°C (RM-005). Resumes normal rate when temp drops below 75°C.
         """
-        now = time.time()
+        now = time.monotonic()
 
         # RM-005: Check GPU temperature periodically
         if now - self._last_thermal_check > self._thermal_check_interval:
@@ -1911,7 +1911,8 @@ class ROSHTTPBridge(Node):
         if not self._enable_mesh:
             return
         try:
-            now = time.time()
+            now_mono = time.monotonic()
+            timestamp = time.time()
 
             if msg.type != 6:  # CUBE_LIST
                 return
@@ -1925,14 +1926,14 @@ class ROSHTTPBridge(Node):
                     self.get_logger().warning(
                         f"{self._mesh_topic} has been empty for 20 consecutive messages"
                     )
-                self._send_empty_mesh_heartbeat(mode="voxel", timestamp=now)
+                self._send_empty_mesh_heartbeat(mode="voxel", timestamp=timestamp, now_mono=now_mono)
                 return
 
             # Got real points -- reset empty counter
             self._voxel_empty_count = 0
 
             # Now apply rate limit only for sending (not for tracking empty)
-            if now - self._last_mesh_send_time < self._mesh_send_interval_s:
+            if now_mono - self._last_mesh_send_time < self._mesh_send_interval_s:
                 return
 
             voxel_size = msg.scale.x if msg.scale.x > 0.0 else 0.05
@@ -1966,7 +1967,7 @@ class ROSHTTPBridge(Node):
                 "mode": "voxel",
                 "total_voxels": n_pts,
                 "sent_voxels": len(voxels),
-                "timestamp": now,
+                "timestamp": timestamp,
                 "frame_id": "map",  # Same frame as nvblox mesh vertices (global_frame=map)
                 "clear": False,
             }
@@ -1987,7 +1988,7 @@ class ROSHTTPBridge(Node):
         Caches the result so the fast-path (_get_drone_body_pose) never blocks
         on HTTP. Called from a dedicated polling timer, not ROS callbacks.
         """
-        now = time.time()
+        now = time.monotonic()
         if now - self._gimbal_last_poll < self._gimbal_poll_interval:
             return
         self._gimbal_last_poll = now
@@ -2145,7 +2146,7 @@ class ROSHTTPBridge(Node):
             try:
                 if self._http_post("/api/task/2/slam/mesh/update", data, timeout=2.0, content_type=ctype):
                     self._mesh_send_count += 1
-                    self._last_mesh_send_time = time.time()
+                    self._last_mesh_send_time = time.monotonic()
                     if self._mesh_send_count % 10 == 1:
                         mode, count = meta
                         self.get_logger().info(
@@ -2158,12 +2159,12 @@ class ROSHTTPBridge(Node):
                 if self._send_errors % 50 == 1:
                     self.get_logger().warning(f"Failed to send mesh: {e}")
 
-    def _send_empty_mesh_heartbeat(self, mode: str, timestamp: float) -> None:
+    def _send_empty_mesh_heartbeat(self, mode: str, timestamp: float, now_mono: float) -> None:
         """Send sparse heartbeat updates so SLAM status does not remain stuck at 'no data'."""
         if not self._enable_mesh:
             return
 
-        if timestamp - self._last_empty_mesh_send_time < self._empty_mesh_send_interval_s:
+        if now_mono - self._last_empty_mesh_send_time < self._empty_mesh_send_interval_s:
             return
 
         mesh_data = {
@@ -2180,7 +2181,7 @@ class ROSHTTPBridge(Node):
             mesh_data["drone_attitude"] = drone_pose["attitude"]
 
         self._send_mesh_to_edge_core(mesh_data)
-        self._last_empty_mesh_send_time = timestamp
+        self._last_empty_mesh_send_time = now_mono
 
     def destroy_node(self) -> bool:
         """Destroy ROS node and cleanup transport resources."""

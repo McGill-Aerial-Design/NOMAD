@@ -1011,7 +1011,12 @@ namespace NOMAD.MissionPlanner
             return s;
         }
 
-        private async void BtnUpload_Click(object sender, EventArgs e)
+        private void BtnUpload_Click(object sender, EventArgs e)
+        {
+            UiAsync.Run(this, () => BtnUploadAsync(sender, e), nameof(BtnUpload_Click));
+        }
+
+        private async Task BtnUploadAsync(object sender, EventArgs e)
         {
             int approvedCount = 0;
             foreach (DataGridViewRow row in _targetGrid.Rows)

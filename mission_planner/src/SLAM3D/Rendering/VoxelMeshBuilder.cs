@@ -111,6 +111,11 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
         private int _stagedRenderedCount;
         private bool _hasStagedMesh;
 
+        // Reused by the single background rebuild worker. The GL thread still
+        // receives copied arrays so clearing these lists cannot affect rendering.
+        private readonly List<float> _rebuildVerts = new List<float>();
+        private readonly List<int> _rebuildIndices = new List<int>();
+
         // ---- Thread safety ----
         private readonly object _meshLock = new object();
 
@@ -451,8 +456,12 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
                 parityModeSnapshot = _parityMode;
             }
 
-            var verts = new List<float>(snapshot.Length * 100);
-            var indices = new List<int>(snapshot.Length * 36);
+            var verts = _rebuildVerts;
+            var indices = _rebuildIndices;
+            verts.Clear();
+            indices.Clear();
+            EnsureListCapacity(verts, (long)snapshot.Length * 100);
+            EnsureListCapacity(indices, (long)snapshot.Length * 36);
             int vertOffset = 0;
 
             foreach (var kvp in snapshot)
@@ -499,8 +508,10 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
                     AddQuad(verts, indices, ref vertOffset, cx + half, cy - half, cz - half, cx - half, cy - half, cz - half, cx - half, cy + half, cz - half, cx + half, cy + half, cz - half, cr, cg, cb, 0, 0, -1);
             }
 
-            float[] finalVerts = verts.ToArray();
-            int[] finalIndices = indices.ToArray();
+            float[] finalVerts = new float[verts.Count];
+            int[] finalIndices = new int[indices.Count];
+            verts.CopyTo(finalVerts);
+            indices.CopyTo(finalIndices);
             int finalCount = indices.Count;
 
             // Hand the new arrays to the GL thread atomically. The next paint
@@ -528,6 +539,16 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
             indices.Add(offset); indices.Add(offset + 1); indices.Add(offset + 2);
             indices.Add(offset); indices.Add(offset + 2); indices.Add(offset + 3);
             offset += 4;
+        }
+
+        private static void EnsureListCapacity<T>(List<T> list, long requestedCapacity)
+        {
+            if (requestedCapacity <= list.Capacity)
+                return;
+
+            list.Capacity = requestedCapacity > int.MaxValue
+                ? int.MaxValue
+                : (int)requestedCapacity;
         }
 
         // ==================== Private: Gap Filling ====================

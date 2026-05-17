@@ -50,6 +50,7 @@ namespace NOMAD.MissionPlanner
         private SLAM3DView _slam3DView;
         private Task2PayloadPanel _payloadPanel;
         private Task2UploadPanel _uploadPanel;
+        private JetsonStateStream _stateStream;
 
         // ---- Status tab ----
         private Label _lblVioStatus;
@@ -88,6 +89,7 @@ namespace NOMAD.MissionPlanner
             _config = config;
             _jetsonConnectionManager = jetsonConnectionManager;
             InitializeUI();
+            StartStateStream();
             StartModePolling();
 
             VisibleChanged += (s, e) =>
@@ -266,7 +268,7 @@ namespace NOMAD.MissionPlanner
             _btnRefreshDetections = CreateButton("Refresh", INFO_COLOR, 80, 26);
             _btnRefreshDetections.Location = new Point(220, 36);
             _btnRefreshDetections.Font = new Font("Segoe UI", 9, FontStyle.Bold);
-            _btnRefreshDetections.Click += async (s, e) => await RefreshDetections();
+            _btnRefreshDetections.Click += (s, e) => UiAsync.Run(this, RefreshDetections, nameof(RefreshDetections));
             detectCard.Controls.Add(_btnRefreshDetections);
 
             _lstDetections = new ListBox
@@ -301,13 +303,13 @@ namespace NOMAD.MissionPlanner
             _btnSprayTarget = CreateButton("Spray Target", ACCENT_COLOR, 140, 38);
             _btnSprayTarget.Location = new Point(15, 38);
             _btnSprayTarget.Font = new Font("Segoe UI", 11, FontStyle.Bold);
-            _btnSprayTarget.Click += async (s, e) => await TriggerSpray();
+            _btnSprayTarget.Click += (s, e) => UiAsync.Run(this, TriggerSpray, nameof(TriggerSpray));
             sprayCard.Controls.Add(_btnSprayTarget);
 
             _btnAbortSpray = CreateButton("ABORT", ERROR_COLOR, 90, 38);
             _btnAbortSpray.Location = new Point(165, 38);
             _btnAbortSpray.Font = new Font("Segoe UI", 11, FontStyle.Bold);
-            _btnAbortSpray.Click += async (s, e) => await AbortSpray();
+            _btnAbortSpray.Click += (s, e) => UiAsync.Run(this, AbortSpray, nameof(AbortSpray));
             sprayCard.Controls.Add(_btnAbortSpray);
 
             sprayCard.Controls.Add(new Label
@@ -347,7 +349,7 @@ namespace NOMAD.MissionPlanner
             _btnResetMap = CreateButton("Reset Map", ERROR_COLOR, 100, 28);
             _btnResetMap.Location = new Point(170, 38);
             _btnResetMap.Font = new Font("Segoe UI", 9, FontStyle.Bold);
-            _btnResetMap.Click += async (s, e) =>
+            _btnResetMap.Click += (s, e) => UiAsync.Run(this, async () =>
             {
                 var confirm = MessageBox.Show(
                     "Reset the exclusion map? All tracked targets will be cleared.",
@@ -358,13 +360,13 @@ namespace NOMAD.MissionPlanner
                     await _sender.SendTask2ResetMap();
                     _lblTargetCount.Text = "Hit targets: 0";
                 }
-            };
+            }, "ResetTask2Map");
             mapCard.Controls.Add(_btnResetMap);
 
             _btnResetVio = CreateButton("Reset VIO", ERROR_COLOR, 100, 28);
             _btnResetVio.Location = new Point(285, 38);
             _btnResetVio.Font = new Font("Segoe UI", 9, FontStyle.Bold);
-            _btnResetVio.Click += async (s, e) => await _sender.ResetVioOriginAsync();
+            _btnResetVio.Click += (s, e) => UiAsync.Run(this, () => _sender.ResetVioOriginAsync(), "ResetVioOrigin");
             mapCard.Controls.Add(_btnResetVio);
 
             // Add cards in reverse-stack order (DockStyle.Top stacks bottom-up)
@@ -518,26 +520,76 @@ namespace NOMAD.MissionPlanner
                 TimeSpan.FromSeconds(2));
         }
 
-        private async void PollModeAndSpray()
+        private void StartStateStream()
+        {
+            _stateStream = JetsonStateStream.Shared;
+            _stateStream.Configure(_config);
+            _stateStream.StateUpdated += OnStateStreamUpdated;
+            _stateStream.Start();
+        }
+
+        private void OnStateStreamUpdated(JObject state)
+        {
+            if (IsDisposed || !IsHandleCreated || state == null) return;
+            try
+            {
+                BeginInvoke((Action)(() => UpdateFromStateStream(state)));
+            }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+        }
+
+        private void UpdateFromStateStream(JObject state)
+        {
+            UpdateModeUI(state["operational_mode"] as JObject);
+            UpdateSprayUI(state["spray_status"] as JObject);
+            UpdateVioUI(state["vio_status"] as JObject);
+            UpdateObstacleUI(state["obstacle_distance"] as JObject);
+        }
+
+        private void PollModeAndSpray()
+        {
+            UiAsync.Run(this, PollModeAndSprayAsync, nameof(PollModeAndSpray));
+        }
+
+        private async Task PollModeAndSprayAsync()
         {
             if (IsDisposed || !IsHandleCreated) return;
             if (Interlocked.Exchange(ref _modePollInFlight, 1) == 1) return;
             try
             {
-                var modeTask = JetsonApiService.GetAsync("/api/mode");
-                var sprayTask = JetsonApiService.GetAsync("/api/spray/status");
-                var vioTask = JetsonApiService.GetAsync("/api/vio/status");
-                var obstacleTask = JetsonApiService.GetAsync("/api/obstacle_distance");
+                JObject modeData = null;
+                JObject sprayData = null;
+                JObject vioData = null;
+                JObject obstacleData = null;
+                var state = _stateStream?.LatestState;
+                if (_stateStream?.HasFreshState == true && state != null)
+                {
+                    modeData = state["operational_mode"] as JObject;
+                    sprayData = state["spray_status"] as JObject;
+                    vioData = state["vio_status"] as JObject;
+                    obstacleData = state["obstacle_distance"] as JObject;
+                }
+                else
+                {
+                    var modeTask = JetsonApiService.GetAsync("/api/mode");
+                    var sprayTask = JetsonApiService.GetAsync("/api/spray/status");
+                    var vioTask = JetsonApiService.GetAsync("/api/vio/status");
+                    var obstacleTask = JetsonApiService.GetAsync("/api/obstacle_distance");
+
+                    await Task.WhenAll(modeTask, sprayTask, vioTask, obstacleTask);
+                    modeData = await ReadJson(modeTask);
+                    sprayData = await ReadJson(sprayTask);
+                    vioData = await ReadJson(vioTask);
+                    obstacleData = await ReadJson(obstacleTask);
+                }
+
                 var detectionTask = JetsonApiService.GetAsync("/api/task/2/detections");
                 var exclMapTask = JetsonApiService.GetAsync("/api/task/2/exclusion_map");
 
-                await Task.WhenAll(modeTask, sprayTask, vioTask, obstacleTask, detectionTask, exclMapTask);
+                await Task.WhenAll(detectionTask, exclMapTask);
                 if (IsDisposed || !IsHandleCreated) return;
 
-                JObject modeData = await ReadJson(modeTask);
-                JObject sprayData = await ReadJson(sprayTask);
-                JObject vioData = await ReadJson(vioTask);
-                JObject obstacleData = await ReadJson(obstacleTask);
                 JObject detectionData = await ReadJson(detectionTask);
                 JObject exclMapData = await ReadJson(exclMapTask);
 
@@ -950,6 +1002,11 @@ namespace NOMAD.MissionPlanner
             if (disposing)
             {
                 _modePollTimer?.Dispose();
+                if (_stateStream != null)
+                {
+                    _stateStream.StateUpdated -= OnStateStreamUpdated;
+                    _stateStream = null;
+                }
                 _slam3DView?.Dispose();
                 _videoPlayer?.Dispose();
             }

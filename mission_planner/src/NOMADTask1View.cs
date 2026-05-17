@@ -147,7 +147,7 @@ private ListBox _lstWalls;
             this.Controls.Add(mainLayout);
 
             // Restore gallery from locally saved captures after UI is ready
-            this.Load += async (s, e) => await RestoreGalleryAsync();
+            this.Load += (s, e) => UiAsync.Run(this, RestoreGalleryAsync, nameof(RestoreGalleryAsync));
         }
 
         private void StyleTabControl(TabControl tabControl)
@@ -437,7 +437,7 @@ private ListBox _lstWalls;
             var btnRefreshWalls = CreateButton("Refresh Walls", Color.FromArgb(70, 70, 73), 120, 28);
             btnRefreshWalls.Font = new Font("Segoe UI", 8, FontStyle.Bold);
             btnRefreshWalls.Location = new Point(16, 318);
-            btnRefreshWalls.Click += async (s, e) => await RefreshWallsAsync();
+            btnRefreshWalls.Click += (s, e) => UiAsync.Run(this, RefreshWallsAsync, nameof(RefreshWallsAsync));
             dimensionsCard.Controls.Add(btnRefreshWalls);
 
             dimensionsCard.Resize += (s, e) =>
@@ -531,7 +531,7 @@ private ListBox _lstWalls;
             var btnRefreshCorners = CreateButton("Refresh", Color.FromArgb(70, 70, 73), 90, 30);
             btnRefreshCorners.Font = new Font("Segoe UI", 8, FontStyle.Bold);
             btnRefreshCorners.Location = new Point(256, 238);
-            btnRefreshCorners.Click += async (s, e) => await RefreshCornerListAsync();
+            btnRefreshCorners.Click += (s, e) => UiAsync.Run(this, RefreshCornerListAsync, nameof(RefreshCornerListAsync));
             cornerCard.Controls.Add(btnRefreshCorners);
 
             cornerCard.Resize += (s, e) =>
@@ -585,7 +585,12 @@ private ListBox _lstWalls;
             return panel;
         }
 
-        private async void BtnCaptureCorner_Click(object sender, EventArgs e)
+        private void BtnCaptureCorner_Click(object sender, EventArgs e)
+        {
+            UiAsync.Run(this, () => BtnCaptureCornerAsync(sender, e), nameof(BtnCaptureCorner_Click));
+        }
+
+        private async Task BtnCaptureCornerAsync(object sender, EventArgs e)
         {
             var cs = MainV2.comPort?.MAV?.cs;
             if (cs == null || (Math.Abs(cs.lat) < 0.000001 && Math.Abs(cs.lng) < 0.000001))
@@ -708,7 +713,12 @@ private ListBox _lstWalls;
             }
         }
 
-        private async void BtnApplyCorners_Click(object sender, EventArgs e)
+        private void BtnApplyCorners_Click(object sender, EventArgs e)
+        {
+            UiAsync.Run(this, () => BtnApplyCornersAsync(sender, e), nameof(BtnApplyCorners_Click));
+        }
+
+        private async Task BtnApplyCornersAsync(object sender, EventArgs e)
         {
             _btnApplyCorners.Enabled = false;
             _txtResult.Text = "Applying corners to building model...";
@@ -743,7 +753,12 @@ private ListBox _lstWalls;
             }
         }
 
-        private async void BtnClearCorners_Click(object sender, EventArgs e)
+        private void BtnClearCorners_Click(object sender, EventArgs e)
+        {
+            UiAsync.Run(this, () => BtnClearCornersAsync(sender, e), nameof(BtnClearCorners_Click));
+        }
+
+        private async Task BtnClearCornersAsync(object sender, EventArgs e)
         {
             try
             {
@@ -769,7 +784,12 @@ private ListBox _lstWalls;
             }
         }
 
-        private async void BtnSetGroundAlt_Click(object sender, EventArgs e)
+        private void BtnSetGroundAlt_Click(object sender, EventArgs e)
+        {
+            UiAsync.Run(this, () => BtnSetGroundAltAsync(sender, e), nameof(BtnSetGroundAlt_Click));
+        }
+
+        private async Task BtnSetGroundAltAsync(object sender, EventArgs e)
         {
             _btnSetGroundAlt.Enabled = false;
             _btnSetGroundAlt.Text = "Setting...";
@@ -819,7 +839,12 @@ private ListBox _lstWalls;
             }
         }
 
-        private async void BtnRegenDescriptions_Click(object sender, EventArgs e)
+        private void BtnRegenDescriptions_Click(object sender, EventArgs e)
+        {
+            UiAsync.Run(this, () => BtnRegenDescriptionsAsync(sender, e), nameof(BtnRegenDescriptions_Click));
+        }
+
+        private async Task BtnRegenDescriptionsAsync(object sender, EventArgs e)
         {
             _btnRegenDescriptions.Enabled = false;
             _btnRegenDescriptions.Text = "Regenerating...";
@@ -888,7 +913,12 @@ private ListBox _lstWalls;
             }
         }
 
-        private async void BtnSetHeight_Click(object sender, EventArgs e)
+        private void BtnSetHeight_Click(object sender, EventArgs e)
+        {
+            UiAsync.Run(this, () => BtnSetHeightAsync(sender, e), nameof(BtnSetHeight_Click));
+        }
+
+        private async Task BtnSetHeightAsync(object sender, EventArgs e)
         {
             if (!double.TryParse(_txtBuildingHeight.Text, out double height) || height <= 0)
             {
@@ -965,7 +995,12 @@ private ListBox _lstWalls;
             }
         }
 
-        private async void BtnSetWall_Click(object sender, EventArgs e)
+        private void BtnSetWall_Click(object sender, EventArgs e)
+        {
+            UiAsync.Run(this, () => BtnSetWallAsync(sender, e), nameof(BtnSetWall_Click));
+        }
+
+        private async Task BtnSetWallAsync(object sender, EventArgs e)
         {
             if (_lstWalls.SelectedIndex < 0)
             {
@@ -1012,7 +1047,12 @@ private ListBox _lstWalls;
             }
         }
 
-        private async void BtnClearWall_Click(object sender, EventArgs e)
+        private void BtnClearWall_Click(object sender, EventArgs e)
+        {
+            UiAsync.Run(this, () => BtnClearWallAsync(sender, e), nameof(BtnClearWall_Click));
+        }
+
+        private async Task BtnClearWallAsync(object sender, EventArgs e)
         {
             if (_lstWalls.SelectedIndex < 0)
             {
@@ -1066,7 +1106,12 @@ private ListBox _lstWalls;
             }
         }
 
-        private async void BtnCapture_Click(object sender, EventArgs e)
+        private void BtnCapture_Click(object sender, EventArgs e)
+        {
+            UiAsync.Run(this, () => BtnCaptureAsync(sender, e), nameof(BtnCapture_Click));
+        }
+
+        private async Task BtnCaptureAsync(object sender, EventArgs e)
         {
             _btnCapture.Enabled = false;
             _btnCapture.Text = "Capturing...";
