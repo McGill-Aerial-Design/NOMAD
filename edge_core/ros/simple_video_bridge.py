@@ -176,6 +176,11 @@ class VideoStreamNode(Node):
         # shows the same boxes as /capture_target without a network round-trip.
         self._hsv_last_run_ts = 0.0
         self._hsv_min_interval = 0.2
+        self._detector_stop = threading.Event()
+        self._detector_frame_lock = threading.Lock()
+        self._detector_frame = None
+        self._detector_frame_ts = 0.0
+        self._detector_last_frame_store_ts = 0.0
         self._task2_cuda_checked = False
         self._task2_cuda_enabled = False
         self._task2_cuda_gray_filter = None
@@ -221,6 +226,14 @@ class VideoStreamNode(Node):
         # Start bus watchdog
         self._bus_thread = threading.Thread(target=self._bus_watch_loop, daemon=True)
         self._bus_thread.start()
+
+        # Detection worker. The ROS image callback only publishes the latest
+        # full-resolution frame to this worker, so expensive target detection
+        # cannot stall the RTSP stream.
+        self._detector_thread = threading.Thread(
+            target=self._detector_loop, daemon=True, name='detector-loop'
+        )
+        self._detector_thread.start()
 
         self.get_logger().info('Video bridge ready!')
 
@@ -490,11 +503,6 @@ class VideoStreamNode(Node):
                 cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2BGRA)
             convert_ms = (time.perf_counter() - convert_start) * 1000.0
 
-            # Run detector on the ROS image before RTSP downscale. With ZED
-            # HD720/NATIVE publishing this keeps Task 2 circle detection in
-            # 1280x720 coordinates while the Mission Planner stream can stay
-            # at 640x360 for bandwidth/CPU. draw_detections() scales boxes
-            # using each detection's _src_w/_src_h fields.
             overlay_ms = 0.0
             if self._overlay_enabled and (now - self._hsv_last_run_ts) >= self._hsv_min_interval:
                 if cv2 is None:
@@ -502,22 +510,9 @@ class VideoStreamNode(Node):
                 overlay_start = time.perf_counter()
                 self._hsv_last_run_ts = now
                 detection_frame = cv2.cvtColor(cv_image, cv2.COLOR_BGRA2BGR)
-                dets = []
-                if self._overlay_task1:
-                    try:
-                        dets.extend(self._detect_hsv_circles(detection_frame))
-                    except Exception as det_err:
-                        if self.frame_count % 150 == 0:
-                            self.get_logger().warn(f'HSV detect error: {det_err}')
-                if self._overlay_task2:
-                    try:
-                        dets.extend(self._detect_shape_circles(detection_frame))
-                    except Exception as det_err:
-                        if self.frame_count % 150 == 0:
-                            self.get_logger().warn(f'Shape detect error: {det_err}')
-                dets = self._dedupe_detections(dets)
-                with self._detections_lock:
-                    self._detections = dets
+                with self._detector_frame_lock:
+                    self._detector_frame = detection_frame
+                    self._detector_frame_ts = now
                 overlay_ms += (time.perf_counter() - overlay_start) * 1000.0
 
             # Resize to target (this is fast if already the right size)
@@ -683,6 +678,40 @@ class VideoStreamNode(Node):
             "encode_count": stats["encode_count"],
         }
 
+    def _detector_loop(self) -> None:
+        """Run local circle detectors from the latest full-resolution frame."""
+        while not self._detector_stop.is_set():
+            self._detector_stop.wait(self._hsv_min_interval)
+            if self._detector_stop.is_set():
+                break
+            if not self._overlay_enabled:
+                continue
+
+            with self._detector_frame_lock:
+                frame = self._detector_frame
+                frame_ts = self._detector_frame_ts
+                self._detector_frame = None
+
+            if frame is None:
+                continue
+            if time.time() - frame_ts > 2.0:
+                continue
+
+            dets = []
+            if self._overlay_task1:
+                try:
+                    dets.extend(self._detect_hsv_circles(frame))
+                except Exception as det_err:
+                    self.get_logger().warn(f'HSV detect error: {det_err}')
+            if self._overlay_task2:
+                try:
+                    dets.extend(self._detect_shape_circles(frame))
+                except Exception as det_err:
+                    self.get_logger().warn(f'Task 2 color detect error: {det_err}')
+            dets = self._dedupe_detections(dets)
+            with self._detections_lock:
+                self._detections = dets
+
     # ---- Depth normalization ----
 
     def _normalize_depth_image(self, image, encoding):
@@ -713,9 +742,12 @@ class VideoStreamNode(Node):
 
     def cleanup(self):
         self.get_logger().info('Stopping video bridge...')
+        self._detector_stop.set()
         self._encode_stop.set()
         self._frame_event.set()  # wake encoder thread
         self.stop_overlay()
+        if getattr(self, '_detector_thread', None) and self._detector_thread.is_alive():
+            self._detector_thread.join(timeout=2)
         if self._encode_thread.is_alive():
             self._encode_thread.join(timeout=3)
         if self.pipeline is not None:
@@ -939,6 +971,143 @@ class VideoStreamNode(Node):
         return gray, hsv
 
     def _detect_shape_circles(self, frame):
+        """Task 2 red-cabbage target detector.
+
+        CONOPS v1.3 gives us a strong visual prior: a pale purple paper circle
+        on white plastic backing, turning blue/cyan after baking-soda water.
+        Use that color/background cue instead of expensive full-frame Hough.
+        """
+        import cv2
+        h, w = frame.shape[:2]
+        _gray, hsv = self._prepare_task2_detection_images(frame, cv2)
+        h_ch = hsv[:, :, 0]
+        s_ch = hsv[:, :, 1]
+        v_ch = hsv[:, :, 2]
+
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        _l_ch, a_ch, b_ch = cv2.split(lab)
+        chroma = (
+            np.abs(a_ch.astype(np.int16) - 128)
+            + np.abs(b_ch.astype(np.int16) - 128)
+        )
+
+        purple_blue_hue = (
+            ((h_ch >= 82) & (h_ch <= 178))
+            | ((h_ch <= 12) & (s_ch >= 12))
+        )
+        target_color = purple_blue_hue & (v_ch >= 35) & (
+            (s_ch >= 10) | (chroma >= 7)
+        )
+        white_mask = (s_ch <= 36) & (v_ch >= 145) & (chroma <= 20)
+        not_white = ~((s_ch <= 18) & (v_ch >= 160) & (chroma <= 12))
+        mask = (target_color & not_white).astype(np.uint8) * 255
+
+        kernel3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        kernel5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel3, iterations=1)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel5, iterations=1)
+
+        min_r = max(6, int(round(min(h, w) * 0.018)))
+        max_r = max(40, min(h, w) // 2)
+        min_area = max(24, int(math.pi * min_r * min_r * 0.18))
+        max_area = int(math.pi * max_r * max_r)
+        max_candidates = 6
+
+        out = []
+        n_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+            mask, connectivity=8
+        )
+        for label_idx in range(1, n_labels):
+            x = int(stats[label_idx, cv2.CC_STAT_LEFT])
+            y = int(stats[label_idx, cv2.CC_STAT_TOP])
+            bw = int(stats[label_idx, cv2.CC_STAT_WIDTH])
+            bh = int(stats[label_idx, cv2.CC_STAT_HEIGHT])
+            area = int(stats[label_idx, cv2.CC_STAT_AREA])
+            if area < min_area or area > max_area or bw <= 2 or bh <= 2:
+                continue
+
+            aspect = bw / float(bh)
+            if aspect < 0.55 or aspect > 1.80:
+                continue
+
+            radius = max(bw, bh) / 2.0
+            if radius < min_r or radius > max_r:
+                continue
+
+            fill = area / float(bw * bh)
+            if fill < 0.18 or fill > 0.93:
+                continue
+
+            cx, cy = centroids[label_idx]
+
+            component_mask = (labels[y:y + bh, x:x + bw] == label_idx).astype(np.uint8)
+            contours, _hier = cv2.findContours(
+                component_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+            if not contours:
+                continue
+            contour = max(contours, key=cv2.contourArea)
+            contour_area = float(cv2.contourArea(contour))
+            perimeter = float(cv2.arcLength(contour, True))
+            if perimeter <= 0.0:
+                continue
+            circularity = (4.0 * math.pi * contour_area) / (perimeter * perimeter)
+            if circularity < 0.34 and area < (min_area * 4):
+                continue
+
+            outer_r = max(int(radius * 1.55), int(radius) + 6)
+            ry0 = max(0, int(cy) - outer_r)
+            ry1 = min(h, int(cy) + outer_r + 1)
+            rx0 = max(0, int(cx) - outer_r)
+            rx1 = min(w, int(cx) + outer_r + 1)
+            ring_white_ratio = 0.0
+            if ry1 > ry0 and rx1 > rx0:
+                yy, xx = np.ogrid[ry0:ry1, rx0:rx1]
+                d2 = (xx - cx) ** 2 + (yy - cy) ** 2
+                inner = max(radius * 1.05, radius + 2)
+                ring = (d2 >= inner * inner) & (d2 <= outer_r * outer_r)
+                ring_count = int(ring.sum())
+                if ring_count > 0:
+                    ring_white = int(np.count_nonzero(
+                        white_mask[ry0:ry1, rx0:rx1] & ring
+                    ))
+                    ring_white_ratio = ring_white / ring_count
+
+            if ring_white_ratio < 0.12 and area < (min_area * 3):
+                continue
+
+            confidence = min(
+                0.95,
+                0.35
+                + min(fill, 0.75) * 0.35
+                + min(ring_white_ratio, 0.50) * 0.40
+                + min(circularity, 0.85) * 0.18,
+            )
+            rng = self._sample_depth_at(cx, cy, w, h)
+            pad = max(2, int(radius * 0.08))
+            x0 = max(0, x - pad)
+            y0 = max(0, y - pad)
+            out.append({
+                "label": "circle",
+                "hsv_color": "purple_blue",
+                "confidence": float(confidence),
+                "bbox_x": float(x0),
+                "bbox_y": float(y0),
+                "bbox_w": float(min(w - x0, bw + pad * 2)),
+                "bbox_h": float(min(h - y0, bh + pad * 2)),
+                "_src_w": w,
+                "_src_h": h,
+                "_detector": "task2",
+                "_method": "color_blob",
+                "range_m": rng,
+            })
+
+        if len(out) > max_candidates:
+            out.sort(key=lambda d: float(d.get("confidence", 0.0)), reverse=True)
+            out = out[:max_candidates]
+        return out
+
+    def _detect_shape_circles_legacy(self, frame):
         """Color-agnostic circular-shape detector for Task 2.
 
         Combines HoughCircles + contour-circularity so any roughly circular
