@@ -135,6 +135,7 @@
     <Compile Include="GroundLinkRouter.cs" />
     <Compile Include="JetsonConnectionManager.cs" />
     <Compile Include="JetsonApiService.cs" />
+    <Compile Include="JetsonStateStream.cs" />
     <Compile Include="JetsonHealthTab.cs" />
     <Compile Include="JetsonTerminalControl.cs" />
     <Compile Include="LinkHealthPanel.cs" />
@@ -184,6 +185,7 @@
     <Compile Include="Task2PayloadPanel.cs" />
     <Compile Include="Task2UploadPanel.cs" />
     <Compile Include="TelemetryInjector.cs" />
+    <Compile Include="UiAsync.cs" />
     <Compile Include="Rviz2View.cs" />
     <Compile Include="ZedCalibrationView.cs" />
   </ItemGroup>

@@ -305,7 +305,52 @@ def register_system_routes(app, ctx) -> None:
                     data["jetson_health"] = health_monitor.health.to_dict()
                 external_vio = _get_vio_snapshot()["external_vio_state"]
                 if external_vio:
-                    data["vio_status"] = external_vio
+                    confidence_0_1 = external_vio.get("confidence", 0)
+                    data["external_vio_state"] = external_vio
+                    data["vio_status"] = {
+                        "health": "healthy" if confidence_0_1 > 0.5 else "degraded",
+                        "tracking_confidence": confidence_0_1,
+                        "position_valid": True,
+                        "message_rate_hz": external_vio.get("message_rate_hz", 30.0),
+                        "reset_counter": 0,
+                        "source": external_vio.get("source", "external"),
+                    }
+                else:
+                    data["vio_status"] = {
+                        "health": "unknown",
+                        "tracking_confidence": 0,
+                        "position_valid": False,
+                        "message_rate_hz": 0,
+                        "reset_counter": 0,
+                        "source": "none",
+                    }
+
+                mode_mgr = getattr(websocket.app.state, "mode_manager", None)
+                if mode_mgr:
+                    data["operational_mode"] = {
+                        "status": mode_mgr.status.to_dict(),
+                        "available_modes": mode_mgr.get_available_modes(),
+                    }
+
+                spray_ctrl = getattr(websocket.app.state, "spray_controller", None)
+                if spray_ctrl:
+                    data["spray_status"] = spray_ctrl.status.to_dict()
+
+                obstacle_snapshot = getattr(websocket.app.state, "obstacle_distance_last", None)
+                if obstacle_snapshot:
+                    obstacle_age_s = time.time() - obstacle_snapshot.get("timestamp", 0.0)
+                    data["obstacle_distance"] = {
+                        "valid": obstacle_age_s < 5.0,
+                        "age_seconds": obstacle_age_s,
+                        "timestamp": obstacle_snapshot.get("timestamp"),
+                        "increment_deg": obstacle_snapshot.get("increment_deg"),
+                        "min_distance_cm": obstacle_snapshot.get("min_distance_cm"),
+                        "max_distance_cm": obstacle_snapshot.get("max_distance_cm"),
+                        "nearest_sector": obstacle_snapshot.get("nearest_sector"),
+                        "nearest_distance_cm": obstacle_snapshot.get("nearest_distance_cm"),
+                        "nearest_bearing_deg": obstacle_snapshot.get("nearest_bearing_deg"),
+                        "distances": obstacle_snapshot.get("distances", []),
+                    }
 
                 await websocket.send_json(data)
                 await asyncio.sleep(0.1)  # 10Hz

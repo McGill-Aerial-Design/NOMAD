@@ -66,6 +66,7 @@ namespace NOMAD.MissionPlanner
         private string _lastError = null;
         private bool _disposed = false;
         private bool _isPolling = false;
+        private JetsonStateStream _stateStream;
         // Reentrancy guard: prevents the timer from stacking up CheckConnectionAsync
         // calls if HTTP responses lag behind the poll interval (mirrors the pattern
         // used in EnhancedHealthDashboard).
@@ -142,6 +143,11 @@ namespace NOMAD.MissionPlanner
                 if (_isPolling) return;
                 _isPolling = true;
             }
+
+            _stateStream = JetsonStateStream.Shared;
+            _stateStream.Configure(_config);
+            _stateStream.StateUpdated += OnStateStreamUpdated;
+            _stateStream.Start();
             
             // Initial check immediately
             _ = CheckConnectionAsync();
@@ -174,6 +180,12 @@ namespace NOMAD.MissionPlanner
             _pollTimer?.Change(Timeout.Infinite, Timeout.Infinite);
             _pollTimer?.Dispose();
             _pollTimer = null;
+
+            if (_stateStream != null)
+            {
+                _stateStream.StateUpdated -= OnStateStreamUpdated;
+                _stateStream = null;
+            }
         }
         
         /// <summary>
@@ -224,6 +236,12 @@ namespace NOMAD.MissionPlanner
             
             try
             {
+                if (_stateStream != null && _stateStream.HasFreshState)
+                {
+                    SetConnected();
+                    return true;
+                }
+
                 var response = await JetsonApiService.GetAsync("/health");
                 
                 if (response.IsSuccessStatusCode)
@@ -277,6 +295,11 @@ namespace NOMAD.MissionPlanner
             {
                 OnConnectionStateChanged(oldState, JetsonConnectionState.Connected, "Connected to Jetson");
             }
+        }
+
+        private void OnStateStreamUpdated(Newtonsoft.Json.Linq.JObject state)
+        {
+            SetConnected();
         }
         
         private void SetDisconnected(string error)

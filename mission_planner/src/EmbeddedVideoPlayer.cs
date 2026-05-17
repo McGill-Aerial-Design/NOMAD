@@ -53,6 +53,15 @@ namespace NOMAD.MissionPlanner
         private int _streamGeneration;
         private volatile bool _stopping;
         private bool _suppressTopicChange;
+
+        private const int FrameBufferCount = 3;
+        private readonly object _frameBufferLock = new object();
+        private Bitmap[] _frameBuffers;
+        private int _frameBufferWidth;
+        private int _frameBufferHeight;
+        private int _displayBufferIndex = -1;
+        private int _pendingBufferIndex = -1;
+        private int _nextBufferIndex;
         
         /// <summary>
         /// Creates an embedded video player.
@@ -64,7 +73,7 @@ namespace NOMAD.MissionPlanner
             InitializeUI();
             
             // Auto-fetch topics when control is loaded
-            this.HandleCreated += async (s, e) =>
+            this.HandleCreated += (s, e) => UiAsync.Run(this, async () =>
             {
                 // Only auto-fetch if no topics exist
                 if (_topics.Count == 0)
@@ -73,7 +82,7 @@ namespace NOMAD.MissionPlanner
                 }
 
                 await SyncOverlayStatusAsync();
-            };
+            }, "EmbeddedVideoHandleCreated");
         }
         
         private void ParseApiUrl(string rtspUrl)
@@ -148,10 +157,10 @@ namespace NOMAD.MissionPlanner
                 BackColor = Color.FromArgb(45, 45, 48),
                 ForeColor = Color.White,
             };
-            _cmbTopic.SelectedIndexChanged += async (s, e) => await SwitchTopicAsync();
+            _cmbTopic.SelectedIndexChanged += (s, e) => UiAsync.Run(this, SwitchTopicAsync, nameof(SwitchTopicAsync));
             
             var btnRefresh = CreateButton("...", 505, 5, 30, Color.FromArgb(60, 60, 65));
-            btnRefresh.Click += async (s, e) => await RefreshTopicsAsync(autoSelectRgb: false);
+            btnRefresh.Click += (s, e) => UiAsync.Run(this, () => RefreshTopicsAsync(autoSelectRgb: false), nameof(RefreshTopicsAsync));
             
             // Row 2: Latency slider + Apply button
             var lblLat = new Label { Text = "Latency:", Location = new Point(10, 33), ForeColor = Color.Gray, AutoSize = true, Font = new Font("Segoe UI", 8) };
@@ -172,7 +181,7 @@ namespace NOMAD.MissionPlanner
 
             var btnApplyLatency = CreateButton("Apply", 275, 30, 55, Color.FromArgb(0, 100, 140));
             btnApplyLatency.Font = new Font("Segoe UI", 7.5f);
-            btnApplyLatency.Click += async (s, e) =>
+            btnApplyLatency.Click += (s, e) => UiAsync.Run(this, async () =>
             {
                 int newLatency = _trkLatency.Value;
                 if (newLatency == _latencyMs && _isPlaying) return;
@@ -200,7 +209,7 @@ namespace NOMAD.MissionPlanner
                     btnApplyLatency.Enabled = true;
                     btnApplyLatency.Text = "Apply";
                 }
-            };
+            }, "ApplyVideoLatency");
 
             // Detection overlay checkbox
             _chkDetections = new CheckBox
@@ -213,7 +222,7 @@ namespace NOMAD.MissionPlanner
                 Font = new Font("Segoe UI", 8, FontStyle.Bold),
                 Checked = false,
             };
-            _chkDetections.CheckedChanged += async (s, e) =>
+            _chkDetections.CheckedChanged += (s, e) => UiAsync.Run(this, async () =>
             {
                 if (_syncingOverlayState) return;
 
@@ -241,7 +250,7 @@ namespace NOMAD.MissionPlanner
                     _syncingOverlayState = false;
                     _overlayEnabled = _chkDetections.Checked;
                 }
-            };
+            }, "ToggleHsvOverlay");
 
             ctrlPanel.Controls.AddRange(new Control[] { btnPlay, btnStop, btnFull, btnVLC, btnSnap, lblTopic, _cmbTopic, btnRefresh, lblLat, _trkLatency, _lblLatencyValue, btnApplyLatency, _chkDetections });
             
@@ -658,32 +667,154 @@ namespace NOMAD.MissionPlanner
             }
             catch { }
 
-            // Clear video display to prevent painting stale/freed frame data
-            try
-            {
-                // _videoBox.Image and _fullscreenBox.Image now alias the
-                // same Bitmap (see UpdateVideoDisplay), so clear fullscreen
-                // first without disposing and then dispose once via videoBox.
-                if (_fullscreenBox != null && !_fullscreenBox.IsDisposed)
-                {
-                    _fullscreenBox.Image = null;
-                }
-                var oldImage = _videoBox?.Image;
-                if (_videoBox != null) _videoBox.Image = null;
-                oldImage?.Dispose();
-            }
-            catch { }
+            ClearVideoDisplayAndDisposeBuffers();
 
             _lblStatus.Text = "Stopped";
             _lblStatus.ForeColor = Color.Gray;
         }
         
         private int _frameCount = 0;
+
+        private void EnsureFrameBuffers(int width, int height)
+        {
+            Bitmap[] oldBuffers = null;
+            lock (_frameBufferLock)
+            {
+                if (_frameBuffers != null && _frameBufferWidth == width && _frameBufferHeight == height)
+                    return;
+
+                oldBuffers = _frameBuffers;
+                _frameBuffers = new Bitmap[FrameBufferCount];
+                for (int i = 0; i < _frameBuffers.Length; i++)
+                {
+                    _frameBuffers[i] = new Bitmap(width, height, PixelFormat.Format32bppPArgb);
+                }
+                _frameBufferWidth = width;
+                _frameBufferHeight = height;
+                _displayBufferIndex = -1;
+                _pendingBufferIndex = -1;
+                _nextBufferIndex = 0;
+            }
+
+            if (oldBuffers != null)
+            {
+                DisposeOldFrameBuffersOnUi(oldBuffers);
+            }
+        }
+
+        private bool TryAcquireFrameBuffer(int width, int height, out Bitmap bitmap, out int bufferIndex)
+        {
+            EnsureFrameBuffers(width, height);
+
+            lock (_frameBufferLock)
+            {
+                bitmap = null;
+                bufferIndex = -1;
+
+                if (_frameBuffers == null || _pendingBufferIndex >= 0)
+                    return false;
+
+                for (int offset = 0; offset < _frameBuffers.Length; offset++)
+                {
+                    int candidate = (_nextBufferIndex + offset) % _frameBuffers.Length;
+                    if (candidate == _displayBufferIndex)
+                        continue;
+
+                    _pendingBufferIndex = candidate;
+                    _nextBufferIndex = (candidate + 1) % _frameBuffers.Length;
+                    bitmap = _frameBuffers[candidate];
+                    bufferIndex = candidate;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void ReleasePendingFrameBuffer(int bufferIndex)
+        {
+            lock (_frameBufferLock)
+            {
+                if (_pendingBufferIndex == bufferIndex)
+                    _pendingBufferIndex = -1;
+            }
+        }
+
+        private void DisposeOldFrameBuffersOnUi(Bitmap[] oldBuffers)
+        {
+            void DisposeNow()
+            {
+                try
+                {
+                    if (_fullscreenBox != null && !_fullscreenBox.IsDisposed &&
+                        Array.IndexOf(oldBuffers, _fullscreenBox.Image as Bitmap) >= 0)
+                    {
+                        _fullscreenBox.Image = null;
+                    }
+                    if (_videoBox != null && !_videoBox.IsDisposed &&
+                        Array.IndexOf(oldBuffers, _videoBox.Image as Bitmap) >= 0)
+                    {
+                        _videoBox.Image = null;
+                    }
+                    foreach (var old in oldBuffers)
+                    {
+                        old?.Dispose();
+                    }
+                }
+                catch { }
+            }
+
+            if (IsHandleCreated && InvokeRequired)
+            {
+                try { BeginInvoke((Action)DisposeNow); }
+                catch { DisposeNow(); }
+            }
+            else
+            {
+                DisposeNow();
+            }
+        }
+
+        private void ClearVideoDisplayAndDisposeBuffers()
+        {
+            if (IsHandleCreated && InvokeRequired)
+            {
+                try { BeginInvoke((Action)ClearVideoDisplayAndDisposeBuffers); }
+                catch { }
+                return;
+            }
+
+            Bitmap[] buffers;
+            lock (_frameBufferLock)
+            {
+                buffers = _frameBuffers;
+                _frameBuffers = null;
+                _frameBufferWidth = 0;
+                _frameBufferHeight = 0;
+                _displayBufferIndex = -1;
+                _pendingBufferIndex = -1;
+                _nextBufferIndex = 0;
+            }
+
+            try
+            {
+                if (_fullscreenBox != null && !_fullscreenBox.IsDisposed)
+                    _fullscreenBox.Image = null;
+                if (_videoBox != null && !_videoBox.IsDisposed)
+                    _videoBox.Image = null;
+                if (buffers != null)
+                {
+                    foreach (var buffer in buffers)
+                        buffer?.Dispose();
+                }
+            }
+            catch { }
+        }
         
         /// <summary>
         /// GStreamer frame callback - invoked on GStreamer's background thread.
         /// Copies pixel data into a managed Bitmap on THIS thread (while native buffer is valid),
-        /// then marshals only the managed copy to UI thread via BeginInvoke.
+        /// then marshals only the buffer index to UI thread via BeginInvoke.
         /// This prevents use-after-free when the native frame buffer is recycled or freed.
         /// </summary>
         private void OnGstNewImage(object sender, MPBitmap frame)
@@ -696,16 +827,14 @@ namespace NOMAD.MissionPlanner
             if (_frameCount % 30 == 1)
                 System.Diagnostics.Debug.WriteLine($"NOMAD Video: Frame #{_frameCount} - {frame.Width}x{frame.Height}");
             
-            // Copy pixel data on the GStreamer callback thread while the native buffer is valid.
-            // We MUST NOT defer this to BeginInvoke because GStreamer may free the buffer
-            // after this callback returns, causing AccessViolationException.
-            Bitmap displayBitmap;
+            if (!TryAcquireFrameBuffer(frame.Width, frame.Height, out var displayBitmap, out var bufferIndex))
+                return;
+
             try
             {
                 var lockData = frame.LockBits(Rectangle.Empty, null, SkiaSharp.SKColorType.Bgra8888);
                 try
                 {
-                    displayBitmap = new Bitmap(frame.Width, frame.Height, PixelFormat.Format32bppPArgb);
                     var bmpData = displayBitmap.LockBits(
                         new Rectangle(0, 0, frame.Width, frame.Height),
                         System.Drawing.Imaging.ImageLockMode.WriteOnly,
@@ -738,6 +867,7 @@ namespace NOMAD.MissionPlanner
             }
             catch
             {
+                ReleasePendingFrameBuffer(bufferIndex);
                 return; // Frame became invalid during copy - pipeline likely tearing down
             }
             
@@ -747,11 +877,18 @@ namespace NOMAD.MissionPlanner
             // Marshal only the fully-managed bitmap to the UI thread
             if (InvokeRequired)
             {
-                BeginInvoke(new Action(() => UpdateVideoDisplay(displayBitmap, width, height, generation)));
+                try
+                {
+                    BeginInvoke(new Action(() => UpdateVideoDisplay(bufferIndex, width, height, generation)));
+                }
+                catch
+                {
+                    ReleasePendingFrameBuffer(bufferIndex);
+                }
                 return;
             }
             
-            UpdateVideoDisplay(displayBitmap, width, height, generation);
+            UpdateVideoDisplay(bufferIndex, width, height, generation);
         }
         
         /// <summary>
@@ -786,31 +923,45 @@ namespace NOMAD.MissionPlanner
         /// Updates PictureBox and fullscreen with a managed bitmap. Called on UI thread only.
         /// Rejects stale frames from previous stream sessions via generation check.
         /// </summary>
-        private void UpdateVideoDisplay(Bitmap displayBitmap, int width, int height, int generation)
+        private void UpdateVideoDisplay(int bufferIndex, int width, int height, int generation)
         {
             if (IsDisposed || _videoBox == null || generation != _streamGeneration || _stopping)
             {
-                displayBitmap.Dispose();
+                ReleasePendingFrameBuffer(bufferIndex);
                 return;
             }
-            
+
+            Bitmap displayBitmap;
+            lock (_frameBufferLock)
+            {
+                if (_frameBuffers == null ||
+                    bufferIndex < 0 ||
+                    bufferIndex >= _frameBuffers.Length ||
+                    _frameBuffers[bufferIndex] == null)
+                {
+                    if (_pendingBufferIndex == bufferIndex)
+                        _pendingBufferIndex = -1;
+                    return;
+                }
+
+                displayBitmap = _frameBuffers[bufferIndex];
+            }
+
             try
             {
-                var oldImage = _videoBox.Image;
                 _videoBox.Image = displayBitmap;
 
                 if (_fullscreenBox != null && !_fullscreenBox.IsDisposed)
                 {
-                    // Share the same bitmap with the fullscreen PictureBox to
-                    // avoid a per-frame Clone() that would push 3-8 MB onto
-                    // the LOH at 30 FPS. Both PictureBoxes paint from the UI
-                    // thread, so concurrent reads are safe. The previous
-                    // frame is disposed once, after both references are
-                    // swapped.
                     _fullscreenBox.Image = displayBitmap;
                 }
 
-                oldImage?.Dispose();
+                lock (_frameBufferLock)
+                {
+                    _displayBufferIndex = bufferIndex;
+                    if (_pendingBufferIndex == bufferIndex)
+                        _pendingBufferIndex = -1;
+                }
 
                 // Snapshots clone _videoBox.Image on demand inside TakeSnapshot
                 // -- the old per-frame _lastFrame clone burned 30+ MB/s in GC
@@ -825,6 +976,13 @@ namespace NOMAD.MissionPlanner
             }
             catch (Exception ex)
             {
+                lock (_frameBufferLock)
+                {
+                    if (_displayBufferIndex == bufferIndex)
+                        _displayBufferIndex = -1;
+                    if (_pendingBufferIndex == bufferIndex)
+                        _pendingBufferIndex = -1;
+                }
                 System.Diagnostics.Debug.WriteLine($"NOMAD Video: Frame error - {ex.Message}");
             }
         }
@@ -862,6 +1020,16 @@ namespace NOMAD.MissionPlanner
                 SizeMode = PictureBoxSizeMode.Zoom,
             };
             _fullscreenBox.DoubleClick += (s, e) => ToggleFullscreen();
+
+            lock (_frameBufferLock)
+            {
+                if (_frameBuffers != null &&
+                    _displayBufferIndex >= 0 &&
+                    _displayBufferIndex < _frameBuffers.Length)
+                {
+                    _fullscreenBox.Image = _frameBuffers[_displayBufferIndex];
+                }
+            }
             
             _fullscreenForm.Controls.Add(_fullscreenBox);
             _fullscreenForm.Show();
@@ -906,7 +1074,16 @@ namespace NOMAD.MissionPlanner
             // Clone the active frame on demand instead of paying a per-frame
             // clone cost. _videoBox.Image is only mutated on the UI thread, so
             // this is safe to read here.
-            var source = _videoBox?.Image as Bitmap;
+            Bitmap source = null;
+            lock (_frameBufferLock)
+            {
+                if (_frameBuffers != null &&
+                    _displayBufferIndex >= 0 &&
+                    _displayBufferIndex < _frameBuffers.Length)
+                {
+                    source = _frameBuffers[_displayBufferIndex];
+                }
+            }
             if (source == null) { _lblStatus.Text = "No frame available"; return; }
             var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), $"NOMAD_{DateTime.Now:yyyyMMdd_HHmmss}.png");
             using (var snap = (Bitmap)source.Clone())
