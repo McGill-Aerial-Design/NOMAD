@@ -176,6 +176,9 @@ class VideoStreamNode(Node):
         # shows the same boxes as /capture_target without a network round-trip.
         self._hsv_last_run_ts = 0.0
         self._hsv_min_interval = 0.2
+        self._task2_cuda_checked = False
+        self._task2_cuda_enabled = False
+        self._task2_cuda_gray_filter = None
         self._edge_core_url = "http://172.17.0.1:8000"
         self._edge_core_api_key = (os.environ.get("NOMAD_API_KEY") or "").strip()
         self._edge_core_internal_token = (
@@ -485,6 +488,36 @@ class VideoStreamNode(Node):
                 cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2BGRA)
             convert_ms = (time.perf_counter() - convert_start) * 1000.0
 
+            # Run detector on the ROS image before RTSP downscale. With ZED
+            # HD720/NATIVE publishing this keeps Task 2 circle detection in
+            # 1280x720 coordinates while the Mission Planner stream can stay
+            # at 640x360 for bandwidth/CPU. draw_detections() scales boxes
+            # using each detection's _src_w/_src_h fields.
+            overlay_ms = 0.0
+            if self._overlay_enabled and (now - self._hsv_last_run_ts) >= self._hsv_min_interval:
+                if cv2 is None:
+                    import cv2
+                overlay_start = time.perf_counter()
+                self._hsv_last_run_ts = now
+                detection_frame = cv2.cvtColor(cv_image, cv2.COLOR_BGRA2BGR)
+                dets = []
+                if self._overlay_task1:
+                    try:
+                        dets.extend(self._detect_hsv_circles(detection_frame))
+                    except Exception as det_err:
+                        if self.frame_count % 150 == 0:
+                            self.get_logger().warn(f'HSV detect error: {det_err}')
+                if self._overlay_task2:
+                    try:
+                        dets.extend(self._detect_shape_circles(detection_frame))
+                    except Exception as det_err:
+                        if self.frame_count % 150 == 0:
+                            self.get_logger().warn(f'Shape detect error: {det_err}')
+                dets = self._dedupe_detections(dets)
+                with self._detections_lock:
+                    self._detections = dets
+                overlay_ms += (time.perf_counter() - overlay_start) * 1000.0
+
             # Resize to target (this is fast if already the right size)
             resize_ms = 0.0
             if cv_image.shape[1] != self.width or cv_image.shape[0] != self.height:
@@ -501,35 +534,15 @@ class VideoStreamNode(Node):
                                       interpolation=interp)
                 resize_ms = (time.perf_counter() - resize_start) * 1000.0
 
-            # Overlay detections if enabled. Run local HSV detection at ~5 Hz
-            # so circles show up in the livestream exactly as they do on capture.
-            overlay_ms = 0.0
+            # Draw cached detections on the downscaled Mission Planner stream.
             if self._overlay_enabled:
                 if cv2 is None:
                     import cv2
                 overlay_start = time.perf_counter()
                 overlay_frame = cv2.cvtColor(cv_image, cv2.COLOR_BGRA2BGR)
-                if (now - self._hsv_last_run_ts) >= self._hsv_min_interval:
-                    self._hsv_last_run_ts = now
-                    dets = []
-                    if self._overlay_task1:
-                        try:
-                            dets.extend(self._detect_hsv_circles(overlay_frame))
-                        except Exception as det_err:
-                            if self.frame_count % 150 == 0:
-                                self.get_logger().warn(f'HSV detect error: {det_err}')
-                    if self._overlay_task2:
-                        try:
-                            dets.extend(self._detect_shape_circles(overlay_frame))
-                        except Exception as det_err:
-                            if self.frame_count % 150 == 0:
-                                self.get_logger().warn(f'Shape detect error: {det_err}')
-                    dets = self._dedupe_detections(dets)
-                    with self._detections_lock:
-                        self._detections = dets
                 self.draw_detections(overlay_frame)
                 cv_image = cv2.cvtColor(overlay_frame, cv2.COLOR_BGR2BGRA)
-                overlay_ms = (time.perf_counter() - overlay_start) * 1000.0
+                overlay_ms += (time.perf_counter() - overlay_start) * 1000.0
 
             # Ensure contiguous C-order for zero-copy tobytes
             if not cv_image.flags['C_CONTIGUOUS']:
@@ -877,6 +890,52 @@ class VideoStreamNode(Node):
                 })
         return out
 
+    def _prepare_task2_detection_images(self, frame, cv2):
+        """Return grayscale and HSV images for Task 2 shape detection.
+
+        Uses OpenCV CUDA for the color conversions and grayscale smoothing when
+        available in the Isaac ROS container. HoughCircles and contour finding
+        still run on CPU because OpenCV's Python CUDA bindings do not provide a
+        drop-in Hough circle / findContours path in the build we provision.
+        """
+        use_cuda = os.environ.get("NOMAD_TASK2_USE_CUDA", "true").lower() not in (
+            "0", "false", "no", "off"
+        )
+        if use_cuda:
+            if not self._task2_cuda_checked:
+                self._task2_cuda_checked = True
+                try:
+                    count = cv2.cuda.getCudaEnabledDeviceCount()
+                    if count > 0:
+                        cv2.cuda.setDevice(0)
+                        self._task2_cuda_gray_filter = cv2.cuda.createMedianFilter(
+                            cv2.CV_8UC1, 5
+                        )
+                        self._task2_cuda_enabled = True
+                        self.get_logger().info("Task 2 detector using OpenCV CUDA preprocess")
+                    else:
+                        self.get_logger().warn("Task 2 CUDA requested but cv2 sees no CUDA device")
+                except Exception as exc:
+                    self.get_logger().warn(f"Task 2 CUDA preprocess unavailable: {exc}")
+
+            if self._task2_cuda_enabled:
+                try:
+                    gpu_bgr = cv2.cuda_GpuMat()
+                    gpu_bgr.upload(frame)
+                    gpu_gray = cv2.cuda.cvtColor(gpu_bgr, cv2.COLOR_BGR2GRAY)
+                    if self._task2_cuda_gray_filter is not None:
+                        gpu_gray = self._task2_cuda_gray_filter.apply(gpu_gray)
+                    gpu_hsv = cv2.cuda.cvtColor(gpu_bgr, cv2.COLOR_BGR2HSV)
+                    return gpu_gray.download(), gpu_hsv.download()
+                except Exception as exc:
+                    self.get_logger().warn(f"Task 2 CUDA preprocess failed; using CPU: {exc}")
+                    self._task2_cuda_enabled = False
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.medianBlur(gray, 5)
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        return gray, hsv
+
     def _detect_shape_circles(self, frame):
         """Color-agnostic circular-shape detector for Task 2.
 
@@ -887,15 +946,13 @@ class VideoStreamNode(Node):
         """
         import cv2
         h, w = frame.shape[:2]
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray = cv2.medianBlur(gray, 5)
+        gray, hsv = self._prepare_task2_detection_images(frame, cv2)
         # Target model: a red/blue/purple paper circle on a white plastic
         # backing. We accept a candidate circle only when (a) its interior is
         # mostly one of those hues and (b) the thin ring just outside it is
         # mostly white. This rejects wall-texture false positives without
         # depending on the exact paper color (cabbage juice can read red,
         # purple or blue depending on pH and lighting).
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         h_ch = hsv[:, :, 0]; s_ch = hsv[:, :, 1]; v_ch = hsv[:, :, 2]
         # Red wraps the hue circle (0..10 and 170..179). Blue/purple ~ 100..160.
         target_color_mask = (
@@ -907,6 +964,11 @@ class VideoStreamNode(Node):
         _MIN_INTERIOR_COLOR = 0.55   # fraction of inner disk in target hue
         _MIN_RING_WHITE     = 0.45   # fraction of outer ring in white
         _MAX_CIRCLES_PER_FRAME = 6
+        # Scale with the actual detection frame. This normally runs on the
+        # pre-stream ROS frame (HD720), while still tolerating 360p if the ZED
+        # publisher is ever switched back to CUSTOM/downscaled output.
+        min_r = max(6, int(round(min(h, w) * 0.018)))
+        max_r = max(40, min(h, w) // 2)
 
         def _passes_edge_gate(cx_i: int, cy_i: int, r_i: int) -> bool:
             if r_i <= 0:
@@ -926,7 +988,10 @@ class VideoStreamNode(Node):
             interior_hits = int(np.count_nonzero(
                 target_color_mask[y0:y1, x0:x1] & inside
             ))
-            if (interior_hits / inside_count) < _MIN_INTERIOR_COLOR:
+            # Small/far targets lose color purity to demosaic, compression, and
+            # resize blending, so relax the gates slightly below ~14 px radius.
+            small_relax = 0.12 if r_i < 14 else 0.0
+            if (interior_hits / inside_count) < (_MIN_INTERIOR_COLOR - small_relax):
                 return False
             # Outer ring: annulus from r*1.10 to r*1.40 — should be white backing.
             outer_r = int(r_i * 1.40)
@@ -943,18 +1008,16 @@ class VideoStreamNode(Node):
             ring_white = int(np.count_nonzero(
                 white_mask[ry0:ry1, rx0:rx1] & ring
             ))
-            return (ring_white / ring_count) >= _MIN_RING_WHITE
+            return (ring_white / ring_count) >= (_MIN_RING_WHITE - small_relax)
 
         out = []
         claimed = []  # list of (cx, cy, r) we've already accepted
 
         # ---- 1. Hough circles ----
         try:
-            min_r = 18
-            max_r = max(40, min(h, w) // 2)
             circles = cv2.HoughCircles(
-                gray, cv2.HOUGH_GRADIENT, dp=1.2, minDist=min_r * 3,
-                param1=120, param2=60, minRadius=min_r, maxRadius=max_r,
+                gray, cv2.HOUGH_GRADIENT, dp=1.2, minDist=max(18, min_r * 3),
+                param1=100, param2=32, minRadius=min_r, maxRadius=max_r,
             )
             if circles is not None:
                 for c in circles[0]:
@@ -982,14 +1045,12 @@ class VideoStreamNode(Node):
 
         # ---- 2. Contour-circularity fallback (catches lower-contrast circles) ----
         try:
-            edges = cv2.Canny(gray, 60, 140)
+            edges = cv2.Canny(gray, 45, 120)
             edges = cv2.dilate(
                 edges, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
                 iterations=1,
             )
             contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            min_r = 18
-            max_r = max(40, min(h, w) // 2)
             min_area = math.pi * min_r * min_r
             max_area = math.pi * max_r * max_r
             for c in contours:
@@ -1000,11 +1061,11 @@ class VideoStreamNode(Node):
                 if perim < 1.0:
                     continue
                 circularity = (4.0 * math.pi * area) / (perim * perim)
-                if circularity < 0.85:
+                if circularity < 0.72:
                     continue
                 hull = cv2.convexHull(c)
                 hull_area = cv2.contourArea(hull)
-                if hull_area < 1.0 or area / hull_area < 0.90:
+                if hull_area < 1.0 or area / hull_area < 0.78:
                     continue
                 (cx_f, cy_f), radius = cv2.minEnclosingCircle(c)
                 cx, cy, r = int(cx_f), int(cy_f), int(radius)
