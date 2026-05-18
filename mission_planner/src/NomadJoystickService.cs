@@ -77,6 +77,17 @@ namespace NOMAD.MissionPlanner
             _zedTiltUs = Math.Max(_config.CameraTiltPwmMin,
                           Math.Min(_config.CameraTiltPwmMax, PayloadControlPanel.LastTiltPulseUs));
 
+            // The Caddx mount only honors DO_MOUNT_CONTROL absolute-angle commands
+            // when it's in MAVLink targeting mode. Without this ping the mount may
+            // be sitting in RC targeting from a previous session and silently drop
+            // every angle command we send — which feels like the joystick is
+            // controlling a rate instead of a position, since the gimbal won't
+            // hold the angle we asked for.
+            if (_config.JoystickGimbalEnabled)
+            {
+                GimbalController.SetMode(GimbalController.MountMode.MavlinkTargeting);
+            }
+
             _timer = new Timer { Interval = 1000 / POLL_HZ };
             _timer.Tick += OnTick;
             _timer.Start();

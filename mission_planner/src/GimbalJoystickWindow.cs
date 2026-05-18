@@ -49,11 +49,12 @@ namespace NOMAD.MissionPlanner
         private const int   STREAM_HZ          = 20;
         private const float DEFAULT_MAX_RATE   = 60f;   // deg/sec at full stick
         private const float KEY_NUDGE_DEG      = 2.0f;
-        // Matches the mount pitch/roll limits on the Caddx mount.
-        private const float PITCH_MIN_DEG      = -90f;
-        private const float PITCH_MAX_DEG      =  90f;
-        private const float ROLL_MIN_DEG       = -30f;
-        private const float ROLL_MAX_DEG       =  30f;
+        // Mount limits pulled from GimbalController so both this window and the
+        // physical NomadJoystickService stay in sync if the limits ever change.
+        private const float PITCH_MIN_DEG      = GimbalController.PITCH_MIN_DEG;
+        private const float PITCH_MAX_DEG      = GimbalController.PITCH_MAX_DEG;
+        private const float ROLL_MIN_DEG       = GimbalController.ROLL_MIN_DEG;
+        private const float ROLL_MAX_DEG       = GimbalController.ROLL_MAX_DEG;
         private const float STICK_DEADZONE     = 0.06f;
 
         // ============================================================
@@ -63,13 +64,17 @@ namespace NOMAD.MissionPlanner
 
         // Stick: normalized [-1,1] x = roll rate, y = pitch rate (up = +pitch).
         private float _stickX, _stickY;
-        // Integrated target angles (deg). Caddx serial driver in AP only accepts
-        // angle commands, so we integrate stick rate → angle locally.
+        // Local mirror of GimbalController target so display label code can read
+        // without crossing threads. Authoritative state lives in GimbalController.
         private float _targetPitch, _targetRoll;
         private float _maxRateDegSec = DEFAULT_MAX_RATE;
-        // Mount mode currently selected for the Caddx mount.
+        // Mount mode currently selected for the Caddx mount — mirrors GimbalController.
         private MountMode _mountMode = MountMode.MavlinkTargeting;
         private string _modeLabel = "MAVLINK";
+
+        // Local alias kept for readability; the canonical type lives on GimbalController.
+        private MountMode MapMode(GimbalController.MountMode m) => (MountMode)(int)m;
+        private GimbalController.MountMode ToCtrl(MountMode m) => (GimbalController.MountMode)(int)m;
 
         private enum MountMode
         {
@@ -87,10 +92,6 @@ namespace NOMAD.MissionPlanner
         private Button _btnRetract, _btnNeutral, _btnRcTgt, _btnMavTgt, _btnCenter, _btnLevel;
         private CheckBox _chkTopMost;
         private Timer _streamTimer;
-
-        // Serialize MAVLink to avoid contention with PayloadControlPanel's lock.
-        // We use the same approach (Task.Run + non-blocking dispatch).
-        private bool _inflight;
 
         private GimbalJoystickWindow(NOMADConfig config)
         {
@@ -117,13 +118,22 @@ namespace NOMAD.MissionPlanner
 
             BuildUi();
 
+            // Seed local mirror from any prior integrator state so reopening the
+            // window doesn't snap the readout back to 0.
+            _targetPitch = GimbalController.TargetPitchDeg;
+            _targetRoll  = GimbalController.TargetRollDeg;
+
             _streamTimer = new Timer { Interval = 1000 / STREAM_HZ };
             _streamTimer.Tick += OnStreamTick;
             _streamTimer.Start();
 
+            // Keep our readout in sync when the physical joystick service moves
+            // the target while this window is open.
+            GimbalController.TargetChanged += OnExternalTargetChanged;
+
             // Default to MAVLink targeting so the first joystick or keyboard input
             // immediately drives the mount.
-            SendMountConfigure(_mountMode);
+            GimbalController.SetMode(ToCtrl(_mountMode));
             UpdateModeLabel();
 
             FormClosed += (s, e) =>
@@ -131,8 +141,19 @@ namespace NOMAD.MissionPlanner
                 _streamTimer?.Stop();
                 _streamTimer?.Dispose();
                 _streamTimer = null;
+                GimbalController.TargetChanged -= OnExternalTargetChanged;
                 s_instance = null;
             };
+        }
+
+        private void OnExternalTargetChanged(float pitch, float roll)
+        {
+            if (IsDisposed) return;
+            if (InvokeRequired) { BeginInvoke(new Action(() => OnExternalTargetChanged(pitch, roll))); return; }
+            _targetPitch = pitch;
+            _targetRoll = roll;
+            if (_lblPitch != null) _lblPitch.Text = $"Pitch: {_targetPitch,+6:0.0}°";
+            if (_lblRoll  != null) _lblRoll.Text  = $"Roll:  {_targetRoll,+6:0.0}°";
         }
 
         // ============================================================
@@ -287,117 +308,36 @@ namespace NOMAD.MissionPlanner
 
             bool active = sx != 0f || sy != 0f;
 
-            // Integrate rate → angle (Caddx driver only accepts angle commands).
+            // Delegate the rate→target-angle integration and the actual
+            // DO_MOUNT_CONTROL send to GimbalController so this window and the
+            // physical NomadJoystickService share one authoritative target.
             if (active)
             {
-                _targetPitch += sy * _maxRateDegSec * dt;
-                _targetRoll  -= sx * _maxRateDegSec * dt;
-
-                if (_targetPitch < PITCH_MIN_DEG) _targetPitch = PITCH_MIN_DEG;
-                if (_targetPitch > PITCH_MAX_DEG) _targetPitch = PITCH_MAX_DEG;
-                if (_targetRoll  < ROLL_MIN_DEG)  _targetRoll  = ROLL_MIN_DEG;
-                if (_targetRoll  > ROLL_MAX_DEG)  _targetRoll  = ROLL_MAX_DEG;
+                GimbalController.ApplyStick(sx, sy, _maxRateDegSec, dt,
+                    send: _mountMode == MountMode.MavlinkTargeting);
             }
 
-            _lblPitch.Text = $"Pitch: {_targetPitch,+6:0.0}°";
-            _lblRoll.Text  = $"Roll:  {_targetRoll,+6:0.0}°";
-
-            // Only MAVLink targeting streams our local stick state.
-            if (_mountMode != MountMode.MavlinkTargeting)
-                return;
-
-            // Only send while the stick is active. Once released, the gimbal holds
-            // its last commanded angle on its own — no need to keep pinging.
-            if (active)
-                SendPitchRollAngle(_targetPitch, _targetRoll);
+            // Mirror controller state into our display fields (TargetChanged
+            // also pushes this, but mirroring each tick keeps things visible
+            // even when no stick motion fires the event).
+            _targetPitch = GimbalController.TargetPitchDeg;
+            _targetRoll  = GimbalController.TargetRollDeg;
+            if (_lblPitch != null) _lblPitch.Text = $"Pitch: {_targetPitch,+6:0.0}°";
+            if (_lblRoll  != null) _lblRoll.Text  = $"Roll:  {_targetRoll,+6:0.0}°";
         }
 
-        // Send DO_MOUNT_CONTROL with absolute pitch/roll angles.
-        // The Caddx mount exposes roll instead of yaw, so we drive the legacy
-        // mount-control path directly.
+        // Helpers for the in-window snap / key-nudge buttons — both go through
+        // GimbalController so the physical NomadJoystickService sees the same
+        // target angles immediately.
         private void SendPitchRollAngle(float pitchDeg, float rollDeg)
         {
-            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return;
-            if (_inflight) return; // drop overlapping frames during fast drag
-            _inflight = true;
-
-            byte sysid  = MainV2.comPort.MAV.sysid;
-            byte compid = MainV2.comPort.MAV.compid;
-
-            Task.Run(async () =>
-            {
-                bool acquired = false;
-                try
-                {
-                    // Share the process-wide MAVLink lock with the payload panels
-                    // -- MainV2.comPort serializes poorly when two callers issue
-                    // doCommandAsync concurrently.
-                    acquired = await CubeOutputController.MavlinkLock
-                        .WaitAsync(1000).ConfigureAwait(false);
-                    if (!acquired)
-                    {
-                        BeginInvoke(new Action(() => SetStatus("Mount send busy", NOMADTheme.WARNING)));
-                        return;
-                    }
-                    await MainV2.comPort.doCommandAsync(
-                        sysid, compid,
-                        MAVLink.MAV_CMD.DO_MOUNT_CONTROL,
-                        pitchDeg, rollDeg,
-                        0f, 0f,
-                        0f, 0f, 2f,
-                        requireack: false, uicallback: null).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    BeginInvoke(new Action(() => SetStatus("Mount send failed: " + ex.Message, NOMADTheme.ERROR)));
-                }
-                finally
-                {
-                    if (acquired) CubeOutputController.MavlinkLock.Release();
-                    _inflight = false;
-                }
-            });
+            GimbalController.SetTargetAngles(pitchDeg, rollDeg);
+            GimbalController.SendPitchRollAngle(GimbalController.TargetPitchDeg, GimbalController.TargetRollDeg);
         }
 
         private void SendMountConfigure(MountMode mode)
         {
-            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return;
-            if (_inflight) return;
-            _inflight = true;
-
-            byte sysid = MainV2.comPort.MAV.sysid;
-            byte compid = MainV2.comPort.MAV.compid;
-
-            Task.Run(async () =>
-            {
-                bool acquired = false;
-                try
-                {
-                    acquired = await CubeOutputController.MavlinkLock
-                        .WaitAsync(2000).ConfigureAwait(false);
-                    if (!acquired)
-                    {
-                        BeginInvoke(new Action(() => SetStatus("Mount mode busy", NOMADTheme.WARNING)));
-                        return;
-                    }
-                    await MainV2.comPort.doCommandAsync(
-                        sysid, compid,
-                        MAVLink.MAV_CMD.DO_MOUNT_CONFIGURE,
-                        (float)mode,
-                        1f, 1f, 1f,
-                        2f, 2f, 2f,
-                        requireack: false, uicallback: null).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    BeginInvoke(new Action(() => SetStatus("Mount mode failed: " + ex.Message, NOMADTheme.ERROR)));
-                }
-                finally
-                {
-                    if (acquired) CubeOutputController.MavlinkLock.Release();
-                    _inflight = false;
-                }
-            });
+            GimbalController.SetMode(ToCtrl(mode));
         }
 
         // ============================================================
