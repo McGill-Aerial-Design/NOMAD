@@ -1,9 +1,9 @@
 // ============================================================
 // Motor Music Player - DroneCAN ESC tone sequencer (ground-side)
 // ============================================================
-// Plays melodies on the drone motors by sending DO_SET_SERVO MAVLink
-// commands from Mission Planner to the Cube Orange, which forwards
-// PWM to the DroneCAN ESCs. The audible "tone" is motor commutation
+// Plays melodies on the drone motors by sending DO_MOTOR_TEST MAVLink
+// commands from Mission Planner to the Cube Orange, which drives the
+// configured motor outputs. The audible "tone" is motor commutation
 // whine, not a true speaker — pitch tracks throttle, so the mapping
 // from musical frequency to PWM is empirical/coarse.
 //
@@ -131,6 +131,20 @@ namespace NOMAD.MissionPlanner
             Add("scale", "C Major Scale (test)",
                 "C4-300 D4-300 E4-300 F4-300 G4-300 A4-300 B4-300 C5-600");
 
+            Add("rickroll", "Rickroll",
+                "R-250 F#4-180 G#4-180 B4-180 G#4-180 D#5-380 D#5-380 C#5-760 " +
+                "R-180 F#4-180 G#4-180 B4-180 G#4-180 C#5-380 C#5-380 B4-380 A#4-180 G#4-560 " +
+                "R-180 F#4-180 G#4-180 B4-180 G#4-180 B4-380 C#5-180 A#4-380 G#4-180 F#4-380 " +
+                "F#4-180 C#5-380 B4-760 " +
+                "R-250 F#4-180 G#4-180 B4-180 G#4-180 D#5-380 D#5-380 C#5-760 " +
+                "R-180 F#4-180 G#4-180 B4-180 G#4-180 F#5-380 A#4-180 B4-380 A#4-180 G#4-560 " +
+                "R-180 F#4-180 G#4-180 B4-180 G#4-180 B4-380 C#5-180 A#4-380 G#4-180 F#4-380 " +
+                "F#4-180 C#5-380 B4-760 " +
+                "R-300 B4-180 C#5-180 D#5-180 B4-180 F#5-500 F#5-250 E5-250 D#5-250 C#5-250 " +
+                "B4-180 C#5-180 D#5-180 B4-180 D#5-500 E5-250 C#5-500 B4-500 " +
+                "R-250 B4-180 C#5-180 D#5-180 B4-180 E5-500 E5-250 D#5-250 C#5-250 B4-250 " +
+                "F#4-180 G#4-180 B4-180 G#4-180 C#5-500 B4-500");
+
             return lib;
         }
 
@@ -239,7 +253,7 @@ namespace NOMAD.MissionPlanner
                     int durMs = Math.Max(20, (int)(note.DurationMs / tempo));
                     int toneMs = Math.Max(10, durMs - InterNoteGapMs);
 
-                    SendNote(note, channels);
+                    SendNote(note, channels, toneMs);
                     SleepFor(toneMs, ct);
 
                     SilenceMotors(channels);
@@ -266,7 +280,7 @@ namespace NOMAD.MissionPlanner
             try { ct.WaitHandle.WaitOne(ms); } catch { }
         }
 
-        private void SendNote(Note note, int[] channels)
+        private void SendNote(Note note, int[] channels, int toneMs)
         {
             if (note.Name.Equals("R", StringComparison.OrdinalIgnoreCase))
             {
@@ -274,17 +288,29 @@ namespace NOMAD.MissionPlanner
                 return;
             }
             int pwm = FreqToPwm(Frequency(note.Name));
-            foreach (var ch in channels)
-                CubeOutputController.TrySendServoMavlink(ch, pwm, tryOnly: false);
+            SendMotorPwm(channels, pwm, toneMs);
         }
 
         private void SilenceMotors(int[] channels)
         {
-            // 1000 µs ≈ disarmed throttle for most ESCs; motors stop spinning.
-            foreach (var ch in channels)
-                CubeOutputController.TrySendServoMavlink(ch, 1000, tryOnly: false);
+            // 1000 us approximates disarmed throttle for most ESCs; motors stop spinning.
+            SendMotorPwm(channels, 1000, 100);
         }
 
+        private void SendMotorPwm(int[] motors, int pwmUs, int durationMs)
+        {
+            double timeoutSeconds = Math.Max(0.05, durationMs / 1000.0);
+            foreach (var motor in motors)
+            {
+                try
+                {
+                    CubeOutputController.SendMotorTestPwmAsync(motor, pwmUs, timeoutSeconds)
+                        .GetAwaiter()
+                        .GetResult();
+                }
+                catch { }
+            }
+        }
         private int FreqToPwm(double freq)
         {
             if (freq <= 0) return PwmMin;

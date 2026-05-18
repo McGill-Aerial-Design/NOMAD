@@ -2,7 +2,7 @@
 // NOMAD Music View - UI for motor-tone music playback
 // ============================================================
 // Pick a song, pick which motor channels to drive, set a tempo,
-// and hit Play. Commands go out as DO_SET_SERVO via the local
+// and hit Play. Commands go out as DO_MOTOR_TEST via the local
 // MAVLink link. Props OFF only.
 // ============================================================
 
@@ -90,7 +90,7 @@ namespace NOMAD.MissionPlanner
             settings.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130f));
             settings.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
 
-            settings.Controls.Add(MakeLabel("Motor channels:"), 0, 0);
+            settings.Controls.Add(MakeLabel("Motors:"), 0, 0);
             _lstChannels = new CheckedListBox
             {
                 Dock = DockStyle.Top,
@@ -101,11 +101,10 @@ namespace NOMAD.MissionPlanner
                 BorderStyle = BorderStyle.FixedSingle,
                 CheckOnClick = true,
             };
-            // NOMAD's spray/aux motors are wired to channels 17-20; default
-            // those to checked. Range goes up to 32 to cover all SERVO_FUNCTION
-            // slots ArduPilot exposes.
-            for (int ch = 1; ch <= 32; ch++)
-                _lstChannels.Items.Add("Channel " + ch, ch >= 17 && ch <= 20);
+            // DO_MOTOR_TEST addresses configured motor instances, not SERVO output
+            // channels. Default to the four primary motors.
+            for (int motor = 1; motor <= 12; motor++)
+                _lstChannels.Items.Add("Motor " + motor, motor >= 1 && motor <= 4);
             settings.Controls.Add(_lstChannels, 1, 0);
 
             settings.Controls.Add(MakeLabel("Tempo (× speed):"), 0, 1);
