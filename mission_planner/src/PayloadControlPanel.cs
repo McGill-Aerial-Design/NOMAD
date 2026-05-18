@@ -75,6 +75,21 @@ namespace NOMAD.MissionPlanner
         public static void RaiseAutonomousModeChanged(bool isAutonomous) =>
             AutonomousModeChanged?.Invoke(isAutonomous);
 
+        /// <summary>
+        /// Update the shared tilt PWM and broadcast to every open PayloadControlPanel
+        /// so each slider mirrors the new value. Does NOT send to the servo — that's
+        /// the caller's responsibility (e.g. NomadJoystickService already streams
+        /// SendServoPwmAsync at its own rate).
+        /// </summary>
+        public static void SetExternalTiltPulse(int pulseUs)
+        {
+            s_lastTiltPulseUs = pulseUs;
+            CameraTiltChanged?.Invoke(pulseUs, null);
+        }
+
+        /// <summary>Last commanded tilt PWM (microseconds). Used by joystick service as its starting target.</summary>
+        public static int LastTiltPulseUs => s_lastTiltPulseUs;
+
 
         // ============================================================
         // Construction

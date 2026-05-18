@@ -113,6 +113,16 @@ namespace NOMAD.MissionPlanner
         private CheckBox _chkSprayUseYaw;
         private Button _btnPushSprayCalibration;
         private Label _lblSprayCalibrationStatus;
+
+        // Joystick Tab
+        private CheckBox _chkJoyGimbalEnabled, _chkJoyZedEnabled;
+        private CheckBox _chkJoyGimbalPitchInvert, _chkJoyGimbalRollInvert, _chkJoyZedTiltInvert;
+        private ComboBox _cmbJoyGimbalDevice, _cmbJoyZedDevice;
+        private ComboBox _cmbJoyGimbalPitchAxis, _cmbJoyGimbalRollAxis, _cmbJoyZedTiltAxis;
+        private NumericUpDown _numJoyGimbalDeadzone, _numJoyZedDeadzone;
+        private NumericUpDown _numJoyGimbalMaxRate, _numJoyZedMaxRate;
+        private Button _btnJoyRefreshDevices;
+        private Label _lblJoyStatus;
         
         // Google Drive
         private Button _btnUploadGDrive;
@@ -175,6 +185,7 @@ namespace NOMAD.MissionPlanner
             _tabControl.TabPages.Add(CreateUploadsTab());
             _tabControl.TabPages.Add(CreateSprayCalibrationTab());
             _tabControl.TabPages.Add(CreateServosTab());
+            _tabControl.TabPages.Add(CreateJoystickTab());
 
             // Buttons at bottom
             int buttonY = 560;
@@ -669,6 +680,119 @@ namespace NOMAD.MissionPlanner
             return tab;
         }
 
+        // ============================================================
+        // Tab: Joystick — two DirectInput devices (gimbal + ZED tilt)
+        // ============================================================
+        private TabPage CreateJoystickTab()
+        {
+            var tab = CreateTabPage("Joystick");
+            int y = 10;
+
+            AddSectionLabel(tab, "Physical Joystick Routing", ref y);
+            AddLabel(tab,
+                "Two DirectInput sticks: one drives the CADDx gimbal,",
+                10, y, Color.FromArgb(180, 180, 180));
+            y += 18;
+            AddLabel(tab,
+                "the other drives the ZED tilt servo. RC override is never sent.",
+                10, y, Color.FromArgb(180, 180, 180));
+            y += 24;
+
+            var devices = NomadJoystickService.EnumerateDevices();
+            var axes = new System.Collections.Generic.List<string>(NomadJoystickService.AxisNames).ToArray();
+            string[] deviceList = BuildDeviceComboList(devices);
+
+            // -------- Gimbal channel --------
+            AddSectionLabel(tab, "Gimbal (CADDx)", ref y);
+
+            _chkJoyGimbalEnabled = AddCheckBox(tab, "Enable", 20, y, Color.LimeGreen);
+            y += 28;
+
+            AddLabel(tab, "Device:", 20, y);
+            _cmbJoyGimbalDevice = AddComboBox(tab, 90, y, 290, deviceList);
+            y += 28;
+
+            AddLabel(tab, "Pitch axis:", 20, y);
+            _cmbJoyGimbalPitchAxis = AddComboBox(tab, 95, y, 80, axes);
+            _chkJoyGimbalPitchInvert = AddCheckBox(tab, "invert", 185, y, Color.White);
+            AddLabel(tab, "Roll axis:", 260, y);
+            _cmbJoyGimbalRollAxis = AddComboBox(tab, 325, y, 60, axes);
+            y += 28;
+
+            _chkJoyGimbalRollInvert = AddCheckBox(tab, "invert roll", 325, y, Color.White);
+            y += 28;
+
+            AddLabel(tab, "Deadzone:", 20, y);
+            _numJoyGimbalDeadzone = AddNumericUpDown(tab, 95, y, 60, 0.00m, 0.50m, 0.08m, 2);
+            AddLabel(tab, "Max rate (°/s):", 175, y);
+            _numJoyGimbalMaxRate = AddNumericUpDown(tab, 270, y, 70, 5, 200, 60);
+            y += 36;
+
+            // -------- ZED channel --------
+            AddSectionLabel(tab, "ZED Tilt Servo", ref y);
+
+            _chkJoyZedEnabled = AddCheckBox(tab, "Enable", 20, y, Color.LimeGreen);
+            y += 28;
+
+            AddLabel(tab, "Device:", 20, y);
+            _cmbJoyZedDevice = AddComboBox(tab, 90, y, 290, deviceList);
+            y += 28;
+
+            AddLabel(tab, "Tilt axis:", 20, y);
+            _cmbJoyZedTiltAxis = AddComboBox(tab, 95, y, 80, axes);
+            _chkJoyZedTiltInvert = AddCheckBox(tab, "invert", 185, y, Color.White);
+            y += 28;
+
+            AddLabel(tab, "Deadzone:", 20, y);
+            _numJoyZedDeadzone = AddNumericUpDown(tab, 95, y, 60, 0.00m, 0.50m, 0.08m, 2);
+            AddLabel(tab, "Max rate (μs/s):", 175, y);
+            _numJoyZedMaxRate = AddNumericUpDown(tab, 280, y, 70, 50, 4000, 400);
+            y += 36;
+
+            _btnJoyRefreshDevices = new Button
+            {
+                Text = "Refresh device list",
+                Location = new Point(20, y),
+                Size = new Size(160, 26),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(70, 70, 75),
+                ForeColor = Color.White,
+            };
+            _btnJoyRefreshDevices.Click += (s, e) =>
+            {
+                var fresh = NomadJoystickService.EnumerateDevices();
+                var freshList = BuildDeviceComboList(fresh);
+                string keepG = _cmbJoyGimbalDevice.SelectedItem?.ToString();
+                string keepZ = _cmbJoyZedDevice.SelectedItem?.ToString();
+                _cmbJoyGimbalDevice.Items.Clear();
+                _cmbJoyZedDevice.Items.Clear();
+                _cmbJoyGimbalDevice.Items.AddRange(freshList);
+                _cmbJoyZedDevice.Items.AddRange(freshList);
+                SetComboBoxValue(_cmbJoyGimbalDevice, keepG);
+                SetComboBoxValue(_cmbJoyZedDevice, keepZ);
+                _lblJoyStatus.Text = $"{fresh.Count} device(s) detected.";
+            };
+            tab.Controls.Add(_btnJoyRefreshDevices);
+
+            _lblJoyStatus = new Label
+            {
+                Text = $"{devices.Count} device(s) detected.",
+                Location = new Point(190, y + 5),
+                AutoSize = true,
+                ForeColor = Color.FromArgb(180, 180, 180),
+            };
+            tab.Controls.Add(_lblJoyStatus);
+
+            return tab;
+        }
+
+        private static string[] BuildDeviceComboList(System.Collections.Generic.IList<string> devices)
+        {
+            var list = new System.Collections.Generic.List<string> { "(none)" };
+            foreach (var d in devices) list.Add(d);
+            return list.ToArray();
+        }
+
         private TabPage CreateSprayCalibrationTab()
         {
             var tab = CreateTabPage("Spray");
@@ -982,6 +1106,25 @@ namespace NOMAD.MissionPlanner
             _numSprayLockMs.Value      = Config.SprayLockHoldMs;
             _numSprayTimeout.Value     = (decimal)Config.SprayAlignTimeoutS;
 
+            // Joystick
+            _chkJoyGimbalEnabled.Checked = Config.JoystickGimbalEnabled;
+            SetComboBoxValue(_cmbJoyGimbalDevice,
+                string.IsNullOrEmpty(Config.JoystickGimbalDevice) ? "(none)" : Config.JoystickGimbalDevice);
+            SetComboBoxValue(_cmbJoyGimbalPitchAxis, Config.JoystickGimbalPitchAxis);
+            _chkJoyGimbalPitchInvert.Checked = Config.JoystickGimbalPitchInvert;
+            SetComboBoxValue(_cmbJoyGimbalRollAxis, Config.JoystickGimbalRollAxis);
+            _chkJoyGimbalRollInvert.Checked = Config.JoystickGimbalRollInvert;
+            _numJoyGimbalDeadzone.Value = (decimal)Math.Max(0f, Math.Min(0.5f, Config.JoystickGimbalDeadzone));
+            _numJoyGimbalMaxRate.Value = (decimal)Math.Max(5f, Math.Min(200f, Config.JoystickGimbalMaxRateDegSec));
+
+            _chkJoyZedEnabled.Checked = Config.JoystickZedEnabled;
+            SetComboBoxValue(_cmbJoyZedDevice,
+                string.IsNullOrEmpty(Config.JoystickZedDevice) ? "(none)" : Config.JoystickZedDevice);
+            SetComboBoxValue(_cmbJoyZedTiltAxis, Config.JoystickZedTiltAxis);
+            _chkJoyZedTiltInvert.Checked = Config.JoystickZedTiltInvert;
+            _numJoyZedDeadzone.Value = (decimal)Math.Max(0f, Math.Min(0.5f, Config.JoystickZedDeadzone));
+            _numJoyZedMaxRate.Value = (decimal)Math.Max(50f, Math.Min(4000f, Config.JoystickZedMaxRateUsPerSec));
+
             UpdateDualLinkControlsState();
             UpdateRadioMasterConnTypeState();
         }
@@ -1109,7 +1252,27 @@ namespace NOMAD.MissionPlanner
             Config.SprayMaxYawRateRadps = (float)_numSprayMaxYaw.Value;
             Config.SprayLockHoldMs = (int)_numSprayLockMs.Value;
             Config.SprayAlignTimeoutS = (float)_numSprayTimeout.Value;
+
+            // Joystick
+            Config.JoystickGimbalEnabled = _chkJoyGimbalEnabled.Checked;
+            Config.JoystickGimbalDevice = NormalizeDevice(_cmbJoyGimbalDevice.SelectedItem?.ToString());
+            Config.JoystickGimbalPitchAxis = _cmbJoyGimbalPitchAxis.SelectedItem?.ToString() ?? "Y";
+            Config.JoystickGimbalPitchInvert = _chkJoyGimbalPitchInvert.Checked;
+            Config.JoystickGimbalRollAxis = _cmbJoyGimbalRollAxis.SelectedItem?.ToString() ?? "X";
+            Config.JoystickGimbalRollInvert = _chkJoyGimbalRollInvert.Checked;
+            Config.JoystickGimbalDeadzone = (float)_numJoyGimbalDeadzone.Value;
+            Config.JoystickGimbalMaxRateDegSec = (float)_numJoyGimbalMaxRate.Value;
+
+            Config.JoystickZedEnabled = _chkJoyZedEnabled.Checked;
+            Config.JoystickZedDevice = NormalizeDevice(_cmbJoyZedDevice.SelectedItem?.ToString());
+            Config.JoystickZedTiltAxis = _cmbJoyZedTiltAxis.SelectedItem?.ToString() ?? "Y";
+            Config.JoystickZedTiltInvert = _chkJoyZedTiltInvert.Checked;
+            Config.JoystickZedDeadzone = (float)_numJoyZedDeadzone.Value;
+            Config.JoystickZedMaxRateUsPerSec = (float)_numJoyZedMaxRate.Value;
         }
+
+        private static string NormalizeDevice(string s)
+            => string.IsNullOrEmpty(s) || s == "(none)" ? "" : s;
         
         private void SetComboBoxValue(ComboBox combo, string value)
         {

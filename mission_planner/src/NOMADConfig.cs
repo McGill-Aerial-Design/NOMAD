@@ -477,6 +477,44 @@ namespace NOMAD.MissionPlanner
         public int CameraTiltAngleRange { get; set; } = 45;
 
         // ============================================================
+        // Joystick Configuration (Mission Planner DirectInput-based)
+        // ============================================================
+        // Two independent joystick assignments routed by NomadJoystickService:
+        //   * Gimbal: stick deflection → pitch/roll rate, integrated locally
+        //     into MAV_CMD_DO_MOUNT_CONTROL angle commands.
+        //   * ZED tilt: stick deflection → PWM rate, integrated locally into
+        //     the camera tilt servo PWM target (DO_SET_SERVO).
+        // Axes are referenced by DirectInput state property name: X, Y, Z,
+        // Rx, Ry, Rz, Slider1, Slider2.
+
+        /// <summary>Enable the gimbal joystick channel.</summary>
+        public bool JoystickGimbalEnabled { get; set; } = false;
+        /// <summary>DirectInput device name (must match one of MP's enumerated devices).</summary>
+        public string JoystickGimbalDevice { get; set; } = "";
+        /// <summary>Axis driving gimbal pitch (X / Y / Z / Rx / Ry / Rz / Slider1 / Slider2).</summary>
+        public string JoystickGimbalPitchAxis { get; set; } = "Y";
+        /// <summary>Invert pitch axis (stick forward = pitch up when invert=true on most flight sticks).</summary>
+        public bool JoystickGimbalPitchInvert { get; set; } = true;
+        /// <summary>Axis driving gimbal roll.</summary>
+        public string JoystickGimbalRollAxis { get; set; } = "X";
+        public bool JoystickGimbalRollInvert { get; set; } = false;
+        /// <summary>Deadzone fraction [0..1] applied per axis.</summary>
+        public float JoystickGimbalDeadzone { get; set; } = 0.08f;
+        /// <summary>Max integrated angle rate (deg/s) at full stick deflection.</summary>
+        public float JoystickGimbalMaxRateDegSec { get; set; } = 60f;
+
+        /// <summary>Enable the ZED tilt joystick channel.</summary>
+        public bool JoystickZedEnabled { get; set; } = false;
+        /// <summary>DirectInput device name. May be the same device as gimbal (different axes).</summary>
+        public string JoystickZedDevice { get; set; } = "";
+        /// <summary>Axis driving ZED tilt rate.</summary>
+        public string JoystickZedTiltAxis { get; set; } = "Y";
+        public bool JoystickZedTiltInvert { get; set; } = true;
+        public float JoystickZedDeadzone { get; set; } = 0.08f;
+        /// <summary>Max integrated PWM rate (microseconds per second) at full stick deflection.</summary>
+        public float JoystickZedMaxRateUsPerSec { get; set; } = 400f;
+
+        // ============================================================
         // Task 2 Spray Calibration
         // ============================================================
 

@@ -50,6 +50,7 @@ namespace NOMAD.MissionPlanner
         private DualLinkSender _sender;
         private MAVLinkConnectionManager _connectionManager;  // Dual link manager
         private JetsonConnectionManager _jetsonConnectionManager;  // Jetson HTTP connectivity
+        private NomadJoystickService _joystickService;        // Physical joysticks → gimbal + ZED tilt
         private Form _popOutForm;                             // Pop-out window for NOMAD screen
         private bool _hudVideoStarted = false;
         private bool _screenRegistered = false;               // Track if NOMAD screen is registered with MainSwitcher
@@ -166,6 +167,14 @@ namespace NOMAD.MissionPlanner
                 if (_config.DualLinkEnabled && _config.RouterEnabled)
                 {
                     InitializeConnectionManager();
+                }
+
+                // Physical joystick service — starts only if either channel is enabled in config.
+                _joystickService = new NomadJoystickService(_config);
+                if (_config.JoystickGimbalEnabled || _config.JoystickZedEnabled)
+                {
+                    try { _joystickService.Start(); }
+                    catch (Exception ex) { Console.WriteLine($"NOMAD: joystick service start failed — {ex.Message}"); }
                 }
 
                 // Add menu items to FlightData right-click menu (if available)
@@ -411,6 +420,10 @@ namespace NOMAD.MissionPlanner
                 _connectionManager?.StopMonitoring();
                 _connectionManager?.Dispose();
                 _connectionManager = null;
+
+                // Release joystick devices
+                _joystickService?.Dispose();
+                _joystickService = null;
                 
                 if (_popOutForm != null && !_popOutForm.IsDisposed)
                 {
@@ -653,6 +666,8 @@ namespace NOMAD.MissionPlanner
                     _config.Save();
                     _sender.UpdateConfig(_config);
                     ApplyDualLinkSettings();
+                    try { _joystickService?.UpdateConfig(_config); }
+                    catch (Exception ex) { Console.WriteLine($"NOMAD: joystick restart failed — {ex.Message}"); }
                 }
             }
         }

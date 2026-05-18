@@ -157,6 +157,8 @@
     <Compile Include="NOMADViewBase.cs" />
     <Compile Include="NOMADTask1View.cs" />
     <Compile Include="GimbalJoystickWindow.cs" />
+    <Compile Include="GimbalController.cs" />
+    <Compile Include="NomadJoystickService.cs" />
     <Compile Include="PayloadControlPanel.cs" />
     <Compile Include="NOMADTask2View.cs" />
     <Compile Include="NOMADVideoView.cs" />
