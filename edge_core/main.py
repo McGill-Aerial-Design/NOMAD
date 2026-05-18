@@ -744,6 +744,11 @@ def run(
             target_z = getattr(target_or_id, "z", None)
             with app.state.detection_state_lock:
                 current = list(getattr(app.state, "detected_objects", []))
+                last_update = float(getattr(app.state, "detection_last_update", 0.0) or 0.0)
+
+            max_age_s = float(os.environ.get("NOMAD_DETECTION_MAX_AGE_S", "0.75"))
+            if last_update <= 0.0 or (time.time() - last_update) > max_age_s:
+                current = []
 
             best = None
             best_score = float("inf")

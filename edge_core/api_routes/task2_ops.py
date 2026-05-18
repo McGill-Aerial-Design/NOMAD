@@ -866,7 +866,7 @@ def register_task2_routes(app, ctx) -> None:
     # Task 2 detections (live shape-detector results from video bridge)
     # ============================================================
     @app.get("/api/task/2/detections", tags=["Task 2"])
-    async def task2_detections():
+    async def task2_detections(request: Request):
         """Return the live Task 2 (shape) circle detections drawn by the
         video overlay. Used by the Mission Planner Detect & Spray tab so the
         operator picks from the same circles they see boxed on the video.
@@ -931,6 +931,47 @@ def register_task2_routes(app, ctx) -> None:
                 "src_w": d.get("_src_w"),
                 "src_h": d.get("_src_h"),
             })
+
+        with request.app.state.detection_state_lock:
+            external = list(getattr(request.app.state, "detected_objects", []))
+            external_age_s = (
+                time.time() - request.app.state.detection_last_update
+                if getattr(request.app.state, "detection_last_update", 0.0) > 0
+                else None
+            )
+        max_external_age_s = float(os.environ.get(
+            "NOMAD_TASK2_OFFBOARD_MAX_AGE_S", "1.0"
+        ))
+        if external_age_s is not None and external_age_s <= max_external_age_s:
+            for d in external:
+                if not isinstance(d, dict):
+                    continue
+                source = str(d.get("source", "") or "")
+                if source not in ("groundstation_task2", "offboard_task2"):
+                    continue
+                idx = len(out)
+                out.append({
+                    "target_id": idx,
+                    "label": d.get("label", "circle"),
+                    "confidence": d.get("confidence", 0.0),
+                    "source": source,
+                    "seen_count": d.get("seen_count", 1),
+                    "x": d.get("x", 0.0),
+                    "y": d.get("y", 0.0),
+                    "z": d.get("z", 0.0),
+                    "image_only": bool(d.get("image_only", True)),
+                    "range_m": d.get("range_m"),
+                    "distance_m": d.get("distance_m", d.get("range_m")),
+                    "pixel_x": d.get("pixel_x", d.get("cx")),
+                    "pixel_y": d.get("pixel_y", d.get("cy")),
+                    "bbox_x": d.get("bbox_x"),
+                    "bbox_y": d.get("bbox_y"),
+                    "bbox_w": d.get("bbox_w"),
+                    "bbox_h": d.get("bbox_h"),
+                    "src_w": d.get("src_w"),
+                    "src_h": d.get("src_h"),
+                    "age_seconds": external_age_s,
+                })
         return {
             "current": {"detections": out, "count": len(out)},
             "history": {"detections": [], "count": 0},

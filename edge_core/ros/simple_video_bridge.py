@@ -124,6 +124,11 @@ class VideoStreamNode(Node):
         self.subscription = None
         self._latest_jpeg = None
         self._last_snapshot_encode_time = 0.0
+        self._latest_raw_jpeg = None
+        self._last_raw_snapshot_encode_time = 0.0
+        self._raw_snapshot_interval = float(os.environ.get(
+            "NOMAD_RAW_SNAPSHOT_INTERVAL", "0.5"
+        ))
 
         # --- Threaded encoder: ROS callback drops frame into _pending_frame,
         # encoder thread picks it up at its own pace. ---
@@ -517,6 +522,20 @@ class VideoStreamNode(Node):
                 cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2BGRA)
             convert_ms = (time.perf_counter() - convert_start) * 1000.0
 
+            if (now - self._last_raw_snapshot_encode_time) >= self._raw_snapshot_interval:
+                try:
+                    if cv2 is None:
+                        import cv2
+                    raw_bgr = cv2.cvtColor(cv_image, cv2.COLOR_BGRA2BGR)
+                    ok, jpeg = cv2.imencode(
+                        '.jpg', raw_bgr, [cv2.IMWRITE_JPEG_QUALITY, 78]
+                    )
+                    if ok:
+                        self._latest_raw_jpeg = jpeg.tobytes()
+                        self._last_raw_snapshot_encode_time = now
+                except Exception:
+                    pass
+
             overlay_ms = 0.0
             if self._overlay_enabled and (now - self._hsv_last_run_ts) >= self._hsv_min_interval:
                 if cv2 is None:
@@ -719,7 +738,7 @@ class VideoStreamNode(Node):
                     self.get_logger().warn(f'HSV detect error: {det_err}')
             if self._overlay_task2:
                 try:
-                    dets.extend(self._detect_shape_circles(frame))
+                    dets.extend(self._detect_task2_circles(frame))
                 except Exception as det_err:
                     self.get_logger().warn(f'Task 2 color detect error: {det_err}')
             dets = self._dedupe_detections(dets)
@@ -994,6 +1013,18 @@ class VideoStreamNode(Node):
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         return gray, hsv
 
+    def _detect_task2_circles(self, frame):
+        """Dispatch Task 2 detection mode.
+
+        Default back to the legacy Hough/contour shape path. The newer
+        color/backing heuristic is useful for comparison, but it proved too
+        brittle against real field lighting and clothing/grass clutter.
+        """
+        mode = os.environ.get("NOMAD_TASK2_DETECTOR_MODE", "legacy").strip().lower()
+        if mode in ("color", "color_blob", "backing"):
+            return self._detect_shape_circles(frame)
+        return self._detect_shape_circles_legacy(frame)
+
     def _detect_shape_circles(self, frame):
         """Task 2 red-cabbage target detector.
 
@@ -1023,13 +1054,7 @@ class VideoStreamNode(Node):
             (s_ch >= 10) | (chroma >= 7)
         )
         white_mask = (s_ch <= 36) & (v_ch >= 145) & (chroma <= 20)
-        backing_mask = (
-            ((s_ch <= 65) & (v_ch >= 120) & (chroma <= 35))
-            | (
-                (h_ch >= 82) & (h_ch <= 115)
-                & (s_ch <= 85) & (v_ch >= 115) & (chroma <= 45)
-            )
-        )
+        backing_mask = (s_ch <= 60) & (v_ch >= 125) & (chroma <= 32)
         not_white = ~((s_ch <= 18) & (v_ch >= 160) & (chroma <= 12))
         mask = (target_color & not_white).astype(np.uint8) * 255
 
@@ -1043,6 +1068,11 @@ class VideoStreamNode(Node):
             kernel5,
             iterations=1,
         ) > 0
+        n_backing, backing_labels, backing_stats, _backing_centroids = (
+            cv2.connectedComponentsWithStats(
+                backing_mask.astype(np.uint8), connectivity=8
+            )
+        )
 
         min_r = max(6, int(round(min(h, w) * 0.018)))
         max_r = max(40, min(h, w) // 2)
@@ -1099,6 +1129,7 @@ class VideoStreamNode(Node):
             rx1 = min(w, int(cx) + outer_r + 1)
             ring_white_ratio = 0.0
             backing_ratio = 0.0
+            support_label = 0
             if ry1 > ry0 and rx1 > rx0:
                 yy, xx = np.ogrid[ry0:ry1, rx0:rx1]
                 d2 = (xx - cx) ** 2 + (yy - cy) ** 2
@@ -1127,13 +1158,36 @@ class VideoStreamNode(Node):
                         backing_mask[sy0:sy1, sx0:sx1] & surround
                     ))
                     backing_ratio = backing_count / surround_count
+                    support_labels = backing_labels[sy0:sy1, sx0:sx1][surround]
+                    support_labels = support_labels[support_labels > 0]
+                    if support_labels.size:
+                        counts = np.bincount(support_labels)
+                        support_label = int(np.argmax(counts))
 
             min_backing_ratio = float(os.environ.get(
-                "NOMAD_TASK2_MIN_BACKING_RATIO", "0.22"
+                "NOMAD_TASK2_MIN_BACKING_RATIO", "0.18"
             ))
             if backing_ratio < min_backing_ratio:
                 continue
             if backing_count < max(int(area * 1.5), 180):
+                continue
+            if not (0 < support_label < n_backing):
+                continue
+
+            bx = int(backing_stats[support_label, cv2.CC_STAT_LEFT])
+            by = int(backing_stats[support_label, cv2.CC_STAT_TOP])
+            bbw = int(backing_stats[support_label, cv2.CC_STAT_WIDTH])
+            bbh = int(backing_stats[support_label, cv2.CC_STAT_HEIGHT])
+            barea = int(backing_stats[support_label, cv2.CC_STAT_AREA])
+            baspect = bbw / float(max(1, bbh))
+            if baspect < 0.45 or baspect > 2.80:
+                continue
+            if barea < max(int(area * 2.5), 700):
+                continue
+            if barea > int(w * h * 0.22):
+                continue
+            if not (bx - radius <= cx <= bx + bbw + radius
+                    and by - radius <= cy <= by + bbh + radius):
                 continue
 
             confidence = min(
@@ -1522,6 +1576,16 @@ class ControlServer(BaseHTTPRequestHandler):
                 self.wfile.write(self.video_node._latest_jpeg)
             else:
                 self._send_json(503, {'error': 'No frame available'})
+
+        elif parsed.path == '/snapshot_raw':
+            if self.video_node and self.video_node._latest_raw_jpeg:
+                self.send_response(200)
+                self.send_header('Content-Type', 'image/jpeg')
+                self.send_header('Content-Length', str(len(self.video_node._latest_raw_jpeg)))
+                self.end_headers()
+                self.wfile.write(self.video_node._latest_raw_jpeg)
+            else:
+                self._send_json(503, {'error': 'No raw frame available'})
 
         elif parsed.path == '/detections':
             query = parse_qs(parsed.query)
