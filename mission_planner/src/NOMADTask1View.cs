@@ -135,7 +135,16 @@ private ListBox _lstWalls;
             submitTab.Controls.Add(_uploadPanel);
             _tabControl.TabPages.Add(submitTab);
 
-            // --- Tab 3: Configuration ---
+            // --- Tab 3: RTM SOPs (CONOPS Appendix F) ---
+            var rtmTab = new TabPage("RTM SOPs")
+            {
+                BackColor = NOMADTheme.BG_DARK,
+                Padding = new Padding(0),
+            };
+            rtmTab.Controls.Add(new RtmChecklistPanel("task1", RtmChecklistPanel.TASK1_ITEMS));
+            _tabControl.TabPages.Add(rtmTab);
+
+            // --- Tab 4: Configuration ---
             var configTab = new TabPage("Configuration")
             {
                 BackColor = CARD_BG,

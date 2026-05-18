@@ -77,11 +77,6 @@ namespace NOMAD.MissionPlanner
         private Button _btnResetMap;
         private Button _btnResetVio;
 
-        // ---- RTM Checklist (Task 2 RTM SOPs, CONOPS Appendix F) ----
-        private List<CheckBox> _rtmCheckboxes = new List<CheckBox>();
-        private Label _lblRtmProgress;
-        private Button _btnRtmReset;
-
         private System.Threading.Timer _modePollTimer;
         private int _modePollInFlight;
         private volatile bool _sprayInProgress;
@@ -175,7 +170,7 @@ namespace NOMAD.MissionPlanner
 
             // Tab 2: RTM Checklist (CONOPS Appendix F — 15 pts)
             var rtmTab = new TabPage("RTM SOPs") { BackColor = NOMADTheme.BG_DARK, Padding = new Padding(0) };
-            rtmTab.Controls.Add(CreateRtmChecklistPanel());
+            rtmTab.Controls.Add(new RtmChecklistPanel("task2", RtmChecklistPanel.TASK2_ITEMS));
             _tabControl.TabPages.Add(rtmTab);
 
             // Tab 3: Submit
@@ -554,144 +549,6 @@ namespace NOMAD.MissionPlanner
             panel.Controls.Add(seqCard);
             panel.Controls.Add(bar);
             return panel;
-        }
-
-        // ============================================================
-        // RTM SOP checklist (CONOPS Appendix F, 15 pts)
-        // ============================================================
-        // This is a pilot-aid: every line is a radio call the team
-        // needs to make to ATC in the right order. Operator ticks the
-        // box as each call is completed. Worth 15 pts for full
-        // compliance, 10 for one error, 0 otherwise — so a missed call
-        // is worse than a slightly wrong one.
-        private static readonly (string phase, string text)[] RTM_CHECKLIST =
-        {
-            ("Setup", "Radio check: \"<Callsign> to base, radio check\" — receive signal rating"),
-            ("Dispatch", "Dispatch briefing: respond \"<Callsign> to dispatch, go ahead\""),
-            ("Dispatch", "After briefing complete: transmit \"<Callsign> Wilco\""),
-            ("Takeoff", "Request takeoff: \"<Callsign> to base, request takeoff\""),
-            ("Takeoff", "Acknowledge clearance: \"Cleared to takeoff, <Callsign>\""),
-            ("Takeoff", "After airborne: \"<Callsign> takeoff complete\""),
-            ("Corridor", "Climb to 20–35 m UAM corridor (hold ≥30 s)"),
-            ("Corridor", "Entering corridor: \"<Callsign> entering corridor\""),
-            ("Corridor", "Leaving corridor (approach building): \"<Callsign> has left the corridor\""),
-            ("Building", "Crossing search-volume boundary: \"<Callsign> operating near the building\""),
-            ("Engagement", "Auto Spray (1×) — claim autonomy gate"),
-            ("Engagement", "Manual sprays for remaining targets"),
-            ("Return", "Climb back into UAM corridor: \"<Callsign> entering corridor\""),
-            ("Return", "Leaving corridor at vertiport: \"<Callsign> has left the corridor\""),
-            ("Landing", "Request landing: \"<Callsign> to base, request landing\""),
-            ("Landing", "Acknowledge clearance: \"Cleared to land, <Callsign>\""),
-            ("Landing", "After touchdown: \"<Callsign> landed\""),
-        };
-
-        private Panel CreateRtmChecklistPanel()
-        {
-            var root = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = NOMADTheme.BG_DARK,
-                Padding = new Padding(10),
-            };
-
-            // Scrollable list (fills remainder).
-            var listHost = new Panel
-            {
-                Dock = DockStyle.Fill,
-                AutoScroll = true,
-                BackColor = NOMADTheme.BG_DARK,
-            };
-
-            int y = 4;
-            string lastPhase = null;
-            foreach (var (phase, text) in RTM_CHECKLIST)
-            {
-                if (phase != lastPhase)
-                {
-                    var hdr = new Label
-                    {
-                        Text = $"── {phase} ──",
-                        Font = new Font("Consolas", 10, FontStyle.Bold),
-                        ForeColor = ACCENT_COLOR,
-                        Location = new Point(0, y),
-                        AutoSize = true,
-                    };
-                    listHost.Controls.Add(hdr);
-                    y += 24;
-                    lastPhase = phase;
-                }
-
-                var cb = new CheckBox
-                {
-                    Text = text,
-                    Font = new Font("Segoe UI", 9),
-                    ForeColor = TEXT_PRIMARY,
-                    Location = new Point(12, y),
-                    AutoSize = true,
-                    AutoCheck = true,
-                    BackColor = NOMADTheme.BG_DARK,
-                };
-                cb.CheckedChanged += (s, e) => UpdateRtmProgress();
-                _rtmCheckboxes.Add(cb);
-                listHost.Controls.Add(cb);
-                y += 22;
-            }
-
-            // Bottom progress bar (docked bottom, drawn first so list fills above).
-            var bottomBar = new Panel
-            {
-                Dock = DockStyle.Bottom,
-                Height = 40,
-                BackColor = CARD_BG,
-                Padding = new Padding(8, 6, 8, 6),
-            };
-
-            _lblRtmProgress = new Label
-            {
-                Text = "Progress: 0 / " + RTM_CHECKLIST.Length,
-                Font = new Font("Consolas", 11, FontStyle.Bold),
-                ForeColor = WARNING_COLOR,
-                Dock = DockStyle.Left,
-                AutoSize = false,
-                Width = 220,
-                TextAlign = ContentAlignment.MiddleLeft,
-            };
-            bottomBar.Controls.Add(_lblRtmProgress);
-
-            _btnRtmReset = CreateButton("Reset checklist", ERROR_COLOR, 140, 28);
-            _btnRtmReset.Dock = DockStyle.Right;
-            _btnRtmReset.Click += (s, e) =>
-            {
-                foreach (var cb in _rtmCheckboxes) cb.Checked = false;
-            };
-            bottomBar.Controls.Add(_btnRtmReset);
-
-            // Header row (docked top).
-            var header = new Label
-            {
-                Text = "Big City RTM SOPs — tick each call as it is made.\n"
-                     + "ICAO phonetic alphabet · 3-digit headings clockwise from magnetic north · full callsign at start of each exchange.",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = TEXT_PRIMARY,
-                Dock = DockStyle.Top,
-                Height = 44,
-                Padding = new Padding(0, 0, 0, 8),
-            };
-
-            root.Controls.Add(listHost);   // fills
-            root.Controls.Add(bottomBar);  // bottom
-            root.Controls.Add(header);     // top
-            return root;
-        }
-
-        private void UpdateRtmProgress()
-        {
-            int done = _rtmCheckboxes.Count(c => c.Checked);
-            int total = _rtmCheckboxes.Count;
-            if (_lblRtmProgress == null) return;
-            _lblRtmProgress.Text = $"Progress: {done} / {total}";
-            _lblRtmProgress.ForeColor = done == total ? SUCCESS_COLOR
-                : done >= total / 2 ? WARNING_COLOR : ERROR_COLOR;
         }
 
         private Label MakeRow(Panel parent, string text, int y)

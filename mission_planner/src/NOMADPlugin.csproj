@@ -187,6 +187,7 @@
     <Compile Include="SLAM3D\Rendering\VoxelMeshBuilder.cs" />
     <Compile Include="SnapshotManager.cs" />
 <Compile Include="GoogleDriveUploadService.cs" />
+    <Compile Include="RtmChecklistPanel.cs" />
     <Compile Include="Task1UploadPanel.cs" />
     <Compile Include="Task2PayloadPanel.cs" />
     <Compile Include="Task2UploadPanel.cs" />
