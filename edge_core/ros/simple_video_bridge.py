@@ -1023,6 +1023,13 @@ class VideoStreamNode(Node):
             (s_ch >= 10) | (chroma >= 7)
         )
         white_mask = (s_ch <= 36) & (v_ch >= 145) & (chroma <= 20)
+        backing_mask = (
+            ((s_ch <= 65) & (v_ch >= 120) & (chroma <= 35))
+            | (
+                (h_ch >= 82) & (h_ch <= 115)
+                & (s_ch <= 85) & (v_ch >= 115) & (chroma <= 45)
+            )
+        )
         not_white = ~((s_ch <= 18) & (v_ch >= 160) & (chroma <= 12))
         mask = (target_color & not_white).astype(np.uint8) * 255
 
@@ -1030,6 +1037,12 @@ class VideoStreamNode(Node):
         kernel5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel3, iterations=1)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel5, iterations=1)
+        backing_mask = cv2.morphologyEx(
+            backing_mask.astype(np.uint8) * 255,
+            cv2.MORPH_CLOSE,
+            kernel5,
+            iterations=1,
+        ) > 0
 
         min_r = max(6, int(round(min(h, w) * 0.018)))
         max_r = max(40, min(h, w) // 2)
@@ -1085,6 +1098,7 @@ class VideoStreamNode(Node):
             rx0 = max(0, int(cx) - outer_r)
             rx1 = min(w, int(cx) + outer_r + 1)
             ring_white_ratio = 0.0
+            backing_ratio = 0.0
             if ry1 > ry0 and rx1 > rx0:
                 yy, xx = np.ogrid[ry0:ry1, rx0:rx1]
                 d2 = (xx - cx) ** 2 + (yy - cy) ** 2
@@ -1097,7 +1111,29 @@ class VideoStreamNode(Node):
                     ))
                     ring_white_ratio = ring_white / ring_count
 
-            if ring_white_ratio < 0.12 and area < (min_area * 3):
+            support_r = max(int(radius * 2.45), int(radius) + 14)
+            sy0 = max(0, int(cy) - support_r)
+            sy1 = min(h, int(cy) + support_r + 1)
+            sx0 = max(0, int(cx) - support_r)
+            sx1 = min(w, int(cx) + support_r + 1)
+            backing_count = 0
+            if sy1 > sy0 and sx1 > sx0:
+                yy, xx = np.ogrid[sy0:sy1, sx0:sx1]
+                d2 = (xx - cx) ** 2 + (yy - cy) ** 2
+                surround = d2 >= max(radius * 1.05, radius + 2) ** 2
+                surround_count = int(surround.sum())
+                if surround_count > 0:
+                    backing_count = int(np.count_nonzero(
+                        backing_mask[sy0:sy1, sx0:sx1] & surround
+                    ))
+                    backing_ratio = backing_count / surround_count
+
+            min_backing_ratio = float(os.environ.get(
+                "NOMAD_TASK2_MIN_BACKING_RATIO", "0.22"
+            ))
+            if backing_ratio < min_backing_ratio:
+                continue
+            if backing_count < max(int(area * 1.5), 180):
                 continue
 
             confidence = min(
@@ -1105,6 +1141,7 @@ class VideoStreamNode(Node):
                 0.35
                 + min(fill, 0.75) * 0.35
                 + min(ring_white_ratio, 0.50) * 0.40
+                + min(backing_ratio, 0.55) * 0.25
                 + min(circularity, 0.85) * 0.18,
             )
             rng = self._sample_depth_at(cx, cy, w, h)
