@@ -47,6 +47,14 @@ namespace NOMAD.MissionPlanner
         private CheckBox _chkDetections;
         private bool _overlayEnabled;
         private bool _syncingOverlayState;
+
+        // Crosshair range readout (bottom-right of the video panel). The
+        // value is polled from /api/video/depth/center at ~5 Hz; drawing
+        // happens client-side in OnVideoPaint so it never gets baked into
+        // the RTSP frames sent to other clients.
+        private System.Windows.Forms.Timer _depthPollTimer;
+        private double? _centerDepthM;
+        private DateTime _centerDepthStamp;
         
         // Stream lifecycle serialization - prevents overlapping native GStreamer teardown/startup
         private readonly SemaphoreSlim _lifecycleLock = new SemaphoreSlim(1, 1);
@@ -112,6 +120,12 @@ namespace NOMAD.MissionPlanner
             };
             _videoBox.DoubleClick += (s, e) => ToggleFullscreen();
             _videoBox.Paint += OnVideoPaint;
+
+            // ZED crosshair-depth poll. 5 Hz keeps the readout responsive
+            // without flooding the bridge HTTP server.
+            _depthPollTimer = new System.Windows.Forms.Timer { Interval = 200 };
+            _depthPollTimer.Tick += async (s, e) => await PollCenterDepthAsync();
+            _depthPollTimer.Start();
             
             // Status bar
             _lblStatus = new Label
@@ -917,6 +931,64 @@ namespace NOMAD.MissionPlanner
                     e.Graphics.DrawLine(pen, cx, cy + gap, cx, cy + arm);
                 }
             }
+
+            DrawCenterDepthReadout(e.Graphics);
+        }
+
+        private void DrawCenterDepthReadout(Graphics g)
+        {
+            string text;
+            bool stale = _centerDepthM == null
+                         || (DateTime.UtcNow - _centerDepthStamp).TotalSeconds > 2.0;
+            if (_centerDepthM is double d && !stale)
+                text = $"Range: {d:0.00} m";
+            else
+                text = "Range: --";
+
+            using (var font = new Font("Consolas", 10f, FontStyle.Bold))
+            {
+                var size = g.MeasureString(text, font);
+                int pad = 6;
+                int margin = 8;
+                var rect = new RectangleF(
+                    _videoBox.Width - size.Width - pad * 2 - margin,
+                    _videoBox.Height - size.Height - pad * 2 - margin,
+                    size.Width + pad * 2,
+                    size.Height + pad * 2);
+
+                using (var bg = new SolidBrush(Color.FromArgb(160, 0, 0, 0)))
+                    g.FillRectangle(bg, rect);
+
+                using (var fg = new SolidBrush(stale ? Color.LightGray : Color.LightGreen))
+                    g.DrawString(text, font, fg, rect.X + pad, rect.Y + pad);
+            }
+        }
+
+        private async Task PollCenterDepthAsync()
+        {
+            if (IsDisposed || _stopping) return;
+            try
+            {
+                var resp = await JetsonApiService.ApiClient.GetAsync(
+                    $"{_apiBaseUrl}/api/video/depth/center");
+                if (!resp.IsSuccessStatusCode) return;
+                var body = await resp.Content.ReadAsStringAsync();
+                var json = JObject.Parse(body);
+                var token = json["range_m"];
+                if (token == null || token.Type == JTokenType.Null)
+                {
+                    _centerDepthM = null;
+                }
+                else
+                {
+                    double v = token.Value<double>();
+                    _centerDepthM = (v > 0.0 && !double.IsNaN(v) && !double.IsInfinity(v)) ? (double?)v : null;
+                }
+                _centerDepthStamp = DateTime.UtcNow;
+                if (!IsDisposed && _videoBox != null && _videoBox.IsHandleCreated)
+                    _videoBox.Invalidate();
+            }
+            catch { /* transient network errors are fine — readout will go stale */ }
         }
 
         /// <summary>
@@ -1124,6 +1196,7 @@ namespace NOMAD.MissionPlanner
                     }
                     catch { }
                 }
+                try { _depthPollTimer?.Stop(); _depthPollTimer?.Dispose(); } catch { }
                 StopStream();
                 _lifecycleLock.Dispose();
                 if (_fullscreenForm != null && !_fullscreenForm.IsDisposed)

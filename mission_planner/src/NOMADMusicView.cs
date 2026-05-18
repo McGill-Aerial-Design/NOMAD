@@ -94,14 +94,18 @@ namespace NOMAD.MissionPlanner
             _lstChannels = new CheckedListBox
             {
                 Dock = DockStyle.Top,
-                Height = 100,
+                // Taller so 32 channels are scrollable but several visible at once.
+                Height = 180,
                 BackColor = NOMADTheme.INPUT_BG,
                 ForeColor = TEXT_PRIMARY,
                 BorderStyle = BorderStyle.FixedSingle,
                 CheckOnClick = true,
             };
-            for (int ch = 1; ch <= 8; ch++)
-                _lstChannels.Items.Add("Channel " + ch, ch >= 1 && ch <= 4);
+            // NOMAD's spray/aux motors are wired to channels 17-20; default
+            // those to checked. Range goes up to 32 to cover all SERVO_FUNCTION
+            // slots ArduPilot exposes.
+            for (int ch = 1; ch <= 32; ch++)
+                _lstChannels.Items.Add("Channel " + ch, ch >= 17 && ch <= 20);
             settings.Controls.Add(_lstChannels, 1, 0);
 
             settings.Controls.Add(MakeLabel("Tempo (× speed):"), 0, 1);

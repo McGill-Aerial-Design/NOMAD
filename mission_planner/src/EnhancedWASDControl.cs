@@ -940,16 +940,17 @@ namespace NOMAD.MissionPlanner
             
             try
             {
-                // Create SET_POSITION_TARGET_LOCAL_NED message in BODY_OFFSET_NED
-                // so vx/vy/vz are applied as Front/Right/Down relative to the
-                // vehicle's heading. LOCAL_NED would lock W/S/A/D to North/East
-                // regardless of yaw.
+                // Create SET_POSITION_TARGET_LOCAL_NED message in BODY_FRD
+                // (Forward/Right/Down body frame) so vx/vy/vz are applied
+                // relative to the vehicle's heading. LOCAL_NED would lock
+                // W/S/A/D to North/East regardless of yaw. BODY_FRD is the
+                // modern replacement for the deprecated BODY_OFFSET_NED.
                 var msg = new MAVLink.mavlink_set_position_target_local_ned_t
                 {
                     time_boot_ms = (uint)Environment.TickCount,
                     target_system = MainV2.comPort.MAV.sysid,
                     target_component = MainV2.comPort.MAV.compid,
-                    coordinate_frame = (byte)MAVLink.MAV_FRAME.BODY_OFFSET_NED,
+                    coordinate_frame = (byte)MAVLink.MAV_FRAME.BODY_FRD,
                     
                     // Type mask for velocity + yaw rate control
                     // Bits 0-2: Ignore position (set)

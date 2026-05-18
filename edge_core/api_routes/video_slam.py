@@ -453,6 +453,18 @@ def register_video_slam_routes(app, ctx) -> None:
 
         return await asyncio.to_thread(mgr.get_overlay_status)
 
+    @app.get("/api/video/depth/center", tags=["Video"])
+    async def get_video_center_depth():
+        """ZED depth (meters) at the live video crosshair, or null when no
+        valid sample is available. Mission Planner polls this for the
+        bottom-right range readout. Cheap — reads the bridge's cached depth.
+        """
+        mgr = get_video_stream_manager()
+        if not mgr:
+            return {"range_m": None}
+        val = await asyncio.to_thread(mgr.get_center_depth_m)
+        return {"range_m": val}
+
     # ==================== SLAM 3D Mesh Endpoints ====================
     # These endpoints stream nvblox 3D mesh data for Mission Planner visualization
     # Mesh data is received from ros_http_bridge running inside the Isaac ROS container

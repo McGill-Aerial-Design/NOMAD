@@ -641,6 +641,20 @@ class VideoStreamManager:
             logger.error(f"Error setting overlay mode: {e}")
             return False
 
+    def get_center_depth_m(self) -> Optional[float]:
+        """Sample ZED depth at the video stream center (operator crosshair)."""
+        if not self.is_relay_running():
+            return None
+        try:
+            url = f"http://localhost:{self.relay_http_port}/depth/center"
+            with urlopen(url, timeout=2) as response:
+                data = json.loads(response.read().decode())
+            val = data.get("range_m")
+            return float(val) if val is not None else None
+        except Exception as e:
+            logger.debug(f"Center-depth fetch failed: {e}")
+            return None
+
     def get_overlay_status(self) -> dict:
         """Get current overlay status from the video bridge."""
         if not self.is_relay_running():

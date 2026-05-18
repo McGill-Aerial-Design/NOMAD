@@ -841,7 +841,17 @@ class VideoStreamNode(Node):
             cv2.putText(frame, text, (x1 + 2, ty - baseline - 2),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
-        badge = f"ROS2: {len(detections)} target{'s' if len(detections) != 1 else ''}"
+        # Label the badge with the active detector(s) so the operator can tell
+        # at a glance which task's overlay is currently drawing.
+        if self._overlay_task1 and self._overlay_task2:
+            mode_label = "Task 1+2"
+        elif self._overlay_task2:
+            mode_label = "Task 2"
+        elif self._overlay_task1:
+            mode_label = "Task 1"
+        else:
+            mode_label = "Idle"
+        badge = f"{mode_label}: {len(detections)} target{'s' if len(detections) != 1 else ''}"
         cv2.putText(frame, badge, (10, 25),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2, cv2.LINE_AA)
 
@@ -1481,6 +1491,31 @@ class ControlServer(BaseHTTPRequestHandler):
                     if wanted == 'all' or d.get('_detector') == wanted:
                         dets.append(d)
             self._send_json(200, {'count': len(dets), 'detections': dets})
+
+        elif parsed.path == '/depth/center':
+            # Sample ZED depth at the stream-frame center (the operator
+            # crosshair). Mission Planner polls this for the bottom-right
+            # range readout. depth_seen lets the client distinguish
+            # "no depth subscribed yet" from "no valid pixels at center"
+            # (e.g. NaN saturation when nothing is in range).
+            range_m = None
+            depth_seen = False
+            if self.video_node is not None:
+                with self.video_node._depth_lock:
+                    depth_seen = self.video_node._latest_depth is not None
+                w = int(getattr(self.video_node, 'width', 0) or 0)
+                h = int(getattr(self.video_node, 'height', 0) or 0)
+                if w > 0 and h > 0:
+                    try:
+                        range_m = self.video_node._sample_depth_at(
+                            w / 2.0, h / 2.0, w, h
+                        )
+                    except Exception:
+                        range_m = None
+            self._send_json(200, {
+                'range_m': float(range_m) if range_m is not None else None,
+                'depth_seen': depth_seen,
+            })
 
         elif parsed.path == '/overlay/status':
             det_count = 0
