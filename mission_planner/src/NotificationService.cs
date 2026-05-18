@@ -75,6 +75,13 @@ namespace NOMAD.MissionPlanner
     /// </summary>
     public class NotificationService : IDisposable
     {
+        /// <summary>
+        /// Process-wide instance set by NOMADPlugin at load time. Views should prefer
+        /// this over constructing their own so monitoring (and audio/TTS alerts) runs
+        /// regardless of which tab is open.
+        /// </summary>
+        public static NotificationService Shared { get; set; }
+
         // ============================================================
         // Constants - Thresholds
         // ============================================================
@@ -85,11 +92,14 @@ namespace NOMAD.MissionPlanner
         private const double GPS_HDOP_WARNING = 2.0;
         private const double GPS_HDOP_CRITICAL = 4.0;
 
-        // Battery thresholds
+        // Battery % thresholds (used when ArduPilot has no capacity-based failsafe set;
+        // voltage thresholds are pulled live from BATTn_LOW_VOLT / BATTn_CRT_VOLT params).
         private const double BATTERY_WARNING_PERCENT = 30.0;
         private const double BATTERY_CRITICAL_PERCENT = 15.0;
-        private const double BATTERY_VOLTAGE_WARNING = 14.0; // 4S LiPo warning
-        private const double BATTERY_VOLTAGE_CRITICAL = 13.2; // 4S LiPo critical
+        // Fallback voltage thresholds if the BATTn_LOW_VOLT param hasn't been received yet.
+        // ArduPilot convention: 0 means "disabled"; we treat those as "no voltage check".
+        private const double BATTERY_VOLTAGE_FALLBACK_LOW_PER_CELL = 3.5;
+        private const double BATTERY_VOLTAGE_FALLBACK_CRT_PER_CELL = 3.3;
 
         // VIO thresholds
         private const double VIO_CONFIDENCE_WARNING = 0.5;
@@ -120,6 +130,12 @@ namespace NOMAD.MissionPlanner
         // State tracking for change detection
         private int _lastEkfSource = -1;
         private int _lastGpsFix = -1;
+        // Per-battery severity 0=ok, 1=warning, 2=critical. Indexed by battery number (1, 2, ...).
+        private readonly Dictionary<int, int> _lastBatterySeverity = new Dictionary<int, int>();
+        // Per-battery last-spoken time. The voltage in each phrase changes every poll,
+        // so the AudioAlerts text-dedup never matches — rate-limit per battery here.
+        private readonly Dictionary<int, DateTime> _lastBatterySpeechUtc = new Dictionary<int, DateTime>();
+        private static readonly TimeSpan BatterySpeechInterval = TimeSpan.FromSeconds(10);
         private bool _lastVioActive = false;
         private string _lastBoundaryStatus = "inside";
 
@@ -400,35 +416,158 @@ namespace NOMAD.MissionPlanner
 
         private void CheckBatteryHealth()
         {
-            var cs = MainV2.comPort?.MAV?.cs;
-            if (cs == null) return;
+            var mav = MainV2.comPort?.MAV;
+            if (mav?.cs == null) return;
 
-            double batteryPercent = cs.battery_remaining;
-            double batteryVoltage = cs.battery_voltage;
-
-            // Check percentage
-            if (batteryPercent > 0 && batteryPercent <= BATTERY_CRITICAL_PERCENT)
+            // Walk BATT1 and BATT2. ArduPilot supports up to 9, but we only
+            // care about the two configured on this airframe.
+            for (int idx = 1; idx <= 2; idx++)
             {
+                CheckOneBattery(mav, idx);
+            }
+        }
+
+        private void CheckOneBattery(dynamic mav, int idx)
+        {
+            // Skip if not configured on the vehicle (BATTn_MONITOR == 0 = Disabled).
+            double monitor = GetBattParam(mav, idx, "MONITOR");
+            if (monitor <= 0) return;
+
+            // Live readings from CurrentState. MP exposes per-battery fields as
+            // battery_voltage / battery_voltage2 / ..., same for _remaining.
+            double voltage = GetCsDouble(mav.cs, idx == 1 ? "battery_voltage" : $"battery_voltage{idx}");
+            double percent = GetCsDouble(mav.cs, idx == 1 ? "battery_remaining" : $"battery_remaining{idx}");
+
+            // Thresholds: prefer the vehicle's own params; fall back to per-cell
+            // estimate from BATTn_CELL_COUNT if voltage params aren't set.
+            double lowV = GetBattParam(mav, idx, "LOW_VOLT");
+            double crtV = GetBattParam(mav, idx, "CRT_VOLT");
+            if (lowV <= 0 || crtV <= 0)
+            {
+                double cells = GetBattParam(mav, idx, "CELL_COUNT");
+                if (cells <= 0)
+                {
+                    // Best-effort guess from voltage: nominal 3.7 V/cell
+                    if (voltage > 0) cells = Math.Max(1, Math.Round(voltage / 3.7));
+                }
+                if (cells > 0)
+                {
+                    if (lowV <= 0) lowV = cells * BATTERY_VOLTAGE_FALLBACK_LOW_PER_CELL;
+                    if (crtV <= 0) crtV = cells * BATTERY_VOLTAGE_FALLBACK_CRT_PER_CELL;
+                }
+            }
+
+            string label = $"BATT{idx}";
+            int severity = 0;
+            string detail = $"{label}: {voltage:F1}V";
+            if (percent > 0) detail += $" ({percent:F0}%)";
+
+            // Voltage check (ArduPilot semantics: 0 = disabled)
+            if (crtV > 0 && voltage > 0 && voltage <= crtV)
+            {
+                severity = 2;
                 AddNotification(NotificationSeverity.Critical, NotificationCategory.Battery,
-                    "Battery Critical", $"Battery at {batteryPercent:F0}% - LAND IMMEDIATELY");
+                    $"{label} Voltage Critical",
+                    $"{detail} ≤ CRT_VOLT {crtV:F1}V — LAND NOW");
             }
-            else if (batteryPercent > 0 && batteryPercent <= BATTERY_WARNING_PERCENT)
+            else if (lowV > 0 && voltage > 0 && voltage <= lowV)
             {
+                severity = 1;
                 AddNotification(NotificationSeverity.Warning, NotificationCategory.Battery,
-                    "Battery Low", $"Battery at {batteryPercent:F0}% - consider landing");
+                    $"{label} Voltage Low",
+                    $"{detail} ≤ LOW_VOLT {lowV:F1}V");
             }
 
-            // Check voltage (4S LiPo thresholds)
-            if (batteryVoltage > 0 && batteryVoltage <= BATTERY_VOLTAGE_CRITICAL)
+            // Percent check (only escalates, never downgrades severity from voltage)
+            if (percent > 0 && percent <= BATTERY_CRITICAL_PERCENT && severity < 2)
             {
+                severity = 2;
                 AddNotification(NotificationSeverity.Critical, NotificationCategory.Battery,
-                    "Voltage Critical", $"Battery voltage {batteryVoltage:F1}V - LAND NOW");
+                    $"{label} Critical", $"{detail} — LAND IMMEDIATELY");
             }
-            else if (batteryVoltage > 0 && batteryVoltage <= BATTERY_VOLTAGE_WARNING)
+            else if (percent > 0 && percent <= BATTERY_WARNING_PERCENT && severity < 1)
             {
+                severity = 1;
                 AddNotification(NotificationSeverity.Warning, NotificationCategory.Battery,
-                    "Voltage Low", $"Battery voltage {batteryVoltage:F1}V");
+                    $"{label} Low", $"{detail}");
             }
+
+            // Audio alerts (per battery, transition-driven for warning, repeating for critical).
+            int last = _lastBatterySeverity.TryGetValue(idx, out var v) ? v : 0;
+            if (severity == 2)
+            {
+                AudioAlerts.Play(AlertKind.BatteryCritical);
+                if (CanSpeakBattery(idx))
+                    AudioAlerts.Speak($"Battery {idx} critical, {voltage:F1} volts. Land now.", ignoreRateLimit: true);
+            }
+            else if (severity == 1 && last < 1)
+            {
+                AudioAlerts.Play(AlertKind.BatteryWarning);
+                if (CanSpeakBattery(idx))
+                    AudioAlerts.Speak($"Battery {idx} low, {voltage:F1} volts.", ignoreRateLimit: true);
+            }
+            _lastBatterySeverity[idx] = severity;
+        }
+
+        private bool CanSpeakBattery(int idx)
+        {
+            var now = DateTime.UtcNow;
+            if (_lastBatterySpeechUtc.TryGetValue(idx, out var last) && now - last < BatterySpeechInterval)
+                return false;
+            _lastBatterySpeechUtc[idx] = now;
+            return true;
+        }
+
+        /// <summary>
+        /// Read BATTn_XXX (or BATT_XXX when n==1) from MAVLink params. Returns 0 if missing.
+        /// </summary>
+        private static double GetBattParam(dynamic mav, int idx, string suffix)
+        {
+            try
+            {
+                string name = (idx == 1 ? "BATT_" : $"BATT{idx}_") + suffix;
+                var param = mav.param;
+                if (param == null) return 0;
+                // MP's MAVLinkParamList exposes ContainsKey / indexer with MAVLinkParam values.
+                var containsKey = param.GetType().GetMethod("ContainsKey", new[] { typeof(string) });
+                if (containsKey != null)
+                {
+                    bool has = (bool)containsKey.Invoke(param, new object[] { name });
+                    if (!has) return 0;
+                }
+                var indexer = param.GetType().GetProperty("Item", new[] { typeof(string) });
+                var entry = indexer?.GetValue(param, new object[] { name });
+                if (entry == null) return 0;
+                // entry is MAVLinkParam — has Value (double or float) or implicit conversion.
+                var valueProp = entry.GetType().GetProperty("Value");
+                if (valueProp != null)
+                {
+                    var raw = valueProp.GetValue(entry);
+                    return Convert.ToDouble(raw);
+                }
+                return Convert.ToDouble(entry);
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// Read a numeric field/property by name from CurrentState. Returns 0 if missing.
+        /// </summary>
+        private static double GetCsDouble(object cs, string name)
+        {
+            try
+            {
+                var t = cs.GetType();
+                var prop = t.GetProperty(name);
+                if (prop != null) return Convert.ToDouble(prop.GetValue(cs));
+                var field = t.GetField(name);
+                if (field != null) return Convert.ToDouble(field.GetValue(cs));
+            }
+            catch { }
+            return 0;
         }
 
         private void CheckEKFSource()

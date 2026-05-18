@@ -288,5 +288,18 @@ def register_services_routes(app, ctx) -> None:
             "running": container_running,
         }
 
+        # Target localizer node (Task 1 capture backend). Lives inside the
+        # Isaac ROS container; pulled from the cached runtime probe so this
+        # endpoint stays subprocess-free.
+        try:
+            isaac_cache = getattr(request.app.state, "isaac_runtime_cache", {}) or {}
+            localizer_running = bool(isaac_cache.get("target_localizer_running", False))
+        except Exception:
+            localizer_running = False
+        services["target_localizer"] = {
+            "status": "active" if localizer_running else "inactive",
+            "running": localizer_running,
+        }
+
         return services
 

@@ -88,6 +88,10 @@ private ListBox _lstWalls;
                 _videoPlayer = new EmbeddedVideoPlayer("Task 1 Camera", rtspUrl, true, _jetsonConnectionManager);
                 _videoPlayer.Dock = DockStyle.Fill;
                 videoPanel.Controls.Add(_videoPlayer);
+                // Pin the bridge to the Task 1 (HSV color) circle detector,
+                // turning the Task 2 shape detector off so the two windows
+                // can never display the wrong overlay.
+                _ = SetOverlayModeAsync("task1");
             }
             catch (Exception ex)
             {
@@ -1806,10 +1810,43 @@ private ListBox _lstWalls;
             public override Color SeparatorLight => Color.FromArgb(60, 60, 63);
         }
 
+        private static async Task SetOverlayModeAsync(string mode)
+        {
+            try
+            {
+                await JetsonApiService.PostAsync($"/api/video/overlay/mode?mode={mode}");
+            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
+        }
+
+        private static async Task DisableOverlayDetectorsAsync()
+        {
+            try
+            {
+                await JetsonApiService.PostAsync(
+                    "/api/video/overlay/detectors?task1=false&task2=false");
+            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
+        }
+
+        protected override void OnVisibleChanged(EventArgs e)
+        {
+            base.OnVisibleChanged(e);
+            if (Visible)
+            {
+                // Re-pin task1 in case another view switched the bridge while
+                // this one was hidden.
+                _ = SetOverlayModeAsync("task1");
+            }
+        }
+
         protected override void Dispose(bool disposing)
         {
             if (disposing)
             {
+                // Best-effort: leave the bridge with both detectors off so a
+                // stale detector doesn't keep running after the view closes.
+                _ = DisableOverlayDetectorsAsync();
                 _videoPlayer?.Dispose();
                 _payloadControl?.Dispose();
                 _uploadPanel?.Dispose();

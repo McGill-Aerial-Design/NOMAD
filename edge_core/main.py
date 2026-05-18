@@ -485,10 +485,12 @@ def run(
     try:
         from .gdrive_upload import upload_to_gdrive, gdrive_ready
 
-        if gdrive_ready():
-            def _upload_photo(local_path: str, filename: str) -> str:
-                """Upload spray photo to Google Drive."""
-                file_id = upload_to_gdrive(local_path, filename)
+    _gdrive_task2_folder_id = os.environ.get("GDRIVE_TASK2_FOLDER_ID", "") or None
+
+    if gdrive_ready():
+        def _upload_photo(local_path: str, filename: str) -> str:
+            """Upload spray photo to Google Drive."""
+            file_id = upload_to_gdrive(local_path, filename, folder_id=_gdrive_task2_folder_id)
                 if file_id:
                     logger.info(f"Google Drive upload: {filename} -> id={file_id}")
                 else:

@@ -1320,10 +1320,14 @@ class VideoStreamNode(Node):
         self._overlay_task2 = new_t2
         any_on = self._overlay_task1 or self._overlay_task2
         self._overlay_enabled = any_on
-        self._overlay_mode = (
-            "task2" if (self._overlay_task2 and not self._overlay_task1)
-            else ("task1" if self._overlay_task1 and not self._overlay_task2 else "both")
-        )
+        if self._overlay_task1 and self._overlay_task2:
+            self._overlay_mode = "both"
+        elif self._overlay_task1:
+            self._overlay_mode = "task1"
+        elif self._overlay_task2:
+            self._overlay_mode = "task2"
+        else:
+            self._overlay_mode = "none"
         with self._detections_lock:
             self._detections = []
         self._hsv_last_run_ts = 0.0

@@ -248,6 +248,27 @@ namespace NOMAD.MissionPlanner
             catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
         }
 
+        private static async Task DisableOverlayDetectorsAsync()
+        {
+            try
+            {
+                await JetsonApiService.PostAsync(
+                    "/api/video/overlay/detectors?task1=false&task2=false");
+            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
+        }
+
+        protected override void OnVisibleChanged(EventArgs e)
+        {
+            base.OnVisibleChanged(e);
+            if (Visible)
+            {
+                // Re-pin task2 in case Task 1 (or anything else) switched the
+                // bridge while this view was hidden.
+                _ = SetOverlayModeAsync("task2");
+            }
+        }
+
         // ============================================================
         // Detect & Spray tab
         // ============================================================
@@ -1219,6 +1240,9 @@ namespace NOMAD.MissionPlanner
         {
             if (disposing)
             {
+                // Best-effort: turn detectors off when the view closes so
+                // overlay processing isn't left running.
+                _ = DisableOverlayDetectorsAsync();
                 _modePollTimer?.Dispose();
                 if (_stateStream != null)
                 {

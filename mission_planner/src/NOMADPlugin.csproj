@@ -55,6 +55,7 @@
     <Reference Include="System.IO.Compression.FileSystem" />
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Xml" />
+    <Reference Include="System.Speech" />
     <Reference Include="Microsoft.CSharp" />
     <!-- WPF References for Helix Toolkit 3D Visualization -->
     <Reference Include="PresentationCore" />
@@ -142,7 +143,11 @@
     <Compile Include="LinkHealthPanel.cs" />
     <Compile Include="MAVLinkConnectionManager.cs" />
     <Compile Include="MissionConfig.cs" />
+    <Compile Include="MotorMusicPlayer.cs" />
+    <Compile Include="NOMADMusicView.cs" />
     <Compile Include="MapOverlayManager.cs" />
+    <Compile Include="MPFenceUploader.cs" />
+    <Compile Include="AudioAlerts.cs" />
     <Compile Include="NOMADConfig.cs" />
     <Compile Include="NOMADDashboardView.cs" />
     <Compile Include="NOMADMainScreen.cs" />

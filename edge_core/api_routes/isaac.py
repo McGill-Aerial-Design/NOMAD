@@ -247,6 +247,122 @@ def register_isaac_routes(app, ctx) -> None:
             None, lambda: _systemctl("stop", ("nomad-ros-http-bridge.service",))
         )
 
+    # ==================== Target Localizer (Task 1) ====================
+    # Direct docker-exec control of the target_localizer ROS 2 node.
+    # We don't restart nomad-zed-wrapper.service for this — the wrapper kills
+    # the helper on every restart, and ZED takes ~5s to come back up. Instead
+    # we launch / pkill the python process directly inside the running Isaac
+    # ROS container so the camera stays live.
+
+    TARGET_LOCALIZER_PATTERN = r"target_localizer\.target_localizer_node"
+
+    def _target_localizer_start_in_container() -> dict:
+        """Launch target_localizer inside the Isaac ROS container.
+
+        Mirrors the launch invocation in scripts/services/zed_wrapper.sh so the
+        node sees the same args, log path, and PYTHONPATH whether it was started
+        by the wrapper or by this endpoint.
+        """
+        running_probe = subprocess.run(
+            ["docker", "exec", "nomad_isaac_ros", "pgrep", "-fc", TARGET_LOCALIZER_PATTERN],
+            capture_output=True, text=True, timeout=8,
+        )
+        try:
+            already = int((running_probe.stdout or "0").strip()) > 0
+        except ValueError:
+            already = False
+        if already:
+            return {"success": True, "message": "target_localizer already running", "already_running": True}
+
+        team_name = os.environ.get("NOMAD_TEAM_NAME", "MAD")
+        launch_cmd = (
+            "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
+            "source /workspaces/isaac_ros-dev/install/setup.bash >/dev/null 2>&1; "
+            "PYTHONPATH=/workspaces/isaac_ros-dev/edge_core/target_localizer:${PYTHONPATH:-} "
+            "nohup python3 -m target_localizer.target_localizer_node "
+            "--ros-args "
+            "-p output_dir:=/workspaces/isaac_ros-dev/data/task1_captures "
+            f"-p team_name:={shlex.quote(team_name)} "
+            "-r /zed2i/zed_node/rgb/image_rect_color:=/zed/zed_node/rgb/color/rect/image "
+            "-r /zed2i/zed_node/depth/depth_registered:=/zed/zed_node/depth/depth_registered "
+            "-r /zed2i/zed_node/rgb/camera_info:=/zed/zed_node/rgb/color/rect/camera_info "
+            ">/tmp/nomad_target_localizer.log 2>&1 &"
+        )
+        try:
+            proc = subprocess.run(
+                ["docker", "exec", "-d", "nomad_isaac_ros", "bash", "-c", launch_cmd],
+                capture_output=True, text=True, timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            return {"success": False, "error": "docker exec timed out"}
+        if proc.returncode != 0:
+            return {"success": False, "error": (proc.stderr or proc.stdout or "").strip()}
+
+        # Wait briefly for the /target_localizer/capture_target service to register.
+        deadline = time.time() + 12.0
+        ready = False
+        while time.time() < deadline:
+            probe = subprocess.run(
+                ["docker", "exec", "nomad_isaac_ros", "bash", "-c",
+                 "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
+                 "source /workspaces/isaac_ros-dev/install/setup.bash >/dev/null 2>&1; "
+                 "ROS2CLI_DISABLE_DAEMON=1 ros2 service list 2>/dev/null | "
+                 "grep -q '/target_localizer/capture_target'"],
+                capture_output=True, text=True, timeout=6,
+            )
+            if probe.returncode == 0:
+                ready = True
+                break
+            time.sleep(0.5)
+
+        return {
+            "success": True,
+            "ready": ready,
+            "message": "target_localizer launched"
+                       + ("" if ready else " (service not yet visible — check /tmp/nomad_target_localizer.log)"),
+        }
+
+    def _target_localizer_stop_in_container() -> dict:
+        try:
+            proc = subprocess.run(
+                ["docker", "exec", "nomad_isaac_ros", "pkill", "-f", TARGET_LOCALIZER_PATTERN],
+                capture_output=True, text=True, timeout=8,
+            )
+        except subprocess.TimeoutExpired:
+            return {"success": False, "error": "docker exec timed out"}
+        # pkill returns 1 when no process matched — that's still success for our purposes.
+        no_match = proc.returncode == 1
+        return {
+            "success": proc.returncode in (0, 1),
+            "message": "target_localizer was not running" if no_match else "target_localizer stopped",
+        }
+
+    @app.post("/api/isaac/target_localizer/start", tags=["Isaac ROS"])
+    async def isaac_target_localizer_start():
+        """Launch the target_localizer ROS 2 node inside the Isaac ROS container.
+
+        Does not touch nomad-zed-wrapper.service, so the ZED camera stays up.
+        Idempotent: if the node is already running this returns success.
+        """
+        runtime_state = await asyncio.to_thread(_probe_isaac_runtime_state, force_refresh=True)
+        if not runtime_state.get("container_running", False):
+            raise HTTPException(
+                status_code=503,
+                detail="Isaac ROS container is not running — start it from Service Control first.",
+            )
+        result = await asyncio.to_thread(_target_localizer_start_in_container)
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail=result.get("error", "start failed"))
+        return result
+
+    @app.post("/api/isaac/target_localizer/stop", tags=["Isaac ROS"])
+    async def isaac_target_localizer_stop():
+        """Stop the target_localizer ROS 2 node inside the Isaac ROS container."""
+        result = await asyncio.to_thread(_target_localizer_stop_in_container)
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail=result.get("error", "stop failed"))
+        return result
+
     @app.post("/api/isaac/nvblox/start", tags=["Isaac ROS"])
     async def isaac_nvblox_start():
         """Bring nvblox up via systemd. Idempotent."""

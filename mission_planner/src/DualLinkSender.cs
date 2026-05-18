@@ -771,19 +771,20 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Start target localization without stopping the Isaac ROS container.
+        /// Start the target_localizer ROS 2 node (Task 1 capture backend) inside
+        /// the Isaac ROS container. Does not restart the ZED wrapper.
         /// </summary>
-        public async Task<CommandResult> StartTargetLocalizationAsync()
+        public async Task<CommandResult> StartTargetLocalizerAsync()
         {
-            return await SendHttpPostLongRun("/api/detections/start", null);
+            return await SendHttpPostLongRun("/api/isaac/target_localizer/start", null);
         }
 
         /// <summary>
-        /// Stop target localization without stopping the Isaac ROS container.
+        /// Stop the target_localizer ROS 2 node inside the Isaac ROS container.
         /// </summary>
-        public async Task<CommandResult> StopTargetLocalizationAsync()
+        public async Task<CommandResult> StopTargetLocalizerAsync()
         {
-            return await SendHttpPostLongRun("/api/detections/stop", null);
+            return await SendHttpPostLongRun("/api/isaac/target_localizer/stop", null);
         }
 
         /// <summary>

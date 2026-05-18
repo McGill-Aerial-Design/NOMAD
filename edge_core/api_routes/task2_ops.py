@@ -329,70 +329,6 @@ def register_task2_routes(app, ctx) -> None:
             )
             raise HTTPException(status_code=503, detail=detail)
 
-    def _is_transient_target_capture_error(detail: str) -> bool:
-        """Return True when target capture failure is likely startup/warmup related."""
-        msg = (detail or "").strip().lower()
-        transient_markers = (
-            "no rgb or depth image available",
-            "camera intrinsics not yet received",
-            "ros2 service not available: /target_localizer/capture_target",
-            "failed to probe ros2 service: /target_localizer/capture_target",
-            "isaac ros container stack is not running",
-            "isaac ros nvblox stack is not running",
-            "ros2 service call timed out: /target_localizer/capture_target",
-        )
-        return any(marker in msg for marker in transient_markers)
-
-    async def _call_target_capture_with_retries(
-        *,
-        max_attempts: int = 3,
-        retry_delay_s: float = 2.0,
-        timeout_s: float = 45.0,
-    ) -> str:
-        """Call target_localizer capture service with short retries for warmup races.
-
-        Runs blocking subprocess work in a thread-pool executor so the event loop
-        stays free during the docker exec calls.  Uses cached isaac runtime state
-        and skips the redundant service-type round-trip for this known service.
-        """
-        attempts = max(1, int(max_attempts))
-        last_exc: HTTPException | None = None
-        loop = asyncio.get_running_loop()
-
-        def _blocking_capture() -> str:
-            return _call_ros2_service_in_isaac_container_or_raise(
-                service_name="/target_localizer/capture_target",
-                service_type="std_srvs/srv/Trigger",
-                request_payload={},
-                timeout_s=timeout_s,
-                skip_type_check=True,
-                force_refresh_runtime=False,
-            )
-
-        for attempt in range(1, attempts + 1):
-            try:
-                return await loop.run_in_executor(None, _blocking_capture)
-            except HTTPException as exc:
-                last_exc = exc
-                detail = str(exc.detail)
-                should_retry = (
-                    attempt < attempts and _is_transient_target_capture_error(detail)
-                )
-                if should_retry:
-                    logger.warning(
-                        "Task1 capture transient failure (attempt %s/%s): %s",
-                        attempt,
-                        attempts,
-                        detail,
-                    )
-                    await asyncio.sleep(max(0.1, float(retry_delay_s)))
-                    continue
-                raise
-
-        if last_exc is not None:
-            raise last_exc
-        raise HTTPException(status_code=503, detail="Target capture unavailable")
-
     def _isaac_container_file_exists(file_path: str) -> bool:
         """Check if a file exists inside the Isaac ROS container."""
         normalized = (file_path or "").strip()
@@ -1101,6 +1037,8 @@ def register_task2_routes(app, ctx) -> None:
                 return None
             return real if os.path.exists(real) else None
 
+        task2_folder_id = os.environ.get("GDRIVE_TASK2_FOLDER_ID", "")
+
         targets = [
             (f"{prefix}_before", _safe(before_path)),
             (f"{prefix}_after", _safe(after_path)),
@@ -1116,7 +1054,7 @@ def register_task2_routes(app, ctx) -> None:
             ext = os.path.splitext(path)[1] or ".bin"
             fname = f"{label}_{ts}{ext}"
             try:
-                file_id = upload_to_gdrive(path, fname)
+                file_id = upload_to_gdrive(path, fname, folder_id=task2_folder_id or None)
                 if file_id:
                     ok += 1
                     results.append({"path": path, "name": fname, "file_id": file_id, "error": None})

@@ -72,7 +72,8 @@ namespace NOMAD.MissionPlanner
         private Button _btnLinks;
         private Button _btnCalibration;
         private Button _btnRviz2;
-        
+        private Button _btnMusic;
+
         // Content views
         private UserControl _currentView;
         private NOMADDashboardView _dashboardView;
@@ -85,6 +86,7 @@ namespace NOMAD.MissionPlanner
         private NOMADLinksView _linksView;
         private ZedCalibrationView _calibrationView;
         private Rviz2View _rviz2View;
+        private NOMADMusicView _musicView;
         
         // Update timer
         private System.Windows.Forms.Timer _updateTimer;
@@ -300,6 +302,10 @@ namespace NOMAD.MissionPlanner
             navPanel.Controls.Add(_btnRviz2);
 
             // Caddx Gimbal joystick — opens floating window instead of swapping view
+            _btnMusic = CreateSidebarButton("Motor Music");
+            _btnMusic.Click += (s, e) => ShowView("Music");
+            navPanel.Controls.Add(_btnMusic);
+
             var btnGimbal = CreateSidebarButton("Caddx Gimbal");
             btnGimbal.Click += (s, e) => GimbalJoystickWindow.ShowSingleton(_config, this.FindForm());
             navPanel.Controls.Add(btnGimbal);
@@ -435,6 +441,7 @@ namespace NOMAD.MissionPlanner
                     case "Links": headerText = "Dual Link Status"; break;
                     case "Calibration": headerText = "ZED Camera Calibration"; break;
                     case "Rviz2": headerText = "RViz2 Remote Viewer"; break;
+                    case "Music": headerText = "Motor Music Player"; break;
                 }
                 ((Label)headerLabel[0]).Text = headerText;
             }
@@ -498,6 +505,10 @@ namespace NOMAD.MissionPlanner
                     if (_rviz2View == null) _rviz2View = new Rviz2View(_config);
                     newView = _rviz2View;
                     break;
+                case "Music":
+                    if (_musicView == null) _musicView = new NOMADMusicView();
+                    newView = _musicView;
+                    break;
             }
             
             if (newView != null)
@@ -511,7 +522,7 @@ namespace NOMAD.MissionPlanner
         private void UpdateSidebarButtonState(string viewName)
         {
             // Reset all buttons to default state
-            var buttons = new[] { _btnDashboard, _btnTask1, _btnTask2, _btnBoundaries, _btnVideo, _btnTerminal, _btnHealth, _btnLinks, _btnCalibration, _btnRviz2 };
+            var buttons = new[] { _btnDashboard, _btnTask1, _btnTask2, _btnBoundaries, _btnVideo, _btnTerminal, _btnHealth, _btnLinks, _btnCalibration, _btnRviz2, _btnMusic };
             foreach (var btn in buttons)
             {
                 if (btn != null)
@@ -535,6 +546,7 @@ namespace NOMAD.MissionPlanner
                 case "Links": activeBtn = _btnLinks; break;
                 case "Calibration": activeBtn = _btnCalibration; break;
                 case "Rviz2": activeBtn = _btnRviz2; break;
+                case "Music": activeBtn = _btnMusic; break;
             }
             
             if (activeBtn != null)
@@ -594,6 +606,7 @@ namespace NOMAD.MissionPlanner
                 _linksView?.Dispose();
                 _calibrationView?.Dispose();
                 _rviz2View?.Dispose();
+                _musicView?.Dispose();
             }
             base.Dispose(disposing);
         }

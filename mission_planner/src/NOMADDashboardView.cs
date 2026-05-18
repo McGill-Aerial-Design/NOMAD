@@ -121,16 +121,20 @@ namespace NOMAD.MissionPlanner
             _connectionManager = connectionManager;
             _jetsonConnectionManager = jetsonConnectionManager;
             
-            // Initialize notification service
-            _notificationService = new NotificationService(null, sender);
-            
+            // Prefer the plugin-owned NotificationService so monitoring continues
+            // even when this view is not focused. Fall back to a local one only if
+            // the plugin didn't create one (e.g. running standalone in tests).
+            _notificationService = NotificationService.Shared
+                ?? new NotificationService(null, sender);
+
             InitializeUI();
-            
+
             // Start health polling to keep Jetson status updated
             StartHealthPolling();
-            
-            // Start notification monitoring after UI is initialized
-            _notificationService.StartMonitoring();
+
+            // Start monitoring only if this view actually owns the service (no Shared yet).
+            if (NotificationService.Shared == null)
+                _notificationService.StartMonitoring();
         }
         
         /// <summary>
@@ -775,13 +779,15 @@ namespace NOMAD.MissionPlanner
                     _healthPollTimer = null;
                 }
                 
-                // Stop notification monitoring and dispose the service
-                if (_notificationService != null)
+                // Only dispose the notification service if WE own it. When it's the
+                // plugin-wide Shared instance, the plugin's Exit() handles cleanup so
+                // closing this view doesn't kill alerts for the rest of the session.
+                if (_notificationService != null && _notificationService != NotificationService.Shared)
                 {
                     _notificationService.StopMonitoring();
                     _notificationService.Dispose();
-                    _notificationService = null;
                 }
+                _notificationService = null;
                 
                 // Dispose the embedded video player
                 if (_videoPlayer != null)

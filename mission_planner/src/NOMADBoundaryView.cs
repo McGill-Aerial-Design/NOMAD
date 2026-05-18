@@ -194,16 +194,16 @@ namespace NOMAD.MissionPlanner
             var btnImportKml = CreateButton("KML", ACCENT_COLOR, 48, 22); btnImportKml.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnImportKml.Location = new Point(60, 39); btnImportKml.Click += BtnImportKml_Click; importCard.Controls.Add(btnImportKml);
             var btnImportCSV = CreateButton("Coords", ACCENT_COLOR, 55, 22); btnImportCSV.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnImportCSV.Location = new Point(112, 39); btnImportCSV.Click += BtnImportGoogleMaps_Click; importCard.Controls.Add(btnImportCSV);
             var btnGetFromMP = CreateButton("MP Fence", ACCENT_COLOR, 65, 22); btnGetFromMP.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnGetFromMP.Location = new Point(171, 39); btnGetFromMP.Click += BtnGetFromMP_Click; importCard.Controls.Add(btnGetFromMP);
-            var lblExport = new Label { Text = "Export:", Font = new Font("Segoe UI", 7.5f, FontStyle.Bold), ForeColor = TEXT_SECONDARY, Location = new Point(10, 68), AutoSize = true };
+            var lblExport = new Label { Text = "Send Fence:", Font = new Font("Segoe UI", 7.5f, FontStyle.Bold), ForeColor = TEXT_SECONDARY, Location = new Point(10, 68), AutoSize = true };
             importCard.Controls.Add(lblExport);
-            var btnExportToMPFence = CreateButton("To MP", SUCCESS_COLOR, 55, 22); btnExportToMPFence.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnExportToMPFence.Location = new Point(60, 65); btnExportToMPFence.Click += BtnExportToMPFence_Click; importCard.Controls.Add(btnExportToMPFence);
-            var btnExportFenFile = CreateButton("Save .fen", SUCCESS_COLOR, 65, 22); btnExportFenFile.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnExportFenFile.Location = new Point(119, 65); btnExportFenFile.Click += BtnExportPolyFile_Click; importCard.Controls.Add(btnExportFenFile);
+            var btnExportToMPFence = CreateButton("Push to MP + Drone", SUCCESS_COLOR, 130, 22); btnExportToMPFence.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnExportToMPFence.Location = new Point(75, 65); btnExportToMPFence.Click += BtnExportToMPFence_Click; importCard.Controls.Add(btnExportToMPFence);
+            var btnClearVehicleFence = CreateButton("Clear on Veh", ERROR_COLOR, 75, 22); btnClearVehicleFence.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnClearVehicleFence.Location = new Point(208, 65); btnClearVehicleFence.Click += BtnClearVehicleFence_Click; importCard.Controls.Add(btnClearVehicleFence);
             leftScroll.Controls.Add(importCard);
 
             // 2) Hard Boundary (middle)
             var hardCard = CreateCard("HARD BOUNDARY (Kill)");
             hardCard.Dock = DockStyle.Top;
-            hardCard.Height = 200;
+            hardCard.Height = 210;
             hardCard.Margin = new Padding(0, 3, 0, 0);
 
             _dgvHardBoundary = CreateBoundaryGrid();
@@ -212,17 +212,20 @@ namespace NOMAD.MissionPlanner
             _dgvHardBoundary.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             _dgvHardBoundary.CellValueChanged += (s, e) => SaveBoundaryFromGrid(_dgvHardBoundary, _missionConfig.HardBoundary);
             hardCard.Controls.Add(_dgvHardBoundary);
-            var btnPasteHard = CreateButton("Paste", ACCENT_COLOR, 65, 24); btnPasteHard.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnPasteHard.Location = new Point(10, 158); btnPasteHard.Click += (s, e) => PasteCoordinates(_dgvHardBoundary, _missionConfig.HardBoundary, "hard"); hardCard.Controls.Add(btnPasteHard);
-            var btnAddHard = CreateButton("+ Add", SUCCESS_COLOR, 55, 24); btnAddHard.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnAddHard.Location = new Point(80, 158); btnAddHard.Click += (s, e) => AddManualPoint(_dgvHardBoundary, _missionConfig.HardBoundary); hardCard.Controls.Add(btnAddHard);
-            var btnClearHard = CreateButton("Clear", ERROR_COLOR, 50, 24); btnClearHard.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnClearHard.Location = new Point(140, 158); btnClearHard.Click += (s, e) => ClearBoundary(_dgvHardBoundary, _missionConfig.HardBoundary); hardCard.Controls.Add(btnClearHard);
-            var lblHardCount = new Label { Name = "lblHardCount", Text = $"{_missionConfig.HardBoundary.Vertices.Count} pts", Font = new Font("Segoe UI", 8), ForeColor = Color.Red, Location = new Point(200, 162), AutoSize = true };
+            var btnPasteHard = CreateButton("Paste", ACCENT_COLOR, 55, 24); btnPasteHard.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnPasteHard.Location = new Point(10, 158); btnPasteHard.Click += (s, e) => PasteCoordinates(_dgvHardBoundary, _missionConfig.HardBoundary, "hard"); hardCard.Controls.Add(btnPasteHard);
+            var btnAddHard = CreateButton("+ Add", SUCCESS_COLOR, 45, 24); btnAddHard.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnAddHard.Location = new Point(70, 158); btnAddHard.Click += (s, e) => AddManualPoint(_dgvHardBoundary, _missionConfig.HardBoundary); hardCard.Controls.Add(btnAddHard);
+            var btnDelHard = CreateButton("Del Pt", ACCENT_COLOR, 50, 24); btnDelHard.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnDelHard.Location = new Point(120, 158); btnDelHard.Click += (s, e) => DeleteSelectedPoint(_dgvHardBoundary, _missionConfig.HardBoundary); hardCard.Controls.Add(btnDelHard);
+            var btnClearHard = CreateButton("Clear", ERROR_COLOR, 45, 24); btnClearHard.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnClearHard.Location = new Point(175, 158); btnClearHard.Click += (s, e) => ClearBoundary(_dgvHardBoundary, _missionConfig.HardBoundary); hardCard.Controls.Add(btnClearHard);
+            var lblHardCount = new Label { Name = "lblHardCount", Text = $"{_missionConfig.HardBoundary.Vertices.Count} pts", Font = new Font("Segoe UI", 8, FontStyle.Bold), ForeColor = Color.Red, Location = new Point(150, 22), AutoSize = true };
             hardCard.Controls.Add(lblHardCount);
+            var lblHardSaved = new Label { Name = "lblHardSaved", Text = "", Font = new Font("Segoe UI", 7), ForeColor = TEXT_SECONDARY, Location = new Point(10, 184), AutoSize = true };
+            hardCard.Controls.Add(lblHardSaved);
             leftScroll.Controls.Add(hardCard);
 
             // 1) Soft Boundary (top - added last so it docks on top)
             var softCard = CreateCard("SOFT BOUNDARY (Warning)");
             softCard.Dock = DockStyle.Top;
-            softCard.Height = 200;
+            softCard.Height = 210;
             softCard.Margin = new Padding(0, 0, 0, 0);
 
             _dgvSoftBoundary = CreateBoundaryGrid();
@@ -231,11 +234,14 @@ namespace NOMAD.MissionPlanner
             _dgvSoftBoundary.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             _dgvSoftBoundary.CellValueChanged += (s, e) => SaveBoundaryFromGrid(_dgvSoftBoundary, _missionConfig.SoftBoundary);
             softCard.Controls.Add(_dgvSoftBoundary);
-            var btnPasteSoft = CreateButton("Paste", ACCENT_COLOR, 65, 24); btnPasteSoft.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnPasteSoft.Location = new Point(10, 158); btnPasteSoft.Click += (s, e) => PasteCoordinates(_dgvSoftBoundary, _missionConfig.SoftBoundary, "soft"); softCard.Controls.Add(btnPasteSoft);
-            var btnAddSoft = CreateButton("+ Add", SUCCESS_COLOR, 55, 24); btnAddSoft.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnAddSoft.Location = new Point(80, 158); btnAddSoft.Click += (s, e) => AddManualPoint(_dgvSoftBoundary, _missionConfig.SoftBoundary); softCard.Controls.Add(btnAddSoft);
-            var btnClearSoft = CreateButton("Clear", ERROR_COLOR, 50, 24); btnClearSoft.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnClearSoft.Location = new Point(140, 158); btnClearSoft.Click += (s, e) => ClearBoundary(_dgvSoftBoundary, _missionConfig.SoftBoundary); softCard.Controls.Add(btnClearSoft);
-            var lblSoftCount = new Label { Name = "lblSoftCount", Text = $"{_missionConfig.SoftBoundary.Vertices.Count} pts", Font = new Font("Segoe UI", 8), ForeColor = Color.Yellow, Location = new Point(200, 162), AutoSize = true };
+            var btnPasteSoft = CreateButton("Paste", ACCENT_COLOR, 55, 24); btnPasteSoft.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnPasteSoft.Location = new Point(10, 158); btnPasteSoft.Click += (s, e) => PasteCoordinates(_dgvSoftBoundary, _missionConfig.SoftBoundary, "soft"); softCard.Controls.Add(btnPasteSoft);
+            var btnAddSoft = CreateButton("+ Add", SUCCESS_COLOR, 45, 24); btnAddSoft.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnAddSoft.Location = new Point(70, 158); btnAddSoft.Click += (s, e) => AddManualPoint(_dgvSoftBoundary, _missionConfig.SoftBoundary); softCard.Controls.Add(btnAddSoft);
+            var btnDelSoft = CreateButton("Del Pt", ACCENT_COLOR, 50, 24); btnDelSoft.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnDelSoft.Location = new Point(120, 158); btnDelSoft.Click += (s, e) => DeleteSelectedPoint(_dgvSoftBoundary, _missionConfig.SoftBoundary); softCard.Controls.Add(btnDelSoft);
+            var btnClearSoft = CreateButton("Clear", ERROR_COLOR, 45, 24); btnClearSoft.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnClearSoft.Location = new Point(175, 158); btnClearSoft.Click += (s, e) => ClearBoundary(_dgvSoftBoundary, _missionConfig.SoftBoundary); softCard.Controls.Add(btnClearSoft);
+            var lblSoftCount = new Label { Name = "lblSoftCount", Text = $"{_missionConfig.SoftBoundary.Vertices.Count} pts", Font = new Font("Segoe UI", 8, FontStyle.Bold), ForeColor = Color.Yellow, Location = new Point(150, 22), AutoSize = true };
             softCard.Controls.Add(lblSoftCount);
+            var lblSoftSaved = new Label { Name = "lblSoftSaved", Text = "", Font = new Font("Segoe UI", 7), ForeColor = TEXT_SECONDARY, Location = new Point(10, 184), AutoSize = true };
+            softCard.Controls.Add(lblSoftSaved);
             leftScroll.Controls.Add(softCard);
 
             mainLayout.Controls.Add(leftScroll, 0, 1);
@@ -245,20 +251,25 @@ namespace NOMAD.MissionPlanner
             // ============================================================
             var rightScroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(3) };
 
-            // Dock.Top stacking: add in REVERSE order
-            // 5) Presets (bottom)
-            var presetCard = CreateCard("PRESETS");
+            // Saved Boundaries card is added LAST (below) so it docks at TOP.
+            // Keep variable here for later assembly.
+            var presetCard = CreateCard("SAVED BOUNDARIES (Plugin Storage)");
             presetCard.Dock = DockStyle.Top;
-            presetCard.Height = 80;
-            presetCard.Margin = new Padding(0, 3, 0, 0);
+            presetCard.Height = 110;
+            presetCard.Margin = new Padding(0, 0, 0, 0);
 
-            _cmbPresets = new ComboBox { Location = new Point(10, 40), Size = new Size(150, 22), DropDownStyle = ComboBoxStyle.DropDownList, BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White, Font = new Font("Segoe UI", 8) };
+            var lblPresetHint = new Label { Text = "Current points auto-save. Use this to save named copies you can reload later.", Font = new Font("Segoe UI", 7), ForeColor = TEXT_SECONDARY, Location = new Point(10, 22), AutoSize = false, Size = new Size(295, 28) };
+            presetCard.Controls.Add(lblPresetHint);
+
+            _cmbPresets = new ComboBox { Location = new Point(10, 55), Size = new Size(150, 22), DropDownStyle = ComboBoxStyle.DropDownList, BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White, Font = new Font("Segoe UI", 8) };
             RefreshPresetCombo();
             presetCard.Controls.Add(_cmbPresets);
-            var btnLoadPreset = CreateButton("Load", SUCCESS_COLOR, 45, 22); btnLoadPreset.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnLoadPreset.Location = new Point(165, 40); btnLoadPreset.Click += LoadSelectedPreset; presetCard.Controls.Add(btnLoadPreset);
-            var btnSavePreset = CreateButton("Save", ACCENT_COLOR, 45, 22); btnSavePreset.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnSavePreset.Location = new Point(215, 40); btnSavePreset.Click += SaveCurrentAsPreset; presetCard.Controls.Add(btnSavePreset);
-            var btnDeletePreset = CreateButton("Del", ERROR_COLOR, 35, 22); btnDeletePreset.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnDeletePreset.Location = new Point(265, 40); btnDeletePreset.Click += DeleteSelectedPreset; presetCard.Controls.Add(btnDeletePreset);
-            rightScroll.Controls.Add(presetCard);
+            var btnLoadPreset = CreateButton("Load", SUCCESS_COLOR, 45, 22); btnLoadPreset.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnLoadPreset.Location = new Point(165, 55); btnLoadPreset.Click += LoadSelectedPreset; presetCard.Controls.Add(btnLoadPreset);
+            var btnSavePreset = CreateButton("Save As...", ACCENT_COLOR, 65, 22); btnSavePreset.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnSavePreset.Location = new Point(215, 55); btnSavePreset.Click += SaveCurrentAsPreset; presetCard.Controls.Add(btnSavePreset);
+            var btnDeletePreset = CreateButton("Del", ERROR_COLOR, 35, 22); btnDeletePreset.Font = new Font("Segoe UI", 7, FontStyle.Bold); btnDeletePreset.Location = new Point(282, 55); btnDeletePreset.Click += DeleteSelectedPreset; presetCard.Controls.Add(btnDeletePreset);
+            var lblAutoSave = new Label { Name = "lblAutoSaveStatus", Text = "Auto-saved to plugin config", Font = new Font("Segoe UI", 7, FontStyle.Italic), ForeColor = SUCCESS_COLOR, Location = new Point(10, 85), AutoSize = true };
+            presetCard.Controls.Add(lblAutoSave);
+            // Added later in stacking order to put it on top.
 
             // 3) Violation Actions
             var actionCard = CreateCard("VIOLATION ACTIONS");
@@ -322,7 +333,7 @@ namespace NOMAD.MissionPlanner
             // 1) Monitoring Settings (top - added last)
             var settingsCard = CreateCard("MONITORING");
             settingsCard.Dock = DockStyle.Top;
-            settingsCard.Height = 110;
+            settingsCard.Height = 125;
             settingsCard.Margin = new Padding(0, 0, 0, 0);
 
             var lblTask = new Label { Text = "Task:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(10, 40), AutoSize = true };
@@ -342,7 +353,51 @@ namespace NOMAD.MissionPlanner
             settingsCard.Controls.Add(_nudMaxAlt);
             var lblMeters = new Label { Text = "m AGL", Font = new Font("Segoe UI", 7), ForeColor = TEXT_SECONDARY, Location = new Point(128, 89), AutoSize = true };
             settingsCard.Controls.Add(lblMeters);
+
+            // Test audio: pick a pattern from a dropdown and play it. Lets the user
+            // confirm the alert sound + know what each in-flight beep means.
+            var cmbTestAudio = new ComboBox
+            {
+                Location = new Point(170, 60),
+                Size = new Size(115, 22),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                BackColor = Color.FromArgb(50, 50, 53),
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 7.5f),
+            };
+            cmbTestAudio.Items.AddRange(new object[] {
+                "Soft boundary",
+                "Hard boundary",
+                "Battery warning",
+                "Battery critical",
+            });
+            cmbTestAudio.SelectedIndex = 0;
+            settingsCard.Controls.Add(cmbTestAudio);
+            var btnTestAudio = CreateButton("Test", ACCENT_COLOR, 50, 22);
+            btnTestAudio.Font = new Font("Segoe UI", 7, FontStyle.Bold);
+            btnTestAudio.Location = new Point(170, 85);
+            btnTestAudio.Click += (s, e) =>
+            {
+                var kind = (AlertKind)cmbTestAudio.SelectedIndex;
+                AudioAlerts.Play(kind, ignoreRateLimit: true);
+                string spoken;
+                switch (kind)
+                {
+                    case AlertKind.BoundarySoft:    spoken = "Soft boundary warning. Turn around."; break;
+                    case AlertKind.BoundaryHard:    spoken = "Hard boundary violation. Kill required."; break;
+                    case AlertKind.BatteryWarning:  spoken = "Battery low. Test alert."; break;
+                    case AlertKind.BatteryCritical: spoken = "Battery critical. Land now. Test alert."; break;
+                    default: spoken = "Test alert."; break;
+                }
+                AudioAlerts.Speak(spoken, ignoreRateLimit: true);
+                CustomMessageBox.Show(AudioAlerts.DescribePattern(kind) + "\n\nSpoken: " + spoken, "Playing test alert");
+            };
+            settingsCard.Controls.Add(btnTestAudio);
+
             rightScroll.Controls.Add(settingsCard);
+
+            // Added LAST so it docks at the very top — promotes Saved Boundaries.
+            rightScroll.Controls.Add(presetCard);
 
             mainLayout.Controls.Add(rightScroll, 1, 1);
 
@@ -425,11 +480,59 @@ namespace NOMAD.MissionPlanner
         {
             var softLabel = this.Controls.Find("lblSoftCount", true).FirstOrDefault() as Label;
             var hardLabel = this.Controls.Find("lblHardCount", true).FirstOrDefault() as Label;
-            
+            var softSaved = this.Controls.Find("lblSoftSaved", true).FirstOrDefault() as Label;
+            var hardSaved = this.Controls.Find("lblHardSaved", true).FirstOrDefault() as Label;
+            string stamp = $"Saved {DateTime.Now:HH:mm:ss} to plugin config";
+
             if (softLabel != null)
                 softLabel.Text = $"Points: {_missionConfig.SoftBoundary.Vertices.Count}";
             if (hardLabel != null)
                 hardLabel.Text = $"Points: {_missionConfig.HardBoundary.Vertices.Count}";
+            if (softSaved != null)
+                softSaved.Text = _missionConfig.SoftBoundary.Vertices.Count > 0 ? stamp : "No points";
+            if (hardSaved != null)
+                hardSaved.Text = _missionConfig.HardBoundary.Vertices.Count > 0 ? stamp : "No points";
+        }
+
+        private void DeleteSelectedPoint(DataGridView dgv, FlightBoundary boundary)
+        {
+            try
+            {
+                var rows = dgv.SelectedRows.Cast<DataGridViewRow>().OrderByDescending(r => r.Index).ToList();
+                if (rows.Count == 0 && dgv.CurrentCell != null)
+                {
+                    var r = dgv.Rows[dgv.CurrentCell.RowIndex];
+                    if (r != null) rows.Add(r);
+                }
+                if (rows.Count == 0)
+                {
+                    CustomMessageBox.Show("Select a row in the grid first.", "Delete Point");
+                    return;
+                }
+                foreach (var r in rows)
+                {
+                    int idx = r.Index;
+                    if (idx >= 0 && idx < boundary.Vertices.Count)
+                        boundary.Vertices.RemoveAt(idx);
+                    dgv.Rows.RemoveAt(idx);
+                }
+                _missionConfig.Save();
+                UpdatePointCounts();
+                AutoDrawBoundariesIfEnabled();
+            }
+            catch (Exception ex)
+            {
+                CustomMessageBox.Show($"Delete failed: {ex.Message}", "Error");
+            }
+        }
+
+        private void BtnClearVehicleFence_Click(object sender, EventArgs e)
+        {
+            if (CustomMessageBox.Show("Disable fence and clear all fence points on the connected vehicle?", "Confirm",
+                CustomMessageBox.MessageBoxButtons.YesNo) != CustomMessageBox.DialogResult.Yes)
+                return;
+            var r = MPFenceUploader.ClearFence();
+            CustomMessageBox.Show(r.Message, r.Success ? "Cleared" : "Failed");
         }
         
         private void PasteCoordinates(DataGridView dgv, FlightBoundary boundary, string boundaryType)
@@ -974,182 +1077,61 @@ namespace NOMAD.MissionPlanner
                 var vertices = GetSelectedBoundaryVertices(out string boundaryName);
                 if (vertices == null || vertices.Count < 3)
                 {
-                    CustomMessageBox.Show("No boundary points to export (need at least 3).", "Warning");
+                    CustomMessageBox.Show("No boundary points to push (need at least 3).", "Warning");
                     return;
                 }
 
-                // Return point: use saved or compute centroid
-                double cLat, cLon;
-                if (_missionConfig.ReturnPoint != null)
-                {
-                    cLat = _missionConfig.ReturnPoint.Lat;
-                    cLon = _missionConfig.ReturnPoint.Lon;
-                }
-                else
-                {
-                    cLat = 0; cLon = 0;
-                    foreach (var v in vertices) { cLat += v.Lat; cLon += v.Lon; }
-                    cLat /= vertices.Count; cLon /= vertices.Count;
-                }
-
-                // Save as temp .fen file in MP's fence directory
-                var mpDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-                    "Mission Planner");
-                if (!Directory.Exists(mpDir))
-                    mpDir = Path.GetTempPath();
-
-                var fenPath = Path.Combine(mpDir, "nomad_fence.fen");
-                using (var writer = new StreamWriter(fenPath))
-                {
-                    writer.WriteLine("#saved by NOMAD Plugin");
-                    writer.WriteLine($"{cLat:F13} {cLon:F13}");
-                    foreach (var v in vertices)
-                        writer.WriteLine($"{v.Lat:F7} {v.Lon:F7}");
-                    writer.WriteLine($"{vertices[0].Lat:F7} {vertices[0].Lon:F7}");
-                }
-
-                // Try to trigger MP's fence load via FlightPlanner reflection
-                bool loaded = false;
-                try
-                {
-                    var fpType = AppDomain.CurrentDomain.GetAssemblies()
-                        .SelectMany(a => { try { return a.GetTypes(); } catch { return new Type[0]; } })
-                        .FirstOrDefault(t => t.FullName == "MissionPlanner.GCSViews.FlightPlanner");
-
-                    if (fpType != null)
-                    {
-                        var fpInstance = fpType.GetProperty("instance",
-                            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static |
-                            System.Reflection.BindingFlags.NonPublic)?.GetValue(null)
-                            ?? fpType.GetField("instance",
-                            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static |
-                            System.Reflection.BindingFlags.NonPublic)?.GetValue(null);
-
-                        if (fpInstance != null)
-                        {
-                            // Try calling loadFenceFromFile or similar method
-                            foreach (var methodName in new[] { "loadFenceFromFile", "LoadFenceFromFile", "BUT_loadfence_Click" })
-                            {
-                                var method = fpType.GetMethod(methodName,
-                                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance |
-                                    System.Reflection.BindingFlags.NonPublic);
-                                if (method != null)
-                                {
-                                    var parms = method.GetParameters();
-                                    if (parms.Length == 1 && parms[0].ParameterType == typeof(string))
-                                    {
-                                        method.Invoke(fpInstance, new object[] { fenPath });
-                                        loaded = true;
-                                        break;
-                                    }
-                                    else if (parms.Length == 0)
-                                    {
-                                        // Some MP versions take no args - they prompt a file dialog
-                                        // Skip these
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"NOMAD: Could not auto-load fence: {ex.Message}");
-                }
-
-                // Also draw on FlightData map via NOMAD overlay
                 bool isSoft = boundaryName == "Soft";
                 var strokeColor = isSoft ? Color.Yellow : Color.Red;
                 var fillColor = isSoft ? Color.FromArgb(60, Color.Yellow) : Color.FromArgb(60, Color.Red);
                 string polyName = $"NOMAD_{boundaryName}_Fence";
 
+                // 1) Draw on Data map overlay
                 try
                 {
                     MapOverlayManager.DrawPolygon(vertices, polyName, strokeColor, fillColor, isSoft ? 2 : 3);
                     MapOverlayManager.RefreshMap();
                 }
-                catch { }
+                catch (Exception ex) { Console.WriteLine($"NOMAD: Data map draw failed - {ex.Message}"); }
 
-                // Also try geofence overlay injection
-                try { MapOverlayManager.ExportToMPGeoFence(vertices, polyName, strokeColor, fillColor, isSoft ? 2 : 3); } catch { }
+                // 2) Inject into MP's Plan-view geofence overlay
+                bool planInjected = false;
+                try
+                {
+                    planInjected = MapOverlayManager.ExportToMPGeoFence(vertices, polyName, strokeColor, fillColor, isSoft ? 2 : 3);
+                }
+                catch (Exception ex) { Console.WriteLine($"NOMAD: Plan map inject failed - {ex.Message}"); }
 
-                if (loaded)
-                {
-                    CustomMessageBox.Show(
-                        $"Loaded {vertices.Count} {boundaryName} boundary points as MP fence.\nFence should be visible on Plan + Data maps.",
-                        "Success");
-                }
-                else
-                {
-                    CustomMessageBox.Show(
-                        $"Fence file saved to:\n{fenPath}\n\nTo load in Mission Planner:\nPlan view > Right-click map > Geo-Fence > Load from File\n\nBoundary also drawn on Data map overlay.",
-                        "Fence Exported");
-                }
+                // 3) Upload to connected vehicle via MAVLink and set FENCE_* params
+                int fenceAction = MapFenceActionToParam(_missionConfig.Failsafe.HardBoundaryAction);
+                var upload = MPFenceUploader.UploadPolygon(
+                    vertices,
+                    _missionConfig.ReturnPoint,
+                    _missionConfig.MaxAltitudeAglMeters,
+                    fenceAction,
+                    enableFence: true);
+
+                var parts = new List<string>();
+                parts.Add($"Boundary: {boundaryName} ({vertices.Count} pts)");
+                parts.Add(planInjected ? "Plan map: injected" : "Plan map: not available");
+                parts.Add(upload.Success ? "Vehicle: " + upload.Message : "Vehicle: " + upload.Message);
+                CustomMessageBox.Show(string.Join("\n", parts), upload.Success ? "Pushed to MP + Drone" : "Partial");
             }
             catch (Exception ex)
             {
-                CustomMessageBox.Show($"Error exporting fence: {ex.Message}", "Error");
+                CustomMessageBox.Show($"Error pushing fence: {ex.Message}", "Error");
             }
         }
 
-        private void BtnExportPolyFile_Click(object sender, EventArgs e)
+        private static int MapFenceActionToParam(string action)
         {
-            try
+            // ArduPilot FENCE_ACTION: 0=Report, 1=RTL or Land, 2=Always Land, 3=SmartRTL, 4=Brake, 5=SmartRTL-or-Land
+            switch ((action ?? "warn_and_kill").ToLower())
             {
-                var vertices = GetSelectedBoundaryVertices(out string boundaryName);
-                if (vertices == null || vertices.Count < 3)
-                {
-                    CustomMessageBox.Show("No boundary points to export (need at least 3).", "Warning");
-                    return;
-                }
-
-                using (var sfd = new SaveFileDialog())
-                {
-                    sfd.Title = $"Save {boundaryName} Boundary as Fence File";
-                    sfd.Filter = "Fence Files (*.fen)|*.fen|Poly Files (*.poly)|*.poly|All Files (*.*)|*.*";
-                    sfd.FileName = $"NOMAD_{boundaryName}_Fence.fen";
-                    sfd.DefaultExt = "fen";
-
-                    if (sfd.ShowDialog() == DialogResult.OK)
-                    {
-                        // Return point: use saved return point or compute centroid
-                        double cLat, cLon;
-                        if (_missionConfig.ReturnPoint != null)
-                        {
-                            cLat = _missionConfig.ReturnPoint.Lat;
-                            cLon = _missionConfig.ReturnPoint.Lon;
-                        }
-                        else
-                        {
-                            cLat = 0; cLon = 0;
-                            foreach (var v in vertices) { cLat += v.Lat; cLon += v.Lon; }
-                            cLat /= vertices.Count;
-                            cLon /= vertices.Count;
-                        }
-
-                        using (var writer = new StreamWriter(sfd.FileName))
-                        {
-                            writer.WriteLine("#saved by NOMAD Plugin");
-                            // Return point (centroid) - required first line
-                            writer.WriteLine($"{cLat:F13} {cLon:F13}");
-                            // Polygon vertices
-                            foreach (var v in vertices)
-                            {
-                                writer.WriteLine($"{v.Lat:F7} {v.Lon:F7}");
-                            }
-                            // Close polygon (repeat first vertex)
-                            writer.WriteLine($"{vertices[0].Lat:F7} {vertices[0].Lon:F7}");
-                        }
-
-                        CustomMessageBox.Show(
-                            $"Saved {vertices.Count} fence points to:\n{sfd.FileName}\n\nTo load in Mission Planner:\nPlan view > Right-click > Geo-Fence > Load from File",
-                            "Fence File Saved");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                CustomMessageBox.Show($"Error saving fence file: {ex.Message}", "Error");
+                case "warn_only": return 0;
+                case "auto_kill": return 2; // Land
+                case "warn_and_kill": return 1; // RTL
+                default: return 1;
             }
         }
 

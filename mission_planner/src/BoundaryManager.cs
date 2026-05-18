@@ -244,6 +244,7 @@ namespace NOMAD.MissionPlanner
             if (_missionConfig.Failsafe.EnableAudioWarnings)
             {
                 PlayWarningSound(false);
+                AudioAlerts.Speak("Approaching boundary. Turn around.");
             }
         }
 
@@ -282,23 +283,13 @@ namespace NOMAD.MissionPlanner
             if (_missionConfig.Failsafe.EnableAudioWarnings)
             {
                 PlayWarningSound(true);
+                AudioAlerts.Speak($"Hard boundary violation. Kill required in {_missionConfig.Failsafe.HardBoundaryKillDelaySec} seconds.");
             }
         }
 
         private void PlayWarningSound(bool urgent)
         {
-            try
-            {
-                if (urgent)
-                {
-                    SystemSounds.Hand.Play();
-                }
-                else
-                {
-                    SystemSounds.Exclamation.Play();
-                }
-            }
-            catch { /* Ignore sound errors */ }
+            AudioAlerts.Play(urgent ? AlertKind.BoundaryHard : AlertKind.BoundarySoft);
         }
 
         public void Dispose()

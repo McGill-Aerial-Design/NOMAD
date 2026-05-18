@@ -46,6 +46,7 @@ namespace NOMAD.MissionPlanner
         private NOMADConfig _config;
         private MissionConfig _missionConfig;
         private BoundaryMonitor _boundaryMonitor;
+        private NotificationService _notificationService;
         private DualLinkSender _sender;
         private MAVLinkConnectionManager _connectionManager;  // Dual link manager
         private JetsonConnectionManager _jetsonConnectionManager;  // Jetson HTTP connectivity
@@ -145,6 +146,16 @@ namespace NOMAD.MissionPlanner
                 
                 // Initialize boundary monitor for competition
                 _boundaryMonitor = new BoundaryMonitor(_missionConfig, _config);
+
+                // Notification service runs plugin-wide so battery / GPS / boundary
+                // alerts (including audio + TTS) fire regardless of which NOMAD tab
+                // is open — and even when the user is on a non-NOMAD MP screen.
+                _notificationService = new NotificationService(_boundaryMonitor, _sender);
+                NotificationService.Shared = _notificationService;
+                _notificationService.StartMonitoring();
+
+                // Startup chime + spoken welcome (fires once per process).
+                AudioAlerts.PlayWelcomeOnce();
 
                 // Initialize Jetson connection manager for non-blocking UI
                 _jetsonConnectionManager = new JetsonConnectionManager(_config);
@@ -380,6 +391,12 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
+                // Stop notification service
+                if (NotificationService.Shared == _notificationService) NotificationService.Shared = null;
+                _notificationService?.StopMonitoring();
+                _notificationService?.Dispose();
+                _notificationService = null;
+
                 // Stop boundary monitor
                 _boundaryMonitor?.StopMonitoring();
                 _boundaryMonitor?.Dispose();

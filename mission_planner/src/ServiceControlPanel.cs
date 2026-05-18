@@ -43,7 +43,7 @@ namespace NOMAD.MissionPlanner
         private Label _lblNoVncStatus;
         private Label _lblEdgeCoreStatus;
         private Label _lblIsaacRosStatus;
-        private Label _lblTargetLocalizationStatus;
+        private Label _lblTargetLocalizerStatus;
         private Label _lblVioStatus;
         
         // Service control buttons
@@ -54,8 +54,8 @@ namespace NOMAD.MissionPlanner
         private Button _btnNoVncStop;
         private Button _btnIsaacRosStart;
         private Button _btnVioReset;
-        private Button _btnTargetLocalizationStart;
-        private Button _btnTargetLocalizationStop;
+        private Button _btnTargetLocalizerStart;
+        private Button _btnTargetLocalizerStop;
         
         // VIO trajectory info
         private Label _lblVioTrajectoryPoints;
@@ -196,8 +196,8 @@ namespace NOMAD.MissionPlanner
             // === ROS HTTP Bridge (with Start/Stop) ===
             AddRosBridgeRow(ref yOffset);
 
-            // === Target Localization (with Start/Stop) ===
-            AddTargetLocalizationRow(ref yOffset);
+            // === Target Localizer (Task 1 capture backend) ===
+            AddTargetLocalizerRow(ref yOffset);
 
             // === Nvblox (with Launch/Stop) ===
             AddNvbloxRow(ref yOffset);
@@ -390,8 +390,13 @@ namespace NOMAD.MissionPlanner
             _logPanel.Controls.Add(lblLogTitle);
         }
         
+        // Suppresses CheckedChanged → PushDetectorState while we mirror server
+        // state into the checkboxes from a periodic poll.
+        private bool _suppressDetectorPush;
+
         private async Task PushDetectorState()
         {
+            if (_suppressDetectorPush) return;
             try
             {
                 bool t1 = _chkDetectorTask1?.Checked ?? false;
@@ -434,9 +439,16 @@ namespace NOMAD.MissionPlanner
                 bool t2 = json["task2_enabled"]?.Value<bool>() ?? false;
                 BeginInvoke(new Action(() =>
                 {
-                    if (_chkDetectorTask1 != null) _chkDetectorTask1.Checked = t1;
-                    if (_chkDetectorTask2 != null) _chkDetectorTask2.Checked = t2;
-                    SetDetectorStatus($"Active — task1={t1} task2={t2}");
+                    _suppressDetectorPush = true;
+                    try
+                    {
+                        if (_chkDetectorTask1 != null) _chkDetectorTask1.Checked = t1;
+                        if (_chkDetectorTask2 != null) _chkDetectorTask2.Checked = t2;
+                    }
+                    finally { _suppressDetectorPush = false; }
+                    SetDetectorStatus(t1 || t2
+                        ? $"Active — task1={t1} task2={t2}"
+                        : "Both detectors disabled");
                 }));
             }
             catch { }
@@ -598,7 +610,7 @@ namespace NOMAD.MissionPlanner
             yOffset += 35;
         }
 
-        private void AddTargetLocalizationRow(ref int yOffset)
+        private void AddTargetLocalizerRow(ref int yOffset)
         {
             int leftCol = ServiceLeftCol;
             int startCol = ServiceStartCol;
@@ -606,14 +618,14 @@ namespace NOMAD.MissionPlanner
 
             var lblName = new Label
             {
-                Text = "Target Localization:",
+                Text = "Target Localizer:",
                 Location = new Point(leftCol, yOffset + 3),
                 Size = new Size(130, 20),
-                ForeColor = Color.LightGray
+                ForeColor = Color.LightGray,
             };
             _servicesPanel.Controls.Add(lblName);
 
-            _lblTargetLocalizationStatus = new Label
+            _lblTargetLocalizerStatus = new Label
             {
                 Text = "Checking...",
                 Location = new Point(ServiceStatusCol, yOffset + 3),
@@ -621,9 +633,9 @@ namespace NOMAD.MissionPlanner
                 ForeColor = Color.Yellow,
                 Anchor = AnchorStyles.Top | AnchorStyles.Left,
             };
-            _servicesPanel.Controls.Add(_lblTargetLocalizationStatus);
+            _servicesPanel.Controls.Add(_lblTargetLocalizerStatus);
 
-            _btnTargetLocalizationStart = new Button
+            _btnTargetLocalizerStart = new Button
             {
                 Text = "Start",
                 Location = new Point(startCol, yOffset),
@@ -633,10 +645,10 @@ namespace NOMAD.MissionPlanner
                 FlatStyle = FlatStyle.Flat,
                 Anchor = AnchorStyles.Top | AnchorStyles.Left,
             };
-            _btnTargetLocalizationStart.Click += async (s, e) => await StartTargetLocalizationAsync();
-            _servicesPanel.Controls.Add(_btnTargetLocalizationStart);
+            _btnTargetLocalizerStart.Click += async (s, e) => await StartTargetLocalizerAsync();
+            _servicesPanel.Controls.Add(_btnTargetLocalizerStart);
 
-            _btnTargetLocalizationStop = new Button
+            _btnTargetLocalizerStop = new Button
             {
                 Text = "Stop",
                 Location = new Point(stopCol, yOffset),
@@ -646,8 +658,8 @@ namespace NOMAD.MissionPlanner
                 FlatStyle = FlatStyle.Flat,
                 Anchor = AnchorStyles.Top | AnchorStyles.Left,
             };
-            _btnTargetLocalizationStop.Click += async (s, e) => await StopTargetLocalizationAsync();
-            _servicesPanel.Controls.Add(_btnTargetLocalizationStop);
+            _btnTargetLocalizerStop.Click += async (s, e) => await StopTargetLocalizerAsync();
+            _servicesPanel.Controls.Add(_btnTargetLocalizerStop);
 
             yOffset += 35;
         }
@@ -829,14 +841,9 @@ namespace NOMAD.MissionPlanner
                         UpdateStatusLabel(_lblIsaacRosStatus, isaacRunning, isaacText);
                         isaacRunningFromServices = isaacRunning;
 
-                        bool targetLocalizationRunning = services["detections"]?["running"]?.Value<bool>() ?? false;
-                        string detectionMessage = services["detections"]?["message"]?.Value<string>();
-                        int detectionCount = services["detections"]?["current_count"]?.Value<int>() ?? 0;
-                        int detectionHistory = services["detections"]?["history_count"]?.Value<int>() ?? 0;
-                        string detectionText = targetLocalizationRunning
-                            ? $"Running ({detectionCount} current, {detectionHistory} history)"
-                            : (string.IsNullOrWhiteSpace(detectionMessage) ? "Stopped" : detectionMessage);
-                        UpdateStatusLabel(_lblTargetLocalizationStatus, targetLocalizationRunning, detectionText);
+                        bool localizerRunning = services["target_localizer"]?["running"]?.Value<bool>() ?? false;
+                        UpdateStatusLabel(_lblTargetLocalizerStatus, localizerRunning,
+                            localizerRunning ? "Running" : "Stopped");
 
                         servicesFresh = true;
                         _servicesFailStreak = 0;
@@ -861,7 +868,7 @@ namespace NOMAD.MissionPlanner
                 {
                     UpdateStatusPendingIfChecking(_lblNoVncStatus, "Waiting...");
                     UpdateStatusPendingIfChecking(_lblIsaacRosStatus, "Waiting...");
-                    UpdateStatusPendingIfChecking(_lblTargetLocalizationStatus, "Waiting...");
+                    UpdateStatusPendingIfChecking(_lblTargetLocalizerStatus, "Waiting...");
                     UpdateStatusPendingIfChecking(_lblNvbloxStatus, "Waiting...");
                     UpdateStatusPendingIfChecking(_lblVioStatus, "Waiting...");
                     UpdateStatusPendingIfChecking(_lblVideoBridgesStatus, "Waiting...");
@@ -1043,6 +1050,10 @@ namespace NOMAD.MissionPlanner
                     }
                 }
                 
+                // Re-sync the circle-detector checkboxes from the bridge so the
+                // panel reflects toggles made by Task 1 / Task 2 views.
+                await RefreshDetectorState();
+
                 // Update timestamp
                 var suffix = servicesFresh ? string.Empty : " (partial/stale)";
                 UpdateLabel(_lblLastUpdate, $"Last update: {DateTime.Now:HH:mm:ss}{suffix}");
@@ -1161,7 +1172,6 @@ namespace NOMAD.MissionPlanner
             UpdateStatusLabel(_lblMavlinkStatus, false, "Restarting...");
             UpdateStatusLabel(_lblMediamtxStatus, false, "Restarting...");
             UpdateStatusLabel(_lblIsaacRosStatus, false, "Restarting...");
-            UpdateStatusLabel(_lblTargetLocalizationStatus, false, "Restarting...");
             UpdateStatusLabel(_lblVideoBridgesStatus, false, "Restarting...");
             
             // Use SSH instead of HTTP API (since we're killing edge_core)
@@ -1247,39 +1257,35 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private async Task StartTargetLocalizationAsync()
+        private async Task StartTargetLocalizerAsync()
         {
-            LogMessage("Starting target localization...");
-            UpdateStatusLabel(_lblTargetLocalizationStatus, false, "Starting...");
-
-            var result = await _sender.StartTargetLocalizationAsync();
-
+            LogMessage("Starting target_localizer node...");
+            UpdateStatusLabel(_lblTargetLocalizerStatus, false, "Starting...");
+            var result = await _sender.StartTargetLocalizerAsync();
             if (result.Success)
             {
-                LogMessage("Target localization start command sent");
+                LogMessage("target_localizer start command sent");
             }
             else
             {
-                LogMessage($"Failed to start target localization: {result.Message}");
-                UpdateStatusLabel(_lblTargetLocalizationStatus, false, "Start Failed");
+                LogMessage($"Failed to start target_localizer: {result.Message}");
+                UpdateStatusLabel(_lblTargetLocalizerStatus, false, "Start Failed");
             }
         }
 
-        private async Task StopTargetLocalizationAsync()
+        private async Task StopTargetLocalizerAsync()
         {
-            LogMessage("Stopping target localization...");
-            UpdateStatusLabel(_lblTargetLocalizationStatus, false, "Stopping...");
-
-            var result = await _sender.StopTargetLocalizationAsync();
-
+            LogMessage("Stopping target_localizer node...");
+            UpdateStatusLabel(_lblTargetLocalizerStatus, false, "Stopping...");
+            var result = await _sender.StopTargetLocalizerAsync();
             if (result.Success)
             {
-                LogMessage("Target localization stopped");
-                UpdateStatusLabel(_lblTargetLocalizationStatus, false, "Stopped");
+                LogMessage("target_localizer stopped");
+                UpdateStatusLabel(_lblTargetLocalizerStatus, false, "Stopped");
             }
             else
             {
-                LogMessage($"Failed to stop target localization: {result.Message}");
+                LogMessage($"Failed to stop target_localizer: {result.Message}");
             }
         }
 
