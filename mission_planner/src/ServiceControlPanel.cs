@@ -407,7 +407,10 @@ namespace NOMAD.MissionPlanner
                 // and disabled (saves CPU) when both are off.
                 if (any)
                 {
-                    await JetsonApiService.PostAsync("/api/video/overlay/enable");
+                    // /overlay/detectors enables the overlay with the exact
+                    // requested detector mask. Calling /overlay/enable first
+                    // briefly selects the legacy Task 1 detector and can draw
+                    // false HSV targets for a few frames.
                     var resp = await JetsonApiService.PostAsync(
                         $"/api/video/overlay/detectors?task1={(t1 ? "true" : "false")}&task2={(t2 ? "true" : "false")}");
                     SetDetectorStatus(resp.IsSuccessStatusCode

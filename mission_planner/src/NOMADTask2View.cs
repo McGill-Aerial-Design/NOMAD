@@ -248,7 +248,9 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                await JetsonApiService.PostAsync("/api/video/overlay/enable");
+                // /overlay/detectors enables the overlay by itself. Avoid
+                // /overlay/enable here because that legacy endpoint briefly
+                // selects the Task 1 HSV detector before this Task 2 command.
                 await JetsonApiService.PostAsync(
                     "/api/video/overlay/detectors?task1=false&task2=true");
                 await JetsonApiService.PostAsync("/api/video/overlay/mode?mode=task2");

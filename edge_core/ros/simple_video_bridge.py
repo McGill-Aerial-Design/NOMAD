@@ -1108,6 +1108,12 @@ class VideoStreamNode(Node):
                 + min(circularity, 0.85) * 0.18,
             )
             rng = self._sample_depth_at(cx, cy, w, h)
+            require_depth = os.environ.get(
+                "NOMAD_TASK2_REQUIRE_DEPTH", "true"
+            ).lower() not in ("0", "false", "no", "off")
+            if require_depth and rng is None:
+                continue
+
             pad = max(2, int(radius * 0.08))
             x0 = max(0, x - pad)
             y0 = max(0, y - pad)
