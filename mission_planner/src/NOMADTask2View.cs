@@ -73,9 +73,6 @@ namespace NOMAD.MissionPlanner
         private Button _btnAbortSpray;
         private Label _lblDistToTarget;
         private Label _lblAutonomyState;     // "Autonomy gate: not yet claimed" / "Claimed (target X)"
-        private Label _lblTargetCount;
-        private Button _btnResetMap;
-        private Button _btnResetVio;
 
         private System.Threading.Timer _modePollTimer;
         private int _modePollInFlight;
@@ -139,8 +136,11 @@ namespace NOMAD.MissionPlanner
                 _videoPlayer = new EmbeddedVideoPlayer("Task 2 Camera", rtspUrl, true, _jetsonConnectionManager);
                 _videoPlayer.Dock = DockStyle.Fill;
                 videoPanel.Controls.Add(_videoPlayer);
-                // Ask the bridge to use Task 2 (shape-based) overlay if available.
-                _ = SetOverlayModeAsync("task2");
+                // Ask the bridge to enable overlay AND switch to the Task 2
+                // (shape-based) detector. set_overlay_mode("task2") alone
+                // wakes the detector but doesn't guarantee overlay is on;
+                // the explicit enable is idempotent and safer here.
+                _ = EnableTask2OverlayAsync();
             }
             catch (Exception ex)
             {
@@ -163,26 +163,25 @@ namespace NOMAD.MissionPlanner
             };
             StyleTabControl(_tabControl);
 
-            // Tab 1: Detect & Spray
+            // Tab 1: Detect & Spray (autonomous flow — includes status,
+            // detection, spray controls, payload, exclusion map, and the
+            // auto-upload artifacts preview so the operator never has to
+            // tab-switch during the autonomy run)
             var detectTab = new TabPage("Detect & Spray") { BackColor = CARD_BG, Padding = new Padding(0) };
             detectTab.Controls.Add(CreateDetectSprayPanel());
             _tabControl.TabPages.Add(detectTab);
 
-            // Tab 2: RTM Checklist (CONOPS Appendix F — 15 pts)
+            // Tab 2: Manual Spray — pilot is in firing range, fires by hand
+            // via the tilt slider + spray button, and records before/after
+            // artifacts. This is the "submit page" the rules require.
+            var manualTab = new TabPage("Manual Spray") { BackColor = CARD_BG, Padding = new Padding(0) };
+            manualTab.Controls.Add(CreateManualSprayPanel());
+            _tabControl.TabPages.Add(manualTab);
+
+            // Tab 3: RTM Checklist (CONOPS Appendix F — 15 pts)
             var rtmTab = new TabPage("RTM SOPs") { BackColor = NOMADTheme.BG_DARK, Padding = new Padding(0) };
             rtmTab.Controls.Add(new RtmChecklistPanel("task2", RtmChecklistPanel.TASK2_ITEMS));
             _tabControl.TabPages.Add(rtmTab);
-
-            // Tab 3: Submit
-            var submitTab = new TabPage("Submit") { BackColor = CARD_BG, Padding = new Padding(0) };
-            _uploadPanel = new Task2UploadPanel(_config) { Dock = DockStyle.Fill };
-            submitTab.Controls.Add(_uploadPanel);
-            _tabControl.TabPages.Add(submitTab);
-
-            // Tab 4: Status
-            var statusTab = new TabPage("Status") { BackColor = NOMADTheme.BG_DARK, Padding = new Padding(0) };
-            statusTab.Controls.Add(CreateStatusPanel());
-            _tabControl.TabPages.Add(statusTab);
 
             // Tab 4: 3D SLAM View
             var slam3DTab = new TabPage("3D SLAM View") { BackColor = NOMADTheme.BG_DARK };
@@ -243,6 +242,20 @@ namespace NOMAD.MissionPlanner
             catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
         }
 
+        /// <summary>Enable overlay + Task 2 detector together so the circle
+        /// detector is guaranteed to be running while this view is open.</summary>
+        private async Task EnableTask2OverlayAsync()
+        {
+            try
+            {
+                await JetsonApiService.PostAsync("/api/video/overlay/enable");
+                await JetsonApiService.PostAsync(
+                    "/api/video/overlay/detectors?task1=false&task2=true");
+                await JetsonApiService.PostAsync("/api/video/overlay/mode?mode=task2");
+            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
+        }
+
         private static async Task DisableOverlayDetectorsAsync()
         {
             try
@@ -259,34 +272,155 @@ namespace NOMAD.MissionPlanner
             if (Visible)
             {
                 // Re-pin task2 in case Task 1 (or anything else) switched the
-                // bridge while this view was hidden.
-                _ = SetOverlayModeAsync("task2");
+                // bridge while this view was hidden. Use the full enable path
+                // so the detector is guaranteed on (not just the mode hint).
+                _ = EnableTask2OverlayAsync();
             }
         }
 
         // ============================================================
         // Detect & Spray tab
         // ============================================================
+        // 2-column layout, no nested scroll. The outer panel is the only
+        // scrollable container so the operator never sees "scrollbar within
+        // scrollbar". Columns stack the cards top-to-bottom with FlowLayout
+        // (TopDown), and each card has a fixed height so growth is
+        // predictable. Exclusion map / reset-map / reset-vio are gone —
+        // they were leftovers from a navigation flow we no longer use.
         private Panel CreateDetectSprayPanel()
         {
-            var scroll = new Panel
+            var root = new Panel
             {
                 Dock = DockStyle.Fill,
                 BackColor = CARD_BG,
                 AutoScroll = true,
+                Padding = new Padding(4),
             };
 
-            var inner = new Panel
+            var grid = new TableLayoutPanel
             {
                 Dock = DockStyle.Top,
+                ColumnCount = 2,
+                RowCount = 1,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 BackColor = CARD_BG,
-                Height = 280 + 175 + 150 + 80,
+                Margin = Padding.Empty,
+                Padding = Padding.Empty,
             };
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-            // ---- Detections card (docks at bottom of inner; added first) ----
+            FlowLayoutPanel MakeColumn() => new FlowLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                FlowDirection = FlowDirection.TopDown,
+                WrapContents = false,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                BackColor = CARD_BG,
+                Margin = new Padding(2),
+                Padding = Padding.Empty,
+            };
+            var leftCol = MakeColumn();
+            var rightCol = MakeColumn();
+
+            void AddCard(FlowLayoutPanel col, Control card, int height)
+            {
+                card.Height = height;
+                card.Margin = new Padding(0, 0, 0, 6);
+                // Width follows the column. FlowLayoutPanel ignores Anchor on
+                // children that aren't auto-sized horizontally, so we wire a
+                // resize handler to keep cards full-width.
+                card.Width = Math.Max(380, col.ClientSize.Width - 6);
+                col.Resize += (s, e) =>
+                {
+                    if (!card.IsDisposed)
+                        card.Width = Math.Max(380, col.ClientSize.Width - 6);
+                };
+                col.Controls.Add(card);
+            }
+
+            // ---- LEFT COLUMN ----
+
+            // STATUS BAR (was its own tab — now embedded so the operator
+            // doesn't tab-switch mid-flight).
+            var statusBar = CreateCard("STATUS");
+            _lblVioStatus      = MakeRow(statusBar, "VIO: --", 36);
+            _lblApproachStatus = MakeRow(statusBar, "Approach: --", 56);
+            _lblModeStatus     = MakeRow(statusBar, "Mode: --", 76);
+            _lblObstacleStatus = MakeRow(statusBar, "Obstacles: --", 96);
+            AddCard(leftCol, statusBar, 130);
+
+            // SPRAY SEQUENCE STATUS card
+            var seqCard = CreateCard("SPRAY SEQUENCE STATUS");
+
+            _lblSprayState = new Label
+            {
+                Text = "State: idle",
+                Font = new Font("Consolas", 14, FontStyle.Bold),
+                ForeColor = TEXT_SECONDARY,
+                Location = new Point(15, 38),
+                AutoSize = true,
+            };
+            seqCard.Controls.Add(_lblSprayState);
+
+            _lblApproachMethod = new Label
+            {
+                Text = "Approach: --",
+                Font = new Font("Consolas", 10),
+                ForeColor = TEXT_SECONDARY,
+                Location = new Point(15, 70),
+                AutoSize = true,
+            };
+            seqCard.Controls.Add(_lblApproachMethod);
+
+            _lblSprayCount = new Label
+            {
+                Text = "Sprays: 0 / 2",
+                Font = new Font("Consolas", 10),
+                ForeColor = TEXT_PRIMARY,
+                Location = new Point(15, 92),
+                AutoSize = true,
+            };
+            seqCard.Controls.Add(_lblSprayCount);
+
+            _lblVerification = new Label
+            {
+                Text = "Verified: --",
+                Font = new Font("Consolas", 10),
+                ForeColor = TEXT_SECONDARY,
+                Location = new Point(15, 114),
+                AutoSize = true,
+            };
+            seqCard.Controls.Add(_lblVerification);
+
+            _lblSprayTargets = new Label
+            {
+                Text = "Engaged: 0 | OK: 0 | Fail: 0",
+                Font = new Font("Consolas", 10),
+                ForeColor = TEXT_PRIMARY,
+                Location = new Point(15, 136),
+                AutoSize = true,
+            };
+            seqCard.Controls.Add(_lblSprayTargets);
+
+            _lblSprayError = new Label
+            {
+                Text = "",
+                Font = new Font("Consolas", 9, FontStyle.Bold),
+                ForeColor = ERROR_COLOR,
+                Location = new Point(15, 165),
+                AutoSize = true,
+                MaximumSize = new Size(450, 60),
+                Visible = false,
+            };
+            seqCard.Controls.Add(_lblSprayError);
+            AddCard(leftCol, seqCard, 220);
+
+            // DETECTED TARGETS card
             var detectCard = CreateCard("DETECTED TARGETS");
-            detectCard.Dock = DockStyle.Top;
-            detectCard.Height = 280;
 
             _lblDetectionCount = new Label
             {
@@ -307,7 +441,7 @@ namespace NOMAD.MissionPlanner
             _lstDetections = new ListBox
             {
                 Location = new Point(15, 64),
-                Size = new Size(480, 160),
+                Size = new Size(380, 150),
                 Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top,
                 BackColor = NOMADTheme.INPUT_BG,
                 ForeColor = TEXT_PRIMARY,
@@ -323,10 +457,11 @@ namespace NOMAD.MissionPlanner
                 Text = "Distance: --",
                 Font = new Font("Consolas", 10, FontStyle.Bold),
                 ForeColor = WARNING_COLOR,
-                Location = new Point(15, 232),
+                Location = new Point(15, 222),
                 AutoSize = true,
             };
             detectCard.Controls.Add(_lblDistToTarget);
+            AddCard(leftCol, detectCard, 260);
 
             // ---- Spray card (autonomy-claim flow + manual flow) ----
             // Strategy for Task 2 scoring (CONOPS §5.2.4 + Q&A #10):
@@ -338,8 +473,6 @@ namespace NOMAD.MissionPlanner
             //     additional indoor + outdoor circles.
             // The two buttons below enforce this split.
             var sprayCard = CreateCard("SPRAY CONTROLS");
-            sprayCard.Dock = DockStyle.Top;
-            sprayCard.Height = 175;
 
             _lblAutonomyState = new Label
             {
@@ -379,175 +512,60 @@ namespace NOMAD.MissionPlanner
                 Location = new Point(15, 112),
                 AutoSize = true,
             });
+            AddCard(leftCol, sprayCard, 175);
 
-            // ---- Payload (cam tilt + shoot water) ----
-            _payloadPanel = new Task2PayloadPanel(_config)
-            {
-                Dock = DockStyle.Top,
-                Height = 150,
-                Margin = new Padding(5, 0, 5, 0),
-            };
+            // ---- RIGHT COLUMN ----
 
-            // ---- Exclusion map card ----
-            var mapCard = CreateCard("EXCLUSION MAP");
-            mapCard.Dock = DockStyle.Top;
-            mapCard.Height = 80;
+            // Payload (cam tilt + shoot water).
+            _payloadPanel = new Task2PayloadPanel(_config);
+            AddCard(rightCol, _payloadPanel, 160);
 
-            _lblTargetCount = new Label
-            {
-                Text = "Hit targets: 0",
-                Font = new Font("Consolas", 10),
-                ForeColor = TEXT_PRIMARY,
-                Location = new Point(15, 42),
-                AutoSize = true,
-            };
-            mapCard.Controls.Add(_lblTargetCount);
+            // AUTO-UPLOAD (compact view of Task2UploadPanel). Mounted here so
+            // the operator sees the autonomous spray's before/after/video
+            // uploading to Drive without tab-switching.
+            _uploadPanel = new Task2UploadPanel(_config, Task2UploadPanel.PanelMode.Auto);
+            AddCard(rightCol, _uploadPanel, 460);
 
-            _btnResetMap = CreateButton("Reset Map", ERROR_COLOR, 100, 28);
-            _btnResetMap.Location = new Point(170, 38);
-            _btnResetMap.Font = new Font("Segoe UI", 9, FontStyle.Bold);
-            _btnResetMap.Click += (s, e) => UiAsync.Run(this, async () =>
-            {
-                var confirm = MessageBox.Show(
-                    "Reset the exclusion map? All tracked targets will be cleared.",
-                    "Confirm Reset",
-                    MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
-                if (confirm == DialogResult.Yes)
-                {
-                    await _sender.SendTask2ResetMap();
-                    _lblTargetCount.Text = "Hit targets: 0";
-                }
-            }, "ResetTask2Map");
-            mapCard.Controls.Add(_btnResetMap);
-
-            _btnResetVio = CreateButton("Reset VIO", ERROR_COLOR, 100, 28);
-            _btnResetVio.Location = new Point(285, 38);
-            _btnResetVio.Font = new Font("Segoe UI", 9, FontStyle.Bold);
-            _btnResetVio.Click += (s, e) => UiAsync.Run(this, () => _sender.ResetVioOriginAsync(), "ResetVioOrigin");
-            mapCard.Controls.Add(_btnResetVio);
-
-            // Add cards in reverse-stack order (DockStyle.Top stacks bottom-up)
-            inner.Controls.Add(detectCard);
-            inner.Controls.Add(sprayCard);
-            inner.Controls.Add(_payloadPanel);
-            inner.Controls.Add(mapCard);
-
-            scroll.Resize += (s, e) =>
-            {
-                int totalH = mapCard.Height + _payloadPanel.Height + sprayCard.Height + detectCard.Height;
-                inner.Height = Math.Max(totalH, scroll.ClientSize.Height);
-            };
-
-            scroll.Controls.Add(inner);
-            return scroll;
+            grid.Controls.Add(leftCol, 0, 0);
+            grid.Controls.Add(rightCol, 1, 0);
+            root.Controls.Add(grid);
+            return root;
         }
 
         // ============================================================
-        // Status tab
+        // Manual Spray tab — pilot positions in firing range, aims via
+        // tilt slider, and fires by hand. Below the controls, the
+        // Task2UploadPanel handles the manual session (before/after
+        // capture + video record + Drive upload).
         // ============================================================
-        private Panel CreateStatusPanel()
+        private Panel CreateManualSprayPanel()
         {
             var panel = new Panel
             {
                 Dock = DockStyle.Fill,
                 BackColor = NOMADTheme.BG_DARK,
                 AutoScroll = true,
-                Padding = new Padding(8),
+                Padding = new Padding(0),
             };
 
-            // ---- Top bar: VIO / Approach / Mode / Obstacles ----
-            var bar = new Panel
+            // Upload panel (Manual mode: start/stop session, before/after,
+            // video, abort, and Drive upload all visible).
+            var manualUpload = new Task2UploadPanel(_config, Task2UploadPanel.PanelMode.Manual)
+            {
+                Dock = DockStyle.Fill,
+            };
+
+            // Payload controls (tilt slider + shoot water). Docked to top
+            // so it sits above the upload panel and the slider stays in
+            // reach while the manual session is open.
+            var manualPayload = new Task2PayloadPanel(_config)
             {
                 Dock = DockStyle.Top,
-                Height = 130,
-                BackColor = CARD_BG,
-                Padding = new Padding(12, 8, 12, 8),
+                Height = 165,
             };
 
-            _lblVioStatus = MakeRow(bar, "VIO: --", 10);
-            _lblApproachStatus = MakeRow(bar, "Approach: --", 32);
-            _lblModeStatus = MakeRow(bar, "Mode: --", 54);
-            _lblObstacleStatus = MakeRow(bar, "Obstacles: --", 76);
-            // ---- Spray sequence detail card ----
-            var seqCard = CreateCard("SPRAY SEQUENCE STATUS");
-            seqCard.Dock = DockStyle.Top;
-            seqCard.Height = 240;
-
-            _lblSprayState = new Label
-            {
-                Text = "State: idle",
-                Font = new Font("Consolas", 14, FontStyle.Bold),
-                ForeColor = TEXT_SECONDARY,
-                Location = new Point(15, 42),
-                AutoSize = true,
-            };
-            seqCard.Controls.Add(_lblSprayState);
-
-            _lblApproachMethod = new Label
-            {
-                Text = "Approach: --",
-                Font = new Font("Consolas", 10),
-                ForeColor = TEXT_SECONDARY,
-                Location = new Point(15, 72),
-                AutoSize = true,
-            };
-            seqCard.Controls.Add(_lblApproachMethod);
-
-            _lblSprayCount = new Label
-            {
-                Text = "Sprays: 0 / 2",
-                Font = new Font("Consolas", 10),
-                ForeColor = TEXT_PRIMARY,
-                Location = new Point(15, 94),
-                AutoSize = true,
-            };
-            seqCard.Controls.Add(_lblSprayCount);
-
-            _lblVerification = new Label
-            {
-                Text = "Verified: --",
-                Font = new Font("Consolas", 10),
-                ForeColor = TEXT_SECONDARY,
-                Location = new Point(15, 116),
-                AutoSize = true,
-            };
-            seqCard.Controls.Add(_lblVerification);
-
-            _lblSprayTargets = new Label
-            {
-                Text = "Engaged: 0 | OK: 0 | Fail: 0",
-                Font = new Font("Consolas", 10),
-                ForeColor = TEXT_PRIMARY,
-                Location = new Point(15, 138),
-                AutoSize = true,
-            };
-            seqCard.Controls.Add(_lblSprayTargets);
-
-            _lblSprayError = new Label
-            {
-                Text = "",
-                Font = new Font("Consolas", 9),
-                ForeColor = ERROR_COLOR,
-                Location = new Point(15, 165),
-                AutoSize = true,
-                MaximumSize = new Size(420, 60),
-                Visible = false,
-            };
-            seqCard.Controls.Add(_lblSprayError);
-
-            seqCard.Controls.Add(new Label
-            {
-                Text = "APPROACH (ZED-guided) → AIM (visual servo)\n"
-                     + "  → SPRAY (500ms pump) → VERIFY (circle change)\n"
-                     + "  → UPLOAD (Google Drive) → COMPLETE",
-                Font = new Font("Consolas", 8),
-                ForeColor = TEXT_MUTED,
-                Location = new Point(15, 200),
-                AutoSize = true,
-            });
-
-            panel.Controls.Add(seqCard);
-            panel.Controls.Add(bar);
+            panel.Controls.Add(manualUpload);
+            panel.Controls.Add(manualPayload);
             return panel;
         }
 
@@ -642,19 +660,16 @@ namespace NOMAD.MissionPlanner
                 }
 
                 var detectionTask = JetsonApiService.GetAsync("/api/task/2/detections");
-                var exclMapTask = JetsonApiService.GetAsync("/api/task/2/exclusion_map");
-
-                await Task.WhenAll(detectionTask, exclMapTask);
+                await detectionTask;
                 if (IsDisposed || !IsHandleCreated) return;
 
                 JObject detectionData = await ReadJson(detectionTask);
-                JObject exclMapData = await ReadJson(exclMapTask);
 
                 if (!IsDisposed && IsHandleCreated)
                 {
                     BeginInvoke((Action)(() => UpdateAllUI(
                         modeData, sprayData, vioData, obstacleData,
-                        detectionData, exclMapData)));
+                        detectionData)));
                 }
             }
             catch (ObjectDisposedException) { }
@@ -679,8 +694,7 @@ namespace NOMAD.MissionPlanner
 
         private void UpdateAllUI(
             JObject modeData, JObject sprayData, JObject vioData,
-            JObject obstacleData, JObject detectionData,
-            JObject exclMapData)
+            JObject obstacleData, JObject detectionData)
         {
             try
             {
@@ -689,7 +703,6 @@ namespace NOMAD.MissionPlanner
                 UpdateModeUI(modeData);
                 UpdateSprayUI(sprayData);
                 UpdateDetectionUI(detectionData);
-                UpdateExclMapUI(exclMapData);
             }
             catch (Exception ex)
             {
@@ -915,17 +928,6 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private void UpdateExclMapUI(JObject exclMapData)
-        {
-            if (exclMapData == null || _lblTargetCount == null) return;
-            try
-            {
-                var totalTargets = exclMapData["total_targets"]?.Value<int>() ?? 0;
-                _lblTargetCount.Text = $"Hit targets: {totalTargets}";
-            }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
-        }
-
         // ============================================================
         // Spray actions
         // ============================================================
@@ -962,11 +964,17 @@ namespace NOMAD.MissionPlanner
             {
                 _btnAutoSpray.Enabled = false;
                 _btnManualSpray.Enabled = false;
+                // Clear any previous error banner so the operator can
+                // see the new failure (or that the trigger actually fired).
+                ShowSprayError("");
 
                 JToken target = null;
-                int selIdx = -1;
-                BeginInvoke((Action)(() => { selIdx = _lstDetections.SelectedIndex; }));
-                await Task.Yield();
+                // UiAsync.Run already invokes us on the UI thread (it uses
+                // ConfigureAwait(true)) so we can read the selection directly
+                // — the old BeginInvoke + Task.Yield was a race that almost
+                // always returned -1 and silently fell through to the
+                // fetch-from-server path.
+                int selIdx = _lstDetections.SelectedIndex;
 
                 if (selIdx >= 0 && selIdx < _cachedDetections.Count)
                 {
@@ -977,7 +985,9 @@ namespace NOMAD.MissionPlanner
                     var detectResp = await JetsonApiService.GetAsync("/api/task/2/detections");
                     if (!detectResp.IsSuccessStatusCode)
                     {
-                        BeginInvoke((Action)(() => _lblSprayError.Text = "No detections available"));
+                        ShowSprayError(
+                            $"Detector fetch failed (HTTP {(int)detectResp.StatusCode}). " +
+                            "Check Jetson + verify the Task 2 overlay is enabled.");
                         ReenableSprayButtons();
                         return;
                     }
@@ -987,7 +997,9 @@ namespace NOMAD.MissionPlanner
                     var detections = (current != null && current.Count > 0) ? current : history;
                     if (detections == null || detections.Count == 0)
                     {
-                        BeginInvoke((Action)(() => _lblSprayError.Text = "No detections -- cannot spray"));
+                        ShowSprayError(
+                            "No detections — the shape detector isn't returning circles. " +
+                            "Verify the video overlay shows boxed circles before triggering.");
                         ReenableSprayButtons();
                         return;
                     }
@@ -1014,23 +1026,20 @@ namespace NOMAD.MissionPlanner
                 {
                     var result = JObject.Parse(await response.Content.ReadAsStringAsync());
                     var skipApproach = result["skip_approach"]?.Value<bool>() ?? false;
-                    BeginInvoke((Action)(() =>
+                    if (requireAutonomy)
                     {
-                        if (requireAutonomy)
-                        {
-                            _lblSprayState.Text = "State: APPROACH (autonomy claim in progress)";
-                            _lblAutonomyState.Text = "Autonomy gate: claim in progress…";
-                            _lblAutonomyState.ForeColor = ACCENT_COLOR;
-                        }
-                        else
-                        {
-                            _lblSprayState.Text = skipApproach
-                                ? "State: MANUAL SPRAY (no approach)"
-                                : "State: APPROACH (manual mode)";
-                        }
-                        _lblSprayState.ForeColor = ACCENT_COLOR;
-                        _lblSprayError.Visible = false;
-                    }));
+                        _lblSprayState.Text = "State: APPROACH (autonomy claim in progress)";
+                        _lblAutonomyState.Text = "Autonomy gate: claim in progress…";
+                        _lblAutonomyState.ForeColor = ACCENT_COLOR;
+                    }
+                    else
+                    {
+                        _lblSprayState.Text = skipApproach
+                            ? "State: MANUAL SPRAY (no approach)"
+                            : "State: APPROACH (manual mode)";
+                    }
+                    _lblSprayState.ForeColor = ACCENT_COLOR;
+                    ShowSprayError("");
                 }
                 else
                 {
@@ -1038,24 +1047,37 @@ namespace NOMAD.MissionPlanner
                     string detail;
                     try { detail = JObject.Parse(body)["detail"]?.ToString() ?? body; }
                     catch { detail = body; }
-                    BeginInvoke((Action)(() =>
-                    {
-                        _lblSprayError.Text = $"Spray failed: {detail}";
-                        _lblSprayError.Visible = true;
-                    }));
+                    ShowSprayError($"Spray failed: {detail}");
                     ReenableSprayButtons();
                 }
             }
             catch (Exception ex)
             {
-                BeginInvoke((Action)(() =>
-                {
-                    _lblSprayError.Text = $"Error: {ex.Message}";
-                    _lblSprayError.Visible = true;
-                }));
+                ShowSprayError($"Error: {ex.Message}");
                 ReenableSprayButtons();
             }
             finally { _sprayInProgress = false; }
+        }
+
+        /// <summary>Surface an error in the spray-status card. Pass empty
+        /// string to hide. Centralised so every failure path actually
+        /// flips Visible=true — the old paths set Text without making the
+        /// label visible, which is why Auto Spray looked silent.</summary>
+        private void ShowSprayError(string message)
+        {
+            if (_lblSprayError == null) return;
+            if (InvokeRequired)
+            {
+                BeginInvoke((Action)(() => ShowSprayError(message)));
+                return;
+            }
+            if (string.IsNullOrEmpty(message))
+            {
+                _lblSprayError.Visible = false;
+                return;
+            }
+            _lblSprayError.Text = message;
+            _lblSprayError.Visible = true;
         }
 
         private void ReenableSprayButtons()
@@ -1073,19 +1095,12 @@ namespace NOMAD.MissionPlanner
             {
                 _btnAbortSpray.Enabled = false;
                 await JetsonApiService.PostAsync("/api/spray/abort");
-                BeginInvoke((Action)(() =>
-                {
-                    _lblSprayState.Text = "State: ABORTED";
-                    _lblSprayState.ForeColor = ERROR_COLOR;
-                }));
+                _lblSprayState.Text = "State: ABORTED";
+                _lblSprayState.ForeColor = ERROR_COLOR;
             }
             catch (Exception ex)
             {
-                BeginInvoke((Action)(() =>
-                {
-                    _lblSprayError.Text = $"Abort error: {ex.Message}";
-                    _lblSprayError.Visible = true;
-                }));
+                ShowSprayError($"Abort error: {ex.Message}");
             }
             finally { _btnAbortSpray.Enabled = true; }
         }

@@ -28,6 +28,21 @@ namespace NOMAD.MissionPlanner
 {
     public class Task2UploadPanel : UserControl
     {
+        /// <summary>
+        /// Two render modes:
+        ///   Manual — full UI: Start/Stop manual session, Abort, before/after
+        ///            thumbnails, video preview, log. Used on the Manual Spray
+        ///            tab where the pilot owns the session.
+        ///   Auto   — read-only view of the autonomous flow: session-source
+        ///            label, auto-upload checkbox, "Upload last now" button,
+        ///            progress + status + thumbnails + video label + log.
+        ///            Used embedded in Detect&Spray to surface the
+        ///            autonomous capture+upload without tab-switching.
+        /// </summary>
+        public enum PanelMode { Manual, Auto }
+
+        private readonly PanelMode _mode;
+
         private static readonly Color CARD_BG        = NOMADTheme.CARD_BG;
         private static readonly Color TEXT_PRIMARY   = NOMADTheme.TEXT_PRIMARY;
         private static readonly Color TEXT_SECONDARY = NOMADTheme.TEXT_SECONDARY;
@@ -65,9 +80,12 @@ namespace NOMAD.MissionPlanner
         private Label _lblSessionSource;
         private Button _btnAbort;
 
-        public Task2UploadPanel(NOMADConfig config)
+        public Task2UploadPanel(NOMADConfig config) : this(config, PanelMode.Manual) { }
+
+        public Task2UploadPanel(NOMADConfig config, PanelMode mode)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
+            _mode = mode;
             InitializeUI();
 
             _statusPollTimer = new System.Threading.Timer(
@@ -106,7 +124,11 @@ namespace NOMAD.MissionPlanner
             Controls.Add(_lblSessionSource);
             y += 22;
 
-            // ---- Manual flow ----
+            // ---- Manual flow (hidden in Auto mode — Detect&Spray surfaces
+            // the autonomous flow only and routes manual operations
+            // through the Manual Spray tab) ----
+            bool showManual = _mode == PanelMode.Manual;
+
             var lblManual = new Label
             {
                 Text = "MANUAL SPRAY SUBMISSION",
@@ -114,28 +136,32 @@ namespace NOMAD.MissionPlanner
                 ForeColor = ACCENT_COLOR,
                 Location = new Point(8, y),
                 AutoSize = true,
+                Visible = showManual,
             };
             Controls.Add(lblManual);
-            y += 22;
+            if (showManual) y += 22;
 
             _btnStart = MakeButton("Start (capture before + record)", Color.FromArgb(40, 130, 60), 240, 30);
             _btnStart.Location = new Point(8, y);
             _btnStart.Click += async (s, e) => await ManualStart();
+            _btnStart.Visible = showManual;
             Controls.Add(_btnStart);
 
             _btnStop = MakeButton("Stop (capture after + upload)", Color.FromArgb(180, 80, 30), 240, 30);
             _btnStop.Location = new Point(254, y);
             _btnStop.Enabled = false;
             _btnStop.Click += async (s, e) => await ManualStop();
+            _btnStop.Visible = showManual;
             Controls.Add(_btnStop);
-            y += 38;
+            if (showManual) y += 38;
 
             _btnAbort = MakeButton("Abort live session", Color.FromArgb(170, 50, 50), 240, 28);
             _btnAbort.Location = new Point(8, y);
             _btnAbort.Enabled = false;
             _btnAbort.Click += async (s, e) => await AbortLiveSession();
+            _btnAbort.Visible = showManual;
             Controls.Add(_btnAbort);
-            y += 36;
+            if (showManual) y += 36;
 
             // ---- Auto flow ----
             _chkAutoUpload = new CheckBox
