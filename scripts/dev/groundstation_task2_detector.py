@@ -14,6 +14,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import sys
@@ -26,10 +27,14 @@ import cv2
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from edge_core.task2_circle_verify import Task2CircleDetector  # noqa: E402
+DETECTOR_PATH = REPO_ROOT / "edge_core" / "task2_circle_verify.py"
+spec = importlib.util.spec_from_file_location("task2_circle_verify", DETECTOR_PATH)
+if spec is None or spec.loader is None:
+    raise RuntimeError(f"Cannot load detector module: {DETECTOR_PATH}")
+detector_module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = detector_module
+spec.loader.exec_module(detector_module)
+Task2CircleDetector = detector_module.Task2CircleDetector
 
 
 def _fetch_jpeg(url: str, timeout_s: float) -> bytes | None:
@@ -122,6 +127,7 @@ def main() -> int:
     parser.add_argument("--blur-kernel", type=int, default=3)
     parser.add_argument("--min-confidence", type=float, default=45.0)
     parser.add_argument("--max-detections", type=int, default=6)
+    parser.add_argument("--count", type=int, default=0, help="Stop after N posts; 0 runs forever.")
     args = parser.parse_args()
 
     snapshot_url = f"http://{args.jetson}:{args.bridge_port}{args.snapshot_path}"
@@ -142,6 +148,7 @@ def main() -> int:
     print(f"  rate:     {args.fps:.1f} Hz")
 
     last_hash = None
+    post_count = 0
     while True:
         loop_start = time.time()
         payload = _fetch_jpeg(snapshot_url, args.timeout)
@@ -176,6 +183,9 @@ def main() -> int:
             f"{time.strftime('%H:%M:%S')} posted={ok} detections={len(detections)}",
             flush=True,
         )
+        post_count += 1
+        if args.count > 0 and post_count >= args.count:
+            break
         sleep_s = period - (time.time() - loop_start)
         if sleep_s > 0:
             time.sleep(sleep_s)

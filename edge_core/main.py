@@ -571,8 +571,15 @@ def run(
                         getattr(app.state, "detection_enabled", False)
                     )
                     if not detection_enabled:
-                        app.state.detected_objects = []
-                        app.state.detection_last_update = 0.0
+                        # Keep offboard ground-station detections alive even
+                        # when the onboard snapshot detector is disabled. The
+                        # Task 2 UI and motion lookup apply their own stale-age
+                        # gates, so these cannot drive control indefinitely.
+                        app.state.detected_objects = [
+                            d for d in getattr(app.state, "detected_objects", [])
+                            if isinstance(d, dict)
+                            and d.get("source") in ("groundstation_task2", "offboard_task2")
+                        ]
                 if not detection_enabled:
                     time.sleep(0.5)
                     last_payload_hash = None
