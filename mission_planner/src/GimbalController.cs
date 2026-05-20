@@ -41,6 +41,28 @@ namespace NOMAD.MissionPlanner
 
         public static MountMode CurrentMode { get; private set; } = MountMode.MavlinkTargeting;
 
+        // Shared rate limit for ALL stick-driven inputs (floating window + physical
+        // joystick service). Lives here so changing it in one UI is immediately
+        // honored by the other — no code duplication and no config round-trip.
+        public const float DEFAULT_MAX_RATE_DEG_SEC = 60f;
+        public const float MIN_MAX_RATE_DEG_SEC = 5f;
+        public const float MAX_MAX_RATE_DEG_SEC = 200f;
+        private static float _maxRateDegSec = DEFAULT_MAX_RATE_DEG_SEC;
+        public static float MaxRateDegSec
+        {
+            get => _maxRateDegSec;
+            set
+            {
+                float v = value < MIN_MAX_RATE_DEG_SEC ? MIN_MAX_RATE_DEG_SEC
+                        : value > MAX_MAX_RATE_DEG_SEC ? MAX_MAX_RATE_DEG_SEC
+                        : value;
+                if (Math.Abs(_maxRateDegSec - v) < 0.001f) return;
+                _maxRateDegSec = v;
+                MaxRateChanged?.Invoke(v);
+            }
+        }
+        public static event Action<float> MaxRateChanged;
+
         /// <summary>
         /// Fires whenever an input source moves the integrated target. Subscribers
         /// (e.g. GimbalJoystickWindow) update their on-screen readouts.
@@ -64,6 +86,12 @@ namespace NOMAD.MissionPlanner
         /// the new angle to the mount. The stick convention matches the
         /// floating joystick: +stickY = pitch up, +stickX = roll right.
         /// </summary>
+        /// <summary>
+        /// Integrate using the shared <see cref="MaxRateDegSec"/>.
+        /// </summary>
+        public static void ApplyStick(float stickX, float stickY, float dt, bool send)
+            => ApplyStick(stickX, stickY, _maxRateDegSec, dt, send);
+
         public static void ApplyStick(float stickX, float stickY, float maxRateDegSec, float dt, bool send)
         {
             float dPitch =  stickY * maxRateDegSec * dt;

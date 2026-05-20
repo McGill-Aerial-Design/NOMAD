@@ -500,7 +500,14 @@ namespace NOMAD.MissionPlanner
         public bool JoystickGimbalRollInvert { get; set; } = false;
         /// <summary>Deadzone fraction [0..1] applied per axis.</summary>
         public float JoystickGimbalDeadzone { get; set; } = 0.08f;
-        /// <summary>Max integrated angle rate (deg/s) at full stick deflection.</summary>
+        /// <summary>
+        /// Persisted max integrated angle rate (deg/s) at full stick deflection.
+        /// At runtime, <see cref="GimbalController.MaxRateDegSec"/> is the
+        /// authoritative value shared by the floating gimbal window, the
+        /// settings dialog, and the physical joystick service. This field is
+        /// only the on-disk snapshot — written when settings are saved,
+        /// read once on plugin start to seed the controller.
+        /// </summary>
         public float JoystickGimbalMaxRateDegSec { get; set; } = 60f;
 
         /// <summary>Enable the ZED tilt joystick channel.</summary>
@@ -513,6 +520,18 @@ namespace NOMAD.MissionPlanner
         public float JoystickZedDeadzone { get; set; } = 0.08f;
         /// <summary>Max integrated PWM rate (microseconds per second) at full stick deflection.</summary>
         public float JoystickZedMaxRateUsPerSec { get; set; } = 400f;
+
+        // --- Serial → virtual gamepad bridge (jotystick.py) ---
+        /// <summary>Auto-launch jotystick.py on plugin start so a serial-attached MCU appears as an Xbox 360 controller.</summary>
+        public bool SerialJoystickEnabled { get; set; } = false;
+        /// <summary>Serial port the MCU is on (e.g. COM10).</summary>
+        public string SerialJoystickPort { get; set; } = "COM10";
+        /// <summary>Baud rate.</summary>
+        public int SerialJoystickBaud { get; set; } = 115200;
+        /// <summary>Python executable to use. Leave blank to use "python" from PATH.</summary>
+        public string SerialJoystickPython { get; set; } = "python";
+        /// <summary>Absolute path to jotystick.py. Leave blank to auto-resolve relative to the plugin DLL.</summary>
+        public string SerialJoystickScriptPath { get; set; } = "";
 
         // ============================================================
         // Task 2 Spray Calibration

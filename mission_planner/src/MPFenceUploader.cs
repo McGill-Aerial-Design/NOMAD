@@ -35,9 +35,11 @@ namespace NOMAD.MissionPlanner
             GpsPoint returnPoint,
             double maxAltMeters,
             int fenceAction,
-            bool enableFence)
+            bool enableFence,
+            int landSpeedCmS = 0)
         {
             var result = new UploadResult();
+            var verifyTargets = new List<(string Name, double Expected)>();
 
             if (vertices == null || vertices.Count < 3)
             {
@@ -90,8 +92,22 @@ namespace NOMAD.MissionPlanner
                 TrySetParam(comPort, "FENCE_TOTAL", total);
                 TrySetParam(comPort, "FENCE_TYPE", 4); // polygon fence (bitmask: 4 = polygon)
                 TrySetParam(comPort, "FENCE_ACTION", fenceAction);
+                verifyTargets.Add(("FENCE_TYPE", 4));
+                verifyTargets.Add(("FENCE_ACTION", fenceAction));
+                verifyTargets.Add(("FENCE_TOTAL", total));
                 if (maxAltMeters > 0)
+                {
                     TrySetParam(comPort, "FENCE_ALT_MAX", maxAltMeters);
+                    verifyTargets.Add(("FENCE_ALT_MAX", maxAltMeters));
+                }
+                if (landSpeedCmS > 0)
+                {
+                    // ArduCopter LAND_SPEED is in cm/s. CONOPS §4.5 requires
+                    // ≥2 m/s vertical descent on termination — default 50 (0.5 m/s)
+                    // is way too slow.
+                    TrySetParam(comPort, "LAND_SPEED", landSpeedCmS);
+                    verifyTargets.Add(("LAND_SPEED", landSpeedCmS));
+                }
 
                 // 2) Upload points
                 bool ok = TrySetFencePoint(comPort, 0, rLat, rLon, (byte)total);
@@ -109,10 +125,42 @@ namespace NOMAD.MissionPlanner
 
                 // 3) Re-enable
                 if (enableFence)
+                {
                     TrySetParam(comPort, "FENCE_ENABLE", 1);
+                    verifyTargets.Add(("FENCE_ENABLE", 1));
+                }
+                else
+                {
+                    verifyTargets.Add(("FENCE_ENABLE", 0));
+                }
 
-                result.Success = true;
-                result.Message = $"Uploaded {vertices.Count} fence points to vehicle.";
+                // 4) Verify params actually took. ArduPilot acks param sets
+                // by echoing PARAM_VALUE, which MP caches on MAV.param.
+                // Give the link a beat to receive the echoes, then compare.
+                System.Threading.Thread.Sleep(400);
+                var mismatches = new List<string>();
+                foreach (var (name, expected) in verifyTargets)
+                {
+                    if (!TryGetParam(comPort, name, out double actual))
+                    {
+                        mismatches.Add($"{name}: no readback");
+                        continue;
+                    }
+                    if (Math.Abs(actual - expected) > 0.01)
+                        mismatches.Add($"{name}: got {actual}, expected {expected}");
+                }
+
+                if (mismatches.Count == 0)
+                {
+                    result.Success = true;
+                    result.Message = $"Uploaded {vertices.Count} fence points; {verifyTargets.Count} params verified.";
+                }
+                else
+                {
+                    result.Success = false;
+                    result.Message = $"Uploaded {vertices.Count} fence points, but {mismatches.Count} param(s) failed verification:\n  "
+                                   + string.Join("\n  ", mismatches);
+                }
                 return result;
             }
             catch (Exception ex)
@@ -185,6 +233,55 @@ namespace NOMAD.MissionPlanner
             catch (Exception ex)
             {
                 Console.WriteLine($"NOMAD: setParam({name}) error - {ex.Message}");
+            }
+            return false;
+        }
+
+        /// <summary>Read a param value back from MP's cached PARAM_VALUE
+        /// dictionary on comPort.MAV.param. Returns false if the key is
+        /// missing or unreadable — caller surfaces this as a verification
+        /// failure rather than guessing.</summary>
+        private static bool TryGetParam(object comPort, string name, out double value)
+        {
+            value = 0;
+            try
+            {
+                var mavProp = comPort.GetType().GetProperty("MAV");
+                var mav = mavProp?.GetValue(comPort);
+                if (mav == null) return false;
+
+                var paramProp = mav.GetType().GetProperty("param");
+                var paramDict = paramProp?.GetValue(mav);
+                if (paramDict == null) return false;
+
+                // MP exposes param as a MAVLinkParamList / dictionary-like.
+                // Try indexer [string] first.
+                var indexer = paramDict.GetType().GetProperty("Item", new[] { typeof(string) });
+                if (indexer != null)
+                {
+                    object raw;
+                    try { raw = indexer.GetValue(paramDict, new object[] { name }); }
+                    catch { return false; }
+                    if (raw == null) return false;
+                    // Param entries can be MAVLinkParam with .Value, or a primitive.
+                    var valProp = raw.GetType().GetProperty("Value");
+                    object boxed = valProp != null ? valProp.GetValue(raw) : raw;
+                    if (boxed == null) return false;
+                    value = Convert.ToDouble(boxed);
+                    return true;
+                }
+
+                // Fallback: ContainsKey + then index
+                var contains = paramDict.GetType().GetMethod("ContainsKey", new[] { typeof(string) });
+                if (contains != null)
+                {
+                    bool has = (bool)contains.Invoke(paramDict, new object[] { name });
+                    if (!has) return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"NOMAD: TryGetParam({name}) error - {ex.Message}");
             }
             return false;
         }

@@ -35,7 +35,7 @@ namespace NOMAD.MissionPlanner
         ///            tab where the pilot owns the session.
         ///   Auto   — read-only view of the autonomous flow: session-source
         ///            label, auto-upload checkbox, "Upload last now" button,
-        ///            progress + status + thumbnails + video label + log.
+        ///            progress + status + before/after thumbnails.
         ///            Used embedded in Detect&Spray to surface the
         ///            autonomous capture+upload without tab-switching.
         /// </summary>
@@ -128,6 +128,12 @@ namespace NOMAD.MissionPlanner
             // the autonomous flow only and routes manual operations
             // through the Manual Spray tab) ----
             bool showManual = _mode == PanelMode.Manual;
+            const int contentX = 8;
+            const int contentW = 448;
+            const int thumbW = 220;
+            const int thumbH = 165;
+            const int colGap = 8;
+            const int secondColX = contentX + thumbW + colGap;
 
             var lblManual = new Label
             {
@@ -141,14 +147,14 @@ namespace NOMAD.MissionPlanner
             Controls.Add(lblManual);
             if (showManual) y += 22;
 
-            _btnStart = MakeButton("Start (capture before + record)", Color.FromArgb(40, 130, 60), 240, 30);
+            _btnStart = MakeButton("Start (capture before + record)", Color.FromArgb(40, 130, 60), 220, 30);
             _btnStart.Location = new Point(8, y);
             _btnStart.Click += async (s, e) => await ManualStart();
             _btnStart.Visible = showManual;
             Controls.Add(_btnStart);
 
-            _btnStop = MakeButton("Stop (capture after + upload)", Color.FromArgb(180, 80, 30), 240, 30);
-            _btnStop.Location = new Point(254, y);
+            _btnStop = MakeButton("Stop (capture after + upload)", Color.FromArgb(180, 80, 30), 220, 30);
+            _btnStop.Location = new Point(secondColX, y);
             _btnStop.Enabled = false;
             _btnStop.Click += async (s, e) => await ManualStop();
             _btnStop.Visible = showManual;
@@ -185,7 +191,7 @@ namespace NOMAD.MissionPlanner
             _progress = new ProgressBar
             {
                 Location = new Point(8, y),
-                Size = new Size(490, 14),
+                Size = new Size(contentW, 14),
                 Style = ProgressBarStyle.Continuous,
             };
             Controls.Add(_progress);
@@ -217,7 +223,7 @@ namespace NOMAD.MissionPlanner
                 Text = "AFTER",
                 Font = new Font("Segoe UI", 8, FontStyle.Bold),
                 ForeColor = TEXT_SECONDARY,
-                Location = new Point(254, y),
+                Location = new Point(secondColX, y),
                 AutoSize = true,
             };
             Controls.Add(_lblAfter);
@@ -226,7 +232,7 @@ namespace NOMAD.MissionPlanner
             _picBefore = new PictureBox
             {
                 Location = new Point(8, y),
-                Size = new Size(240, 180),
+                Size = new Size(thumbW, thumbH),
                 BackColor = Color.FromArgb(20, 20, 22),
                 BorderStyle = BorderStyle.FixedSingle,
                 SizeMode = PictureBoxSizeMode.Zoom,
@@ -234,14 +240,14 @@ namespace NOMAD.MissionPlanner
             Controls.Add(_picBefore);
             _picAfter = new PictureBox
             {
-                Location = new Point(254, y),
-                Size = new Size(240, 180),
+                Location = new Point(secondColX, y),
+                Size = new Size(thumbW, thumbH),
                 BackColor = Color.FromArgb(20, 20, 22),
                 BorderStyle = BorderStyle.FixedSingle,
                 SizeMode = PictureBoxSizeMode.Zoom,
             };
             Controls.Add(_picAfter);
-            y += 188;
+            y += thumbH + 8;
 
             _lblVideo = new Label
             {
@@ -250,14 +256,15 @@ namespace NOMAD.MissionPlanner
                 ForeColor = TEXT_SECONDARY,
                 Location = new Point(8, y),
                 AutoSize = true,
+                Visible = showManual,
             };
             Controls.Add(_lblVideo);
-            y += 22;
+            if (showManual) y += 22;
 
             _txtLog = new TextBox
             {
                 Location = new Point(8, y),
-                Size = new Size(490, 130),
+                Size = new Size(contentW, 130),
                 Multiline = true,
                 ReadOnly = true,
                 ScrollBars = ScrollBars.Vertical,
@@ -265,6 +272,7 @@ namespace NOMAD.MissionPlanner
                 ForeColor = SUCCESS_COLOR,
                 Font = new Font("Consolas", 8),
                 BorderStyle = BorderStyle.FixedSingle,
+                Visible = showManual,
             };
             Controls.Add(_txtLog);
         }

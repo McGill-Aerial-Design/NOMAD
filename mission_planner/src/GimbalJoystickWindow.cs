@@ -47,7 +47,6 @@ namespace NOMAD.MissionPlanner
         // Tunables
         // ============================================================
         private const int   STREAM_HZ          = 20;
-        private const float DEFAULT_MAX_RATE   = 60f;   // deg/sec at full stick
         private const float KEY_NUDGE_DEG      = 2.0f;
         // Mount limits pulled from GimbalController so both this window and the
         // physical NomadJoystickService stay in sync if the limits ever change.
@@ -67,7 +66,6 @@ namespace NOMAD.MissionPlanner
         // Local mirror of GimbalController target so display label code can read
         // without crossing threads. Authoritative state lives in GimbalController.
         private float _targetPitch, _targetRoll;
-        private float _maxRateDegSec = DEFAULT_MAX_RATE;
         // Mount mode currently selected for the Caddx mount — mirrors GimbalController.
         private MountMode _mountMode = MountMode.MavlinkTargeting;
         private string _modeLabel = "MAVLINK";
@@ -130,6 +128,8 @@ namespace NOMAD.MissionPlanner
             // Keep our readout in sync when the physical joystick service moves
             // the target while this window is open.
             GimbalController.TargetChanged += OnExternalTargetChanged;
+            // Mirror max-rate edits made elsewhere (settings dialog, physical service).
+            GimbalController.MaxRateChanged += OnExternalMaxRateChanged;
 
             // Default to MAVLink targeting so the first joystick or keyboard input
             // immediately drives the mount.
@@ -142,6 +142,7 @@ namespace NOMAD.MissionPlanner
                 _streamTimer?.Dispose();
                 _streamTimer = null;
                 GimbalController.TargetChanged -= OnExternalTargetChanged;
+                GimbalController.MaxRateChanged -= OnExternalMaxRateChanged;
                 s_instance = null;
             };
         }
@@ -154,6 +155,19 @@ namespace NOMAD.MissionPlanner
             _targetRoll = roll;
             if (_lblPitch != null) _lblPitch.Text = $"Pitch: {_targetPitch,+6:0.0}°";
             if (_lblRoll  != null) _lblRoll.Text  = $"Roll:  {_targetRoll,+6:0.0}°";
+        }
+
+        private void OnExternalMaxRateChanged(float rate)
+        {
+            if (IsDisposed) return;
+            if (InvokeRequired) { BeginInvoke(new Action(() => OnExternalMaxRateChanged(rate))); return; }
+            if (_trkRate == null) return;
+            int v = (int)Math.Round(rate);
+            if (v < _trkRate.Minimum) v = _trkRate.Minimum;
+            if (v > _trkRate.Maximum) v = _trkRate.Maximum;
+            if (_trkRate.Value != v) _trkRate.Value = v; // ValueChanged fires; the
+                                                          // controller setter dedupes.
+            if (_lblRate != null) _lblRate.Text = $"{v}";
         }
 
         // ============================================================
@@ -208,14 +222,17 @@ namespace NOMAD.MissionPlanner
             {
                 Location = new Point(126, 3),
                 Size = new Size(140, 30),
-                Minimum = 10, Maximum = 180,
-                Value = (int)DEFAULT_MAX_RATE,
+                Minimum = (int)GimbalController.MIN_MAX_RATE_DEG_SEC,
+                Maximum = (int)GimbalController.MAX_MAX_RATE_DEG_SEC,
+                Value = (int)Math.Round(GimbalController.MaxRateDegSec),
                 TickStyle = TickStyle.None,
                 BackColor = Color.FromArgb(50, 50, 58),
             };
             _trkRate.ValueChanged += (s, e) =>
             {
-                _maxRateDegSec = _trkRate.Value;
+                // Single source of truth — controller setter fires MaxRateChanged
+                // which all other UIs subscribe to.
+                GimbalController.MaxRateDegSec = _trkRate.Value;
                 _lblRate.Text = $"{_trkRate.Value}";
             };
             _ratePanel.Controls.Add(_trkRate);
@@ -313,7 +330,7 @@ namespace NOMAD.MissionPlanner
             // physical NomadJoystickService share one authoritative target.
             if (active)
             {
-                GimbalController.ApplyStick(sx, sy, _maxRateDegSec, dt,
+                GimbalController.ApplyStick(sx, sy, dt,
                     send: _mountMode == MountMode.MavlinkTargeting);
             }
 

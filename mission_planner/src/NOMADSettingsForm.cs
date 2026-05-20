@@ -8,6 +8,7 @@
 using System;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.IO.Ports;
 using System.Net.Http;
 using System.Text;
@@ -105,7 +106,9 @@ namespace NOMAD.MissionPlanner
         private CheckBox _chkServo3Rev;
         private NumericUpDown _numReelCh, _numReelPwmIn, _numReelPwmOut;
         private NumericUpDown _numReel2Ch, _numReel2PwmIn, _numReel2PwmOut;
-        private NumericUpDown _numPumpRelay, _numPumpDuration;
+        private NumericUpDown _numPumpRelay, _numPumpDuration, _numPumpRcChannel;
+        private Button _btnApplyPumpRcMapping;
+        private Label _lblPumpRcStatus;
         private NumericUpDown _numTiltCh, _numTiltPwmMin, _numTiltPwmNeutral, _numTiltPwmMax, _numTiltAngleRange;
         private NumericUpDown _numSprayRange, _numSprayRangeTol, _numSprayTriggerMax, _numSprayAimX, _numSprayAimY, _numSprayAimTol;
         private NumericUpDown _numSprayServoAngle, _numSprayForwardGain, _numSprayLateralGain, _numSprayAltitudeGain, _numSprayYawGain;
@@ -123,6 +126,22 @@ namespace NOMAD.MissionPlanner
         private NumericUpDown _numJoyGimbalMaxRate, _numJoyZedMaxRate;
         private Button _btnJoyRefreshDevices;
         private Label _lblJoyStatus;
+        // Serial bridge sub-section
+        private CheckBox _chkSerialBridgeEnabled;
+        private TextBox _txtSerialBridgePort, _txtSerialBridgePython, _txtSerialBridgeScript;
+        private NumericUpDown _numSerialBridgeBaud;
+        private Label _lblSerialBridgeStatus;
+        private System.Windows.Forms.Timer _serialBridgeStatusTimer;
+
+        // Externally-provided status source for the live bridge indicator.
+        // Set by the plugin so the form doesn't need to know about
+        // SerialJoystickBridge directly.
+        private Func<string> _serialBridgeStatusProvider;
+        public void SetSerialBridgeStatusProvider(Func<string> provider)
+        {
+            _serialBridgeStatusProvider = provider;
+            RefreshSerialBridgeStatus();
+        }
         
         // Google Drive
         private Button _btnUploadGDrive;
@@ -666,7 +685,34 @@ namespace NOMAD.MissionPlanner
             y += 28;
             AddLabel(tab, "Duration (ms):", 10, y);
             _numPumpDuration = AddNumericUpDown(tab, 130, y, 65, 50, 5000, 500);
-            y += 32;
+            y += 28;
+            AddLabel(tab, "RC Channel:", 10, y);
+            _numPumpRcChannel = AddNumericUpDown(tab, 100, y, 50, 0, 16, 0);
+            AddLabel(tab, "(0 = disabled, 5–16 = TX switch fires pump)", 160, y, Color.Gray);
+            y += 28;
+            _btnApplyPumpRcMapping = new Button
+            {
+                Text = "Apply RC Mapping",
+                Location = new Point(10, y),
+                Size = new Size(150, 26),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(0, 122, 204),
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 8, FontStyle.Bold),
+            };
+            _btnApplyPumpRcMapping.FlatAppearance.BorderSize = 0;
+            _btnApplyPumpRcMapping.Click += BtnApplyPumpRcMapping_Click;
+            tab.Controls.Add(_btnApplyPumpRcMapping);
+            _lblPumpRcStatus = new Label
+            {
+                Text = "",
+                Location = new Point(170, y + 5),
+                AutoSize = true,
+                ForeColor = Color.Gray,
+                Font = new Font("Segoe UI", 8),
+            };
+            tab.Controls.Add(_lblPumpRcStatus);
+            y += 36;
 
             AddSectionLabel(tab, "Camera Tilt (MAVLink primary, API fallback)", ref y);
             // Calibration: down=700us, straight=1250us, up=1450us, ±45° range
@@ -782,8 +828,69 @@ namespace NOMAD.MissionPlanner
                 ForeColor = Color.FromArgb(180, 180, 180),
             };
             tab.Controls.Add(_lblJoyStatus);
+            y += 36;
+
+            // -------- Serial → virtual gamepad bridge --------
+            AddSectionLabel(tab, "Serial Bridge (jotystick.py)", ref y);
+            AddLabel(tab, "Auto-launches a Python serial → virtual Xbox 360 bridge.",
+                10, y, Color.FromArgb(180, 180, 180));
+            y += 18;
+            AddLabel(tab, "Requires pyserial + vgamepad + ViGEmBus driver.",
+                10, y, Color.FromArgb(180, 180, 180));
+            y += 24;
+
+            _chkSerialBridgeEnabled = AddCheckBox(tab, "Enable bridge (spawn jotystick.py)", 20, y, Color.LimeGreen);
+            y += 26;
+
+            AddLabel(tab, "Serial port:", 20, y);
+            _txtSerialBridgePort = AddTextBox(tab, 110, y, 80);
+            AddLabel(tab, "Baud:", 210, y);
+            _numSerialBridgeBaud = AddNumericUpDown(tab, 260, y, 80, 1200, 1000000, 115200);
+            y += 26;
+
+            AddLabel(tab, "Python:", 20, y);
+            _txtSerialBridgePython = AddTextBox(tab, 110, y, 230);
+            y += 26;
+
+            AddLabel(tab, "Script path:", 20, y);
+            _txtSerialBridgeScript = AddTextBox(tab, 110, y, 230);
+            y += 28;
+
+            AddLabel(tab, "Status:", 20, y);
+            _lblSerialBridgeStatus = new Label
+            {
+                Text = "(unknown)",
+                Location = new Point(110, y),
+                AutoSize = true,
+                ForeColor = Color.FromArgb(180, 180, 180),
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+            };
+            tab.Controls.Add(_lblSerialBridgeStatus);
+
+            // Poll the bridge status every 500 ms while the settings dialog is open.
+            _serialBridgeStatusTimer = new System.Windows.Forms.Timer { Interval = 500 };
+            _serialBridgeStatusTimer.Tick += (s, e) => RefreshSerialBridgeStatus();
+            this.HandleCreated += (s, e) => _serialBridgeStatusTimer.Start();
+            this.FormClosed   += (s, e) => { try { _serialBridgeStatusTimer?.Stop(); _serialBridgeStatusTimer?.Dispose(); } catch { } };
 
             return tab;
+        }
+
+        private void RefreshSerialBridgeStatus()
+        {
+            if (_lblSerialBridgeStatus == null) return;
+            string status;
+            try { status = _serialBridgeStatusProvider?.Invoke() ?? "(no bridge instance)"; }
+            catch (Exception ex) { status = "Error: " + ex.Message; }
+
+            _lblSerialBridgeStatus.Text = status;
+            // Green when running, amber when disabled, red on failure / exit.
+            if (status.StartsWith("Running", StringComparison.OrdinalIgnoreCase))
+                _lblSerialBridgeStatus.ForeColor = Color.LimeGreen;
+            else if (status.StartsWith("Disabled", StringComparison.OrdinalIgnoreCase))
+                _lblSerialBridgeStatus.ForeColor = Color.Goldenrod;
+            else
+                _lblSerialBridgeStatus.ForeColor = Color.IndianRed;
         }
 
         private static string[] BuildDeviceComboList(System.Collections.Generic.IList<string> devices)
@@ -1080,6 +1187,7 @@ namespace NOMAD.MissionPlanner
             _numReel2PwmOut.Value = Config.Reel2PwmOut;
             _numPumpRelay.Value    = Config.WaterPumpRelayNumber;
             _numPumpDuration.Value = Config.WaterPumpDurationMs;
+            _numPumpRcChannel.Value = Math.Min(_numPumpRcChannel.Maximum, Math.Max(_numPumpRcChannel.Minimum, Config.WaterPumpRcChannel));
             _numTiltCh.Value          = Config.CameraTiltChannel;
             _numTiltPwmMin.Value      = Config.CameraTiltPwmMin;
             _numTiltPwmNeutral.Value  = Config.CameraTiltPwmNeutral;
@@ -1115,7 +1223,13 @@ namespace NOMAD.MissionPlanner
             SetComboBoxValue(_cmbJoyGimbalRollAxis, Config.JoystickGimbalRollAxis);
             _chkJoyGimbalRollInvert.Checked = Config.JoystickGimbalRollInvert;
             _numJoyGimbalDeadzone.Value = (decimal)Math.Max(0f, Math.Min(0.5f, Config.JoystickGimbalDeadzone));
-            _numJoyGimbalMaxRate.Value = (decimal)Math.Max(5f, Math.Min(200f, Config.JoystickGimbalMaxRateDegSec));
+            // Single source of truth lives on GimbalController. Read the live
+             // runtime value so this dialog matches what the floating gimbal
+             // window's slider shows, then push edits straight back into the
+             // controller as the user changes them.
+            _numJoyGimbalMaxRate.Value = (decimal)Math.Max(5f, Math.Min(200f, GimbalController.MaxRateDegSec));
+            _numJoyGimbalMaxRate.ValueChanged += (s, e) =>
+                GimbalController.MaxRateDegSec = (float)_numJoyGimbalMaxRate.Value;
 
             _chkJoyZedEnabled.Checked = Config.JoystickZedEnabled;
             SetComboBoxValue(_cmbJoyZedDevice,
@@ -1124,6 +1238,13 @@ namespace NOMAD.MissionPlanner
             _chkJoyZedTiltInvert.Checked = Config.JoystickZedTiltInvert;
             _numJoyZedDeadzone.Value = (decimal)Math.Max(0f, Math.Min(0.5f, Config.JoystickZedDeadzone));
             _numJoyZedMaxRate.Value = (decimal)Math.Max(50f, Math.Min(4000f, Config.JoystickZedMaxRateUsPerSec));
+
+            _chkSerialBridgeEnabled.Checked = Config.SerialJoystickEnabled;
+            _txtSerialBridgePort.Text = Config.SerialJoystickPort ?? "";
+            _numSerialBridgeBaud.Value = Math.Max(_numSerialBridgeBaud.Minimum,
+                Math.Min(_numSerialBridgeBaud.Maximum, Config.SerialJoystickBaud));
+            _txtSerialBridgePython.Text = Config.SerialJoystickPython ?? "python";
+            _txtSerialBridgeScript.Text = Config.SerialJoystickScriptPath ?? "";
 
             UpdateDualLinkControlsState();
             UpdateRadioMasterConnTypeState();
@@ -1227,6 +1348,7 @@ namespace NOMAD.MissionPlanner
             Config.Reel2PwmOut        = (int)_numReel2PwmOut.Value;
             Config.WaterPumpRelayNumber = (int)_numPumpRelay.Value;
             Config.WaterPumpDurationMs  = (int)_numPumpDuration.Value;
+            Config.WaterPumpRcChannel   = (int)_numPumpRcChannel.Value;
             Config.CameraTiltChannel   = (int)_numTiltCh.Value;
             Config.CameraTiltPwmMin    = (int)_numTiltPwmMin.Value;
             Config.CameraTiltPwmNeutral= (int)_numTiltPwmNeutral.Value;
@@ -1262,6 +1384,7 @@ namespace NOMAD.MissionPlanner
             Config.JoystickGimbalRollInvert = _chkJoyGimbalRollInvert.Checked;
             Config.JoystickGimbalDeadzone = (float)_numJoyGimbalDeadzone.Value;
             Config.JoystickGimbalMaxRateDegSec = (float)_numJoyGimbalMaxRate.Value;
+            GimbalController.MaxRateDegSec = (float)_numJoyGimbalMaxRate.Value;
 
             Config.JoystickZedEnabled = _chkJoyZedEnabled.Checked;
             Config.JoystickZedDevice = NormalizeDevice(_cmbJoyZedDevice.SelectedItem?.ToString());
@@ -1269,6 +1392,12 @@ namespace NOMAD.MissionPlanner
             Config.JoystickZedTiltInvert = _chkJoyZedTiltInvert.Checked;
             Config.JoystickZedDeadzone = (float)_numJoyZedDeadzone.Value;
             Config.JoystickZedMaxRateUsPerSec = (float)_numJoyZedMaxRate.Value;
+
+            Config.SerialJoystickEnabled = _chkSerialBridgeEnabled.Checked;
+            Config.SerialJoystickPort = _txtSerialBridgePort.Text.Trim();
+            Config.SerialJoystickBaud = (int)_numSerialBridgeBaud.Value;
+            Config.SerialJoystickPython = _txtSerialBridgePython.Text.Trim();
+            Config.SerialJoystickScriptPath = _txtSerialBridgeScript.Text.Trim();
         }
 
         private static string NormalizeDevice(string s)
@@ -1322,7 +1451,103 @@ namespace NOMAD.MissionPlanner
         // ============================================================
         // Event Handlers
         // ============================================================
-        
+
+        private void BtnApplyPumpRcMapping_Click(object sender, EventArgs e)
+        {
+            int ch = (int)_numPumpRcChannel.Value;
+            int relay = (int)_numPumpRelay.Value;
+
+            // ArduPilot RCx_OPTION codes for relay toggle: RELAY1=28, RELAY2=34, RELAY3=35, RELAY4=36
+            int optionCode;
+            switch (relay)
+            {
+                case 0: optionCode = 28; break;
+                case 1: optionCode = 34; break;
+                case 2: optionCode = 35; break;
+                case 3: optionCode = 36; break;
+                default:
+                    SetPumpRcStatus($"Relay {relay} has no RCx_OPTION code (use 0–3).", Color.OrangeRed);
+                    return;
+            }
+
+            if (ch != 0 && (ch < 5 || ch > 16))
+            {
+                SetPumpRcStatus("RC channel must be 0 (disable) or 5–16.", Color.OrangeRed);
+                return;
+            }
+
+            object comPort = null;
+            try { comPort = global::MissionPlanner.MainV2.comPort; } catch { }
+            if (comPort == null)
+            {
+                SetPumpRcStatus("Not connected to vehicle.", Color.OrangeRed);
+                return;
+            }
+
+            // If disabling, clear the previously-saved channel's option (best-effort: clear all 5–16
+            // would be invasive — instead clear the currently configured channel if known).
+            if (ch == 0)
+            {
+                int prev = Config.WaterPumpRcChannel;
+                if (prev >= 5 && prev <= 16)
+                {
+                    TrySetParamReflect(comPort, $"RC{prev}_OPTION", 0);
+                    SetPumpRcStatus($"Cleared RC{prev}_OPTION.", Color.LightGreen);
+                }
+                else
+                {
+                    SetPumpRcStatus("Disabled (no prior channel to clear).", Color.Gray);
+                }
+                return;
+            }
+
+            bool ok = TrySetParamReflect(comPort, $"RC{ch}_OPTION", optionCode);
+            SetPumpRcStatus(
+                ok ? $"RC{ch}_OPTION = {optionCode} (relay {relay + 1})." : $"Failed to set RC{ch}_OPTION.",
+                ok ? Color.LightGreen : Color.OrangeRed);
+        }
+
+        private void SetPumpRcStatus(string text, Color color)
+        {
+            if (_lblPumpRcStatus == null) return;
+            _lblPumpRcStatus.Text = text;
+            _lblPumpRcStatus.ForeColor = color;
+        }
+
+        private static bool TrySetParamReflect(object comPort, string name, double value)
+        {
+            try
+            {
+                var methods = comPort.GetType()
+                    .GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+                    .Where(m => m.Name == "setParam").ToList();
+                foreach (var m in methods)
+                {
+                    var p = m.GetParameters();
+                    if (p.Length >= 2 && p[0].ParameterType == typeof(string))
+                    {
+                        var args = new object[p.Length];
+                        args[0] = name;
+                        args[1] = Convert.ChangeType(value, p[1].ParameterType);
+                        for (int i = 2; i < p.Length; i++)
+                        {
+                            if (p[i].HasDefaultValue) args[i] = p[i].DefaultValue;
+                            else if (p[i].ParameterType == typeof(bool)) args[i] = true;
+                            else args[i] = p[i].ParameterType.IsValueType
+                                ? Activator.CreateInstance(p[i].ParameterType) : null;
+                        }
+                        try { m.Invoke(comPort, args); return true; }
+                        catch { }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"NOMAD: setParam({name}) error - {ex.Message}");
+            }
+            return false;
+        }
+
         private async System.Threading.Tasks.Task UploadGDriveCredentials()
         {
             using (var dlg = new OpenFileDialog())

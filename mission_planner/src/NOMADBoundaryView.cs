@@ -1074,17 +1074,25 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                var vertices = GetSelectedBoundaryVertices(out string boundaryName);
-                if (vertices == null || vertices.Count < 3)
+                // Always push the HARD boundary to the FC. The soft boundary
+                // is advisory-only per CONOPS §4.2 (warning, pilot turns back);
+                // uploading it would make ArduPilot terminate on the soft
+                // breach, which is wrong. Soft is rendered as map overlay
+                // elsewhere — only hard is enforced by the flight controller.
+                var hardVerts = _missionConfig.HardBoundary?.Vertices;
+                if (hardVerts == null || hardVerts.Count < 3)
                 {
-                    CustomMessageBox.Show("No boundary points to push (need at least 3).", "Warning");
+                    CustomMessageBox.Show(
+                        "Hard boundary needs at least 3 points before pushing to MP / drone.",
+                        "Warning");
                     return;
                 }
-
-                bool isSoft = boundaryName == "Soft";
-                var strokeColor = isSoft ? Color.Yellow : Color.Red;
-                var fillColor = isSoft ? Color.FromArgb(60, Color.Yellow) : Color.FromArgb(60, Color.Red);
-                string polyName = $"NOMAD_{boundaryName}_Fence";
+                var vertices = hardVerts;
+                string boundaryName = "Hard";
+                bool isSoft = false;
+                var strokeColor = Color.Red;
+                var fillColor = Color.FromArgb(60, Color.Red);
+                string polyName = "NOMAD_Hard_Fence";
 
                 // 1) Draw on Data map overlay
                 try
@@ -1102,14 +1110,20 @@ namespace NOMAD.MissionPlanner
                 }
                 catch (Exception ex) { Console.WriteLine($"NOMAD: Plan map inject failed - {ex.Message}"); }
 
-                // 3) Upload to connected vehicle via MAVLink and set FENCE_* params
-                int fenceAction = MapFenceActionToParam(_missionConfig.Failsafe.HardBoundaryAction);
+                // 3) Upload to connected vehicle via MAVLink and set FENCE_* params.
+                // For any "kill" action we also force LAND_SPEED to 200 cm/s
+                // (2 m/s) so the descent meets CONOPS §4.5; warn-only flights
+                // leave LAND_SPEED untouched.
+                string hardAction = _missionConfig.Failsafe.HardBoundaryAction;
+                int fenceAction = MapFenceActionToParam(hardAction);
+                int landSpeedCmS = (hardAction ?? "warn_and_kill").ToLower() == "warn_only" ? 0 : 200;
                 var upload = MPFenceUploader.UploadPolygon(
                     vertices,
                     _missionConfig.ReturnPoint,
                     _missionConfig.MaxAltitudeAglMeters,
                     fenceAction,
-                    enableFence: true);
+                    enableFence: true,
+                    landSpeedCmS: landSpeedCmS);
 
                 var parts = new List<string>();
                 parts.Add($"Boundary: {boundaryName} ({vertices.Count} pts)");
@@ -1125,13 +1139,16 @@ namespace NOMAD.MissionPlanner
 
         private static int MapFenceActionToParam(string action)
         {
-            // ArduPilot FENCE_ACTION: 0=Report, 1=RTL or Land, 2=Always Land, 3=SmartRTL, 4=Brake, 5=SmartRTL-or-Land
+            // ArduPilot FENCE_ACTION: 0=Report, 1=RTL or Land, 2=Always Land, 3=SmartRTL, 4=Brake, 5=SmartRTL-or-Land.
+            // CONOPS §4.5 requires termination (vertical descent ≥2 m/s) on
+            // hard-boundary breach — RTL flies home horizontally first and
+            // does NOT satisfy that, so both "kill" variants map to Land (2).
             switch ((action ?? "warn_and_kill").ToLower())
             {
                 case "warn_only": return 0;
-                case "auto_kill": return 2; // Land
-                case "warn_and_kill": return 1; // RTL
-                default: return 1;
+                case "auto_kill": return 2;
+                case "warn_and_kill": return 2;
+                default: return 2;
             }
         }
 

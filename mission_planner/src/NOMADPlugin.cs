@@ -51,6 +51,7 @@ namespace NOMAD.MissionPlanner
         private MAVLinkConnectionManager _connectionManager;  // Dual link manager
         private JetsonConnectionManager _jetsonConnectionManager;  // Jetson HTTP connectivity
         private NomadJoystickService _joystickService;        // Physical joysticks → gimbal + ZED tilt
+        private SerialJoystickBridge _serialBridge;           // Python subprocess: serial → virtual Xbox 360
         private Form _popOutForm;                             // Pop-out window for NOMAD screen
         private bool _hudVideoStarted = false;
         private bool _screenRegistered = false;               // Track if NOMAD screen is registered with MainSwitcher
@@ -168,6 +169,22 @@ namespace NOMAD.MissionPlanner
                 {
                     InitializeConnectionManager();
                 }
+
+                // Serial → virtual Xbox 360 bridge — must start BEFORE the joystick
+                // service so the virtual device is registered with Windows by the
+                // time NomadJoystickService enumerates DirectInput devices.
+                _serialBridge = new SerialJoystickBridge(_config);
+                if (_config.SerialJoystickEnabled)
+                {
+                    try { _serialBridge.Start(); }
+                    catch (Exception ex) { Console.WriteLine($"NOMAD: serial bridge start failed — {ex.Message}"); }
+                }
+
+                // Seed centralized gimbal rate from persisted config so the floating
+                // gimbal window, the settings dialog, and the physical joystick
+                // service all start with the same value (single source of truth lives
+                // on GimbalController.MaxRateDegSec).
+                GimbalController.MaxRateDegSec = _config.JoystickGimbalMaxRateDegSec;
 
                 // Physical joystick service — starts only if either channel is enabled in config.
                 _joystickService = new NomadJoystickService(_config);
@@ -424,6 +441,10 @@ namespace NOMAD.MissionPlanner
                 // Release joystick devices
                 _joystickService?.Dispose();
                 _joystickService = null;
+
+                // Kill serial bridge subprocess
+                _serialBridge?.Dispose();
+                _serialBridge = null;
                 
                 if (_popOutForm != null && !_popOutForm.IsDisposed)
                 {
@@ -660,12 +681,17 @@ namespace NOMAD.MissionPlanner
         {
             using (var form = new NOMADSettingsForm(_config))
             {
+                // Live serial bridge status indicator on the Joystick tab.
+                form.SetSerialBridgeStatusProvider(() => _serialBridge?.GetStatus() ?? "(no bridge instance)");
+
                 if (form.ShowDialog() == DialogResult.OK)
                 {
                     _config = form.Config;
                     _config.Save();
                     _sender.UpdateConfig(_config);
                     ApplyDualLinkSettings();
+                    try { _serialBridge?.UpdateConfig(_config); }
+                    catch (Exception ex) { Console.WriteLine($"NOMAD: serial bridge update failed — {ex.Message}"); }
                     try { _joystickService?.UpdateConfig(_config); }
                     catch (Exception ex) { Console.WriteLine($"NOMAD: joystick restart failed — {ex.Message}"); }
                 }

@@ -88,6 +88,10 @@ namespace NOMAD.MissionPlanner
                 GimbalController.SetMode(GimbalController.MountMode.MavlinkTargeting);
             }
 
+            // Seed the centralized rate from persisted config so the floating
+            // window's slider and our integrator start with the same value.
+            GimbalController.MaxRateDegSec = _config.JoystickGimbalMaxRateDegSec;
+
             _timer = new Timer { Interval = 1000 / POLL_HZ };
             _timer.Tick += OnTick;
             _timer.Start();
@@ -212,6 +216,20 @@ namespace NOMAD.MissionPlanner
 
             try { DriveZed(dt); }
             catch (Exception ex) { Console.WriteLine($"NOMAD Joystick zed: {ex.Message}"); }
+
+            // Payload switch buttons emitted by joystick.py — read from whichever
+            // device is acquired (gimbal preferred, then zed). Runs every tick so
+            // edge detection doesn't depend on stick motion or DriveGimbal early-returning.
+            try
+            {
+                var btnDev = _gimbalJoy ?? _zedJoy;
+                if (btnDev != null)
+                {
+                    var st = SafeGetState(btnDev);
+                    if (st != null) DrivePayloadButtons(st);
+                }
+            }
+            catch (Exception ex) { Console.WriteLine($"NOMAD Joystick buttons: {ex.Message}"); }
         }
 
         private void DriveGimbal(float dt)
@@ -225,7 +243,9 @@ namespace NOMAD.MissionPlanner
 
             if (roll == 0f && pitch == 0f) return; // no motion → don't spam mount
 
-            GimbalController.ApplyStick(roll, pitch, _config.JoystickGimbalMaxRateDegSec, dt, send: true);
+            // Use the centralized rate so the floating GimbalJoystickWindow's slider
+            // and the settings dialog all agree on one value. No code duplication.
+            GimbalController.ApplyStick(roll, pitch, dt, send: true);
         }
 
         private void DriveZed(float dt)
@@ -314,6 +334,82 @@ namespace NOMAD.MissionPlanner
             float sign = norm < 0 ? -1f : 1f;
             float scaled = (Math.Abs(norm) - deadzone) / (1f - deadzone);
             return invert ? -sign * scaled : sign * scaled;
+        }
+
+        // ============================================================
+        // Payload switch buttons
+        // ============================================================
+        // joystick.py maps the three 3-position switches on the RadioMaster onto
+        // 6 virtual Xbox360 buttons (each switch position = one button). The
+        // mapping is fixed in the python:
+        //   button 0 (A)  = sw1 pos 1  → switch #1 → toggle drop/retract Payload 1
+        //   button 1 (B)  = sw1 pos 2  → switch #2 → toggle drop/retract Payload 2
+        //   button 2 (X)  = sw2 pos 1  → switch #3 → toggle drop/retract Payload 3
+        //   button 3 (Y)  = sw2 pos 2  → switch #4 → reel-in Payload 1 (hold)
+        //   button 4 (LB) = sw3 pos 1  → switch #5 → reel-in Payload 2 (hold)
+        //   button 5 (RB) = sw3 pos 2  → switch #6 → fire water pump (edge)
+        //
+        // Drop/spray are edge-triggered (on press), reels are level-triggered
+        // (run while held, neutral PWM on release).
+
+        private const int BTN_DROP_P1   = 0;
+        private const int BTN_DROP_P2   = 1;
+        private const int BTN_DROP_P3   = 2;
+        private const int BTN_REEL_P1   = 3;
+        private const int BTN_REEL_P2   = 4;
+        private const int BTN_SPRAY     = 5;
+
+        private bool[] _prevButtons = new bool[8];
+        private bool[] _payloadDropped = new bool[3]; // tracks toggle state for P1/P2/P3
+        private readonly bool[] _reelHeld = new bool[2];
+
+        private void DrivePayloadButtons(IMyJoystickState st)
+        {
+            bool[] buttons;
+            try { buttons = st.GetButtons(); }
+            catch { return; }
+            if (buttons == null) return;
+
+            bool B(int i) => i < buttons.Length && buttons[i];
+
+            // Edge-triggered: drop / retract toggles for P1..P3
+            for (int i = 0; i < 3; i++)
+            {
+                bool now = B(i);
+                bool prev = i < _prevButtons.Length && _prevButtons[i];
+                if (now && !prev)
+                {
+                    if (_payloadDropped[i]) { PayloadActions.Retract(_config, i + 1); _payloadDropped[i] = false; }
+                    else                    { PayloadActions.Drop(_config, i + 1);    _payloadDropped[i] = true;  }
+                }
+            }
+
+            // Level-triggered: reel P1 / P2 while held
+            HandleReelHold(0, B(BTN_REEL_P1));
+            HandleReelHold(1, B(BTN_REEL_P2));
+
+            // Edge-triggered: water pump
+            bool sprayNow = B(BTN_SPRAY);
+            bool sprayPrev = BTN_SPRAY < _prevButtons.Length && _prevButtons[BTN_SPRAY];
+            if (sprayNow && !sprayPrev) PayloadActions.FireWater(_config);
+
+            // Save for edge detection next tick
+            int n = Math.Min(buttons.Length, _prevButtons.Length);
+            for (int i = 0; i < n; i++) _prevButtons[i] = buttons[i];
+        }
+
+        private void HandleReelHold(int reelIdx, bool held)
+        {
+            if (held && !_reelHeld[reelIdx])
+            {
+                _reelHeld[reelIdx] = true;
+                PayloadActions.ReelStart(_config, reelIdx);
+            }
+            else if (!held && _reelHeld[reelIdx])
+            {
+                _reelHeld[reelIdx] = false;
+                PayloadActions.ReelStop(_config, reelIdx);
+            }
         }
     }
 }

@@ -52,11 +52,15 @@ namespace NOMAD.MissionPlanner
         private float _altSpeed = 0.3f;     // m/s for altitude
         private float _yawRate = 15.0f;     // deg/s for yaw
         
-        // Current velocity/yaw command state
-        private float _vx = 0f;  // Forward velocity
-        private float _vy = 0f;  // Right velocity
-        private float _vz = 0f;  // Down velocity (positive = down)
-        private float _yawRateCmd = 0f;  // Yaw rate
+        // Target velocity from current key state (set by UpdateVelocitiesFromKeys)
+        private float _vxTarget = 0f, _vyTarget = 0f, _vzTarget = 0f, _yawRateTarget = 0f;
+
+        // Currently commanded velocity (ramped toward target to avoid step inputs
+        // that make ArduPilot's pos_controller overshoot when keys are released).
+        private float _vx = 0f;
+        private float _vy = 0f;
+        private float _vz = 0f;
+        private float _yawRateCmd = 0f;
         
         // Key state tracking
         private bool _keyW, _keyS, _keyA, _keyD;
@@ -851,37 +855,47 @@ namespace NOMAD.MissionPlanner
         
         private void UpdateVelocitiesFromKeys()
         {
-            // Forward/Back (X velocity in NED frame)
-            if (_keyW && !_keyS)
-                _vx = _moveSpeed;
-            else if (_keyS && !_keyW)
-                _vx = -_moveSpeed;
-            else
-                _vx = 0;
-            
-            // Left/Right strafe (Y velocity in NED frame)
-            if (_keyD && !_keyA)
-                _vy = _moveSpeed;
-            else if (_keyA && !_keyD)
-                _vy = -_moveSpeed;
-            else
-                _vy = 0;
-            
-            // Altitude (Z velocity in NED frame - positive is DOWN)
-            if (_keyUp && !_keyDown)
-                _vz = -_altSpeed;  // Up = negative Z
-            else if (_keyDown && !_keyUp)
-                _vz = _altSpeed;   // Down = positive Z
-            else
-                _vz = 0;
-            
-            // Yaw rate
-            if (_keyRight && !_keyLeft)
-                _yawRateCmd = _yawRate * (float)(Math.PI / 180.0);  // Convert to rad/s
-            else if (_keyLeft && !_keyRight)
-                _yawRateCmd = -_yawRate * (float)(Math.PI / 180.0);
-            else
-                _yawRateCmd = 0;
+            // Forward/Back (X velocity in body frame)
+            if (_keyW && !_keyS)       _vxTarget = _moveSpeed;
+            else if (_keyS && !_keyW)  _vxTarget = -_moveSpeed;
+            else                        _vxTarget = 0;
+
+            // Left/Right strafe (Y velocity in body frame)
+            if (_keyD && !_keyA)       _vyTarget = _moveSpeed;
+            else if (_keyA && !_keyD)  _vyTarget = -_moveSpeed;
+            else                        _vyTarget = 0;
+
+            // Altitude (Z velocity, positive = DOWN)
+            if (_keyUp && !_keyDown)     _vzTarget = -_altSpeed;
+            else if (_keyDown && !_keyUp) _vzTarget = _altSpeed;
+            else                          _vzTarget = 0;
+
+            // Yaw rate (rad/s)
+            if (_keyRight && !_keyLeft)   _yawRateTarget = _yawRate * (float)(Math.PI / 180.0);
+            else if (_keyLeft && !_keyRight) _yawRateTarget = -_yawRate * (float)(Math.PI / 180.0);
+            else                              _yawRateTarget = 0;
+        }
+
+        // Linear ramp the commanded velocity toward the target. Called from the
+        // 10 Hz command timer so each tick is ~100 ms. Slewing the setpoint
+        // (rather than snapping it on key release) keeps ArduPilot's
+        // pos_controller from overshooting and oscillating.
+        private void RampVelocityTowardTarget()
+        {
+            const float linearStep = 0.15f;  // m/s per 100 ms  (full stop in ~3-4 ticks)
+            float yawStep = 1.0f * (float)(Math.PI / 180.0); // ~10 deg/s per 100 ms
+
+            _vx = ApproachFloat(_vx, _vxTarget, linearStep);
+            _vy = ApproachFloat(_vy, _vyTarget, linearStep);
+            _vz = ApproachFloat(_vz, _vzTarget, linearStep);
+            _yawRateCmd = ApproachFloat(_yawRateCmd, _yawRateTarget, yawStep);
+        }
+
+        private static float ApproachFloat(float current, float target, float step)
+        {
+            if (current < target) return Math.Min(target, current + step);
+            if (current > target) return Math.Max(target, current - step);
+            return target;
         }
         
         private void UpdateKeyVisuals()
@@ -925,6 +939,8 @@ namespace NOMAD.MissionPlanner
             
             _vx = _vy = _vz = 0;
             _yawRateCmd = 0;
+            _vxTarget = _vyTarget = _vzTarget = 0;
+            _yawRateTarget = 0;
             UpdateKeyVisuals();
             SendVelocityCommand();  // Send zero velocity
         }
@@ -940,27 +956,28 @@ namespace NOMAD.MissionPlanner
             
             try
             {
-                // Create SET_POSITION_TARGET_LOCAL_NED message in BODY_FRD
-                // (Forward/Right/Down body frame) so vx/vy/vz are applied
-                // relative to the vehicle's heading. LOCAL_NED would lock
-                // W/S/A/D to North/East regardless of yaw. BODY_FRD is the
-                // modern replacement for the deprecated BODY_OFFSET_NED.
+                // Create SET_POSITION_TARGET_LOCAL_NED in BODY_OFFSET_NED:
+                // velocity components are interpreted as forward/right/down
+                // relative to the vehicle's current heading. ArduPilot Copter
+                // explicitly supports frames 1, 7, 8, 9 — BODY_FRD (12) is
+                // silently rejected on older firmwares, which made the WASD
+                // packets a no-op.
                 var msg = new MAVLink.mavlink_set_position_target_local_ned_t
                 {
                     time_boot_ms = (uint)Environment.TickCount,
                     target_system = MainV2.comPort.MAV.sysid,
                     target_component = MainV2.comPort.MAV.compid,
-                    coordinate_frame = (byte)MAVLink.MAV_FRAME.BODY_FRD,
-                    
-                    // Type mask for velocity + yaw rate control
-                    // Bits 0-2: Ignore position (set)
-                    // Bits 3-5: Use velocity (clear)
-                    // Bits 6-8: Ignore acceleration (set)
-                    // Bit 9: Ignore force (set)
-                    // Bit 10: Ignore yaw (set)
-                    // Bit 11: Use yaw rate (clear)
-                    // 0b0000_0111_1100_0111 = 0x07C7 - velocity + yaw rate (Force bit set so ArduPilot ignores forces)
-                    type_mask = 0x07C7,
+                    coordinate_frame = (byte)MAVLink.MAV_FRAME.BODY_OFFSET_NED,
+
+                    // Velocity + yaw_rate mask. Bits (LSB=0):
+                    //   0,1,2  pos ignore (set)
+                    //   3,4,5  vel use     (clear)
+                    //   6,7,8  accel ignore (set)
+                    //   9      FORCE_SET flag (clear — accel fields are not forces)
+                    //   10     yaw ignore (set)
+                    //   11     yaw_rate use (clear)
+                    // = 0b0000_0101_1100_0111 = 0x05C7
+                    type_mask = 0x05C7,
                     
                     // Position (ignored)
                     x = 0, y = 0, z = 0,
@@ -1028,7 +1045,10 @@ namespace NOMAD.MissionPlanner
                     }));
                 }
 
-                // Send velocity command (even if zero - ensures clean stop)
+                // Slew commanded velocity toward the target from current keys,
+                // then send. Ramping prevents the step input that previously
+                // caused overshoot/oscillation on key release.
+                RampVelocityTowardTarget();
                 SendVelocityCommand();
             }
             catch (Exception ex)

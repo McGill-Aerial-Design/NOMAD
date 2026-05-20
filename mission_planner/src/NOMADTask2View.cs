@@ -1,17 +1,17 @@
 // ============================================================
 // NOMAD Task 2 View - Indoor Fire Extinguishing
 // ============================================================
-// Layout mirrors Task 1: video feed on the left, tabbed
-// controls on the right.
+// Layout uses a full-width tabbed workflow so Task 2 controls are not
+// constrained by a side-by-side video/control split.
 //
 // Tabs (right column):
-//   1. Detect & Spray  — detection list, spray controls,
-//                        slim payload panel (cam tilt + water),
-//                        distance/error display.
-//   2. Submit          — Task2UploadPanel (auto + manual flow).
-//   3. Status          — VIO/Approach/Mode/Obstacles + spray
-//                        sequence detail panels.
-//   4. 3D SLAM         — SLAM3DView (unchanged).
+//   1. Detect & Spray  — autonomous flight workflow with status,
+//                        detections, spray controls, payload, and
+//                        autonomous artifacts.
+//   2. Manual Spray    — Task2UploadPanel manual flow.
+//   3. RTM SOPs        — checklist.
+//   4. 3D SLAM         — SLAM3DView.
+// Layout mirrors Task 1: live camera feed on the left, tabs on the right.
 //
 // Tilt lock is driven from spray state (UpdateSprayUI) — the
 // slider is locked only while the autonomous spray sequence
@@ -52,11 +52,6 @@ namespace NOMAD.MissionPlanner
         private Task2UploadPanel _uploadPanel;
         private JetsonStateStream _stateStream;
 
-        // ---- Status tab ----
-        private Label _lblVioStatus;
-        private Label _lblApproachStatus;
-        private Label _lblModeStatus;
-        private Label _lblObstacleStatus;
         private Label _lblSprayState;
         private Label _lblApproachMethod;
         private Label _lblSprayCount;
@@ -69,7 +64,6 @@ namespace NOMAD.MissionPlanner
         private Label _lblDetectionCount;
         private Button _btnRefreshDetections;
         private Button _btnAutoSpray;        // Autonomy-gated (1× per mission)
-        private Button _btnManualSpray;      // Manual fire (no approach gate)
         private Button _btnAbortSpray;
         private Label _lblDistToTarget;
         private Label _lblAutonomyState;     // "Autonomy gate: not yet claimed" / "Claimed (target X)"
@@ -110,6 +104,11 @@ namespace NOMAD.MissionPlanner
         // ============================================================
         private void InitializeUI()
         {
+            BackColor = NOMADTheme.BG_DARK;
+            Padding = Padding.Empty;
+
+            // Two-column layout (mirrors Task 1): live video on the left,
+            // tabbed controls on the right.
             var mainLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -117,45 +116,15 @@ namespace NOMAD.MissionPlanner
                 RowCount = 1,
                 Margin = Padding.Empty,
                 Padding = Padding.Empty,
-                BackColor = NOMADTheme.BG_DARK,
             };
             mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
             mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-            // ---- Left: Video ----
-            var videoPanel = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = CARD_BG,
-                Margin = new Padding(5),
-            };
-            try
-            {
-                string rtspUrl = $"rtsp://{_config.EffectiveIP}:8554/primary";
-                _videoPlayer = new EmbeddedVideoPlayer("Task 2 Camera", rtspUrl, true, _jetsonConnectionManager);
-                _videoPlayer.Dock = DockStyle.Fill;
-                videoPanel.Controls.Add(_videoPlayer);
-                // Ask the bridge to enable overlay AND switch to the Task 2
-                // (shape-based) detector. set_overlay_mode("task2") alone
-                // wakes the detector but doesn't guarantee overlay is on;
-                // the explicit enable is idempotent and safer here.
-                _ = EnableTask2OverlayAsync();
-            }
-            catch (Exception ex)
-            {
-                videoPanel.Controls.Add(new Label
-                {
-                    Text = $"Video unavailable: {ex.Message}",
-                    Font = new Font("Segoe UI", 10),
-                    ForeColor = ERROR_COLOR,
-                    Location = new Point(15, 15),
-                    AutoSize = true,
-                });
-            }
-            mainLayout.Controls.Add(videoPanel, 0, 0);
+            // ========== LEFT COLUMN: Video ==========
+            mainLayout.Controls.Add(CreateCameraPanel(), 0, 0);
 
-            // ---- Right: TabControl ----
+            // ========== RIGHT COLUMN: Tabs ==========
             _tabControl = new TabControl
             {
                 Dock = DockStyle.Fill,
@@ -163,27 +132,18 @@ namespace NOMAD.MissionPlanner
             };
             StyleTabControl(_tabControl);
 
-            // Tab 1: Detect & Spray (autonomous flow — includes status,
-            // detection, spray controls, payload, exclusion map, and the
-            // auto-upload artifacts preview so the operator never has to
-            // tab-switch during the autonomy run)
             var detectTab = new TabPage("Detect & Spray") { BackColor = CARD_BG, Padding = new Padding(0) };
             detectTab.Controls.Add(CreateDetectSprayPanel());
             _tabControl.TabPages.Add(detectTab);
 
-            // Tab 2: Manual Spray — pilot is in firing range, fires by hand
-            // via the tilt slider + spray button, and records before/after
-            // artifacts. This is the "submit page" the rules require.
             var manualTab = new TabPage("Manual Spray") { BackColor = CARD_BG, Padding = new Padding(0) };
             manualTab.Controls.Add(CreateManualSprayPanel());
             _tabControl.TabPages.Add(manualTab);
 
-            // Tab 3: RTM Checklist (CONOPS Appendix F — 15 pts)
             var rtmTab = new TabPage("RTM SOPs") { BackColor = NOMADTheme.BG_DARK, Padding = new Padding(0) };
             rtmTab.Controls.Add(new RtmChecklistPanel("task2", RtmChecklistPanel.TASK2_ITEMS));
             _tabControl.TabPages.Add(rtmTab);
 
-            // Tab 4: 3D SLAM View
             var slam3DTab = new TabPage("3D SLAM View") { BackColor = NOMADTheme.BG_DARK };
             try
             {
@@ -205,7 +165,39 @@ namespace NOMAD.MissionPlanner
             _tabControl.TabPages.Add(slam3DTab);
 
             mainLayout.Controls.Add(_tabControl, 1, 0);
+
+            this.AutoScroll = false;
             this.Controls.Add(mainLayout);
+        }
+
+        private Panel CreateCameraPanel()
+        {
+            var videoPanel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = CARD_BG,
+                Margin = new Padding(5),
+            };
+            try
+            {
+                string rtspUrl = $"rtsp://{_config.EffectiveIP}:8554/primary";
+                _videoPlayer = new EmbeddedVideoPlayer("Task 2 Camera", rtspUrl, true, _jetsonConnectionManager);
+                _videoPlayer.Dock = DockStyle.Fill;
+                videoPanel.Controls.Add(_videoPlayer);
+                _ = EnableTask2OverlayAsync();
+            }
+            catch (Exception ex)
+            {
+                videoPanel.Controls.Add(new Label
+                {
+                    Text = $"Video unavailable: {ex.Message}",
+                    Font = new Font("Segoe UI", 10),
+                    ForeColor = ERROR_COLOR,
+                    Location = new Point(15, 15),
+                    AutoSize = true,
+                });
+            }
+            return videoPanel;
         }
 
         private void StyleTabControl(TabControl tabControl)
@@ -283,12 +275,10 @@ namespace NOMAD.MissionPlanner
         // ============================================================
         // Detect & Spray tab
         // ============================================================
-        // 2-column layout, no nested scroll. The outer panel is the only
-        // scrollable container so the operator never sees "scrollbar within
-        // scrollbar". Columns stack the cards top-to-bottom with FlowLayout
-        // (TopDown), and each card has a fixed height so growth is
-        // predictable. Exclusion map / reset-map / reset-vio are gone —
-        // they were leftovers from a navigation flow we no longer use.
+        // Single-column layout. The outer panel is the only scrollable
+        // container so the tab cannot clip half-width cards. Exclusion map /
+        // reset-map / reset-vio are gone; they were leftovers from a
+        // navigation flow we no longer use.
         private Panel CreateDetectSprayPanel()
         {
             var root = new Panel
@@ -296,25 +286,10 @@ namespace NOMAD.MissionPlanner
                 Dock = DockStyle.Fill,
                 BackColor = CARD_BG,
                 AutoScroll = true,
-                Padding = new Padding(4),
+                Padding = new Padding(8),
             };
 
-            var grid = new TableLayoutPanel
-            {
-                Dock = DockStyle.Top,
-                ColumnCount = 2,
-                RowCount = 1,
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                BackColor = CARD_BG,
-                Margin = Padding.Empty,
-                Padding = Padding.Empty,
-            };
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-            grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-
-            FlowLayoutPanel MakeColumn() => new FlowLayoutPanel
+            var stack = new FlowLayoutPanel
             {
                 Dock = DockStyle.Top,
                 FlowDirection = FlowDirection.TopDown,
@@ -322,38 +297,69 @@ namespace NOMAD.MissionPlanner
                 AutoSize = true,
                 AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 BackColor = CARD_BG,
-                Margin = new Padding(2),
+                Margin = Padding.Empty,
                 Padding = Padding.Empty,
             };
-            var leftCol = MakeColumn();
-            var rightCol = MakeColumn();
 
-            void AddCard(FlowLayoutPanel col, Control card, int height)
+            void SizeToStack(Control card)
             {
-                card.Height = height;
-                card.Margin = new Padding(0, 0, 0, 6);
-                // Width follows the column. FlowLayoutPanel ignores Anchor on
-                // children that aren't auto-sized horizontally, so we wire a
-                // resize handler to keep cards full-width.
-                card.Width = Math.Max(380, col.ClientSize.Width - 6);
-                col.Resize += (s, e) =>
-                {
-                    if (!card.IsDisposed)
-                        card.Width = Math.Max(380, col.ClientSize.Width - 6);
-                };
-                col.Controls.Add(card);
+                if (card.IsDisposed) return;
+                var available = root.ClientSize.Width - root.Padding.Horizontal - SystemInformation.VerticalScrollBarWidth - 4;
+                card.Width = Math.Max(470, available);
             }
 
-            // ---- LEFT COLUMN ----
+            void AddCard(Control card, int height)
+            {
+                card.Height = height;
+                card.Margin = new Padding(0, 0, 0, 10);
+                SizeToStack(card);
+                root.Resize += (s, e) => SizeToStack(card);
+                stack.Controls.Add(card);
+            }
 
-            // STATUS BAR (was its own tab — now embedded so the operator
-            // doesn't tab-switch mid-flight).
-            var statusBar = CreateCard("STATUS");
-            _lblVioStatus      = MakeRow(statusBar, "VIO: --", 36);
-            _lblApproachStatus = MakeRow(statusBar, "Approach: --", 56);
-            _lblModeStatus     = MakeRow(statusBar, "Mode: --", 76);
-            _lblObstacleStatus = MakeRow(statusBar, "Obstacles: --", 96);
-            AddCard(leftCol, statusBar, 130);
+            // DETECTED TARGETS card
+            var detectCard = CreateCard("DETECTED TARGETS");
+
+            _lblDetectionCount = new Label
+            {
+                Text = "Targets: 0",
+                Font = new Font("Consolas", 9),
+                ForeColor = TEXT_SECONDARY,
+                Location = new Point(15, 38),
+                AutoSize = true,
+            };
+            detectCard.Controls.Add(_lblDetectionCount);
+
+            _btnRefreshDetections = CreateButton("Refresh", INFO_COLOR, 80, 26);
+            _btnRefreshDetections.Location = new Point(220, 36);
+            _btnRefreshDetections.Font = new Font("Segoe UI", 9, FontStyle.Bold);
+            _btnRefreshDetections.Click += (s, e) => UiAsync.Run(this, RefreshDetections, nameof(RefreshDetections));
+            detectCard.Controls.Add(_btnRefreshDetections);
+
+            _lstDetections = new ListBox
+            {
+                Location = new Point(15, 64),
+                Size = new Size(380, 118),
+                Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top,
+                BackColor = NOMADTheme.INPUT_BG,
+                ForeColor = TEXT_PRIMARY,
+                Font = new Font("Consolas", 9),
+                BorderStyle = BorderStyle.FixedSingle,
+                SelectionMode = SelectionMode.One,
+                HorizontalScrollbar = true,
+            };
+            detectCard.Controls.Add(_lstDetections);
+
+            _lblDistToTarget = new Label
+            {
+                Text = "Distance: --",
+                Font = new Font("Consolas", 10, FontStyle.Bold),
+                ForeColor = WARNING_COLOR,
+                Location = new Point(15, 192),
+                AutoSize = true,
+            };
+            detectCard.Controls.Add(_lblDistToTarget);
+            AddCard(detectCard, 226);
 
             // SPRAY SEQUENCE STATUS card
             var seqCard = CreateCard("SPRAY SEQUENCE STATUS");
@@ -419,51 +425,7 @@ namespace NOMAD.MissionPlanner
                 Visible = false,
             };
             seqCard.Controls.Add(_lblSprayError);
-            AddCard(leftCol, seqCard, 220);
-
-            // DETECTED TARGETS card
-            var detectCard = CreateCard("DETECTED TARGETS");
-
-            _lblDetectionCount = new Label
-            {
-                Text = "Targets: 0",
-                Font = new Font("Consolas", 9),
-                ForeColor = TEXT_SECONDARY,
-                Location = new Point(15, 38),
-                AutoSize = true,
-            };
-            detectCard.Controls.Add(_lblDetectionCount);
-
-            _btnRefreshDetections = CreateButton("Refresh", INFO_COLOR, 80, 26);
-            _btnRefreshDetections.Location = new Point(220, 36);
-            _btnRefreshDetections.Font = new Font("Segoe UI", 9, FontStyle.Bold);
-            _btnRefreshDetections.Click += (s, e) => UiAsync.Run(this, RefreshDetections, nameof(RefreshDetections));
-            detectCard.Controls.Add(_btnRefreshDetections);
-
-            _lstDetections = new ListBox
-            {
-                Location = new Point(15, 64),
-                Size = new Size(380, 150),
-                Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top,
-                BackColor = NOMADTheme.INPUT_BG,
-                ForeColor = TEXT_PRIMARY,
-                Font = new Font("Consolas", 9),
-                BorderStyle = BorderStyle.FixedSingle,
-                SelectionMode = SelectionMode.One,
-                HorizontalScrollbar = true,
-            };
-            detectCard.Controls.Add(_lstDetections);
-
-            _lblDistToTarget = new Label
-            {
-                Text = "Distance: --",
-                Font = new Font("Consolas", 10, FontStyle.Bold),
-                ForeColor = WARNING_COLOR,
-                Location = new Point(15, 222),
-                AutoSize = true,
-            };
-            detectCard.Controls.Add(_lblDistToTarget);
-            AddCard(leftCol, detectCard, 260);
+            AddCard(seqCard, 210);
 
             // ---- Spray card (autonomy-claim flow + manual flow) ----
             // Strategy for Task 2 scoring (CONOPS §5.2.4 + Q&A #10):
@@ -492,45 +454,35 @@ namespace NOMAD.MissionPlanner
             _btnAutoSpray.Click += (s, e) => UiAsync.Run(this, TriggerAutoSpray, nameof(TriggerAutoSpray));
             sprayCard.Controls.Add(_btnAutoSpray);
 
-            _btnManualSpray = CreateButton("Manual Spray", INFO_COLOR, 140, 42);
-            _btnManualSpray.Location = new Point(205, 60);
-            _btnManualSpray.Font = new Font("Segoe UI", 11, FontStyle.Bold);
-            _btnManualSpray.Click += (s, e) => UiAsync.Run(this, TriggerManualSpray, nameof(TriggerManualSpray));
-            sprayCard.Controls.Add(_btnManualSpray);
-
             _btnAbortSpray = CreateButton("ABORT", ERROR_COLOR, 90, 42);
-            _btnAbortSpray.Location = new Point(355, 60);
+            _btnAbortSpray.Location = new Point(205, 60);
             _btnAbortSpray.Font = new Font("Segoe UI", 11, FontStyle.Bold);
             _btnAbortSpray.Click += (s, e) => UiAsync.Run(this, AbortSpray, nameof(AbortSpray));
             sprayCard.Controls.Add(_btnAbortSpray);
 
             sprayCard.Controls.Add(new Label
             {
-                Text = "Auto Spray:   pick outdoor target, drone ≥2.5m from it, full APPROACH→AIM→SPRAY→VERIFY→UPLOAD.\n"
-                     + "Manual Spray: pilot is in firing range, water pump fires; servo aims at last detection.\n"
-                     + "ABORT:        cancels any in-flight sequence and re-arms both buttons.",
+                Text = "Auto Spray: pick outdoor target, drone ≥2.5m from it, full APPROACH→AIM→SPRAY→VERIFY→UPLOAD.\n"
+                     + "ABORT:      cancels any in-flight sequence and re-arms Auto Spray.\n"
+                     + "For hand-fired spray runs, switch to the Manual Spray tab.",
                 Font = new Font("Consolas", 8),
                 ForeColor = TEXT_MUTED,
                 Location = new Point(15, 112),
                 AutoSize = true,
             });
-            AddCard(leftCol, sprayCard, 175);
-
-            // ---- RIGHT COLUMN ----
+            AddCard(sprayCard, 172);
 
             // Payload (cam tilt + shoot water).
             _payloadPanel = new Task2PayloadPanel(_config);
-            AddCard(rightCol, _payloadPanel, 160);
+            AddCard(_payloadPanel, 145);
 
             // AUTO-UPLOAD (compact view of Task2UploadPanel). Mounted here so
-            // the operator sees the autonomous spray's before/after/video
+            // the operator sees the autonomous spray's before/after artifacts
             // uploading to Drive without tab-switching.
             _uploadPanel = new Task2UploadPanel(_config, Task2UploadPanel.PanelMode.Auto);
-            AddCard(rightCol, _uploadPanel, 460);
+            AddCard(_uploadPanel, 350);
 
-            grid.Controls.Add(leftCol, 0, 0);
-            grid.Controls.Add(rightCol, 1, 0);
-            root.Controls.Add(grid);
+            root.Controls.Add(stack);
             return root;
         }
 
@@ -571,20 +523,6 @@ namespace NOMAD.MissionPlanner
             return panel;
         }
 
-        private Label MakeRow(Panel parent, string text, int y)
-        {
-            var lbl = new Label
-            {
-                Text = text,
-                Font = new Font("Consolas", 10),
-                ForeColor = TEXT_SECONDARY,
-                Location = new Point(15, y),
-                AutoSize = true,
-            };
-            parent.Controls.Add(lbl);
-            return lbl;
-        }
-
         // ============================================================
         // Polling
         // ============================================================
@@ -618,10 +556,7 @@ namespace NOMAD.MissionPlanner
 
         private void UpdateFromStateStream(JObject state)
         {
-            UpdateModeUI(state["operational_mode"] as JObject);
             UpdateSprayUI(state["spray_status"] as JObject);
-            UpdateVioUI(state["vio_status"] as JObject);
-            UpdateObstacleUI(state["obstacle_distance"] as JObject);
         }
 
         private void PollModeAndSpray()
@@ -635,30 +570,17 @@ namespace NOMAD.MissionPlanner
             if (Interlocked.Exchange(ref _modePollInFlight, 1) == 1) return;
             try
             {
-                JObject modeData = null;
                 JObject sprayData = null;
-                JObject vioData = null;
-                JObject obstacleData = null;
                 var state = _stateStream?.LatestState;
                 if (_stateStream?.HasFreshState == true && state != null)
                 {
-                    modeData = state["operational_mode"] as JObject;
                     sprayData = state["spray_status"] as JObject;
-                    vioData = state["vio_status"] as JObject;
-                    obstacleData = state["obstacle_distance"] as JObject;
                 }
                 else
                 {
-                    var modeTask = JetsonApiService.GetAsync("/api/mode");
                     var sprayTask = JetsonApiService.GetAsync("/api/spray/status");
-                    var vioTask = JetsonApiService.GetAsync("/api/vio/status");
-                    var obstacleTask = JetsonApiService.GetAsync("/api/obstacle_distance");
-
-                    await Task.WhenAll(modeTask, sprayTask, vioTask, obstacleTask);
-                    modeData = await ReadJson(modeTask);
+                    await sprayTask;
                     sprayData = await ReadJson(sprayTask);
-                    vioData = await ReadJson(vioTask);
-                    obstacleData = await ReadJson(obstacleTask);
                 }
 
                 var detectionTask = JetsonApiService.GetAsync("/api/task/2/detections");
@@ -669,9 +591,7 @@ namespace NOMAD.MissionPlanner
 
                 if (!IsDisposed && IsHandleCreated)
                 {
-                    BeginInvoke((Action)(() => UpdateAllUI(
-                        modeData, sprayData, vioData, obstacleData,
-                        detectionData)));
+                    BeginInvoke((Action)(() => UpdateAllUI(sprayData, detectionData)));
                 }
             }
             catch (ObjectDisposedException) { }
@@ -694,15 +614,10 @@ namespace NOMAD.MissionPlanner
             catch { return null; }
         }
 
-        private void UpdateAllUI(
-            JObject modeData, JObject sprayData, JObject vioData,
-            JObject obstacleData, JObject detectionData)
+        private void UpdateAllUI(JObject sprayData, JObject detectionData)
         {
             try
             {
-                UpdateVioUI(vioData);
-                UpdateObstacleUI(obstacleData);
-                UpdateModeUI(modeData);
                 UpdateSprayUI(sprayData);
                 UpdateDetectionUI(detectionData);
             }
@@ -715,66 +630,6 @@ namespace NOMAD.MissionPlanner
         // ============================================================
         // UI updates
         // ============================================================
-        private void UpdateVioUI(JObject vioData)
-        {
-            if (vioData == null || _lblVioStatus == null) return;
-            var health = vioData["health"]?.ToString() ?? "unknown";
-            var confidence = vioData["tracking_confidence"]?.Value<double>() ?? 0.0;
-            var rateHz = vioData["message_rate_hz"]?.Value<double>() ?? 0.0;
-            var source = vioData["source"]?.ToString() ?? "none";
-
-            _lblVioStatus.Text = $"VIO: {health} | {confidence * 100.0:F0}% | {rateHz:F1}Hz | {source}";
-            _lblVioStatus.ForeColor = health == "healthy" ? SUCCESS_COLOR
-                : health == "degraded" ? WARNING_COLOR : ERROR_COLOR;
-        }
-
-        // Nav2 was removed; the spray controller now drives APPROACH via
-        // visual servoing. UpdateSprayUI already reflects the chosen method.
-
-        private void UpdateObstacleUI(JObject obstacleData)
-        {
-            if (_lblObstacleStatus == null) return;
-            if (obstacleData == null)
-            {
-                _lblObstacleStatus.Text = "Obstacles: --";
-                _lblObstacleStatus.ForeColor = TEXT_SECONDARY;
-                return;
-            }
-            var valid = obstacleData["valid"]?.Value<bool>() ?? false;
-            if (!valid)
-            {
-                _lblObstacleStatus.Text = "Obstacles: no data";
-                _lblObstacleStatus.ForeColor = TEXT_SECONDARY;
-                return;
-            }
-            var nearestCm = obstacleData["nearest_distance_cm"]?.Value<double?>();
-            var nearestBearing = obstacleData["nearest_bearing_deg"]?.Value<double?>();
-            var ageS = obstacleData["age_seconds"]?.Value<double>() ?? 0.0;
-
-            if (nearestCm.HasValue && nearestBearing.HasValue)
-            {
-                var meters = nearestCm.Value / 100.0;
-                _lblObstacleStatus.Text = $"Obstacles: {meters:F2}m @ {nearestBearing.Value:F0}° ({ageS:F1}s)";
-                _lblObstacleStatus.ForeColor = meters < 0.5 ? ERROR_COLOR
-                    : meters < 1.5 ? WARNING_COLOR : SUCCESS_COLOR;
-            }
-            else
-            {
-                _lblObstacleStatus.Text = $"Obstacles: clear ({ageS:F1}s)";
-                _lblObstacleStatus.ForeColor = SUCCESS_COLOR;
-            }
-        }
-
-        private void UpdateModeUI(JObject modeData)
-        {
-            if (modeData == null || _lblModeStatus == null) return;
-            var status = modeData["status"];
-            if (status == null) return;
-
-            var currentMode = status["current_mode"]?.ToString() ?? "unknown";
-            _lblModeStatus.Text = $"Mode: {currentMode}";
-        }
-
         private void UpdateSprayUI(JObject sprayData)
         {
             if (sprayData == null || _lblSprayState == null) return;
@@ -863,7 +718,6 @@ namespace NOMAD.MissionPlanner
             }
 
             _btnAutoSpray.Enabled = !active && !_autonomyClaimed;
-            _btnManualSpray.Enabled = !active;
             _btnAbortSpray.Enabled = active;
 
             // Spray-state-driven tilt lock — only active when spray is mid-run.
@@ -956,7 +810,6 @@ namespace NOMAD.MissionPlanner
         }
 
         private Task TriggerAutoSpray() => TriggerSprayInternal(requireAutonomy: true);
-        private Task TriggerManualSpray() => TriggerSprayInternal(requireAutonomy: false);
 
         private async Task TriggerSprayInternal(bool requireAutonomy)
         {
@@ -965,7 +818,6 @@ namespace NOMAD.MissionPlanner
             try
             {
                 _btnAutoSpray.Enabled = false;
-                _btnManualSpray.Enabled = false;
                 // Clear any previous error banner so the operator can
                 // see the new failure (or that the trigger actually fired).
                 ShowSprayError("");
@@ -1087,7 +939,6 @@ namespace NOMAD.MissionPlanner
             BeginInvoke((Action)(() =>
             {
                 _btnAutoSpray.Enabled = !_autonomyClaimed;
-                _btnManualSpray.Enabled = true;
             }));
         }
 
