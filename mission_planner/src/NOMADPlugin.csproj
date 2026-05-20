@@ -202,6 +202,10 @@
     <Compile Include="ZedCalibrationView.cs" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="esc_music\**\*.txt" />
+  </ItemGroup>
+
   <!-- Optional local references for LibVLCSharp managed assemblies (place DLLs in third_party/libvlc) -->
   <ItemGroup>
     <Reference Include="LibVLCSharp.WinForms" Condition="Exists('..\third_party\libvlc\LibVLCSharp.WinForms.dll')">

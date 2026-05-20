@@ -1,9 +1,9 @@
 // ============================================================
 // NOMAD Music View - UI for motor-tone music playback
 // ============================================================
-// Pick a song, pick which motor channels to drive, set a tempo,
-// and hit Play. Commands go out as DO_MOTOR_TEST via the local
-// MAVLink link. Props OFF only.
+// Pick a song, pick which DroneCAN bus to broadcast on, set a tempo,
+// and hit Play. Commands go out as uavcan.equipment.indication.BeepCommand
+// through the MAVLink CAN bridge. Props OFF only.
 // ============================================================
 
 using System;
@@ -18,10 +18,9 @@ namespace NOMAD.MissionPlanner
         private readonly MotorMusicPlayer _player = MotorMusicPlayer.Instance;
 
         private ListBox _lstSongs;
-        private CheckedListBox _lstChannels;
+        private CheckedListBox _lstCanBuses;
         private NumericUpDown _numTempo;
-        private NumericUpDown _numPwmMin;
-        private NumericUpDown _numPwmMax;
+        private NumericUpDown _numSourceNode;
         private CheckBox _chkArmedOverride;
         private Button _btnPlay;
         private Button _btnStop;
@@ -90,34 +89,28 @@ namespace NOMAD.MissionPlanner
             settings.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130f));
             settings.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
 
-            settings.Controls.Add(MakeLabel("Motors:"), 0, 0);
-            _lstChannels = new CheckedListBox
+            settings.Controls.Add(MakeLabel("DroneCAN bus:"), 0, 0);
+            _lstCanBuses = new CheckedListBox
             {
                 Dock = DockStyle.Top,
-                // Taller so 32 channels are scrollable but several visible at once.
-                Height = 180,
+                Height = 84,
                 BackColor = NOMADTheme.INPUT_BG,
                 ForeColor = TEXT_PRIMARY,
                 BorderStyle = BorderStyle.FixedSingle,
                 CheckOnClick = true,
             };
-            // DO_MOTOR_TEST addresses configured motor instances, not SERVO output
-            // channels. Default to the four primary motors.
-            for (int motor = 1; motor <= 12; motor++)
-                _lstChannels.Items.Add("Motor " + motor, motor >= 1 && motor <= 4);
-            settings.Controls.Add(_lstChannels, 1, 0);
+            _lstCanBuses.Items.Add("CAN 1", true);
+            _lstCanBuses.Items.Add("CAN 2", false);
+            _lstCanBuses.Items.Add("CAN 3", false);
+            settings.Controls.Add(_lstCanBuses, 1, 0);
 
             settings.Controls.Add(MakeLabel("Tempo (× speed):"), 0, 1);
             _numTempo = MakeNumeric(0.25m, 4.0m, 1.0m, 2, 0.1m);
             settings.Controls.Add(_numTempo, 1, 1);
 
-            settings.Controls.Add(MakeLabel("PWM min (µs):"), 0, 2);
-            _numPwmMin = MakeNumeric(1000, 1500, 1100, 0, 10);
-            settings.Controls.Add(_numPwmMin, 1, 2);
-
-            settings.Controls.Add(MakeLabel("PWM max (µs):"), 0, 3);
-            _numPwmMax = MakeNumeric(1200, 2000, 1900, 0, 10);
-            settings.Controls.Add(_numPwmMax, 1, 3);
+            settings.Controls.Add(MakeLabel("Source node:"), 0, 2);
+            _numSourceNode = MakeNumeric(1, 127, 126, 0, 1);
+            settings.Controls.Add(_numSourceNode, 1, 2);
 
             _chkArmedOverride = new CheckBox
             {
@@ -127,7 +120,7 @@ namespace NOMAD.MissionPlanner
                 AutoSize = true,
                 Margin = new Padding(3, 8, 3, 3),
             };
-            settings.Controls.Add(_chkArmedOverride, 1, 4);
+            settings.Controls.Add(_chkArmedOverride, 1, 3);
 
             settingsCard.Controls.Add(settings);
             root.Controls.Add(settingsCard, 1, 0);
@@ -245,18 +238,13 @@ namespace NOMAD.MissionPlanner
             var item = _lstSongs.SelectedItem as SongItem;
             if (item == null) { SetStatus("Pick a song first.", true); return; }
 
-            var channels = _lstChannels.CheckedIndices.Cast<int>().Select(i => i + 1).ToList();
-            if (channels.Count == 0) { SetStatus("Pick at least one motor channel.", true); return; }
+            var buses = _lstCanBuses.CheckedIndices.Cast<int>().Select(i => i + 1).ToList();
+            if (buses.Count == 0) { SetStatus("Pick at least one DroneCAN bus.", true); return; }
 
-            int pwmMin = (int)_numPwmMin.Value;
-            int pwmMax = (int)_numPwmMax.Value;
-            if (pwmMin >= pwmMax) { SetStatus("PWM min must be < PWM max.", true); return; }
-
-            _player.PwmMin = pwmMin;
-            _player.PwmMax = pwmMax;
+            _player.DroneCanSourceNodeId = (int)_numSourceNode.Value;
             _player.AllowArmedOverride = _chkArmedOverride.Checked;
 
-            string err = _player.Play(item.Song.Id, channels, (double)_numTempo.Value);
+            string err = _player.Play(item.Song.Id, buses, (double)_numTempo.Value);
             if (err != null) SetStatus(err, true);
         }
 
@@ -311,7 +299,8 @@ namespace NOMAD.MissionPlanner
             public override string ToString()
             {
                 return string.Format("{0}   ({1:0.0}s, {2} notes)",
-                    Song.Title, Song.TotalMs / 1000.0, Song.Notes.Count);
+                    Song.TrackCount > 1 ? Song.Title + " [track 1/" + Song.TrackCount + "]" : Song.Title,
+                    Song.TotalMs / 1000.0, Song.Notes.Count);
             }
         }
     }

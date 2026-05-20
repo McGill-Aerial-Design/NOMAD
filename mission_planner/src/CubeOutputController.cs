@@ -14,6 +14,9 @@ namespace NOMAD.MissionPlanner
     internal static class CubeOutputController
     {
         private static readonly SemaphoreSlim s_mavlinkLock = new SemaphoreSlim(1, 1);
+        private const int DroneCanBeepCommandDataTypeId = 1080;
+        private const int DroneCanBeepPriority = 20;
+        private static byte s_droneCanBeepTransferId;
 
         internal static SemaphoreSlim MavlinkLock => s_mavlinkLock;
 
@@ -105,6 +108,126 @@ namespace NOMAD.MissionPlanner
             {
                 if (acquired) s_mavlinkLock.Release();
             }
+        }
+
+        public static async Task<bool> EnableCanForwardAsync(int bus, bool enable)
+        {
+            if (bus < 1 || bus > 3) return false;
+            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return false;
+
+            bool acquired = false;
+            try
+            {
+                byte sysid = MainV2.comPort.MAV.sysid;
+                byte compid = MainV2.comPort.MAV.compid;
+
+                acquired = await s_mavlinkLock.WaitAsync(1500).ConfigureAwait(false);
+                if (!acquired) return false;
+
+                await MainV2.comPort.doCommandAsync(
+                    sysid, compid,
+                    MAVLink.MAV_CMD.CAN_FORWARD,
+                    enable ? bus : 0,
+                    0, 0, 0, 0, 0, 0,
+                    requireack: false, uicallback: null).ConfigureAwait(false);
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                if (acquired) s_mavlinkLock.Release();
+            }
+        }
+
+        public static async Task<bool> SendDroneCanBeepAsync(int bus, int sourceNodeId, double frequencyHz, double durationSeconds, bool tryOnly = false)
+        {
+            if (bus < 1 || bus > 3) return false;
+            if (sourceNodeId < 1 || sourceNodeId > 127) return false;
+            if (frequencyHz < 20.0 || frequencyHz > 20000.0) return false;
+            if (durationSeconds <= 0.0 || durationSeconds > 5.0) return false;
+            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return false;
+
+            bool acquired = false;
+            try
+            {
+                byte sysid = MainV2.comPort.MAV.sysid;
+                byte compid = MainV2.comPort.MAV.compid;
+
+                acquired = tryOnly
+                    ? await s_mavlinkLock.WaitAsync(0).ConfigureAwait(false)
+                    : await s_mavlinkLock.WaitAsync(1500).ConfigureAwait(false);
+                if (!acquired) return false;
+
+                byte transferId = s_droneCanBeepTransferId;
+                s_droneCanBeepTransferId = (byte)((s_droneCanBeepTransferId + 1) & 0x1F);
+
+                var frame = new MAVLink.mavlink_can_frame_t
+                {
+                    target_system = sysid,
+                    target_component = compid,
+                    // MAV_CMD_CAN_FORWARD is 1-based, but ArduPilot's CAN_FRAME
+                    // injection path indexes HAL CAN interfaces from zero.
+                    bus = (byte)(bus - 1),
+                    len = 5,
+                    id = BuildDroneCanMessageId(DroneCanBeepPriority, DroneCanBeepCommandDataTypeId, sourceNodeId),
+                    data = new byte[8],
+                };
+
+                WriteFloat16Le(frame.data, 0, frequencyHz);
+                WriteFloat16Le(frame.data, 2, durationSeconds);
+                frame.data[4] = (byte)(0xC0 | transferId);
+
+                MainV2.comPort.sendPacket(frame, sysid, compid);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                if (acquired) s_mavlinkLock.Release();
+            }
+        }
+
+        private static uint BuildDroneCanMessageId(int priority, int dataTypeId, int sourceNodeId)
+        {
+            return ((uint)(priority & 0x1F) << 24)
+                | ((uint)(dataTypeId & 0xFFFF) << 8)
+                | (uint)(sourceNodeId & 0x7F);
+        }
+
+        private static void WriteFloat16Le(byte[] buffer, int offset, double value)
+        {
+            ushort half = FloatToHalf((float)value);
+            buffer[offset] = (byte)(half & 0xFF);
+            buffer[offset + 1] = (byte)(half >> 8);
+        }
+
+        private static ushort FloatToHalf(float value)
+        {
+            uint bits = BitConverter.ToUInt32(BitConverter.GetBytes(value), 0);
+            uint sign = (bits >> 16) & 0x8000;
+            int exponent = (int)((bits >> 23) & 0xFF) - 127 + 15;
+            uint mantissa = bits & 0x7FFFFF;
+
+            if (exponent <= 0)
+            {
+                if (exponent < -10) return (ushort)sign;
+                mantissa = (mantissa | 0x800000) >> (1 - exponent);
+                return (ushort)(sign | ((mantissa + 0x1000) >> 13));
+            }
+
+            if (exponent >= 31)
+            {
+                return (ushort)(sign | 0x7C00);
+            }
+
+            return (ushort)(sign | ((uint)exponent << 10) | ((mantissa + 0x1000) >> 13));
         }
 
         public static bool TrySetRelayMavlink(int relayNumber, bool on)
