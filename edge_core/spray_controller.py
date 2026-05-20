@@ -541,11 +541,9 @@ class SprayController:
                 return {
                     "success": False,
                     "error": (
-                        f"Autonomy gate failed: drone is {distance:.2f}m from "
-                        f"target - must be >= {self.AUTONOMY_MIN_RANGE_M:.1f}m for "
-                        f"the autonomous approach to count (CONOPS Q&A #10). "
-                        f"Back the drone up and retry. For a manual spray, use "
-                        f"the manual button instead."
+                        f"Too close for Auto Spray: {distance:.2f}m "
+                        f"(need >= {self.AUTONOMY_MIN_RANGE_M:.1f}m). "
+                        "Back up or use Manual Spray."
                     ),
                     "distance": round(distance, 2),
                     "min_required_m": self.AUTONOMY_MIN_RANGE_M,

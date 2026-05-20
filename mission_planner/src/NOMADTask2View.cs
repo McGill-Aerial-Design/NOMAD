@@ -87,6 +87,7 @@ namespace NOMAD.MissionPlanner
         private string _lastSprayState = "idle";
         private bool _lastAutonomyCompromised;
         private int _lastConfirmedTargetId = -1;
+        private string _localSprayErrorMessage = "";
         private Button _btnAutoTakeoff;
         private Button _btnAutoLand;
         private NumericUpDown _numTakeoffAltitude;
@@ -787,6 +788,11 @@ namespace NOMAD.MissionPlanner
                 _lblSprayError.Text = $"Error: {error}";
                 _lblSprayError.Visible = true;
             }
+            else if (!string.IsNullOrEmpty(_localSprayErrorMessage))
+            {
+                _lblSprayError.Text = _localSprayErrorMessage;
+                _lblSprayError.Visible = true;
+            }
             else
             {
                 _lblSprayError.Visible = false;
@@ -942,9 +948,11 @@ namespace NOMAD.MissionPlanner
                     var detectResp = await JetsonApiService.GetAsync("/api/task/2/detections");
                     if (!detectResp.IsSuccessStatusCode)
                     {
-                        ShowSprayError(
-                            $"Detector fetch failed (HTTP {(int)detectResp.StatusCode}). " +
-                            "Check Jetson + verify the Task 2 overlay is enabled.");
+                        var msg = $"Detector fetch failed (HTTP {(int)detectResp.StatusCode}). " +
+                                  "Check Jetson + verify the Task 2 overlay is enabled.";
+                        ShowSprayError(msg);
+                        AudioAlerts.Speak("Detector fetch failed. Check Jetson and verify the Task 2 overlay is enabled.",
+                            ignoreRateLimit: true);
                         ReenableSprayButtons();
                         return;
                     }
@@ -954,9 +962,11 @@ namespace NOMAD.MissionPlanner
                     var detections = (current != null && current.Count > 0) ? current : history;
                     if (detections == null || detections.Count == 0)
                     {
-                        ShowSprayError(
-                            "No detections - the shape detector isn't returning circles. " +
-                            "Verify the video overlay shows boxed circles before triggering.");
+                        var msg = "No detections - the shape detector isn't returning circles. " +
+                                  "Verify the video overlay shows boxed circles, then press Refresh before triggering.";
+                        ShowSprayError(msg);
+                        AudioAlerts.Speak("No Task 2 circle detections. Verify boxed circles on the video, then refresh detections.",
+                            ignoreRateLimit: true);
                         ReenableSprayButtons();
                         return;
                     }
@@ -1009,7 +1019,7 @@ namespace NOMAD.MissionPlanner
                     try { detail = JObject.Parse(body)["detail"]?.ToString() ?? body; }
                     catch { detail = body; }
                     ShowSprayError($"Spray failed: {detail}");
-                    AudioAlerts.Speak("Spray trigger failed.", ignoreRateLimit: true);
+                    AudioAlerts.Speak("Spray trigger failed. Check the error banner.", ignoreRateLimit: true);
                     ReenableSprayButtons();
                 }
             }
@@ -1036,9 +1046,11 @@ namespace NOMAD.MissionPlanner
             }
             if (string.IsNullOrEmpty(message))
             {
+                _localSprayErrorMessage = "";
                 _lblSprayError.Visible = false;
                 return;
             }
+            _localSprayErrorMessage = message;
             _lblSprayError.Text = message;
             _lblSprayError.Visible = true;
         }
@@ -1057,6 +1069,7 @@ namespace NOMAD.MissionPlanner
             {
                 _btnAbortSpray.Enabled = false;
                 await JetsonApiService.PostAsync("/api/spray/abort");
+                ShowSprayError("");
                 _lblSprayState.Text = "State: ABORTED";
                 _lblSprayState.ForeColor = ERROR_COLOR;
                 AudioAlerts.Speak("Spray sequence aborted.", ignoreRateLimit: true);

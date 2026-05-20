@@ -7,6 +7,7 @@
 // ============================================================
 
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Net.Http;
 using System.Text;
@@ -27,6 +28,9 @@ namespace NOMAD.MissionPlanner
         private readonly System.Windows.Forms.Timer _timer;
         private bool _refreshing;
         private bool _initialRefreshDone;
+        private string _localTargetColor = "purple";
+        private bool _showingLocalChecklist;
+        private readonly Dictionary<string, bool> _localChecklistState = new Dictionary<string, bool>();
 
         private static readonly string[] TargetColors =
         {
@@ -174,13 +178,14 @@ namespace NOMAD.MissionPlanner
                 var resp = await JetsonApiService.GetAsync("/api/task/2/target_color");
                 if (!resp.IsSuccessStatusCode)
                 {
-                    _lblColor.Text = $"Target color: unavailable (HTTP {(int)resp.StatusCode})";
+                    _lblColor.Text = $"Target color: {_localTargetColor} (local - backend HTTP {(int)resp.StatusCode})";
                     _lblColor.ForeColor = NOMADTheme.WARNING;
                     return;
                 }
 
                 var json = JObject.Parse(await resp.Content.ReadAsStringAsync());
                 var color = json["color"]?.ToString() ?? "purple";
+                _localTargetColor = color;
                 var source = json["source"]?.ToString() ?? "default";
                 SelectColor(color);
                 _lblColor.Text = $"Target color: {color} ({source})";
@@ -188,8 +193,8 @@ namespace NOMAD.MissionPlanner
             }
             catch (Exception ex)
             {
-                _lblColor.Text = $"Target color: error - {ex.Message}";
-                _lblColor.ForeColor = NOMADTheme.ERROR;
+                _lblColor.Text = $"Target color: {_localTargetColor} (local - {ex.Message})";
+                _lblColor.ForeColor = NOMADTheme.WARNING;
             }
         }
 
@@ -207,17 +212,19 @@ namespace NOMAD.MissionPlanner
 
         private async Task SetColor()
         {
+            var color = _cmbColor.SelectedItem?.ToString() ?? "purple";
             try
             {
                 _btnSetColor.Enabled = false;
-                var color = _cmbColor.SelectedItem?.ToString() ?? "purple";
+                _localTargetColor = color;
                 var body = new JObject { ["color"] = color };
                 var content = new StringContent(body.ToString(), Encoding.UTF8, "application/json");
                 var resp = await JetsonApiService.PostAsync("/api/task/2/target_color", content);
                 if (!resp.IsSuccessStatusCode)
                 {
-                    _lblColor.Text = $"Set color failed: {await ExtractError(resp)}";
-                    _lblColor.ForeColor = NOMADTheme.ERROR;
+                    _lblColor.Text = $"Target color: {color} (local - backend HTTP {(int)resp.StatusCode})";
+                    _lblColor.ForeColor = NOMADTheme.WARNING;
+                    await RefreshChecks();
                     return;
                 }
 
@@ -228,8 +235,9 @@ namespace NOMAD.MissionPlanner
             }
             catch (Exception ex)
             {
-                _lblColor.Text = $"Set color error: {ex.Message}";
-                _lblColor.ForeColor = NOMADTheme.ERROR;
+                _lblColor.Text = $"Target color: {color} (local - {ex.Message})";
+                _lblColor.ForeColor = NOMADTheme.WARNING;
+                await RefreshChecks();
             }
             finally
             {
@@ -247,8 +255,7 @@ namespace NOMAD.MissionPlanner
                 var resp = await JetsonApiService.GetAsync("/api/task/2/preflight");
                 if (!resp.IsSuccessStatusCode)
                 {
-                    _lblReady.Text = $"Readiness: unavailable - HTTP {(int)resp.StatusCode}";
-                    _lblReady.ForeColor = NOMADTheme.ERROR;
+                    ShowFallbackChecks($"Backend preflight endpoint unavailable - HTTP {(int)resp.StatusCode}");
                     return;
                 }
 
@@ -259,22 +266,13 @@ namespace NOMAD.MissionPlanner
                     : "Readiness: NOT READY - resolve red checks before claiming autonomy";
                 _lblReady.ForeColor = ready ? NOMADTheme.SUCCESS : NOMADTheme.ERROR;
 
-                _checks.SuspendLayout();
-                _checks.Controls.Clear();
+                _showingLocalChecklist = false;
                 var items = json["items"] as JArray;
-                if (items != null)
-                {
-                    foreach (JObject item in items)
-                    {
-                        _checks.Controls.Add(MakeCheckRow(item));
-                    }
-                }
-                _checks.ResumeLayout();
+                RenderChecks(items ?? new JArray());
             }
             catch (Exception ex)
             {
-                _lblReady.Text = $"Readiness: error - {ex.Message}";
-                _lblReady.ForeColor = NOMADTheme.ERROR;
+                ShowFallbackChecks($"Backend preflight check failed - {ex.Message}");
             }
             finally
             {
@@ -283,11 +281,64 @@ namespace NOMAD.MissionPlanner
             }
         }
 
+        private void RenderChecks(JArray items)
+        {
+            _checks.SuspendLayout();
+            _checks.Controls.Clear();
+            foreach (JObject item in items)
+            {
+                _checks.Controls.Add(MakeCheckRow(item));
+            }
+            _checks.ResumeLayout();
+        }
+
+        private void ShowFallbackChecks(string reason)
+        {
+            _lblReady.Text = "Readiness: LOCAL CHECKLIST - deploy/restart Edge Core for live checks";
+            _lblReady.ForeColor = NOMADTheme.WARNING;
+            _showingLocalChecklist = true;
+
+            var items = new JArray
+            {
+                Check("edge_core_api", false, "Edge Core preflight API deployed", reason),
+                Check("target_color", true, "Task 2 target color selected", $"local color={_localTargetColor}"),
+                Check("mavlink", false, "MAVLink connected to autopilot", "Verify Mission Planner telemetry and Jetson MAVLink heartbeat."),
+                Check("spray_calibration", false, "Spray calibration on disk", "Run/confirm bench calibration before the autonomy claim."),
+                Check("video_bridge", false, "Video bridge snapshot reachable", "Confirm live ZED video and Task 2 circle boxes are visible."),
+                Check("gdrive", false, "Google Drive upload ready", "Confirm Drive token by uploading a small test file."),
+                Check("auto_spray_setup", false, "Auto Spray target setup", "Pick the easiest target, start >=2.5 m away, then hands off until COMPLETE."),
+                Check("takeoff_altitude", false, "Auto takeoff altitude set", "Selector defaults to 30 m AGL; confirm it matches the flight plan."),
+                Check("safety_override", false, "Safety override briefed", "Pilot overrides by switching out of GUIDED; this aborts the autonomy claim.")
+            };
+            foreach (JObject item in items)
+            {
+                var key = item["key"]?.ToString();
+                if (string.IsNullOrEmpty(key)) continue;
+                if (!_localChecklistState.ContainsKey(key))
+                    _localChecklistState[key] = item["ok"]?.Value<bool>() ?? false;
+            }
+            RenderChecks(items);
+            UpdateLocalReadinessHeader();
+        }
+
+        private static JObject Check(string key, bool ok, string label, string detail)
+        {
+            return new JObject
+            {
+                ["key"] = key,
+                ["ok"] = ok,
+                ["label"] = label,
+                ["detail"] = detail,
+            };
+        }
+
         private Control MakeCheckRow(JObject item)
         {
             var ok = item["ok"]?.Value<bool>() ?? false;
             var label = item["label"]?.ToString() ?? item["key"]?.ToString() ?? "check";
             var detail = item["detail"]?.ToString() ?? "";
+            var key = item["key"]?.ToString() ?? label;
+            var localChecked = _localChecklistState.TryGetValue(key, out var saved) ? saved : ok;
 
             var row = new Panel
             {
@@ -298,17 +349,37 @@ namespace NOMAD.MissionPlanner
                 Padding = new Padding(8),
             };
 
-            var status = new Label
+            if (_showingLocalChecklist)
             {
-                Text = ok ? "OK" : "FAIL",
-                ForeColor = Color.White,
-                BackColor = ok ? NOMADTheme.SUCCESS : NOMADTheme.ERROR,
-                Font = new Font("Consolas", 9, FontStyle.Bold),
-                TextAlign = ContentAlignment.MiddleCenter,
-                Location = new Point(8, 10),
-                Size = new Size(44, 22),
-            };
-            row.Controls.Add(status);
+                var checkBox = new CheckBox
+                {
+                    Checked = localChecked,
+                    Location = new Point(10, 17),
+                    Size = new Size(22, 22),
+                    BackColor = NOMADTheme.CARD_BG,
+                    ForeColor = NOMADTheme.TEXT_PRIMARY,
+                };
+                checkBox.CheckedChanged += (s, e) =>
+                {
+                    _localChecklistState[key] = checkBox.Checked;
+                    UpdateLocalReadinessHeader();
+                };
+                row.Controls.Add(checkBox);
+            }
+            else
+            {
+                var status = new Label
+                {
+                    Text = ok ? "OK" : "FAIL",
+                    ForeColor = Color.White,
+                    BackColor = ok ? NOMADTheme.SUCCESS : NOMADTheme.ERROR,
+                    Font = new Font("Consolas", 9, FontStyle.Bold),
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    Location = new Point(8, 10),
+                    Size = new Size(44, 22),
+                };
+                row.Controls.Add(status);
+            }
 
             var title = new Label
             {
@@ -335,6 +406,24 @@ namespace NOMAD.MissionPlanner
             row.Controls.Add(detailLabel);
 
             return row;
+        }
+
+        private void UpdateLocalReadinessHeader()
+        {
+            if (!_showingLocalChecklist) return;
+            int total = _localChecklistState.Count;
+            int done = 0;
+            foreach (var kv in _localChecklistState)
+            {
+                if (kv.Value) done++;
+            }
+
+            _lblReady.Text = total > 0
+                ? $"Readiness: LOCAL CHECKLIST {done}/{total} checked"
+                : "Readiness: LOCAL CHECKLIST";
+            _lblReady.ForeColor = total > 0 && done == total
+                ? NOMADTheme.SUCCESS
+                : NOMADTheme.WARNING;
         }
 
         private static async Task<string> ExtractError(HttpResponseMessage resp)
