@@ -68,6 +68,7 @@ class SprayStatus:
     """Current spray sequence status."""
     state: str = "idle"
     target_id: int = -1
+    target_number: int = 0
     target_label: str = ""
     distance_to_target: float = 0.0
     servo_angle: float = 90.0
@@ -76,6 +77,14 @@ class SprayStatus:
     upload_url: str = ""
     error: Optional[str] = None
     approach_method: str = ""  # "image" or "velocity" for the current Task 2 path
+    autonomy_action: str = ""
+    command_vx_mps: float = 0.0
+    command_vy_mps: float = 0.0
+    command_vz_mps: float = 0.0
+    command_yaw_rate_radps: float = 0.0
+    aim_error_x_px: Optional[float] = None
+    aim_error_y_px: Optional[float] = None
+    range_error_m: Optional[float] = None
     # Was this run triggered with the CONOPS Q&A #10 autonomy gate (i.e. the
     # operator pressed Auto Spray with require_autonomy=True)? Stays True
     # for the duration of the run so the UI can render it correctly.
@@ -94,6 +103,7 @@ class SprayStatus:
         return {
             "state": self.state,
             "target_id": self.target_id,
+            "target_number": self.target_number,
             "target_label": self.target_label,
             "distance_to_target": round(self.distance_to_target, 2),
             "servo_angle": round(self.servo_angle, 1),
@@ -102,6 +112,20 @@ class SprayStatus:
             "upload_url": self.upload_url,
             "error": self.error,
             "approach_method": self.approach_method,
+            "autonomy_action": self.autonomy_action,
+            "command_vx_mps": round(self.command_vx_mps, 3),
+            "command_vy_mps": round(self.command_vy_mps, 3),
+            "command_vz_mps": round(self.command_vz_mps, 3),
+            "command_yaw_rate_radps": round(self.command_yaw_rate_radps, 3),
+            "aim_error_x_px": (
+                None if self.aim_error_x_px is None else round(self.aim_error_x_px, 1)
+            ),
+            "aim_error_y_px": (
+                None if self.aim_error_y_px is None else round(self.aim_error_y_px, 1)
+            ),
+            "range_error_m": (
+                None if self.range_error_m is None else round(self.range_error_m, 2)
+            ),
             "require_autonomy": self.require_autonomy,
             "autonomy_compromised": self.autonomy_compromised,
             "targets_engaged": self.targets_engaged,
@@ -571,12 +595,21 @@ class SprayController:
                 else SprayState.APPROACH.value
             )
             self._status.target_id = target.target_id
+            self._status.target_number = self._status.targets_engaged + 1
             self._status.target_label = target.label
             self._status.distance_to_target = distance
             self._status.spray_count = 0
             self._status.verification_passed = False
             self._status.error = None
             self._status.approach_method = ""
+            self._status.autonomy_action = "Queued"
+            self._status.command_vx_mps = 0.0
+            self._status.command_vy_mps = 0.0
+            self._status.command_vz_mps = 0.0
+            self._status.command_yaw_rate_radps = 0.0
+            self._status.aim_error_x_px = None
+            self._status.aim_error_y_px = None
+            self._status.range_error_m = None
             self._status.require_autonomy = bool(require_autonomy)
             self._status.autonomy_compromised = False
             self._status.targets_engaged += 1
@@ -631,6 +664,11 @@ class SprayController:
 
         with self._lock:
             self._status.state = SprayState.ABORTED.value
+            self._status.autonomy_action = "Aborted"
+            self._status.command_vx_mps = 0.0
+            self._status.command_vy_mps = 0.0
+            self._status.command_vz_mps = 0.0
+            self._status.command_yaw_rate_radps = 0.0
         logger.info("Spray sequence aborted")
         return {"success": True, "message": "Spray sequence aborted"}
 
@@ -653,6 +691,7 @@ class SprayController:
             # --- APPROACH (visible target -> calibrated firing range) ---
             if not skip_approach:
                 self._set_state(SprayState.APPROACH)
+                self._set_autonomy_command("Approaching target")
                 if not self._approach_target(target):
                     if not self._check_abort():
                         self._set_state(SprayState.FAILED, error="Approach failed")
@@ -660,12 +699,14 @@ class SprayController:
 
             # --- AIM ---
             self._set_state(SprayState.AIM)
+            self._set_autonomy_command("Aiming at target")
             if not self._aim_at_target(target):
                 if not self._check_abort():
                     self._set_state(SprayState.FAILED, error="Aim failed")
                 return
 
             # --- CAPTURE PRE-SPRAY SNAPSHOT ---
+            self._set_autonomy_command("Capturing pre-spray image")
             self._capture_pre_spray(target)
 
             # --- SPRAY (with retry) ---
@@ -675,6 +716,7 @@ class SprayController:
                     self._status.spray_count = self._spray_count
 
                 self._set_state(SprayState.SPRAY)
+                self._set_autonomy_command("Spraying")
                 if not self._spray_target():
                     with self._lock:
                         self._status.targets_failed += 1
@@ -686,6 +728,7 @@ class SprayController:
 
                 # --- VERIFY ---
                 self._set_state(SprayState.VERIFY)
+                self._set_autonomy_command("Verifying color change")
                 time.sleep(self.SPRAY_SETTLE_TIME_S)
                 passed = self._verify_spray()
                 if passed:
@@ -702,6 +745,7 @@ class SprayController:
 
             # --- UPLOAD ---
             self._set_state(SprayState.UPLOAD)
+            self._set_autonomy_command("Uploading proof image")
             self._capture_and_upload(target)
 
             # --- COMPLETE ---
@@ -727,6 +771,20 @@ class SprayController:
             self._status.state = state.value
             if error:
                 self._status.error = error
+            if state in (SprayState.COMPLETE, SprayState.FAILED, SprayState.ABORTED):
+                self._status.command_vx_mps = 0.0
+                self._status.command_vy_mps = 0.0
+                self._status.command_vz_mps = 0.0
+                self._status.command_yaw_rate_radps = 0.0
+                self._status.aim_error_x_px = None
+                self._status.aim_error_y_px = None
+                self._status.range_error_m = None
+                if state == SprayState.COMPLETE:
+                    self._status.autonomy_action = "Complete"
+                elif state == SprayState.FAILED:
+                    self._status.autonomy_action = "Failed"
+                else:
+                    self._status.autonomy_action = "Aborted"
         # When the autonomous sequence ends, finalise any open artifact
         # session so the Submit panel can pick it up via /last_artifacts.
         if state in (SprayState.COMPLETE, SprayState.FAILED, SprayState.ABORTED):
@@ -738,6 +796,29 @@ class SprayController:
 
     def _check_abort(self) -> bool:
         return self._abort_event.is_set()
+
+    def _set_autonomy_command(
+        self,
+        action: str,
+        *,
+        vx: float = 0.0,
+        vy: float = 0.0,
+        vz: float = 0.0,
+        yaw_rate: float = 0.0,
+        aim_error_x: Optional[float] = None,
+        aim_error_y: Optional[float] = None,
+        range_error: Optional[float] = None,
+    ) -> None:
+        """Publish the current autonomous intent for the GCS video overlay."""
+        with self._lock:
+            self._status.autonomy_action = action
+            self._status.command_vx_mps = float(vx)
+            self._status.command_vy_mps = float(vy)
+            self._status.command_vz_mps = float(vz)
+            self._status.command_yaw_rate_radps = float(yaw_rate)
+            self._status.aim_error_x_px = aim_error_x
+            self._status.aim_error_y_px = aim_error_y
+            self._status.range_error_m = range_error
 
     def _flight_mode(self) -> str:
         """Current ArduPilot flight mode string, or empty when unknown."""
@@ -871,6 +952,9 @@ class SprayController:
         if self._servo:
             fire_angle = max(0.0, min(180.0, self.SERVO_FIRE_ANGLE_DEG))
             self._servo.set_camera_tilt(fire_angle)
+            with self._lock:
+                self._status.servo_angle = fire_angle
+            self._set_autonomy_command(f"Servo to firing angle {fire_angle:.0f} deg")
 
         approach_start = time.time()
         last_command_time = 0.0
@@ -886,6 +970,7 @@ class SprayController:
                 logger.warning("Image approach timeout — proceeding to aim")
                 if self._nav:
                     self._nav.stop_movement()
+                self._set_autonomy_command("Approach timeout - holding")
                 self._set_approach_sectors(target, exclude=False)
                 return True
 
@@ -894,6 +979,7 @@ class SprayController:
                 no_detection_streak += 1
                 if self._nav and now - last_command_time > 0.25:
                     self._nav.stop_movement()
+                    self._set_autonomy_command("Holding - target lost")
                     last_command_time = now
                 if no_detection_streak > 30:  # ~3s without a detection
                     logger.warning("Image approach lost target — bailing to aim")
@@ -910,6 +996,7 @@ class SprayController:
                 # No depth on this frame — hold and wait for one.
                 if self._nav:
                     self._nav.stop_movement()
+                self._set_autonomy_command("Holding - waiting for depth")
                 time.sleep(0.1)
                 continue
 
@@ -921,6 +1008,7 @@ class SprayController:
                 logger.info(f"Image approach complete at {range_m:.2f}m")
                 if self._nav:
                     self._nav.stop_movement()
+                self._set_autonomy_command("Approach complete - holding")
                 self._set_approach_sectors(target, exclude=False)
                 return True
 
@@ -956,6 +1044,16 @@ class SprayController:
                 self.MAX_ALTITUDE_SPEED_MPS,
             )
             self._nav.send_velocity(vx, vy, vz, yaw_rate)
+            self._set_autonomy_command(
+                "Approaching target",
+                vx=vx,
+                vy=vy,
+                vz=vz,
+                yaw_rate=yaw_rate,
+                aim_error_x=err_x,
+                aim_error_y=err_y,
+                range_error=forward_excess,
+            )
             last_command_time = now
             time.sleep(0.1)
 
@@ -978,6 +1076,7 @@ class SprayController:
 
             if time.time() - approach_start > self.APPROACH_TIMEOUT_S:
                 logger.warning("Velocity approach timeout - continuing")
+                self._set_autonomy_command("Approach timeout - holding")
                 return True
 
             drone_pos = self._get_drone_position()
@@ -996,6 +1095,7 @@ class SprayController:
                 logger.info(f"Velocity approach complete at {distance:.2f}m")
                 if self._nav:
                     self._nav.stop_movement()
+                self._set_autonomy_command("Approach complete - holding")
                 self._set_approach_sectors(target, exclude=False)
                 return True
 
@@ -1013,6 +1113,13 @@ class SprayController:
             vy = (left / norm) * speed
             vz = (up / norm) * speed * 0.3
             self._nav.send_velocity(vx, vy, vz, 0)
+            self._set_autonomy_command(
+                "Approaching target",
+                vx=vx,
+                vy=vy,
+                vz=vz,
+                range_error=max(distance - self.APPROACH_STOP_DISTANCE_M, 0.0),
+            )
             time.sleep(0.1)
 
         return False
@@ -1093,6 +1200,7 @@ class SprayController:
                 logger.warning("Aim timeout - proceeding with current alignment")
                 if self._nav:
                     self._nav.stop_movement()
+                self._set_autonomy_command("Aim timeout - holding")
                 return True
 
             detection = self._get_detection_for_aim(target)
@@ -1100,6 +1208,7 @@ class SprayController:
                 lock_started_at = None
                 if self._nav and now - last_command_time > 0.25:
                     self._nav.stop_movement()
+                    self._set_autonomy_command("Holding - target not visible")
                     last_command_time = now
                 time.sleep(0.1)
                 continue
@@ -1127,9 +1236,21 @@ class SprayController:
                     lock_started_at = now
                     if self._nav:
                         self._nav.stop_movement()
+                    self._set_autonomy_command(
+                        "Aim locked - holding",
+                        aim_error_x=err_x,
+                        aim_error_y=err_y,
+                        range_error=range_error,
+                    )
                 elif (now - lock_started_at) * 1000.0 >= self.LOCK_HOLD_MS:
                     if self._nav:
                         self._nav.stop_movement()
+                    self._set_autonomy_command(
+                        "Aim locked",
+                        aim_error_x=err_x,
+                        aim_error_y=err_y,
+                        range_error=range_error,
+                    )
                     logger.info(
                         "Spray aim lock acquired: "
                         f"pixel=({cx:.0f},{cy:.0f}) err=({err_x:.0f},{err_y:.0f}) "
@@ -1174,6 +1295,16 @@ class SprayController:
                 )
 
                 self._nav.send_velocity(vx, vy, vz, yaw_rate)
+                self._set_autonomy_command(
+                    "Aiming at target",
+                    vx=vx,
+                    vy=vy,
+                    vz=vz,
+                    yaw_rate=yaw_rate,
+                    aim_error_x=err_x,
+                    aim_error_y=err_y,
+                    range_error=range_error,
+                )
                 last_command_time = now
 
             time.sleep(0.1)
@@ -1355,10 +1486,8 @@ class SprayController:
     def _capture_and_upload(self, target: SprayTarget) -> None:
         """Capture photo and upload to Google Drive.
 
-        Filename: Task_2_<team>_target_<n>.jpg (CONOPS §5.2.4.4.f).
-        Team name is taken from NOMAD_TEAM_NAME env var (matching the
-        target_localizer node default and the Mission Planner
-        MissionConfig.TeamName).
+        Filename: target_<n>.jpg, with a 1-based target number for the
+        competition Drive folder.
         """
         try:
             photo_path = None
@@ -1368,8 +1497,10 @@ class SprayController:
                 logger.warning("Could not capture photo for upload")
                 return
 
-            team_name = os.environ.get("NOMAD_TEAM_NAME", "MAD").replace(" ", "_")
-            filename = f"Task_2_{team_name}_target_{target.target_id}.jpg"
+            with self._lock:
+                target_number = self._status.target_number
+            target_number = max(1, int(target_number or 1))
+            filename = f"target_{target_number}.jpg"
             if self._upload_fn:
                 url = self._upload_fn(photo_path, filename)
                 with self._lock:

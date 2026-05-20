@@ -799,6 +799,7 @@ namespace NOMAD.MissionPlanner
             }
 
             bool active = ACTIVE_SPRAY_STATES.Contains(state);
+            UpdateAutonomyVideoOverlay(sprayData, state, active, requireAutonomy, autonomyCompromised);
             if (state == "complete"
                 && verified
                 && requireAutonomy
@@ -825,6 +826,91 @@ namespace NOMAD.MissionPlanner
 
             // Spray-state-driven tilt lock - only active when spray is mid-run.
             _payloadPanel?.SetTiltLocked(active);
+        }
+
+        private void UpdateAutonomyVideoOverlay(
+            JObject sprayData,
+            string state,
+            bool active,
+            bool requireAutonomy,
+            bool autonomyCompromised)
+        {
+            if (_videoPlayer == null) return;
+
+            bool visible = active || state == "complete" || state == "failed" || state == "aborted";
+            if (!visible || state == "idle")
+            {
+                _videoPlayer.SetTask2AutonomyOverlay("", "", TEXT_SECONDARY, false);
+                return;
+            }
+
+            string action = sprayData["autonomy_action"]?.ToString();
+            if (string.IsNullOrWhiteSpace(action))
+                action = state.ToUpperInvariant();
+
+            double vx = sprayData["command_vx_mps"]?.Value<double>() ?? 0.0;
+            double vy = sprayData["command_vy_mps"]?.Value<double>() ?? 0.0;
+            double vz = sprayData["command_vz_mps"]?.Value<double>() ?? 0.0;
+            double yaw = sprayData["command_yaw_rate_radps"]?.Value<double>() ?? 0.0;
+            double servo = sprayData["servo_angle"]?.Value<double>() ?? 0.0;
+            double distance = sprayData["distance_to_target"]?.Value<double>() ?? 0.0;
+            double? errX = sprayData["aim_error_x_px"]?.Type == JTokenType.Null
+                ? null : sprayData["aim_error_x_px"]?.Value<double>();
+            double? errY = sprayData["aim_error_y_px"]?.Type == JTokenType.Null
+                ? null : sprayData["aim_error_y_px"]?.Value<double>();
+            double? rangeErr = sprayData["range_error_m"]?.Type == JTokenType.Null
+                ? null : sprayData["range_error_m"]?.Value<double>();
+
+            var motionParts = new List<string>();
+            AddMotionPart(motionParts, vx, "FWD", "BACK", "m/s");
+            AddMotionPart(motionParts, vy, "LEFT", "RIGHT", "m/s");
+            AddMotionPart(motionParts, vz, "UP", "DOWN", "m/s");
+            AddMotionPart(motionParts, yaw, "YAW LEFT", "YAW RIGHT", "rad/s");
+            string motion = motionParts.Count == 0 ? "HOLD" : string.Join(" | ", motionParts);
+
+            var detail = new StringBuilder();
+            detail.Append(motion);
+            detail.Append($" | SERVO {servo:F0} deg");
+            if (distance > 0.01)
+                detail.Append($" | RANGE {distance:F2}m");
+            if (errX.HasValue && errY.HasValue)
+                detail.Append($" | ERR X {errX.Value:F0} Y {errY.Value:F0}px");
+            if (rangeErr.HasValue)
+                detail.Append($" | RANGE ERR {rangeErr.Value:F2}m");
+
+            string prefix = requireAutonomy ? "AUTO" : "SPRAY";
+            string headline = autonomyCompromised
+                ? "OVERRIDE DETECTED"
+                : $"{prefix} {state.ToUpperInvariant()}: {action}";
+
+            Color color = state switch
+            {
+                "approach" => Color.Cyan,
+                "aim" => WARNING_COLOR,
+                "spray" => ACCENT_COLOR,
+                "verify" => INFO_COLOR,
+                "upload" => INFO_COLOR,
+                "complete" => SUCCESS_COLOR,
+                "failed" => ERROR_COLOR,
+                "aborted" => ERROR_COLOR,
+                _ => TEXT_PRIMARY,
+            };
+            if (autonomyCompromised)
+                color = ERROR_COLOR;
+
+            _videoPlayer.SetTask2AutonomyOverlay(headline, detail.ToString(), color, true);
+        }
+
+        private static void AddMotionPart(
+            List<string> parts,
+            double value,
+            string positiveLabel,
+            string negativeLabel,
+            string unit)
+        {
+            if (Math.Abs(value) < 0.025) return;
+            string label = value >= 0 ? positiveLabel : negativeLabel;
+            parts.Add($"{label} {Math.Abs(value):0.00} {unit}");
         }
 
         private void UpdateDetectionUI(JObject detectionData)

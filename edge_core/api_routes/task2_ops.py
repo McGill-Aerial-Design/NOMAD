@@ -1295,7 +1295,6 @@ def register_task2_routes(app, ctx) -> None:
                 detail="Google Drive not configured on Jetson (no OAuth token)",
             )
 
-        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         root = os.path.realpath(SESSIONS_ROOT)
 
         def _safe(path: Optional[str]) -> Optional[str]:
@@ -1308,10 +1307,32 @@ def register_task2_routes(app, ctx) -> None:
 
         task2_folder_id = os.environ.get("GDRIVE_TASK2_FOLDER_ID", "")
 
+        def _target_number() -> int:
+            for key in ("target_number", "target_num"):
+                try:
+                    n = int(body.get(key))
+                    if n >= 1:
+                        return n
+                except (TypeError, ValueError):
+                    pass
+            for key in ("target_id",):
+                try:
+                    return max(1, int(body.get(key)) + 1)
+                except (TypeError, ValueError):
+                    pass
+            try:
+                if sess_dict.get("target_id") is not None:
+                    return max(1, int(sess_dict.get("target_id")) + 1)
+            except (TypeError, ValueError):
+                pass
+            return 1
+
+        target_number = _target_number()
+
         targets = [
-            (f"{prefix}_before", _safe(before_path)),
-            (f"{prefix}_after", _safe(after_path)),
-            (f"{prefix}_spray", _safe(video_path)),
+            (f"target_{target_number}_before", _safe(before_path)),
+            (f"target_{target_number}_after", _safe(after_path)),
+            (f"target_{target_number}_spray", _safe(video_path)),
         ]
 
         results = []
@@ -1321,7 +1342,7 @@ def register_task2_routes(app, ctx) -> None:
             if path is None:
                 continue
             ext = os.path.splitext(path)[1] or ".bin"
-            fname = f"{label}_{ts}{ext}"
+            fname = f"{label}{ext}"
             try:
                 file_id = upload_to_gdrive(path, fname, folder_id=task2_folder_id or None)
                 if file_id:

@@ -55,6 +55,10 @@ namespace NOMAD.MissionPlanner
         private System.Windows.Forms.Timer _depthPollTimer;
         private double? _centerDepthM;
         private DateTime _centerDepthStamp;
+        private string _task2AutonomyOverlayText = "";
+        private string _task2AutonomyOverlayDetail = "";
+        private Color _task2AutonomyOverlayColor = Color.Cyan;
+        private bool _task2AutonomyOverlayVisible;
         
         // Stream lifecycle serialization - prevents overlapping native GStreamer teardown/startup
         private readonly SemaphoreSlim _lifecycleLock = new SemaphoreSlim(1, 1);
@@ -91,6 +95,16 @@ namespace NOMAD.MissionPlanner
 
                 await SyncOverlayStatusAsync();
             }, "EmbeddedVideoHandleCreated");
+        }
+
+        public void SetTask2AutonomyOverlay(string headline, string detail, Color color, bool visible)
+        {
+            _task2AutonomyOverlayText = headline ?? "";
+            _task2AutonomyOverlayDetail = detail ?? "";
+            _task2AutonomyOverlayColor = color;
+            _task2AutonomyOverlayVisible = visible && !string.IsNullOrWhiteSpace(_task2AutonomyOverlayText);
+            if (!IsDisposed && _videoBox != null && _videoBox.IsHandleCreated)
+                _videoBox.Invalidate();
         }
         
         private void ParseApiUrl(string rtspUrl)
@@ -932,7 +946,71 @@ namespace NOMAD.MissionPlanner
                 }
             }
 
+            DrawTask2AutonomyOverlay(e.Graphics);
             DrawCenterDepthReadout(e.Graphics);
+        }
+
+        private void DrawTask2AutonomyOverlay(Graphics g)
+        {
+            if (!_task2AutonomyOverlayVisible) return;
+
+            using (var headlineFont = new Font("Consolas", 13f, FontStyle.Bold))
+            using (var detailFont = new Font("Consolas", 9.5f, FontStyle.Bold))
+            {
+                var headlineSize = g.MeasureString(_task2AutonomyOverlayText, headlineFont);
+                var detailSize = string.IsNullOrWhiteSpace(_task2AutonomyOverlayDetail)
+                    ? SizeF.Empty
+                    : g.MeasureString(_task2AutonomyOverlayDetail, detailFont);
+
+                int padX = 12;
+                int padY = 8;
+                int marginBottom = 16;
+                float width = Math.Max(headlineSize.Width, detailSize.Width) + padX * 2;
+                float height = headlineSize.Height + padY * 2;
+                if (!string.IsNullOrWhiteSpace(_task2AutonomyOverlayDetail))
+                    height += detailSize.Height + 2;
+
+                var rect = new RectangleF(
+                    Math.Max(8, (_videoBox.Width - width) / 2f),
+                    Math.Max(8, _videoBox.Height - height - marginBottom),
+                    Math.Min(width, _videoBox.Width - 16),
+                    height);
+
+                using (var bg = new SolidBrush(Color.FromArgb(190, 0, 0, 0)))
+                using (var border = new Pen(Color.FromArgb(210, _task2AutonomyOverlayColor), 1.5f))
+                using (var headlineBrush = new SolidBrush(_task2AutonomyOverlayColor))
+                using (var detailBrush = new SolidBrush(Color.White))
+                {
+                    g.FillRectangle(bg, rect);
+                    g.DrawRectangle(border, rect.X, rect.Y, rect.Width, rect.Height);
+
+                    var center = new StringFormat
+                    {
+                        Alignment = StringAlignment.Center,
+                        LineAlignment = StringAlignment.Near,
+                    };
+                    g.DrawString(
+                        _task2AutonomyOverlayText,
+                        headlineFont,
+                        headlineBrush,
+                        new RectangleF(rect.X + padX, rect.Y + padY, rect.Width - padX * 2, headlineSize.Height + 2),
+                        center);
+
+                    if (!string.IsNullOrWhiteSpace(_task2AutonomyOverlayDetail))
+                    {
+                        g.DrawString(
+                            _task2AutonomyOverlayDetail,
+                            detailFont,
+                            detailBrush,
+                            new RectangleF(
+                                rect.X + padX,
+                                rect.Y + padY + headlineSize.Height + 2,
+                                rect.Width - padX * 2,
+                                detailSize.Height + 2),
+                            center);
+                    }
+                }
+            }
         }
 
         private void DrawCenterDepthReadout(Graphics g)

@@ -1249,22 +1249,32 @@ class VideoStreamNode(Node):
         import cv2
         h, w = frame.shape[:2]
         gray, hsv = self._prepare_task2_detection_images(frame, cv2)
-        # Target model: a red/blue/purple paper circle on a white plastic
-        # backing. We accept a candidate circle only when (a) its interior is
-        # mostly one of those hues and (b) the thin ring just outside it is
-        # mostly white. This rejects wall-texture false positives without
-        # depending on the exact paper color (cabbage juice can read red,
-        # purple or blue depending on pH and lighting).
+        # Target model: a low-saturation red/blue/purple paper circle on a
+        # white plastic backing. Real cabbage-paper targets are pale enough
+        # that HSV saturation alone drops valid circles, so mirror the offline
+        # verifier and use Lab chroma as an additional color cue.
         h_ch = hsv[:, :, 0]; s_ch = hsv[:, :, 1]; v_ch = hsv[:, :, 2]
-        # Red wraps the hue circle (0..10 and 170..179). Blue/purple ~ 100..160.
-        target_color_mask = (
-            (((h_ch <= 10) | (h_ch >= 170)) & (s_ch >= 60) & (v_ch >= 50))
-            | ((h_ch >= 100) & (h_ch <= 160) & (s_ch >= 40) & (v_ch >= 50))
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        _l_ch, a_ch, b_ch = cv2.split(lab)
+        chroma = (
+            np.abs(a_ch.astype(np.int16) - 128)
+            + np.abs(b_ch.astype(np.int16) - 128)
         )
-        # White backing: low saturation, high value.
-        white_mask = (s_ch <= 40) & (v_ch >= 180)
-        _MIN_INTERIOR_COLOR = 0.55   # fraction of inner disk in target hue
-        _MIN_RING_WHITE     = 0.45   # fraction of outer ring in white
+        # Red wraps the hue circle. Purple/blue/cyan cover the wet/dry cabbage
+        # response, including low-saturation paper under indoor lighting.
+        target_color_mask = (
+            (
+                ((h_ch <= 12) | (h_ch >= 170) | ((h_ch >= 82) & (h_ch <= 178)))
+                & (v_ch >= 35)
+                & ((s_ch >= 10) | (chroma >= 7))
+            )
+        )
+        # White plastic backing under shadows/glare is not always pure white,
+        # but keep this stricter than the target mask so pale paper does not
+        # satisfy the backing-ring gate by itself.
+        white_mask = (s_ch <= 36) & (v_ch >= 145) & (chroma <= 20)
+        _MIN_INTERIOR_COLOR = 0.42   # fraction of inner disk in target hue/chroma
+        _MIN_RING_WHITE     = 0.30   # fraction of outer ring in white backing
         _MAX_CIRCLES_PER_FRAME = 6
         # Scale with the actual detection frame. This normally runs on the
         # pre-stream ROS frame (HD720), while still tolerating 360p if the ZED

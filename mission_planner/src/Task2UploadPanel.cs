@@ -77,6 +77,7 @@ namespace NOMAD.MissionPlanner
         // {approach, aim, spray, verify, upload}.
         private string _activeSessionSource = "";
         private bool _manualSessionOpen;
+        private int _lastSprayTargetNumber = 1;
         private Label _lblSessionSource;
         private Button _btnAbort;
 
@@ -377,6 +378,12 @@ namespace NOMAD.MissionPlanner
                 if (!resp.IsSuccessStatusCode) return;
                 var json = JObject.Parse(await resp.Content.ReadAsStringAsync());
                 var state = json["state"]?.ToString() ?? "idle";
+                var targetNumber = json["target_number"]?.Value<int>() ?? 0;
+                var targetId = json["target_id"]?.Value<int>() ?? -1;
+                if (targetNumber >= 1)
+                    _lastSprayTargetNumber = Math.Max(_lastSprayTargetNumber, targetNumber);
+                else if (targetId >= 0)
+                    _lastSprayTargetNumber = Math.Max(_lastSprayTargetNumber, targetId + 1);
 
                 bool justCompleted = _lastSprayState != "complete" && state == "complete";
                 _lastSprayState = state;
@@ -572,6 +579,7 @@ namespace NOMAD.MissionPlanner
                     ["after_image_path"]   = json["after_image_path"]?.ToString()  ?? "",
                     ["video_path"]         = json["video_path"]?.ToString()        ?? "",
                     ["name_prefix"]        = "task2",
+                    ["target_number"]      = _lastSprayTargetNumber,
                 };
 
                 using var content = new StringContent(
@@ -612,6 +620,8 @@ namespace NOMAD.MissionPlanner
                 _progress.Style = ProgressBarStyle.Continuous;
                 _progress.Value = 100;
                 _lastUploadedSessionKey = sessionKey;
+                if (ok > 0)
+                    _lastSprayTargetNumber = Math.Max(1, _lastSprayTargetNumber + 1);
                 SetStatus($"Upload done (server) — {ok} ok, {fail} failed",
                     fail == 0 ? SUCCESS_COLOR : WARNING_COLOR);
                 return true;
@@ -636,7 +646,7 @@ namespace NOMAD.MissionPlanner
                 return;
             }
             string folderId = gdrive.GetTask2FolderId();
-            string ts = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            int targetNumber = _lastSprayTargetNumber <= 0 ? 1 : _lastSprayTargetNumber;
 
             int ok = 0, fail = 0;
             async Task UploadOne(string remotePath, string namePrefix)
@@ -646,7 +656,7 @@ namespace NOMAD.MissionPlanner
                 {
                     var local = await DownloadArtifact(remotePath);
                     if (local == null) { fail++; return; }
-                    var fname = $"{namePrefix}_{ts}{Path.GetExtension(local)}";
+                    var fname = $"{namePrefix}{Path.GetExtension(local)}";
                     var fileId = await gdrive.UploadFileAsync(local, fname, folderId);
                     Log($"  uploaded {fname} → {fileId}");
                     ok++;
@@ -654,13 +664,15 @@ namespace NOMAD.MissionPlanner
                 catch (Exception ex) { Log($"  upload failed for {remotePath}: {ex.Message}"); fail++; }
             }
 
-            await UploadOne(beforePath, "task2_before");
-            await UploadOne(afterPath,  "task2_after");
-            await UploadOne(videoPath,  "task2_spray");
+            await UploadOne(beforePath, $"target_{targetNumber}_before");
+            await UploadOne(afterPath,  $"target_{targetNumber}_after");
+            await UploadOne(videoPath,  $"target_{targetNumber}_spray");
 
             _progress.Style = ProgressBarStyle.Continuous;
             _progress.Value = 100;
             _lastUploadedSessionKey = sessionKey;
+            if (ok > 0)
+                _lastSprayTargetNumber = Math.Max(1, _lastSprayTargetNumber + 1);
             SetStatus($"Upload done (client) — {ok} ok, {fail} failed",
                 fail == 0 ? SUCCESS_COLOR : WARNING_COLOR);
         }
