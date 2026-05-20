@@ -719,9 +719,9 @@ class MavlinkService:
     def set_mode(self, mode_id: int) -> bool:
         """
         Set the flight mode on the autopilot.
-        
+
         Used by NavController to request GUIDED mode for Jetson-centric navigation.
-        
+
         Args:
             mode_id: ArduPilot mode ID
                      - 0: STABILIZE
@@ -730,13 +730,13 @@ class MavlinkService:
                      - 5: LOITER
                      - 6: RTL
                      - 9: LAND
-        
+
         Returns:
             True if mode change command was sent successfully
         """
         if self._conn is None:
             return False
-        
+
         try:
             # Custom mode for Copter
             return self._send_command_long_and_wait_ack(
@@ -745,11 +745,54 @@ class MavlinkService:
                 mode_id,        # custom mode
                 0, 0, 0, 0, 0,  # unused params
             )
-            
+
         except Exception as e:
             import logging
             logging.getLogger(__name__).debug(f"Set mode error: {e}")
             return False
+
+    def takeoff(self, altitude_m: float) -> bool:
+        """
+        Command an autonomous takeoff to ``altitude_m`` AGL.
+
+        ArduCopter requires the vehicle to already be in GUIDED mode AND armed
+        before MAV_CMD_NAV_TAKEOFF will be accepted. Callers should ensure both
+        preconditions are met (see ``NavController.auto_takeoff``).
+
+        Args:
+            altitude_m: Target altitude above takeoff point in meters.
+
+        Returns:
+            True if the command was acknowledged by the autopilot.
+        """
+        if self._conn is None:
+            return False
+        try:
+            return self._send_command_long_and_wait_ack(
+                mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
+                0,                  # param1: minimum pitch (ignored on copter)
+                0, 0, 0,            # params 2-4: unused
+                0, 0,               # lat/lon: use current
+                float(altitude_m),  # altitude AGL
+                timeout_s=2.0,
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).debug(f"Takeoff error: {e}")
+            return False
+
+    def land(self) -> bool:
+        """
+        Switch the autopilot to LAND mode for an autonomous descent + touchdown.
+
+        Uses DO_SET_MODE (mode_id=9) rather than NAV_LAND so the vehicle holds
+        position and lands at its current location regardless of its mission
+        state. LAND mode is independent of GUIDED and works from any flight mode.
+
+        Returns:
+            True if the mode change was acknowledged.
+        """
+        return self.set_mode(9)  # ArduCopter LAND mode
 
     def send_position_target(
         self,

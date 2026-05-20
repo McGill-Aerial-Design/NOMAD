@@ -403,6 +403,87 @@ class NavController:
         """Request ArduPilot to enter GUIDED mode."""
         logger.info("Requesting GUIDED mode")
         return self._mavlink.set_mode(self.GUIDED_MODE_ID)
+
+    def wait_for_guided(self, timeout_s: float = 3.0) -> bool:
+        """Block until the autopilot reports it is in GUIDED mode.
+
+        Used by the autonomy entry path (auto-takeoff + spray) so the caller
+        knows the next velocity command will actually be accepted instead of
+        racing the mode change. Returns ``False`` on timeout.
+        """
+        deadline = time.monotonic() + max(0.1, timeout_s)
+        while time.monotonic() < deadline:
+            if self._state_manager.get_state().flight_mode == "GUIDED":
+                return True
+            time.sleep(0.05)
+        return False
+
+    def auto_takeoff(self, altitude_m: float = 30.0) -> dict:
+        """End-to-end autonomous takeoff for the CONOPS 5.2.4 5-pt criterion.
+
+        Sequence: switch to GUIDED -> wait for GUIDED ack -> arm motors ->
+        send NAV_TAKEOFF. The caller (or the operator) keeps the RC mode
+        switch as a safety override; flipping the switch immediately drops
+        GUIDED and returns the vehicle to the pilot's control.
+
+        Returns a structured result with which step (if any) failed so the
+        UI can show an actionable error.
+        """
+        altitude_m = max(1.0, min(float(altitude_m), 60.0))  # clamp to sane band
+
+        if not self.enable_guided_mode():
+            return {"success": False, "stage": "set_mode", "error": "Failed to send mode-change command"}
+
+        if not self.wait_for_guided(timeout_s=3.0):
+            return {
+                "success": False,
+                "stage": "wait_guided",
+                "error": "Autopilot did not enter GUIDED within 3 s - check pre-arm/EKF",
+            }
+
+        # Arm. ArduCopter rejects ARM in some pre-arm failure states; we have
+        # no way to introspect why from here, so surface the failure to the UI.
+        try:
+            self._mavlink.arm_disarm(True)
+        except Exception as e:
+            return {"success": False, "stage": "arm", "error": f"Arm command exception: {e}"}
+
+        # Give the FC ~1s to actually arm before we send takeoff (NAV_TAKEOFF
+        # is rejected if disarmed).
+        armed_deadline = time.monotonic() + 2.0
+        while time.monotonic() < armed_deadline:
+            if self._state_manager.get_state().armed:
+                break
+            time.sleep(0.1)
+        if not self._state_manager.get_state().armed:
+            return {"success": False, "stage": "arm", "error": "Autopilot did not arm - check pre-arm checks"}
+
+        if not self._mavlink.takeoff(altitude_m):
+            return {"success": False, "stage": "takeoff", "error": "NAV_TAKEOFF was not acknowledged"}
+
+        logger.info(f"Auto-takeoff commanded to {altitude_m:.1f} m AGL")
+        return {"success": True, "altitude_m": altitude_m, "stage": "takeoff"}
+
+    def auto_land(self) -> dict:
+        """Command an autonomous landing via ArduCopter LAND mode.
+
+        LAND works from any flight mode and is the recommended way to satisfy
+        the CONOPS 5.2.4 auto-landing 5-pt criterion. The pilot can still
+        flip the RC mode switch to abort the landing.
+        """
+        if not self._mavlink.land():
+            return {"success": False, "error": "Failed to send LAND mode change"}
+
+        # Optimistic wait for the mode to actually transition. We don't fail
+        # the call if it doesn't - the command-ack already succeeded.
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if self._state_manager.get_state().flight_mode == "LAND":
+                break
+            time.sleep(0.1)
+
+        logger.info("Auto-land commanded")
+        return {"success": True, "flight_mode": self._state_manager.get_state().flight_mode}
     
     def _run_loop(self) -> None:
         """Main control loop - handles timeouts and status updates."""

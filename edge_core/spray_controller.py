@@ -76,6 +76,15 @@ class SprayStatus:
     upload_url: str = ""
     error: Optional[str] = None
     approach_method: str = ""  # "image" or "velocity" for the current Task 2 path
+    # Was this run triggered with the CONOPS Q&A #10 autonomy gate (i.e. the
+    # operator pressed Auto Spray with require_autonomy=True)? Stays True
+    # for the duration of the run so the UI can render it correctly.
+    require_autonomy: bool = False
+    # Becomes True if the pilot flips the RC mode switch out of GUIDED while
+    # the autonomy sequence is running. The sequence aborts cleanly and this
+    # flag tells the GCS that the 20-pt autonomy claim is forfeit for THIS
+    # target - a fresh target can still be claimed.
+    autonomy_compromised: bool = False
     # Stats
     targets_engaged: int = 0
     targets_succeeded: int = 0
@@ -93,6 +102,8 @@ class SprayStatus:
             "upload_url": self.upload_url,
             "error": self.error,
             "approach_method": self.approach_method,
+            "require_autonomy": self.require_autonomy,
+            "autonomy_compromised": self.autonomy_compromised,
             "targets_engaged": self.targets_engaged,
             "targets_succeeded": self.targets_succeeded,
             "targets_failed": self.targets_failed,
@@ -216,7 +227,7 @@ class SprayController:
     APPROACH_SPEED_MPS = 0.5
     APPROACH_TIMEOUT_S = 20.0
 
-    # CONOPS §5.2.4 / Q&A #10: full autonomy points require the
+    # CONOPS 5.2.4 / Q&A #10: full autonomy points require the
     # autonomous approach to start from more than 2 m. If the operator
     # triggers a "force autonomy" spray inside this radius, the AIM
     # state will run immediately and the autonomy criterion fails. We
@@ -290,6 +301,11 @@ class SprayController:
 
         # Obstacle avoidance sector exclusion callback
         self._set_excluded_sectors_fn: Optional[Callable[[set[int]], None]] = None
+
+        # Tracks whether the current run was triggered with require_autonomy.
+        # Approach/aim loops use this to decide if a non-GUIDED flight mode
+        # should abort the sequence (operator override).
+        self._active_require_autonomy: bool = False
 
         # Photo / verify / upload callbacks (set externally)
         self._capture_photo_fn: Optional[Callable[[], Optional[str]]] = None
@@ -526,7 +542,7 @@ class SprayController:
                     "success": False,
                     "error": (
                         f"Autonomy gate failed: drone is {distance:.2f}m from "
-                        f"target — must be >= {self.AUTONOMY_MIN_RANGE_M:.1f}m for "
+                        f"target - must be >= {self.AUTONOMY_MIN_RANGE_M:.1f}m for "
                         f"the autonomous approach to count (CONOPS Q&A #10). "
                         f"Back the drone up and retry. For a manual spray, use "
                         f"the manual button instead."
@@ -563,12 +579,27 @@ class SprayController:
             self._status.verification_passed = False
             self._status.error = None
             self._status.approach_method = ""
+            self._status.require_autonomy = bool(require_autonomy)
+            self._status.autonomy_compromised = False
             self._status.targets_engaged += 1
+
+        # When the operator pressed Auto Spray (autonomy gate), force the
+        # autopilot into GUIDED so the velocity commands the controller is
+        # about to send actually take effect. The pilot's RC mode switch
+        # remains the safety override - see _ensure_guided_or_abort.
+        if require_autonomy and self._nav is not None:
+            try:
+                if not self._nav.enable_guided_mode():
+                    logger.warning("Auto Spray: failed to send GUIDED mode change")
+                # Don't block forever; the in-loop check will catch a missed transition.
+                self._nav.wait_for_guided(timeout_s=2.0)
+            except Exception as e:
+                logger.warning(f"Auto Spray: GUIDED transition error: {e}")
 
         # Run sequence in background thread (outside lock)
         self._thread = threading.Thread(
             target=self._run_sequence,
-            args=(skip_approach,),
+            args=(skip_approach, bool(require_autonomy)),
             daemon=True,
         )
         self._thread.start()
@@ -609,12 +640,17 @@ class SprayController:
     # Sequence runner
     # ------------------------------------------------------------------ #
 
-    def _run_sequence(self, skip_approach: bool = False) -> None:
+    def _run_sequence(self, skip_approach: bool = False, require_autonomy: bool = False) -> None:
         """Run autonomous spray sequence."""
         try:
             target = self._current_target
             if target is None:
                 return
+
+            # Stash the autonomy flag on the controller so the approach/aim
+            # loops can read it via _ensure_guided_or_abort without changing
+            # every signature.
+            self._active_require_autonomy = require_autonomy
 
             # --- APPROACH (visible target -> calibrated firing range) ---
             if not skip_approach:
@@ -685,6 +721,8 @@ class SprayController:
         except Exception as e:
             logger.error(f"Spray sequence error: {e}")
             self._set_state(SprayState.FAILED, error=str(e))
+        finally:
+            self._active_require_autonomy = False
 
     def _set_state(self, state: SprayState, error: Optional[str] = None) -> None:
         with self._lock:
@@ -702,6 +740,54 @@ class SprayController:
 
     def _check_abort(self) -> bool:
         return self._abort_event.is_set()
+
+    def _flight_mode(self) -> str:
+        """Current ArduPilot flight mode string, or empty when unknown."""
+        if not self._state:
+            return ""
+        try:
+            return self._state.get_state().flight_mode or ""
+        except Exception:
+            return ""
+
+    def _ensure_guided_or_abort(self, *, require_autonomy: bool) -> bool:
+        """Verify we are still in GUIDED. Pilot RC override is detected here.
+
+        If the operator flips the RC mode switch (LOITER/STABILIZE/ALT_HOLD)
+        the autopilot stops accepting our velocity commands. We DON'T fight
+        the pilot - we mark the autonomy run compromised, stop sending
+        commands, and let the sequence unwind. This is the safety override
+        path the user asked for: the pilot retains ultimate authority via
+        the mode switch on the transmitter.
+
+        Only meaningful while ``require_autonomy=True``. Manual sprays
+        already accept whatever mode the pilot is in.
+        """
+        if not require_autonomy:
+            return True
+        mode = self._flight_mode()
+        # While we're commanding velocity we expect GUIDED. Empty/UNKNOWN
+        # means the heartbeat hasn't been seen yet - treat as transient.
+        if mode and mode != "GUIDED":
+            msg = (
+                f"Autonomy aborted: pilot switched to {mode}. "
+                "The 20-pt claim is forfeit for this target; pick another."
+            )
+            logger.warning(
+                "Spray autonomy: flight mode is %s (not GUIDED) - operator override detected, aborting",
+                mode,
+            )
+            with self._lock:
+                self._status.autonomy_compromised = True
+            self._abort_event.set()
+            if self._nav:
+                try:
+                    self._nav.stop_movement()
+                except Exception:
+                    pass
+            self._set_state(SprayState.ABORTED, error=msg)
+            return False
+        return True
 
     def _get_drone_position(self) -> Optional[tuple[float, float, float]]:
         """Get current drone NED position from state manager."""
@@ -793,6 +879,10 @@ class SprayController:
         no_detection_streak = 0
 
         while not self._check_abort():
+            # Pilot RC override safety check - bail out if we left GUIDED.
+            if not self._ensure_guided_or_abort(require_autonomy=self._active_require_autonomy):
+                return False
+
             now = time.time()
             if now - approach_start > self.APPROACH_TIMEOUT_S:
                 logger.warning("Image approach timeout — proceeding to aim")
@@ -885,6 +975,9 @@ class SprayController:
 
         approach_start = time.time()
         while not self._check_abort():
+            if not self._ensure_guided_or_abort(require_autonomy=self._active_require_autonomy):
+                return False
+
             if time.time() - approach_start > self.APPROACH_TIMEOUT_S:
                 logger.warning("Velocity approach timeout - continuing")
                 return True
@@ -994,6 +1087,9 @@ class SprayController:
         last_command_time = 0.0
 
         while not self._check_abort():
+            if not self._ensure_guided_or_abort(require_autonomy=self._active_require_autonomy):
+                return False
+
             now = time.time()
             if now - aim_start > self.ALIGN_TIMEOUT_S:
                 logger.warning("Aim timeout - proceeding with current alignment")

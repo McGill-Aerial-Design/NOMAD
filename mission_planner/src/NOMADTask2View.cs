@@ -5,15 +5,16 @@
 // constrained by a side-by-side video/control split.
 //
 // Tabs (right column):
-//   1. Detect & Spray  — autonomous flight workflow with status,
+//   1. Detect & Spray  - autonomous flight workflow with status,
 //                        detections, spray controls, payload, and
 //                        autonomous artifacts.
-//   2. Manual Spray    — Task2UploadPanel manual flow.
-//   3. RTM SOPs        — checklist.
-//   4. 3D SLAM         — SLAM3DView.
+//   2. Pre-Flight      - backend readiness checks and target color config.
+//   3. Manual Spray    - Task2UploadPanel manual flow.
+//   4. RTM SOPs        - checklist.
+//   5. 3D SLAM         - SLAM3DView.
 // Layout mirrors Task 1: live camera feed on the left, tabs on the right.
 //
-// Tilt lock is driven from spray state (UpdateSprayUI) — the
+// Tilt lock is driven from spray state (UpdateSprayUI) - the
 // slider is locked only while the autonomous spray sequence
 // is mid-run, and unlocked otherwise.
 // ============================================================
@@ -21,6 +22,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
@@ -63,7 +65,7 @@ namespace NOMAD.MissionPlanner
         private ListBox _lstDetections;
         private Label _lblDetectionCount;
         private Button _btnRefreshDetections;
-        private Button _btnAutoSpray;        // Autonomy-gated (1× per mission)
+        private Button _btnAutoSpray;        // Autonomy-gated (1x per mission)
         private Button _btnAbortSpray;
         private Label _lblDistToTarget;
         private Label _lblAutonomyState;     // "Autonomy gate: not yet claimed" / "Claimed (target X)"
@@ -77,6 +79,18 @@ namespace NOMAD.MissionPlanner
         // the team can't accidentally re-trigger and risk failing the
         // claim on a second attempt.
         private bool _autonomyClaimed;
+
+        // Spray-state transition tracking for TTS + popup. We only speak on
+        // state CHANGES so the operator doesn't get spammed at the 0.5s poll
+        // rate. _lastConfirmedTargetId guards against re-firing the popup
+        // for the same target if the poll lands on COMPLETE more than once.
+        private string _lastSprayState = "idle";
+        private bool _lastAutonomyCompromised;
+        private int _lastConfirmedTargetId = -1;
+        private Button _btnAutoTakeoff;
+        private Button _btnAutoLand;
+        private NumericUpDown _numTakeoffAltitude;
+        private Task2PreflightPanel _preflightPanel;
 
         public NOMADTask2View(
             DualLinkSender sender,
@@ -135,6 +149,11 @@ namespace NOMAD.MissionPlanner
             var detectTab = new TabPage("Detect & Spray") { BackColor = CARD_BG, Padding = new Padding(0) };
             detectTab.Controls.Add(CreateDetectSprayPanel());
             _tabControl.TabPages.Add(detectTab);
+
+            var preflightTab = new TabPage("Pre-Flight") { BackColor = NOMADTheme.BG_DARK, Padding = new Padding(0) };
+            _preflightPanel = new Task2PreflightPanel { Dock = DockStyle.Fill };
+            preflightTab.Controls.Add(_preflightPanel);
+            _tabControl.TabPages.Add(preflightTab);
 
             var manualTab = new TabPage("Manual Spray") { BackColor = CARD_BG, Padding = new Padding(0) };
             manualTab.Controls.Add(CreateManualSprayPanel());
@@ -428,7 +447,7 @@ namespace NOMAD.MissionPlanner
             AddCard(seqCard, 210);
 
             // ---- Spray card (autonomy-claim flow + manual flow) ----
-            // Strategy for Task 2 scoring (CONOPS §5.2.4 + Q&A #10):
+            // Strategy for Task 2 scoring (CONOPS section 5.2.4 + Q&A #10):
             //   - Pick ONE outdoor target near the doorway and run the
             //     autonomous spray sequence on it. That claims the
             //     20-pt autonomy gate.
@@ -440,7 +459,7 @@ namespace NOMAD.MissionPlanner
 
             _lblAutonomyState = new Label
             {
-                Text = "Autonomy gate: NOT CLAIMED — use Auto Spray on the first target",
+                Text = "Autonomy gate: NOT CLAIMED - use Auto Spray on the first target",
                 Font = new Font("Segoe UI", 9, FontStyle.Bold),
                 ForeColor = WARNING_COLOR,
                 Location = new Point(15, 36),
@@ -448,7 +467,7 @@ namespace NOMAD.MissionPlanner
             };
             sprayCard.Controls.Add(_lblAutonomyState);
 
-            _btnAutoSpray = CreateButton("Auto Spray (1×)", ACCENT_COLOR, 180, 42);
+            _btnAutoSpray = CreateButton("Auto Spray (1x)", ACCENT_COLOR, 180, 42);
             _btnAutoSpray.Location = new Point(15, 60);
             _btnAutoSpray.Font = new Font("Segoe UI", 11, FontStyle.Bold);
             _btnAutoSpray.Click += (s, e) => UiAsync.Run(this, TriggerAutoSpray, nameof(TriggerAutoSpray));
@@ -462,7 +481,7 @@ namespace NOMAD.MissionPlanner
 
             sprayCard.Controls.Add(new Label
             {
-                Text = "Auto Spray: pick outdoor target, drone ≥2.5m from it, full APPROACH→AIM→SPRAY→VERIFY→UPLOAD.\n"
+                Text = "Auto Spray: pick outdoor target, drone >=2.5m from it, full APPROACH->AIM->SPRAY->VERIFY->UPLOAD.\n"
                      + "ABORT:      cancels any in-flight sequence and re-arms Auto Spray.\n"
                      + "For hand-fired spray runs, switch to the Manual Spray tab.",
                 Font = new Font("Consolas", 8),
@@ -482,12 +501,65 @@ namespace NOMAD.MissionPlanner
             _uploadPanel = new Task2UploadPanel(_config, Task2UploadPanel.PanelMode.Auto);
             AddCard(_uploadPanel, 350);
 
+            // ---- Auto Takeoff / Auto Land card ----
+            // Kept last so the operator works top-to-bottom: select target,
+            // watch spray/upload, then use flight-window takeoff/landing
+            // controls from the bottom of the tab.
+            var flightCard = CreateCard("AUTONOMOUS TAKEOFF / LAND");
+
+            flightCard.Controls.Add(new Label
+            {
+                Text = "Takeoff altitude (m AGL)",
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                ForeColor = TEXT_PRIMARY,
+                Location = new Point(15, 38),
+                AutoSize = true,
+            });
+
+            _numTakeoffAltitude = new NumericUpDown
+            {
+                Minimum = 1,
+                Maximum = 60,
+                DecimalPlaces = 1,
+                Increment = 1,
+                Value = 30,
+                Width = 90,
+                Location = new Point(170, 35),
+                BackColor = NOMADTheme.INPUT_BG,
+                ForeColor = TEXT_PRIMARY,
+                Font = new Font("Consolas", 10, FontStyle.Bold),
+            };
+            flightCard.Controls.Add(_numTakeoffAltitude);
+
+            _btnAutoTakeoff = CreateButton("Auto Takeoff", ACCENT_COLOR, 150, 42);
+            _btnAutoTakeoff.Location = new Point(15, 72);
+            _btnAutoTakeoff.Font = new Font("Segoe UI", 11, FontStyle.Bold);
+            _btnAutoTakeoff.Click += (s, e) => UiAsync.Run(this, TriggerAutoTakeoff, nameof(TriggerAutoTakeoff));
+            flightCard.Controls.Add(_btnAutoTakeoff);
+
+            _btnAutoLand = CreateButton("Auto Land", INFO_COLOR, 140, 42);
+            _btnAutoLand.Location = new Point(180, 72);
+            _btnAutoLand.Font = new Font("Segoe UI", 11, FontStyle.Bold);
+            _btnAutoLand.Click += (s, e) => UiAsync.Run(this, TriggerAutoLand, nameof(TriggerAutoLand));
+            flightCard.Controls.Add(_btnAutoLand);
+
+            flightCard.Controls.Add(new Label
+            {
+                Text = "Takeoff switches to GUIDED, arms, then climbs to the selected altitude. Land switches to LAND mode.\n"
+                     + "Flip the RC mode switch any time to override.",
+                Font = new Font("Consolas", 8),
+                ForeColor = TEXT_MUTED,
+                Location = new Point(15, 126),
+                AutoSize = true,
+            });
+            AddCard(flightCard, 176);
+
             root.Controls.Add(stack);
             return root;
         }
 
         // ============================================================
-        // Manual Spray tab — pilot positions in firing range, aims via
+        // Manual Spray tab - pilot positions in firing range, aims via
         // tilt slider, and fires by hand. Below the controls, the
         // Task2UploadPanel handles the manual session (before/after
         // capture + video record + Drive upload).
@@ -643,6 +715,24 @@ namespace NOMAD.MissionPlanner
             var engaged = sprayData["targets_engaged"]?.Value<int>() ?? 0;
             var succeeded = sprayData["targets_succeeded"]?.Value<int>() ?? 0;
             var failed = sprayData["targets_failed"]?.Value<int>() ?? 0;
+            var requireAutonomy = sprayData["require_autonomy"]?.Value<bool>() ?? false;
+            var autonomyCompromised = sprayData["autonomy_compromised"]?.Value<bool>() ?? false;
+            var targetId = sprayData["target_id"]?.Value<int>() ?? -1;
+
+            // --- TTS on state TRANSITIONS only (not every poll) ---
+            if (state != _lastSprayState)
+            {
+                AnnounceSprayState(state, requireAutonomy, verified, targetId);
+                _lastSprayState = state;
+            }
+            // Pilot override detection: speak ONCE when the flag flips on.
+            if (autonomyCompromised && !_lastAutonomyCompromised)
+            {
+                AudioAlerts.Speak(
+                    "Autonomy override detected. Pilot has manual control. Claim forfeited for this target.",
+                    ignoreRateLimit: true);
+            }
+            _lastAutonomyCompromised = autonomyCompromised;
 
             _lblSprayState.Text = $"State: {state.ToUpper()}";
             _lblSprayState.ForeColor = state switch
@@ -703,24 +793,31 @@ namespace NOMAD.MissionPlanner
             }
 
             bool active = ACTIVE_SPRAY_STATES.Contains(state);
-            // Autonomy claim is recorded when a sequence that included
-            // an APPROACH phase reaches the verified state. The
-            // backend doesn't currently surface the "required_autonomy"
-            // flag back on /api/spray/status; we proxy it via the fact
-            // that a verified target was engaged via APPROACH (i.e.
-            // approach_method is "image" or "velocity" — both started
-            // from outside the 2 m envelope).
-            if (state == "complete" && verified && !string.IsNullOrEmpty(approachMethod) && !_autonomyClaimed)
+            if (state == "complete"
+                && verified
+                && requireAutonomy
+                && !autonomyCompromised
+                && !_autonomyClaimed)
             {
                 _autonomyClaimed = true;
-                _lblAutonomyState.Text = $"Autonomy gate: CLAIMED (target {sprayData["target_id"]?.Value<int>() ?? -1}) ✓";
+                _lblAutonomyState.Text = $"Autonomy gate: CLAIMED (target {targetId})";
                 _lblAutonomyState.ForeColor = SUCCESS_COLOR;
+            }
+
+            if (state == "complete"
+                && verified
+                && requireAutonomy
+                && !autonomyCompromised
+                && targetId != _lastConfirmedTargetId)
+            {
+                _lastConfirmedTargetId = targetId;
+                ShowExtinguishedConfirmation(targetId);
             }
 
             _btnAutoSpray.Enabled = !active && !_autonomyClaimed;
             _btnAbortSpray.Enabled = active;
 
-            // Spray-state-driven tilt lock — only active when spray is mid-run.
+            // Spray-state-driven tilt lock - only active when spray is mid-run.
             _payloadPanel?.SetTiltLocked(active);
         }
 
@@ -756,7 +853,7 @@ namespace NOMAD.MissionPlanner
                     string posStr;
                     if (imageOnly)
                     {
-                        // Task 2 shape detector is 2D-only — show pixel
+                        // Task 2 shape detector is 2D-only - show pixel
                         // coords + range so the list isn't just "(0,0,0)".
                         var px = det["pixel_x"]?.Value<double>() ?? 0;
                         var py = det["pixel_y"]?.Value<double>() ?? 0;
@@ -818,6 +915,12 @@ namespace NOMAD.MissionPlanner
             try
             {
                 _btnAutoSpray.Enabled = false;
+                if (requireAutonomy)
+                {
+                    AudioAlerts.Speak(
+                        "Autonomous spray requested. Switching to guided and starting the approach.",
+                        ignoreRateLimit: true);
+                }
                 // Clear any previous error banner so the operator can
                 // see the new failure (or that the trigger actually fired).
                 ShowSprayError("");
@@ -825,7 +928,7 @@ namespace NOMAD.MissionPlanner
                 JToken target = null;
                 // UiAsync.Run already invokes us on the UI thread (it uses
                 // ConfigureAwait(true)) so we can read the selection directly
-                // — the old BeginInvoke + Task.Yield was a race that almost
+                // - the old BeginInvoke + Task.Yield was a race that almost
                 // always returned -1 and silently fell through to the
                 // fetch-from-server path.
                 int selIdx = _lstDetections.SelectedIndex;
@@ -852,7 +955,7 @@ namespace NOMAD.MissionPlanner
                     if (detections == null || detections.Count == 0)
                     {
                         ShowSprayError(
-                            "No detections — the shape detector isn't returning circles. " +
+                            "No detections - the shape detector isn't returning circles. " +
                             "Verify the video overlay shows boxed circles before triggering.");
                         ReenableSprayButtons();
                         return;
@@ -883,14 +986,18 @@ namespace NOMAD.MissionPlanner
                     if (requireAutonomy)
                     {
                         _lblSprayState.Text = "State: APPROACH (autonomy claim in progress)";
-                        _lblAutonomyState.Text = "Autonomy gate: claim in progress…";
+                        _lblAutonomyState.Text = "Autonomy gate: claim in progress...";
                         _lblAutonomyState.ForeColor = ACCENT_COLOR;
+                        AudioAlerts.Speak(
+                            "Autonomous spray sequence active. Hands off sticks unless overriding for safety.",
+                            ignoreRateLimit: true);
                     }
                     else
                     {
                         _lblSprayState.Text = skipApproach
                             ? "State: MANUAL SPRAY (no approach)"
                             : "State: APPROACH (manual mode)";
+                        AudioAlerts.Speak("Spray sequence started.", ignoreRateLimit: true);
                     }
                     _lblSprayState.ForeColor = ACCENT_COLOR;
                     ShowSprayError("");
@@ -902,12 +1009,14 @@ namespace NOMAD.MissionPlanner
                     try { detail = JObject.Parse(body)["detail"]?.ToString() ?? body; }
                     catch { detail = body; }
                     ShowSprayError($"Spray failed: {detail}");
+                    AudioAlerts.Speak("Spray trigger failed.", ignoreRateLimit: true);
                     ReenableSprayButtons();
                 }
             }
             catch (Exception ex)
             {
                 ShowSprayError($"Error: {ex.Message}");
+                AudioAlerts.Speak("Spray trigger error.", ignoreRateLimit: true);
                 ReenableSprayButtons();
             }
             finally { _sprayInProgress = false; }
@@ -915,7 +1024,7 @@ namespace NOMAD.MissionPlanner
 
         /// <summary>Surface an error in the spray-status card. Pass empty
         /// string to hide. Centralised so every failure path actually
-        /// flips Visible=true — the old paths set Text without making the
+        /// flips Visible=true - the old paths set Text without making the
         /// label visible, which is why Auto Spray looked silent.</summary>
         private void ShowSprayError(string message)
         {
@@ -950,12 +1059,229 @@ namespace NOMAD.MissionPlanner
                 await JetsonApiService.PostAsync("/api/spray/abort");
                 _lblSprayState.Text = "State: ABORTED";
                 _lblSprayState.ForeColor = ERROR_COLOR;
+                AudioAlerts.Speak("Spray sequence aborted.", ignoreRateLimit: true);
             }
             catch (Exception ex)
             {
                 ShowSprayError($"Abort error: {ex.Message}");
             }
             finally { _btnAbortSpray.Enabled = true; }
+        }
+
+        private async Task TriggerAutoTakeoff()
+        {
+            var altitudeM = _numTakeoffAltitude != null ? (double)_numTakeoffAltitude.Value : 30.0;
+            var confirm = MessageBox.Show(
+                $"Auto takeoff will switch the autopilot to GUIDED, arm motors, and climb to {altitudeM:F1} m AGL.\n\n" +
+                "Keep the RC mode switch ready for override.",
+                "Confirm Auto Takeoff",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning);
+            if (confirm != DialogResult.Yes) return;
+
+            try
+            {
+                _btnAutoTakeoff.Enabled = false;
+                AudioAlerts.Speak($"Auto takeoff requested to {altitudeM:F0} meters. Switching to guided and arming.", ignoreRateLimit: true);
+
+                var payload = new JObject { ["altitude_m"] = altitudeM };
+                var content = new StringContent(payload.ToString(), Encoding.UTF8, "application/json");
+                var resp = await JetsonApiService.PostAsync("/api/flight/takeoff", content);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    ShowSprayError("Auto takeoff failed: " + await ExtractError(resp));
+                    AudioAlerts.Speak("Auto takeoff failed.", ignoreRateLimit: true);
+                    return;
+                }
+
+                _lblSprayState.Text = "State: AUTO TAKEOFF COMMANDED";
+                _lblSprayState.ForeColor = SUCCESS_COLOR;
+                AudioAlerts.Speak($"Auto takeoff commanded to {altitudeM:F0} meters.", ignoreRateLimit: true);
+            }
+            catch (Exception ex)
+            {
+                ShowSprayError($"Auto takeoff error: {ex.Message}");
+                AudioAlerts.Speak("Auto takeoff error.", ignoreRateLimit: true);
+            }
+            finally
+            {
+                _btnAutoTakeoff.Enabled = true;
+            }
+        }
+
+        private async Task TriggerAutoLand()
+        {
+            var confirm = MessageBox.Show(
+                "Auto land will switch the autopilot to LAND mode and descend at the current position.\n\n" +
+                "Use only when the aircraft is over the landing area.",
+                "Confirm Auto Land",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning);
+            if (confirm != DialogResult.Yes) return;
+
+            try
+            {
+                _btnAutoLand.Enabled = false;
+                AudioAlerts.Speak("Auto land requested.", ignoreRateLimit: true);
+
+                var resp = await JetsonApiService.PostAsync("/api/flight/land");
+                if (!resp.IsSuccessStatusCode)
+                {
+                    ShowSprayError("Auto land failed: " + await ExtractError(resp));
+                    AudioAlerts.Speak("Auto land failed.", ignoreRateLimit: true);
+                    return;
+                }
+
+                _lblSprayState.Text = "State: AUTO LAND COMMANDED";
+                _lblSprayState.ForeColor = SUCCESS_COLOR;
+                AudioAlerts.Speak("Auto land commanded.", ignoreRateLimit: true);
+            }
+            catch (Exception ex)
+            {
+                ShowSprayError($"Auto land error: {ex.Message}");
+                AudioAlerts.Speak("Auto land error.", ignoreRateLimit: true);
+            }
+            finally
+            {
+                _btnAutoLand.Enabled = true;
+            }
+        }
+
+        private static async Task<string> ExtractError(HttpResponseMessage resp)
+        {
+            try
+            {
+                var body = await resp.Content.ReadAsStringAsync();
+                if (string.IsNullOrWhiteSpace(body)) return $"HTTP {(int)resp.StatusCode}";
+                try { return JObject.Parse(body)["detail"]?.ToString() ?? body; }
+                catch { return body; }
+            }
+            catch
+            {
+                return $"HTTP {(int)resp.StatusCode}";
+            }
+        }
+
+        private void AnnounceSprayState(string state, bool requireAutonomy, bool verified, int targetId)
+        {
+            switch (state)
+            {
+                case "approach":
+                    AudioAlerts.Speak(requireAutonomy
+                        ? "Autonomous spray started. Guided mode active. Hands off sticks unless overriding for safety."
+                        : "Spray sequence started.",
+                        ignoreRateLimit: true);
+                    break;
+                case "aim":
+                    AudioAlerts.Speak("Aiming at target.", ignoreRateLimit: requireAutonomy);
+                    break;
+                case "spray":
+                    AudioAlerts.Speak("Spraying target.", ignoreRateLimit: true);
+                    break;
+                case "verify":
+                    AudioAlerts.Speak("Verifying extinguish.", ignoreRateLimit: requireAutonomy);
+                    break;
+                case "upload":
+                    AudioAlerts.Speak("Uploading proof image.", ignoreRateLimit: requireAutonomy);
+                    break;
+                case "complete":
+                    AudioAlerts.Speak(verified
+                        ? $"Target {targetId} extinguished."
+                        : $"Target {targetId} verification failed.",
+                        ignoreRateLimit: true);
+                    break;
+                case "failed":
+                    AudioAlerts.Speak("Spray sequence failed.", ignoreRateLimit: true);
+                    break;
+                case "aborted":
+                    AudioAlerts.Speak("Spray sequence aborted.", ignoreRateLimit: true);
+                    break;
+            }
+        }
+
+        private async void ShowExtinguishedConfirmation(int targetId)
+        {
+            try
+            {
+                AudioAlerts.Speak($"Target {targetId} extinguished. Show judges the confirmation image.", ignoreRateLimit: true);
+
+                var resp = await JetsonApiService.GetAsync("/api/task/2/spray/last_artifacts");
+                if (!resp.IsSuccessStatusCode)
+                {
+                    MessageBox.Show(
+                        $"TARGET {targetId} EXTINGUISHED\n\nProof image is not available yet.",
+                        "Task 2 Autonomy",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                    return;
+                }
+
+                var json = JObject.Parse(await resp.Content.ReadAsStringAsync());
+                var afterPath = json["after_image_path"]?.ToString();
+                if (string.IsNullOrEmpty(afterPath))
+                {
+                    MessageBox.Show(
+                        $"TARGET {targetId} EXTINGUISHED\n\nNo post-spray image path returned.",
+                        "Task 2 Autonomy",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                    return;
+                }
+
+                var artifactUrl = $"{JetsonApiService.BaseUrl}/api/task/2/spray/artifact?path={Uri.EscapeDataString(afterPath)}";
+                var bytes = await JetsonApiService.LongRunClient.GetByteArrayAsync(artifactUrl);
+                using (var ms = new MemoryStream(bytes))
+                using (var img = Image.FromStream(ms))
+                {
+                    ShowImageConfirmationForm(targetId, new Bitmap(img));
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"TARGET {targetId} EXTINGUISHED\n\nConfirmation image popup failed: {ex.Message}",
+                    "Task 2 Autonomy",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+        }
+
+        private void ShowImageConfirmationForm(int targetId, Image image)
+        {
+            var form = new Form
+            {
+                Text = $"TARGET {targetId} EXTINGUISHED",
+                BackColor = Color.Black,
+                Width = 980,
+                Height = 760,
+                StartPosition = FormStartPosition.CenterScreen,
+                TopMost = true,
+            };
+
+            var header = new Label
+            {
+                Text = $"TARGET {targetId} - EXTINGUISHED",
+                Dock = DockStyle.Top,
+                Height = 64,
+                ForeColor = Color.White,
+                BackColor = SUCCESS_COLOR,
+                Font = new Font("Segoe UI", 24, FontStyle.Bold),
+                TextAlign = ContentAlignment.MiddleCenter,
+            };
+
+            var pic = new PictureBox
+            {
+                Dock = DockStyle.Fill,
+                Image = image,
+                SizeMode = PictureBoxSizeMode.Zoom,
+                BackColor = Color.Black,
+            };
+            pic.Disposed += (s, e) => image.Dispose();
+
+            form.Controls.Add(pic);
+            form.Controls.Add(header);
+            form.Show(this);
+            form.BringToFront();
         }
 
         // ============================================================

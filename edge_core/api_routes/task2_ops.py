@@ -791,6 +791,234 @@ def register_task2_routes(app, ctx) -> None:
             else "Failed to request GUIDED mode",
         }
 
+    # ==================== Auto Takeoff / Auto Land (CONOPS 5.2.4) =============
+    # 5pts for autonomous takeoff + 5pts for autonomous landing. A single
+    # successful demonstration of each is sufficient - the operator is
+    # expected to press these buttons once during the flight window.
+
+    @app.post("/api/flight/takeoff", tags=["Flight"])
+    async def flight_takeoff(request: Request):
+        """Autonomous takeoff to ``altitude_m`` AGL (default 30 m).
+
+        Body: ``{"altitude_m": 30.0}`` - clamped to 1.0-60.0 m on the backend.
+
+        Sequence: switch to GUIDED -> arm motors -> MAV_CMD_NAV_TAKEOFF. The
+        pilot keeps the RC mode switch as a safety override at all times.
+        """
+        nav_controller = request.app.state.nav_controller
+        if not nav_controller:
+            raise HTTPException(status_code=503, detail="Navigation controller not initialized")
+
+        try:
+            body = await request.json() if (await request.body()) else {}
+            if not isinstance(body, dict):
+                body = {}
+        except Exception:
+            body = {}
+        altitude_m = float(body.get("altitude_m", 30.0))
+
+        result = nav_controller.auto_takeoff(altitude_m=altitude_m)
+        if not result.get("success"):
+            raise HTTPException(status_code=409, detail=result.get("error", "Auto-takeoff failed"))
+        return result
+
+    @app.post("/api/flight/land", tags=["Flight"])
+    async def flight_land(request: Request):
+        """Autonomous landing at the current position (ArduCopter LAND mode)."""
+        nav_controller = request.app.state.nav_controller
+        if not nav_controller:
+            raise HTTPException(status_code=503, detail="Navigation controller not initialized")
+
+        result = nav_controller.auto_land()
+        if not result.get("success"):
+            raise HTTPException(status_code=409, detail=result.get("error", "Auto-land failed"))
+        return result
+
+    # ==================== Target Color (Pre-flight) ===========================
+    # Phase 2 Q&A #5: Task 2 targets will be a single solid color, "depending
+    # on what we can source." Operator observes the actual color at flightline
+    # and records it here for the pre-flight checklist and judge-facing record.
+    # The live Task 2 overlay remains shape/range based by default.
+
+    _COLOR_CONFIG_PATH = os.path.expanduser("~/.nomad/task2_color.json")
+    _ALLOWED_COLORS = ("purple", "blue", "red", "orange", "yellow", "green",
+                       "black", "white", "magenta", "cyan")
+
+    @app.get("/api/task/2/target_color", tags=["Task 2"])
+    async def task2_get_target_color():
+        """Return the operator-set Task 2 target color (or default purple)."""
+        try:
+            if os.path.exists(_COLOR_CONFIG_PATH):
+                with open(_COLOR_CONFIG_PATH) as f:
+                    data = json.load(f)
+                color = str(data.get("color", "purple")).lower()
+                return {"color": color, "source": "file", "path": _COLOR_CONFIG_PATH}
+        except Exception as e:
+            logger.warning(f"Failed to read target color config: {e}")
+        return {"color": "purple", "source": "default", "path": _COLOR_CONFIG_PATH}
+
+    @app.post("/api/task/2/target_color", tags=["Task 2"])
+    async def task2_set_target_color(request: Request):
+        """Set the Task 2 target color observed at flightline.
+
+        Body: ``{"color": "purple"}``. Accepted values: purple, blue, red,
+        orange, yellow, green, black, white, magenta, cyan.
+        """
+        body = await _parse_request_json_object(request)
+        color = str(body.get("color", "")).strip().lower()
+        if color not in _ALLOWED_COLORS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"color must be one of: {', '.join(_ALLOWED_COLORS)}",
+            )
+        try:
+            os.makedirs(os.path.dirname(_COLOR_CONFIG_PATH), exist_ok=True)
+            with open(_COLOR_CONFIG_PATH, "w") as f:
+                json.dump({"color": color, "updated_at": datetime.now(timezone.utc).isoformat()}, f)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to persist color: {e}")
+        logger.info(f"Task 2 target color set to '{color}'")
+        return {"success": True, "color": color, "path": _COLOR_CONFIG_PATH}
+
+    # ==================== Pre-Flight Checklist ===============================
+    # Aggregates the backend-checkable bits of the operator's pre-flight
+    # checklist into one snapshot so the GCS can show a green/red dashboard.
+
+    @app.get("/api/task/2/preflight", tags=["Task 2"])
+    async def task2_preflight(request: Request):
+        """Return pre-flight readiness for Task 2 autonomy.
+
+        Each item has ``{ok: bool, label: str, detail: str}``. The UI renders
+        green/red rows so the pilot can resolve blockers before the demo.
+        """
+        items: list[dict] = []
+
+        # 1) MAVLink connection + flight mode visibility
+        mavlink_svc = getattr(request.app.state, "mavlink_service", None)
+        nav_controller = getattr(request.app.state, "nav_controller", None)
+        flight_mode = "UNKNOWN"
+        armed = False
+        connected = False
+        try:
+            from ..state import StateManager
+            s = StateManager.instance().get_state()
+            flight_mode = s.flight_mode
+            armed = bool(s.armed)
+            connected = bool(s.connected)
+        except Exception:
+            pass
+        items.append({
+            "key": "mavlink",
+            "label": "MAVLink connected to autopilot",
+            "ok": connected and bool(mavlink_svc),
+            "detail": f"flight_mode={flight_mode} armed={armed}",
+        })
+
+        # 2) Spray controller wired
+        spray_ctrl = getattr(request.app.state, "spray_controller", None)
+        items.append({
+            "key": "spray_controller",
+            "label": "Spray controller initialized",
+            "ok": spray_ctrl is not None,
+            "detail": "Available" if spray_ctrl else "Not initialized",
+        })
+
+        # 3) Spray calibration file present (TARGET_CAMERA_RANGE_M etc.)
+        from ..spray_controller import CALIBRATION_FILE as _CAL_FILE
+        cal_ok = os.path.exists(_CAL_FILE)
+        items.append({
+            "key": "spray_calibration",
+            "label": "Spray calibration on disk",
+            "ok": cal_ok,
+            "detail": _CAL_FILE if cal_ok else f"Missing - run bench calibration to create {_CAL_FILE}",
+        })
+
+        # 4) Target color set
+        color = "purple"
+        color_source = "default"
+        try:
+            if os.path.exists(_COLOR_CONFIG_PATH):
+                with open(_COLOR_CONFIG_PATH) as f:
+                    color = str(json.load(f).get("color", "purple")).lower()
+                color_source = "file"
+        except Exception:
+            pass
+        items.append({
+            "key": "target_color",
+            "label": "Task 2 target color set at flightline",
+            "ok": color_source == "file",
+            "detail": f"color={color} ({color_source})",
+        })
+
+        # 5) Google Drive auth ready
+        gdrive_ok = False
+        gdrive_detail = "Module unavailable"
+        try:
+            from ..gdrive_upload import gdrive_ready
+            gdrive_ok = bool(gdrive_ready())
+            gdrive_detail = "OAuth token present" if gdrive_ok else (
+                "Token missing - run: python -m edge_core.gdrive_upload --setup <client_secret>.json"
+            )
+        except Exception as e:
+            gdrive_detail = f"Import failed: {e}"
+        items.append({
+            "key": "gdrive",
+            "label": "Google Drive upload ready",
+            "ok": gdrive_ok,
+            "detail": gdrive_detail,
+        })
+
+        # 6) Camera/video bridge snapshot endpoint reachable
+        bridge_ok = False
+        bridge_detail = ""
+        try:
+            import urllib.request as _ur
+            bridge_port = int(os.environ.get("NOMAD_BRIDGE_HTTP_PORT", "9200"))
+            snap_url = f"http://127.0.0.1:{bridge_port}/snapshot"
+            with _ur.urlopen(snap_url, timeout=1.5) as r:
+                ctype = r.headers.get("Content-Type", "")
+                bridge_ok = r.status == 200 and ctype.startswith("image")
+                bridge_detail = f"{snap_url} ({ctype})"
+        except Exception as e:
+            bridge_detail = f"Snapshot endpoint unreachable: {e}"
+        items.append({
+            "key": "video_bridge",
+            "label": "Video bridge snapshot reachable",
+            "ok": bridge_ok,
+            "detail": bridge_detail,
+        })
+
+        # 7) NavController available for GUIDED velocity ops. Task 2 currently
+        # uses image-space velocity commands, not position targets, so VIO is
+        # diagnostic here rather than a hard preflight gate.
+        nav_ok = False
+        nav_detail = "Navigation controller not initialized"
+        if nav_controller is not None:
+            try:
+                ns = nav_controller.status
+                nav_ok = True
+                nav_detail = (
+                    f"mode={getattr(ns.mode, 'value', ns.mode)} "
+                    f"health={getattr(ns.health, 'value', ns.health)} "
+                    f"guided={ns.guided_mode_active} "
+                    f"vio_healthy={ns.vio_healthy} vio_age_ms={ns.vio_age_ms}"
+                )
+            except Exception as e:
+                nav_detail = f"Nav status read failed: {e}"
+        items.append({
+            "key": "nav_controller",
+            "label": "Navigation controller ready for GUIDED velocity",
+            "ok": nav_ok,
+            "detail": nav_detail,
+        })
+
+        ready = all(item["ok"] for item in items)
+        return {
+            "ready": ready,
+            "items": items,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+        }
+
     # Nav2 was removed -- Task 2 autonomy now relies on pure visual servoing.
     # The helper below is kept because other endpoints in this module use it.
     async def _parse_request_json_object(request: Request) -> dict[str, Any]:
@@ -827,13 +1055,13 @@ def register_task2_routes(app, ctx) -> None:
             require_autonomy (bool, default False): when true, the
                 trigger is refused if the drone is already inside
                 AUTONOMY_MIN_RANGE_M (2.5 m). This is the toggle used
-                by the GCS "Auto Spray (autonomy gate)" button — it
+                by the GCS "Auto Spray (autonomy gate)" button - it
                 prevents the operator from silently forfeiting the
                 CONOPS 20-pt autonomy gate by triggering too close.
                 Manual sprays leave it false.
 
         Drone must be within TRIGGER_MAX_DISTANCE_M (default 5.5 m).
-        Sequence (autonomy path): APPROACH → AIM → SPRAY → VERIFY → UPLOAD.
+        Sequence (autonomy path): APPROACH -> AIM -> SPRAY -> VERIFY -> UPLOAD.
         Sequence (manual / image-only / inside 2 m): AIM immediately.
         """
         spray_ctrl = getattr(request.app.state, "spray_controller", None)
