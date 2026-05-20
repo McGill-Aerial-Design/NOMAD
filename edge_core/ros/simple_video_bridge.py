@@ -127,7 +127,7 @@ class VideoStreamNode(Node):
         self._latest_raw_jpeg = None
         self._last_raw_snapshot_encode_time = 0.0
         self._raw_snapshot_interval = float(os.environ.get(
-            "NOMAD_RAW_SNAPSHOT_INTERVAL", "0.5"
+            "NOMAD_RAW_SNAPSHOT_INTERVAL", "2.0"
         ))
 
         # --- Threaded encoder: ROS callback drops frame into _pending_frame,
@@ -180,7 +180,15 @@ class VideoStreamNode(Node):
         # Local HSV circle detection runs inline at ~5 Hz so the livestream
         # shows the same boxes as /capture_target without a network round-trip.
         self._hsv_last_run_ts = 0.0
-        self._hsv_min_interval = 0.2
+        self._hsv_min_interval = float(os.environ.get(
+            "NOMAD_DETECTOR_INTERVAL_S", "0.5"
+        ))
+        # 0 keeps detection at source resolution. For Task 2 we want the
+        # native HD720 frame for reliable paper-circle detection; CPU is saved
+        # by avoiding BGRA churn and by using the color/backing detector.
+        self._detector_max_width = int(os.environ.get(
+            "NOMAD_DETECTOR_MAX_WIDTH", "0"
+        ))
         self._detector_stop = threading.Event()
         self._detector_frame_lock = threading.Lock()
         self._detector_frame = None
@@ -259,7 +267,7 @@ class VideoStreamNode(Node):
         return (
             f'appsrc name=source is-live=true format=time '
             f'max-buffers=1 block=false '
-            f'caps=video/x-raw,format=BGRA,width={width},height={height},framerate={fps}/1 ! '
+            f'caps=video/x-raw,format=BGR,width={width},height={height},framerate={fps}/1 ! '
             f'queue max-size-buffers=1 max-size-time=0 max-size-bytes=0 leaky=downstream ! '
             f'videoconvert n-threads={threads} ! '
             f'video/x-raw,format=I420,width={width},height={height},framerate={fps}/1 ! '
@@ -487,13 +495,20 @@ class VideoStreamNode(Node):
             cv2 = None
 
             encoding = msg.encoding.lower()
-            if encoding in ('bgra8', '8uc4'):
+            if encoding in ('bgr8', '8uc3'):
                 cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+            elif encoding in ('bgra8', '8uc4'):
+                import cv2
+                cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+                cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGRA2BGR)
             elif encoding == 'rgba8':
                 import cv2
-                if encoding == 'rgba8':
-                    cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
-                    cv_image = cv2.cvtColor(cv_image, cv2.COLOR_RGBA2BGRA)
+                cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+                cv_image = cv2.cvtColor(cv_image, cv2.COLOR_RGBA2BGR)
+            elif encoding == 'rgb8':
+                import cv2
+                cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+                cv_image = cv2.cvtColor(cv_image, cv2.COLOR_RGB2BGR)
             elif encoding in ('16uc1', 'mono16', '32fc1'):
                 raw_depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
                 if self.frame_count % 60 == 0:
@@ -510,25 +525,20 @@ class VideoStreamNode(Node):
                         f'range=[{vmin:.2f}, {vmax:.2f}]'
                     )
                 cv_image = self._normalize_depth_image(raw_depth, encoding)
-                import cv2
-                cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2BGRA)
             elif encoding in ('mono8', '8uc1'):
                 cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
                 import cv2
-                cv_image = cv2.cvtColor(cv_image, cv2.COLOR_GRAY2BGRA)
+                cv_image = cv2.cvtColor(cv_image, cv2.COLOR_GRAY2BGR)
             else:
                 cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-                import cv2
-                cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2BGRA)
             convert_ms = (time.perf_counter() - convert_start) * 1000.0
 
             if (now - self._last_raw_snapshot_encode_time) >= self._raw_snapshot_interval:
                 try:
                     if cv2 is None:
                         import cv2
-                    raw_bgr = cv2.cvtColor(cv_image, cv2.COLOR_BGRA2BGR)
                     ok, jpeg = cv2.imencode(
-                        '.jpg', raw_bgr, [cv2.IMWRITE_JPEG_QUALITY, 78]
+                        '.jpg', cv_image, [cv2.IMWRITE_JPEG_QUALITY, 78]
                     )
                     if ok:
                         self._latest_raw_jpeg = jpeg.tobytes()
@@ -542,7 +552,18 @@ class VideoStreamNode(Node):
                     import cv2
                 overlay_start = time.perf_counter()
                 self._hsv_last_run_ts = now
-                detection_frame = cv2.cvtColor(cv_image, cv2.COLOR_BGRA2BGR)
+                detection_frame = cv_image
+                if (self._detector_max_width > 0
+                        and detection_frame.shape[1] > self._detector_max_width):
+                    scale = self._detector_max_width / float(detection_frame.shape[1])
+                    det_h = max(1, int(round(detection_frame.shape[0] * scale)))
+                    detection_frame = cv2.resize(
+                        detection_frame,
+                        (self._detector_max_width, det_h),
+                        interpolation=cv2.INTER_AREA,
+                    )
+                else:
+                    detection_frame = detection_frame.copy()
                 with self._detector_frame_lock:
                     self._detector_frame = detection_frame
                     self._detector_frame_ts = now
@@ -569,9 +590,7 @@ class VideoStreamNode(Node):
                 if cv2 is None:
                     import cv2
                 overlay_start = time.perf_counter()
-                overlay_frame = cv2.cvtColor(cv_image, cv2.COLOR_BGRA2BGR)
-                self.draw_detections(overlay_frame)
-                cv_image = cv2.cvtColor(overlay_frame, cv2.COLOR_BGR2BGRA)
+                self.draw_detections(cv_image)
                 overlay_ms += (time.perf_counter() - overlay_start) * 1000.0
 
             # Ensure contiguous C-order for zero-copy tobytes
@@ -1016,14 +1035,13 @@ class VideoStreamNode(Node):
     def _detect_task2_circles(self, frame):
         """Dispatch Task 2 detection mode.
 
-        Default back to the legacy Hough/contour shape path. The newer
-        color/backing heuristic is useful for comparison, but it proved too
-        brittle against real field lighting and clothing/grass clutter.
+        Default to the color/backing heuristic. Full-frame Hough is both CPU
+        heavy and too prone to false positives on faces/clutter for Task 2.
         """
-        mode = os.environ.get("NOMAD_TASK2_DETECTOR_MODE", "legacy").strip().lower()
-        if mode in ("color", "color_blob", "backing"):
-            return self._detect_shape_circles(frame)
-        return self._detect_shape_circles_legacy(frame)
+        mode = os.environ.get("NOMAD_TASK2_DETECTOR_MODE", "color").strip().lower()
+        if mode in ("legacy", "hough", "shape"):
+            return self._detect_shape_circles_legacy(frame)
+        return self._detect_shape_circles(frame)
 
     def _detect_shape_circles(self, frame):
         """Task 2 red-cabbage target detector.
@@ -1099,6 +1117,17 @@ class VideoStreamNode(Node):
 
             radius = max(bw, bh) / 2.0
             if radius < min_r or radius > max_r:
+                continue
+            # Reject blobs clipped by the camera frame. The old Hough path
+            # happily locked onto partial edge arcs; keep this narrow so a
+            # real target near the edge can still be acquired.
+            edge_margin = 2
+            if (
+                x <= edge_margin
+                or y <= edge_margin
+                or (x + bw) >= (w - edge_margin)
+                or (y + bh) >= (h - edge_margin)
+            ):
                 continue
 
             fill = area / float(bw * bh)

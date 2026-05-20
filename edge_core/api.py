@@ -513,26 +513,21 @@ def create_app(state_manager: StateManager) -> FastAPI:
         else:
             container_running = bool(container_probe)
 
+        nvblox_probe_enabled = os.environ.get(
+            "NOMAD_PROBE_NVBLOX", os.environ.get("NOMAD_AUTOSTART_NVBLOX", "false")
+        ).lower() in ("1", "true", "yes", "on")
         nvblox_running = False
         bridge_running = False
         target_localizer_running = False
         if container_running:
-            nvblox_node_probe = _docker_exec_bash_success(
-                "nomad_isaac_ros",
-                "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
-                "source /workspaces/isaac_ros-dev/install/setup.bash >/dev/null 2>&1; "
-                "ROS2CLI_DISABLE_DAEMON=1 ros2 node list 2>/dev/null | "
-                "grep -Eq '(^|/)nvblox(_node)?$|(^|/)nvblox_node$'",
-                timeout_s=6,
-            )
-            nvblox_marker_pub_probe = _docker_exec_bash_success(
-                "nomad_isaac_ros",
-                "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
-                "source /workspaces/isaac_ros-dev/install/setup.bash >/dev/null 2>&1; "
-                "ROS2CLI_DISABLE_DAEMON=1 ros2 topic info /nvblox_node/color_layer_marker 2>/dev/null | "
-                "grep -Eq 'Publisher count: [1-9]'",
-                timeout_s=6,
-            )
+            nvblox_node_probe = None
+            nvblox_marker_pub_probe = None
+            if nvblox_probe_enabled:
+                nvblox_node_probe = _docker_exec_pgrep(
+                    "nomad_isaac_ros",
+                    "nvblox_node|nomad_zed_nvblox\\.launch\\.py",
+                    timeout_s=5,
+                )
             bridge_probe = _docker_exec_pgrep(
                 "nomad_isaac_ros",
                 "ros_http_bridge.py|ros_http_bridge",
@@ -544,7 +539,9 @@ def create_app(state_manager: StateManager) -> FastAPI:
                 timeout_s=5,
             )
 
-            if (
+            if not nvblox_probe_enabled:
+                nvblox_running = False
+            elif (
                 nvblox_node_probe is None
                 and nvblox_marker_pub_probe is None
                 and cache_age_s < cache_max_stale_s

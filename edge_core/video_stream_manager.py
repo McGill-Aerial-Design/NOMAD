@@ -282,6 +282,18 @@ class VideoStreamManager:
                 cmd.extend(
                     ["-e", f"NOMAD_INTERNAL_TOKEN={self._edge_core_internal_token}"]
                 )
+            for env_name in (
+                "NOMAD_TASK2_DETECTOR_MODE",
+                "NOMAD_DETECTOR_INTERVAL_S",
+                "NOMAD_DETECTOR_MAX_WIDTH",
+                "NOMAD_RAW_SNAPSHOT_INTERVAL",
+                "NOMAD_TASK2_REQUIRE_DEPTH",
+                "NOMAD_TASK2_MIN_DIAMETER_M",
+                "NOMAD_TASK2_MAX_DIAMETER_M",
+            ):
+                env_value = os.environ.get(env_name)
+                if env_value:
+                    cmd.extend(["-e", f"{env_name}={env_value}"])
             cmd.extend([
                 self.container_name,
                 "bash", "-c",

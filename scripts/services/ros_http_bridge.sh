@@ -36,8 +36,16 @@ ARGS=(
     --vio-topic "${ROS_HTTP_BRIDGE_VIO_TOPIC}"
     --mag-topic "${ROS_HTTP_BRIDGE_MAG_TOPIC}"
     --high-rate-transport "${ROS_HTTP_BRIDGE_TRANSPORT}"
-    --mesh-topic /nvblox_node/color_layer_marker
 )
+
+case "${NOMAD_AUTOSTART_NVBLOX:-false}:${NOMAD_ENABLE_NVBLOX_MESH:-false}" in
+    true:*|TRUE:*|1:*|yes:*|YES:*|on:*|ON:*|*:true|*:TRUE|*:1|*:yes|*:YES|*:on|*:ON)
+        ARGS+=(--mesh-topic /nvblox_node/color_layer_marker)
+        ;;
+    *)
+        ARGS+=(--disable-mesh)
+        ;;
+esac
 
 case "${NOMAD_DETECTIONS_AUTO_START:-false}" in
     1|true|TRUE|yes|YES|on|ON) ;;
@@ -81,6 +89,8 @@ svc_start() {
         "-e" "ROS_HTTP_BRIDGE_VIO_TOPIC=$ROS_HTTP_BRIDGE_VIO_TOPIC"
         "-e" "ROS_HTTP_BRIDGE_MAG_TOPIC=$ROS_HTTP_BRIDGE_MAG_TOPIC"
         "-e" "ROS_HTTP_BRIDGE_TRANSPORT=$ROS_HTTP_BRIDGE_TRANSPORT"
+        "-e" "NOMAD_AUTOSTART_NVBLOX=${NOMAD_AUTOSTART_NVBLOX:-false}"
+        "-e" "NOMAD_ENABLE_NVBLOX_MESH=${NOMAD_ENABLE_NVBLOX_MESH:-false}"
         "-e" "NOMAD_DETECTIONS_AUTO_START=${NOMAD_DETECTIONS_AUTO_START:-false}"
     )
     [ -n "${NOMAD_API_KEY:-}" ]        && env_args+=("-e" "NOMAD_API_KEY=$NOMAD_API_KEY")
