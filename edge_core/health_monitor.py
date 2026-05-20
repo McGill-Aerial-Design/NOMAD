@@ -122,6 +122,10 @@ class JetsonHealthMonitor:
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
+        # EMA-smoothed GPU load to reduce jitter between poll cycles
+        self._gpu_load_ema: Optional[float] = None
+        self._GPU_LOAD_EMA_ALPHA: float = 0.2
+
         # Cached results to avoid spawning subprocesses every poll cycle
         self._tailscale_cache: dict = {}
         self._tailscale_cache_ts: float = 0.0
@@ -181,7 +185,15 @@ class JetsonHealthMonitor:
         
         # GPU load and frequency
         gpu_info = self._get_gpu_info()
-        health.gpu_load_pct = gpu_info.get("load", 0.0)
+        raw_gpu_load = gpu_info.get("load", 0.0)
+        if self._gpu_load_ema is None:
+            self._gpu_load_ema = raw_gpu_load
+        else:
+            self._gpu_load_ema = (
+                self._GPU_LOAD_EMA_ALPHA * raw_gpu_load
+                + (1.0 - self._GPU_LOAD_EMA_ALPHA) * self._gpu_load_ema
+            )
+        health.gpu_load_pct = round(self._gpu_load_ema, 1)
         health.gpu_freq_mhz = gpu_info.get("freq", 0.0)
         
         # Memory
@@ -259,7 +271,14 @@ class JetsonHealthMonitor:
             return 0.0
     
     def _get_gpu_info(self) -> dict:
-        """Get GPU load and frequency from sysfs (Jetson-native, no subprocess)."""
+        """Get GPU load and frequency from sysfs (Jetson-native, no subprocess).
+
+        The Jetson GPU load sysfs file reports an instantaneous 0-1000 value
+        (tenths of a percent). A single read often catches the GPU between
+        work batches, returning 0 even when utilisation is high. Averaging
+        multiple samples over a ~300 ms window produces a stable, representative
+        reading.
+        """
         result = {"load": 0.0, "freq": 0.0}
 
         # Jetson sysfs paths — Orin Nano first, then TX2/Xavier fallbacks.
@@ -276,8 +295,13 @@ class JetsonHealthMonitor:
         try:
             for load_path in load_candidates:
                 if os.path.exists(load_path):
-                    with open(load_path, "r") as f:
-                        result["load"] = float(f.read().strip()) / 10.0
+                    samples = 15
+                    total = 0.0
+                    for _ in range(samples):
+                        with open(load_path, "r") as f:
+                            total += float(f.read().strip())
+                        time.sleep(0.02)
+                    result["load"] = (total / samples) / 10.0
                     break
 
             for freq_path in freq_candidates:
