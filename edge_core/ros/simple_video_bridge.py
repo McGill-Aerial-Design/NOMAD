@@ -98,6 +98,31 @@ def _probe_encoder():
     )
 
 
+def _circles_iou(cx1: float, cy1: float, r1: float,
+                 cx2: float, cy2: float, r2: float) -> float:
+    """Intersection-over-Union of two circles. Returns 0.0 when disjoint."""
+    d = ((cx1 - cx2) ** 2 + (cy1 - cy2) ** 2) ** 0.5
+    if d >= r1 + r2:
+        return 0.0
+    if d <= abs(r1 - r2):
+        rs = min(r1, r2); rl = max(r1, r2)
+        return (rs * rs) / (rl * rl)
+    r1s = r1 * r1; r2s = r2 * r2
+    try:
+        a1 = r1s * math.acos((d * d + r1s - r2s) / (2.0 * d * r1))
+        a2 = r2s * math.acos((d * d + r2s - r1s) / (2.0 * d * r2))
+        a3 = 0.5 * math.sqrt(
+            (-d + r1 + r2) * (d + r1 - r2) * (d - r1 + r2) * (d + r1 + r2)
+        )
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+    inter = a1 + a2 - a3
+    union = math.pi * r1s + math.pi * r2s - inter
+    if union <= 0.0:
+        return 0.0
+    return inter / union
+
+
 class VideoStreamNode(Node):
     """ROS2 node that streams images to RTSP via GStreamer."""
 
@@ -1086,36 +1111,62 @@ class VideoStreamNode(Node):
             pass
 
     def _detect_shape_circles(self, frame):
-        """Task 2 red-cabbage-paper detector — single canonical pipeline.
+        """Task 2 red-cabbage-paper detector -- Hough+density pipeline.
 
-        Target model (CONOPS v1.3 + on-site samples):
-          * 5-30 cm circular paper, pale pink/mauve when dry from red-cabbage
-            juice, turning blue/cyan in a sub-region after baking-soda spray.
-          * Always centered on a visibly larger white plastic plate/backing.
+        Approach (after the connected-component pipeline kept fragmenting
+        textured paper into pieces that all failed the shape gates):
+          1. Build a strict cabbage-paper colour mask (mauve OR blue, with
+             a b* < 135 skin-tone reject). KEEP this raw -- no morphology --
+             so its interior-density is a faithful colour signal.
+          2. Build the white-plastic backing mask (5x5 close + 5x5 open).
+          3. Run HoughCircles on a median-blurred grayscale. Hough finds the
+             disk's geometric boundary even when the colour mask is shattered
+             by paper texture.
+          4. For each Hough candidate, gate by:
+               * interior colour density >= 0.22 (kills circles on plain
+                 surfaces -- pipe ends, wall textures, finger knuckles)
+               * skin-pixel ratio < 0.30 (belt-and-suspenders skin reject)
+               * frame-edge margin
+               * ZED depth + physical diameter (4-35 cm) when depth present
+          5. Backing-ring ratio is a soft confidence booster, not a reject.
+          6. NMS by centre-distance.
 
-        Pipeline:
-          1. White-backing mask (large bright low-sat connected components).
-          2. Cabbage-paper colour mask (Lab + HSV gates, mauve OR blue/cyan).
-          3. Component analysis + ellipse fit (oblique drone views aren't
-             perfect circles in image space).
-          4. Backing-ring gate -- every accepted blob must be surrounded by
-             a white plate, and the supporting plate must be a real big blob.
-          5. Interior colour purity check.
-          6. ZED depth required; physical diameter must be 4.5-34 cm.
-          7. Fused confidence score (not the old per-method lookup).
+        Outputs the same dict shape as the old CC pipeline so the overlay
+        renderer and spray controller see no breaking change.
         """
         import cv2
         h, w = frame.shape[:2]
-        _gray, hsv = self._prepare_task2_detection_images(frame, cv2)
+
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-        h_ch = hsv[:, :, 0]
         s_ch = hsv[:, :, 1]
         v_ch = hsv[:, :, 2]
         a_ch = lab[:, :, 1].astype(np.int16)
         b_ch = lab[:, :, 2].astype(np.int16)
         chroma = np.abs(a_ch - 128) + np.abs(b_ch - 128)
 
-        # ---- White plastic backing -------------------------------------- #
+        # Calibrated against actual cabbage-paper samples:
+        #   real dyed paper:        a*=146-157, b*=86-118, chroma=28-71
+        #   white paper/plastic:    a*=128-130, b*=128,    chroma=3-5
+        #   gray PVC pipe (cool):   a*~128,     b*~125,    chroma=4-10
+        # Setting chroma>=12 + a*>134 puts the gate squarely between real
+        # cabbage paper and the worst off-white false positives.
+        mauve = (
+            (a_ch > 134) & (b_ch < 132) & (chroma >= 12)
+            & (v_ch >= 70) & (v_ch <= 245)
+        )
+        # Post-spray cabbage reaction is a saturated teal/cyan -- never a
+        # slightly-cool gray. a*<124 + chroma>=15 keeps the genuine pH-shift
+        # response while excluding gray plastic with cool lighting cast.
+        blue = (
+            (a_ch < 124) & (b_ch < 128) & (chroma >= 15)
+            & (v_ch >= 60) & (v_ch <= 230)
+        )
+        not_white = ~((s_ch <= 25) & (v_ch >= 195))
+        target = ((mauve | blue) & not_white).astype(np.uint8)
+        # Skin-tone (warm yellow-red corner): a* high AND b* high.
+        skin = ((a_ch > 130) & (b_ch > 135) & (chroma >= 6)).astype(np.uint8)
+
         backing_raw = (
             (s_ch <= 40) & (v_ch >= 175) & (chroma <= 22)
         ).astype(np.uint8) * 255
@@ -1126,346 +1177,166 @@ class VideoStreamNode(Node):
         backing_mask = cv2.morphologyEx(
             backing_mask, cv2.MORPH_OPEN, kernel5, iterations=1
         )
-        n_back, back_labels, back_stats, _back_centroids = (
-            cv2.connectedComponentsWithStats(
-                (backing_mask > 0).astype(np.uint8), connectivity=8
+        backing_bool = backing_mask > 0
+
+        # Hough on the CHROMA channel, not grayscale. The dyed paper has a
+        # sharp chroma boundary against the white-plastic backing (chroma 28
+        # -> chroma 3), while the backing-vs-wall boundary -- the dominant
+        # gradient in grayscale -- is invisible to chroma. This stops Hough
+        # from fitting oversized circles around the paper sheet that then
+        # fail the colored-density check.
+        chroma_u8 = np.clip(chroma, 0, 80).astype(np.uint8) * 3  # boost
+        chroma_u8 = cv2.medianBlur(chroma_u8, 5)
+        min_r = max(8, int(round(min(h, w) * 0.015)))
+        max_r = min(h, w) // 2
+
+        try:
+            circles_raw = cv2.HoughCircles(
+                chroma_u8,
+                cv2.HOUGH_GRADIENT,
+                dp=1.2,
+                minDist=max(20, min_r * 2),
+                param1=80,
+                param2=30,
+                minRadius=min_r,
+                maxRadius=max_r,
             )
-        )
-        min_backing_area = max(400, int(0.0020 * w * h))
-        valid_backing = np.zeros(n_back, dtype=bool)
-        for bidx in range(1, n_back):
-            if back_stats[bidx, cv2.CC_STAT_AREA] >= min_backing_area:
-                valid_backing[bidx] = True
+        except cv2.error as exc:
+            try:
+                self.get_logger().warn(f"HoughCircles failed: {exc}")
+            except Exception:
+                pass
+            return []
 
-        # ---- Cabbage-paper colour --------------------------------------- #
-        # Mauve/pink (dry red-cabbage paper): red-magenta quadrant of Lab,
-        # moderate value, never over-saturated (excludes clothing/markers).
-        # Saturation cap loosened to 210 so phone/monitor-displayed targets
-        # (a common bench-test scenario) and well-lit paper aren't rejected.
-        # Mauve/pink dry cabbage paper sits in the COOL magenta corner of
-        # Lab: a* high (red), b* at or below the neutral line (slight blue).
-        # Skin tone is also a*-high but has a strong YELLOW undertone, so
-        # b* > ~135. Gating with `b* < 135` cleanly excludes hands/faces
-        # while keeping every cabbage-paper sample tested so far.
-        mauve = (
-            (a_ch > 128)
-            & (b_ch < 135)
-            & (chroma >= 4)
-            & (v_ch >= 70)
-            & (v_ch <= 245)
-        )
-        # Blue/cyan post-spray reaction + vivid violet/purple from phones.
-        # Skin never reaches a* < 130, so no skin gate needed here.
-        blue = (
-            (a_ch < 130)
-            & (b_ch < 132)
-            & (chroma >= 4)
-            & (v_ch >= 60)
-            & (v_ch <= 230)
-        )
-        not_white = ~((s_ch <= 25) & (v_ch >= 195))
-        target_mask = ((mauve | blue) & not_white).astype(np.uint8) * 255
+        if circles_raw is None:
+            return []
 
-        # Cabbage paper has visible white speckles between dyed fibres --
-        # a 5-px close leaves the colored region fragmented into a dozen
-        # tiny components instead of one disk. A 13-px close bridges the
-        # speckles while still leaving non-target colored objects as
-        # discrete blobs (clothing/markers have continuous color, so close
-        # iteration count doesn't merge them into giant single blobs).
-        kernel3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
-        target_mask = cv2.morphologyEx(
-            target_mask, cv2.MORPH_OPEN, kernel3, iterations=1
-        )
-        target_mask = cv2.morphologyEx(
-            target_mask, cv2.MORPH_CLOSE, kernel_close, iterations=2
-        )
-
-        # ---- Pixel size bounds (broad; physical diameter is the real gate) #
-        min_r = max(5, int(round(min(h, w) * 0.012)))
-        max_r = max(40, min(h, w) // 2)
-        min_area = max(20, int(math.pi * min_r * min_r * 0.40))
-        max_area = int(math.pi * max_r * max_r)
-
-        n_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
-            target_mask, connectivity=8
-        )
-
+        yy, xx = np.ogrid[:h, :w]
         candidates = []
-        for idx in range(1, n_labels):
-            x = int(stats[idx, cv2.CC_STAT_LEFT])
-            y = int(stats[idx, cv2.CC_STAT_TOP])
-            bw = int(stats[idx, cv2.CC_STAT_WIDTH])
-            bh = int(stats[idx, cv2.CC_STAT_HEIGHT])
-            area = int(stats[idx, cv2.CC_STAT_AREA])
-            cx0 = int(x + bw // 2); cy0 = int(y + bh // 2)
-            if area < min_area or area > max_area:
-                self._task2_debug_reject("area", area, cx0, cy0, max(bw, bh) // 2)
-                continue
-            if bw < 4 or bh < 4:
-                self._task2_debug_reject("bbox_too_small", (bw, bh), cx0, cy0, 0)
-                continue
-            aspect = bw / float(bh)
-            if aspect < 0.45 or aspect > 2.20:
-                self._task2_debug_reject("aspect", aspect, cx0, cy0, max(bw, bh) // 2)
-                continue
-
-            pad = 2
-            x0 = max(0, x - pad); y0 = max(0, y - pad)
-            x1 = min(w, x + bw + pad); y1 = min(h, y + bh + pad)
-            comp_mask = (labels[y0:y1, x0:x1] == idx).astype(np.uint8)
-
-            contours, _ = cv2.findContours(
-                comp_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
-            )
-            if not contours:
-                continue
-            contour = max(contours, key=cv2.contourArea)
-            contour_area = float(cv2.contourArea(contour))
-            if contour_area < min_area:
-                continue
-            perim = float(cv2.arcLength(contour, True))
-            if perim < 1.0:
-                continue
-            circularity = (4.0 * math.pi * contour_area) / (perim * perim)
-            # Recall-favoring floor; backing + size gates do most of the work.
-            if circularity < 0.42:
-                self._task2_debug_reject(
-                    "circularity", circularity, int(x + bw // 2), int(y + bh // 2),
-                    max(bw, bh) // 2,
-                )
-                continue
-
-            hull = cv2.convexHull(contour)
-            hull_area = float(cv2.contourArea(hull))
-            if hull_area < 1.0:
-                continue
-            solidity = contour_area / hull_area
-            if solidity < 0.68:
-                self._task2_debug_reject(
-                    "solidity", solidity, int(x + bw // 2), int(y + bh // 2),
-                    max(bw, bh) // 2,
-                )
-                continue
-
-            # Ellipse fit handles oblique drone views; contour <5 points falls
-            # back to a true circle.
-            if len(contour) >= 5:
-                try:
-                    ellipse = cv2.fitEllipse(contour)
-                except cv2.error:
-                    continue
-                (ecx_loc, ecy_loc), (axis_a, axis_b), angle_deg = ellipse
-                ecx = float(x0) + float(ecx_loc)
-                ecy = float(y0) + float(ecy_loc)
-                major = float(max(axis_a, axis_b)) * 0.5
-                minor = float(min(axis_a, axis_b)) * 0.5
-                if minor < 1.0:
-                    continue
-                ellipticity = minor / major
-                if ellipticity < 0.50:
-                    self._task2_debug_reject(
-                        "ellipticity", ellipticity, int(ecx), int(ecy), int(major),
-                    )
-                    continue  # too elongated; paper is round even oblique
-            else:
-                (ecx_loc, ecy_loc), r_fit = cv2.minEnclosingCircle(contour)
-                ecx = float(x0) + float(ecx_loc)
-                ecy = float(y0) + float(ecy_loc)
-                major = float(r_fit); minor = float(r_fit)
-                angle_deg = 0.0
-                ellipticity = 1.0
-
-            cx_i = int(round(ecx)); cy_i = int(round(ecy))
+        for ccx, ccy, cr in circles_raw[0]:
+            cx_i = int(ccx); cy_i = int(ccy); r_i = int(cr)
             if not (0 <= cx_i < w and 0 <= cy_i < h):
                 continue
-            radius_px = major
-            if radius_px < min_r or radius_px > max_r:
-                self._task2_debug_reject(
-                    "radius_px", (radius_px, min_r, max_r), cx_i, cy_i, int(radius_px),
-                )
+            if r_i < min_r or r_i > max_r:
+                self._task2_debug_reject("radius_px", (r_i, min_r, max_r), cx_i, cy_i, r_i)
+                continue
+            if (cx_i - r_i) < 2 or (cy_i - r_i) < 2 or (cx_i + r_i) >= (w - 2) or (cy_i + r_i) >= (h - 2):
+                self._task2_debug_reject("edge_clipped", (cx_i, cy_i, r_i, w, h), cx_i, cy_i, r_i)
                 continue
 
-            # Reject blobs clipped by the camera frame -- partial arcs are
-            # almost always glare/edges rather than a real paper target.
-            edge_margin = 2
-            if (
-                x <= edge_margin
-                or y <= edge_margin
-                or (x + bw) >= (w - edge_margin)
-                or (y + bh) >= (h - edge_margin)
-            ):
-                self._task2_debug_reject(
-                    "edge_clipped", (x, y, x + bw, y + bh, w, h),
-                    cx_i, cy_i, int(radius_px),
-                )
-                continue
-
-            # ---- Backing-ring measurement (SOFT cue, not a hard gate) -- #
-            # Real competition target sits on a white plastic plate, which is
-            # the strongest disambiguator vs random purple clutter. But many
-            # legitimate scenarios (phone/screen-shown targets, dropped paper,
-            # paper photographed against a near-uniform wall) won't satisfy
-            # the strict plate-ring check, so we treat backing as a heavy
-            # confidence boost rather than a reject.
-            outer_r = int(radius_px * 1.85) + 6
-            ry0 = max(0, cy_i - outer_r); ry1 = min(h, cy_i + outer_r + 1)
-            rx0 = max(0, cx_i - outer_r); rx1 = min(w, cx_i + outer_r + 1)
-            if ry1 <= ry0 or rx1 <= rx0:
-                continue
-            yy, xx = np.ogrid[ry0:ry1, rx0:rx1]
             d2 = (xx - cx_i) ** 2 + (yy - cy_i) ** 2
-            inner = max(radius_px * 1.10, radius_px + 2.0)
-            ring = (d2 >= inner * inner) & (d2 <= outer_r * outer_r)
-            ring_count = int(ring.sum())
+            inside = d2 <= (r_i * 0.85) ** 2
+            ic = int(inside.sum())
+            if ic <= 0:
+                continue
+            t_inside = int((target & inside).sum())
+            color_density = t_inside / ic
+            if color_density < 0.22:
+                self._task2_debug_reject("color_density", color_density, cx_i, cy_i, r_i)
+                continue
+            # Absolute floor on coloured-pixel count: kills tiny corner/edge
+            # false positives where a small region (~30 px) happens to have
+            # high relative density due to JPEG chromatic cast in shadows.
+            # Real disks at worst-case range (5cm @ 5m -> r~7px is unrealistic;
+            # 25cm @ 5m -> r~30px, ~2500 interior px @ 30% density = 750)
+            # clear this easily.
+            if t_inside < 200:
+                self._task2_debug_reject("min_color_pixels", t_inside, cx_i, cy_i, r_i)
+                continue
+
+            sk_inside = int((skin & inside).sum())
+            skin_ratio = sk_inside / ic
+            if skin_ratio > 0.30:
+                self._task2_debug_reject("skin_ratio", skin_ratio, cx_i, cy_i, r_i)
+                continue
+
+            ring = (d2 >= (r_i * 1.10) ** 2) & (d2 <= (r_i * 1.85) ** 2)
+            rc = int(ring.sum())
             backing_ratio = 0.0
-            plate_area = 0
-            has_backing = False
-            if ring_count > 0:
-                ring_white = int(np.count_nonzero(
-                    backing_mask[ry0:ry1, rx0:rx1] & ring
-                ))
-                backing_ratio = ring_white / ring_count
-                sup = back_labels[ry0:ry1, rx0:rx1][ring]
-                sup = sup[sup > 0]
-                support_label = 0
-                if sup.size:
-                    support_label = int(np.argmax(np.bincount(sup)))
-                if (
-                    0 < support_label < n_back
-                    and valid_backing[support_label]
-                ):
-                    plate_area = int(
-                        back_stats[support_label, cv2.CC_STAT_AREA]
-                    )
-                    # Plate must be visibly bigger than the disk and not the
-                    # whole frame (whole-frame "white" is usually a wall).
-                    if (
-                        plate_area >= max(int(area * 1.2), 500)
-                        and plate_area <= int(w * h * 0.55)
-                        and backing_ratio >= 0.15
-                    ):
-                        has_backing = True
+            if rc > 0:
+                rb = int((backing_bool & ring).sum())
+                backing_ratio = rb / rc
 
-            # ---- Interior colour purity -------------------------------- #
-            inner_r = max(2.0, radius_px * 0.7)
-            inner_disk = d2 <= inner_r * inner_r
-            inner_count = int(inner_disk.sum())
-            if inner_count <= 0:
-                continue
-            inside_color = int(np.count_nonzero(
-                target_mask[ry0:ry1, rx0:rx1] & inner_disk
-            ))
-            interior_color_ratio = inside_color / inner_count
-            if interior_color_ratio < 0.40:
-                self._task2_debug_reject(
-                    "interior_color_ratio", interior_color_ratio, cx_i, cy_i, radius_px
-                )
-                continue
-
-            # ---- Acceptance: backing OR strong shape+colour ----------- #
-            # If the plate ring is convincing, easy accept. Otherwise the
-            # candidate must clear modest shape and interior-colour bars
-            # so that random saturated-purple objects (clothing, packaging)
-            # still get rejected even when no plate is visible.
-            shape_strong = (
-                circularity >= 0.55
-                and solidity >= 0.75
-                and ellipticity >= 0.55
-                and interior_color_ratio >= 0.55
-            )
-            if not has_backing and not shape_strong:
-                self._task2_debug_reject(
-                    "no_backing_and_weak_shape",
-                    (circularity, solidity, ellipticity, interior_color_ratio),
-                    cx_i, cy_i, radius_px,
-                )
-                continue
-
-            # ---- Depth (optional; gates diameter when available) ------ #
-            # When the ZED provides a valid range we apply the physical-size
-            # gate (4-35 cm). When depth is missing -- bench testing on a
-            # saved image, glossy surfaces that defeat stereo, or a frame
-            # where the depth topic hasn't published yet -- we skip the
-            # diameter check rather than reject. The pixel-size gate
-            # (min_r/max_r) still bounds size, and the colour+shape+backing
-            # checks above are the real precision drivers.
-            rng = self._sample_depth_at(ecx, ecy, w, h)
+            rng = self._sample_depth_at(float(cx_i), float(cy_i), w, h)
             diameter_m = None
             if rng is not None:
                 diameter_m = self._estimate_task2_diameter_m(
-                    major * 2.0, minor * 2.0, rng, w, h
+                    float(r_i * 2), float(r_i * 2), rng, w, h
                 )
-                if diameter_m is not None and (
-                    diameter_m < 0.035 or diameter_m > 0.40
-                ):
+                if diameter_m is not None and (diameter_m < 0.035 or diameter_m > 0.40):
+                    self._task2_debug_reject("diameter_m", diameter_m, cx_i, cy_i, r_i)
                     continue
 
-            # ---- Fused confidence ------------------------------------- #
-            # Backing is the strongest discriminator when present; otherwise
-            # shape+colour purity carry the score. Both pathways can reach
-            # ~0.85+ for a clean target.
-            backing_score = min(backing_ratio, 0.80) * 0.25 if has_backing else 0.0
+            # Size factor: rewards real targets (r >= 60 px) over slivers.
+            # Saturates at r=60 so very large disks don't completely
+            # dominate over a mid-range disk that's still a real target.
+            size_factor = min(r_i / 60.0, 1.0)
             confidence = min(
                 0.99,
-                0.12
-                + min(circularity, 0.95) * 0.28
-                + min(solidity, 0.95) * 0.14
-                + min(ellipticity, 0.95) * 0.12
-                + backing_score
-                + min(interior_color_ratio, 0.95) * 0.28,
+                0.10
+                + min(color_density, 0.65) * 0.35
+                + min(backing_ratio, 0.70) * 0.25
+                + size_factor * 0.20
+                + (0.10 if rng is not None else 0.0),
             )
 
-            # Axis-aligned bbox from rotated ellipse extent.
-            cos_a = math.cos(math.radians(angle_deg))
-            sin_a = math.sin(math.radians(angle_deg))
-            half_w = abs(major * cos_a) + abs(minor * sin_a)
-            half_h = abs(major * sin_a) + abs(minor * cos_a)
-            bbox_x = max(0.0, ecx - half_w)
-            bbox_y = max(0.0, ecy - half_h)
-            bbox_w = min(float(w) - bbox_x, half_w * 2.0)
-            bbox_h = min(float(h) - bbox_y, half_h * 2.0)
+            if os.environ.get("NOMAD_TASK2_DEBUG", "0").lower() in (
+                "1", "true", "yes", "on"
+            ):
+                try:
+                    self.get_logger().info(
+                        f"task2_accept @ ({cx_i},{cy_i}) r={r_i} "
+                        f"conf={confidence:.2f} density={color_density:.2f} "
+                        f"backing={backing_ratio:.2f} skin={skin_ratio:.2f} "
+                        f"rng={rng}"
+                    )
+                except Exception:
+                    pass
 
             candidates.append({
                 "label": "circle",
                 "hsv_color": "cabbage_paper",
                 "confidence": float(confidence),
-                "bbox_x": float(bbox_x),
-                "bbox_y": float(bbox_y),
-                "bbox_w": float(bbox_w),
-                "bbox_h": float(bbox_h),
-                "cx": float(ecx),
-                "cy": float(ecy),
-                "ellipse_major_px": float(major),
-                "ellipse_minor_px": float(minor),
-                "ellipse_angle_deg": float(angle_deg),
-                "radius_px": float(major),
+                "bbox_x": float(max(0, cx_i - r_i)),
+                "bbox_y": float(max(0, cy_i - r_i)),
+                "bbox_w": float(min(w - max(0, cx_i - r_i), r_i * 2)),
+                "bbox_h": float(min(h - max(0, cy_i - r_i), r_i * 2)),
+                "cx": float(cx_i),
+                "cy": float(cy_i),
+                "ellipse_major_px": float(r_i),
+                "ellipse_minor_px": float(r_i),
+                "ellipse_angle_deg": 0.0,
+                "radius_px": float(r_i),
                 "_src_w": w,
                 "_src_h": h,
                 "_detector": "task2",
-                "_method": "cabbage_v2",
+                "_method": "hough_density_v3",
                 "range_m": rng,
                 "diameter_m": diameter_m,
-                "has_backing": bool(has_backing),
+                "has_backing": bool(backing_ratio >= 0.15),
                 "backing_ratio": float(backing_ratio),
-                "interior_color_ratio": float(interior_color_ratio),
+                "color_density": float(color_density),
             })
 
-        # NMS by ellipse-center distance, recall-favoring cap.
+        # IoU-based NMS: Hough often returns several overlapping sub-circles
+        # inside one real disk because the paper texture creates secondary
+        # gradients. Suppress any circle with significant area overlap with
+        # an already-accepted higher-confidence one.
         candidates.sort(key=lambda d: -float(d["confidence"]))
         out = []
         for cand in candidates:
             keep = True
             for k in out:
-                dx = cand["cx"] - k["cx"]
-                dy = cand["cy"] - k["cy"]
-                r_max = max(cand["ellipse_major_px"], k["ellipse_major_px"])
-                if (dx * dx + dy * dy) ** 0.5 < r_max * 0.7:
+                iou = _circles_iou(
+                    cand["cx"], cand["cy"], cand["radius_px"],
+                    k["cx"], k["cy"], k["radius_px"],
+                )
+                if iou > 0.25:
                     keep = False
                     break
             if keep:
                 out.append(cand)
-            if len(out) >= 8:
+            if len(out) >= 6:
                 break
         return out
 

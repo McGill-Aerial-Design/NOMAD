@@ -38,6 +38,31 @@ import numpy as np
 logger = logging.getLogger("edge_core.task2_circle_verify")
 
 
+def _circles_iou_xy(cx1: float, cy1: float, r1: float,
+                    cx2: float, cy2: float, r2: float) -> float:
+    """Intersection-over-Union of two circles."""
+    d = ((cx1 - cx2) ** 2 + (cy1 - cy2) ** 2) ** 0.5
+    if d >= r1 + r2:
+        return 0.0
+    if d <= abs(r1 - r2):
+        rs = min(r1, r2); rl = max(r1, r2)
+        return (rs * rs) / (rl * rl)
+    r1s = r1 * r1; r2s = r2 * r2
+    try:
+        a1 = r1s * math.acos((d * d + r1s - r2s) / (2.0 * d * r1))
+        a2 = r2s * math.acos((d * d + r2s - r1s) / (2.0 * d * r2))
+        a3 = 0.5 * math.sqrt(
+            (-d + r1 + r2) * (d + r1 - r2) * (d - r1 + r2) * (d + r1 + r2)
+        )
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+    inter = a1 + a2 - a3
+    union = math.pi * r1s + math.pi * r2s - inter
+    if union <= 0.0:
+        return 0.0
+    return inter / union
+
+
 @dataclass
 class DetectedCircle:
     """A circle detected in a Task 2 image (color-agnostic)."""
@@ -108,221 +133,127 @@ class Task2CircleDetector:
     def detect(self, bgr_image: np.ndarray) -> List[DetectedCircle]:
         """Detect cabbage-paper circles in a BGR image.
 
-        Mirrors edge_core/ros/simple_video_bridge.py::_detect_shape_circles.
-        Used here on saved before/after snapshots, so the ZED depth gate is
-        absent -- physical-diameter validation runs at the live overlay path
-        in the bridge. All other gates (Lab+HSV colour, white-backing ring,
-        ellipse fit, fused confidence) match.
+        Mirrors edge_core/ros/simple_video_bridge.py::_detect_shape_circles
+        (the Hough+density pipeline). Used here on saved before/after
+        snapshots, so the ZED depth gate is absent -- physical-diameter
+        validation runs at the live overlay path in the bridge. All other
+        gates (colour mask, skin reject, density, backing) match.
         """
         if bgr_image is None or bgr_image.size == 0:
             return []
 
         h, w = bgr_image.shape[:2]
-        blurred = cv2.GaussianBlur(
-            bgr_image, (self.blur_kernel, self.blur_kernel), 0
-        )
-        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
-        lab = cv2.cvtColor(blurred, cv2.COLOR_BGR2LAB)
-        s_ch = hsv[:, :, 1]
-        v_ch = hsv[:, :, 2]
+        hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
+        lab = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2LAB)
+        s_ch = hsv[:, :, 1]; v_ch = hsv[:, :, 2]
         a_ch = lab[:, :, 1].astype(np.int16)
         b_ch = lab[:, :, 2].astype(np.int16)
         chroma = np.abs(a_ch - 128) + np.abs(b_ch - 128)
+
+        mauve = (
+            (a_ch > 134) & (b_ch < 132) & (chroma >= 12)
+            & (v_ch >= 70) & (v_ch <= 245)
+        )
+        blue = (
+            (a_ch < 124) & (b_ch < 128) & (chroma >= 15)
+            & (v_ch >= 60) & (v_ch <= 230)
+        )
+        not_white = ~((s_ch <= 25) & (v_ch >= 195))
+        target = ((mauve | blue) & not_white).astype(np.uint8)
+        skin = ((a_ch > 130) & (b_ch > 135) & (chroma >= 6)).astype(np.uint8)
 
         backing_raw = (
             (s_ch <= 40) & (v_ch >= 175) & (chroma <= 22)
         ).astype(np.uint8) * 255
         k5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        backing_mask = cv2.morphologyEx(backing_raw, cv2.MORPH_CLOSE, k5, iterations=2)
-        backing_mask = cv2.morphologyEx(backing_mask, cv2.MORPH_OPEN, k5, iterations=1)
-        n_back, back_labels, back_stats, _ = cv2.connectedComponentsWithStats(
-            (backing_mask > 0).astype(np.uint8), connectivity=8
-        )
-        min_backing_area = max(400, int(0.0020 * w * h))
-        valid_backing = np.zeros(n_back, dtype=bool)
-        for bidx in range(1, n_back):
-            if back_stats[bidx, cv2.CC_STAT_AREA] >= min_backing_area:
-                valid_backing[bidx] = True
+        backing = cv2.morphologyEx(backing_raw, cv2.MORPH_CLOSE, k5, iterations=2)
+        backing = cv2.morphologyEx(backing, cv2.MORPH_OPEN, k5, iterations=1)
+        backing_bool = backing > 0
 
-        # See simple_video_bridge._detect_shape_circles for the rationale on
-        # the b* < 135 skin-exclusion gate and the 13-px close kernel.
-        mauve = (
-            (a_ch > 128) & (b_ch < 135) & (chroma >= 4)
-            & (v_ch >= 70) & (v_ch <= 245)
-        )
-        blue = (
-            (a_ch < 130) & (b_ch < 132) & (chroma >= 4)
-            & (v_ch >= 60) & (v_ch <= 230)
-        )
-        not_white = ~((s_ch <= 25) & (v_ch >= 195))
-        target_mask = ((mauve | blue) & not_white).astype(np.uint8) * 255
-        k3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
-        target_mask = cv2.morphologyEx(target_mask, cv2.MORPH_OPEN, k3, iterations=1)
-        target_mask = cv2.morphologyEx(target_mask, cv2.MORPH_CLOSE, k_close, iterations=2)
+        # See bridge: Hough on the chroma channel, not grayscale.
+        chroma_u8 = np.clip(chroma, 0, 80).astype(np.uint8) * 3
+        chroma_u8 = cv2.medianBlur(chroma_u8, 5)
+        min_r = max(self.min_radius_px, int(round(min(h, w) * 0.015)))
+        max_r = min(self.max_radius_px, min(h, w) // 2)
 
-        n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
-            target_mask, connectivity=8
-        )
-
-        min_r = self.min_radius_px
-        max_r = self.max_radius_px
-        min_area = max(20, int(math.pi * min_r * min_r * 0.40))
-        max_area = int(math.pi * max_r * max_r)
-
-        candidates: List[Tuple[float, DetectedCircle]] = []
-        for idx in range(1, n_labels):
-            x = int(stats[idx, cv2.CC_STAT_LEFT])
-            y = int(stats[idx, cv2.CC_STAT_TOP])
-            bw = int(stats[idx, cv2.CC_STAT_WIDTH])
-            bh = int(stats[idx, cv2.CC_STAT_HEIGHT])
-            area = int(stats[idx, cv2.CC_STAT_AREA])
-            if area < min_area or area > max_area or bw < 4 or bh < 4:
-                continue
-            aspect = bw / float(bh)
-            if aspect < 0.45 or aspect > 2.20:
-                continue
-
-            pad = 2
-            x0 = max(0, x - pad); y0 = max(0, y - pad)
-            x1 = min(w, x + bw + pad); y1 = min(h, y + bh + pad)
-            comp_mask = (labels[y0:y1, x0:x1] == idx).astype(np.uint8)
-            contours, _ = cv2.findContours(
-                comp_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+        try:
+            circles_raw = cv2.HoughCircles(
+                chroma_u8, cv2.HOUGH_GRADIENT, dp=1.2,
+                minDist=max(20, min_r * 2),
+                param1=80, param2=30,
+                minRadius=min_r, maxRadius=max_r,
             )
-            if not contours:
-                continue
-            contour = max(contours, key=cv2.contourArea)
-            contour_area = float(cv2.contourArea(contour))
-            if contour_area < min_area:
-                continue
-            perim = float(cv2.arcLength(contour, True))
-            if perim < 1.0:
-                continue
-            circularity = (4.0 * math.pi * contour_area) / (perim * perim)
-            if circularity < 0.42:
-                continue
-            hull = cv2.convexHull(contour)
-            hull_area = float(cv2.contourArea(hull))
-            if hull_area < 1.0:
-                continue
-            solidity = contour_area / hull_area
-            if solidity < 0.68:
-                continue
+        except cv2.error as exc:
+            logger.warning(f"HoughCircles failed: {exc}")
+            return []
 
-            if len(contour) >= 5:
-                try:
-                    (ecx_loc, ecy_loc), (axis_a, axis_b), _angle = cv2.fitEllipse(contour)
-                except cv2.error:
-                    continue
-                ecx = float(x0) + float(ecx_loc)
-                ecy = float(y0) + float(ecy_loc)
-                major = float(max(axis_a, axis_b)) * 0.5
-                minor = float(min(axis_a, axis_b)) * 0.5
-                if minor < 1.0:
-                    continue
-                ellipticity = minor / major
-                if ellipticity < 0.50:
-                    continue
-            else:
-                (ecx_loc, ecy_loc), r_fit = cv2.minEnclosingCircle(contour)
-                ecx = float(x0) + float(ecx_loc)
-                ecy = float(y0) + float(ecy_loc)
-                major = float(r_fit); minor = float(r_fit)
-                ellipticity = 1.0
+        if circles_raw is None:
+            return []
 
-            cx_i = int(round(ecx)); cy_i = int(round(ecy))
+        yy, xx = np.ogrid[:h, :w]
+        cands: List[Tuple[float, DetectedCircle]] = []
+        for ccx, ccy, cr in circles_raw[0]:
+            cx_i = int(ccx); cy_i = int(ccy); r_i = int(cr)
             if not (0 <= cx_i < w and 0 <= cy_i < h):
                 continue
-            radius_px = major
-            if radius_px < min_r or radius_px > max_r:
+            if r_i < min_r or r_i > max_r:
+                continue
+            if (cx_i - r_i) < 2 or (cy_i - r_i) < 2 or (cx_i + r_i) >= (w - 2) or (cy_i + r_i) >= (h - 2):
                 continue
 
-            outer_r = int(radius_px * 1.85) + 6
-            ry0 = max(0, cy_i - outer_r); ry1 = min(h, cy_i + outer_r + 1)
-            rx0 = max(0, cx_i - outer_r); rx1 = min(w, cx_i + outer_r + 1)
-            if ry1 <= ry0 or rx1 <= rx0:
-                continue
-            yy, xx = np.ogrid[ry0:ry1, rx0:rx1]
             d2 = (xx - cx_i) ** 2 + (yy - cy_i) ** 2
-            inner = max(radius_px * 1.10, radius_px + 2.0)
-            ring = (d2 >= inner * inner) & (d2 <= outer_r * outer_r)
-            ring_count = int(ring.sum())
+            inside = d2 <= (r_i * 0.85) ** 2
+            ic = int(inside.sum())
+            if ic <= 0:
+                continue
+            t_inside = int((target & inside).sum())
+            color_density = t_inside / ic
+            if color_density < 0.22:
+                continue
+            if t_inside < 200:
+                continue
+
+            sk_inside = int((skin & inside).sum())
+            if (sk_inside / ic) > 0.30:
+                continue
+
+            ring = (d2 >= (r_i * 1.10) ** 2) & (d2 <= (r_i * 1.85) ** 2)
+            rc = int(ring.sum())
             backing_ratio = 0.0
-            has_backing = False
-            if ring_count > 0:
-                ring_white = int(np.count_nonzero(
-                    backing_mask[ry0:ry1, rx0:rx1] & ring
-                ))
-                backing_ratio = ring_white / ring_count
-                sup = back_labels[ry0:ry1, rx0:rx1][ring]
-                sup = sup[sup > 0]
-                support_label = 0
-                if sup.size:
-                    support_label = int(np.argmax(np.bincount(sup)))
-                if (
-                    0 < support_label < n_back
-                    and valid_backing[support_label]
-                ):
-                    plate_area = int(
-                        back_stats[support_label, cv2.CC_STAT_AREA]
-                    )
-                    if (
-                        plate_area >= max(int(area * 1.2), 500)
-                        and plate_area <= int(w * h * 0.55)
-                        and backing_ratio >= 0.15
-                    ):
-                        has_backing = True
+            if rc > 0:
+                rb = int((backing_bool & ring).sum())
+                backing_ratio = rb / rc
 
-            inner_r = max(2.0, radius_px * 0.7)
-            inner_disk = d2 <= inner_r * inner_r
-            inner_count = int(inner_disk.sum())
-            if inner_count <= 0:
-                continue
-            inside_color = int(np.count_nonzero(target_mask[ry0:ry1, rx0:rx1] & inner_disk))
-            interior_color_ratio = inside_color / inner_count
-            if interior_color_ratio < 0.40:
-                continue
-
-            shape_strong = (
-                circularity >= 0.55
-                and solidity >= 0.75
-                and ellipticity >= 0.55
-                and interior_color_ratio >= 0.55
-            )
-            if not has_backing and not shape_strong:
-                continue
-
-            backing_score = min(backing_ratio, 0.80) * 0.25 if has_backing else 0.0
+            size_factor = min(r_i / 60.0, 1.0)
             confidence = min(
                 0.99,
-                0.12
-                + min(circularity, 0.95) * 0.28
-                + min(solidity, 0.95) * 0.14
-                + min(ellipticity, 0.95) * 0.12
-                + backing_score
-                + min(interior_color_ratio, 0.95) * 0.28,
+                0.10
+                + min(color_density, 0.65) * 0.35
+                + min(backing_ratio, 0.70) * 0.25
+                + size_factor * 0.25,
             )
 
-            det = self._make_detection(
-                cx_i, cy_i, int(round(major)), bgr_image, "cabbage_v2"
-            )
+            det = self._make_detection(cx_i, cy_i, r_i, bgr_image, "hough_density_v3")
             if det is None:
                 continue
             det.confidence = float(confidence)
-            candidates.append((confidence, det))
+            cands.append((confidence, det))
 
-        # NMS by center distance, keep highest-confidence per spatial group.
-        candidates.sort(key=lambda kv: -kv[0])
+        cands.sort(key=lambda kv: -kv[0])
         detections: List[DetectedCircle] = []
-        for _, det in candidates:
-            if not self._overlaps_existing(det, detections):
+        for _, det in cands:
+            keep = True
+            for k in detections:
+                iou = _circles_iou_xy(det.cx, det.cy, det.radius,
+                                     k.cx, k.cy, k.radius)
+                if iou > 0.25:
+                    keep = False
+                    break
+            if keep:
                 detections.append(det)
-            if len(detections) >= 8:
+            if len(detections) >= 6:
                 break
         return detections
-
-
     def _make_detection(
         self,
         cx: int,
