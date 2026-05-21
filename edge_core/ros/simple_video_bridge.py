@@ -1066,6 +1066,25 @@ class VideoStreamNode(Node):
         """Task 2 detector entry point. Single canonical implementation."""
         return self._detect_shape_circles(frame)
 
+    def _task2_debug_reject(self, reason, value, cx_i, cy_i, radius_px):
+        """Log a near-miss rejection when NOMAD_TASK2_DEBUG is enabled.
+
+        Cheap helper so we can tell at-a-glance which gate is rejecting a
+        candidate the operator expected to detect. Off by default to keep
+        the log clean in normal flight.
+        """
+        if os.environ.get("NOMAD_TASK2_DEBUG", "0").lower() not in (
+            "1", "true", "yes", "on"
+        ):
+            return
+        try:
+            self.get_logger().info(
+                f"task2_reject {reason} @ ({cx_i},{cy_i}) r={int(radius_px)} "
+                f"value={value}"
+            )
+        except Exception:
+            pass
+
     def _detect_shape_circles(self, frame):
         """Task 2 red-cabbage-paper detector — single canonical pipeline.
 
@@ -1124,22 +1143,20 @@ class VideoStreamNode(Node):
         # Saturation cap loosened to 210 so phone/monitor-displayed targets
         # (a common bench-test scenario) and well-lit paper aren't rejected.
         mauve = (
-            (a_ch > 130)
+            (a_ch > 128)
             & (chroma >= 6)
-            & (v_ch >= 90)
-            & (v_ch <= 240)
-            & (s_ch <= 210)
+            & (v_ch >= 70)
+            & (v_ch <= 245)
         )
         # Blue/cyan (post-spray reaction): low a*, low-to-mid b*. Also covers
         # vivid violet/purple from phone screens, which sit on the
         # high-chroma side of the red-cabbage spectrum.
         blue = (
-            (a_ch < 127)
+            (a_ch < 130)
             & (b_ch < 132)
-            & (chroma >= 8)
-            & (v_ch >= 70)
-            & (v_ch <= 220)
-            & (s_ch <= 210)
+            & (chroma >= 6)
+            & (v_ch >= 60)
+            & (v_ch <= 230)
         )
         not_white = ~((s_ch <= 25) & (v_ch >= 195))
         target_mask = ((mauve | blue) & not_white).astype(np.uint8) * 255
@@ -1169,12 +1186,16 @@ class VideoStreamNode(Node):
             bw = int(stats[idx, cv2.CC_STAT_WIDTH])
             bh = int(stats[idx, cv2.CC_STAT_HEIGHT])
             area = int(stats[idx, cv2.CC_STAT_AREA])
+            cx0 = int(x + bw // 2); cy0 = int(y + bh // 2)
             if area < min_area or area > max_area:
+                self._task2_debug_reject("area", area, cx0, cy0, max(bw, bh) // 2)
                 continue
             if bw < 4 or bh < 4:
+                self._task2_debug_reject("bbox_too_small", (bw, bh), cx0, cy0, 0)
                 continue
             aspect = bw / float(bh)
             if aspect < 0.45 or aspect > 2.20:
+                self._task2_debug_reject("aspect", aspect, cx0, cy0, max(bw, bh) // 2)
                 continue
 
             pad = 2
@@ -1197,6 +1218,10 @@ class VideoStreamNode(Node):
             circularity = (4.0 * math.pi * contour_area) / (perim * perim)
             # Recall-favoring floor; backing + size gates do most of the work.
             if circularity < 0.42:
+                self._task2_debug_reject(
+                    "circularity", circularity, int(x + bw // 2), int(y + bh // 2),
+                    max(bw, bh) // 2,
+                )
                 continue
 
             hull = cv2.convexHull(contour)
@@ -1205,6 +1230,10 @@ class VideoStreamNode(Node):
                 continue
             solidity = contour_area / hull_area
             if solidity < 0.68:
+                self._task2_debug_reject(
+                    "solidity", solidity, int(x + bw // 2), int(y + bh // 2),
+                    max(bw, bh) // 2,
+                )
                 continue
 
             # Ellipse fit handles oblique drone views; contour <5 points falls
@@ -1223,6 +1252,9 @@ class VideoStreamNode(Node):
                     continue
                 ellipticity = minor / major
                 if ellipticity < 0.50:
+                    self._task2_debug_reject(
+                        "ellipticity", ellipticity, int(ecx), int(ecy), int(major),
+                    )
                     continue  # too elongated; paper is round even oblique
             else:
                 (ecx_loc, ecy_loc), r_fit = cv2.minEnclosingCircle(contour)
@@ -1237,6 +1269,9 @@ class VideoStreamNode(Node):
                 continue
             radius_px = major
             if radius_px < min_r or radius_px > max_r:
+                self._task2_debug_reject(
+                    "radius_px", (radius_px, min_r, max_r), cx_i, cy_i, int(radius_px),
+                )
                 continue
 
             # Reject blobs clipped by the camera frame -- partial arcs are
@@ -1248,6 +1283,10 @@ class VideoStreamNode(Node):
                 or (x + bw) >= (w - edge_margin)
                 or (y + bh) >= (h - edge_margin)
             ):
+                self._task2_debug_reject(
+                    "edge_clipped", (x, y, x + bw, y + bh, w, h),
+                    cx_i, cy_i, int(radius_px),
+                )
                 continue
 
             # ---- Backing-ring measurement (SOFT cue, not a hard gate) -- #
@@ -1306,36 +1345,49 @@ class VideoStreamNode(Node):
                 target_mask[ry0:ry1, rx0:rx1] & inner_disk
             ))
             interior_color_ratio = inside_color / inner_count
-            if interior_color_ratio < 0.45:
+            if interior_color_ratio < 0.40:
+                self._task2_debug_reject(
+                    "interior_color_ratio", interior_color_ratio, cx_i, cy_i, radius_px
+                )
                 continue
 
             # ---- Acceptance: backing OR strong shape+colour ----------- #
             # If the plate ring is convincing, easy accept. Otherwise the
-            # candidate must clear stricter shape and interior-colour bars
+            # candidate must clear modest shape and interior-colour bars
             # so that random saturated-purple objects (clothing, packaging)
             # still get rejected even when no plate is visible.
             shape_strong = (
-                circularity >= 0.62
-                and solidity >= 0.80
-                and ellipticity >= 0.62
-                and interior_color_ratio >= 0.62
+                circularity >= 0.55
+                and solidity >= 0.75
+                and ellipticity >= 0.55
+                and interior_color_ratio >= 0.55
             )
             if not has_backing and not shape_strong:
+                self._task2_debug_reject(
+                    "no_backing_and_weak_shape",
+                    (circularity, solidity, ellipticity, interior_color_ratio),
+                    cx_i, cy_i, radius_px,
+                )
                 continue
 
-            # ---- Depth (REQUIRED) ------------------------------------- #
+            # ---- Depth (optional; gates diameter when available) ------ #
+            # When the ZED provides a valid range we apply the physical-size
+            # gate (4-35 cm). When depth is missing -- bench testing on a
+            # saved image, glossy surfaces that defeat stereo, or a frame
+            # where the depth topic hasn't published yet -- we skip the
+            # diameter check rather than reject. The pixel-size gate
+            # (min_r/max_r) still bounds size, and the colour+shape+backing
+            # checks above are the real precision drivers.
             rng = self._sample_depth_at(ecx, ecy, w, h)
-            if rng is None:
-                continue
-
-            diameter_m = self._estimate_task2_diameter_m(
-                major * 2.0, minor * 2.0, rng, w, h
-            )
-            if diameter_m is None:
-                continue
-            # 5-30 cm spec with small slack for measurement error.
-            if diameter_m < 0.045 or diameter_m > 0.34:
-                continue
+            diameter_m = None
+            if rng is not None:
+                diameter_m = self._estimate_task2_diameter_m(
+                    major * 2.0, minor * 2.0, rng, w, h
+                )
+                if diameter_m is not None and (
+                    diameter_m < 0.035 or diameter_m > 0.40
+                ):
+                    continue
 
             # ---- Fused confidence ------------------------------------- #
             # Backing is the strongest discriminator when present; otherwise

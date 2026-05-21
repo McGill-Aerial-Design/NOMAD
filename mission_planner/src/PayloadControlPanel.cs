@@ -90,6 +90,38 @@ namespace NOMAD.MissionPlanner
         /// <summary>Last commanded tilt PWM (microseconds). Used by joystick service as its starting target.</summary>
         public static int LastTiltPulseUs => s_lastTiltPulseUs;
 
+        // ============================================================
+        // Cross-panel payload drop-state sync
+        // ============================================================
+        // External sources (NomadJoystickService, automated drops, second open
+        // panel) need to push their drop/retract events here so every open
+        // PayloadControlPanel mirrors the new visual state and the
+        // joystick-toggle state machine stays consistent. The bool is true when
+        // the servo is at its drop position.
+
+        public static event Action<int, bool> PayloadDroppedStateChanged;
+
+        // Authoritative dropped/retracted state per payload (idx 0..2). Mirrored
+        // into each panel's _dropDropped on event delivery; consulted by
+        // NomadJoystickService.ToggleDrop to decide direction on each switch flip.
+        private static readonly bool[] s_payloadDropped = new bool[3];
+
+        /// <summary>Latest known dropped state for the given payload index (0..2).</summary>
+        public static bool IsPayloadDropped(int payloadIdx0)
+            => payloadIdx0 >= 0 && payloadIdx0 < s_payloadDropped.Length && s_payloadDropped[payloadIdx0];
+
+        /// <summary>
+        /// Raise this when any source (panel, joystick service, autonomy) drops
+        /// or retracts a payload, so every open panel and the joystick service
+        /// agree on the toggle state. payloadIdx0 is zero-based (0=P1, 1=P2, 2=P3).
+        /// </summary>
+        public static void RaisePayloadDroppedState(int payloadIdx0, bool isDropped)
+        {
+            if (payloadIdx0 < 0 || payloadIdx0 >= s_payloadDropped.Length) return;
+            s_payloadDropped[payloadIdx0] = isDropped;
+            PayloadDroppedStateChanged?.Invoke(payloadIdx0, isDropped);
+        }
+
 
         // ============================================================
         // Construction
@@ -101,13 +133,19 @@ namespace NOMAD.MissionPlanner
             InitializeUI();
             CameraTiltChanged    += OnCameraTiltChangedExternally;
             AutonomousModeChanged += OnAutonomousModeChanged;
+            PayloadDroppedStateChanged += OnPayloadDroppedStateChanged;
             this.Disposed += (s, e) =>
             {
                 CameraTiltChanged    -= OnCameraTiltChangedExternally;
                 AutonomousModeChanged -= OnAutonomousModeChanged;
+                PayloadDroppedStateChanged -= OnPayloadDroppedStateChanged;
                 CleanupTimers();
             };
             ApplyTiltPulseQuietly(s_lastTiltPulseUs);
+            // Seed each drop button's visual from the shared state so a panel
+            // opened after a drop already happened shows the correct label.
+            for (int i = 0; i < _dropDropped.Length; i++)
+                ApplyDropVisual(i, s_payloadDropped[i]);
         }
 
         // ============================================================
@@ -396,9 +434,7 @@ namespace NOMAD.MissionPlanner
 
             if (success)
             {
-                _dropDropped[idx] = true;
-                _dropButtons[idx].Text = $"Retract P{payloadNumber}";
-                _dropButtons[idx].BackColor = DROP_COLOR_DROPPED;
+                RaisePayloadDroppedState(idx, true);
             }
         }
 
@@ -434,9 +470,7 @@ namespace NOMAD.MissionPlanner
 
             // Immediately restore button to drop-ready state so the operator can
             // drop again without waiting for the servo to physically finish moving.
-            _dropDropped[idx] = false;
-            _dropButtons[idx].Text = $"Drop P{payloadNumber}";
-            _dropButtons[idx].BackColor = DROP_COLOR_IDLE;
+            RaisePayloadDroppedState(idx, false);
 
             if (await CubeOutputController.SendServoPwmAsync(channel, pwmMin))
             {
@@ -557,6 +591,40 @@ namespace NOMAD.MissionPlanner
             int channel = _config?.CameraTiltChannel ?? 0;
 
             await CubeOutputController.SendServoPwmAsync(channel, pulseUs, tryOnly);
+        }
+
+        private void OnPayloadDroppedStateChanged(int payloadIdx0, bool isDropped)
+        {
+            if (IsDisposed) return;
+            if (InvokeRequired) { BeginInvoke(new Action(() => OnPayloadDroppedStateChanged(payloadIdx0, isDropped))); return; }
+            ApplyDropVisual(payloadIdx0, isDropped);
+        }
+
+        private void ApplyDropVisual(int payloadIdx0, bool isDropped)
+        {
+            if (payloadIdx0 < 0 || payloadIdx0 >= _dropButtons.Length) return;
+            var btn = _dropButtons[payloadIdx0];
+            if (btn == null) return;
+
+            _dropDropped[payloadIdx0] = isDropped;
+            // Cancel any in-progress click-arming on this button — the state
+            // just got reset externally, so a half-armed sequence is stale.
+            _dropResetTimers[payloadIdx0]?.Stop();
+            _dropResetTimers[payloadIdx0]?.Dispose();
+            _dropResetTimers[payloadIdx0] = null;
+            _dropClickCount[payloadIdx0] = 0;
+
+            int payloadNumber = payloadIdx0 + 1;
+            if (isDropped)
+            {
+                btn.Text = $"Retract P{payloadNumber}";
+                btn.BackColor = DROP_COLOR_DROPPED;
+            }
+            else
+            {
+                btn.Text = $"Drop P{payloadNumber}";
+                btn.BackColor = DROP_COLOR_IDLE;
+            }
         }
 
         private void OnCameraTiltChangedExternally(int pulseUs, PayloadControlPanel source)

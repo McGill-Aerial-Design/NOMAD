@@ -145,12 +145,12 @@ class Task2CircleDetector:
                 valid_backing[bidx] = True
 
         mauve = (
-            (a_ch > 130) & (chroma >= 6)
-            & (v_ch >= 90) & (v_ch <= 240) & (s_ch <= 210)
+            (a_ch > 128) & (chroma >= 6)
+            & (v_ch >= 70) & (v_ch <= 245)
         )
         blue = (
-            (a_ch < 127) & (b_ch < 132) & (chroma >= 8)
-            & (v_ch >= 70) & (v_ch <= 220) & (s_ch <= 210)
+            (a_ch < 130) & (b_ch < 132) & (chroma >= 6)
+            & (v_ch >= 60) & (v_ch <= 230)
         )
         not_white = ~((s_ch <= 25) & (v_ch >= 195))
         target_mask = ((mauve | blue) & not_white).astype(np.uint8) * 255
@@ -278,14 +278,14 @@ class Task2CircleDetector:
                 continue
             inside_color = int(np.count_nonzero(target_mask[ry0:ry1, rx0:rx1] & inner_disk))
             interior_color_ratio = inside_color / inner_count
-            if interior_color_ratio < 0.45:
+            if interior_color_ratio < 0.40:
                 continue
 
             shape_strong = (
-                circularity >= 0.62
-                and solidity >= 0.80
-                and ellipticity >= 0.62
-                and interior_color_ratio >= 0.62
+                circularity >= 0.55
+                and solidity >= 0.75
+                and ellipticity >= 0.55
+                and interior_color_ratio >= 0.55
             )
             if not has_backing and not shape_strong:
                 continue

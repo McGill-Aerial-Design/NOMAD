@@ -34,6 +34,7 @@ namespace NOMAD.MissionPlanner
             if (ch <= 0) return;
             await CubeOutputController.SendServoPwmAsync(ch, pwm);
             if (ch2 > 0) await CubeOutputController.SendServoPwmAsync(ch2, pwm2);
+            PayloadControlPanel.RaisePayloadDroppedState(payload - 1, true);
         }
 
         public static async void Retract(NOMADConfig cfg, int payload)
@@ -57,6 +58,7 @@ namespace NOMAD.MissionPlanner
             if (ch <= 0) return;
             await CubeOutputController.SendServoPwmAsync(ch, pwm);
             if (ch2 > 0) await CubeOutputController.SendServoPwmAsync(ch2, pwm2);
+            PayloadControlPanel.RaisePayloadDroppedState(payload - 1, false);
         }
 
         public static async void ReelStart(NOMADConfig cfg, int reelIdx)
