@@ -864,8 +864,38 @@ class VideoStreamNode(Node):
             ry = (y2 - y1) // 2
             
             if 'circle' in label.lower() and rx > 0 and ry > 0:
-                cv2.ellipse(frame, (cx, cy), (rx, ry), 0, 0, 360, color, 2)
-                cv2.drawMarker(frame, (cx, cy), color, cv2.MARKER_CROSS, 10, 1)
+                # Prefer the fitted ellipse (rotated) when the Task 2 detector
+                # provided one; otherwise fall back to the axis-aligned bbox.
+                emaj = det.get('ellipse_major_px')
+                emin = det.get('ellipse_minor_px')
+                eang = det.get('ellipse_angle_deg')
+                ecx_v = det.get('cx')
+                ecy_v = det.get('cy')
+                drew = False
+                try:
+                    if (emaj is not None and emin is not None and eang is not None
+                            and ecx_v is not None and ecy_v is not None):
+                        emaj_px = int(round(float(emaj) * sx))
+                        emin_px = int(round(float(emin) * sy))
+                        ecx_px = int(round(float(ecx_v) * sx))
+                        ecy_px = int(round(float(ecy_v) * sy))
+                        if emaj_px > 0 and emin_px > 0:
+                            cv2.ellipse(
+                                frame, (ecx_px, ecy_px),
+                                (emaj_px, emin_px), float(eang),
+                                0, 360, color, 2,
+                            )
+                            cv2.drawMarker(
+                                frame, (ecx_px, ecy_px), color,
+                                cv2.MARKER_CROSS, 10, 1,
+                            )
+                            cx, cy = ecx_px, ecy_px
+                            drew = True
+                except (TypeError, ValueError):
+                    drew = False
+                if not drew:
+                    cv2.ellipse(frame, (cx, cy), (rx, ry), 0, 0, 360, color, 2)
+                    cv2.drawMarker(frame, (cx, cy), color, cv2.MARKER_CROSS, 10, 1)
             else:
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
@@ -1033,94 +1063,180 @@ class VideoStreamNode(Node):
         return gray, hsv
 
     def _detect_task2_circles(self, frame):
-        """Dispatch Task 2 detection mode.
-
-        Default to the color/backing heuristic. Full-frame Hough is both CPU
-        heavy and too prone to false positives on faces/clutter for Task 2.
-        """
-        mode = os.environ.get("NOMAD_TASK2_DETECTOR_MODE", "color").strip().lower()
-        if mode in ("legacy", "hough", "shape"):
-            return self._detect_shape_circles_legacy(frame)
+        """Task 2 detector entry point. Single canonical implementation."""
         return self._detect_shape_circles(frame)
 
     def _detect_shape_circles(self, frame):
-        """Task 2 red-cabbage target detector.
+        """Task 2 red-cabbage-paper detector — single canonical pipeline.
 
-        CONOPS v1.3 gives us a strong visual prior: a pale purple paper circle
-        on white plastic backing, turning blue/cyan after baking-soda water.
-        Use that color/background cue instead of expensive full-frame Hough.
+        Target model (CONOPS v1.3 + on-site samples):
+          * 5-30 cm circular paper, pale pink/mauve when dry from red-cabbage
+            juice, turning blue/cyan in a sub-region after baking-soda spray.
+          * Always centered on a visibly larger white plastic plate/backing.
+
+        Pipeline:
+          1. White-backing mask (large bright low-sat connected components).
+          2. Cabbage-paper colour mask (Lab + HSV gates, mauve OR blue/cyan).
+          3. Component analysis + ellipse fit (oblique drone views aren't
+             perfect circles in image space).
+          4. Backing-ring gate -- every accepted blob must be surrounded by
+             a white plate, and the supporting plate must be a real big blob.
+          5. Interior colour purity check.
+          6. ZED depth required; physical diameter must be 4.5-34 cm.
+          7. Fused confidence score (not the old per-method lookup).
         """
         import cv2
         h, w = frame.shape[:2]
         _gray, hsv = self._prepare_task2_detection_images(frame, cv2)
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
         h_ch = hsv[:, :, 0]
         s_ch = hsv[:, :, 1]
         v_ch = hsv[:, :, 2]
+        a_ch = lab[:, :, 1].astype(np.int16)
+        b_ch = lab[:, :, 2].astype(np.int16)
+        chroma = np.abs(a_ch - 128) + np.abs(b_ch - 128)
 
-        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-        _l_ch, a_ch, b_ch = cv2.split(lab)
-        chroma = (
-            np.abs(a_ch.astype(np.int16) - 128)
-            + np.abs(b_ch.astype(np.int16) - 128)
-        )
-
-        purple_blue_hue = (
-            ((h_ch >= 82) & (h_ch <= 178))
-            | ((h_ch <= 12) & (s_ch >= 12))
-        )
-        target_color = purple_blue_hue & (v_ch >= 35) & (
-            (s_ch >= 10) | (chroma >= 7)
-        )
-        white_mask = (s_ch <= 36) & (v_ch >= 145) & (chroma <= 20)
-        backing_mask = (s_ch <= 60) & (v_ch >= 125) & (chroma <= 32)
-        not_white = ~((s_ch <= 18) & (v_ch >= 160) & (chroma <= 12))
-        mask = (target_color & not_white).astype(np.uint8) * 255
-
-        kernel3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        # ---- White plastic backing -------------------------------------- #
+        backing_raw = (
+            (s_ch <= 40) & (v_ch >= 175) & (chroma <= 22)
+        ).astype(np.uint8) * 255
         kernel5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel3, iterations=1)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel5, iterations=1)
         backing_mask = cv2.morphologyEx(
-            backing_mask.astype(np.uint8) * 255,
-            cv2.MORPH_CLOSE,
-            kernel5,
-            iterations=1,
-        ) > 0
-        n_backing, backing_labels, backing_stats, _backing_centroids = (
+            backing_raw, cv2.MORPH_CLOSE, kernel5, iterations=2
+        )
+        backing_mask = cv2.morphologyEx(
+            backing_mask, cv2.MORPH_OPEN, kernel5, iterations=1
+        )
+        n_back, back_labels, back_stats, _back_centroids = (
             cv2.connectedComponentsWithStats(
-                backing_mask.astype(np.uint8), connectivity=8
+                (backing_mask > 0).astype(np.uint8), connectivity=8
             )
         )
+        min_backing_area = max(400, int(0.0020 * w * h))
+        valid_backing = np.zeros(n_back, dtype=bool)
+        for bidx in range(1, n_back):
+            if back_stats[bidx, cv2.CC_STAT_AREA] >= min_backing_area:
+                valid_backing[bidx] = True
 
-        min_r = max(6, int(round(min(h, w) * 0.018)))
-        max_r = max(40, min(h, w) // 2)
-        min_area = max(24, int(math.pi * min_r * min_r * 0.18))
-        max_area = int(math.pi * max_r * max_r)
-        max_candidates = 6
-
-        out = []
-        n_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
-            mask, connectivity=8
+        # ---- Cabbage-paper colour --------------------------------------- #
+        # Mauve/pink (dry red-cabbage paper): red-magenta quadrant of Lab,
+        # moderate value, never over-saturated (excludes clothing/markers).
+        mauve = (
+            (a_ch > 130)
+            & (chroma >= 6)
+            & (v_ch >= 90)
+            & (v_ch <= 240)
+            & (s_ch <= 180)
         )
-        for label_idx in range(1, n_labels):
-            x = int(stats[label_idx, cv2.CC_STAT_LEFT])
-            y = int(stats[label_idx, cv2.CC_STAT_TOP])
-            bw = int(stats[label_idx, cv2.CC_STAT_WIDTH])
-            bh = int(stats[label_idx, cv2.CC_STAT_HEIGHT])
-            area = int(stats[label_idx, cv2.CC_STAT_AREA])
-            if area < min_area or area > max_area or bw <= 2 or bh <= 2:
-                continue
+        # Blue/cyan (post-spray reaction): low a*, low-to-mid b*.
+        blue = (
+            (a_ch < 127)
+            & (b_ch < 132)
+            & (chroma >= 8)
+            & (v_ch >= 70)
+            & (v_ch <= 220)
+            & (s_ch <= 180)
+        )
+        not_white = ~((s_ch <= 25) & (v_ch >= 195))
+        target_mask = ((mauve | blue) & not_white).astype(np.uint8) * 255
 
+        kernel3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        target_mask = cv2.morphologyEx(
+            target_mask, cv2.MORPH_OPEN, kernel3, iterations=1
+        )
+        target_mask = cv2.morphologyEx(
+            target_mask, cv2.MORPH_CLOSE, kernel5, iterations=2
+        )
+
+        # ---- Pixel size bounds (broad; physical diameter is the real gate) #
+        min_r = max(5, int(round(min(h, w) * 0.012)))
+        max_r = max(40, min(h, w) // 2)
+        min_area = max(20, int(math.pi * min_r * min_r * 0.40))
+        max_area = int(math.pi * max_r * max_r)
+
+        n_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+            target_mask, connectivity=8
+        )
+
+        candidates = []
+        for idx in range(1, n_labels):
+            x = int(stats[idx, cv2.CC_STAT_LEFT])
+            y = int(stats[idx, cv2.CC_STAT_TOP])
+            bw = int(stats[idx, cv2.CC_STAT_WIDTH])
+            bh = int(stats[idx, cv2.CC_STAT_HEIGHT])
+            area = int(stats[idx, cv2.CC_STAT_AREA])
+            if area < min_area or area > max_area:
+                continue
+            if bw < 4 or bh < 4:
+                continue
             aspect = bw / float(bh)
-            if aspect < 0.55 or aspect > 1.80:
+            if aspect < 0.45 or aspect > 2.20:
                 continue
 
-            radius = max(bw, bh) / 2.0
-            if radius < min_r or radius > max_r:
+            pad = 2
+            x0 = max(0, x - pad); y0 = max(0, y - pad)
+            x1 = min(w, x + bw + pad); y1 = min(h, y + bh + pad)
+            comp_mask = (labels[y0:y1, x0:x1] == idx).astype(np.uint8)
+
+            contours, _ = cv2.findContours(
+                comp_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+            )
+            if not contours:
                 continue
-            # Reject blobs clipped by the camera frame. The old Hough path
-            # happily locked onto partial edge arcs; keep this narrow so a
-            # real target near the edge can still be acquired.
+            contour = max(contours, key=cv2.contourArea)
+            contour_area = float(cv2.contourArea(contour))
+            if contour_area < min_area:
+                continue
+            perim = float(cv2.arcLength(contour, True))
+            if perim < 1.0:
+                continue
+            circularity = (4.0 * math.pi * contour_area) / (perim * perim)
+            # Recall-favoring floor; backing + size gates do most of the work.
+            if circularity < 0.42:
+                continue
+
+            hull = cv2.convexHull(contour)
+            hull_area = float(cv2.contourArea(hull))
+            if hull_area < 1.0:
+                continue
+            solidity = contour_area / hull_area
+            if solidity < 0.68:
+                continue
+
+            # Ellipse fit handles oblique drone views; contour <5 points falls
+            # back to a true circle.
+            if len(contour) >= 5:
+                try:
+                    ellipse = cv2.fitEllipse(contour)
+                except cv2.error:
+                    continue
+                (ecx_loc, ecy_loc), (axis_a, axis_b), angle_deg = ellipse
+                ecx = float(x0) + float(ecx_loc)
+                ecy = float(y0) + float(ecy_loc)
+                major = float(max(axis_a, axis_b)) * 0.5
+                minor = float(min(axis_a, axis_b)) * 0.5
+                if minor < 1.0:
+                    continue
+                ellipticity = minor / major
+                if ellipticity < 0.50:
+                    continue  # too elongated; paper is round even oblique
+            else:
+                (ecx_loc, ecy_loc), r_fit = cv2.minEnclosingCircle(contour)
+                ecx = float(x0) + float(ecx_loc)
+                ecy = float(y0) + float(ecy_loc)
+                major = float(r_fit); minor = float(r_fit)
+                angle_deg = 0.0
+                ellipticity = 1.0
+
+            cx_i = int(round(ecx)); cy_i = int(round(ecy))
+            if not (0 <= cx_i < w and 0 <= cy_i < h):
+                continue
+            radius_px = major
+            if radius_px < min_r or radius_px > max_r:
+                continue
+
+            # Reject blobs clipped by the camera frame -- partial arcs are
+            # almost always glare/edges rather than a real paper target.
             edge_margin = 2
             if (
                 x <= edge_margin
@@ -1130,318 +1246,131 @@ class VideoStreamNode(Node):
             ):
                 continue
 
-            fill = area / float(bw * bh)
-            if fill < 0.18 or fill > 0.93:
+            # ---- Backing-ring gate ------------------------------------- #
+            outer_r = int(radius_px * 1.85) + 6
+            ry0 = max(0, cy_i - outer_r); ry1 = min(h, cy_i + outer_r + 1)
+            rx0 = max(0, cx_i - outer_r); rx1 = min(w, cx_i + outer_r + 1)
+            if ry1 <= ry0 or rx1 <= rx0:
                 continue
-
-            cx, cy = centroids[label_idx]
-
-            component_mask = (labels[y:y + bh, x:x + bw] == label_idx).astype(np.uint8)
-            contours, _hier = cv2.findContours(
-                component_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-            )
-            if not contours:
+            yy, xx = np.ogrid[ry0:ry1, rx0:rx1]
+            d2 = (xx - cx_i) ** 2 + (yy - cy_i) ** 2
+            inner = max(radius_px * 1.10, radius_px + 2.0)
+            ring = (d2 >= inner * inner) & (d2 <= outer_r * outer_r)
+            ring_count = int(ring.sum())
+            if ring_count <= 0:
                 continue
-            contour = max(contours, key=cv2.contourArea)
-            contour_area = float(cv2.contourArea(contour))
-            perimeter = float(cv2.arcLength(contour, True))
-            if perimeter <= 0.0:
-                continue
-            circularity = (4.0 * math.pi * contour_area) / (perimeter * perimeter)
-            if circularity < 0.34 and area < (min_area * 4):
-                continue
-
-            outer_r = max(int(radius * 1.55), int(radius) + 6)
-            ry0 = max(0, int(cy) - outer_r)
-            ry1 = min(h, int(cy) + outer_r + 1)
-            rx0 = max(0, int(cx) - outer_r)
-            rx1 = min(w, int(cx) + outer_r + 1)
-            ring_white_ratio = 0.0
-            backing_ratio = 0.0
-            support_label = 0
-            if ry1 > ry0 and rx1 > rx0:
-                yy, xx = np.ogrid[ry0:ry1, rx0:rx1]
-                d2 = (xx - cx) ** 2 + (yy - cy) ** 2
-                inner = max(radius * 1.05, radius + 2)
-                ring = (d2 >= inner * inner) & (d2 <= outer_r * outer_r)
-                ring_count = int(ring.sum())
-                if ring_count > 0:
-                    ring_white = int(np.count_nonzero(
-                        white_mask[ry0:ry1, rx0:rx1] & ring
-                    ))
-                    ring_white_ratio = ring_white / ring_count
-
-            support_r = max(int(radius * 2.45), int(radius) + 14)
-            sy0 = max(0, int(cy) - support_r)
-            sy1 = min(h, int(cy) + support_r + 1)
-            sx0 = max(0, int(cx) - support_r)
-            sx1 = min(w, int(cx) + support_r + 1)
-            backing_count = 0
-            if sy1 > sy0 and sx1 > sx0:
-                yy, xx = np.ogrid[sy0:sy1, sx0:sx1]
-                d2 = (xx - cx) ** 2 + (yy - cy) ** 2
-                surround = d2 >= max(radius * 1.05, radius + 2) ** 2
-                surround_count = int(surround.sum())
-                if surround_count > 0:
-                    backing_count = int(np.count_nonzero(
-                        backing_mask[sy0:sy1, sx0:sx1] & surround
-                    ))
-                    backing_ratio = backing_count / surround_count
-                    support_labels = backing_labels[sy0:sy1, sx0:sx1][surround]
-                    support_labels = support_labels[support_labels > 0]
-                    if support_labels.size:
-                        counts = np.bincount(support_labels)
-                        support_label = int(np.argmax(counts))
-
-            min_backing_ratio = float(os.environ.get(
-                "NOMAD_TASK2_MIN_BACKING_RATIO", "0.18"
+            ring_white = int(np.count_nonzero(
+                backing_mask[ry0:ry1, rx0:rx1] & ring
             ))
-            if backing_ratio < min_backing_ratio:
-                continue
-            if backing_count < max(int(area * 1.5), 180):
-                continue
-            if not (0 < support_label < n_backing):
+            backing_ratio = ring_white / ring_count
+            if backing_ratio < 0.22:
                 continue
 
-            bx = int(backing_stats[support_label, cv2.CC_STAT_LEFT])
-            by = int(backing_stats[support_label, cv2.CC_STAT_TOP])
-            bbw = int(backing_stats[support_label, cv2.CC_STAT_WIDTH])
-            bbh = int(backing_stats[support_label, cv2.CC_STAT_HEIGHT])
-            barea = int(backing_stats[support_label, cv2.CC_STAT_AREA])
-            baspect = bbw / float(max(1, bbh))
-            if baspect < 0.45 or baspect > 2.80:
+            # Identify the supporting plate component and require it big.
+            sup = back_labels[ry0:ry1, rx0:rx1][ring]
+            sup = sup[sup > 0]
+            support_label = 0
+            if sup.size:
+                counts = np.bincount(sup)
+                support_label = int(np.argmax(counts))
+            if support_label <= 0 or support_label >= n_back:
                 continue
-            if barea < max(int(area * 2.5), 700):
+            if not valid_backing[support_label]:
                 continue
-            if barea > int(w * h * 0.22):
+            plate_area = int(back_stats[support_label, cv2.CC_STAT_AREA])
+            if plate_area < max(int(area * 1.8), 700):
                 continue
-            if not (bx - radius <= cx <= bx + bbw + radius
-                    and by - radius <= cy <= by + bbh + radius):
+            if plate_area > int(w * h * 0.30):
+                continue  # whole-frame "white" is probably a wall
+
+            # ---- Interior colour purity -------------------------------- #
+            inner_r = max(2.0, radius_px * 0.7)
+            inner_disk = d2 <= inner_r * inner_r
+            inner_count = int(inner_disk.sum())
+            if inner_count <= 0:
+                continue
+            inside_color = int(np.count_nonzero(
+                target_mask[ry0:ry1, rx0:rx1] & inner_disk
+            ))
+            interior_color_ratio = inside_color / inner_count
+            if interior_color_ratio < 0.45:
                 continue
 
-            confidence = min(
-                0.95,
-                0.35
-                + min(fill, 0.75) * 0.35
-                + min(ring_white_ratio, 0.50) * 0.40
-                + min(backing_ratio, 0.55) * 0.25
-                + min(circularity, 0.85) * 0.18,
+            # ---- Depth (REQUIRED) ------------------------------------- #
+            rng = self._sample_depth_at(ecx, ecy, w, h)
+            if rng is None:
+                continue
+
+            diameter_m = self._estimate_task2_diameter_m(
+                major * 2.0, minor * 2.0, rng, w, h
             )
-            rng = self._sample_depth_at(cx, cy, w, h)
-            require_depth = os.environ.get(
-                "NOMAD_TASK2_REQUIRE_DEPTH", "true"
-            ).lower() not in ("0", "false", "no", "off")
-            if require_depth and rng is None:
+            if diameter_m is None:
+                continue
+            # 5-30 cm spec with small slack for measurement error.
+            if diameter_m < 0.045 or diameter_m > 0.34:
                 continue
 
-            pad = max(2, int(radius * 0.08))
-            x0 = max(0, x - pad)
-            y0 = max(0, y - pad)
-            bbox_w = float(min(w - x0, bw + pad * 2))
-            bbox_h = float(min(h - y0, bh + pad * 2))
-            diameter_m = self._estimate_task2_diameter_m(bbox_w, bbox_h, rng, w, h)
-            if diameter_m is not None:
-                min_diameter = float(os.environ.get("NOMAD_TASK2_MIN_DIAMETER_M", "0.04"))
-                max_diameter = float(os.environ.get("NOMAD_TASK2_MAX_DIAMETER_M", "0.35"))
-                if diameter_m < min_diameter or diameter_m > max_diameter:
-                    continue
+            # ---- Fused confidence ------------------------------------- #
+            confidence = min(
+                0.99,
+                0.10
+                + min(circularity, 0.95) * 0.30
+                + min(solidity, 0.95) * 0.15
+                + min(ellipticity, 0.95) * 0.10
+                + min(backing_ratio, 0.80) * 0.25
+                + min(interior_color_ratio, 0.90) * 0.20,
+            )
 
-            out.append({
+            # Axis-aligned bbox from rotated ellipse extent.
+            cos_a = math.cos(math.radians(angle_deg))
+            sin_a = math.sin(math.radians(angle_deg))
+            half_w = abs(major * cos_a) + abs(minor * sin_a)
+            half_h = abs(major * sin_a) + abs(minor * cos_a)
+            bbox_x = max(0.0, ecx - half_w)
+            bbox_y = max(0.0, ecy - half_h)
+            bbox_w = min(float(w) - bbox_x, half_w * 2.0)
+            bbox_h = min(float(h) - bbox_y, half_h * 2.0)
+
+            candidates.append({
                 "label": "circle",
-                "hsv_color": "purple_blue",
+                "hsv_color": "cabbage_paper",
                 "confidence": float(confidence),
-                "bbox_x": float(x0),
-                "bbox_y": float(y0),
-                "bbox_w": bbox_w,
-                "bbox_h": bbox_h,
+                "bbox_x": float(bbox_x),
+                "bbox_y": float(bbox_y),
+                "bbox_w": float(bbox_w),
+                "bbox_h": float(bbox_h),
+                "cx": float(ecx),
+                "cy": float(ecy),
+                "ellipse_major_px": float(major),
+                "ellipse_minor_px": float(minor),
+                "ellipse_angle_deg": float(angle_deg),
+                "radius_px": float(major),
                 "_src_w": w,
                 "_src_h": h,
                 "_detector": "task2",
-                "_method": "color_blob",
+                "_method": "cabbage_v2",
                 "range_m": rng,
                 "diameter_m": diameter_m,
             })
 
-        if len(out) > max_candidates:
-            out.sort(key=lambda d: float(d.get("confidence", 0.0)), reverse=True)
-            out = out[:max_candidates]
-        return out
-
-    def _detect_shape_circles_legacy(self, frame):
-        """Color-agnostic circular-shape detector for Task 2.
-
-        Combines HoughCircles + contour-circularity so any roughly circular
-        shape (regardless of its color) is highlighted. Average colour
-        verification (purple→blue change) is done by the spray controller,
-        not here — this overlay just picks shapes.
-        """
-        import cv2
-        h, w = frame.shape[:2]
-        gray, hsv = self._prepare_task2_detection_images(frame, cv2)
-        # Target model: a low-saturation red/blue/purple paper circle on a
-        # white plastic backing. Real cabbage-paper targets are pale enough
-        # that HSV saturation alone drops valid circles, so mirror the offline
-        # verifier and use Lab chroma as an additional color cue.
-        h_ch = hsv[:, :, 0]; s_ch = hsv[:, :, 1]; v_ch = hsv[:, :, 2]
-        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-        _l_ch, a_ch, b_ch = cv2.split(lab)
-        chroma = (
-            np.abs(a_ch.astype(np.int16) - 128)
-            + np.abs(b_ch.astype(np.int16) - 128)
-        )
-        # Red wraps the hue circle. Purple/blue/cyan cover the wet/dry cabbage
-        # response, including low-saturation paper under indoor lighting.
-        target_color_mask = (
-            (
-                ((h_ch <= 12) | (h_ch >= 170) | ((h_ch >= 82) & (h_ch <= 178)))
-                & (v_ch >= 35)
-                & ((s_ch >= 10) | (chroma >= 7))
-            )
-        )
-        # White plastic backing under shadows/glare is not always pure white,
-        # but keep this stricter than the target mask so pale paper does not
-        # satisfy the backing-ring gate by itself.
-        white_mask = (s_ch <= 36) & (v_ch >= 145) & (chroma <= 20)
-        _MIN_INTERIOR_COLOR = 0.42   # fraction of inner disk in target hue/chroma
-        _MIN_RING_WHITE     = 0.30   # fraction of outer ring in white backing
-        _MAX_CIRCLES_PER_FRAME = 6
-        # Scale with the actual detection frame. This normally runs on the
-        # pre-stream ROS frame (HD720), while still tolerating 360p if the ZED
-        # publisher is ever switched back to CUSTOM/downscaled output.
-        min_r = max(6, int(round(min(h, w) * 0.018)))
-        max_r = max(40, min(h, w) // 2)
-
-        def _passes_edge_gate(cx_i: int, cy_i: int, r_i: int) -> bool:
-            if r_i <= 0:
-                return False
-            # Interior: a disk at 0.7 * r — avoids the rim where anti-aliasing
-            # and shadows blur the hue.
-            inner_r = max(2, int(r_i * 0.7))
-            y0 = max(0, cy_i - inner_r); y1 = min(h, cy_i + inner_r + 1)
-            x0 = max(0, cx_i - inner_r); x1 = min(w, cx_i + inner_r + 1)
-            if y1 <= y0 or x1 <= x0:
-                return False
-            yy, xx = np.ogrid[y0:y1, x0:x1]
-            inside = (xx - cx_i) ** 2 + (yy - cy_i) ** 2 <= inner_r * inner_r
-            inside_count = int(inside.sum())
-            if inside_count <= 0:
-                return False
-            interior_hits = int(np.count_nonzero(
-                target_color_mask[y0:y1, x0:x1] & inside
-            ))
-            # Small/far targets lose color purity to demosaic, compression, and
-            # resize blending, so relax the gates slightly below ~14 px radius.
-            small_relax = 0.12 if r_i < 14 else 0.0
-            if (interior_hits / inside_count) < (_MIN_INTERIOR_COLOR - small_relax):
-                return False
-            # Outer ring: annulus from r*1.10 to r*1.40 — should be white backing.
-            outer_r = int(r_i * 1.40)
-            ry0 = max(0, cy_i - outer_r); ry1 = min(h, cy_i + outer_r + 1)
-            rx0 = max(0, cx_i - outer_r); rx1 = min(w, cx_i + outer_r + 1)
-            if ry1 <= ry0 or rx1 <= rx0:
-                return False
-            yy2, xx2 = np.ogrid[ry0:ry1, rx0:rx1]
-            d2 = (xx2 - cx_i) ** 2 + (yy2 - cy_i) ** 2
-            ring = (d2 >= int(r_i * 1.10) ** 2) & (d2 <= outer_r * outer_r)
-            ring_count = int(ring.sum())
-            if ring_count <= 0:
-                return False
-            ring_white = int(np.count_nonzero(
-                white_mask[ry0:ry1, rx0:rx1] & ring
-            ))
-            return (ring_white / ring_count) >= (_MIN_RING_WHITE - small_relax)
-
+        # NMS by ellipse-center distance, recall-favoring cap.
+        candidates.sort(key=lambda d: -float(d["confidence"]))
         out = []
-        claimed = []  # list of (cx, cy, r) we've already accepted
-
-        # ---- 1. Hough circles ----
-        try:
-            circles = cv2.HoughCircles(
-                gray, cv2.HOUGH_GRADIENT, dp=1.2, minDist=max(18, min_r * 3),
-                param1=100, param2=32, minRadius=min_r, maxRadius=max_r,
-            )
-            if circles is not None:
-                for c in circles[0]:
-                    cx, cy, r = int(c[0]), int(c[1]), int(c[2])
-                    if not _passes_edge_gate(cx, cy, r):
-                        continue
-                    claimed.append((cx, cy, r))
-                    rng = self._sample_depth_at(cx, cy, w, h)
-                    out.append({
-                        "label": "circle",
-                        "hsv_color": "circle",
-                        "confidence": 0.85,
-                        "bbox_x": float(max(0, cx - r)),
-                        "bbox_y": float(max(0, cy - r)),
-                        "bbox_w": float(min(w, 2 * r)),
-                        "bbox_h": float(min(h, 2 * r)),
-                        "_src_w": w,
-                        "_src_h": h,
-                        "_detector": "task2",
-                        "_method": "hough",
-                        "range_m": rng,
-                    })
-        except cv2.error:
-            pass
-
-        # ---- 2. Contour-circularity fallback (catches lower-contrast circles) ----
-        # At HD720, contours are expensive. Only run them when Hough did not
-        # produce a gated circle in this frame.
-        if not claimed:
-            try:
-                edges = cv2.Canny(gray, 45, 120)
-                edges = cv2.dilate(
-                    edges, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
-                    iterations=1,
-                )
-                contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                min_area = math.pi * min_r * min_r
-                max_area = math.pi * max_r * max_r
-                for c in contours:
-                    area = cv2.contourArea(c)
-                    if area < min_area or area > max_area:
-                        continue
-                    perim = cv2.arcLength(c, True)
-                    if perim < 1.0:
-                        continue
-                    circularity = (4.0 * math.pi * area) / (perim * perim)
-                    if circularity < 0.72:
-                        continue
-                    hull = cv2.convexHull(c)
-                    hull_area = cv2.contourArea(hull)
-                    if hull_area < 1.0 or area / hull_area < 0.78:
-                        continue
-                    (cx_f, cy_f), radius = cv2.minEnclosingCircle(c)
-                    cx, cy, r = int(cx_f), int(cy_f), int(radius)
-                    if r < min_r or r > max_r:
-                        continue
-                    if not _passes_edge_gate(cx, cy, r):
-                        continue
-                    claimed.append((cx, cy, r))
-                    x, y, bw, bh = cv2.boundingRect(c)
-                    rng = self._sample_depth_at(cx, cy, w, h)
-                    out.append({
-                        "label": "circle",
-                        "hsv_color": "circle",
-                        "confidence": float(min(circularity, area / hull_area)),
-                        "bbox_x": float(x),
-                        "bbox_y": float(y),
-                        "bbox_w": float(bw),
-                        "bbox_h": float(bh),
-                        "_src_w": w,
-                        "_src_h": h,
-                        "_detector": "task2",
-                        "_method": "contour",
-                        "range_m": rng,
-                    })
-            except cv2.error:
-                pass
-        # Cap to top-N by confidence so a noisy frame can never spam the
-        # overlay (and downstream targeting) with 20+ candidates.
-        if len(out) > _MAX_CIRCLES_PER_FRAME:
-            out.sort(key=lambda d: float(d.get("confidence", 0.0)), reverse=True)
-            out = out[:_MAX_CIRCLES_PER_FRAME]
+        for cand in candidates:
+            keep = True
+            for k in out:
+                dx = cand["cx"] - k["cx"]
+                dy = cand["cy"] - k["cy"]
+                r_max = max(cand["ellipse_major_px"], k["ellipse_major_px"])
+                if (dx * dx + dy * dy) ** 0.5 < r_max * 0.7:
+                    keep = False
+                    break
+            if keep:
+                out.append(cand)
+            if len(out) >= 8:
+                break
         return out
+
 
     def set_overlay_mode(self, mode: str) -> bool:
         """Legacy mode setter: "task1" turns on T1 only; "task2" turns on T2 only."""

@@ -131,14 +131,6 @@ def cleanup() -> None:
         except Exception:
             pass
 
-    # Stop detection thread (if running)
-    try:
-        stop_fn = getattr(app.state, '_stop_detection_fn', None)
-        if stop_fn:
-            stop_fn()
-    except Exception:
-        pass
-
     spray_controller = None
 
     # Shutdown servo controller (safety - disable PWM outputs)
@@ -519,174 +511,15 @@ def run(
     # the approach phase, so no nav2 goal/status/cancel wiring is needed here.
 
     # ------------------------------------------------------------------ #
-    # Continuous detection thread for visual servoing AIM phase.
-    # Runs at ~5 Hz in background, caches the latest detection so the
-    # spray controller gets instant responses instead of blocking on
-    # an HTTP snapshot per detection call.
+    # Task 2 detection now lives entirely inside the ROS video bridge
+    # (edge_core/ros/simple_video_bridge.py::_detect_shape_circles). The
+    # bridge owns the ZED frame + depth subscription, runs the cabbage-
+    # paper detector inline at the overlay loop rate, and publishes
+    # results into the API via /api/detections/update. The previous
+    # snapshot-poll thread + ground-station offload paths have been
+    # removed -- they were the source of conflicting bboxes / false
+    # positives in the overlay.
     # ------------------------------------------------------------------ #
-    import threading as _threading
-
-    _latest_detection: dict | None = None
-    _detection_lock = _threading.Lock()
-    _detection_running = False
-
-    def _detection_loop() -> None:
-        """Background detection thread — continuously detects targets at ~5 Hz.
-
-        Uses NOMAD's built-in circle detector (contrast/shape-based, no YOLO).
-        Caches the latest detection result for the spray controller and exposes
-        it through /api/detections so Mission Planner can select it.
-        """
-        nonlocal _latest_detection, _detection_running
-        _detection_running = True
-        logger.info("Detection thread started (~5 Hz)")
-
-        # Lazy imports (only done once when thread starts)
-        try:
-            from .task2_circle_verify import Task2CircleDetector
-            import cv2
-            import numpy as _np
-            import requests as _requests
-        except ImportError as e:
-            logger.error(f"Detection thread: missing dependency: {e}")
-            _detection_running = False
-            return
-
-        detector = Task2CircleDetector(
-            min_radius_px=3,    # Lowered for small targets at distance
-            hough_param2=30,    # More sensitive for small circles
-            blur_kernel=3,      # Less blur to preserve small features
-        )
-        bridge_port = int(os.environ.get("NOMAD_BRIDGE_HTTP_PORT", "9200"))
-        snap_url = f"http://172.17.0.1:{bridge_port}/snapshot"
-        # simple_video_bridge refreshes /snapshot every ~2s; polling faster
-        # just re-decodes and re-detects the same JPEG. Skip when the payload
-        # hash hasn't moved so we don't burn Jetson CPU on duplicate work.
-        last_payload_hash: int | None = None
-
-        while _detection_running:
-            try:
-                with app.state.detection_state_lock:
-                    detection_enabled = bool(
-                        getattr(app.state, "detection_enabled", False)
-                    )
-                    if not detection_enabled:
-                        # Keep offboard ground-station detections alive even
-                        # when the onboard snapshot detector is disabled. The
-                        # Task 2 UI and motion lookup apply their own stale-age
-                        # gates, so these cannot drive control indefinitely.
-                        app.state.detected_objects = [
-                            d for d in getattr(app.state, "detected_objects", [])
-                            if isinstance(d, dict)
-                            and d.get("source") in ("groundstation_task2", "offboard_task2")
-                        ]
-                if not detection_enabled:
-                    time.sleep(0.5)
-                    last_payload_hash = None
-                    with _detection_lock:
-                        _latest_detection = None
-                    continue
-
-                resp = _requests.get(snap_url, timeout=1)
-                if resp.status_code != 200:
-                    time.sleep(0.5)
-                    continue
-
-                payload_hash = hash(resp.content)
-                if payload_hash == last_payload_hash:
-                    time.sleep(0.5)
-                    continue
-                last_payload_hash = payload_hash
-
-                arr = _np.frombuffer(resp.content, dtype=_np.uint8)
-                img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                if img is None:
-                    time.sleep(0.5)
-                    continue
-
-                circles = detector.detect(img)
-                current_detection = None
-                with _detection_lock:
-                    if circles:
-                        best = max(
-                            circles, key=lambda c: c.confidence * c.radius
-                        )
-                        bbox_w = float(best.radius * 2)
-                        bbox_h = float(best.radius * 2)
-                        bbox_x = float(best.cx - best.radius)
-                        bbox_y = float(best.cy - best.radius)
-                        current_detection = {
-                            "target_id": 1,
-                            "label": "task2_circle",
-                            "confidence": float(best.confidence * 100.0),
-                            "bbox_x": bbox_x,
-                            "bbox_y": bbox_y,
-                            "bbox_w": bbox_w,
-                            "bbox_h": bbox_h,
-                            "cx": float(best.cx),
-                            "cy": float(best.cy),
-                            "radius_px": float(best.radius),
-                            "source": "snapshot_circle",
-                            "image_only": True,
-                        }
-                        drone_state = state_manager.get_state()
-                        drone_pos = (
-                            getattr(drone_state, "vio_x", None),
-                            getattr(drone_state, "vio_y", None),
-                            getattr(drone_state, "vio_z", None),
-                        )
-                        heading_deg = getattr(drone_state, "heading_deg", None)
-                        if all(v is not None for v in drone_pos) and heading_deg is not None:
-                            # Approximate a selectable target location straight
-                            # ahead. Final alignment is image-based; this only
-                            # lets the existing trigger/approach API work when
-                            # custom object detection is disabled.
-                            approx_range = float(SprayController.TARGET_CAMERA_RANGE_M)
-                            yaw = math.radians(float(heading_deg))
-                            current_detection["x"] = float(drone_pos[0]) + approx_range * math.cos(yaw)
-                            current_detection["y"] = float(drone_pos[1]) + approx_range * math.sin(yaw)
-                            current_detection["z"] = float(drone_pos[2])
-                            current_detection["range_m"] = approx_range
-                        _latest_detection = current_detection
-                    else:
-                        _latest_detection = None
-                with app.state.detection_state_lock:
-                    existing_depth_detection = None
-                    existing_age_s = None
-                    try:
-                        existing_age_s = time.time() - float(app.state.detection_last_update)
-                    except (TypeError, ValueError):
-                        existing_age_s = None
-                    for det in getattr(app.state, "detected_objects", []):
-                        if (
-                            isinstance(det, dict)
-                            and det.get("source") == "target_localizer_depth"
-                            and det.get("range_m") is not None
-                        ):
-                            existing_depth_detection = det
-                            break
-
-                    # Do not let the lightweight RGB snapshot detector clobber
-                    # the ROS-side circle+depth detection. The depth path is the
-                    # collision-critical source for forward/backward motion.
-                    preserve_depth_detection = (
-                        existing_depth_detection is not None
-                        and existing_age_s is not None
-                        and existing_age_s <= 1.0
-                    )
-                    if current_detection is not None:
-                        if not preserve_depth_detection:
-                            app.state.detected_objects = [current_detection]
-                            app.state.detection_last_update = time.time()
-                    elif (
-                        getattr(app.state, "detected_objects", [])
-                        and app.state.detected_objects[0].get("source") == "snapshot_circle"
-                    ):
-                        app.state.detected_objects = []
-                        app.state.detection_last_update = time.time()
-            except Exception as e:
-                logger.error(f"Detection loop error: {e}")
-            time.sleep(0.5)  # ~2 Hz; bridge snapshot only refreshes every 2s
 
     def _get_detection_bbox(target_or_id) -> dict | tuple | None:
         """Return the freshest detection for spray visual servoing.
@@ -811,26 +644,13 @@ def run(
                     "source": best.get("source", "detections_api"),
                 }
         except Exception as e:
-            logger.debug(f"ZED detection lookup failed, using snapshot fallback: {e}")
+            logger.debug(f"ZED detection lookup failed: {e}")
 
-        with _detection_lock:
-            return _latest_detection
+        return None
 
-    def _stop_detection() -> None:
-        """Stop the detection thread (called on shutdown)."""
-        nonlocal _detection_running
-        _detection_running = False
-
-    # Start background detection thread
-    _det_thread = _threading.Thread(
-        target=_detection_loop, daemon=True, name="spray_detection"
-    )
-    _det_thread.start()
     spray_controller.set_detection_bbox_fn(_get_detection_bbox)
-    # Store stop function for cleanup
-    app.state._stop_detection_fn = _stop_detection
 
-    logger.info("Spray controller initialized with velocity approach + circle verify + continuous detection")
+    logger.info("Spray controller initialized with velocity approach + circle verify")
 
     # Start health status broadcast (every 2 seconds)
     mavlink_service.start_health_broadcast(interval=2.0)

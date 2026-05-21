@@ -87,198 +87,222 @@ class Task2CircleDetector:
         self,
         min_radius_px: int = 15,
         max_radius_px: int = 300,
+        min_circularity: float = 0.42,
+        min_solidity: float = 0.68,
+        blur_kernel: int = 5,
+        # Accepted-but-ignored kwargs for back-compat with callers that were
+        # built against the old Hough/contour pipeline.
         hough_dp: float = 1.5,
         hough_param1: int = 100,
         hough_param2: int = 40,
-        min_circularity: float = 0.60,
-        min_solidity: float = 0.70,
-        blur_kernel: int = 5,
         canny_low: int = 50,
         canny_high: int = 150,
     ):
         self.min_radius_px = min_radius_px
         self.max_radius_px = max_radius_px
-        self.hough_dp = hough_dp
-        self.hough_param1 = hough_param1
-        self.hough_param2 = hough_param2
         self.min_circularity = min_circularity
         self.min_solidity = min_solidity
         self.blur_kernel = blur_kernel
-        self.canny_low = canny_low
-        self.canny_high = canny_high
+        _ = (hough_dp, hough_param1, hough_param2, canny_low, canny_high)
 
     def detect(self, bgr_image: np.ndarray) -> List[DetectedCircle]:
-        """
-        Detect circles in a BGR image.
+        """Detect cabbage-paper circles in a BGR image.
 
-        Runs Task 2 color/shape segmentation first, then supplements with Hough
-        and contour detection. Deduplicates overlapping results.
-
-        Args:
-            bgr_image: OpenCV BGR image (e.g., from ZED camera)
-
-        Returns:
-            List of DetectedCircle with pixel positions and properties.
+        Mirrors edge_core/ros/simple_video_bridge.py::_detect_shape_circles.
+        Used here on saved before/after snapshots, so the ZED depth gate is
+        absent -- physical-diameter validation runs at the live overlay path
+        in the bridge. All other gates (Lab+HSV colour, white-backing ring,
+        ellipse fit, fused confidence) match.
         """
         if bgr_image is None or bgr_image.size == 0:
             return []
 
-        gray = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (self.blur_kernel, self.blur_kernel), 0)
+        h, w = bgr_image.shape[:2]
+        blurred = cv2.GaussianBlur(
+            bgr_image, (self.blur_kernel, self.blur_kernel), 0
+        )
+        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
+        lab = cv2.cvtColor(blurred, cv2.COLOR_BGR2LAB)
+        s_ch = hsv[:, :, 1]
+        v_ch = hsv[:, :, 2]
+        a_ch = lab[:, :, 1].astype(np.int16)
+        b_ch = lab[:, :, 2].astype(np.int16)
+        chroma = np.abs(a_ch - 128) + np.abs(b_ch - 128)
 
+        backing_raw = (
+            (s_ch <= 40) & (v_ch >= 175) & (chroma <= 22)
+        ).astype(np.uint8) * 255
+        k5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        backing_mask = cv2.morphologyEx(backing_raw, cv2.MORPH_CLOSE, k5, iterations=2)
+        backing_mask = cv2.morphologyEx(backing_mask, cv2.MORPH_OPEN, k5, iterations=1)
+        n_back, back_labels, back_stats, _ = cv2.connectedComponentsWithStats(
+            (backing_mask > 0).astype(np.uint8), connectivity=8
+        )
+        min_backing_area = max(400, int(0.0020 * w * h))
+        valid_backing = np.zeros(n_back, dtype=bool)
+        for bidx in range(1, n_back):
+            if back_stats[bidx, cv2.CC_STAT_AREA] >= min_backing_area:
+                valid_backing[bidx] = True
+
+        mauve = (
+            (a_ch > 130) & (chroma >= 6)
+            & (v_ch >= 90) & (v_ch <= 240) & (s_ch <= 180)
+        )
+        blue = (
+            (a_ch < 127) & (b_ch < 132) & (chroma >= 8)
+            & (v_ch >= 70) & (v_ch <= 220) & (s_ch <= 180)
+        )
+        not_white = ~((s_ch <= 25) & (v_ch >= 195))
+        target_mask = ((mauve | blue) & not_white).astype(np.uint8) * 255
+        k3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        target_mask = cv2.morphologyEx(target_mask, cv2.MORPH_OPEN, k3, iterations=1)
+        target_mask = cv2.morphologyEx(target_mask, cv2.MORPH_CLOSE, k5, iterations=2)
+
+        n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+            target_mask, connectivity=8
+        )
+
+        min_r = self.min_radius_px
+        max_r = self.max_radius_px
+        min_area = max(20, int(math.pi * min_r * min_r * 0.40))
+        max_area = int(math.pi * max_r * max_r)
+
+        candidates: List[Tuple[float, DetectedCircle]] = []
+        for idx in range(1, n_labels):
+            x = int(stats[idx, cv2.CC_STAT_LEFT])
+            y = int(stats[idx, cv2.CC_STAT_TOP])
+            bw = int(stats[idx, cv2.CC_STAT_WIDTH])
+            bh = int(stats[idx, cv2.CC_STAT_HEIGHT])
+            area = int(stats[idx, cv2.CC_STAT_AREA])
+            if area < min_area or area > max_area or bw < 4 or bh < 4:
+                continue
+            aspect = bw / float(bh)
+            if aspect < 0.45 or aspect > 2.20:
+                continue
+
+            pad = 2
+            x0 = max(0, x - pad); y0 = max(0, y - pad)
+            x1 = min(w, x + bw + pad); y1 = min(h, y + bh + pad)
+            comp_mask = (labels[y0:y1, x0:x1] == idx).astype(np.uint8)
+            contours, _ = cv2.findContours(
+                comp_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+            )
+            if not contours:
+                continue
+            contour = max(contours, key=cv2.contourArea)
+            contour_area = float(cv2.contourArea(contour))
+            if contour_area < min_area:
+                continue
+            perim = float(cv2.arcLength(contour, True))
+            if perim < 1.0:
+                continue
+            circularity = (4.0 * math.pi * contour_area) / (perim * perim)
+            if circularity < 0.42:
+                continue
+            hull = cv2.convexHull(contour)
+            hull_area = float(cv2.contourArea(hull))
+            if hull_area < 1.0:
+                continue
+            solidity = contour_area / hull_area
+            if solidity < 0.68:
+                continue
+
+            if len(contour) >= 5:
+                try:
+                    (ecx_loc, ecy_loc), (axis_a, axis_b), _angle = cv2.fitEllipse(contour)
+                except cv2.error:
+                    continue
+                ecx = float(x0) + float(ecx_loc)
+                ecy = float(y0) + float(ecy_loc)
+                major = float(max(axis_a, axis_b)) * 0.5
+                minor = float(min(axis_a, axis_b)) * 0.5
+                if minor < 1.0:
+                    continue
+                ellipticity = minor / major
+                if ellipticity < 0.50:
+                    continue
+            else:
+                (ecx_loc, ecy_loc), r_fit = cv2.minEnclosingCircle(contour)
+                ecx = float(x0) + float(ecx_loc)
+                ecy = float(y0) + float(ecy_loc)
+                major = float(r_fit); minor = float(r_fit)
+                ellipticity = 1.0
+
+            cx_i = int(round(ecx)); cy_i = int(round(ecy))
+            if not (0 <= cx_i < w and 0 <= cy_i < h):
+                continue
+            radius_px = major
+            if radius_px < min_r or radius_px > max_r:
+                continue
+
+            outer_r = int(radius_px * 1.85) + 6
+            ry0 = max(0, cy_i - outer_r); ry1 = min(h, cy_i + outer_r + 1)
+            rx0 = max(0, cx_i - outer_r); rx1 = min(w, cx_i + outer_r + 1)
+            if ry1 <= ry0 or rx1 <= rx0:
+                continue
+            yy, xx = np.ogrid[ry0:ry1, rx0:rx1]
+            d2 = (xx - cx_i) ** 2 + (yy - cy_i) ** 2
+            inner = max(radius_px * 1.10, radius_px + 2.0)
+            ring = (d2 >= inner * inner) & (d2 <= outer_r * outer_r)
+            ring_count = int(ring.sum())
+            if ring_count <= 0:
+                continue
+            ring_white = int(np.count_nonzero(backing_mask[ry0:ry1, rx0:rx1] & ring))
+            backing_ratio = ring_white / ring_count
+            if backing_ratio < 0.22:
+                continue
+
+            sup = back_labels[ry0:ry1, rx0:rx1][ring]
+            sup = sup[sup > 0]
+            support_label = 0
+            if sup.size:
+                support_label = int(np.argmax(np.bincount(sup)))
+            if support_label <= 0 or support_label >= n_back or not valid_backing[support_label]:
+                continue
+            plate_area = int(back_stats[support_label, cv2.CC_STAT_AREA])
+            if plate_area < max(int(area * 1.8), 700):
+                continue
+            if plate_area > int(w * h * 0.30):
+                continue
+
+            inner_r = max(2.0, radius_px * 0.7)
+            inner_disk = d2 <= inner_r * inner_r
+            inner_count = int(inner_disk.sum())
+            if inner_count <= 0:
+                continue
+            inside_color = int(np.count_nonzero(target_mask[ry0:ry1, rx0:rx1] & inner_disk))
+            interior_color_ratio = inside_color / inner_count
+            if interior_color_ratio < 0.45:
+                continue
+
+            confidence = min(
+                0.99,
+                0.10
+                + min(circularity, 0.95) * 0.30
+                + min(solidity, 0.95) * 0.15
+                + min(ellipticity, 0.95) * 0.10
+                + min(backing_ratio, 0.80) * 0.25
+                + min(interior_color_ratio, 0.90) * 0.20,
+            )
+
+            det = self._make_detection(
+                cx_i, cy_i, int(round(major)), bgr_image, "cabbage_v2"
+            )
+            if det is None:
+                continue
+            det.confidence = float(confidence)
+            candidates.append((confidence, det))
+
+        # NMS by center distance, keep highest-confidence per spatial group.
+        candidates.sort(key=lambda kv: -kv[0])
         detections: List[DetectedCircle] = []
-
-        # Method 1: Task 2-specific color/shape segmentation
-        color_circles = self._detect_color_shape(bgr_image)
-        for c in color_circles:
-            det = self._make_detection(c[0], c[1], c[2], bgr_image, "color_shape")
-            if det is not None:
+        for _, det in candidates:
+            if not self._overlaps_existing(det, detections):
                 detections.append(det)
-
-        # Method 2: Hough Circle Transform
-        hough_circles = self._detect_hough(blurred)
-        for c in hough_circles:
-            det = self._make_detection(c[0], c[1], c[2], bgr_image, "hough")
-            if det is not None and not self._overlaps_existing(det, detections):
-                detections.append(det)
-
-        # Method 3: Contour-based detection (catches circles Hough misses)
-        contour_circles = self._detect_contours(blurred)
-        for c in contour_circles:
-            det = self._make_detection(c[0], c[1], c[2], bgr_image, "contour")
-            if det is not None and not self._overlaps_existing(det, detections):
-                detections.append(det)
-
+            if len(detections) >= 8:
+                break
         return detections
 
-    def _detect_color_shape(self, bgr_image: np.ndarray) -> List[Tuple[int, int, int]]:
-        """Detect pale purple/blue circular paper against white backing."""
-        hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
-        lab = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2LAB)
-        h_ch, s_ch, v_ch = cv2.split(hsv)
-        l_ch, a_ch, b_ch = cv2.split(lab)
-
-        # Purple dry target: H roughly 125-175 in OpenCV HSV, often low sat.
-        # Blue/cyan wet target: H roughly 85-130. The Lab chroma gate helps
-        # keep white plastic backing and glare out even when saturation is low.
-        purple_blue_hue = (
-            ((h_ch >= 85) & (h_ch <= 130))
-            | ((h_ch >= 125) & (h_ch <= 175))
-        )
-        chroma = (
-            (s_ch >= 12)
-            | (np.abs(a_ch.astype(np.int16) - 128) >= 4)
-            | (np.abs(b_ch.astype(np.int16) - 128) >= 4)
-        )
-        not_white = ~((s_ch <= 18) & (v_ch >= 185) & (l_ch >= 178))
-        mask = (purple_blue_hue & chroma & not_white & (v_ch >= 35)).astype(np.uint8) * 255
-
-        kernel_size = max(3, self.blur_kernel | 1)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        result: List[Tuple[int, int, int]] = []
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area < math.pi * self.min_radius_px ** 2:
-                continue
-            if area > math.pi * self.max_radius_px ** 2:
-                continue
-
-            perimeter = cv2.arcLength(contour, True)
-            if perimeter < 1.0:
-                continue
-            circularity = (4.0 * math.pi * area) / (perimeter * perimeter)
-            if circularity < max(0.45, self.min_circularity - 0.15):
-                continue
-
-            hull = cv2.convexHull(contour)
-            hull_area = cv2.contourArea(hull)
-            if hull_area < 1.0:
-                continue
-            solidity = area / hull_area
-            if solidity < max(0.55, self.min_solidity - 0.15):
-                continue
-
-            (cx, cy), radius = cv2.minEnclosingCircle(contour)
-            cx, cy, radius = int(cx), int(cy), int(radius)
-            if radius < self.min_radius_px or radius > self.max_radius_px:
-                continue
-
-            result.append((cx, cy, radius))
-        return result
-
-    def _detect_hough(self, gray_blurred: np.ndarray) -> List[Tuple[int, int, int]]:
-        """Run Hough Circle Transform on preprocessed grayscale image."""
-        try:
-            circles = cv2.HoughCircles(
-                gray_blurred,
-                cv2.HOUGH_GRADIENT,
-                dp=self.hough_dp,
-                minDist=self.min_radius_px * 2,
-                param1=self.hough_param1,
-                param2=self.hough_param2,
-                minRadius=self.min_radius_px,
-                maxRadius=self.max_radius_px,
-            )
-        except cv2.error as e:
-            logger.warning(f"HoughCircles failed: {e}")
-            return []
-
-        if circles is None:
-            return []
-
-        result = []
-        for c in circles[0]:
-            cx, cy, r = int(c[0]), int(c[1]), int(c[2])
-            result.append((cx, cy, r))
-        return result
-
-    def _detect_contours(self, gray_blurred: np.ndarray) -> List[Tuple[int, int, int]]:
-        """Detect circles via Canny edges + contour circularity analysis."""
-        edges = cv2.Canny(gray_blurred, self.canny_low, self.canny_high)
-
-        # Dilate edges to close small gaps in circle outlines
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        edges = cv2.dilate(edges, kernel, iterations=1)
-
-        contours, _ = cv2.findContours(
-            edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
-
-        result = []
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area < math.pi * self.min_radius_px ** 2:
-                continue
-            if area > math.pi * self.max_radius_px ** 2:
-                continue
-
-            perimeter = cv2.arcLength(contour, True)
-            if perimeter < 1.0:
-                continue
-
-            circularity = (4.0 * math.pi * area) / (perimeter * perimeter)
-            if circularity < self.min_circularity:
-                continue
-
-            hull = cv2.convexHull(contour)
-            hull_area = cv2.contourArea(hull)
-            if hull_area < 1.0:
-                continue
-            solidity = area / hull_area
-            if solidity < self.min_solidity:
-                continue
-
-            (cx, cy), radius = cv2.minEnclosingCircle(contour)
-            cx, cy, radius = int(cx), int(cy), int(radius)
-            if radius < self.min_radius_px or radius > self.max_radius_px:
-                continue
-
-            result.append((cx, cy, radius))
-        return result
 
     def _make_detection(
         self,
@@ -299,10 +323,11 @@ class Task2CircleDetector:
         mean_color = cv2.mean(bgr_image, mask=mask)[:3]
         mean_color = np.array(mean_color)
 
+        # Confidence is overwritten by the caller with the fused score from
+        # the cabbage-paper pipeline. The default below only applies to legacy
+        # callers that still pass an unrecognised method string.
         confidence = {
-            "color_shape": 0.90,
-            "hough": 0.75,
-            "contour": 0.60,
+            "cabbage_v2": 0.75,
         }.get(method, 0.50)
 
         return DetectedCircle(
