@@ -202,6 +202,15 @@ class VideoStreamNode(Node):
         self._overlay_mode = "task1"
         self._detections = []
         self._detections_lock = threading.Lock()
+        # Tracked detections with last-seen timestamps for temporal
+        # smoothing: a single 100ms detector miss flickers the overlay
+        # which is bad for visual targeting & autonomy. Keep stale boxes
+        # alive for up to _detection_persist_s after the last fresh hit.
+        # New detections are matched to tracked ones by IoU+distance.
+        self._tracked: list = []  # list of dicts with extra "last_seen"
+        self._detection_persist_s = float(os.environ.get(
+            "NOMAD_DETECTION_PERSIST_S", "0.5"
+        ))
         # Local HSV circle detection runs inline at ~5 Hz so the livestream
         # shows the same boxes as /capture_target without a network round-trip.
         self._hsv_last_run_ts = 0.0
@@ -762,10 +771,11 @@ class VideoStreamNode(Node):
             if self._detector_stop.is_set():
                 break
             if not self._overlay_enabled:
-                # Clear any stale overlay when detector is turned off.
+                # Drop everything when detector is turned off -- no decay.
                 with self._detections_lock:
                     if self._detections:
                         self._detections = []
+                self._tracked = []
                 continue
 
             with self._detector_frame_lock:
@@ -773,14 +783,13 @@ class VideoStreamNode(Node):
                 frame_ts = self._detector_frame_ts
                 self._detector_frame = None
 
-            # If no fresh frame, or the frame we have is stale, age out
-            # the existing overlay rather than letting it linger.
-            # Previously this `continue`d without touching self._detections,
-            # which left old boxes drawn for many seconds when the detector
-            # was running slower than frames arrived.
+            # If no fresh frame, age out the persistence tracker rather
+            # than hard-clearing. A short ZED hiccup shouldn't wipe the
+            # overlay if we just had a valid detection.
             if frame is None or (time.time() - frame_ts) > 0.5:
+                merged = self._merge_with_tracked([], time.time())
                 with self._detections_lock:
-                    self._detections = []
+                    self._detections = merged
                 continue
 
             dets = []
@@ -795,8 +804,9 @@ class VideoStreamNode(Node):
                 except Exception as det_err:
                     self.get_logger().warn(f'Task 2 color detect error: {det_err}')
             dets = self._dedupe_detections(dets)
+            merged = self._merge_with_tracked(dets, time.time())
             with self._detections_lock:
-                self._detections = dets
+                self._detections = merged
 
     # ---- Depth normalization ----
 
@@ -1167,27 +1177,44 @@ class VideoStreamNode(Node):
         # chroma as low as 4-5. Use a very permissive colour gate, and rely
         # on the higher density floor (0.30 below) inside the Hough circle
         # to discriminate from wall stains / gray plastic.
-        # Pale red-cabbage paper retains a clearly-red shift in Lab (a*>132)
-        # even when chroma is low. Pipe gray under cool/warm lighting stays
-        # near neutral (a*=124-130). So a*>132 cleanly separates them
-        # regardless of chroma magnitude.
+        # Cabbage paper is red-leaning but the camera often renders it as
+        # "warm neutral" where a* ≈ b* (both ~134). Strict `a > b` then
+        # catches only ~30% of pixels. Use a softer rule:
+        #   * a* must be red-side (>= b* - 8, i.e. red within 8 units of
+        #     equal -- excludes clearly yellow-dominant skin/cream)
+        #   * b* < 145 forbids deep yellow tones (skin tops out ~150)
+        #   * chr >= 8 forbids pipe gray (chr=1) and white paper (chr<5)
+        # Calibration samples:
+        #   warehouse mauve:   a*=146 b*=118 chr=28  PASS (146 >> 110, b ok)
+        #   pale pink @ 0.5m:  a*=134 b*=134 chr=12  PASS (134 > 126)
+        #   pink edge:         a*=140 b*=138 chr=23  PASS
+        #   light skin:        a*=140 b*=145 chr=12  REJECT (140 < 137? no, but b>=145)
+        #   pipe gray:         a*=128 b*=129 chr=1   REJECT (chr<8)
+        #   wall cream:        a*=123 b*=139 chr=16  REJECT (123 < 131)
         mauve = (
-            (a_ch > 132) & (b_ch < 134) & (chroma >= 4)
-            & (v_ch >= 70) & (v_ch <= 245)
+            (a_ch >= b_ch - 8) & (b_ch < 145) & (chroma >= 8)
+            & (s_ch >= 28) & (v_ch >= 70) & (v_ch <= 245)
         )
-        # Calibrated against a pale post-spray sample: a*=121, b*=125,
-        # chroma=10. Pipe gray at a*=128 b*=129 chroma=1 stays out.
-        # Wall cream has chroma 16 but b*=139 (yellow) -- excluded by
-        # b<128. White paper has a*=124 (right at the limit) but chroma=7
-        # < 8, also excluded.
+        # Calibrated against two samples:
+        #   pale post-spray at 30cm: a*=121, b*=125, chroma=10
+        #   same target at 1m:        a*=119, b*=135, chroma=16
+        # The b* drifts up to ~135 at distance due to white-balance/angle
+        # so use b*<138. Pipe gray (a*~128) and yellow wall cream (a*~123
+        # b*~139) are both excluded by a*<124 OR b*<138 respectively
+        # combined with backing-ring check downstream.
         blue = (
-            (a_ch < 124) & (b_ch < 128) & (chroma >= 8)
-            & (v_ch >= 60) & (v_ch <= 230)
+            (a_ch < 124) & (b_ch < 132) & (chroma >= 8)
+            & (s_ch >= 28) & (v_ch >= 60) & (v_ch <= 230)
         )
         not_white = ~((s_ch <= 25) & (v_ch >= 195))
         target = ((mauve | blue) & not_white).astype(np.uint8)
-        # Skin-tone (warm yellow-red corner): a* high AND b* high.
-        skin = ((a_ch > 130) & (b_ch > 135) & (chroma >= 6)).astype(np.uint8)
+        # Skin-tone / cream veto: yellow-dominant warm pixels. Red-pink
+        # cabbage paper can have high a* and b* too, so only reject when b*
+        # is meaningfully above a*.
+        skin = (
+            (a_ch > 130) & (b_ch > 135) & ((b_ch - a_ch) >= 4)
+            & (chroma >= 6)
+        ).astype(np.uint8)
 
         backing_raw = (
             (s_ch <= 40) & (v_ch >= 175) & (chroma <= 22)
@@ -1306,12 +1333,12 @@ class VideoStreamNode(Node):
                 self._task2_debug_reject("color_density", color_density, cx_i, cy_i, r_i)
                 continue
             # Absolute floor on coloured-pixel count: kills tiny corner/edge
-            # false positives where a small region (~30 px) happens to have
-            # high relative density due to JPEG chromatic cast in shadows.
-            # Real disks at worst-case range (5cm @ 5m -> r~7px is unrealistic;
-            # 25cm @ 5m -> r~30px, ~2500 interior px @ 30% density = 750)
-            # clear this easily.
-            if t_inside < 200:
+            # false positives where a small region happens to have high
+            # relative density due to JPEG chromatic cast in shadows.
+            # Lowered from 200 to 80 so 25cm targets at 5-8m range (r~10
+            # in downsampled detection frame) still clear it. A real disk
+            # at r=8 with 50% density has ~80 coloured pixels.
+            if t_inside < 80:
                 self._task2_debug_reject("min_color_pixels", t_inside, cx_i, cy_i, r_i)
                 continue
 
@@ -1509,6 +1536,77 @@ class VideoStreamNode(Node):
             if not collide:
                 out.append(d)
         return out
+
+    def _merge_with_tracked(self, fresh: list, now: float) -> list:
+        """Temporal persistence layer.
+
+        Each detection carries a "last_seen" timestamp. A fresh detection
+        either matches an existing tracked entry (close center + similar
+        radius) and refreshes its timestamp, or it's added as a new entry.
+        Tracked entries that haven't been refreshed for longer than
+        self._detection_persist_s are dropped. The returned list always
+        contains every still-alive tracked detection -- so a brief miss
+        on one frame won't flicker the overlay off.
+        """
+        # 1. Refresh existing tracks with any matching fresh detection.
+        matched_fresh_idx: set = set()
+        for t in self._tracked:
+            best_i = -1
+            best_d = float("inf")
+            for i, f in enumerate(fresh):
+                if i in matched_fresh_idx:
+                    continue
+                try:
+                    fx = float(f["cx"]); fy = float(f["cy"])
+                    fr = float(f.get("radius_px") or max(
+                        f.get("bbox_w", 0), f.get("bbox_h", 0)) / 2.0)
+                except (TypeError, ValueError, KeyError):
+                    continue
+                try:
+                    tx = float(t["cx"]); ty = float(t["cy"])
+                    tr = float(t.get("radius_px") or 1.0)
+                except (TypeError, ValueError, KeyError):
+                    continue
+                # Match if centers within combined radius and sizes similar.
+                dist = ((fx - tx) ** 2 + (fy - ty) ** 2) ** 0.5
+                if dist > (fr + tr) * 0.6:
+                    continue
+                if max(fr, tr) > 0 and (min(fr, tr) / max(fr, tr)) < 0.5:
+                    continue
+                if dist < best_d:
+                    best_d = dist
+                    best_i = i
+            if best_i >= 0:
+                # Refresh the track with the fresh detection's data.
+                new_track = dict(fresh[best_i])
+                new_track["last_seen"] = now
+                # Keep some history hint on the track.
+                new_track["track_first_seen"] = t.get(
+                    "track_first_seen", t.get("last_seen", now)
+                )
+                # Replace the tracked entry by index (preserved via
+                # rebuild below).
+                t.clear()
+                t.update(new_track)
+                matched_fresh_idx.add(best_i)
+        # 2. Add un-matched fresh detections as new tracks.
+        for i, f in enumerate(fresh):
+            if i in matched_fresh_idx:
+                continue
+            nf = dict(f)
+            nf["last_seen"] = now
+            nf["track_first_seen"] = now
+            self._tracked.append(nf)
+        # 3. Age out stale tracks.
+        cutoff = now - self._detection_persist_s
+        self._tracked = [
+            t for t in self._tracked
+            if float(t.get("last_seen", 0.0)) >= cutoff
+        ]
+        # 4. Output is the current tracked list (without our internal
+        # "last_seen"/"track_first_seen" fields if downstream doesn't
+        # need them -- we keep them as harmless extras).
+        return list(self._tracked)
 
     def start_overlay(self):
         # Default: enable Task 1 (preserves prior behaviour for /overlay/enable).

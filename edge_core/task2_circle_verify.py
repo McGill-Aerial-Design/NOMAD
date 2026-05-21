@@ -151,16 +151,22 @@ class Task2CircleDetector:
         chroma = np.abs(a_ch - 128) + np.abs(b_ch - 128)
 
         mauve = (
-            (a_ch > 132) & (b_ch < 134) & (chroma >= 4)
-            & (v_ch >= 70) & (v_ch <= 245)
+            (a_ch >= b_ch - 8) & (b_ch < 145) & (chroma >= 8)
+            & (s_ch >= 28) & (v_ch >= 70) & (v_ch <= 245)
         )
         blue = (
-            (a_ch < 124) & (b_ch < 128) & (chroma >= 8)
-            & (v_ch >= 60) & (v_ch <= 230)
+            (a_ch < 124) & (b_ch < 132) & (chroma >= 8)
+            & (s_ch >= 28) & (v_ch >= 60) & (v_ch <= 230)
         )
         not_white = ~((s_ch <= 25) & (v_ch >= 195))
         target = ((mauve | blue) & not_white).astype(np.uint8)
-        skin = ((a_ch > 130) & (b_ch > 135) & (chroma >= 6)).astype(np.uint8)
+        # Skin-tone / cream veto: yellow-dominant warm pixels. Red-pink
+        # cabbage paper can have high a* and b* too, so only reject when b*
+        # is meaningfully above a*.
+        skin = (
+            (a_ch > 130) & (b_ch > 135) & ((b_ch - a_ch) >= 4)
+            & (chroma >= 6)
+        ).astype(np.uint8)
 
         backing_raw = (
             (s_ch <= 40) & (v_ch >= 175) & (chroma <= 22)
@@ -247,7 +253,7 @@ class Task2CircleDetector:
             color_density = t_inside / ic
             if color_density < 0.30:
                 continue
-            if t_inside < 200:
+            if t_inside < 80:
                 continue
 
             sk_inside = int((skin & inside).sum())
