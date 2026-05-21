@@ -1145,21 +1145,34 @@ class VideoStreamNode(Node):
         b_ch = lab[:, :, 2].astype(np.int16)
         chroma = np.abs(a_ch - 128) + np.abs(b_ch - 128)
 
-        # Calibrated against actual cabbage-paper samples:
-        #   real dyed paper:        a*=146-157, b*=86-118, chroma=28-71
-        #   white paper/plastic:    a*=128-130, b*=128,    chroma=3-5
-        #   gray PVC pipe (cool):   a*~128,     b*~125,    chroma=4-10
-        # Setting chroma>=12 + a*>134 puts the gate squarely between real
-        # cabbage paper and the worst off-white false positives.
+        # Calibrated against samples:
+        #   real dyed paper (good light):  a*=146-157, b*=86-118, chroma=28-71
+        #   real dyed paper (phone OLED):  a*=130-138, b*=120-128, chroma=8-18
+        #   white paper/plastic:           a*=128-130, b*=128,     chroma=3-5
+        #   gray PVC pipe (cool):          a*~128,     b*~125,     chroma=4-10
+        # The density check (>=0.22 inside the Hough circle) is the real
+        # discriminator vs pipes -- a pipe has maybe 10-15% of pixels in
+        # the loose gate, a real disk has 40-90%. So we keep the gate just
+        # tight enough to skip pure neutrals, and let density do the work.
+        # Pale red-cabbage paper (low-dye or photographed dim) can have
+        # chroma as low as 4-5. Use a very permissive colour gate, and rely
+        # on the higher density floor (0.30 below) inside the Hough circle
+        # to discriminate from wall stains / gray plastic.
+        # Pale red-cabbage paper retains a clearly-red shift in Lab (a*>132)
+        # even when chroma is low. Pipe gray under cool/warm lighting stays
+        # near neutral (a*=124-130). So a*>132 cleanly separates them
+        # regardless of chroma magnitude.
         mauve = (
-            (a_ch > 134) & (b_ch < 132) & (chroma >= 12)
+            (a_ch > 132) & (b_ch < 134) & (chroma >= 4)
             & (v_ch >= 70) & (v_ch <= 245)
         )
-        # Post-spray cabbage reaction is a saturated teal/cyan -- never a
-        # slightly-cool gray. a*<124 + chroma>=15 keeps the genuine pH-shift
-        # response while excluding gray plastic with cool lighting cast.
+        # Calibrated against a pale post-spray sample: a*=121, b*=125,
+        # chroma=10. Pipe gray at a*=128 b*=129 chroma=1 stays out.
+        # Wall cream has chroma 16 but b*=139 (yellow) -- excluded by
+        # b<128. White paper has a*=124 (right at the limit) but chroma=7
+        # < 8, also excluded.
         blue = (
-            (a_ch < 124) & (b_ch < 128) & (chroma >= 15)
+            (a_ch < 124) & (b_ch < 128) & (chroma >= 8)
             & (v_ch >= 60) & (v_ch <= 230)
         )
         not_white = ~((s_ch <= 25) & (v_ch >= 195))
@@ -1179,36 +1192,83 @@ class VideoStreamNode(Node):
         )
         backing_bool = backing_mask > 0
 
-        # Hough on the CHROMA channel, not grayscale. The dyed paper has a
-        # sharp chroma boundary against the white-plastic backing (chroma 28
-        # -> chroma 3), while the backing-vs-wall boundary -- the dominant
-        # gradient in grayscale -- is invisible to chroma. This stops Hough
-        # from fitting oversized circles around the paper sheet that then
-        # fail the colored-density check.
-        chroma_u8 = np.clip(chroma, 0, 80).astype(np.uint8) * 3  # boost
+        # Hough on CHROMA channel (primary, finds saturated disks against
+        # neutral backgrounds) + GRAYSCALE Hough (fallback, finds disks
+        # where the chroma boundary is weak because the background colour
+        # is similar to the disk colour -- yellow-cream wall behind a
+        # mauve disk has very low chroma transition).
+        chroma_u8 = np.clip(chroma, 0, 80).astype(np.uint8) * 3
         chroma_u8 = cv2.medianBlur(chroma_u8, 5)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.medianBlur(gray, 5)
         min_r = max(8, int(round(min(h, w) * 0.015)))
         max_r = min(h, w) // 2
 
-        try:
-            circles_raw = cv2.HoughCircles(
-                chroma_u8,
-                cv2.HOUGH_GRADIENT,
-                dp=1.2,
-                minDist=max(20, min_r * 2),
-                param1=80,
-                param2=30,
-                minRadius=min_r,
-                maxRadius=max_r,
-            )
-        except cv2.error as exc:
+        circle_lists = []
+        for input_img, src in ((chroma_u8, "chroma"), (gray, "gray")):
             try:
-                self.get_logger().warn(f"HoughCircles failed: {exc}")
-            except Exception:
-                pass
+                cr = cv2.HoughCircles(
+                    input_img, cv2.HOUGH_GRADIENT, dp=1.2,
+                    minDist=max(20, min_r * 2),
+                    param1=80, param2=22,
+                    minRadius=min_r, maxRadius=max_r,
+                )
+            except cv2.error as exc:
+                try:
+                    self.get_logger().warn(f"HoughCircles({src}) failed: {exc}")
+                except Exception:
+                    pass
+                cr = None
+            if cr is not None:
+                circle_lists.append(cr[0])
+
+        # Connected-component fallback for weak-edge targets where Hough
+        # cannot find any circle (pale post-spray blue on white paper has
+        # only a ~3-unit chroma gradient at the disk boundary).
+        #
+        # Use centroid + area-based radius rather than minEnclosingCircle:
+        # the latter chases outlier pixels (single stray colour pixel near
+        # the disk can shift the circle by 10+px). Centroid is robust;
+        # area-based radius is just sqrt(area/pi). Add a small dilation
+        # correction (~3 px) because the colour gate naturally erodes the
+        # blob by 2-4 px at the gradual edge of pale targets.
+        k_open_cc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        k_close_cc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        target_clean = cv2.morphologyEx(target * 255, cv2.MORPH_OPEN, k_open_cc)
+        target_closed = cv2.morphologyEx(target_clean, cv2.MORPH_CLOSE, k_close_cc)
+        n_lbl, lbl, st, _ = cv2.connectedComponentsWithStats(target_closed, connectivity=8)
+        cc_circles = []
+        min_area_cc = max(math.pi * min_r * min_r * 0.4, 200)
+        max_area_cc = math.pi * max_r * max_r
+        for i in range(1, n_lbl):
+            area = int(st[i, cv2.CC_STAT_AREA])
+            if area < min_area_cc or area > max_area_cc:
+                continue
+            comp = (lbl == i).astype(np.uint8)
+            # Centroid from raw moments
+            M = cv2.moments(comp)
+            if M["m00"] <= 0:
+                continue
+            ccx = M["m10"] / M["m00"]
+            ccy = M["m01"] / M["m00"]
+            # Area-equivalent radius + ~3px edge-falloff correction
+            r_eq = math.sqrt(area / math.pi)
+            cr_fit = r_eq + 3.0
+            # Reject non-circular blobs by area/bbox-circle ratio
+            bw_ = st[i, cv2.CC_STAT_WIDTH]
+            bh_ = st[i, cv2.CC_STAT_HEIGHT]
+            bbox_r = max(bw_, bh_) / 2.0
+            if bbox_r <= 0 or (r_eq / bbox_r) < 0.70:
+                continue  # blob isn't disk-like
+            cc_circles.append([float(ccx), float(ccy), float(cr_fit)])
+        if cc_circles:
+            circle_lists.append(np.array(cc_circles, dtype=np.float32))
+
+        if not circle_lists:
             return []
 
-        if circles_raw is None:
+        circles_raw = [np.concatenate(circle_lists, axis=0)]
+        if circles_raw[0].size == 0:
             return []
 
         yy, xx = np.ogrid[:h, :w]
@@ -1231,7 +1291,10 @@ class VideoStreamNode(Node):
                 continue
             t_inside = int((target & inside).sum())
             color_density = t_inside / ic
-            if color_density < 0.22:
+            # Density floor raised because the colour gate is now loose --
+            # a real pale disk still gives 60-90% density (uniform color
+            # interior); wall stains / pipe gives only 10-25%.
+            if color_density < 0.30:
                 self._task2_debug_reject("color_density", color_density, cx_i, cy_i, r_i)
                 continue
             # Absolute floor on coloured-pixel count: kills tiny corner/edge
@@ -1257,6 +1320,19 @@ class VideoStreamNode(Node):
                 rb = int((backing_bool & ring).sum())
                 backing_ratio = rb / rc
 
+            # White-backing is now a hard requirement. Real cabbage targets
+            # ALWAYS have a white plastic plate behind them (competition
+            # spec). The phone-test scenario also has the disk on a white
+            # screen background. Wall stains / brown rust patches that
+            # happen to pass the colour gate never have a clean white ring
+            # around them, so this single check ends the wall false
+            # positives without touching real targets.
+            if backing_ratio < 0.15:
+                self._task2_debug_reject(
+                    "no_backing", backing_ratio, cx_i, cy_i, r_i,
+                )
+                continue
+
             rng = self._sample_depth_at(float(cx_i), float(cy_i), w, h)
             diameter_m = None
             if rng is not None:
@@ -1268,15 +1344,17 @@ class VideoStreamNode(Node):
                     continue
 
             # Size factor: rewards real targets (r >= 60 px) over slivers.
-            # Saturates at r=60 so very large disks don't completely
-            # dominate over a mid-range disk that's still a real target.
             size_factor = min(r_i / 60.0, 1.0)
+            # Backing is the strongest single discriminator vs phone-UI
+            # false positives -- weight it heaviest. Density still matters
+            # because Hough can locally find non-target circles inside
+            # large white regions.
             confidence = min(
                 0.99,
-                0.10
-                + min(color_density, 0.65) * 0.35
-                + min(backing_ratio, 0.70) * 0.25
-                + size_factor * 0.20
+                0.05
+                + min(color_density, 0.65) * 0.30
+                + min(backing_ratio, 0.70) * 0.40
+                + size_factor * 0.15
                 + (0.10 if rng is not None else 0.0),
             )
 
@@ -1318,20 +1396,26 @@ class VideoStreamNode(Node):
                 "color_density": float(color_density),
             })
 
-        # IoU-based NMS: Hough often returns several overlapping sub-circles
-        # inside one real disk because the paper texture creates secondary
-        # gradients. Suppress any circle with significant area overlap with
-        # an already-accepted higher-confidence one.
+        # Aggressive NMS: Hough returns several offset sub-circles inside
+        # one real disk. IoU alone misses them when centers are far enough
+        # apart that area overlap drops under 0.25 even though they're
+        # visually the same target. Combine with center-distance check.
         candidates.sort(key=lambda d: -float(d["confidence"]))
         out = []
         for cand in candidates:
             keep = True
             for k in out:
+                dx = cand["cx"] - k["cx"]
+                dy = cand["cy"] - k["cy"]
+                dist = (dx * dx + dy * dy) ** 0.5
+                # Suppress when centers are within 70% of summed radii
+                # (covers offset hits on the same target).
+                close = dist < (cand["radius_px"] + k["radius_px"]) * 0.7
                 iou = _circles_iou(
                     cand["cx"], cand["cy"], cand["radius_px"],
                     k["cx"], k["cy"], k["radius_px"],
                 )
-                if iou > 0.25:
+                if close or iou > 0.15:
                     keep = False
                     break
             if keep:

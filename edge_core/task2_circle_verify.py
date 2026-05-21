@@ -151,11 +151,11 @@ class Task2CircleDetector:
         chroma = np.abs(a_ch - 128) + np.abs(b_ch - 128)
 
         mauve = (
-            (a_ch > 134) & (b_ch < 132) & (chroma >= 12)
+            (a_ch > 132) & (b_ch < 134) & (chroma >= 4)
             & (v_ch >= 70) & (v_ch <= 245)
         )
         blue = (
-            (a_ch < 124) & (b_ch < 128) & (chroma >= 15)
+            (a_ch < 124) & (b_ch < 128) & (chroma >= 8)
             & (v_ch >= 60) & (v_ch <= 230)
         )
         not_white = ~((s_ch <= 25) & (v_ch >= 195))
@@ -176,18 +176,59 @@ class Task2CircleDetector:
         min_r = max(self.min_radius_px, int(round(min(h, w) * 0.015)))
         max_r = min(self.max_radius_px, min(h, w) // 2)
 
-        try:
-            circles_raw = cv2.HoughCircles(
-                chroma_u8, cv2.HOUGH_GRADIENT, dp=1.2,
-                minDist=max(20, min_r * 2),
-                param1=80, param2=30,
-                minRadius=min_r, maxRadius=max_r,
-            )
-        except cv2.error as exc:
-            logger.warning(f"HoughCircles failed: {exc}")
-            return []
+        gray = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2GRAY)
+        gray = cv2.medianBlur(gray, 5)
 
-        if circles_raw is None:
+        circle_lists = []
+        for input_img in (chroma_u8, gray):
+            try:
+                cr = cv2.HoughCircles(
+                    input_img, cv2.HOUGH_GRADIENT, dp=1.2,
+                    minDist=max(20, min_r * 2),
+                    param1=80, param2=22,
+                    minRadius=min_r, maxRadius=max_r,
+                )
+            except cv2.error as exc:
+                logger.warning(f"HoughCircles failed: {exc}")
+                cr = None
+            if cr is not None:
+                circle_lists.append(cr[0])
+
+        # CC fallback using centroid + area-equivalent radius (more
+        # accurate centering than minEnclosingCircle on slightly-irregular
+        # mask blobs).
+        k_open_cc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        k_close_cc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        target_clean = cv2.morphologyEx(target * 255, cv2.MORPH_OPEN, k_open_cc)
+        target_closed = cv2.morphologyEx(target_clean, cv2.MORPH_CLOSE, k_close_cc)
+        n_lbl, lbl, st, _ = cv2.connectedComponentsWithStats(target_closed, connectivity=8)
+        cc_circles = []
+        min_area_cc = max(math.pi * min_r * min_r * 0.4, 200)
+        max_area_cc = math.pi * max_r * max_r
+        for i in range(1, n_lbl):
+            area = int(st[i, cv2.CC_STAT_AREA])
+            if area < min_area_cc or area > max_area_cc:
+                continue
+            comp = (lbl == i).astype(np.uint8)
+            M = cv2.moments(comp)
+            if M["m00"] <= 0:
+                continue
+            ccx = M["m10"] / M["m00"]
+            ccy = M["m01"] / M["m00"]
+            r_eq = math.sqrt(area / math.pi)
+            bw_ = st[i, cv2.CC_STAT_WIDTH]
+            bh_ = st[i, cv2.CC_STAT_HEIGHT]
+            bbox_r = max(bw_, bh_) / 2.0
+            if bbox_r <= 0 or (r_eq / bbox_r) < 0.70:
+                continue
+            cc_circles.append([float(ccx), float(ccy), float(r_eq + 3.0)])
+        if cc_circles:
+            circle_lists.append(np.array(cc_circles, dtype=np.float32))
+
+        if not circle_lists:
+            return []
+        circles_raw = [np.concatenate(circle_lists, axis=0)]
+        if circles_raw[0].size == 0:
             return []
 
         yy, xx = np.ogrid[:h, :w]
@@ -208,7 +249,7 @@ class Task2CircleDetector:
                 continue
             t_inside = int((target & inside).sum())
             color_density = t_inside / ic
-            if color_density < 0.22:
+            if color_density < 0.30:
                 continue
             if t_inside < 200:
                 continue
@@ -224,13 +265,16 @@ class Task2CircleDetector:
                 rb = int((backing_bool & ring).sum())
                 backing_ratio = rb / rc
 
+            if backing_ratio < 0.15:
+                continue
+
             size_factor = min(r_i / 60.0, 1.0)
             confidence = min(
                 0.99,
-                0.10
-                + min(color_density, 0.65) * 0.35
-                + min(backing_ratio, 0.70) * 0.25
-                + size_factor * 0.25,
+                0.05
+                + min(color_density, 0.65) * 0.30
+                + min(backing_ratio, 0.70) * 0.40
+                + size_factor * 0.20,
             )
 
             det = self._make_detection(cx_i, cy_i, r_i, bgr_image, "hough_density_v3")
@@ -244,9 +288,11 @@ class Task2CircleDetector:
         for _, det in cands:
             keep = True
             for k in detections:
+                dist = ((det.cx - k.cx) ** 2 + (det.cy - k.cy) ** 2) ** 0.5
+                close = dist < (det.radius + k.radius) * 0.7
                 iou = _circles_iou_xy(det.cx, det.cy, det.radius,
                                      k.cx, k.cy, k.radius)
-                if iou > 0.25:
+                if close or iou > 0.15:
                     keep = False
                     break
             if keep:
