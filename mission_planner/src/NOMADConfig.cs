@@ -531,6 +531,14 @@ namespace NOMAD.MissionPlanner
         // Drop toggles and FireWaterPump are edge-triggered (fire on switch flip
         // toward the position); Reel actions run while the switch is held off-
         // centre and stop when it returns to middle.
+        /// <summary>
+        /// DirectInput device that publishes the switch buttons (from joystick.py
+        /// or any other source). Independent of the gimbal/ZED axis devices so
+        /// payload switches keep working even when both axis channels are off.
+        /// Leave blank to fall back to the gimbal device, then the ZED device.
+        /// </summary>
+        public string JoystickSwitchDevice  { get; set; } = "";
+
         public string JoystickSw1UpAction   { get; set; } = "DropToggleP1";
         public string JoystickSw1DownAction { get; set; } = "DropToggleP2";
         public string JoystickSw2UpAction   { get; set; } = "DropToggleP3";

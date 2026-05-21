@@ -44,6 +44,11 @@ namespace NOMAD.MissionPlanner
         // We dedupe at acquire-time by sharing one base when device names match.
         private JoystickBase _gimbalJoy;
         private JoystickBase _zedJoy;
+        // Dedicated button-source device. May alias _gimbalJoy / _zedJoy when
+        // the configured switch device matches one of the axis devices, so we
+        // only Acquire() once per physical handle.
+        private JoystickBase _switchJoy;
+        private bool _switchJoyOwned; // true if we created it (vs. aliased gimbal/zed)
 
         // Cached property accessors on IMyJoystickState (X, Y, …) so we read
         // by axis-name string from config without per-tick reflection cost.
@@ -105,6 +110,12 @@ namespace NOMAD.MissionPlanner
             try { _timer?.Stop(); _timer?.Dispose(); } catch { }
             _timer = null;
 
+            // Release the dedicated switch device first if we own it; otherwise
+            // just drop the alias so ReleaseJoy on gimbal/zed below frees it.
+            if (_switchJoyOwned) ReleaseJoy(ref _switchJoy);
+            else _switchJoy = null;
+            _switchJoyOwned = false;
+
             ReleaseJoy(ref _gimbalJoy);
             ReleaseJoy(ref _zedJoy);
         }
@@ -112,8 +123,28 @@ namespace NOMAD.MissionPlanner
         public void RestartWithConfig()
         {
             Stop();
-            if (_config.JoystickGimbalEnabled || _config.JoystickZedEnabled)
-                Start();
+            if (NeedsToRun()) Start();
+        }
+
+        /// <summary>
+        /// True when the service has something to do — either an axis channel
+        /// is enabled, or at least one switch slot is mapped to a real action
+        /// (so payload switches keep working even with no gimbal/ZED routing).
+        /// </summary>
+        public bool NeedsToRun()
+        {
+            if (_config.JoystickGimbalEnabled || _config.JoystickZedEnabled) return true;
+            return AnySwitchMapped();
+        }
+
+        private bool AnySwitchMapped()
+        {
+            return GetSlotAction(0) != SwitchAction.None
+                || GetSlotAction(1) != SwitchAction.None
+                || GetSlotAction(2) != SwitchAction.None
+                || GetSlotAction(3) != SwitchAction.None
+                || GetSlotAction(4) != SwitchAction.None
+                || GetSlotAction(5) != SwitchAction.None;
         }
 
         public void UpdateConfig(NOMADConfig config)
@@ -146,24 +177,48 @@ namespace NOMAD.MissionPlanner
 
         private void AcquireDevices()
         {
-            // Share one JoystickBase across both roles if they target the
-            // same physical device — DirectInput permits multiple readers
-            // of one acquired device cheaper than two separate acquires.
-            JoystickBase shared = null;
-
+            // Share one JoystickBase across roles if they target the same
+            // physical device — DirectInput permits multiple readers of one
+            // acquired device cheaper than two separate acquires.
             if (_config.JoystickGimbalEnabled && !string.IsNullOrWhiteSpace(_config.JoystickGimbalDevice))
             {
                 _gimbalJoy = CreateAndAcquire(_config.JoystickGimbalDevice);
-                shared = _gimbalJoy;
             }
 
             if (_config.JoystickZedEnabled && !string.IsNullOrWhiteSpace(_config.JoystickZedDevice))
             {
-                if (shared != null && _config.JoystickZedDevice == _config.JoystickGimbalDevice)
-                    _zedJoy = shared;
+                if (_gimbalJoy != null && _config.JoystickZedDevice == _config.JoystickGimbalDevice)
+                    _zedJoy = _gimbalJoy;
                 else
                     _zedJoy = CreateAndAcquire(_config.JoystickZedDevice);
             }
+
+            // Resolve the button-source device. Explicit config wins; otherwise
+            // fall back to whichever axis device is already acquired so users
+            // with a single virtual gamepad don't need to configure twice.
+            string switchDev = _config.JoystickSwitchDevice;
+            if (string.IsNullOrWhiteSpace(switchDev))
+            {
+                _switchJoy = _gimbalJoy ?? _zedJoy;
+                _switchJoyOwned = false;
+            }
+            else if (_gimbalJoy != null && switchDev == _config.JoystickGimbalDevice)
+            {
+                _switchJoy = _gimbalJoy;
+                _switchJoyOwned = false;
+            }
+            else if (_zedJoy != null && switchDev == _config.JoystickZedDevice)
+            {
+                _switchJoy = _zedJoy;
+                _switchJoyOwned = false;
+            }
+            else
+            {
+                _switchJoy = CreateAndAcquire(switchDev);
+                _switchJoyOwned = _switchJoy != null;
+            }
+
+            Console.WriteLine($"NOMAD Joystick: switch device='{switchDev}' acquired={(_switchJoy != null)} owned={_switchJoyOwned}");
         }
 
         private static JoystickBase CreateAndAcquire(string deviceName)
@@ -222,7 +277,7 @@ namespace NOMAD.MissionPlanner
             // edge detection doesn't depend on stick motion or DriveGimbal early-returning.
             try
             {
-                var btnDev = _gimbalJoy ?? _zedJoy;
+                var btnDev = _switchJoy ?? _gimbalJoy ?? _zedJoy;
                 if (btnDev != null)
                 {
                     var st = SafeGetState(btnDev);

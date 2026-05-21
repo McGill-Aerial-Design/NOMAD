@@ -128,6 +128,7 @@ namespace NOMAD.MissionPlanner
         private Label _lblJoyStatus;
         // 3-position switch action mapping (6 slots: sw1/2/3 × up/down)
         private ComboBox _cmbSw1Up, _cmbSw1Down, _cmbSw2Up, _cmbSw2Down, _cmbSw3Up, _cmbSw3Down;
+        private ComboBox _cmbSwitchDevice;
         // Serial bridge sub-section
         private CheckBox _chkSerialBridgeEnabled;
         private TextBox _txtSerialBridgePort, _txtSerialBridgePython, _txtSerialBridgeScript;
@@ -812,12 +813,19 @@ namespace NOMAD.MissionPlanner
                 var freshList = BuildDeviceComboList(fresh);
                 string keepG = _cmbJoyGimbalDevice.SelectedItem?.ToString();
                 string keepZ = _cmbJoyZedDevice.SelectedItem?.ToString();
+                string keepS = _cmbSwitchDevice?.SelectedItem?.ToString();
                 _cmbJoyGimbalDevice.Items.Clear();
                 _cmbJoyZedDevice.Items.Clear();
                 _cmbJoyGimbalDevice.Items.AddRange(freshList);
                 _cmbJoyZedDevice.Items.AddRange(freshList);
                 SetComboBoxValue(_cmbJoyGimbalDevice, keepG);
                 SetComboBoxValue(_cmbJoyZedDevice, keepZ);
+                if (_cmbSwitchDevice != null)
+                {
+                    _cmbSwitchDevice.Items.Clear();
+                    _cmbSwitchDevice.Items.AddRange(freshList);
+                    SetComboBoxValue(_cmbSwitchDevice, keepS);
+                }
                 _lblJoyStatus.Text = $"{fresh.Count} device(s) detected.";
             };
             tab.Controls.Add(_btnJoyRefreshDevices);
@@ -841,6 +849,10 @@ namespace NOMAD.MissionPlanner
                 "Each switch centers in the middle; UP and DOWN each fire an action.",
                 10, y, Color.FromArgb(180, 180, 180));
             y += 22;
+
+            AddLabel(tab, "Device:", 20, y);
+            _cmbSwitchDevice = AddComboBox(tab, 90, y, 290, deviceList);
+            y += 28;
 
             string[] actionLabels = SwitchActionLabels();
             AddLabel(tab, "SW1 ↑:", 20, y);
@@ -1307,6 +1319,8 @@ namespace NOMAD.MissionPlanner
             _numJoyZedDeadzone.Value = (decimal)Math.Max(0f, Math.Min(0.5f, Config.JoystickZedDeadzone));
             _numJoyZedMaxRate.Value = (decimal)Math.Max(50f, Math.Min(4000f, Config.JoystickZedMaxRateUsPerSec));
 
+            SetComboBoxValue(_cmbSwitchDevice,
+                string.IsNullOrEmpty(Config.JoystickSwitchDevice) ? "(none)" : Config.JoystickSwitchDevice);
             SetComboBoxValue(_cmbSw1Up,   LabelForActionId(Config.JoystickSw1UpAction));
             SetComboBoxValue(_cmbSw1Down, LabelForActionId(Config.JoystickSw1DownAction));
             SetComboBoxValue(_cmbSw2Up,   LabelForActionId(Config.JoystickSw2UpAction));
@@ -1468,6 +1482,7 @@ namespace NOMAD.MissionPlanner
             Config.JoystickZedDeadzone = (float)_numJoyZedDeadzone.Value;
             Config.JoystickZedMaxRateUsPerSec = (float)_numJoyZedMaxRate.Value;
 
+            Config.JoystickSwitchDevice  = NormalizeDevice(_cmbSwitchDevice?.SelectedItem?.ToString());
             Config.JoystickSw1UpAction   = ActionIdForLabel(_cmbSw1Up?.SelectedItem?.ToString());
             Config.JoystickSw1DownAction = ActionIdForLabel(_cmbSw1Down?.SelectedItem?.ToString());
             Config.JoystickSw2UpAction   = ActionIdForLabel(_cmbSw2Up?.SelectedItem?.ToString());

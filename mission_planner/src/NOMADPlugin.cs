@@ -188,7 +188,7 @@ namespace NOMAD.MissionPlanner
 
                 // Physical joystick service — starts only if either channel is enabled in config.
                 _joystickService = new NomadJoystickService(_config);
-                if (_config.JoystickGimbalEnabled || _config.JoystickZedEnabled)
+                if (_joystickService.NeedsToRun())
                 {
                     try { _joystickService.Start(); }
                     catch (Exception ex) { Console.WriteLine($"NOMAD: joystick service start failed — {ex.Message}"); }
