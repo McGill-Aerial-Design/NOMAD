@@ -80,33 +80,41 @@ namespace NOMAD.MissionPlanner
                     ? "python"
                     : _config.SerialJoystickPython;
 
+                // Spawn python in its own visible console window. Two reasons:
+                //   1. The previous headless launch (UseShellExecute=false +
+                //      CreateNoWindow=true) silently failed for some users —
+                //      vgamepad/ViGEmBus appears to rely on a real console
+                //      session, and redirected stdout fights Python's default
+                //      block-buffering so we couldn't see why.
+                //   2. A visible window means the user immediately sees pyserial
+                //      / vgamepad errors and live telemetry frames, matching
+                //      what they get from running the script in a terminal.
+                // We still own the spawned cmd.exe handle so Stop() can kill it.
+                // Using cmd /k keeps the window open if python exits with an
+                // error so the message stays on screen.
+                string argString = $"/k title NOMAD Joystick Bridge && \"{python}\" \"{script}\" --port {_config.SerialJoystickPort} --baud {_config.SerialJoystickBaud}";
                 var psi = new ProcessStartInfo
                 {
-                    FileName = python,
-                    Arguments = $"\"{script}\" --port {_config.SerialJoystickPort} --baud {_config.SerialJoystickBaud}",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
+                    FileName = "cmd.exe",
+                    Arguments = argString,
+                    UseShellExecute = true,         // required for a real console window
+                    CreateNoWindow = false,
+                    WindowStyle = ProcessWindowStyle.Normal,
                     WorkingDirectory = Path.GetDirectoryName(script) ?? Environment.CurrentDirectory,
                 };
 
                 try
                 {
                     _proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
-                    _proc.OutputDataReceived += (s, e) => { if (e.Data != null) Console.WriteLine("[NOMAD bridge] " + e.Data); };
-                    _proc.ErrorDataReceived  += (s, e) => { if (e.Data != null) Console.WriteLine("[NOMAD bridge ERR] " + e.Data); };
                     _proc.Exited += (s, e) =>
                     {
                         // Surface unexpected exits so the user notices the bridge died.
-                        Console.WriteLine($"[NOMAD bridge] process exited (code {SafeExitCode(_proc)}).");
+                        Console.WriteLine($"[NOMAD bridge] cmd window closed (code {SafeExitCode(_proc)}).");
                     };
                     _proc.Start();
-                    _proc.BeginOutputReadLine();
-                    _proc.BeginErrorReadLine();
                     _lastStartUtc = DateTime.UtcNow;
                     _lastError = null;
-                    Console.WriteLine($"NOMAD bridge: launched ({python} {script} --port {_config.SerialJoystickPort})");
+                    Console.WriteLine($"NOMAD bridge: launched in console window ({python} {script} --port {_config.SerialJoystickPort})");
                 }
                 catch (Exception ex)
                 {
@@ -126,7 +134,28 @@ namespace NOMAD.MissionPlanner
                 {
                     if (!_proc.HasExited)
                     {
-                        try { _proc.Kill(); } catch { }
+                        // cmd.exe's python child won't die from Process.Kill() on
+                        // the parent — taskkill /T walks the tree.
+                        int pid = -1;
+                        try { pid = _proc.Id; } catch { }
+                        if (pid > 0)
+                        {
+                            try
+                            {
+                                var killer = new ProcessStartInfo
+                                {
+                                    FileName = "taskkill",
+                                    Arguments = $"/PID {pid} /T /F",
+                                    UseShellExecute = false,
+                                    CreateNoWindow = true,
+                                    RedirectStandardOutput = true,
+                                    RedirectStandardError = true,
+                                };
+                                using (var p = Process.Start(killer)) { p?.WaitForExit(1500); }
+                            }
+                            catch { }
+                        }
+                        try { if (!_proc.HasExited) _proc.Kill(); } catch { }
                         try { _proc.WaitForExit(1500); } catch { }
                     }
                 }

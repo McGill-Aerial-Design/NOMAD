@@ -147,6 +147,7 @@
     <Compile Include="NOMADMusicView.cs" />
     <Compile Include="MapOverlayManager.cs" />
     <Compile Include="MPFenceUploader.cs" />
+    <Compile Include="FlightModeController.cs" />
     <Compile Include="AudioAlerts.cs" />
     <Compile Include="NOMADConfig.cs" />
     <Compile Include="NOMADDashboardView.cs" />

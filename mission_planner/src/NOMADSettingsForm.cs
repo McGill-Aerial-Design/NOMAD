@@ -129,6 +129,9 @@ namespace NOMAD.MissionPlanner
         // 3-position switch action mapping (6 slots: sw1/2/3 × up/down)
         private ComboBox _cmbSw1Up, _cmbSw1Down, _cmbSw2Up, _cmbSw2Down, _cmbSw3Up, _cmbSw3Down;
         private ComboBox _cmbSwitchDevice;
+        private CheckBox _chkKillSwitchEnabled;
+        private NumericUpDown _numKillLandSpeed;
+        private CheckBox _chkJoyAutoSelect;
         // Serial bridge sub-section
         private CheckBox _chkSerialBridgeEnabled;
         private TextBox _txtSerialBridgePort, _txtSerialBridgePython, _txtSerialBridgeScript;
@@ -747,6 +750,10 @@ namespace NOMAD.MissionPlanner
                 10, y, Color.FromArgb(180, 180, 180));
             y += 24;
 
+            _chkJoyAutoSelect = AddCheckBox(tab,
+                "Auto-pick first available device (and hot-plug retry)", 20, y, Color.LimeGreen);
+            y += 28;
+
             var devices = NomadJoystickService.EnumerateDevices();
             var axes = new System.Collections.Generic.List<string>(NomadJoystickService.AxisNames).ToArray();
             string[] deviceList = BuildDeviceComboList(devices);
@@ -871,6 +878,25 @@ namespace NOMAD.MissionPlanner
             _cmbSw3Up = AddComboBox(tab, 80, y, 220, actionLabels);
             AddLabel(tab, "SW3 ↓:", 310, y);
             _cmbSw3Down = AddComboBox(tab, 370, y, 130, actionLabels);
+            y += 36;
+
+            // -------- Kill switch (XInput BACK button = radio kill pushbutton) --------
+            AddSectionLabel(tab, "Kill Switch (pushbutton)", ref y);
+            AddLabel(tab,
+                "Pressing the radio's kill button commands LAND at the descent",
+                10, y, Color.FromArgb(180, 180, 180));
+            y += 18;
+            AddLabel(tab,
+                "rate below. Minimum 200 cm/s (2 m/s) per CONOPS §4.5.",
+                10, y, Color.FromArgb(180, 180, 180));
+            y += 22;
+
+            _chkKillSwitchEnabled = AddCheckBox(tab, "Enable kill switch", 20, y, Color.IndianRed);
+            y += 28;
+
+            AddLabel(tab, "Descent (cm/s):", 20, y);
+            _numKillLandSpeed = AddNumericUpDown(tab, 130, y, 80, 200, 800, 250);
+            AddLabel(tab, "= " + "2.5 m/s default", 220, y, Color.Gray);
             y += 36;
 
             // -------- Serial → virtual gamepad bridge --------
@@ -1328,6 +1354,11 @@ namespace NOMAD.MissionPlanner
             SetComboBoxValue(_cmbSw3Up,   LabelForActionId(Config.JoystickSw3UpAction));
             SetComboBoxValue(_cmbSw3Down, LabelForActionId(Config.JoystickSw3DownAction));
 
+            _chkJoyAutoSelect.Checked = Config.JoystickAutoSelectDevice;
+            _chkKillSwitchEnabled.Checked = Config.JoystickKillSwitchEnabled;
+            _numKillLandSpeed.Value = Math.Max(_numKillLandSpeed.Minimum,
+                                       Math.Min(_numKillLandSpeed.Maximum, Config.JoystickKillLandSpeedCmS));
+
             _chkSerialBridgeEnabled.Checked = Config.SerialJoystickEnabled;
             _txtSerialBridgePort.Text = Config.SerialJoystickPort ?? "";
             _numSerialBridgeBaud.Value = Math.Max(_numSerialBridgeBaud.Minimum,
@@ -1489,6 +1520,10 @@ namespace NOMAD.MissionPlanner
             Config.JoystickSw2DownAction = ActionIdForLabel(_cmbSw2Down?.SelectedItem?.ToString());
             Config.JoystickSw3UpAction   = ActionIdForLabel(_cmbSw3Up?.SelectedItem?.ToString());
             Config.JoystickSw3DownAction = ActionIdForLabel(_cmbSw3Down?.SelectedItem?.ToString());
+
+            Config.JoystickAutoSelectDevice = _chkJoyAutoSelect.Checked;
+            Config.JoystickKillSwitchEnabled = _chkKillSwitchEnabled.Checked;
+            Config.JoystickKillLandSpeedCmS = (int)_numKillLandSpeed.Value;
 
             Config.SerialJoystickEnabled = _chkSerialBridgeEnabled.Checked;
             Config.SerialJoystickPort = _txtSerialBridgePort.Text.Trim();

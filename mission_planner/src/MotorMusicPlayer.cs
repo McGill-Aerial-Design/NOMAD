@@ -356,7 +356,9 @@ namespace NOMAD.MissionPlanner
             try
             {
                 foreach (int bus in canBuses)
-                    CubeOutputController.EnableCanForwardAsync(bus, true).GetAwaiter().GetResult();
+                {
+                    try { CubeOutputController.EnableCanForward(bus, true); } catch { }
+                }
 
                 foreach (var note in song.Notes)
                 {
@@ -378,7 +380,7 @@ namespace NOMAD.MissionPlanner
             {
                 foreach (int bus in canBuses)
                 {
-                    try { CubeOutputController.EnableCanForwardAsync(bus, false).GetAwaiter().GetResult(); } catch { }
+                    try { CubeOutputController.EnableCanForward(bus, false); } catch { }
                 }
                 _currentSong = null;
                 _progress = 0f;
@@ -405,9 +407,7 @@ namespace NOMAD.MissionPlanner
             {
                 try
                 {
-                    CubeOutputController.SendDroneCanBeepAsync(bus, DroneCanSourceNodeId, freq, durationSeconds)
-                        .GetAwaiter()
-                        .GetResult();
+                    CubeOutputController.SendDroneCanBeep(bus, DroneCanSourceNodeId, freq, durationSeconds);
                 }
                 catch { }
             }

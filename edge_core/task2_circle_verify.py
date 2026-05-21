@@ -144,19 +144,22 @@ class Task2CircleDetector:
             if back_stats[bidx, cv2.CC_STAT_AREA] >= min_backing_area:
                 valid_backing[bidx] = True
 
+        # See simple_video_bridge._detect_shape_circles for the rationale on
+        # the b* < 135 skin-exclusion gate and the 13-px close kernel.
         mauve = (
-            (a_ch > 128) & (chroma >= 6)
+            (a_ch > 128) & (b_ch < 135) & (chroma >= 4)
             & (v_ch >= 70) & (v_ch <= 245)
         )
         blue = (
-            (a_ch < 130) & (b_ch < 132) & (chroma >= 6)
+            (a_ch < 130) & (b_ch < 132) & (chroma >= 4)
             & (v_ch >= 60) & (v_ch <= 230)
         )
         not_white = ~((s_ch <= 25) & (v_ch >= 195))
         target_mask = ((mauve | blue) & not_white).astype(np.uint8) * 255
         k3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
         target_mask = cv2.morphologyEx(target_mask, cv2.MORPH_OPEN, k3, iterations=1)
-        target_mask = cv2.morphologyEx(target_mask, cv2.MORPH_CLOSE, k5, iterations=2)
+        target_mask = cv2.morphologyEx(target_mask, cv2.MORPH_CLOSE, k_close, iterations=2)
 
         n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
             target_mask, connectivity=8

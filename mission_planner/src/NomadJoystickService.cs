@@ -134,6 +134,7 @@ namespace NOMAD.MissionPlanner
         public bool NeedsToRun()
         {
             if (_config.JoystickGimbalEnabled || _config.JoystickZedEnabled) return true;
+            if (_config.JoystickKillSwitchEnabled) return true;
             return AnySwitchMapped();
         }
 
@@ -175,42 +176,79 @@ namespace NOMAD.MissionPlanner
             "X", "Y", "Z", "Rx", "Ry", "Rz", "Slider1", "Slider2"
         };
 
+        /// <summary>
+        /// Resolve a configured device name to one actually present on the system.
+        /// When auto-select is on and the configured value is blank or unmatched,
+        /// returns the first available device so a freshly hot-plugged controller
+        /// (typically the vgamepad spawned by joystick.py) gets picked up
+        /// automatically.
+        /// </summary>
+        private string ResolveDeviceName(string configured, IList<string> available)
+        {
+            if (!string.IsNullOrWhiteSpace(configured))
+            {
+                foreach (var d in available)
+                    if (string.Equals(d, configured, StringComparison.OrdinalIgnoreCase))
+                        return d;
+            }
+            if (_config.JoystickAutoSelectDevice && available != null && available.Count > 0)
+                return available[0];
+            return null;
+        }
+
         private void AcquireDevices()
         {
+            var available = EnumerateDevices();
+
             // Share one JoystickBase across roles if they target the same
             // physical device — DirectInput permits multiple readers of one
             // acquired device cheaper than two separate acquires.
-            if (_config.JoystickGimbalEnabled && !string.IsNullOrWhiteSpace(_config.JoystickGimbalDevice))
+            // Skip roles whose handle is already live so re-acquire calls don't
+            // leak handles when only one role needs catching up.
+            if (_config.JoystickGimbalEnabled && _gimbalJoy == null)
             {
-                _gimbalJoy = CreateAndAcquire(_config.JoystickGimbalDevice);
+                var dev = ResolveDeviceName(_config.JoystickGimbalDevice, available);
+                if (dev != null) _gimbalJoy = CreateAndAcquire(dev);
             }
 
-            if (_config.JoystickZedEnabled && !string.IsNullOrWhiteSpace(_config.JoystickZedDevice))
+            if (_config.JoystickZedEnabled && _zedJoy == null)
             {
-                if (_gimbalJoy != null && _config.JoystickZedDevice == _config.JoystickGimbalDevice)
-                    _zedJoy = _gimbalJoy;
-                else
-                    _zedJoy = CreateAndAcquire(_config.JoystickZedDevice);
+                var dev = ResolveDeviceName(_config.JoystickZedDevice, available);
+                if (dev != null)
+                {
+                    if (_gimbalJoy != null && string.Equals(dev, _config.JoystickGimbalDevice, StringComparison.OrdinalIgnoreCase))
+                        _zedJoy = _gimbalJoy;
+                    else
+                        _zedJoy = CreateAndAcquire(dev);
+                }
             }
 
             // Resolve the button-source device. Explicit config wins; otherwise
             // fall back to whichever axis device is already acquired so users
             // with a single virtual gamepad don't need to configure twice.
-            string switchDev = _config.JoystickSwitchDevice;
-            if (string.IsNullOrWhiteSpace(switchDev))
+            if (_switchJoy != null) return;
+
+            string switchDev = ResolveDeviceName(_config.JoystickSwitchDevice, available);
+            if (switchDev == null)
             {
                 _switchJoy = _gimbalJoy ?? _zedJoy;
                 _switchJoyOwned = false;
             }
-            else if (_gimbalJoy != null && switchDev == _config.JoystickGimbalDevice)
+            else if (_gimbalJoy != null && string.Equals(switchDev, _config.JoystickGimbalDevice, StringComparison.OrdinalIgnoreCase))
             {
                 _switchJoy = _gimbalJoy;
                 _switchJoyOwned = false;
             }
-            else if (_zedJoy != null && switchDev == _config.JoystickZedDevice)
+            else if (_zedJoy != null && string.Equals(switchDev, _config.JoystickZedDevice, StringComparison.OrdinalIgnoreCase))
             {
                 _switchJoy = _zedJoy;
                 _switchJoyOwned = false;
+            }
+            else if (_gimbalJoy == null && _zedJoy == null && _config.JoystickAutoSelectDevice)
+            {
+                // Auto-select with no axis devices acquired — open switchDev directly.
+                _switchJoy = CreateAndAcquire(switchDev);
+                _switchJoyOwned = _switchJoy != null;
             }
             else
             {
@@ -258,6 +296,8 @@ namespace NOMAD.MissionPlanner
         // ============================================================
 
         private DateTime _lastTick = DateTime.UtcNow;
+        private DateTime _lastReacquireAttempt = DateTime.MinValue;
+        private const double REACQUIRE_INTERVAL_SEC = 3.0;
 
         private void OnTick(object sender, EventArgs e)
         {
@@ -265,6 +305,21 @@ namespace NOMAD.MissionPlanner
             float dt = (float)(now - _lastTick).TotalSeconds;
             _lastTick = now;
             if (dt <= 0f || dt > 0.5f) dt = 1f / POLL_HZ;
+
+            // Hot-plug recovery: if we're missing a device we expect, retry
+            // device enumeration every few seconds so a controller (or the
+            // joystick.py-spawned vgamepad) gets picked up without restarting
+            // the plugin. Skip when nothing needs a device.
+            bool needSwitches = AnySwitchMapped() || _config.JoystickKillSwitchEnabled;
+            bool missingAxis = (_config.JoystickGimbalEnabled && _gimbalJoy == null)
+                            || (_config.JoystickZedEnabled    && _zedJoy    == null);
+            bool missingSwitch = needSwitches && _switchJoy == null;
+            if ((missingAxis || missingSwitch) && (now - _lastReacquireAttempt).TotalSeconds >= REACQUIRE_INTERVAL_SEC)
+            {
+                _lastReacquireAttempt = now;
+                try { AcquireDevices(); }
+                catch (Exception ex) { Console.WriteLine($"NOMAD Joystick: re-acquire failed — {ex.Message}"); }
+            }
 
             try { DriveGimbal(dt); }
             catch (Exception ex) { Console.WriteLine($"NOMAD Joystick gimbal: {ex.Message}"); }
@@ -411,8 +466,13 @@ namespace NOMAD.MissionPlanner
         // held off-centre, neutral PWM when it returns to middle.
 
         private const int SLOT_COUNT = 6;
+        // joystick.py maps the radio kill pushbutton to XInput BACK, which lands
+        // on DirectInput button index 6. Read separately so the user-configurable
+        // 6 switch slots don't have to know about it.
+        private const int KILL_BUTTON_IDX = 6;
 
         private bool[] _prevButtons = new bool[SLOT_COUNT];
+        private bool _prevKillButton;
         // Drop toggle state lives in PayloadControlPanel.s_payloadDropped so the
         // joystick and UI agree about what the next switch flip should do —
         // dropping from the GUI then flipping the switch retracts, and vice versa.
@@ -463,6 +523,26 @@ namespace NOMAD.MissionPlanner
             for (int i = 0; i < SLOT_COUNT; i++)
                 pressed[i] = i < buttons.Length && buttons[i];
 
+            // Kill switch — dedicated edge-triggered pushbutton (XInput BACK).
+            // Sits outside the configurable slot table because it has fixed
+            // semantics and we never want a user to accidentally map it away.
+            if (_config.JoystickKillSwitchEnabled)
+            {
+                bool killNow = KILL_BUTTON_IDX < buttons.Length && buttons[KILL_BUTTON_IDX];
+                if (killNow && !_prevKillButton)
+                {
+                    int speed = Math.Max(200, _config.JoystickKillLandSpeedCmS);
+                    Console.WriteLine($"NOMAD Joystick: KILL SWITCH pressed — commanding LAND @ {speed} cm/s descent");
+                    bool ok = FlightModeController.EmergencyLand(speed);
+                    if (!ok) Console.WriteLine("NOMAD Joystick: EmergencyLand dispatch failed.");
+                }
+                _prevKillButton = killNow;
+            }
+            else
+            {
+                _prevKillButton = false;
+            }
+
             // Pass 1: edge-triggered actions (drop toggles, water pump)
             for (int slot = 0; slot < SLOT_COUNT; slot++)
             {
@@ -512,16 +592,12 @@ namespace NOMAD.MissionPlanner
 
         private void ToggleDrop(int payloadIdx)
         {
-            if (_payloadDropped[payloadIdx])
-            {
+            // PayloadActions.Drop / Retract raise PayloadDroppedStateChanged on
+            // success, which updates the shared state we read here next time.
+            if (PayloadControlPanel.IsPayloadDropped(payloadIdx))
                 PayloadActions.Retract(_config, payloadIdx + 1);
-                _payloadDropped[payloadIdx] = false;
-            }
             else
-            {
                 PayloadActions.Drop(_config, payloadIdx + 1);
-                _payloadDropped[payloadIdx] = true;
-            }
         }
 
         private void ApplyReel(int reelIdx, int target)

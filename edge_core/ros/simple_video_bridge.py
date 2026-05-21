@@ -1142,31 +1142,43 @@ class VideoStreamNode(Node):
         # moderate value, never over-saturated (excludes clothing/markers).
         # Saturation cap loosened to 210 so phone/monitor-displayed targets
         # (a common bench-test scenario) and well-lit paper aren't rejected.
+        # Mauve/pink dry cabbage paper sits in the COOL magenta corner of
+        # Lab: a* high (red), b* at or below the neutral line (slight blue).
+        # Skin tone is also a*-high but has a strong YELLOW undertone, so
+        # b* > ~135. Gating with `b* < 135` cleanly excludes hands/faces
+        # while keeping every cabbage-paper sample tested so far.
         mauve = (
             (a_ch > 128)
-            & (chroma >= 6)
+            & (b_ch < 135)
+            & (chroma >= 4)
             & (v_ch >= 70)
             & (v_ch <= 245)
         )
-        # Blue/cyan (post-spray reaction): low a*, low-to-mid b*. Also covers
-        # vivid violet/purple from phone screens, which sit on the
-        # high-chroma side of the red-cabbage spectrum.
+        # Blue/cyan post-spray reaction + vivid violet/purple from phones.
+        # Skin never reaches a* < 130, so no skin gate needed here.
         blue = (
             (a_ch < 130)
             & (b_ch < 132)
-            & (chroma >= 6)
+            & (chroma >= 4)
             & (v_ch >= 60)
             & (v_ch <= 230)
         )
         not_white = ~((s_ch <= 25) & (v_ch >= 195))
         target_mask = ((mauve | blue) & not_white).astype(np.uint8) * 255
 
+        # Cabbage paper has visible white speckles between dyed fibres --
+        # a 5-px close leaves the colored region fragmented into a dozen
+        # tiny components instead of one disk. A 13-px close bridges the
+        # speckles while still leaving non-target colored objects as
+        # discrete blobs (clothing/markers have continuous color, so close
+        # iteration count doesn't merge them into giant single blobs).
         kernel3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
         target_mask = cv2.morphologyEx(
             target_mask, cv2.MORPH_OPEN, kernel3, iterations=1
         )
         target_mask = cv2.morphologyEx(
-            target_mask, cv2.MORPH_CLOSE, kernel5, iterations=2
+            target_mask, cv2.MORPH_CLOSE, kernel_close, iterations=2
         )
 
         # ---- Pixel size bounds (broad; physical diameter is the real gate) #

@@ -290,6 +290,7 @@ class VideoStreamManager:
                 "NOMAD_TASK2_REQUIRE_DEPTH",
                 "NOMAD_TASK2_MIN_DIAMETER_M",
                 "NOMAD_TASK2_MAX_DIAMETER_M",
+                "NOMAD_TASK2_DEBUG",
             ):
                 env_value = os.environ.get(env_name)
                 if env_value:

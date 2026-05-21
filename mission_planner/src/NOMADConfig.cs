@@ -546,6 +546,30 @@ namespace NOMAD.MissionPlanner
         public string JoystickSw3UpAction   { get; set; } = "ReelInP2";
         public string JoystickSw3DownAction { get; set; } = "FireWaterPump";
 
+        /// <summary>
+        /// Enable the dedicated kill-switch pushbutton (button index 6 on the
+        /// virtual gamepad — joystick.py maps the radio kill switch to XInput
+        /// BACK). When pressed, the plugin commands LAND mode and forces
+        /// LAND_SPEED / WPNAV_SPEED_DN to <see cref="JoystickKillLandSpeedCmS"/>
+        /// so the descent meets the CONOPS §4.5 ≥2 m/s requirement.
+        /// </summary>
+        public bool JoystickKillSwitchEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Descent speed (cm/s) the kill switch forces before engaging LAND.
+        /// Default 250 = 2.5 m/s, comfortably above the 2 m/s CONOPS floor.
+        /// </summary>
+        public int JoystickKillLandSpeedCmS { get; set; } = 250;
+
+        /// <summary>
+        /// When true, the joystick service auto-picks the first available
+        /// DirectInput device for any role whose configured device name is
+        /// blank or not currently enumerated, and re-checks periodically so
+        /// hot-plugged controllers (e.g. the vgamepad created by joystick.py)
+        /// get picked up without a settings round-trip. Default true.
+        /// </summary>
+        public bool JoystickAutoSelectDevice { get; set; } = true;
+
         // --- Serial → virtual gamepad bridge (jotystick.py) ---
         /// <summary>Auto-launch jotystick.py on plugin start so a serial-attached MCU appears as an Xbox 360 controller.</summary>
         public bool SerialJoystickEnabled { get; set; } = false;

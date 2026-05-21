@@ -141,6 +141,15 @@ namespace NOMAD.MissionPlanner
         private DateTime _lastFailover = DateTime.MinValue;
         private DateTime _preferredHealthySince = DateTime.MinValue;
         private DateTime _lastStatsTick = DateTime.MinValue;
+        private DateTime _lastLteReopenAttempt = DateTime.MinValue;
+        private DateTime _lastRadioReopenAttempt = DateTime.MinValue;
+        private static readonly TimeSpan REOPEN_BACKOFF = TimeSpan.FromSeconds(3);
+
+        // Windows-only ioctl: tells the UDP socket to *not* surface ICMP
+        // "Port Unreachable" errors as SocketExceptions on the next Receive.
+        // Without this, a single outbound Send to an endpoint that briefly
+        // stops listening will kill the rx loop on the very next ReceiveAsync.
+        private const int SIO_UDP_CONNRESET = -1744830452; // 0x9800000C
         private long _lteBytesAtLastTick;
         private long _radioBytesAtLastTick;
         // MAVLink seq is per-(sysid, compid); a single global last-seq mixes
@@ -197,6 +206,7 @@ namespace NOMAD.MissionPlanner
             {
                 if (!IPAddress.TryParse(_cfg.BindAddress, out var ip)) ip = IPAddress.Loopback;
                 _localSock = new UdpClient(new IPEndPoint(ip, _cfg.LocalPort));
+                DisableUdpConnReset(_localSock);
                 _mpEndpoint = null; // set when MP first sends to us
                 LocalEndpoint = (IPEndPoint)_localSock.Client.LocalEndPoint;
             }
@@ -250,9 +260,12 @@ namespace NOMAD.MissionPlanner
 
         private void OpenLte()
         {
+            _lastLteReopenAttempt = DateTime.UtcNow;
             try
             {
-                _lteSock = new UdpClient(new IPEndPoint(IPAddress.Any, _cfg.LteBindPort));
+                var sock = new UdpClient(new IPEndPoint(IPAddress.Any, _cfg.LteBindPort));
+                DisableUdpConnReset(sock);
+                _lteSock = sock;
                 Lte.IsOpen = true;
                 Task.Run(() => UdpRxLoop(_lteSock, LinkType.LTE, _cts.Token));
                 Log($"LTE listening on udp://0.0.0.0:{_cfg.LteBindPort}");
@@ -260,12 +273,15 @@ namespace NOMAD.MissionPlanner
             catch (Exception ex)
             {
                 Lte.IsOpen = false;
+                try { _lteSock?.Close(); } catch { }
+                _lteSock = null;
                 Log($"LTE bind failed on port {_cfg.LteBindPort}: {ex.Message}");
             }
         }
 
         private void OpenRadio()
         {
+            _lastRadioReopenAttempt = DateTime.UtcNow;
             if (_cfg.RadioIsSerial)
             {
                 try
@@ -297,7 +313,9 @@ namespace NOMAD.MissionPlanner
                 }
                 try
                 {
-                    _radioSock = new UdpClient(new IPEndPoint(IPAddress.Any, _cfg.RadioBindPort));
+                    var sock = new UdpClient(new IPEndPoint(IPAddress.Any, _cfg.RadioBindPort));
+                    DisableUdpConnReset(sock);
+                    _radioSock = sock;
                     Radio.IsOpen = true;
                     Task.Run(() => UdpRxLoop(_radioSock, LinkType.RadioMaster, _cts.Token));
                     Log($"RadioMaster listening on udp://0.0.0.0:{_cfg.RadioBindPort}");
@@ -305,6 +323,8 @@ namespace NOMAD.MissionPlanner
                 catch (Exception ex)
                 {
                     Radio.IsOpen = false;
+                    try { _radioSock?.Close(); } catch { }
+                    _radioSock = null;
                     Log($"RadioMaster UDP bind failed on port {_cfg.RadioBindPort}: {ex.Message}");
                 }
             }
@@ -316,20 +336,65 @@ namespace NOMAD.MissionPlanner
 
         private async Task UdpRxLoop(UdpClient sock, LinkType type, CancellationToken ct)
         {
-            while (!ct.IsCancellationRequested)
+            try
             {
-                try
+                while (!ct.IsCancellationRequested)
                 {
-                    var result = await sock.ReceiveAsync().ConfigureAwait(false);
-                    var effectiveType = ClassifyUdpSource(type, result.RemoteEndPoint);
-                    var stats = effectiveType == LinkType.LTE ? Lte : Radio;
-                    var effectiveParser = effectiveType == LinkType.LTE ? _lteParser : _radioParser;
-                    stats.LastRemote = result.RemoteEndPoint;
-                    ProcessIncoming(effectiveType, effectiveParser, result.Buffer, result.Buffer.Length);
+                    try
+                    {
+                        var result = await sock.ReceiveAsync().ConfigureAwait(false);
+                        var effectiveType = ClassifyUdpSource(type, result.RemoteEndPoint);
+                        var stats = effectiveType == LinkType.LTE ? Lte : Radio;
+                        var effectiveParser = effectiveType == LinkType.LTE ? _lteParser : _radioParser;
+                        stats.LastRemote = result.RemoteEndPoint;
+                        ProcessIncoming(effectiveType, effectiveParser, result.Buffer, result.Buffer.Length);
+                    }
+                    catch (ObjectDisposedException) { break; }
+                    catch (SocketException sx)
+                    {
+                        // Transient errors we should *not* die on:
+                        //   ConnectionReset (10054) — ICMP port-unreachable from a prior Send.
+                        //                              SIO_UDP_CONNRESET should suppress these
+                        //                              on Windows, but belt-and-suspenders.
+                        //   MessageSize    (10040) — oversized datagram; drop and continue.
+                        //   Interrupted    (10004) — async cancel; loop will re-check ct.
+                        //   NetworkReset   (10052), HostUnreachable (10065), etc.
+                        if (sx.SocketErrorCode == SocketError.ConnectionReset ||
+                            sx.SocketErrorCode == SocketError.MessageSize ||
+                            sx.SocketErrorCode == SocketError.Interrupted ||
+                            sx.SocketErrorCode == SocketError.NetworkReset ||
+                            sx.SocketErrorCode == SocketError.HostUnreachable ||
+                            sx.SocketErrorCode == SocketError.ConnectionRefused)
+                        {
+                            continue;
+                        }
+                        Log($"{type} rx socket error ({sx.SocketErrorCode}): {sx.Message} — closing rx loop, watchdog will reopen");
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"{type} rx error: {ex.Message}");
+                        try { await Task.Delay(100, ct).ConfigureAwait(false); } catch { break; }
+                    }
                 }
-                catch (ObjectDisposedException) { break; }
-                catch (SocketException) { break; }
-                catch (Exception ex) { Log($"{type} rx error: {ex.Message}"); await Task.Delay(100, ct).ContinueWith(_ => { }); }
+            }
+            finally
+            {
+                // Mark the link down so the watchdog reopens the socket.
+                if (type == LinkType.LTE)
+                {
+                    Lte.IsOpen = false;
+                    Lte.IsConnected = false;
+                    Lte.Health = LinkHealth.Disconnected;
+                    if (!ct.IsCancellationRequested) Log("LTE rx loop ended unexpectedly");
+                }
+                else
+                {
+                    Radio.IsOpen = false;
+                    Radio.IsConnected = false;
+                    Radio.Health = LinkHealth.Disconnected;
+                    if (!ct.IsCancellationRequested) Log("RadioMaster rx loop ended unexpectedly");
+                }
             }
         }
 
@@ -364,15 +429,36 @@ namespace NOMAD.MissionPlanner
         private void SerialRxLoop(SerialPort port, CancellationToken ct)
         {
             var buf = new byte[4096];
-            while (!ct.IsCancellationRequested && port.IsOpen)
+            try
             {
-                try
+                while (!ct.IsCancellationRequested && port.IsOpen)
                 {
-                    int n = port.Read(buf, 0, buf.Length);
-                    if (n > 0) ProcessIncoming(LinkType.RadioMaster, _radioParser, buf, n);
+                    try
+                    {
+                        int n = port.Read(buf, 0, buf.Length);
+                        if (n > 0) ProcessIncoming(LinkType.RadioMaster, _radioParser, buf, n);
+                    }
+                    catch (TimeoutException) { }
+                    catch (System.IO.IOException ex)
+                    {
+                        // USB disconnect or port yanked. Bail so watchdog can reopen.
+                        Log($"Radio serial I/O error: {ex.Message} — closing rx loop, watchdog will reopen");
+                        break;
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        Log($"Radio serial closed: {ex.Message} — watchdog will reopen");
+                        break;
+                    }
+                    catch (Exception ex) { Log($"Radio serial rx error: {ex.Message}"); Thread.Sleep(100); }
                 }
-                catch (TimeoutException) { }
-                catch (Exception ex) { Log($"Radio serial rx error: {ex.Message}"); Thread.Sleep(100); }
+            }
+            finally
+            {
+                Radio.IsOpen = false;
+                Radio.IsConnected = false;
+                Radio.Health = LinkHealth.Disconnected;
+                if (!ct.IsCancellationRequested) Log("RadioMaster serial rx loop ended unexpectedly");
             }
         }
 
@@ -755,6 +841,47 @@ namespace NOMAD.MissionPlanner
             // Failover
             if (_cfg.AutoFailoverEnabled && ManualOverride == LinkType.None)
                 EvaluateFailover(now);
+
+            // Watchdog: re-open any source link whose rx loop died or whose
+            // initial bind failed. Without this, a single transient socket
+            // failure permanently kills one leg of the dual link.
+            WatchdogReopen(now);
+        }
+
+        private void WatchdogReopen(DateTime now)
+        {
+            if (_cts == null || _cts.IsCancellationRequested) return;
+
+            if (!Lte.IsOpen && (now - _lastLteReopenAttempt) >= REOPEN_BACKOFF)
+            {
+                Log("Watchdog: LTE link is down, re-opening socket");
+                try { _lteSock?.Close(); } catch { } _lteSock = null;
+                OpenLte();
+            }
+
+            if (!Radio.IsOpen && (now - _lastRadioReopenAttempt) >= REOPEN_BACKOFF)
+            {
+                Log("Watchdog: RadioMaster link is down, re-opening");
+                try { _radioSock?.Close(); } catch { } _radioSock = null;
+                try { if (_radioSerial?.IsOpen == true) _radioSerial.Close(); } catch { } _radioSerial = null;
+                OpenRadio();
+            }
+        }
+
+        private static void DisableUdpConnReset(UdpClient sock)
+        {
+            // Windows-only: stops ICMP "Port Unreachable" responses from
+            // outbound Sends from surfacing as SocketExceptions on the very
+            // next Receive. Without this, ReceiveAsync throws WSAECONNRESET
+            // (10054) any time we Send to a peer that briefly stops listening
+            // — which silently killed the rx loop and froze the link's
+            // heartbeat counter, leaving stale "connected" status in the UI.
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return;
+            try
+            {
+                sock.Client.IOControl(SIO_UDP_CONNRESET, new byte[] { 0, 0, 0, 0 }, null);
+            }
+            catch { /* non-Windows or unsupported transport — best-effort */ }
         }
 
         private void EvaluateLiveness(LinkSourceStats s, DateTime now)

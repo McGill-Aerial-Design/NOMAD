@@ -124,12 +124,50 @@ namespace NOMAD.MissionPlanner
                 acquired = await s_mavlinkLock.WaitAsync(1500).ConfigureAwait(false);
                 if (!acquired) return false;
 
-                await MainV2.comPort.doCommandAsync(
+                int busParam = enable ? bus : 0;
+
+                await MainV2.comPort.doCommandIntAsync(
                     sysid, compid,
                     MAVLink.MAV_CMD.CAN_FORWARD,
-                    enable ? bus : 0,
-                    0, 0, 0, 0, 0, 0,
-                    requireack: false, uicallback: null).ConfigureAwait(false);
+                    0, 0, 0, 0,
+                    busParam, 0, 0,
+                    requireack: false, uicallback: null,
+                    frame: MAVLink.MAV_FRAME.GLOBAL).ConfigureAwait(false);
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                if (acquired) s_mavlinkLock.Release();
+            }
+        }
+
+        public static bool EnableCanForward(int bus, bool enable)
+        {
+            if (bus < 1 || bus > 3) return false;
+            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return false;
+
+            bool acquired = false;
+            try
+            {
+                byte sysid = MainV2.comPort.MAV.sysid;
+                byte compid = MainV2.comPort.MAV.compid;
+
+                acquired = s_mavlinkLock.Wait(1500);
+                if (!acquired) return false;
+
+                int busParam = enable ? bus : 0;
+
+                MainV2.comPort.doCommandInt(
+                    sysid, compid,
+                    MAVLink.MAV_CMD.CAN_FORWARD,
+                    0, 0, 0, 0,
+                    busParam, 0, 0,
+                    false, null, MAVLink.MAV_FRAME.GLOBAL);
 
                 return true;
             }
@@ -145,6 +183,11 @@ namespace NOMAD.MissionPlanner
 
         public static async Task<bool> SendDroneCanBeepAsync(int bus, int sourceNodeId, double frequencyHz, double durationSeconds, bool tryOnly = false)
         {
+            return await Task.Run(() => SendDroneCanBeep(bus, sourceNodeId, frequencyHz, durationSeconds, tryOnly)).ConfigureAwait(false);
+        }
+
+        public static bool SendDroneCanBeep(int bus, int sourceNodeId, double frequencyHz, double durationSeconds, bool tryOnly = false)
+        {
             if (bus < 1 || bus > 3) return false;
             if (sourceNodeId < 1 || sourceNodeId > 127) return false;
             if (frequencyHz < 20.0 || frequencyHz > 20000.0) return false;
@@ -158,8 +201,8 @@ namespace NOMAD.MissionPlanner
                 byte compid = MainV2.comPort.MAV.compid;
 
                 acquired = tryOnly
-                    ? await s_mavlinkLock.WaitAsync(0).ConfigureAwait(false)
-                    : await s_mavlinkLock.WaitAsync(1500).ConfigureAwait(false);
+                    ? s_mavlinkLock.Wait(0)
+                    : s_mavlinkLock.Wait(1500);
                 if (!acquired) return false;
 
                 byte transferId = s_droneCanBeepTransferId;
@@ -169,10 +212,8 @@ namespace NOMAD.MissionPlanner
                 {
                     target_system = sysid,
                     target_component = compid,
-                    // MAV_CMD_CAN_FORWARD is 1-based, but ArduPilot's CAN_FRAME
-                    // injection path indexes HAL CAN interfaces from zero.
                     bus = (byte)(bus - 1),
-                    len = 5,
+                    len = 8,
                     id = BuildDroneCanMessageId(DroneCanBeepPriority, DroneCanBeepCommandDataTypeId, sourceNodeId),
                     data = new byte[8],
                 };
