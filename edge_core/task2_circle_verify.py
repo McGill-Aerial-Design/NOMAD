@@ -146,11 +146,11 @@ class Task2CircleDetector:
 
         mauve = (
             (a_ch > 130) & (chroma >= 6)
-            & (v_ch >= 90) & (v_ch <= 240) & (s_ch <= 180)
+            & (v_ch >= 90) & (v_ch <= 240) & (s_ch <= 210)
         )
         blue = (
             (a_ch < 127) & (b_ch < 132) & (chroma >= 8)
-            & (v_ch >= 70) & (v_ch <= 220) & (s_ch <= 180)
+            & (v_ch >= 70) & (v_ch <= 220) & (s_ch <= 210)
         )
         not_white = ~((s_ch <= 25) & (v_ch >= 195))
         target_mask = ((mauve | blue) & not_white).astype(np.uint8) * 255
@@ -245,25 +245,31 @@ class Task2CircleDetector:
             inner = max(radius_px * 1.10, radius_px + 2.0)
             ring = (d2 >= inner * inner) & (d2 <= outer_r * outer_r)
             ring_count = int(ring.sum())
-            if ring_count <= 0:
-                continue
-            ring_white = int(np.count_nonzero(backing_mask[ry0:ry1, rx0:rx1] & ring))
-            backing_ratio = ring_white / ring_count
-            if backing_ratio < 0.22:
-                continue
-
-            sup = back_labels[ry0:ry1, rx0:rx1][ring]
-            sup = sup[sup > 0]
-            support_label = 0
-            if sup.size:
-                support_label = int(np.argmax(np.bincount(sup)))
-            if support_label <= 0 or support_label >= n_back or not valid_backing[support_label]:
-                continue
-            plate_area = int(back_stats[support_label, cv2.CC_STAT_AREA])
-            if plate_area < max(int(area * 1.8), 700):
-                continue
-            if plate_area > int(w * h * 0.30):
-                continue
+            backing_ratio = 0.0
+            has_backing = False
+            if ring_count > 0:
+                ring_white = int(np.count_nonzero(
+                    backing_mask[ry0:ry1, rx0:rx1] & ring
+                ))
+                backing_ratio = ring_white / ring_count
+                sup = back_labels[ry0:ry1, rx0:rx1][ring]
+                sup = sup[sup > 0]
+                support_label = 0
+                if sup.size:
+                    support_label = int(np.argmax(np.bincount(sup)))
+                if (
+                    0 < support_label < n_back
+                    and valid_backing[support_label]
+                ):
+                    plate_area = int(
+                        back_stats[support_label, cv2.CC_STAT_AREA]
+                    )
+                    if (
+                        plate_area >= max(int(area * 1.2), 500)
+                        and plate_area <= int(w * h * 0.55)
+                        and backing_ratio >= 0.15
+                    ):
+                        has_backing = True
 
             inner_r = max(2.0, radius_px * 0.7)
             inner_disk = d2 <= inner_r * inner_r
@@ -275,14 +281,24 @@ class Task2CircleDetector:
             if interior_color_ratio < 0.45:
                 continue
 
+            shape_strong = (
+                circularity >= 0.62
+                and solidity >= 0.80
+                and ellipticity >= 0.62
+                and interior_color_ratio >= 0.62
+            )
+            if not has_backing and not shape_strong:
+                continue
+
+            backing_score = min(backing_ratio, 0.80) * 0.25 if has_backing else 0.0
             confidence = min(
                 0.99,
-                0.10
-                + min(circularity, 0.95) * 0.30
-                + min(solidity, 0.95) * 0.15
-                + min(ellipticity, 0.95) * 0.10
-                + min(backing_ratio, 0.80) * 0.25
-                + min(interior_color_ratio, 0.90) * 0.20,
+                0.12
+                + min(circularity, 0.95) * 0.28
+                + min(solidity, 0.95) * 0.14
+                + min(ellipticity, 0.95) * 0.12
+                + backing_score
+                + min(interior_color_ratio, 0.95) * 0.28,
             )
 
             det = self._make_detection(

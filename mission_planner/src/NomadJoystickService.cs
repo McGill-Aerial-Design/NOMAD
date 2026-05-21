@@ -339,29 +339,60 @@ namespace NOMAD.MissionPlanner
         // ============================================================
         // Payload switch buttons
         // ============================================================
-        // joystick.py maps the three 3-position switches on the RadioMaster onto
-        // 6 virtual Xbox360 buttons (each switch position = one button). The
-        // mapping is fixed in the python:
-        //   button 0 (A)  = sw1 pos 1  → switch #1 → toggle drop/retract Payload 1
-        //   button 1 (B)  = sw1 pos 2  → switch #2 → toggle drop/retract Payload 2
-        //   button 2 (X)  = sw2 pos 1  → switch #3 → toggle drop/retract Payload 3
-        //   button 3 (Y)  = sw2 pos 2  → switch #4 → reel-in Payload 1 (hold)
-        //   button 4 (LB) = sw3 pos 1  → switch #5 → reel-in Payload 2 (hold)
-        //   button 5 (RB) = sw3 pos 2  → switch #6 → fire water pump (edge)
+        // joystick.py encodes each 3-position RadioMaster switch as a pair of
+        // virtual Xbox 360 buttons — UP = one button, DOWN = another, middle
+        // releases both. Six slots total, each user-configurable in Settings →
+        // Joystick to fire any of the actions in SwitchAction below.
         //
-        // Drop/spray are edge-triggered (on press), reels are level-triggered
-        // (run while held, neutral PWM on release).
+        //   button 0 (A)  = sw1 UP    -> Config.JoystickSw1UpAction
+        //   button 1 (B)  = sw1 DOWN  -> Config.JoystickSw1DownAction
+        //   button 2 (X)  = sw2 UP    -> Config.JoystickSw2UpAction
+        //   button 3 (Y)  = sw2 DOWN  -> Config.JoystickSw2DownAction
+        //   button 4 (LB) = sw3 UP    -> Config.JoystickSw3UpAction
+        //   button 5 (RB) = sw3 DOWN  -> Config.JoystickSw3DownAction
+        //
+        // Drop toggles and FireWaterPump are edge-triggered (on switch flip into
+        // position). Reel actions are level-triggered — run while the switch is
+        // held off-centre, neutral PWM when it returns to middle.
 
-        private const int BTN_DROP_P1   = 0;
-        private const int BTN_DROP_P2   = 1;
-        private const int BTN_DROP_P3   = 2;
-        private const int BTN_REEL_P1   = 3;
-        private const int BTN_REEL_P2   = 4;
-        private const int BTN_SPRAY     = 5;
+        private const int SLOT_COUNT = 6;
 
-        private bool[] _prevButtons = new bool[8];
-        private bool[] _payloadDropped = new bool[3]; // tracks toggle state for P1/P2/P3
-        private readonly bool[] _reelHeld = new bool[2];
+        private bool[] _prevButtons = new bool[SLOT_COUNT];
+        private readonly bool[] _payloadDropped = new bool[3]; // toggle state per payload
+        private readonly int[] _reelDir = new int[2]; // last commanded direction per reel: 0=stop, +1=in, -1=out
+
+        public enum SwitchAction
+        {
+            None,
+            DropToggleP1,
+            DropToggleP2,
+            DropToggleP3,
+            ReelInP1,
+            ReelOutP1,
+            ReelInP2,
+            ReelOutP2,
+            FireWaterPump,
+        }
+
+        private static SwitchAction ParseAction(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return SwitchAction.None;
+            return Enum.TryParse(id, true, out SwitchAction a) ? a : SwitchAction.None;
+        }
+
+        private SwitchAction GetSlotAction(int slot)
+        {
+            switch (slot)
+            {
+                case 0: return ParseAction(_config.JoystickSw1UpAction);
+                case 1: return ParseAction(_config.JoystickSw1DownAction);
+                case 2: return ParseAction(_config.JoystickSw2UpAction);
+                case 3: return ParseAction(_config.JoystickSw2DownAction);
+                case 4: return ParseAction(_config.JoystickSw3UpAction);
+                case 5: return ParseAction(_config.JoystickSw3DownAction);
+                default: return SwitchAction.None;
+            }
+        }
 
         private void DrivePayloadButtons(IMyJoystickState st)
         {
@@ -370,46 +401,81 @@ namespace NOMAD.MissionPlanner
             catch { return; }
             if (buttons == null) return;
 
-            bool B(int i) => i < buttons.Length && buttons[i];
+            // Snapshot per-slot pressed state for this tick.
+            var pressed = new bool[SLOT_COUNT];
+            for (int i = 0; i < SLOT_COUNT; i++)
+                pressed[i] = i < buttons.Length && buttons[i];
 
-            // Edge-triggered: drop / retract toggles for P1..P3
-            for (int i = 0; i < 3; i++)
+            // Pass 1: edge-triggered actions (drop toggles, water pump)
+            for (int slot = 0; slot < SLOT_COUNT; slot++)
             {
-                bool now = B(i);
-                bool prev = i < _prevButtons.Length && _prevButtons[i];
-                if (now && !prev)
-                {
-                    if (_payloadDropped[i]) { PayloadActions.Retract(_config, i + 1); _payloadDropped[i] = false; }
-                    else                    { PayloadActions.Drop(_config, i + 1);    _payloadDropped[i] = true;  }
-                }
+                bool now = pressed[slot];
+                bool prev = _prevButtons[slot];
+                if (!(now && !prev)) continue; // rising edge only
+                FireEdgeAction(GetSlotAction(slot));
             }
 
-            // Level-triggered: reel P1 / P2 while held
-            HandleReelHold(0, B(BTN_REEL_P1));
-            HandleReelHold(1, B(BTN_REEL_P2));
+            // Pass 2: level-triggered reels. A reel can be driven from either
+            // direction by any slot; resolve at most one owner per reel per tick
+            // (first slot wins) so two switches don't fight over the same PWM.
+            var reelTarget = new int[] { 0, 0 }; // 0 = stop, +1 = reel in, -1 = reel out
+            for (int slot = 0; slot < SLOT_COUNT; slot++)
+            {
+                if (!pressed[slot]) continue;
+                var action = GetSlotAction(slot);
+                int reelIdx, dir;
+                switch (action)
+                {
+                    case SwitchAction.ReelInP1:  reelIdx = 0; dir = +1; break;
+                    case SwitchAction.ReelOutP1: reelIdx = 0; dir = -1; break;
+                    case SwitchAction.ReelInP2:  reelIdx = 1; dir = +1; break;
+                    case SwitchAction.ReelOutP2: reelIdx = 1; dir = -1; break;
+                    default: continue;
+                }
+                if (reelTarget[reelIdx] == 0) reelTarget[reelIdx] = dir; // first slot wins
+            }
+            ApplyReel(0, reelTarget[0]);
+            ApplyReel(1, reelTarget[1]);
 
-            // Edge-triggered: water pump
-            bool sprayNow = B(BTN_SPRAY);
-            bool sprayPrev = BTN_SPRAY < _prevButtons.Length && _prevButtons[BTN_SPRAY];
-            if (sprayNow && !sprayPrev) PayloadActions.FireWater(_config);
-
-            // Save for edge detection next tick
-            int n = Math.Min(buttons.Length, _prevButtons.Length);
-            for (int i = 0; i < n; i++) _prevButtons[i] = buttons[i];
+            _prevButtons = pressed;
         }
 
-        private void HandleReelHold(int reelIdx, bool held)
+        private void FireEdgeAction(SwitchAction action)
         {
-            if (held && !_reelHeld[reelIdx])
+            switch (action)
             {
-                _reelHeld[reelIdx] = true;
-                PayloadActions.ReelStart(_config, reelIdx);
+                case SwitchAction.DropToggleP1: ToggleDrop(0); break;
+                case SwitchAction.DropToggleP2: ToggleDrop(1); break;
+                case SwitchAction.DropToggleP3: ToggleDrop(2); break;
+                case SwitchAction.FireWaterPump: PayloadActions.FireWater(_config); break;
+                // Reel actions are handled level-triggered in pass 2 — ignore on edge.
+                default: break;
             }
-            else if (!held && _reelHeld[reelIdx])
+        }
+
+        private void ToggleDrop(int payloadIdx)
+        {
+            if (_payloadDropped[payloadIdx])
             {
-                _reelHeld[reelIdx] = false;
-                PayloadActions.ReelStop(_config, reelIdx);
+                PayloadActions.Retract(_config, payloadIdx + 1);
+                _payloadDropped[payloadIdx] = false;
             }
+            else
+            {
+                PayloadActions.Drop(_config, payloadIdx + 1);
+                _payloadDropped[payloadIdx] = true;
+            }
+        }
+
+        private void ApplyReel(int reelIdx, int target)
+        {
+            // Only re-send when the commanded direction actually changes. Cube
+            // holds the last PWM, so an idle reel costs zero MAVLink traffic.
+            if (target == _reelDir[reelIdx]) return;
+            _reelDir[reelIdx] = target;
+            if      (target > 0) PayloadActions.ReelStart(_config, reelIdx);
+            else if (target < 0) PayloadActions.ReelStartOut(_config, reelIdx);
+            else                 PayloadActions.ReelStop(_config, reelIdx);
         }
     }
 }

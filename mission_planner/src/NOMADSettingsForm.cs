@@ -126,6 +126,8 @@ namespace NOMAD.MissionPlanner
         private NumericUpDown _numJoyGimbalMaxRate, _numJoyZedMaxRate;
         private Button _btnJoyRefreshDevices;
         private Label _lblJoyStatus;
+        // 3-position switch action mapping (6 slots: sw1/2/3 × up/down)
+        private ComboBox _cmbSw1Up, _cmbSw1Down, _cmbSw2Up, _cmbSw2Down, _cmbSw3Up, _cmbSw3Down;
         // Serial bridge sub-section
         private CheckBox _chkSerialBridgeEnabled;
         private TextBox _txtSerialBridgePort, _txtSerialBridgePython, _txtSerialBridgeScript;
@@ -830,6 +832,35 @@ namespace NOMAD.MissionPlanner
             tab.Controls.Add(_lblJoyStatus);
             y += 36;
 
+            // -------- 3-position switch action mapping --------
+            // Each physical RadioMaster 3-position switch surfaces as a pair of
+            // virtual buttons (UP / DOWN) via jotystick.py. Middle = both
+            // released. Pick what each end-of-throw should fire.
+            AddSectionLabel(tab, "Transmitter Switches (3-position)", ref y);
+            AddLabel(tab,
+                "Each switch centers in the middle; UP and DOWN each fire an action.",
+                10, y, Color.FromArgb(180, 180, 180));
+            y += 22;
+
+            string[] actionLabels = SwitchActionLabels();
+            AddLabel(tab, "SW1 ↑:", 20, y);
+            _cmbSw1Up = AddComboBox(tab, 80, y, 220, actionLabels);
+            AddLabel(tab, "SW1 ↓:", 310, y);
+            _cmbSw1Down = AddComboBox(tab, 370, y, 130, actionLabels);
+            y += 28;
+
+            AddLabel(tab, "SW2 ↑:", 20, y);
+            _cmbSw2Up = AddComboBox(tab, 80, y, 220, actionLabels);
+            AddLabel(tab, "SW2 ↓:", 310, y);
+            _cmbSw2Down = AddComboBox(tab, 370, y, 130, actionLabels);
+            y += 28;
+
+            AddLabel(tab, "SW3 ↑:", 20, y);
+            _cmbSw3Up = AddComboBox(tab, 80, y, 220, actionLabels);
+            AddLabel(tab, "SW3 ↓:", 310, y);
+            _cmbSw3Down = AddComboBox(tab, 370, y, 130, actionLabels);
+            y += 36;
+
             // -------- Serial → virtual gamepad bridge --------
             AddSectionLabel(tab, "Serial Bridge (jotystick.py)", ref y);
             AddLabel(tab, "Auto-launches a Python serial → virtual Xbox 360 bridge.",
@@ -891,6 +922,43 @@ namespace NOMAD.MissionPlanner
                 _lblSerialBridgeStatus.ForeColor = Color.Goldenrod;
             else
                 _lblSerialBridgeStatus.ForeColor = Color.IndianRed;
+        }
+
+        // Switch action mapping helpers. Display labels in the ComboBoxes need
+        // to round-trip to stable IDs persisted in NOMADConfig so renames in the
+        // UI don't invalidate saved profiles.
+        private static readonly (string Id, string Label)[] SwitchActionMap =
+        {
+            ("None",          "(unassigned)"),
+            ("DropToggleP1",  "Drop / Retract Payload 1"),
+            ("DropToggleP2",  "Drop / Retract Payload 2"),
+            ("DropToggleP3",  "Drop / Retract Payload 3"),
+            ("ReelInP1",      "Reel In — Payload 1 (hold)"),
+            ("ReelOutP1",     "Reel Out — Payload 1 (hold)"),
+            ("ReelInP2",      "Reel In — Payload 2 (hold)"),
+            ("ReelOutP2",     "Reel Out — Payload 2 (hold)"),
+            ("FireWaterPump", "Fire Water Pump"),
+        };
+
+        private static string[] SwitchActionLabels()
+        {
+            var labels = new string[SwitchActionMap.Length];
+            for (int i = 0; i < SwitchActionMap.Length; i++) labels[i] = SwitchActionMap[i].Label;
+            return labels;
+        }
+
+        private static string LabelForActionId(string id)
+        {
+            foreach (var (Id, Label) in SwitchActionMap)
+                if (string.Equals(Id, id, StringComparison.OrdinalIgnoreCase)) return Label;
+            return SwitchActionMap[0].Label;
+        }
+
+        private static string ActionIdForLabel(string label)
+        {
+            foreach (var (Id, Label) in SwitchActionMap)
+                if (string.Equals(Label, label, StringComparison.OrdinalIgnoreCase)) return Id;
+            return "None";
         }
 
         private static string[] BuildDeviceComboList(System.Collections.Generic.IList<string> devices)
@@ -1239,6 +1307,13 @@ namespace NOMAD.MissionPlanner
             _numJoyZedDeadzone.Value = (decimal)Math.Max(0f, Math.Min(0.5f, Config.JoystickZedDeadzone));
             _numJoyZedMaxRate.Value = (decimal)Math.Max(50f, Math.Min(4000f, Config.JoystickZedMaxRateUsPerSec));
 
+            SetComboBoxValue(_cmbSw1Up,   LabelForActionId(Config.JoystickSw1UpAction));
+            SetComboBoxValue(_cmbSw1Down, LabelForActionId(Config.JoystickSw1DownAction));
+            SetComboBoxValue(_cmbSw2Up,   LabelForActionId(Config.JoystickSw2UpAction));
+            SetComboBoxValue(_cmbSw2Down, LabelForActionId(Config.JoystickSw2DownAction));
+            SetComboBoxValue(_cmbSw3Up,   LabelForActionId(Config.JoystickSw3UpAction));
+            SetComboBoxValue(_cmbSw3Down, LabelForActionId(Config.JoystickSw3DownAction));
+
             _chkSerialBridgeEnabled.Checked = Config.SerialJoystickEnabled;
             _txtSerialBridgePort.Text = Config.SerialJoystickPort ?? "";
             _numSerialBridgeBaud.Value = Math.Max(_numSerialBridgeBaud.Minimum,
@@ -1392,6 +1467,13 @@ namespace NOMAD.MissionPlanner
             Config.JoystickZedTiltInvert = _chkJoyZedTiltInvert.Checked;
             Config.JoystickZedDeadzone = (float)_numJoyZedDeadzone.Value;
             Config.JoystickZedMaxRateUsPerSec = (float)_numJoyZedMaxRate.Value;
+
+            Config.JoystickSw1UpAction   = ActionIdForLabel(_cmbSw1Up?.SelectedItem?.ToString());
+            Config.JoystickSw1DownAction = ActionIdForLabel(_cmbSw1Down?.SelectedItem?.ToString());
+            Config.JoystickSw2UpAction   = ActionIdForLabel(_cmbSw2Up?.SelectedItem?.ToString());
+            Config.JoystickSw2DownAction = ActionIdForLabel(_cmbSw2Down?.SelectedItem?.ToString());
+            Config.JoystickSw3UpAction   = ActionIdForLabel(_cmbSw3Up?.SelectedItem?.ToString());
+            Config.JoystickSw3DownAction = ActionIdForLabel(_cmbSw3Down?.SelectedItem?.ToString());
 
             Config.SerialJoystickEnabled = _chkSerialBridgeEnabled.Checked;
             Config.SerialJoystickPort = _txtSerialBridgePort.Text.Trim();

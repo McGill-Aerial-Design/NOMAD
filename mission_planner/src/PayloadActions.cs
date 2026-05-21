@@ -68,6 +68,15 @@ namespace NOMAD.MissionPlanner
             await CubeOutputController.SendServoPwmAsync(ch, pwm);
         }
 
+        public static async void ReelStartOut(NOMADConfig cfg, int reelIdx)
+        {
+            if (cfg == null) return;
+            int ch = reelIdx == 0 ? cfg.ReelServoChannel : cfg.Reel2ServoChannel;
+            int pwm = reelIdx == 0 ? cfg.ReelPwmOut      : cfg.Reel2PwmOut;
+            if (ch <= 0) return;
+            await CubeOutputController.SendServoPwmAsync(ch, pwm);
+        }
+
         public static async void ReelStop(NOMADConfig cfg, int reelIdx)
         {
             if (cfg == null) return;

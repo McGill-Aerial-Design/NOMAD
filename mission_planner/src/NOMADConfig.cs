@@ -521,6 +521,23 @@ namespace NOMAD.MissionPlanner
         /// <summary>Max integrated PWM rate (microseconds per second) at full stick deflection.</summary>
         public float JoystickZedMaxRateUsPerSec { get; set; } = 400f;
 
+        // --- Three-position switch action mapping ---
+        // joystick.py encodes each 3-position RadioMaster switch (sw1, sw2, sw3)
+        // as a pair of virtual Xbox 360 buttons — UP and DOWN positions press a
+        // dedicated button, middle releases both. NomadJoystickService dispatches
+        // a configurable action per slot. Valid action IDs:
+        //   None, DropToggleP1, DropToggleP2, DropToggleP3,
+        //   ReelInP1, ReelOutP1, ReelInP2, ReelOutP2, FireWaterPump
+        // Drop toggles and FireWaterPump are edge-triggered (fire on switch flip
+        // toward the position); Reel actions run while the switch is held off-
+        // centre and stop when it returns to middle.
+        public string JoystickSw1UpAction   { get; set; } = "DropToggleP1";
+        public string JoystickSw1DownAction { get; set; } = "DropToggleP2";
+        public string JoystickSw2UpAction   { get; set; } = "DropToggleP3";
+        public string JoystickSw2DownAction { get; set; } = "ReelInP1";
+        public string JoystickSw3UpAction   { get; set; } = "ReelInP2";
+        public string JoystickSw3DownAction { get; set; } = "FireWaterPump";
+
         // --- Serial → virtual gamepad bridge (jotystick.py) ---
         /// <summary>Auto-launch jotystick.py on plugin start so a serial-attached MCU appears as an Xbox 360 controller.</summary>
         public bool SerialJoystickEnabled { get; set; } = false;
