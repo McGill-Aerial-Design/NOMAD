@@ -413,7 +413,9 @@ namespace NOMAD.MissionPlanner
         private const int SLOT_COUNT = 6;
 
         private bool[] _prevButtons = new bool[SLOT_COUNT];
-        private readonly bool[] _payloadDropped = new bool[3]; // toggle state per payload
+        // Drop toggle state lives in PayloadControlPanel.s_payloadDropped so the
+        // joystick and UI agree about what the next switch flip should do —
+        // dropping from the GUI then flipping the switch retracts, and vice versa.
         private readonly int[] _reelDir = new int[2]; // last commanded direction per reel: 0=stop, +1=in, -1=out
 
         public enum SwitchAction
