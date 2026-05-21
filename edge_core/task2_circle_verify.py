@@ -176,23 +176,19 @@ class Task2CircleDetector:
         min_r = max(self.min_radius_px, int(round(min(h, w) * 0.015)))
         max_r = min(self.max_radius_px, min(h, w) // 2)
 
-        gray = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2GRAY)
-        gray = cv2.medianBlur(gray, 5)
-
         circle_lists = []
-        for input_img in (chroma_u8, gray):
-            try:
-                cr = cv2.HoughCircles(
-                    input_img, cv2.HOUGH_GRADIENT, dp=1.2,
-                    minDist=max(20, min_r * 2),
-                    param1=80, param2=22,
-                    minRadius=min_r, maxRadius=max_r,
-                )
-            except cv2.error as exc:
-                logger.warning(f"HoughCircles failed: {exc}")
-                cr = None
-            if cr is not None:
-                circle_lists.append(cr[0])
+        try:
+            cr = cv2.HoughCircles(
+                chroma_u8, cv2.HOUGH_GRADIENT, dp=1.2,
+                minDist=max(20, min_r * 2),
+                param1=80, param2=22,
+                minRadius=min_r, maxRadius=max_r,
+            )
+        except cv2.error as exc:
+            logger.warning(f"HoughCircles failed: {exc}")
+            cr = None
+        if cr is not None:
+            circle_lists.append(cr[0])
 
         # CC fallback using centroid + area-equivalent radius (more
         # accurate centering than minEnclosingCircle on slightly-irregular

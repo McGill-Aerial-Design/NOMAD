@@ -72,7 +72,7 @@ namespace NOMAD.MissionPlanner
         public static async Task<bool> SendMotorTestPwmAsync(int motorInstance, int pwmUs, double timeoutSeconds, bool tryOnly = false)
         {
             if (motorInstance <= 0) return false;
-            if (pwmUs < 500 || pwmUs > 2500) return false;
+            if (pwmUs != 0 && (pwmUs < 500 || pwmUs > 2500)) return false;
             if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return false;
 
             bool acquired = false;
@@ -94,9 +94,47 @@ namespace NOMAD.MissionPlanner
                     pwmUs,
                     (float)Math.Max(0.05, Math.Min(timeoutSeconds, 3.0)),
                     1,
-                    0, // MOTOR_TEST_ORDER_DEFAULT
+                    0,
                     0,
                     requireack: false, uicallback: null).ConfigureAwait(false);
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                if (acquired) s_mavlinkLock.Release();
+            }
+        }
+
+        public static bool SendMotorTestPwm(int motorInstance, int pwmUs, double timeoutSeconds)
+        {
+            if (motorInstance <= 0) return false;
+            if (pwmUs != 0 && (pwmUs < 500 || pwmUs > 2500)) return false;
+            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return false;
+
+            bool acquired = false;
+            try
+            {
+                byte sysid = MainV2.comPort.MAV.sysid;
+                byte compid = MainV2.comPort.MAV.compid;
+
+                acquired = s_mavlinkLock.Wait(1500);
+                if (!acquired) return false;
+
+                MainV2.comPort.doCommand(
+                    sysid, compid,
+                    MAVLink.MAV_CMD.DO_MOTOR_TEST,
+                    motorInstance,
+                    1,
+                    pwmUs,
+                    (float)Math.Max(0.05, Math.Min(timeoutSeconds, 3.0)),
+                    1,
+                    0,
+                    0);
 
                 return true;
             }

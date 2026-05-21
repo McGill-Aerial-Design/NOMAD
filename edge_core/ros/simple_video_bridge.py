@@ -762,6 +762,10 @@ class VideoStreamNode(Node):
             if self._detector_stop.is_set():
                 break
             if not self._overlay_enabled:
+                # Clear any stale overlay when detector is turned off.
+                with self._detections_lock:
+                    if self._detections:
+                        self._detections = []
                 continue
 
             with self._detector_frame_lock:
@@ -769,9 +773,14 @@ class VideoStreamNode(Node):
                 frame_ts = self._detector_frame_ts
                 self._detector_frame = None
 
-            if frame is None:
-                continue
-            if time.time() - frame_ts > 2.0:
+            # If no fresh frame, or the frame we have is stale, age out
+            # the existing overlay rather than letting it linger.
+            # Previously this `continue`d without touching self._detections,
+            # which left old boxes drawn for many seconds when the detector
+            # was running slower than frames arrived.
+            if frame is None or (time.time() - frame_ts) > 0.5:
+                with self._detections_lock:
+                    self._detections = []
                 continue
 
             dets = []
@@ -1192,35 +1201,34 @@ class VideoStreamNode(Node):
         )
         backing_bool = backing_mask > 0
 
-        # Hough on CHROMA channel (primary, finds saturated disks against
-        # neutral backgrounds) + GRAYSCALE Hough (fallback, finds disks
-        # where the chroma boundary is weak because the background colour
-        # is similar to the disk colour -- yellow-cream wall behind a
-        # mauve disk has very low chroma transition).
+        # Hough on CHROMA channel only. Grayscale Hough was returning
+        # ~1000 circles per frame on textured scenes (perforated metal
+        # panel, wall stains) which made per-candidate density checks
+        # take 10+ seconds per frame -- the user observed the overlay
+        # lingering 15s after the target was removed. The CC fallback
+        # below covers the weak-chroma-boundary case grayscale was added
+        # to handle.
         chroma_u8 = np.clip(chroma, 0, 80).astype(np.uint8) * 3
         chroma_u8 = cv2.medianBlur(chroma_u8, 5)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray = cv2.medianBlur(gray, 5)
         min_r = max(8, int(round(min(h, w) * 0.015)))
         max_r = min(h, w) // 2
 
         circle_lists = []
-        for input_img, src in ((chroma_u8, "chroma"), (gray, "gray")):
+        try:
+            cr = cv2.HoughCircles(
+                chroma_u8, cv2.HOUGH_GRADIENT, dp=1.2,
+                minDist=max(20, min_r * 2),
+                param1=80, param2=22,
+                minRadius=min_r, maxRadius=max_r,
+            )
+        except cv2.error as exc:
             try:
-                cr = cv2.HoughCircles(
-                    input_img, cv2.HOUGH_GRADIENT, dp=1.2,
-                    minDist=max(20, min_r * 2),
-                    param1=80, param2=22,
-                    minRadius=min_r, maxRadius=max_r,
-                )
-            except cv2.error as exc:
-                try:
-                    self.get_logger().warn(f"HoughCircles({src}) failed: {exc}")
-                except Exception:
-                    pass
-                cr = None
-            if cr is not None:
-                circle_lists.append(cr[0])
+                self.get_logger().warn(f"HoughCircles(chroma) failed: {exc}")
+            except Exception:
+                pass
+            cr = None
+        if cr is not None:
+            circle_lists.append(cr[0])
 
         # Connected-component fallback for weak-edge targets where Hough
         # cannot find any circle (pale post-spray blue on white paper has
