@@ -1164,8 +1164,15 @@ class VideoStreamNode(Node):
         a_ch = lab[:, :, 1].astype(np.int16)
         b_ch = lab[:, :, 2].astype(np.int16)
         chroma = np.abs(a_ch - 128) + np.abs(b_ch - 128)
-        mauve_hue = (h_ch <= 18) | (h_ch >= 140)
+        mauve_hue = (h_ch <= 18) | ((h_ch >= 140) & (h_ch <= 160))
         blue_hue = (h_ch >= 70) & (h_ch <= 100)
+        pale_pink = (
+            (h_ch >= 160) & (h_ch <= 179)
+            & (s_ch >= 28) & (s_ch <= 95)
+            & (v_ch >= 180)
+            & (a_ch >= 135) & (b_ch <= 135)
+            & (chroma >= 10)
+        )
 
         # Calibrated against samples:
         #   real dyed paper (good light):  a*=146-157, b*=86-118, chroma=28-71
@@ -1195,8 +1202,11 @@ class VideoStreamNode(Node):
         #   pipe gray:         a*=128 b*=129 chr=1   REJECT (chr<8)
         #   wall cream:        a*=123 b*=139 chr=16  REJECT (123 < 131)
         mauve = (
-            (a_ch >= b_ch - 8) & (b_ch < 145) & (chroma >= 8)
-            & mauve_hue & (s_ch >= 28) & (v_ch >= 70) & (v_ch <= 245)
+            (
+                (a_ch >= b_ch - 8) & (b_ch < 145) & (chroma >= 8)
+                & mauve_hue & (s_ch >= 28) & (v_ch >= 70) & (v_ch <= 245)
+            )
+            | pale_pink
         )
         # Calibrated against two samples:
         #   pale post-spray at 30cm: a*=121, b*=125, chroma=10
@@ -1240,7 +1250,7 @@ class VideoStreamNode(Node):
         # to handle.
         chroma_u8 = np.clip(chroma, 0, 80).astype(np.uint8) * 3
         chroma_u8 = cv2.medianBlur(chroma_u8, 5)
-        min_r = max(8, int(round(min(h, w) * 0.015)))
+        min_r = max(18, int(round(min(h, w) * 0.015)))
         max_r = min(h, w) // 2
 
         circle_lists = []

@@ -5,17 +5,18 @@ Wants=network-online.target
 PartOf=nomad.target
 
 [Service]
-# oneshot+RemainAfterExit because mavlink_router.sh's `start` action backgrounds
-# mavlink-routerd with nohup and exits 0. Type=forking would need a PIDFile.
-Type=oneshot
-RemainAfterExit=yes
+# Keep the wrapper in the foreground so systemd sees router exits after Cube
+# USB resets and the wrapper can rediscover the serial device.
+Type=simple
 User=mad
 Group=mad
 WorkingDirectory=/home/mad/NOMAD
 EnvironmentFile=/home/mad/NOMAD/config/nomad.env
 
-ExecStart=/bin/bash /home/mad/NOMAD/scripts/services/mavlink_router.sh start
+ExecStart=/bin/bash /home/mad/NOMAD/scripts/services/mavlink_router.sh run
 ExecStop=/bin/bash /home/mad/NOMAD/scripts/services/mavlink_router.sh stop
+Restart=always
+RestartSec=3
 
 StandardOutput=journal
 StandardError=journal

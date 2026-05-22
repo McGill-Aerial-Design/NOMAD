@@ -10,8 +10,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/../lib/common.sh"
 
 PATTERN='mavlink-routerd'
-LOG_FILE_DEFAULT="${NOMAD_LOG_DIR:-/tmp}/mavlink.log"
-EMPTY_CONF_DEFAULT="${NOMAD_LOG_DIR:-/tmp}/mavlink-router-empty.conf"
+RUN_PATTERN='mavlink_router.sh run'
+LOG_FILE_DEFAULT=""
+EMPTY_CONF_DEFAULT=""
+RUN_PID_FILE=""
+DEFAULT_MAVLINK_UART_DEV="/dev/ttyACM0"
 
 discover_gcs_ip() {
     if [ -n "${GCS_IP:-}" ]; then
@@ -46,23 +49,41 @@ build_gcs_endpoints() {
     printf '%s\n' "${endpoints[@]}"
 }
 
-svc_start() {
-    if pgrep -x "$PATTERN" >/dev/null 2>&1; then
-        log_ok "already running"
+discover_mavlink_dev() {
+    local configured="${MAVLINK_UART_DEV:-$DEFAULT_MAVLINK_UART_DEV}"
+
+    # If a deployment pins a non-default device path, honor it when present.
+    if [ "$configured" != "$DEFAULT_MAVLINK_UART_DEV" ] && [ -e "$configured" ]; then
+        echo "$configured"
         return 0
     fi
-    if [ ! -e "$MAVLINK_UART_DEV" ]; then
-        # Not a software failure — the FC just isn't plugged in. Exit 0 so the
-        # unit becomes "active (exited)" with a warning in the journal, instead
-        # of polluting nomad.target with a hardware-state-driven failure.
-        # When the FC is connected, `nomad restart mavlink_router` brings it up.
-        log_warn "CubePilot not present at $MAVLINK_UART_DEV; staying down (plug in and restart this unit)"
+
+    # Cube Orange enumerates as two ACM interfaces. Use interface 00 for MAVLink.
+    local by_id
+    by_id=$(find /dev/serial/by-id -maxdepth 1 -type l \
+        \( -iname '*CubePilot*if00*' -o -iname '*CubeOrange*if00*' -o -iname '*CubeOrange+*if00*' \) \
+        2>/dev/null | sort | head -n 1 || true)
+    if [ -n "$by_id" ] && [ -e "$by_id" ]; then
+        echo "$by_id"
         return 0
     fi
-    local gcs
-    gcs="$(discover_gcs_ip)"
-    local endpoints
-    mapfile -t endpoints < <(build_gcs_endpoints "$gcs")
+
+    if [ -e "$configured" ]; then
+        echo "$configured"
+        return 0
+    fi
+
+    local acm
+    acm=$(find /dev -maxdepth 1 -name 'ttyACM*' -type c 2>/dev/null | sort | head -n 1 || true)
+    if [ -n "$acm" ]; then
+        echo "$acm"
+        return 0
+    fi
+
+    return 1
+}
+
+write_empty_conf() {
     local empty_conf="${MAVLINK_ROUTER_EMPTY_CONF:-$EMPTY_CONF_DEFAULT}"
     mkdir -p "$(dirname "$empty_conf")"
     cat > "$empty_conf" <<EOF
@@ -71,51 +92,95 @@ TcpServerPort=5760
 ReportStats=true
 MavlinkDialect=ardupilotmega
 EOF
-    local attempts delay attempt
-    attempts="${MAVLINK_ROUTER_START_ATTEMPTS:-10}"
-    delay="${MAVLINK_ROUTER_START_RETRY_DELAY:-2}"
-    for attempt in $(seq 1 "$attempts"); do
-        log_info "starting (attempt $attempt/$attempts, endpoints: ${endpoints[*]})"
-        nohup mavlink-routerd \
+    echo "$empty_conf"
+}
+
+svc_run() {
+    local retry_delay="${MAVLINK_ROUTER_START_RETRY_DELAY:-2}"
+    echo "$$" > "$RUN_PID_FILE"
+    trap 'rm -f "$RUN_PID_FILE"; pkill -x "$PATTERN" 2>/dev/null || true; exit 0' TERM INT EXIT
+    while true; do
+        local mavlink_dev=""
+        if ! mavlink_dev="$(discover_mavlink_dev)"; then
+            log_warn "CubePilot not present; waiting for USB serial device"
+            sleep "$retry_delay"
+            continue
+        fi
+
+        local gcs endpoints empty_conf
+        gcs="$(discover_gcs_ip)"
+        mapfile -t endpoints < <(build_gcs_endpoints "$gcs")
+        empty_conf="$(write_empty_conf)"
+
+        log_info "starting foreground router"
+        mavlink-routerd \
             -c "$empty_conf" \
             "${endpoints[@]}" \
-            "$MAVLINK_UART_DEV:${MAVLINK_UART_BAUD:-921600}" \
-            > "$LOG_FILE_DEFAULT" 2>&1 &
-        sleep 2
-        if pgrep -x "$PATTERN" >/dev/null 2>&1; then
-            log_ok "started"
-            return 0
-        fi
-        if [ "$attempt" -lt "$attempts" ]; then
-            log_warn "start attempt $attempt failed; retrying in ${delay}s (see $LOG_FILE_DEFAULT)"
-            sleep "$delay"
-        fi
+            "$mavlink_dev:${MAVLINK_UART_BAUD:-921600}"
+
+        local rc=$?
+        log_warn "mavlink-routerd exited with status $rc; rediscovering Cube USB in ${retry_delay}s"
+        sleep "$retry_delay"
     done
-    log_fail "failed to start; see $LOG_FILE_DEFAULT"
+}
+
+svc_start() {
+    local run_pid=""
+    [ -f "$RUN_PID_FILE" ] && run_pid="$(cat "$RUN_PID_FILE" 2>/dev/null || true)"
+    if [ -n "$run_pid" ] && ps -p "$run_pid" -o args= 2>/dev/null | grep -q "$RUN_PATTERN"; then
+        log_ok "supervisor already running"
+        return 0
+    fi
+    if pgrep -x "$PATTERN" >/dev/null 2>&1; then
+        log_ok "router already running"
+        return 0
+    fi
+    mkdir -p "$(dirname "$LOG_FILE_DEFAULT")"
+    log_info "starting supervisor"
+    nohup "$0" run > "$LOG_FILE_DEFAULT" 2>&1 &
+    sleep 2
+    run_pid="$(cat "$RUN_PID_FILE" 2>/dev/null || true)"
+    if [ -n "$run_pid" ] && ps -p "$run_pid" -o args= 2>/dev/null | grep -q "$RUN_PATTERN"; then
+        log_ok "supervisor started"
+        return 0
+    fi
+    log_fail "failed to start supervisor; see $LOG_FILE_DEFAULT"
     return 1
 }
 
 svc_stop() {
     log_info "stopping"
+    local run_pid=""
+    [ -f "$RUN_PID_FILE" ] && run_pid="$(cat "$RUN_PID_FILE" 2>/dev/null || true)"
+    if [ -n "$run_pid" ]; then
+        kill "$run_pid" 2>/dev/null || true
+    fi
+    pkill -f "$RUN_PATTERN" 2>/dev/null || true
     pkill -x "$PATTERN" 2>/dev/null || true
     local i=0
     while [ $i -lt 10 ]; do
-        if ! pgrep -x "$PATTERN" >/dev/null 2>&1; then
+        run_pid="$(cat "$RUN_PID_FILE" 2>/dev/null || true)"
+        if { [ -z "$run_pid" ] || ! ps -p "$run_pid" >/dev/null 2>&1; } && ! pgrep -x "$PATTERN" >/dev/null 2>&1; then
+            rm -f "$RUN_PID_FILE"
             log_ok "stopped"
             return 0
         fi
         sleep 0.5
         i=$((i + 1))
     done
+    pkill -9 -f "$RUN_PATTERN" 2>/dev/null || true
     pkill -9 -x "$PATTERN" 2>/dev/null || true
+    rm -f "$RUN_PID_FILE"
     log_ok "stopped"
 }
 
 svc_status() {
     local pids
+    local run_pid=""
     pids=$(pgrep -x "$PATTERN" 2>/dev/null || true)
-    if [ -n "$pids" ]; then
-        log_ok "running (PID: $(echo "$pids" | tr '\n' ' '))"
+    [ -f "$RUN_PID_FILE" ] && run_pid="$(cat "$RUN_PID_FILE" 2>/dev/null || true)"
+    if [ -n "$pids" ] || { [ -n "$run_pid" ] && ps -p "$run_pid" >/dev/null 2>&1; }; then
+        log_ok "running (supervisor: ${run_pid:-none}, router: $(echo "${pids:-none}" | tr '\n' ' '))"
         return 0
     fi
     log_warn "not running"
@@ -127,4 +192,23 @@ svc_logs() {
         log_warn "no log file (running under systemd? use: journalctl -u nomad-mavlink-router -f)"
 }
 
-dispatch_service "$@"
+load_nomad_env || exit 1
+LOG_FILE_DEFAULT="${MAVLINK_ROUTER_LOG_FILE:-${NOMAD_LOG_DIR:-/tmp}/mavlink.log}"
+EMPTY_CONF_DEFAULT="${MAVLINK_ROUTER_EMPTY_CONF:-${NOMAD_LOG_DIR:-/tmp}/mavlink-router-empty.conf}"
+RUN_PID_FILE="${MAVLINK_ROUTER_PID_FILE:-${NOMAD_RUN_DIR:-/tmp}/mavlink-router-supervisor.pid}"
+if ! mkdir -p "$(dirname "$RUN_PID_FILE")" 2>/dev/null || ! touch "$RUN_PID_FILE" 2>/dev/null; then
+    RUN_PID_FILE="/tmp/mavlink-router-supervisor.pid"
+    touch "$RUN_PID_FILE" 2>/dev/null || true
+fi
+case "${1:-status}" in
+    run)     svc_run ;;
+    start)   svc_start ;;
+    stop)    svc_stop ;;
+    restart) svc_stop; sleep 1; svc_start ;;
+    status)  svc_status ;;
+    logs)    svc_logs "${2:-}" ;;
+    *)
+        echo "Usage: $0 {run|start|stop|restart|status|logs}" >&2
+        exit 2
+        ;;
+esac

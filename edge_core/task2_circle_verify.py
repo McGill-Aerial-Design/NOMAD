@@ -152,12 +152,22 @@ class Task2CircleDetector:
         a_ch = lab[:, :, 1].astype(np.int16)
         b_ch = lab[:, :, 2].astype(np.int16)
         chroma = np.abs(a_ch - 128) + np.abs(b_ch - 128)
-        mauve_hue = (h_ch <= 18) | (h_ch >= 140)
+        mauve_hue = (h_ch <= 18) | ((h_ch >= 140) & (h_ch <= 160))
         blue_hue = (h_ch >= 70) & (h_ch <= 100)
+        pale_pink = (
+            (h_ch >= 160) & (h_ch <= 179)
+            & (s_ch >= 28) & (s_ch <= 95)
+            & (v_ch >= 180)
+            & (a_ch >= 135) & (b_ch <= 135)
+            & (chroma >= 10)
+        )
 
         mauve = (
-            (a_ch >= b_ch - 8) & (b_ch < 145) & (chroma >= 8)
-            & mauve_hue & (s_ch >= 28) & (v_ch >= 70) & (v_ch <= 245)
+            (
+                (a_ch >= b_ch - 8) & (b_ch < 145) & (chroma >= 8)
+                & mauve_hue & (s_ch >= 28) & (v_ch >= 70) & (v_ch <= 245)
+            )
+            | pale_pink
         )
         blue = (
             (a_ch < 124) & (b_ch < 132) & (chroma >= 8)
