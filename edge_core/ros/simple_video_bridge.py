@@ -1158,11 +1158,14 @@ class VideoStreamNode(Node):
 
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        h_ch = hsv[:, :, 0]
         s_ch = hsv[:, :, 1]
         v_ch = hsv[:, :, 2]
         a_ch = lab[:, :, 1].astype(np.int16)
         b_ch = lab[:, :, 2].astype(np.int16)
         chroma = np.abs(a_ch - 128) + np.abs(b_ch - 128)
+        mauve_hue = (h_ch <= 18) | (h_ch >= 140)
+        blue_hue = (h_ch >= 70) & (h_ch <= 100)
 
         # Calibrated against samples:
         #   real dyed paper (good light):  a*=146-157, b*=86-118, chroma=28-71
@@ -1193,7 +1196,7 @@ class VideoStreamNode(Node):
         #   wall cream:        a*=123 b*=139 chr=16  REJECT (123 < 131)
         mauve = (
             (a_ch >= b_ch - 8) & (b_ch < 145) & (chroma >= 8)
-            & (s_ch >= 28) & (v_ch >= 70) & (v_ch <= 245)
+            & mauve_hue & (s_ch >= 28) & (v_ch >= 70) & (v_ch <= 245)
         )
         # Calibrated against two samples:
         #   pale post-spray at 30cm: a*=121, b*=125, chroma=10
@@ -1204,7 +1207,7 @@ class VideoStreamNode(Node):
         # combined with backing-ring check downstream.
         blue = (
             (a_ch < 124) & (b_ch < 132) & (chroma >= 8)
-            & (s_ch >= 28) & (v_ch >= 60) & (v_ch <= 230)
+            & blue_hue & (s_ch >= 28) & (v_ch >= 60) & (v_ch <= 230)
         )
         not_white = ~((s_ch <= 25) & (v_ch >= 195))
         target = ((mauve | blue) & not_white).astype(np.uint8)
@@ -1318,7 +1321,6 @@ class VideoStreamNode(Node):
             if (cx_i - r_i) < 2 or (cy_i - r_i) < 2 or (cx_i + r_i) >= (w - 2) or (cy_i + r_i) >= (h - 2):
                 self._task2_debug_reject("edge_clipped", (cx_i, cy_i, r_i, w, h), cx_i, cy_i, r_i)
                 continue
-
             d2 = (xx - cx_i) ** 2 + (yy - cy_i) ** 2
             inside = d2 <= (r_i * 0.85) ** 2
             ic = int(inside.sum())
@@ -1392,6 +1394,9 @@ class VideoStreamNode(Node):
                 + size_factor * 0.15
                 + (0.10 if rng is not None else 0.0),
             )
+            if confidence < 0.40:
+                self._task2_debug_reject("low_confidence", confidence, cx_i, cy_i, r_i)
+                continue
 
             if os.environ.get("NOMAD_TASK2_DEBUG", "0").lower() in (
                 "1", "true", "yes", "on"

@@ -4,7 +4,7 @@
 // Plays melodies by sending DO_MOTOR_TEST commands to individual
 // motors. The ESCs spin the motors at a low throttle percentage
 // producing audible tones whose pitch scales with RPM. This works
-// with any ESC — no DroneCAN BeepCommand support needed.
+// with any ESC - no DroneCAN BeepCommand support needed.
 //
 // SAFETY: Remove propellers before use. Playback is blocked while
 // the vehicle is armed unless the user explicitly enables override.
@@ -43,12 +43,6 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        public enum PlayMode
-        {
-            MotorTest = 0,
-            DroneCanBeep = 1,
-        }
-
         private static readonly Dictionary<string, int> ChromaticOffset = new Dictionary<string, int>(StringComparer.Ordinal)
         {
             { "C", -9 }, { "C#", -8 }, { "Db", -8 },
@@ -61,6 +55,7 @@ namespace NOMAD.MissionPlanner
         };
 
         private const int EscMusicDurationScale = 6;
+
         private static readonly Regex EscSectionRegex = new Regex(
             @"\[MUSIC#(?<track>\d+)\]\s*NOTES=(?<notes>[^\r\n]+)\s*NOTE_LENGTH=(?<length>\d+)\s*NOTE_INTERVAL=(?<interval>\d+)",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -129,7 +124,10 @@ namespace NOMAD.MissionPlanner
         {
             var loaded = new List<Song>();
             var assembly = Assembly.GetExecutingAssembly();
-            foreach (var name in assembly.GetManifestResourceNames().Where(n => n.IndexOf(".esc_music.", StringComparison.OrdinalIgnoreCase) >= 0 && n.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)))
+
+            foreach (var name in assembly.GetManifestResourceNames()
+                .Where(n => n.IndexOf(".esc_music.", StringComparison.OrdinalIgnoreCase) >= 0
+                         && n.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)))
             {
                 using (var stream = assembly.GetManifestResourceStream(name))
                 using (var reader = stream == null ? null : new StreamReader(stream))
@@ -162,7 +160,9 @@ namespace NOMAD.MissionPlanner
             var matches = EscSectionRegex.Matches(text ?? "");
             if (matches.Count == 0) return null;
 
-            var firstTrack = matches.Cast<Match>().OrderBy(m => int.Parse(m.Groups["track"].Value)).First();
+            var firstTrack = matches.Cast<Match>()
+                .OrderBy(m => int.Parse(m.Groups["track"].Value)).First();
+
             var notes = ParseEscTrack(
                 firstTrack.Groups["notes"].Value,
                 int.Parse(firstTrack.Groups["length"].Value),
@@ -183,6 +183,7 @@ namespace NOMAD.MissionPlanner
             var notes = new List<Note>();
             int i = 0;
             int intervalMs = Math.Max(0, noteInterval * noteLength * EscMusicDurationScale);
+
             while (i < compactNotes.Length)
             {
                 if (compactNotes[i] == 'P')
@@ -195,6 +196,7 @@ namespace NOMAD.MissionPlanner
                 }
 
                 if ("ABCDEFG".IndexOf(compactNotes[i]) < 0) break;
+
                 string pitch = compactNotes[i].ToString();
                 i++;
                 if (i < compactNotes.Length && compactNotes[i] == '#')
@@ -202,12 +204,15 @@ namespace NOMAD.MissionPlanner
                     pitch += "#";
                     i++;
                 }
+
                 if (i + 1 >= compactNotes.Length || !char.IsDigit(compactNotes[i]) || !char.IsDigit(compactNotes[i + 1])) break;
+
                 string noteName = pitch + compactNotes[i];
                 int durationUnits = compactNotes[i + 1] - '0';
                 notes.Add(new Note(noteName, Math.Max(20, durationUnits * noteLength * EscMusicDurationScale + intervalMs)));
                 i += 2;
             }
+
             return notes;
         }
 
@@ -259,13 +264,6 @@ namespace NOMAD.MissionPlanner
             return -1;
         }
 
-        private static double Frequency(string note)
-        {
-            int m = Midi(note);
-            if (m < 0) return 0.0;
-            return 440.0 * Math.Pow(2.0, (m - 69) / 12.0);
-        }
-
         private static int NoteToPwm(string note, int minPwm, int maxPwm, int minMidi, int maxMidi)
         {
             int midi = Midi(note);
@@ -275,11 +273,9 @@ namespace NOMAD.MissionPlanner
             return minPwm + (int)(t * (maxPwm - minPwm));
         }
 
-        public int DroneCanSourceNodeId = 126;
         public int InterNoteGapMs = 20;
         public int MaxSongMs = 60_000;
         public bool AllowArmedOverride = false;
-        public PlayMode Mode = PlayMode.MotorTest;
         public int MinPwm = 1050;
         public int MaxPwm = 1800;
         public int MotorCount = 4;
@@ -297,26 +293,18 @@ namespace NOMAD.MissionPlanner
         public event Action<string> StatusChanged;
         public event Action<bool> PlayingChanged;
 
-        public string Play(string songId, IEnumerable<int> canBuses, double tempo)
+        public string Play(string songId, IEnumerable<int> channels, double tempo)
         {
             Song song;
             if (!Library.TryGetValue(songId, out song))
                 return "Unknown song: " + songId;
 
-            var buses = new List<int>();
-            foreach (var c in canBuses) if (c >= 1 && c <= 3 && !buses.Contains(c)) buses.Add(c);
-
-            if (Mode == PlayMode.DroneCanBeep && buses.Count == 0)
-                return "Select at least one DroneCAN bus for beep mode.";
-
-            if (Mode == PlayMode.MotorTest && MotorCount < 1)
-                return "Set at least 1 motor for motor test mode.";
+            var chans = new List<int>();
+            foreach (var c in channels) if (c > 0) chans.Add(c);
+            if (chans.Count == 0) return "Select at least one motor channel.";
 
             if (song.TotalMs > MaxSongMs)
                 return string.Format("Song length {0}ms exceeds {1}ms safety cap.", song.TotalMs, MaxSongMs);
-
-            if (Mode == PlayMode.DroneCanBeep && (DroneCanSourceNodeId < 1 || DroneCanSourceNodeId > 127))
-                return "DroneCAN source node must be 1..127.";
 
             if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen)
                 return "MAVLink link is not open.";
@@ -342,14 +330,8 @@ namespace NOMAD.MissionPlanner
                 _progress = 0f;
 
                 var token = _cts.Token;
-                var busesCopy = buses.ToArray();
-                _thread = new Thread(() =>
-                {
-                    if (Mode == PlayMode.MotorTest)
-                        PlayLoopMotorTest(song, tempo, token);
-                    else
-                        PlayLoopDroneCan(song, busesCopy, tempo, token);
-                })
+                var chansCopy = chans.ToArray();
+                _thread = new Thread(() => PlayLoopMotorTest(song, chansCopy, tempo, token))
                 {
                     IsBackground = true,
                     Name = "NOMAD-MotorMusic",
@@ -358,8 +340,7 @@ namespace NOMAD.MissionPlanner
             }
 
             Raise(PlayingChanged, true);
-            string modeLabel = Mode == PlayMode.MotorTest ? "motor test" : "DroneCAN beep";
-            RaiseStatus("Playing " + song.Title + " via " + modeLabel + ".");
+            RaiseStatus("Playing " + song.Title + " via motor test.");
             return null;
         }
 
@@ -381,9 +362,10 @@ namespace NOMAD.MissionPlanner
             _thread = null;
         }
 
-        private void PlayLoopMotorTest(Song song, double tempo, CancellationToken ct)
+        private void PlayLoopMotorTest(Song song, int[] channels, double tempo, CancellationToken ct)
         {
-            int totalMs = song.Notes.Sum(n => Math.Max(20, (int)(n.DurationMs / tempo)));
+            int totalMs = 0;
+            foreach (var n in song.Notes) totalMs += Math.Max(20, (int)(n.DurationMs / tempo));
             int elapsedMs = 0;
             int motorIndex = 0;
             int minMidi = 48;
@@ -398,9 +380,10 @@ namespace NOMAD.MissionPlanner
                     int durMs = Math.Max(20, (int)(note.DurationMs / tempo));
                     int toneMs = Math.Max(10, durMs - InterNoteGapMs);
 
-                    SendNoteMotorTest(note, ref motorIndex, minMidi, maxMidi, toneMs);
+                    SendNoteMotorTest(note, ref motorIndex, channels, minMidi, maxMidi, toneMs);
                     SleepFor(toneMs, ct);
-                    SendMotorStop(motorIndex == 0 ? MotorCount : motorIndex);
+
+                    SilenceMotor(channels, ref motorIndex);
                     SleepFor(InterNoteGapMs, ct);
 
                     elapsedMs += durMs;
@@ -410,10 +393,7 @@ namespace NOMAD.MissionPlanner
             catch { }
             finally
             {
-                for (int m = 1; m <= MotorCount; m++)
-                {
-                    try { SendMotorStop(m); } catch { }
-                }
+                SilenceAllMotors(channels);
                 _currentSong = null;
                 _progress = 0f;
                 Raise(PlayingChanged, false);
@@ -421,85 +401,33 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private void SendNoteMotorTest(Note note, ref int motorIndex, int minMidi, int maxMidi, int toneMs)
+        private void SendNoteMotorTest(Note note, ref int motorIndex, int[] channels, int minMidi, int maxMidi, int toneMs)
         {
             if (note.Name.Equals("R", StringComparison.OrdinalIgnoreCase)) return;
 
-            motorIndex = (motorIndex % MotorCount) + 1;
+            motorIndex = (motorIndex + 1) % channels.Length;
+            int ch = channels[motorIndex];
             int pwm = NoteToPwm(note.Name, MinPwm, MaxPwm, minMidi, maxMidi);
             double timeoutS = Math.Max(0.05, Math.Min(3.0, toneMs / 1000.0));
 
             try
             {
-                CubeOutputController.SendMotorTestPwm(motorIndex, pwm, timeoutS);
+                CubeOutputController.SendMotorTestPwm(ch, pwm, timeoutS);
             }
             catch { }
         }
 
-        private void SendMotorStop(int motorInstance)
+        private void SilenceMotor(int[] channels, ref int motorIndex)
         {
-            try
-            {
-                CubeOutputController.SendMotorTestPwm(motorInstance, 0, 0.05);
-            }
-            catch { }
+            int ch = channels[motorIndex % channels.Length];
+            try { CubeOutputController.SendMotorTestPwm(ch, 0, 0.05); } catch { }
         }
 
-        private void PlayLoopDroneCan(Song song, int[] canBuses, double tempo, CancellationToken ct)
+        private void SilenceAllMotors(int[] channels)
         {
-            int totalMs = song.Notes.Sum(n => Math.Max(20, (int)(n.DurationMs / tempo)));
-            int elapsedMs = 0;
-            try
+            foreach (var ch in channels)
             {
-                foreach (int bus in canBuses)
-                {
-                    try { CubeOutputController.EnableCanForward(bus, true); } catch { }
-                }
-
-                foreach (var note in song.Notes)
-                {
-                    if (ct.IsCancellationRequested) break;
-
-                    int durMs = Math.Max(20, (int)(note.DurationMs / tempo));
-                    int toneMs = Math.Max(10, durMs - InterNoteGapMs);
-
-                    SendNoteDroneCan(note, canBuses, toneMs);
-                    SleepFor(toneMs, ct);
-                    SleepFor(InterNoteGapMs, ct);
-
-                    elapsedMs += durMs;
-                    _progress = totalMs > 0 ? Math.Min(1f, (float)elapsedMs / totalMs) : 1f;
-                }
-            }
-            catch { }
-            finally
-            {
-                foreach (int bus in canBuses)
-                {
-                    try { CubeOutputController.EnableCanForward(bus, false); } catch { }
-                }
-                _currentSong = null;
-                _progress = 0f;
-                Raise(PlayingChanged, false);
-                RaiseStatus("Finished.");
-            }
-        }
-
-        private void SendNoteDroneCan(Note note, int[] canBuses, int toneMs)
-        {
-            if (note.Name.Equals("R", StringComparison.OrdinalIgnoreCase)) return;
-
-            double freq = Frequency(note.Name);
-            if (freq <= 0.0) return;
-
-            double durationSeconds = Math.Max(0.02, Math.Min(5.0, toneMs / 1000.0));
-            foreach (var bus in canBuses)
-            {
-                try
-                {
-                    CubeOutputController.SendDroneCanBeep(bus, DroneCanSourceNodeId, freq, durationSeconds);
-                }
-                catch { }
+                try { CubeOutputController.SendMotorTestPwm(ch, 0, 0.05); } catch { }
             }
         }
 

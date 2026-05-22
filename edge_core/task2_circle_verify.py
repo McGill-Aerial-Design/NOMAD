@@ -115,6 +115,7 @@ class Task2CircleDetector:
         min_circularity: float = 0.42,
         min_solidity: float = 0.68,
         blur_kernel: int = 5,
+        allow_edge_touching: bool = False,
         # Accepted-but-ignored kwargs for back-compat with callers that were
         # built against the old Hough/contour pipeline.
         hough_dp: float = 1.5,
@@ -128,6 +129,7 @@ class Task2CircleDetector:
         self.min_circularity = min_circularity
         self.min_solidity = min_solidity
         self.blur_kernel = blur_kernel
+        self.allow_edge_touching = allow_edge_touching
         _ = (hough_dp, hough_param1, hough_param2, canny_low, canny_high)
 
     def detect(self, bgr_image: np.ndarray) -> List[DetectedCircle]:
@@ -145,18 +147,21 @@ class Task2CircleDetector:
         h, w = bgr_image.shape[:2]
         hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
         lab = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2LAB)
+        h_ch = hsv[:, :, 0]
         s_ch = hsv[:, :, 1]; v_ch = hsv[:, :, 2]
         a_ch = lab[:, :, 1].astype(np.int16)
         b_ch = lab[:, :, 2].astype(np.int16)
         chroma = np.abs(a_ch - 128) + np.abs(b_ch - 128)
+        mauve_hue = (h_ch <= 18) | (h_ch >= 140)
+        blue_hue = (h_ch >= 70) & (h_ch <= 100)
 
         mauve = (
             (a_ch >= b_ch - 8) & (b_ch < 145) & (chroma >= 8)
-            & (s_ch >= 28) & (v_ch >= 70) & (v_ch <= 245)
+            & mauve_hue & (s_ch >= 28) & (v_ch >= 70) & (v_ch <= 245)
         )
         blue = (
             (a_ch < 124) & (b_ch < 132) & (chroma >= 8)
-            & (s_ch >= 28) & (v_ch >= 60) & (v_ch <= 230)
+            & blue_hue & (s_ch >= 28) & (v_ch >= 60) & (v_ch <= 230)
         )
         not_white = ~((s_ch <= 25) & (v_ch >= 195))
         target = ((mauve | blue) & not_white).astype(np.uint8)
@@ -241,14 +246,22 @@ class Task2CircleDetector:
                 continue
             if r_i < min_r or r_i > max_r:
                 continue
-            if (cx_i - r_i) < 2 or (cy_i - r_i) < 2 or (cx_i + r_i) >= (w - 2) or (cy_i + r_i) >= (h - 2):
+            if not self.allow_edge_touching and (
+                (cx_i - r_i) < 2
+                or (cy_i - r_i) < 2
+                or (cx_i + r_i) >= (w - 2)
+                or (cy_i + r_i) >= (h - 2)
+            ):
                 continue
-
             d2 = (xx - cx_i) ** 2 + (yy - cy_i) ** 2
             inside = d2 <= (r_i * 0.85) ** 2
             ic = int(inside.sum())
             if ic <= 0:
                 continue
+            if self.allow_edge_touching:
+                ideal_ic = math.pi * (r_i * 0.85) ** 2
+                if ideal_ic > 0 and (ic / ideal_ic) < 0.75:
+                    continue
             t_inside = int((target & inside).sum())
             color_density = t_inside / ic
             if color_density < 0.30:
@@ -278,6 +291,8 @@ class Task2CircleDetector:
                 + min(backing_ratio, 0.70) * 0.40
                 + size_factor * 0.20,
             )
+            if confidence < 0.40:
+                continue
 
             det = self._make_detection(cx_i, cy_i, r_i, bgr_image, "hough_density_v3")
             if det is None:
@@ -377,7 +392,7 @@ class ColorAgnosticCircleVerifier:
         self.change_threshold = change_threshold
         self.match_distance_px = match_distance_px
         self.pixel_diff_threshold = pixel_diff_threshold
-        self._detector = Task2CircleDetector()
+        self._detector = Task2CircleDetector(allow_edge_touching=True)
 
     def capture_snapshot(
         self, bgr_image: np.ndarray, image_path: Optional[str] = None
@@ -562,7 +577,7 @@ class CircleChangeVerifier:
         self.match_distance_px = match_distance_px
         self.blue_after_threshold = blue_after_threshold
         self.blue_increase_threshold = blue_increase_threshold
-        self._detector = Task2CircleDetector()
+        self._detector = Task2CircleDetector(allow_edge_touching=True)
 
     def capture_snapshot(
         self, bgr_image: np.ndarray, image_path: Optional[str] = None

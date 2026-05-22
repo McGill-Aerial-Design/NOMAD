@@ -1,8 +1,9 @@
 // ============================================================
 // NOMAD Music View - UI for motor-tone music playback
 // ============================================================
-// Pick a song, choose playback mode (motor test or DroneCAN
-// beep), configure output, and hit Play. Props OFF only.
+// Pick a song, pick which motor channels to drive, set a tempo,
+// and hit Play. Commands go out as DO_MOTOR_TEST via the local
+// MAVLink link. Props OFF only.
 // ============================================================
 
 using System;
@@ -17,22 +18,16 @@ namespace NOMAD.MissionPlanner
         private readonly MotorMusicPlayer _player = MotorMusicPlayer.Instance;
 
         private ListBox _lstSongs;
-        private CheckedListBox _lstCanBuses;
+        private CheckedListBox _lstChannels;
         private NumericUpDown _numTempo;
-        private NumericUpDown _numSourceNode;
-        private NumericUpDown _numMotorCount;
-        private NumericUpDown _numMinPwm;
-        private NumericUpDown _numMaxPwm;
-        private ComboBox _cmbMode;
+        private NumericUpDown _numPwmMin;
+        private NumericUpDown _numPwmMax;
         private CheckBox _chkArmedOverride;
         private Button _btnPlay;
         private Button _btnStop;
         private Label _lblStatus;
         private ProgressBar _progress;
         private System.Windows.Forms.Timer _uiTimer;
-
-        private Panel _motorTestPanel;
-        private Panel _droneCanPanel;
 
         public NOMADMusicView()
         {
@@ -93,113 +88,41 @@ namespace NOMAD.MissionPlanner
             settings.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130f));
             settings.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
 
-            int row = 0;
-
-            settings.Controls.Add(MakeLabel("Mode:"), 0, row);
-            _cmbMode = new ComboBox
+            settings.Controls.Add(MakeLabel("Motor channels:"), 0, 0);
+            _lstChannels = new CheckedListBox
             {
                 Dock = DockStyle.Top,
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                BackColor = NOMADTheme.INPUT_BG,
-                ForeColor = TEXT_PRIMARY,
-                Font = new Font("Segoe UI", 9),
-            };
-            _cmbMode.Items.Add("Motor Test (PWM)");
-            _cmbMode.Items.Add("DroneCAN Beep");
-            _cmbMode.SelectedIndex = 0;
-            _cmbMode.SelectedIndexChanged += (s, e) => UpdateModeVisibility();
-            settings.Controls.Add(_cmbMode, 1, row);
-            row++;
-
-            settings.Controls.Add(MakeLabel("Tempo (x speed):"), 0, row);
-            _numTempo = MakeNumeric(0.25m, 4.0m, 1.0m, 2, 0.1m);
-            settings.Controls.Add(_numTempo, 1, row);
-            row++;
-
-            _chkArmedOverride = new CheckBox
-            {
-                Text = "Allow while ARMED (DANGEROUS - props off!)",
-                ForeColor = NOMADTheme.WARNING,
-                BackColor = settingsCard.BackColor,
-                AutoSize = true,
-                Margin = new Padding(3, 8, 3, 3),
-            };
-            settings.Controls.Add(_chkArmedOverride, 1, row);
-            row++;
-
-            _motorTestPanel = new Panel
-            {
-                Dock = DockStyle.Top,
-                AutoSize = true,
-                BackColor = settingsCard.BackColor,
-                Padding = Padding.Empty,
-            };
-            var mtLayout = new TableLayoutPanel
-            {
-                Dock = DockStyle.Top,
-                ColumnCount = 2,
-                AutoSize = true,
-                BackColor = settingsCard.BackColor,
-            };
-            mtLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130f));
-            mtLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-
-            mtLayout.Controls.Add(MakeLabel("Motor count:"), 0, 0);
-            _numMotorCount = MakeNumeric(1, 8, 4, 0, 1);
-            mtLayout.Controls.Add(_numMotorCount, 1, 0);
-
-            mtLayout.Controls.Add(MakeLabel("Min PWM:"), 0, 1);
-            _numMinPwm = MakeNumeric(1000, 1300, 1050, 0, 10);
-            mtLayout.Controls.Add(_numMinPwm, 1, 1);
-
-            mtLayout.Controls.Add(MakeLabel("Max PWM:"), 0, 2);
-            _numMaxPwm = MakeNumeric(1300, 2200, 1800, 0, 10);
-            mtLayout.Controls.Add(_numMaxPwm, 1, 2);
-
-            _motorTestPanel.Controls.Add(mtLayout);
-            settings.Controls.Add(_motorTestPanel, 0, row);
-            settings.SetColumnSpan(_motorTestPanel, 2);
-            row++;
-
-            _droneCanPanel = new Panel
-            {
-                Dock = DockStyle.Top,
-                AutoSize = true,
-                BackColor = settingsCard.BackColor,
-                Padding = Padding.Empty,
-            };
-            var dcLayout = new TableLayoutPanel
-            {
-                Dock = DockStyle.Top,
-                ColumnCount = 2,
-                AutoSize = true,
-                BackColor = settingsCard.BackColor,
-            };
-            dcLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130f));
-            dcLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-
-            dcLayout.Controls.Add(MakeLabel("DroneCAN bus:"), 0, 0);
-            _lstCanBuses = new CheckedListBox
-            {
-                Height = 84,
+                Height = 100,
                 BackColor = NOMADTheme.INPUT_BG,
                 ForeColor = TEXT_PRIMARY,
                 BorderStyle = BorderStyle.FixedSingle,
                 CheckOnClick = true,
             };
-            _lstCanBuses.Items.Add("CAN 1", true);
-            _lstCanBuses.Items.Add("CAN 2", false);
-            _lstCanBuses.Items.Add("CAN 3", false);
-            dcLayout.Controls.Add(_lstCanBuses, 1, 0);
+            for (int ch = 1; ch <= 8; ch++)
+                _lstChannels.Items.Add("Channel " + ch, ch >= 1 && ch <= 4);
+            settings.Controls.Add(_lstChannels, 1, 0);
 
-            dcLayout.Controls.Add(MakeLabel("Source node:"), 0, 1);
-            _numSourceNode = MakeNumeric(1, 127, 126, 0, 1);
-            dcLayout.Controls.Add(_numSourceNode, 1, 1);
+            settings.Controls.Add(MakeLabel("Tempo (\u00d7 speed):"), 0, 1);
+            _numTempo = MakeNumeric(0.25m, 4.0m, 1.0m, 2, 0.1m);
+            settings.Controls.Add(_numTempo, 1, 1);
 
-            _droneCanPanel.Controls.Add(dcLayout);
-            settings.Controls.Add(_droneCanPanel, 0, row);
-            settings.SetColumnSpan(_droneCanPanel, 2);
-            row++;
+            settings.Controls.Add(MakeLabel("PWM min (\u00b5s):"), 0, 2);
+            _numPwmMin = MakeNumeric(1000, 1300, 1050, 0, 10);
+            settings.Controls.Add(_numPwmMin, 1, 2);
+
+            settings.Controls.Add(MakeLabel("PWM max (\u00b5s):"), 0, 3);
+            _numPwmMax = MakeNumeric(1300, 2200, 1800, 0, 10);
+            settings.Controls.Add(_numPwmMax, 1, 3);
+
+            _chkArmedOverride = new CheckBox
+            {
+                Text = "Allow playback while ARMED (DANGEROUS \u2014 props off!)",
+                ForeColor = NOMADTheme.WARNING,
+                BackColor = settingsCard.BackColor,
+                AutoSize = true,
+                Margin = new Padding(3, 8, 3, 3),
+            };
+            settings.Controls.Add(_chkArmedOverride, 1, 4);
 
             settingsCard.Controls.Add(settings);
             root.Controls.Add(settingsCard, 1, 0);
@@ -209,7 +132,7 @@ namespace NOMAD.MissionPlanner
 
             _btnPlay = new Button
             {
-                Text = "\u25B6 Play",
+                Text = "\u25b6 Play",
                 BackColor = NOMADTheme.BTN_START,
                 ForeColor = TEXT_PRIMARY,
                 FlatStyle = FlatStyle.Flat,
@@ -222,7 +145,7 @@ namespace NOMAD.MissionPlanner
 
             _btnStop = new Button
             {
-                Text = "\u25A0 Stop",
+                Text = "\u25a0 Stop",
                 BackColor = NOMADTheme.BTN_STOP,
                 ForeColor = TEXT_PRIMARY,
                 FlatStyle = FlatStyle.Flat,
@@ -259,15 +182,6 @@ namespace NOMAD.MissionPlanner
             root.SetColumnSpan(transport, 2);
 
             this.Controls.Add(root);
-
-            UpdateModeVisibility();
-        }
-
-        private void UpdateModeVisibility()
-        {
-            bool motorTest = _cmbMode.SelectedIndex == 0;
-            _motorTestPanel.Visible = motorTest;
-            _droneCanPanel.Visible = !motorTest;
         }
 
         private Panel CreateSectionCard(string title)
@@ -325,30 +239,18 @@ namespace NOMAD.MissionPlanner
             var item = _lstSongs.SelectedItem as SongItem;
             if (item == null) { SetStatus("Pick a song first.", true); return; }
 
-            _player.Mode = _cmbMode.SelectedIndex == 0
-                ? MotorMusicPlayer.PlayMode.MotorTest
-                : MotorMusicPlayer.PlayMode.DroneCanBeep;
+            var channels = _lstChannels.CheckedIndices.Cast<int>().Select(i => i + 1).ToList();
+            if (channels.Count == 0) { SetStatus("Pick at least one motor channel.", true); return; }
+
+            int pwmMin = (int)_numPwmMin.Value;
+            int pwmMax = (int)_numPwmMax.Value;
+            if (pwmMin >= pwmMax) { SetStatus("PWM min must be < PWM max.", true); return; }
+
+            _player.MinPwm = pwmMin;
+            _player.MaxPwm = pwmMax;
             _player.AllowArmedOverride = _chkArmedOverride.Checked;
 
-            if (_player.Mode == MotorMusicPlayer.PlayMode.MotorTest)
-            {
-                _player.MotorCount = (int)_numMotorCount.Value;
-                _player.MinPwm = (int)_numMinPwm.Value;
-                _player.MaxPwm = (int)_numMaxPwm.Value;
-                if (_player.MinPwm >= _player.MaxPwm)
-                {
-                    SetStatus("Min PWM must be less than Max PWM.", true);
-                    return;
-                }
-            }
-            else
-            {
-                _player.DroneCanSourceNodeId = (int)_numSourceNode.Value;
-            }
-
-            var buses = _lstCanBuses.CheckedIndices.Cast<int>().Select(i => i + 1).ToList();
-
-            string err = _player.Play(item.Song.Id, buses, (double)_numTempo.Value);
+            string err = _player.Play(item.Song.Id, channels, (double)_numTempo.Value);
             if (err != null) SetStatus(err, true);
         }
 
