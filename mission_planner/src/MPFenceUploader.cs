@@ -2,15 +2,12 @@
 // NOMAD MP Fence Uploader
 // ============================================================
 // Pushes a polygon boundary into Mission Planner's native geofence
-// system: uploads vertices to the connected vehicle via MAVLink
-// (FENCE_TOTAL + fence_point messages) and sets the related FENCE_*
-// parameters (ENABLE, ACTION, ALT_MAX). Uses reflection on
-// MainV2.comPort so it works across MP versions that ship different
-// MAVLinkInterface method signatures.
+// system: uploads vertices to the connected vehicle as MAVLink fence
+// mission items (MAV_CMD_NAV_FENCE_POLYGON_VERTEX_INCLUSION) and sets
+// the related FENCE_* parameters (ENABLE, TYPE, ACTION, ALT_MAX).
 // ============================================================
 
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -84,20 +81,40 @@ namespace NOMAD.MissionPlanner
 
             try
             {
-                // Total point count: 1 return point + N vertices + 1 closing vertex
-                int total = vertices.Count + 2;
+                int fenceType = maxAltMeters > 0 ? 5 : 4; // bitmask: 1=alt max, 4=polygon
 
                 // 1) Disable fence first so we can rewrite cleanly
-                TrySetParam(comPort, "FENCE_ENABLE", 0);
-                TrySetParam(comPort, "FENCE_TOTAL", total);
-                TrySetParam(comPort, "FENCE_TYPE", 4); // polygon fence (bitmask: 4 = polygon)
-                TrySetParam(comPort, "FENCE_ACTION", fenceAction);
-                verifyTargets.Add(("FENCE_TYPE", 4));
+                if (!TrySetParam(comPort, "FENCE_ENABLE", 0))
+                {
+                    result.Message = "Could not disable FENCE_ENABLE before upload.";
+                    return result;
+                }
+
+                // ArduPilot's current polygon fence storage is MAVLink
+                // mission type FENCE. The older FENCE_POINT/FENCE_TOTAL path
+                // can leave Copter with FENCE_ENABLE=1 but no selected fence
+                // items, triggering: "PreArm: Fences enabled, but none selected".
+                TryUploadFenceMission(comPort, vertices, rLat, rLon);
+
+                if (!TrySetParam(comPort, "FENCE_TYPE", fenceType))
+                {
+                    result.Message = "Could not set FENCE_TYPE.";
+                    return result;
+                }
+                if (!TrySetParam(comPort, "FENCE_ACTION", fenceAction))
+                {
+                    result.Message = "Could not set FENCE_ACTION.";
+                    return result;
+                }
+                verifyTargets.Add(("FENCE_TYPE", fenceType));
                 verifyTargets.Add(("FENCE_ACTION", fenceAction));
-                verifyTargets.Add(("FENCE_TOTAL", total));
                 if (maxAltMeters > 0)
                 {
-                    TrySetParam(comPort, "FENCE_ALT_MAX", maxAltMeters);
+                    if (!TrySetParam(comPort, "FENCE_ALT_MAX", maxAltMeters))
+                    {
+                        result.Message = "Could not set FENCE_ALT_MAX.";
+                        return result;
+                    }
                     verifyTargets.Add(("FENCE_ALT_MAX", maxAltMeters));
                 }
                 if (landSpeedCmS > 0)
@@ -105,28 +122,22 @@ namespace NOMAD.MissionPlanner
                     // ArduCopter LAND_SPEED is in cm/s. CONOPS §4.5 requires
                     // ≥2 m/s vertical descent on termination — default 50 (0.5 m/s)
                     // is way too slow.
-                    TrySetParam(comPort, "LAND_SPEED", landSpeedCmS);
+                    if (!TrySetParam(comPort, "LAND_SPEED", landSpeedCmS))
+                    {
+                        result.Message = "Could not set LAND_SPEED.";
+                        return result;
+                    }
                     verifyTargets.Add(("LAND_SPEED", landSpeedCmS));
                 }
 
-                // 2) Upload points
-                bool ok = TrySetFencePoint(comPort, 0, rLat, rLon, (byte)total);
-                if (!ok)
-                {
-                    result.Message = "Could not invoke setFencePoint on MAVLinkInterface (MP API mismatch).";
-                    return result;
-                }
-                for (int i = 0; i < vertices.Count; i++)
-                {
-                    TrySetFencePoint(comPort, (byte)(i + 1), vertices[i].Lat, vertices[i].Lon, (byte)total);
-                }
-                // Closing point repeats first vertex
-                TrySetFencePoint(comPort, (byte)(vertices.Count + 1), vertices[0].Lat, vertices[0].Lon, (byte)total);
-
-                // 3) Re-enable
+                // 2) Re-enable after the fence mission and type are present.
                 if (enableFence)
                 {
-                    TrySetParam(comPort, "FENCE_ENABLE", 1);
+                    if (!TrySetParam(comPort, "FENCE_ENABLE", 1))
+                    {
+                        result.Message = "Could not re-enable FENCE_ENABLE.";
+                        return result;
+                    }
                     verifyTargets.Add(("FENCE_ENABLE", 1));
                 }
                 else
@@ -134,7 +145,7 @@ namespace NOMAD.MissionPlanner
                     verifyTargets.Add(("FENCE_ENABLE", 0));
                 }
 
-                // 4) Verify params actually took. ArduPilot acks param sets
+                // 3) Verify params actually took. ArduPilot acks param sets
                 // by echoing PARAM_VALUE, which MP caches on MAV.param.
                 // Give the link a beat to receive the echoes, then compare.
                 System.Threading.Thread.Sleep(400);
@@ -150,10 +161,12 @@ namespace NOMAD.MissionPlanner
                         mismatches.Add($"{name}: got {actual}, expected {expected}");
                 }
 
+                string fenceSummary = TryGetFenceMissionSummary(comPort, vertices.Count);
+
                 if (mismatches.Count == 0)
                 {
                     result.Success = true;
-                    result.Message = $"Uploaded {vertices.Count} fence points; {verifyTargets.Count} params verified.";
+                    result.Message = $"Uploaded {vertices.Count} inclusion fence vertices; {verifyTargets.Count} params verified. {fenceSummary}";
                 }
                 else
                 {
@@ -171,7 +184,7 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Clear the vehicle fence (set FENCE_TOTAL=0, disable).
+        /// Clear the vehicle fence mission and disable the fence.
         /// </summary>
         public static UploadResult ClearFence()
         {
@@ -185,7 +198,7 @@ namespace NOMAD.MissionPlanner
             try
             {
                 TrySetParam(comPort, "FENCE_ENABLE", 0);
-                TrySetParam(comPort, "FENCE_TOTAL", 0);
+                TryUploadEmptyFenceMission(comPort);
                 result.Success = true;
                 result.Message = "Fence cleared on vehicle.";
             }
@@ -213,16 +226,19 @@ namespace NOMAD.MissionPlanner
                         args[1] = Convert.ChangeType(value, p[1].ParameterType);
                         for (int i = 2; i < p.Length; i++)
                         {
-                            // Default extra params (e.g. bool saveToBackstop, byte sysid/compid)
-                            if (p[i].HasDefaultValue) args[i] = p[i].DefaultValue;
-                            else if (p[i].ParameterType == typeof(bool)) args[i] = true;
+                            // Force the write even when Mission Planner's local
+                            // param cache believes the value is already current.
+                            if (p[i].ParameterType == typeof(bool)) args[i] = true;
+                            else if (p[i].HasDefaultValue) args[i] = p[i].DefaultValue;
                             else args[i] = p[i].ParameterType.IsValueType
                                 ? Activator.CreateInstance(p[i].ParameterType)
                                 : null;
                         }
                         try
                         {
-                            m.Invoke(comPort, args);
+                            object invoked = m.Invoke(comPort, args);
+                            if (m.ReturnType == typeof(bool))
+                                return (bool)invoked;
                             return true;
                         }
                         catch { /* try next overload */ }
@@ -235,6 +251,59 @@ namespace NOMAD.MissionPlanner
                 Console.WriteLine($"NOMAD: setParam({name}) error - {ex.Message}");
             }
             return false;
+        }
+
+        private static void TryUploadFenceMission(object comPort, List<GpsPoint> vertices, double returnLat, double returnLon)
+        {
+            var fence = new global::MissionPlanner.Utilities.Fence();
+
+            fence.Fences.Add(new global::MissionPlanner.Utilities.FenceReturn
+            {
+                Return = new global::MissionPlanner.Utilities.PointLatLngAlt(returnLat, returnLon, 0)
+            });
+
+            fence.Fences.Add(new global::MissionPlanner.Utilities.FencePolygon
+            {
+                Mode = global::MissionPlanner.Utilities.FencePolygon.PolyType.Inclusive,
+                Points = vertices.Select(v => new global::MissionPlanner.Utilities.PointLatLngAlt(v.Lat, v.Lon, 0)).ToList()
+            });
+
+            fence.UploadFence((global::MissionPlanner.MAVLinkInterface)comPort, (progress, status) =>
+                Console.WriteLine($"NOMAD: fence upload {progress}% {status}"));
+        }
+
+        private static void TryUploadEmptyFenceMission(object comPort)
+        {
+            var fence = new global::MissionPlanner.Utilities.Fence();
+            fence.UploadFence((global::MissionPlanner.MAVLinkInterface)comPort, (progress, status) =>
+                Console.WriteLine($"NOMAD: fence clear {progress}% {status}"));
+        }
+
+        private static string TryGetFenceMissionSummary(object comPort, int expectedVertexCount)
+        {
+            try
+            {
+                var fence = new global::MissionPlanner.Utilities.Fence();
+                fence.DownloadFence((global::MissionPlanner.MAVLinkInterface)comPort, (progress, status) =>
+                    Console.WriteLine($"NOMAD: fence verify {progress}% {status}"));
+
+                var polygon = fence.Fences
+                    .OfType<global::MissionPlanner.Utilities.FencePolygon>()
+                    .FirstOrDefault(p => p.Mode == global::MissionPlanner.Utilities.FencePolygon.PolyType.Inclusive);
+
+                if (polygon == null)
+                    return "Warning: fence mission readback did not include an inclusion polygon.";
+
+                int actual = polygon.Points?.Count ?? 0;
+                if (actual != expectedVertexCount)
+                    return $"Warning: fence mission readback has {actual} inclusion vertices, expected {expectedVertexCount}.";
+
+                return $"Fence mission readback: {actual} inclusion vertices.";
+            }
+            catch (Exception ex)
+            {
+                return $"Warning: fence mission readback failed ({ex.Message}).";
+            }
         }
 
         /// <summary>Read a param value back from MP's cached PARAM_VALUE
@@ -286,72 +355,5 @@ namespace NOMAD.MissionPlanner
             return false;
         }
 
-        private static bool TrySetFencePoint(object comPort, byte index, double lat, double lon, byte total)
-        {
-            try
-            {
-                // MP signature: setFencePoint(byte index, PointLatLngAlt plla, byte fencepointcount)
-                var methods = comPort.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
-                    .Where(m => m.Name == "setFencePoint").ToList();
-
-                foreach (var m in methods)
-                {
-                    var p = m.GetParameters();
-                    if (p.Length < 2) continue;
-
-                    object plla = BuildPointLatLngAlt(p[1].ParameterType, lat, lon);
-                    if (plla == null) continue;
-
-                    var args = new object[p.Length];
-                    args[0] = index;
-                    args[1] = plla;
-                    for (int i = 2; i < p.Length; i++)
-                    {
-                        if (p[i].ParameterType == typeof(byte)) args[i] = total;
-                        else if (p[i].HasDefaultValue) args[i] = p[i].DefaultValue;
-                        else args[i] = p[i].ParameterType.IsValueType
-                            ? Activator.CreateInstance(p[i].ParameterType)
-                            : null;
-                    }
-                    try
-                    {
-                        m.Invoke(comPort, args);
-                        return true;
-                    }
-                    catch { /* try next */ }
-                }
-                Console.WriteLine($"NOMAD: setFencePoint not invocable on comPort");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"NOMAD: setFencePoint error - {ex.Message}");
-            }
-            return false;
-        }
-
-        private static object BuildPointLatLngAlt(Type t, double lat, double lon)
-        {
-            try
-            {
-                // Try (double lat, double lng) ctor
-                var ctor = t.GetConstructor(new[] { typeof(double), typeof(double) });
-                if (ctor != null) return ctor.Invoke(new object[] { lat, lon });
-
-                // Try (double lat, double lng, double alt)
-                ctor = t.GetConstructor(new[] { typeof(double), typeof(double), typeof(double) });
-                if (ctor != null) return ctor.Invoke(new object[] { lat, lon, 0.0 });
-
-                // Try (double lat, double lng, double alt, string tag)
-                ctor = t.GetConstructor(new[] { typeof(double), typeof(double), typeof(double), typeof(string) });
-                if (ctor != null) return ctor.Invoke(new object[] { lat, lon, 0.0, "" });
-
-                // Fallback: empty ctor and set fields
-                var obj = Activator.CreateInstance(t);
-                t.GetProperty("Lat")?.SetValue(obj, lat);
-                t.GetProperty("Lng")?.SetValue(obj, lon);
-                return obj;
-            }
-            catch { return null; }
-        }
     }
 }

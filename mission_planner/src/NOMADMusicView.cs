@@ -304,9 +304,11 @@ namespace NOMAD.MissionPlanner
             public SongItem(MotorMusicPlayer.Song s) { Song = s; }
             public override string ToString()
             {
-                return string.Format("{0} ({1:0.0}s, {2} notes)",
-                    Song.TrackCount > 1 ? Song.Title + " [track 1/" + Song.TrackCount + "]" : Song.Title,
-                    Song.TotalMs / 1000.0, Song.Notes.Count);
+                return string.Format("{0} ({1:0.0}s, {2} tracks, {3} notes)",
+                    Song.Title,
+                    Song.TotalMs / 1000.0,
+                    Song.TrackCount,
+                    Song.NoteCount);
             }
         }
     }

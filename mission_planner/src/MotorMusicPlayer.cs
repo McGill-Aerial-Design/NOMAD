@@ -30,17 +30,62 @@ namespace NOMAD.MissionPlanner
             public Note(string name, int durationMs) { Name = name; DurationMs = durationMs; }
         }
 
+        public sealed class Track
+        {
+            public int Number;
+            public List<Note> Notes = new List<Note>();
+        }
+
         public sealed class Song
         {
             public string Id;
             public string Title;
             public string Source;
             public int TrackCount = 1;
-            public List<Note> Notes;
+            public List<Track> Tracks = new List<Track>();
+            public List<Note> Notes
+            {
+                get { return Tracks.Count == 0 ? new List<Note>() : Tracks[0].Notes; }
+                set
+                {
+                    Tracks = new List<Track>
+                    {
+                        new Track { Number = 1, Notes = value ?? new List<Note>() }
+                    };
+                    TrackCount = Tracks.Count;
+                }
+            }
             public int TotalMs
             {
-                get { int t = 0; foreach (var n in Notes) t += n.DurationMs; return t; }
+                get
+                {
+                    int max = 0;
+                    foreach (var track in Tracks)
+                    {
+                        int t = 0;
+                        foreach (var n in track.Notes) t += n.DurationMs;
+                        if (t > max) max = t;
+                    }
+                    return max;
+                }
             }
+            public int NoteCount
+            {
+                get
+                {
+                    int count = 0;
+                    foreach (var track in Tracks) count += track.Notes.Count;
+                    return count;
+                }
+            }
+        }
+
+        private sealed class ScheduledNote
+        {
+            public int Channel;
+            public int StartMs;
+            public int DurationMs;
+            public Note Note;
         }
 
         private static readonly Dictionary<string, int> ChromaticOffset = new Dictionary<string, int>(StringComparer.Ordinal)
@@ -55,6 +100,7 @@ namespace NOMAD.MissionPlanner
         };
 
         private const int EscMusicDurationScale = 6;
+        private const int MotorCommandOverlapMs = 80;
 
         private static readonly Regex EscSectionRegex = new Regex(
             @"\[MUSIC#(?<track>\d+)\]\s*NOTES=(?<notes>[^\r\n]+)\s*NOTE_LENGTH=(?<length>\d+)\s*NOTE_INTERVAL=(?<interval>\d+)",
@@ -109,7 +155,7 @@ namespace NOMAD.MissionPlanner
 
             foreach (var song in LoadEscMusicSongs())
             {
-                if (song.Notes.Count == 0) continue;
+                if (song.NoteCount == 0) continue;
                 var id = song.Id;
                 int suffix = 2;
                 while (lib.ContainsKey(id)) id = song.Id + "_" + suffix++;
@@ -160,42 +206,63 @@ namespace NOMAD.MissionPlanner
             var matches = EscSectionRegex.Matches(text ?? "");
             if (matches.Count == 0) return null;
 
-            var firstTrack = matches.Cast<Match>()
-                .OrderBy(m => int.Parse(m.Groups["track"].Value)).First();
-
-            var notes = ParseEscTrack(
-                firstTrack.Groups["notes"].Value,
-                int.Parse(firstTrack.Groups["length"].Value),
-                int.Parse(firstTrack.Groups["interval"].Value));
+            var tracks = new List<Track>();
+            foreach (var match in matches.Cast<Match>().OrderBy(m => int.Parse(m.Groups["track"].Value)))
+            {
+                var notes = ParseEscTrack(
+                    match.Groups["notes"].Value,
+                    int.Parse(match.Groups["length"].Value),
+                    int.Parse(match.Groups["interval"].Value),
+                    title,
+                    int.Parse(match.Groups["track"].Value));
+                if (notes.Count > 0)
+                {
+                    tracks.Add(new Track
+                    {
+                        Number = int.Parse(match.Groups["track"].Value),
+                        Notes = notes,
+                    });
+                }
+            }
+            if (tracks.Count == 0) return null;
 
             return new Song
             {
                 Id = Slug(title),
                 Title = title,
                 Source = source,
-                TrackCount = matches.Count,
-                Notes = notes,
+                TrackCount = tracks.Count,
+                Tracks = tracks,
             };
         }
 
-        private static List<Note> ParseEscTrack(string compactNotes, int noteLength, int noteInterval)
+        private static List<Note> ParseEscTrack(string compactNotes, int noteLength, int noteInterval, string title, int trackNumber)
         {
             var notes = new List<Note>();
             int i = 0;
             int intervalMs = Math.Max(0, noteInterval * noteLength * EscMusicDurationScale);
+            compactNotes = compactNotes ?? "";
 
             while (i < compactNotes.Length)
             {
+                if (char.IsWhiteSpace(compactNotes[i]) || compactNotes[i] == ',')
+                {
+                    i++;
+                    continue;
+                }
+
                 if (compactNotes[i] == 'P')
                 {
-                    if (i + 1 >= compactNotes.Length || !char.IsDigit(compactNotes[i + 1])) break;
+                    if (i + 1 >= compactNotes.Length || !char.IsDigit(compactNotes[i + 1]))
+                        throw new FormatException(string.Format("Invalid pause token in {0} track {1} at offset {2}.", title, trackNumber, i));
                     int units = compactNotes[i + 1] - '0';
                     notes.Add(new Note("R", Math.Max(20, units * noteLength * EscMusicDurationScale + intervalMs)));
                     i += 2;
                     continue;
                 }
 
-                if ("ABCDEFG".IndexOf(compactNotes[i]) < 0) break;
+                if ("ABCDEFG".IndexOf(compactNotes[i]) < 0)
+                    throw new FormatException(string.Format("Invalid note token '{0}' in {1} track {2} at offset {3}.", compactNotes[i], title, trackNumber, i));
 
                 string pitch = compactNotes[i].ToString();
                 i++;
@@ -205,7 +272,8 @@ namespace NOMAD.MissionPlanner
                     i++;
                 }
 
-                if (i + 1 >= compactNotes.Length || !char.IsDigit(compactNotes[i]) || !char.IsDigit(compactNotes[i + 1])) break;
+                if (i + 1 >= compactNotes.Length || !char.IsDigit(compactNotes[i]) || !char.IsDigit(compactNotes[i + 1]))
+                    throw new FormatException(string.Format("Invalid pitch/duration token in {0} track {1} at offset {2}.", title, trackNumber, i));
 
                 string noteName = pitch + compactNotes[i];
                 int durationUnits = compactNotes[i + 1] - '0';
@@ -228,6 +296,35 @@ namespace NOMAD.MissionPlanner
                 notes.Add(new Note(tok.Substring(0, dash), dur));
             }
             return notes;
+        }
+
+        public static IReadOnlyList<string> ValidateLibrary()
+        {
+            var errors = new List<string>();
+            foreach (var song in Library.Values.OrderBy(s => s.Title))
+            {
+                if (song.TrackCount <= 0 || song.Tracks.Count == 0)
+                    errors.Add(song.Title + ": no decoded tracks.");
+
+                if (song.TrackCount != song.Tracks.Count)
+                    errors.Add(string.Format("{0}: TrackCount={1}, decoded={2}.", song.Title, song.TrackCount, song.Tracks.Count));
+
+                foreach (var track in song.Tracks)
+                {
+                    if (track.Notes.Count == 0)
+                        errors.Add(string.Format("{0}: track {1} has no notes.", song.Title, track.Number));
+
+                    foreach (var note in track.Notes)
+                    {
+                        if (note.DurationMs <= 0)
+                            errors.Add(string.Format("{0}: track {1} has invalid duration {2}.", song.Title, track.Number, note.DurationMs));
+
+                        if (!note.Name.Equals("R", StringComparison.OrdinalIgnoreCase) && Midi(note.Name) < 0)
+                            errors.Add(string.Format("{0}: track {1} has invalid note {2}.", song.Title, track.Number, note.Name));
+                    }
+                }
+            }
+            return errors;
         }
 
         private static string TitleFromResourceName(string resourceName)
@@ -273,7 +370,7 @@ namespace NOMAD.MissionPlanner
             return minPwm + (int)(t * (maxPwm - minPwm));
         }
 
-        public int InterNoteGapMs = 20;
+        public int InterNoteGapMs = 0;
         public int MaxSongMs = 60_000;
         public bool AllowArmedOverride = false;
         public int MinPwm = 1050;
@@ -303,8 +400,8 @@ namespace NOMAD.MissionPlanner
             foreach (var c in channels) if (c > 0) chans.Add(c);
             if (chans.Count == 0) return "Select at least one motor channel.";
 
-            if (song.TotalMs > MaxSongMs)
-                return string.Format("Song length {0}ms exceeds {1}ms safety cap.", song.TotalMs, MaxSongMs);
+            if (song.TrackCount > 1 && chans.Count < song.TrackCount)
+                return string.Format("This song has {0} simultaneous tracks. Select at least {0} motor channels.", song.TrackCount);
 
             if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen)
                 return "MAVLink link is not open.";
@@ -321,6 +418,10 @@ namespace NOMAD.MissionPlanner
 
             if (tempo <= 0.05) tempo = 0.05;
             if (tempo > 4.0) tempo = 4.0;
+
+            int scaledSongMs = Math.Max(0, (int)(song.TotalMs / tempo));
+            if (scaledSongMs > MaxSongMs)
+                return string.Format("Song length {0}ms exceeds {1}ms safety cap.", scaledSongMs, MaxSongMs);
 
             lock (_lock)
             {
@@ -364,29 +465,26 @@ namespace NOMAD.MissionPlanner
 
         private void PlayLoopMotorTest(Song song, int[] channels, double tempo, CancellationToken ct)
         {
-            int totalMs = 0;
-            foreach (var n in song.Notes) totalMs += Math.Max(20, (int)(n.DurationMs / tempo));
             int elapsedMs = 0;
-            int motorIndex = 0;
             int minMidi = 48;
             int maxMidi = 84;
 
             try
             {
-                foreach (var note in song.Notes)
+                var schedules = BuildSchedules(song, channels, tempo);
+                var boundaries = BuildBoundaries(schedules);
+                int totalMs = boundaries.Count == 0 ? 0 : boundaries[boundaries.Count - 1];
+
+                for (int boundaryIndex = 0; boundaryIndex < boundaries.Count - 1; boundaryIndex++)
                 {
                     if (ct.IsCancellationRequested) break;
 
-                    int durMs = Math.Max(20, (int)(note.DurationMs / tempo));
-                    int toneMs = Math.Max(10, durMs - InterNoteGapMs);
-
-                    SendNoteMotorTest(note, ref motorIndex, channels, minMidi, maxMidi, toneMs);
-                    SleepFor(toneMs, ct);
-
-                    SilenceMotor(channels, ref motorIndex);
-                    SleepFor(InterNoteGapMs, ct);
-
-                    elapsedMs += durMs;
+                    int nowMs = boundaries[boundaryIndex];
+                    int nextMs = boundaries[boundaryIndex + 1];
+                    SendBoundaryMotorTests(schedules, nowMs, minMidi, maxMidi);
+                    int sleepMs = Math.Max(0, nextMs - nowMs);
+                    SleepFor(sleepMs, ct);
+                    elapsedMs = nextMs;
                     _progress = totalMs > 0 ? Math.Min(1f, (float)elapsedMs / totalMs) : 1f;
                 }
             }
@@ -401,34 +499,83 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private void SendNoteMotorTest(Note note, ref int motorIndex, int[] channels, int minMidi, int maxMidi, int toneMs)
+        private static List<List<ScheduledNote>> BuildSchedules(Song song, int[] channels, double tempo)
         {
-            if (note.Name.Equals("R", StringComparison.OrdinalIgnoreCase)) return;
+            var schedules = new List<List<ScheduledNote>>();
+            var tracks = song.Tracks.Count == 0
+                ? new List<Track> { new Track { Number = 1, Notes = song.Notes } }
+                : song.Tracks;
+            int voiceCount = tracks.Count == 1 ? channels.Length : Math.Min(channels.Length, tracks.Count);
 
-            motorIndex = (motorIndex + 1) % channels.Length;
-            int ch = channels[motorIndex];
-            int pwm = NoteToPwm(note.Name, MinPwm, MaxPwm, minMidi, maxMidi);
-            double timeoutS = Math.Max(0.05, Math.Min(3.0, toneMs / 1000.0));
-
-            try
+            for (int voice = 0; voice < voiceCount; voice++)
             {
-                CubeOutputController.SendMotorTestPwm(ch, pwm, timeoutS);
+                var track = tracks.Count == 1 ? tracks[0] : tracks[voice];
+                var schedule = new List<ScheduledNote>();
+                int startMs = 0;
+
+                foreach (var note in track.Notes)
+                {
+                    int durationMs = Math.Max(20, (int)Math.Round(note.DurationMs / tempo));
+                    schedule.Add(new ScheduledNote
+                    {
+                        Channel = channels[voice],
+                        StartMs = startMs,
+                        DurationMs = durationMs,
+                        Note = note,
+                    });
+                    startMs += durationMs;
+                }
+                schedules.Add(schedule);
             }
-            catch { }
+
+            return schedules;
         }
 
-        private void SilenceMotor(int[] channels, ref int motorIndex)
+        private static List<int> BuildBoundaries(List<List<ScheduledNote>> schedules)
         {
-            int ch = channels[motorIndex % channels.Length];
-            try { CubeOutputController.SendMotorTestPwm(ch, 0, 0.05); } catch { }
+            var set = new SortedSet<int>();
+            set.Add(0);
+            foreach (var schedule in schedules)
+            {
+                foreach (var note in schedule)
+                {
+                    set.Add(note.StartMs);
+                    set.Add(note.StartMs + note.DurationMs);
+                }
+            }
+            return set.ToList();
+        }
+
+        private void SendBoundaryMotorTests(List<List<ScheduledNote>> schedules, int nowMs, int minMidi, int maxMidi)
+        {
+            var commands = new List<CubeOutputController.MotorTestCommand>();
+            foreach (var schedule in schedules)
+            {
+                foreach (var note in schedule)
+                {
+                    if (note.StartMs != nowMs) continue;
+
+                    int pwm = note.Note.Name.Equals("R", StringComparison.OrdinalIgnoreCase)
+                        ? 0
+                        : NoteToPwm(note.Note.Name, MinPwm, MaxPwm, minMidi, maxMidi);
+                    int timeoutMs = note.Note.Name.Equals("R", StringComparison.OrdinalIgnoreCase)
+                        ? 50
+                        : note.DurationMs + MotorCommandOverlapMs + InterNoteGapMs;
+                    double timeoutS = Math.Max(0.05, Math.Min(3.0, timeoutMs / 1000.0));
+                    commands.Add(new CubeOutputController.MotorTestCommand(note.Channel, pwm, timeoutS));
+                    break;
+                }
+            }
+
+            if (commands.Count == 0) return;
+            try { CubeOutputController.SendMotorTestPwmBatch(commands); } catch { }
         }
 
         private void SilenceAllMotors(int[] channels)
         {
-            foreach (var ch in channels)
-            {
-                try { CubeOutputController.SendMotorTestPwm(ch, 0, 0.05); } catch { }
-            }
+            var commands = new List<CubeOutputController.MotorTestCommand>();
+            foreach (var ch in channels) commands.Add(new CubeOutputController.MotorTestCommand(ch, 0, 0.05));
+            try { CubeOutputController.SendMotorTestPwmBatch(commands); } catch { }
         }
 
         private static void SleepFor(int ms, CancellationToken ct)

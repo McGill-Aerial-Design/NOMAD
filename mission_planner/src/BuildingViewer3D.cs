@@ -20,6 +20,7 @@ using System.Windows.Forms;
 using OpenTK;
 using OpenTK.Graphics;
 using OpenTK.Graphics.OpenGL;
+using NOMAD.MissionPlanner.SLAM3D.Rendering;
 
 namespace NOMAD.MissionPlanner
 {
@@ -51,10 +52,23 @@ namespace NOMAD.MissionPlanner
             public float Up;
         }
 
+        public class Placement
+        {
+            public string Surface;
+            public string WallName;
+            public string NearestCornerName;
+            public float East;
+            public float North;
+            public float Up;
+            public float DistanceFromCornerM;
+        }
+
         // ==================== Public API ====================
 
         public event Action<string> TargetHovered;
+        public event Action<Placement> PlacementClicked;
         public string HighlightedTargetId { get; private set; }
+        public bool PlacementMode { get; set; }
 
         public void SetHighlightedTarget(string id)
         {
@@ -79,6 +93,8 @@ namespace NOMAD.MissionPlanner
             _corners.Clear();
             if (corners == null || corners.Count == 0)
             {
+                _hasProjectionOrigin = false;
+                _hasDronePose = false;
                 _glControl?.Invalidate();
                 return;
             }
@@ -86,6 +102,10 @@ namespace NOMAD.MissionPlanner
             double lat0 = centerLat ?? corners.Average(c => c.Lat);
             double lon0 = centerLon ?? corners.Average(c => c.Lon);
             double cosLat = Math.Cos(lat0 * Math.PI / 180.0);
+            _originLat = lat0;
+            _originLon = lon0;
+            _originCosLat = cosLat;
+            _hasProjectionOrigin = true;
             const double METERS_PER_DEG = 111320.0;
 
             foreach (var c in corners)
@@ -103,9 +123,44 @@ namespace NOMAD.MissionPlanner
             // Recenter on centroid so the model is easy to orbit.
             float cx = _corners.Average(c => c.East);
             float cy = _corners.Average(c => c.North);
+            _recenterEast = cx;
+            _recenterNorth = cy;
             foreach (var c in _corners) { c.East -= cx; c.North -= cy; }
 
             _glControl?.Invalidate();
+        }
+
+        public void SetDronePoseGps(double lat, double lon, double altAglM,
+            double yawDeg, double pitchDeg, double rollDeg)
+        {
+            if (!_hasProjectionOrigin || Math.Abs(lat) < 0.000001 || Math.Abs(lon) < 0.000001)
+            {
+                _hasDronePose = false;
+                _glControl?.Invalidate();
+                return;
+            }
+
+            const double METERS_PER_DEG = 111320.0;
+            _droneEast = (float)((lon - _originLon) * _originCosLat * METERS_PER_DEG - _recenterEast);
+            _droneNorth = (float)((lat - _originLat) * METERS_PER_DEG - _recenterNorth);
+            _droneUp = (float)Math.Max(0.0, altAglM);
+            _droneYawRad = (float)(yawDeg * Math.PI / 180.0);
+            _dronePitchRad = (float)(pitchDeg * Math.PI / 180.0);
+            _droneRollRad = (float)(rollDeg * Math.PI / 180.0);
+            _hasDronePose = true;
+            _glControl?.Invalidate();
+        }
+
+        public bool TryGetLocalFromGps(double lat, double lon, out float east, out float north)
+        {
+            east = 0f;
+            north = 0f;
+            if (!_hasProjectionOrigin) return false;
+
+            const double METERS_PER_DEG = 111320.0;
+            east = (float)((lon - _originLon) * _originCosLat * METERS_PER_DEG - _recenterEast);
+            north = (float)((lat - _originLat) * METERS_PER_DEG - _recenterNorth);
+            return true;
         }
 
         public void SetTargets(IList<Target> targets)
@@ -127,8 +182,22 @@ namespace NOMAD.MissionPlanner
         private readonly GLControl _glControl;
         private readonly List<Corner> _corners = new List<Corner>();
         private readonly List<Target> _targets = new List<Target>();
+        private readonly DroneRenderer _droneRenderer = new DroneRenderer();
 
         private float _buildingHeight = 5f;
+        private bool _hasProjectionOrigin;
+        private double _originLat;
+        private double _originLon;
+        private double _originCosLat = 1.0;
+        private float _recenterEast;
+        private float _recenterNorth;
+        private bool _hasDronePose;
+        private float _droneEast;
+        private float _droneNorth;
+        private float _droneUp;
+        private float _droneYawRad;
+        private float _dronePitchRad;
+        private float _droneRollRad;
 
         // Orbit camera state.
         private float _yawDeg = 35f;
@@ -137,6 +206,7 @@ namespace NOMAD.MissionPlanner
         private Vector3 _panTarget = Vector3.Zero;
 
         private Point _lastMouse;
+        private Point _mouseDownPoint;
         private MouseButtons _dragButton;
         private string _hoverId;
 
@@ -244,6 +314,7 @@ namespace NOMAD.MissionPlanner
                 DrawSurroundCircle(15f);
                 DrawBuilding();
                 DrawTargets();
+                DrawDronePose();
                 DrawCornerLabels();
 
                 _glControl.SwapBuffers();
@@ -413,6 +484,30 @@ namespace NOMAD.MissionPlanner
             }
         }
 
+        private void DrawDronePose()
+        {
+            if (!_hasDronePose) return;
+
+            float glX = _droneEast;
+            float glY = Math.Max(0.08f, _droneUp);
+            float glZ = -_droneNorth;
+
+            _droneRenderer.LengthM = 0.35f;
+            _droneRenderer.WidthM = 0.35f;
+            _droneRenderer.HeightM = 0.08f;
+            _droneRenderer.FrameType = "Quadcopter";
+            _droneRenderer.ShowAvoidanceEnvelope = false;
+            _droneRenderer.Draw(glX, glY, glZ, _droneYawRad, _dronePitchRad, _droneRollRad, 90f);
+            GL.Disable(EnableCap.Lighting);
+
+            GL.LineWidth(1.5f);
+            GL.Color4(1.0f, 0.65f, 0.0f, 0.65f);
+            GL.Begin(PrimitiveType.Lines);
+            GL.Vertex3(glX, 0f, glZ);
+            GL.Vertex3(glX, glY, glZ);
+            GL.End();
+        }
+
         // ==================== 2D overlay (compass + wall labels) ====================
 
         private void DrawOverlay2D()
@@ -579,12 +674,26 @@ namespace NOMAD.MissionPlanner
         private void GlControl_MouseDown(object sender, MouseEventArgs e)
         {
             _lastMouse = e.Location;
+            _mouseDownPoint = e.Location;
             _dragButton = e.Button;
             _glControl.Focus();
         }
 
         private void GlControl_MouseUp(object sender, MouseEventArgs e)
         {
+            if (_dragButton == MouseButtons.Left && PlacementMode)
+            {
+                int dx = e.X - _mouseDownPoint.X;
+                int dy = e.Y - _mouseDownPoint.Y;
+                if (dx * dx + dy * dy <= 25)
+                {
+                    var placement = PickPlacement(e.Location);
+                    if (placement != null)
+                    {
+                        try { PlacementClicked?.Invoke(placement); } catch { }
+                    }
+                }
+            }
             _dragButton = MouseButtons.None;
         }
 
@@ -665,6 +774,141 @@ namespace NOMAD.MissionPlanner
                 }
             }
             return best;
+        }
+
+        private Placement PickPlacement(Point screen)
+        {
+            if (_corners.Count < 3 || _viewW == 0 || _viewH == 0) return null;
+            if (!TryBuildPickRay(screen, out var origin, out var dir)) return null;
+
+            Placement best = null;
+            float bestT = float.MaxValue;
+
+            TryPickHorizontal("ground", 0f, origin, dir, false, ref best, ref bestT);
+            TryPickHorizontal("roof", _buildingHeight, origin, dir, true, ref best, ref bestT);
+            TryPickWalls(origin, dir, ref best, ref bestT);
+
+            return best;
+        }
+
+        private bool TryBuildPickRay(Point screen, out Vector3 origin, out Vector3 dir)
+        {
+            origin = Vector3.Zero;
+            dir = Vector3.Zero;
+
+            float ndcX = (2f * screen.X) / Math.Max(1, _viewW) - 1f;
+            float ndcY = 1f - (2f * screen.Y) / Math.Max(1, _viewH);
+
+            Matrix4 viewProj = _viewProj;
+            Matrix4.Invert(ref viewProj, out var inv);
+            var near = Vector4.Transform(new Vector4(ndcX, ndcY, -1f, 1f), inv);
+            var far = Vector4.Transform(new Vector4(ndcX, ndcY, 1f, 1f), inv);
+            if (Math.Abs(near.W) < 0.0001f || Math.Abs(far.W) < 0.0001f) return false;
+            near /= near.W;
+            far /= far.W;
+
+            origin = new Vector3(near.X, near.Y, near.Z);
+            dir = Vector3.Normalize(new Vector3(far.X - near.X, far.Y - near.Y, far.Z - near.Z));
+            return dir.LengthSquared > 0.0001f;
+        }
+
+        private void TryPickHorizontal(string surface, float y, Vector3 origin, Vector3 dir,
+            bool requireInsideFootprint, ref Placement best, ref float bestT)
+        {
+            if (Math.Abs(dir.Y) < 0.0001f) return;
+            float t = (y - origin.Y) / dir.Y;
+            if (t <= 0f || t >= bestT) return;
+
+            var p = origin + dir * t;
+            bool inside = PointInsideFootprint(p.X, p.Z);
+            if (requireInsideFootprint && !inside) return;
+            if (!requireInsideFootprint && Distance2(p.X, p.Z, 0f, 0f) > 15f * 15f) return;
+
+            bestT = t;
+            best = BuildPlacement(surface, null, p);
+        }
+
+        private void TryPickWalls(Vector3 origin, Vector3 dir, ref Placement best, ref float bestT)
+        {
+            for (int i = 0; i < _corners.Count; i++)
+            {
+                var ca = _corners[i];
+                var cb = _corners[(i + 1) % _corners.Count];
+                var a = new Vector3(ca.East, 0f, -ca.North);
+                var b = new Vector3(cb.East, 0f, -cb.North);
+                var edge = b - a;
+                if (edge.LengthSquared < 0.0001f) continue;
+
+                var normal = Vector3.Normalize(new Vector3(edge.Z, 0f, -edge.X));
+                float denom = Vector3.Dot(dir, normal);
+                if (Math.Abs(denom) < 0.0001f) continue;
+
+                float t = Vector3.Dot(a - origin, normal) / denom;
+                if (t <= 0f || t >= bestT) continue;
+
+                var p = origin + dir * t;
+                if (p.Y < -0.01f || p.Y > _buildingHeight + 0.01f) continue;
+
+                float along = Vector3.Dot(p - a, edge) / edge.LengthSquared;
+                if (along < -0.01f || along > 1.01f) continue;
+
+                string wall = $"{NameOrIndex(ca.Name, i)}-{NameOrIndex(cb.Name, (i + 1) % _corners.Count)}";
+                bestT = t;
+                best = BuildPlacement("wall", wall, p);
+            }
+        }
+
+        private Placement BuildPlacement(string surface, string wallName, Vector3 glPoint)
+        {
+            float east = glPoint.X;
+            float north = -glPoint.Z;
+            string nearestName = "";
+            float nearest = float.MaxValue;
+
+            for (int i = 0; i < _corners.Count; i++)
+            {
+                var c = _corners[i];
+                float d2 = Distance2(east, north, c.East, c.North);
+                if (d2 < nearest)
+                {
+                    nearest = d2;
+                    nearestName = NameOrIndex(c.Name, i);
+                }
+            }
+
+            return new Placement
+            {
+                Surface = surface,
+                WallName = wallName,
+                NearestCornerName = nearestName,
+                East = east,
+                North = north,
+                Up = Math.Max(0f, Math.Min(_buildingHeight, glPoint.Y)),
+                DistanceFromCornerM = (float)Math.Sqrt(Math.Max(0f, nearest)),
+            };
+        }
+
+        private bool PointInsideFootprint(float glX, float glZ)
+        {
+            bool inside = false;
+            for (int i = 0, j = _corners.Count - 1; i < _corners.Count; j = i++)
+            {
+                float xi = _corners[i].East;
+                float zi = -_corners[i].North;
+                float xj = _corners[j].East;
+                float zj = -_corners[j].North;
+                bool intersect = ((zi > glZ) != (zj > glZ)) &&
+                    (glX < (xj - xi) * (glZ - zi) / ((zj - zi) == 0f ? 0.0001f : (zj - zi)) + xi);
+                if (intersect) inside = !inside;
+            }
+            return inside;
+        }
+
+        private static float Distance2(float x1, float y1, float x2, float y2)
+        {
+            float dx = x1 - x2;
+            float dy = y1 - y2;
+            return dx * dx + dy * dy;
         }
 
         protected override void Dispose(bool disposing)

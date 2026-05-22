@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using MissionPlanner;
@@ -11,6 +12,20 @@ namespace NOMAD.MissionPlanner
         private static readonly SemaphoreSlim s_mavlinkLock = new SemaphoreSlim(1, 1);
 
         internal static SemaphoreSlim MavlinkLock => s_mavlinkLock;
+
+        internal sealed class MotorTestCommand
+        {
+            public readonly int MotorInstance;
+            public readonly int PwmUs;
+            public readonly double TimeoutSeconds;
+
+            public MotorTestCommand(int motorInstance, int pwmUs, double timeoutSeconds)
+            {
+                MotorInstance = motorInstance;
+                PwmUs = pwmUs;
+                TimeoutSeconds = timeoutSeconds;
+            }
+        }
 
         public static bool TrySendServoMavlink(int channel, int pwmUs, bool tryOnly = false)
         {
@@ -123,6 +138,55 @@ namespace NOMAD.MissionPlanner
                     pwmUs,
                     (float)Math.Max(0.05, Math.Min(timeoutSeconds, 3.0)),
                     1, 0, 0);
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                if (acquired) s_mavlinkLock.Release();
+            }
+        }
+
+        public static bool SendMotorTestPwmBatch(IEnumerable<MotorTestCommand> commands)
+        {
+            if (commands == null) return false;
+            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return false;
+
+            var list = new List<MotorTestCommand>();
+            foreach (var command in commands)
+            {
+                if (command == null) continue;
+                if (command.MotorInstance <= 0) return false;
+                if (command.PwmUs != 0 && (command.PwmUs < 500 || command.PwmUs > 2500)) return false;
+                list.Add(command);
+            }
+            if (list.Count == 0) return true;
+
+            bool acquired = false;
+            try
+            {
+                byte sysid = MainV2.comPort.MAV.sysid;
+                byte compid = MainV2.comPort.MAV.compid;
+
+                acquired = s_mavlinkLock.Wait(1500);
+                if (!acquired) return false;
+
+                foreach (var command in list)
+                {
+                    MainV2.comPort.doCommandAsync(
+                        sysid, compid,
+                        MAVLink.MAV_CMD.DO_MOTOR_TEST,
+                        command.MotorInstance,
+                        1,
+                        command.PwmUs,
+                        (float)Math.Max(0.05, Math.Min(command.TimeoutSeconds, 3.0)),
+                        1, 0, 0,
+                        requireack: false, uicallback: null).GetAwaiter().GetResult();
+                }
 
                 return true;
             }
