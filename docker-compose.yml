@@ -101,6 +101,12 @@ services:
       - EGL_PLATFORM=device
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
+      # Forwarded from the host nomad.env via the systemd unit that owns the
+      # container (nomad-isaac-ros-container.service). drone_state_publisher
+      # needs this to authenticate against Edge Core's /status endpoint when
+      # NOMAD_ALLOW_INSECURE_REMOTE=false; without it every poll returns 401
+      # and the localizer never sees a GPS fix.
+      - NOMAD_API_KEY=${NOMAD_API_KEY:-}
     command: >
       bash -c "
         echo '[init] Cleaning up old ROS processes...';

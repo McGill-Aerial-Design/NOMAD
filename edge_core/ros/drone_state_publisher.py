@@ -27,6 +27,7 @@ import argparse
 import json
 import logging
 import math
+import os
 import threading
 from http.client import HTTPConnection, HTTPException
 
@@ -62,6 +63,10 @@ class DroneStatePublisher(Node):
         self._http_port = port
         self._http_conn = HTTPConnection(host, port, timeout=0.5)
         self._http_lock = threading.Lock()
+        # Edge Core requires X-API-Key when NOMAD_API_KEY is set and
+        # NOMAD_ALLOW_INSECURE_REMOTE is false. Inside the Isaac container
+        # this hits localhost, but the auth check still applies.
+        self._api_key = os.environ.get("NOMAD_API_KEY", "").strip()
 
         sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -100,9 +105,10 @@ class DroneStatePublisher(Node):
         with self._http_lock:
             try:
                 self._http_conn.timeout = timeout
-                self._http_conn.request(
-                    "GET", path, headers={"Connection": "keep-alive"}
-                )
+                headers = {"Connection": "keep-alive"}
+                if self._api_key:
+                    headers["X-API-Key"] = self._api_key
+                self._http_conn.request("GET", path, headers=headers)
                 resp = self._http_conn.getresponse()
                 body = resp.read()
                 if resp.status != 200:

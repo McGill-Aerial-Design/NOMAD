@@ -556,6 +556,54 @@ class TargetLocalizerNode(Node):
     # ================================================================ #
     #  Target capture (button press)
     # ================================================================ #
+    def _maybe_apply_drone_state_sidecar(self) -> None:
+        """Fill in missing GPS/heading/alt from a sidecar written by the
+        capture API. Used when the MAVROS bridge inside the container is
+        not delivering NavSatFix even though Edge Core has a valid fix.
+        Live ROS values always take precedence."""
+        sidecar_paths = (
+            "/workspaces/isaac_ros-dev/config/capture_drone_state.json",
+            os.path.join(self.output_dir, "capture_drone_state.json"),
+            os.path.expanduser("~/NOMAD/config/capture_drone_state.json"),
+        )
+        for path in sidecar_paths:
+            if not os.path.exists(path):
+                continue
+            try:
+                import json as _json
+                with open(path, "r") as f:
+                    data = _json.load(f)
+            except Exception as e:
+                self.get_logger().warn(f"Drone-state sidecar read failed at {path}: {e}")
+                continue
+
+            if not self.has_gps_fix:
+                lat = data.get("lat")
+                lon = data.get("lon")
+                if (
+                    isinstance(lat, (int, float)) and isinstance(lon, (int, float))
+                    and math.isfinite(lat) and math.isfinite(lon)
+                    and not (abs(lat) < 1e-8 and abs(lon) < 1e-8)
+                ):
+                    self.drone_lat = float(lat)
+                    self.drone_lon = float(lon)
+                    self.has_gps_fix = True
+                    self.get_logger().info(
+                        f"Drone-state sidecar GPS applied (MAVROS empty): "
+                        f"({self.drone_lat:.7f}, {self.drone_lon:.7f})"
+                    )
+
+            # Heading/alt: only override if we never received a live value.
+            if self.drone_heading == 0.0:
+                hdg = data.get("heading_deg")
+                if isinstance(hdg, (int, float)) and math.isfinite(hdg):
+                    self.drone_heading = float(hdg)
+            if self.drone_alt == 0.0:
+                agl = data.get("alt_agl_m")
+                if isinstance(agl, (int, float)) and math.isfinite(agl):
+                    self.drone_alt = float(agl)
+            return
+
     def _sweep_old_captures(self, keep_last: int) -> None:
         """Keep the newest `keep_last` timestamped capture folders.
 
@@ -650,6 +698,14 @@ class TargetLocalizerNode(Node):
         rgb = self.latest_rgb.copy()
         depth = self.latest_depth.copy()
         captured_servo_pitch = self.servo_pitch_deg
+
+        # Drone-state sidecar fallback: if the live MAVROS NavSatFix/heading
+        # subscription is empty (the drone_state_publisher bridge inside the
+        # Isaac container sometimes wedges) but Edge Core itself has a valid
+        # fix, the capture endpoint writes the current state to a sidecar so
+        # we can still geolocate. Only fills fields we don't already have
+        # from the live ROS topic, so a working subscription always wins.
+        self._maybe_apply_drone_state_sidecar()
 
         # Run HSV circle detection unless the GCS requested a one-shot
         # crosshair capture. The request is passed through a sidecar because
@@ -952,19 +1008,23 @@ class TargetLocalizerNode(Node):
                 f" distance={det_distance_m * 100:.0f}cm"
                 if det_distance_m is not None else ""
             )
+            # Description + face-plane classification moved to the GCS, so the
+            # node no longer has those locals. Log raw lat/lon/height + range.
             self.get_logger().info(
-                f"TARGET {record.target_id}: {description} "
-                f"(plane={plane_hit.label}, slant_range={plane_hit.distance:.2f}m{dist_str})"
+                f"TARGET {record.target_id}: "
+                f"({target_lat:.7f}, {target_lon:.7f}) h={height_agl:.2f}m{dist_str} "
+                f"color={final_color.value}"
             )
 
         if new_targets:
             response.success = True
-            # Description is the spatial body only -- no color, no distance.
-            # Mission Planner prepends "<Color> target " from the table column;
-            # raw slant-range stays in t.raw_data["distance_m"] for diagnostics
-            # but is intentionally NOT in user-visible text (the operator wants
-            # description = building-relative geometry only).
-            lines = [f"Target {t.target_id}: {t.description}" for t in new_targets]
+            # The GCS owns description/face-classification. Reply with raw
+            # lat/lon/height per target so the GCS can render its own text.
+            # Slant-range stays in t.raw_data["distance_m"] for diagnostics.
+            lines = [
+                f"Target {t.target_id}: ({t.lat:.7f}, {t.lon:.7f}) h={t.height_agl:.2f}m"
+                for t in new_targets
+            ]
             response.message = "\n".join(lines)
         else:
             # A filter-only result means HSV detection is working, but no NEW

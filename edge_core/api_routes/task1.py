@@ -544,6 +544,39 @@ def register_task1_routes(app, ctx) -> None:
 
         force_crosshair = bool(overrides.force_crosshair) if overrides is not None else False
         capture_options_path = os.path.join(_TARGET_SIDECAR_DIR, "capture_options.json")
+
+        # Drone-state sidecar: target_localizer normally gets GPS/heading/alt
+        # via MAVROS topics published by drone_state_publisher (running inside
+        # the Isaac ROS container). If that bridge is wedged the localizer
+        # has no fix even though Edge Core itself sees a valid one over
+        # MAVLink, and every capture fails with "no GPS fix". Write the
+        # current state here so the localizer can fall back to it.
+        try:
+            state_for_sidecar = request.app.state.state_manager.get_state()
+            if (
+                state_for_sidecar.gps_lat is not None
+                and state_for_sidecar.gps_lon is not None
+                and state_for_sidecar.gps_fix
+            ):
+                _atomic_write_json(
+                    os.path.join(_TARGET_SIDECAR_DIR, "capture_drone_state.json"),
+                    {
+                        "lat": float(state_for_sidecar.gps_lat),
+                        "lon": float(state_for_sidecar.gps_lon),
+                        "gps_fix": True,
+                        "heading_deg": float(state_for_sidecar.heading_deg)
+                            if getattr(state_for_sidecar, "heading_deg", None) is not None
+                            else None,
+                        "alt_agl_m": float(state_for_sidecar.alt_agl_m)
+                            if getattr(state_for_sidecar, "alt_agl_m", None) is not None
+                            else None,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                    indent=None,
+                )
+        except Exception as exc:
+            logger.warning("Task1 capture drone-state sidecar write failed: %s", exc)
+
         if force_crosshair:
             _atomic_write_json(
                 capture_options_path,
@@ -589,6 +622,13 @@ def register_task1_routes(app, ctx) -> None:
                     "camera intrinsics",
                     "stream appears frozen",
                     "frame is",
+                    # Crosshair-fallback diagnostics (no GPS / no depth / etc).
+                    # These are real per-capture preconditions, not gateway
+                    # outages, so surface them as success=False payloads.
+                    "crosshair capture failed",
+                    "no gps fix",
+                    "no valid depth",
+                    "back-projection",
                 )
             )
             if application_level_failure:
