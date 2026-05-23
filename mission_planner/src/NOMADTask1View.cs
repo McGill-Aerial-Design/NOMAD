@@ -256,8 +256,8 @@ private ListBox _lstWalls;
 
             var currentBudgetCard = CreateCard("CURRENT BUDGET");
             currentBudgetCard.Dock = DockStyle.Top;
-            currentBudgetCard.Height = 170;
-            var currentBudgetPanel = new Task1CurrentBudgetPanel
+            currentBudgetCard.Height = 120;
+            var currentBudgetPanel = new Task1CurrentBudgetPanel(_config)
             {
                 Dock = DockStyle.Fill,
                 Margin = new Padding(5, 28, 5, 5),
@@ -375,10 +375,12 @@ private ListBox _lstWalls;
 
             lapCard.Resize += (s, e) => grid.Width = Math.Max(260, lapCard.ClientSize.Width - 30);
 
-            inner.Controls.Add(payloadCard);
-            inner.Controls.Add(currentBudgetCard);
+            // DockStyle.Top stacks the most recently added control at the top.
+            // Add in reverse visual order: payload, budget, lap course.
             inner.Controls.Add(lapCard);
-            inner.Height += currentBudgetCard.Height + 5;
+            inner.Controls.Add(currentBudgetCard);
+            inner.Controls.Add(payloadCard);
+            inner.Height = payloadCard.Height + currentBudgetCard.Height + lapCard.Height + 15;
             scroll.Controls.Add(inner);
             return scroll;
         }
@@ -943,32 +945,18 @@ private ListBox _lstWalls;
 
             try
             {
-                var body = new { name = cornerName, lat = cs.lat, lon = cs.lng };
-                var json = Newtonsoft.Json.JsonConvert.SerializeObject(body);
-                var httpContent = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json");
-                var response = await JetsonApiService.PostAsync("/api/task/1/building/calibration/corner", httpContent);
-                var respBody = await response.Content.ReadAsStringAsync();
-                if (response.IsSuccessStatusCode)
-                {
-                    string mode = "";
-                    try
-                    {
-                        var data = Newtonsoft.Json.Linq.JObject.Parse(respBody);
-                        mode = data["calibration"]?["mode"]?.ToString();
-                    }
-                    catch { }
+                var model = BuildingCornerStore.LoadOrPreset();
+                BuildingCornerStore.AddObservationAndCalibrate(model, cornerName, cs.lat, cs.lng);
+                BuildingCornerStore.Save(model);
 
-                    _txtResult.Text = string.IsNullOrEmpty(mode)
-                        ? "[OK] Model calibration point saved."
-                        : $"[OK] Model calibrated ({mode}). Apply to Model to push it to target_localizer.";
-                    _txtResult.ForeColor = SUCCESS_COLOR;
-                    await RefreshCornerListAsync();
-                }
-                else
-                {
-                    _txtResult.Text = $"[FAIL] Calibration failed: {response.StatusCode} - {respBody}";
-                    _txtResult.ForeColor = ERROR_COLOR;
-                }
+                string mode = model.Calibration?.Mode ?? "none";
+                _txtResult.Text = $"[OK] Model calibrated locally ({mode}, {model.Calibration?.ObservationCount ?? 0} obs, "
+                    + $"{model.Calibration?.RotationDeg:F2}°). Building model updates live in the 3D view.";
+                _txtResult.ForeColor = SUCCESS_COLOR;
+
+                AutoAdvanceCornerName(cornerName);
+                RefreshCornerListLocal(model);
+                await Task.CompletedTask;
             }
             catch (Exception ex)
             {
@@ -990,7 +978,7 @@ private ListBox _lstWalls;
             string cornerName = _txtCornerName.Text.Trim();
             if (string.IsNullOrEmpty(cornerName))
             {
-                _txtResult.Text = "[FAIL] Enter a corner name (e.g. NW, NE).";
+                _txtResult.Text = "[FAIL] Enter a corner name (e.g. 1, 2, 3).";
                 _txtResult.ForeColor = ERROR_COLOR;
                 return;
             }
@@ -1002,31 +990,32 @@ private ListBox _lstWalls;
 
             try
             {
-                var body = new { name = cornerName, lat = cs.lat, lon = cs.lng };
-                var json = Newtonsoft.Json.JsonConvert.SerializeObject(body);
-                var httpContent = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json");
-                var response = await JetsonApiService.PostAsync("/api/task/1/building/corner", httpContent);
-
-                if (response.IsSuccessStatusCode)
+                // CAPTURE replaces the raw preset corner with the observed GPS
+                // (no calibration math — direct override). Operators expect this
+                // when they want to log captured corner positions one at a time
+                // and then run "Apply to Model" to update the viewer.
+                var model = BuildingCornerStore.LoadOrPreset();
+                var existing = model.Corners.FirstOrDefault(c => string.Equals(c.Name, cornerName, StringComparison.OrdinalIgnoreCase));
+                if (existing != null)
                 {
-                    var respBody = await response.Content.ReadAsStringAsync();
-                    var data = Newtonsoft.Json.Linq.JObject.Parse(respBody);
-                    int total = (int?)data["total_corners"] ?? 0;
-                    bool canApply = (bool?)data["can_apply"] ?? false;
-
-                    _txtResult.Text = $"[OK] Corner '{cornerName}' saved ({cs.lat:F6}, {cs.lng:F6}). {total} corners total." + (canApply ? " Ready to Apply!" : " Need >= 3 corners to apply.");
-                    _txtResult.ForeColor = SUCCESS_COLOR;
-
-                    // Auto-advance to next corner name suggestion
-                    AutoAdvanceCornerName(cornerName);
-
-                    await RefreshCornerListAsync();
+                    existing.Lat = cs.lat;
+                    existing.Lon = cs.lng;
                 }
                 else
                 {
-                    _txtResult.Text = $"[FAIL] API returned {response.StatusCode}";
-                    _txtResult.ForeColor = ERROR_COLOR;
+                    model.Corners.Add(new BuildingCornerStore.Corner { Name = cornerName, Lat = cs.lat, Lon = cs.lng });
                 }
+                BuildingCornerStore.Save(model);
+
+                int total = model.Corners.Count;
+                bool canApply = total >= 3;
+                _txtResult.Text = $"[OK] Corner '{cornerName}' saved ({cs.lat:F6}, {cs.lng:F6}). {total} corners total."
+                    + (canApply ? " Ready to Apply!" : " Need >= 3 corners to apply.");
+                _txtResult.ForeColor = SUCCESS_COLOR;
+
+                AutoAdvanceCornerName(cornerName);
+                RefreshCornerListLocal(model);
+                await Task.CompletedTask;
             }
             catch (Exception ex)
             {
@@ -1056,62 +1045,54 @@ private ListBox _lstWalls;
             }
         }
 
-        private async Task RefreshCornerListAsync()
+        private Task RefreshCornerListAsync()
         {
-            try
+            // Source of truth is now %MyDocuments%/NOMAD/Task1/building_corners.json.
+            // No more round-trip to the Jetson.
+            var model = BuildingCornerStore.Load();
+            RefreshCornerListLocal(model);
+            return Task.CompletedTask;
+        }
+
+        private void RefreshCornerListLocal(BuildingCornerStore.Model model)
+        {
+            int total = model?.Corners?.Count ?? 0;
+            bool canApply = total >= 3;
+
+            if (_lstCorners != null)
             {
-                var response = await JetsonApiService.GetAsync("/api/task/1/building/corners");
-                if (response.IsSuccessStatusCode)
+                _lstCorners.Items.Clear();
+                if (model?.Corners != null)
                 {
-                    var body = await response.Content.ReadAsStringAsync();
-                    var data = Newtonsoft.Json.Linq.JObject.Parse(body);
-                    var corners = data["corners"] as Newtonsoft.Json.Linq.JArray;
-                    int total = (int?)data["total_corners"] ?? 0;
-                    bool canApply = (bool?)data["can_apply"] ?? false;
-
-                    _lstCorners.Items.Clear();
-                    var localCorners = new List<BuildingViewer3D.Corner>();
-                    if (corners != null)
-                    {
-                        foreach (var c in corners)
-                        {
-                            string name = c["name"]?.ToString() ?? "?";
-                            double lat = (double?)c["lat"] ?? 0;
-                            double lon = (double?)c["lon"] ?? 0;
-                            _lstCorners.Items.Add($"{name}: {lat:F6}, {lon:F6}");
-                            localCorners.Add(new BuildingViewer3D.Corner
-                            {
-                                Name = name,
-                                Lat = lat,
-                                Lon = lon,
-                            });
-                        }
-                    }
-
-                    if (total == 0)
-                    {
-                        _uploadPanel?.ClearBuildingModel();
-                    }
-                    else if (localCorners.Count >= 3)
-                    {
-                        double height = 2.4;
-                        double.TryParse(_txtBuildingHeight?.Text, out height);
-                        _uploadPanel?.SetBuildingModel(localCorners, height > 0 ? height : 2.4);
-                    }
-
-                    _lblCornerStatus.Text = total == 0
-                        ? "Fly above each building corner and click Capture Corner"
-                        : $"{total} corners captured" + (canApply ? " - Ready to Apply!" : " - Need >= 3");
-                    _lblCornerStatus.ForeColor = canApply ? SUCCESS_COLOR : TEXT_SECONDARY;
-                    
-                    // Also refresh walls when corners change
-                    await RefreshWallsAsync();
+                    foreach (var c in model.Corners)
+                        _lstCorners.Items.Add($"{c.Name}: {c.Lat:F6}, {c.Lon:F6}");
                 }
             }
-            catch
+
+            if (total == 0)
             {
-                // Silently fail - API may not be available
+                _uploadPanel?.ClearBuildingModel();
             }
+            else if (canApply)
+            {
+                double height = model.Height > 0 ? model.Height : 2.4;
+                if (_txtBuildingHeight != null && double.TryParse(_txtBuildingHeight.Text, out double parsed) && parsed > 0)
+                    height = parsed;
+                var localCorners = model.Corners
+                    .Select(c => new BuildingViewer3D.Corner { Name = c.Name, Lat = c.Lat, Lon = c.Lon })
+                    .ToList();
+                _uploadPanel?.SetBuildingModel(localCorners, height);
+            }
+
+            if (_lblCornerStatus != null)
+            {
+                _lblCornerStatus.Text = total == 0
+                    ? "Fly above each building corner and click Capture Corner"
+                    : $"{total} corners captured" + (canApply ? " - Ready to Apply!" : " - Need >= 3");
+                _lblCornerStatus.ForeColor = canApply ? SUCCESS_COLOR : TEXT_SECONDARY;
+            }
+
+            RefreshWallsLocal(model);
         }
 
         private void BtnApplyCorners_Click(object sender, EventArgs e)
@@ -1134,8 +1115,10 @@ private ListBox _lstWalls;
             }
             try
             {
-                PopulatePresetCornersInUi();
+                var fresh = BuildingCornerStore.BuildPreset();
+                BuildingCornerStore.Save(fresh);
                 _uploadPanel?.LoadCompetitionPresetModel();
+                RefreshCornerListLocal(fresh);
                 SetTask1Status("[OK] Task 1 preset loaded on the ground station.", SUCCESS_COLOR);
                 await Task.CompletedTask;
             }
@@ -1177,79 +1160,40 @@ private ListBox _lstWalls;
                 _lstCorners.Items.Add($"{c.name}: {c.lat:F6}, {c.lon:F6}");
         }
 
-        private async Task LoadTask1PresetViaCornerApiAsync(string reason)
-        {
-            SetTask1Status($"Preset endpoint unavailable; loading corners directly... ({reason})", WARNING_COLOR);
-
-            try
-            {
-                await JetsonApiService.DeleteAsync("/api/task/1/building/corners");
-                foreach (var c in GetTask1BuildingPresetCorners())
-                {
-                    var json = Newtonsoft.Json.JsonConvert.SerializeObject(new { name = c.name, lat = c.lat, lon = c.lon });
-                    var content = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json");
-                    var resp = await JetsonApiService.PostAsync("/api/task/1/building/corner", content);
-                    if (!resp.IsSuccessStatusCode)
-                    {
-                        var body = await resp.Content.ReadAsStringAsync();
-                        throw new Exception($"Corner {c.name} failed: HTTP {(int)resp.StatusCode} {body}");
-                    }
-                }
-                await JetsonApiService.PostAsync("/api/task/1/building/height?height=2.4", null);
-                SetTask1Status("[OK] Task 1 preset loaded through corner API. Apply to Model when ready.", SUCCESS_COLOR);
-                await RefreshCornerListAsync();
-            }
-            catch (Exception ex)
-            {
-                SetTask1Status($"[FAIL] Preset fallback failed: {ex.Message}", ERROR_COLOR);
-                MessageBox.Show(
-                    $"Load Preset could not reach the Jetson API.\n\n{ex.Message}\n\nThe preset is shown locally in the corner list, but it was not pushed to Edge Core.",
-                    "Task 1 Preset",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
-            }
-        }
-
         private async Task BtnApplyCornersAsync(object sender, EventArgs e)
         {
             _btnApplyCorners.Enabled = false;
-            _txtResult.Text = "Applying corners to building model...";
+            _txtResult.Text = "Rebuilding 3D model from saved corners...";
             _txtResult.ForeColor = WARNING_COLOR;
 
             try
             {
-                var response = await JetsonApiService.PostAsync("/api/task/1/building/corners/apply", null);
-                if (response.IsSuccessStatusCode)
+                var model = BuildingCornerStore.Load();
+                int count = model?.Corners?.Count ?? 0;
+                if (count < 3)
                 {
-                    var body = await response.Content.ReadAsStringAsync();
-                    var data = Newtonsoft.Json.Linq.JObject.Parse(body);
-                    var arr = data["corners"] as Newtonsoft.Json.Linq.JArray;
-                    int count = arr?.Count ?? 0;
-                    if (arr != null && count >= 3)
-                    {
-                        var localCorners = new List<BuildingViewer3D.Corner>();
-                        foreach (var c in arr)
-                        {
-                            localCorners.Add(new BuildingViewer3D.Corner
-                            {
-                                Name = c["name"]?.ToString() ?? (localCorners.Count + 1).ToString(),
-                                Lat = (double?)c["lat"] ?? 0,
-                                Lon = (double?)c["lon"] ?? 0,
-                            });
-                        }
-                        double height = 2.4;
-                        double.TryParse(_txtBuildingHeight?.Text, out height);
-                        _uploadPanel?.SetBuildingModel(localCorners, height > 0 ? height : 2.4);
-                    }
-                    _txtResult.Text = $"[OK] Building model rebuilt with {count} corners!";
-                    _txtResult.ForeColor = SUCCESS_COLOR;
-                }
-                else
-                {
-                    var errorBody = await response.Content.ReadAsStringAsync();
-                    _txtResult.Text = $"[FAIL] Apply corners failed: {response.StatusCode} - {errorBody}";
+                    _txtResult.Text = "[FAIL] Need at least 3 corners before applying. Capture more corners or click Load Preset.";
                     _txtResult.ForeColor = ERROR_COLOR;
+                    return;
                 }
+
+                double height = model.Height > 0 ? model.Height : 2.4;
+                if (_txtBuildingHeight != null && double.TryParse(_txtBuildingHeight.Text, out double parsed) && parsed > 0)
+                {
+                    height = parsed;
+                    model.Height = height;
+                    BuildingCornerStore.Save(model);
+                }
+
+                var localCorners = model.Corners
+                    .Select(c => new BuildingViewer3D.Corner { Name = c.Name, Lat = c.Lat, Lon = c.Lon })
+                    .ToList();
+                _uploadPanel?.SetBuildingModel(localCorners, height);
+                RefreshCornerListLocal(model);
+
+                _txtResult.Text = $"[OK] Building model rebuilt with {count} corners.";
+                _txtResult.ForeColor = SUCCESS_COLOR;
+                await Task.CompletedTask;
             }
             catch (Exception ex)
             {
@@ -1271,21 +1215,15 @@ private ListBox _lstWalls;
         {
             try
             {
-                var response = await JetsonApiService.DeleteAsync("/api/task/1/building/corners");
-                if (response.IsSuccessStatusCode)
-                {
-                    _lstCorners.Items.Clear();
-                    _uploadPanel?.ClearBuildingModel();
-                    _lblCornerStatus.Text = "Fly above each building corner and click Capture Corner";
-                    _lblCornerStatus.ForeColor = TEXT_SECONDARY;
-                    _txtResult.Text = "[OK] Building corners cleared.";
-                    _txtResult.ForeColor = SUCCESS_COLOR;
-                }
-                else
-                {
-                    _txtResult.Text = $"[FAIL] Clear failed: {response.StatusCode}";
-                    _txtResult.ForeColor = ERROR_COLOR;
-                }
+                BuildingCornerStore.Delete();
+                _lstCorners.Items.Clear();
+                _uploadPanel?.ClearBuildingModel();
+                _lblCornerStatus.Text = "Fly above each building corner and click Capture Corner";
+                _lblCornerStatus.ForeColor = TEXT_SECONDARY;
+                _lstWalls?.Items.Clear();
+                _txtResult.Text = "[OK] Building corners cleared.";
+                _txtResult.ForeColor = SUCCESS_COLOR;
+                await Task.CompletedTask;
             }
             catch (Exception ex)
             {
@@ -1405,19 +1343,14 @@ private ListBox _lstWalls;
 
             try
             {
-                var response = await JetsonApiService.PostAsync($"/api/task/1/building/height?height={height}", null);
-                if (response.IsSuccessStatusCode)
-                {
-                    _txtResult.Text = $"[OK] Building height set to {height}m";
-                    _txtResult.ForeColor = SUCCESS_COLOR;
-                    if (_uploadPanel != null) _uploadPanel.BuildingHeight = height;
-                    await RefreshWallsAsync();
-                }
-                else
-                {
-                    _txtResult.Text = $"[FAIL] API returned {response.StatusCode}";
-                    _txtResult.ForeColor = ERROR_COLOR;
-                }
+                var model = BuildingCornerStore.LoadOrPreset();
+                model.Height = height;
+                BuildingCornerStore.Save(model);
+                if (_uploadPanel != null) _uploadPanel.BuildingHeight = height;
+                _txtResult.Text = $"[OK] Building height set to {height}m";
+                _txtResult.ForeColor = SUCCESS_COLOR;
+                RefreshWallsLocal(model);
+                await Task.CompletedTask;
             }
             catch (Exception ex)
             {
@@ -1426,48 +1359,33 @@ private ListBox _lstWalls;
             }
         }
 
-        private async Task RefreshWallsAsync()
+        private Task RefreshWallsAsync()
         {
-            try
+            RefreshWallsLocal(BuildingCornerStore.Load());
+            return Task.CompletedTask;
+        }
+
+        private void RefreshWallsLocal(BuildingCornerStore.Model model)
+        {
+            if (_lstWalls == null) return;
+            _lstWalls.Items.Clear();
+
+            if (model?.Corners == null || model.Corners.Count < 3)
             {
-                var response = await JetsonApiService.GetAsync("/api/task/1/building/corners");
-                if (response.IsSuccessStatusCode)
-                {
-                    var body = await response.Content.ReadAsStringAsync();
-                    var data = Newtonsoft.Json.Linq.JObject.Parse(body);
-                    var walls = data["walls"] as Newtonsoft.Json.Linq.JArray;
-                    double? height = (double?)data["height"];
-
-                    if (height.HasValue)
-                    {
-                        _txtBuildingHeight.Text = height.Value.ToString("F1");
-                    }
-
-                    _lstWalls.Items.Clear();
-                    if (walls != null && walls.Count > 0)
-                    {
-                        foreach (var w in walls)
-                        {
-                            string name = w["name"]?.ToString() ?? "?";
-                            double lengthM = (double?)w["length_m"] ?? 0;
-                            double? overrideM = (double?)w["manual_override_m"];
-
-                            string display = overrideM.HasValue
-                                ? $"{name}: {lengthM:F2}m → {overrideM.Value:F2}m (manual)"
-                                : $"{name}: {lengthM:F2}m";
-                            
-                            _lstWalls.Items.Add(display);
-                        }
-                    }
-                    else
-                    {
-                        _lstWalls.Items.Add("(No walls - add >= 3 corners first)");
-                    }
-                }
+                _lstWalls.Items.Add("(No walls - add >= 3 corners first)");
+                return;
             }
-            catch
+
+            if (_txtBuildingHeight != null && model.Height > 0)
+                _txtBuildingHeight.Text = model.Height.ToString("F1");
+
+            var walls = BuildingCornerStore.ComputeWallLengths(model);
+            foreach (var w in walls)
             {
-                // Silently fail - API may not be available
+                string display = w.ManualOverrideM.HasValue
+                    ? $"{w.Name}: {w.LengthM:F2}m → {w.ManualOverrideM.Value:F2}m (manual)"
+                    : $"{w.Name}: {w.LengthM:F2}m";
+                _lstWalls.Items.Add(display);
             }
         }
 
@@ -1494,27 +1412,18 @@ private ListBox _lstWalls;
 
             try
             {
-                // Extract wall name from selected item (format: "NW-NE: 10.5m" or "NW-NE: 10.5m → 12.0m (manual)")
                 string selectedItem = _lstWalls.SelectedItem.ToString();
                 string wallName = selectedItem.Split(':')[0].Trim();
 
-                var response = await JetsonApiService.PostAsync(
-                    $"/api/task/1/building/wall/override?wall_name={Uri.EscapeDataString(wallName)}&length_m={length}",
-                    null);
+                var model = BuildingCornerStore.LoadOrPreset();
+                BuildingCornerStore.SetWallOverride(model, wallName, length);
+                BuildingCornerStore.Save(model);
 
-                if (response.IsSuccessStatusCode)
-                {
-                    _txtResult.Text = $"[OK] Wall '{wallName}' set to {length}m";
-                    _txtResult.ForeColor = SUCCESS_COLOR;
-                    _txtWallOverride.Clear();
-                    await RefreshWallsAsync();
-                }
-                else
-                {
-                    var errorBody = await response.Content.ReadAsStringAsync();
-                    _txtResult.Text = $"[FAIL] {response.StatusCode}: {errorBody}";
-                    _txtResult.ForeColor = ERROR_COLOR;
-                }
+                _txtResult.Text = $"[OK] Wall '{wallName}' set to {length}m";
+                _txtResult.ForeColor = SUCCESS_COLOR;
+                _txtWallOverride.Clear();
+                RefreshWallsLocal(model);
+                await Task.CompletedTask;
             }
             catch (Exception ex)
             {
@@ -1539,26 +1448,18 @@ private ListBox _lstWalls;
 
             try
             {
-                // Extract wall name from selected item
                 string selectedItem = _lstWalls.SelectedItem.ToString();
                 string wallName = selectedItem.Split(':')[0].Trim();
 
-                var response = await JetsonApiService.PostAsync(
-                    $"/api/task/1/building/wall/override?wall_name={Uri.EscapeDataString(wallName)}",
-                    null);
+                var model = BuildingCornerStore.LoadOrPreset();
+                BuildingCornerStore.SetWallOverride(model, wallName, null);
+                BuildingCornerStore.Save(model);
 
-                if (response.IsSuccessStatusCode)
-                {
-                    _txtResult.Text = $"[OK] Wall '{wallName}' override cleared (using GPS-calculated length)";
-                    _txtResult.ForeColor = SUCCESS_COLOR;
-                    _txtWallOverride.Clear();
-                    await RefreshWallsAsync();
-                }
-                else
-                {
-                    _txtResult.Text = $"[FAIL] API returned {response.StatusCode}";
-                    _txtResult.ForeColor = ERROR_COLOR;
-                }
+                _txtResult.Text = $"[OK] Wall '{wallName}' override cleared (using GPS-calculated length)";
+                _txtResult.ForeColor = SUCCESS_COLOR;
+                _txtWallOverride.Clear();
+                RefreshWallsLocal(model);
+                await Task.CompletedTask;
             }
             catch (Exception ex)
             {

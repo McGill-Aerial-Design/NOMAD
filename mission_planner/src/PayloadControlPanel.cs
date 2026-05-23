@@ -40,8 +40,14 @@ namespace NOMAD.MissionPlanner
         // Safety limits
         private const int DROP_CLICKS_REQUIRED = 3;      // clicks needed to drop
         private const int DROP_RESET_MS        = 3000;   // ms before click count resets
-        private const int REEL_SAFETY_MS       = 10_000; // max continuous reel time
+        private const int REEL_SAFETY_MS       = 10_000; // max continuous hold-to-reel time
         private const int TILT_SETTLE_MS       = 100;    // final send after slider stops moving
+
+        // Full-spool reel constants — three-click confirm to start, fourth
+        // click (or any click after start) cancels mid-spool.
+        private const int FULL_REEL_DURATION_MS      = 80_000; // 1 min 20 s
+        private const int FULL_REEL_CLICKS_REQUIRED  = 3;
+        private const int FULL_REEL_CLICK_RESET_MS   = 3000;
 
         private readonly NOMADConfig _config;
 
@@ -54,6 +60,18 @@ namespace NOMAD.MissionPlanner
         // Reel safety (indexed: 0 = reel 1, 1 = reel 2)
         private readonly bool[]  _reelActive       = new bool[2];
         private readonly Timer[] _reelSafetyTimers = new Timer[2];
+
+        // Full-spool reel state. Slot layout: 0 = reel-1 IN, 1 = reel-1 OUT,
+        // 2 = reel-2 IN, 3 = reel-2 OUT. Each slot tracks its own arming
+        // click count and its own active 80s countdown so the operator can
+        // cancel mid-spool by clicking the running button again.
+        private readonly Button[] _fullReelButtons        = new Button[4];
+        private readonly string[] _fullReelLabels         = { "In Full", "Out Full", "In Full", "Out Full" };
+        private readonly int[]    _fullReelClickCount     = new int[4];
+        private readonly Timer[]  _fullReelClickReset     = new Timer[4];
+        private readonly Timer[]  _fullReelCountdown      = new Timer[4];
+        private readonly int[]    _fullReelRemainingMs    = new int[4];
+        private readonly bool[]   _fullReelActive         = new bool[4];
 
         // Tilt debounce
         private TrackBar _tiltSlider;
@@ -218,6 +236,11 @@ namespace NOMAD.MissionPlanner
             btnReelOut.MouseUp    += (s, e) => StopReel(0);
             btnReelOut.MouseLeave += (s, e) => { if (_reelActive[0]) StopReel(0); };
             Controls.Add(btnReelOut);
+            x += 92;
+
+            CreateFullReelButton(0, x, y);
+            x += 80;
+            CreateFullReelButton(1, x, y);
 
             // ---- Row 3: Strap reel 2 ----
             y += DROP_H + ROW_GAP;
@@ -247,6 +270,11 @@ namespace NOMAD.MissionPlanner
             btnReel2Out.MouseUp    += (s, e) => StopReel(1);
             btnReel2Out.MouseLeave += (s, e) => { if (_reelActive[1]) StopReel(1); };
             Controls.Add(btnReel2Out);
+            x += 92;
+
+            CreateFullReelButton(2, x, y);
+            x += 80;
+            CreateFullReelButton(3, x, y);
 
             // ---- Row 4: Camera tilt slider ----
             y += DROP_H + ROW_GAP;
@@ -320,7 +348,7 @@ namespace NOMAD.MissionPlanner
             Controls.Add(_lblStatus);
 
             // Lock in the minimum height so the parent TableLayoutPanel row never clips content.
-            this.MinimumSize = new Size(300, y + 20);
+            this.MinimumSize = new Size(470, y + 20);
         }
 
         // ============================================================
@@ -489,6 +517,9 @@ namespace NOMAD.MissionPlanner
 
         private void StartReel(int reelIdx, int pwmUs)
         {
+            StopFullReel(reelIdx * 2, true);
+            StopFullReel(reelIdx * 2 + 1, true);
+
             int channel = reelIdx == 0 ? (_config?.ReelServoChannel ?? 0) : (_config?.Reel2ServoChannel ?? 0);
             _reelActive[reelIdx] = true;
 
@@ -524,6 +555,169 @@ namespace NOMAD.MissionPlanner
             SendServoNow(channel, 1500);
             SetStatus($"Reel P{reelIdx + 1} stopped", TEXT_SECONDARY);
         }
+
+        private void CreateFullReelButton(int slot, int x, int y)
+        {
+            if (slot < 0 || slot >= _fullReelButtons.Length) return;
+
+            var btn = MakeButton(_fullReelLabels[slot], Color.FromArgb(85, 65, 35), 76, 26);
+            btn.Location = new Point(x, y);
+            btn.Click += (s, e) => OnFullReelClick(slot);
+            Controls.Add(btn);
+            _fullReelButtons[slot] = btn;
+        }
+
+        private void OnFullReelClick(int slot)
+        {
+            if (slot < 0 || slot >= _fullReelButtons.Length) return;
+
+            if (_fullReelActive[slot])
+            {
+                StopFullReel(slot, true);
+                return;
+            }
+
+            _fullReelClickCount[slot]++;
+            if (_fullReelClickCount[slot] < FULL_REEL_CLICKS_REQUIRED)
+            {
+                StartFullReelClickReset(slot);
+                UpdateFullReelButton(slot);
+                SetStatus(
+                    $"{_fullReelLabels[slot]} P{FullReelNumber(slot)} armed: {_fullReelClickCount[slot]}/{FULL_REEL_CLICKS_REQUIRED}",
+                    WARNING_COLOR);
+                return;
+            }
+
+            StartFullReel(slot);
+        }
+
+        private void StartFullReelClickReset(int slot)
+        {
+            _fullReelClickReset[slot]?.Stop();
+            _fullReelClickReset[slot]?.Dispose();
+
+            var resetTimer = new Timer { Interval = FULL_REEL_CLICK_RESET_MS };
+            resetTimer.Tick += (s, e) =>
+            {
+                resetTimer.Stop();
+                resetTimer.Dispose();
+                _fullReelClickReset[slot] = null;
+                _fullReelClickCount[slot] = 0;
+                UpdateFullReelButton(slot);
+            };
+            _fullReelClickReset[slot] = resetTimer;
+            resetTimer.Start();
+        }
+
+        private void StartFullReel(int slot)
+        {
+            int reelIdx = FullReelIndex(slot);
+            int oppositeSlot = FullReelOppositeSlot(slot);
+            int channel = reelIdx == 0 ? (_config?.ReelServoChannel ?? 0) : (_config?.Reel2ServoChannel ?? 0);
+
+            if (channel <= 0)
+            {
+                _fullReelClickReset[slot]?.Stop();
+                _fullReelClickReset[slot]?.Dispose();
+                _fullReelClickReset[slot] = null;
+                _fullReelClickCount[slot] = 0;
+                UpdateFullReelButton(slot);
+                SetStatus($"Reel P{reelIdx + 1} channel not configured (see Settings > Servos)", WARNING_COLOR);
+                return;
+            }
+
+            if (_fullReelActive[oppositeSlot])
+                StopFullReel(oppositeSlot, false);
+            if (_reelActive[reelIdx])
+                StopReel(reelIdx);
+
+            _fullReelClickReset[slot]?.Stop();
+            _fullReelClickReset[slot]?.Dispose();
+            _fullReelClickReset[slot] = null;
+            _fullReelClickCount[slot] = 0;
+
+            _fullReelActive[slot] = true;
+            _fullReelRemainingMs[slot] = FULL_REEL_DURATION_MS;
+            UpdateFullReelButton(slot);
+
+            int pwmUs = FullReelIsIn(slot)
+                ? (reelIdx == 0 ? (_config?.ReelPwmIn ?? 2100) : (_config?.Reel2PwmIn ?? 2100))
+                : (reelIdx == 0 ? (_config?.ReelPwmOut ?? 900) : (_config?.Reel2PwmOut ?? 900));
+
+            SendServoNow(channel, pwmUs);
+            SetStatus($"{_fullReelLabels[slot]} P{reelIdx + 1} running for 1:20  (click to cancel)", SUCCESS_COLOR);
+
+            _fullReelCountdown[slot]?.Stop();
+            _fullReelCountdown[slot]?.Dispose();
+            var countdown = new Timer { Interval = 1000 };
+            countdown.Tick += (s, e) =>
+            {
+                _fullReelRemainingMs[slot] -= 1000;
+                if (_fullReelRemainingMs[slot] <= 0)
+                {
+                    StopFullReel(slot, false);
+                    return;
+                }
+                UpdateFullReelButton(slot);
+            };
+            _fullReelCountdown[slot] = countdown;
+            countdown.Start();
+        }
+
+        private void StopFullReel(int slot, bool cancelled)
+        {
+            if (slot < 0 || slot >= _fullReelButtons.Length) return;
+
+            bool wasActive = _fullReelActive[slot];
+            int reelIdx = FullReelIndex(slot);
+
+            _fullReelActive[slot] = false;
+            _fullReelRemainingMs[slot] = 0;
+            _fullReelClickCount[slot] = 0;
+
+            _fullReelClickReset[slot]?.Stop();
+            _fullReelClickReset[slot]?.Dispose();
+            _fullReelClickReset[slot] = null;
+
+            _fullReelCountdown[slot]?.Stop();
+            _fullReelCountdown[slot]?.Dispose();
+            _fullReelCountdown[slot] = null;
+
+            UpdateFullReelButton(slot);
+
+            if (!wasActive) return;
+
+            int channel = reelIdx == 0 ? (_config?.ReelServoChannel ?? 0) : (_config?.Reel2ServoChannel ?? 0);
+            SendServoNow(channel, 1500);
+            SetStatus(
+                cancelled ? $"{_fullReelLabels[slot]} P{reelIdx + 1} cancelled" : $"{_fullReelLabels[slot]} P{reelIdx + 1} complete",
+                cancelled ? WARNING_COLOR : SUCCESS_COLOR);
+        }
+
+        private void UpdateFullReelButton(int slot)
+        {
+            var btn = _fullReelButtons[slot];
+            if (btn == null || btn.IsDisposed) return;
+
+            if (_fullReelActive[slot])
+            {
+                int secondsRemaining = Math.Max(0, _fullReelRemainingMs[slot] / 1000);
+                btn.Text = $"{FullReelShortLabel(slot)} {secondsRemaining}s";
+                btn.BackColor = WARNING_COLOR;
+                return;
+            }
+
+            btn.Text = _fullReelClickCount[slot] > 0
+                ? $"{FullReelShortLabel(slot)} {_fullReelClickCount[slot]}/{FULL_REEL_CLICKS_REQUIRED}"
+                : _fullReelLabels[slot];
+            btn.BackColor = _fullReelClickCount[slot] > 0 ? Color.FromArgb(180, 95, 25) : Color.FromArgb(85, 65, 35);
+        }
+
+        private static int FullReelIndex(int slot) => slot / 2;
+        private static int FullReelNumber(int slot) => FullReelIndex(slot) + 1;
+        private static int FullReelOppositeSlot(int slot) => FullReelIndex(slot) * 2 + (FullReelIsIn(slot) ? 1 : 0);
+        private static bool FullReelIsIn(int slot) => slot % 2 == 0;
+        private static string FullReelShortLabel(int slot) => FullReelIsIn(slot) ? "In" : "Out";
 
         /// <summary>
         /// Fire-and-forget Cube servo command for time-critical paths (reel MouseDown/Up).
@@ -719,6 +913,18 @@ namespace NOMAD.MissionPlanner
                 _reelSafetyTimers[i]?.Stop();
                 _reelSafetyTimers[i]?.Dispose();
                 _reelSafetyTimers[i] = null;
+            }
+            for (int i = 0; i < _fullReelClickReset.Length; i++)
+            {
+                _fullReelClickReset[i]?.Stop();
+                _fullReelClickReset[i]?.Dispose();
+                _fullReelClickReset[i] = null;
+
+                _fullReelCountdown[i]?.Stop();
+                _fullReelCountdown[i]?.Dispose();
+                _fullReelCountdown[i] = null;
+                _fullReelActive[i] = false;
+                _fullReelClickCount[i] = 0;
             }
             _tiltDebounceTimer?.Stop();
             _tiltDebounceTimer?.Dispose();

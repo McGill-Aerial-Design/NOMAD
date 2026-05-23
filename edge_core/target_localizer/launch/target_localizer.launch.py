@@ -13,9 +13,9 @@ Usage:
   # competition.yaml -- edit that file or pass a custom one for the real
   # building polygon).
 
-Per CONOPS v1.3 the building is not necessarily rectangular and the polygon
-is configured via building.corner_names / corner_lats / corner_lons in the
-YAML, not via launch args. See competition.yaml for the operational checklist.
+The building polygon now lives on the ground station — this node only
+publishes targets as absolute (lat, lon, height_AGL). See competition.yaml
+for the (much shorter) operational checklist.
 """
 
 import os

@@ -1,6 +1,5 @@
 import asyncio
 import json
-import math
 import os
 import re
 import shlex
@@ -679,7 +678,7 @@ def register_task1_routes(app, ctx) -> None:
         target_id = target_id.strip().upper()
         if not target_id or len(target_id) != 1 or not target_id.isalpha():
             raise HTTPException(status_code=400, detail=f"Invalid target_id: {target_id!r}")
-        delete_path = os.path.join(_BUILDING_CORNERS_DIR, "delete_target.json")
+        delete_path = os.path.join(_TARGET_SIDECAR_DIR, "delete_target.json")
         _atomic_write_json(delete_path, {"target_id": target_id}, indent=None)
         output = _call_ros2_service_in_isaac_container_or_raise(
             service_name="/target_localizer/delete_target",
@@ -706,28 +705,12 @@ def register_task1_routes(app, ctx) -> None:
         )
         return {"success": True, "output": output}
 
-# ==================== Building Corner Calibration ====================
-
-    class BuildingCornerRequest(BaseModel):
-        name: str
-        lat: float
-        lon: float
-
-    class BuildingCornersRequest(BaseModel):
-        center_lat: float
-        center_lon: float
-        height: float
-        corners: list[dict[str, Any]]
-
-    class BuildingCalibrationCornerRequest(BaseModel):
-        name: str
-        lat: float
-        lon: float
-
-    # Directory where API writes building_corners.json and plane_override.json.
-    # Must be writable by the mad user (host) AND readable by the node (container).
-    # /home/mad/NOMAD/config (host, mad-writable) -> /workspaces/isaac_ros-dev/config (container, RO mount).
-    _BUILDING_CORNERS_DIR = os.environ.get(
+# ==================== Target sidecar files ====================
+    # The building model now lives entirely on the ground station. The Jetson
+    # only keeps a small sidecar directory for per-target action files
+    # (delete_target.json, plane_override.json) that target_localizer reads
+    # opportunistically.
+    _TARGET_SIDECAR_DIR = os.environ.get(
         "NOMAD_TARGET_OUTPUT_DIR",
         os.path.expanduser("~/NOMAD/config"),
     )
@@ -737,8 +720,6 @@ def register_task1_routes(app, ctx) -> None:
         Crash-safe JSON write: serialize to a sibling .tmp, fsync, then
         os.replace() onto the target. A power loss or kill during the write
         can only ever leave a stale .tmp — the live file is never half-written.
-        Used by all building configuration writes so a Jetson crash mid-save
-        cannot wipe the corner calibration.
         """
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         tmp = f"{path}.tmp"
@@ -754,178 +735,12 @@ def register_task1_routes(app, ctx) -> None:
                 pass
         os.replace(tmp, path)
 
-    def _gps_to_local_for_ref(
-        lat: float, lon: float, ref_lat: float, ref_lon: float
-    ) -> tuple[float, float]:
-        earth_radius_m = 6_371_000.0
-        north = math.radians(lat - ref_lat) * earth_radius_m
-        east = (
-            math.radians(lon - ref_lon)
-            * earth_radius_m
-            * math.cos(math.radians(ref_lat))
-        )
-        return east, north
-
-    def _offset_gps(lat: float, lon: float, east_m: float, north_m: float) -> tuple[float, float]:
-        earth_radius_m = 6_371_000.0
-        out_lat = lat + math.degrees(north_m / earth_radius_m)
-        out_lon = lon + math.degrees(
-            east_m / (earth_radius_m * math.cos(math.radians(lat)))
-        )
-        return out_lat, out_lon
-
-    def _task1_dimension_preset() -> dict[str, Any]:
-        """Google Maps measured eight-corner Task 1 footprint."""
-        raw_corners = [
-            (45.316743567764945, -75.75773827279546),
-            (45.31671371473123, -75.75759833217171),
-            (45.31615424384856, -75.75781374638878),
-            (45.31618520285556, -75.75796312121189),
-            (45.31641794771017, -75.75787506868524),
-            (45.316440061185425, -75.75798592052764),
-            (45.31652353947904, -75.75795525937997),
-            (45.316500873200205, -75.75784362135427),
-        ]
-        corners = [
-            {"name": str(idx), "lat": lat, "lon": lon}
-            for idx, (lat, lon) in enumerate(raw_corners, start=1)
-        ]
-        center_lat = sum(c["lat"] for c in corners) / len(corners)
-        center_lon = sum(c["lon"] for c in corners) / len(corners)
-        return {
-            "preset": "aeac_2026_task1",
-            "source": "google-maps-measured-corners",
-            "center_lat": center_lat,
-            "center_lon": center_lon,
-            "height": 2.4,
-            "corners": corners,
-            "base_corners": corners,
-        }
-
-    def _apply_corner_calibration(data: dict[str, Any]) -> dict[str, Any]:
-        base_corners = data.get("base_corners") or data.get("corners") or []
-        observations = data.get("calibration_observations") or []
-        if not base_corners or not observations:
-            return data
-
-        base_by_name = {str(c.get("name")): c for c in base_corners}
-        usable = [
-            obs for obs in observations
-            if str(obs.get("name")) in base_by_name
-            and obs.get("lat") is not None
-            and obs.get("lon") is not None
-        ]
-        if not usable:
-            return data
-
-        ref_lat = float(data.get("base_center_lat") or data.get("center_lat"))
-        ref_lon = float(data.get("base_center_lon") or data.get("center_lon"))
-
-        base_local: dict[str, tuple[float, float]] = {}
-        for c in base_corners:
-            base_local[str(c.get("name"))] = _gps_to_local_for_ref(
-                float(c["lat"]), float(c["lon"]), ref_lat, ref_lon
-            )
-
-        obs0 = usable[0]
-        p0 = base_local[str(obs0["name"])]
-        q0 = _gps_to_local_for_ref(float(obs0["lat"]), float(obs0["lon"]), ref_lat, ref_lon)
-        theta = 0.0
-        mode = "translation"
-
-        if len(usable) >= 2:
-            for obs1 in usable[1:]:
-                name1 = str(obs1["name"])
-                p1 = base_local[name1]
-                q1 = _gps_to_local_for_ref(float(obs1["lat"]), float(obs1["lon"]), ref_lat, ref_lon)
-                base_heading = math.atan2(p1[1] - p0[1], p1[0] - p0[0])
-                obs_heading = math.atan2(q1[1] - q0[1], q1[0] - q0[0])
-                if math.hypot(p1[0] - p0[0], p1[1] - p0[1]) > 1.0:
-                    theta = obs_heading - base_heading
-                    mode = "translation_rotation"
-                    break
-
-        cos_t = math.cos(theta)
-        sin_t = math.sin(theta)
-
-        def transform(point: tuple[float, float]) -> tuple[float, float]:
-            x = cos_t * point[0] - sin_t * point[1]
-            y = sin_t * point[0] + cos_t * point[1]
-            x0 = cos_t * p0[0] - sin_t * p0[1]
-            y0 = sin_t * p0[0] + cos_t * p0[1]
-            return x + (q0[0] - x0), y + (q0[1] - y0)
-
-        calibrated_corners = []
-        for c in base_corners:
-            east, north = transform(base_local[str(c["name"])])
-            lat, lon = _offset_gps(ref_lat, ref_lon, east, north)
-            calibrated_corners.append({"name": str(c["name"]), "lat": lat, "lon": lon})
-
-        center_e = sum(transform(base_local[str(c["name"])])[0] for c in base_corners) / len(base_corners)
-        center_n = sum(transform(base_local[str(c["name"])])[1] for c in base_corners) / len(base_corners)
-        center_lat, center_lon = _offset_gps(ref_lat, ref_lon, center_e, center_n)
-
-        data["corners"] = calibrated_corners
-        data["center_lat"] = center_lat
-        data["center_lon"] = center_lon
-        data["calibration"] = {
-            "mode": mode,
-            "observation_count": len(usable),
-            "rotation_deg": math.degrees(theta),
-            "scale": 1.0,
-        }
-        return data
-
-    class PlaneOverrideRequest(BaseModel):
-        plane_kind: str  # "wall" | "ground" | "roof"
-        face_name: Optional[str] = None  # optional explicit wall face (e.g. "N", "S")
-
-    @app.post("/api/task/1/target/{target_id}/plane_override", tags=["Task 1"])
-    async def task1_set_target_plane(target_id: str, body: PlaneOverrideRequest):
-        """
-        Override the plane classification (wall/ground/roof) of a single target.
-
-        Writes ``plane_override.json`` to the target output dir, then triggers
-        the ``~/set_target_plane`` ROS2 service which updates the target's
-        raw_data and regenerates its description. The pilot uses this when
-        the auto-classification picked the wrong plane.
-        """
-        plane_kind = (body.plane_kind or "").strip().lower()
-        if plane_kind not in {"wall", "ground", "roof"}:
-            raise HTTPException(
-                status_code=400,
-                detail=f"plane_kind must be wall|ground|roof, got {body.plane_kind!r}",
-            )
-        override_path = os.path.join(_BUILDING_CORNERS_DIR, "plane_override.json")
-        payload = {"target_id": target_id, "plane_kind": plane_kind}
-        if body.face_name:
-            payload["face_name"] = body.face_name
-        _atomic_write_json(override_path, payload, indent=None)
-        output = _call_ros2_service_in_isaac_container_or_raise(
-            service_name="/target_localizer/set_target_plane",
-            service_type="std_srvs/srv/Trigger",
-            request_payload={},
-            timeout_s=10.0,
-        )
-        return {"success": True, "target_id": target_id, "plane_kind": plane_kind, "output": output}
-
-    @app.post("/api/task/1/target/regenerate", tags=["Task 1"])
-    async def task1_regenerate_descriptions():
-        """
-        Regenerate all target descriptions from stored raw data.
-
-        Call after changing building model, ground altitude, or plane
-        overrides so that all descriptions stay consistent with the
-        current building geometry.
-        Calls the ~/regenerate_descriptions service.
-        """
-        output = _call_ros2_service_in_isaac_container_or_raise(
-            service_name="/target_localizer/regenerate_descriptions",
-            service_type="std_srvs/srv/Trigger",
-            request_payload={},
-            timeout_s=10.0,
-        )
-        return {"success": True, "output": output}
+    # NOTE: /api/task/1/target/{id}/plane_override and /api/task/1/target/regenerate
+    # used to live here. They depended on the Jetson-side building model to
+    # reclassify face/plane and rewrite the spatial description. The ground
+    # station now owns the building model and rewrites descriptions locally
+    # whenever the operator edits the Plane cell, so these endpoints have no
+    # job left on the Jetson and were removed along with the building APIs.
 
     @app.post("/api/task/1/target/detection_status/update", tags=["Task 1"])
     async def task1_detection_status_push(request: Request):
@@ -977,9 +792,10 @@ def register_task1_routes(app, ctx) -> None:
         Return captured targets as structured JSON for the 3D building viewer.
 
         The target_localizer node's save_targets service writes a debug file
-        with ENU coordinates. We parse that file and surface
-        ``[{id, color, face, height_agl, east, north, up, image, timestamp}]``
-        so the GCS can place markers on the 3D building model.
+        with absolute GPS coordinates. We parse that file and surface
+        ``[{id, color, lat, lon, height_agl, image, timestamp}]`` so the GCS
+        can place markers on the 3D building model (and convert lat/lon to
+        its own building-relative ENU frame using the locally stored corners).
         """
         team_name = os.environ.get("NOMAD_TEAM_NAME", "MAD")
         output_dir = os.environ.get(
@@ -1013,12 +829,9 @@ def register_task1_routes(app, ctx) -> None:
 
         # Parse the per-target blocks the node writes:
         #   Target A:
-        #     Description: ...
         #     Color: red
-        #     Face: north face
+        #     GPS: (45.3167432, -75.7577383)
         #     Height AGL: 2.10m
-        #     Horiz from left: 1.80m
-        #     World ENU: (12.30, -4.50, 2.10)
         #     ...
         import re as _re
         for block in _re.split(r"\n(?=Target\s)", content):
@@ -1029,9 +842,7 @@ def register_task1_routes(app, ctx) -> None:
             entry: dict[str, Any] = {"id": tid}
 
             for key, pattern in (
-                ("description", r"Description:\s*(.+)"),
                 ("color", r"Color:\s*(\S+)"),
-                ("face", r"Face:\s*(.+)"),
                 ("image", r"Image:\s*(.+)"),
                 ("timestamp", r"Timestamp:\s*(.+)"),
             ):
@@ -1046,22 +857,14 @@ def register_task1_routes(app, ctx) -> None:
                 except ValueError:
                     pass
 
-            m_horiz = _re.search(r"Horiz from left:\s*([-\d.]+)", block)
-            if m_horiz:
-                try:
-                    entry["horiz_from_left"] = float(m_horiz.group(1))
-                except ValueError:
-                    pass
-
-            m_enu = _re.search(
-                r"World ENU:\s*\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)",
+            m_gps = _re.search(
+                r"GPS:\s*\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)",
                 block,
             )
-            if m_enu:
+            if m_gps:
                 try:
-                    entry["east"] = float(m_enu.group(1))
-                    entry["north"] = float(m_enu.group(2))
-                    entry["up"] = float(m_enu.group(3))
+                    entry["lat"] = float(m_gps.group(1))
+                    entry["lon"] = float(m_gps.group(2))
                 except ValueError:
                     pass
 
@@ -1069,377 +872,10 @@ def register_task1_routes(app, ctx) -> None:
 
         return {"success": True, "targets": targets, "count": len(targets), "source": debug_path}
 
-    @app.get("/api/task/1/target/model", tags=["Task 1"])
-    async def task1_print_building_model():
-        """
-        Print the current building model summary (corners, face info).
+    # NOTE: All /api/task/1/building/* endpoints and /api/task/1/target/model
+    # were removed when the building model moved to the ground station.
+    # The GCS persists corners under %MyDocuments%/NOMAD/Task1/building_corners.json
+    # and never asks the Jetson about building geometry anymore.
 
-        Calls the ~/print_model service on the target_localizer node.
-        """
-        output = _call_ros2_service_in_isaac_container_or_raise(
-            service_name="/target_localizer/print_model",
-            service_type="std_srvs/srv/Trigger",
-            request_payload={},
-            timeout_s=10.0,
-        )
-        return {"success": True, "output": output}
-
-    @app.post("/api/task/1/building/preset/{preset_name}", tags=["Task 1"])
-    async def task1_load_building_preset(preset_name: str):
-        """
-        Load a known Task 1 building footprint into building_corners.json.
-
-        For aeac_2026_task1, the current checked-in preset is dimension-derived
-        because the provided GPS list contains the same coordinate for all
-        eight corners. Real captured corners or corrected GPS values can still
-        be applied over this preset using the normal corner endpoints.
-        """
-        key = (preset_name or "").strip().lower()
-        if key not in {"aeac_2026_task1", "task1", "default"}:
-            raise HTTPException(status_code=404, detail=f"Unknown Task 1 preset: {preset_name}")
-
-        data = _task1_dimension_preset()
-        data["base_center_lat"] = data["center_lat"]
-        data["base_center_lon"] = data["center_lon"]
-        corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
-        _atomic_write_json(corners_path, data)
-        return {
-            "success": True,
-            "preset": data["preset"],
-            "source": data["source"],
-            "corners": data["corners"],
-            "total_corners": len(data["corners"]),
-            "center_lat": data["center_lat"],
-            "center_lon": data["center_lon"],
-            "height": data["height"],
-            "can_apply": True,
-            "corners_path": corners_path,
-        }
-
-    @app.post("/api/task/1/building/calibration/corner", tags=["Task 1"])
-    async def task1_calibrate_building_corner(corner: BuildingCalibrationCornerRequest):
-        """
-        Add/update an observed calibration corner and transform the whole model.
-
-        One observed corner translates the preset. Two or more observed corners
-        translate and rotate the preset while preserving the measured scale.
-        """
-        corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
-        if not os.path.exists(corners_path):
-            raise HTTPException(status_code=404, detail="Load a building preset before calibration.")
-
-        try:
-            with open(corners_path, "r") as f:
-                data = json.load(f)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to read building configuration: {e}")
-
-        data.setdefault("base_corners", data.get("corners", []))
-        data.setdefault("base_center_lat", data.get("center_lat"))
-        data.setdefault("base_center_lon", data.get("center_lon"))
-        observations = data.setdefault("calibration_observations", [])
-
-        name = str(corner.name).strip()
-        if not any(str(c.get("name")) == name for c in data.get("base_corners", [])):
-            available = ", ".join(str(c.get("name")) for c in data.get("base_corners", []))
-            raise HTTPException(
-                status_code=404,
-                detail=f"Corner {name!r} not found in base model. Available: {available}",
-            )
-
-        entry = {"name": name, "lat": corner.lat, "lon": corner.lon}
-        for i, obs in enumerate(observations):
-            if str(obs.get("name")) == name:
-                observations[i] = entry
-                break
-        else:
-            observations.append(entry)
-
-        data = _apply_corner_calibration(data)
-        _atomic_write_json(corners_path, data)
-
-        return {
-            "success": True,
-            "corner": entry,
-            "calibration": data.get("calibration", {}),
-            "observations": data.get("calibration_observations", []),
-            "corners": data.get("corners", []),
-            "total_corners": len(data.get("corners", [])),
-            "can_apply": len(data.get("corners", [])) >= 3,
-            "corners_path": corners_path,
-        }
-
-    @app.post("/api/task/1/building/corner", tags=["Task 1"])
-    async def task1_add_building_corner(corner: BuildingCornerRequest):
-        """
-        Add a single building corner coordinate (e.g. from the drone's GPS
-        while hovering above the corner).
-
-        Pilots fly the drone above each building corner, then the operator
-        clicks "Capture Corner" in Mission Planner. This endpoint appends
-        the corner to the persistent corners list. Once >= 3 corners are
-        collected, call /api/task/1/building/corners/apply to rebuild the
-        building model.
-        """
-        corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
-        os.makedirs(_BUILDING_CORNERS_DIR, exist_ok=True)
-
-        # Load or create the corners file
-        data = {}
-        if os.path.exists(corners_path):
-            try:
-                with open(corners_path, "r") as f:
-                    data = json.load(f)
-            except Exception:
-                data = {}
-
-        if "corners" not in data:
-            data["corners"] = []
-
-        # Add or update the corner by name
-        existing_idx = None
-        for i, c in enumerate(data["corners"]):
-            if c.get("name") == corner.name:
-                existing_idx = i
-                break
-
-        corner_entry = {"name": corner.name, "lat": corner.lat, "lon": corner.lon}
-        if existing_idx is not None:
-            data["corners"][existing_idx] = corner_entry
-        else:
-            data["corners"].append(corner_entry)
-
-        # Preserve center_lat/center_lon/height if already set, else use defaults
-        data.setdefault("center_lat", data["corners"][0]["lat"] if data["corners"] else 45.0)
-        data.setdefault("center_lon", data["corners"][0]["lon"] if data["corners"] else -75.0)
-        data.setdefault("height", 5.0)
-
-        _atomic_write_json(corners_path, data)
-
-        return {
-            "success": True,
-            "corner": corner_entry,
-            "total_corners": len(data["corners"]),
-            "can_apply": len(data["corners"]) >= 3,
-            "corners_path": corners_path,
-        }
-
-    @app.get("/api/task/1/building/corners", tags=["Task 1"])
-    async def task1_get_building_corners():
-        """
-        List the currently saved building corners (from the JSON file).
-        Includes calculated wall lengths and manual overrides.
-        """
-        corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
-        if not os.path.exists(corners_path):
-            return {"success": True, "corners": [], "walls": [], "total_corners": 0, "can_apply": False}
-
-        try:
-            with open(corners_path, "r") as f:
-                data = json.load(f)
-        except Exception as e:
-            return {"success": False, "error": str(e), "corners": [], "walls": [], "total_corners": 0, "can_apply": False}
-
-        corners = data.get("corners", [])
-        
-        # Calculate wall lengths if we have corners
-        walls = []
-        if len(corners) >= 3:
-            from ..geospatial import calculate_wall_lengths_from_corners
-            center_lat = data.get("center_lat", corners[0]["lat"] if corners else 45.0)
-            center_lon = data.get("center_lon", corners[0]["lon"] if corners else -75.0)
-            walls = calculate_wall_lengths_from_corners(corners, center_lat, center_lon)
-            
-            # Merge with saved manual overrides
-            saved_walls = data.get("walls", [])
-            for wall in walls:
-                for saved_wall in saved_walls:
-                    if saved_wall.get("name") == wall["name"]:
-                        wall["manual_override_m"] = saved_wall.get("manual_override_m")
-                        break
-        
-        return {
-            "success": True,
-            "corners": corners,
-            "walls": walls,
-            "center_lat": data.get("center_lat"),
-            "center_lon": data.get("center_lon"),
-            "height": data.get("height"),
-            "total_corners": len(corners),
-            "can_apply": len(corners) >= 3,
-        }
-
-    @app.delete("/api/task/1/building/corners", tags=["Task 1"])
-    async def task1_clear_building_corners():
-        """
-        Clear all saved building corners (e.g. to restart calibration).
-        """
-        corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
-        if os.path.exists(corners_path):
-            os.remove(corners_path)
-        return {"success": True, "message": "Building corners cleared."}
-
-    @app.post("/api/task/1/building/height", tags=["Task 1"])
-    async def task1_set_building_height(height: float = Query(..., description="Building height in meters")):
-        """
-        Set the building height manually.
-        
-        This allows operators to input the exact building height provided
-        by the competition organizers.
-        """
-        corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
-        os.makedirs(_BUILDING_CORNERS_DIR, exist_ok=True)
-        
-        # Load or create the corners file
-        data = {}
-        if os.path.exists(corners_path):
-            try:
-                with open(corners_path, "r") as f:
-                    data = json.load(f)
-            except Exception:
-                data = {}
-        
-        # Update height
-        data["height"] = height
-        
-        # Ensure other fields exist
-        data.setdefault("corners", [])
-        data.setdefault("center_lat", 45.0)
-        data.setdefault("center_lon", -75.0)
-        
-        _atomic_write_json(corners_path, data)
-        
-        return {
-            "success": True,
-            "height": height,
-            "message": f"Building height set to {height}m",
-        }
-
-    @app.post("/api/task/1/building/wall/override", tags=["Task 1"])
-    async def task1_set_wall_override(
-        wall_name: str = Query(..., description="Wall name (e.g., 'NW-NE')"),
-        length_m: Optional[float] = Query(None, description="Manual wall length in meters (null to clear override)"),
-    ):
-        """
-        Set or clear a manual override for a wall length.
-        
-        This allows operators to input the exact wall dimensions provided
-        by the competition organizers, overriding the GPS-calculated values.
-        """
-        corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
-        
-        if not os.path.exists(corners_path):
-            raise HTTPException(status_code=404, detail="No building configuration found. Add corners first.")
-        
-        try:
-            with open(corners_path, "r") as f:
-                data = json.load(f)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to read building configuration: {e}")
-        
-        corners = data.get("corners", [])
-        if len(corners) < 3:
-            raise HTTPException(status_code=400, detail="At least 3 corners required before setting wall overrides.")
-        
-        # Calculate current walls
-        from ..geospatial import calculate_wall_lengths_from_corners
-        center_lat = data.get("center_lat", corners[0]["lat"])
-        center_lon = data.get("center_lon", corners[0]["lon"])
-        walls = calculate_wall_lengths_from_corners(corners, center_lat, center_lon)
-        
-        # Find the wall
-        wall_found = False
-        for wall in walls:
-            if wall["name"] == wall_name:
-                wall["manual_override_m"] = length_m
-                wall_found = True
-                break
-        
-        if not wall_found:
-            available_walls = [w["name"] for w in walls]
-            raise HTTPException(
-                status_code=404,
-                detail=f"Wall '{wall_name}' not found. Available walls: {', '.join(available_walls)}"
-            )
-        
-        # Save walls with overrides
-        data["walls"] = walls
-        
-        _atomic_write_json(corners_path, data)
-        
-        action = "cleared" if length_m is None else f"set to {length_m}m"
-        return {
-            "success": True,
-            "wall_name": wall_name,
-            "manual_override_m": length_m,
-            "message": f"Wall '{wall_name}' override {action}",
-        }
-
-    @app.post("/api/task/1/building/corners/apply", tags=["Task 1"])
-    async def task1_apply_building_corners(
-        center_lat: Optional[float] = None,
-        center_lon: Optional[float] = None,
-        height: Optional[float] = None,
-    ):
-        """
-        Apply the saved building corners to the target_localizer node by
-        calling the /target_localizer/set_building_corners ROS2 service.
-
-        The service reads the building_corners.json file and rebuilds the
-        BuildingModel at runtime. At least 3 corners must be saved first
-        (via /api/task/1/building/corner).
-
-        Optionally override center_lat, center_lon, height via query params.
-        """
-        corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
-        if not os.path.exists(corners_path):
-            raise HTTPException(status_code=404, detail="No building corners saved yet. Add corners via POST /api/task/1/building/corner first.")
-
-        try:
-            with open(corners_path, "r") as f:
-                data = json.load(f)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to read building corners: {e}")
-
-        corners = data.get("corners", [])
-        if len(corners) < 3:
-            raise HTTPException(status_code=400, detail="At least 3 building corners are required before applying.")
-
-        payload = {
-            "center_lat": center_lat if center_lat is not None else data.get("center_lat"),
-            "center_lon": center_lon if center_lon is not None else data.get("center_lon"),
-            "height": height if height is not None else data.get("height"),
-            "corners": corners,
-        }
-
-        if payload["center_lat"] is None or payload["center_lon"] is None or payload["height"] is None:
-            raise HTTPException(status_code=400, detail="center_lat, center_lon, and height must be available (either saved or provided as query parameters).")
-
-        # Persist the potentially overridden center/height back to disk
-        data["center_lat"] = payload["center_lat"]
-        data["center_lon"] = payload["center_lon"]
-        data["height"] = payload["height"]
-        _atomic_write_json(corners_path, data)
-
-        # The ROS2 node registers /target_localizer/set_building_corners as
-        # std_srvs/srv/Trigger (no request payload). It reads the corners JSON
-        # file from disk, so we pass an empty payload and just trigger the
-        # rebuild. The file was already written by the API endpoints above.
-        output = _call_ros2_service_in_isaac_container_or_raise(
-            service_name="/target_localizer/set_building_corners",
-            service_type="std_srvs/srv/Trigger",
-            request_payload={},
-            timeout_s=10.0,
-        )
-
-        return {
-            "success": True,
-            "output": output,
-            "corners": corners,
-            "corners_count": len(corners),
-            "center_lat": payload["center_lat"],
-            "center_lon": payload["center_lon"],
-            "height": payload["height"],
-        }
 
 

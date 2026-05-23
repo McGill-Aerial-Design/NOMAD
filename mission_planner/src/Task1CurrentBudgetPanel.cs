@@ -8,11 +8,12 @@
 //     I_target = (capacity_Amin * safety - hover_A * other_time) / lap_time
 //
 // where other_time = total_mission - setup - laps (drop + target work).
+// All inputs live in NOMAD Settings > Budget; this panel is a
+// readout only.
 // ============================================================
 
 using System;
 using System.Drawing;
-using System.Globalization;
 using System.Windows.Forms;
 using MissionPlanner;
 using Timer = System.Windows.Forms.Timer;
@@ -29,34 +30,23 @@ namespace NOMAD.MissionPlanner
         private static readonly Color ERROR_COLOR    = NOMADTheme.ERROR;
         private static readonly Color ACCENT_COLOR   = NOMADTheme.ACCENT;
 
-        // Defaults tuned for our 23Ah pack (= 1380 amp-minutes) and the
-        // measured ~20A hover. Operator can override on the fly.
-        private const double DefaultCapacityAmpMin = 1380.0;
-        private const double DefaultSafetyFactor   = 0.80;
-        private const double DefaultHoverCurrentA  = 20.0;
-        private const double DefaultMissionMin     = 30.0;
-        private const double DefaultSetupMin       = 8.0;
-        private const double DefaultLapMin         = 12.0;
-
-        private NumericUpDown _numCapacity;
-        private NumericUpDown _numSafety;
-        private NumericUpDown _numHover;
-        private NumericUpDown _numMission;
-        private NumericUpDown _numSetup;
-        private NumericUpDown _numLap;
+        private readonly NOMADConfig _config;
 
         private Label _lblTarget;
         private Label _lblActual;
         private Label _lblDelta;
+        private Label _lblInputs;
         private Label _lblRemainder;
         private Label _lblFormula;
 
         private Timer _refreshTimer;
-        private double _emaCurrent;          // smoothed actual amps
+        private double _emaCurrent;
         private bool _haveCurrentSample;
+        private double _currentTargetA = double.NaN;
 
-        public Task1CurrentBudgetPanel()
+        public Task1CurrentBudgetPanel(NOMADConfig config)
         {
+            _config = config ?? new NOMADConfig();
             BackColor = CARD_BG;
             Dock = DockStyle.Fill;
             Padding = new Padding(8, 4, 8, 4);
@@ -65,7 +55,11 @@ namespace NOMAD.MissionPlanner
             RecomputeTarget();
 
             _refreshTimer = new Timer { Interval = 500 };
-            _refreshTimer.Tick += (s, e) => RefreshActual();
+            _refreshTimer.Tick += (s, e) =>
+            {
+                RecomputeTarget();
+                RefreshActual();
+            };
             this.HandleCreated += (s, e) => _refreshTimer.Start();
             this.Disposed += (s, e) =>
             {
@@ -87,23 +81,7 @@ namespace NOMAD.MissionPlanner
             };
             Controls.Add(title);
 
-            // ----- Inputs row 1: capacity, safety, hover -----
             int y = 26;
-            _numCapacity = AddNumeric("Capacity (A·min)", 8,   y, (decimal)DefaultCapacityAmpMin, 0,   5000, 10m);
-            _numSafety   = AddNumeric("Safety",            175, y, (decimal)DefaultSafetyFactor,  0.1m, 1.0m, 0.05m, decimals: 2);
-            _numHover    = AddNumeric("Hover (A)",         300, y, (decimal)DefaultHoverCurrentA, 1,   80,   0.5m, decimals: 1);
-
-            // ----- Inputs row 2: timing -----
-            y += 42;
-            _numMission = AddNumeric("Total (min)", 8,   y, (decimal)DefaultMissionMin, 5, 90, 0.5m, decimals: 1);
-            _numSetup   = AddNumeric("Setup (min)", 175, y, (decimal)DefaultSetupMin,   0, 60, 0.5m, decimals: 1);
-            _numLap     = AddNumeric("Laps (min)",  300, y, (decimal)DefaultLapMin,     1, 60, 0.5m, decimals: 1);
-
-            foreach (var nud in new[] { _numCapacity, _numSafety, _numHover, _numMission, _numSetup, _numLap })
-                nud.ValueChanged += (s, e) => RecomputeTarget();
-
-            // ----- Big readout row -----
-            y += 46;
             _lblTarget = new Label
             {
                 Text = "Target: -- A",
@@ -134,8 +112,18 @@ namespace NOMAD.MissionPlanner
             };
             Controls.Add(_lblDelta);
 
-            // ----- Detail row -----
             y += 28;
+            _lblInputs = new Label
+            {
+                Text = "",
+                Font = new Font("Segoe UI", 8),
+                ForeColor = TEXT_SECONDARY,
+                Location = new Point(8, y),
+                AutoSize = true,
+            };
+            Controls.Add(_lblInputs);
+
+            y += 16;
             _lblRemainder = new Label
             {
                 Text = "Drop+target window: -- min",
@@ -149,7 +137,7 @@ namespace NOMAD.MissionPlanner
             y += 16;
             _lblFormula = new Label
             {
-                Text = "I = (cap·s − hover·(total−setup−laps)) / laps",
+                Text = "I = (cap·s − hover·(total−setup−laps)) / laps   ·   edit in Settings > Budget",
                 Font = new Font("Segoe UI", 8, FontStyle.Italic),
                 ForeColor = TEXT_SECONDARY,
                 Location = new Point(8, y),
@@ -160,58 +148,34 @@ namespace NOMAD.MissionPlanner
             MinimumSize = new Size(420, y + 24);
         }
 
-        private NumericUpDown AddNumeric(string label, int x, int y, decimal value,
-            decimal min, decimal max, decimal step, int decimals = 0)
-        {
-            Controls.Add(new Label
-            {
-                Text = label,
-                Font = new Font("Segoe UI", 8),
-                ForeColor = TEXT_SECONDARY,
-                Location = new Point(x, y),
-                AutoSize = true,
-            });
-            var nud = new NumericUpDown
-            {
-                Location = new Point(x, y + 14),
-                Size = new Size(115, 22),
-                Minimum = min,
-                Maximum = max,
-                Increment = step,
-                DecimalPlaces = decimals,
-                Value = Math.Max(min, Math.Min(max, value)),
-                BackColor = Color.FromArgb(25, 25, 28),
-                ForeColor = TEXT_PRIMARY,
-                BorderStyle = BorderStyle.FixedSingle,
-            };
-            Controls.Add(nud);
-            return nud;
-        }
-
         private void RecomputeTarget()
         {
-            double cap     = (double)_numCapacity.Value;
-            double safety  = (double)_numSafety.Value;
-            double hoverA  = (double)_numHover.Value;
-            double mission = (double)_numMission.Value;
-            double setup   = (double)_numSetup.Value;
-            double lap     = (double)_numLap.Value;
+            double cap     = _config.Task1BudgetCapacityAmpMin;
+            double safety  = _config.Task1BudgetSafetyFactor;
+            double hoverA  = _config.Task1BudgetHoverCurrentA;
+            double mission = _config.Task1BudgetMissionMin;
+            double setup   = _config.Task1BudgetSetupMin;
+            double lap     = _config.Task1BudgetLapMin;
 
             double other = mission - setup - lap;
+            _lblInputs.Text = $"cap {cap:F0} A·min · s {safety:F2} · hover {hoverA:F1} A";
             _lblRemainder.Text = $"Drop+target window: {other:F1} min  (mission {mission:F1} − setup {setup:F1} − laps {lap:F1})";
 
             if (lap <= 0)
             {
+                _currentTargetA = double.NaN;
                 _lblTarget.Text = "Target: -- A";
                 _lblTarget.ForeColor = ERROR_COLOR;
+                UpdateDelta();
                 return;
             }
 
             double target = (cap * safety - hoverA * other) / lap;
+            _currentTargetA = target;
             _lblTarget.Text = $"Target: {target:F1} A";
             _lblTarget.ForeColor = other < 0 || target < hoverA ? WARNING_COLOR : ACCENT_COLOR;
 
-            UpdateDelta(target);
+            UpdateDelta();
         }
 
         private void RefreshActual()
@@ -224,16 +188,13 @@ namespace NOMAD.MissionPlanner
                     _lblActual.Text = "Actual: link down";
                     _lblActual.ForeColor = TEXT_SECONDARY;
                     _haveCurrentSample = false;
-                    UpdateDelta((double)_numHover.Value); // no Δ until data
+                    UpdateDelta();
                     return;
                 }
 
                 double amps = ReadDoubleProperty(cs, "current");
-                // Cube reports negative when ESCs regen; clamp to 0 for display.
                 if (amps < 0) amps = 0;
 
-                // 0.3 EMA — about 2 s settling at 500 ms tick. Smooths the
-                // jitter without hiding a real acceleration spike.
                 if (!_haveCurrentSample)
                 {
                     _emaCurrent = amps;
@@ -245,10 +206,8 @@ namespace NOMAD.MissionPlanner
                 }
 
                 _lblActual.Text = $"Actual: {_emaCurrent:F1} A";
-
-                double target = ParseTargetAmps();
-                _lblActual.ForeColor = ColorForActual(_emaCurrent, target);
-                UpdateDelta(target);
+                _lblActual.ForeColor = ColorForActual(_emaCurrent, _currentTargetA);
+                UpdateDelta();
             }
             catch
             {
@@ -257,39 +216,27 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private double ParseTargetAmps()
+        private void UpdateDelta()
         {
-            // _lblTarget.Text format: "Target: 25.3 A"
-            var t = _lblTarget.Text;
-            int colon = t.IndexOf(':');
-            if (colon < 0) return double.NaN;
-            var s = t.Substring(colon + 1).Trim().TrimEnd('A').Trim();
-            if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var v))
-                return v;
-            return double.NaN;
-        }
-
-        private void UpdateDelta(double target)
-        {
-            if (!_haveCurrentSample || double.IsNaN(target))
+            if (!_haveCurrentSample || double.IsNaN(_currentTargetA))
             {
                 _lblDelta.Text = "Δ: --";
                 _lblDelta.ForeColor = TEXT_SECONDARY;
                 return;
             }
-            double delta = _emaCurrent - target;
+            double delta = _emaCurrent - _currentTargetA;
             string sign = delta >= 0 ? "+" : "";
             _lblDelta.Text = $"Δ: {sign}{delta:F1} A";
-            _lblDelta.ForeColor = ColorForActual(_emaCurrent, target);
+            _lblDelta.ForeColor = ColorForActual(_emaCurrent, _currentTargetA);
         }
 
         private static Color ColorForActual(double actual, double target)
         {
             if (double.IsNaN(target) || target <= 0) return TEXT_PRIMARY;
             double ratio = actual / target;
-            if (ratio <= 0.95) return SUCCESS_COLOR;          // under budget — can go faster
-            if (ratio <= 1.10) return WARNING_COLOR;          // close to budget
-            return ERROR_COLOR;                                // over budget — slow down
+            if (ratio <= 0.95) return SUCCESS_COLOR;
+            if (ratio <= 1.10) return WARNING_COLOR;
+            return ERROR_COLOR;
         }
 
         private static double ReadDoubleProperty(object obj, string name)

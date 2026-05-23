@@ -244,6 +244,16 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public bool Task1AutoCapture { get; set; } = false;
 
+        // --- Task 1 lap-phase current budget ---
+        // Inputs for I_target = (capacity*safety - hover*(total-setup-laps)) / laps.
+        // Defaults: 23 Ah pack (1380 A·min), 80 % safety, ~20 A hover.
+        public double Task1BudgetCapacityAmpMin { get; set; } = 1380.0;
+        public double Task1BudgetSafetyFactor   { get; set; } = 0.80;
+        public double Task1BudgetHoverCurrentA  { get; set; } = 20.0;
+        public double Task1BudgetMissionMin     { get; set; } = 30.0;
+        public double Task1BudgetSetupMin       { get; set; } = 8.0;
+        public double Task1BudgetLapMin         { get; set; } = 12.0;
+
         // ============================================================
         // Task 2 Configuration (Indoor Extinguish)
         // ============================================================

@@ -71,6 +71,14 @@ namespace NOMAD.MissionPlanner
         private NumericUpDown _numWasdNudgeSpeed;
         private NumericUpDown _numWasdAltSpeed;
         private CheckBox _chkWasdAutoEnable;
+
+        // Budget Tab (Task 1 lap-phase current budget)
+        private NumericUpDown _numBudgetCapacity;
+        private NumericUpDown _numBudgetSafety;
+        private NumericUpDown _numBudgetHover;
+        private NumericUpDown _numBudgetMission;
+        private NumericUpDown _numBudgetSetup;
+        private NumericUpDown _numBudgetLap;
         
         // VIO Tab
         private NumericUpDown _numVioConfidenceWarning;
@@ -204,6 +212,7 @@ namespace NOMAD.MissionPlanner
             _tabControl.TabPages.Add(CreateVideoTab());
             _tabControl.TabPages.Add(CreateDualLinkTab());
             _tabControl.TabPages.Add(CreateTasksTab());
+            _tabControl.TabPages.Add(CreateBudgetTab());
             _tabControl.TabPages.Add(CreateVioTab());
             _tabControl.TabPages.Add(CreateUiTab());
             _tabControl.TabPages.Add(CreateAlertsTab());
@@ -478,6 +487,60 @@ namespace NOMAD.MissionPlanner
             y += 30;
 
             _chkWasdAutoEnable = AddCheckBox(tab, "Auto-enable WASD on Task 2 tab", 40, y);
+
+            return tab;
+        }
+
+        // ============================================================
+        // Tab: Budget (Task 1 lap-phase current budget)
+        // ============================================================
+
+        private TabPage CreateBudgetTab()
+        {
+            var tab = CreateTabPage("Budget");
+            int y = 15;
+
+            AddSectionLabel(tab, "Task 1 Lap Current Budget", ref y);
+            AddLabel(tab,
+                "Drives the CURRENT BUDGET readout on the Task 1 view.",
+                20, y, Color.FromArgb(180, 180, 180));
+            y += 18;
+            AddLabel(tab,
+                "I_target = (capacity·safety − hover·(total−setup−laps)) / laps",
+                20, y, Color.FromArgb(180, 180, 180));
+            y += 26;
+
+            AddLabel(tab, "Pack capacity (A·min):", 20, y);
+            _numBudgetCapacity = AddNumericUpDown(tab, 200, y, 90, 0, 5000, 1380);
+            AddLabel(tab, "23 Ah = 1380", 300, y, Color.Gray);
+            y += 30;
+
+            AddLabel(tab, "Safety factor:", 20, y);
+            _numBudgetSafety = AddNumericUpDown(tab, 200, y, 90, 0.1m, 1.0m, 0.80m, 2);
+            AddLabel(tab, "fraction usable (0–1)", 300, y, Color.Gray);
+            y += 30;
+
+            AddLabel(tab, "Hover current (A):", 20, y);
+            _numBudgetHover = AddNumericUpDown(tab, 200, y, 90, 1, 80, 20, 1);
+            y += 36;
+
+            AddSectionLabel(tab, "Mission Phase Timing", ref y);
+
+            AddLabel(tab, "Total mission (min):", 20, y);
+            _numBudgetMission = AddNumericUpDown(tab, 200, y, 90, 5, 90, 30, 1);
+            y += 30;
+
+            AddLabel(tab, "Setup (min):", 20, y);
+            _numBudgetSetup = AddNumericUpDown(tab, 200, y, 90, 0, 60, 8, 1);
+            y += 30;
+
+            AddLabel(tab, "Laps (min):", 20, y);
+            _numBudgetLap = AddNumericUpDown(tab, 200, y, 90, 1, 60, 12, 1);
+            y += 30;
+
+            AddLabel(tab,
+                "Drop + target window = total − setup − laps.",
+                20, y, Color.Gray);
 
             return tab;
         }
@@ -1246,6 +1309,14 @@ namespace NOMAD.MissionPlanner
             _numWasdNudgeSpeed.Value = (decimal)Config.WasdNudgeSpeed;
             _numWasdAltSpeed.Value = (decimal)Config.WasdAltSpeed;
             _chkWasdAutoEnable.Checked = Config.WasdAutoEnable;
+
+            // Budget (Task 1 lap-phase current budget)
+            _numBudgetCapacity.Value = ClampDec(_numBudgetCapacity, (decimal)Config.Task1BudgetCapacityAmpMin);
+            _numBudgetSafety.Value   = ClampDec(_numBudgetSafety,   (decimal)Config.Task1BudgetSafetyFactor);
+            _numBudgetHover.Value    = ClampDec(_numBudgetHover,    (decimal)Config.Task1BudgetHoverCurrentA);
+            _numBudgetMission.Value  = ClampDec(_numBudgetMission,  (decimal)Config.Task1BudgetMissionMin);
+            _numBudgetSetup.Value    = ClampDec(_numBudgetSetup,    (decimal)Config.Task1BudgetSetupMin);
+            _numBudgetLap.Value      = ClampDec(_numBudgetLap,      (decimal)Config.Task1BudgetLapMin);
             
             // VIO / Terminal
             _numVioConfidenceWarning.Value = (decimal)Config.VioConfidenceWarning;
@@ -1421,6 +1492,14 @@ namespace NOMAD.MissionPlanner
             Config.WasdNudgeSpeed = (float)_numWasdNudgeSpeed.Value;
             Config.WasdAltSpeed = (float)_numWasdAltSpeed.Value;
             Config.WasdAutoEnable = _chkWasdAutoEnable.Checked;
+
+            // Budget (Task 1 lap-phase current budget)
+            Config.Task1BudgetCapacityAmpMin = (double)_numBudgetCapacity.Value;
+            Config.Task1BudgetSafetyFactor   = (double)_numBudgetSafety.Value;
+            Config.Task1BudgetHoverCurrentA  = (double)_numBudgetHover.Value;
+            Config.Task1BudgetMissionMin     = (double)_numBudgetMission.Value;
+            Config.Task1BudgetSetupMin       = (double)_numBudgetSetup.Value;
+            Config.Task1BudgetLapMin         = (double)_numBudgetLap.Value;
             
             // VIO / Terminal
             Config.VioConfidenceWarning = (float)_numVioConfidenceWarning.Value;
@@ -1534,6 +1613,9 @@ namespace NOMAD.MissionPlanner
 
         private static string NormalizeDevice(string s)
             => string.IsNullOrEmpty(s) || s == "(none)" ? "" : s;
+
+        private static decimal ClampDec(NumericUpDown nud, decimal value)
+            => Math.Max(nud.Minimum, Math.Min(nud.Maximum, value));
         
         private void SetComboBoxValue(ComboBox combo, string value)
         {

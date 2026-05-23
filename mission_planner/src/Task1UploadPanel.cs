@@ -52,6 +52,11 @@ namespace NOMAD.MissionPlanner
         // 3D building viewer (below the preview area).
         private BuildingViewer3D _viewer;
         private System.Windows.Forms.Timer _viewerRefreshTimer;
+        // Dedicated 10 Hz pose pump — the panel's UpdateData() pathway ticks
+        // at HealthPollInterval (5 s) which is too slow to track the drone
+        // smoothly in the 3D model. This timer pushes cs.lat/lng/yaw straight
+        // into the viewer regardless of how often UpdateData is called.
+        private System.Windows.Forms.Timer _posePumpTimer;
         private bool _viewerRefreshInFlight;
         private readonly List<BuildingViewer3D.Target> _lastBackendTargets = new List<BuildingViewer3D.Target>();
 
@@ -311,17 +316,20 @@ namespace NOMAD.MissionPlanner
                 foreach (var t in targets)
                 {
                     var id = t["id"]?.ToString();
-                    var east = (float?)t["east"];
-                    var north = (float?)t["north"];
-                    if (string.IsNullOrEmpty(id) || !east.HasValue || !north.HasValue) continue;
-                    var up = (float?)t["up"] ?? 0f;
+                    if (string.IsNullOrEmpty(id)) continue;
+                    var lat = (double?)t["lat"];
+                    var lon = (double?)t["lon"];
+                    if (!lat.HasValue || !lon.HasValue) continue;
+                    if (_viewer == null) continue;
+                    if (!_viewer.TryGetLocalFromGps(lat.Value, lon.Value, out float eastM, out float northM)) continue;
+                    float up = (float?)t["height_agl"] ?? 0f;
                     byLetter[id] = new BackendTargetInfo
                     {
                         Id = id,
                         Color = t["color"]?.ToString(),
                         Surface = InferSurfaceFromBackendTarget(t, up),
-                        East = east.Value,
-                        North = north.Value,
+                        East = eastM,
+                        North = northM,
                         Up = up,
                     };
                 }
@@ -806,6 +814,7 @@ namespace NOMAD.MissionPlanner
             _viewer = new BuildingViewer3D();
             _viewer.Dock = DockStyle.Fill;
             _viewer.TargetHovered += OnViewerTargetHovered;
+            _viewer.TargetClicked += OnViewerTargetClicked;
             _viewer.PlacementClicked += OnViewerPlacementClicked;
             viewerHost.Controls.Add(_viewer);
             viewerHost.Controls.Add(viewerHeader);
@@ -1057,7 +1066,7 @@ namespace NOMAD.MissionPlanner
             if (p.Surface == "roof")
                 return $"on the roof of the {structure} near the {face} face, {p.Up:F1}m above ground and {refText}.";
             if (p.Surface == "ground")
-                return $"on the ground near the {face} face of the {structure}, {p.Up:F1}m above ground and {refText}.";
+                return $"on the ground near the {face} face of the {structure}, {refText}.";
             return $"on the {face} face of the {structure}, {p.Up:F1}m above ground and {refText}.";
         }
 
@@ -1380,9 +1389,11 @@ namespace NOMAD.MissionPlanner
                 ApplyRowHighlighting();
             else if (colName == "Plane")
             {
-                var stateKey = _targetGrid.Rows[e.RowIndex].Cells["StateKey"].Value?.ToString() ?? "";
-                if (!stateKey.StartsWith("manual:", StringComparison.OrdinalIgnoreCase))
-                    _ = SendPlaneOverrideAsync(e.RowIndex);
+                // Plane is now a purely-local field: the GCS regenerates the
+                // description from the current plane + ENU position. The
+                // Jetson no longer owns the building model so there's nothing
+                // to round-trip.
+                RegenerateRowDescription(e.RowIndex);
             }
 
             // Persist any user-visible field change so a crash never loses
@@ -1396,33 +1407,19 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private async Task SendPlaneOverrideAsync(int rowIndex)
+        private void RegenerateRowDescription(int rowIndex)
         {
             if (rowIndex < 0 || rowIndex >= _targetGrid.Rows.Count) return;
+            if (_viewer == null) return;
             var row = _targetGrid.Rows[rowIndex];
-            var plane = row.Cells["Plane"].Value?.ToString();
-            if (string.IsNullOrEmpty(plane)) return;
-
-            // Target letters are assigned in capture order: row 0 = A, row 1 = B, ...
-            string targetId = IndexToTargetLetter(rowIndex);
-            try
-            {
-                _lblStatus.Text = $"Sending plane override for target {targetId} ({plane})...";
-                _lblStatus.ForeColor = TEXT_SECONDARY;
-                var json = JsonConvert.SerializeObject(new { plane_kind = plane });
-                var content = new StringContent(json, Encoding.UTF8, "application/json");
-                var resp = await JetsonApiService.PostLongRunAsync(
-                    $"/api/task/1/target/{targetId}/plane_override", content);
-                if (!resp.IsSuccessStatusCode)
-                    throw new Exception($"HTTP {(int)resp.StatusCode}");
-                _lblStatus.Text = $"Target {targetId} plane set to {plane}";
-                _lblStatus.ForeColor = SUCCESS_COLOR;
-            }
-            catch (Exception ex)
-            {
-                _lblStatus.Text = $"Plane override failed: {ex.Message}";
-                _lblStatus.ForeColor = ERROR_COLOR;
-            }
+            string surface = row.Cells["Plane"].Value?.ToString() ?? "wall";
+            float? east = TryParseFloatCell(row, "East");
+            float? north = TryParseFloatCell(row, "North");
+            if (!east.HasValue || !north.HasValue) return;
+            float up = TryParseFloatCell(row, "Up") ?? TryParseFloatCell(row, "Height") ?? 0f;
+            var placement = _viewer.CreatePlacementFromLocal(surface, east.Value, north.Value, up);
+            if (placement == null) return;
+            row.Cells["Description"].Value = GeneratePlacementDescription(placement);
         }
 
         private void BtnPreview_Click(object sender, EventArgs e)
@@ -1743,8 +1740,6 @@ namespace NOMAD.MissionPlanner
 
         /// <summary>
         /// Targets are assigned letters in capture order: row 0 → A, row 1 → B, ...
-        /// Same convention as SendPlaneOverrideAsync, so the IDs match what the
-        /// Jetson's debug file emits.
         /// </summary>
         private string TargetIdForRow(int rowIndex)
         {
@@ -1787,6 +1782,25 @@ namespace NOMAD.MissionPlanner
             try { _targetGrid.FirstDisplayedScrollingRowIndex = Math.Max(0, idx - 2); } catch { }
         }
 
+        private void OnViewerTargetClicked(string targetId)
+        {
+            if (InvokeRequired) { BeginInvoke(new Action(() => OnViewerTargetClicked(targetId))); return; }
+            if (string.IsNullOrEmpty(targetId)) return;
+            int idx = TargetLetterToIndex(targetId);
+            if (idx < 0 || idx >= _targetGrid.Rows.Count) return;
+            _targetGrid.ClearSelection();
+            var row = _targetGrid.Rows[idx];
+            row.Selected = true;
+            try
+            {
+                _targetGrid.CurrentCell = row.Cells["Description"];
+                _targetGrid.FirstDisplayedScrollingRowIndex = Math.Max(0, idx - 2);
+            }
+            catch { }
+            // Keep the marker highlighted while the operator looks at the row.
+            _viewer?.SetHighlightedTarget(targetId);
+        }
+
         private static int TargetLetterToIndex(string letters)
         {
             if (string.IsNullOrWhiteSpace(letters)) return -1;
@@ -1801,6 +1815,12 @@ namespace NOMAD.MissionPlanner
 
         private void StartViewerRefresh()
         {
+            if (_posePumpTimer == null)
+            {
+                _posePumpTimer = new System.Windows.Forms.Timer { Interval = 100 }; // 10 Hz
+                _posePumpTimer.Tick += (s, e) => PumpDronePoseFromMav();
+                _posePumpTimer.Start();
+            }
             if (_viewerRefreshTimer != null) return;
             _viewerRefreshTimer = new System.Windows.Forms.Timer { Interval = 3000 };
             _viewerRefreshTimer.Tick += (s, e) => _ = RefreshViewerDataAsync();
@@ -1810,10 +1830,39 @@ namespace NOMAD.MissionPlanner
 
         private void StopViewerRefresh()
         {
+            if (_posePumpTimer != null)
+            {
+                _posePumpTimer.Stop();
+                _posePumpTimer.Dispose();
+                _posePumpTimer = null;
+            }
             if (_viewerRefreshTimer == null) return;
             _viewerRefreshTimer.Stop();
             _viewerRefreshTimer.Dispose();
             _viewerRefreshTimer = null;
+        }
+
+        private void PumpDronePoseFromMav()
+        {
+            if (_viewer == null) return;
+            try
+            {
+                var cs = global::MissionPlanner.MainV2.comPort?.MAV?.cs;
+                if (cs == null) return;
+                if (Math.Abs(cs.lat) < 0.000001 && Math.Abs(cs.lng) < 0.000001) return;
+                UpdateDronePose(
+                    cs.lat,
+                    cs.lng,
+                    cs.alt,
+                    ReadDouble(cs, "yaw"),
+                    ReadDouble(cs, "pitch"),
+                    ReadDouble(cs, "roll"));
+            }
+            catch
+            {
+                // The pose timer must never throw — Mission Planner's link may
+                // tear down mid-tick and `cs` will surface a transient null.
+            }
         }
 
         private async Task RefreshViewerDataAsync()
@@ -1835,28 +1884,29 @@ namespace NOMAD.MissionPlanner
                     {
                         foreach (var t in arr)
                         {
-                            var east = (float?)t["east"];
-                            var north = (float?)t["north"];
-                            var up = (float?)t["up"];
-                            if (!east.HasValue || !north.HasValue) continue;
+                            var lat = (double?)t["lat"];
+                            var lon = (double?)t["lon"];
+                            if (!lat.HasValue || !lon.HasValue) continue;
+                            if (!_viewer.TryGetLocalFromGps(lat.Value, lon.Value, out float eastM, out float northM)) continue;
+                            float up = (float?)t["height_agl"] ?? 0f;
                             string id = t["id"]?.ToString() ?? "?";
                             targets.Add(new BuildingViewer3D.Target
                             {
                                 Id = id,
                                 Color = t["color"]?.ToString(),
-                                Description = t["description"]?.ToString(),
-                                East = east.Value,
-                                North = north.Value,
-                                Up = up ?? 0f,
+                                Description = null,
+                                East = eastM,
+                                North = northM,
+                                Up = up,
                             });
                             byLetter[id] = new BackendTargetInfo
                             {
                                 Id = id,
                                 Color = t["color"]?.ToString(),
-                                Surface = InferSurfaceFromBackendTarget(t, up ?? 0f),
-                                East = east.Value,
-                                North = north.Value,
-                                Up = up ?? 0f,
+                                Surface = InferSurfaceFromBackendTarget(t, up),
+                                East = eastM,
+                                North = northM,
+                                Up = up,
                             };
                         }
                     }

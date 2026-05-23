@@ -1,20 +1,19 @@
 """
 target_localizer_node.py
 
-Main ROS 2 node for AEAC 2026 Task 1 automated target description.
+Main ROS 2 node for AEAC 2026 Task 1 target detection + GPS localization.
 
-Workflow:
-  1. Subscribe to ZED RGB + depth, drone pose (MAVROS), servo angle
-  2. On button press (service call or joystick trigger):
-     a. Capture current ZED frame
-     b. Run HSV circle detection
-     c. Back-project detections to 3D using depth + TF
-      d. Classify nearest analytical plane (4 walls + ground + roof)
-          and project onto nearest wall face for references
-     e. Find nearest corner
-     f. Generate natural-language description from template
-     g. Append to target list (with deduplication)
-  3. On "save" command, write target list to .txt file
+The ground station now owns the building model: it stores corners, runs
+calibration, classifies faces/walls/heights, and generates the spatial
+target descriptions. This node's job is reduced to:
+
+  1. Subscribe to ZED RGB + depth, drone pose (MAVROS), servo angle.
+  2. On button press, run HSV circle detection.
+  3. Back-project each detection through depth + servo tilt + drone heading
+     into an absolute (lat, lon, height_agl) tuple.
+  4. Hand that off to the GCS via /api/task/1/target/list_structured;
+     anything resembling "north face" or "0.4 m above ground near corner 2"
+     is generated on the C# side from those raw coordinates.
 
 Topics subscribed:
   - /zed2i/zed_node/rgb/image_rect_color (sensor_msgs/Image)
@@ -26,20 +25,16 @@ Topics subscribed:
   - /servo/angle (Float64 - current servo pitch in degrees)
 
 Services:
-  - ~/capture_target (std_srvs/Trigger) - run detection + description
+  - ~/capture_target (std_srvs/Trigger) - run detection + localization
   - ~/save_targets (std_srvs/Trigger) - write .txt file
-  - ~/print_model (std_srvs/Trigger) - print building model summary
-   - ~/set_building_corners (std_srvs/Trigger) - rebuild building model from corners JSON file
+  - ~/clear_targets (std_srvs/Trigger) - drop everything from memory
+  - ~/delete_target (std_srvs/Trigger) - drop one by ID (uses sidecar JSON)
+  - ~/set_ground_alt (std_srvs/Trigger) - latch current AGL as ground=0
 
 Parameters (set via YAML config):
-  - building.center_lat, building.center_lon, building.height
-  - building.corner_names + building.corner_lats + building.corner_lons
-    (parallel arrays, one entry per polygon corner)
-  - building.rectangle.{length,width,orientation_deg}
-    (only used when corner_names is empty -- rectangle convenience fallback)
   - team_name
   - output_dir
-  - dedup_radius_m
+  - dedup_radius_m  (meters; converted to lat/lon delta internally)
 """
 
 import rclpy
@@ -67,8 +62,25 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-from .building_model import BuildingModel, Face, gps_to_local
 from .detectors import CircleDetector, ColorVerifier, TargetColor
+
+
+_EARTH_RADIUS_M = 6_371_000.0
+
+
+def _offset_gps(lat: float, lon: float, east_m: float, north_m: float):
+    """Equirectangular: add a local-ENU offset (in meters) onto a GPS fix."""
+    out_lat = lat + math.degrees(north_m / _EARTH_RADIUS_M)
+    out_lon = lon + math.degrees(east_m / (_EARTH_RADIUS_M * math.cos(math.radians(lat))))
+    return out_lat, out_lon
+
+
+def _gps_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Small-angle equirectangular distance — fine for the < 1 km radii we deal with."""
+    avg_lat = math.radians(0.5 * (lat1 + lat2))
+    dx = math.radians(lon2 - lon1) * _EARTH_RADIUS_M * math.cos(avg_lat)
+    dy = math.radians(lat2 - lat1) * _EARTH_RADIUS_M
+    return math.hypot(dx, dy)
 
 
 def target_letter_from_index(i: int) -> str:
@@ -87,22 +99,22 @@ def target_letter_from_index(i: int) -> str:
 
 @dataclass
 class TargetRecord:
-    """A confirmed target with 3D position and description."""
+    """A confirmed target with absolute GPS + AGL height.
+
+    The Jetson does not classify which building face the target is on or
+    write a natural-language description — the GCS does all of that from
+    these raw coordinates. We only carry the bare-minimum identification
+    fields (id, color, timestamp, confidence, image).
+    """
 
     target_id: str
     color: TargetColor
-    face_label: str
+    lat: float
+    lon: float
     height_agl: float
-    horiz_from_left: float
-    east: float
-    north: float
-    up: float
-    description: str
     timestamp: float
     confidence: float
     image_path: Optional[str] = None
-    plane_kind: str = "wall"
-    face_name: str = ""
     approved: bool = False
     raw_data: Optional[dict] = None
 
@@ -112,18 +124,9 @@ class TargetLocalizerNode(Node):
         super().__init__("target_localizer")
 
         # ----- Parameters ----- #
-        self.declare_parameter("building.center_lat", 0.0)
-        self.declare_parameter("building.center_lon", 0.0)
-        self.declare_parameter("building.height", 5.0)
-        # N-corner polygon (preferred path). Three parallel arrays so ROS 2
-        # parameters can carry the schema (no list-of-dict support natively).
-        self.declare_parameter("building.corner_names", [""])
-        self.declare_parameter("building.corner_lats", [0.0])
-        self.declare_parameter("building.corner_lons", [0.0])
-        # Rectangle convenience fallback, only used when corner_names is empty.
-        self.declare_parameter("building.rectangle.length", 10.0)
-        self.declare_parameter("building.rectangle.width", 6.0)
-        self.declare_parameter("building.rectangle.orientation_deg", 0.0)
+        # Building geometry parameters used to live here (center_lat/lon, height,
+        # corner_lats/lons, rectangle fallback). They were removed when the GCS
+        # took over face/wall classification — see Task1 module on the C# side.
         self.declare_parameter("team_name", "MAD")
         self.declare_parameter("output_dir", "/home/mad/targets")
         # Keep at most this many timestamped capture folders. Older ones are
@@ -159,55 +162,6 @@ class TargetLocalizerNode(Node):
         )
 
         os.makedirs(self.output_dir, exist_ok=True)
-
-        # ----- Building model ----- #
-        center_lat = float(self.get_parameter("building.center_lat").value)
-        center_lon = float(self.get_parameter("building.center_lon").value)
-        height = float(self.get_parameter("building.height").value)
-
-        corner_names = [
-            str(s) for s in self.get_parameter("building.corner_names").value or []
-            if str(s).strip() != ""
-        ]
-        corner_lats = list(self.get_parameter("building.corner_lats").value or [])
-        corner_lons = list(self.get_parameter("building.corner_lons").value or [])
-
-        corners_local = None
-        if len(corner_names) >= 3:
-            if not (len(corner_names) == len(corner_lats) == len(corner_lons)):
-                raise RuntimeError(
-                    "building.corner_names / corner_lats / corner_lons must "
-                    f"have equal length, got {len(corner_names)} / "
-                    f"{len(corner_lats)} / {len(corner_lons)}"
-                )
-            corners_local = [
-                (name,) + gps_to_local(float(lat), float(lon), center_lat, center_lon)
-                for name, lat, lon in zip(corner_names, corner_lats, corner_lons)
-            ]
-            self.get_logger().info(
-                f"Loaded {len(corners_local)} polygon corners from CONOPS data."
-            )
-        else:
-            self.get_logger().warn(
-                "No polygon corners configured; falling back to rectangle "
-                "convenience path. Update building.corner_* params for the real "
-                "building shape."
-            )
-
-        self.building = BuildingModel(
-            center_lat=center_lat,
-            center_lon=center_lon,
-            height=height,
-            corners_local=corners_local,
-            length=float(self.get_parameter("building.rectangle.length").value),
-            width=float(self.get_parameter("building.rectangle.width").value),
-            orientation_deg=float(
-                self.get_parameter("building.rectangle.orientation_deg").value
-            ),
-        )
-        self.get_logger().info(
-            f"Building model initialized:\n{self.building.get_summary()}"
-        )
 
         # ----- Detectors ----- #
         # Defaults: 12px min radius, 0.70 circularity, 0.80 solidity.
@@ -333,27 +287,18 @@ class TargetLocalizerNode(Node):
         self.save_srv = self.create_service(
             Trigger, "/target_localizer/save_targets", self._save_callback
         )
-        self.model_srv = self.create_service(
-            Trigger, "/target_localizer/print_model", self._print_model_callback
-        )
-        self.corners_srv = self.create_service(
-            Trigger, "/target_localizer/set_building_corners", self._set_corners_callback
-        )
         self.clear_srv = self.create_service(
             Trigger, "/target_localizer/clear_targets", self._clear_targets_callback
         )
         self.ground_alt_srv = self.create_service(
             Trigger, "/target_localizer/set_ground_alt", self._set_ground_alt_callback
         )
-        self.regen_srv = self.create_service(
-            Trigger, "/target_localizer/regenerate_descriptions", self._regenerate_descriptions_callback
-        )
-        self.plane_override_srv = self.create_service(
-            Trigger, "/target_localizer/set_target_plane", self._set_target_plane_callback
-        )
         self.delete_target_srv = self.create_service(
             Trigger, "/target_localizer/delete_target", self._delete_target_callback
         )
+        # Building-model services (print_model, set_building_corners,
+        # regenerate_descriptions, set_target_plane) were removed when the
+        # GCS took ownership of the building geometry.
 
         self._detection_status_pub = self.create_publisher(
             Float64, "/target_localizer/detection_status", 10
@@ -564,23 +509,16 @@ class TargetLocalizerNode(Node):
 
         return east_offset, north_offset, target_up
 
-    def _camera_origin_from_vehicle_local(
-        self, vehicle_east: float, vehicle_north: float
-    ) -> Tuple[float, float]:
-        """Shift vehicle GPS/local pose to the ZED optical origin in ENU."""
-        heading_rad = math.radians(self.drone_heading)
-        forward = self.camera_gps_offset_forward_m
-        right = self.camera_gps_offset_right_m
-        east = vehicle_east + forward * math.sin(heading_rad) + right * math.cos(heading_rad)
-        north = vehicle_north + forward * math.cos(heading_rad) - right * math.sin(heading_rad)
-        return east, north
-
-    def _pixel_to_world_enu(
+    def _pixel_to_world_gps(
         self, px: int, py: int, depth_image: np.ndarray,
         servo_pitch_override: Optional[float] = None,
     ) -> Optional[Tuple[float, float, float]]:
         """
-        Back-project pixel to world ENU coordinates (relative to building center).
+        Back-project a pixel to absolute (lat, lon, height_agl).
+
+        Requires a GPS fix on the drone — we no longer have a building origin
+        to anchor an ENU-only fallback against, and the GCS would have nothing
+        to convert the result with anyway.
         """
         local = self._pixel_to_3d_local(px, py, depth_image, servo_pitch_override)
         if local is None:
@@ -588,91 +526,26 @@ class TargetLocalizerNode(Node):
 
         east_off, north_off, up = local
 
-        # Drone position in building-relative ENU.
-        # Prefer GPS geodetic conversion when available, otherwise fall back
-        # to local pose (e.g., ZED odom / MAVROS local_position) so Task 1
-        # capture remains usable indoors or before GPS lock.
-        if self.has_gps_fix:
-            drone_east, drone_north = gps_to_local(
-                self.drone_lat,
-                self.drone_lon,
-                self.building.center_lat,
-                self.building.center_lon,
-            )
-        else:
-            drone_east, drone_north = self.drone_local_east, self.drone_local_north
-        camera_east, camera_north = self._camera_origin_from_vehicle_local(
-            drone_east, drone_north
+        if not self.has_gps_fix:
+            return None
+
+        # Apply the camera's offset from the GPS antenna in the drone heading
+        # frame, then walk that meter offset onto the drone GPS as a lat/lon
+        # delta. The GCS turns this into building-local ENU on its end using
+        # its own (calibrated) corner list.
+        heading_rad = math.radians(self.drone_heading)
+        forward = self.camera_gps_offset_forward_m
+        right = self.camera_gps_offset_right_m
+        cam_east_off = forward * math.sin(heading_rad) + right * math.cos(heading_rad)
+        cam_north_off = forward * math.cos(heading_rad) - right * math.sin(heading_rad)
+
+        lat, lon = _offset_gps(
+            self.drone_lat,
+            self.drone_lon,
+            cam_east_off + east_off,
+            cam_north_off + north_off,
         )
-
-        return (camera_east + east_off, camera_north + north_off, up)
-
-    # ================================================================ #
-    #  Description generation
-    # ================================================================ #
-    def _generate_description(
-        self,
-        color: TargetColor,
-        face: Face,
-        horiz_from_left: float,
-        height_agl: float,
-        plane_kind: str = "wall",
-    ) -> str:
-        """
-        Generate a natural-language target description.
-
-        Output is the COLOR-FREE spatial body, e.g.
-          "on the <face> face of the building, <height>m above ground,
-           <horizontal reference>."
-
-        Color is intentionally NOT included: the Mission Planner submission
-        table is the single source of truth for target color. The C# side
-        prefixes "<Color> target " in front of this body at upload time.
-
-        plane_kind is 'wall', 'ground', or 'roof'.
-        """
-        height_rounded = round(height_agl, 1)
-        ref_name, ref_dist, ref_phrase = self.building.find_nearest_reference(
-            face, horiz_from_left, height_agl
-        )
-        face_name = face.name
-
-        if plane_kind == "ground" or height_agl < 0.3:
-            return (
-                f"on the ground near the {face_name} face of the building, "
-                f"{height_rounded}m above ground, {ref_phrase}."
-            )
-        if plane_kind == "roof":
-            return (
-                f"on the roof near the {face_name} face of the building, "
-                f"{height_rounded}m above ground, {ref_phrase}."
-            )
-        return (
-            f"on the {face_name} face of the building, "
-            f"{height_rounded}m above ground, {ref_phrase}."
-        )
-
-    def _resolve_observed_face(self) -> Tuple[Optional["Face"], str]:
-        """Resolve active building face using GPS first, then local-pose fallback."""
-        if self.has_gps_fix:
-            face = self.building.get_face_from_drone_pose(
-                self.drone_lat,
-                self.drone_lon,
-                self.drone_heading,
-            )
-            if face is not None:
-                return face, "gps"
-
-        if self.has_local_pose:
-            face = self.building.get_face_from_local_pose(
-                self.drone_local_east,
-                self.drone_local_north,
-                self.drone_heading,
-            )
-            if face is not None:
-                return face, "local_pose"
-
-        return None, "none"
+        return lat, lon, up
 
     # ================================================================ #
     #  Target capture (button press)
@@ -778,42 +651,23 @@ class TargetLocalizerNode(Node):
         new_targets: List[TargetRecord] = []
 
         if len(circles) == 0:
-            # No circles detected — automatically use the frame center (crosshair)
-            # for localization. Always attempted; _pixel_to_world_enu falls back to
-            # local_pose when GPS is unavailable.
+            # No circles detected — use the frame center as a manual crosshair
+            # fallback. The GCS still gets a (lat, lon, height) and decides
+            # which building face / corner reference to attach.
             center_px = self.latest_rgb.shape[1] // 2
             center_py = self.latest_rgb.shape[0] // 2
-            # Raw depth at center pixel for distance reporting
             _chw = 5
-            _cy_c, _cx_c = center_py, center_px
-            _cy1 = max(0, _cy_c - _chw); _cy2 = min(depth.shape[0], _cy_c + _chw + 1)
-            _cx1 = max(0, _cx_c - _chw); _cx2 = min(depth.shape[1], _cx_c + _chw + 1)
+            _cy1 = max(0, center_py - _chw); _cy2 = min(depth.shape[0], center_py + _chw + 1)
+            _cx1 = max(0, center_px - _chw); _cx2 = min(depth.shape[1], center_px + _chw + 1)
             _croi = depth[_cy1:_cy2, _cx1:_cx2]
             _cvalid = _croi[np.isfinite(_croi) & (_croi > 0.1) & (_croi < 35.0)]
             center_distance_m: Optional[float] = float(np.median(_cvalid)) if len(_cvalid) > 0 else None
 
-            world = self._pixel_to_world_enu(center_px, center_py, depth, captured_servo_pitch)
+            world = self._pixel_to_world_gps(center_px, center_py, depth, captured_servo_pitch)
             if world is not None:
-                east, north, up = world
-                observed_face, _ = self._resolve_observed_face()
-                plane_hit = self.building.classify_nearest_plane(east, north, up)
-                if observed_face is not None:
-                    face = observed_face
-                elif plane_hit.face is not None:
-                    face = plane_hit.face
-                else:
-                    face, _ = self.building.get_nearest_wall_face(east, north)
-                # Subtract ground_alt_offset BEFORE projecting: the projection
-                # clamps height_agl to [0, building.height+0.05] in the building
-                # frame, so a post-projection subtraction would either clip the
-                # offset away or push a ground target to a large negative value.
-                horiz_from_left, height_agl = self.building.project_point_onto_face(
-                    east, north, up - self.ground_alt_offset, face
-                )
+                target_lat, target_lon, up = world
+                height_agl = up - self.ground_alt_offset
                 target_letter = target_letter_from_index(self.next_target_index)
-                description = self._generate_description(
-                    TargetColor.UNKNOWN, face, horiz_from_left, height_agl, plane_hit.kind
-                )
                 img_filename = f"target_{target_letter}.jpg"
                 img_path = os.path.join(capture_dir, img_filename)
                 annotated = rgb.copy()
@@ -833,22 +687,17 @@ class TargetLocalizerNode(Node):
                 record = TargetRecord(
                     target_id=target_letter,
                     color=TargetColor.UNKNOWN,
-                    face_label=plane_hit.label,
+                    lat=target_lat,
+                    lon=target_lon,
                     height_agl=height_agl,
-                    horiz_from_left=horiz_from_left,
-                    east=east,
-                    north=north,
-                    up=up,
-                    description=description,
                     timestamp=time.time(),
                     confidence=0.0,
                     image_path=img_path,
-                    plane_kind=plane_hit.kind,
-                    face_name=face.name,
                     approved=False,
                     raw_data={
-                        "east": east, "north": north, "up": up,
-                        "plane_kind": plane_hit.kind,
+                        "lat": target_lat,
+                        "lon": target_lon,
+                        "height_agl": height_agl,
                         "drone_lat": self.drone_lat,
                         "drone_lon": self.drone_lon,
                         "drone_heading": self.drone_heading,
@@ -866,15 +715,16 @@ class TargetLocalizerNode(Node):
                     if center_distance_m is not None else ""
                 )
                 self.get_logger().info(
-                    f"TARGET {record.target_id} (center-fallback): {description}{dist_str}"
+                    f"TARGET {record.target_id} (center-fallback): "
+                    f"({target_lat:.7f}, {target_lon:.7f}) h={height_agl:.2f}m{dist_str}"
                 )
             else:
                 response.success = False
                 response.message = (
-                    "No circles detected and depth is invalid at frame center "
-                    "(all NaN or out of range). Check ZED depth stream."
+                    "No circles detected and either depth or GPS is invalid. "
+                    "Check ZED depth stream and MAVROS GPS fix."
                 )
-                self.get_logger().warn("Crosshair fallback failed: center-pixel depth is invalid.")
+                self.get_logger().warn("Crosshair fallback failed: no usable depth/GPS.")
                 return response
 
         self.get_logger().info(f"Detected {len(circles)} circle(s)")
@@ -917,25 +767,23 @@ class TargetLocalizerNode(Node):
             except Exception as _imwrite_err:
                 self.get_logger().warn(f"Image save failed (non-fatal): {_imwrite_err}")
 
-        # Check if we can create targets (requires GPS/local pose)
-        can_create_targets = self.has_gps_fix or self.has_local_pose
-        if not can_create_targets:
+        # GPS fix is required: we can't produce absolute target coordinates
+        # without one, and the GCS would have nothing to convert.
+        if not self.has_gps_fix:
             response.success = True
             response.message = (
                 f"Detected {len(circles)} circle(s) and saved {len(saved_images)} image(s). "
-                "GPS/local pose unavailable - targets not created but images saved for review."
+                "No GPS fix — targets not created (images saved for review)."
             )
             self.get_logger().info(
-                f"Saved {len(saved_images)} detection images without GPS"
+                f"Saved {len(saved_images)} detection images without GPS fix"
             )
             return response
 
         duplicate_count = 0
         depth_fail_count = 0
-        face_fail_count = 0
         confidence_filtered_count = 0
         for det in circles:
-            # Confidence threshold filter: reject detections below minimum
             if det.confidence < self.min_confidence:
                 confidence_filtered_count += 1
                 continue
@@ -952,16 +800,16 @@ class TargetLocalizerNode(Node):
             else:
                 final_color = det.color
 
-            # Back-project to 3D world coordinates using captured servo angle
-            world = self._pixel_to_world_enu(det.cx, det.cy, depth, captured_servo_pitch)
+            world = self._pixel_to_world_gps(det.cx, det.cy, depth, captured_servo_pitch)
             if world is None:
                 self.get_logger().warn(
-                    f"Could not get depth for circle at ({det.cx}, {det.cy}), skipping."
+                    f"Could not back-project circle at ({det.cx}, {det.cy}), skipping."
                 )
                 depth_fail_count += 1
                 continue
 
-            east, north, up = world
+            target_lat, target_lon, up = world
+            height_agl = up - self.ground_alt_offset
 
             # Raw slant range to target center (meters) for distance reporting
             _hw = 5
@@ -972,48 +820,17 @@ class TargetLocalizerNode(Node):
             _valid = _roi[np.isfinite(_roi) & (_roi > 0.1) & (_roi < 35.0)]
             det_distance_m: Optional[float] = float(np.median(_valid)) if len(_valid) > 0 else None
 
-            # Prefer the face the drone is actively looking at; fall back to
-            # nearest-wall classification if view direction is unknown. Either
-            # way `face` is guaranteed non-None for the description below.
-            observed_face, _ = self._resolve_observed_face()
-            plane_hit = self.building.classify_nearest_plane(east, north, up)
-
-            if observed_face is not None:
-                face: Face = observed_face
-            elif plane_hit.face is not None:
-                face = plane_hit.face
-            else:
-                face, _ = self.building.get_nearest_wall_face(east, north)
-
-            # Project onto face. Pre-subtract ground_alt_offset so the
-            # projection's [0, building.height] clamp operates in
-            # ground-relative coordinates.
-            horiz_from_left, height_agl = self.building.project_point_onto_face(
-                east, north, up - self.ground_alt_offset, face
-            )
-
-            # Deduplication check
-            if self._is_duplicate(east, north, up):
+            if self._is_duplicate(target_lat, target_lon, height_agl):
                 self.get_logger().info(
-                    f"Duplicate target at ({east:.1f}, {north:.1f}, {up:.1f}), skipping."
+                    f"Duplicate target at ({target_lat:.7f}, {target_lon:.7f}, "
+                    f"h={height_agl:.1f}m), skipping."
                 )
                 duplicate_count += 1
                 continue
 
-            # Generate description
-            description = self._generate_description(
-                final_color,
-                face,
-                horiz_from_left,
-                height_agl,
-                plane_kind=plane_hit.kind,
-            )
-
-            # Save target image (already saved detection images above, this is for confirmed targets)
             target_letter = target_letter_from_index(self.next_target_index)
             img_filename = f"target_{target_letter}.jpg"
             img_path = os.path.join(capture_dir, img_filename)
-            # Draw bounding box on image copy
             annotated = rgb.copy()
             x1, y1, x2, y2 = det.bbox
             cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
@@ -1041,27 +858,20 @@ class TargetLocalizerNode(Node):
                 self.get_logger().warn(f"Image save failed (non-fatal): {_imwrite_err}")
                 img_path = None
 
-            # Create record
             record = TargetRecord(
                 target_id=target_letter,
                 color=final_color,
-                face_label=plane_hit.label,
+                lat=target_lat,
+                lon=target_lon,
                 height_agl=height_agl,
-                horiz_from_left=horiz_from_left,
-                east=east,
-                north=north,
-                up=up,
-                description=description,
                 timestamp=time.time(),
                 confidence=det.confidence,
                 image_path=img_path,
-                plane_kind=plane_hit.kind,
-                face_name=face.name,
                 approved=False,
                 raw_data={
-                    "east": east, "north": north, "up": up,
-                    "plane_kind": plane_hit.kind,
-                    "face_name_override": None,
+                    "lat": target_lat,
+                    "lon": target_lon,
+                    "height_agl": height_agl,
                     "drone_lat": self.drone_lat,
                     "drone_lon": self.drone_lon,
                     "drone_heading": self.drone_heading,
@@ -1111,13 +921,17 @@ class TargetLocalizerNode(Node):
         self.get_logger().info(f"Total targets so far: {len(self.targets)}")
         return response
 
-    def _is_duplicate(self, east: float, north: float, up: float) -> bool:
-        """Check if a detection is within dedup_radius of an existing target."""
+    def _is_duplicate(self, lat: float, lon: float, height_agl: float) -> bool:
+        """Check if a detection is within dedup_radius of an existing target.
+
+        Horizontal distance comes from the equirectangular GPS helper; vertical
+        is the AGL difference. Both contribute to a 3D distance so a target
+        directly above another (e.g. wall vs. roof) is not dropped as a dupe.
+        """
         for t in self.targets:
-            dist = math.sqrt(
-                (east - t.east) ** 2 + (north - t.north) ** 2 + (up - t.up) ** 2
-            )
-            if dist < self.dedup_radius:
+            horiz = _gps_distance_m(lat, lon, t.lat, t.lon)
+            vert = height_agl - t.height_agl
+            if math.sqrt(horiz * horiz + vert * vert) < self.dedup_radius:
                 return True
         return False
 
@@ -1125,41 +939,27 @@ class TargetLocalizerNode(Node):
     #  Save targets to file
     # ================================================================ #
     def _save_callback(self, request, response):
-        """Service handler for ~/save_targets. Writes the .txt file."""
+        """Service handler for ~/save_targets.
+
+        Writes a compact debug log of localized targets to disk. The
+        operator-visible submission .txt is generated by Mission Planner
+        from the GCS-side description, so this file is purely diagnostic.
+        """
         if not self.targets:
             response.success = False
             response.message = "No targets to save."
             return response
 
-        filename = f"Task_1_{self.team_name}_targets.txt"
-        filepath = os.path.join(self.output_dir, filename)
-
-        sorted_targets = sorted(self.targets, key=lambda t: t.target_id)
-        lines = []
-        for t in sorted_targets:
-            lines.append(f"Target {t.target_id}: {t.description}")
-
-        content = "\n\n".join(lines) + "\n"
-
-        with open(filepath, "w") as f:
-            f.write(content)
-
-        self.get_logger().info(f"Saved {len(self.targets)} targets to {filepath}")
-        self.get_logger().info(f"Content:\n{content}")
-
-        # Also save a detailed log with raw data for debugging
         debug_filename = f"Task_1_{self.team_name}_targets_debug.txt"
         debug_filepath = os.path.join(self.output_dir, debug_filename)
+        sorted_targets = sorted(self.targets, key=lambda t: t.target_id)
         debug_lines = []
         for t in sorted_targets:
             debug_lines.append(
                 f"Target {t.target_id}:\n"
-                f"  Description: {t.description}\n"
                 f"  Color: {t.color.value}\n"
-                f"  Face: {t.face_label}\n"
+                f"  GPS: ({t.lat:.7f}, {t.lon:.7f})\n"
                 f"  Height AGL: {t.height_agl:.2f}m\n"
-                f"  Horiz from left: {t.horiz_from_left:.2f}m\n"
-                f"  World ENU: ({t.east:.2f}, {t.north:.2f}, {t.up:.2f})\n"
                 f"  Confidence: {t.confidence:.2f}\n"
                 f"  Image: {t.image_path}\n"
                 f"  Timestamp: {datetime.fromtimestamp(t.timestamp).isoformat()}"
@@ -1167,85 +967,11 @@ class TargetLocalizerNode(Node):
         with open(debug_filepath, "w") as f:
             f.write("\n\n".join(debug_lines) + "\n")
 
+        self.get_logger().info(
+            f"Saved {len(self.targets)} target debug records to {debug_filepath}"
+        )
         response.success = True
-        response.message = f"Saved to {filepath} ({len(self.targets)} targets)"
-        return response
-
-
-    def _set_corners_callback(self, request, response):
-        """Rebuild the building model from a corners JSON file.
-
-        The API writes a JSON file to the output_dir containing corner
-        GPS coordinates. This service reads it and rebuilds the
-        BuildingModel at runtime, so operators can calibrate corners
-        by flying to each one and capturing the drone GPS.
-
-        Expected JSON format (written to <output_dir>/building_corners.json):
-        {
-            "center_lat": 45.322,
-            "center_lon": -75.760,
-            "height": 5.0,
-            "corners": [
-                {"name": "NW", "lat": 45.32205, "lon": -75.7601},
-                {"name": "NE", "lat": 45.32205, "lon": -75.7595},
-                ...
-            ]
-        }
-        """
-        import json as _json
-        # API writes to the config bind-mount (host /home/mad/NOMAD/config -> container /workspaces/isaac_ros-dev/config).
-        # Fall back to output_dir for manual placement.
-        _config_corners = "/workspaces/isaac_ros-dev/config/building_corners.json"
-        corners_path = _config_corners if os.path.exists(_config_corners) else os.path.join(self.output_dir, "building_corners.json")
-        if not os.path.exists(corners_path):
-            response.success = False
-            response.message = f"Corners file not found: {corners_path}. Write building_corners.json first."
-            return response
-
-        try:
-            with open(corners_path, "r") as f:
-                data = _json.load(f)
-        except Exception as e:
-            response.success = False
-            response.message = f"Failed to read corners file: {e}"
-            return response
-
-        try:
-            center_lat = float(data.get("center_lat", self.building.center_lat))
-            center_lon = float(data.get("center_lon", self.building.center_lon))
-            height = float(data.get("height", self.building.height))
-            corners_data = data.get("corners", [])
-
-            if len(corners_data) < 3:
-                response.success = False
-                response.message = f"Need at least 3 corners, got {len(corners_data)}"
-                return response
-
-            # Convert corner GPS to local ENU
-            corners_local = [
-                (c["name"],) + gps_to_local(float(c["lat"]), float(c["lon"]), center_lat, center_lon)
-                for c in corners_data
-            ]
-
-            # Rebuild the building model
-            self.building = BuildingModel(
-                center_lat=center_lat,
-                center_lon=center_lon,
-                height=height,
-                corners_local=corners_local,
-            )
-
-            summary = self.building.get_summary()
-            self.get_logger().info(
-                f"Building model rebuilt from corner calibration:\n{summary}"
-            )
-            response.success = True
-            response.message = f"Building model rebuilt with {len(corners_data)} corners.\n{summary}"
-        except Exception as e:
-            self.get_logger().error(f"Failed to rebuild building model: {e}")
-            response.success = False
-            response.message = f"Error rebuilding building model: {e}"
-
+        response.message = f"Saved {len(self.targets)} target debug records to {debug_filepath}"
         return response
 
     def _clear_targets_callback(self, request, response):
@@ -1333,122 +1059,6 @@ class TargetLocalizerNode(Node):
             f"Ground altitude set to {self.ground_alt_offset:.2f}m. "
             f"All heights will be relative to this level."
         )
-        return response
-
-    def _regenerate_one_target(self, t) -> bool:
-        """Recompute face/height/description for a single target from its raw_data.
-
-        Returns True if the target was regenerated, False if it had no raw_data.
-        """
-        if t.raw_data is None:
-            return False
-        rd = t.raw_data
-        plane_kind = rd.get("plane_kind", t.plane_kind)
-        face_name_override = rd.get("face_name_override")
-
-        east = rd.get("east", t.east)
-        north = rd.get("north", t.north)
-        up = rd.get("up", t.up)
-
-        if face_name_override:
-            face = self.building.faces_by_name.get(face_name_override)
-            if face is None:
-                face, _ = self.building.get_nearest_wall_face(east, north)
-        else:
-            observed_face, _ = self._resolve_observed_face()
-            plane_hit = self.building.classify_nearest_plane(east, north, up)
-            if observed_face is not None:
-                face = observed_face
-            elif plane_hit.face is not None:
-                face = plane_hit.face
-            else:
-                face, _ = self.building.get_nearest_wall_face(east, north)
-
-        # Pre-subtract offset (see _capture_callback for rationale).
-        horiz_from_left, height_agl = self.building.project_point_onto_face(
-            east, north, up - self.ground_alt_offset, face
-        )
-
-        if plane_kind == "ground":
-            height_agl = max(0.0, height_agl)
-
-        t.face_label = face.name if face else plane_kind
-        t.face_name = face.name if face else ""
-        t.plane_kind = plane_kind
-        t.height_agl = height_agl
-        t.horiz_from_left = horiz_from_left
-        t.description = self._generate_description(
-            t.color, face, horiz_from_left, height_agl, plane_kind
-        )
-        return True
-
-    def _regenerate_descriptions_callback(self, request, response):
-        """Regenerate all target descriptions from stored raw data.
-
-        Called after the pilot changes building model, ground altitude,
-        or plane overrides so that all descriptions stay consistent.
-        """
-        regenerated = sum(1 for t in self.targets if self._regenerate_one_target(t))
-        msg = f"Regenerated {regenerated}/{len(self.targets)} target description(s)."
-        self.get_logger().info(msg)
-        response.success = True
-        response.message = msg
-        return response
-
-    def _set_target_plane_callback(self, request, response):
-        """Override the plane classification of a single target.
-
-        The API writes a ``plane_override.json`` file to the output directory
-        containing ``{"target_id": "A", "plane_kind": "wall|ground|roof",
-        "face_name": "N"}`` (face_name optional). This service reads it,
-        updates that target's raw_data, and regenerates its description.
-        """
-        import json as _json
-        _config_override = "/workspaces/isaac_ros-dev/config/plane_override.json"
-        override_path = _config_override if os.path.exists(_config_override) else os.path.join(self.output_dir, "plane_override.json")
-        if not os.path.exists(override_path):
-            response.success = False
-            response.message = f"Override file not found: {override_path}"
-            return response
-        try:
-            with open(override_path, "r") as f:
-                data = _json.load(f)
-        except Exception as e:
-            response.success = False
-            response.message = f"Failed to read override file: {e}"
-            return response
-
-        target_id = str(data.get("target_id", "")).strip()
-        plane_kind = str(data.get("plane_kind", "")).strip().lower()
-        face_name = data.get("face_name")
-        if plane_kind not in {"wall", "ground", "roof"}:
-            response.success = False
-            response.message = f"Invalid plane_kind: {plane_kind!r}"
-            return response
-
-        target = next((t for t in self.targets if t.target_id == target_id), None)
-        if target is None:
-            response.success = False
-            response.message = f"Target {target_id!r} not found"
-            return response
-
-        if target.raw_data is None:
-            target.raw_data = {}
-        target.raw_data["plane_kind"] = plane_kind
-        if face_name:
-            target.raw_data["face_name_override"] = str(face_name)
-        elif "face_name_override" in target.raw_data:
-            del target.raw_data["face_name_override"]
-
-        self._regenerate_one_target(target)
-        msg = (
-            f"Target {target_id} plane set to {plane_kind}"
-            + (f" (face={face_name})" if face_name else "")
-            + f"; description: {target.description}"
-        )
-        self.get_logger().info(msg)
-        response.success = True
-        response.message = msg
         return response
 
     def _detection_status_timer_callback(self):
@@ -1555,15 +1165,6 @@ class TargetLocalizerNode(Node):
             threading.Thread(target=_push, daemon=True).start()
         except Exception:
             pass
-
-    def _print_model_callback(self, request, response):
-        """Print the current building model summary."""
-        summary = self.building.get_summary()
-        self.get_logger().info(f"\n{summary}")
-        response.success = True
-        response.message = summary
-        return response
-
 
 def main(args=None):
     rclpy.init(args=args)

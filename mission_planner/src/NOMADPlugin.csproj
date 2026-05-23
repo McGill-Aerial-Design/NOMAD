@@ -131,6 +131,7 @@
   <ItemGroup>
     <!-- Source Files -->
     <Compile Include="BoundaryManager.cs" />
+    <Compile Include="BuildingCornerStore.cs" />
     <Compile Include="BuildingViewer3D.cs" />
     <Compile Include="CubeOutputController.cs" />
     <Compile Include="DualLinkSender.cs" />

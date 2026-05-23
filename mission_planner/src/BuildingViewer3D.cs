@@ -69,6 +69,7 @@ namespace NOMAD.MissionPlanner
         // ==================== Public API ====================
 
         public event Action<string> TargetHovered;
+        public event Action<string> TargetClicked;
         public event Action<Placement> PlacementClicked;
         public string HighlightedTargetId { get; private set; }
         public bool PlacementMode { get; set; }
@@ -879,16 +880,28 @@ namespace NOMAD.MissionPlanner
 
         private void GlControl_MouseUp(object sender, MouseEventArgs e)
         {
-            if (_dragButton == MouseButtons.Left && PlacementMode)
+            if (_dragButton == MouseButtons.Left)
             {
                 int dx = e.X - _mouseDownPoint.X;
                 int dy = e.Y - _mouseDownPoint.Y;
-                if (dx * dx + dy * dy <= 25)
+                bool isClick = dx * dx + dy * dy <= 25;
+                if (isClick)
                 {
-                    var placement = PickPlacement(e.Location);
-                    if (placement != null)
+                    if (PlacementMode)
                     {
-                        try { PlacementClicked?.Invoke(placement); } catch { }
+                        var placement = PickPlacement(e.Location);
+                        if (placement != null)
+                            try { PlacementClicked?.Invoke(placement); } catch { }
+                    }
+                    else
+                    {
+                        // Click on (or very near) a target marker selects it
+                        // in the submission table. We pick BEFORE clearing the
+                        // drag state so the hit-test uses the same screen
+                        // projection the user just saw.
+                        string id = PickTarget(e.Location);
+                        if (!string.IsNullOrEmpty(id))
+                            try { TargetClicked?.Invoke(id); } catch { }
                     }
                 }
             }

@@ -2,25 +2,11 @@
 # Target Localizer Configuration - AEAC 2026 Task 1
 # ============================================================
 #
-# CONOPS gives us a single building lat/lon (just identifies which
-# building) plus the critical building dimensions. Building shape is
-# NOT necessarily rectangular -- could be L-shape, T-shape, etc.
-#
-# Pre-flight reconstruction (Thursday night -> Friday morning):
-#   1. From the satellite image of Area XO, derive the building's
-#      rotation (long-axis heading from true north).
-#   2. From CONOPS dimensions + that rotation + the lat/lon, compute
-#      a GPS coordinate for each corner of the polygon.
-#   3. Paste them into building.corner_lats / building.corner_lons /
-#      building.corner_names below (one entry per corner, same order,
-#      polygon must be wound consistently -- CCW or CW, model handles
-#      either).
-#   4. Set building.height from CONOPS dimensions.
-#   5. Run the node and call /target_localizer/print_model to verify
-#      face headings, names, and corner order match the satellite view.
-#
-# For a quick rectangular fallback (e.g. testing without CONOPS data),
-# leave corner_names empty and set the rectangle.* fields instead.
+# The ground station owns the building geometry now. This node just
+# converts circle detections into absolute (lat, lon, height_AGL) and
+# hands them off via /api/task/1/target/list_structured. There are no
+# building.* parameters anymore — the entire building model lives in
+# Mission Planner under %MyDocuments%/NOMAD/Task1/building_corners.json.
 #
 # USAGE:
 #   ros2 launch target_localizer target_localizer.launch.py
@@ -33,69 +19,20 @@
 target_localizer:
   ros__parameters:
 
-    # ---- Building Geometry ----
-    building:
-      # GPS origin of the local ENU frame. Use the CONOPS-provided lat/lon
-      # for the building, or the centroid of the corners.
-      center_lat: 45.31645989384689
-      center_lon: -75.75784666781436
-
-      # Building height (meters), from CONOPS dimensions.
-      height: 2.4
-
-      # ---- Polygon corners (preferred path) ----
-      # One entry per corner. corner_names, corner_lats, corner_lons must all
-      # have the same length (>= 3). Order the corners going around the
-      # polygon (CW or CCW, model auto-detects).
-      #
-      # Names are operator-facing and appear in target descriptions, e.g.
-      # "3.2m from the NW corner". Use short labels -- "NW", "NE", "A", "B".
-      #
-      # Numbered clockwise in Google Maps measurement order.
-      corner_names: ["1", "2", "3", "4", "5", "6", "7", "8"]
-      corner_lats: [
-        45.316743567764945,
-        45.31671371473123,
-        45.31615424384856,
-        45.31618520285556,
-        45.31641794771017,
-        45.316440061185425,
-        45.31652353947904,
-        45.316500873200205,
-      ]
-      corner_lons: [
-        -75.75773827279546,
-        -75.75759833217171,
-        -75.75781374638878,
-        -75.75796312121189,
-        -75.75787506868524,
-        -75.75798592052764,
-        -75.75795525937997,
-        -75.75784362135427,
-      ]
-
-      # ---- Rectangle convenience fallback ----
-      # Used only when corner_names is empty. Generates a 4-corner rectangle
-      # labeled NW/NE/SE/SW from center+dims+orientation.
-      rectangle:
-        length: 10.0           # Long axis dimension (meters)
-        width: 6.0             # Short axis dimension (meters)
-        orientation_deg: 0.0   # Long-axis heading, deg CW from true north
-                               # 0 = long axis points north, 90 = points east
-
     # ZED optical origin relative to the vehicle GPS antenna, in body frame.
-    # The Task 1 target projection starts from the camera, while MAVROS GPS is
-    # at the antenna. Positive forward is along vehicle heading.
+    # Used to back-project from the camera to a GPS lat/lon when MAVROS
+    # reports the antenna position. Positive forward is along vehicle heading.
     camera:
       gps_offset_forward_m: 0.35
       gps_offset_right_m: 0.0
 
-    # ---- Team ----
+    # ---- Team / IO ----
     team_name: "MAD"
     output_dir: "/workspaces/isaac_ros-dev/data/task1_captures"
 
     # ---- Target Detection ----
     dedup_radius_m: 0.5         # Targets within this 3D distance are merged
+    min_confidence: 0.35
 
     # ---- HSV Circle Detector (live-tunable) ----
     # ros2 param set /target_localizer circle.min_circularity 0.65
@@ -107,49 +44,22 @@ target_localizer:
       blur_kernel: 7
 
 # ============================================================
-# HSV Tuning Guide
-# ============================================================
-#
-# The default HSV ranges in detectors.py are a starting point. Re-tune at
-# the venue with the actual targets:
-#   1. Capture sample images with the ZED at typical hover distances
-#   2. Run python3 tools/hsv_tuner.py --image target_sample.jpg
-#   3. Update HSV_RANGES in detectors.py and rebuild
-#
-# Operator can also override the detected color via the GCS review UI
-# before each target is appended -- color penalty is x50% so HITL color
-# verification is the dominant accuracy lever.
-#
-# ============================================================
 # Operational Checklist
 # ============================================================
 #
-# Thursday night (after CONOPS releases building data):
-#   [ ] Open Area XO satellite imagery, measure building rotation
-#   [ ] Compute corner GPS coords from dimensions + rotation + lat/lon
-#   [ ] Paste into corner_names / corner_lats / corner_lons
-#   [ ] Set building.height from CONOPS dimensions
-#   [ ] Set building.center_lat / center_lon to the polygon centroid
-#   [ ] ros2 run + call /target_localizer/print_model to verify
-#
-# Friday morning (before flight):
+# Before flight:
 #   [ ] RTK fix on the Cube (or local pose if EKF origin is set)
 #   [ ] ZED RGB + depth + camera_info topics live
 #   [ ] Servo angle topic publishing
 #   [ ] One test capture at the flight line, review on GCS
 #   [ ] output_dir writable, Google Drive upload tested
+#   [ ] Calibrate the GCS building model: Mission Planner -> Task 1 ->
+#       Capture preset corner GPS for corners 1 and 2 to lock translation+rotation.
 #
 # During flight:
 #   [ ] Pilot positions UAV ~3-5m from each candidate target
 #   [ ] Operator triggers /target_localizer/capture_target
-#   [ ] Operator confirms color + face on GCS, accepts/rejects
-#   [ ] Repeat for each target
-#   [ ] After landing, /target_localizer/save_targets
-#   [ ] Review .txt before uploading to Google Drive
-#   [ ] Upload Task_1_MAD_targets.txt before window closes
-#
-# Emergency fallback:
-#   If the node fails, manually write descriptions using:
-#   - Annotated images in output_dir
-#   - Debug log with raw 3D coordinates
-#   - Building dimensions + corner GPS from this file
+#   [ ] Operator confirms color + face/plane on the GCS (face/plane is
+#       computed locally on the ground station from the target's GPS).
+#   [ ] After landing, /target_localizer/save_targets dumps a debug log.
+#   [ ] Submit Task_1_MAD_targets.txt from Mission Planner -> Upload panel.
