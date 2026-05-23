@@ -1046,6 +1046,10 @@ class VideoStreamNode(Node):
                     continue
                 claimed_centers.append((cx, cy, r))
                 x, y, bw, bh = cv2.boundingRect(c)
+                # cx/cy/radius_px are required by _merge_with_tracked to
+                # match a fresh detection against an existing track. Without
+                # them the tracker treats every frame's detection as new
+                # and stacks overlapping circles on the same target.
                 out.append({
                     "label": f"{color_name}_circle",
                     "hsv_color": color_name,
@@ -1054,6 +1058,9 @@ class VideoStreamNode(Node):
                     "bbox_y": float(y),
                     "bbox_w": float(bw),
                     "bbox_h": float(bh),
+                    "cx": float(cx),
+                    "cy": float(cy),
+                    "radius_px": float(r),
                     "_src_w": w,
                     "_src_h": h,
                     "_detector": "task1",
