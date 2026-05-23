@@ -432,6 +432,7 @@ class TargetLocalizerNode(Node):
     def _pixel_to_3d_local(
         self, px: int, py: int, depth_image: np.ndarray,
         servo_pitch_override: Optional[float] = None,
+        max_range_m: float = 35.0,
     ) -> Optional[Tuple[float, float, float]]:
         """
         Back-project a pixel to 3D coordinates in the drone's local ENU frame,
@@ -443,23 +444,27 @@ class TargetLocalizerNode(Node):
         if not self.intrinsics_received:
             return None
 
-        def _sample_depth(half_window: int, max_range_m: float) -> Optional[float]:
+        def _sample_depth(half_window: int, sample_max_range_m: float) -> Optional[float]:
             y1 = max(0, py - half_window)
             y2 = min(depth_image.shape[0], py + half_window + 1)
             x1 = max(0, px - half_window)
             x2 = min(depth_image.shape[1], px + half_window + 1)
             roi = depth_image[y1:y2, x1:x2]
-            valid = roi[np.isfinite(roi) & (roi > 0.1) & (roi < max_range_m)]
+            valid = roi[np.isfinite(roi) & (roi > 0.1) & (roi < sample_max_range_m)]
             if len(valid) == 0:
                 return None
             return float(np.median(valid))
 
         # Start with a tight ROI for precision, then expand to handle common
-        # depth holes on low-texture/reflective target patches.
-        depth = _sample_depth(half_window=5, max_range_m=20.0)
+        # depth holes on low-texture/reflective target patches. The tight
+        # sample uses a slightly stricter cap so close targets don't average
+        # in the far wall behind them; the expanding retries honor the
+        # caller-supplied max_range_m.
+        tight_cap = min(20.0, max_range_m)
+        depth = _sample_depth(half_window=5, sample_max_range_m=tight_cap)
         if depth is None:
             for half_window in (12, 20, 30, 60, 100):
-                depth = _sample_depth(half_window=half_window, max_range_m=35.0)
+                depth = _sample_depth(half_window=half_window, sample_max_range_m=max_range_m)
                 if depth is not None:
                     break
 
@@ -512,6 +517,7 @@ class TargetLocalizerNode(Node):
     def _pixel_to_world_gps(
         self, px: int, py: int, depth_image: np.ndarray,
         servo_pitch_override: Optional[float] = None,
+        max_range_m: float = 35.0,
     ) -> Optional[Tuple[float, float, float]]:
         """
         Back-project a pixel to absolute (lat, lon, height_agl).
@@ -520,7 +526,7 @@ class TargetLocalizerNode(Node):
         to anchor an ENU-only fallback against, and the GCS would have nothing
         to convert the result with anyway.
         """
-        local = self._pixel_to_3d_local(px, py, depth_image, servo_pitch_override)
+        local = self._pixel_to_3d_local(px, py, depth_image, servo_pitch_override, max_range_m=max_range_m)
         if local is None:
             return None
 
@@ -681,16 +687,28 @@ class TargetLocalizerNode(Node):
             # crosshair backup: use the frame center. The GCS still gets a
             # (lat, lon, height) and decides which building face / corner
             # reference to attach.
+            #
+            # Crosshair captures use a wider depth range (100 m) than circle
+            # detection (35 m). Operators sometimes line up a far building
+            # corner from a high hover where the true center-pixel depth
+            # exceeds 35 m; rejecting those captures (when GPS and depth are
+            # otherwise fine) was surfacing as a misleading "depth or GPS
+            # invalid" error.
+            crosshair_max_range_m = 100.0
+
             center_px = self.latest_rgb.shape[1] // 2
             center_py = self.latest_rgb.shape[0] // 2
             _chw = 5
             _cy1 = max(0, center_py - _chw); _cy2 = min(depth.shape[0], center_py + _chw + 1)
             _cx1 = max(0, center_px - _chw); _cx2 = min(depth.shape[1], center_px + _chw + 1)
             _croi = depth[_cy1:_cy2, _cx1:_cx2]
-            _cvalid = _croi[np.isfinite(_croi) & (_croi > 0.1) & (_croi < 35.0)]
+            _cvalid = _croi[np.isfinite(_croi) & (_croi > 0.1) & (_croi < crosshair_max_range_m)]
             center_distance_m: Optional[float] = float(np.median(_cvalid)) if len(_cvalid) > 0 else None
 
-            world = self._pixel_to_world_gps(center_px, center_py, depth, captured_servo_pitch)
+            world = self._pixel_to_world_gps(
+                center_px, center_py, depth, captured_servo_pitch,
+                max_range_m=crosshair_max_range_m,
+            )
             if world is not None:
                 target_lat, target_lon, up = world
                 height_agl = up - self.ground_alt_offset
@@ -748,12 +766,24 @@ class TargetLocalizerNode(Node):
                     f"({target_lat:.7f}, {target_lon:.7f}) h={height_agl:.2f}m{dist_str}"
                 )
             else:
+                # Pinpoint which precondition failed so the operator isn't
+                # chasing the wrong subsystem.
+                reasons = []
+                if not self.has_gps_fix:
+                    reasons.append("no GPS fix (MAVROS NavSatFix is zero/NaN)")
+                if center_distance_m is None:
+                    reasons.append(
+                        f"no valid depth at frame center within {crosshair_max_range_m:.0f} m "
+                        "(ZED depth hole or target out of range)"
+                    )
+                if not self.intrinsics_received:
+                    reasons.append("camera intrinsics not yet received")
+                if not reasons:
+                    reasons.append("back-projection returned no usable position")
+                detail = "; ".join(reasons)
                 response.success = False
-                response.message = (
-                    "No circles detected and either depth or GPS is invalid. "
-                    "Check ZED depth stream and MAVROS GPS fix."
-                )
-                self.get_logger().warn("Crosshair fallback failed: no usable depth/GPS.")
+                response.message = f"Crosshair capture failed: {detail}."
+                self.get_logger().warn(f"Crosshair fallback failed: {detail}.")
                 return response
 
         self.get_logger().info(f"Detected {len(circles)} circle(s)")
