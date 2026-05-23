@@ -498,13 +498,15 @@ namespace NOMAD.MissionPlanner
             {
                 AudioAlerts.Play(AlertKind.BatteryCritical);
                 if (CanSpeakBattery(idx))
-                    AudioAlerts.Speak($"Battery {idx} critical, {voltage:F1} volts. Land now.", ignoreRateLimit: true);
+                    AudioAlerts.Speak($"Battery {idx} critical, {voltage:F1} volts. Land now.",
+                        component: $"battery.{idx}", ignoreRateLimit: true);
             }
             else if (severity == 1 && last < 1)
             {
                 AudioAlerts.Play(AlertKind.BatteryWarning);
                 if (CanSpeakBattery(idx))
-                    AudioAlerts.Speak($"Battery {idx} low, {voltage:F1} volts.", ignoreRateLimit: true);
+                    AudioAlerts.Speak($"Battery {idx} low, {voltage:F1} volts.",
+                        component: $"battery.{idx}", ignoreRateLimit: true);
             }
             _lastBatterySeverity[idx] = severity;
         }

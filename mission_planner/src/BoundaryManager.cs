@@ -244,7 +244,7 @@ namespace NOMAD.MissionPlanner
             if (_missionConfig.Failsafe.EnableAudioWarnings)
             {
                 PlayWarningSound(false);
-                AudioAlerts.Speak("Approaching boundary. Turn around.");
+                AudioAlerts.Speak("Approaching boundary. Turn around.", component: "boundary");
             }
         }
 
@@ -283,7 +283,8 @@ namespace NOMAD.MissionPlanner
             if (_missionConfig.Failsafe.EnableAudioWarnings)
             {
                 PlayWarningSound(true);
-                AudioAlerts.Speak($"Hard boundary violation. Kill required in {_missionConfig.Failsafe.HardBoundaryKillDelaySec} seconds.");
+                AudioAlerts.Speak($"Hard boundary violation. Kill required in {_missionConfig.Failsafe.HardBoundaryKillDelaySec} seconds.",
+                    component: "boundary");
             }
         }
 

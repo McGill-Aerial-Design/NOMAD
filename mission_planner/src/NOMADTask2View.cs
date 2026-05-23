@@ -844,7 +844,7 @@ namespace NOMAD.MissionPlanner
             {
                 AudioAlerts.Speak(
                     "Autonomy override detected. Pilot has manual control. Claim forfeited for this target.",
-                    ignoreRateLimit: true);
+                    component: "task2.autonomy", ignoreRateLimit: true);
             }
             _lastAutonomyCompromised = autonomyCompromised;
 
@@ -1204,7 +1204,7 @@ namespace NOMAD.MissionPlanner
                                   "Check Jetson + verify the Task 2 overlay is enabled.";
                         ShowSprayError(msg);
                         AudioAlerts.Speak("Detector fetch failed. Check Jetson and verify the Task 2 overlay is enabled.",
-                            ignoreRateLimit: true);
+                            component: "task2.detector", ignoreRateLimit: true);
                         ReenableSprayButtons();
                         return;
                     }
@@ -1218,7 +1218,7 @@ namespace NOMAD.MissionPlanner
                                   "Verify the video overlay shows boxed circles, then press Refresh before triggering.";
                         ShowSprayError(msg);
                         AudioAlerts.Speak("No Task 2 circle detections. Verify boxed circles on the video, then refresh detections.",
-                            ignoreRateLimit: true);
+                            component: "task2.detector", ignoreRateLimit: true);
                         ReenableSprayButtons();
                         return;
                     }
@@ -1545,31 +1545,37 @@ namespace NOMAD.MissionPlanner
                     AudioAlerts.Speak(requireAutonomy
                         ? "Autonomous spray started. Guided mode active. Hands off sticks unless overriding for safety."
                         : "Spray sequence started.",
-                        ignoreRateLimit: true);
+                        component: "task2.spray.state", ignoreRateLimit: true);
                     break;
                 case "aim":
-                    AudioAlerts.Speak("Aiming at target.", ignoreRateLimit: requireAutonomy);
+                    AudioAlerts.Speak("Aiming at target.",
+                        component: "task2.spray.state", ignoreRateLimit: requireAutonomy);
                     break;
                 case "spray":
-                    AudioAlerts.Speak("Spraying target.", ignoreRateLimit: true);
+                    AudioAlerts.Speak("Spraying target.",
+                        component: "task2.spray.state", ignoreRateLimit: true);
                     break;
                 case "verify":
-                    AudioAlerts.Speak("Verifying extinguish.", ignoreRateLimit: requireAutonomy);
+                    AudioAlerts.Speak("Verifying extinguish.",
+                        component: "task2.spray.state", ignoreRateLimit: requireAutonomy);
                     break;
                 case "upload":
-                    AudioAlerts.Speak("Uploading proof image.", ignoreRateLimit: requireAutonomy);
+                    AudioAlerts.Speak("Uploading proof image.",
+                        component: "task2.spray.state", ignoreRateLimit: requireAutonomy);
                     break;
                 case "complete":
                     AudioAlerts.Speak(verified
                         ? $"Target {targetId} extinguished."
                         : $"Target {targetId} verification failed.",
-                        ignoreRateLimit: true);
+                        component: "task2.spray.state", ignoreRateLimit: true);
                     break;
                 case "failed":
-                    AudioAlerts.Speak("Spray sequence failed.", ignoreRateLimit: true);
+                    AudioAlerts.Speak("Spray sequence failed.",
+                        component: "task2.spray.state", ignoreRateLimit: true);
                     break;
                 case "aborted":
-                    AudioAlerts.Speak("Spray sequence aborted.", ignoreRateLimit: true);
+                    AudioAlerts.Speak("Spray sequence aborted.",
+                        component: "task2.spray.state", ignoreRateLimit: true);
                     break;
             }
         }

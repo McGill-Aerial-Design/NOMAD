@@ -44,6 +44,23 @@ namespace NOMAD.MissionPlanner
         private static SpeechSynthesizer _tts;
         private static readonly object _ttsLock = new object();
 
+        // ---- Speech queue ----------------------------------------------------
+        // Single worker plays one phrase at a time so callers from different
+        // components never speak over each other. When a new phrase arrives
+        // with the same Component as a still-queued phrase, the queued one is
+        // replaced — so a component never speaks outdated info while a fresher
+        // update is waiting behind it. The currently-playing phrase is never
+        // interrupted (cutting off mid-sentence sounds worse than a small delay).
+        private sealed class SpeechItem
+        {
+            public string Text;
+            public string Component; // null => no dedup
+        }
+        private static readonly LinkedList<SpeechItem> _speechQueue = new LinkedList<SpeechItem>();
+        private static readonly object _queueLock = new object();
+        private static readonly AutoResetEvent _queueSignal = new AutoResetEvent(false);
+        private static Thread _speechWorker;
+
         /// <summary>Enable spoken (text-to-speech) descriptions of alerts.</summary>
         public static bool SpeechEnabled { get; set; } = true;
 
@@ -204,10 +221,18 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Speak a message via Windows TTS on a background thread. De-duplicates so the
-        /// same phrase won't repeat faster than SpeechMinIntervalSec.
+        /// Speak a message via Windows TTS. Phrases queue and play sequentially on a
+        /// single worker thread so callers never speak over each other.
+        ///
+        /// <paramref name="component"/> is a dedup key: if a phrase from the same
+        /// component is still waiting in the queue when a newer one arrives, the
+        /// waiting phrase is replaced so we never speak stale info. Pass null for
+        /// one-off announcements that should never be replaced.
+        ///
+        /// <paramref name="ignoreRateLimit"/> skips the identical-phrase rate limit
+        /// (SpeechMinIntervalSec); it does NOT bypass the queue.
         /// </summary>
-        public static void Speak(string text, bool ignoreRateLimit = false)
+        public static void Speak(string text, string component = null, bool ignoreRateLimit = false)
         {
             if (!SpeechEnabled || string.IsNullOrWhiteSpace(text)) return;
 
@@ -222,31 +247,90 @@ namespace NOMAD.MissionPlanner
                 _lastSpoken[text] = DateTime.UtcNow;
             }
 
-            Task.Run(() =>
+            EnqueueSpeech(new SpeechItem { Text = text, Component = component });
+        }
+
+        // Back-compat overload for existing 2-arg callers: Speak(text, ignoreRateLimit: true)
+        public static void Speak(string text, bool ignoreRateLimit) =>
+            Speak(text, component: null, ignoreRateLimit: ignoreRateLimit);
+
+        /// <summary>Convenience: play the beep pattern and speak a description.</summary>
+        public static void PlayAndSpeak(AlertKind kind, string spokenText, string component = null, bool ignoreRateLimit = false)
+        {
+            Play(kind, ignoreRateLimit);
+            Speak(spokenText, component, ignoreRateLimit);
+        }
+
+        public static void PlayAndSpeak(AlertKind kind, string spokenText, bool ignoreRateLimit) =>
+            PlayAndSpeak(kind, spokenText, component: null, ignoreRateLimit: ignoreRateLimit);
+
+        private static void EnqueueSpeech(SpeechItem item)
+        {
+            lock (_queueLock)
             {
+                if (!string.IsNullOrEmpty(item.Component))
+                {
+                    // Drop any still-queued phrases from the same component — the new
+                    // one supersedes them. The currently-playing phrase (already
+                    // popped from the queue) is left alone.
+                    var node = _speechQueue.First;
+                    while (node != null)
+                    {
+                        var next = node.Next;
+                        if (node.Value.Component == item.Component) _speechQueue.Remove(node);
+                        node = next;
+                    }
+                }
+                _speechQueue.AddLast(item);
+                EnsureSpeechWorker();
+            }
+            _queueSignal.Set();
+        }
+
+        private static void EnsureSpeechWorker()
+        {
+            if (_speechWorker != null) return;
+            _speechWorker = new Thread(SpeechWorkerLoop)
+            {
+                IsBackground = true,
+                Name = "NOMAD-AudioAlerts-Speech",
+            };
+            _speechWorker.Start();
+        }
+
+        private static void SpeechWorkerLoop()
+        {
+            while (true)
+            {
+                SpeechItem item = null;
+                lock (_queueLock)
+                {
+                    if (_speechQueue.Count > 0)
+                    {
+                        item = _speechQueue.First.Value;
+                        _speechQueue.RemoveFirst();
+                    }
+                }
+
+                if (item == null)
+                {
+                    _queueSignal.WaitOne();
+                    continue;
+                }
+
                 try
                 {
                     var synth = GetSynth();
-                    if (synth == null) return;
-                    // SpeakAsyncCancelAll prevents queue buildup if alerts pile up.
-                    lock (_ttsLock)
-                    {
-                        synth.SpeakAsyncCancelAll();
-                        synth.SpeakAsync(text);
-                    }
+                    if (synth == null) continue;
+                    // Synchronous Speak — blocks the worker until the phrase finishes,
+                    // which is exactly what serializes everything.
+                    synth.Speak(item.Text);
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine($"NOMAD: TTS error - {ex.Message}");
                 }
-            });
-        }
-
-        /// <summary>Convenience: play the beep pattern and speak a description.</summary>
-        public static void PlayAndSpeak(AlertKind kind, string spokenText, bool ignoreRateLimit = false)
-        {
-            Play(kind, ignoreRateLimit);
-            Speak(spokenText, ignoreRateLimit);
+            }
         }
 
         private static SpeechSynthesizer GetSynth()
