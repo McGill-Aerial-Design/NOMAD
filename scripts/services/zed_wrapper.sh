@@ -19,7 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # nvblox or the ROS-HTTP bridge.
 PATTERN_LAUNCH='zed_camera\.launch\.py'
 PATTERN_ZED_RUNTIME='component_container_isolated.*zed_container|zed_state_publisher'
-PATTERN_HELPERS='target_localizer\.target_localizer_node|servo_tf_publisher\.py|zed_left_camera_frame_optical'
+PATTERN_HELPERS='target_localizer\.target_localizer_node|servo_tf_publisher\.py|drone_state_publisher\.py|zed_left_camera_frame_optical'
 
 LAUNCH_SCRIPT_PATH=/tmp/nomad_zed_wrapper_launch.sh
 LAUNCH_LOG=/tmp/nomad_zed_wrapper.log
@@ -119,6 +119,15 @@ ros2 run tf2_ros static_transform_publisher \
 
 case "${NOMAD_TARGET_LOCALIZER_AUTO_START:-false}" in
     1|true|TRUE|yes|YES|on|ON)
+        # drone_state_publisher bridges Edge Core's MAVLink telemetry into the
+        # /mavros/* topics the localizer subscribes to. Without it the
+        # localizer never sees a GPS fix and every Task 1 capture fails.
+        # NOMAD_API_KEY is forwarded via the container env so it can
+        # authenticate against /status when NOMAD_ALLOW_INSECURE_REMOTE=false.
+        python3 /workspaces/isaac_ros-dev/edge_core/ros/drone_state_publisher.py \
+            --host localhost --port "${NOMAD_API_PORT}" --rate 10 \
+            >/tmp/nomad_drone_state_publisher.log 2>&1 &
+
         PYTHONPATH=/workspaces/isaac_ros-dev/edge_core/target_localizer:${PYTHONPATH:-} \
             python3 -m target_localizer.target_localizer_node \
             --ros-args \
@@ -170,7 +179,7 @@ svc_start() {
              ZED_PUBLISH_MAG ZED_DEPTH_CONFIDENCE ZED_DEPTH_TEXTURE_CONF \
              ZED_DEPTH_MODE \
              ZED_GRAB_RESOLUTION NOMAD_API_PORT ROS_HTTP_BRIDGE_VIO_TOPIC \
-             NOMAD_TARGET_LOCALIZER_AUTO_START; do
+             NOMAD_TARGET_LOCALIZER_AUTO_START NOMAD_API_KEY; do
         env_args+=("-e" "${v}=${!v}")
     done
 
