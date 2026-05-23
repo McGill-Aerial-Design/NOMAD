@@ -859,8 +859,8 @@ namespace NOMAD.MissionPlanner
 
             if (_heldKeys.Contains(Keys.W)) delta += forward;
             if (_heldKeys.Contains(Keys.S)) delta -= forward;
-            if (_heldKeys.Contains(Keys.D)) delta += right;
-            if (_heldKeys.Contains(Keys.A)) delta -= right;
+            if (_heldKeys.Contains(Keys.D)) delta -= right;
+            if (_heldKeys.Contains(Keys.A)) delta += right;
             if (_heldKeys.Contains(Keys.Up)) delta += Vector3.UnitY;
             if (_heldKeys.Contains(Keys.Down)) delta -= Vector3.UnitY;
 
@@ -1190,24 +1190,83 @@ namespace NOMAD.MissionPlanner
         private string WallLabelForEdge(int i)
         {
             if (_corners.Count < 2) return "wall";
+            // The protrusion's two side faces literally face north and south,
+            // but they belong to the west wall of the building — so report them
+            // under the parent wall direction instead of their local normal.
+            if (IsProtrudingWallIndex(i))
+                return ProtrudingSectionParentWall() ?? EdgeOutwardCompass(i);
+            return EdgeOutwardCompass(i);
+        }
+
+        // Compass label from the edge's outward normal — robust to concavities
+        // (the previous midpoint-vs-centroid heuristic mislabels edges of any
+        // section that protrudes past the polygon's centroid).
+        private string EdgeOutwardCompass(int i)
+        {
+            if (!TryEdgeOutwardNormal(i, out float ox, out float oy))
+                return "wall";
+            float heading = (float)((90.0 - Math.Atan2(oy, ox) * 180.0 / Math.PI + 360.0) % 360.0);
+            return SnapHeadingToCompass(heading);
+        }
+
+        private bool TryEdgeOutwardNormal(int i, out float nx, out float ny)
+        {
+            nx = ny = 0f;
+            int n = _corners.Count;
+            if (n < 2) return false;
             var a = _corners[i];
-            var b = _corners[(i + 1) % _corners.Count];
-            float cx = _corners.Average(c => c.East);
-            float cy = _corners.Average(c => c.North);
+            var b = _corners[(i + 1) % n];
+            float vx = b.East - a.East;
+            float vy = b.North - a.North;
+            float len = (float)Math.Sqrt(vx * vx + vy * vy);
+            if (len < 1e-6f) return false;
+            // Perpendicular candidate.
+            nx = vy / len;
+            ny = -vx / len;
+            // Flip if it points into the polygon interior.
             float mx = (a.East + b.East) * 0.5f;
             float my = (a.North + b.North) * 0.5f;
-            float ox = mx - cx;
-            float oy = my - cy;
-            if (ox * ox + oy * oy < 0.0001f)
+            const float probe = 0.5f;
+            if (PointInPolygon(mx + nx * probe, my + ny * probe))
             {
-                float ex = b.East - a.East;
-                float ey = b.North - a.North;
-                ox = ey;
-                oy = -ex;
+                nx = -nx;
+                ny = -ny;
             }
-            float heading = (float)((90.0 - Math.Atan2(oy, ox) * 180.0 / Math.PI + 360.0) % 360.0);
-            string bucket = SnapHeadingToCompass(heading);
-            return bucket;
+            return true;
+        }
+
+        // Dominant compass direction of the protrusion: sum of outward normals
+        // across its edges. For a westward bump, the south + north side normals
+        // cancel and the outer (west) face dominates → "west".
+        private string ProtrudingSectionParentWall()
+        {
+            int n = _corners.Count;
+            float sx = 0, sy = 0;
+            for (int i = 0; i < n; i++)
+            {
+                if (!IsProtrudingWallIndex(i)) continue;
+                if (!TryEdgeOutwardNormal(i, out float nx, out float ny)) continue;
+                sx += nx;
+                sy += ny;
+            }
+            if (sx * sx + sy * sy < 1e-6f) return null;
+            float heading = (float)((90.0 - Math.Atan2(sy, sx) * 180.0 / Math.PI + 360.0) % 360.0);
+            return SnapHeadingToCompass(heading);
+        }
+
+        private bool PointInPolygon(float px, float py)
+        {
+            bool inside = false;
+            int n = _corners.Count;
+            for (int i = 0, j = n - 1; i < n; j = i++)
+            {
+                var pi = _corners[i];
+                var pj = _corners[j];
+                if (((pi.North > py) != (pj.North > py)) &&
+                    (px < (pj.East - pi.East) * (py - pi.North) / (pj.North - pi.North) + pi.East))
+                    inside = !inside;
+            }
+            return inside;
         }
 
         private string WallDisplayLabelForEdge(int i)
