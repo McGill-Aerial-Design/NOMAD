@@ -1070,6 +1070,7 @@ private ListBox _lstWalls;
                     bool canApply = (bool?)data["can_apply"] ?? false;
 
                     _lstCorners.Items.Clear();
+                    var localCorners = new List<BuildingViewer3D.Corner>();
                     if (corners != null)
                     {
                         foreach (var c in corners)
@@ -1078,7 +1079,24 @@ private ListBox _lstWalls;
                             double lat = (double?)c["lat"] ?? 0;
                             double lon = (double?)c["lon"] ?? 0;
                             _lstCorners.Items.Add($"{name}: {lat:F6}, {lon:F6}");
+                            localCorners.Add(new BuildingViewer3D.Corner
+                            {
+                                Name = name,
+                                Lat = lat,
+                                Lon = lon,
+                            });
                         }
+                    }
+
+                    if (total == 0)
+                    {
+                        _uploadPanel?.ClearBuildingModel();
+                    }
+                    else if (localCorners.Count >= 3)
+                    {
+                        double height = 2.4;
+                        double.TryParse(_txtBuildingHeight?.Text, out height);
+                        _uploadPanel?.SetBuildingModel(localCorners, height > 0 ? height : 2.4);
                     }
 
                     _lblCornerStatus.Text = total == 0
@@ -1257,6 +1275,7 @@ private ListBox _lstWalls;
                 if (response.IsSuccessStatusCode)
                 {
                     _lstCorners.Items.Clear();
+                    _uploadPanel?.ClearBuildingModel();
                     _lblCornerStatus.Text = "Fly above each building corner and click Capture Corner";
                     _lblCornerStatus.ForeColor = TEXT_SECONDARY;
                     _txtResult.Text = "[OK] Building corners cleared.";
