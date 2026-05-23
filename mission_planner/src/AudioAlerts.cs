@@ -322,6 +322,10 @@ namespace NOMAD.MissionPlanner
                 {
                     var synth = GetSynth();
                     if (synth == null) continue;
+                    // Pre-roll: the audio codec/device takes ~1s to spin up after
+                    // being idle, which clips the first syllable. Pause so the
+                    // start of every phrase is heard cleanly.
+                    Thread.Sleep(1000);
                     // Synchronous Speak — blocks the worker until the phrase finishes,
                     // which is exactly what serializes everything.
                     synth.Speak(item.Text);
