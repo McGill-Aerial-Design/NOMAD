@@ -948,6 +948,8 @@ namespace NOMAD.MissionPlanner
         // ============================================================
         // MAVLink Command Sending
         // ============================================================
+
+        private const byte MavFrameBodyOffsetNed = 9;
         
         private void SendVelocityCommand()
         {
@@ -967,7 +969,7 @@ namespace NOMAD.MissionPlanner
                     time_boot_ms = (uint)Environment.TickCount,
                     target_system = MainV2.comPort.MAV.sysid,
                     target_component = MainV2.comPort.MAV.compid,
-                    coordinate_frame = (byte)MAVLink.MAV_FRAME.BODY_OFFSET_NED,
+                    coordinate_frame = MavFrameBodyOffsetNed,
 
                     // Velocity + yaw_rate mask. Bits (LSB=0):
                     //   0,1,2  pos ignore (set)

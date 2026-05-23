@@ -64,7 +64,6 @@ namespace NOMAD.MissionPlanner
         // Sidebar buttons
         private Button _btnDashboard;
         private Button _btnTask1;
-        private Button _btnTask1V2;
         private Button _btnTask2;
         private Button _btnBoundaries;
         private Button _btnVideo;
@@ -79,7 +78,6 @@ namespace NOMAD.MissionPlanner
         private UserControl _currentView;
         private NOMADDashboardView _dashboardView;
         private NOMADTask1View _task1View;
-        private NOMADTask1V2View _task1V2View;
         private NOMADTask2View _task2View;
         private NOMADBoundaryView _boundaryView;
         private NOMADVideoView _videoView;
@@ -257,10 +255,6 @@ namespace NOMAD.MissionPlanner
             _btnTask1.Click += (s, e) => ShowView("Task1");
             navPanel.Controls.Add(_btnTask1);
 
-            _btnTask1V2 = CreateSidebarButton("Task 1: Recon V2");
-            _btnTask1V2.Click += (s, e) => ShowView("Task1V2");
-            navPanel.Controls.Add(_btnTask1V2);
-            
             // Task 2 button  
             _btnTask2 = CreateSidebarButton("Task 2: Extinguish");
             _btnTask2.Click += (s, e) => ShowView("Task2");
@@ -439,7 +433,6 @@ namespace NOMAD.MissionPlanner
                 {
                     case "Dashboard": headerText = "Dashboard"; break;
                     case "Task1": headerText = "Task 1: Outdoor Reconnaissance"; break;
-                    case "Task1V2": headerText = "Task 1 V2: GPS Building Reconnaissance"; break;
                     case "Task2": headerText = "Task 2: Indoor Fire Extinguishing"; break;
                     case "Boundaries": headerText = "Flight Boundaries"; break;
                     case "Video": headerText = "Video Feed"; break;
@@ -479,10 +472,6 @@ namespace NOMAD.MissionPlanner
                 case "Task1":
                     if (_task1View == null) _task1View = new NOMADTask1View(_sender, _config, _missionConfig, _jetsonConnectionManager);
                     newView = _task1View;
-                    break;
-                case "Task1V2":
-                    if (_task1V2View == null) _task1V2View = new NOMADTask1V2View(_config, _missionConfig);
-                    newView = _task1V2View;
                     break;
                 case "Task2":
                     if (_task2View == null) _task2View = new NOMADTask2View(_sender, _config, _jetsonConnectionManager);
@@ -533,7 +522,7 @@ namespace NOMAD.MissionPlanner
         private void UpdateSidebarButtonState(string viewName)
         {
             // Reset all buttons to default state
-            var buttons = new[] { _btnDashboard, _btnTask1, _btnTask1V2, _btnTask2, _btnBoundaries, _btnVideo, _btnTerminal, _btnHealth, _btnLinks, _btnCalibration, _btnRviz2, _btnMusic };
+            var buttons = new[] { _btnDashboard, _btnTask1, _btnTask2, _btnBoundaries, _btnVideo, _btnTerminal, _btnHealth, _btnLinks, _btnCalibration, _btnRviz2, _btnMusic };
             foreach (var btn in buttons)
             {
                 if (btn != null)
@@ -549,7 +538,6 @@ namespace NOMAD.MissionPlanner
             {
                 case "Dashboard": activeBtn = _btnDashboard; break;
                 case "Task1": activeBtn = _btnTask1; break;
-                case "Task1V2": activeBtn = _btnTask1V2; break;
                 case "Task2": activeBtn = _btnTask2; break;
                 case "Boundaries": activeBtn = _btnBoundaries; break;
                 case "Video": activeBtn = _btnVideo; break;
@@ -610,7 +598,6 @@ namespace NOMAD.MissionPlanner
                 
                 _dashboardView?.Dispose();
                 _task1View?.Dispose();
-                _task1V2View?.Dispose();
                 _task2View?.Dispose();
                 _boundaryView?.Dispose();
                 _videoView?.Dispose();

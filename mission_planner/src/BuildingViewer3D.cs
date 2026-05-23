@@ -61,6 +61,9 @@ namespace NOMAD.MissionPlanner
             public float North;
             public float Up;
             public float DistanceFromCornerM;
+            public string StructureLabel;
+            public string ReferenceWallName;
+            public float DistanceFromReferenceWallM;
         }
 
         // ==================== Public API ====================
@@ -69,6 +72,7 @@ namespace NOMAD.MissionPlanner
         public event Action<Placement> PlacementClicked;
         public string HighlightedTargetId { get; private set; }
         public bool PlacementMode { get; set; }
+        public float BuildingHeightM => _buildingHeight;
 
         public void SetHighlightedTarget(string id)
         {
@@ -126,6 +130,7 @@ namespace NOMAD.MissionPlanner
             _recenterEast = cx;
             _recenterNorth = cy;
             foreach (var c in _corners) { c.East -= cx; c.North -= cy; }
+            UpdateSceneBounds();
 
             _glControl?.Invalidate();
         }
@@ -163,6 +168,21 @@ namespace NOMAD.MissionPlanner
             return true;
         }
 
+        public Placement CreatePlacementFromLocal(string surface, float east, float north, float up)
+        {
+            if (_corners.Count < 3) return null;
+            string normalized = string.IsNullOrWhiteSpace(surface)
+                ? "ground"
+                : surface.Trim().ToLowerInvariant();
+            float clampedUp = normalized == "roof"
+                ? _buildingHeight
+                : Math.Max(0f, Math.Min(_buildingHeight, up));
+            return BuildPlacement(
+                normalized,
+                normalized == "wall" ? (int?)NearestWallIndex(east, north) : null,
+                new Vector3(east, clampedUp, -north));
+        }
+
         public void SetTargets(IList<Target> targets)
         {
             _targets.Clear();
@@ -182,9 +202,14 @@ namespace NOMAD.MissionPlanner
         private readonly GLControl _glControl;
         private readonly List<Corner> _corners = new List<Corner>();
         private readonly List<Target> _targets = new List<Target>();
+        private readonly HashSet<Keys> _heldKeys = new HashSet<Keys>();
         private readonly DroneRenderer _droneRenderer = new DroneRenderer();
+        private readonly Timer _navTimer;
 
         private float _buildingHeight = 5f;
+        private float _searchBufferM = 15f;
+        private float _sceneHalfExtentM = 25f;
+        private float _minEast = -10f, _maxEast = 10f, _minNorth = -10f, _maxNorth = 10f;
         private bool _hasProjectionOrigin;
         private double _originLat;
         private double _originLon;
@@ -225,17 +250,30 @@ namespace NOMAD.MissionPlanner
             {
                 Dock = DockStyle.Fill,
                 BackColor = Color.Black,
+                TabStop = true,
             };
             _glControl.Load += GlControl_Load;
             _glControl.Resize += GlControl_Resize;
             _glControl.Paint += GlControl_Paint;
             _glControl.MouseDown += GlControl_MouseDown;
             _glControl.MouseUp += GlControl_MouseUp;
+            _glControl.MouseEnter += (s, e) => _glControl.Focus();
             _glControl.MouseMove += GlControl_MouseMove;
             _glControl.MouseLeave += (s, e) => SetHover(null);
+            _glControl.LostFocus += (s, e) =>
+            {
+                _heldKeys.Clear();
+                _navTimer.Stop();
+            };
             _glControl.MouseWheel += GlControl_MouseWheel;
+            _glControl.PreviewKeyDown += GlControl_PreviewKeyDown;
+            _glControl.KeyDown += GlControl_KeyDown;
+            _glControl.KeyUp += GlControl_KeyUp;
 
             Controls.Add(_glControl);
+
+            _navTimer = new Timer { Interval = 16 };
+            _navTimer.Tick += NavTimer_Tick;
         }
 
         private void GlControl_Load(object sender, EventArgs e)
@@ -311,7 +349,7 @@ namespace NOMAD.MissionPlanner
                 GL.LoadMatrix(ref view);
 
                 DrawGroundGrid();
-                DrawSurroundCircle(15f);
+                DrawSearchBoundary();
                 DrawBuilding();
                 DrawTargets();
                 DrawDronePose();
@@ -334,14 +372,14 @@ namespace NOMAD.MissionPlanner
             GL.LineWidth(1f);
             GL.Color4(0.18f, 0.18f, 0.22f, 1f);
             GL.Begin(PrimitiveType.Lines);
-            const int N = 20;
+            int n = Math.Max(20, (int)Math.Ceiling(_sceneHalfExtentM));
             const float step = 1f;
-            for (int i = -N; i <= N; i++)
+            for (int i = -n; i <= n; i++)
             {
-                GL.Vertex3(i * step, 0f, -N * step);
-                GL.Vertex3(i * step,  0f,  N * step);
-                GL.Vertex3(-N * step, 0f, i * step);
-                GL.Vertex3( N * step, 0f, i * step);
+                GL.Vertex3(i * step, 0f, -n * step);
+                GL.Vertex3(i * step,  0f,  n * step);
+                GL.Vertex3(-n * step, 0f, i * step);
+                GL.Vertex3( n * step, 0f, i * step);
             }
             GL.End();
 
@@ -352,17 +390,20 @@ namespace NOMAD.MissionPlanner
             GL.End();
         }
 
-        private void DrawSurroundCircle(float radius)
+        private void DrawSearchBoundary()
         {
+            float minE = _minEast - _searchBufferM;
+            float maxE = _maxEast + _searchBufferM;
+            float minN = _minNorth - _searchBufferM;
+            float maxN = _maxNorth + _searchBufferM;
+
             GL.LineWidth(2f);
             GL.Color4(1.0f, 0.55f, 0.0f, 0.85f);
             GL.Begin(PrimitiveType.LineLoop);
-            const int SEG = 96;
-            for (int i = 0; i < SEG; i++)
-            {
-                float a = (float)(i * 2 * Math.PI / SEG);
-                GL.Vertex3((float)Math.Cos(a) * radius, 0.02f, -(float)Math.Sin(a) * radius);
-            }
+            GL.Vertex3(minE, 0.02f, -minN);
+            GL.Vertex3(maxE, 0.02f, -minN);
+            GL.Vertex3(maxE, 0.02f, -maxN);
+            GL.Vertex3(minE, 0.02f, -maxN);
             GL.End();
         }
 
@@ -520,6 +561,8 @@ namespace NOMAD.MissionPlanner
                     g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                     g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
                     DrawWallLabels2D(g);
+                    DrawCornerLabels2D(g);
+                    DrawTargetLabels2D(g);
                     DrawCompass2D(g);
                 }
             }
@@ -605,7 +648,7 @@ namespace NOMAD.MissionPlanner
                 {
                     var a = _corners[i];
                     var b = _corners[(i + 1) % _corners.Count];
-                    string label = $"{NameOrIndex(a.Name, i)}-{NameOrIndex(b.Name, (i + 1) % _corners.Count)}";
+                    string label = WallDisplayLabelForEdge(i);
 
                     // Mid-wall at half-height in GL coords (E, up, -N).
                     Vector3 mid = new Vector3(
@@ -625,7 +668,66 @@ namespace NOMAD.MissionPlanner
         }
 
         private static string NameOrIndex(string name, int idx)
-            => string.IsNullOrWhiteSpace(name) ? ((char)('A' + (idx % 26))).ToString() : name;
+            => string.IsNullOrWhiteSpace(name) ? (idx + 1).ToString() : name;
+
+        private void DrawCornerLabels2D(Graphics g)
+        {
+            if (_corners.Count == 0) return;
+
+            using (var font = new Font("Segoe UI", 9.5f, FontStyle.Bold))
+            using (var textBrush = new SolidBrush(Color.Black))
+            using (var fill = new SolidBrush(Color.FromArgb(245, 245, 220, 80)))
+            using (var border = new Pen(Color.FromArgb(230, 40, 40, 35), 1f))
+            {
+                for (int i = 0; i < _corners.Count; i++)
+                {
+                    var c = _corners[i];
+                    if (!WorldToScreen(new Vector3(c.East, 0.35f, -c.North), out var pt)) continue;
+
+                    string label = (i + 1).ToString();
+                    var sz = g.MeasureString(label, font);
+                    float diameter = Math.Max(20f, Math.Max(sz.Width, sz.Height) + 7f);
+                    float x = pt.X - diameter / 2f;
+                    float y = pt.Y - diameter / 2f;
+                    g.FillEllipse(fill, x, y, diameter, diameter);
+                    g.DrawEllipse(border, x, y, diameter, diameter);
+                    g.DrawString(label, font, textBrush, pt.X - sz.Width / 2f, pt.Y - sz.Height / 2f);
+                }
+            }
+        }
+
+        private void DrawTargetLabels2D(Graphics g)
+        {
+            if (_targets.Count == 0) return;
+
+            using (var font = new Font("Segoe UI", 8.5f, FontStyle.Bold))
+            using (var textBrush = new SolidBrush(Color.White))
+            using (var borderPen = new Pen(Color.FromArgb(230, 245, 245, 245), 1f))
+            using (var shadow = new SolidBrush(Color.FromArgb(205, 0, 0, 0)))
+            {
+                foreach (var t in _targets)
+                {
+                    string id = string.IsNullOrWhiteSpace(t.Id) ? "?" : t.Id.Trim();
+                    string color = string.IsNullOrWhiteSpace(t.Color) ? "Unknown" : t.Color.Trim();
+                    string label = $"{id} {color}";
+                    float labelUp = Math.Max(t.Up, 0.15f) + 0.45f;
+                    if (!WorldToScreen(new Vector3(t.East, labelUp, -t.North), out var pt)) continue;
+
+                    var sz = g.MeasureString(label, font);
+                    float x = pt.X - sz.Width / 2f;
+                    float y = pt.Y - sz.Height - 8f;
+                    var rect = new RectangleF(x - 5f, y - 2f, sz.Width + 10f, sz.Height + 4f);
+
+                    using (var fill = new SolidBrush(Color.FromArgb(225, ColorForTarget(t.Color))))
+                    {
+                        g.FillRectangle(shadow, rect.X + 1f, rect.Y + 1f, rect.Width, rect.Height);
+                        g.FillRectangle(fill, rect);
+                    }
+                    g.DrawRectangle(borderPen, rect.X, rect.Y, rect.Width, rect.Height);
+                    g.DrawString(label, font, textBrush, x, y);
+                }
+            }
+        }
 
         private bool WorldToScreen(Vector3 world, out PointF screen)
         {
@@ -677,6 +779,102 @@ namespace NOMAD.MissionPlanner
             _mouseDownPoint = e.Location;
             _dragButton = e.Button;
             _glControl.Focus();
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            var key = keyData & Keys.KeyCode;
+            if (IsNavigationKey(key))
+            {
+                _glControl.Focus();
+                SetNavigationKey(key, true);
+                return true;
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        private void GlControl_PreviewKeyDown(object sender, PreviewKeyDownEventArgs e)
+        {
+            if (IsNavigationKey(e.KeyCode))
+                e.IsInputKey = true;
+        }
+
+        private static bool IsNavigationKey(Keys key)
+        {
+            return key == Keys.W || key == Keys.A || key == Keys.S || key == Keys.D
+                || key == Keys.Up || key == Keys.Down || key == Keys.Home;
+        }
+
+        private void SetNavigationKey(Keys key, bool down)
+        {
+            if (key == Keys.Home && down)
+            {
+                _panTarget = Vector3.Zero;
+                _heldKeys.Clear();
+                _navTimer.Stop();
+                _glControl.Invalidate();
+                return;
+            }
+
+            if (!IsNavigationKey(key) || key == Keys.Home)
+                return;
+
+            if (down) _heldKeys.Add(key);
+            else _heldKeys.Remove(key);
+
+            if (_heldKeys.Count > 0 && !_navTimer.Enabled)
+                _navTimer.Start();
+            else if (_heldKeys.Count == 0 && _navTimer.Enabled)
+                _navTimer.Stop();
+        }
+
+        private void GlControl_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (!IsNavigationKey(e.KeyCode)) return;
+            SetNavigationKey(e.KeyCode, true);
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+        }
+
+        private void GlControl_KeyUp(object sender, KeyEventArgs e)
+        {
+            if (!IsNavigationKey(e.KeyCode)) return;
+            SetNavigationKey(e.KeyCode, false);
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+        }
+
+        private void NavTimer_Tick(object sender, EventArgs e)
+        {
+            if (_heldKeys.Count == 0)
+            {
+                _navTimer.Stop();
+                return;
+            }
+
+            float yaw = _yawDeg * (float)Math.PI / 180f;
+            Vector3 forward = new Vector3(-(float)Math.Sin(yaw), 0f, (float)Math.Cos(yaw));
+            Vector3 right = new Vector3((float)Math.Cos(yaw), 0f, (float)Math.Sin(yaw));
+            Vector3 delta = Vector3.Zero;
+
+            if (_heldKeys.Contains(Keys.W)) delta += forward;
+            if (_heldKeys.Contains(Keys.S)) delta -= forward;
+            if (_heldKeys.Contains(Keys.D)) delta += right;
+            if (_heldKeys.Contains(Keys.A)) delta -= right;
+            if (_heldKeys.Contains(Keys.Up)) delta += Vector3.UnitY;
+            if (_heldKeys.Contains(Keys.Down)) delta -= Vector3.UnitY;
+
+            if (delta.LengthSquared <= 0.0001f)
+                return;
+
+            delta.Normalize();
+            float speed = Math.Max(1.5f, _distance * 0.55f);
+            var modifiers = Control.ModifierKeys;
+            if ((modifiers & Keys.Shift) == Keys.Shift) speed *= 3.0f;
+            if ((modifiers & Keys.Control) == Keys.Control) speed *= 0.25f;
+
+            _panTarget += delta * speed * (_navTimer.Interval / 1000f);
+            _glControl.Invalidate();
         }
 
         private void GlControl_MouseUp(object sender, MouseEventArgs e)
@@ -822,7 +1020,7 @@ namespace NOMAD.MissionPlanner
             var p = origin + dir * t;
             bool inside = PointInsideFootprint(p.X, p.Z);
             if (requireInsideFootprint && !inside) return;
-            if (!requireInsideFootprint && Distance2(p.X, p.Z, 0f, 0f) > 15f * 15f) return;
+            if (!requireInsideFootprint && DistanceToFootprintSquared(p.X, p.Z) > _searchBufferM * _searchBufferM) return;
 
             bestT = t;
             best = BuildPlacement(surface, null, p);
@@ -852,16 +1050,16 @@ namespace NOMAD.MissionPlanner
                 float along = Vector3.Dot(p - a, edge) / edge.LengthSquared;
                 if (along < -0.01f || along > 1.01f) continue;
 
-                string wall = $"{NameOrIndex(ca.Name, i)}-{NameOrIndex(cb.Name, (i + 1) % _corners.Count)}";
                 bestT = t;
-                best = BuildPlacement("wall", wall, p);
+                best = BuildPlacement("wall", i, p);
             }
         }
 
-        private Placement BuildPlacement(string surface, string wallName, Vector3 glPoint)
+        private Placement BuildPlacement(string surface, int? wallIndex, Vector3 glPoint)
         {
             float east = glPoint.X;
             float north = -glPoint.Z;
+            int faceIndex = wallIndex ?? NearestWallIndex(east, north);
             string nearestName = "";
             float nearest = float.MaxValue;
 
@@ -876,15 +1074,22 @@ namespace NOMAD.MissionPlanner
                 }
             }
 
+            var reference = ReferenceWallForPlacement(faceIndex, east, north);
+            bool onProtrusion = IsProtrudingWallIndex(faceIndex) ||
+                ((surface == "roof" || surface == "ground") && PointInProtrudingPortion(east, north));
+
             return new Placement
             {
                 Surface = surface,
-                WallName = wallName,
+                WallName = WallLabelForEdge(faceIndex),
                 NearestCornerName = nearestName,
                 East = east,
                 North = north,
                 Up = Math.Max(0f, Math.Min(_buildingHeight, glPoint.Y)),
                 DistanceFromCornerM = (float)Math.Sqrt(Math.Max(0f, nearest)),
+                StructureLabel = onProtrusion ? "portion of the building that sticks out" : "building",
+                ReferenceWallName = reference.wall,
+                DistanceFromReferenceWallM = reference.distance,
             };
         }
 
@@ -904,6 +1109,169 @@ namespace NOMAD.MissionPlanner
             return inside;
         }
 
+        private float DistanceToFootprintSquared(float glX, float glZ)
+        {
+            if (PointInsideFootprint(glX, glZ)) return 0f;
+            float best = float.MaxValue;
+            for (int i = 0; i < _corners.Count; i++)
+            {
+                var a = _corners[i];
+                var b = _corners[(i + 1) % _corners.Count];
+                float ax = a.East, az = -a.North;
+                float bx = b.East, bz = -b.North;
+                float vx = bx - ax, vz = bz - az;
+                float len2 = vx * vx + vz * vz;
+                if (len2 < 0.0001f) continue;
+                float t = ((glX - ax) * vx + (glZ - az) * vz) / len2;
+                t = Math.Max(0f, Math.Min(1f, t));
+                float px = ax + vx * t;
+                float pz = az + vz * t;
+                best = Math.Min(best, Distance2(glX, glZ, px, pz));
+            }
+            return best;
+        }
+
+        private string NearestWallLabel(float east, float north)
+            => WallLabelForEdge(NearestWallIndex(east, north));
+
+        private int NearestWallIndex(float east, float north)
+        {
+            if (_corners.Count < 2) return 0;
+            int bestIdx = 0;
+            float best = float.MaxValue;
+            for (int i = 0; i < _corners.Count; i++)
+            {
+                var a = _corners[i];
+                var b = _corners[(i + 1) % _corners.Count];
+                float vx = b.East - a.East;
+                float vy = b.North - a.North;
+                float len2 = vx * vx + vy * vy;
+                if (len2 < 0.0001f) continue;
+                float t = ((east - a.East) * vx + (north - a.North) * vy) / len2;
+                t = Math.Max(0f, Math.Min(1f, t));
+                float px = a.East + vx * t;
+                float py = a.North + vy * t;
+                float d = Distance2(east, north, px, py);
+                if (d < best)
+                {
+                    best = d;
+                    bestIdx = i;
+                }
+            }
+            return bestIdx;
+        }
+
+        private (string wall, float distance) ReferenceWallForPlacement(int edgeIndex, float east, float north)
+        {
+            if (_corners.Count < 2)
+                return ("nearest", 0f);
+
+            var a = _corners[edgeIndex];
+            var b = _corners[(edgeIndex + 1) % _corners.Count];
+            float vx = b.East - a.East;
+            float vy = b.North - a.North;
+            float len2 = Math.Max(0.0001f, vx * vx + vy * vy);
+            float t = ((east - a.East) * vx + (north - a.North) * vy) / len2;
+            t = Math.Max(0f, Math.Min(1f, t));
+            float px = a.East + vx * t;
+            float py = a.North + vy * t;
+
+            string face = WallLabelForEdge(edgeIndex);
+            bool eastWestFace = face.Contains("north") || face.Contains("south");
+            bool useFirst = eastWestFace
+                ? a.East <= b.East
+                : a.North <= b.North;
+            var refCorner = useFirst ? a : b;
+            string refWall = eastWestFace ? "western" : "southern";
+            float distance = (float)Math.Sqrt(Distance2(px, py, refCorner.East, refCorner.North));
+            return (refWall, distance);
+        }
+
+        private string WallLabelForEdge(int i)
+        {
+            if (_corners.Count < 2) return "wall";
+            var a = _corners[i];
+            var b = _corners[(i + 1) % _corners.Count];
+            float cx = _corners.Average(c => c.East);
+            float cy = _corners.Average(c => c.North);
+            float mx = (a.East + b.East) * 0.5f;
+            float my = (a.North + b.North) * 0.5f;
+            float ox = mx - cx;
+            float oy = my - cy;
+            if (ox * ox + oy * oy < 0.0001f)
+            {
+                float ex = b.East - a.East;
+                float ey = b.North - a.North;
+                ox = ey;
+                oy = -ex;
+            }
+            float heading = (float)((90.0 - Math.Atan2(oy, ox) * 180.0 / Math.PI + 360.0) % 360.0);
+            string bucket = SnapHeadingToCompass(heading);
+            return bucket;
+        }
+
+        private string WallDisplayLabelForEdge(int i)
+        {
+            string face = WallLabelForEdge(i);
+            return IsProtrudingWallIndex(i)
+                ? $"{face} - portion that sticks out"
+                : face;
+        }
+
+        private bool IsProtrudingWallIndex(int edgeIndex)
+        {
+            return _corners.Count == 8 && edgeIndex >= 4 && edgeIndex <= 6;
+        }
+
+        private bool PointInProtrudingPortion(float east, float north)
+        {
+            if (_corners.Count != 8) return false;
+            var protrusion = new[] { _corners[4], _corners[5], _corners[6], _corners[7] };
+            float minE = protrusion.Min(c => c.East) - 0.05f;
+            float maxE = protrusion.Max(c => c.East) + 0.05f;
+            float minN = protrusion.Min(c => c.North) - 0.05f;
+            float maxN = protrusion.Max(c => c.North) + 0.05f;
+            return east >= minE && east <= maxE && north >= minN && north <= maxN;
+        }
+
+        private float EdgeHeading(int i)
+        {
+            var a = _corners[i];
+            var b = _corners[(i + 1) % _corners.Count];
+            float cx = _corners.Average(c => c.East);
+            float cy = _corners.Average(c => c.North);
+            float ox = (a.East + b.East) * 0.5f - cx;
+            float oy = (a.North + b.North) * 0.5f - cy;
+            return (float)((90.0 - Math.Atan2(oy, ox) * 180.0 / Math.PI + 360.0) % 360.0);
+        }
+
+        private static string SnapHeadingToCompass(float headingDeg)
+        {
+            string[] names = { "north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest" };
+            int idx = (int)Math.Round((((headingDeg % 360f) + 360f) % 360f) / 45f) % 8;
+            return names[idx];
+        }
+
+        private void UpdateSceneBounds()
+        {
+            if (_corners.Count == 0)
+            {
+                _minEast = _minNorth = -10f;
+                _maxEast = _maxNorth = 10f;
+                _sceneHalfExtentM = 25f;
+                _distance = Math.Max(_distance, 25f);
+                return;
+            }
+            _minEast = _corners.Min(c => c.East);
+            _maxEast = _corners.Max(c => c.East);
+            _minNorth = _corners.Min(c => c.North);
+            _maxNorth = _corners.Max(c => c.North);
+            float halfW = Math.Max(Math.Abs(_minEast), Math.Abs(_maxEast));
+            float halfH = Math.Max(Math.Abs(_minNorth), Math.Abs(_maxNorth));
+            _sceneHalfExtentM = Math.Max(25f, Math.Max(halfW, halfH) + _searchBufferM + 5f);
+            _distance = Math.Max(_distance, _sceneHalfExtentM * 1.4f);
+        }
+
         private static float Distance2(float x1, float y1, float x2, float y2)
         {
             float dx = x1 - x2;
@@ -915,6 +1283,8 @@ namespace NOMAD.MissionPlanner
         {
             if (disposing)
             {
+                try { _navTimer?.Stop(); } catch { }
+                try { _navTimer?.Dispose(); } catch { }
                 try { _glControl?.Dispose(); } catch { }
             }
             base.Dispose(disposing);

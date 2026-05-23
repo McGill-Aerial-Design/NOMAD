@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 import os
 import re
 import shlex
@@ -718,6 +719,11 @@ def register_task1_routes(app, ctx) -> None:
         height: float
         corners: list[dict[str, Any]]
 
+    class BuildingCalibrationCornerRequest(BaseModel):
+        name: str
+        lat: float
+        lon: float
+
     # Directory where API writes building_corners.json and plane_override.json.
     # Must be writable by the mad user (host) AND readable by the node (container).
     # /home/mad/NOMAD/config (host, mad-writable) -> /workspaces/isaac_ros-dev/config (container, RO mount).
@@ -747,6 +753,128 @@ def register_task1_routes(app, ctx) -> None:
             except OSError:
                 pass
         os.replace(tmp, path)
+
+    def _gps_to_local_for_ref(
+        lat: float, lon: float, ref_lat: float, ref_lon: float
+    ) -> tuple[float, float]:
+        earth_radius_m = 6_371_000.0
+        north = math.radians(lat - ref_lat) * earth_radius_m
+        east = (
+            math.radians(lon - ref_lon)
+            * earth_radius_m
+            * math.cos(math.radians(ref_lat))
+        )
+        return east, north
+
+    def _offset_gps(lat: float, lon: float, east_m: float, north_m: float) -> tuple[float, float]:
+        earth_radius_m = 6_371_000.0
+        out_lat = lat + math.degrees(north_m / earth_radius_m)
+        out_lon = lon + math.degrees(
+            east_m / (earth_radius_m * math.cos(math.radians(lat)))
+        )
+        return out_lat, out_lon
+
+    def _task1_dimension_preset() -> dict[str, Any]:
+        """Google Maps measured eight-corner Task 1 footprint."""
+        raw_corners = [
+            (45.316743567764945, -75.75773827279546),
+            (45.31671371473123, -75.75759833217171),
+            (45.31615424384856, -75.75781374638878),
+            (45.31618520285556, -75.75796312121189),
+            (45.31641794771017, -75.75787506868524),
+            (45.316440061185425, -75.75798592052764),
+            (45.31652353947904, -75.75795525937997),
+            (45.316500873200205, -75.75784362135427),
+        ]
+        corners = [
+            {"name": str(idx), "lat": lat, "lon": lon}
+            for idx, (lat, lon) in enumerate(raw_corners, start=1)
+        ]
+        center_lat = sum(c["lat"] for c in corners) / len(corners)
+        center_lon = sum(c["lon"] for c in corners) / len(corners)
+        return {
+            "preset": "aeac_2026_task1",
+            "source": "google-maps-measured-corners",
+            "center_lat": center_lat,
+            "center_lon": center_lon,
+            "height": 2.4,
+            "corners": corners,
+            "base_corners": corners,
+        }
+
+    def _apply_corner_calibration(data: dict[str, Any]) -> dict[str, Any]:
+        base_corners = data.get("base_corners") or data.get("corners") or []
+        observations = data.get("calibration_observations") or []
+        if not base_corners or not observations:
+            return data
+
+        base_by_name = {str(c.get("name")): c for c in base_corners}
+        usable = [
+            obs for obs in observations
+            if str(obs.get("name")) in base_by_name
+            and obs.get("lat") is not None
+            and obs.get("lon") is not None
+        ]
+        if not usable:
+            return data
+
+        ref_lat = float(data.get("base_center_lat") or data.get("center_lat"))
+        ref_lon = float(data.get("base_center_lon") or data.get("center_lon"))
+
+        base_local: dict[str, tuple[float, float]] = {}
+        for c in base_corners:
+            base_local[str(c.get("name"))] = _gps_to_local_for_ref(
+                float(c["lat"]), float(c["lon"]), ref_lat, ref_lon
+            )
+
+        obs0 = usable[0]
+        p0 = base_local[str(obs0["name"])]
+        q0 = _gps_to_local_for_ref(float(obs0["lat"]), float(obs0["lon"]), ref_lat, ref_lon)
+        theta = 0.0
+        mode = "translation"
+
+        if len(usable) >= 2:
+            for obs1 in usable[1:]:
+                name1 = str(obs1["name"])
+                p1 = base_local[name1]
+                q1 = _gps_to_local_for_ref(float(obs1["lat"]), float(obs1["lon"]), ref_lat, ref_lon)
+                base_heading = math.atan2(p1[1] - p0[1], p1[0] - p0[0])
+                obs_heading = math.atan2(q1[1] - q0[1], q1[0] - q0[0])
+                if math.hypot(p1[0] - p0[0], p1[1] - p0[1]) > 1.0:
+                    theta = obs_heading - base_heading
+                    mode = "translation_rotation"
+                    break
+
+        cos_t = math.cos(theta)
+        sin_t = math.sin(theta)
+
+        def transform(point: tuple[float, float]) -> tuple[float, float]:
+            x = cos_t * point[0] - sin_t * point[1]
+            y = sin_t * point[0] + cos_t * point[1]
+            x0 = cos_t * p0[0] - sin_t * p0[1]
+            y0 = sin_t * p0[0] + cos_t * p0[1]
+            return x + (q0[0] - x0), y + (q0[1] - y0)
+
+        calibrated_corners = []
+        for c in base_corners:
+            east, north = transform(base_local[str(c["name"])])
+            lat, lon = _offset_gps(ref_lat, ref_lon, east, north)
+            calibrated_corners.append({"name": str(c["name"]), "lat": lat, "lon": lon})
+
+        center_e = sum(transform(base_local[str(c["name"])])[0] for c in base_corners) / len(base_corners)
+        center_n = sum(transform(base_local[str(c["name"])])[1] for c in base_corners) / len(base_corners)
+        center_lat, center_lon = _offset_gps(ref_lat, ref_lon, center_e, center_n)
+
+        data["corners"] = calibrated_corners
+        data["center_lat"] = center_lat
+        data["center_lon"] = center_lon
+        data["calibration"] = {
+            "mode": mode,
+            "observation_count": len(usable),
+            "rotation_deg": math.degrees(theta),
+            "scale": 1.0,
+        }
+        return data
 
     class PlaneOverrideRequest(BaseModel):
         plane_kind: str  # "wall" | "ground" | "roof"
@@ -955,6 +1083,91 @@ def register_task1_routes(app, ctx) -> None:
             timeout_s=10.0,
         )
         return {"success": True, "output": output}
+
+    @app.post("/api/task/1/building/preset/{preset_name}", tags=["Task 1"])
+    async def task1_load_building_preset(preset_name: str):
+        """
+        Load a known Task 1 building footprint into building_corners.json.
+
+        For aeac_2026_task1, the current checked-in preset is dimension-derived
+        because the provided GPS list contains the same coordinate for all
+        eight corners. Real captured corners or corrected GPS values can still
+        be applied over this preset using the normal corner endpoints.
+        """
+        key = (preset_name or "").strip().lower()
+        if key not in {"aeac_2026_task1", "task1", "default"}:
+            raise HTTPException(status_code=404, detail=f"Unknown Task 1 preset: {preset_name}")
+
+        data = _task1_dimension_preset()
+        data["base_center_lat"] = data["center_lat"]
+        data["base_center_lon"] = data["center_lon"]
+        corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
+        _atomic_write_json(corners_path, data)
+        return {
+            "success": True,
+            "preset": data["preset"],
+            "source": data["source"],
+            "corners": data["corners"],
+            "total_corners": len(data["corners"]),
+            "center_lat": data["center_lat"],
+            "center_lon": data["center_lon"],
+            "height": data["height"],
+            "can_apply": True,
+            "corners_path": corners_path,
+        }
+
+    @app.post("/api/task/1/building/calibration/corner", tags=["Task 1"])
+    async def task1_calibrate_building_corner(corner: BuildingCalibrationCornerRequest):
+        """
+        Add/update an observed calibration corner and transform the whole model.
+
+        One observed corner translates the preset. Two or more observed corners
+        translate and rotate the preset while preserving the measured scale.
+        """
+        corners_path = os.path.join(_BUILDING_CORNERS_DIR, "building_corners.json")
+        if not os.path.exists(corners_path):
+            raise HTTPException(status_code=404, detail="Load a building preset before calibration.")
+
+        try:
+            with open(corners_path, "r") as f:
+                data = json.load(f)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to read building configuration: {e}")
+
+        data.setdefault("base_corners", data.get("corners", []))
+        data.setdefault("base_center_lat", data.get("center_lat"))
+        data.setdefault("base_center_lon", data.get("center_lon"))
+        observations = data.setdefault("calibration_observations", [])
+
+        name = str(corner.name).strip()
+        if not any(str(c.get("name")) == name for c in data.get("base_corners", [])):
+            available = ", ".join(str(c.get("name")) for c in data.get("base_corners", []))
+            raise HTTPException(
+                status_code=404,
+                detail=f"Corner {name!r} not found in base model. Available: {available}",
+            )
+
+        entry = {"name": name, "lat": corner.lat, "lon": corner.lon}
+        for i, obs in enumerate(observations):
+            if str(obs.get("name")) == name:
+                observations[i] = entry
+                break
+        else:
+            observations.append(entry)
+
+        data = _apply_corner_calibration(data)
+        _atomic_write_json(corners_path, data)
+
+        return {
+            "success": True,
+            "corner": entry,
+            "calibration": data.get("calibration", {}),
+            "observations": data.get("calibration_observations", []),
+            "corners": data.get("corners", []),
+            "total_corners": len(data.get("corners", [])),
+            "can_apply": len(data.get("corners", [])) >= 3,
+            "corners_path": corners_path,
+        }
 
     @app.post("/api/task/1/building/corner", tags=["Task 1"])
     async def task1_add_building_corner(corner: BuildingCornerRequest):
@@ -1222,6 +1435,7 @@ def register_task1_routes(app, ctx) -> None:
         return {
             "success": True,
             "output": output,
+            "corners": corners,
             "corners_count": len(corners),
             "center_lat": payload["center_lat"],
             "center_lon": payload["center_lon"],

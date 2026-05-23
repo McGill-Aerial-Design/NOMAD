@@ -131,6 +131,8 @@ class TargetLocalizerNode(Node):
         self.declare_parameter("capture_retention_keep_last", 200)
         self.declare_parameter("dedup_radius_m", 0.5)
         self.declare_parameter("min_confidence", 0.35)
+        self.declare_parameter("camera.gps_offset_forward_m", 0.35)
+        self.declare_parameter("camera.gps_offset_right_m", 0.0)
         # HSV circle detector knobs. Exposed so we can tune live via
         #   ros2 param set /target_localizer circle.min_circularity 0.65
         # without rebuilding the container.
@@ -149,6 +151,12 @@ class TargetLocalizerNode(Node):
         self.dedup_radius = self.get_parameter("dedup_radius_m").value
 
         self.min_confidence = float(self.get_parameter("min_confidence").value)
+        self.camera_gps_offset_forward_m = float(
+            self.get_parameter("camera.gps_offset_forward_m").value
+        )
+        self.camera_gps_offset_right_m = float(
+            self.get_parameter("camera.gps_offset_right_m").value
+        )
 
         os.makedirs(self.output_dir, exist_ok=True)
 
@@ -484,7 +492,7 @@ class TargetLocalizerNode(Node):
         Back-project a pixel to 3D coordinates in the drone's local ENU frame,
         accounting for servo tilt.
 
-        Returns (east_offset, north_offset, up) relative to the drone,
+        Returns (east_offset, north_offset, up) relative to the camera origin,
         or None if depth is invalid.
         """
         if not self.intrinsics_received:
@@ -556,6 +564,17 @@ class TargetLocalizerNode(Node):
 
         return east_offset, north_offset, target_up
 
+    def _camera_origin_from_vehicle_local(
+        self, vehicle_east: float, vehicle_north: float
+    ) -> Tuple[float, float]:
+        """Shift vehicle GPS/local pose to the ZED optical origin in ENU."""
+        heading_rad = math.radians(self.drone_heading)
+        forward = self.camera_gps_offset_forward_m
+        right = self.camera_gps_offset_right_m
+        east = vehicle_east + forward * math.sin(heading_rad) + right * math.cos(heading_rad)
+        north = vehicle_north + forward * math.cos(heading_rad) - right * math.sin(heading_rad)
+        return east, north
+
     def _pixel_to_world_enu(
         self, px: int, py: int, depth_image: np.ndarray,
         servo_pitch_override: Optional[float] = None,
@@ -582,8 +601,11 @@ class TargetLocalizerNode(Node):
             )
         else:
             drone_east, drone_north = self.drone_local_east, self.drone_local_north
+        camera_east, camera_north = self._camera_origin_from_vehicle_local(
+            drone_east, drone_north
+        )
 
-        return (drone_east + east_off, drone_north + north_off, up)
+        return (camera_east + east_off, camera_north + north_off, up)
 
     # ================================================================ #
     #  Description generation

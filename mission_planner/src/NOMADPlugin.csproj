@@ -57,6 +57,10 @@
     <Reference Include="System.Xml" />
     <Reference Include="System.Speech" />
     <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Memory">
+      <HintPath>C:\Program Files (x86)\Mission Planner\System.Memory.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <!-- WPF References for Helix Toolkit 3D Visualization -->
     <Reference Include="PresentationCore" />
     <Reference Include="PresentationFramework" />
@@ -157,7 +161,6 @@
     <Compile Include="NOMADTheme.cs" />
     <Compile Include="NOMADViewBase.cs" />
     <Compile Include="NOMADTask1View.cs" />
-    <Compile Include="NOMADTask1V2View.cs" />
     <Compile Include="GimbalJoystickWindow.cs" />
     <Compile Include="GimbalController.cs" />
     <Compile Include="NomadJoystickService.cs" />
@@ -194,6 +197,8 @@
     <Compile Include="SnapshotManager.cs" />
 <Compile Include="GoogleDriveUploadService.cs" />
     <Compile Include="RtmChecklistPanel.cs" />
+    <Compile Include="Task1CurrentBudgetPanel.cs" />
+    <Compile Include="Task1LapMissionPlanner.cs" />
     <Compile Include="Task1UploadPanel.cs" />
     <Compile Include="Task2PreflightPanel.cs" />
     <Compile Include="Task2PayloadPanel.cs" />

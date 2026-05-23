@@ -106,6 +106,8 @@ class Corner:
     def description_name(self) -> str:
         # Operator-facing form. Avoid double "corner" suffix.
         n = self.name.strip()
+        if n.isdigit():
+            return f"corner {n}"
         if n.lower().endswith("corner"):
             return n
         return f"{n} corner"

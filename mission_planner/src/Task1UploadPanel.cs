@@ -8,6 +8,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -38,15 +39,21 @@ namespace NOMAD.MissionPlanner
         private Button _btnApprove;
         private Button _btnPreview;
         private Button _btnUpload;
+        private Button _btnPlacementMode;
+        private Button _btnGpsGround;
+        private Button _btnGpsRoof;
         private TextBox _txtPreview;
         private Label _lblStatus;
         private ProgressBar _progressBar;
         private double _buildingHeight = 5.0;
+        private double _groundAltM = 0.0;
+        private bool _placementMode;
 
         // 3D building viewer (below the preview area).
         private BuildingViewer3D _viewer;
         private System.Windows.Forms.Timer _viewerRefreshTimer;
         private bool _viewerRefreshInFlight;
+        private readonly List<BuildingViewer3D.Target> _lastBackendTargets = new List<BuildingViewer3D.Target>();
 
         // Triple-click guard for the Remove button
         private int _removeClickCount;
@@ -62,6 +69,23 @@ namespace NOMAD.MissionPlanner
             Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
             "NOMAD", "Task1", "submit_state.json");
 
+        private const double CompetitionBuildingHeightM = 2.4;
+
+        private static (string name, double lat, double lon)[] GetCompetitionBuildingCorners()
+        {
+            return new[]
+            {
+                ("1", 45.316743567764945, -75.75773827279546),
+                ("2", 45.31671371473123, -75.75759833217171),
+                ("3", 45.31615424384856, -75.75781374638878),
+                ("4", 45.31618520285556, -75.75796312121189),
+                ("5", 45.31641794771017, -75.75787506868524),
+                ("6", 45.316440061185425, -75.75798592052764),
+                ("7", 45.31652353947904, -75.75795525937997),
+                ("8", 45.316500873200205, -75.75784362135427),
+            };
+        }
+
         private class SubmitRowState
         {
             public bool Approved { get; set; }
@@ -69,6 +93,10 @@ namespace NOMAD.MissionPlanner
             public string Plane { get; set; }
             public string Height { get; set; }
             public string Description { get; set; }
+            public string StateKey { get; set; }
+            public float? East { get; set; }
+            public float? North { get; set; }
+            public float? Up { get; set; }
         }
 
         public double BuildingHeight
@@ -90,6 +118,7 @@ namespace NOMAD.MissionPlanner
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
             InitializeUI();
+            LoadCompetitionPresetModel();
             // Auto-restore any previously saved captures on creation
             this.Load += (s, e) =>
             {
@@ -123,16 +152,22 @@ namespace NOMAD.MissionPlanner
             var task1Dir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
                 "NOMAD", "Task1");
-            if (!Directory.Exists(task1Dir)) return;
+            Dictionary<string, SubmitRowState> savedState = LoadSubmitState();
+            if (!Directory.Exists(task1Dir))
+            {
+                RestoreManualTargets(savedState);
+                return;
+            }
 
             // Skip the submit_state sidecar — it isn't a capture metadata file.
             var jsonFiles = Directory.GetFiles(task1Dir, "*.json")
                 .Where(f => !string.Equals(Path.GetFileName(f), "submit_state.json", StringComparison.OrdinalIgnoreCase))
                 .OrderBy(f => f).ToArray();
-            if (jsonFiles.Length == 0) return;
-
-            // Load per-row user edits keyed by image path (if any).
-            Dictionary<string, SubmitRowState> savedState = LoadSubmitState();
+            if (jsonFiles.Length == 0)
+            {
+                RestoreManualTargets(savedState);
+                return;
+            }
 
             _restoringState = true;
             try
@@ -166,6 +201,10 @@ namespace NOMAD.MissionPlanner
                         row.Cells["Height"].Value = saved?.Height ?? "";
                         row.Cells["Description"].Value = saved?.Description ?? metadata?.RelativeDescription ?? "";
                         row.Cells["ImagePath"].Value = imagePath ?? "";
+                        row.Cells["StateKey"].Value = imagePath ?? "";
+                        row.Cells["East"].Value = saved?.East?.ToString(CultureInfo.InvariantCulture) ?? "";
+                        row.Cells["North"].Value = saved?.North?.ToString(CultureInfo.InvariantCulture) ?? "";
+                        row.Cells["Up"].Value = saved?.Up?.ToString(CultureInfo.InvariantCulture) ?? "";
                         row.Cells["Warning"].Value = "";
 
                         if (imagePath != null)
@@ -201,14 +240,63 @@ namespace NOMAD.MissionPlanner
                 // panel. Local user edits (saved state) still win.
                 _ = OverlayBackendDescriptionsAsync(LoadSubmitState());
             }
+
+            RestoreManualTargets(savedState);
         }
 
-        // Pull /api/task/1/target/list_structured and replace each row's
-        // Description cell with the backend-side text, unless the operator has
-        // an explicit saved override. The mapping is positional: backend
-        // targets are A,B,C,...; grid rows are loaded in capture order so row
-        // 0 → A, row 1 → B, etc. Failures are non-fatal — we keep the
-        // capture-time RelativeDescription already in the cell.
+        private void RestoreManualTargets(Dictionary<string, SubmitRowState> savedState)
+        {
+            var manual = savedState
+                .Where(kvp => kvp.Key.StartsWith("manual:", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(kvp => kvp.Key)
+                .ToList();
+            if (manual.Count == 0) return;
+
+            _restoringState = true;
+            try
+            {
+                foreach (var kvp in manual)
+                {
+                    var s = kvp.Value;
+                    int rowIndex = _targetGrid.Rows.Add();
+                    var row = _targetGrid.Rows[rowIndex];
+                    row.Cells["Approved"].Value = s.Approved;
+                    row.Cells["Number"].Value = rowIndex + 1;
+                    row.Cells["Color"].Value = s.Color ?? "Red";
+                    row.Cells["Plane"].Value = s.Plane ?? "ground";
+                    row.Cells["Height"].Value = s.Height ?? "";
+                    row.Cells["Description"].Value = s.Description ?? "";
+                    row.Cells["ImagePath"].Value = "";
+                    row.Cells["StateKey"].Value = kvp.Key;
+                    row.Cells["East"].Value = s.East?.ToString(CultureInfo.InvariantCulture) ?? "";
+                    row.Cells["North"].Value = s.North?.ToString(CultureInfo.InvariantCulture) ?? "";
+                    row.Cells["Up"].Value = s.Up?.ToString(CultureInfo.InvariantCulture) ?? "";
+                    row.Cells["Warning"].Value = "";
+                }
+            }
+            finally
+            {
+                _restoringState = false;
+            }
+            RenumberTargets();
+            ApplyRowHighlighting();
+            PushGridTargetsToViewer();
+        }
+
+        private class BackendTargetInfo
+        {
+            public string Id;
+            public string Color;
+            public string Surface;
+            public float East;
+            public float North;
+            public float Up;
+        }
+
+        // Pull /api/task/1/target/list_structured and use only the target's
+        // final model position. Spatial descriptions are generated locally from
+        // the Mission Planner building model so the Jetson does not own display
+        // or submission wording.
         private async Task OverlayBackendDescriptionsAsync(Dictionary<string, SubmitRowState> savedState)
         {
             try
@@ -219,57 +307,112 @@ namespace NOMAD.MissionPlanner
                 var json = Newtonsoft.Json.Linq.JObject.Parse(body);
                 var targets = json["targets"] as Newtonsoft.Json.Linq.JArray;
                 if (targets == null) return;
-                var byLetter = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                var byLetter = new Dictionary<string, BackendTargetInfo>(StringComparer.OrdinalIgnoreCase);
                 foreach (var t in targets)
                 {
                     var id = t["id"]?.ToString();
-                    var desc = t["description"]?.ToString();
-                    if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(desc))
-                        byLetter[id] = desc;
+                    var east = (float?)t["east"];
+                    var north = (float?)t["north"];
+                    if (string.IsNullOrEmpty(id) || !east.HasValue || !north.HasValue) continue;
+                    var up = (float?)t["up"] ?? 0f;
+                    byLetter[id] = new BackendTargetInfo
+                    {
+                        Id = id,
+                        Color = t["color"]?.ToString(),
+                        Surface = InferSurfaceFromBackendTarget(t, up),
+                        East = east.Value,
+                        North = north.Value,
+                        Up = up,
+                    };
                 }
                 if (byLetter.Count == 0) return;
 
                 if (_targetGrid.IsDisposed) return;
                 if (_targetGrid.InvokeRequired)
                 {
-                    _targetGrid.Invoke((Action)(() => ApplyBackendDescriptions(byLetter, savedState)));
+                    _targetGrid.Invoke((Action)(() => ApplyBackendTargetPositions(byLetter, savedState)));
                 }
                 else
                 {
-                    ApplyBackendDescriptions(byLetter, savedState);
+                    ApplyBackendTargetPositions(byLetter, savedState);
                 }
             }
             catch { /* network/parse failure: keep local descriptions */ }
         }
 
-        private void ApplyBackendDescriptions(
-            Dictionary<string, string> byLetter,
+        private void ApplyBackendTargetPositions(
+            Dictionary<string, BackendTargetInfo> byLetter,
             Dictionary<string, SubmitRowState> savedState)
         {
+            bool changed = false;
             _restoringState = true;
             try
             {
                 for (int i = 0; i < _targetGrid.Rows.Count; i++)
                 {
                     var letter = IndexToTargetLetter(i);
-                    if (!byLetter.TryGetValue(letter, out var desc)) continue;
+                    if (!byLetter.TryGetValue(letter, out var target)) continue;
                     var row = _targetGrid.Rows[i];
-                    var imagePath = row.Cells["ImagePath"].Value?.ToString();
-                    if (!string.IsNullOrEmpty(imagePath) && savedState.TryGetValue(imagePath, out var saved)
-                        && !string.IsNullOrEmpty(saved?.Description))
+                    row.Cells["East"].Value = target.East.ToString(CultureInfo.InvariantCulture);
+                    row.Cells["North"].Value = target.North.ToString(CultureInfo.InvariantCulture);
+                    row.Cells["Up"].Value = target.Up.ToString(CultureInfo.InvariantCulture);
+                    row.Cells["Height"].Value = target.Up.ToString("F1", CultureInfo.InvariantCulture);
+                    row.Cells["Plane"].Value = target.Surface;
+                    if (!string.IsNullOrWhiteSpace(target.Color))
+                        row.Cells["Color"].Value = NormalizeTargetColor(target.Color);
+                    changed = true;
+
+                    var stateKey = row.Cells["StateKey"].Value?.ToString();
+                    bool hasSavedDescription = !string.IsNullOrEmpty(stateKey)
+                        && savedState.TryGetValue(stateKey, out var saved)
+                        && !string.IsNullOrWhiteSpace(saved?.Description);
+                    if (hasSavedDescription)
                     {
-                        // Operator explicitly edited this row — don't clobber.
                         continue;
                     }
-                    // Strip any legacy color/Target-letter/distance crud so the
-                    // cell text is the canonical color-free body the upload step
-                    // will prefix with the table's Color value.
-                    row.Cells["Description"].Value = NormalizeBackendDescription(desc);
+
+                    var placement = _viewer?.CreatePlacementFromLocal(target.Surface, target.East, target.North, target.Up);
+                    if (placement != null)
+                        row.Cells["Description"].Value = GeneratePlacementDescription(placement);
                 }
+                PushGridTargetsToViewer();
             }
             finally
             {
                 _restoringState = false;
+            }
+            if (changed) ScheduleSubmitStateSave();
+        }
+
+        private static string InferSurfaceFromBackendTarget(Newtonsoft.Json.Linq.JToken t, float up)
+        {
+            string raw = t["plane"]?.ToString()
+                ?? t["plane_kind"]?.ToString()
+                ?? t["surface"]?.ToString()
+                ?? t["face"]?.ToString()
+                ?? "";
+            raw = raw.Trim().ToLowerInvariant();
+            if (raw.Contains("roof")) return "roof";
+            if (raw.Contains("ground") || raw.Contains("floor")) return "ground";
+            if (raw.Contains("wall")) return "wall";
+            if (up <= 0.25f) return "ground";
+            return "wall";
+        }
+
+        private static string NormalizeTargetColor(string color)
+        {
+            if (string.IsNullOrWhiteSpace(color)) return "Unknown";
+            switch (color.Trim().ToLowerInvariant())
+            {
+                case "red": return "Red";
+                case "blue": return "Blue";
+                case "green": return "Green";
+                case "yellow": return "Yellow";
+                case "orange": return "Orange";
+                case "purple": return "Purple";
+                case "white": return "White";
+                case "black": return "Black";
+                default: return "Unknown";
             }
         }
 
@@ -335,15 +478,21 @@ namespace NOMAD.MissionPlanner
                 foreach (DataGridViewRow row in _targetGrid.Rows)
                 {
                     if (row.IsNewRow) continue;
+                    var stateKey = row.Cells["StateKey"].Value?.ToString();
                     var imagePath = row.Cells["ImagePath"].Value?.ToString();
-                    if (string.IsNullOrEmpty(imagePath)) continue;
-                    dict[imagePath] = new SubmitRowState
+                    if (string.IsNullOrEmpty(stateKey)) stateKey = imagePath;
+                    if (string.IsNullOrEmpty(stateKey)) continue;
+                    dict[stateKey] = new SubmitRowState
                     {
                         Approved = (bool?)row.Cells["Approved"].Value ?? false,
                         Color = row.Cells["Color"].Value?.ToString(),
                         Plane = row.Cells["Plane"].Value?.ToString(),
                         Height = row.Cells["Height"].Value?.ToString(),
                         Description = row.Cells["Description"].Value?.ToString(),
+                        StateKey = stateKey,
+                        East = TryParseFloatCell(row, "East"),
+                        North = TryParseFloatCell(row, "North"),
+                        Up = TryParseFloatCell(row, "Up"),
                     };
                 }
 
@@ -375,32 +524,30 @@ namespace NOMAD.MissionPlanner
             this.AutoScroll = true;
 
             // Fixed-height inner panel — scrolls when window is too short
-            const int GRID_H    = 210;  // target table (~4 rows)
+            const int GRID_H    = 360;
             const int BTN_H     = 42;
-            const int PREVIEW_H = 110;
-            const int VIEWER_H  = 220;
+            const int PREVIEW_H = 170;
+            const int VIEWER_H  = 620;
             const int STATUS_H  = 36;
             const int TITLE_H   = 32;
-            const int TOTAL_H   = TITLE_H + GRID_H + BTN_H + PREVIEW_H + VIEWER_H + STATUS_H + 20;
+            int totalH = TITLE_H + Math.Max(GRID_H + BTN_H + PREVIEW_H, VIEWER_H) + STATUS_H + 20;
 
             var mainLayout = new TableLayoutPanel
             {
-                Dock = DockStyle.Top,
+                Dock = DockStyle.Fill,
                 ColumnCount = 1,
                 RowCount = 6,
-                Height = TOTAL_H,
+                Height = totalH,
                 Padding = new Padding(8),
             };
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, TITLE_H));    // 0: title
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, GRID_H));     // 1: grid
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, BTN_H));      // 2: buttons
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, PREVIEW_H));  // 3: preview text
-            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, VIEWER_H));   // 4: 3D viewer
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));         // 1: 3D viewer
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, GRID_H));     // 2: target table
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, BTN_H));      // 3: buttons
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, PREVIEW_H));  // 4: preview text
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, STATUS_H));   // 5: status
 
             // Stretch inner panel width with the scroll container
-            this.Resize += (s, e) => mainLayout.Width = this.ClientSize.Width;
-
             var lblTitle = new Label
             {
                 Text = "TASK 1 SUBMISSION",
@@ -518,6 +665,38 @@ namespace NOMAD.MissionPlanner
             };
             _targetGrid.Columns.Add(colImagePath);
 
+            _targetGrid.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "StateKey",
+                HeaderText = "StateKey",
+                ReadOnly = true,
+                Visible = false,
+            });
+
+            _targetGrid.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "East",
+                HeaderText = "E",
+                ReadOnly = true,
+                Visible = false,
+            });
+
+            _targetGrid.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "North",
+                HeaderText = "N",
+                ReadOnly = true,
+                Visible = false,
+            });
+
+            _targetGrid.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "Up",
+                HeaderText = "U",
+                ReadOnly = true,
+                Visible = false,
+            });
+
             var colWarning = new DataGridViewTextBoxColumn
             {
                 Name = "Warning",
@@ -530,6 +709,7 @@ namespace NOMAD.MissionPlanner
             _targetGrid.CellClick += TargetGrid_CellClick;
             _targetGrid.CellEndEdit += TargetGrid_CellEndEdit;
             _targetGrid.CellValueChanged += TargetGrid_CellValueChanged;
+            _targetGrid.DataError += (s, e) => { e.ThrowException = false; };
             _targetGrid.CellMouseEnter += (s, e) =>
             {
                 if (e.RowIndex < 0 || _viewer == null) return;
@@ -537,10 +717,14 @@ namespace NOMAD.MissionPlanner
             };
             _targetGrid.MouseLeave += (s, e) => _viewer?.SetHighlightedTarget(null);
             _targetGrid.RowsAdded += (s, e) => { ApplyRowHighlighting(); ScheduleSubmitStateSave(); };
-            _targetGrid.RowsRemoved += (s, e) => ScheduleSubmitStateSave();
+            _targetGrid.RowsRemoved += (s, e) =>
+            {
+                ScheduleSubmitStateSave();
+                PushGridTargetsToViewer();
+            };
             _targetGrid.DataBindingComplete += (s, e) => ApplyRowHighlighting();
 
-            mainLayout.Controls.Add(_targetGrid, 0, 1);
+            mainLayout.Controls.Add(_targetGrid, 0, 2);
 
             var buttonPanel = new FlowLayoutPanel
             {
@@ -564,6 +748,18 @@ namespace NOMAD.MissionPlanner
 
             buttonPanel.Controls.Add(new Panel { Width = 20, Height = 28 });
 
+            _btnPlacementMode = CreateButton("Place: Off", Color.FromArgb(80, 80, 83), 82, 28);
+            _btnPlacementMode.Click += BtnPlacementMode_Click;
+            buttonPanel.Controls.Add(_btnPlacementMode);
+
+            _btnGpsGround = CreateButton("GPS Ground", ACCENT_COLOR, 92, 28);
+            _btnGpsGround.Click += (s, e) => AddGpsTarget("ground");
+            buttonPanel.Controls.Add(_btnGpsGround);
+
+            _btnGpsRoof = CreateButton("GPS Roof", ACCENT_COLOR, 75, 28);
+            _btnGpsRoof.Click += (s, e) => AddGpsTarget("roof");
+            buttonPanel.Controls.Add(_btnGpsRoof);
+
             _btnPreview = CreateButton("Preview TXT", Color.FromArgb(80, 80, 83), 100, 28);
             _btnPreview.Click += BtnPreview_Click;
             buttonPanel.Controls.Add(_btnPreview);
@@ -572,7 +768,7 @@ namespace NOMAD.MissionPlanner
             _btnUpload.Click += BtnUpload_Click;
             buttonPanel.Controls.Add(_btnUpload);
 
-            mainLayout.Controls.Add(buttonPanel, 0, 2);
+            mainLayout.Controls.Add(buttonPanel, 0, 3);
 
             _txtPreview = new TextBox
             {
@@ -586,7 +782,7 @@ namespace NOMAD.MissionPlanner
                 BorderStyle = BorderStyle.FixedSingle,
                 Text = "Click 'Preview TXT' to see the submission file content...\n\nOnly approved targets (checked) will be included.",
             };
-            mainLayout.Controls.Add(_txtPreview, 0, 3);
+            mainLayout.Controls.Add(_txtPreview, 0, 4);
 
             // ---- 3D building viewer ----
             var viewerHost = new Panel
@@ -598,7 +794,7 @@ namespace NOMAD.MissionPlanner
             };
             var viewerHeader = new Label
             {
-                Text = "3D BUILDING MODEL  —  drag = orbit, wheel = zoom, right-drag = pan",
+                Text = "3D BUILDING MODEL - drag = orbit, wheel = zoom, right-drag/WASD/arrows = move view",
                 Dock = DockStyle.Top,
                 Height = 18,
                 ForeColor = ACCENT_COLOR,
@@ -610,9 +806,10 @@ namespace NOMAD.MissionPlanner
             _viewer = new BuildingViewer3D();
             _viewer.Dock = DockStyle.Fill;
             _viewer.TargetHovered += OnViewerTargetHovered;
+            _viewer.PlacementClicked += OnViewerPlacementClicked;
             viewerHost.Controls.Add(_viewer);
             viewerHost.Controls.Add(viewerHeader);
-            mainLayout.Controls.Add(viewerHost, 0, 4);
+            mainLayout.Controls.Add(viewerHost, 0, 1);
 
             var statusPanel = new TableLayoutPanel
             {
@@ -643,6 +840,69 @@ namespace NOMAD.MissionPlanner
 
             mainLayout.Controls.Add(statusPanel, 0, 5);
 
+            buttonPanel.Controls.Remove(_btnPlacementMode);
+            buttonPanel.Controls.Remove(_btnGpsGround);
+            buttonPanel.Controls.Remove(_btnGpsRoof);
+
+            var modelTools = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.LeftToRight,
+                Padding = new Padding(0, 4, 0, 4),
+                BackColor = CARD_BG,
+            };
+            modelTools.Controls.Add(_btnPlacementMode);
+            modelTools.Controls.Add(_btnGpsGround);
+            modelTools.Controls.Add(_btnGpsRoof);
+
+            var modelLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 2,
+                Padding = new Padding(0),
+            };
+            modelLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, BTN_H));
+            modelLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            modelLayout.Controls.Add(modelTools, 0, 0);
+            modelLayout.Controls.Add(viewerHost, 0, 1);
+
+            var submissionLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 3,
+                Padding = new Padding(0),
+            };
+            submissionLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            submissionLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, BTN_H));
+            submissionLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, PREVIEW_H));
+            submissionLayout.Controls.Add(_targetGrid, 0, 0);
+            submissionLayout.Controls.Add(buttonPanel, 0, 1);
+            submissionLayout.Controls.Add(_txtPreview, 0, 2);
+
+            var contentTabs = new TabControl
+            {
+                Dock = DockStyle.Fill,
+                Appearance = TabAppearance.Normal,
+            };
+            var modelPage = new TabPage("3D Model") { BackColor = CARD_BG, Padding = new Padding(0) };
+            modelPage.Controls.Add(modelLayout);
+            var tablePage = new TabPage("Submission Table") { BackColor = CARD_BG, Padding = new Padding(0) };
+            tablePage.Controls.Add(submissionLayout);
+            contentTabs.TabPages.Add(modelPage);
+            contentTabs.TabPages.Add(tablePage);
+
+            mainLayout.Controls.Clear();
+            mainLayout.RowStyles.Clear();
+            mainLayout.RowCount = 3;
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, TITLE_H));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, STATUS_H));
+            mainLayout.Controls.Add(lblTitle, 0, 0);
+            mainLayout.Controls.Add(contentTabs, 0, 1);
+            mainLayout.Controls.Add(statusPanel, 0, 2);
+
             this.Controls.Add(mainLayout);
         }
 
@@ -661,6 +921,203 @@ namespace NOMAD.MissionPlanner
             };
         }
 
+        public void LoadCompetitionPresetModel()
+        {
+            var corners = GetCompetitionBuildingCorners()
+                .Select(c => new BuildingViewer3D.Corner { Name = c.name, Lat = c.lat, Lon = c.lon })
+                .ToList();
+            SetBuildingModel(corners, CompetitionBuildingHeightM);
+        }
+
+        public void SetBuildingModel(IList<BuildingViewer3D.Corner> corners, double heightM)
+        {
+            _buildingHeight = Math.Max(0.5, heightM);
+            _viewer?.SetBuildingHeight(_buildingHeight);
+            _viewer?.SetCorners(corners);
+            PushGridTargetsToViewer();
+        }
+
+        public void ClearBuildingModel()
+        {
+            _viewer?.SetCorners(new List<BuildingViewer3D.Corner>());
+            _viewer?.SetTargets(new List<BuildingViewer3D.Target>());
+            _lastBackendTargets.Clear();
+            _lblStatus.Text = "3D building model cleared.";
+            _lblStatus.ForeColor = TEXT_SECONDARY;
+        }
+
+        public void UpdateDronePose(double lat, double lon, double altMsl, double yawDeg, double pitchDeg, double rollDeg)
+        {
+            if (_viewer == null) return;
+            double agl = _groundAltM == 0.0 ? Math.Max(0.0, altMsl) : Math.Max(0.0, altMsl - _groundAltM);
+            _viewer.SetDronePoseGps(lat, lon, agl, yawDeg, pitchDeg, rollDeg);
+        }
+
+        public void SetGroundAltitudeReference(double groundAltM)
+        {
+            _groundAltM = groundAltM;
+            if (_lblStatus != null && !_lblStatus.IsDisposed)
+            {
+                _lblStatus.Text = $"Ground-station altitude reference set to {groundAltM:F2}m.";
+                _lblStatus.ForeColor = SUCCESS_COLOR;
+            }
+        }
+
+        private void BtnPlacementMode_Click(object sender, EventArgs e)
+        {
+            _placementMode = !_placementMode;
+            _viewer.PlacementMode = _placementMode;
+            _btnPlacementMode.Text = _placementMode ? "Place: On" : "Place: Off";
+            _btnPlacementMode.BackColor = _placementMode ? SUCCESS_COLOR : Color.FromArgb(80, 80, 83);
+            _lblStatus.Text = _placementMode
+                ? "Placement mode on: click the building, roof, or ground search area to add a target."
+                : "Placement mode off.";
+            _lblStatus.ForeColor = _placementMode ? SUCCESS_COLOR : TEXT_SECONDARY;
+        }
+
+        private void OnViewerPlacementClicked(BuildingViewer3D.Placement placement)
+        {
+            if (placement == null) return;
+            AddManualPlacement(placement);
+        }
+
+        private void AddGpsTarget(string surface)
+        {
+            var cs = global::MissionPlanner.MainV2.comPort?.MAV?.cs;
+            if (cs == null || Math.Abs(cs.lat) < 0.000001 || Math.Abs(cs.lng) < 0.000001)
+            {
+                _lblStatus.Text = "No GPS position available for GPS-only target.";
+                _lblStatus.ForeColor = ERROR_COLOR;
+                return;
+            }
+
+            if (!_viewer.TryGetLocalFromGps(cs.lat, cs.lng, out float east, out float north))
+            {
+                _lblStatus.Text = "Load or apply a building model before GPS-only placement.";
+                _lblStatus.ForeColor = ERROR_COLOR;
+                return;
+            }
+            double yawRad = ReadDouble(cs, "yaw") * Math.PI / 180.0;
+            east += (float)(0.35 * Math.Sin(yawRad));
+            north += (float)(0.35 * Math.Cos(yawRad));
+
+            float up = surface == "roof" ? _viewer.BuildingHeightM : 0f;
+            var placement = _viewer.CreatePlacementFromLocal(surface, east, north, up);
+            if (placement == null)
+            {
+                _lblStatus.Text = "Could not project GPS onto the current building model.";
+                _lblStatus.ForeColor = ERROR_COLOR;
+                return;
+            }
+            AddManualPlacement(placement);
+        }
+
+        private void AddManualPlacement(BuildingViewer3D.Placement placement)
+        {
+            string defaultColor = "Red";
+            string defaultDescription = GeneratePlacementDescription(placement);
+            using (var dialog = new TargetPlacementDialog(defaultColor, defaultDescription))
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                int rowIndex = _targetGrid.Rows.Add();
+                var row = _targetGrid.Rows[rowIndex];
+                row.Cells["Approved"].Value = true;
+                row.Cells["Number"].Value = rowIndex + 1;
+                row.Cells["Color"].Value = dialog.TargetColor;
+                row.Cells["Plane"].Value = placement.Surface;
+                row.Cells["Height"].Value = placement.Up.ToString("F1", CultureInfo.InvariantCulture);
+                row.Cells["Description"].Value = dialog.DescriptionText;
+                row.Cells["ImagePath"].Value = "";
+                row.Cells["StateKey"].Value = $"manual:{DateTime.UtcNow:yyyyMMddHHmmssfff}:{Guid.NewGuid():N}";
+                row.Cells["East"].Value = placement.East.ToString(CultureInfo.InvariantCulture);
+                row.Cells["North"].Value = placement.North.ToString(CultureInfo.InvariantCulture);
+                row.Cells["Up"].Value = placement.Up.ToString(CultureInfo.InvariantCulture);
+                row.Cells["Warning"].Value = "";
+                row.DefaultCellStyle.BackColor = Color.FromArgb(30, 30, 33);
+
+                RenumberTargets();
+                ApplyRowHighlighting();
+                ScheduleSubmitStateSave();
+                PushGridTargetsToViewer();
+                _lblStatus.Text = $"Manual {placement.Surface} target added.";
+                _lblStatus.ForeColor = SUCCESS_COLOR;
+            }
+        }
+
+        private static string GeneratePlacementDescription(BuildingViewer3D.Placement p)
+        {
+            string structure = string.IsNullOrWhiteSpace(p.StructureLabel)
+                ? "building"
+                : p.StructureLabel;
+            string face = string.IsNullOrWhiteSpace(p.WallName) ? "nearest" : p.WallName;
+            string refWall = string.IsNullOrWhiteSpace(p.ReferenceWallName) ? "nearest" : p.ReferenceWallName;
+            string refSuffix = structure == "building" ? "" : " of that portion";
+            string refText = $"{p.DistanceFromReferenceWallM:F1}m from the {refWall} wall{refSuffix}";
+
+            if (p.Surface == "roof")
+                return $"on the roof of the {structure} near the {face} face, {p.Up:F1}m above ground and {refText}.";
+            if (p.Surface == "ground")
+                return $"on the ground near the {face} face of the {structure}, {p.Up:F1}m above ground and {refText}.";
+            return $"on the {face} face of the {structure}, {p.Up:F1}m above ground and {refText}.";
+        }
+
+        public int RegenerateLocalDescriptions()
+        {
+            if (_targetGrid == null || _viewer == null) return 0;
+            int count = 0;
+            _restoringState = true;
+            try
+            {
+                foreach (DataGridViewRow row in _targetGrid.Rows)
+                {
+                    if (row.IsNewRow) continue;
+                    float? east = TryParseFloatCell(row, "East");
+                    float? north = TryParseFloatCell(row, "North");
+                    if (!east.HasValue || !north.HasValue) continue;
+                    float up = TryParseFloatCell(row, "Up") ?? TryParseFloatCell(row, "Height") ?? 0f;
+                    string surface = row.Cells["Plane"].Value?.ToString() ?? "wall";
+                    var placement = _viewer.CreatePlacementFromLocal(surface, east.Value, north.Value, up);
+                    if (placement == null) continue;
+                    row.Cells["Description"].Value = GeneratePlacementDescription(placement);
+                    row.Cells["Height"].Value = placement.Up.ToString("F1", CultureInfo.InvariantCulture);
+                    row.Cells["Up"].Value = placement.Up.ToString(CultureInfo.InvariantCulture);
+                    count++;
+                }
+            }
+            finally
+            {
+                _restoringState = false;
+            }
+            if (count > 0)
+            {
+                ScheduleSubmitStateSave();
+                PushGridTargetsToViewer();
+            }
+            return count;
+        }
+
+        private static float? TryParseFloatCell(DataGridViewRow row, string columnName)
+        {
+            if (!row.DataGridView.Columns.Contains(columnName)) return null;
+            var raw = row.Cells[columnName].Value?.ToString();
+            if (string.IsNullOrWhiteSpace(raw)) return null;
+            if (float.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)) return v;
+            if (float.TryParse(raw, NumberStyles.Float, CultureInfo.CurrentCulture, out v)) return v;
+            return null;
+        }
+
+        private static double ReadDouble(object obj, string propertyName)
+        {
+            try
+            {
+                var prop = obj.GetType().GetProperty(propertyName);
+                if (prop == null) return 0.0;
+                var value = prop.GetValue(obj, null);
+                return value == null ? 0.0 : Convert.ToDouble(value);
+            }
+            catch { return 0.0; }
+        }
+
         private void BtnAddTarget_Click(object sender, EventArgs e)
         {
             int nextNumber = _targetGrid.Rows.Count + 1;
@@ -673,6 +1130,10 @@ namespace NOMAD.MissionPlanner
             row.Cells["Height"].Value = "";
             row.Cells["Description"].Value = "";
             row.Cells["ImagePath"].Value = "";
+            row.Cells["StateKey"].Value = $"manual:{Guid.NewGuid():N}";
+            row.Cells["East"].Value = "";
+            row.Cells["North"].Value = "";
+            row.Cells["Up"].Value = "";
             row.Cells["Warning"].Value = "";
             row.DefaultCellStyle.BackColor = UNAPPROVED_BG;
 
@@ -743,6 +1204,7 @@ namespace NOMAD.MissionPlanner
                 Row = row,
                 Letter = IndexToTargetLetter(allRows.IndexOf(row)),
                 ImagePath = row.Cells["ImagePath"].Value?.ToString() ?? "",
+                HasImage = !string.IsNullOrWhiteSpace(row.Cells["ImagePath"].Value?.ToString()),
             }).ToList();
 
             foreach (var d in deletions)
@@ -758,22 +1220,29 @@ namespace NOMAD.MissionPlanner
                     if (File.Exists(jsonPath)) try { File.Delete(jsonPath); } catch { }
                 }
 
-                // 2. Tell Jetson to remove target + capture folder
-                try
+                // 2. Captured-image rows also exist on the Jetson. Manual /
+                // GPS-only rows without an image are ground-station-only, so
+                // deleting them should not call the Jetson target endpoint.
+                if (d.HasImage)
                 {
-                    var resp = await JetsonApiService.DeleteAsync($"/api/task/1/target/{d.Letter}");
-                    if (!resp.IsSuccessStatusCode)
+                    _lastBackendTargets.RemoveAll(t =>
+                        string.Equals(t.Id, d.Letter, StringComparison.OrdinalIgnoreCase));
+                    try
                     {
-                        var body = await resp.Content.ReadAsStringAsync();
-                        _lblStatus.Text = $"Jetson delete failed for {d.Letter}: HTTP {(int)resp.StatusCode} — {body}";
-                        _lblStatus.ForeColor = ERROR_COLOR;
+                        var resp = await JetsonApiService.DeleteAsync($"/api/task/1/target/{d.Letter}");
+                        if (!resp.IsSuccessStatusCode)
+                        {
+                            var body = await resp.Content.ReadAsStringAsync();
+                            _lblStatus.Text = $"Jetson delete failed for {d.Letter}: HTTP {(int)resp.StatusCode} — {body}";
+                            _lblStatus.ForeColor = ERROR_COLOR;
+                        }
                     }
-                }
-                catch (Exception ex)
-                {
-                    _lblStatus.Text = $"Jetson unreachable during delete: {ex.Message}";
-                    _lblStatus.ForeColor = WARNING_COLOR;
-                    // Still remove locally even if Jetson call fails.
+                    catch (Exception ex)
+                    {
+                        _lblStatus.Text = $"Jetson unreachable during delete: {ex.Message}";
+                        _lblStatus.ForeColor = WARNING_COLOR;
+                        // Still remove locally even if Jetson call fails.
+                    }
                 }
 
                 // 3. Remove from grid
@@ -782,9 +1251,10 @@ namespace NOMAD.MissionPlanner
             }
 
             RenumberTargets();
+            PushGridTargetsToViewer();
             SaveSubmitState();
             _btnRemoveTarget.Enabled = true;
-            _lblStatus.Text = $"Deleted {deletions.Count} target(s). Local files and Jetson captures removed.";
+            _lblStatus.Text = $"Deleted {deletions.Count} target(s).";
             _lblStatus.ForeColor = SUCCESS_COLOR;
         }
 
@@ -818,11 +1288,15 @@ namespace NOMAD.MissionPlanner
             var row = _targetGrid.Rows[rowIndex];
             row.Cells["Approved"].Value = false;
             row.Cells["Number"].Value = nextNumber;
-            row.Cells["Color"].Value = color;
-            row.Cells["Plane"].Value = plane;
+            row.Cells["Color"].Value = NormalizeTargetColor(color);
+            row.Cells["Plane"].Value = string.IsNullOrWhiteSpace(plane) ? "wall" : plane.Trim().ToLowerInvariant();
             row.Cells["Height"].Value = heightAgl;
             row.Cells["Description"].Value = suggestedDescription ?? "";
             row.Cells["ImagePath"].Value = imagePath ?? "";
+            row.Cells["StateKey"].Value = imagePath ?? "";
+            row.Cells["East"].Value = "";
+            row.Cells["North"].Value = "";
+            row.Cells["Up"].Value = "";
             row.Cells["Warning"].Value = "";
 
             if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
@@ -842,6 +1316,8 @@ namespace NOMAD.MissionPlanner
             _targetGrid.ClearSelection();
             row.Selected = true;
             _targetGrid.CurrentCell = row.Cells["Description"];
+            PushGridTargetsToViewer();
+            _ = RefreshViewerDataAsync();
         }
 
         private void ApplyRowHighlighting()
@@ -891,7 +1367,7 @@ namespace NOMAD.MissionPlanner
                 var colorCell = _targetGrid.Rows[e.RowIndex].Cells["Color"];
                 if (string.IsNullOrEmpty(descCell.Value?.ToString()) && colorCell.Value != null)
                 {
-                    descCell.Value = $"{colorCell.Value} target on the [face] of the building, [X]m above ground, [Y]m from the [corner] corner.";
+                    descCell.Value = "on the [face] face of the building, [X]m above ground and [Y]m from the [western/eastern/southern/northern] wall.";
                 }
             }
         }
@@ -903,7 +1379,11 @@ namespace NOMAD.MissionPlanner
             if (colName == "Approved")
                 ApplyRowHighlighting();
             else if (colName == "Plane")
-                _ = SendPlaneOverrideAsync(e.RowIndex);
+            {
+                var stateKey = _targetGrid.Rows[e.RowIndex].Cells["StateKey"].Value?.ToString() ?? "";
+                if (!stateKey.StartsWith("manual:", StringComparison.OrdinalIgnoreCase))
+                    _ = SendPlaneOverrideAsync(e.RowIndex);
+            }
 
             // Persist any user-visible field change so a crash never loses
             // approval/edit work. Image-path/preview/warning are derived,
@@ -912,6 +1392,7 @@ namespace NOMAD.MissionPlanner
                 || colName == "Height" || colName == "Description")
             {
                 ScheduleSubmitStateSave();
+                PushGridTargetsToViewer();
             }
         }
 
@@ -968,16 +1449,17 @@ namespace NOMAD.MissionPlanner
 
                 if (!string.IsNullOrEmpty(description))
                 {
-                    // Backend returns the color-free spatial body, e.g.
-                    //   "on the south face of the building, 1.5m above ground, 1.7m from the SE corner."
+                    // Descriptions are color-free spatial bodies, e.g.
+                    //   "on the north face of the building, 3.2m above ground and 1.6m from the western wall."
                     // The table's Color column is the single source of truth for target color.
                     // NormalizeBackendDescription only strips legacy capture text saved before
                     // the backend was changed (color word, "Target X:" prefix, [distance=...] tag).
                     var body = NormalizeBackendDescription(description);
-                    var fullDesc = string.IsNullOrEmpty(color)
-                        ? body
-                        : $"{color} target {body}".TrimEnd();
-                    lines.Add($"Target {letter}: {fullDesc}");
+                    string line = $"Target {letter} is {body}".TrimEnd();
+                    if (!line.EndsWith(".")) line += ".";
+                    if (!string.IsNullOrWhiteSpace(color))
+                        line += $" The colour is {color.Trim().ToLowerInvariant()}.";
+                    lines.Add(line);
                 }
             }
 
@@ -1224,6 +1706,10 @@ namespace NOMAD.MissionPlanner
                     row.Cells["Description"].Value =
                         metadata?.RelativeDescription ?? "";
                     row.Cells["ImagePath"].Value = File.Exists(imagePath) ? imagePath : "";
+                    row.Cells["StateKey"].Value = File.Exists(imagePath) ? imagePath : "";
+                    row.Cells["East"].Value = "";
+                    row.Cells["North"].Value = "";
+                    row.Cells["Up"].Value = "";
                     row.Cells["Warning"].Value = "";
 
                     if (File.Exists(imagePath))
@@ -1294,11 +1780,23 @@ namespace NOMAD.MissionPlanner
                 _targetGrid.ClearSelection();
                 return;
             }
-            int idx = targetId[0] - 'A';
+            int idx = TargetLetterToIndex(targetId);
             if (idx < 0 || idx >= _targetGrid.Rows.Count) return;
             _targetGrid.ClearSelection();
             _targetGrid.Rows[idx].Selected = true;
             try { _targetGrid.FirstDisplayedScrollingRowIndex = Math.Max(0, idx - 2); } catch { }
+        }
+
+        private static int TargetLetterToIndex(string letters)
+        {
+            if (string.IsNullOrWhiteSpace(letters)) return -1;
+            int n = 0;
+            foreach (char ch in letters.Trim().ToUpperInvariant())
+            {
+                if (ch < 'A' || ch > 'Z') return -1;
+                n = n * 26 + (ch - 'A' + 1);
+            }
+            return n - 1;
         }
 
         private void StartViewerRefresh()
@@ -1324,35 +1822,6 @@ namespace NOMAD.MissionPlanner
             _viewerRefreshInFlight = true;
             try
             {
-                // 1. Building corners + height.
-                var cornersResp = await JetsonApiService.GetAsync("/api/task/1/building/corners");
-                if (cornersResp.IsSuccessStatusCode)
-                {
-                    var body = await cornersResp.Content.ReadAsStringAsync();
-                    var data = Newtonsoft.Json.Linq.JObject.Parse(body);
-                    var arr = data["corners"] as Newtonsoft.Json.Linq.JArray;
-
-                    var corners = new List<BuildingViewer3D.Corner>();
-                    if (arr != null)
-                    {
-                        foreach (var c in arr)
-                        {
-                            corners.Add(new BuildingViewer3D.Corner
-                            {
-                                Name = c["name"]?.ToString() ?? "?",
-                                Lat = (double?)c["lat"] ?? 0,
-                                Lon = (double?)c["lon"] ?? 0,
-                            });
-                        }
-                    }
-                    double? centerLat = (double?)data["center_lat"];
-                    double? centerLon = (double?)data["center_lon"];
-                    double? heightM = (double?)data["height"];
-                    if (heightM.HasValue) _viewer.SetBuildingHeight(heightM.Value);
-                    _viewer.SetCorners(corners, centerLat, centerLon);
-                }
-
-                // 2. Captured targets.
                 var targetsResp = await JetsonApiService.GetAsync("/api/task/1/target/list_structured");
                 if (targetsResp.IsSuccessStatusCode)
                 {
@@ -1361,37 +1830,171 @@ namespace NOMAD.MissionPlanner
                     var arr = data["targets"] as Newtonsoft.Json.Linq.JArray;
 
                     var targets = new List<BuildingViewer3D.Target>();
+                    var byLetter = new Dictionary<string, BackendTargetInfo>(StringComparer.OrdinalIgnoreCase);
                     if (arr != null)
                     {
                         foreach (var t in arr)
                         {
-                            // Only plot targets the API gave us a 3D position for.
                             var east = (float?)t["east"];
                             var north = (float?)t["north"];
                             var up = (float?)t["up"];
                             if (!east.HasValue || !north.HasValue) continue;
+                            string id = t["id"]?.ToString() ?? "?";
                             targets.Add(new BuildingViewer3D.Target
                             {
-                                Id = t["id"]?.ToString() ?? "?",
+                                Id = id,
                                 Color = t["color"]?.ToString(),
                                 Description = t["description"]?.ToString(),
                                 East = east.Value,
                                 North = north.Value,
                                 Up = up ?? 0f,
                             });
+                            byLetter[id] = new BackendTargetInfo
+                            {
+                                Id = id,
+                                Color = t["color"]?.ToString(),
+                                Surface = InferSurfaceFromBackendTarget(t, up ?? 0f),
+                                East = east.Value,
+                                North = north.Value,
+                                Up = up ?? 0f,
+                            };
                         }
                     }
-                    _viewer.SetTargets(targets);
+                    _lastBackendTargets.Clear();
+                    _lastBackendTargets.AddRange(targets);
+                    ApplyBackendTargetPositions(byLetter, LoadSubmitState());
+                    PushGridTargetsToViewer();
                 }
             }
             catch
             {
-                // Silently ignore — Jetson may be unreachable. The viewer keeps
-                // its previous data so the user still sees the last good model.
+                // Silently ignore — Jetson may be unreachable. The local model
+                // remains usable for manual and GPS-only placement.
             }
             finally
             {
                 _viewerRefreshInFlight = false;
+            }
+        }
+
+        private void PushGridTargetsToViewer()
+        {
+            if (_viewer == null) return;
+            var merged = new List<BuildingViewer3D.Target>(_lastBackendTargets);
+            var ids = new HashSet<string>(merged.Select(t => t.Id ?? ""), StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < _targetGrid.Rows.Count; i++)
+            {
+                var row = _targetGrid.Rows[i];
+                if (row.IsNewRow) continue;
+                float? east = TryParseFloatCell(row, "East");
+                float? north = TryParseFloatCell(row, "North");
+                if (!east.HasValue || !north.HasValue) continue;
+                string id = IndexToTargetLetter(i);
+                var target = new BuildingViewer3D.Target
+                {
+                    Id = id,
+                    Color = row.Cells["Color"].Value?.ToString(),
+                    Description = row.Cells["Description"].Value?.ToString(),
+                    East = east.Value,
+                    North = north.Value,
+                    Up = TryParseFloatCell(row, "Up") ?? 0f,
+                };
+                int existing = merged.FindIndex(t => string.Equals(t.Id, id, StringComparison.OrdinalIgnoreCase));
+                if (existing >= 0) merged[existing] = target;
+                else if (!ids.Contains(id)) merged.Add(target);
+            }
+            _viewer.SetTargets(merged);
+        }
+
+        private class TargetPlacementDialog : Form
+        {
+            private readonly ComboBox _color;
+            private readonly TextBox _description;
+
+            public string TargetColor => _color.SelectedItem?.ToString() ?? "Red";
+            public string DescriptionText => _description.Text.Trim();
+
+            public TargetPlacementDialog(string color, string description)
+            {
+                Text = "Task 1 Target";
+                FormBorderStyle = FormBorderStyle.FixedDialog;
+                StartPosition = FormStartPosition.CenterParent;
+                MinimizeBox = false;
+                MaximizeBox = false;
+                ClientSize = new Size(430, 230);
+                BackColor = CARD_BG;
+
+                Controls.Add(new Label
+                {
+                    Text = "Color",
+                    Location = new Point(12, 14),
+                    AutoSize = true,
+                    ForeColor = TEXT_SECONDARY,
+                });
+
+                _color = new ComboBox
+                {
+                    Location = new Point(12, 36),
+                    Size = new Size(160, 24),
+                    DropDownStyle = ComboBoxStyle.DropDownList,
+                    BackColor = Color.FromArgb(25, 25, 28),
+                    ForeColor = TEXT_PRIMARY,
+                    FlatStyle = FlatStyle.Flat,
+                };
+                _color.Items.AddRange(new object[] { "Red", "Blue", "Green", "Yellow", "Orange", "Purple", "White", "Black", "Unknown" });
+                _color.SelectedItem = string.IsNullOrWhiteSpace(color) ? "Red" : color;
+                if (_color.SelectedIndex < 0) _color.SelectedIndex = 0;
+                Controls.Add(_color);
+
+                Controls.Add(new Label
+                {
+                    Text = "Description",
+                    Location = new Point(12, 70),
+                    AutoSize = true,
+                    ForeColor = TEXT_SECONDARY,
+                });
+
+                _description = new TextBox
+                {
+                    Location = new Point(12, 92),
+                    Size = new Size(406, 88),
+                    Multiline = true,
+                    ScrollBars = ScrollBars.Vertical,
+                    Text = description ?? "",
+                    BackColor = Color.FromArgb(25, 25, 28),
+                    ForeColor = TEXT_PRIMARY,
+                    BorderStyle = BorderStyle.FixedSingle,
+                };
+                Controls.Add(_description);
+
+                var ok = new Button
+                {
+                    Text = "Add",
+                    DialogResult = DialogResult.OK,
+                    Location = new Point(250, 190),
+                    Size = new Size(80, 28),
+                    BackColor = SUCCESS_COLOR,
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat,
+                };
+                ok.FlatAppearance.BorderSize = 0;
+                Controls.Add(ok);
+
+                var cancel = new Button
+                {
+                    Text = "Cancel",
+                    DialogResult = DialogResult.Cancel,
+                    Location = new Point(338, 190),
+                    Size = new Size(80, 28),
+                    BackColor = Color.FromArgb(70, 70, 73),
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat,
+                };
+                cancel.FlatAppearance.BorderSize = 0;
+                Controls.Add(cancel);
+
+                AcceptButton = ok;
+                CancelButton = cancel;
             }
         }
     }

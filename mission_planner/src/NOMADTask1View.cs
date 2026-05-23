@@ -3,6 +3,7 @@
 // ============================================================
 
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
@@ -29,12 +30,15 @@ namespace NOMAD.MissionPlanner
         private PayloadControlPanel _payloadControl;
         private Task1UploadPanel _uploadPanel;
         private TabControl _tabControl;
+        private NumericUpDown _numLapCount;
+        private NumericUpDown _numLapAltitude;
     private TextBox _txtCornerName;
     private ListBox _lstCorners;
     private Label _lblCornerStatus;
     private Button _btnCaptureCorner;
     private Button _btnApplyCorners;
     private Button _btnClearCorners;
+    private Button _btnLoadPreset;
     private TextBox _txtBuildingHeight;
 private ListBox _lstWalls;
         private TextBox _txtWallOverride;
@@ -46,6 +50,26 @@ private ListBox _lstWalls;
         private int _detectionPollCounter = 0;
         private int _tiltPollCounter = 2; // Staggered from detection poll
         private int _lastDetectionCount = 0;
+
+        private void SetTask1Status(string text, Color color)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => SetTask1Status(text, color)));
+                return;
+            }
+
+            if (_txtResult != null && !_txtResult.IsDisposed)
+            {
+                _txtResult.Text = text;
+                _txtResult.ForeColor = color;
+            }
+            if (_lblCornerStatus != null && !_lblCornerStatus.IsDisposed)
+            {
+                _lblCornerStatus.Text = text;
+                _lblCornerStatus.ForeColor = color;
+            }
+        }
         
         public NOMADTask1View(
             DualLinkSender sender,
@@ -107,7 +131,7 @@ private ListBox _lstWalls;
             }
             mainLayout.Controls.Add(videoPanel, 0, 0);
 
-            // ========== RIGHT COLUMN: TabControl with Capture/Submit/Configuration tabs ==========
+            // ========== RIGHT COLUMN: Task 1 workflow tabs ==========
             _tabControl = new TabControl
             {
                 Dock = DockStyle.Fill,
@@ -115,34 +139,21 @@ private ListBox _lstWalls;
             };
             StyleTabControl(_tabControl);
 
-            // --- Tab 1: Capture ---
-            var captureTab = new TabPage("Capture")
+            var payloadTab = new TabPage("Payload")
             {
                 BackColor = CARD_BG,
                 Padding = new Padding(0),
             };
-            captureTab.Controls.Add(CreateCapturePanel());
-            _tabControl.TabPages.Add(captureTab);
+            payloadTab.Controls.Add(CreatePayloadWorkflowPanel());
+            _tabControl.TabPages.Add(payloadTab);
 
-            // --- Tab 2: Submit to Google Drive ---
-            var submitTab = new TabPage("Submit")
+            var reconTab = new TabPage("Recon")
             {
                 BackColor = CARD_BG,
                 Padding = new Padding(0),
             };
-            _uploadPanel = new Task1UploadPanel(_config);
-            _uploadPanel.Dock = DockStyle.Fill;
-            submitTab.Controls.Add(_uploadPanel);
-            _tabControl.TabPages.Add(submitTab);
-
-            // --- Tab 3: Configuration ---
-            var configTab = new TabPage("Configuration")
-            {
-                BackColor = CARD_BG,
-                Padding = new Padding(0),
-            };
-            configTab.Controls.Add(CreateConfigurationSubtab());
-            _tabControl.TabPages.Add(configTab);
+            reconTab.Controls.Add(CreateReconWorkflowPanel());
+            _tabControl.TabPages.Add(reconTab);
 
 
             mainLayout.Controls.Add(_tabControl, 1, 0);
@@ -152,6 +163,31 @@ private ListBox _lstWalls;
 
             // Restore gallery from locally saved captures after UI is ready
             this.Load += (s, e) => UiAsync.Run(this, RestoreGalleryAsync, nameof(RestoreGalleryAsync));
+        }
+
+        private Control CreateReconWorkflowPanel()
+        {
+            var tabs = new TabControl
+            {
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0),
+            };
+            StyleTabControl(tabs);
+
+            var captureTab = new TabPage("Capture") { BackColor = CARD_BG, Padding = new Padding(0) };
+            captureTab.Controls.Add(CreateCapturePanel());
+            tabs.TabPages.Add(captureTab);
+
+            var modelTab = new TabPage("3D Model") { BackColor = CARD_BG, Padding = new Padding(0) };
+            _uploadPanel = new Task1UploadPanel(_config) { Dock = DockStyle.Fill };
+            modelTab.Controls.Add(_uploadPanel);
+            tabs.TabPages.Add(modelTab);
+
+            var configTab = new TabPage("Configuration") { BackColor = CARD_BG, Padding = new Padding(0) };
+            configTab.Controls.Add(CreateConfigurationSubtab());
+            tabs.TabPages.Add(configTab);
+
+            return tabs;
         }
 
         private void StyleTabControl(TabControl tabControl)
@@ -192,6 +228,282 @@ private ListBox _lstWalls;
             return capturePanel;
         }
 
+        private Control CreatePayloadWorkflowPanel()
+        {
+            var scroll = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = CARD_BG,
+                AutoScroll = true,
+            };
+
+            var inner = new Panel
+            {
+                Dock = DockStyle.Top,
+                BackColor = CARD_BG,
+                Height = 515,
+            };
+
+            var payloadCard = CreateCard("PAYLOAD RELEASE");
+            payloadCard.Dock = DockStyle.Top;
+            payloadCard.Height = 170;
+            _payloadControl = new PayloadControlPanel(_config)
+            {
+                Dock = DockStyle.Fill,
+                Margin = new Padding(5, 28, 5, 5),
+            };
+            payloadCard.Controls.Add(_payloadControl);
+
+            var currentBudgetCard = CreateCard("CURRENT BUDGET");
+            currentBudgetCard.Dock = DockStyle.Top;
+            currentBudgetCard.Height = 170;
+            var currentBudgetPanel = new Task1CurrentBudgetPanel
+            {
+                Dock = DockStyle.Fill,
+                Margin = new Padding(5, 28, 5, 5),
+            };
+            currentBudgetCard.Controls.Add(currentBudgetPanel);
+
+            var lapCard = CreateCard("LAP COURSE");
+            lapCard.Dock = DockStyle.Top;
+            lapCard.Height = 340;
+
+            var grid = new DataGridView
+            {
+                Location = new Point(15, 38),
+                Size = new Size(360, 105),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                AllowUserToAddRows = false,
+                AllowUserToDeleteRows = false,
+                RowHeadersVisible = false,
+                BackgroundColor = Color.FromArgb(25, 25, 28),
+                ForeColor = TEXT_PRIMARY,
+                BorderStyle = BorderStyle.FixedSingle,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+                EnableHeadersVisualStyles = false,
+            };
+            grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(45, 45, 48);
+            grid.ColumnHeadersDefaultCellStyle.ForeColor = TEXT_PRIMARY;
+            grid.DefaultCellStyle.BackColor = Color.FromArgb(30, 30, 33);
+            grid.DefaultCellStyle.ForeColor = TEXT_PRIMARY;
+            grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Number", HeaderText = "#", ReadOnly = true, FillWeight = 18 });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Lat", HeaderText = "Latitude", ReadOnly = true, FillWeight = 70 });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Lon", HeaderText = "Longitude", ReadOnly = true, FillWeight = 70 });
+
+            var lapPoints = GetTask1LapMissionWaypoints(Task1LapMissionPlanner.DefaultAltitudeMeters);
+            for (int i = 0; i < lapPoints.Count; i++)
+            {
+                int idx = grid.Rows.Add();
+                grid.Rows[idx].Cells["Number"].Value = i + 1;
+                grid.Rows[idx].Cells["Lat"].Value = lapPoints[i].Lat.ToString("F7");
+                grid.Rows[idx].Cells["Lon"].Value = lapPoints[i].Lon.ToString("F7");
+            }
+            lapCard.Controls.Add(grid);
+
+            var lblLaps = new Label
+            {
+                Text = "Laps",
+                Location = new Point(15, 154),
+                AutoSize = true,
+                ForeColor = TEXT_PRIMARY,
+                Font = new Font("Segoe UI", 9),
+            };
+            lapCard.Controls.Add(lblLaps);
+
+            _numLapCount = new NumericUpDown
+            {
+                Location = new Point(58, 151),
+                Size = new Size(58, 24),
+                Minimum = 1,
+                Maximum = 10,
+                Value = 3,
+                BackColor = Color.FromArgb(25, 25, 28),
+                ForeColor = TEXT_PRIMARY,
+            };
+            lapCard.Controls.Add(_numLapCount);
+
+            var lblAlt = new Label
+            {
+                Text = "Alt m",
+                Location = new Point(132, 154),
+                AutoSize = true,
+                ForeColor = TEXT_PRIMARY,
+                Font = new Font("Segoe UI", 9),
+            };
+            lapCard.Controls.Add(lblAlt);
+
+            _numLapAltitude = new NumericUpDown
+            {
+                Location = new Point(177, 151),
+                Size = new Size(68, 24),
+                Minimum = 3,
+                Maximum = 60,
+                DecimalPlaces = 1,
+                Increment = 0.5M,
+                Value = (decimal)Task1LapMissionPlanner.DefaultAltitudeMeters,
+                BackColor = Color.FromArgb(25, 25, 28),
+                ForeColor = TEXT_PRIMARY,
+            };
+            lapCard.Controls.Add(_numLapAltitude);
+
+            var btnLoadMission = CreateButton("Load MP Mission", ACCENT_COLOR, 160, 30);
+            btnLoadMission.Location = new Point(15, 187);
+            btnLoadMission.Click += (s, e) => LoadLapMissionIntoMissionPlanner();
+            lapCard.Controls.Add(btnLoadMission);
+
+            var btnUploadMission = CreateButton("Upload to Drone", WARNING_COLOR, 160, 30);
+            btnUploadMission.Location = new Point(185, 187);
+            btnUploadMission.Click += (s, e) => UploadLapMissionToDrone();
+            lapCard.Controls.Add(btnUploadMission);
+
+            var btnShowMap = CreateButton("Overlay Backup", Color.FromArgb(90, 90, 95), 160, 30);
+            btnShowMap.Location = new Point(15, 225);
+            btnShowMap.Click += (s, e) => ShowLapWaypointsOnMap();
+            lapCard.Controls.Add(btnShowMap);
+
+            var lblLapStatus = new Label
+            {
+                Name = "lblLapStatus",
+                Text = "Native mission uses a 2m outside offset, 8m pass radius, and yaw toward the next leg.",
+                Location = new Point(15, 266),
+                MaximumSize = new Size(510, 0),
+                AutoSize = true,
+                ForeColor = TEXT_SECONDARY,
+                Font = new Font("Segoe UI", 9),
+            };
+            lapCard.Controls.Add(lblLapStatus);
+
+            lapCard.Resize += (s, e) => grid.Width = Math.Max(260, lapCard.ClientSize.Width - 30);
+
+            inner.Controls.Add(payloadCard);
+            inner.Controls.Add(currentBudgetCard);
+            inner.Controls.Add(lapCard);
+            inner.Height += currentBudgetCard.Height + 5;
+            scroll.Controls.Add(inner);
+            return scroll;
+        }
+
+        private static (double lat, double lon)[] GetTask1LapWaypoints()
+        {
+            return new[]
+            {
+                (45.31711388888889, -75.7563138888889),
+                (45.31553055555556, -75.7566),
+                (45.31565, -75.75780555555555),
+            };
+        }
+
+        private List<GpsPoint> GetTask1LapMissionWaypoints(double altitudeMeters)
+        {
+            var reference = GetTask1LapWaypoints()
+                .Select(p => new GpsPoint(p.lat, p.lon, altitudeMeters))
+                .ToList();
+            return Task1LapMissionPlanner.BuildOutsideOffsetCourse(
+                reference,
+                Task1LapMissionPlanner.OutsideOffsetMeters,
+                altitudeMeters);
+        }
+
+        private int CurrentLapCount =>
+            _numLapCount == null ? 1 : Math.Max(1, (int)_numLapCount.Value);
+
+        private double CurrentLapAltitude =>
+            _numLapAltitude == null ? Task1LapMissionPlanner.DefaultAltitudeMeters : (double)_numLapAltitude.Value;
+
+        private void SetLapStatus(string text, Color color)
+        {
+            try
+            {
+                var labels = this.Controls.Find("lblLapStatus", true);
+                if (labels.Length > 0 && labels[0] is Label label)
+                {
+                    label.Text = text;
+                    label.ForeColor = color;
+                }
+            }
+            catch { }
+        }
+
+        private void ShowLapWaypointsOnMap()
+        {
+            try
+            {
+                var points = GetTask1LapMissionWaypoints(CurrentLapAltitude);
+                _missionConfig.LapCourseWaypoints = points;
+                _missionConfig.Save();
+
+                bool shown = MapOverlayManager.DrawWaypointCourse(
+                    points,
+                    "NOMAD_Task1_Lap_Course",
+                    ACCENT_COLOR,
+                    Color.FromArgb(35, ACCENT_COLOR),
+                    3);
+                MapOverlayManager.CenterMapOn(points.Average(p => p.Lat), points.Average(p => p.Lon), 18);
+                MapOverlayManager.RefreshMap();
+                SetLapStatus(
+                    shown
+                        ? "Backup overlay drawn for the offset lap course. Nothing was sent to the drone."
+                        : "Map centered, but overlay could not be drawn. Check Mission Planner Data map is loaded.",
+                    shown ? SUCCESS_COLOR : WARNING_COLOR);
+            }
+            catch (Exception ex)
+            {
+                SetLapStatus($"Map draw failed: {ex.Message}", ERROR_COLOR);
+            }
+        }
+
+        private void LoadLapMissionIntoMissionPlanner()
+        {
+            try
+            {
+                var course = GetTask1LapMissionWaypoints(CurrentLapAltitude);
+                _missionConfig.LapCourseWaypoints = course;
+                _missionConfig.Save();
+
+                var result = Task1LapMissionPlanner.LoadIntoFlightPlanner(course, CurrentLapCount);
+                if (result.Success)
+                {
+                    MapOverlayManager.CenterMapOn(course.Average(p => p.Lat), course.Average(p => p.Lon), 18);
+                    MapOverlayManager.RefreshMap();
+                }
+
+                SetLapStatus(result.Message, result.Success ? SUCCESS_COLOR : ERROR_COLOR);
+            }
+            catch (Exception ex)
+            {
+                SetLapStatus($"Mission load failed: {ex.Message}", ERROR_COLOR);
+            }
+        }
+
+        private void UploadLapMissionToDrone()
+        {
+            try
+            {
+                var confirm = MessageBox.Show(
+                    "This will replace the current vehicle mission with the Task 1 lap course. It will not arm the drone or start AUTO.",
+                    "Upload Task 1 Lap Mission",
+                    MessageBoxButtons.OKCancel,
+                    MessageBoxIcon.Warning);
+                if (confirm != DialogResult.OK)
+                    return;
+
+                var course = GetTask1LapMissionWaypoints(CurrentLapAltitude);
+                var loadResult = Task1LapMissionPlanner.LoadIntoFlightPlanner(course, CurrentLapCount);
+                if (!loadResult.Success)
+                {
+                    SetLapStatus(loadResult.Message, ERROR_COLOR);
+                    return;
+                }
+
+                var uploadResult = Task1LapMissionPlanner.UploadLoadedMissionToVehicle();
+                SetLapStatus(uploadResult.Message, uploadResult.Success ? SUCCESS_COLOR : ERROR_COLOR);
+            }
+            catch (Exception ex)
+            {
+                SetLapStatus($"Mission upload failed: {ex.Message}", ERROR_COLOR);
+            }
+        }
+
         private Panel CreateMainControlsSubtab()
         {
             // Scrollable container \u2014 cards stack top-to-bottom with fixed heights.
@@ -208,7 +520,7 @@ private ListBox _lstWalls;
             {
                 Dock = DockStyle.Top,
                 BackColor = CARD_BG,
-                Height = 120 + 145 + 185 + 220,  // sum of card heights below
+                Height = 120 + 185 + 220,  // sum of card heights below
             };
 
             // --- Gallery Card (added first so it docks at bottom of inner, behind others) ---
@@ -262,12 +574,6 @@ private ListBox _lstWalls;
                 _txtResult.Width = captureCard.ClientSize.Width - 30;
             };
 
-            // --- Payload Controls ---
-            _payloadControl = new PayloadControlPanel(_config);
-            _payloadControl.Dock = DockStyle.Top;
-            _payloadControl.Height = 145;
-            _payloadControl.Margin = new Padding(5, 0, 5, 0);
-
             // --- GPS Status Card ---
             var gpsCard = CreateCard("GPS STATUS");
             gpsCard.Dock = DockStyle.Top;
@@ -316,13 +622,12 @@ private ListBox _lstWalls;
             // Add cards to inner in reverse order (DockStyle.Top stacks bottom-up in WinForms)
             inner.Controls.Add(galleryCard);
             inner.Controls.Add(captureCard);
-            inner.Controls.Add(_payloadControl);
             inner.Controls.Add(gpsCard);
 
             // Resize inner panel to match total card height when scroll area resizes
             scroll.Resize += (s, e) =>
             {
-                int totalH = gpsCard.Height + _payloadControl.Height + captureCard.Height + galleryCard.Height;
+                int totalH = gpsCard.Height + captureCard.Height + galleryCard.Height;
                 inner.Height = Math.Max(totalH, scroll.ClientSize.Height);
             };
 
@@ -459,7 +764,7 @@ private ListBox _lstWalls;
 
             _lblCornerStatus = new Label
             {
-                Text = "Fly above each building corner and click Capture Corner",
+                Text = "Fly above each building corner in order and click Capture Corner",
                 Font = new Font("Segoe UI", 9),
                 ForeColor = TEXT_SECONDARY,
                 Location = new Point(16, 34),
@@ -469,7 +774,7 @@ private ListBox _lstWalls;
 
             var lblCornerName = new Label
             {
-                Text = "Corner Name:",
+                Text = "Corner #:",
                 Font = new Font("Segoe UI", 9),
                 ForeColor = TEXT_PRIMARY,
                 Location = new Point(16, 58),
@@ -479,7 +784,7 @@ private ListBox _lstWalls;
 
             _txtCornerName = new TextBox
             {
-                Text = "NW",
+                Text = "1",
                 Location = new Point(16, 76),
                 Size = new Size(120, 28),
                 BackColor = Color.FromArgb(50, 50, 53),
@@ -489,15 +794,15 @@ private ListBox _lstWalls;
             };
             cornerCard.Controls.Add(_txtCornerName);
 
-            // Preset corner name buttons: cardinal (rectangles) + alphabetic (any polygon)
-            string[] presetNames = { "NW", "NE", "SE", "SW", "A", "B", "C" };
+            // Preset corner buttons: Task 1 corners are numbered in polygon order.
+            string[] presetNames = { "1", "2", "3", "4", "5", "6", "7", "8" };
             for (int i = 0; i < presetNames.Length; i++)
             {
                 string name = presetNames[i];
-                int btnW = name.Length > 1 ? 36 : 28;
+                int btnW = 28;
                 var btnPreset = CreateButton(name, Color.FromArgb(70, 70, 73), btnW, 26);
                 btnPreset.Font = new Font("Segoe UI", 7, FontStyle.Bold);
-                btnPreset.Location = new Point(144 + i * 38, 77);
+                btnPreset.Location = new Point(144 + i * 32, 77);
                 btnPreset.Click += (s, e) => _txtCornerName.Text = name;
                 cornerCard.Controls.Add(btnPreset);
             }
@@ -508,10 +813,19 @@ private ListBox _lstWalls;
             _btnCaptureCorner.Click += BtnCaptureCorner_Click;
             cornerCard.Controls.Add(_btnCaptureCorner);
 
+            var btnCalibrateCorner = CreateButton("CALIBRATE MODEL TO THIS CORNER", SUCCESS_COLOR, 250, 28);
+            btnCalibrateCorner.Font = new Font("Segoe UI", 8, FontStyle.Bold);
+            btnCalibrateCorner.Location = new Point(16, 112);
+            btnCalibrateCorner.Click += BtnCalibrateCorner_Click;
+            cornerCard.Controls.Add(btnCalibrateCorner);
+
+            _btnCaptureCorner.Location = new Point(16, 108);
+            btnCalibrateCorner.Location = new Point(16, 140);
+
             _lstCorners = new ListBox
             {
-                Location = new Point(16, 150),
-                Size = new Size(280, 80),
+                Location = new Point(16, 174),
+                Size = new Size(280, 56),
                 BackColor = Color.FromArgb(40, 40, 43),
                 ForeColor = Color.White,
                 Font = new Font("Consolas", 9),
@@ -526,15 +840,21 @@ private ListBox _lstWalls;
             _btnApplyCorners.Click += BtnApplyCorners_Click;
             cornerCard.Controls.Add(_btnApplyCorners);
 
+            _btnLoadPreset = CreateButton("Load Preset", ACCENT_COLOR, 110, 30);
+            _btnLoadPreset.Font = new Font("Segoe UI", 8, FontStyle.Bold);
+            _btnLoadPreset.Location = new Point(156, 238);
+            _btnLoadPreset.Click += BtnLoadPreset_Click;
+            cornerCard.Controls.Add(_btnLoadPreset);
+
             _btnClearCorners = CreateButton("Clear All", ERROR_COLOR, 90, 30);
             _btnClearCorners.Font = new Font("Segoe UI", 8, FontStyle.Bold);
-            _btnClearCorners.Location = new Point(156, 238);
+            _btnClearCorners.Location = new Point(16, 274);
             _btnClearCorners.Click += BtnClearCorners_Click;
             cornerCard.Controls.Add(_btnClearCorners);
 
             var btnRefreshCorners = CreateButton("Refresh", Color.FromArgb(70, 70, 73), 90, 30);
             btnRefreshCorners.Font = new Font("Segoe UI", 8, FontStyle.Bold);
-            btnRefreshCorners.Location = new Point(256, 238);
+            btnRefreshCorners.Location = new Point(116, 274);
             btnRefreshCorners.Click += (s, e) => UiAsync.Run(this, RefreshCornerListAsync, nameof(RefreshCornerListAsync));
             cornerCard.Controls.Add(btnRefreshCorners);
 
@@ -542,6 +862,7 @@ private ListBox _lstWalls;
             {
                 int inputWidth = Math.Max(260, cornerCard.ClientSize.Width - 32);
                 _btnCaptureCorner.Width = inputWidth;
+                btnCalibrateCorner.Width = inputWidth;
                 _lstCorners.Width = inputWidth;
             };
 
@@ -592,6 +913,68 @@ private ListBox _lstWalls;
         private void BtnCaptureCorner_Click(object sender, EventArgs e)
         {
             UiAsync.Run(this, () => BtnCaptureCornerAsync(sender, e), nameof(BtnCaptureCorner_Click));
+        }
+
+        private void BtnCalibrateCorner_Click(object sender, EventArgs e)
+        {
+            UiAsync.Run(this, () => BtnCalibrateCornerAsync(sender, e), nameof(BtnCalibrateCorner_Click));
+        }
+
+        private async Task BtnCalibrateCornerAsync(object sender, EventArgs e)
+        {
+            var cs = MainV2.comPort?.MAV?.cs;
+            if (cs == null || (Math.Abs(cs.lat) < 0.000001 && Math.Abs(cs.lng) < 0.000001))
+            {
+                _txtResult.Text = "[FAIL] No GPS position available. Fly above the calibration corner first.";
+                _txtResult.ForeColor = ERROR_COLOR;
+                return;
+            }
+
+            string cornerName = _txtCornerName.Text.Trim();
+            if (string.IsNullOrEmpty(cornerName))
+            {
+                _txtResult.Text = "[FAIL] Enter the preset corner number to calibrate.";
+                _txtResult.ForeColor = ERROR_COLOR;
+                return;
+            }
+
+            _txtResult.Text = $"Calibrating model: corner {cornerName} -> {cs.lat:F7}, {cs.lng:F7}...";
+            _txtResult.ForeColor = WARNING_COLOR;
+
+            try
+            {
+                var body = new { name = cornerName, lat = cs.lat, lon = cs.lng };
+                var json = Newtonsoft.Json.JsonConvert.SerializeObject(body);
+                var httpContent = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json");
+                var response = await JetsonApiService.PostAsync("/api/task/1/building/calibration/corner", httpContent);
+                var respBody = await response.Content.ReadAsStringAsync();
+                if (response.IsSuccessStatusCode)
+                {
+                    string mode = "";
+                    try
+                    {
+                        var data = Newtonsoft.Json.Linq.JObject.Parse(respBody);
+                        mode = data["calibration"]?["mode"]?.ToString();
+                    }
+                    catch { }
+
+                    _txtResult.Text = string.IsNullOrEmpty(mode)
+                        ? "[OK] Model calibration point saved."
+                        : $"[OK] Model calibrated ({mode}). Apply to Model to push it to target_localizer.";
+                    _txtResult.ForeColor = SUCCESS_COLOR;
+                    await RefreshCornerListAsync();
+                }
+                else
+                {
+                    _txtResult.Text = $"[FAIL] Calibration failed: {response.StatusCode} - {respBody}";
+                    _txtResult.ForeColor = ERROR_COLOR;
+                }
+            }
+            catch (Exception ex)
+            {
+                _txtResult.Text = $"[FAIL] {ex.Message}";
+                _txtResult.ForeColor = ERROR_COLOR;
+            }
         }
 
         private async Task BtnCaptureCornerAsync(object sender, EventArgs e)
@@ -659,16 +1042,12 @@ private ListBox _lstWalls;
 
         private void AutoAdvanceCornerName(string current)
         {
-            // Cardinal sequence: NW -> NE -> SE -> SW (good for rectangles)
-            var cardinal = new[] { "NW", "NE", "SE", "SW" };
-            int idx = Array.IndexOf(cardinal, current.ToUpper());
-            if (idx >= 0 && idx < cardinal.Length - 1)
+            if (int.TryParse(current, out int number) && number > 0 && number < 99)
             {
-                _txtCornerName.Text = cardinal[idx + 1];
+                _txtCornerName.Text = (number + 1).ToString();
                 return;
             }
 
-            // Alphabetic sequence: A -> B -> C -> ... -> Z (scales to any polygon)
             if (current.Length == 1 && char.IsLetter(current[0]))
             {
                 char next = (char)(char.ToUpper(current[0]) + 1);
@@ -722,6 +1101,97 @@ private ListBox _lstWalls;
             UiAsync.Run(this, () => BtnApplyCornersAsync(sender, e), nameof(BtnApplyCorners_Click));
         }
 
+        private void BtnLoadPreset_Click(object sender, EventArgs e)
+        {
+            UiAsync.Run(this, BtnLoadPresetAsync, nameof(BtnLoadPreset_Click));
+        }
+
+        private async Task BtnLoadPresetAsync()
+        {
+            SetTask1Status("Loading Task 1 building preset locally...", WARNING_COLOR);
+            if (_btnLoadPreset != null)
+            {
+                _btnLoadPreset.Enabled = false;
+                _btnLoadPreset.Text = "Loading...";
+            }
+            try
+            {
+                PopulatePresetCornersInUi();
+                _uploadPanel?.LoadCompetitionPresetModel();
+                SetTask1Status("[OK] Task 1 preset loaded on the ground station.", SUCCESS_COLOR);
+                await Task.CompletedTask;
+            }
+            catch (Exception ex)
+            {
+                SetTask1Status($"[FAIL] Preset load failed: {ex.Message}", ERROR_COLOR);
+            }
+            finally
+            {
+                if (_btnLoadPreset != null)
+                {
+                    _btnLoadPreset.Enabled = true;
+                    _btnLoadPreset.Text = "Load Preset";
+                }
+            }
+        }
+
+        private static (string name, double lat, double lon)[] GetTask1BuildingPresetCorners()
+        {
+            return new[]
+            {
+                ("1", 45.316743567764945, -75.75773827279546),
+                ("2", 45.31671371473123, -75.75759833217171),
+                ("3", 45.31615424384856, -75.75781374638878),
+                ("4", 45.31618520285556, -75.75796312121189),
+                ("5", 45.31641794771017, -75.75787506868524),
+                ("6", 45.316440061185425, -75.75798592052764),
+                ("7", 45.31652353947904, -75.75795525937997),
+                ("8", 45.316500873200205, -75.75784362135427),
+            };
+        }
+
+        private void PopulatePresetCornersInUi()
+        {
+            if (_txtBuildingHeight != null) _txtBuildingHeight.Text = "2.4";
+            if (_lstCorners == null) return;
+            _lstCorners.Items.Clear();
+            foreach (var c in GetTask1BuildingPresetCorners())
+                _lstCorners.Items.Add($"{c.name}: {c.lat:F6}, {c.lon:F6}");
+        }
+
+        private async Task LoadTask1PresetViaCornerApiAsync(string reason)
+        {
+            SetTask1Status($"Preset endpoint unavailable; loading corners directly... ({reason})", WARNING_COLOR);
+
+            try
+            {
+                await JetsonApiService.DeleteAsync("/api/task/1/building/corners");
+                foreach (var c in GetTask1BuildingPresetCorners())
+                {
+                    var json = Newtonsoft.Json.JsonConvert.SerializeObject(new { name = c.name, lat = c.lat, lon = c.lon });
+                    var content = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json");
+                    var resp = await JetsonApiService.PostAsync("/api/task/1/building/corner", content);
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        var body = await resp.Content.ReadAsStringAsync();
+                        throw new Exception($"Corner {c.name} failed: HTTP {(int)resp.StatusCode} {body}");
+                    }
+                }
+                await JetsonApiService.PostAsync("/api/task/1/building/height?height=2.4", null);
+                SetTask1Status("[OK] Task 1 preset loaded through corner API. Apply to Model when ready.", SUCCESS_COLOR);
+                await RefreshCornerListAsync();
+            }
+            catch (Exception ex)
+            {
+                SetTask1Status($"[FAIL] Preset fallback failed: {ex.Message}", ERROR_COLOR);
+                MessageBox.Show(
+                    $"Load Preset could not reach the Jetson API.\n\n{ex.Message}\n\nThe preset is shown locally in the corner list, but it was not pushed to Edge Core.",
+                    "Task 1 Preset",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+        }
+
         private async Task BtnApplyCornersAsync(object sender, EventArgs e)
         {
             _btnApplyCorners.Enabled = false;
@@ -735,7 +1205,24 @@ private ListBox _lstWalls;
                 {
                     var body = await response.Content.ReadAsStringAsync();
                     var data = Newtonsoft.Json.Linq.JObject.Parse(body);
-                    int count = (data["corners"] as Newtonsoft.Json.Linq.JArray)?.Count ?? 0;
+                    var arr = data["corners"] as Newtonsoft.Json.Linq.JArray;
+                    int count = arr?.Count ?? 0;
+                    if (arr != null && count >= 3)
+                    {
+                        var localCorners = new List<BuildingViewer3D.Corner>();
+                        foreach (var c in arr)
+                        {
+                            localCorners.Add(new BuildingViewer3D.Corner
+                            {
+                                Name = c["name"]?.ToString() ?? (localCorners.Count + 1).ToString(),
+                                Lat = (double?)c["lat"] ?? 0,
+                                Lon = (double?)c["lon"] ?? 0,
+                            });
+                        }
+                        double height = 2.4;
+                        double.TryParse(_txtBuildingHeight?.Text, out height);
+                        _uploadPanel?.SetBuildingModel(localCorners, height > 0 ? height : 2.4);
+                    }
                     _txtResult.Text = $"[OK] Building model rebuilt with {count} corners!";
                     _txtResult.ForeColor = SUCCESS_COLOR;
                 }
@@ -799,12 +1286,16 @@ private ListBox _lstWalls;
             _btnSetGroundAlt.Text = "Setting...";
             try
             {
+                var cs = global::MissionPlanner.MainV2.comPort?.MAV?.cs;
+                double localGroundAlt = cs != null ? cs.alt : 0.0;
+                _uploadPanel?.SetGroundAltitudeReference(localGroundAlt);
+
                 var response = await JetsonApiService.PostLongRunAsync("/api/task/1/target/ground_alt", null);
                 if (response.IsSuccessStatusCode)
                 {
                     var body = await response.Content.ReadAsStringAsync();
                     // Extract the altitude value from "Ground altitude set to X.XXm..."
-                    string altStr = "?";
+                    string jetsonAltStr = "?";
                     try
                     {
                         var json = Newtonsoft.Json.Linq.JObject.Parse(body);
@@ -813,12 +1304,12 @@ private ListBox _lstWalls;
                         // The leading minus must be captured; the old regex dropped it and
                         // displayed e.g. "78.50m" instead of "-78.50m".
                         var m = System.Text.RegularExpressions.Regex.Match(msg, @"(-?\d+(?:\.\d+)?)\s*m");
-                        if (m.Success) altStr = m.Groups[1].Value + "m";
+                        if (m.Success) jetsonAltStr = m.Groups[1].Value + "m";
                     }
                     catch { }
-                    _lblGroundAlt.Text = $"Offset: {altStr}";
+                    _lblGroundAlt.Text = $"MP: {localGroundAlt:F2}m | ZED: {jetsonAltStr}";
                     _lblGroundAlt.ForeColor = SUCCESS_COLOR;
-                    _txtResult.Text = $"[OK] Ground alt set to {altStr}. Heights now relative to ground.";
+                    _txtResult.Text = $"[OK] Ground altitude set. Mission Planner reference={localGroundAlt:F2}m, ZED reference={jetsonAltStr}.";
                     _txtResult.ForeColor = SUCCESS_COLOR;
                 }
                 else
@@ -854,54 +1345,16 @@ private ListBox _lstWalls;
             _btnRegenDescriptions.Text = "Regenerating...";
             try
             {
-                // PostLongRunAsync: the regenerate service may iterate over every
-                // captured target. Even with the in-container service proxy
-                // (sub-100ms typical) this is the right client to use — short
-                // 5s timeout caused this button to silently TaskCancel.
-                var response = await JetsonApiService.PostLongRunAsync("/api/task/1/target/regenerate", null);
-                var body = await response.Content.ReadAsStringAsync();
-                if (response.IsSuccessStatusCode)
-                {
-                    // Surface the backend's "Regenerated N/M target description(s)."
-                    // so the operator sees real feedback instead of a generic OK.
-                    string detail = null;
-                    try
-                    {
-                        var json = Newtonsoft.Json.Linq.JObject.Parse(body);
-                        detail = json["output"]?.ToString() ?? json["message"]?.ToString();
-                    }
-                    catch { }
-                    var ok = string.IsNullOrWhiteSpace(detail)
-                        ? "Target descriptions regenerated from raw data."
-                        : detail.Trim();
-                    _txtResult.Text = $"[OK] {ok} Reopen the Submit panel to see updated text.";
-                    _txtResult.ForeColor = SUCCESS_COLOR;
-                    // _txtResult lives further down the layout and can scroll
-                    // out of view; show a MessageBox so the operator always
-                    // gets visible confirmation.
-                    MessageBox.Show(
-                        ok + "\n\nReopen the Submit panel to see updated descriptions.",
-                        "Descriptions Regenerated",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Information);
-                }
-                else
-                {
-                    string detail = null;
-                    try
-                    {
-                        var json = Newtonsoft.Json.Linq.JObject.Parse(body);
-                        detail = json["detail"]?.ToString();
-                    }
-                    catch { }
-                    var err = string.IsNullOrWhiteSpace(detail)
-                        ? $"Regenerate failed: {response.StatusCode}"
-                        : $"Regenerate failed: {detail}";
-                    _txtResult.Text = "[FAIL] " + err;
-                    _txtResult.ForeColor = ERROR_COLOR;
-                    MessageBox.Show(err, "Regenerate Failed",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
+                int count = _uploadPanel?.RegenerateLocalDescriptions() ?? 0;
+                await Task.CompletedTask;
+                var ok = count == 0
+                    ? "No target rows have model coordinates yet. Capture a target or place one on the model first."
+                    : $"Regenerated {count} target description(s) from the ground-station building model.";
+                _txtResult.Text = count == 0 ? "[WARN] " + ok : "[OK] " + ok;
+                _txtResult.ForeColor = count == 0 ? WARNING_COLOR : SUCCESS_COLOR;
+                MessageBox.Show(ok, "Task 1 Descriptions",
+                    MessageBoxButtons.OK,
+                    count == 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
@@ -1301,14 +1754,13 @@ private ListBox _lstWalls;
                     outputText ?? "", @"(\d+\.?\d*)\s*m\s+above\s+ground");
                 if (heightMatch.Success) capturedHeight = heightMatch.Groups[1].Value;
 
-                var suggestedDesc = ExtractSuggestedTask1Description(outputText);
                 var capturedImageBytes = imageBytes;
                 var capturedLocalPath = localPath;
                 var capturedJsonPath = jsonPath;
 
                 this.BeginInvoke(() =>
                 {
-                    _uploadPanel?.AddCapturedImage(capturedLocalPath, suggestedDesc, capturedColor, capturedPlane, capturedHeight);
+                    _uploadPanel?.AddCapturedImage(capturedLocalPath, string.Empty, capturedColor, capturedPlane, capturedHeight);
 
                     // Draw the thumbnail onto an independent Bitmap so it does
                     // not retain a lazy reference to the disposed MemoryStream.
@@ -1397,6 +1849,13 @@ private ListBox _lstWalls;
                 _lblGpsStatus.ForeColor = gpsFix >= 3 ? SUCCESS_COLOR : WARNING_COLOR;
                 
                 _lblPosition.Text = $"Position: {cs.lat:F6}, {cs.lng:F6} | Alt: {cs.alt:F1}m";
+                _uploadPanel?.UpdateDronePose(
+                    cs.lat,
+                    cs.lng,
+                    cs.alt,
+                    ReadDouble(cs, "yaw"),
+                    ReadDouble(cs, "pitch"),
+                    ReadDouble(cs, "roll"));
 
                 // Update detection status + capture button color every ~2s
                 _detectionPollCounter++;
@@ -1526,6 +1985,18 @@ private ListBox _lstWalls;
                 }
             }
             catch { }
+        }
+
+        private static double ReadDouble(object obj, string propertyName)
+        {
+            try
+            {
+                var prop = obj.GetType().GetProperty(propertyName);
+                if (prop == null) return 0.0;
+                var value = prop.GetValue(obj, null);
+                return value == null ? 0.0 : Convert.ToDouble(value);
+            }
+            catch { return 0.0; }
         }
         
         /// <summary>
