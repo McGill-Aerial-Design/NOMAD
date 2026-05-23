@@ -24,6 +24,7 @@ namespace NOMAD.MissionPlanner
         private Label _lblPosition;
         private Label _lblGpsStatus;
         private Button _btnCapture;
+        private Button _btnCaptureCrosshair;
         private TextBox _txtResult;
         private EmbeddedVideoPlayer _videoPlayer;
         private FlowLayoutPanel _galleryPanel;
@@ -146,6 +147,14 @@ private ListBox _lstWalls;
             };
             payloadTab.Controls.Add(CreatePayloadWorkflowPanel());
             _tabControl.TabPages.Add(payloadTab);
+
+            var checklistTab = new TabPage("Checklist")
+            {
+                BackColor = CARD_BG,
+                Padding = new Padding(0),
+            };
+            checklistTab.Controls.Add(new Task1ChecklistPanel());
+            _tabControl.TabPages.Add(checklistTab);
 
             var reconTab = new TabPage("Recon")
             {
@@ -556,6 +565,11 @@ private ListBox _lstWalls;
             _btnCapture.Click += BtnCapture_Click;
             captureCard.Controls.Add(_btnCapture);
 
+            _btnCaptureCrosshair = CreateButton("CAPTURE CROSSHAIR", WARNING_COLOR, 180, 32);
+            _btnCaptureCrosshair.Location = new Point(225, 38);
+            _btnCaptureCrosshair.Click += BtnCaptureCrosshair_Click;
+            captureCard.Controls.Add(_btnCaptureCrosshair);
+
             _txtResult = new TextBox
             {
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
@@ -574,6 +588,8 @@ private ListBox _lstWalls;
             captureCard.Resize += (s, e) =>
             {
                 _txtResult.Width = captureCard.ClientSize.Width - 30;
+                if (_btnCaptureCrosshair != null)
+                    _btnCaptureCrosshair.Left = Math.Min(225, Math.Max(15, captureCard.ClientSize.Width - _btnCaptureCrosshair.Width - 15));
             };
 
             // --- GPS Status Card ---
@@ -1471,6 +1487,13 @@ private ListBox _lstWalls;
         private void RestoreCaptureButton()
         {
             _btnCapture.Enabled = true;
+            if (_btnCaptureCrosshair != null && !_btnCaptureCrosshair.IsDisposed)
+            {
+                _btnCaptureCrosshair.Enabled = true;
+                _btnCaptureCrosshair.BackColor = WARNING_COLOR;
+                _btnCaptureCrosshair.Text = "CAPTURE CROSSHAIR";
+            }
+
             if (_lastDetectionCount > 0)
             {
                 _btnCapture.BackColor = SUCCESS_COLOR;
@@ -1485,19 +1508,35 @@ private ListBox _lstWalls;
 
         private void BtnCapture_Click(object sender, EventArgs e)
         {
-            UiAsync.Run(this, () => BtnCaptureAsync(sender, e), nameof(BtnCapture_Click));
+            UiAsync.Run(this, () => BtnCaptureAsync(forceCrosshair: false), nameof(BtnCapture_Click));
         }
 
-        private async Task BtnCaptureAsync(object sender, EventArgs e)
+        private void BtnCaptureCrosshair_Click(object sender, EventArgs e)
+        {
+            UiAsync.Run(this, () => BtnCaptureAsync(forceCrosshair: true), nameof(BtnCaptureCrosshair_Click));
+        }
+
+        private async Task BtnCaptureAsync(bool forceCrosshair)
         {
             _btnCapture.Enabled = false;
-            _btnCapture.Text = "Capturing...";
-            _txtResult.Text = "Sending capture command...";
+            if (_btnCaptureCrosshair != null && !_btnCaptureCrosshair.IsDisposed)
+                _btnCaptureCrosshair.Enabled = false;
+
+            if (forceCrosshair)
+            {
+                _btnCaptureCrosshair.Text = "Capturing...";
+                _txtResult.Text = "Sending crosshair capture command...";
+            }
+            else
+            {
+                _btnCapture.Text = "Capturing...";
+                _txtResult.Text = "Sending capture command...";
+            }
             _txtResult.ForeColor = WARNING_COLOR;
 
             try
             {
-                var result = await _sender.SendTask1Capture();
+                var result = await _sender.SendTask1Capture(forceCrosshair: forceCrosshair);
                 if (result.Success)
                 {
                     if (!string.IsNullOrEmpty(result.Data))
@@ -1547,7 +1586,7 @@ private ListBox _lstWalls;
                         var altStr = position?["alt"]?.ToString() ?? "N/A";
 
                         var metadataText = new StringBuilder();
-                        metadataText.AppendLine("[OK] Capture Successful");
+                        metadataText.AppendLine(forceCrosshair ? "[OK] Crosshair Capture Successful" : "[OK] Capture Successful");
                         metadataText.AppendLine($"Time: {timestamp}");
                         metadataText.AppendLine($"Position: {latStr}, {lonStr} @ {altStr}m");
                         metadataText.AppendLine($"AHRS: Hdg={headingDeg} Pitch={pitchDeg} Roll={rollDeg}");

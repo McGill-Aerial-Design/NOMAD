@@ -135,6 +135,74 @@ class TestNavPositionBounds(unittest.TestCase):
         self.assertEqual(mavlink.velocity_calls, [])
 
 
+class TestGuidedRthLanding(unittest.TestCase):
+    class FakeSystemState(SimpleNamespace):
+        def has_valid_gps(self):
+            return self.gps_fix and self.gps_lat is not None and self.gps_lon is not None
+
+    class FakeStateManager:
+        def __init__(self):
+            self.state = TestGuidedRthLanding.FakeSystemState(
+                connected=True,
+                armed=True,
+                flight_mode="GUIDED",
+                gps_fix=True,
+                gps_lat=43.0,
+                gps_lon=-79.0,
+                gps_alt=110.0,
+                alt_agl_m=10.0,
+                home_lat=43.0001,
+                home_lon=-79.0001,
+                home_alt=100.0,
+            )
+
+        def get_state(self):
+            return self.state
+
+    class FakeMavlink:
+        def __init__(self):
+            self.global_targets = []
+            self.land_calls = 0
+
+        def request_home_position(self):
+            return True
+
+        def send_global_position_target(self, lat, lon, alt_msl, yaw=None):
+            self.global_targets.append((lat, lon, alt_msl, yaw))
+            return True
+
+        def send_velocity_command(self, *args):
+            return True
+
+        def land(self):
+            self.land_calls += 1
+            return True
+
+    def test_rth_plan_waits_for_operator_approval(self):
+        mavlink = self.FakeMavlink()
+        controller = NavController(mavlink, self.FakeStateManager())
+
+        result = controller.start_rth_landing(climb_alt_m=30.0)
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["awaiting_approval"])
+        self.assertEqual(result["next_phase"], "climb")
+        self.assertEqual(mavlink.global_targets, [])
+        self.assertEqual(mavlink.land_calls, 0)
+
+    def test_rth_climb_uses_altitude_above_home_not_raw_msl(self):
+        mavlink = self.FakeMavlink()
+        controller = NavController(mavlink, self.FakeStateManager())
+        controller.start_rth_landing(climb_alt_m=30.0)
+
+        result = controller.approve_rth_landing_phase()
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["phase"], "climb")
+        self.assertEqual(mavlink.global_targets[-1][2], 130.0)
+        self.assertEqual(mavlink.land_calls, 0)
+
+
 class TestStateManagerBatching(unittest.TestCase):
     def test_get_state_flushes_pending_update_after_interval(self):
         original_interval = StateManager.MODEL_UPDATE_INTERVAL

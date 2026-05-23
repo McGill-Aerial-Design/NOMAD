@@ -77,6 +77,9 @@ class SystemState(BaseModel):
     gps_lon: Optional[float] = None  # Longitude in degrees
     gps_alt: Optional[float] = None  # Altitude MSL in meters
     alt_agl_m: Optional[float] = None  # Altitude AGL from FC (GLOBAL_POSITION_INT.relative_alt)
+    home_lat: Optional[float] = None  # ArduPilot home latitude in degrees
+    home_lon: Optional[float] = None  # ArduPilot home longitude in degrees
+    home_alt: Optional[float] = None  # ArduPilot home altitude MSL in meters
 
     # Attitude and heading
     heading_deg: Optional[float] = None  # Magnetic heading 0-360 (0=North)

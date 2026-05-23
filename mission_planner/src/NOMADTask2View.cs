@@ -53,6 +53,7 @@ namespace NOMAD.MissionPlanner
         private Task2PayloadPanel _payloadPanel;
         private Task2UploadPanel _uploadPanel;
         private JetsonStateStream _stateStream;
+        private GuidedRthLandingController _rthLandingController;
 
         private Label _lblSprayState;
         private Label _lblApproachMethod;
@@ -91,6 +92,15 @@ namespace NOMAD.MissionPlanner
         private Button _btnAutoTakeoff;
         private Button _btnAutoLand;
         private NumericUpDown _numTakeoffAltitude;
+        private NumericUpDown _numRthAltitudeMsl;
+        private NumericUpDown _numRthDescentRate;
+        private NumericUpDown _numRthTargetAgl;
+        private Label _lblRthLandingStatus;
+        private Button _btnRthApprove;
+        private Button _btnRthPause;
+        private Button _btnRthResume;
+        private Button _btnRthApplyEdit;
+        private Button _btnRthAbort;
         private Task2PreflightPanel _preflightPanel;
 
         public NOMADTask2View(
@@ -101,6 +111,7 @@ namespace NOMAD.MissionPlanner
             _sender = sender;
             _config = config;
             _jetsonConnectionManager = jetsonConnectionManager;
+            _rthLandingController = new GuidedRthLandingController();
             InitializeUI();
             StartStateStream();
             StartModePolling();
@@ -502,11 +513,11 @@ namespace NOMAD.MissionPlanner
             _uploadPanel = new Task2UploadPanel(_config, Task2UploadPanel.PanelMode.Auto);
             AddCard(_uploadPanel, 350);
 
-            // ---- Auto Takeoff / Auto Land card ----
+            // ---- Auto Takeoff / Guided RTH Landing card ----
             // Kept last so the operator works top-to-bottom: select target,
             // watch spray/upload, then use flight-window takeoff/landing
             // controls from the bottom of the tab.
-            var flightCard = CreateCard("AUTONOMOUS TAKEOFF / LAND");
+            var flightCard = CreateCard("AUTONOMOUS TAKEOFF / GUIDED RTH");
 
             flightCard.Controls.Add(new Label
             {
@@ -538,22 +549,119 @@ namespace NOMAD.MissionPlanner
             _btnAutoTakeoff.Click += (s, e) => UiAsync.Run(this, TriggerAutoTakeoff, nameof(TriggerAutoTakeoff));
             flightCard.Controls.Add(_btnAutoTakeoff);
 
-            _btnAutoLand = CreateButton("Auto Land", INFO_COLOR, 140, 42);
-            _btnAutoLand.Location = new Point(180, 72);
+            flightCard.Controls.Add(new Label
+            {
+                Text = "RTH altitude (m rel home)",
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                ForeColor = TEXT_PRIMARY,
+                Location = new Point(15, 126),
+                AutoSize = true,
+            });
+
+            _numRthAltitudeMsl = new NumericUpDown
+            {
+                Minimum = 1,
+                Maximum = 150,
+                DecimalPlaces = 1,
+                Increment = 1,
+                Value = 30,
+                Width = 90,
+                Location = new Point(170, 123),
+                BackColor = NOMADTheme.INPUT_BG,
+                ForeColor = TEXT_PRIMARY,
+                Font = new Font("Consolas", 10, FontStyle.Bold),
+            };
+            flightCard.Controls.Add(_numRthAltitudeMsl);
+
+            flightCard.Controls.Add(new Label
+            {
+                Text = "Descent rate / target AGL",
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                ForeColor = TEXT_PRIMARY,
+                Location = new Point(15, 160),
+                AutoSize = true,
+            });
+
+            _numRthDescentRate = new NumericUpDown
+            {
+                Minimum = 0.1M,
+                Maximum = 1.0M,
+                DecimalPlaces = 1,
+                Increment = 0.1M,
+                Value = 0.5M,
+                Width = 70,
+                Location = new Point(170, 157),
+                BackColor = NOMADTheme.INPUT_BG,
+                ForeColor = TEXT_PRIMARY,
+                Font = new Font("Consolas", 10, FontStyle.Bold),
+            };
+            flightCard.Controls.Add(_numRthDescentRate);
+
+            _numRthTargetAgl = new NumericUpDown
+            {
+                Minimum = 0.1M,
+                Maximum = 5.0M,
+                DecimalPlaces = 1,
+                Increment = 0.1M,
+                Value = 0.3M,
+                Width = 70,
+                Location = new Point(250, 157),
+                BackColor = NOMADTheme.INPUT_BG,
+                ForeColor = TEXT_PRIMARY,
+                Font = new Font("Consolas", 10, FontStyle.Bold),
+            };
+            flightCard.Controls.Add(_numRthTargetAgl);
+
+            _btnAutoLand = CreateButton("Start RTH", INFO_COLOR, 120, 34);
+            _btnAutoLand.Location = new Point(15, 194);
             _btnAutoLand.Font = new Font("Segoe UI", 11, FontStyle.Bold);
             _btnAutoLand.Click += (s, e) => UiAsync.Run(this, TriggerAutoLand, nameof(TriggerAutoLand));
             flightCard.Controls.Add(_btnAutoLand);
 
+            _btnRthApprove = CreateButton("Approve Phase", ACCENT_COLOR, 140, 34);
+            _btnRthApprove.Location = new Point(145, 194);
+            _btnRthApprove.Click += (s, e) => UiAsync.Run(this, ApproveRthLandingPhase, nameof(ApproveRthLandingPhase));
+            flightCard.Controls.Add(_btnRthApprove);
+
+            _btnRthPause = CreateButton("Pause", WARNING_COLOR, 82, 30);
+            _btnRthPause.Location = new Point(15, 236);
+            _btnRthPause.Click += (s, e) => UiAsync.Run(this, PauseRthLanding, nameof(PauseRthLanding));
+            flightCard.Controls.Add(_btnRthPause);
+
+            _btnRthResume = CreateButton("Resume", INFO_COLOR, 82, 30);
+            _btnRthResume.Location = new Point(105, 236);
+            _btnRthResume.Click += (s, e) => UiAsync.Run(this, ResumeRthLanding, nameof(ResumeRthLanding));
+            flightCard.Controls.Add(_btnRthResume);
+
+            _btnRthApplyEdit = CreateButton("Apply Edit", INFO_COLOR, 105, 30);
+            _btnRthApplyEdit.Location = new Point(195, 236);
+            _btnRthApplyEdit.Click += (s, e) => UiAsync.Run(this, ApplyRthLandingEdit, nameof(ApplyRthLandingEdit));
+            flightCard.Controls.Add(_btnRthApplyEdit);
+
+            _btnRthAbort = CreateButton("Abort", ERROR_COLOR, 76, 30);
+            _btnRthAbort.Location = new Point(308, 236);
+            _btnRthAbort.Click += (s, e) => UiAsync.Run(this, AbortRthLanding, nameof(AbortRthLanding));
+            flightCard.Controls.Add(_btnRthAbort);
+
+            _lblRthLandingStatus = new Label
+            {
+                Text = "RTH: idle",
+                Font = new Font("Consolas", 8),
+                ForeColor = TEXT_SECONDARY,
+                Location = new Point(15, 274),
+                Size = new Size(455, 50),
+            };
+            flightCard.Controls.Add(_lblRthLandingStatus);
+
             flightCard.Controls.Add(new Label
             {
-                Text = "Takeoff switches to GUIDED, arms, then climbs to the selected altitude. Land switches to LAND mode.\n"
-                     + "Flip the RC mode switch any time to override.",
+                Text = "RTH is GUIDED only: approve climb -> home -> controlled descent. LAND mode is failsafe/emergency only.",
                 Font = new Font("Consolas", 8),
                 ForeColor = TEXT_MUTED,
-                Location = new Point(15, 126),
-                AutoSize = true,
+                Location = new Point(15, 326),
+                Size = new Size(455, 34),
             });
-            AddCard(flightCard, 176);
+            AddCard(flightCard, 376);
 
             root.Controls.Add(stack);
             return root;
@@ -657,6 +765,7 @@ namespace NOMAD.MissionPlanner
                 }
 
                 var detectionTask = JetsonApiService.GetAsync("/api/task/2/detections");
+                var rthData = _rthLandingController?.CurrentStatus;
                 await detectionTask;
                 if (IsDisposed || !IsHandleCreated) return;
 
@@ -664,7 +773,7 @@ namespace NOMAD.MissionPlanner
 
                 if (!IsDisposed && IsHandleCreated)
                 {
-                    BeginInvoke((Action)(() => UpdateAllUI(sprayData, detectionData)));
+                    BeginInvoke((Action)(() => UpdateAllUI(sprayData, detectionData, rthData)));
                 }
             }
             catch (ObjectDisposedException) { }
@@ -687,12 +796,16 @@ namespace NOMAD.MissionPlanner
             catch { return null; }
         }
 
-        private void UpdateAllUI(JObject sprayData, JObject detectionData)
+        private void UpdateAllUI(
+            JObject sprayData,
+            JObject detectionData,
+            GuidedRthLandingController.Status rthData = null)
         {
             try
             {
                 UpdateSprayUI(sprayData);
                 UpdateDetectionUI(detectionData);
+                UpdateRthLandingUI(rthData);
             }
             catch (Exception ex)
             {
@@ -973,6 +1086,59 @@ namespace NOMAD.MissionPlanner
             }
         }
 
+        private void UpdateRthLandingUI(GuidedRthLandingController.Status rthData)
+        {
+            if (_lblRthLandingStatus == null) return;
+            if (rthData == null)
+            {
+                _lblRthLandingStatus.Text = "RTH: status unavailable";
+                _lblRthLandingStatus.ForeColor = TEXT_MUTED;
+                return;
+            }
+
+            var phase = rthData.Phase ?? "idle";
+            var next = rthData.NextPhase ?? "";
+            var active = rthData.Active;
+            var paused = rthData.Paused;
+            var awaiting = rthData.AwaitingApproval;
+            var message = rthData.Message ?? "";
+            var error = rthData.ErrorMessage ?? "";
+
+            var parts = new List<string>
+            {
+                $"RTH: {phase.ToUpperInvariant()}" + (paused ? " (PAUSED)" : ""),
+            };
+            if (awaiting && !string.IsNullOrEmpty(next))
+                parts.Add($"approve {next}");
+            if (rthData.DistanceToHomeM.HasValue)
+                parts.Add($"home {rthData.DistanceToHomeM.Value:F1}m");
+            if (rthData.CurrentAltAglM.HasValue)
+                parts.Add($"AGL {rthData.CurrentAltAglM.Value:F1}m");
+            if (rthData.RangefinderM.HasValue)
+                parts.Add($"RF {rthData.RangefinderM.Value:F2}m");
+            else if (rthData.NoRangefinderFallbackActive)
+                parts.Add(rthData.NoRangefinderStableSeconds.HasValue
+                    ? $"NO RF stable {rthData.NoRangefinderStableSeconds.Value:F1}s"
+                    : "NO RF fallback");
+            if (rthData.TargetAltAglM.HasValue)
+                parts.Add($"target {rthData.TargetAltAglM.Value:F1}m");
+
+            _lblRthLandingStatus.Text = string.Join(" | ", parts) + "\n" +
+                (!string.IsNullOrEmpty(error) ? $"ERROR: {error}" : message);
+            _lblRthLandingStatus.ForeColor = !string.IsNullOrEmpty(error) ? ERROR_COLOR
+                : paused ? WARNING_COLOR
+                : awaiting ? ACCENT_COLOR
+                : active ? INFO_COLOR
+                : phase == "complete" ? SUCCESS_COLOR
+                : TEXT_SECONDARY;
+
+            if (_btnRthApprove != null) _btnRthApprove.Enabled = active && awaiting && !paused;
+            if (_btnRthPause != null) _btnRthPause.Enabled = active && !paused;
+            if (_btnRthResume != null) _btnRthResume.Enabled = active && paused;
+            if (_btnRthApplyEdit != null) _btnRthApplyEdit.Enabled = active;
+            if (_btnRthAbort != null) _btnRthAbort.Enabled = active;
+        }
+
         // ============================================================
         // Spray actions
         // ============================================================
@@ -1208,42 +1374,152 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private async Task TriggerAutoLand()
+        private Task TriggerAutoLand()
         {
+            var altitudeMsl = _numRthAltitudeMsl != null ? (double)_numRthAltitudeMsl.Value : 30.0;
+            var descentRate = _numRthDescentRate != null ? (double)_numRthDescentRate.Value : 0.5;
+            var targetAgl = _numRthTargetAgl != null ? (double)_numRthTargetAgl.Value : 0.3;
             var confirm = MessageBox.Show(
-                "Auto land will switch the autopilot to LAND mode and descend at the current position.\n\n" +
-                "Use only when the aircraft is over the landing area.",
-                "Confirm Auto Land",
+                $"Guided RTH landing will create a 3-step plan:\n\n" +
+                $"1. climb/hold to {altitudeMsl:F1} m above home\n" +
+                "2. fly to ArduPilot home at that altitude\n" +
+                $"3. descend over home at {descentRate:F1} m/s to {targetAgl:F1} m AGL\n\n" +
+                "Each phase requires a separate approval. LAND mode will not be used.",
+                "Confirm Guided RTH Landing",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning);
-            if (confirm != DialogResult.Yes) return;
+            if (confirm != DialogResult.Yes) return Task.CompletedTask;
 
             try
             {
                 _btnAutoLand.Enabled = false;
-                AudioAlerts.Speak("Auto land requested.", ignoreRateLimit: true);
+                AudioAlerts.Speak("Guided return to home landing plan requested.", ignoreRateLimit: true);
 
-                var resp = await JetsonApiService.PostAsync("/api/flight/land");
-                if (!resp.IsSuccessStatusCode)
+                var status = _rthLandingController.Start(altitudeMsl, descentRate, targetAgl);
+                if (!string.IsNullOrEmpty(status.ErrorMessage))
                 {
-                    ShowSprayError("Auto land failed: " + await ExtractError(resp));
-                    AudioAlerts.Speak("Auto land failed.", ignoreRateLimit: true);
-                    return;
+                    ShowSprayError("Guided RTH start failed: " + status.ErrorMessage);
+                    AudioAlerts.Speak("Guided return to home start failed.", ignoreRateLimit: true);
+                    return Task.CompletedTask;
                 }
 
-                _lblSprayState.Text = "State: AUTO LAND COMMANDED";
+                UpdateRthLandingUI(status);
+                _lblSprayState.Text = "State: RTH LANDING AWAITING APPROVAL";
                 _lblSprayState.ForeColor = SUCCESS_COLOR;
-                AudioAlerts.Speak("Auto land commanded.", ignoreRateLimit: true);
+                AudioAlerts.Speak("RTH landing plan ready. Approve climb phase when clear.", ignoreRateLimit: true);
             }
             catch (Exception ex)
             {
-                ShowSprayError($"Auto land error: {ex.Message}");
-                AudioAlerts.Speak("Auto land error.", ignoreRateLimit: true);
+                ShowSprayError($"Guided RTH error: {ex.Message}");
+                AudioAlerts.Speak("Guided return to home error.", ignoreRateLimit: true);
             }
             finally
             {
                 _btnAutoLand.Enabled = true;
             }
+
+            return Task.CompletedTask;
+        }
+
+        private async Task ApproveRthLandingPhase()
+        {
+            await RunRthLandingCommand(
+                () => _rthLandingController.ApproveNextPhase(),
+                "RTH phase approved.",
+                "RTH approval failed: ");
+        }
+
+        private async Task PauseRthLanding()
+        {
+            await RunRthLandingCommand(
+                () => _rthLandingController.Pause(),
+                "RTH landing paused.",
+                "RTH pause failed: ");
+        }
+
+        private async Task ResumeRthLanding()
+        {
+            await RunRthLandingCommand(
+                () => _rthLandingController.Resume(),
+                "RTH landing resumed.",
+                "RTH resume failed: ");
+        }
+
+        private async Task ApplyRthLandingEdit()
+        {
+            await RunRthLandingCommand(
+                () => _rthLandingController.Edit(
+                    _numRthAltitudeMsl != null ? (double)_numRthAltitudeMsl.Value : 30.0,
+                    _numRthDescentRate != null ? (double)_numRthDescentRate.Value : 0.5,
+                    _numRthTargetAgl != null ? (double)_numRthTargetAgl.Value : 0.3),
+                "RTH landing edit applied.",
+                "RTH edit failed: ");
+        }
+
+        private async Task AbortRthLanding()
+        {
+            var confirm = MessageBox.Show(
+                "Abort the guided RTH landing plan and hold current position?",
+                "Abort Guided RTH",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning);
+            if (confirm != DialogResult.Yes) return;
+
+            await RunRthLandingCommand(
+                () => _rthLandingController.Abort(),
+                "RTH landing aborted.",
+                "RTH abort failed: ");
+        }
+
+        private async Task RunRthLandingCommand(
+            Func<GuidedRthLandingController.Status> command,
+            string successSpeech,
+            string errorPrefix)
+        {
+            try
+            {
+                SetRthButtonsEnabled(false);
+                var status = await Task.Run(command);
+                if (!string.IsNullOrEmpty(status.ErrorMessage))
+                {
+                    ShowSprayError(errorPrefix + status.ErrorMessage);
+                    AudioAlerts.Speak(errorPrefix.TrimEnd(' ', ':'), ignoreRateLimit: true);
+                    return;
+                }
+
+                UpdateRthLandingUI(status);
+                ShowSprayError("");
+                AudioAlerts.Speak(successSpeech, ignoreRateLimit: true);
+            }
+            catch (Exception ex)
+            {
+                ShowSprayError($"{errorPrefix}{ex.Message}");
+                AudioAlerts.Speak("RTH landing command error.", ignoreRateLimit: true);
+            }
+            finally
+            {
+                SetRthButtonsEnabled(true);
+                RefreshRthLandingStatus();
+            }
+        }
+
+        private void RefreshRthLandingStatus()
+        {
+            try
+            {
+                UpdateRthLandingUI(_rthLandingController?.CurrentStatus);
+            }
+            catch { }
+        }
+
+        private void SetRthButtonsEnabled(bool enabled)
+        {
+            if (_btnAutoLand != null) _btnAutoLand.Enabled = enabled;
+            if (_btnRthApprove != null) _btnRthApprove.Enabled = enabled;
+            if (_btnRthPause != null) _btnRthPause.Enabled = enabled;
+            if (_btnRthResume != null) _btnRthResume.Enabled = enabled;
+            if (_btnRthApplyEdit != null) _btnRthApplyEdit.Enabled = enabled;
+            if (_btnRthAbort != null) _btnRthAbort.Enabled = enabled;
         }
 
         private static async Task<string> ExtractError(HttpResponseMessage resp)
@@ -1401,6 +1677,8 @@ namespace NOMAD.MissionPlanner
                 }
                 _slam3DView?.Dispose();
                 _videoPlayer?.Dispose();
+                _rthLandingController?.Dispose();
+                _rthLandingController = null;
             }
             base.Dispose(disposing);
         }

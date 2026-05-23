@@ -645,15 +645,42 @@ class TargetLocalizerNode(Node):
         depth = self.latest_depth.copy()
         captured_servo_pitch = self.servo_pitch_deg
 
-        # Run HSV circle detection
-        circles = self.circle_detector.detect(rgb)
+        # Run HSV circle detection unless the GCS requested a one-shot
+        # crosshair capture. The request is passed through a sidecar because
+        # std_srvs/Trigger has no payload fields.
+        force_crosshair = False
+        try:
+            import json as _json
+            for options_path in (
+                "/workspaces/isaac_ros-dev/config/capture_options.json",
+                os.path.join(self.output_dir, "capture_options.json"),
+            ):
+                if not os.path.exists(options_path):
+                    continue
+                with open(options_path, "r") as f:
+                    options = _json.load(f)
+                force_crosshair = bool(options.get("force_crosshair"))
+                try:
+                    os.remove(options_path)
+                except OSError:
+                    pass
+                break
+        except Exception as e:
+            self.get_logger().warn(f"Capture options read failed (ignored): {e}")
+
+        if force_crosshair:
+            self.get_logger().info("Capture: forcing crosshair fallback; circle detections ignored.")
+            circles = []
+        else:
+            circles = self.circle_detector.detect(rgb)
 
         new_targets: List[TargetRecord] = []
 
         if len(circles) == 0:
-            # No circles detected — use the frame center as a manual crosshair
-            # fallback. The GCS still gets a (lat, lon, height) and decides
-            # which building face / corner reference to attach.
+            # No circles detected, or the GCS explicitly requested the
+            # crosshair backup: use the frame center. The GCS still gets a
+            # (lat, lon, height) and decides which building face / corner
+            # reference to attach.
             center_px = self.latest_rgb.shape[1] // 2
             center_py = self.latest_rgb.shape[0] // 2
             _chw = 5
@@ -674,7 +701,8 @@ class TargetLocalizerNode(Node):
                 h, w = annotated.shape[:2]
                 cv2.line(annotated, (w // 2 - 20, h // 2), (w // 2 + 20, h // 2), (0, 255, 255), 2)
                 cv2.line(annotated, (w // 2, h // 2 - 20), (w // 2, h // 2 + 20), (0, 255, 255), 2)
-                cv2.putText(annotated, f"{target_letter}: center-depth fallback", (10, 30),
+                fallback_label = "forced crosshair" if force_crosshair else "center-depth fallback"
+                cv2.putText(annotated, f"{target_letter}: {fallback_label}", (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
                 try:
                     ok, buf = cv2.imencode(".jpg", annotated)
@@ -705,6 +733,7 @@ class TargetLocalizerNode(Node):
                         "drone_alt": self.drone_alt,
                         "distance_m": center_distance_m,
                         "center_fallback": True,
+                        "force_crosshair": force_crosshair,
                     },
                 )
                 self.targets.append(record)

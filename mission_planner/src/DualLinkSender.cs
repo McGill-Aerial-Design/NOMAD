@@ -141,9 +141,10 @@ namespace NOMAD.MissionPlanner
         public async Task<CommandResult> SendTask1Capture(
             float? headingOverride = null,
             float? gimbalPitchOverride = null,
-            float? lidarDistanceOverride = null)
+            float? lidarDistanceOverride = null,
+            bool forceCrosshair = false)
         {
-            if (_config.UseELRS)
+            if (_config.UseELRS && !forceCrosshair)
             {
                 return await SendMAVLinkCommand(
                     CMD_NOMAD_TASK1_CAPTURE,
@@ -158,7 +159,8 @@ namespace NOMAD.MissionPlanner
                 {
                     heading_deg = headingOverride,
                     gimbal_pitch_deg = gimbalPitchOverride,
-                    lidar_distance_m = lidarDistanceOverride
+                    lidar_distance_m = lidarDistanceOverride,
+                    force_crosshair = forceCrosshair
                 };
                 // Use the target-localizer capture endpoint with the long-run client.
                 return await SendHttpPostLongRun("/api/task/1/target/capture", body);

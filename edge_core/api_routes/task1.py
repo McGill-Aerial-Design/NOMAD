@@ -500,6 +500,7 @@ def register_task1_routes(app, ctx) -> None:
         heading_deg: Optional[float] = None
         gimbal_pitch_deg: Optional[float] = None
         lidar_distance_m: Optional[float] = None
+        force_crosshair: Optional[bool] = None
 
     @app.post("/api/task/1/target/capture", tags=["Task 1"])
     async def task1_capture_target(request: Request):
@@ -533,7 +534,7 @@ def register_task1_routes(app, ctx) -> None:
             update_fields = {
                 k: v
                 for k, v in overrides.model_dump().items()
-                if v is not None
+                if v is not None and k != "force_crosshair"
             }
             if update_fields:
                 try:
@@ -541,17 +542,41 @@ def register_task1_routes(app, ctx) -> None:
                 except Exception as exc:
                     logger.warning("Task1 capture override update failed: %s", exc)
 
+        force_crosshair = bool(overrides.force_crosshair) if overrides is not None else False
+        capture_options_path = os.path.join(_TARGET_SIDECAR_DIR, "capture_options.json")
+        if force_crosshair:
+            _atomic_write_json(
+                capture_options_path,
+                {"force_crosshair": True, "created_at": datetime.now(timezone.utc).isoformat()},
+                indent=None,
+            )
+        else:
+            # Clear any stale one-shot option left by an interrupted forced capture.
+            try:
+                if os.path.exists(capture_options_path):
+                    os.remove(capture_options_path)
+            except OSError as exc:
+                logger.warning("Task1 capture option cleanup failed: %s", exc)
+
         # The helper maps any `success: false` response (including the
         # application-level "no circles detected" case) to HTTPException 502,
         # which the client then shows as a scary "HTTP 502 Bad Gateway".
         # Catch that and return a structured success=False payload instead, so
         # legitimate no-detect captures don't look like gateway outages.
         try:
-            output = await _call_target_capture_with_retries(
-                max_attempts=4,
-                retry_delay_s=1.5,
-                timeout_s=30.0,
-            )
+            try:
+                output = await _call_target_capture_with_retries(
+                    max_attempts=4,
+                    retry_delay_s=1.5,
+                    timeout_s=30.0,
+                )
+            finally:
+                if force_crosshair:
+                    try:
+                        if os.path.exists(capture_options_path):
+                            os.remove(capture_options_path)
+                    except OSError as exc:
+                        logger.warning("Task1 forced capture option cleanup failed: %s", exc)
         except HTTPException as exc:
             detail_text = str(exc.detail or "").strip()
             low = detail_text.lower()

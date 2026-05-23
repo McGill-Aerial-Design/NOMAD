@@ -42,6 +42,7 @@ namespace NOMAD.MissionPlanner
         private Button _btnPlacementMode;
         private Button _btnGpsGround;
         private Button _btnGpsRoof;
+        private Button _btnDronePov;
         private TextBox _txtPreview;
         private Label _lblStatus;
         private ProgressBar _progressBar;
@@ -768,6 +769,9 @@ namespace NOMAD.MissionPlanner
             _btnGpsRoof.Click += (s, e) => AddGpsTarget("roof");
             buttonPanel.Controls.Add(_btnGpsRoof);
 
+            _btnDronePov = CreateButton("View: Orbit", Color.FromArgb(60, 60, 65), 105, 28);
+            _btnDronePov.Click += (s, e) => ToggleDronePov();
+
             _btnPreview = CreateButton("Preview TXT", Color.FromArgb(80, 80, 83), 100, 28);
             _btnPreview.Click += BtnPreview_Click;
             buttonPanel.Controls.Add(_btnPreview);
@@ -863,6 +867,7 @@ namespace NOMAD.MissionPlanner
             modelTools.Controls.Add(_btnPlacementMode);
             modelTools.Controls.Add(_btnGpsGround);
             modelTools.Controls.Add(_btnGpsRoof);
+            modelTools.Controls.Add(_btnDronePov);
 
             var modelLayout = new TableLayoutPanel
             {
@@ -982,6 +987,19 @@ namespace NOMAD.MissionPlanner
                 ? "Placement mode on: click the building, roof, or ground search area to add a target."
                 : "Placement mode off.";
             _lblStatus.ForeColor = _placementMode ? SUCCESS_COLOR : TEXT_SECONDARY;
+        }
+
+        private void ToggleDronePov()
+        {
+            if (_viewer == null) return;
+
+            _viewer.DronePovEnabled = !_viewer.DronePovEnabled;
+            _btnDronePov.Text = _viewer.DronePovEnabled ? "View: Drone" : "View: Orbit";
+            _btnDronePov.BackColor = _viewer.DronePovEnabled ? WARNING_COLOR : Color.FromArgb(60, 60, 65);
+            _lblStatus.Text = _viewer.DronePovEnabled
+                ? "Drone POV on: 3D model camera follows the live drone pose."
+                : "Orbit view on.";
+            _lblStatus.ForeColor = _viewer.DronePovEnabled ? WARNING_COLOR : TEXT_SECONDARY;
         }
 
         private void OnViewerPlacementClicked(BuildingViewer3D.Placement placement)

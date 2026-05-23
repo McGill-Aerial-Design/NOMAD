@@ -822,16 +822,128 @@ def register_task2_routes(app, ctx) -> None:
             raise HTTPException(status_code=409, detail=result.get("error", "Auto-takeoff failed"))
         return result
 
+    async def _json_body_or_empty(request: Request) -> dict:
+        try:
+            raw = await request.body()
+            if not raw:
+                return {}
+            body = json.loads(raw)
+            return body if isinstance(body, dict) else {}
+        except Exception:
+            return {}
+
     @app.post("/api/flight/land", tags=["Flight"])
     async def flight_land(request: Request):
-        """Autonomous landing at the current position (ArduCopter LAND mode)."""
+        """Start the guided operator-approved RTH landing plan.
+
+        This endpoint intentionally does not switch ArduCopter into LAND mode.
+        LAND mode is reserved for failsafe/emergency use because the configured
+        descent rate is too aggressive for normal Task 2 recovery.
+        """
         nav_controller = request.app.state.nav_controller
         if not nav_controller:
             raise HTTPException(status_code=503, detail="Navigation controller not initialized")
 
-        result = nav_controller.auto_land()
+        body = await _json_body_or_empty(request)
+        result = nav_controller.start_rth_landing(
+            climb_alt_m=float(body.get("climb_alt_m", body.get("altitude_m", 30.0))),
+            descent_rate_mps=float(body.get("descent_rate_mps", 0.5)),
+            descent_target_agl_m=float(body.get("descent_target_agl_m", 0.3)),
+        )
         if not result.get("success"):
-            raise HTTPException(status_code=409, detail=result.get("error", "Auto-land failed"))
+            raise HTTPException(status_code=409, detail=result.get("error", "RTH landing start failed"))
+        return result
+
+    @app.get("/api/flight/rth_landing/status", tags=["Flight"])
+    async def flight_rth_landing_status(request: Request):
+        """Return the guided RTH landing workflow state."""
+        nav_controller = request.app.state.nav_controller
+        if not nav_controller:
+            raise HTTPException(status_code=503, detail="Navigation controller not initialized")
+
+        return {"success": True, **nav_controller.rth_landing_status.to_dict()}
+
+    @app.post("/api/flight/rth_landing/start", tags=["Flight"])
+    async def flight_rth_landing_start(request: Request):
+        """Start a guided RTH landing plan and wait for climb approval."""
+        nav_controller = request.app.state.nav_controller
+        if not nav_controller:
+            raise HTTPException(status_code=503, detail="Navigation controller not initialized")
+
+        body = await _json_body_or_empty(request)
+        result = nav_controller.start_rth_landing(
+            climb_alt_m=float(body.get("climb_alt_m", body.get("altitude_m", 30.0))),
+            descent_rate_mps=float(body.get("descent_rate_mps", 0.5)),
+            descent_target_agl_m=float(body.get("descent_target_agl_m", 0.3)),
+        )
+        if not result.get("success"):
+            raise HTTPException(status_code=409, detail=result.get("error", "RTH landing start failed"))
+        return result
+
+    @app.post("/api/flight/rth_landing/approve", tags=["Flight"])
+    async def flight_rth_landing_approve(request: Request):
+        """Approve the next RTH landing phase."""
+        nav_controller = request.app.state.nav_controller
+        if not nav_controller:
+            raise HTTPException(status_code=503, detail="Navigation controller not initialized")
+
+        body = await _json_body_or_empty(request)
+        result = nav_controller.approve_rth_landing_phase(body.get("phase"))
+        if not result.get("success"):
+            raise HTTPException(status_code=409, detail=result.get("error", "RTH landing approval failed"))
+        return result
+
+    @app.post("/api/flight/rth_landing/pause", tags=["Flight"])
+    async def flight_rth_landing_pause(request: Request):
+        """Pause RTH landing and hold the current position."""
+        nav_controller = request.app.state.nav_controller
+        if not nav_controller:
+            raise HTTPException(status_code=503, detail="Navigation controller not initialized")
+
+        result = nav_controller.pause_rth_landing()
+        if not result.get("success"):
+            raise HTTPException(status_code=409, detail=result.get("error", "RTH landing pause failed"))
+        return result
+
+    @app.post("/api/flight/rth_landing/resume", tags=["Flight"])
+    async def flight_rth_landing_resume(request: Request):
+        """Resume the active RTH landing phase after pause/edit."""
+        nav_controller = request.app.state.nav_controller
+        if not nav_controller:
+            raise HTTPException(status_code=503, detail="Navigation controller not initialized")
+
+        result = nav_controller.resume_rth_landing()
+        if not result.get("success"):
+            raise HTTPException(status_code=409, detail=result.get("error", "RTH landing resume failed"))
+        return result
+
+    @app.post("/api/flight/rth_landing/edit", tags=["Flight"])
+    async def flight_rth_landing_edit(request: Request):
+        """Edit RTH altitude/descent settings while active or paused."""
+        nav_controller = request.app.state.nav_controller
+        if not nav_controller:
+            raise HTTPException(status_code=503, detail="Navigation controller not initialized")
+
+        body = await _json_body_or_empty(request)
+        result = nav_controller.edit_rth_landing(
+            climb_alt_m=body.get("climb_alt_m", body.get("altitude_m")),
+            descent_rate_mps=body.get("descent_rate_mps"),
+            descent_target_agl_m=body.get("descent_target_agl_m"),
+        )
+        if not result.get("success"):
+            raise HTTPException(status_code=409, detail=result.get("error", "RTH landing edit failed"))
+        return result
+
+    @app.post("/api/flight/rth_landing/abort", tags=["Flight"])
+    async def flight_rth_landing_abort(request: Request):
+        """Abort RTH landing without entering LAND mode."""
+        nav_controller = request.app.state.nav_controller
+        if not nav_controller:
+            raise HTTPException(status_code=503, detail="Navigation controller not initialized")
+
+        result = nav_controller.abort_rth_landing()
+        if not result.get("success"):
+            raise HTTPException(status_code=409, detail=result.get("error", "RTH landing abort failed"))
         return result
 
     # ==================== Target Color (Pre-flight) ===========================

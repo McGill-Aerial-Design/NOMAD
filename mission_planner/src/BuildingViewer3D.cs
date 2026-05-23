@@ -73,6 +73,18 @@ namespace NOMAD.MissionPlanner
         public event Action<Placement> PlacementClicked;
         public string HighlightedTargetId { get; private set; }
         public bool PlacementMode { get; set; }
+        public bool DronePovEnabled
+        {
+            get => _dronePovEnabled;
+            set
+            {
+                if (_dronePovEnabled == value) return;
+                _dronePovEnabled = value;
+                _heldKeys.Clear();
+                _navTimer.Stop();
+                _glControl?.Invalidate();
+            }
+        }
         public float BuildingHeightM => _buildingHeight;
 
         public void SetHighlightedTarget(string id)
@@ -224,6 +236,7 @@ namespace NOMAD.MissionPlanner
         private float _droneYawRad;
         private float _dronePitchRad;
         private float _droneRollRad;
+        private bool _dronePovEnabled;
 
         // Orbit camera state.
         private float _yawDeg = 35f;
@@ -309,6 +322,36 @@ namespace NOMAD.MissionPlanner
 
         private (Matrix4 view, Matrix4 proj, Vector3 eye) BuildMatrices()
         {
+            float aspect = _viewW > 0 && _viewH > 0 ? (float)_viewW / _viewH : 1f;
+            var proj = Matrix4.CreatePerspectiveFieldOfView(
+                MathHelperToRad(55f), aspect, 0.1f, 500f);
+
+            if (_dronePovEnabled && _hasDronePose)
+            {
+                float glX = _droneEast;
+                float glY = Math.Max(0.08f, _droneUp);
+                float glZ = -_droneNorth;
+
+                // Match the SLAM FPV convention: ROS yaw maps to GL heading,
+                // pitch is inverted into GL elevation, roll controls camera up.
+                float headingRad = -_droneYawRad;
+                float elevRad = -_dronePitchRad;
+                float cosH = (float)Math.Cos(headingRad);
+                float sinH = (float)Math.Sin(headingRad);
+                float cosE = (float)Math.Cos(elevRad);
+                float sinE = (float)Math.Sin(elevRad);
+
+                var povEye = new Vector3(glX, glY, glZ);
+                var forward = new Vector3(sinH * cosE, sinE, -cosH * cosE);
+                if (forward.LengthSquared < 0.0001f)
+                    forward = new Vector3(0f, 0f, -1f);
+                forward.Normalize();
+
+                var up = BuildRolledUpVector(forward, _droneRollRad);
+                var povView = Matrix4.LookAt(povEye, povEye + forward, up);
+                return (povView, proj, povEye);
+            }
+
             float yaw = _yawDeg * (float)Math.PI / 180f;
             float pitch = MathHelperClamp(_pitchDeg, -85f, 85f) * (float)Math.PI / 180f;
 
@@ -322,15 +365,32 @@ namespace NOMAD.MissionPlanner
             Vector3 dir = new Vector3(cp * sy, sp, -cp * cy);
             Vector3 eye = _panTarget + dir * _distance;
 
-            float aspect = _viewW > 0 && _viewH > 0 ? (float)_viewW / _viewH : 1f;
-            var proj = Matrix4.CreatePerspectiveFieldOfView(
-                MathHelperToRad(55f), aspect, 0.1f, 500f);
             var view = Matrix4.LookAt(eye, _panTarget, Vector3.UnitY);
             return (view, proj, eye);
         }
 
         private static float MathHelperToRad(float deg) => deg * (float)Math.PI / 180f;
         private static float MathHelperClamp(float v, float lo, float hi) => Math.Max(lo, Math.Min(hi, v));
+
+        private static Vector3 BuildRolledUpVector(Vector3 forward, float rollRad)
+        {
+            Vector3 worldUp = Vector3.UnitY;
+            Vector3 right = Vector3.Cross(forward, worldUp);
+            if (right.LengthSquared < 0.0001f)
+                right = Vector3.UnitX;
+            right.Normalize();
+
+            Vector3 up = Vector3.Cross(right, forward);
+            up.Normalize();
+
+            float cosR = (float)Math.Cos(rollRad);
+            float sinR = (float)Math.Sin(rollRad);
+            var rolled = up * cosR + right * sinR;
+            if (rolled.LengthSquared < 0.0001f)
+                return Vector3.UnitY;
+            rolled.Normalize();
+            return rolled;
+        }
 
         // ==================== Rendering ====================
 
@@ -528,7 +588,7 @@ namespace NOMAD.MissionPlanner
 
         private void DrawDronePose()
         {
-            if (!_hasDronePose) return;
+            if (!_hasDronePose || _dronePovEnabled) return;
 
             float glX = _droneEast;
             float glY = Math.Max(0.08f, _droneUp);
@@ -564,10 +624,29 @@ namespace NOMAD.MissionPlanner
                     DrawWallLabels2D(g);
                     DrawCornerLabels2D(g);
                     DrawTargetLabels2D(g);
+                    DrawViewModeLabel2D(g);
                     DrawCompass2D(g);
                 }
             }
             catch { /* GDI/GL race on resize — skip this frame. */ }
+        }
+
+        private void DrawViewModeLabel2D(Graphics g)
+        {
+            if (!_dronePovEnabled) return;
+
+            string text = _hasDronePose ? "DRONE POV" : "DRONE POV - WAITING FOR POSE";
+            using (var font = new Font("Segoe UI", 8, FontStyle.Bold))
+            {
+                var size = g.MeasureString(text, font);
+                var rect = new RectangleF(10, 10, size.Width + 16, size.Height + 8);
+                using (var bg = new SolidBrush(Color.FromArgb(180, 18, 18, 22)))
+                    g.FillRectangle(bg, rect);
+                using (var pen = new Pen(Color.FromArgb(220, 255, 193, 7), 1f))
+                    g.DrawRectangle(pen, rect.X, rect.Y, rect.Width, rect.Height);
+                using (var brush = new SolidBrush(Color.FromArgb(255, 193, 7)))
+                    g.DrawString(text, font, brush, rect.X + 8, rect.Y + 4);
+            }
         }
 
         // Compass rose in the top-right that rotates with the camera so the user
@@ -808,6 +887,9 @@ namespace NOMAD.MissionPlanner
 
         private void SetNavigationKey(Keys key, bool down)
         {
+            if (_dronePovEnabled)
+                return;
+
             if (key == Keys.Home && down)
             {
                 _panTarget = Vector3.Zero;
@@ -847,6 +929,13 @@ namespace NOMAD.MissionPlanner
 
         private void NavTimer_Tick(object sender, EventArgs e)
         {
+            if (_dronePovEnabled)
+            {
+                _heldKeys.Clear();
+                _navTimer.Stop();
+                return;
+            }
+
             if (_heldKeys.Count == 0)
             {
                 _navTimer.Stop();
@@ -914,6 +1003,13 @@ namespace NOMAD.MissionPlanner
             int dy = e.Y - _lastMouse.Y;
             _lastMouse = e.Location;
 
+            if (_dronePovEnabled)
+            {
+                if (_dragButton == MouseButtons.None)
+                    SetHover(PickTarget(e.Location));
+                return;
+            }
+
             if (_dragButton == MouseButtons.Left)
             {
                 _yawDeg = (_yawDeg + dx * 0.4f) % 360f;
@@ -940,6 +1036,8 @@ namespace NOMAD.MissionPlanner
 
         private void GlControl_MouseWheel(object sender, MouseEventArgs e)
         {
+            if (_dronePovEnabled) return;
+
             float factor = e.Delta > 0 ? 0.85f : 1.18f;
             _distance = MathHelperClamp(_distance * factor, 4f, 120f);
             _glControl.Invalidate();

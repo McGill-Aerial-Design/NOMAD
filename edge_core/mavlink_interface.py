@@ -91,7 +91,7 @@ class MavlinkService:
                 msg_types = [
                     "HEARTBEAT", "SYS_STATUS", "GLOBAL_POSITION_INT",
                     "ATTITUDE", "SYSTEM_TIME", "COMMAND_ACK",
-                    "SERVO_OUTPUT_RAW",  # actual FC PWM outputs for camera tilt TF
+                    "HOME_POSITION", "SERVO_OUTPUT_RAW",  # actual FC PWM outputs for camera tilt TF
                 ]
                 msg = self._conn.recv_match(
                     type=msg_types,
@@ -139,6 +139,16 @@ class MavlinkService:
                     gps_alt=gps_alt,
                     alt_agl_m=alt_agl_m,
                 )
+            elif msg_type == "HOME_POSITION":
+                lat_raw = getattr(msg, "latitude", 0)
+                lon_raw = getattr(msg, "longitude", 0)
+                alt_raw = getattr(msg, "altitude", 0)
+                if lat_raw or lon_raw:
+                    self.state_manager.update_state(
+                        home_lat=lat_raw / 1e7,
+                        home_lon=lon_raw / 1e7,
+                        home_alt=alt_raw / 1000.0,
+                    )
             elif msg_type == "ATTITUDE":
                 import math
                 # ATTITUDE message provides roll/pitch/yaw in radians
@@ -793,6 +803,64 @@ class MavlinkService:
             True if the mode change was acknowledged.
         """
         return self.set_mode(9)  # ArduCopter LAND mode
+
+    def request_home_position(self) -> bool:
+        """Ask ArduPilot to send HOME_POSITION once."""
+        if self._conn is None:
+            return False
+        try:
+            return self._send_command_long_and_wait_ack(
+                mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE,
+                mavutil.mavlink.MAVLINK_MSG_ID_HOME_POSITION,
+                0, 0, 0, 0, 0, 0,
+                timeout_s=1.0,
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).debug(f"Home position request error: {e}")
+            return False
+
+    def send_global_position_target(
+        self,
+        lat: float,
+        lon: float,
+        alt_msl: float,
+        yaw: float | None = None,
+    ) -> bool:
+        """
+        Send a GUIDED global position target in WGS84 / MSL.
+
+        This uses SET_POSITION_TARGET_GLOBAL_INT instead of LAND/RTL so NOMAD
+        can own the Task 2 return-home landing profile and keep the operator in
+        the approval loop for each phase.
+        """
+        if self._conn is None:
+            return False
+
+        try:
+            type_mask = 0b0000_1111_1111_1000
+            if yaw is not None:
+                type_mask &= ~(1 << 10)  # use yaw
+
+            self._conn.mav.set_position_target_global_int_send(
+                0,
+                self._conn.target_system,
+                self._conn.target_component,
+                mavutil.mavlink.MAV_FRAME_GLOBAL_INT,
+                type_mask,
+                int(round(float(lat) * 1e7)),
+                int(round(float(lon) * 1e7)),
+                float(alt_msl),
+                0, 0, 0,
+                0, 0, 0,
+                float(yaw or 0.0),
+                0,
+            )
+            return True
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).debug(f"Global position target error: {e}")
+            return False
 
     def send_position_target(
         self,

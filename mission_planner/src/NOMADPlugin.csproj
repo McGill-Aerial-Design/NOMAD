@@ -164,6 +164,7 @@
     <Compile Include="NOMADTask1View.cs" />
     <Compile Include="GimbalJoystickWindow.cs" />
     <Compile Include="GimbalController.cs" />
+    <Compile Include="GuidedRthLandingController.cs" />
     <Compile Include="NomadJoystickService.cs" />
     <Compile Include="SerialJoystickBridge.cs" />
     <Compile Include="PayloadControlPanel.cs" />
@@ -199,6 +200,7 @@
 <Compile Include="GoogleDriveUploadService.cs" />
     <Compile Include="RtmChecklistPanel.cs" />
     <Compile Include="Task1CurrentBudgetPanel.cs" />
+    <Compile Include="Task1ChecklistPanel.cs" />
     <Compile Include="Task1LapMissionPlanner.cs" />
     <Compile Include="Task1UploadPanel.cs" />
     <Compile Include="Task2PreflightPanel.cs" />

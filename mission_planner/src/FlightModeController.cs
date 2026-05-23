@@ -55,6 +55,17 @@ namespace NOMAD.MissionPlanner
         // Reflection helpers (mirror MPFenceUploader's pattern)
         // ============================================================
 
+        public static bool SetGuidedMode()
+        {
+            var comPort = MainV2.comPort;
+            if (comPort == null)
+            {
+                Console.WriteLine("NOMAD SetGuidedMode: not connected.");
+                return false;
+            }
+            return TrySetMode(comPort, "GUIDED");
+        }
+
         private static bool TrySetMode(object comPort, string modeName)
         {
             try
