@@ -1,0 +1,59 @@
+# Pre-commit hooks for NOMAD. Install with `pre-commit install` (or run all via
+# `pixi run precommit`). Keep these in sync with the lint CI workflow.
+
+minimum_pre_commit_version: "3.5.0"
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '\.(svg|patch)$'
+      - id: end-of-file-fixer
+        exclude: '\.(svg|patch)$'
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.7.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+        files: '^(scripts|tailscale|infra)/.*\.sh$'
+        # Match the CI excludes (.github/workflows/lint.yml): service scripts
+        # source siblings/config (SC1091), define vars used by sourced code
+        # (SC2034), and use a bottom dispatcher calling helpers defined earlier
+        # in the same file (SC2218 — resolved at call time).
+        args:
+          - --external-sources
+          - --severity=warning
+          - --exclude=SC1091,SC2034,SC2218
+
+  - repo: local
+    hooks:
+      - id: spdx-header
+        name: SPDX license header
+        description: Check for SPDX-License-Identifier in staged source files
+        entry: >
+          python -c "import sys;missing=[p for p in sys.argv[1:] if 'SPDX-License-Identifier' not in open(p).read()];[print(f'SPDX-License-Identifier missing: {p}') for p in missing];exit(1 if missing else 0)"
+        language: python
+        files: \.(py|cs|sh)$
+      - id: file-line-count
+        name: File line count (max 800)
+        description: Reject source files that exceed 800 lines
+        entry: >
+          python -c "import sys;errors=[p for p in sys.argv[1:] if sum(1 for _ in open(p)) > 800];[print(f'Over 800 lines: {p}') for p in errors];exit(1 if errors else 0)"
+        language: python
+        files: \.(py|cs|sh)$

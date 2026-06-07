@@ -1,0 +1,36 @@
+{
+    "recommendations": [
+        // Pixi — adds the status-bar environment selector + task explorer.
+        // pixi-code registers pixi envs with the Python Environments extension,
+        // so both are required for the status-bar picker to appear.
+        "renan-r-santos.pixi-code",
+        "ms-python.vscode-python-envs",
+        // Python
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        // C#
+        "ms-dotnettools.csharp",
+        "ms-dotnettools.csdevkit",
+        // Docker
+        "ms-azuretools.vscode-docker",
+        // Docs / Markdown
+        "yzhang.markdown-all-in-one",
+        "streetsidesoftware.code-spell-checker",
+        // Shell
+        "foxundermoon.shell-format",
+        "timonwong.shellcheck",
+        // GitHub
+        "github.vscode-github-actions",
+        "github.vscode-pull-request-github",
+        // TOML (pixi.toml, pyproject.toml)
+        "tamasfe.even-better-toml",
+        // YAML
+        "redhat.vscode-yaml",
+        // PowerShell
+        "ms-vscode.powershell",
+        // Tasks2 — adds task runner to the status bar
+        "dragoscv.tasks2"
+    ],
+    "unwantedRecommendations": []
+}

@@ -1,0 +1,73 @@
+{
+    // ==================== Editor ====================
+    // Visual guide at 120 chars (matching ruff line-length)
+    "editor.rulers": [
+        120
+    ],
+    "editor.formatOnSave": true,
+    "editor.trimTrailingWhitespace": true,
+    "editor.insertFinalNewline": true,
+    "files.trimFinalNewlines": true,
+    // ==================== Python ====================
+    // pixi-code registers pixi environments with the Python Environments
+    // extension; pick "default" from the status-bar selector. This fallback
+    // path keeps Pylance working before/without the extension and is
+    // workspace-relative so it is portable across machines.
+    "python.defaultInterpreterPath": "${workspaceFolder}/.pixi/envs/default/python.exe",
+    "python.terminal.activateEnvironment": true,
+    "python.terminal.activateEnvInCurrentTerminal": true,
+    // Python analysis
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/edge_core",
+        "${workspaceFolder}/infra/tailscale/src"
+    ],
+    "python.analysis.typeCheckingMode": "basic",
+    // Ruff: lint + format on save (matches pixi.toml tasks)
+    "[python]": {
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.fixAll.ruff": "explicit",
+            "source.organizeImports.ruff": "explicit"
+        },
+        "editor.defaultFormatter": "charliermarsh.ruff"
+    },
+    // ==================== C# (Mission Planner Plugin) ====================
+    // Omnisharp: editorconfig support + analyzers
+    "omnisharp.enableEditorConfigSupport": true,
+    "omnisharp.enableRoslynAnalyzers": true,
+    // dotnet format integration
+    "[csharp]": {
+        "editor.formatOnSave": true,
+        "editor.formatOnPaste": true,
+        "editor.defaultFormatter": "ms-dotnettools.csharp"
+    },
+    // ==================== Docker ====================
+    "docker.commands.build": "-f ${workspaceFolder}/docker/${tag} -t ${image} ${workspaceFolder}",
+    "docker.dockerfileSearchList": [
+        "docker/Dockerfile.dev",
+        "docker/Dockerfile.jetson",
+        "Dockerfile"
+    ],
+    // ==================== File Associations ====================
+    "files.associations": {
+        "*.param": "properties",
+        "*.env": "properties",
+        "*.conf": "properties"
+    },
+    // ==================== Search / Exclude ====================
+    "files.exclude": {
+        "**/.git": true,
+        "**/__pycache__": true,
+        "**/tmpclaude-*": true,
+        "**/bin": true,
+        "**/obj": true,
+        "**/.vs": true
+    },
+    "search.exclude": {
+        "**/node_modules": true,
+        "**/__pycache__": true,
+        "**/tmpclaude-*": true,
+        "**/bin": true,
+        "**/obj": true
+    }
+}

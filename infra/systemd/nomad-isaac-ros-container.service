@@ -1,0 +1,23 @@
+[Unit]
+Description=NOMAD Isaac ROS Container (sleep infinity host)
+After=docker.service
+Requires=docker.service
+PartOf=nomad.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=__NOMAD_USER__
+Group=__NOMAD_USER__
+WorkingDirectory=__NOMAD_ROOT__
+EnvironmentFile=__NOMAD_ROOT__/config/nomad.env
+
+ExecStart=/bin/bash __NOMAD_ROOT__/scripts/services/isaac_ros_container.sh start
+ExecStop=/bin/bash __NOMAD_ROOT__/scripts/services/isaac_ros_container.sh stop
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nomad-isaac-ros-container
+
+[Install]
+WantedBy=nomad.target

@@ -1,0 +1,94 @@
+# NOMAD Docker Ignore File
+# Prevents unnecessary files from being included in the Docker build context
+
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.Python
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Test and coverage
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Local development
+*.local
+*.log
+.env.local
+
+# Data and logs (mounted at runtime)
+data/
+mission_logs/
+
+# Windows-specific
+infra/startup.ps1
+scripts/*.ps1
+
+# C# MissionPlanner plugin (separate build)
+mission_planner/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Large archives / model bundles (never needed in the build context)
+*.zip
+*.tar.gz
+*.rar
+*.7z
+*.svo
+*.svo2
+
+# Secrets / credentials (must never enter an image)
+.env
+.env.*
+!.env.example
+config/nomad.env
+client_secret_*.json
+nomad-*.json
+*.key
+*.pem
+*.p12
+
+# Tooling caches / agent data
+.pixi/
+.ruff_cache/
+.mypy_cache/
+.pycache_tmp/
+.kilo/
+.mcp/
+.claude/
+nul

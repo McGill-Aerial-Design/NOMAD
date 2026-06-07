@@ -1,0 +1,139 @@
+###############################################
+# MediaMTX Configuration for NOMAD
+#
+# Ultra-low latency configuration for FPV drone operations.
+# Optimized for <150ms glass-to-glass latency.
+#
+# Source: https://github.com/bluenviron/mediamtx
+###############################################
+
+# ============================================================
+# Global Settings - LOW LATENCY OPTIMIZED
+# ============================================================
+
+# Logging level (debug, info, warn, error)
+logLevel: warn
+logDestinations: [stdout]
+
+# Minimal timeouts for low latency
+readTimeout: 5s
+writeTimeout: 5s
+
+# ============================================================
+# Authentication
+# ============================================================
+
+# SECURITY NOTE: Access is unauthenticated. MediaMTX does not support
+# IP-based allow-listing natively. Restrict access at the network level:
+# - Tailscale ACLs should limit access to the 100.64.0.0/10 subnet
+# - firewall rules (iptables/nftables) should block non-Tailscale IPs
+#   on ports 8554 (RTSP) and 9997 (API)
+# - Do NOT expose these ports on public interfaces without ACLs
+authMethod: internal
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: api
+      - action: metrics
+      - action: publish
+      - action: read
+
+# ============================================================
+# API (for monitoring)
+# ============================================================
+
+api: yes
+apiAddress: :9997
+# Metrics disabled (port conflict)
+metrics: no
+
+# ============================================================
+# RTSP Server - LOW LATENCY OPTIMIZED
+# ============================================================
+
+rtsp: yes
+rtspAddress: :8554
+
+# Disable auth for local/Tailscale access
+rtspAuthMethods: [basic]
+
+# Write queue: buffer outgoing packets to absorb network jitter.
+# Too small = dropped frames on slow clients. Too large = stale video.
+# 256 packets ~= 1-2 seconds at 30fps, good balance.
+writeQueueSize: 256
+
+# ============================================================
+# RTMP Server (disabled)
+# ============================================================
+
+rtmp: no
+rtmpAddress: :1935
+
+# ============================================================
+# HLS Server (disabled)
+# ============================================================
+
+hls: no
+hlsAddress: :8888
+
+# ============================================================
+# WebRTC Server (disabled - using RTSP for Mission Planner)
+# ============================================================
+
+webrtc: no
+webrtcAddress: :8889
+
+# ============================================================
+# SRT Server (disabled)
+# ============================================================
+
+srt: no
+srtAddress: :8890
+
+# ============================================================
+# Recording (optional)
+# ============================================================
+
+# Use pathDefaults instead of global record
+pathDefaults:
+  record: no
+
+# ============================================================
+# Paths (stream endpoints) - Zero-Copy GStreamer Pipeline
+# ============================================================
+
+paths:
+  # Primary stream - always running (for Mission Planner main view)
+  # Content is controlled by Jetson API - stream URL stays constant
+  primary:
+    source: publisher
+    sourceOnDemand: no
+
+  # Secondary stream - always running (for Gimbal/Secondary view)
+  secondary:
+    source: publisher
+    sourceOnDemand: no
+
+  # Legacy endpoints for backward compatibility
+  zed:
+    source: publisher
+    sourceOnDemand: no
+
+  live:
+    source: publisher
+    sourceOnDemand: no
+
+  # Dynamic stream for topic switching
+  dynamic:
+    source: publisher
+    sourceOnDemand: no
+
+  # Wildcard path - accept any stream name
+  # Critical for low latency:
+  all_others:
+    source: publisher
+    sourceOnDemand: no
+    runOnDemandStartTimeout: 10s
+    runOnDemandCloseAfter: 10s

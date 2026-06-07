@@ -1,0 +1,791 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The NOMAD Authors
+// ============================================================
+// NOMAD Configuration
+// ============================================================
+// Handles plugin configuration persistence.
+// Stored in Mission Planner's config directory.
+// Supports all NOMAD features including video, terminal, and VIO.
+// ============================================================
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using Newtonsoft.Json;
+
+namespace NOMAD.MissionPlanner
+{
+    /// <summary>
+    /// Plugin configuration settings for NOMAD Mission Planner integration.
+    /// </summary>
+    public partial class NOMADConfig
+    {
+        // ============================================================
+        // Connection Configuration
+        // ============================================================
+
+        /// <summary>
+        /// Jetson IP address (local network or Tailscale).
+        /// </summary>
+        /// <summary>
+        /// Active NOMAD config profile name. Written by the profile loader
+        /// (scripts/profile.py) so the plugin can show which profile is live.
+        /// </summary>
+        public string ActiveProfile { get; set; } = "dev";
+
+        public string JetsonIP { get; set; } = "";
+
+        /// <summary>
+        /// Jetson API port.
+        /// </summary>
+        public int JetsonPort { get; set; } = 8000;
+
+        /// <summary>
+        /// Jetson API key (must match NOMAD_API_KEY on the Jetson).
+        /// Defaults to the committed DEV key so the plugin works against the dev
+        /// stack out of the box. Override locally (untracked) for a real drone.
+        /// </summary>
+        public string JetsonApiKey { get; set; } = "nomad-dev-key";
+
+        /// <summary>
+        /// SSH login user on the Jetson (used by terminal/service control over SSH).
+        /// </summary>
+        public string JetsonSshUser { get; set; } = "nomad";
+
+        /// <summary>
+        /// Full Jetson Base URL (computed property).
+        /// </summary>
+        [JsonIgnore]
+        public string JetsonBaseUrl => $"http://{JetsonIP}:{JetsonPort}";
+
+        /// <summary>
+        /// Tailscale IP address (if using VPN).
+        /// </summary>
+        public string TailscaleIP { get; set; } = "";
+
+        /// <summary>
+        /// Use Tailscale IP instead of local IP.
+        /// </summary>
+        public bool UseTailscale { get; set; } = true;
+
+        /// <summary>
+        /// Gets the effective IP based on UseTailscale setting.
+        /// </summary>
+        [JsonIgnore]
+        public string EffectiveIP => UseTailscale && !string.IsNullOrWhiteSpace(TailscaleIP) ? TailscaleIP : JetsonIP;
+
+        /// <summary>
+        /// Gets the effective base URL.
+        /// </summary>
+        [JsonIgnore]
+        public string EffectiveBaseUrl
+        {
+            get
+            {
+                var ip = EffectiveIP;
+                if (string.IsNullOrWhiteSpace(ip))
+                    ip = "127.0.0.1";
+                return $"http://{ip}:{JetsonPort}";
+            }
+        }
+
+        // ============================================================
+        // Video Streaming Configuration
+        // ============================================================
+
+        /// <summary>
+        /// Video stream URL for ZED camera.
+        /// Default: RTSP stream supporting multiple simultaneous viewers.
+        /// Format: rtsp://&lt;jetson-ip&gt;:8554/primary
+        /// </summary>
+        public string VideoUrl { get; set; } = "";
+
+        /// <summary>
+        /// Network caching for video streams (ms).
+        /// Lower = less latency, higher = more stable.
+        /// </summary>
+        public int VideoNetworkCaching { get; set; } = 100;
+
+        /// <summary>
+        /// Preferred video player: "Embedded", "VLC", "FFplay".
+        /// </summary>
+        public string PreferredVideoPlayer { get; set; } = "Embedded";
+
+        /// <summary>
+        /// Enable video stream auto-start when opening video tab.
+        /// </summary>
+        public bool VideoAutoStart { get; set; } = false;
+
+        /// <summary>
+        /// Auto-start video on Mission Planner's HUD when plugin loads.
+        /// This displays the ZED camera feed as a background overlay on the HUD.
+        /// </summary>
+        public bool AutoStartHudVideo { get; set; } = true;
+
+        // ============================================================
+        // Communication Configuration
+        // ============================================================
+
+        /// <summary>
+        /// Use ELRS/MAVLink mode instead of HTTP.
+        /// </summary>
+        public bool UseELRS { get; set; } = false;
+
+        /// <summary>
+        /// HTTP connection timeout in seconds.
+        /// </summary>
+        public int HttpTimeoutSeconds { get; set; } = 5;
+
+        /// <summary>
+        /// Enable auto-reconnect on connection loss.
+        /// </summary>
+        public bool AutoReconnect { get; set; } = true;
+
+        /// <summary>
+        /// Health polling interval (ms).
+        /// </summary>
+        public int HealthPollInterval { get; set; } = 5000;
+
+        // ============================================================
+        // MAVLink Dual Link Configuration
+        // ============================================================
+
+        /// <summary>
+        /// Enable MAVLink dual link management (LTE + RadioMaster failover).
+        /// </summary>
+        public bool DualLinkEnabled { get; set; } = true;
+
+        /// <summary>
+        /// RadioMaster connection type: "UDP", "COM", or "TCP"
+        /// UDP uses network port, COM uses serial port (e.g., COM3), TCP uses TCP network port (e.g., SITL)
+        /// </summary>
+        public string RadioMasterConnectionType { get; set; } = "UDP";
+
+        /// <summary>
+        /// RadioMaster UDP port (typically 14550 for RC telemetry).
+        /// Used when RadioMasterConnectionType is "UDP"
+        /// </summary>
+        public int RadioMasterPort { get; set; } = 14550;
+
+        /// <summary>
+        /// RadioMaster COM port (e.g., "COM3", "COM4").
+        /// Used when RadioMasterConnectionType is "COM"
+        /// </summary>
+        public string RadioMasterComPort { get; set; } = "COM3";
+
+        /// <summary>
+        /// RadioMaster TCP host to connect to (e.g. "127.0.0.1" for ArduPilot SITL).
+        /// Used when RadioMasterConnectionType is "TCP" (port = RadioMasterPort).
+        /// </summary>
+        public string RadioMasterTcpHost { get; set; } = "127.0.0.1";
+
+        /// <summary>
+        /// RadioMaster COM port baud rate.
+        /// ELRS typically uses 420000 or 115200
+        /// </summary>
+        public int RadioMasterBaudRate { get; set; } = 420000;
+
+        /// <summary>
+        /// LTE/Tailscale MAVLink UDP port the ground station listens on.
+        /// Default 14560 to avoid colliding with the RadioMaster default (14550).
+        /// </summary>
+        public int LteMavlinkPort { get; set; } = 14560;
+
+        /// <summary>
+        /// Enable automatic failover between links.
+        /// </summary>
+        public bool AutoFailoverEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Preferred MAVLink link when both are available.
+        /// Options: "LTE", "RadioMaster", "None"
+        /// </summary>
+        public string PreferredMavlinkLink { get; set; } = "LTE";
+
+        /// <summary>
+        /// Auto-reconnect to preferred link when it becomes available.
+        /// </summary>
+        public bool AutoReconnectToPreferred { get; set; } = true;
+
+        /// <summary>
+        /// Delay in seconds before switching back to preferred link.
+        /// </summary>
+        public int PreferredLinkReconnectDelay { get; set; } = 10;
+
+        /// <summary>
+        /// MAVLink heartbeat timeout in seconds before considering link dead.
+        /// </summary>
+        public double MavlinkHeartbeatTimeout { get; set; } = 3.0;
+
+        /// <summary>
+        /// Link monitoring interval in milliseconds.
+        /// </summary>
+        public int LinkMonitorInterval { get; set; } = 500;
+
+        // ============================================================
+        // Ground-side MAVLink Router (MAVProxy-style multiplexer)
+        // ============================================================
+        // The router opens both source links itself (LTE UDP + RC UDP/COM),
+        // tracks per-link health from real packet flow, dedupes duplicates,
+        // and exposes a single merged UDP endpoint Mission Planner connects
+        // to (UDPCl to 127.0.0.1:<RouterLocalPort>). Failover is zero-gap
+        // because both source links are read in parallel at all times.
+
+        /// <summary>
+        /// Enable the local MAVLink router. When on, the plugin owns both
+        /// source links and Mission Planner should connect to the local
+        /// loopback endpoint instead of LTE/RC directly.
+        /// </summary>
+        public bool RouterEnabled { get; set; } = true;
+
+        /// <summary>Local UDP port the router serves the merged stream on.</summary>
+        public int RouterLocalPort { get; set; } = 14600;
+
+        /// <summary>Address the router binds for the local merged stream.</summary>
+        public string RouterBindAddress { get; set; } = "127.0.0.1";
+
+        /// <summary>
+        /// Deduplicate identical packets that arrive on both links (recommended).
+        /// Disable only for diagnostics — costs ~1.5x bandwidth to MP.
+        /// </summary>
+        public bool RouterDedupEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Optional outbound endpoint for LTE link. When non-empty, router
+        /// sends GCS-originated traffic to this host:port over UDP. Leave
+        /// empty to use the same endpoint packets were received from.
+        /// </summary>
+        public string LteRemoteHost { get; set; } = "";
+
+        /// <summary>Outbound UDP port for LTE link (0 = use last-rx port).</summary>
+        public int LteRemotePort { get; set; } = 0;
+
+        // ============================================================
+        // VIO Configuration
+        // ============================================================
+
+        /// <summary>
+        /// VIO confidence warning threshold (0-100).
+        /// </summary>
+        public float VioConfidenceWarning { get; set; } = 50.0f;
+
+        /// <summary>
+        /// VIO confidence critical threshold (0-100).
+        /// </summary>
+        public float VioConfidenceCritical { get; set; } = 30.0f;
+
+        /// <summary>
+        /// Enable VIO status alerts.
+        /// </summary>
+        public bool VioAlertsEnabled { get; set; } = true;
+
+        // ============================================================
+        // Terminal Configuration
+        // ============================================================
+
+        /// <summary>
+        /// SSH username for direct SSH connection.
+        /// </summary>
+        public string SshUsername { get; set; } = "mad";
+
+        /// <summary>
+        /// Terminal command timeout (seconds).
+        /// </summary>
+        public int TerminalTimeout { get; set; } = 30;
+
+        /// <summary>
+        /// Save terminal history between sessions.
+        /// </summary>
+        public bool SaveTerminalHistory { get; set; } = true;
+
+        // ============================================================
+        // UI Configuration
+        // ============================================================
+
+        /// <summary>
+        /// Enable debug logging.
+        /// </summary>
+        public bool DebugMode { get; set; } = false;
+
+        /// <summary>
+        /// Show notifications for status changes.
+        /// </summary>
+        public bool ShowNotifications { get; set; } = true;
+
+        /// <summary>
+        /// Default tab to show on startup.
+        /// </summary>
+        public string DefaultTab { get; set; } = "Dashboard";
+
+        /// <summary>
+        /// Enable dark mode for NOMAD UI.
+        /// </summary>
+        public bool DarkMode { get; set; } = true;
+
+        // ============================================================
+        // Alert Configuration
+        // ============================================================
+
+        /// <summary>
+        /// Temperature warning threshold (Celsius).
+        /// </summary>
+        public float TempWarningC { get; set; } = 75.0f;
+
+        /// <summary>
+        /// Temperature critical threshold (Celsius).
+        /// </summary>
+        public float TempCriticalC { get; set; } = 85.0f;
+
+        /// <summary>
+        /// Enable audio alerts for critical warnings.
+        /// </summary>
+        public bool AudioAlerts { get; set; } = true;
+
+        // ============================================================
+        // Drone Geometry & SLAM 3D Configuration
+        // ============================================================
+
+        /// <summary>Drone body length in cm (nose to tail).</summary>
+        public float DroneLengthCm { get; set; } = 45.0f;
+
+        /// <summary>Drone body width in cm (arm tip to arm tip).</summary>
+        public float DroneWidthCm { get; set; } = 45.0f;
+
+        /// <summary>Drone body height in cm (top to bottom).</summary>
+        public float DroneHeightCm { get; set; } = 15.0f;
+
+        /// <summary>Camera forward offset from drone center in cm.</summary>
+        public float CameraForwardOffsetCm { get; set; } = 10.0f;
+
+        /// <summary>Camera downward offset from drone center in cm.</summary>
+        public float CameraDownOffsetCm { get; set; } = 5.0f;
+
+        /// <summary>Drone frame type for 3D visualization: "Tricopter" or "Quadcopter".</summary>
+        public string DroneFrameType { get; set; } = "Quadcopter";
+
+        /// <summary>Heading offset in degrees to compensate for magnetometer calibration.</summary>
+        public float SlamHeadingOffsetDeg { get; set; } = 0.0f;
+
+        /// <summary>SLAM 3D camera field of view in degrees.</summary>
+        public float SlamCameraFovDeg { get; set; } = 60.0f;
+
+        /// <summary>SLAM 3D local map radius in meters.</summary>
+        public float SlamMapRadiusM { get; set; } = 3.0f;
+
+        // ============================================================
+        // Servo Configuration (Cube Orange AUX Outputs via MAVLink)
+        // All payloads, reels, water pump and camera tilt are wired to the
+        // Cube and commanded via MAVLink DO_SET_SERVO. Edge Core is used only
+        // as a fallback path to send the same Cube MAVLink commands.
+        // Channel numbers correspond to ArduPilot servo output numbers
+        // (e.g. 9 = SERVO9 = AUX1 on most Cube builds).
+        // ============================================================
+
+        // --- Modular payloads (drop servos, slider servos, relay/GPIO outputs) ---
+        /// <summary>Maximum number of configurable payloads (panel + Settings cap).</summary>
+        public const int MaxPayloads = 8;
+
+        /// <summary>
+        /// Configurable payload outputs rendered on the payload panel and edited in
+        /// Settings → Payloads. Each is a drop servo, a slider servo, or a relay/GPIO
+        /// output. See <see cref="PayloadControl"/>.
+        /// </summary>
+        public List<PayloadControl> Payloads { get; set; } = DefaultPayloads();
+
+        /// <summary>Default payload set: three drop servos plus the water-pump relay.</summary>
+        public static List<PayloadControl> DefaultPayloads() => new List<PayloadControl>
+        {
+            new PayloadControl { Name = "Payload 1", Kind = PayloadKind.Drop, Channel = 9 },
+            new PayloadControl { Name = "Payload 2", Kind = PayloadKind.Drop, Channel = 10 },
+            new PayloadControl { Name = "Payload 3", Kind = PayloadKind.Drop, Channel = 11 },
+            new PayloadControl { Name = "Water Pump", Kind = PayloadKind.Relay, Channel = 0, PulseMs = 500 },
+        };
+
+        // --- Strap reel servo (payload 1) ---
+        /// <summary>Cube servo output channel for payload 1 strap reel.</summary>
+        public int ReelServoChannel { get; set; } = 12;
+        /// <summary>PWM (us) to reel straps in (must be &gt;2000 us).</summary>
+        public int ReelPwmIn { get; set; } = 2100;
+        /// <summary>PWM (us) to reel straps out (must be &lt;1000 us).</summary>
+        public int ReelPwmOut { get; set; } = 900;
+
+        // --- Strap reel servo (payload 2) ---
+        /// <summary>Cube servo output channel for payload 2 strap reel.</summary>
+        public int Reel2ServoChannel { get; set; } = 13;
+        /// <summary>PWM (us) to reel straps in on reel 2 (must be &gt;2000 us).</summary>
+        public int Reel2PwmIn { get; set; } = 2100;
+        /// <summary>PWM (us) to reel straps out on reel 2 (must be &lt;1000 us).</summary>
+        public int Reel2PwmOut { get; set; } = 900;
+
+        // --- Camera tilt servo (Cube MAVLink primary, Edge Core Cube fallback) ---
+        // ZED camera tilt calibration points:
+        //   700 us  → pointing down  (−45° from level)
+        //   1250 us → straight/level ( 0°)
+        //   1450 us → pointing up    (+45° from level)
+        // Neutral is at 1250us, NOT the standard 1500us, because the camera arm
+        // is mechanically offset. Conversion uses piecewise linear interpolation.
+        /// <summary>Cube servo output channel for camera tilt servo.</summary>
+        public int CameraTiltChannel { get; set; } = 14;
+        /// <summary>Camera tilt minimum PWM (us) — fully down.</summary>
+        public int CameraTiltPwmMin { get; set; } = 700;
+        /// <summary>Camera tilt neutral PWM (us) — camera pointing straight/level.</summary>
+        public int CameraTiltPwmNeutral { get; set; } = 1250;
+        /// <summary>Camera tilt maximum PWM (us) — fully up.</summary>
+        public int CameraTiltPwmMax { get; set; } = 1450;
+        /// <summary>Physical tilt range in degrees each way from level (±45°).</summary>
+        public int CameraTiltAngleRange { get; set; } = 45;
+
+        // ============================================================
+        // Joystick Configuration (Mission Planner DirectInput-based)
+        // ============================================================
+        // Two independent joystick assignments routed by NomadJoystickService:
+        //   * Gimbal: stick deflection → pitch/roll rate, integrated locally
+        //     into MAV_CMD_DO_MOUNT_CONTROL angle commands.
+        //   * ZED tilt: stick deflection → PWM rate, integrated locally into
+        //     the camera tilt servo PWM target (DO_SET_SERVO).
+        // Axes are referenced by DirectInput state property name: X, Y, Z,
+        // Rx, Ry, Rz, Slider1, Slider2.
+
+        /// <summary>Enable the gimbal joystick channel.</summary>
+        public bool JoystickGimbalEnabled { get; set; } = false;
+        /// <summary>DirectInput device name (must match one of MP's enumerated devices).</summary>
+        public string JoystickGimbalDevice { get; set; } = "";
+        /// <summary>Axis driving gimbal pitch (X / Y / Z / Rx / Ry / Rz / Slider1 / Slider2).</summary>
+        public string JoystickGimbalPitchAxis { get; set; } = "Y";
+        /// <summary>Invert pitch axis (stick forward = pitch up when invert=true on most flight sticks).</summary>
+        public bool JoystickGimbalPitchInvert { get; set; } = true;
+        /// <summary>Axis driving gimbal roll.</summary>
+        public string JoystickGimbalRollAxis { get; set; } = "X";
+        public bool JoystickGimbalRollInvert { get; set; } = false;
+        /// <summary>Deadzone fraction [0..1] applied per axis.</summary>
+        public float JoystickGimbalDeadzone { get; set; } = 0.08f;
+        /// <summary>
+        /// Persisted max integrated angle rate (deg/s) at full stick deflection.
+        /// At runtime, <see cref="GimbalController.MaxRateDegSec"/> is the
+        /// authoritative value shared by the floating gimbal window, the
+        /// settings dialog, and the physical joystick service. This field is
+        /// only the on-disk snapshot — written when settings are saved,
+        /// read once on plugin start to seed the controller.
+        /// </summary>
+        public float JoystickGimbalMaxRateDegSec { get; set; } = 60f;
+
+        /// <summary>Enable the ZED tilt joystick channel.</summary>
+        public bool JoystickZedEnabled { get; set; } = false;
+        /// <summary>DirectInput device name. May be the same device as gimbal (different axes).</summary>
+        public string JoystickZedDevice { get; set; } = "";
+        /// <summary>Axis driving ZED tilt rate.</summary>
+        public string JoystickZedTiltAxis { get; set; } = "Y";
+        public bool JoystickZedTiltInvert { get; set; } = true;
+        public float JoystickZedDeadzone { get; set; } = 0.08f;
+        /// <summary>Max integrated PWM rate (microseconds per second) at full stick deflection.</summary>
+        public float JoystickZedMaxRateUsPerSec { get; set; } = 400f;
+
+        // --- Three-position switch action mapping ---
+        // joystick.py encodes each 3-position RadioMaster switch (sw1, sw2, sw3)
+        // as a pair of virtual Xbox 360 buttons — UP and DOWN positions press a
+        // dedicated button, middle releases both. NomadJoystickService dispatches
+        // a configurable action per slot. Valid action IDs:
+        //   None, DropToggleP1, DropToggleP2, DropToggleP3,
+        //   ReelInP1, ReelOutP1, ReelInP2, ReelOutP2, FireWaterPump
+        // Drop toggles and FireWaterPump are edge-triggered (fire on switch flip
+        // toward the position); Reel actions run while the switch is held off-
+        // centre and stop when it returns to middle.
+        /// <summary>
+        /// DirectInput device that publishes the switch buttons (from joystick.py
+        /// or any other source). Independent of the gimbal/ZED axis devices so
+        /// payload switches keep working even when both axis channels are off.
+        /// Leave blank to fall back to the gimbal device, then the ZED device.
+        /// </summary>
+        public string JoystickSwitchDevice  { get; set; } = "";
+
+        public string JoystickSw1UpAction   { get; set; } = "DropToggleP1";
+        public string JoystickSw1DownAction { get; set; } = "DropToggleP2";
+        public string JoystickSw2UpAction   { get; set; } = "DropToggleP3";
+        public string JoystickSw2DownAction { get; set; } = "ReelInP1";
+        public string JoystickSw3UpAction   { get; set; } = "ReelInP2";
+        public string JoystickSw3DownAction { get; set; } = "FireWaterPump";
+
+        /// <summary>
+        /// Enable the dedicated kill-switch pushbutton (button index 6 on the
+        /// virtual gamepad — joystick.py maps the radio kill switch to XInput
+        /// BACK). When pressed, the plugin commands LAND mode and forces
+        /// LAND_SPEED / WPNAV_SPEED_DN to <see cref="JoystickKillLandSpeedCmS"/>
+        /// so the descent meets the CONOPS §4.5 ≥2 m/s requirement.
+        /// </summary>
+        public bool JoystickKillSwitchEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Descent speed (cm/s) the kill switch forces before engaging LAND.
+        /// Default 250 = 2.5 m/s, comfortably above the 2 m/s CONOPS floor.
+        /// </summary>
+        public int JoystickKillLandSpeedCmS { get; set; } = 250;
+
+        /// <summary>
+        /// When true, the joystick service auto-picks the first available
+        /// DirectInput device for any role whose configured device name is
+        /// blank or not currently enumerated, and re-checks periodically so
+        /// hot-plugged controllers (e.g. the vgamepad created by joystick.py)
+        /// get picked up without a settings round-trip. Default true.
+        /// </summary>
+        public bool JoystickAutoSelectDevice { get; set; } = true;
+
+        // --- Serial → virtual gamepad bridge (jotystick.py) ---
+        /// <summary>Auto-launch jotystick.py on plugin start so a serial-attached MCU appears as an Xbox 360 controller.</summary>
+        public bool SerialJoystickEnabled { get; set; } = false;
+        /// <summary>Serial port the MCU is on (e.g. COM10).</summary>
+        public string SerialJoystickPort { get; set; } = "COM10";
+        /// <summary>Baud rate.</summary>
+        public int SerialJoystickBaud { get; set; } = 115200;
+        /// <summary>Python executable to use. Leave blank to use "python" from PATH.</summary>
+        public string SerialJoystickPython { get; set; } = "python";
+        /// <summary>Absolute path to jotystick.py. Leave blank to auto-resolve relative to the plugin DLL.</summary>
+        public string SerialJoystickScriptPath { get; set; } = "";
+
+
+        // ============================================================
+        // Persistence
+        // ============================================================
+
+        private static string ConfigPath => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Mission Planner",
+            "plugins",
+            "nomad_config.json"
+        );
+
+        /// <summary>
+        /// Load configuration from file. If the primary file is missing or
+        /// corrupt (e.g. crash mid-write), fall back to the .bak written by
+        /// the last successful Save().
+        /// </summary>
+        public static NOMADConfig Load()
+        {
+            var primary = ConfigPath;
+            var backup = primary + ".bak";
+
+            foreach (var path in new[] { primary, backup })
+            {
+                try
+                {
+                    if (!File.Exists(path)) continue;
+                    var json = File.ReadAllText(path);
+                    if (string.IsNullOrWhiteSpace(json)) continue;
+                    var config = JsonConvert.DeserializeObject<NOMADConfig>(json);
+                    if (config != null)
+                    {
+                        config.MigrateDefaults();
+                        if (path == backup)
+                            Log.Warn("Loaded config from .bak (primary corrupt or missing).");
+                        return config;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"Failed to load config from {path} - {ex.Message}");
+                }
+            }
+
+            return new NOMADConfig();
+        }
+
+        /// <summary>
+        /// Save configuration atomically: write to .tmp first, then swap
+        /// using File.Replace which keeps the previous version as .bak.
+        /// This makes the on-disk file crash-safe — a kill mid-write can
+        /// only corrupt the .tmp, never the live file.
+        /// </summary>
+        public void Save()
+        {
+            try
+            {
+                var path = ConfigPath;
+                var dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                    Directory.CreateDirectory(dir);
+
+                var json = JsonConvert.SerializeObject(this, Formatting.Indented);
+                var tmp = path + ".tmp";
+                var bak = path + ".bak";
+
+                File.WriteAllText(tmp, json);
+
+                if (File.Exists(path))
+                {
+                    // Atomic rename + backup. Replace() requires the destination
+                    // to exist; otherwise fall through to a plain Move().
+                    File.Replace(tmp, path, bak, ignoreMetadataErrors: true);
+                }
+                else
+                {
+                    File.Move(tmp, path);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Failed to save config - {ex.Message}");
+                // Best-effort cleanup so a stale .tmp doesn't sit around.
+                try { File.Delete(ConfigPath + ".tmp"); } catch { }
+            }
+        }
+
+        /// <summary>
+        /// Migrate defaults for properties that may have been added in newer versions.
+        /// </summary>
+        private void MigrateDefaults()
+        {
+            // Migrate from old UDP format to RTSP (multiple viewers)
+            if (VideoUrl == "udp://@:5600" || string.IsNullOrEmpty(VideoUrl))
+            {
+                // New default is RTSP stream (allows multiple viewers)
+                var ip = EffectiveIP;
+                if (string.IsNullOrWhiteSpace(ip))
+                    ip = JetsonIP;
+                VideoUrl = $"rtsp://{ip}:8554/primary";
+            }
+
+            // Migrate old Jetson IP to Tailscale if using Tailscale
+            if (JetsonIP == "192.168.1.100" && UseTailscale)
+            {
+                JetsonIP = TailscaleIP;
+            }
+
+            // Migrate SSH username from 'nomad' to 'mad'
+            if (SshUsername == "nomad")
+            {
+                SshUsername = "mad";
+            }
+
+            // Bump LTE MAVLink port off the RadioMaster default (14550) so the
+            // two links don't fight for the same UDP port on the GCS. Users
+            // who explicitly set a non-default value keep it.
+            if (LteMavlinkPort == 14550)
+            {
+                LteMavlinkPort = 14560;
+            }
+
+            // Keep the old high-level dual-link toggle and the newer local
+            // router toggle in lockstep unless a future UI exposes them
+            // separately.
+            RouterEnabled = DualLinkEnabled;
+
+            // Keep FOV within a practical range for 3D view usability.
+            if (SlamCameraFovDeg < 30.0f || SlamCameraFovDeg > 140.0f)
+            {
+                SlamCameraFovDeg = 60.0f;
+            }
+
+            if (SlamMapRadiusM < 1.0f || SlamMapRadiusM > 20.0f)
+            {
+                SlamMapRadiusM = 3.0f;
+            }
+
+            SprayTargetCameraRangeM = Clamp(SprayTargetCameraRangeM, 0.5f, 8.0f, 3.8f);
+            SprayRangeToleranceM = Clamp(SprayRangeToleranceM, 0.05f, 1.0f, 0.25f);
+            SprayTriggerMaxDistanceM = Clamp(SprayTriggerMaxDistanceM, 1.0f, 8.0f, 5.5f);
+            if (SprayAimPixelX < 0 || SprayAimPixelX > 4000) SprayAimPixelX = 640;
+            if (SprayAimPixelY < 0 || SprayAimPixelY > 3000) SprayAimPixelY = 390;
+            if (SprayAimTolerancePx < 2 || SprayAimTolerancePx > 250) SprayAimTolerancePx = 25;
+            SprayServoFireAngleDeg = Clamp(SprayServoFireAngleDeg, 0.0f, 180.0f, 82.0f);
+            SprayForwardGain = Clamp(SprayForwardGain, 0.0f, 2.0f, 0.45f);
+            SprayLateralGain = Clamp(SprayLateralGain, -0.02f, 0.02f, 0.0010f);
+            SprayAltitudeGain = Clamp(SprayAltitudeGain, -0.02f, 0.02f, 0.0010f);
+            SprayYawGain = Clamp(SprayYawGain, -0.02f, 0.02f, 0.0025f);
+            SprayMaxForwardSpeedMps = Clamp(SprayMaxForwardSpeedMps, 0.05f, 2.0f, 0.45f);
+            SprayMaxLateralSpeedMps = Clamp(SprayMaxLateralSpeedMps, 0.05f, 1.0f, 0.25f);
+            SprayMaxAltitudeSpeedMps = Clamp(SprayMaxAltitudeSpeedMps, 0.05f, 1.0f, 0.20f);
+            SprayMaxYawRateRadps = Clamp(SprayMaxYawRateRadps, 0.05f, 2.0f, 0.35f);
+            if (SprayLockHoldMs < 100 || SprayLockHoldMs > 5000) SprayLockHoldMs = 700;
+            SprayAlignTimeoutS = Clamp(SprayAlignTimeoutS, 2.0f, 60.0f, 20.0f);
+        }
+
+        private static float Clamp(float value, float min, float max, float fallback)
+        {
+            if (float.IsNaN(value) || float.IsInfinity(value)) return fallback;
+            return Math.Max(min, Math.Min(max, value));
+        }
+
+        /// <summary>
+        /// Create a copy of the configuration.
+        /// </summary>
+        public NOMADConfig Clone()
+        {
+            var json = JsonConvert.SerializeObject(this);
+            return JsonConvert.DeserializeObject<NOMADConfig>(json) ?? new NOMADConfig();
+        }
+
+        /// <summary>
+        /// Reset to default values.
+        /// </summary>
+        public void ResetToDefaults()
+        {
+            var defaults = new NOMADConfig();
+
+            // Copy all properties from defaults
+            JetsonIP = defaults.JetsonIP;
+            JetsonPort = defaults.JetsonPort;
+            JetsonApiKey = defaults.JetsonApiKey;
+            JetsonSshUser = defaults.JetsonSshUser;
+            TailscaleIP = defaults.TailscaleIP;
+            UseTailscale = defaults.UseTailscale;
+            VideoUrl = defaults.VideoUrl;
+            VideoNetworkCaching = defaults.VideoNetworkCaching;
+            PreferredVideoPlayer = defaults.PreferredVideoPlayer;
+            VideoAutoStart = defaults.VideoAutoStart;
+            UseELRS = defaults.UseELRS;
+            HttpTimeoutSeconds = defaults.HttpTimeoutSeconds;
+            AutoReconnect = defaults.AutoReconnect;
+            HealthPollInterval = defaults.HealthPollInterval;
+            VioConfidenceWarning = defaults.VioConfidenceWarning;
+            VioConfidenceCritical = defaults.VioConfidenceCritical;
+            VioAlertsEnabled = defaults.VioAlertsEnabled;
+            SshUsername = defaults.SshUsername;
+            TerminalTimeout = defaults.TerminalTimeout;
+            SaveTerminalHistory = defaults.SaveTerminalHistory;
+            DebugMode = defaults.DebugMode;
+            ShowNotifications = defaults.ShowNotifications;
+            DefaultTab = defaults.DefaultTab;
+            DarkMode = defaults.DarkMode;
+            TempWarningC = defaults.TempWarningC;
+            TempCriticalC = defaults.TempCriticalC;
+            AudioAlerts = defaults.AudioAlerts;
+            DroneLengthCm = defaults.DroneLengthCm;
+            DroneWidthCm = defaults.DroneWidthCm;
+            DroneHeightCm = defaults.DroneHeightCm;
+            CameraForwardOffsetCm = defaults.CameraForwardOffsetCm;
+            CameraDownOffsetCm = defaults.CameraDownOffsetCm;
+            SlamHeadingOffsetDeg = defaults.SlamHeadingOffsetDeg;
+            SlamCameraFovDeg = defaults.SlamCameraFovDeg;
+            SlamMapRadiusM = defaults.SlamMapRadiusM;
+            Payloads = DefaultPayloads();
+            ReelServoChannel = defaults.ReelServoChannel;
+            ReelPwmIn = defaults.ReelPwmIn;
+            ReelPwmOut = defaults.ReelPwmOut;
+            Reel2ServoChannel = defaults.Reel2ServoChannel;
+            Reel2PwmIn = defaults.Reel2PwmIn;
+            Reel2PwmOut = defaults.Reel2PwmOut;
+            CameraTiltChannel = defaults.CameraTiltChannel;
+            CameraTiltPwmMin = defaults.CameraTiltPwmMin;
+            CameraTiltPwmNeutral = defaults.CameraTiltPwmNeutral;
+            CameraTiltPwmMax = defaults.CameraTiltPwmMax;
+            CameraTiltAngleRange = defaults.CameraTiltAngleRange;
+            SprayTargetCameraRangeM = defaults.SprayTargetCameraRangeM;
+            SprayRangeToleranceM = defaults.SprayRangeToleranceM;
+            SprayTriggerMaxDistanceM = defaults.SprayTriggerMaxDistanceM;
+            SprayAimPixelX = defaults.SprayAimPixelX;
+            SprayAimPixelY = defaults.SprayAimPixelY;
+            SprayAimTolerancePx = defaults.SprayAimTolerancePx;
+            SprayServoFireAngleDeg = defaults.SprayServoFireAngleDeg;
+            SprayForwardGain = defaults.SprayForwardGain;
+            SprayLateralGain = defaults.SprayLateralGain;
+            SprayAltitudeGain = defaults.SprayAltitudeGain;
+            SprayYawGain = defaults.SprayYawGain;
+            SprayUseYawAlignment = defaults.SprayUseYawAlignment;
+            SprayMaxForwardSpeedMps = defaults.SprayMaxForwardSpeedMps;
+            SprayMaxLateralSpeedMps = defaults.SprayMaxLateralSpeedMps;
+            SprayMaxAltitudeSpeedMps = defaults.SprayMaxAltitudeSpeedMps;
+            SprayMaxYawRateRadps = defaults.SprayMaxYawRateRadps;
+            SprayLockHoldMs = defaults.SprayLockHoldMs;
+            SprayAlignTimeoutS = defaults.SprayAlignTimeoutS;
+        }
+    }
+}

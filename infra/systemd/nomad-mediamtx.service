@@ -1,0 +1,25 @@
+[Unit]
+Description=NOMAD MediaMTX RTSP Server
+After=network-online.target
+Wants=network-online.target
+PartOf=nomad.target
+
+[Service]
+# oneshot+RemainAfterExit because mediamtx.sh's `start` action backgrounds
+# mediamtx with nohup and exits 0. Type=forking would need a PIDFile.
+Type=oneshot
+RemainAfterExit=yes
+User=__NOMAD_USER__
+Group=__NOMAD_USER__
+WorkingDirectory=__NOMAD_ROOT__
+EnvironmentFile=__NOMAD_ROOT__/config/nomad.env
+
+ExecStart=/bin/bash __NOMAD_ROOT__/scripts/services/mediamtx.sh start
+ExecStop=/bin/bash __NOMAD_ROOT__/scripts/services/mediamtx.sh stop
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nomad-mediamtx
+
+[Install]
+WantedBy=nomad.target

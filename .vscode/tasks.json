@@ -1,0 +1,319 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    // ==================== Configuration Profiles ====================
+    // These tasks appear in the VS Code status bar via "Run Task".
+    // Switch between full sim, real drone, and minimal dev with one click.
+    {
+      "label": "Profile: Load simulation (Isaac Sim + SITL)",
+      "type": "shell",
+      "command": "pixi run profile-load sim",
+      "group": "none",
+      "presentation": {
+        "panel": "shared",
+        "clear": true,
+        "showReuseMessage": false
+      },
+      "problemMatcher": [],
+      "detail": "Full Isaac Sim + SITL simulation. No hardware needed — GPU required."
+    },
+    {
+      "label": "Profile: Load real drone (Jetson + ZED2i)",
+      "type": "shell",
+      "command": "pixi run profile-load drone",
+      "group": "none",
+      "presentation": {
+        "panel": "shared",
+        "clear": true,
+        "showReuseMessage": false
+      },
+      "problemMatcher": [],
+      "detail": "Production Jetson Orin Nano + ZED2i + CubePilot. All hardware services enabled."
+    },
+    {
+      "label": "Profile: Load minimal dev (Edge Core only)",
+      "type": "shell",
+      "command": "pixi run profile-load dev",
+      "group": "none",
+      "presentation": {
+        "panel": "shared",
+        "clear": true,
+        "showReuseMessage": false
+      },
+      "problemMatcher": [],
+      "detail": "Minimal: Edge Core in sim mode, no vision, no containers. Good for API dev."
+    },
+    {
+      "label": "Profile: Show active",
+      "type": "shell",
+      "command": "pixi run profile-show",
+      "group": "none",
+      "presentation": {
+        "panel": "shared",
+        "clear": true,
+        "showReuseMessage": false
+      },
+      "problemMatcher": [],
+      "detail": "Display the active profile name, sim mode, vision, and config path."
+    },
+    {
+      "label": "Profile: List all",
+      "type": "shell",
+      "command": "pixi run profile-list",
+      "group": "none",
+      "presentation": {
+        "panel": "shared",
+        "clear": true,
+        "showReuseMessage": false
+      },
+      "problemMatcher": [],
+      "detail": "List all available configuration profiles."
+    },
+    {
+      "label": "Profile: Edit current config",
+      "type": "shell",
+      "command": "pixi run profile-edit",
+      "group": "none",
+      "presentation": {
+        "panel": "shared",
+        "clear": true,
+        "showReuseMessage": false
+      },
+      "problemMatcher": [],
+      "detail": "Open config/nomad.env in your editor ($EDITOR or Notepad)."
+    },
+    {
+      "label": "Profile: Save current as new profile",
+      "type": "shell",
+      "command": "pixi run profile-save ${input:profileName}",
+      "group": "none",
+      "presentation": {
+        "panel": "shared",
+        "clear": true,
+        "showReuseMessage": false
+      },
+      "problemMatcher": [],
+      "detail": "Snapshot the current config/nomad.env into config/profiles/<name>.env"
+    },
+    // ==================== Edge Core (Python) ====================
+    {
+      "label": "Edge Core: Dev server (sim)",
+      "type": "shell",
+      "command": "pixi run dev",
+      "group": { "kind": "build", "isDefault": false },
+      "presentation": {
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": true
+      },
+      "problemMatcher": [],
+      "detail": "Run Edge Core in hardware-free sim mode on http://localhost:8000"
+    },
+    {
+      "label": "Edge Core: Dev server (full sim with vision)",
+      "type": "shell",
+      "command": "pixi run dev-vision",
+      "group": "build",
+      "presentation": {
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": true
+      },
+      "problemMatcher": [],
+      "detail": "Run Edge Core with vision enabled (requires Isaac Sim container running)"
+    },
+    {
+      "label": "Edge Core: Run tests",
+      "type": "shell",
+      "command": "pixi run test",
+      "group": { "kind": "test", "isDefault": true },
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": [],
+      "detail": "Run pytest"
+    },
+    {
+      "label": "Edge Core: Lint (ruff check)",
+      "type": "shell",
+      "command": "pixi run lint",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": [],
+      "detail": "Run ruff check on the entire codebase"
+    },
+    {
+      "label": "Edge Core: Format (ruff format)",
+      "type": "shell",
+      "command": "pixi run fmt",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": [],
+      "detail": "Auto-format all Python files with ruff"
+    },
+    {
+      "label": "Edge Core: Type check (mypy)",
+      "type": "shell",
+      "command": "pixi run typecheck",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": [],
+      "detail": "Run mypy type checker (gradual, advisory)"
+    },
+    // ==================== Isaac Sim (Docker) ====================
+    {
+      "label": "Sim: Build Isaac Sim image",
+      "type": "shell",
+      "command": "docker build -f docker/Dockerfile.isaac_sim -t nomad-isaac-sim:latest .",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": [],
+      "detail": "Build the x86_64 Isaac Sim + ZED SDK + ROS2 Docker image (~60 GB, 30-60 min)"
+    },
+    {
+      "label": "Sim: Start full stack (Isaac Sim + Edge Core + MediaMTX)",
+      "type": "shell",
+      "command": "docker compose -f docker/docker-compose.sim.yml up -d",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true, "showReuseMessage": false },
+      "problemMatcher": [],
+      "detail": "Start the full simulation stack. API at http://localhost:8000, RTSP at :8554"
+    },
+    {
+      "label": "Sim: Start full stack with SITL",
+      "type": "shell",
+      "command": "docker compose -f docker/docker-compose.sim.yml --profile sitl up -d",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true, "showReuseMessage": false },
+      "problemMatcher": [],
+      "detail": "Start sim stack with ArduPilot SITL. MAVLink on TCP localhost:5760"
+    },
+    {
+      "label": "Sim: View logs",
+      "type": "shell",
+      "command": "docker compose -f docker/docker-compose.sim.yml logs -f",
+      "group": "none",
+      "presentation": { "panel": "dedicated", "showReuseMessage": false },
+      "problemMatcher": [],
+      "detail": "Follow logs from all sim services"
+    },
+    {
+      "label": "Sim: Stop full stack",
+      "type": "shell",
+      "command": "docker compose -f docker/docker-compose.sim.yml down",
+      "group": "none",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": [],
+      "detail": "Stop and remove all sim containers"
+    },
+    {
+      "label": "Sim: Restart full stack",
+      "type": "shell",
+      "command": "docker compose -f docker/docker-compose.sim.yml restart",
+      "group": "none",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": [],
+      "detail": "Restart all sim services"
+    },
+    {
+      "label": "Sim: Check stack status",
+      "type": "shell",
+      "command": "docker compose -f docker/docker-compose.sim.yml ps",
+      "group": "none",
+      "presentation": { "panel": "shared", "clear": true, "showReuseMessage": false },
+      "problemMatcher": [],
+      "detail": "Show status of all sim containers"
+    },
+    // ==================== C# ====================
+    {
+      "label": "C#: Build Mission Planner Plugin",
+      "type": "shell",
+      "command": "pixi run build-plugin",
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": [],
+      "detail": "Build and deploy NOMADPlugin.dll (requires Visual Studio + Mission Planner)"
+    },
+    {
+      "label": "C#: Lint plugin for dead code",
+      "type": "shell",
+      "command": "pixi run lint-plugin",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": [],
+      "detail": "Rebuild treating unused fields/locals/unreachable code as errors"
+    },
+    // ==================== Docker (dev) ====================
+    {
+      "label": "Docker: Build dev image",
+      "type": "shell",
+      "command": "docker build -f docker/Dockerfile.dev -t nomad-edge-dev .",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": [],
+      "detail": "Build the x86 sim Docker image for development/testing"
+    },
+    {
+      "label": "Docker: Compose up (dev)",
+      "type": "shell",
+      "command": "docker compose -f docker/docker-compose.dev.yml up --build",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true, "showReuseMessage": false },
+      "problemMatcher": [],
+      "detail": "Start the full dev stack (Edge Core + optional ArduPilot SITL)"
+    },
+    {
+      "label": "Docker: Compose up with SITL",
+      "type": "shell",
+      "command": "docker compose -f docker/docker-compose.dev.yml --profile sitl up --build",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true, "showReuseMessage": false },
+      "problemMatcher": [],
+      "detail": "Start dev stack with ArduPilot SITL for realistic MAVLink"
+    },
+    // ==================== Documentation ====================
+    {
+      "label": "Docs: Build site",
+      "type": "shell",
+      "command": "pixi run docs-build",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": [],
+      "detail": "Build ProperDocs site with strict mode"
+    },
+    {
+      "label": "Docs: Serve locally",
+      "type": "shell",
+      "command": "pixi run docs",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": [],
+      "detail": "Serve ProperDocs site on http://localhost:8000 (auto-reload)"
+    },
+    // ==================== Development Environment ====================
+    {
+      "label": "Bootstrap: Set up dev environment",
+      "type": "shell",
+      "command": "pixi run bootstrap",
+      "group": "none",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": [],
+      "detail": "Run the bootstrap script (install pixi env, pre-commit hooks, smoke test)"
+    },
+    {
+      "label": "Bootstrap: Install pre-commit hooks",
+      "type": "shell",
+      "command": "pixi run precommit",
+      "group": "none",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": [],
+      "detail": "Run pre-commit hooks on all files"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "profileName",
+      "type": "promptString",
+      "description": "Profile name to save as",
+      "default": "my_profile"
+    }
+  ]
+}

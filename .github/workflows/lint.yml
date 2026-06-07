@@ -1,0 +1,66 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: ruff + mypy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          cache: true
+      - name: Ruff lint
+        run: pixi run lint
+      - name: Ruff format check
+        run: pixi run fmt-check
+      - name: Mypy (advisory)
+        run: pixi run typecheck
+        continue-on-error: true
+
+  shell:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ludeeus/action-shellcheck@master
+        with:
+          severity: warning
+          scandir: "."
+        env:
+          # Service scripts source siblings + config/nomad.env at runtime (SC1091),
+          # define vars consumed by sourced code (SC2034), and use a dispatcher at
+          # the bottom that calls helper functions defined earlier in the same
+          # file — forward references resolved at call time, not parse time (SC2218).
+          SHELLCHECK_OPTS: -e SC1091 -e SC2034 -e SC2218
+
+  csharp:
+    name: dotnet format (advisory)
+    runs-on: ubuntu-latest
+    # The Mission Planner plugin references local Windows-only DLLs (WinForms/WPF
+    # + C:\Program Files (x86)\Mission Planner\*.dll), so it cannot restore or
+    # build on hosted runners. This is a best-effort whitespace/style check only;
+    # full build + style enforcement happens in Visual Studio on Windows.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: dotnet format (whitespace, no restore)
+        run: |
+          dotnet format mission_planner/src/NOMADPlugin.csproj \
+            --no-restore --verify-no-changes --verbosity diagnostic \
+            || echo "::warning::dotnet format could not fully run (expected — local MP DLLs absent in CI)"

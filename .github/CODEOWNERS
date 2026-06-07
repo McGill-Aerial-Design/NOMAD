@@ -1,0 +1,8 @@
+# Default owners for everything in the repo. Adjust to your team's handles/teams.
+* @YoussGm3o8
+
+# Area owners (uncomment / edit as the team grows):
+# /edge_core/                 @YoussGm3o8
+# /mission_planner/           @YoussGm3o8
+# /docker/  /infra/  /scripts/ @YoussGm3o8
+# /docs/                      @YoussGm3o8

@@ -1,0 +1,80 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{yml,yaml,json,toml}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+# ==================== C# (.editorconfig + dotnet format) ====================
+
+[*.cs]
+indent_size = 4
+indent_style = space
+
+# Organize imports
+dotnet_sort_system_directives_first = true
+dotnet_separate_import_directive_groups = true
+
+# Newline preferences
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_open_brace = methods
+csharp_new_line_before_open_brace = properties
+csharp_new_line_before_open_brace = control_blocks
+csharp_new_line_before_open_brace = types
+csharp_new_line_before_open_brace = lambdas
+csharp_new_line_before_open_brace = accessors
+csharp_new_line_before_open_brace = anonymous_methods
+csharp_new_line_before_open_brace = anonymous_types
+csharp_new_line_before_open_brace = object_collection_array_initializers
+csharp_new_line_before_else = true
+csharp_new_line_before_catch = true
+csharp_new_line_before_finally = true
+csharp_new_line_before_members_in_anonymous_types = true
+csharp_new_line_before_members_in_object_initializers = true
+csharp_new_line_between_query_expression_clauses = true
+
+# Spacing
+csharp_space_after_keywords_in_control_flow_statements = true
+csharp_space_between_parentheses = false
+csharp_space_between_method_declaration_parameter_list_parentheses = false
+csharp_space_between_method_declaration_empty_parameter_list_parentheses = false
+csharp_space_between_method_call_parameter_list_parentheses = false
+csharp_space_between_method_call_empty_parameter_list_parentheses = false
+
+# Wrapping
+csharp_preserve_single_line_statements = false
+csharp_preserve_single_line_blocks = true
+
+# Naming conventions
+dotnet_naming_rule.private_fields_underscore.symbols = private_fields
+dotnet_naming_rule.private_fields_underscore.style = prefix_underscore
+dotnet_naming_symbols.private_fields.applicable_kinds = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private
+dotnet_naming_style.prefix_underscore.required_prefix = _
+dotnet_naming_style.prefix_underscore.capitalization = camel_case
+
+# Style
+csharp_style_var_for_built_in_types = true:none
+csharp_style_var_when_type_is_apparent = true:none
+csharp_style_var_elsewhere = true:none
+csharp_style_expression_bodied_methods = false:none
+csharp_style_expression_bodied_properties = true:none
+csharp_style_pattern_matching_over_is_with_cast_check = true:suggestion
+csharp_style_pattern_matching_over_as_with_null_check = true:suggestion
+csharp_style_throw_expression = true:suggestion
+csharp_style_prefer_null_check_over_type_check = true:suggestion
+
+[Makefile]
+indent_style = tab
+
+[*.sh]
+indent_size = 2

@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1
+#
+# NOMAD developer / simulation image (x86_64).
+#
+# Runs Edge Core in hardware-free sim mode — no CUDA, ZED SDK, or ROS2. This is
+# the everyday "run it without a Jetson" image and what CI builds/smoke-tests.
+#
+# Build:  docker build -f docker/Dockerfile.dev -t nomad-edge-dev .
+# Run:    docker run --rm -p 8000:8000 nomad-edge-dev
+#         # then open http://localhost:8000/docs
+FROM python:3.13-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    NOMAD_SIM_MODE=true \
+    NOMAD_ENABLE_VISION=false \
+    # Dev-only: with no API key, Edge Core rejects non-loopback clients unless
+    # this is set, so host -> container requests would 401. Safe here because the
+    # image is for local development. NEVER set this on a deployed device.
+    NOMAD_ALLOW_INSECURE_REMOTE=true
+
+# Runtime libs: opencv-python-headless needs libglib2.0; curl powers HEALTHCHECK.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libglib2.0-0 curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install runtime deps first for better layer caching. Only the files needed to
+# build + import the package are copied (no CUDA/ZED/ROS extras).
+COPY pyproject.toml README.md ./
+COPY edge_core/ ./edge_core/
+COPY infra/ ./infra/
+RUN pip install --upgrade pip && pip install .
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=6 \
+  CMD curl -fsS http://localhost:8000/health || exit 1
+
+# Hardware-free simulation mode (mock MAVLink, no vision pipeline).
+CMD ["nomad-edge", "--sim", "--no-vision", "--host", "0.0.0.0", "--port", "8000"]

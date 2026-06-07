@@ -1,0 +1,252 @@
+#!/bin/bash
+# =============================================================================
+# `nomad-profile` — manage NOMAD configuration profiles.
+#
+# A profile is a complete config/nomad.env file stored under config/profiles/.
+# Loading a profile copies it to config/nomad.env (the gitignored runtime
+# config that every service reads). Saving a profile snapshots the current
+# nomad.env back to a named profile file.
+#
+# Usage:
+#   nomad-profile load <name>     Load a profile (e.g., sim, drone, dev)
+#   nomad-profile save <name>     Save current config as a new profile
+#   nomad-profile list            List available profiles
+#   nomad-profile show            Show the active profile name and description
+#   nomad-profile diff <name>     Diff a profile against the current config
+#   nomad-profile edit            Open the current config in $EDITOR
+#   nomad-profile which           Print the path to the current config
+#
+# Profiles:
+#   sim     Full Isaac Sim + SITL simulation (no hardware)
+#   drone   Real Jetson + ZED2i + CubePilot (production)
+#   dev     Minimal Edge Core only (API dev / CI)
+#
+# Examples:
+#   nomad-profile load sim        # Switch to simulation mode
+#   nomad-profile load drone      # Switch to real drone mode
+#   nomad-profile save my_tuning  # Snapshot current config
+#   nomad-profile list            # See what's available
+# =============================================================================
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NOMAD_REPO_ROOT="${NOMAD_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+PROFILES_DIR="$NOMAD_REPO_ROOT/config/profiles"
+ENV_FILE="${NOMAD_ENV_FILE:-$NOMAD_REPO_ROOT/config/nomad.env}"
+
+# Colors
+if [ -t 1 ]; then
+    _C_RED='\033[0;31m'; _C_GRN='\033[0;32m'; _C_YEL='\033[1;33m'
+    _C_BLU='\033[0;34m'; _C_CYA='\033[0;36m'; _C_OFF='\033[0m'
+else
+    _C_RED=''; _C_GRN=''; _C_YEL=''; _C_BLU=''; _C_CYA=''; _C_OFF=''
+fi
+
+log_info()  { printf "%b[PROFILE] %b %s%b\n" "$_C_BLU" "INFO" "$_C_OFF" "$1"; }
+log_ok()    { printf "%b[PROFILE] %b %s%b\n" "$_C_GRN" "OK" "$_C_OFF" "$1"; }
+log_warn()  { printf "%b[PROFILE] %b %s%b\n" "$_C_YEL" "WARN" "$_C_OFF" "$1"; }
+log_fail()  { printf "%b[PROFILE] %b %s%b\n" "$_C_RED" "FAIL" "$_C_OFF" "$1" >&2; }
+
+cmd_list() {
+    printf "%bAvailable profiles:%b\n" "$_C_CYA" "$_C_OFF"
+    printf "%-20s %-12s %s\n" "PROFILE" "SIM MODE" "DESCRIPTION"
+    printf "%-20s %-12s %s\n" "-------" "--------" "-----------"
+    for f in "$PROFILES_DIR"/*.env; do
+        [ -f "$f" ] || continue
+        name=$(basename "$f" .env)
+        desc=$(grep -m1 '^NOMAD_PROFILE_DESCRIPTION=' "$f" 2>/dev/null | cut -d= -f2- | tr -d '"' || echo "")
+        sim=$(grep -m1 '^ISAAC_SIM_MODE=' "$f" 2>/dev/null | cut -d= -f2 || echo "false")
+        [ "$sim" = "true" ] && sim_label="sim" || sim_label="hw"
+        printf "%-20s %-12s %s\n" "$name" "$sim_label" "$desc"
+    done
+}
+
+cmd_load() {
+    local name="${1:-}"
+    if [ -z "$name" ]; then
+        log_fail "Usage: nomad-profile load <name>"
+        log_fail "Run 'nomad-profile list' to see available profiles."
+        return 1
+    fi
+
+    local src="$PROFILES_DIR/${name}.env"
+    if [ ! -f "$src" ]; then
+        log_fail "Profile not found: $src"
+        log_fail "Available profiles:"
+        for f in "$PROFILES_DIR"/*.env; do
+            [ -f "$f" ] || continue
+            printf "  %s\n" "$(basename "$f" .env)"
+        done
+        return 1
+    fi
+
+    # Backup the current config if it exists
+    if [ -f "$ENV_FILE" ]; then
+        local backup="$ENV_FILE.bak.$(date +%Y%m%d_%H%M%S)"
+        cp "$ENV_FILE" "$backup"
+        log_info "Backed up current config to $(basename "$backup")"
+    fi
+
+    cp "$src" "$ENV_FILE"
+
+    local desc
+    desc=$(grep -m1 '^NOMAD_PROFILE_DESCRIPTION=' "$src" 2>/dev/null | cut -d= -f2- | tr -d '"' || echo "")
+    log_ok "Loaded profile: $name"
+    [ -n "$desc" ] && log_info "  $desc"
+
+    # Print key settings summary
+    local sim_mode
+    sim_mode=$(grep -m1 '^ISAAC_SIM_MODE=' "$src" 2>/dev/null | cut -d= -f2 || echo "false")
+    local vision
+    vision=$(grep -m1 '^NOMAD_ENABLE_VISION=' "$src" 2>/dev/null | cut -d= -f2 || echo "false")
+    local servos
+    servos=$(grep -m1 '^NOMAD_ENABLE_SERVOS=' "$src" 2>/dev/null | cut -d= -f2 || echo "false")
+
+    printf "\n%bKey settings:%b\n" "$_C_CYA" "$_C_OFF"
+    printf "  ISAAC_SIM_MODE     = %s\n" "$sim_mode"
+    printf "  NOMAD_ENABLE_VISION = %s\n" "$vision"
+    printf "  NOMAD_ENABLE_SERVOS = %s\n" "$servos"
+
+    # Warn about USER placeholder
+    if grep -q 'replace USER' "$ENV_FILE" 2>/dev/null || \
+       grep -q '/home/USER/' "$ENV_FILE" 2>/dev/null; then
+        printf "\n%b⚠  Paths contain USER placeholder. Edit config/nomad.env:%b\n" "$_C_YEL" "$_C_OFF"
+        printf "  sed -i 's|/home/USER/|/home/%s/|g' %s\n" "$(whoami)" "$ENV_FILE"
+    fi
+
+    printf "\n%bNext steps:%b\n" "$_C_CYA" "$_C_OFF"
+    if [ "$sim_mode" = "true" ]; then
+        printf "  1. Edit paths in config/nomad.env if needed\n"
+        printf "  2. Build the Isaac Sim image:  pixi run sim-build\n"
+        printf "  3. Start the sim stack:        pixi run sim-up\n"
+        printf "  4. Or with SITL:               pixi run sim-up-sitl\n"
+    else
+        printf "  1. Edit paths and auth tokens in config/nomad.env\n"
+        printf "  2. Deploy to Jetson:           nomad start all\n"
+    fi
+}
+
+cmd_save() {
+    local name="${1:-}"
+    if [ -z "$name" ]; then
+        log_fail "Usage: nomad-profile save <name>"
+        return 1
+    fi
+
+    if [ ! -f "$ENV_FILE" ]; then
+        log_fail "No current config found at $ENV_FILE"
+        log_fail "Load a profile first: nomad-profile load <name>"
+        return 1
+    fi
+
+    local dest="$PROFILES_DIR/${name}.env"
+    if [ -f "$dest" ]; then
+        log_warn "Profile '$name' already exists. Overwrite? [y/N]"
+        read -r answer
+        [ "$answer" = "y" ] || [ "$answer" = "Y" ] || { log_info "Aborted"; return 0; }
+    fi
+
+    # Stamp the profile identity into the saved file
+    local tmp
+    tmp=$(mktemp)
+    {
+        echo "# Saved by nomad-profile on $(date -Iseconds)"
+        echo "NOMAD_PROFILE=$name"
+        echo "NOMAD_PROFILE_DESCRIPTION=\"Saved from current config on $(date +%Y-%m-%d)\""
+        echo ""
+        grep -v '^NOMAD_PROFILE=' "$ENV_FILE" | grep -v '^NOMAD_PROFILE_DESCRIPTION='
+    } > "$tmp"
+    mv "$tmp" "$dest"
+
+    log_ok "Saved current config as profile: $name"
+    log_info "  → $dest"
+}
+
+cmd_show() {
+    if [ ! -f "$ENV_FILE" ]; then
+        log_warn "No active config (config/nomad.env does not exist)"
+        log_info "Load a profile: nomad-profile load <name>"
+        return 1
+    fi
+
+    local profile
+    profile=$(grep -m1 '^NOMAD_PROFILE=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "unknown")
+    local desc
+    desc=$(grep -m1 '^NOMAD_PROFILE_DESCRIPTION=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' || echo "No description")
+    local sim_mode
+    sim_mode=$(grep -m1 '^ISAAC_SIM_MODE=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "false")
+    local vision
+    vision=$(grep -m1 '^NOMAD_ENABLE_VISION=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "false")
+
+    printf "%bActive profile:%b  %s\n" "$_C_CYA" "$_C_OFF" "$profile"
+    printf "%bDescription:%b     %s\n" "$_C_CYA" "$_C_OFF" "$desc"
+    printf "%bSim mode:%b        %s\n" "$_C_CYA" "$_C_OFF" "$sim_mode"
+    printf "%bVision:%b          %s\n" "$_C_CYA" "$_C_OFF" "$vision"
+    printf "%bConfig file:%b    %s\n" "$_C_CYA" "$_C_OFF" "$ENV_FILE"
+}
+
+cmd_diff() {
+    local name="${1:-}"
+    if [ -z "$name" ]; then
+        log_fail "Usage: nomad-profile diff <name>"
+        return 1
+    fi
+
+    local src="$PROFILES_DIR/${name}.env"
+    if [ ! -f "$src" ]; then
+        log_fail "Profile not found: $src"
+        return 1
+    fi
+
+    if [ ! -f "$ENV_FILE" ]; then
+        log_fail "No current config to diff against"
+        return 1
+    fi
+
+    diff --color=auto -u "$ENV_FILE" "$src" || true
+}
+
+cmd_edit() {
+    if [ ! -f "$ENV_FILE" ]; then
+        log_warn "No active config. Loading 'dev' profile first."
+        cmd_load dev || return 1
+    fi
+
+    local editor="${EDITOR:-nano}"
+    log_info "Opening $ENV_FILE with $editor"
+    $editor "$ENV_FILE"
+}
+
+cmd_which() {
+    if [ -f "$ENV_FILE" ]; then
+        echo "$ENV_FILE"
+    else
+        log_warn "No active config file found"
+        return 1
+    fi
+}
+
+usage() {
+    sed -n '2,/^# ===/p' "$0" | sed 's/^# \{0,1\}//'
+    exit "${1:-0}"
+}
+
+main() {
+    local action="${1:-}"
+    case "$action" in
+        ""|-h|--help|help) usage 0 ;;
+        list)   cmd_list ;;
+        load)   cmd_load "${2:-}" ;;
+        save)   cmd_save "${2:-}" ;;
+        show)   cmd_show ;;
+        diff)   cmd_diff "${2:-}" ;;
+        edit)   cmd_edit ;;
+        which)  cmd_which ;;
+        *)
+            echo "[nomad-profile] unknown command: $action" >&2
+            usage 2
+            ;;
+    esac
+}
+
+main "$@"

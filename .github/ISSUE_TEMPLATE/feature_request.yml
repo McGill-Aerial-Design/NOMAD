@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest a capability, module, or improvement for NOMAD.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What are you trying to do that NOMAD doesn't support today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: |
+        What should it look like? If this is a new capability, consider whether it
+        fits as a NOMAD module (Python `nomad.modules` entry point or C# view).
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: This belongs in the reusable core (mission-agnostic)
+        - label: I'm willing to help implement it

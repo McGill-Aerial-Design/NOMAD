@@ -1,0 +1,332 @@
+# ============================================================
+# NOMAD Project .gitignore
+# ============================================================
+
+# ============================================================
+# Python
+# ============================================================
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+!scripts/build/
+!scripts/build/*.sh
+
+# MkDocs site output (pixi run docs-build)
+/site/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+!scripts/lib/
+!scripts/lib/*.sh
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+*.cache
+.cache
+.cache/
+**/.cache/
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# ============================================================
+# C# / .NET / Visual Studio
+# ============================================================
+
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+
+# Visual Studio cache/options
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Visual Studio profiler
+*.psess
+*.vsp
+*.vspx
+
+# ReSharper
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+
+# NuGet Packages
+*.nupkg
+**/packages/*
+!**/packages/build/
+*.nuget.props
+*.nuget.targets
+
+# MSBuild Binary and Structured Log
+*.binlog
+
+# ============================================================
+# Mission Planner Plugin
+# ============================================================
+
+# Compiled plugin (should be built fresh)
+mission_planner/src/bin/
+mission_planner/src/obj/
+mission_planner/plugins-dist/*.dll
+mission_planner/plugins-dist/*.pdb
+mission_planner/packaging/libvlc-windows/
+!mission_planner/packaging/libvlc-windows/README.md
+
+# User config (contains Tailscale IPs, etc.)
+mission_planner/nomad_config.json
+
+# ============================================================
+# Runtime / Data / Logs
+# ============================================================
+
+# Mission logs (large JSON files)
+data/mission_logs/*.json
+!data/mission_logs/README.md
+
+# Video recordings
+recordings/
+*.mp4
+*.avi
+*.mkv
+
+# ZED SDK cache
+*.svo
+*.svo2
+
+# ============================================================
+# Configuration / Secrets
+# ============================================================
+
+# Environment files with secrets
+.env
+.env.*
+!.env.example
+!*.env.example
+
+# NOMAD runtime config (holds real secrets + host paths). Commit only the
+# scrubbed template config/nomad.env.example.
+config/nomad.env
+!config/nomad.env.example
+# Timestamped backups written by the profile loader (e.g. nomad.env.bak.2026...)
+config/nomad.env.bak.*
+config/*.env.bak.*
+
+# Google Cloud credentials
+nomad-*.json
+client_secret_*.json
+
+# Tailscale auth keys
+config/env/*.env
+!config/env/*.env.example
+
+# Private keys
+*.key
+*.pem
+*.p12
+
+# ============================================================
+# Operating System Files
+# ============================================================
+
+# Windows
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# ============================================================
+# IDE / Editor
+# ============================================================
+
+# JetBrains IDEs (PyCharm, Rider, etc.)
+.idea/
+*.iml
+*.iws
+
+# VS Code — ignore the folder contents but share the project config.
+# Use .vscode/* (not .vscode/) so the negations below can re-include files;
+# git cannot re-include a file whose parent directory is excluded.
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/mcp-settings.json
+*.code-workspace
+
+# Emacs
+*~
+\#*\#
+
+# Vim
+*.swp
+*.swo
+*~
+
+# ============================================================
+# Docker
+# ============================================================
+
+# Docker volumes
+.docker/
+
+# ============================================================
+# Temporary / Generated Files
+# ============================================================
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.old
+tmpclaude-*/
+nul
+
+# Logs
+*.log
+logs/
+
+# Test outputs
+test_output/
+*.test
+
+# ============================================================
+# Specific to NOMAD
+# ============================================================
+
+# MCP Server Data (AI assistant memory/cache)
+.mcp/
+!.mcp/README.md
+
+# Local development overrides
+local_config.json
+dev_settings.json
+
+# Large model files (should be downloaded separately)
+models/*.pt
+models/*.onnx
+models/*.tflite
+!models/README.md
+
+# Jetson-specific
+/opt/nomad/
+
+# ============================================================
+# GitHub / CI
+# ============================================================
+
+# Keep .github folder but ignore certain files
+# (Remove these lines if you want to track .github)
+# .github/
+# !.github/workflows/
+# !.github/agents/
+
+# ============================================================
+# Documentation Builds
+# ============================================================
+
+# Sphinx documentation
+docs/_build/
+docs/_static/
+docs/_templates/
+
+# ============================================================
+# Archives
+# ============================================================
+
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# ============================================================
+# Exceptions (force include important files)
+# ============================================================
+
+# Include README files everywhere
+!**/README.md
+
+# Include example configurations
+!**/*.example
+!**/*.template
+
+# Include documentation
+!docs/**
+
+# Include empty directories with .gitkeep
+!**/.gitkeep
+
+# Claude Code local settings
+.claude/

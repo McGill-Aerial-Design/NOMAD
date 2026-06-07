@@ -1,0 +1,720 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 The NOMAD Authors
+"""
+Video Stream Manager - Simple Video Bridge for NOMAD
+
+Manages the simple video bridge running inside the Isaac ROS Docker container
+for low-latency ROS-to-RTSP streaming using software H.264 encoding.
+
+Architecture:
+    ZED Camera (ROS2) -> x264enc (software, zerolatency) -> RTSP -> MediaMTX -> Viewers
+
+Key Features:
+- Software H.264 encoding (x264enc zerolatency, openh264enc fallback)
+- Single persistent stream with dynamic topic switching
+- Fixed RTSP URL (never changes when switching topics)
+- HTTP API control for topic switching and status
+- Multiple viewer support via MediaMTX
+- Pipeline watchdog with automatic error recovery
+- Auto-discovery of available ROS2 image topics
+
+Runs on Jetson Edge Core host, controls the bridge inside Docker container.
+"""
+
+import json
+import logging
+import os
+import subprocess
+import threading
+import time
+from dataclasses import asdict, dataclass
+from typing import Any
+from urllib.error import URLError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
+
+logger = logging.getLogger("edge_core.video_stream_manager")
+
+_ISAAC_SIM_MODE = os.environ.get("ISAAC_SIM_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+
+# Configuration — when ISAAC_SIM_MODE is true, target the Isaac Sim container
+# instead of the real Jetson Isaac ROS container. Both containers expose the
+# same ROS2 topic interface and simple_video_bridge HTTP API.
+if _ISAAC_SIM_MODE:
+    DEFAULT_CONTAINER_NAME = os.environ.get("ISAAC_SIM_CONTAINER_NAME", "nomad_isaac_sim")
+else:
+    DEFAULT_CONTAINER_NAME = os.environ.get("ISAAC_CONTAINER_NAME", "nomad_isaac_ros")
+DEFAULT_RELAY_HTTP_PORT = int(os.environ.get("VIDEO_RELAY_HTTP_PORT", "9200"))
+_DOCKER_HOST_IP = os.environ.get("NOMAD_DOCKER_HOST_IP", "172.17.0.1")
+DEFAULT_RTSP_URL = (
+    os.environ.get("NOMAD_RTSP_URL") or f"rtsp://{os.environ.get('NOMAD_DOCKER_HOST_IP', _DOCKER_HOST_IP)}:8554/primary"
+)
+DEFAULT_TOPIC = os.environ.get("NOMAD_DEFAULT_VIDEO_TOPIC", "/zed/zed_node/rgb/color/rect/image")
+_NOMAD_ROS_ROOT = os.environ.get("NOMAD_ROS_ROOT", "/opt/ros/humble")
+if _ISAAC_SIM_MODE:
+    _NOMAD_ISAAC_WS = os.environ.get("NOMAD_ISAAC_WORKSPACE", "/workspaces/nomad-sim")
+else:
+    _NOMAD_ISAAC_WS = os.environ.get("NOMAD_ISAAC_WORKSPACE", "/workspaces/isaac_ros-dev")
+
+# Stream settings — 720p at a low bitrate. Picks up overrides from
+# config/nomad.env (VIDEO_BRIDGE_WIDTH/HEIGHT/FPS/BITRATE) so we don't have
+# to edit code to change resolution.
+DEFAULT_WIDTH = int(os.environ.get("VIDEO_BRIDGE_WIDTH", "640"))
+DEFAULT_HEIGHT = int(os.environ.get("VIDEO_BRIDGE_HEIGHT", "360"))
+DEFAULT_FPS = int(os.environ.get("VIDEO_BRIDGE_FPS", "15"))
+DEFAULT_BITRATE = int(os.environ.get("VIDEO_BRIDGE_BITRATE", "800"))  # kbps
+
+
+@dataclass
+class StreamStatus:
+    """Status information for the video stream."""
+
+    streaming: bool
+    current_topic: str
+    rtsp_url: str
+    fps: float
+    frame_count: int
+    error_count: int
+    dropped_count: int
+    uptime_s: float
+    width: int
+    height: int
+    bitrate_kbps: int
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class TopicInfo:
+    """Information about an available video topic."""
+
+    name: str
+    display_name: str  # Trimmed for UI display
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def trim_topic_name(topic: str) -> str:
+    """
+    Trim topic name for display in UI dropdown.
+
+    Removes common prefixes:
+    - /zed/zed_node/ -> zed:
+    - /camera/ -> cam:
+
+    Examples:
+        /zed/zed_node/rgb/color/rect/image -> zed: rgb/color/rect/image
+        /zed/zed_node/left/image_rect_color -> zed: left/image_rect_color
+        /zed/zed_node/depth/depth_registered -> zed: depth/depth_registered
+    """
+    prefixes = [
+        ("/zed/zed_node/", "zed: "),
+        ("/camera/", "cam: "),
+        ("/", ""),
+    ]
+
+    for prefix, replacement in prefixes:
+        if topic.startswith(prefix):
+            return replacement + topic[len(prefix) :]
+
+    return topic
+
+
+class VideoStreamManager:
+    """
+    Manages the video streaming pipeline for NOMAD.
+
+    This class controls the simple video bridge running inside the Isaac ROS
+    Docker container. The bridge:
+    - Subscribes to ROS2 image topics from ZED camera
+    - Encodes video using x264enc software encoder (zerolatency tuning)
+    - Streams to MediaMTX RTSP server at fixed URL
+
+    Topic switching is done via HTTP API to the bridge, which changes its
+    ROS2 subscription. The RTSP URL stays constant - only the content changes.
+    """
+
+    def __init__(
+        self,
+        container_name: str = DEFAULT_CONTAINER_NAME,
+        relay_http_port: int = DEFAULT_RELAY_HTTP_PORT,
+        rtsp_url: str = DEFAULT_RTSP_URL,
+        default_topic: str = DEFAULT_TOPIC,
+        width: int = DEFAULT_WIDTH,
+        height: int = DEFAULT_HEIGHT,
+        fps: int = DEFAULT_FPS,
+        bitrate: int = DEFAULT_BITRATE,
+    ):
+        self.container_name = container_name
+        self.relay_http_port = relay_http_port
+        self.rtsp_url = rtsp_url
+        self.default_topic = default_topic
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.bitrate = bitrate
+        self._edge_core_api_key = (os.environ.get("NOMAD_API_KEY") or "").strip()
+        self._edge_core_internal_token = (os.environ.get("NOMAD_INTERNAL_TOKEN") or "").strip()
+
+        self._started = False
+        self._lock = threading.RLock()
+
+        # Watchdog state
+        self._watchdog_stop = threading.Event()
+        self._watchdog_thread: threading.Thread | None = None
+        self._user_stopped = False  # set True when operator explicitly stops bridge
+
+        logger.info("VideoStreamManager initialized")
+        logger.info(f"  Container: {container_name}")
+        logger.info(f"  RTSP URL: {rtsp_url}")
+        logger.info(f"  Default topic: {default_topic}")
+
+    def is_container_running(self) -> bool:
+        """Check if the Isaac ROS container is running."""
+        try:
+            result = subprocess.run(
+                ["docker", "ps", "--filter", f"name={self.container_name}", "--format", "{{.Names}}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            return self.container_name in result.stdout
+        except Exception as e:
+            logger.error(f"Error checking container status: {e}")
+            return False
+
+    def _get_relay_status_data(self, timeout_s: float = 2.0) -> dict[str, Any] | None:
+        """Fetch bridge /status JSON, or None if unavailable."""
+        try:
+            url = f"http://localhost:{self.relay_http_port}/status"
+            with urlopen(url, timeout=timeout_s) as response:
+                return json.loads(response.read().decode())
+        except Exception:
+            return None
+
+    def is_relay_running(self, require_recent_frames: bool = False) -> bool:
+        """Check if the simple video bridge is running inside the container."""
+        try:
+            # Check if the HTTP API is responsive
+            url = f"http://localhost:{self.relay_http_port}/health"
+            with urlopen(url, timeout=2) as response:
+                data = json.loads(response.read().decode())
+                healthy = data.get("healthy", False)
+                pipeline_playing = data.get("pipeline_playing", healthy)
+                if not (healthy and pipeline_playing):
+                    return False
+
+                if not require_recent_frames:
+                    return True
+
+                status = self._get_relay_status_data(timeout_s=2.0)
+                if not status:
+                    return False
+
+                age = status.get("last_frame_age_s")
+                if age is None:
+                    return False
+                return age < 10.0
+        except Exception:
+            return False
+
+    def start(self) -> bool:
+        """
+        Start the video streaming pipeline.
+
+        Copies the simple video bridge script to the container and launches it.
+        Returns True if successful.
+        """
+        result = self._start_internal()
+        return result[0]
+
+    def start_with_reason(self) -> tuple:
+        """
+        Start the video streaming pipeline with failure reason.
+
+        Returns:
+            Tuple of (success: bool, message: str)
+        """
+        return self._start_internal()
+
+    def _start_internal(self) -> tuple:
+        """Internal start implementation returning (success, message)."""
+        with self._lock:
+            # Check if a bridge is already running (from any launch path:
+            # nomad-video-bridge.service, watchdog re-launch, or prior API call).
+            # Don't kill a working bridge just because _started is False
+            # (e.g., after Edge Core restart).
+            if self.is_relay_running(require_recent_frames=True):
+                self._started = True
+                logger.info("Simple video bridge already running, adopting existing instance")
+                return (True, "Already running")
+            elif self.is_relay_running(require_recent_frames=False):
+                logger.warning("Simple video bridge process is alive but not receiving fresh frames; restarting bridge")
+
+            if not self.is_container_running():
+                msg = f"Docker container '{self.container_name}' is not running. Start Isaac ROS first."
+                logger.warning(msg)
+                return (False, msg)
+
+            # Copy simple bridge script to container
+            script_name = "simple_video_bridge.py"
+            script_path = os.path.join(os.path.dirname(__file__), "ros", script_name)
+            if not os.path.exists(script_path):
+                msg = f"Bridge script not found: {script_path}"
+                logger.error(msg)
+                return (False, msg)
+
+            try:
+                subprocess.run(
+                    ["docker", "cp", script_path, f"{self.container_name}:/tmp/{script_name}"],
+                    capture_output=True,
+                    timeout=10,
+                    check=True,
+                )
+                logger.info(f"Copied {script_name} to container")
+            except subprocess.CalledProcessError as e:
+                msg = f"Failed to copy bridge script to container: {e.stderr or e}"
+                logger.error(msg)
+                return (False, msg)
+
+            # Kill any existing bridge processes
+            try:
+                subprocess.run(
+                    ["docker", "exec", self.container_name, "pkill", "-f", "simple_video_bridge"],
+                    capture_output=True,
+                    timeout=5,
+                )
+            except Exception:
+                pass  # OK if nothing to kill
+
+            # Start the simple video bridge
+            cmd = ["docker", "exec", "-d"]
+            if self._edge_core_api_key:
+                cmd.extend(["-e", f"NOMAD_API_KEY={self._edge_core_api_key}"])
+            if self._edge_core_internal_token:
+                cmd.extend(["-e", f"NOMAD_INTERNAL_TOKEN={self._edge_core_internal_token}"])
+            for env_name in (
+                "NOMAD_TASK2_DETECTOR_MODE",
+                "NOMAD_DETECTOR_INTERVAL_S",
+                "NOMAD_DETECTOR_MAX_WIDTH",
+                "NOMAD_RAW_SNAPSHOT_INTERVAL",
+                "NOMAD_TASK2_REQUIRE_DEPTH",
+                "NOMAD_TASK2_MIN_DIAMETER_M",
+                "NOMAD_TASK2_MAX_DIAMETER_M",
+                "NOMAD_TASK2_DEBUG",
+            ):
+                env_value = os.environ.get(env_name)
+                if env_value:
+                    cmd.extend(["-e", f"{env_name}={env_value}"])
+            cmd.extend(
+                [
+                    self.container_name,
+                    "bash",
+                    "-c",
+                    f"source {_NOMAD_ROS_ROOT}/setup.bash 2>/dev/null; source {_NOMAD_ROS_ROOT}/install/setup.bash 2>/dev/null; "
+                    f"source {_NOMAD_ISAAC_WS}/install/setup.bash 2>/dev/null; "
+                    f"python3 /tmp/{script_name} "
+                    f"--source-topic '{self.default_topic}' "
+                    f"--width {self.width} "
+                    f"--height {self.height} "
+                    f"--fps {self.fps} "
+                    f"--bitrate {self.bitrate} "
+                    f"--http-port {self.relay_http_port} "
+                    f"> /tmp/video_bridge.log 2>&1",
+                ]
+            )
+
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                if result.returncode != 0:
+                    msg = f"Docker exec failed: {result.stderr.strip() or 'unknown error'}"
+                    logger.error(msg)
+                    return (False, msg)
+            except subprocess.TimeoutExpired:
+                msg = "Bridge start command timed out after 10s"
+                logger.error(msg)
+                return (False, msg)
+            except Exception as e:
+                msg = f"Error starting bridge: {e}"
+                logger.error(msg)
+                return (False, msg)
+
+            # Wait for bridge HTTP API and GStreamer pipeline to be ready.
+            # We do NOT require fresh frames here — the ZED topic may not be
+            # publishing yet (e.g. container just started). Frames will arrive
+            # once ROS graph discovery completes. Checking pipeline_playing is
+            # sufficient to confirm the bridge process is healthy and encoding.
+            for i in range(15):  # Wait up to 15 seconds
+                time.sleep(1)
+                if self.is_relay_running(require_recent_frames=False):
+                    self._started = True
+                    logger.info(f"{script_name} started successfully")
+                    return (True, "Started successfully")
+
+            # Bridge didn't respond - check if the process is still running
+            try:
+                check = subprocess.run(
+                    ["docker", "exec", self.container_name, "pgrep", "-f", "simple_video_bridge"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if check.returncode != 0:
+                    # Process died - get the log
+                    log_result = subprocess.run(
+                        ["docker", "exec", self.container_name, "tail", "-20", "/tmp/video_bridge.log"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                    msg = f"Bridge process crashed. Log: {log_result.stdout.strip()[-200:]}"
+                else:
+                    msg = "Bridge process is running but no fresh frames were received within 25s"
+            except Exception:
+                msg = "Bridge did not start in time and could not check process status"
+
+            logger.error(msg)
+            return (False, msg)
+
+    def stop(self) -> bool:
+        """Stop the video streaming pipeline (operator-initiated; watchdog will not auto-restart)."""
+        self._user_stopped = True
+        with self._lock:
+            try:
+                # Stop simple video bridge
+                subprocess.run(
+                    ["docker", "exec", self.container_name, "pkill", "-f", "simple_video_bridge"],
+                    capture_output=True,
+                    timeout=5,
+                )
+                self._started = False
+                logger.info("Simple video bridge stopped")
+                return True
+            except Exception as e:
+                logger.error(f"Error stopping bridge: {e}")
+                return False
+
+    def restart(self) -> bool:
+        """Restart the video streaming pipeline."""
+        self._user_stopped = False
+        self.stop()
+        time.sleep(2)
+        return self.start()
+
+    def _watchdog_loop(self):
+        """
+        Persistent watchdog: checks bridge health every 30 s.
+        Restarts the bridge automatically if it has crashed or stopped
+        receiving frames, unless the operator explicitly stopped it.
+        Handles container restarts transparently.
+        """
+        logger.info("Video bridge watchdog started")
+        while not self._watchdog_stop.is_set():
+            self._watchdog_stop.wait(30)
+            if self._watchdog_stop.is_set():
+                break
+            if self._user_stopped:
+                continue
+            try:
+                if not self.is_container_running():
+                    continue
+                if not self.is_relay_running(require_recent_frames=False):
+                    logger.warning("Watchdog: video bridge not running, restarting...")
+                    ok, msg = self._start_internal()
+                    if ok:
+                        logger.info("Watchdog: video bridge restarted successfully")
+                    else:
+                        logger.error(f"Watchdog: restart failed — {msg}")
+                elif not self.is_relay_running(require_recent_frames=True):
+                    # Process alive but no frames — GStreamer pipeline stalled
+                    logger.warning("Watchdog: bridge running but no recent frames, triggering pipeline restart")
+                    try:
+                        from urllib.request import Request, urlopen
+
+                        req = Request(f"http://localhost:{self.relay_http_port}/restart", method="POST")
+                        urlopen(req, timeout=5)
+                    except Exception as e:
+                        logger.warning(
+                            f"Watchdog: pipeline restart request failed ({e}), killing and relaunching bridge"
+                        )
+                        ok, msg = self._start_internal()
+                        if not ok:
+                            logger.error(f"Watchdog: relaunch failed — {msg}")
+            except Exception as e:
+                logger.error(f"Watchdog: unexpected error — {e}")
+
+    def switch_topic(self, topic: str) -> bool:
+        """
+        Switch the video stream to a different ROS topic.
+
+        This calls the bridge's HTTP API to change its source topic.
+        The Isaac ROS H264 encoder restarts with the new topic.
+        The ROS2 subscription changes instantly.
+
+        Args:
+            topic: Full ROS topic path (e.g., /zed/zed_node/left/image_rect_color)
+
+        Returns:
+            True if switch was successful
+        """
+        with self._lock:
+            if not self.is_relay_running():
+                logger.warning("Cannot switch topic: bridge not running")
+                return False
+
+            try:
+                url = f"http://localhost:{self.relay_http_port}/switch?topic={quote(topic, safe='')}"
+                req = Request(url, method="POST")
+
+                with urlopen(req, timeout=5) as response:
+                    data = json.loads(response.read().decode())
+
+                if data.get("success"):
+                    logger.info(f"Switched video source to: {topic}")
+                    return True
+                else:
+                    logger.error(f"Failed to switch topic: {data.get('message', 'Unknown error')}")
+                    return False
+
+            except URLError as e:
+                logger.error(f"HTTP error switching topic: {e}")
+                return False
+            except Exception as e:
+                logger.error(f"Error switching topic: {e}")
+                return False
+
+    def list_topics(self) -> list[TopicInfo]:
+        """
+        List available ROS image topics.
+
+        Queries the bridge's HTTP API which uses ros2 topic list
+        to find sensor_msgs/Image topics.
+
+        Returns:
+            List of TopicInfo with name and display_name
+        """
+        if not self.is_relay_running():
+            return []
+
+        try:
+            url = f"http://localhost:{self.relay_http_port}/topics"
+            with urlopen(url, timeout=10) as response:
+                data = json.loads(response.read().decode())
+
+            topics = []
+            for topic in data.get("topics", []):
+                topics.append(TopicInfo(name=topic, display_name=trim_topic_name(topic)))
+            return topics
+
+        except Exception as e:
+            logger.error(f"Error listing topics: {e}")
+            return []
+
+    def _query_topics_docker(self) -> list[TopicInfo]:
+        """Query topics directly via docker exec (fallback)."""
+        try:
+            cmd = [
+                "docker",
+                "exec",
+                self.container_name,
+                "bash",
+                "-c",
+                f"source {_NOMAD_ROS_ROOT}/setup.bash 2>/dev/null; source {_NOMAD_ROS_ROOT}/install/setup.bash 2>/dev/null; ros2 topic list -t 2>/dev/null",
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            if result.returncode != 0:
+                return []
+
+            topics = []
+            for line in result.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 2:
+                    topic, type_ = parts[0], parts[1].strip("[]")
+                    if "sensor_msgs/msg/Image" in type_:
+                        topics.append(TopicInfo(name=topic, display_name=trim_topic_name(topic)))
+
+            return sorted(topics, key=lambda t: t.name)
+
+        except Exception as e:
+            logger.error(f"Error querying topics via docker: {e}")
+            return []
+
+    def get_status(self) -> StreamStatus:
+        """
+        Get current stream status.
+
+        Queries the bridge's HTTP API for detailed status.
+        """
+        default_status = StreamStatus(
+            streaming=False,
+            current_topic="",
+            rtsp_url=self._local_rtsp_url(),
+            fps=0.0,
+            frame_count=0,
+            error_count=0,
+            dropped_count=0,
+            uptime_s=0.0,
+            width=self.width,
+            height=self.height,
+            bitrate_kbps=self.bitrate,
+        )
+
+        if not self.is_relay_running():
+            return default_status
+
+        try:
+            url = f"http://localhost:{self.relay_http_port}/status"
+            with urlopen(url, timeout=5) as response:
+                data = json.loads(response.read().decode())
+
+            return StreamStatus(
+                streaming=data.get("streaming", False),
+                current_topic=data.get("source_topic", ""),
+                rtsp_url=self._local_rtsp_url(),
+                fps=data.get("fps", 0.0),
+                frame_count=data.get("frame_count", 0),
+                error_count=data.get("error_count", 0),
+                dropped_count=data.get("dropped_count", 0),
+                uptime_s=0.0,  # Not tracked in new bridge
+                width=self.width,
+                height=self.height,
+                bitrate_kbps=self.bitrate,
+            )
+
+        except Exception as e:
+            logger.error(f"Error getting status: {e}")
+            return default_status
+
+    def _local_rtsp_url(self) -> str:
+        return self.rtsp_url.replace(_DOCKER_HOST_IP, "localhost")
+
+    def get_rtsp_url(self) -> str:
+        """Get the constant RTSP URL for the video stream."""
+        return self._local_rtsp_url()
+
+    def get_logs(self, lines: int = 50) -> str:
+        """Get recent logs from the simple video bridge process."""
+        try:
+            cmd = ["docker", "exec", self.container_name, "tail", f"-{lines}", "/tmp/video_bridge.log"]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            return result.stdout
+        except Exception as e:
+            return f"Error getting logs: {e}"
+
+    def set_overlay(self, enabled: bool) -> bool:
+        """
+        Enable or disable the ROS2 detection overlay on the video stream.
+
+        When enabled, the video bridge draws bounding boxes from Edge Core
+        detections directly onto the video frames before encoding to RTSP.
+        """
+        if not self.is_relay_running():
+            logger.warning("Cannot toggle overlay: video bridge not running")
+            return False
+
+        action = "enable" if enabled else "disable"
+        try:
+            url = f"http://localhost:{self.relay_http_port}/overlay/{action}"
+            req = Request(url, method="POST")
+            with urlopen(req, timeout=5) as response:
+                data = json.loads(response.read().decode())
+            return data.get("success", False)
+        except Exception as e:
+            logger.error(f"Error toggling overlay: {e}")
+            return False
+
+    def get_center_depth_m(self) -> float | None:
+        """Sample ZED depth at the video stream center (operator crosshair)."""
+        if not self.is_relay_running():
+            return None
+        try:
+            url = f"http://localhost:{self.relay_http_port}/depth/center"
+            with urlopen(url, timeout=2) as response:
+                data = json.loads(response.read().decode())
+            val = data.get("range_m")
+            return float(val) if val is not None else None
+        except Exception as e:
+            logger.debug(f"Center-depth fetch failed: {e}")
+            return None
+
+    def get_overlay_status(self) -> dict:
+        """Get current overlay status from the video bridge."""
+        if not self.is_relay_running():
+            return {"enabled": False, "detection_count": 0}
+
+        try:
+            url = f"http://localhost:{self.relay_http_port}/overlay/status"
+            with urlopen(url, timeout=5) as response:
+                return json.loads(response.read().decode())
+        except Exception as e:
+            logger.error(f"Error getting overlay status: {e}")
+            return {"enabled": False, "detection_count": 0}
+
+
+# Global instance
+_video_stream_manager: VideoStreamManager | None = None
+
+
+def get_video_stream_manager() -> VideoStreamManager | None:
+    """Get the global video stream manager instance."""
+    global _video_stream_manager
+    return _video_stream_manager
+
+
+def init_video_stream_manager(
+    container_name: str = DEFAULT_CONTAINER_NAME,
+    auto_start: bool = False,  # kept in signature for backward compat; ignored
+    **kwargs,
+) -> VideoStreamManager:
+    """
+    Initialize the global video stream manager.
+
+    Lifecycle ownership: `nomad-video-bridge.service` is the SINGLE owner of
+    the simple_video_bridge process. Edge Core exposes /api/video/start and
+    /api/video/stop for explicit operator control (used by the systemd unit
+    and Mission Planner), but does NOT auto-start the bridge in-process —
+    that would race with the systemd unit.
+
+    The `auto_start` kwarg is accepted for backward compatibility but is
+    ignored. To bring the bridge up, start the systemd unit.
+
+    A crash-recovery watchdog still runs. It restarts the bridge only if the
+    relay died unexpectedly; explicit stops (POST /api/video/stop, which is
+    what `systemctl stop nomad-video-bridge.service` ultimately calls) set
+    `_user_stopped=True`, and the watchdog will not resurrect the bridge in
+    that case.
+
+    Args:
+        container_name: Isaac ROS Docker container name.
+        auto_start: deprecated; ignored.
+
+    Returns:
+        The initialized VideoStreamManager instance.
+    """
+    global _video_stream_manager
+    _video_stream_manager = VideoStreamManager(container_name=container_name, **kwargs)
+
+    if auto_start:
+        logger.warning(
+            "init_video_stream_manager(auto_start=True) is deprecated and ignored. "
+            "nomad-video-bridge.service owns the bridge lifecycle; "
+            "set NOMAD_VIDEO_AUTO_START=false (the default) in config/nomad.env."
+        )
+
+    # Crash-recovery watchdog only. It will not initiate a first start.
+    def _start_watchdog_after_delay():
+        time.sleep(120)
+        _video_stream_manager._watchdog_thread = threading.Thread(
+            target=_video_stream_manager._watchdog_loop,
+            daemon=True,
+            name="video-watchdog",
+        )
+        _video_stream_manager._watchdog_thread.start()
+
+    threading.Thread(target=_start_watchdog_after_delay, daemon=True, name="video-watchdog-init").start()
+    logger.info("Video bridge crash-recovery watchdog scheduled (starts in 120s)")
+
+    return _video_stream_manager

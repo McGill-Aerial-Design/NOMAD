@@ -1,0 +1,64 @@
+# NOMAD hardware-free dev/sim stack.
+#
+#   docker compose -f docker/docker-compose.dev.yml up --build
+#   # Edge Core API:  http://localhost:8000/docs
+#
+# Optional ArduPilot SITL (realistic MAVLink without a flight controller):
+#   docker compose -f docker/docker-compose.dev.yml --profile sitl up --build
+#
+# This is the contributor's default "run it" path and what CI builds.
+name: nomad-dev
+
+services:
+  edge_core:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    image: nomad-edge-dev:latest
+    ports:
+      - "8000:8000"
+    environment:
+      NOMAD_SIM_MODE: "true"
+      NOMAD_ENABLE_VISION: "false"
+      # Let the Mission Planner plugin reach the API over the LAN without a key.
+      # Keep this false anywhere other than local development.
+      NOMAD_ALLOW_INSECURE_REMOTE: "true"
+      # DEV-ONLY credentials, committed so the dev stack + GCS plugin work out of
+      # the box. NEVER use these on a real drone — production sets its own
+      # NOMAD_API_KEY / NOMAD_INTERNAL_TOKEN locally (untracked).
+      NOMAD_API_KEY: "nomad-dev-key"
+      NOMAD_INTERNAL_TOKEN: "nomad-dev-internal-token-0123456789ab"
+      # Listen for the SITL MAVLink stream (see the sitl service below). With no
+      # SITL running this simply waits with no telemetry — harmless.
+      NOMAD_MAVLINK_ENDPOINT: "udpin:0.0.0.0:14550"
+    restart: unless-stopped
+    # Mount your own runtime config if you want to override sim defaults:
+    # volumes:
+    #   - ../config/nomad.env:/app/config/nomad.env:ro
+
+  # Optional: ArduPilot SITL (Copter-4.6.3 stable).
+  # Exposes MAVLink on TCP :5760 (connect Mission Planner, mavproxy, etc.).
+  # Fully wiring edge_core <-> SITL needs a MAVLink TCP endpoint in your config;
+  # by default edge_core sim mocks MAVLink and does not dial out to SITL.
+  sitl:
+    # ArduPilot Copter 4.6.3, built from source once with:
+    #   docker build -t nomad-sitl:copter-4.6.3 \
+    #     --build-arg COPTER_TAG=Copter-4.6.3 \
+    #     https://github.com/radarku/ardupilot-sitl-docker.git
+    image: nomad-sitl:copter-4.6.3
+    profiles: ["sitl"]
+    # sim_vehicle.py launches MAVProxy on a console; without a TTY it exits
+    # immediately and the container restart-loops. Allocate a pseudo-TTY.
+    tty: true
+    stdin_open: true
+    environment:
+      VEHICLE: ArduCopter
+      MODEL: quad
+      SPEEDUP: "1"
+      # Stream MAVLink to the Edge Core container so telemetry actually flows.
+      SITL_UDP_OUTPUT_ADDRESS: "udp:edge_core:14550"
+    ports:
+      - "5760:5760"   # TCP MAVLink (connect Mission Planner here)
+    depends_on:
+      - edge_core
+    restart: unless-stopped

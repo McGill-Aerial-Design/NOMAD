@@ -1,0 +1,281 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  NOMAD Mission Planner Plugin Project
+  Target: Mission Planner 1.3.x / .NET Framework 4.7.2
+
+  Build Instructions:
+  1. Open in Visual Studio 2022
+  2. Build > Build Solution (Ctrl+Shift+B)
+  3. Copy bin\Release\NOMADPlugin.dll to Mission Planner plugins folder
+-->
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <AssemblyName>NOMADPlugin</AssemblyName>
+    <RootNamespace>NOMAD.MissionPlanner</RootNamespace>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <LangVersion>latest</LangVersion>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- .NET Framework References -->
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Xml" />
+    <Reference Include="System.Speech" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Memory">
+      <HintPath>C:\Program Files (x86)\Mission Planner\System.Memory.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <!-- WPF References for Helix Toolkit 3D Visualization -->
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="WindowsFormsIntegration" />
+    <Reference Include="System.Xaml" />
+  </ItemGroup>
+
+  <!-- OpenTK for cross-platform 3D SLAM visualization (ships with Mission Planner) -->
+  <ItemGroup>
+    <Reference Include="OpenTK">
+      <HintPath>C:\Program Files (x86)\Mission Planner\OpenTK.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="OpenTK.GLControl">
+      <HintPath>C:\Program Files (x86)\Mission Planner\OpenTK.GLControl.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Mission Planner References -->
+    <Reference Include="MissionPlanner">
+      <HintPath>C:\Program Files (x86)\Mission Planner\MissionPlanner.exe</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="MissionPlanner.ArduPilot">
+      <HintPath>C:\Program Files (x86)\Mission Planner\MissionPlanner.ArduPilot.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="MissionPlanner.Comms">
+      <HintPath>C:\Program Files (x86)\Mission Planner\MissionPlanner.Comms.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="MissionPlanner.Controls">
+      <HintPath>C:\Program Files (x86)\Mission Planner\MissionPlanner.Controls.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="MissionPlanner.Utilities">
+      <HintPath>C:\Program Files (x86)\Mission Planner\MissionPlanner.Utilities.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="MissionPlanner.Drawing">
+      <HintPath>C:\Program Files (x86)\Mission Planner\MissionPlanner.Drawing.dll</HintPath>
+      <Private>False</Private>
+      <Aliases>MPDrawing</Aliases>
+    </Reference>
+    <Reference Include="Interfaces">
+      <HintPath>C:\Program Files (x86)\Mission Planner\Interfaces.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="MAVLink">
+      <HintPath>C:\Program Files (x86)\Mission Planner\MAVLink.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <!-- Newtonsoft.Json -->
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>C:\Program Files (x86)\Mission Planner\Newtonsoft.Json.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <!-- SkiaSharp for video frame handling -->
+    <Reference Include="SkiaSharp">
+      <HintPath>C:\Program Files (x86)\Mission Planner\SkiaSharp.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- NOMAD Module SDK -->
+    <Compile Include="Core\NomadModuleContext.cs" />
+    <Compile Include="Core\INomadView.cs" />
+    <Compile Include="Core\NomadViewDescriptor.cs" />
+    <Compile Include="Core\INomadModule.cs" />
+    <Compile Include="Core\ModuleHost.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Plugin entry + shell -->
+    <Compile Include="Plugin\NOMADPlugin.cs" />
+    <Compile Include="Plugin\NOMADPlugin.VideoAndLink.cs" />
+    <Compile Include="Plugin\NOMADMainScreen.cs" />
+
+    <!-- Config -->
+    <Compile Include="Config\NOMADConfig.cs" />
+    <Compile Include="Config\NOMADConfig.Spray.cs" />
+    <Compile Include="Config\NOMADSettingsForm.cs" />
+    <Compile Include="Config\NOMADSettingsForm.ConnectionTab.cs" />
+    <Compile Include="Config\NOMADSettingsForm.VideoTab.cs" />
+    <Compile Include="Config\NOMADSettingsForm.ServosTab.cs" />
+    <Compile Include="Config\NOMADSettingsForm.PayloadsTab.cs" />
+    <Compile Include="Config\NOMADSettingsForm.JoystickTab.cs" />
+    <Compile Include="Config\NOMADSettingsForm.UploadsTab.cs" />
+
+  <!-- Shared UI scaffolding -->
+  <Compile Include="UI\NOMADViewBase.cs" />
+  <Compile Include="UI\NOMADTheme.cs" />
+  <Compile Include="UI\UiAsync.cs" />
+  <Compile Include="UI\Log.cs" />
+  <Compile Include="UI\ControlFactory.cs" />
+  <Compile Include="UI\HttpJson.cs" />
+  <Compile Include="UI\SafeDispose.cs" />
+
+    <!-- Top-level page views -->
+    <Compile Include="Views\NOMADDashboardView.cs" />
+    <Compile Include="Views\NOMADHealthView.cs" />
+    <Compile Include="Views\NOMADLinksView.cs" />
+    <Compile Include="Views\NOMADTerminalView.cs" />
+    <Compile Include="Views\NOMADVideoView.cs" />
+    <Compile Include="Views\NOMADBoundaryView.cs" />
+    <Compile Include="Views\NOMADBoundaryView.Operations.cs" />
+    <Compile Include="Views\NOMADBoundaryView.Presets.cs" />
+    <Compile Include="Views\SLAM3DView.cs" />
+    <Compile Include="Views\SLAM3DView.UI.cs" />
+    <Compile Include="Views\SLAM3DView.Rendering.cs" />
+    <Compile Include="Views\SLAM3DView.Data.cs" />
+    <Compile Include="Views\SLAM3DView.Actions.cs" />
+    <Compile Include="Views\Rviz2View.cs" />
+    <Compile Include="Views\ZedCalibrationView.cs" />
+
+    <!-- Embeddable control panels -->
+    <Compile Include="Panels\ServiceControlPanel.cs" />
+    <Compile Include="Panels\ServiceControlPanel.UI.cs" />
+    <Compile Include="Panels\ServiceControlPanel.Monitoring.cs" />
+    <Compile Include="Panels\LinkHealthPanel.cs" />
+    <Compile Include="Panels\EnhancedHealthDashboard.cs" />
+    <Compile Include="Panels\EnhancedHealthDashboard.UI.cs" />
+    <Compile Include="Panels\EnhancedHealthDashboard.Monitoring.cs" />
+    <Compile Include="Panels\EnhancedHealthDashboard.GraphAndAlerts.cs" />
+    <Compile Include="Panels\EkfSourceControlPanel.cs" />
+    <Compile Include="Panels\JetsonHealthTab.cs" />
+    <Compile Include="Panels\JetsonTerminalControl.cs" />
+
+    <!-- Connectivity (links / transport) -->
+    <Compile Include="Connectivity\MAVLinkConnectionManager.cs" />
+    <Compile Include="Connectivity\JetsonConnectionManager.cs" />
+    <Compile Include="Connectivity\JetsonApiService.cs" />
+    <Compile Include="Connectivity\JetsonStateStream.cs" />
+    <Compile Include="Connectivity\DualLinkSender.cs" />
+    <Compile Include="Connectivity\DualLinkSender.Http.cs" />
+    <Compile Include="Connectivity\DualLinkSender.Ssh.cs" />
+    <Compile Include="Connectivity\GroundLinkRouter.cs" />
+    <Compile Include="Connectivity\GroundLinkRouter.Rx.cs" />
+    <Compile Include="Connectivity\GroundLinkRouter.Tx.cs" />
+
+    <!-- Flight / gimbal control -->
+    <Compile Include="Control\FlightModeController.cs" />
+    <Compile Include="Control\GimbalController.cs" />
+    <Compile Include="Control\GimbalJoystickWindow.cs" />
+    <Compile Include="Control\GuidedRthLandingController.cs" />
+    <Compile Include="Control\CubeOutputController.cs" />
+
+    <!-- Joystick input -->
+    <Compile Include="Input\NomadJoystickService.cs" />
+    <Compile Include="Input\SerialJoystickBridge.cs" />
+
+    <!-- Payload -->
+    <Compile Include="Payload\PayloadModels.cs" />
+    <Compile Include="Payload\PayloadActions.cs" />
+    <Compile Include="Payload\PayloadControlPanel.cs" />
+    <Compile Include="Payload\PayloadControlPanel.Drop.cs" />
+
+    <!-- Geofence / boundary -->
+    <Compile Include="Geofence\BoundaryManager.cs" />
+    <Compile Include="Geofence\GeofenceConfig.cs" />
+    <Compile Include="Geofence\MapOverlayManager.cs" />
+    <Compile Include="Geofence\MPFenceUploader.cs" />
+
+    <!-- Media (video / snapshots / 3D) -->
+    <Compile Include="Media\EmbeddedVideoPlayer.cs" />
+    <Compile Include="Media\EmbeddedVideoPlayer.UI.cs" />
+    <Compile Include="Media\EmbeddedVideoPlayer.Playback.cs" />
+    <Compile Include="Media\SnapshotManager.cs" />
+    <Compile Include="Media\BuildingViewer3D.cs" />
+    <Compile Include="Media\BuildingViewer3D.UI.cs" />
+    <Compile Include="Media\BuildingViewer3D.Rendering.cs" />
+    <Compile Include="Media\BuildingViewer3D.Data.cs" />
+
+    <!-- Notifications -->
+    <Compile Include="Notifications\NotificationService.cs" />
+    <Compile Include="Notifications\NotificationPanel.cs" />
+    <Compile Include="Notifications\AudioAlerts.cs" />
+
+    <!-- Telemetry -->
+    <Compile Include="Telemetry\TelemetryInjector.cs" />
+
+    <!-- 3D SLAM visualization -->
+    <Compile Include="SLAM3D\MathHelper.cs" />
+    <Compile Include="SLAM3D\SLAM3DManager.cs" />
+    <Compile Include="SLAM3D\Models\MeshDataModel.cs" />
+    <Compile Include="SLAM3D\Models\DetectionMarker3D.cs" />
+    <Compile Include="SLAM3D\Models\CameraViewMode.cs" />
+    <Compile Include="SLAM3D\Data\PoseState.cs" />
+    <Compile Include="SLAM3D\Data\VoxelStorage.cs" />
+    <Compile Include="SLAM3D\Data\CoordinateConverter.cs" />
+    <Compile Include="SLAM3D\Network\WebSocketClient.cs" />
+    <Compile Include="SLAM3D\Camera\CameraController.cs" />
+    <Compile Include="SLAM3D\Rendering\DroneRenderer.cs" />
+    <Compile Include="SLAM3D\Rendering\GridRenderer.cs" />
+    <Compile Include="SLAM3D\Rendering\VoxelRenderer.cs" />
+    <Compile Include="SLAM3D\Rendering\TrajectoryRenderer.cs" />
+    <Compile Include="SLAM3D\Rendering\DetectionRenderer.cs" />
+    <Compile Include="SLAM3D\Rendering\VoxelMeshBuilder.cs" />
+  </ItemGroup>
+
+  <!-- Optional local references for LibVLCSharp managed assemblies (place DLLs in third_party/libvlc) -->
+  <ItemGroup>
+    <Reference Include="LibVLCSharp.WinForms" Condition="Exists('..\third_party\libvlc\LibVLCSharp.WinForms.dll')">
+      <HintPath>..\third_party\libvlc\LibVLCSharp.WinForms.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="LibVLCSharp.Shared" Condition="Exists('..\third_party\libvlc\LibVLCSharp.Shared.dll')">
+      <HintPath>..\third_party\libvlc\LibVLCSharp.Shared.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+  </ItemGroup>
+
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

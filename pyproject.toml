@@ -1,0 +1,108 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nomad-edge"
+version = "0.1.0"
+description = "NOMAD — a reusable drone edge + ground-control framework (companion-computer service)"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "The NOMAD Authors" }]
+keywords = ["drone", "uav", "mavlink", "ros2", "jetson", "robotics", "fastapi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+]
+
+# Runtime dependencies
+dependencies = [
+    "fastapi>=0.104",
+    "uvicorn[standard]>=0.24",
+    "websockets>=12.0",
+    "pydantic>=2.5",
+    "pydantic-settings>=2.5",
+    "pymavlink>=2.4",
+    "pyserial>=3.5",
+    "numpy>=1.26",
+    "pyzmq>=25.1",
+    "psutil>=5.9",
+    "python-dotenv>=1.0",
+    "httpx>=0.27",
+    "opencv-python-headless>=4.8",
+    "piexif>=1.1.3",
+]
+
+[project.optional-dependencies]
+vision = ["ultralytics>=8.0"]
+gdrive = [
+    "google-api-python-client>=2.150",
+    "google-auth>=2.35",
+    "google-auth-oauthlib>=1.2",
+]
+jetson = ["jetson-stats>=4.2"]
+dev = [
+    "ruff>=0.7",
+    "mypy>=1.11",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pre-commit>=3.8",
+]
+docs = ["properdocs>=1.6", "mkdocs-material>=9.5", "mkdocs-redirects>=1.2"]
+
+[project.urls]
+Homepage = "https://github.com/McGill-Aerial-Design/NOMAD"
+Repository = "https://github.com/McGill-Aerial-Design/NOMAD"
+
+[project.scripts]
+nomad-edge = "edge_core.main:main"
+
+[project.entry-points."nomad.modules"]
+# Core Services
+health = "edge_core.services.health_monitor:HealthMonitorModule"
+time = "edge_core.services.time_manager:TimeSyncModule"
+mavlink = "edge_core.services.mavlink.module:MavlinkModule"
+payload = "edge_core.services.payload_module:PayloadModule"
+
+# REST API Route Modules (general/reusable infrastructure only)
+video_slam = "edge_core.api_routes.video_slam:VideoSlamModule"
+isaac = "edge_core.api_routes.isaac:IsaacModule"
+isaac_sim = "edge_core.api_routes.isaac_sim:IsaacSimModule"
+calibration = "edge_core.api_routes.calibration:CalibrationModule"
+
+[tool.setuptools.packages.find]
+include = ["edge_core*", "infra.tailscale*", "infra.transport*"]
+exclude = ["tests*", "scripts*", "docs*", "build*", "examples*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = [".pixi"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["F403", "F405", "E402"]
+"scripts/dev/**" = ["E402"]
+"__init__.py" = ["F401"]
+"edge_core/main.py" = ["E402"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["edge_core"]
+ignore_missing_imports = true
+follow_imports = "silent"
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q --ignore=tests/test_p3_7_debounce.py"

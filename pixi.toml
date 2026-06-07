@@ -1,0 +1,128 @@
+# NOMAD developer / simulation environment.
+#
+# Pixi (https://pixi.sh) provides a reproducible, cross-platform dev environment
+# that does NOT require the Jetson, CUDA, ZED SDK, or ROS2 — those are device-only
+# and are installed separately on hardware (see docker/Dockerfile.jetson).
+#
+# Quick start:
+#   pixi run dev      # run Edge Core in hardware-free sim mode on :8000
+#   pixi run test     # pytest
+#   pixi run lint     # ruff check
+#   pixi run fmt      # ruff format
+#   pixi run docs     # serve the docs site locally
+
+[workspace]
+name = "nomad"
+version = "0.1.0"
+description = "NOMAD drone edge + ground-control framework — dev/sim environment"
+channels = ["conda-forge"]
+platforms = ["linux-64", "win-64", "osx-64", "osx-arm64"]
+
+# ==================== Features ====================
+
+[feature.dev.dependencies]
+python = "3.13.*"
+pre-commit = ">=3.8"
+shellcheck = ">=0.10"
+
+[feature.dev.pypi-dependencies]
+nomad-edge = { path = ".", editable = true, extras = ["dev", "docs"] }
+
+# ==================== Sim Feature ====================
+# ZED Isaac Sim integration. Provides tasks to build and run the full
+# simulation stack (Isaac Sim + ArduPilot SITL + Edge Core + MediaMTX)
+# using Docker Compose. Requires an NVIDIA GPU and the NVIDIA Container
+# Toolkit. NOT needed on the Jetson — only on x86_64 dev workstations.
+
+[feature.sim.tasks]
+# Build the Isaac Sim Docker image (x86_64, requires NVIDIA GPU host)
+sim-build = "docker build -f docker/Dockerfile.isaac_sim -t nomad-isaac-sim:latest ."
+# Build the dev Edge Core image
+sim-build-dev = "docker build -f docker/Dockerfile.dev -t nomad-edge-dev:latest ."
+# Build all sim images
+sim-build-all = "docker compose -f docker/docker-compose.sim.yml build"
+# Start the full sim stack (Edge Core + Isaac Sim + MediaMTX)
+sim-up = "docker compose -f docker/docker-compose.sim.yml up -d"
+# Start the full sim stack with ArduPilot SITL
+sim-up-sitl = "docker compose -f docker/docker-compose.sim.yml --profile sitl up -d"
+# Stop the sim stack
+sim-down = "docker compose -f docker/docker-compose.sim.yml down"
+# View logs from all sim services
+sim-logs = "docker compose -f docker/docker-compose.sim.yml logs -f"
+# View Edge Core logs only
+sim-logs-edge = "docker compose -f docker/docker-compose.sim.yml logs -f edge_core"
+# View Isaac Sim logs only
+sim-logs-sim = "docker compose -f docker/docker-compose.sim.yml logs -f isaac_sim"
+# Check sim stack status
+sim-status = "docker compose -f docker/docker-compose.sim.yml ps"
+# Restart the sim stack
+sim-restart = "docker compose -f docker/docker-compose.sim.yml restart"
+
+# ==================== Environments ====================
+
+[environments]
+default = { features = ["dev"] }
+sim = { features = ["dev", "sim"] }
+
+# ==================== Tasks ====================
+
+[tasks]
+
+# Edge Core
+dev = "python -m edge_core.main --sim --no-vision --host 0.0.0.0 --port 8000"
+# Sim with the vision pipeline enabled (needs the Isaac Sim container for camera data).
+dev-vision = { cmd = "python -m edge_core.main --sim --host 0.0.0.0 --port 8000", env = { ISAAC_SIM_MODE = "true", NOMAD_ENABLE_VISION = "true" } }
+test = "pytest"
+
+# Hardware-free dev stack (Docker): Edge Core + ArduPilot SITL, no Isaac Sim.
+#   pixi run dev-up      # build + start edge_core and SITL (detached)
+#   pixi run test-api    # exercise every REST endpoint against it
+#   pixi run dev-down    # stop and remove
+dev-up = "docker compose -f docker/docker-compose.dev.yml --profile sitl up -d --build"
+dev-down = "docker compose -f docker/docker-compose.dev.yml --profile sitl down"
+dev-logs = "docker compose -f docker/docker-compose.dev.yml logs -f"
+dev-ps = "docker compose -f docker/docker-compose.dev.yml --profile sitl ps"
+test-api = "python scripts/dev/test_api_endpoints.py"
+lint = "ruff check ."
+fmt = "ruff format ."
+fmt-check = "ruff format --check ."
+typecheck = "mypy"
+
+# Documentation
+docs = "properdocs serve"
+docs-build = "properdocs build --strict"
+
+# Git hooks
+precommit = "pre-commit run --all-files"
+
+# Bootstrap (run once when first cloning)
+bootstrap = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/bootstrap.ps1"
+
+# Build the Mission Planner plugin (Windows only)
+build-plugin = "powershell -ExecutionPolicy Bypass -File scripts/build/build_plugin_windows.ps1"
+
+# Dead-code lint for the plugin (Windows only) — fails on unused fields/locals,
+# unreachable code, etc. (C# compiler diagnostics promoted to errors).
+lint-plugin = "powershell -ExecutionPolicy Bypass -File scripts/build/lint_plugin_deadcode.ps1"
+
+# ==================== Configuration Profiles ====================
+# Manage config/nomad.env via named profiles stored in config/profiles/.
+# Each profile is a complete environment file with all settings for a
+# specific deployment target (sim, real drone, minimal dev).
+#
+# Quick start:
+#   pixi run profile-load sim       # Full Isaac Sim simulation
+#   pixi run profile-load drone     # Real Jetson + ZED2i
+#   pixi run profile-load dev       # Minimal Edge Core only
+#   pixi run profile-show           # Show active profile
+#   pixi run profile-list           # List available profiles
+
+# Cross-platform profile manager (runs in the pixi Python env so it works on
+# Windows/macOS/Linux without bash). `nomad-profile` (bash) remains for the
+# Jetson runtime.
+profile-load = { cmd = "python scripts/profile.py load {{ profile }}", args = ["profile"] }
+profile-save = { cmd = "python scripts/profile.py save {{ profile }}", args = ["profile"] }
+profile-list = "python scripts/profile.py list"
+profile-show = "python scripts/profile.py show"
+profile-diff = { cmd = "python scripts/profile.py diff {{ profile }}", args = ["profile"] }
+profile-edit = "python scripts/profile.py edit"

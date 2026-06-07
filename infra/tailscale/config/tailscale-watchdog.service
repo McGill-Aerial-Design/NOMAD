@@ -1,0 +1,30 @@
+[Unit]
+Description=NOMAD Tailscale Connection Watchdog
+Documentation=https://github.com/McGill-Aerial-Design/NOMAD
+After=tailscaled.service network-online.target
+Wants=network-online.target
+Requires=tailscaled.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=__NOMAD_ROOT__/infra/tailscale/scripts/watchdog.sh
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tailscale-watchdog
+
+# Resource limits
+MemoryMax=50M
+CPUQuota=10%
+
+# Security hardening
+NoNewPrivileges=false
+ProtectSystem=false
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

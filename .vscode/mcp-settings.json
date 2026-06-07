@@ -1,0 +1,70 @@
+{
+	"mcpServers": {
+		"forgetful": {
+			"command": "uvx",
+			"args": ["forgetful-ai"],
+			"env": {
+				"FORGETFUL_DB_PATH": "${workspaceFolder}/.mcp/forgetful.db",
+				"FORGETFUL_PROJECT_NAME": "NOMAD",
+				"FORGETFUL_PROJECT_TYPE": "drone-autonomy"
+			}
+		},
+		"io.github.github/github-mcp-server": {
+			"type": "http",
+			"url": "https://api.githubcopilot.com/mcp/",
+			"gallery": "https://api.mcp.github.com",
+			"version": "0.30.2",
+			"env": {
+				"GITHUB_DEFAULT_REPO": "MAD/NOMAD"
+			}
+		},
+		"oraios/serena": {
+			"type": "stdio",
+			"command": "uvx",
+			"args": [
+				"--from",
+				"git+https://github.com/oraios/serena",
+				"serena",
+				"start-mcp-server",
+				"serena@latest",
+				"--context",
+				"ide-assistant",
+				"--project-path",
+				"${workspaceFolder}",
+				"--project-name",
+				"NOMAD",
+				"--languages",
+				"python,csharp,yaml,dockerfile",
+				"--frameworks",
+				"fastapi,ros2,dotnet"
+			],
+			"gallery": "https://api.mcp.github.com",
+			"version": "1.0.0",
+			"env": {
+				"SERENA_MEMORY_PATH": "${workspaceFolder}/.mcp/serena",
+				"SERENA_INDEX_PATHS": "edge_core,mission_planner/src,tailscale/src"
+			}
+		},
+		"io.github.upstash/context7": {
+			"type": "stdio",
+			"command": "npx",
+			"args": [
+				"@upstash/context7-mcp@1.0.31"
+			],
+			"env": {
+				"CONTEXT7_API_KEY": "${input:CONTEXT7_API_KEY}",
+				"CONTEXT7_DEFAULT_LIBRARIES": "fastapi,ros2,pymavlink,ultralytics,opencv-python,pydantic"
+			},
+			"gallery": "https://api.mcp.github.com",
+			"version": "1.0.31"
+		}
+	},
+	"inputs": [
+		{
+			"id": "CONTEXT7_API_KEY",
+			"type": "promptString",
+			"description": "API key for Context7 documentation access",
+			"password": true
+		}
+	]
+}

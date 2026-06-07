@@ -1,0 +1,21 @@
+[Unit]
+Description=NOMAD nvblox Mapping (opt-in)
+After=nomad-zed-wrapper.service
+Requires=nomad-isaac-ros-container.service nomad-zed-wrapper.service
+# Manual-only service. Mission Planner Service Control starts/stops this unit;
+# nomad.target and install.sh intentionally do not enable it at boot.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=__NOMAD_USER__
+Group=__NOMAD_USER__
+WorkingDirectory=__NOMAD_ROOT__
+EnvironmentFile=__NOMAD_ROOT__/config/nomad.env
+
+ExecStart=/bin/bash __NOMAD_ROOT__/scripts/services/nvblox.sh start
+ExecStop=/bin/bash __NOMAD_ROOT__/scripts/services/nvblox.sh stop
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nomad-nvblox
