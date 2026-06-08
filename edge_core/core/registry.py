@@ -185,8 +185,22 @@ class ModuleRegistry:
                 logger.error("error stopping module %s: %s", name, exc)
         self._started.clear()
 
-    def wire(self, ctx: AppContext, app: Any) -> ModuleRegistry:
-        """Resolve order, configure modules, and register their routes."""
-        self.configure_all(ctx)
-        self.register_routes(app)
-        return self
+    def wire_safe(self, ctx: AppContext, app: Any) -> list[str]:
+        """Resolve order, then configure + register routes with fault isolation.
+
+        Unlike :meth:`configure_all` + :meth:`register_routes`, a module that
+        raises during ``configure``/``register_routes`` is logged and skipped
+        rather than aborting the rest. ``self.order`` is updated to the modules
+        that wired successfully, and that list is returned. This is the single
+        source of truth used by :func:`edge_core.core.wire_modules`.
+        """
+        wired: list[str] = []
+        for name in self.resolve_order(ctx):
+            try:
+                self._modules[name].configure(ctx)
+                self._modules[name].register_routes(app)
+                wired.append(name)
+            except Exception as exc:  # noqa: BLE001 - isolate one bad module
+                logger.error("module %s wiring failed: %s", name, exc)
+        self._order = wired
+        return wired

@@ -3,14 +3,15 @@
 # Copyright 2026 The NOMAD Authors
 # Jetson smoke-test runner: checks SLAM frame contract, edge_core service
 # health, and the VIO endpoint. Canonical SLAM frame_id is "odom".
-# Place in ~/NOMAD/tests/ and run: bash run_jetson_tests.sh
+# Unsupported on-hardware diagnostic — run from a Jetson checkout:
+#   bash scripts/dev/archive/run_jetson_tests.sh
 
 set -e
 
-TEST_DIR="$(dirname "$0")"
-NOMAD_ROOT="$(dirname "$TEST_DIR")"
+SCRIPT_DIR="$(dirname "$0")"
+NOMAD_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LOG_FILE="$TEST_DIR/jetson_test_${TIMESTAMP}.log"
+LOG_FILE="$SCRIPT_DIR/jetson_test_${TIMESTAMP}.log"
 
 echo "======================================================================"
 echo "Jetson SLAM + Edge Core Smoke Tests"
@@ -50,11 +51,11 @@ echo "======================================================================"
     fi
     echo ""
 
-    echo "Checking edge_core/ros_http_bridge.py for canonical frame_id 'odom'..."
-    if grep -q '"frame_id": "odom"' edge_core/ros_http_bridge.py; then
-        echo "✓ Canonical frame_id 'odom' present in ros_http_bridge.py"
+    echo "Checking edge_core/ros_http_bridge/ for canonical frame_id 'odom'..."
+    if grep -rq '"frame_id": "odom"' edge_core/ros_http_bridge/; then
+        echo "✓ Canonical frame_id 'odom' present in ros_http_bridge package"
     else
-        echo "✗ Canonical frame_id 'odom' NOT found in ros_http_bridge.py"
+        echo "✗ Canonical frame_id 'odom' NOT found in ros_http_bridge package"
     fi
     echo ""
 

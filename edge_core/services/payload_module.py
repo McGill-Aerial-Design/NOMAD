@@ -31,6 +31,7 @@ class PayloadModule(BaseModule):
         init_servo_controller(mavlink_service=mavlink_service, camera_tilt_channel=tilt_channel)
         controller = get_servo_controller()
         ctx.register_service("servo_controller", controller)
+        ctx.app.state.servo_controller = controller
         logger.info("Payload actuation module configured")
 
     def stop(self) -> None:

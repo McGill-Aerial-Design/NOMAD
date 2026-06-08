@@ -82,40 +82,42 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gnupg2 \
     lsb-release \
     && curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
-       -o /usr/share/keyrings/ros-archive-keyring.gpg \
+    -o /usr/share/keyrings/ros-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
-       http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" \
-       > /etc/apt/sources.list.d/ros2.list \
+    http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" \
+    > /etc/apt/sources.list.d/ros2.list \
     && apt-get update \
+    && echo "Package: libbrotli1\nPin: version 1.0.9-2build6\nPin-Priority: 1001" \
+    > /etc/apt/preferences.d/pin-libbrotli1 \
     && apt-get install -y --no-install-recommends \
-       ros-humble-ros-base \
-       ros-humble-robot-localization \
-       ros-humble-point-cloud-transport \
-       ros-humble-tf2-ros \
-       ros-humble-tf2-tools \
-       ros-humble-navigation2 \
-       ros-humble-nav2-bringup \
-       ros-humble-nav2-msgs \
-       ros-humble-image-transport \
-       ros-humble-image-transport-plugins \
-       ros-humble-vision-msgs \
-       ros-humble-sensor-msgs \
-       ros-humble-geometry-msgs \
-       ros-humble-nav-msgs \
-       ros-humble-std-msgs \
-       ros-humble-visualization-msgs \
-       python3-colcon-common-extensions \
-       python3-rosdep \
+    ros-humble-ros-base \
+    ros-humble-robot-localization \
+    ros-humble-point-cloud-transport \
+    ros-humble-tf2-ros \
+    ros-humble-tf2-tools \
+    ros-humble-navigation2 \
+    ros-humble-nav2-bringup \
+    ros-humble-nav2-msgs \
+    ros-humble-image-transport \
+    ros-humble-image-transport-plugins \
+    ros-humble-vision-msgs \
+    ros-humble-sensor-msgs \
+    ros-humble-geometry-msgs \
+    ros-humble-nav-msgs \
+    ros-humble-std-msgs \
+    ros-humble-visualization-msgs \
+    python3-colcon-common-extensions \
+    python3-rosdep \
     && rm -rf /var/lib/apt/lists/*
 
 # ==============================================================
-# ZED SDK 4.2 for x86_64 Ubuntu 22.04
+# ZED SDK 5.3.1 for x86_64 Ubuntu 22.04
 # ==============================================================
 # NOTE: ZED SDK x86_64 does NOT include the actual camera driver (that
 # requires a physical ZED). The SDK here provides the Python API and
 # shared libraries needed by the ZED ROS2 wrapper's simulation mode
 # (which feeds synthetic frames from Isaac Sim through the SDK API).
-ENV ZED_SDK_URL="https://download.stereolabs.com/zedsdk/4.2/ubuntu22"
+ENV ZED_SDK_URL="https://download.stereolabs.com/zedsdk/5.3.1/ubuntu22"
 RUN curl -L -o /tmp/zed_sdk.run ${ZED_SDK_URL} && \
     chmod +x /tmp/zed_sdk.run && \
     /tmp/zed_sdk.run -- silent skip_od_module && \
@@ -128,7 +130,7 @@ ENV LD_LIBRARY_PATH="/usr/local/zed/lib:${LD_LIBRARY_PATH:-}"
 # ZED ROS2 Wrapper + ZED Messages
 # ==============================================================
 # Build from source so we can control the version and patch for sim mode.
-ENV ZED_WRAPPER_BRANCH=v4.2.1
+ENV ZED_WRAPPER_BRANCH=v5.3.1
 RUN mkdir -p /opt/zed_ros_ws/src && \
     cd /opt/zed_ros_ws/src && \
     git clone --branch ${ZED_WRAPPER_BRANCH} --depth 1 \

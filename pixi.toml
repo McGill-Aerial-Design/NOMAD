@@ -2,7 +2,9 @@
 #
 # Pixi (https://pixi.sh) provides a reproducible, cross-platform dev environment
 # that does NOT require the Jetson, CUDA, ZED SDK, or ROS2 — those are device-only
-# and are installed separately on hardware (see docker/Dockerfile.jetson).
+# and are installed separately on hardware. The Docker images live in docker/
+# (Dockerfile.dev for the hardware-free dev stack, Dockerfile.isaac_sim for the
+# GPU Isaac Sim stack).
 #
 # Quick start:
 #   pixi run dev      # run Edge Core in hardware-free sim mode on :8000
@@ -40,23 +42,23 @@ sim-build = "docker build -f docker/Dockerfile.isaac_sim -t nomad-isaac-sim:late
 # Build the dev Edge Core image
 sim-build-dev = "docker build -f docker/Dockerfile.dev -t nomad-edge-dev:latest ."
 # Build all sim images
-sim-build-all = "docker compose -f docker/docker-compose.sim.yml build"
-# Start the full sim stack (Edge Core + Isaac Sim + MediaMTX)
-sim-up = "docker compose -f docker/docker-compose.sim.yml up -d"
-# Start the full sim stack with ArduPilot SITL
+sim-build-all = "docker compose -f docker/docker-compose.sim.yml --profile sitl --profile isaac build"
+# Start Edge Core + SITL (no GPU, no Isaac Sim)
 sim-up-sitl = "docker compose -f docker/docker-compose.sim.yml --profile sitl up -d"
-# Stop the sim stack
-sim-down = "docker compose -f docker/docker-compose.sim.yml down"
+# Start full stack: Isaac Sim + Edge Core (vision) + SITL + MediaMTX (GPU required)
+sim-up = "docker compose -f docker/docker-compose.sim.yml --profile sitl --profile isaac up -d"
+# Stop the sim stack (all profiles)
+sim-down = "docker compose -f docker/docker-compose.sim.yml --profile sitl --profile isaac down"
 # View logs from all sim services
-sim-logs = "docker compose -f docker/docker-compose.sim.yml logs -f"
+sim-logs = "docker compose -f docker/docker-compose.sim.yml --profile sitl --profile isaac logs -f"
 # View Edge Core logs only
-sim-logs-edge = "docker compose -f docker/docker-compose.sim.yml logs -f edge_core"
+sim-logs-edge = "docker compose -f docker/docker-compose.sim.yml --profile sitl --profile isaac logs -f edge_core"
 # View Isaac Sim logs only
-sim-logs-sim = "docker compose -f docker/docker-compose.sim.yml logs -f isaac_sim"
+sim-logs-sim = "docker compose -f docker/docker-compose.sim.yml --profile isaac logs -f isaac_sim"
 # Check sim stack status
-sim-status = "docker compose -f docker/docker-compose.sim.yml ps"
+sim-status = "docker compose -f docker/docker-compose.sim.yml --profile sitl --profile isaac ps"
 # Restart the sim stack
-sim-restart = "docker compose -f docker/docker-compose.sim.yml restart"
+sim-restart = "docker compose -f docker/docker-compose.sim.yml --profile sitl --profile isaac restart"
 
 # ==================== Environments ====================
 
@@ -72,7 +74,11 @@ sim = { features = ["dev", "sim"] }
 dev = "python -m edge_core.main --sim --no-vision --host 0.0.0.0 --port 8000"
 # Sim with the vision pipeline enabled (needs the Isaac Sim container for camera data).
 dev-vision = { cmd = "python -m edge_core.main --sim --host 0.0.0.0 --port 8000", env = { ISAAC_SIM_MODE = "true", NOMAD_ENABLE_VISION = "true" } }
-test = "pytest"
+# Coverage floor is a ratchet set just below the current level so coverage can
+# only trend up; raise it as more of the codebase gets tested.
+test = "pytest --cov=edge_core --cov=infra/tailscale --cov-report=term-missing --cov-fail-under=25"
+# Plain pytest without the coverage gate (handy for running a single test file).
+test-fast = "pytest"
 
 # Hardware-free dev stack (Docker): Edge Core + ArduPilot SITL, no Isaac Sim.
 #   pixi run dev-up      # build + start edge_core and SITL (detached)
@@ -88,8 +94,8 @@ fmt = "ruff format ."
 fmt-check = "ruff format --check ."
 typecheck = "mypy"
 
-# Documentation
-docs = "properdocs serve"
+# Documentation. Served on :8001 so it doesn't clash with `pixi run dev` (:8000).
+docs = "properdocs serve --dev-addr localhost:8001"
 docs-build = "properdocs build --strict"
 
 # Git hooks

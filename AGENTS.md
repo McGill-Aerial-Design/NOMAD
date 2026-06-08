@@ -46,7 +46,7 @@ NOMAD/
 |-- edge_core/              # Python FastAPI server (runs on the companion computer)
 |   |-- api.py              # App factory + API-key auth middleware
 |   |-- api_routes/         # Route modules (system, services, terminal, streaming,
-|   |                       #   video_slam, isaac, isaac_sim, calibration)
+|   |                       #   vio, video_slam, isaac, isaac_sim, calibration)
 |   |-- main.py             # Entry point — boots the module registry
 |   |-- core/               # Module SDK (NomadModule, ModuleRegistry, AppContext)
 |   |-- services/           # state, mavlink/ (package), health_monitor,
@@ -275,14 +275,7 @@ The documentation site is built with MkDocs Material (`pixi run docs`).
 | Deployment (Jetson image + systemd) | `docs/deployment.md` |
 | Configuration reference | `docs/configuration.md` |
 | API Reference | `docs/api_reference.md` |
-
-| Operations runbook | `docs/OPERATIONS_RUNBOOK.md` |
-| Jetson deployment (detailed) | `docs/JETSON_DEPLOYMENT.md` |
+| ZED + Isaac Sim guide | `docs/ZED_ISAAC_SIM_GUIDE.md` |
 | Tailscale setup | `infra/tailscale/SETUP.md` |
-| Video streaming | `docs/VIDEO_STREAMING.md` |
-| Isaac ROS + nvblox | `docs/NVBLOX_VISUALIZATION.md` |
-| Object detection | `docs/OBJECT_DETECTION.md` |
-| Task 1 competition guide | `docs/TASK1_COMPETITION_GUIDE.md` |
-| Task 2 spray guide | `docs/TASK2_MANUAL_POSITIONING.md` |
 | Edge Core | `edge_core/README.md` |
 | Mission Planner plugin | `mission_planner/README.md` |

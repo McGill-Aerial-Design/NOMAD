@@ -46,10 +46,11 @@ gdrive = [
 ]
 jetson = ["jetson-stats>=4.2"]
 dev = [
-    "ruff>=0.7",
+    "ruff==0.15.16",
     "mypy>=1.11",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=5.0",
     "pre-commit>=3.8",
 ]
 docs = ["properdocs>=1.6", "mkdocs-material>=9.5", "mkdocs-redirects>=1.2"]
@@ -69,6 +70,7 @@ mavlink = "edge_core.services.mavlink.module:MavlinkModule"
 payload = "edge_core.services.payload_module:PayloadModule"
 
 # REST API Route Modules (general/reusable infrastructure only)
+vio = "edge_core.api_routes.vio:VioModule"
 video_slam = "edge_core.api_routes.video_slam:VideoSlamModule"
 isaac = "edge_core.api_routes.isaac:IsaacModule"
 isaac_sim = "edge_core.api_routes.isaac_sim:IsaacSimModule"
@@ -85,17 +87,23 @@ extend-exclude = [".pixi"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP"]
-ignore = ["E501"]
+# line-length (120) is enforced via E501. Files that hold unbreakable shell
+# command / URL string literals opt out per-file below rather than disabling the
+# rule everywhere.
+ignore = []
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["F403", "F405", "E402"]
-"scripts/dev/**" = ["E402"]
+"scripts/dev/**" = ["E402", "E501"]
 "__init__.py" = ["F401"]
 "edge_core/main.py" = ["E402"]
+# Catalogs of long systemd/ROS shell-command strings that cannot be wrapped.
+"edge_core/api_models.py" = ["E501"]
+"edge_core/services/video_stream_manager.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.10"
-files = ["edge_core"]
+files = ["edge_core", "infra/tailscale"]
 ignore_missing_imports = true
 follow_imports = "silent"
 no_implicit_optional = true
@@ -105,4 +113,4 @@ warn_unused_ignores = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-q --ignore=tests/test_p3_7_debounce.py"
+addopts = "-q"

@@ -32,6 +32,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .state import StateManager
 
+from edge_core.core import BaseModule, ModuleMetadata
+
 logger = logging.getLogger(__name__)
 
 
@@ -509,3 +511,33 @@ def init_time_sync_service(state_manager: StateManager) -> TimeSyncService:
     global _time_sync_service
     _time_sync_service = TimeSyncService(state_manager=state_manager)
     return _time_sync_service
+
+
+class TimeSyncModule(BaseModule):
+    """Bridges TimeSyncService into the modular SDK framework."""
+
+    metadata = ModuleMetadata(
+        name="time",
+        version="1.0.0",
+        description="Hybrid NTP/GPS time synchronization service",
+        enable_flag="NOMAD_AUTOSTART_TIME_SYNC",
+        enabled_by_default=True,
+    )
+
+    def __init__(self) -> None:
+        self._service: TimeSyncService | None = None
+
+    def configure(self, ctx) -> None:
+        state_mgr = ctx.require_service("state_manager")
+        self._service = TimeSyncService(state_manager=state_mgr)
+        ctx.register_service("time_sync", self._service)
+
+    def start(self) -> None:
+        if self._service:
+            self._service.start()
+            logger.info("Time sync module started")
+
+    def stop(self) -> None:
+        if self._service:
+            self._service.stop()
+            logger.info("Time sync module stopped")

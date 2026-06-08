@@ -215,6 +215,9 @@ $RECYCLE.BIN/
 *.iml
 *.iws
 
+# Kilo Code (editor/agent extension vendored node_modules tree)
+.kilo/
+
 # VS Code — ignore the folder contents but share the project config.
 # Use .vscode/* (not .vscode/) so the negations below can re-include files;
 # git cannot re-include a file whose parent directory is excluded.

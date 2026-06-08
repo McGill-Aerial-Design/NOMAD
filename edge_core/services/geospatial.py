@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
 """
-Geospatial calculations for NOMAD Task 1 (Recon Mission).
+Geospatial calculations for NOMAD.
 
 Pure functions for GPS coordinate transformations, raycasting,
 and relative position calculations.

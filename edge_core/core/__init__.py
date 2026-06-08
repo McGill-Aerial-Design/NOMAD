@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Iterable
+from contextlib import asynccontextmanager
 from typing import Any
 
 from .context import AppContext
@@ -85,31 +86,27 @@ def wire_modules(
     if ctx is None:
         ctx = AppContext(app=app)
 
-    enabled = registry.resolve_order(ctx)
-    if not enabled:
-        return None
-
-    wired: list[str] = []
-    for name in enabled:
-        try:
-            registry._modules[name].configure(ctx)
-            registry._modules[name].register_routes(app)
-            wired.append(name)
-        except Exception as exc:  # noqa: BLE001
-            logger.error("module %s wiring failed: %s", name, exc)
-
+    # One source of truth: ModuleRegistry.wire_safe resolves order and
+    # configures + registers routes with per-module fault isolation.
+    wired = registry.wire_safe(ctx, app)
     if not wired:
         return None
 
-    registry._order = wired
+    # Drive the modules' start()/stop() lifecycle through the ASGI lifespan,
+    # composing with any lifespan already configured on the app rather than the
+    # deprecated @app.on_event hooks.
+    prev_lifespan = app.router.lifespan_context
 
-    @app.on_event("startup")
-    async def _nomad_start_modules() -> None:  # pragma: no cover - exercised at runtime
-        registry.start_all()
+    @asynccontextmanager
+    async def _module_lifespan(app_: Any) -> Any:  # pragma: no cover - exercised at runtime
+        async with prev_lifespan(app_):
+            registry.start_all()
+            try:
+                yield
+            finally:
+                registry.stop_all()
 
-    @app.on_event("shutdown")
-    async def _nomad_stop_modules() -> None:  # pragma: no cover - exercised at runtime
-        registry.stop_all()
+    app.router.lifespan_context = _module_lifespan
 
     app.state.module_registry = registry
     logger.info("NOMAD modules wired: %s", ", ".join(registry.order))

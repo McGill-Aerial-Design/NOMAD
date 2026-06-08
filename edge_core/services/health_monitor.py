@@ -22,6 +22,8 @@ import threading
 import time
 from dataclasses import dataclass
 
+from edge_core.core import BaseModule, ModuleMetadata
+
 logger = logging.getLogger("edge_core.health_monitor")
 
 
@@ -513,3 +515,37 @@ def get_jetson_health() -> dict:
     monitor = JetsonHealthMonitor()
     monitor._update_health()
     return monitor.health.to_dict()
+
+
+class HealthMonitorModule(BaseModule):
+    """Bridges JetsonHealthMonitor into the modular SDK framework."""
+
+    metadata = ModuleMetadata(
+        name="health",
+        version="1.0.0",
+        description="Hardware health monitoring (CPU, GPU, memory, disk, power, thermal)",
+        enable_flag="NOMAD_AUTOSTART_HEALTH_MONITOR",
+        enabled_by_default=True,
+    )
+
+    def __init__(self) -> None:
+        self._monitor: JetsonHealthMonitor | None = None
+
+    def configure(self, ctx) -> None:
+        from edge_core.api import set_health_monitor
+
+        state_mgr = ctx.require_service("state_manager")
+        self._monitor = JetsonHealthMonitor()
+        self._monitor.set_state_manager(state_mgr)
+        ctx.register_service("health_monitor", self._monitor)
+        set_health_monitor(ctx.app, self._monitor)
+
+    def start(self) -> None:
+        if self._monitor:
+            self._monitor.start()
+            logger.info("Health monitor module started")
+
+    def stop(self) -> None:
+        if self._monitor:
+            self._monitor.stop()
+            logger.info("Health monitor module stopped")

@@ -46,12 +46,19 @@ logger = logging.getLogger("edge_core")
 state_manager = StateManager.instance()
 
 
+def _is_sim_mode() -> bool:
+    """True when NOMAD_SIM_MODE is set to a truthy value (set by ``--sim``)."""
+    return os.environ.get("NOMAD_SIM_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def get_app():
     """Get or create the FastAPI application."""
     return create_app(state_manager)
 
 
-# Create app instance for uvicorn
+# Module-level singleton created at import time. uvicorn's reload/worker modes
+# import the app by string ("edge_core.main:app"), so this must exist at module
+# scope — do not move it into run()/main() or uvicorn cannot find it.
 app = get_app()
 
 
@@ -63,7 +70,7 @@ def cleanup() -> None:
             app.state.module_registry.stop_all()
             logger.info("All modular services stopped")
         except Exception as e:
-            logger.error(f"Error stopping modules: {e}")
+            logger.error("Error stopping modules: %s", e)
     logger.info("Cleanup complete")
 
 
@@ -99,18 +106,23 @@ def run(
 
     def signal_handler(signum: int, frame: Any) -> None:
         sig_name = signal.Signals(signum).name
-        logger.info(f"Received signal {sig_name} ({signum}), shutting down...")
+        logger.info("Received signal %s (%s), shutting down...", sig_name, signum)
         _safe_cleanup()
         raise SystemExit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    # Wire and start all discoverable modules (includes core services + routes)
+    # Wire and start all discoverable modules (includes core services + routes).
+    # In sim/dev we tolerate a half-wired boot so the API still comes up; on real
+    # hardware a wiring failure is fatal — fail fast rather than fly half-armed.
     try:
         wire_modules(app, ctx=ctx)
     except Exception as exc:
-        logger.error(f"Module wiring failed: {exc}")
+        logger.critical("Module wiring failed: %s", exc, exc_info=True)
+        if not _is_sim_mode():
+            raise
+        logger.warning("Continuing with a partially wired app (sim mode)")
 
     try:
         uvicorn.run(app, host=host, port=port, log_level=log_level)
@@ -140,6 +152,12 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    # CLI flags are translated into environment variables here, which is the
+    # single contract by which modules/services discover their configuration:
+    #   --sim        -> NOMAD_SIM_MODE       (sim vs real hardware paths)
+    #   --no-vision  -> NOMAD_ENABLE_VISION  (gate the vision pipeline)
+    #   --servo-mode -> SERVO_MODE           (payload actuation mode)
+    # Modules read these via AppContext / os.environ; see docs/configuration.md.
     if args.sim:
         os.environ["NOMAD_SIM_MODE"] = "true"
     if args.no_vision:

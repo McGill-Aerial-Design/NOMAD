@@ -4,7 +4,7 @@
 NOMAD Edge Core - REST API
 
 Provides HTTP endpoints for system status, health monitoring,
-Task 1/Task 2 operations, and video streaming.
+payload/actuation control, and video streaming.
 
 Target: Python 3.13 | NVIDIA Jetson Orin Nano
 """
@@ -74,7 +74,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
     """
     app = FastAPI(
         title="NOMAD Edge Core API",
-        description="Drone-side API for NOMAD - Task 1 & Task 2 Operations",
+        description="Drone-side companion-computer API for NOMAD",
         version="1.0.0",
         docs_url="/docs",
         redoc_url="/redoc",

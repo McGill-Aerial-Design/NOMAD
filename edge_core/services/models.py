@@ -99,7 +99,7 @@ class SystemState(BaseModel):
     target_visible: bool = False  # Is a target currently detected?
     current_detection: DetectionInfo | None = None  # Latest detection
 
-    # VIO pose in local NED/body-navigation frame for Task 2 approach logic
+    # VIO pose in local NED/body-navigation frame for approach/positioning logic
     vio_x: float | None = None
     vio_y: float | None = None
     vio_z: float | None = None
