@@ -46,7 +46,7 @@ pixi run pre-commit install
 
 A lightweight x86 Docker image is provided for CI and isolated testing. The
 easiest path is the pixi wrappers, which bring up Edge Core **and** ArduPilot
-SITL (Copter 4.6.3) with telemetry wired in — no Isaac Sim, no GPU:
+SITL (Copter 4.6.3) with telemetry wired in — no GPU needed:
 
 ```bash
 pixi run dev-up       # build + start Edge Core + SITL (detached)

@@ -33,6 +33,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`MapOverlayManager`, `LinkHealthPanel`).
 
 ### Removed
+- Isaac Sim (Omniverse) integration — the `Dockerfile.isaac_sim`,
+  `docker-compose.sim.yml`, `docker/isaac_sim/` launch scripts, the `isaac_sim`
+  route module, the pixi `sim` feature/environment + `sim-*` tasks, the `sim`
+  config profile, and all `ISAAC_SIM_MODE` branches. It needs a high-end GPU we
+  don't have yet and will return later as a remote simulation server. The
+  hardware-free dev stack (Edge Core + ArduPilot SITL) and the on-Jetson Isaac
+  ROS bridge are unaffected.
 - `tests/test_p3_7_debounce.py` (competition-specific, permanently skipped).
 
 ## [0.1.0] - 2026-06-08

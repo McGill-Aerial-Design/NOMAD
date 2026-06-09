@@ -73,7 +73,6 @@ payload = "edge_core.services.payload_module:PayloadModule"
 vio = "edge_core.api_routes.vio:VioModule"
 video_slam = "edge_core.api_routes.video_slam:VideoSlamModule"
 isaac = "edge_core.api_routes.isaac:IsaacModule"
-isaac_sim = "edge_core.api_routes.isaac_sim:IsaacSimModule"
 calibration = "edge_core.api_routes.calibration:CalibrationModule"
 
 [tool.setuptools.packages.find]

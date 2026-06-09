@@ -46,7 +46,7 @@ NOMAD/
 |-- edge_core/              # Python FastAPI server (runs on the companion computer)
 |   |-- api.py              # App factory + API-key auth middleware
 |   |-- api_routes/         # Route modules (system, services, terminal, streaming,
-|   |                       #   vio, video_slam, isaac, isaac_sim, calibration)
+|   |                       #   vio, video_slam, isaac, calibration)
 |   |-- main.py             # Entry point — boots the module registry
 |   |-- core/               # Module SDK (NomadModule, ModuleRegistry, AppContext)
 |   |-- services/           # state, mavlink/ (package), health_monitor,
@@ -58,10 +58,7 @@ NOMAD/
 |
 |-- docker/
 | |-- Dockerfile.dev # x86_64 dev/sim image (no CUDA/ZED)
-| |-- Dockerfile.isaac_sim # x86_64 Isaac Sim + ZED SDK + ROS2 (full sim)
-| |-- docker-compose.dev.yml # Hardware-free dev stack
-| |-- docker-compose.sim.yml # Full sim stack (Isaac Sim + SITL + Edge Core)
-| |-- isaac_sim/ # ZED sim launch scripts
+| |-- docker-compose.dev.yml # Hardware-free dev stack (Edge Core + ArduPilot SITL)
 |
 |-- mission_planner/src/ # C# plugin (runs on the Windows ground station)
 |   |-- NOMADPlugin.cs               # Plugin entry point
@@ -275,7 +272,6 @@ The documentation site is built with MkDocs Material (`pixi run docs`).
 | Deployment (Jetson image + systemd) | `docs/deployment.md` |
 | Configuration reference | `docs/configuration.md` |
 | API Reference | `docs/api_reference.md` |
-| ZED + Isaac Sim guide | `docs/ZED_ISAAC_SIM_GUIDE.md` |
 | Tailscale setup | `infra/tailscale/SETUP.md` |
 | Edge Core | `edge_core/README.md` |
 | Mission Planner plugin | `mission_planner/README.md` |

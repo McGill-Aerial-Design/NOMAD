@@ -3,20 +3,7 @@
   "tasks": [
     // ==================== Configuration Profiles ====================
     // These tasks appear in the VS Code status bar via "Run Task".
-    // Switch between full sim, real drone, and minimal dev with one click.
-    {
-      "label": "Profile: Load simulation (Isaac Sim + SITL)",
-      "type": "shell",
-      "command": "pixi run profile-load sim",
-      "group": "none",
-      "presentation": {
-        "panel": "shared",
-        "clear": true,
-        "showReuseMessage": false
-      },
-      "problemMatcher": [],
-      "detail": "Full Isaac Sim + SITL simulation. No hardware needed — GPU required."
-    },
+    // Switch between real drone and minimal dev with one click.
     {
       "label": "Profile: Load real drone (Jetson + ZED2i)",
       "type": "shell",
@@ -110,19 +97,6 @@
       "detail": "Run Edge Core in hardware-free sim mode on http://localhost:8000"
     },
     {
-      "label": "Edge Core: Dev server (full sim with vision)",
-      "type": "shell",
-      "command": "pixi run dev-vision",
-      "group": "build",
-      "presentation": {
-        "panel": "dedicated",
-        "showReuseMessage": false,
-        "clear": true
-      },
-      "problemMatcher": [],
-      "detail": "Run Edge Core with vision enabled (requires Isaac Sim container running)"
-    },
-    {
       "label": "Edge Core: Run tests",
       "type": "shell",
       "command": "pixi run test",
@@ -158,72 +132,6 @@
       "problemMatcher": [],
       "detail": "Run mypy type checker (gradual, advisory)"
     },
-    // ==================== Isaac Sim (Docker) ====================
-    // These call the pixi `sim-*` tasks so the docker compose flags live in one
-    // place (pixi.toml), not duplicated here.
-    {
-      "label": "Sim: Build Isaac Sim image",
-      "type": "shell",
-      "command": "pixi run sim-build",
-      "group": "build",
-      "presentation": { "panel": "dedicated", "clear": true },
-      "problemMatcher": [],
-      "detail": "Build the x86_64 Isaac Sim + ZED SDK + ROS2 Docker image (~60 GB, 30-60 min)"
-    },
-    {
-      "label": "Sim: Start Edge Core + SITL",
-      "type": "shell",
-      "command": "pixi run sim-up-sitl",
-      "group": "build",
-      "presentation": { "panel": "dedicated", "clear": true, "showReuseMessage": false },
-      "problemMatcher": [],
-      "detail": "Start Edge Core (no vision) + ArduPilot SITL. No GPU needed."
-    },
-    {
-      "label": "Sim: Start full stack (Isaac Sim + SITL)",
-      "type": "shell",
-      "command": "pixi run sim-up",
-      "group": "build",
-      "presentation": { "panel": "dedicated", "clear": true, "showReuseMessage": false },
-      "problemMatcher": [],
-      "detail": "Start Isaac Sim + Edge Core (vision) + SITL + MediaMTX. GPU required."
-    },
-    {
-      "label": "Sim: View logs",
-      "type": "shell",
-      "command": "pixi run sim-logs",
-      "group": "none",
-      "presentation": { "panel": "dedicated", "showReuseMessage": false },
-      "problemMatcher": [],
-      "detail": "Follow logs from all active sim services"
-    },
-    {
-      "label": "Sim: Stop full stack",
-      "type": "shell",
-      "command": "pixi run sim-down",
-      "group": "none",
-      "presentation": { "panel": "dedicated", "clear": true },
-      "problemMatcher": [],
-      "detail": "Stop and remove all sim containers (both profiles)"
-    },
-    {
-      "label": "Sim: Restart full stack",
-      "type": "shell",
-      "command": "pixi run sim-restart",
-      "group": "none",
-      "presentation": { "panel": "dedicated", "clear": true },
-      "problemMatcher": [],
-      "detail": "Restart all active sim services"
-    },
-    {
-      "label": "Sim: Check stack status",
-      "type": "shell",
-      "command": "pixi run sim-status",
-      "group": "none",
-      "presentation": { "panel": "shared", "clear": true, "showReuseMessage": false },
-      "problemMatcher": [],
-      "detail": "Show status of all sim containers"
-    },
     // ==================== C# ====================
     {
       "label": "C#: Build Mission Planner Plugin",
@@ -249,7 +157,7 @@
     {
       "label": "Docker: Build dev image",
       "type": "shell",
-      "command": "pixi run sim-build-dev",
+      "command": "pixi run dev-build",
       "group": "build",
       "presentation": { "panel": "dedicated", "clear": true },
       "problemMatcher": [],

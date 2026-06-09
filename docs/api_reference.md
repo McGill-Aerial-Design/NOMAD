@@ -67,14 +67,13 @@ gating (clamp, VIO freshness, armed+GUIDED, watchdog) owned there.
 | POST | `/api/video/overlay/{action}` | Toggle overlay rendering |
 | GET | `/api/stream/info` | Stream/RTSP info |
 
-## Isaac ROS / Isaac Sim
+## Isaac ROS
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/isaac/status` | Isaac ROS container status |
 | POST | `/api/isaac/start` · `/api/isaac/stop` | Container lifecycle |
 | POST | `/api/isaac/bridge/start` · `/api/isaac/bridge/stop` | ROS-HTTP bridge lifecycle |
-| GET/POST | `/api/sim/*` | Isaac Sim container controls (when `ISAAC_SIM_MODE=true`) |
 
 ## Terminal (admin)
 

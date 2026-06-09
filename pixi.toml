@@ -2,9 +2,8 @@
 #
 # Pixi (https://pixi.sh) provides a reproducible, cross-platform dev environment
 # that does NOT require the Jetson, CUDA, ZED SDK, or ROS2 — those are device-only
-# and are installed separately on hardware. The Docker images live in docker/
-# (Dockerfile.dev for the hardware-free dev stack, Dockerfile.isaac_sim for the
-# GPU Isaac Sim stack).
+# and are installed separately on hardware. The dev Docker image lives in
+# docker/Dockerfile.dev (hardware-free Edge Core + ArduPilot SITL stack).
 #
 # Quick start:
 #   pixi run dev      # run Edge Core in hardware-free sim mode on :8000
@@ -30,41 +29,15 @@ shellcheck = ">=0.10"
 [feature.dev.pypi-dependencies]
 nomad-edge = { path = ".", editable = true, extras = ["dev", "docs"] }
 
-# ==================== Sim Feature ====================
-# ZED Isaac Sim integration. Provides tasks to build and run the full
-# simulation stack (Isaac Sim + ArduPilot SITL + Edge Core + MediaMTX)
-# using Docker Compose. Requires an NVIDIA GPU and the NVIDIA Container
-# Toolkit. NOT needed on the Jetson — only on x86_64 dev workstations.
-
-[feature.sim.tasks]
-# Build the Isaac Sim Docker image (x86_64, requires NVIDIA GPU host)
-sim-build = "docker build -f docker/Dockerfile.isaac_sim -t nomad-isaac-sim:latest ."
-# Build the dev Edge Core image
-sim-build-dev = "docker build -f docker/Dockerfile.dev -t nomad-edge-dev:latest ."
-# Build all sim images
-sim-build-all = "docker compose -f docker/docker-compose.sim.yml --profile sitl --profile isaac build"
-# Start Edge Core + SITL (no GPU, no Isaac Sim)
-sim-up-sitl = "docker compose -f docker/docker-compose.sim.yml --profile sitl up -d"
-# Start full stack: Isaac Sim + Edge Core (vision) + SITL + MediaMTX (GPU required)
-sim-up = "docker compose -f docker/docker-compose.sim.yml --profile sitl --profile isaac up -d"
-# Stop the sim stack (all profiles)
-sim-down = "docker compose -f docker/docker-compose.sim.yml --profile sitl --profile isaac down"
-# View logs from all sim services
-sim-logs = "docker compose -f docker/docker-compose.sim.yml --profile sitl --profile isaac logs -f"
-# View Edge Core logs only
-sim-logs-edge = "docker compose -f docker/docker-compose.sim.yml --profile sitl --profile isaac logs -f edge_core"
-# View Isaac Sim logs only
-sim-logs-sim = "docker compose -f docker/docker-compose.sim.yml --profile isaac logs -f isaac_sim"
-# Check sim stack status
-sim-status = "docker compose -f docker/docker-compose.sim.yml --profile sitl --profile isaac ps"
-# Restart the sim stack
-sim-restart = "docker compose -f docker/docker-compose.sim.yml --profile sitl --profile isaac restart"
+# Isaac Sim (Omniverse) integration is intentionally not included in this
+# baseline — it needs a high-end NVIDIA GPU host. It will return later as a
+# remote simulation server. The hardware-free dev stack below (Edge Core +
+# ArduPilot SITL) covers local development without a GPU.
 
 # ==================== Environments ====================
 
 [environments]
 default = { features = ["dev"] }
-sim = { features = ["dev", "sim"] }
 
 # ==================== Tasks ====================
 
@@ -72,8 +45,6 @@ sim = { features = ["dev", "sim"] }
 
 # Edge Core
 dev = "python -m edge_core.main --sim --no-vision --host 0.0.0.0 --port 8000"
-# Sim with the vision pipeline enabled (needs the Isaac Sim container for camera data).
-dev-vision = { cmd = "python -m edge_core.main --sim --host 0.0.0.0 --port 8000", env = { ISAAC_SIM_MODE = "true", NOMAD_ENABLE_VISION = "true" } }
 # Coverage floor is a ratchet set just below the current level so coverage can
 # only trend up; raise it as more of the codebase gets tested.
 test = "pytest --cov=edge_core --cov=infra/tailscale --cov-report=term-missing --cov-fail-under=25"
@@ -84,6 +55,7 @@ test-fast = "pytest"
 #   pixi run dev-up      # build + start edge_core and SITL (detached)
 #   pixi run test-api    # exercise every REST endpoint against it
 #   pixi run dev-down    # stop and remove
+dev-build = "docker build -f docker/Dockerfile.dev -t nomad-edge-dev:latest ."
 dev-up = "docker compose -f docker/docker-compose.dev.yml --profile sitl up -d --build"
 dev-down = "docker compose -f docker/docker-compose.dev.yml --profile sitl down"
 dev-logs = "docker compose -f docker/docker-compose.dev.yml logs -f"
@@ -114,10 +86,9 @@ lint-plugin = "powershell -ExecutionPolicy Bypass -File scripts/build/lint_plugi
 # ==================== Configuration Profiles ====================
 # Manage config/nomad.env via named profiles stored in config/profiles/.
 # Each profile is a complete environment file with all settings for a
-# specific deployment target (sim, real drone, minimal dev).
+# specific deployment target (real drone, minimal dev).
 #
 # Quick start:
-#   pixi run profile-load sim       # Full Isaac Sim simulation
 #   pixi run profile-load drone     # Real Jetson + ZED2i
 #   pixi run profile-load dev       # Minimal Edge Core only
 #   pixi run profile-show           # Show active profile

@@ -3,10 +3,10 @@
 """
 Simple Video Bridge — ROS2 image topic to RTSP via GStreamer.
 
-Runs inside the Isaac ROS Docker container (real Jetson) or the Isaac Sim
-container (simulation). Subscribes to a ROS2 image topic, encodes frames
-with x264enc (software, zerolatency tuning), and streams to MediaMTX via
-RTSP. Also provides an HTTP API for topic switching, status, and overlays.
+Runs inside the Isaac ROS Docker container on the Jetson. Subscribes to a ROS2
+image topic, encodes frames with x264enc (software, zerolatency tuning), and
+streams to MediaMTX via RTSP. Also provides an HTTP API for topic switching,
+status, and overlays.
 
 Architecture:
   ROS2 Image Topic -> GStreamer x264enc -> RTSP -> MediaMTX -> Viewers

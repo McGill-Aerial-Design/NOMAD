@@ -38,7 +38,7 @@ NOMAD/
 │   ├── modules/           # Built-in pluggable modules (slam, payload)
 │   └── ros_http_bridge/   # ROS→Edge Core bridge package (runs in Isaac container)
 ├── mission_planner/src/   # C# Mission Planner plugin
-├── docker/                # Dockerfile.dev, Dockerfile.isaac_sim, compose files
+├── docker/                # Dockerfile.dev + hardware-free dev compose (Edge Core + SITL)
 ├── scripts/               # Service mgmt, profiles, build, dev tools
 ├── infra/                 # systemd units, transport (mavlink-router), tailscale
 └── config/                # nomad.env (+ profiles/) — runtime config

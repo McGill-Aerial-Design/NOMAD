@@ -35,15 +35,7 @@ from urllib.request import Request, urlopen
 
 logger = logging.getLogger("edge_core.video_stream_manager")
 
-_ISAAC_SIM_MODE = os.environ.get("ISAAC_SIM_MODE", "").strip().lower() in ("1", "true", "yes", "on")
-
-# Configuration — when ISAAC_SIM_MODE is true, target the Isaac Sim container
-# instead of the real Jetson Isaac ROS container. Both containers expose the
-# same ROS2 topic interface and simple_video_bridge HTTP API.
-if _ISAAC_SIM_MODE:
-    DEFAULT_CONTAINER_NAME = os.environ.get("ISAAC_SIM_CONTAINER_NAME", "nomad_isaac_sim")
-else:
-    DEFAULT_CONTAINER_NAME = os.environ.get("ISAAC_CONTAINER_NAME", "nomad_isaac_ros")
+DEFAULT_CONTAINER_NAME = os.environ.get("ISAAC_CONTAINER_NAME", "nomad_isaac_ros")
 DEFAULT_RELAY_HTTP_PORT = int(os.environ.get("VIDEO_RELAY_HTTP_PORT", "9200"))
 _DOCKER_HOST_IP = os.environ.get("NOMAD_DOCKER_HOST_IP", "172.17.0.1")
 DEFAULT_RTSP_URL = (
@@ -51,10 +43,7 @@ DEFAULT_RTSP_URL = (
 )
 DEFAULT_TOPIC = os.environ.get("NOMAD_DEFAULT_VIDEO_TOPIC", "/zed/zed_node/rgb/color/rect/image")
 _NOMAD_ROS_ROOT = os.environ.get("NOMAD_ROS_ROOT", "/opt/ros/humble")
-if _ISAAC_SIM_MODE:
-    _NOMAD_ISAAC_WS = os.environ.get("NOMAD_ISAAC_WORKSPACE", "/workspaces/nomad-sim")
-else:
-    _NOMAD_ISAAC_WS = os.environ.get("NOMAD_ISAAC_WORKSPACE", "/workspaces/isaac_ros-dev")
+_NOMAD_ISAAC_WS = os.environ.get("NOMAD_ISAAC_WORKSPACE", "/workspaces/isaac_ros-dev")
 
 # Stream settings — 720p at a low bitrate. Picks up overrides from
 # config/nomad.env (VIDEO_BRIDGE_WIDTH/HEIGHT/FPS/BITRATE) so we don't have
