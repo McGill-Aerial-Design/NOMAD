@@ -13,7 +13,7 @@ the loop on an actual autopilot, not just in unit tests.
 These tests are **skipped in normal CI** (no autopilot present). They run on
 demand against the dev stack.
 
-## What the scenario proves
+## What the scenarios prove
 
 [velocity_loop_closure.py](velocity_loop_closure.py) runs:
 
@@ -23,6 +23,16 @@ demand against the dev stack.
 | velocity step (`vx=1.5`) | H-01 / SR-VEL | commanded motion actually happens (peak groundspeed ≥ 0.8 m/s, within the 2.0 clamp) |
 | stop commanding | H-03/H-02 / SR-LNK-02, SR-VIO-02 | watchdog zeroes velocity; vehicle stops on its own |
 | switch to LOITER | H-04 / SR-VEL-05 | setpoints refused outside GUIDED |
+
+[geofence_containment.py](geofence_containment.py) (`pixi run sitl-fence`) runs:
+
+| Step | Hazard / requirement | Assertion |
+|------|----------------------|-----------|
+| configure a 100 m keep-in box around home | H-05 / SR-FEN-02 | fence parsed from `NOMAD_FENCE_POLYGON` |
+| arm → GUIDED → takeoff | — | vehicle reaches altitude |
+| global target 30 m north (inside) | H-05 / SR-FEN-02 | target accepted and actually flown |
+| global target 300 m north (outside) | H-05 / SR-FEN-02 | target rejected; vehicle stays inside the box |
+| LOCAL_NED target 300 m north | H-05 / SR-FEN-02 | target rejected |
 
 ## How to run
 

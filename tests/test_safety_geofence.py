@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
-"""Unit tests for edge_core.safety.geofence containment primitive (SR-FEN-02).
+"""Unit tests for edge_core.safety.geofence (SR-FEN-02).
 
-NOTE: this primitive is not yet wired into the command path; these tests prove
-the geometry so the wiring step (a later, SITL-verified change) can rely on it.
+Covers the containment geometry (point-in-polygon, distance, keep-in margin)
+and the pure :func:`evaluate_position` decision the MAVLink command adapter
+asks before sending any position target, including its fault-injection
+branches (non-finite target, unconfigured fence, degenerate boundary).
 """
 
 from __future__ import annotations
@@ -11,8 +13,10 @@ from __future__ import annotations
 import math
 
 from edge_core.safety.geofence import (
+    FencePolicy,
     Point,
     distance_to_boundary,
+    evaluate_position,
     is_contained,
     point_in_polygon,
 )
@@ -77,3 +81,46 @@ def test_distance_to_boundary_handles_degenerate_edge():
     # All edges (and the degenerate one) put the nearest feature at (0, 0).
     poly = [Point(0, 0), Point(0, 0), Point(3, 0)]
     assert math.isclose(distance_to_boundary(Point(0, 4), poly), 4.0)
+
+
+def test_evaluate_position_unconfigured_allows():
+    # No boundary configured: pass through, the FC fence is the enforcement.
+    decision = evaluate_position(FencePolicy(), Point(1e9, -1e9))
+    assert decision.allowed is True
+    assert decision.reason is None
+
+
+def test_evaluate_position_inside_allows():
+    decision = evaluate_position(FencePolicy(boundary=tuple(SQUARE)), Point(0, 0))
+    assert decision.allowed is True
+
+
+def test_evaluate_position_rejects_outside_boundary():
+    decision = evaluate_position(FencePolicy(boundary=tuple(SQUARE)), Point(10, 0))
+    assert decision.allowed is False
+    assert decision.reason == "fence"
+    assert decision.setpoint is None
+
+
+def test_evaluate_position_rejects_inside_keep_in_margin():
+    policy = FencePolicy(boundary=tuple(SQUARE), margin=2.0)
+    # 1.0 from the edge with a 2.0 margin: rejected before the hard boundary.
+    assert evaluate_position(policy, Point(4, 0)).allowed is False
+    assert evaluate_position(policy, Point(0, 0)).allowed is True
+
+
+def test_evaluate_position_rejects_nonfinite_target():
+    policy = FencePolicy(boundary=tuple(SQUARE))
+    for bad in (Point(math.nan, 0.0), Point(0.0, math.inf), Point(-math.inf, math.nan)):
+        decision = evaluate_position(policy, bad)
+        assert decision.allowed is False
+        assert decision.reason == "nonfinite"
+    # A non-finite target is rejected even with no fence configured.
+    assert evaluate_position(FencePolicy(), Point(math.nan, 0.0)).allowed is False
+
+
+def test_evaluate_position_degenerate_boundary_rejects_everything():
+    # A configured-but-broken boundary (< 3 vertices) must fail closed.
+    decision = evaluate_position(FencePolicy(boundary=()), Point(0, 0))
+    assert decision.allowed is False
+    assert decision.reason == "fence"

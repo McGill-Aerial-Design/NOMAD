@@ -1,17 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
-"""Boundary containment math for the safety-critical core.
+"""Boundary containment for the safety-critical core (requirement SR-FEN-02).
 
-Tier SC. Pure planar geometry — point-in-polygon and distance-to-boundary — for
-an independent geofence containment check (requirement SR-FEN-02).
-
-.. warning::
-    **NOT YET WIRED into the command path.** Today the operating boundary is
-    enforced only by the FC fence (uploaded from the C# ground station). This
-    module provides the *primitive* for a NOMAD-side independent check; gating
-    velocity/position commands on it is a later, SITL-verified step. See
-    ``docs/safety/hazards.md`` (H-05) and ``docs/safety/requirements.md``
-    (SR-FEN-02).
+Tier SC. Pure planar geometry — point-in-polygon and distance-to-boundary —
+plus :func:`evaluate_position`, the single "is this position target inside the
+fence?" decision the MAVLink command adapter
+(``services/mavlink/commands.py``) asks before transmitting any position
+target. The FC fence (uploaded from the C# ground station) remains the
+independent backstop; this check is NOMAD's own containment layer. See
+``docs/safety/hazards.md`` (H-05).
 
 Inputs are 2D points in a consistent planar frame (e.g. local NED north/east in
 metres, projected by the caller via ``services.geospatial``). The math is
@@ -22,7 +19,10 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import NamedTuple
+
+from .envelope import Decision
 
 
 class Point(NamedTuple):
@@ -99,3 +99,37 @@ def is_contained(point: Point, polygon: Sequence[Point], margin: float = 0.0) ->
     if margin <= 0.0:
         return True
     return distance_to_boundary(point, polygon) >= margin
+
+
+@dataclass(frozen=True)
+class FencePolicy:
+    """Optional keep-in boundary for position targets.
+
+    ``boundary is None`` means no NOMAD-side fence is configured: position
+    targets pass through and the FC fence is the only enforcement. A configured
+    boundary with fewer than 3 vertices is a broken configuration and rejects
+    every target — a bad fence must fail closed, never open.
+    """
+
+    boundary: tuple[Point, ...] | None = None
+    margin: float = 0.0
+
+
+def evaluate_position(policy: FencePolicy, point: Point) -> Decision:
+    """Decide whether a position target at ``point`` stays inside the fence.
+
+    Pure and frame-agnostic: the caller projects the target and the boundary
+    into the same planar frame before asking. The first failing check
+    short-circuits with the safe default (reject, send nothing); only a finite
+    target inside the boundary by at least ``margin`` yields ``allowed=True``.
+    """
+    if not (math.isfinite(point.x) and math.isfinite(point.y)):
+        return Decision(False, "nonfinite", "Non-finite position target - dropping command")
+
+    if policy.boundary is None:
+        return Decision(True)
+
+    if not is_contained(point, policy.boundary, policy.margin):
+        return Decision(False, "fence", "Position target outside geofence boundary - dropping command")
+
+    return Decision(True)
