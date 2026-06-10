@@ -5,15 +5,33 @@
 
 All payload, camera tilt, and water pump hardware is driven by the Cube Orange.
 The Jetson does not own any local GPIO or PWM lines for servos.
+
+Tier SC adapter (requirements SR-PAY-01/02/03, hazard H-06): the channel/PWM
+ranges, duration clamp, and the arm->release interlock are decided by the pure
+``edge_core.safety.payload`` core; this module owns the I/O — MAVLink
+transmission, the interlock state under its lock, and the
+de-energize-in-``finally`` guarantee on the pump path.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
+
+from edge_core.safety import (
+    MAX_SERVO_CHANNEL,
+    MIN_SERVO_CHANNEL,
+    InterlockPolicy,
+    InterlockState,
+    arm_release,
+    clamp_release_duration,
+    evaluate_release,
+    validate_servo_command,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,11 +81,11 @@ class MavlinkServo:
         return self._channel
 
     def initialize(self) -> bool:
-        if self._channel < 1 or self._channel > 16:
-            logger.error(f"Invalid MAVLink servo channel: {self._channel}")
+        if self._channel < MIN_SERVO_CHANNEL or self._channel > MAX_SERVO_CHANNEL:
+            logger.error("Invalid MAVLink servo channel: %s", self._channel)
             return False
         self._enabled = True
-        logger.info(f"MAVLink servo {self.name} configured on Cube channel {self._channel}")
+        logger.info("MAVLink servo %s configured on Cube channel %s", self.name, self._channel)
         return True
 
     def enable(self) -> bool:
@@ -91,7 +109,7 @@ class MavlinkServo:
             return False
         success = self._mav.trigger_payload(pulse_us, self._channel)
         if not success:
-            logger.debug(f"MAVLink servo command failed (channel={self._channel}, pwm={pulse_us})")
+            logger.debug("MAVLink servo command failed (channel=%s, pwm=%s)", self._channel, pulse_us)
         return success
 
     def get_state(self) -> ServoState:
@@ -118,6 +136,9 @@ class ServoController:
         self._camera_tilt_channel: int | None = None
         self._water_pump_relay_number: int = 0
         self._last_relay_trigger: float = 0.0
+        self._interlock_policy = InterlockPolicy()
+        self._interlock_state = InterlockState()
+        self._interlock_lock = threading.Lock()
 
     def initialize(self) -> bool:
         self._initialized = True
@@ -128,8 +149,8 @@ class ServoController:
         return self._initialized
 
     def configure_camera_tilt_mavlink(self, channel: int) -> bool:
-        if channel < 1 or channel > 16:
-            logger.error(f"Invalid camera tilt servo channel: {channel}")
+        if channel < MIN_SERVO_CHANNEL or channel > MAX_SERVO_CHANNEL:
+            logger.error("Invalid camera tilt servo channel: %s", channel)
             return False
 
         old_servo = self._servos.get(ServoFunction.CAMERA_TILT)
@@ -152,18 +173,16 @@ class ServoController:
 
     def configure_water_pump_relay(self, relay_number: int) -> bool:
         if relay_number < 0 or relay_number > 15:
-            logger.error(f"Invalid water pump relay number: {relay_number}")
+            logger.error("Invalid water pump relay number: %s", relay_number)
             return False
         self._water_pump_relay_number = int(relay_number)
-        logger.info(f"Water pump configured on Cube relay {self._water_pump_relay_number}")
+        logger.info("Water pump configured on Cube relay %s", self._water_pump_relay_number)
         return True
 
     def set_channel_pwm(self, channel: int, pwm_us: int) -> bool:
-        if channel < 1 or channel > 16:
-            logger.error(f"Invalid Cube servo channel: {channel}")
-            return False
-        if pwm_us < 500 or pwm_us > 2500:
-            logger.error(f"Invalid Cube servo PWM: {pwm_us}")
+        decision = validate_servo_command(channel, pwm_us)
+        if not decision.allowed:
+            logger.error("%s", decision.message)
             return False
         if self._mavlink_service is None:
             logger.warning("MAVLink service not available for Cube servo command")
@@ -183,12 +202,32 @@ class ServoController:
             return None
         return servo.get_state().angle
 
+    def arm_release(self) -> float:
+        """Open the release interlock window (SR-PAY-03); returns its length in s."""
+        with self._interlock_lock:
+            self._interlock_state = arm_release(time.monotonic())
+        return self._interlock_policy.arm_window_s
+
     def trigger_water_shooter(self, duration_ms: int = 200) -> bool:
+        # Interlock first: the arm is consumed whether or not the release goes
+        # on to succeed, so every attempt needs a fresh, deliberate arm.
+        with self._interlock_lock:
+            self._interlock_state, decision = evaluate_release(
+                self._interlock_policy, self._interlock_state, time.monotonic()
+            )
+        if not decision.allowed:
+            logger.warning("%s", decision.message)
+            return False
+
         if self._mavlink_service is None:
             logger.warning("MAVLink service not available for Cube relay command")
             return False
 
-        duration_s = max(0.05, min(float(duration_ms) / 1000.0, 5.0))
+        try:
+            duration_s = clamp_release_duration(float(duration_ms) / 1000.0)
+        except ValueError:
+            logger.error("Non-finite water shooter duration - rejected")
+            return False
         relay = self._water_pump_relay_number
         if not self._mavlink_service.set_relay(relay, True):
             # The command may still have reached the FC even if COMMAND_ACK was
@@ -196,8 +235,8 @@ class ServoController:
             # reporting failure so the pump cannot be left energized.
             try:
                 self._mavlink_service.set_relay(relay, False)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Best-effort relay-off after failed on-command also failed: %s", e)
             return False
         self._last_relay_trigger = time.time()
         try:

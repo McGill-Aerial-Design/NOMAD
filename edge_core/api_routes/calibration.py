@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from edge_core.core import AppContext, BaseModule, ModuleMetadata
+from edge_core.safety import MAX_PWM_US, MAX_SERVO_CHANNEL, MIN_PWM_US, MIN_SERVO_CHANNEL
 
 logger = logging.getLogger("edge_core.api.calibration")
 
@@ -57,10 +58,12 @@ class CalibrationModule(BaseModule):
         @router.post("/api/servo/channel/{channel}/pwm")
         async def set_direct_pwm(channel: int, pwm: int):
             """Send a direct raw PWM microsecond output override to a Cube channel."""
-            if channel < 1 or channel > 16:
-                raise HTTPException(status_code=400, detail="Channel must be between 1 and 16")
-            if pwm < 500 or pwm > 2500:
-                raise HTTPException(status_code=400, detail="PWM must be between 500 and 2500 us")
+            if channel < MIN_SERVO_CHANNEL or channel > MAX_SERVO_CHANNEL:
+                raise HTTPException(
+                    status_code=400, detail=f"Channel must be between {MIN_SERVO_CHANNEL} and {MAX_SERVO_CHANNEL}"
+                )
+            if pwm < MIN_PWM_US or pwm > MAX_PWM_US:
+                raise HTTPException(status_code=400, detail=f"PWM must be between {MIN_PWM_US} and {MAX_PWM_US} us")
 
             servo_ctrl = app.state.servo_controller
             if not servo_ctrl:
