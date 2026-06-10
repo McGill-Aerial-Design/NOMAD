@@ -53,7 +53,7 @@ test-fast = "pytest"
 # Safety-critical core gate (rearchitecture plan §4.5): the edge_core/safety/
 # package must hold 100% BRANCH coverage. Asymmetric rigor - the rest of the
 # tree rides the modest 25% floor above; the SC core does not get to regress.
-cov-safety = "pytest tests/test_safety_envelope.py tests/test_safety_gates.py tests/test_safety_limits.py tests/test_safety_watchdog.py tests/test_safety_geofence.py --cov=edge_core.safety --cov-branch --cov-report=term-missing --cov-fail-under=100"
+cov-safety = "pytest tests/test_safety_envelope.py tests/test_safety_gates.py tests/test_safety_limits.py tests/test_safety_watchdog.py tests/test_safety_geofence.py tests/test_safety_payload.py --cov=edge_core.safety --cov-branch --cov-report=term-missing --cov-fail-under=100"
 
 # Hardware-free dev stack (Docker): Edge Core + ArduPilot SITL, no Isaac Sim.
 #   pixi run dev-up      # build + start edge_core and SITL (detached)
@@ -69,9 +69,15 @@ test-api = "python scripts/dev/test_api_endpoints.py"
 # dev+sitl stack up: `pixi run dev-up`). Runs inside the compose network and
 # mounts the working tree so it tests current code. See tests/sitl/README.md.
 sitl-scenario = """docker run --rm --network nomad-dev_default -v $PWD:/work -w /work -e PYTHONPATH=/work -e NOMAD_SITL_OPERATOR=tcp:nomad-dev-sitl-1:5762 -e NOMAD_SITL_CONTROLLER=tcp:nomad-dev-sitl-1:5763 --entrypoint python nomad-edge-dev:latest tests/sitl/velocity_loop_closure.py"""
+# Geofence containment scenario (SR-FEN-02): same stack, different script.
+sitl-fence = """docker run --rm --network nomad-dev_default -v $PWD:/work -w /work -e PYTHONPATH=/work -e NOMAD_SITL_OPERATOR=tcp:nomad-dev-sitl-1:5762 -e NOMAD_SITL_CONTROLLER=tcp:nomad-dev-sitl-1:5763 --entrypoint python nomad-edge-dev:latest tests/sitl/geofence_containment.py"""
 lint = "ruff check ."
 fmt = "ruff format ."
 fmt-check = "ruff format --check ."
+# Extra rule sets on the SC core + its adapters (rearchitecture plan §6):
+# bugbear, bandit, logging-format, Ruff-specific. The rest of the tree rides
+# the standard `lint` selection.
+lint-safety = "ruff check --extend-select B,S,G,LOG,RUF edge_core/safety edge_core/ros_http_bridge/mavlink_velocity.py edge_core/services/mavlink/commands.py edge_core/modules/payload/servo.py"
 typecheck = "mypy"
 
 # Documentation. Served on :8001 so it doesn't clash with `pixi run dev` (:8000).

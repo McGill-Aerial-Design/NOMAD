@@ -35,6 +35,8 @@ jobs:
           cache: true
       - name: Gate edge_core/safety at 100% branch coverage
         run: pixi run cov-safety
+      - name: SC lint (bugbear/bandit/logging rule sets on SC files)
+        run: pixi run lint-safety
 
   dev-image:
     name: build dev docker image

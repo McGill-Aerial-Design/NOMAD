@@ -33,16 +33,18 @@ import os
 import threading
 import time
 
-from edge_core.safety import gates
-from edge_core.safety.envelope import (
+from edge_core.safety import (
     Decision,
     EnvelopePolicy,
     FlightConditions,
     VelocityCommand,
+    VelocityLimits,
+    clamp,
     evaluate,
+    heartbeat_from_vehicle,
+    vio_fresh,
+    watchdog_decision,
 )
-from edge_core.safety.limits import VelocityLimits, clamp
-from edge_core.safety.watchdog import watchdog_decision
 
 try:
     from pymavlink import mavutil
@@ -182,16 +184,16 @@ class MavlinkVelocityController:
         self._stop_event.set()
         try:
             self._send_stop()
-        except Exception:
-            pass
+        except Exception as e:
+            self._log.debug("Final zero-velocity send failed during stop: %s", e)
         for thread in (self._rx_thread, self._watchdog_thread):
             if thread and thread.is_alive():
                 thread.join(timeout=2.0)
         if self._conn is not None:
             try:
                 self._conn.close()
-            except Exception:
-                pass
+            except Exception as e:
+                self._log.debug("MAVLink close error during stop: %s", e)
             self._conn = None
 
     def _connect(self) -> bool:
@@ -236,7 +238,9 @@ class MavlinkVelocityController:
                 self.rejected_count += 1
             return False
 
-        assert decision.setpoint is not None  # allowed implies a setpoint
+        if decision.setpoint is None:  # allowed always carries a setpoint
+            self._warn("rejected", "envelope allowed a command without a setpoint - dropping")
+            return False
         sent = self._send_velocity_frd(*decision.setpoint)
         if sent:
             with self._lock:
@@ -317,7 +321,7 @@ class MavlinkVelocityController:
             # Only track the autopilot we command; ignore GCS and other systems'
             # heartbeats sharing the link, which would otherwise flip our view of
             # armed/mode every other beat and drop valid setpoints (SR-VEL-06).
-            if not gates.heartbeat_from_vehicle(
+            if not heartbeat_from_vehicle(
                 msg.get_srcSystem(), msg.type, conn.target_system, gcs_type=mavutil.mavlink.MAV_TYPE_GCS
             ):
                 continue
@@ -339,7 +343,7 @@ class MavlinkVelocityController:
             with self._lock:
                 active = self._active
                 last_command_time = self._last_command_time
-                vio_is_fresh = gates.vio_fresh(self._vio_last_update, now, self._vio_max_age_s)
+                vio_is_fresh = vio_fresh(self._vio_last_update, now, self._vio_max_age_s)
             result = watchdog_decision(
                 active=active,
                 last_command_time=last_command_time,
