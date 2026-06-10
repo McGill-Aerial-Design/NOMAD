@@ -90,11 +90,20 @@ Planner Service Control when needed.
 
 ## dev/
 
-Diagnostics, USB / ZED probes, and Windows simulation entry points
-(`run_dev.ps1`, `run_dev.sh`). The historic `restart_nvblox.sh`,
-`restart_bridge.sh`, `full_restart_ros.sh`, `ros_full_launch.sh` are gone —
-their behavior is now `nomad restart nvblox`, `nomad restart ros_http_bridge`,
-etc.
+Supported local-development entry points:
+
+| Script                  | Description                                             |
+|-------------------------|---------------------------------------------------------|
+| `run_dev.sh` / `.ps1`   | Launch Edge Core in hardware-free sim mode (Linux/Win)  |
+| `test_api_endpoints.py` | Exercise every REST endpoint (used by `pixi run test-api`) |
+| `gdrive_auth.py`        | One-time Google Drive OAuth for evidence upload         |
+
+One-off hardware bring-up and debugging throwaways (ZED/USB probes, nvblox mesh
+inspectors, odometry comparisons) have been moved to `dev/archive/` — see
+[`dev/archive/README.md`](dev/archive/README.md). They are unsupported and not
+covered by CI. The historic `restart_nvblox.sh`, `restart_bridge.sh`,
+`full_restart_ros.sh`, `ros_full_launch.sh` are gone — their behavior is now
+`nomad restart nvblox`, `nomad restart ros_http_bridge`, etc.
 
 ## build/ and hardware/
 

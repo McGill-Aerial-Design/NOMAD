@@ -18,8 +18,7 @@
 # Services (start order = listed order):
 # edge_core, mavlink_router, mediamtx,
 # isaac_ros_container, ros_http_bridge, zed_wrapper,
-# video_bridge, nvblox,
-# isaac_sim, isaac_sim_zed
+# video_bridge, nvblox
 #
 # `all` operates on the autostart set from config/nomad.env
 # (NOMAD_AUTOSTART_* flags). nvblox is manual-only and is never part of `all`.
@@ -47,8 +46,6 @@ ros_http_bridge
 zed_wrapper
 video_bridge
 nvblox
-isaac_sim
-isaac_sim_zed
 )
 
 # Map a CLI name to the autostart flag key.
@@ -62,8 +59,6 @@ zed_wrapper) echo "ZED_WRAPPER" ;;
 ros_http_bridge) echo "ROS_HTTP_BRIDGE" ;;
 video_bridge) echo "VIDEO_BRIDGE" ;;
 nvblox) echo "NVBLOX" ;;
-isaac_sim) echo "ISAAC_SIM" ;;
-isaac_sim_zed) echo "ISAAC_SIM_ZED" ;;
 *) return 1 ;;
 esac
 }
@@ -97,8 +92,6 @@ printf "%-22s %-10s %s\n" "ros_http_bridge" "$NOMAD_AUTOSTART_ROS_HTTP_BRIDGE" "
 printf "%-22s %-10s %s\n" "zed_wrapper" "$NOMAD_AUTOSTART_ZED_WRAPPER" "ZED camera node (in container)"
 printf "%-22s %-10s %s\n" "video_bridge" "$NOMAD_AUTOSTART_VIDEO_BRIDGE" "RTSP relay (via Edge Core API)"
 printf "%-22s %-10s %s\n" "nvblox" "manual" "nvblox mapping (Mission Planner start only)"
-printf "%-22s %-10s %s\n" "isaac_sim" "${NOMAD_AUTOSTART_ISAAC_SIM:-false}" "Isaac Sim container (x86_64 sim)"
-printf "%-22s %-10s %s\n" "isaac_sim_zed" "${NOMAD_AUTOSTART_ISAAC_SIM_ZED:-false}" "ZED sim publisher (in sim container)"
 }
 
 cmd_config() {

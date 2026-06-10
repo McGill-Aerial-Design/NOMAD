@@ -4,7 +4,7 @@
 NOMAD Edge Core - REST API
 
 Provides HTTP endpoints for system status, health monitoring,
-Task 1/Task 2 operations, and video streaming.
+payload/actuation control, and video streaming.
 
 Target: Python 3.13 | NVIDIA Jetson Orin Nano
 """
@@ -74,7 +74,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
     """
     app = FastAPI(
         title="NOMAD Edge Core API",
-        description="Drone-side API for NOMAD - Task 1 & Task 2 Operations",
+        description="Drone-side companion-computer API for NOMAD",
         version="1.0.0",
         docs_url="/docs",
         redoc_url="/redoc",
@@ -104,6 +104,11 @@ def create_app(state_manager: StateManager) -> FastAPI:
         "on",
     }
     _AUTH_EXEMPT_PATHS = {"/", "/health", "/docs", "/redoc", "/openapi.json"}
+    # Command paths can actuate hardware (payload servos/relays, spray config).
+    # They require real authentication even from loopback, and every request to
+    # them is audit-logged (SR-SEC-03). Future command routes (velocity, mode)
+    # must be added here.
+    _COMMAND_PATH_PREFIXES = ("/api/servo/", "/api/spray/")
     _INTERNAL_BRIDGE_TOKEN_HEADER = "X-NOMAD-Internal-Token"
     _INTERNAL_BRIDGE_TOKEN = (os.environ.get("NOMAD_INTERNAL_TOKEN") or "").strip() or None
     _INTERNAL_BRIDGE_ALLOWED_ROUTES: set[tuple[str, str]] = {
@@ -163,26 +168,71 @@ def create_app(state_manager: StateManager) -> FastAPI:
             return False
         return hmac.compare_digest(provided_token, _INTERNAL_BRIDGE_TOKEN)
 
+    def _is_command_path(request_path: str) -> bool:
+        return request_path.startswith(_COMMAND_PATH_PREFIXES)
+
+    def _client_host(request: Request) -> str:
+        if request.client is not None and request.client.host is not None:
+            return request.client.host
+        return "unknown"
+
+    def _audit_command(request: Request, request_path: str, auth_mode: str) -> None:
+        """Post-flight audit trail for actuation commands (SR-SEC-03)."""
+        logger.info(
+            "SC command audit: %s %s from %s auth=%s",
+            request.method,
+            request_path,
+            _client_host(request),
+            auth_mode,
+        )
+
     class APIKeyMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
+            request_path = request.url.path.rstrip("/") or "/"
             if _NOMAD_API_KEY is None:
+                if _is_command_path(request_path):
+                    # Command endpoints never ride the unauthenticated loopback
+                    # / insecure-remote fallbacks (SR-SEC-03).
+                    if _is_internal_bridge_request(request, request_path):
+                        _audit_command(request, request_path, "internal-token")
+                        return await call_next(request)
+                    logger.warning(
+                        "SC command refused (no API key configured): %s %s from %s",
+                        request.method,
+                        request_path,
+                        _client_host(request),
+                    )
+                    return JSONResponse(
+                        status_code=403,
+                        content={"detail": "Command endpoints require NOMAD_API_KEY to be configured"},
+                    )
                 if _ALLOW_INSECURE_REMOTE or _is_loopback_client(request):
                     return await call_next(request)
                 return JSONResponse(
                     status_code=401,
                     content={"detail": ("NOMAD_API_KEY is not configured; remote API access is disabled")},
                 )
-            request_path = request.url.path.rstrip("/") or "/"
             if request_path in _AUTH_EXEMPT_PATHS:
                 return await call_next(request)
             if _is_internal_bridge_request(request, request_path):
+                if _is_command_path(request_path):
+                    _audit_command(request, request_path, "internal-token")
                 return await call_next(request)
             provided_key = request.headers.get("X-API-Key")
             if not provided_key or not hmac.compare_digest(provided_key, _NOMAD_API_KEY):
+                if _is_command_path(request_path):
+                    logger.warning(
+                        "SC command refused (bad/missing key): %s %s from %s",
+                        request.method,
+                        request_path,
+                        _client_host(request),
+                    )
                 return JSONResponse(
                     status_code=401,
                     content={"detail": "Invalid or missing API key"},
                 )
+            if _is_command_path(request_path):
+                _audit_command(request, request_path, "api-key")
             return await call_next(request)
 
     app.add_middleware(APIKeyMiddleware)

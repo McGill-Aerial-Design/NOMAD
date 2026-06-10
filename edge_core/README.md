@@ -21,7 +21,7 @@ on the drone, or hardware-free in sim mode on any machine.
 | `services/ipc.py` | ZeroMQ IPC helpers for high-rate ROS data |
 | `services/geospatial.py` · `logging_service.py` | Coordinate conversions · mission logging |
 | `services/ros/` | ROS2-side helper nodes (e.g. video bridge) |
-| `api_routes/` | Route modules (system, services, terminal, streaming, video_slam, isaac, isaac_sim, calibration) |
+| `api_routes/` | Route modules (system, services, terminal, streaming, vio, video_slam, isaac, calibration) |
 | `modules/` | Built-in capability modules (slam/isaac, payload/servo) |
 | `ros_http_bridge/` | ROS→Edge Core bridge package (runs inside the Isaac container) — see its own notes |
 
@@ -34,7 +34,7 @@ The bridge package (`ros_http_bridge/`) splits the old monolith into `node.py`
 
 ```bash
 pixi run dev          # Edge Core in sim mode (no hardware) on http://localhost:8000
-pixi run dev-up       # Docker: Edge Core + ArduPilot SITL (no Isaac Sim)
+pixi run dev-up       # Docker: Edge Core + ArduPilot SITL (hardware-free)
 pixi run test-api     # exercise every REST endpoint
 ```
 
@@ -60,7 +60,7 @@ are loaded. The general baseline exposes:
 | Servo / Calibration | `/api/servo/*`, `/api/calibration/*` | Camera tilt, channel PWM, IMU/ZED calibration |
 | SLAM | `/api/slam/mesh`, `/api/slam/mesh/update` | nvblox voxel mesh stream (general, task-agnostic) |
 | Video | `/api/video/*`, `/api/stream/*` | Source switching, overlays, bridges, stream info |
-| Isaac | `/api/isaac/*`, `/api/sim/*` | Isaac ROS / Isaac Sim container lifecycle |
+| Isaac | `/api/isaac/*` | Isaac ROS container + ROS-HTTP bridge lifecycle |
 | Terminal | `/api/terminal/*` | Whitelisted commands, logs (admin) |
 | VIO (internal) | `/api/vio/update` | Bridge → Edge Core pose ingest (internal token) |
 

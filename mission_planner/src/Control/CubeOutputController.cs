@@ -244,6 +244,11 @@ namespace NOMAD.MissionPlanner
 
             try
             {
+                // The edge-side release interlock (SR-PAY-03) requires an
+                // explicit arm immediately before the trigger; the operator's
+                // confirm already happened in the UI / on the transmitter.
+                var armResp = await JetsonApiService.PostAsync("/api/servo/shooter/arm").ConfigureAwait(false);
+                if (!armResp.IsSuccessStatusCode) return false;
                 var resp = await JetsonApiService.PostAsync(
                     $"/api/servo/shooter/trigger?duration_ms={durationMs}&relay_number={relayNumber}"
                 ).ConfigureAwait(false);

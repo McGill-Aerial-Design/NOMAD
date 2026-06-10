@@ -14,6 +14,7 @@ Mission Planner plugin (ground station).
 | Deploy to a Jetson | [Deployment](deployment.md) |
 | Configure the system | [Configuration](configuration.md) |
 | Browse the API | [API Reference](api_reference.md) |
+| Understand the safety case | [Safety Case](safety/README.md) |
 
 ## Documentation structure
 
@@ -25,3 +26,4 @@ Mission Planner plugin (ground station).
 | `deployment.md` | Jetson all-in-one image, bare-metal systemd |
 | `configuration.md` | `config/nomad.env` reference |
 | `api_reference.md` | Consolidated Edge Core API endpoints |
+| `safety/` | Safety case: SC/SR/NC partition, FHA-lite hazards, requirements, traceability |

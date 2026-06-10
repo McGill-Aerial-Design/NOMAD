@@ -1,4 +1,8 @@
-# Keep Linux-executed scripts compatible on Jetson.
+# Normalize all text files to LF in the repo so cross-platform contributors
+# don't churn line endings. Binary files are auto-detected and left untouched.
+* text=auto eol=lf
+
+# Keep Linux-executed scripts compatible on Jetson (explicit for clarity).
 *.sh text eol=lf
 *.bash text eol=lf
 

@@ -417,7 +417,7 @@ class NetworkMonitor:
                 "gsm.apn,GENERAL.STATE,IP4.ADDRESS,GENERAL.DEVICES",
                 "connection",
                 "show",
-                matched["name"],
+                conn_name,  # == matched["name"], but typed str for the command list
             ]
         )
         result: dict[str, Any] = {

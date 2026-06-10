@@ -1,6 +1,18 @@
 # Default owners for everything in the repo. Adjust to your team's handles/teams.
 * @YoussGm3o8
 
+# --- Safety-critical (SC) paths: docs/safety/partition.md is the source of ---
+# --- truth. Changes here need a named requirement + test (see the SC PR    ---
+# --- checklist in the PR template) and review by an SC owner.              ---
+/edge_core/safety/                          @YoussGm3o8
+/edge_core/ros_http_bridge/mavlink_velocity.py @YoussGm3o8
+/edge_core/services/mavlink/                @YoussGm3o8
+/edge_core/modules/payload/                 @YoussGm3o8
+/mission_planner/src/Control/               @YoussGm3o8
+/mission_planner/src/Payload/               @YoussGm3o8
+/mission_planner/src/Geofence/              @YoussGm3o8
+/docs/safety/                               @YoussGm3o8
+
 # Area owners (uncomment / edit as the team grows):
 # /edge_core/                 @YoussGm3o8
 # /mission_planner/           @YoussGm3o8

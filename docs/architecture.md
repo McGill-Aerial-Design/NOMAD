@@ -6,6 +6,38 @@ NOMAD is divided into three logical domains:
 - **Edge Core (B)** — the onboard Python FastAPI service
 - **Mission Planner Plugin (C)** — the ground station C# plugin
 
+## System overview
+
+```
+            DRONE (companion computer)                         GROUND STATION
+ ┌───────────────────────────────────────────────┐        ┌────────────────────┐
+ │                                                │        │  Mission Planner   │
+ │  Flight Controller (ArduPilot)                 │        │   + NOMAD plugin    │
+ │        │ UART (MAVLink)                        │        │        (C#)         │
+ │        ▼                                       │        └─────────┬──────────┘
+ │  mavlink-router ──────── UDP/VPN ──────────────┼── Tailscale ─────┤  REST/WS
+ │        │ localhost UDP                          │   (4G/WiFi)      │  + MAVLink
+ │        ▼                                       │                  │
+ │  ┌──────────────── Edge Core (FastAPI) ──────┐ │◄─── HTTP/WS ─────┘
+ │  │  module registry: configure→routes→       │ │
+ │  │  start→stop  (ASGI lifespan)              │ │
+ │  │  services: state · mavlink · health ·     │ │
+ │  │  video · payload · time · geo             │ │
+ │  │  api_routes: system · vio · slam · isaac  │ │
+ │  └───────────────▲───────────────────────────┘ │
+ │     HTTP (loopback, internal token)            │
+ │  ┌──────────────┴── ROS-HTTP bridge ─────────┐ │
+ │  │  ZED / nvblox / nav2  →  pose, mesh,       │ │
+ │  │  cmd_vel → MAVLink GUIDED (direct link)    │ │
+ │  └────────────────────────────────────────────┘ │
+ └───────────────────────────────────────────────┘
+```
+
+Module lifecycle: each module is discovered via the `nomad.modules`
+entry-point group, then driven through `configure(ctx)` → `register_routes(app)`
+→ `start()` → `stop()` (start/stop run on the ASGI lifespan; see
+[Writing a Module](writing_a_module.md)).
+
 ## Domains
 
 ### A — Transport Layer

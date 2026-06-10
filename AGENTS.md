@@ -46,7 +46,7 @@ NOMAD/
 |-- edge_core/              # Python FastAPI server (runs on the companion computer)
 |   |-- api.py              # App factory + API-key auth middleware
 |   |-- api_routes/         # Route modules (system, services, terminal, streaming,
-|   |                       #   video_slam, isaac, isaac_sim, calibration)
+|   |                       #   vio, video_slam, isaac, calibration)
 |   |-- main.py             # Entry point — boots the module registry
 |   |-- core/               # Module SDK (NomadModule, ModuleRegistry, AppContext)
 |   |-- services/           # state, mavlink/ (package), health_monitor,
@@ -58,10 +58,7 @@ NOMAD/
 |
 |-- docker/
 | |-- Dockerfile.dev # x86_64 dev/sim image (no CUDA/ZED)
-| |-- Dockerfile.isaac_sim # x86_64 Isaac Sim + ZED SDK + ROS2 (full sim)
-| |-- docker-compose.dev.yml # Hardware-free dev stack
-| |-- docker-compose.sim.yml # Full sim stack (Isaac Sim + SITL + Edge Core)
-| |-- isaac_sim/ # ZED sim launch scripts
+| |-- docker-compose.dev.yml # Hardware-free dev stack (Edge Core + ArduPilot SITL)
 |
 |-- mission_planner/src/ # C# plugin (runs on the Windows ground station)
 |   |-- NOMADPlugin.cs               # Plugin entry point
@@ -130,7 +127,11 @@ in the plugin.
 
 ### Servo / Calibration (payload)
 - `POST /api/servo/camera/tilt?angle={0-180}` · `POST /api/servo/channel/{channel}/pwm`
+- `POST /api/servo/shooter/arm` then `POST /api/servo/shooter/trigger` (release interlock, SR-PAY-03)
 - `POST /api/calibration/imu/reset_biases` · `POST /api/calibration/zed/sensor-viewer/start`
+
+> Command paths (`/api/servo/*`, `/api/spray/*`) require authentication even on
+> loopback and are audit-logged (SR-SEC-03); they never ride the no-key dev fallback.
 
 ### Isaac / SLAM / Video
 - `GET /api/isaac/status` · `POST /api/isaac/start` · `POST /api/isaac/stop` · `/api/isaac/bridge/{start,stop}`
@@ -275,14 +276,6 @@ The documentation site is built with MkDocs Material (`pixi run docs`).
 | Deployment (Jetson image + systemd) | `docs/deployment.md` |
 | Configuration reference | `docs/configuration.md` |
 | API Reference | `docs/api_reference.md` |
-
-| Operations runbook | `docs/OPERATIONS_RUNBOOK.md` |
-| Jetson deployment (detailed) | `docs/JETSON_DEPLOYMENT.md` |
 | Tailscale setup | `infra/tailscale/SETUP.md` |
-| Video streaming | `docs/VIDEO_STREAMING.md` |
-| Isaac ROS + nvblox | `docs/NVBLOX_VISUALIZATION.md` |
-| Object detection | `docs/OBJECT_DETECTION.md` |
-| Task 1 competition guide | `docs/TASK1_COMPETITION_GUIDE.md` |
-| Task 2 spray guide | `docs/TASK2_MANUAL_POSITIONING.md` |
 | Edge Core | `edge_core/README.md` |
 | Mission Planner plugin | `mission_planner/README.md` |

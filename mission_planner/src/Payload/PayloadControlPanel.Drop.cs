@@ -46,6 +46,11 @@ namespace NOMAD.MissionPlanner
         // Latching-relay on/off state, keyed by relay number.
         private readonly Dictionary<int, bool> _relayOn = new Dictionary<int, bool>();
 
+        // Momentary-relay fire arming (SR-PAY-03): first click arms (with a
+        // timeout reset, like drops), second click fires. Keyed by channel.
+        private readonly Dictionary<int, bool>  _relayFireArmed       = new Dictionary<int, bool>();
+        private readonly Dictionary<int, Timer> _relayFireResetTimers = new Dictionary<int, Timer>();
+
         // ============================================================
         // Cross-panel drop-state sync (also read by NomadJoystickService)
         // ============================================================
@@ -336,7 +341,7 @@ namespace NOMAD.MissionPlanner
             {
                 var btn = MakeButton($"Fire {p.Name}", RELAY_COLOR, 120, ROW_H);
                 btn.Location = new Point(100, y);
-                btn.Click += (s, e) => FireRelay(p);
+                btn.Click += (s, e) => OnFireRelayClick(p, btn);
                 Controls.Add(btn);
             }
             else
@@ -348,6 +353,58 @@ namespace NOMAD.MissionPlanner
             }
 
             y += ROW_H + ROW_GAP;
+        }
+
+        private void OnFireRelayClick(PayloadControl p, Button btn)
+        {
+            bool armed = _relayFireArmed.TryGetValue(p.Channel, out bool a) && a;
+            if (!armed)
+            {
+                _relayFireArmed[p.Channel] = true;
+                btn.Text = $"Confirm {p.Name}";
+                btn.BackColor = DROP_COLOR_ARM2;
+                SetStatus($"{p.Name} armed — click again to fire", WARNING_COLOR);
+                RestartRelayFireResetTimer(p, btn);
+                return;
+            }
+
+            ClearRelayFireResetTimer(p.Channel);
+            ResetFireRelayButton(p, btn);
+            FireRelay(p);
+        }
+
+        private void RestartRelayFireResetTimer(PayloadControl p, Button btn)
+        {
+            ClearRelayFireResetTimer(p.Channel);
+            var t = new Timer { Interval = DROP_RESET_MS };
+            t.Tick += (s, e) =>
+            {
+                ClearRelayFireResetTimer(p.Channel);
+                if (!IsDisposed) ResetFireRelayButton(p, btn);
+                SetStatus($"{p.Name} fire cancelled (timeout)", TEXT_SECONDARY);
+            };
+            _relayFireResetTimers[p.Channel] = t;
+            t.Start();
+        }
+
+        private void ClearRelayFireResetTimer(int channel)
+        {
+            if (_relayFireResetTimers.TryGetValue(channel, out var t) && t != null)
+            {
+                t.Stop();
+                t.Dispose();
+            }
+            _relayFireResetTimers.Remove(channel);
+        }
+
+        private void ResetFireRelayButton(PayloadControl p, Button btn)
+        {
+            _relayFireArmed[p.Channel] = false;
+            if (btn != null && !btn.IsDisposed)
+            {
+                btn.Text = $"Fire {p.Name}";
+                btn.BackColor = RELAY_COLOR;
+            }
         }
 
         private async void FireRelay(PayloadControl p)

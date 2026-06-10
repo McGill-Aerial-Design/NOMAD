@@ -69,9 +69,20 @@ nav:
   - Deployment: deployment.md
   - Configuration: configuration.md
   - API Reference: api_reference.md
+  - Safety Case:
+      - Overview: safety/README.md
+      - Partition (SC/SR/NC): safety/partition.md
+      - Hazards (FHA-lite): safety/hazards.md
+      - Requirements: safety/requirements.md
+      - Traceability: safety/traceability.md
 validation:
-  absolute_links: info
-  unrecognized_links: info
+  links:
+    # Safety-case docs link to source files (../../edge_core/...) so they are
+    # clickable when read in-repo / on GitHub; those targets live outside the
+    # built docs tree, so treat "not found" as info rather than failing --strict.
+    not_found: info
+    absolute_links: info
+    unrecognized_links: info
 
 extra_css: []
 extra_javascript: []

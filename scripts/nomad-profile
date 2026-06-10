@@ -17,7 +17,6 @@
 #   nomad-profile which           Print the path to the current config
 #
 # Profiles:
-#   sim     Full Isaac Sim + SITL simulation (no hardware)
 #   drone   Real Jetson + ZED2i + CubePilot (production)
 #   dev     Minimal Edge Core only (API dev / CI)
 #
@@ -55,7 +54,7 @@ cmd_list() {
         [ -f "$f" ] || continue
         name=$(basename "$f" .env)
         desc=$(grep -m1 '^NOMAD_PROFILE_DESCRIPTION=' "$f" 2>/dev/null | cut -d= -f2- | tr -d '"' || echo "")
-        sim=$(grep -m1 '^ISAAC_SIM_MODE=' "$f" 2>/dev/null | cut -d= -f2 || echo "false")
+        sim=$(grep -m1 '^NOMAD_SIM_MODE=' "$f" 2>/dev/null | cut -d= -f2 || echo "false")
         [ "$sim" = "true" ] && sim_label="sim" || sim_label="hw"
         printf "%-20s %-12s %s\n" "$name" "$sim_label" "$desc"
     done
@@ -96,14 +95,14 @@ cmd_load() {
 
     # Print key settings summary
     local sim_mode
-    sim_mode=$(grep -m1 '^ISAAC_SIM_MODE=' "$src" 2>/dev/null | cut -d= -f2 || echo "false")
+    sim_mode=$(grep -m1 '^NOMAD_SIM_MODE=' "$src" 2>/dev/null | cut -d= -f2 || echo "false")
     local vision
     vision=$(grep -m1 '^NOMAD_ENABLE_VISION=' "$src" 2>/dev/null | cut -d= -f2 || echo "false")
     local servos
     servos=$(grep -m1 '^NOMAD_ENABLE_SERVOS=' "$src" 2>/dev/null | cut -d= -f2 || echo "false")
 
     printf "\n%bKey settings:%b\n" "$_C_CYA" "$_C_OFF"
-    printf "  ISAAC_SIM_MODE     = %s\n" "$sim_mode"
+    printf "  NOMAD_SIM_MODE      = %s\n" "$sim_mode"
     printf "  NOMAD_ENABLE_VISION = %s\n" "$vision"
     printf "  NOMAD_ENABLE_SERVOS = %s\n" "$servos"
 
@@ -117,12 +116,10 @@ cmd_load() {
     printf "\n%bNext steps:%b\n" "$_C_CYA" "$_C_OFF"
     if [ "$sim_mode" = "true" ]; then
         printf "  1. Edit paths in config/nomad.env if needed\n"
-        printf "  2. Build the Isaac Sim image:  pixi run sim-build\n"
-        printf "  3. Start the sim stack:        pixi run sim-up\n"
-        printf "  4. Or with SITL:               pixi run sim-up-sitl\n"
+        printf "  2. Run the hardware-free dev stack:  pixi run dev   (or pixi run dev-up)\n"
     else
         printf "  1. Edit paths and auth tokens in config/nomad.env\n"
-        printf "  2. Deploy to Jetson:           nomad start all\n"
+        printf "  2. Deploy to Jetson:                 nomad start all\n"
     fi
 }
 
@@ -174,7 +171,7 @@ cmd_show() {
     local desc
     desc=$(grep -m1 '^NOMAD_PROFILE_DESCRIPTION=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' || echo "No description")
     local sim_mode
-    sim_mode=$(grep -m1 '^ISAAC_SIM_MODE=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "false")
+    sim_mode=$(grep -m1 '^NOMAD_SIM_MODE=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "false")
     local vision
     vision=$(grep -m1 '^NOMAD_ENABLE_VISION=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "false")
 

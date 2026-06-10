@@ -3,6 +3,19 @@
 Please provide a brief description of your merge request and describe the
 changes made. Remove any sections that are not applicable.
 
+## Safety-critical checklist
+
+<!-- Required ONLY if this PR touches an SC path (edge_core/safety/,
+     mavlink_velocity.py, services/mavlink/, modules/payload/, or the C#
+     Control/, Payload/, Geofence/ dirs — see docs/safety/partition.md).
+     Delete this section otherwise. -->
+
+- [ ] Requirement: SR-___ (docs/safety/requirements.md; new ones append, never renumber)
+- [ ] Test proving it: `tests/...::test_...` (fault inputs included, not just happy path)
+- [ ] `pixi run cov-safety` still 100% and traceability.md updated if symbols moved
+- [ ] SITL evidence if the velocity/fence/payload command path changed (`pixi run sitl-scenario` / `sitl-fence`), or stated why not run
+- [ ] No gate/clamp/watchdog weakened, reordered, or removed
+
 **Category:** <!-- one of: edge, plugin, docker, infra, ci, docs, refactor, chore -->
 
 # Changelog

@@ -21,7 +21,7 @@ repos:
       - id: detect-private-key
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.7.4
+    rev: v0.15.16
     hooks:
       - id: ruff
         args: [--fix]
@@ -47,13 +47,13 @@ repos:
         name: SPDX license header
         description: Check for SPDX-License-Identifier in staged source files
         entry: >
-          python -c "import sys;missing=[p for p in sys.argv[1:] if 'SPDX-License-Identifier' not in open(p).read()];[print(f'SPDX-License-Identifier missing: {p}') for p in missing];exit(1 if missing else 0)"
+          python -c "import sys;missing=[p for p in sys.argv[1:] if 'SPDX-License-Identifier' not in open(p, encoding='utf-8').read()];[print(f'SPDX-License-Identifier missing: {p}') for p in missing];exit(1 if missing else 0)"
         language: python
         files: \.(py|cs|sh)$
       - id: file-line-count
         name: File line count (max 800)
         description: Reject source files that exceed 800 lines
         entry: >
-          python -c "import sys;errors=[p for p in sys.argv[1:] if sum(1 for _ in open(p)) > 800];[print(f'Over 800 lines: {p}') for p in errors];exit(1 if errors else 0)"
+          python -c "import sys;errors=[p for p in sys.argv[1:] if sum(1 for _ in open(p, encoding='utf-8')) > 800];[print(f'Over 800 lines: {p}') for p in errors];exit(1 if errors else 0)"
         language: python
         files: \.(py|cs|sh)$

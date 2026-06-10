@@ -47,6 +47,8 @@ gating (clamp, VIO freshness, armed+GUIDED, watchdog) owned there.
 |--------|------|-------------|
 | POST | `/api/servo/camera/tilt` | Set camera tilt angle (`?angle=0-180`) |
 | POST | `/api/servo/channel/{channel}/pwm` | Set a raw servo channel PWM |
+| POST | `/api/servo/shooter/arm` | Arm the water-shooter release interlock (short window, consumed per attempt) |
+| POST | `/api/servo/shooter/trigger` | Fire the water shooter (`?duration_ms=&relay_number=`); requires a prior arm |
 | POST | `/api/calibration/imu/reset_biases` | Reset IMU biases |
 | POST | `/api/calibration/zed/sensor-viewer/start` | Launch ZED sensor viewer |
 
@@ -67,14 +69,13 @@ gating (clamp, VIO freshness, armed+GUIDED, watchdog) owned there.
 | POST | `/api/video/overlay/{action}` | Toggle overlay rendering |
 | GET | `/api/stream/info` | Stream/RTSP info |
 
-## Isaac ROS / Isaac Sim
+## Isaac ROS
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/isaac/status` | Isaac ROS container status |
 | POST | `/api/isaac/start` · `/api/isaac/stop` | Container lifecycle |
 | POST | `/api/isaac/bridge/start` · `/api/isaac/bridge/stop` | ROS-HTTP bridge lifecycle |
-| GET/POST | `/api/sim/*` | Isaac Sim container controls (when `ISAAC_SIM_MODE=true`) |
 
 ## Terminal (admin)
 

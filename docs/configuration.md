@@ -17,7 +17,6 @@ complete env file in `config/profiles/`:
 | Profile | Use |
 |---------|-----|
 | `dev` | Minimal Edge Core, sim mode, no vision/containers (API dev, CI) |
-| `sim` | Full Isaac Sim + SITL simulation |
 | `drone` | Real Jetson + ZED2i + CubePilot (production; secrets set locally) |
 
 ```bash

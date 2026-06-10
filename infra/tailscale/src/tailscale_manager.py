@@ -39,7 +39,7 @@ class TailscalePeer:
     """Information about a connected Tailscale peer."""
 
     hostname: str
-    ip_address: str
+    ip_address: str | None  # None if the peer has no advertised Tailscale IP
     online: bool
     last_seen: str | None = None
     os: str | None = None
@@ -179,6 +179,19 @@ class TailscaleManager:
             self._task = None
 
         logger.info("TailscaleManager stopped")
+
+    async def reconnect(self) -> bool:
+        """Attempt to bring the Tailscale link back up via ``tailscale up``.
+
+        Returns True if the command succeeded. Called by the monitor loop when
+        the link is seen DISCONNECTED/ERROR and ``auto_reconnect`` is enabled.
+        """
+        exit_code, _stdout, stderr = await self._run_command(["tailscale", "up"])
+        if exit_code != 0:
+            logger.warning(f"tailscale up failed: {stderr.strip()}")
+            return False
+        await self._check_status()
+        return self.is_connected
 
     async def _monitor_loop(self) -> None:
         """Background monitoring loop."""

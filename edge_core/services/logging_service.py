@@ -3,7 +3,7 @@
 """
 Mission Event Logging Service for NOMAD.
 
-Handles evidence logging for competition tasks.
+Handles evidence logging for mission events.
 Saves JSON files with timestamped filenames for mission events.
 
 Target: Python 3.13 | NVIDIA Jetson Orin Nano

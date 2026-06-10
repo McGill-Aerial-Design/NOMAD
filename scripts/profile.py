@@ -35,7 +35,6 @@ PROFILES_DIR = REPO_ROOT / "config" / "profiles"
 ENV_FILE = REPO_ROOT / "config" / "nomad.env"
 
 PROFILES = {
-    "sim": "Full Isaac Sim + SITL simulation (no hardware needed)",
     "drone": "Real Jetson + ZED2i + CubePilot (production)",
     "dev": "Minimal Edge Core only (API dev / CI)",
 }
@@ -45,7 +44,6 @@ def _key_settings(path: Path) -> dict[str, str]:
     keys = [
         "NOMAD_PROFILE",
         "NOMAD_PROFILE_DESCRIPTION",
-        "ISAAC_SIM_MODE",
         "NOMAD_SIM_MODE",
         "NOMAD_ENABLE_VISION",
         "NOMAD_ENABLE_SERVOS",
@@ -149,7 +147,7 @@ def cmd_list() -> None:
         name = f.stem
         settings = _key_settings(f)
         desc = settings.get("NOMAD_PROFILE_DESCRIPTION", PROFILES.get(name, ""))
-        sim = settings.get("NOMAD_SIM_MODE", settings.get("ISAAC_SIM_MODE", "false"))
+        sim = settings.get("NOMAD_SIM_MODE", "false")
         sim_label = "sim" if sim.lower() in ("true", "1", "yes") else "hw"
         print(f"{name:<20} {sim_label:<12} {desc}")
 
@@ -180,13 +178,13 @@ def cmd_load(name: str) -> None:
     if desc:
         print(f"      {desc}")
 
-    sim = settings.get("ISAAC_SIM_MODE", "false")
+    sim = settings.get("NOMAD_SIM_MODE", "false")
     vision = settings.get("NOMAD_ENABLE_VISION", "false")
     servos = settings.get("NOMAD_ENABLE_SERVOS", "false")
 
     print()
     print("Key settings:")
-    print(f"  ISAAC_SIM_MODE      = {sim}")
+    print(f"  NOMAD_SIM_MODE      = {sim}")
     print(f"  NOMAD_ENABLE_VISION = {vision}")
     print(f"  NOMAD_ENABLE_SERVOS = {servos}")
 
@@ -202,12 +200,10 @@ def cmd_load(name: str) -> None:
     print("Next steps:")
     if sim.lower() in ("true", "1", "yes"):
         print("  1. Edit paths in config/nomad.env if needed")
-        print("  2. Build the Isaac Sim image:  pixi run sim-build")
-        print("  3. Start the sim stack:        pixi run sim-up")
-        print("  4. Or with SITL:               pixi run sim-up-sitl")
+        print("  2. Run the hardware-free dev stack:  pixi run dev   (or pixi run dev-up)")
     else:
         print("  1. Edit paths and auth tokens in config/nomad.env")
-        print("  2. Deploy to Jetson:           nomad start all")
+        print("  2. Deploy to Jetson:                 nomad start all")
 
 
 def cmd_save(name: str) -> None:
@@ -250,7 +246,7 @@ def cmd_show() -> None:
     settings = _key_settings(ENV_FILE)
     profile = settings.get("NOMAD_PROFILE", "unknown")
     desc = settings.get("NOMAD_PROFILE_DESCRIPTION", "No description")
-    sim = settings.get("ISAAC_SIM_MODE", "false")
+    sim = settings.get("NOMAD_SIM_MODE", "false")
     vision = settings.get("NOMAD_ENABLE_VISION", "false")
 
     print(f"Active profile:   {profile}")

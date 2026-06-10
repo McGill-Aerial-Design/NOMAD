@@ -1,0 +1,46 @@
+<!--
+SPDX-License-Identifier: Apache-2.0
+Copyright 2026 The NOMAD Authors
+-->
+# FHA-lite — Functional Hazard Assessment
+
+What NOMAD can *cause* that is dangerous. For each hazard: a severity, the
+current mitigation, the SC code that implements it, the test that proves it, and
+the honest residual risk. This table **is** the spine of the safety case — every
+mitigation must name code and a test, or be marked **GAP**.
+
+Severity scale (proportionate, not DAL-formal):
+**Catastrophic** — likely injury / loss of aircraft over people ·
+**Hazardous** — loss of aircraft / property damage ·
+**Major** — controllability or mission degraded, recoverable.
+
+| ID | Hazard | Severity | Current mitigation | SC code | Proof (test) | Residual risk |
+|----|--------|----------|--------------------|---------|--------------|---------------|
+| H-01 | **Uncommanded / excessive velocity** — a bad `/cmd_vel` drives the aircraft too fast or in the wrong axis. | Hazardous | Velocity clamps (XY ≤2.0, Z ≤1.0 m/s, yaw ≤1.0 rad/s) + finite check before send; FLU→FRD frame conversion verified. | `safety/limits.py::VelocityLimits.clamp_command`, `safety/envelope.py::evaluate` (frame convert) ([safety/](../../edge_core/safety/)) | `tests/test_safety_limits.py`, `tests/test_safety_envelope.py::test_allows_and_clamps_before_converting` / `::test_allows_and_frame_converts_when_all_gates_pass`; **SITL-proven** (commanded vx → real motion within clamp) | Clamp *limits* are constants, not yet derived from a requirement reviewed against the airframe. FC enforces its own params as backstop. |
+| H-02 | **Stale-VIO flyaway** — velocity commanded while visual-inertial odometry is stale or low-confidence, so the aircraft flies blind. | Catastrophic | VIO-freshness + confidence + healthy gate refuses setpoints; watchdog zeroes velocity if VIO goes stale mid-motion. | `safety/gates.py::vio_ready`, `safety/watchdog.py::watchdog_decision` (via `envelope.evaluate`) | `tests/test_safety_gates.py::test_vio_ready_*`, `tests/test_safety_envelope.py::test_rejects_when_vio_*`, `tests/test_safety_watchdog.py::test_vio_stale_stops_with_reason`; **SITL-proven** (VIO-stale → vehicle stops) | Gate thresholds (`min_vio_confidence=0.3`, `vio_max_age_s=1.0`) tested but not yet derived from a reviewed requirement value. |
+| H-03 | **Loss of link during GUIDED** — companion→FC link drops while streaming velocity; aircraft keeps last setpoint. | Hazardous | Heartbeat-freshness gate drops `cmd_vel` with no fresh FC heartbeat; command-timeout watchdog (0.5 s) zeroes velocity; FC's own GCS-failsafe is the independent backstop. | `safety/gates.py::heartbeat_fresh`, `safety/watchdog.py::watchdog_decision` | `tests/test_safety_envelope.py::test_rejects_when_heartbeat_stale`, `tests/test_safety_watchdog.py::test_command_timeout_stops_with_reason`; **SITL-proven** (stop commanding → vehicle stops, 1.5→0.04 m/s) | Relies on FC failsafe for the link-loss-after-last-good-command case. |
+| H-04 | **Mode change out of GUIDED** — operator/FC leaves GUIDED but companion keeps sending velocity targets. | Major | Armed + GUIDED-mode gate parsed from FC HEARTBEAT; setpoints dropped unless armed and mode == GUIDED. HEARTBEAT is **filtered to the commanded autopilot** so a GCS heartbeat on the link can't flip the gate (SR-VEL-06). | `safety/envelope.py::evaluate` (armed/guided gates), `safety/gates.py::heartbeat_from_vehicle`, `mavlink_velocity._rx_loop` | `tests/test_safety_envelope.py::test_rejects_when_not_armed`, `::test_rejects_when_not_guided`, `tests/test_safety_gates.py::test_heartbeat_from_vehicle_rejects_gcs`; **SITL-proven** (LOITER → setpoints refused) | — |
+| H-05 | **Geofence breach** — aircraft commanded outside the operating boundary. | Hazardous | Boundary defined + uploaded to FC; FC enforces fence independently. NOMAD-side containment check (`NOMAD_FENCE_POLYGON` + keep-in margin) **enforced on every position target**; malformed fence config fails closed (all position targets rejected). | C#: `BoundaryManager`, `MPFenceUploader` ([Geofence/](../../mission_planner/src/Geofence/)); Python `safety/geofence.py::evaluate_position` enforced by `services/mavlink/commands.py::_fence_allows_global` / `_fence_allows_local` | `tests/test_safety_geofence.py` (decision incl. fault injection), `tests/test_mavlink_fence.py` (adapter: outside/margin/non-finite/malformed-config/no-home all rejected). **GAP** — SITL containment scenario ([geofence_containment.py](../../tests/sitl/geofence_containment.py), `pixi run sitl-fence`) written but **not yet run**. | NOMAD fence is opt-in config — unset means FC fence is the only enforcement. Velocity-path commands are not fence-checked (FC fence is the backstop there). LOCAL_NED targets use home as a proxy for the EKF origin (keep margin > their separation). |
+| H-06 | **Unintended payload release / pump energized** — relay/servo actuated without operator intent, or pump left energized. | Major | Channel + PWM validation and the 0.05–5.0 s duration clamp (non-finite rejected) decided by the pure SC core; **arm→release interlock** (arm consumed per attempt, short window) on the pump path; relay-off in `finally` and on every failure path. GCS fire button requires an explicit confirm click. | `safety/payload.py` (`validate_servo_command`, `clamp_release_duration`, `evaluate_release`); adapter [servo.py](../../edge_core/modules/payload/servo.py) (`trigger_water_shooter`, `set_channel_pwm`, `arm_release`) | `tests/test_safety_payload.py` (core, 100% branch), `tests/test_payload_servo.py` (fault injection: exception mid-pulse, relay-ack failure, non-finite duration — pump always de-energized) | Direct GCS→FC MAVLink relay commands bypass NOMAD — there the confirm click / transmitter switch is the only interlock, and the FC owns the output. |
+| H-07 | **Failsafe suppression** — NOMAD floods STATUSTEXT/commands or holds a mode such that an FC failsafe is masked. | Hazardous | NOMAD never disables FC failsafes; commands are advisory; STATUSTEXT truncated to 50 chars; FC failsafes run independently of the companion. A deny-list test scans every MAVLink-owning module for parameter writes, force-arm magic, and termination/parachute commands. | `send_statustext`, `set_mode` (no failsafe-disable command exists in the surface) | `tests/test_safety_command_surface.py::test_no_failsafe_disabling_commands` | Scan is token-based on the named modules; a new MAVLink-owning module must be added to the test's file list. |
+| H-08 | **Unauthorized command** — a command reaches the edge API without authorization. | Hazardous | API-key auth middleware: key required, loopback-dev fallback, explicit insecure-remote opt-in, length-checked internal-bridge token, exempt paths. **Command paths (`/api/servo/*`, `/api/spray/*`) require real auth even on loopback** — never the no-key dev fallback or the insecure-remote opt-in — and every command-path request is audit-logged (client address + auth mode). | `api.py` auth middleware (Tier SR), `_COMMAND_PATH_PREFIXES` | `tests/test_auth_middleware.py` (incl. `test_command_path_requires_auth_even_on_loopback`, `test_command_path_requests_are_audit_logged`) | A single shared key cannot distinguish named operators; identity in the audit log is client address + auth mode. |
+
+## How to read the GAPs
+
+A **GAP** is a deliberately-visible piece of unfinished safety work, not a
+defect being hidden. The Phase 3 work (rearchitecture plan §4.3, §4.5) is
+precisely: turn every GAP above into a named test or SITL scenario.
+
+**Phase 2** closed the velocity-path GAPs (H-01..H-04) with the pure,
+100%-covered `edge_core/safety/` package + fault-injection unit tests. **Phase 3**
+added the proof layer: the velocity path is now **loop-closure-proven against
+real ArduPilot SITL** ([../../tests/sitl/](../../tests/sitl/)) — commanded
+motion, watchdog stop, and the GUIDED gate all verified on a live autopilot.
+That SITL run also surfaced and fixed a real defect (the gate could be flipped by
+a GCS heartbeat sharing the link — now filtered, SR-VEL-06).
+
+Remaining open items, in order:
+
+1. **H-05 SITL evidence** — the geofence is wired and unit/adapter-tested; the
+   containment scenario (`pixi run sitl-fence`) is written but has not yet been
+   run against a live SITL.

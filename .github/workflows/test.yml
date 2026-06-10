@@ -19,11 +19,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: prefix-dev/setup-pixi@v0.8.1
+      - uses: prefix-dev/setup-pixi@v0.8.8
         with:
           cache: true
       - name: Run tests
         run: pixi run test
+
+  safety-core:
+    name: SC core (100% branch coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.8
+        with:
+          cache: true
+      - name: Gate edge_core/safety at 100% branch coverage
+        run: pixi run cov-safety
+      - name: SC lint (bugbear/bandit/logging rule sets on SC files)
+        run: pixi run lint-safety
 
   dev-image:
     name: build dev docker image

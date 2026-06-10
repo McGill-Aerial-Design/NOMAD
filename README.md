@@ -11,8 +11,10 @@ discoverable modules.
 
 ## Quick start (sim, no hardware)
 
+# Install pixi (https://pixi.sh) — one of:
+#   Linux/macOS:  curl -fsSL https://pixi.sh/install.sh | bash
+#   Windows:      iwr -useb https://pixi.sh/install.ps1 | iex
 ```bash
-pip install pixi          # https://pixi.sh
 git clone <repo-url> && cd NOMAD
 pixi run dev              # Edge Core sim on http://localhost:8000
 
@@ -32,11 +34,11 @@ NOMAD/
 ├── edge_core/             # Python FastAPI service (companion computer)
 │   ├── core/              # Module SDK: registry, AppContext, lifecycle
 │   ├── services/          # state, mavlink/, health, video, payload, IPC, geo
-│   ├── api_routes/        # Route modules (system, video_slam, isaac, calibration, …)
+│   ├── api_routes/        # Route modules (system, vio, video_slam, isaac, calibration, …)
 │   ├── modules/           # Built-in pluggable modules (slam, payload)
 │   └── ros_http_bridge/   # ROS→Edge Core bridge package (runs in Isaac container)
 ├── mission_planner/src/   # C# Mission Planner plugin
-├── docker/                # Dockerfile.dev, Dockerfile.isaac_sim, compose files
+├── docker/                # Dockerfile.dev + hardware-free dev compose (Edge Core + SITL)
 ├── scripts/               # Service mgmt, profiles, build, dev tools
 ├── infra/                 # systemd units, transport (mavlink-router), tailscale
 └── config/                # nomad.env (+ profiles/) — runtime config
