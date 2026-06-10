@@ -96,3 +96,14 @@ def test_submit_rejected_without_heartbeat():
     # No connection / heartbeat -> command refused.
     assert ctrl.submit(1.0, 0.0, 0.0, 0.0) is False
     assert ctrl.rejected_count == 1
+
+
+def test_stop_sends_zero_velocity(monkeypatch):
+    """SR-LNK-03: stop() commands zero velocity before tearing the link down."""
+    ctrl = MavlinkVelocityController(endpoint="127.0.0.1:14552")
+    sent: list[tuple[float, float, float, float]] = []
+    monkeypatch.setattr(ctrl, "_send_velocity_frd", lambda *a: sent.append(a) or True)
+
+    # No threads were started; stop() must still emit a single zero setpoint.
+    ctrl.stop()
+    assert sent == [(0.0, 0.0, 0.0, 0.0)]

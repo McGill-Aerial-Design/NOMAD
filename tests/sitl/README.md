@@ -1,0 +1,77 @@
+<!--
+SPDX-License-Identifier: Apache-2.0
+Copyright 2026 The NOMAD Authors
+-->
+# SITL scenario suite
+
+End-to-end loop-closure tests that drive a **real ArduPilot SITL** vehicle and
+exercise the safety-critical velocity core (`MavlinkVelocityController`) against
+it. This is the §4.5 verification the safety case calls for: proving the
+mitigations in [../../docs/safety/hazards.md](../../docs/safety/hazards.md) close
+the loop on an actual autopilot, not just in unit tests.
+
+These tests are **skipped in normal CI** (no autopilot present). They run on
+demand against the dev stack.
+
+## What the scenario proves
+
+[velocity_loop_closure.py](velocity_loop_closure.py) runs:
+
+| Step | Hazard / requirement | Assertion |
+|------|----------------------|-----------|
+| arm → GUIDED → takeoff | — | vehicle reaches altitude |
+| velocity step (`vx=1.5`) | H-01 / SR-VEL | commanded motion actually happens (peak groundspeed ≥ 0.8 m/s, within the 2.0 clamp) |
+| stop commanding | H-03/H-02 / SR-LNK-02, SR-VIO-02 | watchdog zeroes velocity; vehicle stops on its own |
+| switch to LOITER | H-04 / SR-VEL-05 | setpoints refused outside GUIDED |
+
+## How to run
+
+1. Bring up the hardware-free stack (Edge Core + ArduPilot SITL):
+
+   ```sh
+   pixi run dev-up
+   ```
+
+   ArduPilot needs ~20-30 s to reach "ArduPilot Ready" (EKF/GPS).
+
+2. Run the scenario. ArduPilot SITL exposes two independent MAVLink links on
+   TCP **5762** (SERIAL1, operator) and **5763** (SERIAL2, controller). The
+   scenario runs inside the compose network so it can reach the `sitl` service:
+
+   ```sh
+   pixi run sitl-scenario
+   ```
+
+   or directly:
+
+   ```sh
+   docker run --rm --network nomad-dev_default \
+     -v "$PWD:/work" -w /work -e PYTHONPATH=/work \
+     -e NOMAD_SITL_OPERATOR=tcp:nomad-dev-sitl-1:5762 \
+     -e NOMAD_SITL_CONTROLLER=tcp:nomad-dev-sitl-1:5763 \
+     --entrypoint python nomad-edge-dev:latest tests/sitl/velocity_loop_closure.py
+   ```
+
+   A pass ends with `SCENARIO PASSED: {...}`; any unmet safety behaviour raises
+   `ScenarioError` and exits non-zero.
+
+3. Tear down:
+
+   ```sh
+   pixi run dev-down
+   ```
+
+## As a pytest
+
+[test_velocity_loop_closure.py](test_velocity_loop_closure.py) wraps the
+scenario and **skips** unless `NOMAD_SITL_OPERATOR` and `NOMAD_SITL_CONTROLLER`
+are set, so it is safe to leave in the default `pixi run test` run.
+
+## Notes
+
+- The scenario uses the freshly-built `nomad-edge-dev` image for pymavlink + the
+  package, but mounts the working tree at `/work` so it always tests **current**
+  code, not what was baked at image-build time.
+- Two MAVLink links are required because one drives the vehicle (arm / mode /
+  observe) while the other is the controller under test. SERIAL1/SERIAL2 give
+  two independent views without a router.

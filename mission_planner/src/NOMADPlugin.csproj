@@ -211,7 +211,6 @@
     <Compile Include="Control\FlightModeController.cs" />
     <Compile Include="Control\GimbalController.cs" />
     <Compile Include="Control\GimbalJoystickWindow.cs" />
-    <Compile Include="Control\GuidedRthLandingController.cs" />
     <Compile Include="Control\CubeOutputController.cs" />
 
     <!-- Joystick input -->

@@ -50,6 +50,10 @@ dev = "python -m edge_core.main --sim --no-vision --host 0.0.0.0 --port 8000"
 test = "pytest --cov=edge_core --cov=infra/tailscale --cov-report=term-missing --cov-fail-under=25"
 # Plain pytest without the coverage gate (handy for running a single test file).
 test-fast = "pytest"
+# Safety-critical core gate (rearchitecture plan §4.5): the edge_core/safety/
+# package must hold 100% BRANCH coverage. Asymmetric rigor - the rest of the
+# tree rides the modest 25% floor above; the SC core does not get to regress.
+cov-safety = "pytest tests/test_safety_envelope.py tests/test_safety_gates.py tests/test_safety_limits.py tests/test_safety_watchdog.py tests/test_safety_geofence.py --cov=edge_core.safety --cov-branch --cov-report=term-missing --cov-fail-under=100"
 
 # Hardware-free dev stack (Docker): Edge Core + ArduPilot SITL, no Isaac Sim.
 #   pixi run dev-up      # build + start edge_core and SITL (detached)
@@ -61,6 +65,10 @@ dev-down = "docker compose -f docker/docker-compose.dev.yml --profile sitl down"
 dev-logs = "docker compose -f docker/docker-compose.dev.yml logs -f"
 dev-ps = "docker compose -f docker/docker-compose.dev.yml --profile sitl ps"
 test-api = "python scripts/dev/test_api_endpoints.py"
+# SITL loop-closure scenario for the safety-critical velocity core (needs the
+# dev+sitl stack up: `pixi run dev-up`). Runs inside the compose network and
+# mounts the working tree so it tests current code. See tests/sitl/README.md.
+sitl-scenario = """docker run --rm --network nomad-dev_default -v $PWD:/work -w /work -e PYTHONPATH=/work -e NOMAD_SITL_OPERATOR=tcp:nomad-dev-sitl-1:5762 -e NOMAD_SITL_CONTROLLER=tcp:nomad-dev-sitl-1:5763 --entrypoint python nomad-edge-dev:latest tests/sitl/velocity_loop_closure.py"""
 lint = "ruff check ."
 fmt = "ruff format ."
 fmt-check = "ruff format --check ."

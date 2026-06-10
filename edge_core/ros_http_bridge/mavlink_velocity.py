@@ -15,6 +15,12 @@ the Edge Core NavController:
 - a command-timeout watchdog that zeroes velocity if cmd_vel stops arriving,
 - the ROS FLU -> MAVLink FRD frame conversion (negate vy, vz, yaw_rate).
 
+The flight-safety *decisions* above live in the dependency-light
+:mod:`edge_core.safety` core (Tier SC); this class is the I/O **adapter** that
+snapshots state under its lock, asks ``safety`` whether a command is permitted,
+and transmits what it returns. See ``docs/safety/`` for the requirements these
+implement.
+
 The link is independent of the Edge Core orchestrator link; mavlink-router
 multiplexes both. See infra/transport/mavlink_router/main.conf
 ([UdpEndpoint nav_bridge], port 14552).
@@ -23,10 +29,20 @@ multiplexes both. See infra/transport/mavlink_router/main.conf
 from __future__ import annotations
 
 import logging
-import math
 import os
 import threading
 import time
+
+from edge_core.safety import gates
+from edge_core.safety.envelope import (
+    Decision,
+    EnvelopePolicy,
+    FlightConditions,
+    VelocityCommand,
+    evaluate,
+)
+from edge_core.safety.limits import VelocityLimits, clamp
+from edge_core.safety.watchdog import watchdog_decision
 
 try:
     from pymavlink import mavutil
@@ -37,6 +53,10 @@ except Exception:  # pragma: no cover - exercised only when pymavlink is absent
     MAVLINK_AVAILABLE = False
 
 logger = logging.getLogger("ros_http_bridge.mavlink_velocity")
+
+# Back-compat alias: the clamp lives in the SC core now. Kept so existing
+# imports (`from ...mavlink_velocity import _clamp`) and tests keep working.
+_clamp = clamp
 
 
 class MavlinkVelocityController:
@@ -91,6 +111,18 @@ class MavlinkVelocityController:
             else _read_positive_float("NOMAD_MAVLINK_DISCONNECT_TIMEOUT_S", 3.0)
         )
         self._log = logger_adapter or logger
+
+        # The SC-core policy: limits + gate thresholds, built from this adapter's
+        # constants/config. The class constants remain the source of the limits.
+        self._policy = EnvelopePolicy(
+            limits=VelocityLimits(self.MAX_VELOCITY_XY, self.MAX_VELOCITY_Z, self.MAX_YAW_RATE),
+            require_armed=require_armed,
+            require_guided=require_guided,
+            guided_mode=self.GUIDED_MODE,
+            heartbeat_timeout_s=self._heartbeat_timeout_s,
+            vio_max_age_s=self._vio_max_age_s,
+            min_vio_confidence=self.MIN_VIO_CONFIDENCE,
+        )
 
         self._conn = None
         self._lock = threading.Lock()
@@ -189,41 +221,23 @@ class MavlinkVelocityController:
 
         Inputs are ROS REP-103 body frame (x forward, y left, z up, yaw CCW+).
         Returns True if a setpoint was sent to the flight controller.
+
+        This is a thin adapter: it snapshots FC/VIO state under the lock, then
+        defers every flight-safety decision to :func:`edge_core.safety.evaluate`.
         """
         now = time.monotonic()
         with self._lock:
-            if self._conn is None or not self._heartbeat_fresh_locked(now):
-                self._warn("link", "No MAVLink heartbeat from flight controller - dropping cmd_vel")
-                self.rejected_count += 1
-                return False
-            if self._require_armed and not self._armed:
-                self._warn("armed", "Vehicle not armed - dropping cmd_vel")
-                self.rejected_count += 1
-                return False
-            if self._require_guided and self._flight_mode != self.GUIDED_MODE:
-                self._warn("mode", f"Vehicle not in GUIDED ({self._flight_mode}) - dropping cmd_vel")
-                self.rejected_count += 1
-                return False
-            if not self._vio_ready_locked(now):
-                self._warn(
-                    "vio",
-                    f"VIO unhealthy/stale (confidence={self._vio_confidence:.2f}) - dropping cmd_vel",
-                )
-                self.rejected_count += 1
-                return False
+            conditions = self._snapshot_conditions_locked()
 
-        try:
-            vx_c = _clamp(vx, -self.MAX_VELOCITY_XY, self.MAX_VELOCITY_XY)
-            vy_c = _clamp(vy, -self.MAX_VELOCITY_XY, self.MAX_VELOCITY_XY)
-            vz_c = _clamp(vz, -self.MAX_VELOCITY_Z, self.MAX_VELOCITY_Z)
-            yaw_c = _clamp(yaw_rate, -self.MAX_YAW_RATE, self.MAX_YAW_RATE)
-        except ValueError:
-            self._warn("nonfinite", "Non-finite cmd_vel value - dropping command")
-            self.rejected_count += 1
+        decision: Decision = evaluate(self._policy, conditions, VelocityCommand(vx, vy, vz, yaw_rate), now)
+        if not decision.allowed:
+            self._warn(decision.reason or "rejected", decision.message or "cmd_vel rejected")
+            with self._lock:
+                self.rejected_count += 1
             return False
 
-        # ROS FLU -> MAVLink FRD (BODY_OFFSET_NED): negate y, z, yaw_rate.
-        sent = self._send_velocity_frd(vx_c, -vy_c, -vz_c, -yaw_c)
+        assert decision.setpoint is not None  # allowed implies a setpoint
+        sent = self._send_velocity_frd(*decision.setpoint)
         if sent:
             with self._lock:
                 self._last_command_time = now
@@ -233,6 +247,21 @@ class MavlinkVelocityController:
             with self._lock:
                 self.rejected_count += 1
         return sent
+
+    def _snapshot_conditions_locked(self) -> FlightConditions:
+        """Build an immutable view of FC/VIO state for the SC envelope.
+
+        Must be called with ``self._lock`` held.
+        """
+        return FlightConditions(
+            connected=self._conn is not None,
+            armed=self._armed,
+            flight_mode=self._flight_mode,
+            last_heartbeat=self._last_heartbeat,
+            vio_confidence=self._vio_confidence,
+            vio_healthy=self._vio_healthy,
+            vio_last_update=self._vio_last_update,
+        )
 
     # -- MAVLink TX ---------------------------------------------------------
 
@@ -285,6 +314,13 @@ class MavlinkVelocityController:
                 msg = None
             if msg is None:
                 continue
+            # Only track the autopilot we command; ignore GCS and other systems'
+            # heartbeats sharing the link, which would otherwise flip our view of
+            # armed/mode every other beat and drop valid setpoints (SR-VEL-06).
+            if not gates.heartbeat_from_vehicle(
+                msg.get_srcSystem(), msg.type, conn.target_system, gcs_type=mavutil.mavlink.MAV_TYPE_GCS
+            ):
+                continue
             try:
                 mode = mavutil.mode_string_v10(msg) or "UNKNOWN"
             except Exception:
@@ -301,31 +337,21 @@ class MavlinkVelocityController:
         while not self._stop_event.wait(interval):
             now = time.monotonic()
             with self._lock:
-                if not self._active:
-                    continue
-                stale_cmd = (now - self._last_command_time) > self.COMMAND_TIMEOUT_S
-                vio_stale = not self._vio_fresh_locked(now)
-            if stale_cmd or vio_stale:
-                reason = "command timeout" if stale_cmd else "VIO stale"
-                self._log.warning("Stopping velocity (%s)", reason)
+                active = self._active
+                last_command_time = self._last_command_time
+                vio_is_fresh = gates.vio_fresh(self._vio_last_update, now, self._vio_max_age_s)
+            result = watchdog_decision(
+                active=active,
+                last_command_time=last_command_time,
+                now=now,
+                command_timeout_s=self.COMMAND_TIMEOUT_S,
+                vio_is_fresh=vio_is_fresh,
+            )
+            if result.stop:
+                self._log.warning("Stopping velocity (%s)", result.reason)
                 self._send_stop()
                 with self._lock:
                     self._active = False
-
-    # -- gating helpers (call with the lock held) ---------------------------
-
-    def _heartbeat_fresh_locked(self, now: float) -> bool:
-        if self._last_heartbeat <= 0.0:
-            return False
-        return (now - self._last_heartbeat) <= self._heartbeat_timeout_s
-
-    def _vio_fresh_locked(self, now: float) -> bool:
-        if self._vio_last_update <= 0.0:
-            return False
-        return (now - self._vio_last_update) <= self._vio_max_age_s
-
-    def _vio_ready_locked(self, now: float) -> bool:
-        return self._vio_healthy and self._vio_confidence >= self.MIN_VIO_CONFIDENCE and self._vio_fresh_locked(now)
 
     def _warn(self, key: str, message: str) -> None:
         now = time.monotonic()
@@ -333,12 +359,6 @@ class MavlinkVelocityController:
         if now - last >= self._warn_interval_s:
             self._warn_times[key] = now
             self._log.warning(message)
-
-
-def _clamp(value: float, lo: float, hi: float) -> float:
-    if not math.isfinite(value):
-        raise ValueError("velocity command values must be finite")
-    return max(lo, min(hi, value))
 
 
 def _read_positive_float(env_name: str, default: float) -> float:
