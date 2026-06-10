@@ -149,7 +149,32 @@ pixi run precommit
 - [ ] The MR is focused — one feature/fix per MR.
 - [ ] Branch is up to date with `upstream/main`.
 
-## 8. Reporting bugs / requesting features
+## 8. Where to start — the onboarding ladder
+
+The repo is partitioned by safety tier (see
+[docs/safety/partition.md](docs/safety/partition.md)). The tiers are not
+bureaucracy — they are *why* most of the repo is fast to change: heavy process
+applies only to the thin slice that can move the aircraft or fire the payload.
+Competition-specific code stays in modules so the baseline survives to the next
+season.
+
+1. **Start in modules.** Competition features are `NomadModule`s on the SDK —
+   isolated, fault-contained, and unable to touch safety-critical code. See
+   [examples/sample_module/](examples/sample_module/) and
+   [docs/writing_a_module.md](docs/writing_a_module.md). This is where new
+   recruits build task code from day one.
+2. **NC (non-critical) next.** Panels, views, video, docs, scripts — normal
+   review, fast merges. Look for `good-first-issue` labels.
+3. **SR/SC last, and paired.** Safety-related/safety-critical paths (listed in
+   [.github/CODEOWNERS](.github/CODEOWNERS) and `partition.md`) require:
+   reading [docs/safety/README.md](docs/safety/README.md) (one page), a named
+   `SR-*` requirement, a test (fault inputs included), the SC checklist in the
+   PR template, and a CODEOWNER review. CI enforces 100% branch coverage on
+   `edge_core/safety/` (`pixi run cov-safety`), the requirement→code→test
+   traceability sync, the SC/NC import partition, and the C# client↔API
+   contract.
+
+## 9. Reporting bugs / requesting features
 
 Open an issue using the templates under **New issue**. Redact any secrets in
 logs and reproduction steps.

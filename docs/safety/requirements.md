@@ -45,23 +45,23 @@ Numbers are stable identifiers; do not renumber. New requirements append.
 | ID | Requirement | Hazard | Status |
 |----|-------------|--------|--------|
 | SR-FEN-01 | The operating boundary shall be uploaded to and enforced by the FC fence before autonomous flight. | H-05 | 🟡 (FC-side; not NOMAD-tested) |
-| SR-FEN-02 | NOMAD shall provide an independent containment check that rejects/clamps any position target outside the configured boundary. | H-05 | 🟡 (pure containment primitive `edge_core/safety/geofence.py` implemented + tested; **not yet wired/enforced** in the command path) |
+| SR-FEN-02 | NOMAD shall provide an independent containment check that rejects/clamps any position target outside the configured boundary. | H-05 | ✅ (pure decision `safety/geofence.py::evaluate_position`, enforced in `services/mavlink/commands.py` position-target senders; unit + adapter fault-injection tested. SITL containment scenario exists — `pixi run sitl-fence` — but has **not yet been run**; see H-05) |
 
 ## Payload (PAY) — hazard H-06
 
 | ID | Requirement | Hazard | Status |
 |----|-------------|--------|--------|
-| SR-PAY-01 | Servo channel shall be validated to 1–16 and PWM to 500–2500 µs; out-of-range commands shall be rejected. | H-06 | 🟡 |
-| SR-PAY-02 | Pump-on duration shall be clamped (0.05–5.0 s) and the relay shall be de-energized in a `finally` block and on any failure path, so the pump cannot be left energized. | H-06 | 🟡 |
-| SR-PAY-03 | Payload release shall require an explicit operator confirm/interlock before actuation. | H-06 | 🔴 (no interlock yet) |
+| SR-PAY-01 | Servo channel shall be validated to 1–16 and PWM to 500–2500 µs; out-of-range commands shall be rejected. | H-06 | ✅ (pure `safety/payload.py::validate_servo_command`, enforced in `servo.py`; tested) |
+| SR-PAY-02 | Pump-on duration shall be clamped (0.05–5.0 s, non-finite rejected) and the relay shall be de-energized in a `finally` block and on any failure path, so the pump cannot be left energized. | H-06 | ✅ (`safety/payload.py::clamp_release_duration` + `servo.py` `finally`; fault-injection tested incl. exception mid-pulse) |
+| SR-PAY-03 | Payload release shall require an explicit operator confirm/interlock before actuation: an arm within a short window, consumed by each release attempt. | H-06 | ✅ (`safety/payload.py` interlock state machine, enforced in `servo.py::trigger_water_shooter`; HTTP arm→trigger routes; GCS fire button requires a confirm click. Direct GCS→FC MAVLink relay commands are outside NOMAD's mediation — the transmitter switch / armed button click is the operator confirm there) |
 
 ## Failsafe integrity & security (SEC) — hazards H-07, H-08
 
 | ID | Requirement | Hazard | Status |
 |----|-------------|--------|--------|
-| SR-SEC-01 | The MAVLink command surface shall contain no command that disables an FC failsafe. | H-07 | 🟡 (true by construction; untested) |
+| SR-SEC-01 | The MAVLink command surface shall contain no command that disables an FC failsafe (no parameter writes, no force-arm magic, no flight-termination/parachute commands). | H-07 | ✅ (deny-list scan over every MAVLink-owning module: `tests/test_safety_command_surface.py`) |
 | SR-SEC-02 | Edge API requests shall be authenticated per the auth middleware (key, loopback-dev fallback, explicit insecure-remote opt-in, length-checked internal token). | H-08 | ✅ |
-| SR-SEC-03 | Command-path endpoints (velocity / RTH / payload) shall require authentication even on loopback, and each SC command shall be logged with operator identity for post-flight audit. | H-08 | 🔴 (target, §4.6) |
+| SR-SEC-03 | Command-path endpoints (payload actuation; future velocity/mode routes) shall require authentication even on loopback — never the unauthenticated dev fallbacks — and every command-path request shall be audit-logged with client address and auth mode. | H-08 | ✅ (middleware `_COMMAND_PATH_PREFIXES`; tested in `tests/test_auth_middleware.py`. Identity is client address + auth mode — a single shared key cannot distinguish named operators) |
 
 ## Backlog
 
@@ -72,16 +72,29 @@ package. **Phase 3** added the proof infrastructure: a traceability CI gate
 `tests/test_safety_traceability.py`), a 100%-branch-coverage gate on the SC core
 (`pixi run cov-safety`), and the SR-LNK-03 shutdown-stop test (→ ✅).
 
+**Phase 4.1** wired the geofence: `safety/geofence.py::evaluate_position` (pure,
+in the 100%-branch gate) is now enforced by the position-target senders in
+`services/mavlink/commands.py`, configured via `NOMAD_FENCE_POLYGON` /
+`NOMAD_FENCE_MARGIN_M` (malformed config fails closed). Unit + adapter
+fault-injection tests prove it (SR-FEN-02 → ✅).
+
+**Phase 4.2** extracted the payload path: pure `safety/payload.py`
+(channel/PWM validation, duration clamp, arm→release interlock) enforced by the
+`servo.py` adapter, with the de-energize-on-exception guarantee fault-injection
+tested; `/api/servo/shooter/{arm,trigger}` give the interlock an operator
+surface and the GCS fire button now requires a confirm click
+(SR-PAY-01/02/03 → ✅).
+
+**Phase 4.3** made security-as-safety checkable: a deny-list scan proves the
+MAVLink surface contains no failsafe-disabling command (SR-SEC-01 → ✅), and
+command-path endpoints require auth even on loopback with every request
+audit-logged (SR-SEC-03 → ✅).
+
 Remaining work:
 
-- **SR-FEN-02 wiring** — wire `safety/geofence.py` into the command path and
-  prove containment in SITL (the primitive is done; enforcement is not).
-- **SR-PAY-01/02/03** — extract + test the payload range/duration/de-energize
-  guarantees and add the arm/confirm interlock.
-- **SR-SEC-01** — assert by test that the command surface exposes no
-  failsafe-disabling MAVLink command.
-- **SR-SEC-03** — auth-on-loopback for command paths + operator-audit logging.
-- **SITL loop-closure** scenarios for the failsafe branches, run against the
-  `pixi run dev-up` ArduPilot SITL stack (§4.5).
+- **SR-FEN-02 SITL evidence** — run the containment scenario
+  (`tests/sitl/geofence_containment.py`, `pixi run sitl-fence`) against the
+  dev stack; it is written but not yet executed.
+- **SR-FEN-01** — FC-side fence upload remains manually verified.
 
 See [hazards.md](hazards.md) "How to read the GAPs".

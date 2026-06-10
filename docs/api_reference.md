@@ -47,6 +47,8 @@ gating (clamp, VIO freshness, armed+GUIDED, watchdog) owned there.
 |--------|------|-------------|
 | POST | `/api/servo/camera/tilt` | Set camera tilt angle (`?angle=0-180`) |
 | POST | `/api/servo/channel/{channel}/pwm` | Set a raw servo channel PWM |
+| POST | `/api/servo/shooter/arm` | Arm the water-shooter release interlock (short window, consumed per attempt) |
+| POST | `/api/servo/shooter/trigger` | Fire the water shooter (`?duration_ms=&relay_number=`); requires a prior arm |
 | POST | `/api/calibration/imu/reset_biases` | Reset IMU biases |
 | POST | `/api/calibration/zed/sensor-viewer/start` | Launch ZED sensor viewer |
 

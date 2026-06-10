@@ -34,20 +34,22 @@ architecture test that proves it is a later phase (rearchitecture plan §5).
 
 | File / symbol | Why SC |
 |---------------|--------|
-| **[safety/](../../edge_core/safety/)** — `limits.py`, `gates.py`, `watchdog.py`, `envelope.py`, `geofence.py` | **The extracted SC decision core (Phase 2).** Dependency-light, pure-logic: velocity/yaw clamps + finite checks (`limits`), freshness/arm/mode gates (`gates`), command-timeout/VIO-stale failsafe (`watchdog`), the single "is this command allowed?" entry point (`envelope`), and the boundary-containment primitive (`geofence`). 100% line coverage. Misbehavior here = uncommanded motion or flyaway. |
+| **[safety/](../../edge_core/safety/)** — `limits.py`, `gates.py`, `watchdog.py`, `envelope.py`, `geofence.py`, `payload.py` | **The extracted SC decision core.** Dependency-light, pure-logic: velocity/yaw clamps + finite checks (`limits`), freshness/arm/mode gates (`gates`), command-timeout/VIO-stale failsafe (`watchdog`), the single "is this command allowed?" entry point (`envelope`), boundary containment (`geofence`), and payload validation + release interlock (`payload`). 100% branch coverage, CI-gated. Misbehavior here = uncommanded motion, flyaway, or unintended release. |
 | [ros_http_bridge/mavlink_velocity.py](../../edge_core/ros_http_bridge/mavlink_velocity.py) — `MavlinkVelocityController` | The autonomous velocity command path's I/O **adapter** (threads, MAVLink link, HEARTBEAT parse). After Phase 2 it owns no safety decisions itself — it snapshots state under its lock and defers to `safety.evaluate` / `safety.watchdog_decision`. Still SC because it is the thing that actually transmits setpoints. |
 | [services/mavlink/commands.py](../../edge_core/services/mavlink/commands.py) — `arm_disarm`, `set_mode`, `land`, `takeoff`, `send_velocity_command`, `send_global_position_target`, `send_position_target`, `trigger_payload`, `set_relay` | Direct MAVLink command surface: arm/disarm, mode changes (incl. LAND), takeoff, position/velocity targets, servo + relay actuation. Each can move the aircraft or fire the payload. |
-| [modules/payload/servo.py](../../edge_core/modules/payload/servo.py) — `ServoController.trigger_water_shooter`, `set_channel_pwm`, `MavlinkServo.set_pwm` | Payload / relay actuation. The pump-energize path and its best-effort de-energize on failure. Not yet extracted into `safety/` (Phase 3). |
+| [modules/payload/servo.py](../../edge_core/modules/payload/servo.py) — `ServoController.trigger_water_shooter`, `arm_release`, `set_channel_pwm`, `MavlinkServo.set_pwm` | Payload / relay actuation **adapter**: the decisions (channel/PWM ranges, duration clamp, arm→release interlock) live in `safety/payload.py`; this file owns MAVLink I/O, the interlock state under its lock, and the de-energize-in-`finally` guarantee. |
 
-> **PARTIAL — geofence containment math.** The rearchitecture plan §3.1
-> anticipated a Python `geofence.py` "from `services/geospatial`". In fact
-> [services/geospatial.py](../../edge_core/services/geospatial.py) contains **no**
-> boundary-containment logic — only GPS offset, raycast, bearing, haversine, and
-> wall-length math. Phase 2 instead authored a fresh, pure containment primitive
-> at [safety/geofence.py](../../edge_core/safety/geofence.py) (point-in-polygon,
-> distance-to-boundary, keep-in margin) with full tests. **It is not yet wired
-> into the command path** — geofence *enforcement* still lives on the C# side and
-> the FC's own fence. Wiring + SITL proof is Phase 3 (req SR-FEN-02).
+> **Geofence containment (SR-FEN-02).** The pure containment decision lives at
+> [safety/geofence.py](../../edge_core/safety/geofence.py) (point-in-polygon,
+> distance-to-boundary, keep-in margin, `evaluate_position`) and is **wired into
+> the command path**: `send_global_position_target` / `send_position_target` in
+> [services/mavlink/commands.py](../../edge_core/services/mavlink/commands.py)
+> refuse targets outside the optional `NOMAD_FENCE_POLYGON` boundary. The
+> lat/lon→planar projection happens in the adapter via
+> [services/geospatial.py](../../edge_core/services/geospatial.py); the SC core
+> stays frame-agnostic. The FC's own fence (uploaded from the C# side) remains
+> the independent backstop. SITL proof: `pixi run sitl-fence` — see
+> [hazards.md](hazards.md) H-05 for what has actually been run.
 
 ### SR — Safety-Related
 

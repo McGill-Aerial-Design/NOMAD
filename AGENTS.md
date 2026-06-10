@@ -127,7 +127,11 @@ in the plugin.
 
 ### Servo / Calibration (payload)
 - `POST /api/servo/camera/tilt?angle={0-180}` · `POST /api/servo/channel/{channel}/pwm`
+- `POST /api/servo/shooter/arm` then `POST /api/servo/shooter/trigger` (release interlock, SR-PAY-03)
 - `POST /api/calibration/imu/reset_biases` · `POST /api/calibration/zed/sensor-viewer/start`
+
+> Command paths (`/api/servo/*`, `/api/spray/*`) require authentication even on
+> loopback and are audit-logged (SR-SEC-03); they never ride the no-key dev fallback.
 
 ### Isaac / SLAM / Video
 - `GET /api/isaac/status` · `POST /api/isaac/start` · `POST /api/isaac/stop` · `/api/isaac/bridge/{start,stop}`

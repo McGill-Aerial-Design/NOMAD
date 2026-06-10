@@ -35,26 +35,26 @@ rather than at the threaded `mavlink_velocity.py` adapter.
 | SR-LNK-02 | `safety/watchdog.py::watchdog_decision` (`command_timeout_s`) | `tests/test_safety_watchdog.py::test_command_timeout_stops_with_reason`, `::test_at_timeout_boundary_does_not_stop` |
 | SR-LNK-03 | `mavlink_velocity.py::MavlinkVelocityController.stop` → `_send_stop` | `tests/test_mavlink_velocity.py::test_stop_sends_zero_velocity` |
 | SR-FEN-01 | C# `Geofence/MPFenceUploader.cs`, `BoundaryManager.cs` | **(none)** — FC-side, manual |
-| SR-FEN-02 | `safety/geofence.py::is_contained`, `point_in_polygon`, `distance_to_boundary` (**primitive only; not wired**) | `tests/test_safety_geofence.py` (suite) |
-| SR-PAY-01 | `modules/payload/servo.py::ServoController.set_channel_pwm`, `MavlinkServo.set_angle` | **(none)** — H-06 GAP |
-| SR-PAY-02 | `modules/payload/servo.py::ServoController.trigger_water_shooter` (`finally` de-energize) | **(none)** — H-06 GAP |
-| SR-PAY-03 | *(no interlock yet)* | **(none)** — H-06 GAP |
-| SR-SEC-01 | `services/mavlink/commands.py::MavlinkCommands` (surface contains no failsafe-disable) | **(none)** — by construction |
+| SR-FEN-02 | `safety/geofence.py::evaluate_position` (pure decision over `is_contained`); enforced by `services/mavlink/commands.py::_fence_allows_global` / `_fence_allows_local` in the position-target senders | `tests/test_safety_geofence.py::test_evaluate_position_rejects_outside_boundary` (+ fault-injection siblings); `tests/test_mavlink_fence.py` (adapter suite); SITL: `tests/sitl/geofence_containment.py` (**written, not yet run**) |
+| SR-PAY-01 | `safety/payload.py::validate_servo_command`; enforced by `modules/payload/servo.py::ServoController.set_channel_pwm` | `tests/test_safety_payload.py::test_validate_servo_command_rejects_bad_channel` (+ siblings); `tests/test_payload_servo.py::test_set_channel_pwm_rejects_out_of_range` |
+| SR-PAY-02 | `safety/payload.py::clamp_release_duration`; `servo.py::trigger_water_shooter` (`finally` de-energize) | `tests/test_safety_payload.py::test_clamp_release_duration_rejects_nonfinite`; `tests/test_payload_servo.py::test_pump_deenergized_when_sleep_raises`, `::test_relay_on_failure_still_attempts_off` |
+| SR-PAY-03 | `safety/payload.py::arm_release` / `evaluate_release` (interlock state machine); `servo.py::ServoController.arm_release` / `trigger_water_shooter`; `/api/servo/shooter/{arm,trigger}` routes; C# fire-button confirm | `tests/test_safety_payload.py::test_release_requires_prior_arm` (+ siblings); `tests/test_payload_servo.py::test_release_without_arm_sends_nothing`, `::test_arm_is_consumed_by_each_attempt` |
+| SR-SEC-01 | `services/mavlink/commands.py::MavlinkCommands` (surface contains no failsafe-disable) | `tests/test_safety_command_surface.py::test_no_failsafe_disabling_commands` |
 | SR-SEC-02 | `api.py` auth middleware | `tests/test_auth_middleware.py` (suite) |
-| SR-SEC-03 | *(target — §4.6)* | **(none)** |
+| SR-SEC-03 | `api.py` middleware `_COMMAND_PATH_PREFIXES` (auth-on-loopback + audit log) | `tests/test_auth_middleware.py::test_command_path_requires_auth_even_on_loopback`, `::test_command_path_requests_are_audit_logged` |
 
 ## Coverage summary
 
 | | Count |
 |---|---|
-| Requirements with a proving test | 13 |
-| Requirements implemented but untested / partial (🟡) | 3 |
-| Requirements not yet implemented (🔴) | 3 |
+| Requirements with a proving test (✅) | 18 |
+| Requirements implemented but untested / partial (🟡) | 1 |
+| Requirements not yet implemented (🔴) | 0 |
 
 `edge_core/safety/` itself is at **100% line and branch coverage** (limits, gates,
-watchdog, envelope, geofence), enforced by the `cov-safety` gate (see below). The
-remaining untested cells are the not-yet-extracted payload path (SR-PAY-*) and
-the security-as-safety targets (SR-SEC-01/03).
+watchdog, envelope, geofence, payload), enforced by the `cov-safety` gate (see
+below). The single remaining 🟡 is SR-FEN-01: the fence upload is FC-side
+(C# `MPFenceUploader`) and verified manually, not by a NOMAD test.
 
 ## Machine-checked mappings (normative — parsed by CI)
 
@@ -80,15 +80,17 @@ SR-VIO-02 | edge_core.safety.watchdog:watchdog_decision | tests/test_safety_watc
 SR-LNK-01 | edge_core.safety.gates:heartbeat_fresh | tests/test_safety_gates.py::test_heartbeat_stale_past_timeout
 SR-LNK-02 | edge_core.safety.watchdog:watchdog_decision | tests/test_safety_watchdog.py::test_command_timeout_stops_with_reason
 SR-LNK-03 | edge_core.ros_http_bridge.mavlink_velocity:MavlinkVelocityController.stop | tests/test_mavlink_velocity.py::test_stop_sends_zero_velocity
-SR-FEN-02 | edge_core.safety.geofence:is_contained | tests/test_safety_geofence.py::test_is_contained_with_keep_in_margin
+SR-FEN-02 | edge_core.safety.geofence:evaluate_position | tests/test_safety_geofence.py::test_evaluate_position_rejects_outside_boundary
+SR-PAY-01 | edge_core.safety.payload:validate_servo_command | tests/test_safety_payload.py::test_validate_servo_command_rejects_bad_channel
+SR-PAY-02 | edge_core.safety.payload:clamp_release_duration | tests/test_payload_servo.py::test_pump_deenergized_when_sleep_raises
+SR-PAY-03 | edge_core.safety.payload:evaluate_release | tests/test_safety_payload.py::test_release_requires_prior_arm
+SR-SEC-01 | edge_core.services.mavlink.commands:MavlinkCommands | tests/test_safety_command_surface.py::test_no_failsafe_disabling_commands
 SR-SEC-02 | edge_core.api:create_app | tests/test_auth_middleware.py::test_no_key_blocks_remote
+SR-SEC-03 | edge_core.api:create_app | tests/test_auth_middleware.py::test_command_path_requires_auth_even_on_loopback
 ```
 
 ## Verification roadmap (remaining)
 
-1. Wire `safety/geofence.py` into the command path (SR-FEN-02 enforcement) and
-   extract/test the payload guarantees (SR-PAY-01/02) + interlock (SR-PAY-03).
-2. Run the SITL loop-closure scenarios for the failsafe branches against the
-   `pixi run dev-up` stack (arm→GUIDED→velocity step→watchdog timeout→confirm
-   stop; geofence approach→confirm containment). The compose profile exists; the
-   scripted scenarios are the open item.
+1. Run the geofence containment SITL scenario (`pixi run sitl-fence`,
+   [tests/sitl/geofence_containment.py](../../tests/sitl/geofence_containment.py))
+   against the `pixi run dev-up` stack — written, not yet executed.
