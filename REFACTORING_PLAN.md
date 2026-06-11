@@ -347,7 +347,7 @@ get an `enable_flag`.
 - [x] C#: `scripts/build/build_plugin_windows.ps1` compiles clean;
   `scripts/build/lint_plugin_deadcode.ps1` reports no new (and fewer) orphans
 - [x] Upgraded contract gate green with **zero `KNOWN_DRIFT` rows** at plan end
-- [ ] `pixi run dev-up && pixi run test-api` passes; `pixi run sitl-scenario`
+- [x] `pixi run dev-up && pixi run test-api` passes; `pixi run sitl-scenario`
   and `pixi run sitl-fence` pass (SR-VEL / SR-FEN evidence unchanged)
 - [x] Camera-tilt live check: POST then GET `/api/servo/camera/tilt`
   round-trips a float angle
@@ -361,10 +361,9 @@ Verification notes (2026-06-11):
 - Focused module boot/API reference slice passed: 32 tests.
 - Sim-mode lifespan check wired and started every `nomad.modules` entry point:
   `calibration, health, isaac_mgmt, mavlink, network, time, video, video_slam, vio`.
-- Docker/SITL gate is blocked on this workstation: `pixi run dev-up` cannot
-  connect to Docker Desktop's Linux engine pipe
-  (`//./pipe/dockerDesktopLinuxEngine` missing), so `test-api`,
-  `sitl-scenario`, and `sitl-fence` could not be run here.
+- Docker/SITL gate passed after starting Docker Desktop: `pixi run dev-up`,
+  `pixi run test-api` (43/43), `pixi run sitl-scenario`, `pixi run sitl-fence`,
+  then `pixi run dev-down`.
 - The remaining `"success": True` route returns are attached to actual state
   mutation, subprocess/systemd calls, or manager operations; the old no-op VIO
   area/origin handlers return 501.
