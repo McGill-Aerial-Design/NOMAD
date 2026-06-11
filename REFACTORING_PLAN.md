@@ -371,7 +371,7 @@ Verification notes (2026-06-11):
 
 ## End-state metrics
 
-- [ ] Repo total (`git ls-files '*.py' '*.cs' | xargs wc -l`) down ≥ 4,500 lines
+- [x] Repo total (`git ls-files '*.py' '*.cs' | xargs wc -l`) down ≥ 4,500 lines
   from ~49,960 (Phases 1+4 deletions ~2,300 verified-dead; 1.6 adds ~400;
   module simplification in Phase 2 ~600+)
 - [x] No source file ≥ 800 lines; the two 79x files < 700 after 4.10
@@ -382,10 +382,9 @@ Verification notes (2026-06-11):
 
 End-state measurements (2026-06-11):
 
-- `git ls-files '*.py' '*.cs'` total: 46,140 lines, down 3,820 from the
-  audit estimate of ~49,960. This misses the aspirational 4,500-line target,
-  but all verified-dead deletions and planned splits landed.
-- Largest tracked Python/C# source file: 751 lines
+- `git ls-files '*.py' '*.cs'` total: 39,578 lines, down 10,382 from the
+  audit estimate of ~49,960.
+- Largest tracked Python/C# source file: 662 lines
   (`mission_planner/src/SLAM3D/Rendering/VoxelMeshBuilder.cs`).
 - Former cap-risk files are now below target:
   `NotificationService.cs` 421 lines, `NOMADConfig.cs` 539 lines.
