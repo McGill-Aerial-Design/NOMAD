@@ -9,11 +9,11 @@ health monitoring, payload actuation, and ROS2 bridges — and is designed so ne
 capabilities (SLAM, perception, payloads, mission tasks) are added as
 discoverable modules.
 
-# Quick start (sim, no hardware)
+## Quick start (sim, no hardware)
 
-## Install pixi (https://pixi.sh) — one of:
-    Linux/macOS:  curl -fsSL https://pixi.sh/install.sh | bash
-    Windows:      iwr -useb https://pixi.sh/install.ps1 | iex
+# Install pixi (https://pixi.sh) — one of:
+#   Linux/macOS:  curl -fsSL https://pixi.sh/install.sh | bash
+#   Windows:      iwr -useb https://pixi.sh/install.ps1 | iex
 ```bash
 git clone <repo-url> && cd NOMAD
 pixi run dev              # Edge Core sim on http://localhost:8000

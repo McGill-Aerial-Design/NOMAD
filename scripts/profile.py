@@ -45,7 +45,6 @@ def _key_settings(path: Path) -> dict[str, str]:
         "NOMAD_PROFILE",
         "NOMAD_PROFILE_DESCRIPTION",
         "NOMAD_SIM_MODE",
-        "NOMAD_ENABLE_VISION",
         "NOMAD_ENABLE_SERVOS",
         "NOMAD_ALLOW_INSECURE_REMOTE",
     ]
@@ -179,13 +178,11 @@ def cmd_load(name: str) -> None:
         print(f"      {desc}")
 
     sim = settings.get("NOMAD_SIM_MODE", "false")
-    vision = settings.get("NOMAD_ENABLE_VISION", "false")
     servos = settings.get("NOMAD_ENABLE_SERVOS", "false")
 
     print()
     print("Key settings:")
     print(f"  NOMAD_SIM_MODE      = {sim}")
-    print(f"  NOMAD_ENABLE_VISION = {vision}")
     print(f"  NOMAD_ENABLE_SERVOS = {servos}")
 
     if "/home/USER/" in ENV_FILE.read_text(encoding="utf-8"):
@@ -247,12 +244,10 @@ def cmd_show() -> None:
     profile = settings.get("NOMAD_PROFILE", "unknown")
     desc = settings.get("NOMAD_PROFILE_DESCRIPTION", "No description")
     sim = settings.get("NOMAD_SIM_MODE", "false")
-    vision = settings.get("NOMAD_ENABLE_VISION", "false")
 
     print(f"Active profile:   {profile}")
     print(f"Description:      {desc}")
     print(f"Sim mode:         {sim}")
-    print(f"Vision:           {vision}")
     print(f"Config file:      {ENV_FILE}")
 
 

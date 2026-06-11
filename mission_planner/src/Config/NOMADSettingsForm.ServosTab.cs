@@ -202,31 +202,14 @@ namespace NOMAD.MissionPlanner
             return false;
         }
 
-        private JObject BuildSprayCalibrationPayload(bool persist)
+        // The server consumes only the relay number; every other spray
+        // setting is GCS-local. The API rejects unknown fields (extra=forbid)
+        // so this payload cannot drift silently.
+        private JObject BuildSprayCalibrationPayload()
         {
             return new JObject
             {
-                ["target_camera_range_m"] = Config.SprayTargetCameraRangeM,
-                ["range_tolerance_m"] = Config.SprayRangeToleranceM,
-                ["trigger_max_distance_m"] = Config.SprayTriggerMaxDistanceM,
-                ["aim_pixel_x"] = Config.SprayAimPixelX,
-                ["aim_pixel_y"] = Config.SprayAimPixelY,
-                ["aim_tolerance_px"] = Config.SprayAimTolerancePx,
-                ["servo_fire_angle_deg"] = Config.SprayServoFireAngleDeg,
-                ["spray_duration_ms"] = Config.WaterPump()?.PulseMs ?? 500,
                 ["water_pump_relay_number"] = Config.WaterPump()?.Channel ?? 0,
-                ["forward_gain"] = Config.SprayForwardGain,
-                ["lateral_gain"] = Config.SprayLateralGain,
-                ["altitude_gain"] = Config.SprayAltitudeGain,
-                ["yaw_gain"] = Config.SprayYawGain,
-                ["use_yaw_alignment"] = Config.SprayUseYawAlignment,
-                ["max_forward_speed_mps"] = Config.SprayMaxForwardSpeedMps,
-                ["max_lateral_speed_mps"] = Config.SprayMaxLateralSpeedMps,
-                ["max_altitude_speed_mps"] = Config.SprayMaxAltitudeSpeedMps,
-                ["max_yaw_rate_radps"] = Config.SprayMaxYawRateRadps,
-                ["lock_hold_ms"] = Config.SprayLockHoldMs,
-                ["align_timeout_s"] = Config.SprayAlignTimeoutS,
-                ["persist"] = persist,
             };
         }
 
@@ -242,7 +225,7 @@ namespace NOMAD.MissionPlanner
                 Config.Save();
                 JetsonApiService.Reconfigure(Config);
 
-                var json = BuildSprayCalibrationPayload(true).ToString(Newtonsoft.Json.Formatting.None);
+                var json = BuildSprayCalibrationPayload().ToString(Newtonsoft.Json.Formatting.None);
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
                 var response = await JetsonApiService.PostAsync("/api/spray/calibration", content);
 

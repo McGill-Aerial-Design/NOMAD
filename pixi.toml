@@ -44,7 +44,7 @@ default = { features = ["dev"] }
 [tasks]
 
 # Edge Core
-dev = "python -m edge_core.main --sim --no-vision --host 0.0.0.0 --port 8000"
+dev = "python -m edge_core.main --sim --host 0.0.0.0 --port 8000"
 # Coverage floor is a ratchet set just below the current level so coverage can
 # only trend up; raise it as more of the codebase gets tested.
 test = "pytest --cov=edge_core --cov=infra/tailscale --cov-report=term-missing --cov-fail-under=25"

@@ -164,14 +164,6 @@ class ModuleRegistry:
         return order
 
     # -- lifecycle ----------------------------------------------------------
-    def configure_all(self, ctx: AppContext) -> None:
-        for name in self.resolve_order(ctx):
-            self._modules[name].configure(ctx)
-
-    def register_routes(self, app: Any) -> None:
-        for name in self._order:
-            self._modules[name].register_routes(app)
-
     def start_all(self) -> None:
         for name in self._order:
             self._modules[name].start()
@@ -188,9 +180,9 @@ class ModuleRegistry:
     def wire_safe(self, ctx: AppContext, app: Any) -> list[str]:
         """Resolve order, then configure + register routes with fault isolation.
 
-        Unlike :meth:`configure_all` + :meth:`register_routes`, a module that
-        raises during ``configure``/``register_routes`` is logged and skipped
-        rather than aborting the rest. ``self.order`` is updated to the modules
+        A module that raises during ``configure``/``register_routes`` is
+        logged and skipped rather than aborting the rest. ``self.order`` is
+        updated to the modules
         that wired successfully, and that list is returned. This is the single
         source of truth used by :func:`edge_core.core.wire_modules`.
         """

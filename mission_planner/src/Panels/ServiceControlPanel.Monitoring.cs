@@ -113,7 +113,6 @@ namespace NOMAD.MissionPlanner
                     UpdateStatusPendingIfChecking(_lblNvbloxStatus, "Waiting...");
                     UpdateStatusPendingIfChecking(_lblVioStatus, "Waiting...");
                     UpdateStatusPendingIfChecking(_lblVideoBridgesStatus, "Waiting...");
-                    UpdateStatusPendingIfChecking(_lblSlamStatus, "Waiting...");
                     UpdateLabel(_lblLastUpdate, $"Last update: {DateTime.Now:HH:mm:ss} (partial/stale)");
                     return;
                 }
@@ -242,53 +241,6 @@ namespace NOMAD.MissionPlanner
                             LogMessage($"Video status warning (streak {_videoFailStreak}): {bridgesResult.Message}");
                     }
 
-                    // SLAM status
-                    var slamResult = await _sender.GetSlamStatusAsync();
-                    if (slamResult.Success)
-                    {
-                        try
-                        {
-                            var data = JObject.Parse(slamResult.Data);
-                            var available = data["available"]?.Value<bool>() ?? false;
-                            var running = data["running"]?.Value<bool>() ?? false;
-                            if (running)
-                            {
-                                var blocks = data["block_count"]?.Value<int>() ?? 0;
-                                UpdateStatusLabel(_lblSlamStatus, true, $"Active ({blocks} blocks)");
-                            }
-                            else if (available)
-                            {
-                                UpdateStatusLabel(_lblSlamStatus, false, "Available (no data)");
-                            }
-                            else
-                            {
-                                var error = (string)data["error"];
-                                if (isaacRunningFromServices &&
-                                    string.Equals(error, "No mesh data available", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    UpdateStatusLabel(_lblSlamStatus, false, "Waiting for mesh");
-                                }
-                                else
-                                {
-                                    UpdateStatusLabel(_lblSlamStatus, false, error ?? "Inactive");
-                                }
-                            }
-
-                            _slamFailStreak = 0;
-                        }
-                        catch (Exception parseEx)
-                        {
-                            _slamFailStreak++;
-                            if (ShouldLogStreak(_slamFailStreak))
-                                LogMessage($"SLAM status parse warning (streak {_slamFailStreak}): {parseEx.Message}");
-                        }
-                    }
-                    else
-                    {
-                        _slamFailStreak++;
-                        if (ShouldLogStreak(_slamFailStreak))
-                            LogMessage($"SLAM status warning (streak {_slamFailStreak}): {slamResult.Message}");
-                    }
                 }
 
                 // Update timestamp
@@ -509,21 +461,6 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private async Task ResetVioOriginAsync()
-        {
-            LogMessage("Resetting VIO origin...");
-            var result = await _sender.ResetVioOriginAsync();
-
-            if (result.Success)
-            {
-                LogMessage("VIO origin reset successful");
-            }
-            else
-            {
-                LogMessage($"VIO reset failed: {result.Message}");
-            }
-        }
-
         private async Task ClearTrajectoryAsync()
         {
             LogMessage("Clearing VIO trajectory...");
@@ -574,40 +511,6 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private async Task LaunchNvbloxAsync()
-        {
-            LogMessage("Launching nvblox...");
-            UpdateStatusLabel(_lblNvbloxStatus, false, "Launching...");
-
-            var result = await _sender.LaunchNvbloxAsync();
-            if (result.Success)
-            {
-                LogMessage("nvblox launch initiated (~15s for ZED init)");
-            }
-            else
-            {
-                LogMessage($"Failed to launch nvblox: {result.Message}");
-                UpdateStatusLabel(_lblNvbloxStatus, false, "Launch Failed");
-            }
-        }
-
-        private async Task StopNvbloxAsync()
-        {
-            LogMessage("Stopping nvblox...");
-            UpdateStatusLabel(_lblNvbloxStatus, false, "Stopping...");
-
-            var result = await _sender.StopNvbloxAsync();
-            if (result.Success)
-            {
-                LogMessage("nvblox stopped");
-                UpdateStatusLabel(_lblNvbloxStatus, false, "Stopped");
-            }
-            else
-            {
-                LogMessage($"Failed to stop nvblox: {result.Message}");
-            }
-        }
-
         private async Task StartVideoBridgesAsync()
         {
             LogMessage("Starting video bridges...");
@@ -619,21 +522,5 @@ namespace NOMAD.MissionPlanner
                 LogMessage($"Failed to start bridges: {result.Message}");
         }
 
-        private async Task StopSlamAsync()
-        {
-            LogMessage("Stopping SLAM / nvblox...");
-            UpdateStatusLabel(_lblSlamStatus, false, "Stopping...");
-            var result = await _sender.StopSlamAsync();
-            if (result.Success)
-            {
-                LogMessage("SLAM / nvblox stopped");
-                UpdateStatusLabel(_lblSlamStatus, false, "Stopped");
-            }
-            else
-            {
-                LogMessage($"Stop failed: {result.Message}");
-                UpdateStatusLabel(_lblSlamStatus, false, "Stop Failed");
-            }
-        }
     }
 }

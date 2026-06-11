@@ -326,30 +326,12 @@ namespace NOMAD.MissionPlanner
                     var response = await JetsonApiService.PostAsync("/api/servo/camera/config", body);
                     Log.Debug($"Pushed servo config to Jetson — HTTP {(int)response.StatusCode}");
 
+                    // The server consumes only the relay number (extra fields
+                    // are rejected); all other spray settings are GCS-local.
                     var sprayBody = new System.Net.Http.StringContent(
                         Newtonsoft.Json.JsonConvert.SerializeObject(new
                         {
-                            target_camera_range_m = cfg.SprayTargetCameraRangeM,
-                            range_tolerance_m = cfg.SprayRangeToleranceM,
-                            trigger_max_distance_m = cfg.SprayTriggerMaxDistanceM,
-                            aim_pixel_x = cfg.SprayAimPixelX,
-                            aim_pixel_y = cfg.SprayAimPixelY,
-                            aim_tolerance_px = cfg.SprayAimTolerancePx,
-                            servo_fire_angle_deg = cfg.SprayServoFireAngleDeg,
-                            spray_duration_ms = cfg.WaterPump()?.PulseMs ?? 500,
                             water_pump_relay_number = cfg.WaterPump()?.Channel ?? 0,
-                            forward_gain = cfg.SprayForwardGain,
-                            lateral_gain = cfg.SprayLateralGain,
-                            altitude_gain = cfg.SprayAltitudeGain,
-                            yaw_gain = cfg.SprayYawGain,
-                            use_yaw_alignment = cfg.SprayUseYawAlignment,
-                            max_forward_speed_mps = cfg.SprayMaxForwardSpeedMps,
-                            max_lateral_speed_mps = cfg.SprayMaxLateralSpeedMps,
-                            max_altitude_speed_mps = cfg.SprayMaxAltitudeSpeedMps,
-                            max_yaw_rate_radps = cfg.SprayMaxYawRateRadps,
-                            lock_hold_ms = cfg.SprayLockHoldMs,
-                            align_timeout_s = cfg.SprayAlignTimeoutS,
-                            persist = true,
                         }),
                         System.Text.Encoding.UTF8,
                         "application/json");

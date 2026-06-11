@@ -429,8 +429,7 @@ class ROSHTTPBridge(Node):
         if data is None:
             return
         try:
-            fb_angle = data.get("feedback_angle") or data.get("angle", 90.0)
-            self._gimbal_angle_deg = max(0.0, min(180.0, float(fb_angle)))
+            self._gimbal_angle_deg = max(0.0, min(180.0, float(data.get("angle", 90.0))))
             self._gimbal_pitch_rad = math.radians(self._gimbal_angle_deg - 90.0)
         except (TypeError, ValueError):
             pass

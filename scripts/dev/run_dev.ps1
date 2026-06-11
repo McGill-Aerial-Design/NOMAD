@@ -9,16 +9,12 @@
 # Usage:
 #   .\scripts\dev\run_dev.ps1             # Run with default settings
 #   .\scripts\dev\run_dev.ps1 -Port 8080  # Custom port
-#   .\scripts\dev\run_dev.ps1 -NoVision   # Disable vision process
 # =============================================================================
 
 param(
     [int]$Port = 8000,
     [string]$BindHost = "0.0.0.0",
-    [string]$LogLevel = "info",
-    [switch]$NoVision,
-    [switch]$NoTask2,
-    [string]$ServoMode = "gimbal"
+    [string]$LogLevel = "info"
 )
 
 # Get script directory and project root
@@ -70,16 +66,6 @@ try {
 
     # Build arguments
     $CmdArgs = @("--sim", "--host", $BindHost, "--port", $Port, "--log-level", $LogLevel)
-
-    if ($NoVision) {
-        $CmdArgs += "--no-vision"
-    }
-
-    if ($NoTask2) {
-        $CmdArgs += "--no-task2"
-    }
-
-    $CmdArgs += @("--servo-mode", $ServoMode)
 
     # Run the Edge Core with simulation mode
     & $PythonCmd -m edge_core.main @CmdArgs

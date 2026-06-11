@@ -29,7 +29,6 @@ dependencies = [
     "pymavlink>=2.4",
     "pyserial>=3.5",
     "numpy>=1.26",
-    "pyzmq>=25.1",
     "psutil>=5.9",
     "python-dotenv>=1.0",
     "httpx>=0.27",
@@ -68,6 +67,8 @@ health = "edge_core.services.health_monitor:HealthMonitorModule"
 time = "edge_core.services.time_manager:TimeSyncModule"
 mavlink = "edge_core.services.mavlink.module:MavlinkModule"
 payload = "edge_core.services.payload_module:PayloadModule"
+video = "edge_core.services.video_module:VideoStreamModule"
+network = "edge_core.services.network_module:NetworkModule"
 
 # REST API Route Modules (general/reusable infrastructure only)
 vio = "edge_core.api_routes.vio:VioModule"

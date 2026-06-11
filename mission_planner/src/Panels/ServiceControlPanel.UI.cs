@@ -93,12 +93,6 @@ namespace NOMAD.MissionPlanner
             AddServiceRow("Video Bridges", ref _lblVideoBridgesStatus, ref _btnStartBridges, ref yOffset, "Start");
             _btnStartBridges.Click += async (s, e) => await StartVideoBridgesAsync();
 
-            // === SLAM Service ===
-            AddServiceRow("SLAM / Mesh", ref _lblSlamStatus, ref _btnStopSlam, ref yOffset, "Stop SLAM");
-            _btnStopSlam.Click += async (s, e) => await StopSlamAsync();
-
-
-
             // Separator
             yOffset += 10;
             var separator = new Label
@@ -143,18 +137,6 @@ namespace NOMAD.MissionPlanner
             };
             _servicesPanel.Controls.Add(_lblVioStatus);
 
-            _btnVioReset = new Button
-            {
-                Text = "Reset Origin",
-                Location = new Point(rightCol, yOffset - 3),
-                Size = new Size(100, 25),
-                BackColor = NOMADTheme.BUTTON_BG,
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                FlatStyle = FlatStyle.Flat,
-                Anchor = AnchorStyles.Top | AnchorStyles.Right,
-            };
-            _btnVioReset.Click += async (s, e) => await ResetVioOriginAsync();
-            _servicesPanel.Controls.Add(_btnVioReset);
             yOffset += 30;
 
             // VIO Trajectory Points
@@ -429,16 +411,14 @@ namespace NOMAD.MissionPlanner
             yOffset += 35;
         }
 
+        // Status-only: nvblox launch/stop routes were gutted from this baseline;
+        // the running state still comes from /api/isaac/status.
         private void AddNvbloxRow(ref int yOffset)
         {
-            int leftCol = ServiceLeftCol;
-            int launchCol = ServiceStartCol;
-            int stopCol = ServiceStopCol;
-
             var lblName = new Label
             {
                 Text = "Nvblox:",
-                Location = new Point(leftCol, yOffset + 3),
+                Location = new Point(ServiceLeftCol, yOffset + 3),
                 Size = new Size(120, 20),
                 ForeColor = NOMADTheme.TEXT_SECONDARY
             };
@@ -453,32 +433,6 @@ namespace NOMAD.MissionPlanner
                 Anchor = AnchorStyles.Top | AnchorStyles.Left,
             };
             _servicesPanel.Controls.Add(_lblNvbloxStatus);
-
-            _btnNvbloxLaunch = new Button
-            {
-                Text = "Launch",
-                Location = new Point(launchCol, yOffset),
-                Size = new Size(70, 25),
-                BackColor = NOMADTheme.BTN_START,
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                FlatStyle = FlatStyle.Flat,
-                Anchor = AnchorStyles.Top | AnchorStyles.Left,
-            };
-            _btnNvbloxLaunch.Click += async (s, e) => await LaunchNvbloxAsync();
-            _servicesPanel.Controls.Add(_btnNvbloxLaunch);
-
-            _btnNvbloxStop = new Button
-            {
-                Text = "Stop",
-                Location = new Point(stopCol, yOffset),
-                Size = new Size(70, 25),
-                BackColor = NOMADTheme.BTN_STOP,
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                FlatStyle = FlatStyle.Flat,
-                Anchor = AnchorStyles.Top | AnchorStyles.Left,
-            };
-            _btnNvbloxStop.Click += async (s, e) => await StopNvbloxAsync();
-            _servicesPanel.Controls.Add(_btnNvbloxStop);
 
             yOffset += 35;
         }

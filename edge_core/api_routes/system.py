@@ -118,7 +118,7 @@ def register_system_routes(app, ctx) -> None:
         internet_reachable = False
         gcs_reachable = False
 
-        tailscale_manager = request.app.state.tailscale_manager
+        tailscale_manager = getattr(request.app.state, "tailscale_manager", None)
         if tailscale_manager:
             info = tailscale_manager.info
             tailscale = {
@@ -129,7 +129,7 @@ def register_system_routes(app, ctx) -> None:
                 "latency_ms": getattr(info, "latency_ms", None),
             }
 
-        network_monitor = request.app.state.network_monitor
+        network_monitor = getattr(request.app.state, "network_monitor", None)
         if network_monitor:
             status = network_monitor.status
             internet_reachable = bool(getattr(status, "internet_reachable", False))
@@ -260,13 +260,6 @@ def register_system_routes(app, ctx) -> None:
                         "message_rate_hz": 0,
                         "reset_counter": 0,
                         "source": "none",
-                    }
-
-                mode_mgr = getattr(websocket.app.state, "mode_manager", None)
-                if mode_mgr:
-                    data["operational_mode"] = {
-                        "status": mode_mgr.status.to_dict(),
-                        "available_modes": mode_mgr.get_available_modes(),
                     }
 
                 obstacle_snapshot = getattr(websocket.app.state, "obstacle_distance_last", None)

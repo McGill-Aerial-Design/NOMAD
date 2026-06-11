@@ -229,21 +229,12 @@ def register_services_routes(app, ctx) -> None:
         # Edge Core is always running (we're responding)
         services["edge_core"] = {"status": "active", "running": True}
 
-        # Isaac ROS status
-        isaac_bridge = request.app.state.isaac_bridge
-        if isaac_bridge:
-            services["isaac_ros"] = {
-                "status": "active",
-                "running": True,
-                "container_running": container_running,
-                **isaac_bridge.get_status(),
-            }
-        else:
-            services["isaac_ros"] = {
-                "status": "active" if container_running else "not_initialized",
-                "running": container_running,
-                "container_running": container_running,
-            }
+        # Isaac ROS status (container probe only; no in-process bridge exists)
+        services["isaac_ros"] = {
+            "status": "active" if container_running else "not_initialized",
+            "running": container_running,
+            "container_running": container_running,
+        }
 
         # VIO status — provided by modules that register VIO state
         external_vio_state = getattr(request.app.state, "external_vio_state", None)

@@ -80,8 +80,7 @@ namespace NOMAD.MissionPlanner
 
         public static async Task<bool> SendMotorTestPwmAsync(int motorInstance, int pwmUs, double timeoutSeconds, bool tryOnly = false)
         {
-            if (motorInstance <= 0) return false;
-            if (pwmUs != 0 && (pwmUs < 500 || pwmUs > 2500)) return false;
+            if (!IsValidMotorTestCommand(motorInstance, pwmUs)) return false;
             if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return false;
 
             bool acquired = false;
@@ -95,16 +94,8 @@ namespace NOMAD.MissionPlanner
                     : await s_mavlinkLock.WaitAsync(1500).ConfigureAwait(false);
                 if (!acquired) return false;
 
-                await MainV2.comPort.doCommandAsync(
-                    sysid, compid,
-                    MAVLink.MAV_CMD.DO_MOTOR_TEST,
-                    motorInstance,
-                    1,
-                    pwmUs,
-                    (float)Math.Max(0.05, Math.Min(timeoutSeconds, 3.0)),
-                    1, 0, 0,
-                    requireack: false, uicallback: null).ConfigureAwait(false);
-
+                await SendMotorTestPwmLockedAsync(sysid, compid, motorInstance, pwmUs, timeoutSeconds)
+                    .ConfigureAwait(false);
                 return true;
             }
             catch
@@ -119,38 +110,7 @@ namespace NOMAD.MissionPlanner
 
         public static bool SendMotorTestPwm(int motorInstance, int pwmUs, double timeoutSeconds)
         {
-            if (motorInstance <= 0) return false;
-            if (pwmUs != 0 && (pwmUs < 500 || pwmUs > 2500)) return false;
-            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return false;
-
-            bool acquired = false;
-            try
-            {
-                byte sysid = MainV2.comPort.MAV.sysid;
-                byte compid = MainV2.comPort.MAV.compid;
-
-                acquired = s_mavlinkLock.Wait(1500);
-                if (!acquired) return false;
-
-                MainV2.comPort.doCommand(
-                    sysid, compid,
-                    MAVLink.MAV_CMD.DO_MOTOR_TEST,
-                    motorInstance,
-                    1,
-                    pwmUs,
-                    (float)Math.Max(0.05, Math.Min(timeoutSeconds, 3.0)),
-                    1, 0, 0);
-
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
-            finally
-            {
-                if (acquired) s_mavlinkLock.Release();
-            }
+            return SendMotorTestPwmAsync(motorInstance, pwmUs, timeoutSeconds).GetAwaiter().GetResult();
         }
 
         public static bool SendMotorTestPwmBatch(IEnumerable<MotorTestCommand> commands)
@@ -162,8 +122,7 @@ namespace NOMAD.MissionPlanner
             foreach (var command in commands)
             {
                 if (command == null) continue;
-                if (command.MotorInstance <= 0) return false;
-                if (command.PwmUs != 0 && (command.PwmUs < 500 || command.PwmUs > 2500)) return false;
+                if (!IsValidMotorTestCommand(command.MotorInstance, command.PwmUs)) return false;
                 list.Add(command);
             }
             if (list.Count == 0) return true;
@@ -179,15 +138,12 @@ namespace NOMAD.MissionPlanner
 
                 foreach (var command in list)
                 {
-                    MainV2.comPort.doCommandAsync(
-                        sysid, compid,
-                        MAVLink.MAV_CMD.DO_MOTOR_TEST,
+                    SendMotorTestPwmLockedAsync(
+                        sysid,
+                        compid,
                         command.MotorInstance,
-                        1,
                         command.PwmUs,
-                        (float)Math.Max(0.05, Math.Min(command.TimeoutSeconds, 3.0)),
-                        1, 0, 0,
-                        requireack: false, uicallback: null).GetAwaiter().GetResult();
+                        command.TimeoutSeconds).GetAwaiter().GetResult();
                 }
 
                 return true;
@@ -200,6 +156,30 @@ namespace NOMAD.MissionPlanner
             {
                 if (acquired) s_mavlinkLock.Release();
             }
+        }
+
+        private static bool IsValidMotorTestCommand(int motorInstance, int pwmUs)
+        {
+            if (motorInstance <= 0) return false;
+            return pwmUs == 0 || (pwmUs >= 500 && pwmUs <= 2500);
+        }
+
+        private static Task SendMotorTestPwmLockedAsync(
+            byte sysid,
+            byte compid,
+            int motorInstance,
+            int pwmUs,
+            double timeoutSeconds)
+        {
+            return MainV2.comPort.doCommandAsync(
+                sysid, compid,
+                MAVLink.MAV_CMD.DO_MOTOR_TEST,
+                motorInstance,
+                1,
+                pwmUs,
+                (float)Math.Max(0.05, Math.Min(timeoutSeconds, 3.0)),
+                1, 0, 0,
+                requireack: false, uicallback: null);
         }
 
         public static bool TrySetRelayMavlink(int relayNumber, bool on)
@@ -237,6 +217,10 @@ namespace NOMAD.MissionPlanner
             durationMs = Math.Max(50, Math.Min(durationMs, 5000));
             if (TrySetRelayMavlink(relayNumber, true))
             {
+                // SR-PAY-03: direct GCS-to-FC relay output bypasses the Edge
+                // Core interlock by design; the panel's armed click or the
+                // transmitter switch is the operator interlock documented in
+                // docs/safety/requirements.md and docs/safety/hazards.md.
                 await Task.Delay(durationMs).ConfigureAwait(false);
                 TrySetRelayMavlink(relayNumber, false);
                 return true;

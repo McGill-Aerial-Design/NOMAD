@@ -11,7 +11,6 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from edge_core.core import AppContext, BaseModule, ModuleMetadata
-from edge_core.services.video_stream_manager import get_video_stream_manager
 
 logger = logging.getLogger("edge_core.api.video_slam")
 
@@ -47,20 +46,23 @@ class VideoSlamModule(BaseModule):
     def register_routes(self, app: Any) -> None:
         router = APIRouter(tags=["Video & SLAM"])
 
+        def _manager():
+            return getattr(app.state, "video_stream_manager", None)
+
         @router.get("/api/video/bridges")
         async def get_video_bridges_status():
             """Get status of running RTSP streams."""
-            mgr = get_video_stream_manager()
+            mgr = _manager()
             if not mgr:
-                return {"success": False, "error": "VideoStreamManager not initialized"}
+                raise HTTPException(status_code=503, detail="VideoStreamManager not initialized")
             return {"success": True, "bridges": {"primary": mgr.get_status().to_dict()}}
 
         @router.post("/api/video/bridges/start")
         async def start_video_bridges():
             """Launch the persistent video bridge inside the container."""
-            mgr = get_video_stream_manager()
+            mgr = _manager()
             if not mgr:
-                raise HTTPException(status_code=500, detail="VideoStreamManager not initialized")
+                raise HTTPException(status_code=503, detail="VideoStreamManager not initialized")
             ok, msg = mgr.start_with_reason()
             if not ok:
                 raise HTTPException(status_code=503, detail=msg)
@@ -69,7 +71,7 @@ class VideoSlamModule(BaseModule):
         @router.post("/api/video/source")
         async def switch_video_source(topic: str):
             """Switch the active camera ROS2 topic subscription."""
-            mgr = get_video_stream_manager()
+            mgr = _manager()
             if not mgr or not mgr.is_relay_running():
                 raise HTTPException(status_code=503, detail="Video bridge not running")
             if mgr.switch_topic(topic):
@@ -79,7 +81,7 @@ class VideoSlamModule(BaseModule):
         @router.post("/api/video/overlay/{action}")
         async def set_video_overlay(action: str):
             """Enable or disable the ZED detection overlay on the RTSP feed."""
-            mgr = get_video_stream_manager()
+            mgr = _manager()
             if not mgr or not mgr.is_relay_running():
                 raise HTTPException(status_code=503, detail="Video bridge not running")
             enabled = action.lower() == "enable"

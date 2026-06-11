@@ -195,40 +195,9 @@ namespace NOMAD.MissionPlanner
             };
             _controlPanel.Controls.Add(_numMapRadius);
 
-            // Third row: area map controls
+            // Third row
             y += 26;
             x = 10;
-
-            _lblMapPath = CreateLabel("Area Map:", x, y + 3);
-            _controlPanel.Controls.Add(_lblMapPath);
-            x += 65;
-
-            _txtMapPath = new TextBox
-            {
-                Location = new Point(x, y),
-                Size = new Size(300, 22),
-                Text = "~/NOMAD/data/area_maps/slam_area_map.area",
-                BackColor = Color.FromArgb(50, 50, 55),
-                ForeColor = Color.White,
-                BorderStyle = BorderStyle.FixedSingle,
-            };
-            _controlPanel.Controls.Add(_txtMapPath);
-            x += 310;
-
-            _btnSaveMap = CreateButton("Save", x, y, 58, 24, Color.FromArgb(0, 122, 204));
-            _btnSaveMap.Click += async (s, e) => await SaveAreaMapAsync();
-            _controlPanel.Controls.Add(_btnSaveMap);
-            x += 62;
-
-            _btnLoadMap = CreateButton("Load", x, y, 58, 24, Color.FromArgb(60, 60, 65));
-            _btnLoadMap.Click += async (s, e) => await LoadAreaMapAsync();
-            _controlPanel.Controls.Add(_btnLoadMap);
-            x += 62;
-
-            _btnRelocalizeMap = CreateButton("Relocalize", x, y, 80, 24, Color.FromArgb(150, 90, 0));
-            _btnRelocalizeMap.Click += async (s, e) => await RelocalizeAreaMapAsync();
-            _controlPanel.Controls.Add(_btnRelocalizeMap);
-            x += 86;
 
             _btnCenterOnPose = CreateButton("Center", x, y, 65, 24, Color.FromArgb(60, 60, 65));
             _btnCenterOnPose.Click += (s, e) => CenterOrbitOnCurrentPose();
@@ -255,17 +224,6 @@ namespace NOMAD.MissionPlanner
                 Font = new Font("Consolas", 9),
             };
             _controlPanel.Controls.Add(_lblStats);
-
-            y += 18;
-            _lblPerceptionStatus = new Label
-            {
-                Text = "HSV: -- | Servo: --",
-                Location = new Point(10, y),
-                ForeColor = Color.FromArgb(150, 150, 150),
-                AutoSize = true,
-                Font = new Font("Consolas", 9),
-            };
-            _controlPanel.Controls.Add(_lblPerceptionStatus);
 
             _statusLogPanel = new Panel
             {

@@ -19,7 +19,6 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from enum import Enum
 from typing import Any
 
 from edge_core.safety import (
@@ -36,10 +35,7 @@ from edge_core.safety import (
 logger = logging.getLogger(__name__)
 
 
-class ServoFunction(Enum):
-    """Servo functions tracked by Edge Core."""
-
-    CAMERA_TILT = "camera_tilt"
+CAMERA_TILT = "camera_tilt"
 
 
 @dataclass
@@ -47,7 +43,6 @@ class ServoState:
     """Current state for a Cube-controlled output."""
 
     angle: float
-    enabled: bool
     last_update: float
 
 
@@ -74,7 +69,6 @@ class MavlinkServo:
         self._min_pulse_us = int(min_pulse_us)
         self._max_pulse_us = int(max_pulse_us)
         self._current_angle = float(neutral_angle)
-        self._enabled = False
 
     @property
     def channel(self) -> int:
@@ -84,16 +78,7 @@ class MavlinkServo:
         if self._channel < MIN_SERVO_CHANNEL or self._channel > MAX_SERVO_CHANNEL:
             logger.error("Invalid MAVLink servo channel: %s", self._channel)
             return False
-        self._enabled = True
         logger.info("MAVLink servo %s configured on Cube channel %s", self.name, self._channel)
-        return True
-
-    def enable(self) -> bool:
-        self._enabled = True
-        return True
-
-    def disable(self) -> bool:
-        self._enabled = False
         return True
 
     def set_angle(self, angle: float) -> bool:
@@ -104,6 +89,12 @@ class MavlinkServo:
 
     def set_pwm(self, pulse_us: int) -> bool:
         pulse_us = int(pulse_us)
+        # SR-PAY-01: every transmitted pulse goes through the SC validator,
+        # including locally-computed camera-tilt pulses.
+        decision = validate_servo_command(self._channel, pulse_us)
+        if not decision.allowed:
+            logger.error("%s", decision.message)
+            return False
         if self._mav is None:
             logger.warning("MAVLink service not available for servo command")
             return False
@@ -115,7 +106,6 @@ class MavlinkServo:
     def get_state(self) -> ServoState:
         return ServoState(
             angle=self._current_angle,
-            enabled=self._enabled,
             last_update=time.time(),
         )
 
@@ -129,9 +119,9 @@ class MavlinkServo:
 class ServoController:
     """MAVLink-only controller for Cube Orange servo and relay outputs."""
 
-    def __init__(self) -> None:
-        self._mavlink_service: Any | None = None
-        self._servos: dict[ServoFunction, MavlinkServo] = {}
+    def __init__(self, mavlink_service: Any | None = None) -> None:
+        self._mavlink_service: Any | None = mavlink_service
+        self._servos: dict[str, MavlinkServo] = {}
         self._initialized = False
         self._camera_tilt_channel: int | None = None
         self._water_pump_relay_number: int = 0
@@ -145,6 +135,9 @@ class ServoController:
         logger.info("Servo controller initialized in Cube Orange MAVLink-only mode")
         return True
 
+    def set_mavlink_service(self, mavlink_service: Any | None) -> None:
+        self._mavlink_service = mavlink_service
+
     def is_available(self) -> bool:
         return self._initialized
 
@@ -153,7 +146,7 @@ class ServoController:
             logger.error("Invalid camera tilt servo channel: %s", channel)
             return False
 
-        old_servo = self._servos.get(ServoFunction.CAMERA_TILT)
+        old_servo = self._servos.get(CAMERA_TILT)
         last_angle = 90.0
         if old_servo is not None:
             last_angle = old_servo.get_state().angle
@@ -168,7 +161,7 @@ class ServoController:
             return False
 
         self._camera_tilt_channel = channel
-        self._servos[ServoFunction.CAMERA_TILT] = servo
+        self._servos[CAMERA_TILT] = servo
         return True
 
     def configure_water_pump_relay(self, relay_number: int) -> bool:
@@ -190,14 +183,14 @@ class ServoController:
         return self._mavlink_service.trigger_payload(int(pwm_us), int(channel))
 
     def set_camera_tilt(self, angle: float) -> bool:
-        servo = self._servos.get(ServoFunction.CAMERA_TILT)
+        servo = self._servos.get(CAMERA_TILT)
         if servo is None:
             logger.warning("Camera tilt channel not configured by Mission Planner")
             return False
         return servo.set_angle(angle)
 
     def get_camera_tilt(self) -> float | None:
-        servo = self._servos.get(ServoFunction.CAMERA_TILT)
+        servo = self._servos.get(CAMERA_TILT)
         if servo is None:
             return None
         return servo.get_state().angle
@@ -245,14 +238,6 @@ class ServoController:
             self._mavlink_service.set_relay(relay, False)
         return True
 
-    def enable_all(self) -> None:
-        for servo in self._servos.values():
-            servo.enable()
-
-    def disable_all(self) -> None:
-        for servo in self._servos.values():
-            servo.disable()
-
     def get_status(self) -> dict:
         status: dict[str, Any] = {
             "initialized": self._initialized,
@@ -271,9 +256,8 @@ class ServoController:
 
         for function, servo in self._servos.items():
             state = servo.get_state()
-            status["servos"][function.value] = {
+            status["servos"][function] = {
                 "angle": state.angle,
-                "enabled": state.enabled,
                 "last_update": state.last_update,
                 "type": "mavlink",
                 "channel": servo.channel,
@@ -282,7 +266,6 @@ class ServoController:
         return status
 
     def shutdown(self) -> None:
-        self.disable_all()
         self._initialized = False
 
 
@@ -296,9 +279,10 @@ def init_servo_controller(
     """Initialize the global MAVLink-only servo controller."""
     global _controller
     if _controller is None:
-        _controller = ServoController()
+        _controller = ServoController(mavlink_service=mavlink_service)
+    else:
+        _controller.set_mavlink_service(mavlink_service)
 
-    _controller._mavlink_service = mavlink_service
     initialized = _controller.initialize()
     if camera_tilt_channel is not None and camera_tilt_channel > 0:
         _controller.configure_camera_tilt_mavlink(int(camera_tilt_channel))

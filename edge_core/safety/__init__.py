@@ -22,6 +22,7 @@ from .limits import (
     DEFAULT_MAX_VELOCITY_XY,
     DEFAULT_MAX_VELOCITY_Z,
     DEFAULT_MAX_YAW_RATE,
+    VELOCITY_TYPE_MASK,
     VelocityLimits,
     clamp,
 )
@@ -52,6 +53,7 @@ __all__ = [
     "MIN_PWM_US",
     "MIN_RELEASE_S",
     "MIN_SERVO_CHANNEL",
+    "VELOCITY_TYPE_MASK",
     "Decision",
     "EnvelopePolicy",
     "FencePolicy",

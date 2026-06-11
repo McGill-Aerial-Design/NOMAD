@@ -56,7 +56,6 @@ def wire_modules(
     app: Any,
     *,
     allow_list: Iterable[str] | None = None,
-    specs: Iterable[str] | None = None,
     ctx: AppContext | None = None,
 ) -> ModuleRegistry | None:
     """Discover, configure, and register enabled modules on the FastAPI ``app``.
@@ -74,11 +73,6 @@ def wire_modules(
         registry.discover_entry_points()
     except Exception as exc:  # noqa: BLE001 - never let discovery crash startup
         logger.error("module discovery failed: %s", exc)
-    if specs:
-        try:
-            registry.load_specs(specs)
-        except Exception as exc:  # noqa: BLE001
-            logger.error("module spec loading failed: %s", exc)
 
     if len(registry) == 0:
         return None

@@ -21,6 +21,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using MissionPlanner;
 using JoystickBase = MissionPlanner.Joystick.JoystickBase;
@@ -586,7 +587,9 @@ namespace NOMAD.MissionPlanner
                 case SwitchAction.DropToggleP1: ToggleDrop(0); break;
                 case SwitchAction.DropToggleP2: ToggleDrop(1); break;
                 case SwitchAction.DropToggleP3: ToggleDrop(2); break;
-                case SwitchAction.FireWaterPump: PayloadActions.FireWater(_config); break;
+                case SwitchAction.FireWaterPump:
+                    RunPayloadAction(() => PayloadActions.FireWater(_config), "fire water pump");
+                    break;
                 // Reel actions are handled level-triggered in pass 2 — ignore on edge.
                 default: break;
             }
@@ -597,9 +600,9 @@ namespace NOMAD.MissionPlanner
             // PayloadActions.Drop / Retract raise PayloadDroppedStateChanged on
             // success, which updates the shared state we read here next time.
             if (PayloadControlPanel.IsPayloadDropped(payloadIdx))
-                PayloadActions.Retract(_config, payloadIdx + 1);
+                RunPayloadAction(() => PayloadActions.Retract(_config, payloadIdx + 1), $"retract payload {payloadIdx + 1}");
             else
-                PayloadActions.Drop(_config, payloadIdx + 1);
+                RunPayloadAction(() => PayloadActions.Drop(_config, payloadIdx + 1), $"drop payload {payloadIdx + 1}");
         }
 
         private void ApplyReel(int reelIdx, int target)
@@ -608,9 +611,26 @@ namespace NOMAD.MissionPlanner
             // holds the last PWM, so an idle reel costs zero MAVLink traffic.
             if (target == _reelDir[reelIdx]) return;
             _reelDir[reelIdx] = target;
-            if      (target > 0) PayloadActions.ReelStart(_config, reelIdx);
-            else if (target < 0) PayloadActions.ReelStartOut(_config, reelIdx);
-            else                 PayloadActions.ReelStop(_config, reelIdx);
+            if      (target > 0) RunPayloadAction(() => PayloadActions.ReelStart(_config, reelIdx), $"reel {reelIdx + 1} in");
+            else if (target < 0) RunPayloadAction(() => PayloadActions.ReelStartOut(_config, reelIdx), $"reel {reelIdx + 1} out");
+            else                 RunPayloadAction(() => PayloadActions.ReelStop(_config, reelIdx), $"reel {reelIdx + 1} stop");
+        }
+
+        private static void RunPayloadAction(Func<Task> action, string name)
+        {
+            _ = RunPayloadActionAsync(action, name);
+        }
+
+        private static async Task RunPayloadActionAsync(Func<Task> action, string name)
+        {
+            try
+            {
+                await action().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Joystick payload action failed ({name}) — {ex.Message}");
+            }
         }
     }
 }

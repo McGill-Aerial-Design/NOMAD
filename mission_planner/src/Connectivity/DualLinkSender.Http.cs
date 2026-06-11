@@ -2,11 +2,11 @@
 // Copyright 2026 The NOMAD Authors
 
 using System;
+using System.Collections.Generic;
 using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using MissionPlanner;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -17,74 +17,60 @@ namespace NOMAD.MissionPlanner
     /// </summary>
     public partial class DualLinkSender
     {
+        private sealed class EdgeHealthResponse
+        {
+            [JsonProperty("cpu_load")]
+            public float CpuLoad { get; set; }
+
+            [JsonProperty("gpu_load")]
+            public float GpuLoad { get; set; }
+
+            [JsonProperty("cpu_temp")]
+            public float CpuTemp { get; set; }
+
+            [JsonProperty("gpu_temp")]
+            public float GpuTemp { get; set; }
+
+            [JsonProperty("memory_used_pct")]
+            public float MemoryUsedPct { get; set; }
+
+            [JsonProperty("disk_free_gb")]
+            public float DiskFreeGb { get; set; }
+        }
+
         /// <summary>
         /// Get health status from Jetson.
         /// Also updates IsJetsonConnected and LastHealthStatus properties.
         /// </summary>
         public async Task<CommandResult> GetHealthAsync()
         {
-            try
+            var result = await SendAsync(HttpMethod.Get, "/health").ConfigureAwait(false);
+            IsJetsonConnected = result.Success;
+
+            if (!result.Success)
             {
-                var response = await JetsonApiService.GetAsync("/health");
-                var responseBody = await response.Content.ReadAsStringAsync();
-
-                // Update connection status
-                IsJetsonConnected = response.IsSuccessStatusCode;
-
-                // Parse and store health data
-                if (response.IsSuccessStatusCode && !string.IsNullOrEmpty(responseBody))
-                {
-                    try
-                    {
-                        var data = JsonConvert.DeserializeObject<dynamic>(responseBody);
-                        LastHealthStatus = new JetsonHealthStatus
-                        {
-                            // Match actual API field names from /health endpoint
-                            CpuUsage = data.cpu_load ?? data.cpu_usage_pct ?? 0,
-                            GpuUsage = data.gpu_load ?? data.gpu_usage_pct ?? 0,
-                            CpuTemp = data.cpu_temp ?? data.cpu_temp_c ?? 0,
-                            GpuTemp = data.gpu_temp ?? data.gpu_temp_c ?? 0,
-                            MemoryUsed = data.memory_used_pct ?? data.memory_used_mb ?? 0,
-                            MemoryTotal = 100, // memory_used_pct is already a percentage
-                            DiskUsed = 100 - ((float)(data.disk_free_gb ?? 800) / 1000 * 100), // Approx: 1TB disk
-                            Timestamp = DateTime.Now
-                        };
-                    }
-                    catch (Exception parseEx)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Health parse error: {parseEx.Message}");
-                    }
-                }
-
-                return new CommandResult
-                {
-                    Success = response.IsSuccessStatusCode,
-                    Message = response.IsSuccessStatusCode ? "Health check OK" : "Health check failed",
-                    Data = responseBody,
-                    Method = "HTTP"
-                };
-            }
-            catch (Exception ex)
-            {
-                // Update connection status - failed to reach Jetson
-                IsJetsonConnected = false;
                 LastHealthStatus = null;
+                result.Message = $"Health check error: {result.Message}";
+                return result;
+            }
 
-                return new CommandResult
+            var data = HttpJson.Deserialize<EdgeHealthResponse>(result.Data);
+            if (data != null)
+            {
+                LastHealthStatus = new JetsonHealthStatus
                 {
-                    Success = false,
-                    Message = $"Health check error: {ex.Message}",
-                    Method = "HTTP"
+                    CpuUsage = data.CpuLoad,
+                    GpuUsage = data.GpuLoad,
+                    CpuTemp = data.CpuTemp,
+                    GpuTemp = data.GpuTemp,
+                    MemoryUsed = data.MemoryUsedPct,
+                    DiskFreeGb = data.DiskFreeGb,
+                    Timestamp = DateTime.Now
                 };
             }
-        }
 
-        /// <summary>
-        /// Reset VIO origin on Jetson.
-        /// </summary>
-        public async Task<CommandResult> ResetVioOriginAsync()
-        {
-            return await SendHttpPost("/api/vio/reset_origin", null);
+            result.Message = "Health check OK";
+            return result;
         }
 
         /// <summary>
@@ -92,7 +78,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> GetVioStatusAsync()
         {
-            return await SendHttpGetLongRun("/api/vio/status", 12);
+            return await SendAsync(HttpMethod.Get, "/api/vio/status", timeoutSeconds: 12);
         }
 
         /// <summary>
@@ -100,7 +86,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> GetVioTrajectoryAsync(int maxPoints = 100)
         {
-            return await SendHttpGetLongRun($"/api/vio/trajectory?max_points={maxPoints}", 12);
+            return await SendAsync(HttpMethod.Get, $"/api/vio/trajectory?max_points={maxPoints}", timeoutSeconds: 12);
         }
 
         /// <summary>
@@ -108,7 +94,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> ClearVioTrajectoryAsync()
         {
-            return await SendHttpDelete("/api/vio/trajectory");
+            return await SendAsync(HttpMethod.Delete, "/api/vio/trajectory");
         }
 
         /// <summary>
@@ -116,7 +102,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> GetIsaacStatusAsync()
         {
-            return await SendHttpGetLongRun("/api/isaac/status", 15);
+            return await SendAsync(HttpMethod.Get, "/api/isaac/status", timeoutSeconds: 15);
         }
 
         /// <summary>
@@ -124,7 +110,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> GetServicesStatusAsync()
         {
-            return await SendHttpGetLongRun("/api/services/status", 15);
+            return await SendAsync(HttpMethod.Get, "/api/services/status", timeoutSeconds: 15);
         }
 
         /// <summary>
@@ -133,7 +119,7 @@ namespace NOMAD.MissionPlanner
         public async Task<CommandResult> ExecuteTerminalCommandAsync(string command, int timeout = 10)
         {
             // API expects command_name (whitelist key), not full command string
-            return await SendHttpPost("/api/terminal/run", new { command_name = command, timeout });
+            return await SendAsync(HttpMethod.Post, "/api/terminal/run", new { command_name = command, timeout });
         }
 
         /// <summary>
@@ -172,26 +158,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> StartServiceAsync(string serviceName)
         {
-            if (!ALLOWED_SERVICES.Contains(serviceName))
-                return new CommandResult { Success = false, Message = $"Service '{serviceName}' not in whitelist" };
-
-            // Map service names to whitelisted command names
-            string commandName = serviceName switch
-            {
-                "mediamtx" => "start_mediamtx",
-                "mavlink-router" => "start_mavlink",
-                "nomad" or "edge_core" => "start_nomad",
-                "isaac" => "start_isaac",
-                "zed" => "start_zed",
-                "ros_bridge" => "start_ros_bridge",
-                "video_bridge" => "start_video_bridge",
-                "nvblox" => "start_nvblox",
-                "all" => "start_all",
-                "novnc" => "start_novnc",
-                _ => $"start_{serviceName}"
-            };
-
-            return await ExecuteTerminalCommandParsedAsync(commandName, 15);
+            return await RunServiceCommandAsync("start", serviceName, 15);
         }
 
         /// <summary>
@@ -199,26 +166,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> StopServiceAsync(string serviceName)
         {
-            if (!ALLOWED_SERVICES.Contains(serviceName))
-                return new CommandResult { Success = false, Message = $"Service '{serviceName}' not in whitelist" };
-
-            // Map service names to whitelisted command names
-            string commandName = serviceName switch
-            {
-                "mediamtx" => "stop_mediamtx",
-                "mavlink-router" => "stop_mavlink",
-                "nomad" or "edge_core" => "stop_nomad",
-                "isaac" => "stop_isaac",
-                "zed" => "stop_zed",
-                "ros_bridge" => "stop_ros_bridge",
-                "video_bridge" => "stop_video_bridge",
-                "nvblox" => "stop_nvblox",
-                "all" => "stop_all",
-                "novnc" => "stop_novnc",
-                _ => $"stop_{serviceName}"
-            };
-
-            return await ExecuteTerminalCommandParsedAsync(commandName, 15);
+            return await RunServiceCommandAsync("stop", serviceName, 15);
         }
 
         /// <summary>
@@ -226,25 +174,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> RestartServiceAsync(string serviceName)
         {
-            if (!ALLOWED_SERVICES.Contains(serviceName))
-                return new CommandResult { Success = false, Message = $"Service '{serviceName}' not in whitelist" };
-
-            // Map service names to whitelisted command names
-            string commandName = serviceName switch
-            {
-                "mediamtx" => "restart_video",            // restarts mediamtx + video_bridge
-                "mavlink-router" => "restart_mavlink",
-                "nomad" or "edge_core" => "restart_edge_core",
-                "isaac" => "restart_isaac",
-                "zed" => "restart_zed",
-                "ros_bridge" => "restart_ros_bridge",
-                "video_bridge" => "restart_video_bridge",
-                "nvblox" => "restart_nvblox",
-                "all" => "restart_all",
-                _ => $"restart_{serviceName}" // Fallback
-            };
-
-            return await ExecuteTerminalCommandParsedAsync(commandName, 15);
+            return await RunServiceCommandAsync("restart", serviceName, 15);
         }
 
         /// <summary>
@@ -252,33 +182,77 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> GetServiceStatusAsync(string serviceName)
         {
-            if (!ALLOWED_SERVICES.Contains(serviceName))
-                return new CommandResult { Success = false, Message = $"Service '{serviceName}' not in whitelist" };
-
-            // Map service names to whitelisted command names
-            string commandName = serviceName switch
-            {
-                "mediamtx" => "status_mediamtx",
-                "mavlink-router" => "status_mavlink",
-                "nomad" or "edge_core" => "status_nomad",
-                "isaac" => "status_isaac",
-                "zed" => "status_zed",
-                "ros_bridge" => "status_ros_bridge",
-                "video_bridge" => "status_video",
-                "nvblox" => "status_nvblox",
-                "novnc" => "status_novnc",
-                _ => $"status_{serviceName}" // Fallback
-            };
-
-            return await ExecuteTerminalCommandParsedAsync(commandName, 5);
+            return await RunServiceCommandAsync("status", serviceName, 5);
         }
 
-        /// <summary>
-        /// Check if Isaac ROS container is running.
-        /// </summary>
-        public async Task<CommandResult> GetIsaacRosContainerStatusAsync()
+        private static readonly Dictionary<string, string> ServiceCommandExceptions =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["start:edge_core"] = "start_nomad",
+                ["stop:edge_core"] = "stop_nomad",
+                ["restart:edge_core"] = "restart_edge_core",
+                ["restart:nomad"] = "restart_edge_core",
+                ["restart:mediamtx"] = "restart_video",
+                ["status:edge_core"] = "status_nomad",
+                ["status:video_bridge"] = "status_video",
+            };
+
+        private static readonly HashSet<string> TerminalCommandNames =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "status_nomad",
+                "status_mediamtx",
+                "status_mavlink",
+                "status_video",
+                "status_isaac",
+                "status_zed",
+                "status_ros_bridge",
+                "status_nvblox",
+                "status_novnc",
+                "start_nomad",
+                "stop_nomad",
+                "restart_edge_core",
+                "start_mediamtx",
+                "stop_mediamtx",
+                "restart_video",
+                "start_mavlink",
+                "stop_mavlink",
+                "restart_mavlink",
+                "start_video_bridge",
+                "stop_video_bridge",
+                "restart_video_bridge",
+                "start_isaac",
+                "stop_isaac",
+                "restart_isaac",
+                "restart_all",
+            };
+
+        private async Task<CommandResult> RunServiceCommandAsync(string action, string serviceName, int timeout)
         {
-            return await ExecuteTerminalCommandAsync("docker ps --filter name=nomad_isaac_ros --format '{{.Status}}'", 5);
+            string commandName = ResolveServiceCommand(action, serviceName);
+            if (commandName == null)
+            {
+                return new CommandResult
+                {
+                    Success = false,
+                    Message = $"Service action '{action}:{serviceName}' not in whitelist",
+                    Method = "HTTP"
+                };
+            }
+
+            return await ExecuteTerminalCommandParsedAsync(commandName, timeout);
+        }
+
+        private static string ResolveServiceCommand(string action, string serviceName)
+        {
+            if (string.IsNullOrWhiteSpace(action) || string.IsNullOrWhiteSpace(serviceName)) return null;
+
+            string service = serviceName.Trim().Replace("-", "_");
+            string key = $"{action}:{service}";
+            string commandName = ServiceCommandExceptions.TryGetValue(key, out var mapped)
+                ? mapped
+                : $"{action}_{service}";
+            return TerminalCommandNames.Contains(commandName) ? commandName : null;
         }
 
         /// <summary>
@@ -286,7 +260,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> StartIsaacRosAsync()
         {
-            return await SendHttpPostLongRun("/api/isaac/start", null);
+            return await SendAsync(HttpMethod.Post, "/api/isaac/start", timeoutSeconds: 60);
         }
 
         /// <summary>
@@ -294,16 +268,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> StopIsaacRosAsync()
         {
-            return await SendHttpPostLongRun("/api/isaac/stop", null);
-        }
-
-        /// <summary>
-        /// Launch nvblox + ROS-HTTP bridge inside a running container.
-        /// Lightweight: does not install deps or rebuild.
-        /// </summary>
-        public async Task<CommandResult> LaunchNvbloxAsync()
-        {
-            return await SendHttpPostLongRun("/api/isaac/launch-nvblox", null);
+            return await SendAsync(HttpMethod.Post, "/api/isaac/stop", timeoutSeconds: 60);
         }
 
         /// <summary>
@@ -311,7 +276,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> StartRosBridgeAsync()
         {
-            return await SendHttpPostLongRun("/api/isaac/bridge/start", null);
+            return await SendAsync(HttpMethod.Post, "/api/isaac/bridge/start", timeoutSeconds: 60);
         }
 
         /// <summary>
@@ -319,31 +284,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> StopRosBridgeAsync()
         {
-            return await SendHttpPost("/api/isaac/bridge/stop", null);
-        }
-
-        /// <summary>
-        /// Stop nvblox without stopping the container.
-        /// </summary>
-        public async Task<CommandResult> StopNvbloxAsync()
-        {
-            return await SendHttpPostLongRun("/api/isaac/stop-nvblox", null);
-        }
-
-        /// <summary>
-        /// Stop SLAM resources by stopping nvblox.
-        /// </summary>
-        public async Task<CommandResult> StopSlamAsync()
-        {
-            return await StopNvbloxAsync();
-        }
-
-        /// <summary>
-        /// Get Isaac ROS logs.
-        /// </summary>
-        public async Task<CommandResult> GetIsaacRosLogsAsync(string logType = "all")
-        {
-            return await SendHttpGetLongRun($"/api/isaac/logs?log_type={logType}", 15);
+            return await SendAsync(HttpMethod.Post, "/api/isaac/bridge/stop");
         }
 
         // ============================================================
@@ -355,7 +296,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> GetVideoBridgesStatusAsync()
         {
-            return await SendHttpGetLongRun("/api/video/bridges", 15);
+            return await SendAsync(HttpMethod.Get, "/api/video/bridges", timeoutSeconds: 15);
         }
 
         /// <summary>
@@ -365,127 +306,58 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public async Task<CommandResult> StartVideoBridgesAsync()
         {
-            return await SendHttpPostLongRun("/api/video/bridges/start", null);
-        }
-
-        // ============================================================
-        // SLAM Control
-        // ============================================================
-
-        /// <summary>
-        /// Get SLAM/nvblox mapping status.
-        /// </summary>
-        public async Task<CommandResult> GetSlamStatusAsync()
-        {
-            return await SendHttpGetLongRun("/api/slam/status", 15);
-        }
-
-        /// <summary>
-        /// Clear SLAM mesh data.
-        /// </summary>
-        public async Task<CommandResult> ClearSlamAsync()
-        {
-            return await SendHttpPostLongRun("/api/slam/clear?prefer_load_map=true&auto_create_empty_map_if_missing=true", null);
-        }
-
-        /// <summary>
-        /// Save the ZED positional tracking area map to a Jetson SSD path.
-        /// </summary>
-        public async Task<CommandResult> SaveAreaMapAsync(string filePath)
-        {
-            var body = new
-            {
-                file_path = filePath,
-                wait_for_completion = true,
-                timeout_s = 30.0,
-            };
-            return await SendHttpPostLongRun("/api/vio/area/save", body);
-        }
-
-        /// <summary>
-        /// Load a previously saved area map for relocalization.
-        /// </summary>
-        public async Task<CommandResult> LoadAreaMapAsync(string filePath)
-        {
-            var body = new
-            {
-                file_path = filePath,
-            };
-            return await SendHttpPostLongRun("/api/vio/area/load", body);
-        }
-
-        /// <summary>
-        /// Load an area map and immediately attempt relocalization.
-        /// </summary>
-        public async Task<CommandResult> RelocalizeAreaMapAsync(string filePath)
-        {
-            var body = new
-            {
-                file_path = filePath,
-            };
-            return await SendHttpPostLongRun("/api/vio/area/relocalize", body);
+            return await SendAsync(HttpMethod.Post, "/api/video/bridges/start", timeoutSeconds: 60);
         }
 
         // ============================================================
         // HTTP Communication
         // ============================================================
 
-        private static CommandResult ToCommandResult(
-            bool success, string body, string error, string successMessage)
-        {
-            return new CommandResult
-            {
-                Success = success,
-                Message = success ? successMessage : error,
-                Data = body,
-                Method = "HTTP"
-            };
-        }
-
-        private async Task<CommandResult> SendHttpGet(string endpoint)
-        {
-            var (success, body, error) = await HttpJson.TryGetAsync(
-                JetsonApiService.ApiClient, $"{JetsonApiService.BaseUrl}{endpoint}");
-            return ToCommandResult(success, body, error, "HTTP GET successful");
-        }
-
-        private async Task<CommandResult> SendHttpGetLongRun(string endpoint, int timeoutSeconds = 15)
+        private async Task<CommandResult> SendAsync(
+            HttpMethod method,
+            string endpoint,
+            object body = null,
+            int? timeoutSeconds = null)
         {
             CancellationTokenSource cts = null;
             try
             {
-                cts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Max(1, timeoutSeconds)));
-                var response = await JetsonApiService.LongRunClient.GetAsync(
-                    $"{JetsonApiService.BaseUrl}{endpoint}",
-                    cts.Token
-                );
-                var responseBody = await response.Content.ReadAsStringAsync();
-
-                if (response.IsSuccessStatusCode)
+                var client = timeoutSeconds.HasValue ? JetsonApiService.LongRunClient : JetsonApiService.ApiClient;
+                var request = new HttpRequestMessage(method, $"{JetsonApiService.BaseUrl}{endpoint}");
+                if (body != null || method == HttpMethod.Post)
                 {
-                    return new CommandResult
-                    {
-                        Success = true,
-                        Message = "HTTP GET successful",
-                        Data = responseBody,
-                        Method = "HTTP"
-                    };
+                    request.Content = new StringContent(
+                        JsonConvert.SerializeObject(body ?? new { }),
+                        Encoding.UTF8,
+                        "application/json");
                 }
 
+                var token = CancellationToken.None;
+                if (timeoutSeconds.HasValue)
+                {
+                    cts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Max(1, timeoutSeconds.Value)));
+                    token = cts.Token;
+                }
+
+                var response = await client.SendAsync(request, token).ConfigureAwait(false);
+                var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                 return new CommandResult
                 {
-                    Success = false,
-                    Message = $"HTTP {(int)response.StatusCode}: {response.ReasonPhrase}",
+                    Success = response.IsSuccessStatusCode,
+                    Message = response.IsSuccessStatusCode
+                        ? $"HTTP {method.Method} successful"
+                        : $"HTTP {(int)response.StatusCode}: {response.ReasonPhrase}",
                     Data = responseBody,
                     Method = "HTTP"
                 };
             }
             catch (TaskCanceledException)
             {
+                string timeout = timeoutSeconds.HasValue ? $" ({Math.Max(1, timeoutSeconds.Value)}s)" : "";
                 return new CommandResult
                 {
                     Success = false,
-                    Message = $"HTTP request timed out ({Math.Max(1, timeoutSeconds)}s)",
+                    Message = $"HTTP request timed out{timeout}",
                     Method = "HTTP"
                 };
             }
@@ -510,121 +382,6 @@ namespace NOMAD.MissionPlanner
             finally
             {
                 cts?.Dispose();
-            }
-        }
-
-        private async Task<CommandResult> SendHttpDelete(string endpoint)
-        {
-            try
-            {
-                var response = await JetsonApiService.DeleteAsync(endpoint);
-                var body = await response.Content.ReadAsStringAsync();
-                return ToCommandResult(
-                    response.IsSuccessStatusCode, body,
-                    $"HTTP {(int)response.StatusCode}: {response.ReasonPhrase}",
-                    "HTTP DELETE successful");
-            }
-            catch (Exception ex)
-            {
-                return ToCommandResult(false, null, $"HTTP error: {ex.Message}", null);
-            }
-        }
-
-        private async Task<CommandResult> SendHttpPost(string endpoint, object body)
-        {
-            var (success, responseBody, error) = await HttpJson.TryPostAsync(
-                JetsonApiService.ApiClient, $"{JetsonApiService.BaseUrl}{endpoint}", body);
-            return ToCommandResult(success, responseBody, error, "HTTP request successful");
-        }
-
-        /// <summary>
-        /// Send an HTTP POST using the long-running client (60s timeout).
-        /// Use for operations that take longer than the standard timeout,
-        /// such as starting video bridges, Isaac ROS, etc.
-        /// </summary>
-        private async Task<CommandResult> SendHttpPostLongRun(string endpoint, object body)
-        {
-            try
-            {
-                var content = body != null
-                    ? new StringContent(
-                        JsonConvert.SerializeObject(body),
-                        Encoding.UTF8,
-                        "application/json")
-                    : new StringContent("{}", Encoding.UTF8, "application/json");
-
-                var response = await JetsonApiService.PostLongRunAsync(endpoint, content);
-                var responseBody = await response.Content.ReadAsStringAsync();
-
-                if (response.IsSuccessStatusCode)
-                {
-                    // Check for application-level failure: server returns HTTP 200
-                    // with {"success": false, "error": "..."} for long-running ops.
-                    string appError = null;
-                    try
-                    {
-                        var json = JObject.Parse(responseBody);
-                        if (json["success"]?.Value<bool>() == false)
-                            appError = json["error"]?.Value<string>() ?? json["message"]?.Value<string>() ?? "Server reported failure";
-                    }
-                    catch { }
-
-                    if (appError != null)
-                    {
-                        return new CommandResult
-                        {
-                            Success = false,
-                            Message = appError,
-                            Data = responseBody,
-                            Method = "HTTP"
-                        };
-                    }
-
-                    return new CommandResult
-                    {
-                        Success = true,
-                        Message = "HTTP request successful",
-                        Data = responseBody,
-                        Method = "HTTP"
-                    };
-                }
-                else
-                {
-                    return new CommandResult
-                    {
-                        Success = false,
-                        Message = $"HTTP {(int)response.StatusCode}: {response.ReasonPhrase}",
-                        Data = responseBody,
-                        Method = "HTTP"
-                    };
-                }
-            }
-            catch (HttpRequestException ex)
-            {
-                return new CommandResult
-                {
-                    Success = false,
-                    Message = $"HTTP connection failed: {ex.Message}",
-                    Method = "HTTP"
-                };
-            }
-            catch (TaskCanceledException)
-            {
-                return new CommandResult
-                {
-                    Success = false,
-                    Message = "HTTP request timed out",
-                    Method = "HTTP"
-                };
-            }
-            catch (Exception ex)
-            {
-                return new CommandResult
-                {
-                    Success = false,
-                    Message = $"HTTP error: {ex.Message}",
-                    Method = "HTTP"
-                };
             }
         }
     }

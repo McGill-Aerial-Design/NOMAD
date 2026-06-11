@@ -8,8 +8,9 @@ FastAPI route and participates in the ``start()``/``stop()`` lifecycle.
 
 Load it explicitly (config / tests)::
 
-    from edge_core.core import wire_modules
-    wire_modules(app, specs=["sample_module.sample_module:SampleModule"])
+    from edge_core.core import ModuleRegistry
+    registry = ModuleRegistry()
+    registry.load_specs(["sample_module.sample_module:SampleModule"])
 
 or, when packaged and installed, advertise it on the ``nomad.modules``
 entry-point group so it is auto-discovered::

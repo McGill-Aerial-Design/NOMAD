@@ -15,21 +15,21 @@ import pytest
 from edge_core.ros_http_bridge import mavlink_velocity as mv
 from edge_core.ros_http_bridge.mavlink_velocity import (
     MavlinkVelocityController,
-    _clamp,
     _read_positive_float,
 )
+from edge_core.safety import clamp
 
 
 def test_clamp_within_and_outside_bounds():
-    assert _clamp(0.5, -1.0, 1.0) == 0.5
-    assert _clamp(5.0, -1.0, 1.0) == 1.0
-    assert _clamp(-5.0, -1.0, 1.0) == -1.0
+    assert clamp(0.5, -1.0, 1.0) == 0.5
+    assert clamp(5.0, -1.0, 1.0) == 1.0
+    assert clamp(-5.0, -1.0, 1.0) == -1.0
 
 
 def test_clamp_rejects_nonfinite():
     for bad in (math.inf, -math.inf, math.nan):
         with pytest.raises(ValueError):
-            _clamp(bad, -1.0, 1.0)
+            clamp(bad, -1.0, 1.0)
 
 
 def test_read_positive_float_valid(monkeypatch):

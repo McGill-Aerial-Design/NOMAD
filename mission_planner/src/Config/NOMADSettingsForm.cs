@@ -79,7 +79,6 @@ namespace NOMAD.MissionPlanner
         private CheckBox _chkShowNotifications;
         private ComboBox _cmbDefaultTab;
         private CheckBox _chkDarkMode;
-        private CheckBox _chkUseELRS;
         private NumericUpDown _numSlamFov;
         private NumericUpDown _numSlamMapRadius;
 
@@ -128,10 +127,6 @@ namespace NOMAD.MissionPlanner
             _serialBridgeStatusProvider = provider;
             RefreshSerialBridgeStatus();
         }
-
-        // Google Drive
-        private Button _btnUploadGDrive;
-        private Label _lblGDriveStatus;
 
         // Buttons
         private Button _btnOK;
@@ -183,7 +178,6 @@ namespace NOMAD.MissionPlanner
             _tabControl.TabPages.Add(CreateVioTab());
             _tabControl.TabPages.Add(CreateUiTab());
             _tabControl.TabPages.Add(CreateAlertsTab());
-            _tabControl.TabPages.Add(CreateUploadsTab());
             _tabControl.TabPages.Add(CreatePayloadsTab());
             _tabControl.TabPages.Add(CreateSprayCalibrationTab());
             _tabControl.TabPages.Add(CreateServosTab());
@@ -412,7 +406,6 @@ namespace NOMAD.MissionPlanner
             _chkShowNotifications.Checked = Config.ShowNotifications;
             SetComboBoxValue(_cmbDefaultTab, Config.DefaultTab);
             _chkDebugMode.Checked = Config.DebugMode;
-            _chkUseELRS.Checked = Config.UseELRS;
             _numSlamFov.Value = (decimal)Math.Max(30f, Math.Min(140f, Config.SlamCameraFovDeg));
             _numSlamMapRadius.Value = (decimal)Math.Max(1f, Math.Min(20f, Config.SlamMapRadiusM));
 
@@ -565,7 +558,6 @@ namespace NOMAD.MissionPlanner
             Config.ShowNotifications = _chkShowNotifications.Checked;
             Config.DefaultTab = _cmbDefaultTab.SelectedItem?.ToString() ?? "Dashboard";
             Config.DebugMode = _chkDebugMode.Checked;
-            Config.UseELRS = _chkUseELRS.Checked;
             Config.SlamCameraFovDeg = (float)_numSlamFov.Value;
             Config.SlamMapRadiusM = (float)_numSlamMapRadius.Value;
 

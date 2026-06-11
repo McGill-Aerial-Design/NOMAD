@@ -34,12 +34,12 @@ import threading
 import time
 
 from edge_core.safety import (
+    VELOCITY_TYPE_MASK,
     Decision,
     EnvelopePolicy,
     FlightConditions,
     VelocityCommand,
     VelocityLimits,
-    clamp,
     evaluate,
     heartbeat_from_vehicle,
     vio_fresh,
@@ -55,10 +55,6 @@ except Exception:  # pragma: no cover - exercised only when pymavlink is absent
     MAVLINK_AVAILABLE = False
 
 logger = logging.getLogger("ros_http_bridge.mavlink_velocity")
-
-# Back-compat alias: the clamp lives in the SC core now. Kept so existing
-# imports (`from ...mavlink_velocity import _clamp`) and tests keep working.
-_clamp = clamp
 
 
 class MavlinkVelocityController:
@@ -78,10 +74,9 @@ class MavlinkVelocityController:
     # ArduPilot flight mode required for guided velocity control.
     GUIDED_MODE = "GUIDED"
 
-    # type_mask for SET_POSITION_TARGET_LOCAL_NED: use vx/vy/vz + yaw_rate only.
-    # Bits 0-2 (pos) ignored, 3-5 (vel) used, 6-8 (accel) + 9 (force) + 10 (yaw)
-    # ignored, 11 (yaw_rate) used.  == 0x07C7.
-    _TYPE_MASK = 0b0000_0111_1100_0111
+    # type_mask for SET_POSITION_TARGET_LOCAL_NED: velocity + yaw_rate only.
+    # Single source of truth in the SC core (edge_core.safety).
+    _TYPE_MASK = VELOCITY_TYPE_MASK
 
     def __init__(
         self,

@@ -148,7 +148,7 @@ in the plugin.
 
 ### Run Edge Core locally without hardware (sim)
 ```bash
-python -m edge_core.main --sim --no-vision --port 8000
+python -m edge_core.main --sim --port 8000
 # then open http://localhost:8000/docs
 ```
 
