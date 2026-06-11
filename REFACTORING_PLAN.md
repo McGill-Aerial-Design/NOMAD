@@ -339,31 +339,56 @@ get an `enable_flag`.
 
 ## Verification gates (every commit)
 
-- [ ] `pixi run cov-safety` — 100% branch coverage on `edge_core/safety/`
-- [ ] `pixi run lint-safety` and SC tests green (`test_safety_partition.py`,
+- [x] `pixi run cov-safety` — 100% branch coverage on `edge_core/safety/`
+- [x] `pixi run lint-safety` and SC tests green (`test_safety_partition.py`,
   `test_safety_command_surface.py`, `test_safety_traceability.py`)
-- [ ] `pixi run test` (coverage ratchet ≥ 25; raise the floor at the end of the
+- [x] `pixi run test` (coverage ratchet ≥ 25; raise the floor at the end of the
   plan to the new level minus 1 point) · `lint` · `fmt-check` · `typecheck`
-- [ ] C#: `scripts/build/build_plugin_windows.ps1` compiles clean;
+- [x] C#: `scripts/build/build_plugin_windows.ps1` compiles clean;
   `scripts/build/lint_plugin_deadcode.ps1` reports no new (and fewer) orphans
-- [ ] Upgraded contract gate green with **zero `KNOWN_DRIFT` rows** at plan end
+- [x] Upgraded contract gate green with **zero `KNOWN_DRIFT` rows** at plan end
 - [ ] `pixi run dev-up && pixi run test-api` passes; `pixi run sitl-scenario`
   and `pixi run sitl-fence` pass (SR-VEL / SR-FEN evidence unchanged)
-- [ ] Camera-tilt live check: POST then GET `/api/servo/camera/tilt`
+- [x] Camera-tilt live check: POST then GET `/api/servo/camera/tilt`
   round-trips a float angle
-- [ ] No fake success: `grep -rn '"success": True' edge_core/api_routes/` shows
+- [x] No fake success: `grep -rn '"success": True' edge_core/api_routes/` shows
   no handler returning success without performing the named action
+
+Verification notes (2026-06-11):
+
+- `pixi run test` was rerun after `coverage erase`: 214 passed, 2 skipped,
+  coverage 46.23% (above the 25% ratchet).
+- Focused module boot/API reference slice passed: 32 tests.
+- Sim-mode lifespan check wired and started every `nomad.modules` entry point:
+  `calibration, health, isaac_mgmt, mavlink, network, time, video, video_slam, vio`.
+- Docker/SITL gate is blocked on this workstation: `pixi run dev-up` cannot
+  connect to Docker Desktop's Linux engine pipe
+  (`//./pipe/dockerDesktopLinuxEngine` missing), so `test-api`,
+  `sitl-scenario`, and `sitl-fence` could not be run here.
+- The remaining `"success": True` route returns are attached to actual state
+  mutation, subprocess/systemd calls, or manager operations; the old no-op VIO
+  area/origin handlers return 501.
 
 ## End-state metrics
 
 - [ ] Repo total (`git ls-files '*.py' '*.cs' | xargs wc -l`) down ≥ 4,500 lines
   from ~49,960 (Phases 1+4 deletions ~2,300 verified-dead; 1.6 adds ~400;
   module simplification in Phase 2 ~600+)
-- [ ] No source file ≥ 800 lines; the two 79x files < 700 after 4.10
-- [ ] `pyzmq` gone from `pyproject.toml`
-- [ ] `KNOWN_DRIFT` ledger empty
-- [ ] Every `nomad.modules` entry point starts in sim mode
+- [x] No source file ≥ 800 lines; the two 79x files < 700 after 4.10
+- [x] `pyzmq` gone from `pyproject.toml`
+- [x] `KNOWN_DRIFT` ledger empty
+- [x] Every `nomad.modules` entry point starts in sim mode
   (`pixi run dev` boots with all modules wired, none half-wired)
+
+End-state measurements (2026-06-11):
+
+- `git ls-files '*.py' '*.cs'` total: 46,140 lines, down 3,820 from the
+  audit estimate of ~49,960. This misses the aspirational 4,500-line target,
+  but all verified-dead deletions and planned splits landed.
+- Largest tracked Python/C# source file: 751 lines
+  (`mission_planner/src/SLAM3D/Rendering/VoxelMeshBuilder.cs`).
+- Former cap-risk files are now below target:
+  `NotificationService.cs` 421 lines, `NOMADConfig.cs` 539 lines.
 
 ---
 
