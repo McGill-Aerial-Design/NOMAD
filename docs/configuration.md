@@ -52,6 +52,8 @@ Controls which services are started by `nomad start all` and at boot.
 | `NOMAD_AUTOSTART_ROS_HTTP_BRIDGE` | `true` | ROS ↔ HTTP bridge |
 | `NOMAD_AUTOSTART_VIDEO_BRIDGE` | `true` | Video encoding bridge |
 | `NOMAD_AUTOSTART_NVBLOX` | `false` | nvblox (manual start only) |
+| `NOMAD_AUTOSTART_HEALTH_MONITOR` | `true` | Jetson health monitor module |
+| `NOMAD_AUTOSTART_TIME_SYNC` | `true` | Time synchronization module |
 
 ### Paths
 
@@ -70,6 +72,8 @@ Controls which services are started by `nomad start all` and at boot.
 |----------|---------|-------------|
 | `NOMAD_API_HOST` | `0.0.0.0` | API bind address |
 | `NOMAD_API_PORT` | `8000` | API port |
+| `NOMAD_API_URL` | `http://localhost:8000` | Local service-script API URL |
+| `NOMAD_DOCKER_HOST_IP` | `172.17.0.1` | Host address reachable from Docker containers |
 | `GCS_IP` | *(blank)* | Ground station Tailscale IP (auto-discovered if blank) |
 | `GCS_EXTRA_IPS` | *(blank)* | Additional GCS IPs for MAVLink LTE |
 | `GCS_PORT_LTE` | `14560` | LTE MAVLink port on GCS |
@@ -113,12 +117,33 @@ Controls which services are started by `nomad start all` and at boot.
 |----------|---------|-------------|
 | `ISAAC_CONTAINER_NAME` | `nomad_isaac_ros` | Docker container name |
 | `ISAAC_IMAGE_NAME` | `nomad-isaac-ros:latest` | Docker image tag |
+| `ISAAC_IMAGE_FALLBACK` | `isaac_ros_dev-aarch64` | Existing image name accepted by provisioning |
 | `ISAAC_WORKSPACE` | `~/workspaces/isaac_ros-dev` | Isaac ROS workspace |
 | `ISAAC_ROS_DOMAIN_ID` | `0` | ROS2 domain ID |
 | `ZED_CAMERA_MODEL` | `zed2i` | ZED camera model |
+| `ZED_CAMERA_NAME` | `zed` | ZED ROS node camera name |
+| `ZED_PUB_RESOLUTION` | `NATIVE` | Published image resolution mode |
+| `ZED_PUB_DOWNSCALE_FACTOR` | `2.0` | Downscale factor when using custom publish resolution |
+| `ZED_PUBLISH_RAW` | `true` | Publish raw camera image topics |
+| `ZED_PUBLISH_LEFT_RIGHT` | `true` | Publish left/right image topics |
+| `ZED_PUBLISH_MAG` | `true` | Publish magnetometer data |
 | `ZED_GRAB_RESOLUTION` | `HD720` | ZED grab resolution |
 | `ZED_DEPTH_CONFIDENCE` | `95` | ZED depth confidence threshold |
+| `ZED_DEPTH_TEXTURE_CONF` | `90` | ZED texture-confidence threshold |
 | `ZED_DEPTH_MODE` | `NEURAL_LIGHT` | ZED depth backend |
+| `ZED_READY_TIMEOUT_S` | `300` | Startup wait for ZED odometry |
+
+### ROS-HTTP bridge
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ROS_HTTP_BRIDGE_RATE` | `5` | Bridge publish/poll rate |
+| `ROS_HTTP_BRIDGE_VIO_TOPIC` | `/zed/zed_node/odom` | VIO odometry topic |
+| `ROS_HTTP_BRIDGE_MAG_TOPIC` | `/zed/zed_node/imu/mag` | Magnetometer topic |
+| `ROS_HTTP_BRIDGE_TRANSPORT` | `http` | Bridge transport mode |
+| `NOMAD_ROS_ROOT` | `/opt/ros/humble` | ROS install root inside the container |
+| `NOMAD_ISAAC_WORKSPACE` | `/workspaces/isaac_ros-dev` | Isaac ROS workspace inside the container |
+| `NOMAD_VIO_MAX_AGE_S` | `1.0` | Maximum VIO age before command rejection |
 
 ### Video bridge
 
@@ -131,6 +156,8 @@ Controls which services are started by `nomad start all` and at boot.
 | `VIDEO_BRIDGE_BITRATE` | `800` | Stream bitrate (kbps) |
 | `VIDEO_RELAY_HTTP_PORT` | `9200` | Bridge control HTTP port |
 | `NOMAD_ENABLE_VIDEO` | `true` | Enable the video stream module |
+| `NOMAD_DEFAULT_VIDEO_TOPIC` | `/zed/zed_node/rgb/color/rect/image` | Default source topic |
+| `NOMAD_RTSP_URL` | *(blank)* | Explicit RTSP URL override |
 
 ### Detection
 
@@ -144,7 +171,6 @@ Controls which services are started by `nomad start all` and at boot.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NOMAD_PROBE_NVBLOX` | `false` | Probe for nvblox at startup |
 | `NOMAD_ENABLE_NVBLOX_MESH` | `false` | Enable mesh streaming |
 
 ### Module control
@@ -161,3 +187,21 @@ Controls which services are started by `nomad start all` and at boot.
 | `NOMAD_ENABLE_NETWORK_MONITOR` | `true` | Enable the Tailscale/LTE network module |
 | `NOMAD_LTE_CONNECTION` | `NOMAD-LTE` | NetworkManager profile owning the LTE modem |
 | `GCS_IP` | *(blank)* | GCS Tailscale IP used for reachability checks |
+
+### Health and MAVLink safety
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NOMAD_HEALTH_BROADCAST_INTERVAL_S` | `2.0` | MAVLink health broadcast interval |
+| `NOMAD_MAVLINK_ENDPOINT` | `127.0.0.1:14550` | Edge Core MAVLink endpoint |
+| `NOMAD_MAVLINK_DISCONNECT_TIMEOUT_S` | `3.0` | MAVLink disconnect timeout |
+| `NOMAD_BRIDGE_MAVLINK_ENDPOINT` | `127.0.0.1:14552` | ROS bridge velocity MAVLink endpoint |
+| `NOMAD_FENCE_POLYGON` | *(blank)* | Optional NOMAD-side keep-in polygon |
+| `NOMAD_FENCE_MARGIN_M` | `2.0` | Keep-in polygon margin |
+
+### Optional uploads and misc
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GDRIVE_FOLDER_ID` | *(blank)* | Optional Google Drive upload folder |
+| `PYTHONUNBUFFERED` | `1` | Force unbuffered Python service logs |

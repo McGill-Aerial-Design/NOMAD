@@ -328,11 +328,11 @@ get an `enable_flag`.
 - [x] **5.2 [SR] One error envelope.** Server errors are FastAPI `{"detail": …}`
   everywhere; remove the HTTP-200-with-`{"success": false}` pattern, then
   delete `SendHttpPostLongRun`'s application-error double-parse on the C# side.
-- [ ] **5.3 [NC] Config truth.** After 1.10 and 4.4, regenerate
+- [x] **5.3 [NC] Config truth.** After 1.10 and 4.4, regenerate
   [docs/configuration.md](docs/configuration.md) and `config/nomad.env.example`
   so every documented variable has a reader; consider a `NOMAD_*`-has-a-reader
   test in the spirit of `test_api_reference_sync.py`.
-- [ ] **5.4 [NC] Stale comment fixes.** [DualLinkSender.cs:54](mission_planner/src/Connectivity/DualLinkSender.cs#L54)
+- [x] **5.4 [NC] Stale comment fixes.** [DualLinkSender.cs:54](mission_planner/src/Connectivity/DualLinkSender.cs#L54)
   points the command whitelist at `edge_core/api.py`; it lives in
   [terminal.py](edge_core/api_routes/terminal.py). Sweep similar references
   while touching these files.

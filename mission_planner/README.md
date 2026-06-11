@@ -190,7 +190,6 @@ Example:
   "RtspUrlSecondary": "rtsp://192.168.1.100:8554/gimbal",
   "VideoNetworkCaching": 100,
   "PreferredVideoPlayer": "Embedded",
-  "UseELRS": false,
   "HttpTimeoutSeconds": 5,
   "DefaultTab": "Dashboard",
   "DebugMode": false
