@@ -321,7 +321,7 @@ get an `enable_flag`.
 
 ## Phase 5 — Protocol, logging, and config unification
 
-- [ ] **5.1 [SR] One request-parsing idiom server-side.** Replace repeated
+- [x] **5.1 [SR] One request-parsing idiom server-side.** Replace repeated
   `await request.body(); json.loads(...)` blocks (vio.py ×4, calibration.py ×2)
   with Pydantic request models — this also makes the openapi schema strong
   enough for the Phase 0 gate to verify field names/types.

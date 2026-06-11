@@ -59,5 +59,5 @@ def test_trajectory_accumulates_and_clears(client):
 
 def test_malformed_update_is_handled(client):
     resp = client.post("/api/vio/update", content=b"not json")
-    assert resp.status_code == 200
-    assert resp.json()["success"] is False
+    assert resp.status_code == 422
+    assert "detail" in resp.json()

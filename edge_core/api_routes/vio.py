@@ -9,18 +9,30 @@ read-only status endpoints for the Mission Planner plugin.
 
 from __future__ import annotations
 
-import logging
 import threading
 import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
 
 from edge_core.core import AppContext, BaseModule, ModuleMetadata
 
-logger = logging.getLogger("edge_core.api.vio")
-
 _VIO_TRAJECTORY_MAX = 500
+
+
+class VioUpdateRequest(BaseModel):
+    """Pose update from the ROS-HTTP bridge."""
+
+    x: float = 0.0
+    y: float = 0.0
+    z: float = 0.0
+    roll: float = 0.0
+    pitch: float = 0.0
+    yaw: float = 0.0
+    confidence: float = 0.0
+    source: str = "external"
+    timestamp: float | None = None
 
 
 class VioModule(BaseModule):
@@ -43,39 +55,29 @@ class VioModule(BaseModule):
         lock = self._lock
 
         @router.post("/api/vio/update")
-        async def vio_update(request: Request):
+        async def vio_update(request: Request, update: VioUpdateRequest):
             """Ingest a VIO pose update from the ROS-HTTP bridge (internal token)."""
-            try:
-                import json
-
-                body = await request.body()
-                data = json.loads(body.decode("utf-8"))
-            except Exception as exc:
-                logger.debug("VIO update parse error: %s", exc)
-                return {"success": False, "error": str(exc)}
-
-            confidence = data.get("confidence", 0.0)
-            source = data.get("source", "external")
+            timestamp = update.timestamp if update.timestamp is not None else time.time()
 
             request.app.state.external_vio_state = {
-                "x": data.get("x", 0.0),
-                "y": data.get("y", 0.0),
-                "z": data.get("z", 0.0),
-                "roll": data.get("roll", 0.0),
-                "pitch": data.get("pitch", 0.0),
-                "yaw": data.get("yaw", 0.0),
-                "confidence": confidence,
-                "source": source,
-                "timestamp": data.get("timestamp", time.time()),
+                "x": update.x,
+                "y": update.y,
+                "z": update.z,
+                "roll": update.roll,
+                "pitch": update.pitch,
+                "yaw": update.yaw,
+                "confidence": update.confidence,
+                "source": update.source,
+                "timestamp": timestamp,
             }
 
             with lock:
                 trajectory.append(
                     {
-                        "x": data.get("x", 0.0),
-                        "y": data.get("y", 0.0),
-                        "z": data.get("z", 0.0),
-                        "timestamp": data.get("timestamp", time.time()),
+                        "x": update.x,
+                        "y": update.y,
+                        "z": update.z,
+                        "timestamp": timestamp,
                     }
                 )
                 if len(trajectory) > _VIO_TRAJECTORY_MAX:

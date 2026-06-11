@@ -9,7 +9,7 @@ import logging
 import subprocess
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from edge_core.core import AppContext, BaseModule, ModuleMetadata
@@ -24,6 +24,12 @@ class SprayCalibrationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     water_pump_relay_number: int = Field(ge=0, le=15)
+
+
+class CameraServoConfigRequest(BaseModel):
+    """Camera tilt servo channel configuration from Mission Planner."""
+
+    channel: int = Field(default=14, ge=1, le=16)
 
 
 class CalibrationModule(BaseModule):
@@ -106,24 +112,15 @@ class CalibrationModule(BaseModule):
             return {"angle": angle}
 
         @servo_router.post("/api/servo/camera/config")
-        async def set_camera_config(request: Request):
+        async def set_camera_config(req: CameraServoConfigRequest):
             """Push servo channel configuration from Mission Planner."""
-            try:
-                import json
-
-                body = await request.body()
-                data = json.loads(body.decode("utf-8"))
-            except Exception as exc:
-                raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}")
-
-            channel = int(data.get("channel", 14))
             servo_ctrl = app.state.servo_controller
             if not servo_ctrl:
                 raise HTTPException(status_code=503, detail="Servo controller not initialized")
 
-            servo_ctrl.configure_camera_tilt_mavlink(channel)
-            logger.info("Camera servo config updated: channel=%d", channel)
-            return {"success": True, "channel": channel}
+            servo_ctrl.configure_camera_tilt_mavlink(req.channel)
+            logger.info("Camera servo config updated: channel=%d", req.channel)
+            return {"success": True, "channel": req.channel}
 
         @servo_router.post("/api/spray/calibration")
         async def set_spray_calibration(req: SprayCalibrationRequest):
