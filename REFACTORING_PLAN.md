@@ -287,15 +287,15 @@ get an `enable_flag`.
   step in C# before the direct send, or record the rationale in
   [docs/safety/](docs/safety/) + a code comment citing the requirement ID. Do
   not leave it implicit.
-- [ ] **4.8 [NC] Unify `DualLinkSender.Http` plumbing.**
-  - [ ] One private `SendAsync(HttpMethod, path, body, timeout?)` built on
+- [x] **4.8 [NC] Unify `DualLinkSender.Http` plumbing.**
+  - [x] One private `SendAsync(HttpMethod, path, body, timeout?)` built on
         `HttpJson`, returning `CommandResult`; the five hand-rolled variants
         (`SendHttpGet`, `SendHttpGetLongRun`, `SendHttpDelete`, `SendHttpPost`,
         `SendHttpPostLongRun`) become one-liners or vanish.
-  - [ ] Replace the four service-name switch tables with one
+  - [x] Replace the four service-name switch tables with one
         exceptions-`Dictionary<string,string>` + `$"{verb}_{service}"`
         composition.
-  - [ ] Replace `dynamic` health parsing in `GetHealthAsync` with a typed DTO
+  - [x] Replace `dynamic` health parsing in `GetHealthAsync` with a typed DTO
         matching the actual `/health` schema — delete the `??` dual-name
         chains and the hardcoded 1 TB disk assumption (surface `disk_free_gb`
         as-is).

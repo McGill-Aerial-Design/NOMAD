@@ -23,8 +23,7 @@ namespace NOMAD.MissionPlanner
         public float CpuTemp { get; set; }
         public float GpuTemp { get; set; }
         public float MemoryUsed { get; set; }
-        public float MemoryTotal { get; set; }
-        public float DiskUsed { get; set; }
+        public float DiskFreeGb { get; set; }
         public DateTime Timestamp { get; set; }
     }
 
@@ -41,24 +40,6 @@ namespace NOMAD.MissionPlanner
 
         /// <summary>MAV_CMD_SET_EKF_SOURCE_SET (42007) - Switch EKF source</summary>
         public const ushort CMD_SET_EKF_SOURCE = 42007;
-
-        // Security: Whitelist of allowed service names (defense-in-depth).
-        // Each name maps to a *_<name> command_name in Edge Core's
-        // COMMAND_WHITELIST (see edge_core/api.py). The mapping happens in the
-        // per-action switch statements below.
-        private static readonly System.Collections.Generic.HashSet<string> ALLOWED_SERVICES = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "nomad", "edge_core",
-            "mediamtx",
-            "mavlink-router",
-            "isaac",            // = whole Isaac ROS stack (container + zed + ros_http_bridge)
-            "zed",              // = nomad-zed-wrapper.service
-            "ros_bridge",       // = nomad-ros-http-bridge.service
-            "video_bridge",     // = nomad-video-bridge.service
-            "nvblox",           // = nomad-nvblox.service (opt-in)
-            "all",              // = nomad.target (autostart set)
-            "novnc"
-        };
 
         // ============================================================
         // Fields

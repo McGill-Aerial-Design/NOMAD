@@ -582,16 +582,14 @@ namespace NOMAD.MissionPlanner
                 _lblHealthGpu.ForeColor = gpuLoad > 90 ? NOMADTheme.ERROR : (gpuLoad > 70 ? NOMADTheme.WARNING : NOMADTheme.SUCCESS);
 
                 // Memory
-                var memUsed = health.MemoryUsed;
-                var memTotal = health.MemoryTotal;
-                var memPercent = memTotal > 0 ? (memUsed / memTotal * 100) : 0;
+                var memPercent = health.MemoryUsed;
                 _lblHealthMem.Text = $"Memory: {memPercent:F0}%";
                 _lblHealthMem.ForeColor = memPercent > 90 ? NOMADTheme.ERROR : (memPercent > 75 ? NOMADTheme.WARNING : NOMADTheme.SUCCESS);
 
                 // Disk
-                var diskPercent = health.DiskUsed;
-                _lblHealthDisk.Text = $"Disk: {diskPercent:F0}%";
-                _lblHealthDisk.ForeColor = diskPercent > 90 ? NOMADTheme.ERROR : (diskPercent > 75 ? NOMADTheme.WARNING : NOMADTheme.SUCCESS);
+                var diskFreeGb = health.DiskFreeGb;
+                _lblHealthDisk.Text = $"Disk: {diskFreeGb:F0} GB free";
+                _lblHealthDisk.ForeColor = diskFreeGb < 10 ? NOMADTheme.ERROR : (diskFreeGb < 25 ? NOMADTheme.WARNING : NOMADTheme.SUCCESS);
 
                 // Temperature (use GPU temp as primary indicator)
                 var temp = health.GpuTemp > 0 ? health.GpuTemp : health.CpuTemp;
