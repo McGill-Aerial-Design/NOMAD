@@ -312,7 +312,7 @@ get an `enable_flag`.
         (unreachable after the line-397 early return).
   - [x] Rename `MavlinkFrameParser.CrcErrors` → `ResyncCount` (no CRC is
         validated); drop the redundant `MavlinkFrame.Payload` alias of `Raw`.
-- [ ] **4.10 [NC] Pre-emptive splits at the 800-line cap.**
+- [x] **4.10 [NC] Pre-emptive splits at the 800-line cap.**
   [NotificationService.cs](mission_planner/src/Notifications/NotificationService.cs)
   (797) and [NOMADConfig.cs](mission_planner/src/Config/NOMADConfig.cs) (791)
   cannot absorb another change. Split along existing seams (rules/state vs.

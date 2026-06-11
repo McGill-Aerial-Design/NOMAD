@@ -145,6 +145,7 @@
 
     <!-- Config -->
     <Compile Include="Config\NOMADConfig.cs" />
+    <Compile Include="Config\NOMADConfig.Persistence.cs" />
     <Compile Include="Config\NOMADConfig.Spray.cs" />
     <Compile Include="Config\NOMADSettingsForm.cs" />
     <Compile Include="Config\NOMADSettingsForm.ConnectionTab.cs" />
@@ -240,6 +241,7 @@
 
     <!-- Notifications -->
     <Compile Include="Notifications\NotificationService.cs" />
+    <Compile Include="Notifications\NotificationService.Monitoring.cs" />
     <Compile Include="Notifications\NotificationPanel.cs" />
     <Compile Include="Notifications\AudioAlerts.cs" />
 
