@@ -276,21 +276,45 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private async Task LocalRxLoop(CancellationToken ct)
+        private async Task LocalRxLoop(UdpClient sock, CancellationToken ct)
         {
             // MP is a UDP client — its source endpoint is ephemeral, so latch it
             // on the first inbound packet and use it as the downlink destination.
-            while (!ct.IsCancellationRequested)
+            try
             {
-                try
+                while (!ct.IsCancellationRequested)
                 {
-                    var result = await _localSock.ReceiveAsync().ConfigureAwait(false);
-                    _mpEndpoint = result.RemoteEndPoint;
-                    ForwardOutbound(result.Buffer, result.Buffer.Length);
+                    try
+                    {
+                        var result = await sock.ReceiveAsync().ConfigureAwait(false);
+                        _mpEndpoint = result.RemoteEndPoint;
+                        ForwardOutbound(result.Buffer, result.Buffer.Length);
+                    }
+                    catch (ObjectDisposedException) { break; }
+                    catch (SocketException sx)
+                    {
+                        if (sx.SocketErrorCode == SocketError.ConnectionReset ||
+                            sx.SocketErrorCode == SocketError.MessageSize ||
+                            sx.SocketErrorCode == SocketError.Interrupted ||
+                            sx.SocketErrorCode == SocketError.NetworkReset ||
+                            sx.SocketErrorCode == SocketError.HostUnreachable ||
+                            sx.SocketErrorCode == SocketError.ConnectionRefused)
+                        {
+                            continue;
+                        }
+                        EmitLog($"Local rx socket error ({sx.SocketErrorCode}): {sx.Message} — closing rx loop, watchdog will reopen");
+                        break;
+                    }
+                    catch (Exception ex) { EmitLog($"Local rx error: {ex.Message}"); }
                 }
-                catch (ObjectDisposedException) { break; }
-                catch (SocketException) { break; }
-                catch (Exception ex) { EmitLog($"Local rx error: {ex.Message}"); }
+            }
+            finally
+            {
+                if (ReferenceEquals(_localSock, sock))
+                {
+                    _localRxRunning = false;
+                    if (!ct.IsCancellationRequested) EmitLog("Local rx loop ended unexpectedly");
+                }
             }
         }
 
@@ -333,17 +357,17 @@ namespace NOMAD.MissionPlanner
                     //   rxerrors u16, fixed u16, rssi u8, remrssi u8, txbuf u8, noise u8, remnoise u8
                     if (frame.IsV2 && frame.PayloadLength >= 6)
                     {
-                        stats.Rssi = frame.Payload[frame.PayloadOffset + 4];
-                        stats.RemRssi = frame.Payload[frame.PayloadOffset + 5];
+                        stats.Rssi = frame.Raw[frame.PayloadOffset + 4];
+                        stats.RemRssi = frame.Raw[frame.PayloadOffset + 5];
                     }
                     else if (!frame.IsV2 && frame.PayloadLength >= 2)
                     {
-                        stats.Rssi = frame.Payload[frame.PayloadOffset + 0];
-                        stats.RemRssi = frame.Payload[frame.PayloadOffset + 1];
+                        stats.Rssi = frame.Raw[frame.PayloadOffset + 0];
+                        stats.RemRssi = frame.Raw[frame.PayloadOffset + 1];
                     }
                 }
 
-                stats.FrameErrors = parser.CrcErrors;
+                stats.FrameErrors = parser.ResyncCount;
 
                 MaybePromoteReceivingLink(type);
 
@@ -396,7 +420,7 @@ namespace NOMAD.MissionPlanner
             if (ManualOverride != LinkType.None)
                 return source == ManualOverride;
 
-            var target = ManualOverride != LinkType.None ? ManualOverride : ActiveLink;
+            var target = ActiveLink;
             if (target == LinkType.None)
                 target = _cfg.PreferredLink == LinkType.None ? LinkType.LTE : _cfg.PreferredLink;
 

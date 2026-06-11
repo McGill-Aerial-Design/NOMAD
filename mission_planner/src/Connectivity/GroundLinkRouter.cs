@@ -150,9 +150,12 @@ namespace NOMAD.MissionPlanner
         private DateTime _lastFailover = DateTime.MinValue;
         private DateTime _preferredHealthySince = DateTime.MinValue;
         private DateTime _lastStatsTick = DateTime.MinValue;
+        private DateTime _lastLocalReopenAttempt = DateTime.MinValue;
         private DateTime _lastLteReopenAttempt = DateTime.MinValue;
         private DateTime _lastRadioReopenAttempt = DateTime.MinValue;
         private static readonly TimeSpan REOPEN_BACKOFF = TimeSpan.FromSeconds(3);
+        private volatile bool _localRxRunning;
+        private readonly object _activeLinkLock = new object();
 
         // Windows-only ioctl: tells the UDP socket to *not* surface ICMP
         // "Port Unreachable" errors as SocketExceptions on the next Receive.
@@ -211,19 +214,10 @@ namespace NOMAD.MissionPlanner
             // router has to bind the local socket on LocalPort and act as the
             // server. MP's ephemeral source endpoint is captured on the first
             // received packet, then used as the return path for downlink frames.
-            try
+            if (!OpenLocalSocket())
             {
-                if (!IPAddress.TryParse(_cfg.BindAddress, out var ip)) ip = IPAddress.Loopback;
-                _localSock = new UdpClient(new IPEndPoint(ip, _cfg.LocalPort));
-                DisableUdpConnReset(_localSock);
-                _mpEndpoint = null; // set when MP first sends to us
-                LocalEndpoint = (IPEndPoint)_localSock.Client.LocalEndPoint;
-            }
-            catch (Exception ex)
-            {
-                EmitLog($"FATAL: could not allocate local socket → {_cfg.BindAddress}:{_cfg.LocalPort} — {ex.Message}");
                 Cleanup();
-                throw;
+                throw new SocketException((int)SocketError.AddressAlreadyInUse);
             }
 
             OpenLte();
@@ -234,9 +228,33 @@ namespace NOMAD.MissionPlanner
             ActiveLink = _cfg.PreferredLink == LinkType.None ? LinkType.LTE : _cfg.PreferredLink;
             ActiveLinkChanged?.Invoke(this, ActiveLink);
 
-            Task.Run(() => LocalRxLoop(_cts.Token));
             Task.Run(() => StatsLoop(_cts.Token));
             EmitLog($"Router started: listening for Mission Planner on udp://{_cfg.BindAddress}:{_cfg.LocalPort}");
+        }
+
+        private bool OpenLocalSocket()
+        {
+            _lastLocalReopenAttempt = DateTime.UtcNow;
+            try
+            {
+                if (!IPAddress.TryParse(_cfg.BindAddress, out var ip)) ip = IPAddress.Loopback;
+                var sock = new UdpClient(new IPEndPoint(ip, _cfg.LocalPort));
+                DisableUdpConnReset(sock);
+                _localSock = sock;
+                _mpEndpoint = null; // set when MP first sends to us
+                LocalEndpoint = (IPEndPoint)sock.Client.LocalEndPoint;
+                _localRxRunning = true;
+                Task.Run(() => LocalRxLoop(sock, _cts.Token));
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _localRxRunning = false;
+                try { _localSock?.Close(); } catch { }
+                _localSock = null;
+                EmitLog($"FATAL: could not allocate local socket → {_cfg.BindAddress}:{_cfg.LocalPort} — {ex.Message}");
+                return false;
+            }
         }
 
         public void Stop()
@@ -255,6 +273,7 @@ namespace NOMAD.MissionPlanner
             try { _radioTcpClient?.Close(); } catch { } _radioTcpClient = null;
             try { if (_radioSerial?.IsOpen == true) _radioSerial.Close(); } catch { } _radioSerial = null;
             try { _localSock?.Close(); } catch { } _localSock = null;
+            _localRxRunning = false;
             Lte.IsOpen = false; Lte.IsConnected = false; Lte.Health = LinkHealth.Disconnected;
             Radio.IsOpen = false; Radio.IsConnected = false; Radio.Health = LinkHealth.Disconnected;
         }
@@ -290,7 +309,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public bool SetManualOverride(LinkType target)
         {
-            ManualOverride = target;
+            lock (_activeLinkLock) ManualOverride = target;
             if (target != LinkType.None) SetActiveLink(target, "manual override");
             else EmitLog("Manual override released — auto-failover resumed");
             return true;
@@ -404,7 +423,7 @@ namespace NOMAD.MissionPlanner
 
     internal class MavlinkFrameParser
     {
-        public long CrcErrors;
+        public long ResyncCount;
         public long FramesEmitted;
 
         private const byte STX_V1 = 0xFE;
@@ -457,7 +476,7 @@ namespace NOMAD.MissionPlanner
 
         private void Resync()
         {
-            CrcErrors++;
+            ResyncCount++;
             // Find next STX in current buffer to recover (cheap heuristic)
             for (int j = 1; j < _len; j++)
             {
@@ -515,7 +534,6 @@ namespace NOMAD.MissionPlanner
                 Msgid = msgid,
                 Seq = seq,
                 RawHash = rawHash,
-                Payload = raw,
                 PayloadOffset = payloadOffset,
                 PayloadLength = payloadLen,
             });
@@ -546,7 +564,6 @@ namespace NOMAD.MissionPlanner
         public uint Msgid;
         public byte Seq;
         public uint RawHash;
-        public byte[] Payload;       // alias of Raw — payload begins at PayloadOffset
         public int PayloadOffset;
         public int PayloadLength;
 

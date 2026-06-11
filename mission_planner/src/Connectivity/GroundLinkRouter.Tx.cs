@@ -166,6 +166,13 @@ namespace NOMAD.MissionPlanner
         {
             if (_cts == null || _cts.IsCancellationRequested) return;
 
+            if ((_localSock == null || !_localRxRunning) && (now - _lastLocalReopenAttempt) >= REOPEN_BACKOFF)
+            {
+                EmitLog("Watchdog: local Mission Planner socket is down, re-opening");
+                try { _localSock?.Close(); } catch { } _localSock = null;
+                OpenLocalSocket();
+            }
+
             if (!Lte.IsOpen && (now - _lastLteReopenAttempt) >= REOPEN_BACKOFF)
             {
                 EmitLog("Watchdog: LTE link is down, re-opening socket");
@@ -282,22 +289,27 @@ namespace NOMAD.MissionPlanner
 
         private void SetActiveLink(LinkType newActive, string reason)
         {
-            if (newActive == ActiveLink) return;
-            var from = ActiveLink;
-            ActiveLink = newActive;
-            _lastFailover = DateTime.UtcNow;
+            LinkType from;
+            FailoverEventArgs ev;
+            lock (_activeLinkLock)
+            {
+                if (newActive == ActiveLink) return;
+                from = ActiveLink;
+                ActiveLink = newActive;
+                _lastFailover = DateTime.UtcNow;
 
-            var ev = new FailoverEventArgs
-            {
-                FromLink = from,
-                ToLink = newActive,
-                Reason = reason,
-                Timestamp = DateTime.UtcNow,
-            };
-            lock (_failoverLog)
-            {
-                _failoverLog.AddLast(ev);
-                while (_failoverLog.Count > FAILOVER_LOG_MAX) _failoverLog.RemoveFirst();
+                ev = new FailoverEventArgs
+                {
+                    FromLink = from,
+                    ToLink = newActive,
+                    Reason = reason,
+                    Timestamp = DateTime.UtcNow,
+                };
+                lock (_failoverLog)
+                {
+                    _failoverLog.AddLast(ev);
+                    while (_failoverLog.Count > FAILOVER_LOG_MAX) _failoverLog.RemoveFirst();
+                }
             }
 
             FailoverOccurred?.Invoke(this, ev);

@@ -299,18 +299,18 @@ get an `enable_flag`.
         matching the actual `/health` schema — delete the `??` dual-name
         chains and the hardcoded 1 TB disk assumption (surface `disk_free_gb`
         as-is).
-- [ ] **4.9 [SR] Ground router fixes.**
-  - [ ] Watchdog for `_localSock`: extend `WatchdogReopen` to rebind it and
+- [x] **4.9 [SR] Ground router fixes.**
+  - [x] Watchdog for `_localSock`: extend `WatchdogReopen` to rebind it and
         restart `LocalRxLoop` when the loop has exited; tolerate the same
         benign `SocketError` set as `UdpRxLoop` before breaking. (Today one
         socket error permanently kills GCS→aircraft uplink.)
-  - [ ] Make `SetActiveLink` thread-safe (lock around compare-and-set, or
+  - [x] Make `SetActiveLink` thread-safe (lock around compare-and-set, or
         marshal `MaybePromoteReceivingLink`'s promotion onto the stats tick) —
         it races between rx threads and the stats thread.
-  - [ ] Delete the dead ternary at
+  - [x] Delete the dead ternary at
         [GroundLinkRouter.Rx.cs:399](mission_planner/src/Connectivity/GroundLinkRouter.Rx.cs#L399)
         (unreachable after the line-397 early return).
-  - [ ] Rename `MavlinkFrameParser.CrcErrors` → `ResyncCount` (no CRC is
+  - [x] Rename `MavlinkFrameParser.CrcErrors` → `ResyncCount` (no CRC is
         validated); drop the redundant `MavlinkFrame.Payload` alias of `Raw`.
 - [ ] **4.10 [NC] Pre-emptive splits at the 800-line cap.**
   [NotificationService.cs](mission_planner/src/Notifications/NotificationService.cs)
