@@ -61,17 +61,17 @@ Decisions taken (2026-06-10):
 
 Convert the bug classes below into red CI *before* touching the code they guard.
 
-- [ ] **0.1 [SR] Contract gate: verbs, not just paths.** Extend
+- [x] **0.1 [SR] Contract gate: verbs, not just paths.** Extend
   [tests/test_client_contract.py](tests/test_client_contract.py) to extract the
   HTTP method from C# call sites (`GetAsync|PostAsync|DeleteAsync|GetLongRunAsync|PostLongRunAsync|GetStringAsync|PostJsonAsync`
   preceding the route literal) and assert `(method, path)` exists in
   `app.openapi()`, not just the path.
-- [ ] **0.2 [SR] Contract gate: cover the Python client.** Add a scanner over
+- [x] **0.2 [SR] Contract gate: cover the Python client.** Add a scanner over
   [edge_core/ros_http_bridge/node.py](edge_core/ros_http_bridge/node.py)'s
   `_http_get_json` / `_http_post` route literals and assert `(method, path)`
   against the same openapi schema. (This is where F4a/F4b lived — the C#-only
   gate could not see them.)
-- [ ] **0.3 [NC] Expect both new checks to fail** on the camera-tilt GET and any
+- [x] **0.3 [NC] Expect both new checks to fail** on the camera-tilt GET and any
   other latent drift; record the failures in this file under Phase 3 before
   fixing them. Do not extend `KNOWN_DRIFT` for new code.
 
@@ -79,52 +79,52 @@ Convert the bug classes below into red CI *before* touching the code they guard.
 
 Each deletion commit cites the verifying grep in its message.
 
-- [ ] **1.1 [SR]** Delete `_mavlink_watchdog_loop` from
+- [x] **1.1 [SR]** Delete `_mavlink_watchdog_loop` from
   [edge_core/api.py](edge_core/api.py) (lines ~261–366; defined, never
   scheduled; duplicates `infra/systemd/nomad-mavlink-router.service`). (~105 lines)
-- [ ] **1.2 [NC]** Delete unused DI setters in `api.py`: `set_isaac_bridge`,
+- [x] **1.2 [NC]** Delete unused DI setters in `api.py`: `set_isaac_bridge`,
   `set_tailscale_manager`, `set_network_monitor`, `set_camera_service`. Inline
   `set_health_monitor` into
   [health_monitor.py:535-541](edge_core/services/health_monitor.py#L535-L541).
-- [ ] **1.3 [NC]** Delete [edge_core/services/ipc.py](edge_core/services/ipc.py)
+- [x] **1.3 [NC]** Delete [edge_core/services/ipc.py](edge_core/services/ipc.py)
   (373 lines, zero consumers), its `edge_core/__init__.py` re-exports, and the
   `pyzmq` dependency from [pyproject.toml](pyproject.toml).
-- [ ] **1.4 [NC]** Delete
+- [x] **1.4 [NC]** Delete
   [edge_core/services/logging_service.py](edge_core/services/logging_service.py)
   (zero consumers) and its re-exports.
-- [ ] **1.5 [NC]** Delete
+- [x] **1.5 [NC]** Delete
   [edge_core/services/operational_mode.py](edge_core/services/operational_mode.py)
   (init never called), the `mode_manager` websocket branch in
   [system.py:265-270](edge_core/api_routes/system.py#L265-L270), and
   `app.state.mode_manager`.
-- [ ] **1.6 [NC] DELETE `IsaacROSBridge`** (decision 2026-06-10):
+- [x] **1.6 [NC] DELETE `IsaacROSBridge`** (decision 2026-06-10):
   [edge_core/modules/slam/isaac.py](edge_core/modules/slam/isaac.py) (382 lines),
   `tests/test_isaac_bridge.py`, the optional-import block + `_ISAAC_AVAILABLE`
   exports in [edge_core/__init__.py](edge_core/__init__.py), and
   `app.state.isaac_bridge`. Note: `api_routes/isaac.py` (the `isaac_mgmt`
   container-control module) **stays** — only the unwired bridge class goes.
-- [ ] **1.7 [SC]** Delete dead `MavlinkCommands` methods (no production callers):
+- [x] **1.7 [SC]** Delete dead `MavlinkCommands` methods (no production callers):
   `send_gimbal_command`, `send_gimbal_rate_command`, `send_obstacle_distance`,
   `send_vision_position_estimate`, `send_vision_speed_estimate`. Update
   `tests/test_safety_command_surface.py` to pin the reduced surface. SC
   protocol applies: behavior-preserving deletion, cite the audit grep.
-- [ ] **1.8 [SC]** Remove the `_clamp = clamp` back-compat alias in
+- [x] **1.8 [SC]** Remove the `_clamp = clamp` back-compat alias in
   [mavlink_velocity.py:61](edge_core/ros_http_bridge/mavlink_velocity.py#L61)
   (update any test imports); delete `MavlinkServo.enable/disable` +
   `ServoController.enable_all/disable_all` (the `_enabled` flag gates nothing)
   and the single-member `ServoFunction` enum in
   [servo.py](edge_core/modules/payload/servo.py).
-- [ ] **1.9 [NC]** Delete `ModuleRegistry.configure_all` / `register_routes`
+- [x] **1.9 [NC]** Delete `ModuleRegistry.configure_all` / `register_routes`
   (test-only duplicates of `wire_safe`) and the unused `specs=` parameter of
   `wire_modules`; migrate the one test in `tests/test_module_registry.py`.
-- [ ] **1.10 [NC]** Delete vestigial config plumbing: `--no-vision` /
+- [x] **1.10 [NC]** Delete vestigial config plumbing: `--no-vision` /
   `NOMAD_ENABLE_VISION` and `--servo-mode` / `SERVO_MODE` from
   [main.py](edge_core/main.py), `config/profiles/*.env`,
   `config/nomad.env.example`, `scripts/profile.py`, `scripts/nomad-profile`,
   `scripts/setup/setup_jetson_remote.py`, `docker/Dockerfile.dev`,
   `docker/docker-compose.dev.yml`, and docs. (No edge_core code reads either;
   payload uses `NOMAD_ENABLE_SERVOS`.)
-- [ ] **1.11 [NC]** Fix `edge_core/__init__.py` `__all__`: `"SystemState"` is
+- [x] **1.11 [NC]** Fix `edge_core/__init__.py` `__all__`: `"SystemState"` is
   listed but never imported (`from edge_core import SystemState` raises).
   Import it from `services.models` or drop the entry.
 
@@ -196,7 +196,7 @@ get an `enable_flag`.
   `IsaacModule.cmd_success` is non-None after `wire_modules`. Decide whether
   `ApiRouteContext` itself survives; if `AppContext` can serve the legacy route
   files, unify on it.
-- [ ] **3.2 [SR] Camera-tilt contract (F4).** In
+- [x] **3.2 [SR] Camera-tilt contract (F4).** In
   [calibration.py](edge_core/api_routes/calibration.py):
   - [ ] `set_camera_tilt(angle: int = 90)` → `angle: float`, validated to
         [0, 180].

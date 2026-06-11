@@ -30,7 +30,7 @@ pixi run docs         # serve this documentation site
 pixi run docs-build   # build the docs for deployment
 ```
 
-The `pixi run dev` command starts Edge Core with the `--sim --no-vision` flags so
+The `pixi run dev` command starts Edge Core with the `--sim` flag so
 it runs without any hardware. Open `http://localhost:8000/docs` for the interactive
 Swagger UI.
 

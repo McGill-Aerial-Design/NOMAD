@@ -12,7 +12,6 @@
 # Usage:
 #   ./scripts/dev/run_dev.sh           # Run with default settings
 #   ./scripts/dev/run_dev.sh --port 8080  # Custom port
-#   ./scripts/dev/run_dev.sh --no-vision  # Disable vision process
 # =============================================================================
 
 set -e

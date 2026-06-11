@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import math
 import os
-import time
 
 from pymavlink import mavutil
 
@@ -131,94 +130,6 @@ class MavlinkCommands:
         except Exception as exc:
             logger.debug("Arm/disarm command error: %s", exc)
 
-    def send_vision_position_estimate(
-        self,
-        timestamp_us: int,
-        x: float,
-        y: float,
-        z: float,
-        roll: float,
-        pitch: float,
-        yaw: float,
-        covariance: list[float] | None = None,
-        reset_counter: int = 0,
-    ) -> bool:
-        """Send VISION_POSITION_ESTIMATE message to the flight controller."""
-        if not hasattr(self, "_conn") or self._conn is None:  # type: ignore
-            return False
-
-        try:
-            if covariance is None:
-                covariance = [
-                    0.01,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0.01,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0.01,
-                    0,
-                    0,
-                    0,
-                    0.01,
-                    0,
-                    0,
-                    0.01,
-                    0,
-                    0.01,
-                ]
-
-            self._conn.mav.vision_position_estimate_send(  # type: ignore
-                timestamp_us,
-                x,
-                y,
-                z,
-                roll,
-                pitch,
-                yaw,
-                covariance,
-                reset_counter,
-            )
-            return True
-        except Exception as e:
-            logger.debug("VIO send error: %s", e)
-            return False
-
-    def send_vision_speed_estimate(
-        self,
-        timestamp_us: int,
-        vx: float,
-        vy: float,
-        vz: float,
-        covariance: list[float] | None = None,
-        reset_counter: int = 0,
-    ) -> bool:
-        """Send VISION_SPEED_ESTIMATE message to the flight controller."""
-        if not hasattr(self, "_conn") or self._conn is None:  # type: ignore
-            return False
-
-        try:
-            if covariance is None:
-                covariance = [0.01, 0, 0, 0, 0.01, 0, 0, 0, 0.01]
-
-            self._conn.mav.vision_speed_estimate_send(  # type: ignore
-                timestamp_us,
-                vx,
-                vy,
-                vz,
-                covariance,
-                reset_counter,
-            )
-            return True
-        except Exception as e:
-            logger.debug("Vision speed send error: %s", e)
-            return False
-
     def send_velocity_command(
         self,
         vx: float,
@@ -258,64 +169,6 @@ class MavlinkCommands:
             return True
         except Exception as e:
             logger.debug("Velocity command error: %s", e)
-            return False
-
-    def send_gimbal_command(
-        self,
-        pitch: float,
-        yaw: float,
-        roll: float = 0.0,
-    ) -> bool:
-        """Send gimbal control command via COMMAND_LONG (MAV_CMD_DO_MOUNT_CONTROL)."""
-        if not hasattr(self, "_conn") or self._conn is None:  # type: ignore
-            return False
-
-        try:
-            self._conn.mav.command_long_send(  # type: ignore
-                self._conn.target_system,  # type: ignore
-                self._conn.target_component,  # type: ignore
-                mavutil.mavlink.MAV_CMD_DO_MOUNT_CONTROL,
-                0,
-                pitch,
-                roll,
-                yaw,
-                0,
-                0,
-                0,
-                mavutil.mavlink.MAV_MOUNT_MODE_MAVLINK_TARGETING,
-            )
-            return True
-        except Exception as e:
-            logger.debug("Gimbal command error: %s", e)
-            return False
-
-    def send_gimbal_rate_command(
-        self,
-        pitch_rate: float,
-        yaw_rate: float,
-        roll_rate: float = 0.0,
-    ) -> bool:
-        """Send gimbal angular rate command."""
-        if not hasattr(self, "_conn") or self._conn is None:  # type: ignore
-            return False
-
-        try:
-            self._conn.mav.command_long_send(  # type: ignore
-                self._conn.target_system,  # type: ignore
-                self._conn.target_component,  # type: ignore
-                mavutil.mavlink.MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW,
-                0,
-                pitch_rate,
-                yaw_rate,
-                pitch_rate,
-                yaw_rate,
-                0,
-                0,
-                0,
-            )
-            return True
-        except Exception as e:
-            logger.debug("Gimbal rate command error: %s", e)
             return False
 
     def trigger_payload(
@@ -530,38 +383,4 @@ class MavlinkCommands:
             return True
         except Exception as e:
             logger.debug("Position target error: %s", e)
-            return False
-
-    def send_obstacle_distance(
-        self,
-        distances: list[int],
-        increment: int = 5,
-        min_distance: int = 20,
-        max_distance: int = 2000,
-        angle_offset: int = 0,
-        frame: int = 0,
-    ) -> bool:
-        """Send OBSTACLE_DISTANCE message to ArduPilot."""
-        if not hasattr(self, "_conn") or self._conn is None:  # type: ignore
-            return False
-
-        try:
-            dist_array = list(distances[:72])
-            while len(dist_array) < 72:
-                dist_array.append(max_distance)
-
-            self._conn.mav.obstacle_distance_send(  # type: ignore
-                int(time.time() * 1e3) & 0xFFFFFFFF,
-                0,
-                dist_array,
-                increment,
-                min_distance,
-                max_distance,
-                float(increment),
-                float(angle_offset),
-                frame,
-            )
-            return True
-        except Exception as e:
-            logger.debug("Obstacle distance error: %s", e)
             return False

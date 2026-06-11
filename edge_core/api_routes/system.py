@@ -262,13 +262,6 @@ def register_system_routes(app, ctx) -> None:
                         "source": "none",
                     }
 
-                mode_mgr = getattr(websocket.app.state, "mode_manager", None)
-                if mode_mgr:
-                    data["operational_mode"] = {
-                        "status": mode_mgr.status.to_dict(),
-                        "available_modes": mode_mgr.get_available_modes(),
-                    }
-
                 obstacle_snapshot = getattr(websocket.app.state, "obstacle_distance_last", None)
                 if obstacle_snapshot:
                     obstacle_age_s = time.time() - obstacle_snapshot.get("timestamp", 0.0)

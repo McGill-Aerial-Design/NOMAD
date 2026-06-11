@@ -46,6 +46,38 @@ FORBIDDEN_TOKENS = [
 ]
 
 
+# The complete public command surface of MavlinkCommands. A method added here
+# can transmit to the FC — adding one is an SC change (name the SR-* requirement
+# and update this pin deliberately). Dead transmit paths were deleted on
+# 2026-06-10 (gimbal, vision-estimate, obstacle-distance: zero callers).
+MAVLINK_COMMANDS_SURFACE = {
+    "arm_disarm",
+    "send_velocity_command",
+    "trigger_payload",
+    "set_relay",
+    "stop_velocity",
+    "send_statustext",
+    "set_mode",
+    "takeoff",
+    "land",
+    "request_home_position",
+    "send_global_position_target",
+    "send_position_target",
+}
+
+
+def test_mavlink_commands_surface_is_pinned():
+    from edge_core.services.mavlink.commands import MavlinkCommands
+
+    public = {
+        name for name in vars(MavlinkCommands) if not name.startswith("_") and callable(getattr(MavlinkCommands, name))
+    }
+    assert public == MAVLINK_COMMANDS_SURFACE, (
+        f"MavlinkCommands public surface changed: added={public - MAVLINK_COMMANDS_SURFACE}, "
+        f"removed={MAVLINK_COMMANDS_SURFACE - public}. Update the pin only with an SR-* justification."
+    )
+
+
 @pytest.mark.parametrize("rel_path", COMMAND_SURFACE_FILES)
 def test_no_failsafe_disabling_commands(rel_path: str):
     source_file = REPO_ROOT / rel_path

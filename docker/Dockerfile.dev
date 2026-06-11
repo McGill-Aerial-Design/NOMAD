@@ -14,7 +14,6 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     NOMAD_SIM_MODE=true \
-    NOMAD_ENABLE_VISION=false \
     # Dev-only: with no API key, Edge Core rejects non-loopback clients unless
     # this is set, so host -> container requests would 401. Safe here because the
     # image is for local development. NEVER set this on a deployed device.
@@ -40,4 +39,4 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=6 \
   CMD curl -fsS http://localhost:8000/health || exit 1
 
 # Hardware-free simulation mode (mock MAVLink, no vision pipeline).
-CMD ["nomad-edge", "--sim", "--no-vision", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["nomad-edge", "--sim", "--host", "0.0.0.0", "--port", "8000"]

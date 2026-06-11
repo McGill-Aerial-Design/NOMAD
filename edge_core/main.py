@@ -145,25 +145,15 @@ def main() -> None:
         "--log-level", type=str, default="info", choices=["debug", "info", "warning", "error"], help="Logging level"
     )
     parser.add_argument("--sim", action="store_true", help="Enable simulation mode")
-    parser.add_argument("--no-vision", action="store_true", help="Disable vision process")
-    parser.add_argument(
-        "--servo-mode", type=str, default="gimbal", choices=["gimbal", "direct", "disabled"], help="Servo control mode"
-    )
 
     args = parser.parse_args()
 
     # CLI flags are translated into environment variables here, which is the
     # single contract by which modules/services discover their configuration:
-    #   --sim        -> NOMAD_SIM_MODE       (sim vs real hardware paths)
-    #   --no-vision  -> NOMAD_ENABLE_VISION  (gate the vision pipeline)
-    #   --servo-mode -> SERVO_MODE           (payload actuation mode)
+    #   --sim -> NOMAD_SIM_MODE (sim vs real hardware paths)
     # Modules read these via AppContext / os.environ; see docs/configuration.md.
     if args.sim:
         os.environ["NOMAD_SIM_MODE"] = "true"
-    if args.no_vision:
-        os.environ["NOMAD_ENABLE_VISION"] = "false"
-    if args.servo_mode != "gimbal":
-        os.environ["SERVO_MODE"] = args.servo_mode
 
     run(host=args.host, port=args.port, log_level=args.log_level)
 

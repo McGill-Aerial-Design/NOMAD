@@ -182,7 +182,7 @@ def test_lifecycle_runs_in_dependency_order_and_stops_reversed():
     reg.register(make_module("a", requires=("b",), log=log))
     reg.register(make_module("b", log=log))
     ctx = AppContext()
-    reg.configure_all(ctx)
+    reg.wire_safe(ctx, app=None)
     reg.start_all()
     reg.stop_all()
     starts = [name for action, name in log if action == "start"]
@@ -218,14 +218,28 @@ def test_context_falls_back_to_app_state():
 # --------------------------------------------------------------------------- #
 # end-to-end: wire the sample module into a real FastAPI app
 # --------------------------------------------------------------------------- #
-def test_wire_sample_module_into_fastapi_app():
+def test_wire_sample_module_into_fastapi_app(monkeypatch):
     fastapi = pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
     sys.path.insert(0, str(REPO_ROOT / "examples"))
     try:
+        # Feed the sample module through the production discovery path.
+        class _FakeEntryPoint:
+            name = "sample"
+
+            @staticmethod
+            def load():
+                from sample_module.sample_module import SampleModule
+
+                return SampleModule
+
+        import edge_core.core.registry as registry_mod
+
+        monkeypatch.setattr(registry_mod, "_default_entry_point_loader", lambda group: [_FakeEntryPoint])
+
         app = fastapi.FastAPI()
-        registry = wire_modules(app, specs=["sample_module.sample_module:SampleModule"])
+        registry = wire_modules(app)
         assert registry is not None and "sample" in registry.modules
 
         # TestClient as a context manager fires startup/shutdown -> start()/stop().

@@ -532,13 +532,11 @@ class HealthMonitorModule(BaseModule):
         self._monitor: JetsonHealthMonitor | None = None
 
     def configure(self, ctx) -> None:
-        from edge_core.api import set_health_monitor
-
         state_mgr = ctx.require_service("state_manager")
         self._monitor = JetsonHealthMonitor()
         self._monitor.set_state_manager(state_mgr)
         ctx.register_service("health_monitor", self._monitor)
-        set_health_monitor(ctx.app, self._monitor)
+        ctx.app.state.health_monitor = self._monitor
 
     def start(self) -> None:
         if self._monitor:

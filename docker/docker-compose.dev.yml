@@ -19,7 +19,6 @@ services:
       - "8000:8000"
     environment:
       NOMAD_SIM_MODE: "true"
-      NOMAD_ENABLE_VISION: "false"
       # Let the Mission Planner plugin reach the API over the LAN without a key.
       # Keep this false anywhere other than local development.
       NOMAD_ALLOW_INSECURE_REMOTE: "true"

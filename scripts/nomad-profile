@@ -96,14 +96,11 @@ cmd_load() {
     # Print key settings summary
     local sim_mode
     sim_mode=$(grep -m1 '^NOMAD_SIM_MODE=' "$src" 2>/dev/null | cut -d= -f2 || echo "false")
-    local vision
-    vision=$(grep -m1 '^NOMAD_ENABLE_VISION=' "$src" 2>/dev/null | cut -d= -f2 || echo "false")
     local servos
     servos=$(grep -m1 '^NOMAD_ENABLE_SERVOS=' "$src" 2>/dev/null | cut -d= -f2 || echo "false")
 
     printf "\n%bKey settings:%b\n" "$_C_CYA" "$_C_OFF"
     printf "  NOMAD_SIM_MODE      = %s\n" "$sim_mode"
-    printf "  NOMAD_ENABLE_VISION = %s\n" "$vision"
     printf "  NOMAD_ENABLE_SERVOS = %s\n" "$servos"
 
     # Warn about USER placeholder
@@ -172,13 +169,9 @@ cmd_show() {
     desc=$(grep -m1 '^NOMAD_PROFILE_DESCRIPTION=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' || echo "No description")
     local sim_mode
     sim_mode=$(grep -m1 '^NOMAD_SIM_MODE=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "false")
-    local vision
-    vision=$(grep -m1 '^NOMAD_ENABLE_VISION=' "$ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "false")
-
     printf "%bActive profile:%b  %s\n" "$_C_CYA" "$_C_OFF" "$profile"
     printf "%bDescription:%b     %s\n" "$_C_CYA" "$_C_OFF" "$desc"
     printf "%bSim mode:%b        %s\n" "$_C_CYA" "$_C_OFF" "$sim_mode"
-    printf "%bVision:%b          %s\n" "$_C_CYA" "$_C_OFF" "$vision"
     printf "%bConfig file:%b    %s\n" "$_C_CYA" "$_C_OFF" "$ENV_FILE"
 }
 
