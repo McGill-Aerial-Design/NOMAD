@@ -225,17 +225,6 @@ namespace NOMAD.MissionPlanner
             };
             _controlPanel.Controls.Add(_lblStats);
 
-            y += 18;
-            _lblPerceptionStatus = new Label
-            {
-                Text = "HSV: -- | Servo: --",
-                Location = new Point(10, y),
-                ForeColor = Color.FromArgb(150, 150, 150),
-                AutoSize = true,
-                Font = new Font("Consolas", 9),
-            };
-            _controlPanel.Controls.Add(_lblPerceptionStatus);
-
             _statusLogPanel = new Panel
             {
                 Dock = DockStyle.Fill,

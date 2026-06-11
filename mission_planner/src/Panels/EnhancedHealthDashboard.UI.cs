@@ -102,32 +102,6 @@ namespace NOMAD.MissionPlanner
             };
             panel.Controls.Add(lblAutoRefresh);
 
-            // Git status label
-            _lblGitStatus = new Label
-            {
-                Text = "",
-                Location = new Point(400, 50),
-                ForeColor = Color.Gray,
-                Font = new Font("Consolas", 8),
-                AutoSize = true,
-            };
-            panel.Controls.Add(_lblGitStatus);
-
-            // Git update button
-            _btnGitUpdate = new Button
-            {
-                Text = "Git Update",
-                Location = new Point(250, 20),
-                Size = new Size(85, 28),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(70, 100, 150),
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-            };
-            _btnGitUpdate.FlatAppearance.BorderSize = 0;
-            _btnGitUpdate.Click += async (s, e) => await TriggerGitUpdate();
-            panel.Controls.Add(_btnGitUpdate);
-
             return panel;
         }
 

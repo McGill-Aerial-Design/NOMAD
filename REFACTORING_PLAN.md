@@ -248,40 +248,40 @@ get an `enable_flag`.
 
 ## Phase 4 — C# control-path consolidation
 
-- [ ] **4.1 [NC] Burn down `KNOWN_DRIFT` (all 11 rows).** Delete callers and
+- [x] **4.1 [NC] Burn down `KNOWN_DRIFT` (all 11 rows).** Delete callers and
   ledger rows together (the two-way check enforces it). Do not re-add routes
   server-side to satisfy dead buttons:
-  - [ ] `/api/isaac/launch-nvblox` + `/api/isaac/stop-nvblox` —
+  - [x] `/api/isaac/launch-nvblox` + `/api/isaac/stop-nvblox` —
         `LaunchNvbloxAsync`, `StopNvbloxAsync`, `StopSlamAsync`,
         ServiceControlPanel nvblox buttons
-  - [ ] `/api/isaac/logs` — `GetIsaacRosLogsAsync`
-  - [ ] `/api/slam/status` — `GetSlamStatusAsync`, ServiceControlPanel SLAM row
-  - [ ] `/api/slam/clear` — `ClearSlamAsync` + SLAM3DView.Actions caller
-  - [ ] `/api/admin/git-update` — EnhancedHealthDashboard update button
-  - [ ] `/api/admin/upload-gdrive-token` — Settings uploads tab
-  - [ ] `/api/detections` — SLAM3DView overlay poll
-  - [ ] `/api/servo/status` — SLAM3DView servo poll
-  - [ ] `/api/tools/rviz2/start` + `/stop` — Rviz2View (delete the view if it
+  - [x] `/api/isaac/logs` — `GetIsaacRosLogsAsync`
+  - [x] `/api/slam/status` — `GetSlamStatusAsync`, ServiceControlPanel SLAM row
+  - [x] `/api/slam/clear` — `ClearSlamAsync` + SLAM3DView.Actions caller
+  - [x] `/api/admin/git-update` — EnhancedHealthDashboard update button
+  - [x] `/api/admin/upload-gdrive-token` — Settings uploads tab
+  - [x] `/api/detections` — SLAM3DView overlay poll
+  - [x] `/api/servo/status` — SLAM3DView servo poll
+  - [x] `/api/tools/rviz2/start` + `/stop` — Rviz2View (delete the view if it
         has no remaining function)
-- [ ] **4.2 [NC]** Delete `DualLinkSender.SendMAVLinkCommand` (private, zero
+- [x] **4.2 [NC]** Delete `DualLinkSender.SendMAVLinkCommand` (private, zero
   callers, ~75 lines) and `GetIsaacRosContainerStatusAsync` (passes a raw
   docker string where a whitelist key is required — cannot ever succeed).
-- [ ] **4.3 [NC]** Delete `MAVLinkConnectionManager.ProcessHeartbeat`,
+- [x] **4.3 [NC]** Delete `MAVLinkConnectionManager.ProcessHeartbeat`,
   `TrackPacket`, `GetBestAvailableLink` (zero callers); drop the unused `force`
   parameter of `SwitchToLink`.
-- [ ] **4.4 [NC]** Delete `UseELRS`: config property, settings checkbox
+- [x] **4.4 [NC]** Delete `UseELRS`: config property, settings checkbox
   (`NOMADSettingsForm.VideoTab.cs`), and the two status-text reads in
   `NOMADPlugin.cs`. The "ELRS instead of HTTP" mode does not exist.
-- [ ] **4.5 [SC-adjacent] Collapse `CubeOutputController` motor-test
+- [x] **4.5 [SC-adjacent] Collapse `CubeOutputController` motor-test
   triplication.** `SendMotorTestPwmAsync` becomes the single implementation;
   sync wrapper delegates; `SendMotorTestPwmBatch` loops over it under one lock
   acquisition. Preserve PWM bounds (500–2500) and timeout clamp verbatim.
-- [ ] **4.6 [SC-adjacent] Eliminate `async void` in the payload command path.**
+- [x] **4.6 [SC-adjacent] Eliminate `async void` in the payload command path.**
   [PayloadActions.cs](mission_planner/src/Payload/PayloadActions.cs) methods
   become `async Task` with top-level try/catch logging via `Log`; joystick call
   sites use an exception-observing fire-and-forget helper (see
   [UiAsync.cs](mission_planner/src/UI/UiAsync.cs)).
-- [ ] **4.7 [SC] Relay-interlock asymmetry decision.** `FireRelayAsync`'s
+- [x] **4.7 [SC] Relay-interlock asymmetry decision.** `FireRelayAsync`'s
   direct-MAVLink path fires the pump with UI-confirm only, while the HTTP
   fallback enforces the SR-PAY-03 arm→trigger interlock. Either mirror the arm
   step in C# before the direct send, or record the rationale in

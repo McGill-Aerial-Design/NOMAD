@@ -152,7 +152,6 @@
     <Compile Include="Config\NOMADSettingsForm.ServosTab.cs" />
     <Compile Include="Config\NOMADSettingsForm.PayloadsTab.cs" />
     <Compile Include="Config\NOMADSettingsForm.JoystickTab.cs" />
-    <Compile Include="Config\NOMADSettingsForm.UploadsTab.cs" />
 
   <!-- Shared UI scaffolding -->
   <Compile Include="UI\NOMADViewBase.cs" />
@@ -177,7 +176,6 @@
     <Compile Include="Views\SLAM3DView.Rendering.cs" />
     <Compile Include="Views\SLAM3DView.Data.cs" />
     <Compile Include="Views\SLAM3DView.Actions.cs" />
-    <Compile Include="Views\Rviz2View.cs" />
     <Compile Include="Views\ZedCalibrationView.cs" />
 
     <!-- Embeddable control panels -->

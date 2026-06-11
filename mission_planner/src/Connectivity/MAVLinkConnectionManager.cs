@@ -313,7 +313,7 @@ namespace NOMAD.MissionPlanner
         /// Manual override of the active outbound link. Pass LinkType.None to
         /// release the override and resume auto-failover.
         /// </summary>
-        public bool SwitchToLink(LinkType target, bool force = false)
+        public bool SwitchToLink(LinkType target)
         {
             if (_router == null) return false;
             _router.SetManualOverride(target);
@@ -351,26 +351,8 @@ namespace NOMAD.MissionPlanner
             if (_router != null) _router.Config.PreferredLink = link;
         }
 
-        public LinkType GetBestAvailableLink()
-        {
-            bool lteOk = IsLteHealthy;
-            bool rmOk = IsRadioMasterHealthy;
-            if (!lteOk && !rmOk) return LinkType.None;
-            if (lteOk && !rmOk) return LinkType.LTE;
-            if (!lteOk && rmOk) return LinkType.RadioMaster;
-            return _config.PreferredLink != LinkType.None ? _config.PreferredLink : LinkType.LTE;
-        }
-
         public string GetStatusSummary() => _router?.GetStatusSummary()
             ?? $"Active: {ActiveLink} | LTE: offline | Radio: offline";
-
-        /// <summary>
-        /// Legacy hook kept for source-compat with older callers. The router
-        /// derives heartbeats from packet flow directly, so this is a no-op.
-        /// </summary>
-        public void ProcessHeartbeat(LinkType fromLink) { /* no-op: router owns heartbeats */ }
-
-        public void TrackPacket(LinkType link, int bytesReceived, bool wasLost = false) { /* no-op */ }
 
         public void ResetCounters() => _router?.ResetCounters();
 

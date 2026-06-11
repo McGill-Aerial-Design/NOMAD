@@ -266,14 +266,6 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Check if Isaac ROS container is running.
-        /// </summary>
-        public async Task<CommandResult> GetIsaacRosContainerStatusAsync()
-        {
-            return await ExecuteTerminalCommandAsync("docker ps --filter name=nomad_isaac_ros --format '{{.Status}}'", 5);
-        }
-
-        /// <summary>
         /// Start Isaac ROS container and services.
         /// </summary>
         public async Task<CommandResult> StartIsaacRosAsync()
@@ -290,15 +282,6 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Launch nvblox + ROS-HTTP bridge inside a running container.
-        /// Lightweight: does not install deps or rebuild.
-        /// </summary>
-        public async Task<CommandResult> LaunchNvbloxAsync()
-        {
-            return await SendHttpPostLongRun("/api/isaac/launch-nvblox", null);
-        }
-
-        /// <summary>
         /// Start the ROS HTTP bridge inside the Isaac ROS container (idempotent).
         /// </summary>
         public async Task<CommandResult> StartRosBridgeAsync()
@@ -312,30 +295,6 @@ namespace NOMAD.MissionPlanner
         public async Task<CommandResult> StopRosBridgeAsync()
         {
             return await SendHttpPost("/api/isaac/bridge/stop", null);
-        }
-
-        /// <summary>
-        /// Stop nvblox without stopping the container.
-        /// </summary>
-        public async Task<CommandResult> StopNvbloxAsync()
-        {
-            return await SendHttpPostLongRun("/api/isaac/stop-nvblox", null);
-        }
-
-        /// <summary>
-        /// Stop SLAM resources by stopping nvblox.
-        /// </summary>
-        public async Task<CommandResult> StopSlamAsync()
-        {
-            return await StopNvbloxAsync();
-        }
-
-        /// <summary>
-        /// Get Isaac ROS logs.
-        /// </summary>
-        public async Task<CommandResult> GetIsaacRosLogsAsync(string logType = "all")
-        {
-            return await SendHttpGetLongRun($"/api/isaac/logs?log_type={logType}", 15);
         }
 
         // ============================================================
@@ -358,26 +317,6 @@ namespace NOMAD.MissionPlanner
         public async Task<CommandResult> StartVideoBridgesAsync()
         {
             return await SendHttpPostLongRun("/api/video/bridges/start", null);
-        }
-
-        // ============================================================
-        // SLAM Control
-        // ============================================================
-
-        /// <summary>
-        /// Get SLAM/nvblox mapping status.
-        /// </summary>
-        public async Task<CommandResult> GetSlamStatusAsync()
-        {
-            return await SendHttpGetLongRun("/api/slam/status", 15);
-        }
-
-        /// <summary>
-        /// Clear SLAM mesh data.
-        /// </summary>
-        public async Task<CommandResult> ClearSlamAsync()
-        {
-            return await SendHttpPostLongRun("/api/slam/clear?prefer_load_map=true&auto_create_empty_map_if_missing=true", null);
         }
 
         // ============================================================

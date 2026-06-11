@@ -55,10 +55,6 @@ namespace NOMAD.MissionPlanner
         private Label _lblOverallStatus;
         private Label _lblLastUpdate;
 
-        // Git update controls
-        private Button _btnGitUpdate;
-        private Label _lblGitStatus;
-
         // Metric labels
         private Label _lblCpuTemp, _lblCpuLoad;
         private Label _lblGpuTemp, _lblGpuLoad;

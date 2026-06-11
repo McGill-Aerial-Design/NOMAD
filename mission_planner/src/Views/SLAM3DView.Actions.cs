@@ -61,71 +61,16 @@ namespace NOMAD.MissionPlanner
             _btnToggleCamera.Text = $"View: {modeName}";
         }
 
-        private async void BtnClearMesh_Click(object sender, EventArgs e)
+        // Local-only: the server-side /api/slam/clear route was gutted from this
+        // baseline. Clearing the local renderers is still useful to the operator.
+        private void BtnClearMesh_Click(object sender, EventArgs e)
         {
-            try
-            {
-                var response = await JetsonApiService.PostLongRunAsync(
-                    "/api/slam/clear?prefer_load_map=true&auto_create_empty_map_if_missing=true"
-                );
-                var responseBody = await response.Content.ReadAsStringAsync();
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    string failureMessage = $"Mesh clear failed ({(int)response.StatusCode})";
-                    try
-                    {
-                        if (!string.IsNullOrWhiteSpace(responseBody))
-                        {
-                            var payload = JObject.Parse(responseBody);
-                            var apiMessage = payload["message"]?.Value<string>();
-                            if (!string.IsNullOrWhiteSpace(apiMessage))
-                                failureMessage = apiMessage;
-                        }
-                    }
-                    catch
-                    {
-                    }
-
-                    UpdateStatusSafe(failureMessage);
-                    AppendStatusLogSafe(failureMessage);
-                    return;
-                }
-
-                _voxelMeshBuilder.Clear();
-                _trajectoryRenderer.Clear();
-                _detectionRenderer.Clear();
-                _totalBlocks = 0;
-
-                string successMessage = "Mesh cleared";
-                try
-                {
-                    if (!string.IsNullOrWhiteSpace(responseBody))
-                    {
-                        var payload = JObject.Parse(responseBody);
-                        var clearStrategy = payload["clear_strategy"]?.Value<string>();
-                        if (!string.IsNullOrWhiteSpace(clearStrategy))
-                            successMessage = $"Mesh cleared ({clearStrategy})";
-                    }
-                }
-                catch
-                {
-                }
-
-                UpdateStatusSafe(successMessage);
-                AppendStatusLogSafe(successMessage);
-            }
-            catch (TaskCanceledException)
-            {
-                const string timeoutMessage = "Mesh clear timed out before server confirmation";
-                UpdateStatusSafe(timeoutMessage);
-                AppendStatusLogSafe(timeoutMessage);
-            }
-            catch (Exception ex)
-            {
-                UpdateStatusSafe($"Mesh clear failed ({ex.Message})");
-                AppendStatusLogSafe($"Mesh clear failed ({ex.Message})");
-            }
+            _voxelMeshBuilder.Clear();
+            _trajectoryRenderer.Clear();
+            _detectionRenderer.Clear();
+            _totalBlocks = 0;
+            UpdateStatusSafe("Mesh cleared (local view)");
+            AppendStatusLogSafe("Mesh cleared (local view)");
         }
 
         private async void BtnResetImuBiases_Click(object sender, EventArgs e)
@@ -235,12 +180,6 @@ namespace NOMAD.MissionPlanner
         {
             if (_lblStats == null) return;
             UiAsync.RunSync(_lblStats, () => { if (_lblStats != null) _lblStats.Text = text; }, "UpdateStatsSafe");
-        }
-
-        private void UpdatePerceptionStatusSafe(string text)
-        {
-            if (_lblPerceptionStatus == null) return;
-            UiAsync.RunSync(_lblPerceptionStatus, () => { if (_lblPerceptionStatus != null) _lblPerceptionStatus.Text = text; }, "UpdatePerceptionStatusSafe");
         }
 
         private void AppendStatusLogSafe(string text)

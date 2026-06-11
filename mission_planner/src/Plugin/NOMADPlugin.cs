@@ -10,7 +10,7 @@
 // - Embedded video streaming
 // - Jetson terminal access
 // - System health monitoring
-// - Dual-link communication (HTTP or MAVLink/ELRS)
+// - Dual-link MAVLink routing
 // - Configurable payload controls
 // ============================================================
 
@@ -304,8 +304,7 @@ namespace NOMAD.MissionPlanner
                             $"- MAVLink dual link failover\n" +
                             $"- Configurable payload controls\n\n" +
                             $"Jetson: {_config.EffectiveIP}:{_config.JetsonPort}\n" +
-                            $"Dual Link: {(_config.DualLinkEnabled ? "Enabled" : "Disabled")}\n" +
-                            $"Mode: {(_config.UseELRS ? "ELRS/MAVLink" : "HTTP")}",
+                            $"Dual Link: {(_config.DualLinkEnabled ? "Enabled" : "Disabled")}",
                             "About NOMAD"
                         );
                         nomadMenu.DropDownItems.Add(aboutItem);
@@ -325,7 +324,6 @@ namespace NOMAD.MissionPlanner
                             $"NOMAD Plugin v{Version} loaded.\n\n" +
                             $"Use the NOMAD menu → Open NOMAD Tab\n" +
                             $"for the complete NOMAD interface.\n\n" +
-                            $"Mode: {(_config.UseELRS ? "ELRS/MAVLink" : "HTTP")}\n" +
                             $"Jetson IP: {_config.EffectiveIP}",
                             "NOMAD"
                         );

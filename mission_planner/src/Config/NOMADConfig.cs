@@ -127,11 +127,6 @@ namespace NOMAD.MissionPlanner
         // ============================================================
 
         /// <summary>
-        /// Use ELRS/MAVLink mode instead of HTTP.
-        /// </summary>
-        public bool UseELRS { get; set; } = false;
-
-        /// <summary>
         /// HTTP connection timeout in seconds.
         /// </summary>
         public int HttpTimeoutSeconds { get; set; } = 5;
@@ -731,7 +726,6 @@ namespace NOMAD.MissionPlanner
             VideoNetworkCaching = defaults.VideoNetworkCaching;
             PreferredVideoPlayer = defaults.PreferredVideoPlayer;
             VideoAutoStart = defaults.VideoAutoStart;
-            UseELRS = defaults.UseELRS;
             HttpTimeoutSeconds = defaults.HttpTimeoutSeconds;
             AutoReconnect = defaults.AutoReconnect;
             HealthPollInterval = defaults.HealthPollInterval;

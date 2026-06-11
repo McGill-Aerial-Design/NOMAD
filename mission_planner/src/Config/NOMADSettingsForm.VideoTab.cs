@@ -62,9 +62,6 @@ namespace NOMAD.MissionPlanner
             AddSectionLabel(tab, "Debug / Advanced", ref y);
 
             _chkDebugMode = AddCheckBox(tab, "Enable Debug Logging", 20, y);
-            y += 30;
-
-            _chkUseELRS = AddCheckBox(tab, "Use ELRS/MAVLink instead of HTTP", 20, y, Color.Orange);
             y += 40;
 
             AddSectionLabel(tab, "SLAM 3D View", ref y);

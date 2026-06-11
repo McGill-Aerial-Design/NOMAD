@@ -110,19 +110,7 @@ def live_paths(live_operations) -> set[str]:
 # caller (or re-add the route as a deployment module) and remove the row here.
 # This ledger is two-way checked — adding NEW drift fails, and fixing an entry
 # without removing its row also fails, so it cannot rot silently.
-KNOWN_DRIFT = {
-    "/api/admin/git-update": "EnhancedHealthDashboard update button; admin routes gutted",
-    "/api/admin/upload-gdrive-token": "Settings uploads tab; admin routes gutted",
-    "/api/detections": "SLAM3DView overlay poll; detections are per-deployment modules",
-    "/api/isaac/launch-nvblox": "ServiceControlPanel nvblox button; device-only route gutted",
-    "/api/isaac/stop-nvblox": "ServiceControlPanel nvblox button; device-only route gutted",
-    "/api/isaac/logs": "DualLinkSender log fetch; route gutted",
-    "/api/servo/status": "SLAM3DView servo poll; route gutted",
-    "/api/slam/clear": "SLAM3DView / DualLinkSender; SLAM map routes gutted",
-    "/api/slam/status": "ServiceControlPanel SLAM status; route gutted",
-    "/api/tools/rviz2/start": "Rviz2View; tools routes gutted",
-    "/api/tools/rviz2/stop": "Rviz2View; tools routes gutted",
-}
+KNOWN_DRIFT: dict[str, str] = {}  # burned down to zero (baseline-polish plan 4.1); keep it that way
 
 
 def test_every_client_route_exists_in_api(live_operations, live_paths):

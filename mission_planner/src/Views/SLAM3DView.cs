@@ -68,9 +68,6 @@ namespace NOMAD.MissionPlanner
         private int _servoPulseUs = ServoPulseLevelUs;
         private System.Windows.Forms.Timer _servoTimer;
 
-        // ---- Perception/status polling ----
-        private System.Windows.Forms.Timer _statusTimer;
-        private bool _statusPollInFlight;
 
         // ---- PoseState (anti-jitter filtering) ----
         private readonly PoseState _poseState = new PoseState();
@@ -114,7 +111,6 @@ namespace NOMAD.MissionPlanner
         private Button _btnToggleCamera, _btnResetView, _btnClearMesh, _btnResetImuBiases;
         private Button _btnCenterOnPose;
         private Label _lblStatus, _lblStats;
-        private Label _lblPerceptionStatus;
         private TextBox _txtStatusLog;
         private CheckBox _chkShowGrid, _chkShowTrajectory, _chkAutoUpdate;
         private ComboBox _combDroneType;
@@ -151,7 +147,6 @@ namespace NOMAD.MissionPlanner
             InitializeComponents();
             StartUpdateLoop();
             StartServoPolling();
-            StartPerceptionStatusPolling();
         }
 
         private void InitializeSlamComponents()
@@ -188,8 +183,6 @@ namespace NOMAD.MissionPlanner
                 _renderTimer?.Dispose();
                 _servoTimer?.Stop();
                 _servoTimer?.Dispose();
-                _statusTimer?.Stop();
-                _statusTimer?.Dispose();
                 try { _webSocketClient.Stop(); } catch { }
                 try { _webSocketClient.Dispose(); } catch { }
                 _glControl?.Dispose();

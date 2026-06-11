@@ -32,7 +32,6 @@ namespace NOMAD.MissionPlanner
         private int _isaacFailStreak = 0;
         private int _vioFailStreak = 0;
         private int _videoFailStreak = 0;
-        private int _slamFailStreak = 0;
 
         // Service status indicators
         private Label _lblMavlinkStatus;
@@ -60,18 +59,12 @@ namespace NOMAD.MissionPlanner
         private Button _btnStartRosBridge;
         private Button _btnStopRosBridge;
 
-        // Nvblox
+        // Nvblox (status only; launch/stop routes gutted)
         private Label _lblNvbloxStatus;
-        private Button _btnNvbloxLaunch;
-        private Button _btnNvbloxStop;
 
         // Video bridges
         private Label _lblVideoBridgesStatus;
         private Button _btnStartBridges;
-
-        // SLAM
-        private Label _lblSlamStatus;
-        private Button _btnStopSlam;
 
         // Status text
         private Label _lblLastUpdate;
