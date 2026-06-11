@@ -129,6 +129,7 @@ pixi run dev           # Edge Core sim on http://localhost:8000
 pixi run test          # pytest
 pixi run lint          # ruff check
 pixi run fmt           # ruff format
+pixi run line-report   # largest files and longest source lines
 pixi run docs          # serve docs site locally
 pixi run build-plugin  # build Mission Planner DLL (Windows)
 ```
@@ -145,9 +146,15 @@ pixi run precommit
       user paths. Use env vars or placeholders like `<jetson-ip>`.
 - [ ] `pixi run lint` and `pixi run fmt-check` pass.
 - [ ] `pixi run test` passes (or is N/A for your change).
+- [ ] `pixi run line-report` shows no touched source file over 800 lines.
 - [ ] Docs are updated if behavior or configuration changed.
 - [ ] The MR is focused — one feature/fix per MR.
 - [ ] Branch is up to date with `upstream/main`.
+
+The line report scans source/docs files only. It excludes generated or bulky
+non-source output such as `.git/`, Pixi/Ruff/Pytest/Mypy caches, `site/`, package
+metadata, `pixi.lock`, and vendored Mission Planner third-party binaries under
+`mission_planner/third_party/`.
 
 ## 8. Where to start — the onboarding ladder
 
