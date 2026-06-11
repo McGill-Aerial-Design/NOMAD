@@ -138,40 +138,40 @@ get an `enable_flag`.
 - [x] **2.1 [NC] `video` module.** Wrap
   [video_stream_manager.py](edge_core/services/video_stream_manager.py) in a
   `VideoStreamModule` (suggested: `edge_core/services/video_module.py`):
-  - [ ] `configure`: construct the manager from ctx config
+  - [x] `configure`: construct the manager from ctx config
         (`ISAAC_CONTAINER_NAME`, stream ports); register as service
         `video_stream_manager`; `enable_flag="NOMAD_ENABLE_VIDEO"`,
         `enabled_by_default=True`.
-  - [ ] `start`/`stop`: own the watchdog thread lifecycle (replace the
+  - [x] `start`/`stop`: own the watchdog thread lifecycle (replace the
         module-level `init_video_stream_manager` global/singleton; delete the
         deprecated `auto_start` parameter and its warning).
-  - [ ] Move route lookup in
+  - [x] Move route lookup in
         [video_slam.py](edge_core/api_routes/video_slam.py) from the global
         `get_video_stream_manager()` to the registered service / `app.state`.
-  - [ ] **Simplify to what the routes consume.** The live consumers are
+  - [x] **Simplify to what the routes consume.** The live consumers are
         `/api/video/bridges`, `/api/video/bridges/start`, `/api/video/source`,
         `/api/video/overlay/{action}` plus the C# callers
         (`GetVideoBridgesStatusAsync`, `StartVideoBridgesAsync`,
         `NOMADVideoView`). Delete manager methods/fields with no caller after
         that wiring (audit each public method; target ≤ ~450 of the current
         709 lines).
-  - [ ] Add `tests/test_video_module.py`: module wires, routes respond without
+  - [x] Add `tests/test_video_module.py`: module wires, routes respond without
         Docker present (graceful degraded payloads, not 500s).
 - [x] **2.2 [NC] `network` module.** Wrap `infra/tailscale/src/`
   (`TailscaleManager`, `NetworkMonitor`) in a `NetworkModule`:
-  - [ ] `configure`: `init_tailscale_manager` / `init_network_monitor` from ctx
+  - [x] `configure`: `init_tailscale_manager` / `init_network_monitor` from ctx
         config (`GCS_IP` / tailscale env); register services + set
         `app.state.tailscale_manager` / `network_monitor`;
         `enable_flag="NOMAD_ENABLE_NETWORK_MONITOR"`, `enabled_by_default=True`.
-  - [ ] `start`/`stop`: own the monitor thread lifecycle.
-  - [ ] **Simplify to what `/network/status` and the C# dashboard consume**:
+  - [x] `start`/`stop`: own the monitor thread lifecycle.
+  - [x] **Simplify to what `/network/status` and the C# dashboard consume**:
         tailscale `status/ip/hostname/peer_count/latency_ms`, monitor
         `internet_reachable/tailscale_reachable/modem`. Delete unconsumed
         surface (audit `network_monitor.py`'s 732 lines against actual readers;
         target ≤ ~400). Keep the standalone watchdog shell scripts
         (`infra/tailscale/scripts/`) untouched — they are deployment infra, not
         app code.
-  - [ ] Add `tests/test_network_module.py`: module wires; `/network/status`
+  - [x] Add `tests/test_network_module.py`: module wires; `/network/status`
         returns real (or cleanly-degraded) data instead of permanent nulls.
 - [x] **2.3 [NC]** Register both in `pyproject.toml`
   `[project.entry-points."nomad.modules"]` and document the enable flags in
@@ -198,14 +198,14 @@ get an `enable_flag`.
   files, unify on it.
 - [x] **3.2 [SR] Camera-tilt contract (F4).** In
   [calibration.py](edge_core/api_routes/calibration.py):
-  - [ ] `set_camera_tilt(angle: int = 90)` → `angle: float`, validated to
+  - [x] `set_camera_tilt(angle: int = 90)` → `angle: float`, validated to
         [0, 180].
-  - [ ] Add `GET /api/servo/camera/tilt` returning `{"angle": <current>}` from
+  - [x] Add `GET /api/servo/camera/tilt` returning `{"angle": <current>}` from
         `ServoController.get_camera_tilt()` (503 when uninitialized).
-  - [ ] Update [node.py](edge_core/ros_http_bridge/node.py)
+  - [x] Update [node.py](edge_core/ros_http_bridge/node.py)
         `_poll_gimbal_angle` to read `angle` (drop the phantom
         `feedback_angle` key).
-  - [ ] Add the GET route to the internal-bridge allowed routes in `api.py` if
+  - [x] Add the GET route to the internal-bridge allowed routes in `api.py` if
         the bridge polls it (it does, at 10 Hz with 0.1 s timeout).
 - [x] **3.3 [SR] Honest `/api/spray/calibration`.** Typed Pydantic request model
   containing only consumed fields (today: `water_pump_relay_number`), with
@@ -222,25 +222,25 @@ get an `enable_flag`.
   `RelocalizeAreaMapAsync`) and their buttons.
 - [x] **3.5 [SC] De-boilerplate `MavlinkCommands`** (behavior-preserving; keep
   `tests/test_mavlink_fence.py` green unchanged):
-  - [ ] One connection-guard helper replacing the 15× repeated
+  - [x] One connection-guard helper replacing the 15× repeated
         `hasattr(self, "_conn")` + try/except + `logger.debug` pattern,
         preserving exact return-False failure behavior.
-  - [ ] Single shared velocity `type_mask` constant in `edge_core.safety`
+  - [x] Single shared velocity `type_mask` constant in `edge_core.safety`
         (policy currently restated in
         [commands.py:238](edge_core/services/mavlink/commands.py#L238) and
         [mavlink_velocity.py:84](edge_core/ros_http_bridge/mavlink_velocity.py#L84)).
-  - [ ] Replace the implicit mixin contract (`hasattr(self, "_conn")`,
+  - [x] Replace the implicit mixin contract (`hasattr(self, "_conn")`,
         `getattr(self, "state_manager", None)`) with declared abstract
         attributes or a `Protocol` so mypy enforces it.
 - [x] **3.6 [SC] Servo adapter tightening.**
-  - [ ] Route `MavlinkServo.set_pwm` through
+  - [x] Route `MavlinkServo.set_pwm` through
         `edge_core.safety.validate_servo_command` (the camera-tilt path
         currently transmits an unvalidated locally-computed pulse).
-  - [ ] Remove the duplicated inline range checks in
+  - [x] Remove the duplicated inline range checks in
         [calibration.py:61-66](edge_core/api_routes/calibration.py#L61-L66) so
         rejection text comes from the SC core only (preserve the message
         verbatim or update the test with it).
-  - [ ] Replace `init_servo_controller`'s mutation of the private
+  - [x] Replace `init_servo_controller`'s mutation of the private
         `_controller._mavlink_service` with a constructor arg or public setter.
 - [x] **3.7 [SR] Shrink `create_app`.** After 1.1–1.2 and 2.4, `api.py` holds
   only app construction, CORS, auth middleware, and route registration. Target
