@@ -129,6 +129,8 @@ Controls which services are started by `nomad start all` and at boot.
 | `VIDEO_BRIDGE_HEIGHT` | `360` | Stream height |
 | `VIDEO_BRIDGE_FPS` | `15` | Stream framerate |
 | `VIDEO_BRIDGE_BITRATE` | `800` | Stream bitrate (kbps) |
+| `VIDEO_RELAY_HTTP_PORT` | `9200` | Bridge control HTTP port |
+| `NOMAD_ENABLE_VIDEO` | `true` | Enable the video stream module |
 
 ### Detection
 
@@ -151,3 +153,11 @@ Controls which services are started by `nomad start all` and at boot.
 |----------|---------|-------------|
 | `NOMAD_MODULES` | *(blank)* | Module allow-list (comma-separated; blank = all) |
 | `NOMAD_ENABLE_<MODULE>` | `true` | Disable a specific module by name |
+
+### Network monitoring
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NOMAD_ENABLE_NETWORK_MONITOR` | `true` | Enable the Tailscale/LTE network module |
+| `NOMAD_LTE_CONNECTION` | `NOMAD-LTE` | NetworkManager profile owning the LTE modem |
+| `GCS_IP` | *(blank)* | GCS Tailscale IP used for reachability checks |

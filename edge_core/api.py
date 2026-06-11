@@ -205,8 +205,6 @@ def create_app(state_manager: StateManager) -> FastAPI:
     # Initialize app.state with all service references (dependency injection)
     app.state.state_manager = state_manager
     app.state.health_monitor = None
-    app.state.tailscale_manager = None
-    app.state.network_monitor = None
     app.state.mavlink_service = None
     app.state.isaac_runtime_cache = {
         "timestamp": 0.0,

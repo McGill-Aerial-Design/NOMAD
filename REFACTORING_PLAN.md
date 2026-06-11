@@ -135,7 +135,7 @@ Both modules follow the `NomadModule` lifecycle
 the `nomad.modules` entry-point group in [pyproject.toml](pyproject.toml), and
 get an `enable_flag`.
 
-- [ ] **2.1 [NC] `video` module.** Wrap
+- [x] **2.1 [NC] `video` module.** Wrap
   [video_stream_manager.py](edge_core/services/video_stream_manager.py) in a
   `VideoStreamModule` (suggested: `edge_core/services/video_module.py`):
   - [ ] `configure`: construct the manager from ctx config
@@ -157,7 +157,7 @@ get an `enable_flag`.
         709 lines).
   - [ ] Add `tests/test_video_module.py`: module wires, routes respond without
         Docker present (graceful degraded payloads, not 500s).
-- [ ] **2.2 [NC] `network` module.** Wrap `infra/tailscale/src/`
+- [x] **2.2 [NC] `network` module.** Wrap `infra/tailscale/src/`
   (`TailscaleManager`, `NetworkMonitor`) in a `NetworkModule`:
   - [ ] `configure`: `init_tailscale_manager` / `init_network_monitor` from ctx
         config (`GCS_IP` / tailscale env); register services + set
@@ -173,10 +173,10 @@ get an `enable_flag`.
         app code.
   - [ ] Add `tests/test_network_module.py`: module wires; `/network/status`
         returns real (or cleanly-degraded) data instead of permanent nulls.
-- [ ] **2.3 [NC]** Register both in `pyproject.toml`
+- [x] **2.3 [NC]** Register both in `pyproject.toml`
   `[project.entry-points."nomad.modules"]` and document the enable flags in
   [docs/configuration.md](docs/configuration.md) and `config/nomad.env.example`.
-- [ ] **2.4 [NC]** Remove the now-satisfied `app.state.* = None` placeholders in
+- [x] **2.4 [NC]** Remove the now-satisfied `app.state.* = None` placeholders in
   `create_app` for `tailscale_manager` / `network_monitor` (modules set them),
   and delete `app.state.camera_service` outright (nothing ever sets or reads a
   real one).

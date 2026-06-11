@@ -1,24 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
-"""
-NOMAD Tailscale Manager
+"""Tailscale VPN status for NOMAD.
 
-Monitors and manages Tailscale VPN connection for secure 4G/LTE communication
-between the Jetson Orin Nano (drone) and Ground Station.
-
-Target: Python 3.13 | NVIDIA Jetson Orin Nano
+Polls ``tailscale status --json`` on a background thread and exposes the
+fields the ``/network/status`` route and the GCS dashboard consume:
+status / ip / hostname / peer_count. Auto-reconnects via ``tailscale up``
+when the link drops.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-from collections.abc import Callable
-from dataclasses import dataclass, field
+import subprocess
+import threading
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -35,365 +33,108 @@ class TailscaleStatus(Enum):
 
 
 @dataclass
-class TailscalePeer:
-    """Information about a connected Tailscale peer."""
-
-    hostname: str
-    ip_address: str | None  # None if the peer has no advertised Tailscale IP
-    online: bool
-    last_seen: str | None = None
-    os: str | None = None
-    relay: str | None = None  # DERP relay if not direct
-
-
-@dataclass
 class TailscaleInfo:
-    """Current Tailscale connection info."""
+    """Current Tailscale connection info (the consumed surface only)."""
 
     status: TailscaleStatus
     ip_address: str | None = None
-    ip_v6: str | None = None
     hostname: str = "unknown"
-    dns_name: str | None = None
-    backend_state: str | None = None
-    peers: list[TailscalePeer] = field(default_factory=list)
-    derp_relay: str | None = None  # DERP server if relayed
-    exit_node: str | None = None
-    exit_node_ip: str | None = None
-    online: bool = False
-    version: str | None = None
-    last_check: datetime = field(default_factory=datetime.now)
+    peer_count: int = 0
+    latency_ms: float | None = None  # reserved; not measured today
+    last_check: datetime | None = None
 
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for API response."""
-        return {
-            "status": self.status.value,
-            "ip_address": self.ip_address,
-            "ip_v6": self.ip_v6,
-            "hostname": self.hostname,
-            "dns_name": self.dns_name,
-            "backend_state": self.backend_state,
-            "peer_count": len(self.peers),
-            "peers": [
-                {
-                    "hostname": p.hostname,
-                    "ip_address": p.ip_address,
-                    "online": p.online,
-                    "relay": p.relay,
-                }
-                for p in self.peers
-            ],
-            "derp_relay": self.derp_relay,
-            "online": self.online,
-            "version": self.version,
-            "last_check": self.last_check.isoformat(),
-        }
+
+_STATUS_MAP = {
+    "Running": TailscaleStatus.CONNECTED,
+    "Starting": TailscaleStatus.CONNECTING,
+    "NeedsLogin": TailscaleStatus.NEEDS_AUTH,
+    "NeedsMachineAuth": TailscaleStatus.NEEDS_AUTH,
+    "Stopped": TailscaleStatus.DISCONNECTED,
+}
+
+
+def parse_status_json(data: dict) -> TailscaleInfo:
+    """Parse ``tailscale status --json`` output into the consumed fields."""
+    self_info = data.get("Self", {})
+    ip_v4 = next((ip for ip in self_info.get("TailscaleIPs", []) if ":" not in ip), None)
+    return TailscaleInfo(
+        status=_STATUS_MAP.get(data.get("BackendState", ""), TailscaleStatus.ERROR),
+        ip_address=ip_v4,
+        hostname=self_info.get("HostName", "unknown"),
+        peer_count=len(data.get("Peer", {})),
+        last_check=datetime.now(),
+    )
 
 
 class TailscaleManager:
-    """
-    Manages Tailscale VPN connection for NOMAD.
+    """Polls Tailscale status on a daemon thread; reconnects when down."""
 
-    Features:
-    - Monitor connection status via `tailscale status --json`
-    - Auto-reconnect on disconnection
-    - Provide health metrics for API
-    - Callback on status changes
-
-    Usage:
-        manager = TailscaleManager(on_status_change=my_callback)
-        await manager.start()
-        info = manager.info
-        await manager.stop()
-    """
-
-    def __init__(
-        self,
-        hostname: str = "nomad-jetson",
-        check_interval: float = 10.0,
-        auto_reconnect: bool = True,
-        on_status_change: Callable[[TailscaleInfo], None] | None = None,
-    ):
-        """
-        Initialize Tailscale manager.
-
-        Args:
-            hostname: Tailscale hostname for this device
-            check_interval: Seconds between status checks
-            auto_reconnect: Whether to auto-reconnect on disconnection
-            on_status_change: Callback when status changes
-        """
-        self._hostname = hostname
+    def __init__(self, check_interval: float = 10.0, auto_reconnect: bool = True) -> None:
         self._check_interval = check_interval
         self._auto_reconnect = auto_reconnect
-        self._on_status_change = on_status_change
-
         self._info = TailscaleInfo(status=TailscaleStatus.DISCONNECTED)
-        self._running = False
-        self._task: asyncio.Task[None] | None = None
-        self._prev_status: TailscaleStatus | None = None
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
 
     @property
     def info(self) -> TailscaleInfo:
-        """Get current Tailscale info."""
         return self._info
 
-    @property
-    def is_connected(self) -> bool:
-        """Check if Tailscale is connected."""
-        return self._info.status == TailscaleStatus.CONNECTED
-
-    @property
-    def ip_address(self) -> str | None:
-        """Get Tailscale IP address (100.x.x.x)."""
-        return self._info.ip_address
-
-    async def start(self) -> None:
-        """Start monitoring Tailscale connection."""
-        if self._running:
-            logger.warning("TailscaleManager already running")
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
             return
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._monitor_loop, name="tailscale-monitor", daemon=True)
+        self._thread.start()
+        logger.info("TailscaleManager started (interval=%.0fs)", self._check_interval)
 
-        self._running = True
-        logger.info(f"TailscaleManager starting (interval={self._check_interval}s)")
-
-        # Do initial check
-        await self._check_status()
-
-        # Start monitoring task
-        self._task = asyncio.create_task(self._monitor_loop())
-
-    async def stop(self) -> None:
-        """Stop monitoring."""
-        if not self._running:
-            return
-
-        self._running = False
-
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
-
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
         logger.info("TailscaleManager stopped")
 
-    async def reconnect(self) -> bool:
-        """Attempt to bring the Tailscale link back up via ``tailscale up``.
+    def _monitor_loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                self._check_status()
+                if self._auto_reconnect and self._info.status in (
+                    TailscaleStatus.DISCONNECTED,
+                    TailscaleStatus.ERROR,
+                ):
+                    self._reconnect()
+            except Exception as e:  # noqa: BLE001 - monitor must never die
+                logger.error("Tailscale monitor error: %s", e)
+            self._stop_event.wait(self._check_interval)
 
-        Returns True if the command succeeded. Called by the monitor loop when
-        the link is seen DISCONNECTED/ERROR and ``auto_reconnect`` is enabled.
-        """
-        exit_code, _stdout, stderr = await self._run_command(["tailscale", "up"])
+    def _check_status(self) -> None:
+        exit_code, stdout = _run(["tailscale", "status", "--json"])
+        if exit_code == 127:
+            self._info = TailscaleInfo(status=TailscaleStatus.NOT_INSTALLED, last_check=datetime.now())
+            return
         if exit_code != 0:
-            logger.warning(f"tailscale up failed: {stderr.strip()}")
-            return False
-        await self._check_status()
-        return self.is_connected
-
-    async def _monitor_loop(self) -> None:
-        """Background monitoring loop."""
-        while self._running:
-            try:
-                await self._check_status()
-
-                # Auto-reconnect if needed
-                if self._auto_reconnect and self._info.status in (TailscaleStatus.DISCONNECTED, TailscaleStatus.ERROR):
-                    logger.info("Auto-reconnect triggered")
-                    await self.reconnect()
-
-                await asyncio.sleep(self._check_interval)
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Monitor loop error: {e}")
-                await asyncio.sleep(self._check_interval)
-
-    async def _check_status(self) -> None:
-        """Query Tailscale CLI for current status."""
+            self._info = TailscaleInfo(status=TailscaleStatus.ERROR, last_check=datetime.now())
+            return
         try:
-            # Check if tailscale is installed
-            if not await self._is_tailscale_installed():
-                self._update_info(TailscaleInfo(status=TailscaleStatus.NOT_INSTALLED))
-                return
+            self._info = parse_status_json(json.loads(stdout))
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.error("Failed to parse tailscale status JSON: %s", e)
+            self._info = TailscaleInfo(status=TailscaleStatus.ERROR, last_check=datetime.now())
 
-            # Get status JSON
-            exit_code, stdout, stderr = await self._run_command(["tailscale", "status", "--json"])
-
-            if exit_code != 0:
-                logger.warning(f"tailscale status failed: {stderr}")
-                self._update_info(TailscaleInfo(status=TailscaleStatus.ERROR))
-                return
-
-            # Parse JSON
-            try:
-                data = json.loads(stdout)
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse tailscale status JSON: {e}")
-                self._update_info(TailscaleInfo(status=TailscaleStatus.ERROR))
-                return
-
-            # Build info from parsed data
-            info = self._parse_status_json(data)
-            self._update_info(info)
-
-        except Exception as e:
-            logger.error(f"Status check error: {e}")
-            self._update_info(TailscaleInfo(status=TailscaleStatus.ERROR))
-
-    def _parse_status_json(self, data: dict[str, Any]) -> TailscaleInfo:
-        """Parse tailscale status --json output."""
-        # Get backend state
-        backend_state = data.get("BackendState", "")
-
-        # Determine status from backend state
-        status_map = {
-            "Running": TailscaleStatus.CONNECTED,
-            "Starting": TailscaleStatus.CONNECTING,
-            "NeedsLogin": TailscaleStatus.NEEDS_AUTH,
-            "NeedsMachineAuth": TailscaleStatus.NEEDS_AUTH,
-            "Stopped": TailscaleStatus.DISCONNECTED,
-        }
-        status = status_map.get(backend_state, TailscaleStatus.ERROR)
-
-        # Get self info
-        self_info = data.get("Self", {})
-        tailscale_ips = self_info.get("TailscaleIPs", [])
-
-        ip_v4 = None
-        ip_v6 = None
-        for ip in tailscale_ips:
-            if ":" in ip:
-                ip_v6 = ip
-            else:
-                ip_v4 = ip
-
-        # Parse peers
-        peers = []
-        peer_data = data.get("Peer", {})
-        for peer_key, peer_info in peer_data.items():
-            peer_ips = peer_info.get("TailscaleIPs", [])
-            peer_ip = peer_ips[0] if peer_ips else None
-
-            peers.append(
-                TailscalePeer(
-                    hostname=peer_info.get("HostName", "unknown"),
-                    ip_address=peer_ip,
-                    online=peer_info.get("Online", False),
-                    last_seen=peer_info.get("LastSeen"),
-                    os=peer_info.get("OS"),
-                    relay=peer_info.get("Relay"),
-                )
-            )
-
-        return TailscaleInfo(
-            status=status,
-            ip_address=ip_v4,
-            ip_v6=ip_v6,
-            hostname=self_info.get("HostName", "unknown"),
-            dns_name=self_info.get("DNSName"),
-            backend_state=backend_state,
-            peers=peers,
-            online=self_info.get("Online", False),
-            version=data.get("Version"),
-            last_check=datetime.now(),
-        )
-
-    def _update_info(self, info: TailscaleInfo) -> None:
-        """Update info and trigger callback if status changed."""
-        status_changed = self._prev_status != info.status
-        self._info = info
-        self._prev_status = info.status
-
-        if status_changed:
-            logger.info(f"Tailscale status: {info.status.value}")
-            if self._on_status_change:
-                try:
-                    self._on_status_change(info)
-                except Exception as e:
-                    logger.error(f"Status change callback error: {e}")
-
-    async def _is_tailscale_installed(self) -> bool:
-        """Check if tailscale CLI is available."""
-        try:
-            exit_code, _, _ = await self._run_command(["tailscale", "version"])
-            return exit_code == 0
-        except FileNotFoundError:
-            return False
-
-    async def _run_command(self, cmd: list[str], timeout: float = 30.0) -> tuple[int, str, str]:
-        """
-        Run shell command and return (exit_code, stdout, stderr).
-
-        Args:
-            cmd: Command and arguments
-            timeout: Command timeout in seconds
-
-        Returns:
-            Tuple of (exit_code, stdout, stderr)
-        """
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-
-            return (
-                proc.returncode or 0,
-                stdout.decode("utf-8", errors="replace"),
-                stderr.decode("utf-8", errors="replace"),
-            )
-
-        except asyncio.TimeoutError:
-            logger.warning(f"Command timed out: {' '.join(cmd)}")
-            return (1, "", "Command timed out")
-        except FileNotFoundError:
-            return (127, "", f"Command not found: {cmd[0]}")
-        except Exception as e:
-            return (1, "", str(e))
+    def _reconnect(self) -> None:
+        logger.info("Tailscale auto-reconnect triggered")
+        exit_code, _ = _run(["tailscale", "up"], timeout=30.0)
+        if exit_code != 0:
+            logger.warning("tailscale up failed (exit %d)", exit_code)
 
 
-# ============================================================
-# Module-level singleton access
-# ============================================================
-
-_manager: TailscaleManager | None = None
-
-
-def get_tailscale_manager() -> TailscaleManager | None:
-    """Get the global TailscaleManager instance."""
-    return _manager
-
-
-def init_tailscale_manager(
-    hostname: str = "nomad-jetson",
-    check_interval: float = 10.0,
-    auto_reconnect: bool = True,
-    on_status_change: Callable[[TailscaleInfo], None] | None = None,
-) -> TailscaleManager:
-    """
-    Initialize the global TailscaleManager instance.
-
-    Args:
-        hostname: Tailscale hostname for this device
-        check_interval: Seconds between status checks
-        auto_reconnect: Whether to auto-reconnect on disconnection
-        on_status_change: Callback when status changes
-
-    Returns:
-        The initialized TailscaleManager instance
-    """
-    global _manager
-    _manager = TailscaleManager(
-        hostname=hostname,
-        check_interval=check_interval,
-        auto_reconnect=auto_reconnect,
-        on_status_change=on_status_change,
-    )
-    return _manager
+def _run(cmd: list[str], timeout: float = 10.0) -> tuple[int, str]:
+    """Run a command, returning (exit_code, stdout); 127 when not installed."""
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return result.returncode, result.stdout
+    except FileNotFoundError:
+        return 127, ""
+    except Exception as e:  # noqa: BLE001 - probe failure is a soft error
+        logger.debug("Command %s failed: %s", cmd[0], e)
+        return 1, ""

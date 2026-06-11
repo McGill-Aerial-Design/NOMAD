@@ -118,7 +118,7 @@ def register_system_routes(app, ctx) -> None:
         internet_reachable = False
         gcs_reachable = False
 
-        tailscale_manager = request.app.state.tailscale_manager
+        tailscale_manager = getattr(request.app.state, "tailscale_manager", None)
         if tailscale_manager:
             info = tailscale_manager.info
             tailscale = {
@@ -129,7 +129,7 @@ def register_system_routes(app, ctx) -> None:
                 "latency_ms": getattr(info, "latency_ms", None),
             }
 
-        network_monitor = request.app.state.network_monitor
+        network_monitor = getattr(request.app.state, "network_monitor", None)
         if network_monitor:
             status = network_monitor.status
             internet_reachable = bool(getattr(status, "internet_reachable", False))
