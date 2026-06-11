@@ -143,18 +143,6 @@ namespace NOMAD.MissionPlanner
             };
             _servicesPanel.Controls.Add(_lblVioStatus);
 
-            _btnVioReset = new Button
-            {
-                Text = "Reset Origin",
-                Location = new Point(rightCol, yOffset - 3),
-                Size = new Size(100, 25),
-                BackColor = NOMADTheme.BUTTON_BG,
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                FlatStyle = FlatStyle.Flat,
-                Anchor = AnchorStyles.Top | AnchorStyles.Right,
-            };
-            _btnVioReset.Click += async (s, e) => await ResetVioOriginAsync();
-            _servicesPanel.Controls.Add(_btnVioReset);
             yOffset += 30;
 
             // VIO Trajectory Points

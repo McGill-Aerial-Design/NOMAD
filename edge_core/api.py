@@ -13,7 +13,6 @@ import hmac
 import ipaddress
 import logging
 import os
-import subprocess
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -217,21 +216,6 @@ def create_app(state_manager: StateManager) -> FastAPI:
         allow_insecure_remote=_ALLOW_INSECURE_REMOTE,
         require_terminal_api_key=_require_admin_api_key,
     )
-
-    def _docker_exec_pgrep(container: str, pattern: str, timeout_s: int = 5) -> bool | None:
-        """Return process-match state inside container, or None on probe failure."""
-        try:
-            result = subprocess.run(
-                ["docker", "exec", container, "pgrep", "-f", pattern],
-                capture_output=True,
-                text=True,
-                timeout=timeout_s,
-            )
-            return result.returncode == 0
-        except Exception:
-            return None
-
-    ctx.docker_exec_bash_success = _docker_exec_pgrep
 
     from .api_routes.system import register_system_routes
 

@@ -22,6 +22,20 @@ from edge_core.core import AppContext, BaseModule, ModuleMetadata
 logger = logging.getLogger("edge_core.api.isaac")
 
 
+def _docker_exec_pgrep(container: str, pattern: str, timeout_s: int = 5) -> bool | None:
+    """Return process-match state inside container, or None on probe failure."""
+    try:
+        result = subprocess.run(
+            ["docker", "exec", container, "pgrep", "-f", pattern],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+        return result.returncode == 0
+    except Exception:
+        return None
+
+
 class IsaacModule(BaseModule):
     """Pluggable router for Docker and ROS bridge processes."""
 
@@ -33,7 +47,7 @@ class IsaacModule(BaseModule):
 
     def configure(self, ctx: AppContext) -> None:
         self.state_mgr = ctx.require_service("state_manager")
-        self.cmd_success = ctx.get_service("docker_exec_bash_success")
+        self.cmd_success = _docker_exec_pgrep
         self._container_name = os.environ.get("ISAAC_CONTAINER_NAME", "nomad_isaac_ros")
 
     def register_routes(self, app: Any) -> None:
@@ -66,7 +80,7 @@ class IsaacModule(BaseModule):
             nvblox_running = False
             bridge_running = False
 
-            if container_running and self.cmd_success:
+            if container_running:
                 loop = asyncio.get_running_loop()
                 nv_task = loop.run_in_executor(None, self.cmd_success, container_name, "nvblox_node", 3)
                 br_task = loop.run_in_executor(None, self.cmd_success, container_name, "ros_http_bridge\\.py", 3)

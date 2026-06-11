@@ -89,6 +89,12 @@ class MavlinkServo:
 
     def set_pwm(self, pulse_us: int) -> bool:
         pulse_us = int(pulse_us)
+        # SR-PAY-01: every transmitted pulse goes through the SC validator,
+        # including locally-computed camera-tilt pulses.
+        decision = validate_servo_command(self._channel, pulse_us)
+        if not decision.allowed:
+            logger.error("%s", decision.message)
+            return False
         if self._mav is None:
             logger.warning("MAVLink service not available for servo command")
             return False
@@ -113,8 +119,8 @@ class MavlinkServo:
 class ServoController:
     """MAVLink-only controller for Cube Orange servo and relay outputs."""
 
-    def __init__(self) -> None:
-        self._mavlink_service: Any | None = None
+    def __init__(self, mavlink_service: Any | None = None) -> None:
+        self._mavlink_service: Any | None = mavlink_service
         self._servos: dict[str, MavlinkServo] = {}
         self._initialized = False
         self._camera_tilt_channel: int | None = None
@@ -128,6 +134,9 @@ class ServoController:
         self._initialized = True
         logger.info("Servo controller initialized in Cube Orange MAVLink-only mode")
         return True
+
+    def set_mavlink_service(self, mavlink_service: Any | None) -> None:
+        self._mavlink_service = mavlink_service
 
     def is_available(self) -> bool:
         return self._initialized
@@ -270,9 +279,10 @@ def init_servo_controller(
     """Initialize the global MAVLink-only servo controller."""
     global _controller
     if _controller is None:
-        _controller = ServoController()
+        _controller = ServoController(mavlink_service=mavlink_service)
+    else:
+        _controller.set_mavlink_service(mavlink_service)
 
-    _controller._mavlink_service = mavlink_service
     initialized = _controller.initialize()
     if camera_tilt_channel is not None and camera_tilt_channel > 0:
         _controller.configure_camera_tilt_mavlink(int(camera_tilt_channel))

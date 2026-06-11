@@ -20,6 +20,13 @@ DEFAULT_MAX_VELOCITY_XY = 2.0
 DEFAULT_MAX_VELOCITY_Z = 1.0
 DEFAULT_MAX_YAW_RATE = 1.0
 
+# SET_POSITION_TARGET_LOCAL_NED type_mask for velocity control (SR-VEL-01):
+# bits 0-2 (position) ignored, 3-5 (velocity) used, 6-8 (accel) + 9 (force) +
+# 10 (yaw) ignored, 11 (yaw_rate) used. Single source of truth for every
+# adapter that streams velocity setpoints — position bits must stay masked so
+# a velocity path can never command a position.
+VELOCITY_TYPE_MASK = 0b0000_0111_1100_0111
+
 
 def clamp(value: float, lo: float, hi: float) -> float:
     """Clamp ``value`` to ``[lo, hi]``, rejecting non-finite input.

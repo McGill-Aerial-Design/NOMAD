@@ -10,11 +10,20 @@ import subprocess
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
 
 from edge_core.core import AppContext, BaseModule, ModuleMetadata
-from edge_core.safety import MAX_PWM_US, MAX_SERVO_CHANNEL, MIN_PWM_US, MIN_SERVO_CHANNEL
+from edge_core.safety import validate_servo_command
 
 logger = logging.getLogger("edge_core.api.calibration")
+
+
+class SprayCalibrationRequest(BaseModel):
+    """The consumed subset of the GCS spray settings; extras are rejected."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    water_pump_relay_number: int = Field(ge=0, le=15)
 
 
 class CalibrationModule(BaseModule):
@@ -58,12 +67,10 @@ class CalibrationModule(BaseModule):
         @router.post("/api/servo/channel/{channel}/pwm")
         async def set_direct_pwm(channel: int, pwm: int):
             """Send a direct raw PWM microsecond output override to a Cube channel."""
-            if channel < MIN_SERVO_CHANNEL or channel > MAX_SERVO_CHANNEL:
-                raise HTTPException(
-                    status_code=400, detail=f"Channel must be between {MIN_SERVO_CHANNEL} and {MAX_SERVO_CHANNEL}"
-                )
-            if pwm < MIN_PWM_US or pwm > MAX_PWM_US:
-                raise HTTPException(status_code=400, detail=f"PWM must be between {MIN_PWM_US} and {MAX_PWM_US} us")
+            # Rejection text comes from the SC core only (SR-PAY-01).
+            decision = validate_servo_command(channel, pwm)
+            if not decision.allowed:
+                raise HTTPException(status_code=400, detail=decision.message)
 
             servo_ctrl = app.state.servo_controller
             if not servo_ctrl:
@@ -119,22 +126,18 @@ class CalibrationModule(BaseModule):
             return {"success": True, "channel": channel}
 
         @servo_router.post("/api/spray/calibration")
-        async def set_spray_calibration(request: Request):
-            """Push spray calibration parameters from Mission Planner."""
-            try:
-                import json
+        async def set_spray_calibration(req: SprayCalibrationRequest):
+            """Configure the water pump relay number from Mission Planner.
 
-                body = await request.body()
-                data = json.loads(body.decode("utf-8"))
-            except Exception as exc:
-                raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}")
-
+            This is the only spray field the server consumes; everything else
+            (gains, aim point, speeds) is GCS-local. Unknown fields are
+            rejected so client and server cannot drift silently.
+            """
             servo_ctrl = app.state.servo_controller
-            relay_num = int(data.get("water_pump_relay_number", 0))
-            if servo_ctrl and relay_num > 0:
-                servo_ctrl.configure_water_pump_relay(relay_num)
-
-            logger.info("Spray calibration updated: %s", list(data.keys()))
-            return {"success": True, "persisted": data.get("persist", False)}
+            if not servo_ctrl:
+                raise HTTPException(status_code=503, detail="Servo controller not initialized")
+            if not servo_ctrl.configure_water_pump_relay(req.water_pump_relay_number):
+                raise HTTPException(status_code=400, detail="Invalid relay number")
+            return {"success": True, "relay_number": req.water_pump_relay_number}
 
         app.include_router(servo_router)

@@ -112,11 +112,9 @@ namespace NOMAD.MissionPlanner
         private Panel _controlPanel;
         private Panel _statusLogPanel;
         private Button _btnToggleCamera, _btnResetView, _btnClearMesh, _btnResetImuBiases;
-        private Button _btnSaveMap, _btnLoadMap, _btnRelocalizeMap, _btnCenterOnPose;
+        private Button _btnCenterOnPose;
         private Label _lblStatus, _lblStats;
         private Label _lblPerceptionStatus;
-        private Label _lblMapPath;
-        private TextBox _txtMapPath;
         private TextBox _txtStatusLog;
         private CheckBox _chkShowGrid, _chkShowTrajectory, _chkAutoUpdate;
         private ComboBox _combDroneType;

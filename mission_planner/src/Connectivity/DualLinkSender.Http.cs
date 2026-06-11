@@ -80,14 +80,6 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Reset VIO origin on Jetson.
-        /// </summary>
-        public async Task<CommandResult> ResetVioOriginAsync()
-        {
-            return await SendHttpPost("/api/vio/reset_origin", null);
-        }
-
-        /// <summary>
         /// Get VIO status from Jetson.
         /// </summary>
         public async Task<CommandResult> GetVioStatusAsync()
@@ -386,44 +378,6 @@ namespace NOMAD.MissionPlanner
         public async Task<CommandResult> ClearSlamAsync()
         {
             return await SendHttpPostLongRun("/api/slam/clear?prefer_load_map=true&auto_create_empty_map_if_missing=true", null);
-        }
-
-        /// <summary>
-        /// Save the ZED positional tracking area map to a Jetson SSD path.
-        /// </summary>
-        public async Task<CommandResult> SaveAreaMapAsync(string filePath)
-        {
-            var body = new
-            {
-                file_path = filePath,
-                wait_for_completion = true,
-                timeout_s = 30.0,
-            };
-            return await SendHttpPostLongRun("/api/vio/area/save", body);
-        }
-
-        /// <summary>
-        /// Load a previously saved area map for relocalization.
-        /// </summary>
-        public async Task<CommandResult> LoadAreaMapAsync(string filePath)
-        {
-            var body = new
-            {
-                file_path = filePath,
-            };
-            return await SendHttpPostLongRun("/api/vio/area/load", body);
-        }
-
-        /// <summary>
-        /// Load an area map and immediately attempt relocalization.
-        /// </summary>
-        public async Task<CommandResult> RelocalizeAreaMapAsync(string filePath)
-        {
-            var body = new
-            {
-                file_path = filePath,
-            };
-            return await SendHttpPostLongRun("/api/vio/area/relocalize", body);
         }
 
         // ============================================================

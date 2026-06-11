@@ -509,21 +509,6 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private async Task ResetVioOriginAsync()
-        {
-            LogMessage("Resetting VIO origin...");
-            var result = await _sender.ResetVioOriginAsync();
-
-            if (result.Success)
-            {
-                LogMessage("VIO origin reset successful");
-            }
-            else
-            {
-                LogMessage($"VIO reset failed: {result.Message}");
-            }
-        }
-
         private async Task ClearTrajectoryAsync()
         {
             LogMessage("Clearing VIO trajectory...");

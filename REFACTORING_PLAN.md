@@ -189,7 +189,7 @@ get an `enable_flag`.
 > '/api/servo/camera/tilt')` from `node.py` `_poll_gimbal_angle`. No other
 > latent drift found beyond the existing `KNOWN_DRIFT` ledger. Both fixed by 3.2.
 
-- [ ] **3.1 [SR] Fix the silent docker-probe wiring break (F2).** Move the
+- [x] **3.1 [SR] Fix the silent docker-probe wiring break (F2).** Move the
   `pgrep`-in-container probe into `IsaacModule.configure` (or register it as a
   named `AppContext` service from `create_app`). Delete
   `ApiRouteContext.docker_exec_bash_success`. Add a regression test asserting
@@ -207,7 +207,7 @@ get an `enable_flag`.
         `feedback_angle` key).
   - [ ] Add the GET route to the internal-bridge allowed routes in `api.py` if
         the bridge polls it (it does, at 10 Hz with 0.1 s timeout).
-- [ ] **3.3 [SR] Honest `/api/spray/calibration`.** Typed Pydantic request model
+- [x] **3.3 [SR] Honest `/api/spray/calibration`.** Typed Pydantic request model
   containing only consumed fields (today: `water_pump_relay_number`), with
   `extra="forbid"` (or documented accepted-and-ignored); remove the fabricated
   `"persisted"` key. Trim the C# push payload
@@ -215,12 +215,12 @@ get an `enable_flag`.
   the ~18 `Spray*` gains in
   [NOMADConfig.Spray.cs](mission_planner/src/Config/NOMADConfig.Spray.cs) that
   no longer travel become C#-local or get deleted with their UI.
-- [ ] **3.4 [SR] vio.py stubs stop lying (F3).** `reset_origin`, `area/save`,
+- [x] **3.4 [SR] vio.py stubs stop lying (F3).** `reset_origin`, `area/save`,
   `area/load`, `area/relocalize`: implement against the real ZED service if it
   exists in this baseline; otherwise return 501 and delete the C# callers
   (`ResetVioOriginAsync`, `SaveAreaMapAsync`, `LoadAreaMapAsync`,
   `RelocalizeAreaMapAsync`) and their buttons.
-- [ ] **3.5 [SC] De-boilerplate `MavlinkCommands`** (behavior-preserving; keep
+- [x] **3.5 [SC] De-boilerplate `MavlinkCommands`** (behavior-preserving; keep
   `tests/test_mavlink_fence.py` green unchanged):
   - [ ] One connection-guard helper replacing the 15× repeated
         `hasattr(self, "_conn")` + try/except + `logger.debug` pattern,
@@ -232,7 +232,7 @@ get an `enable_flag`.
   - [ ] Replace the implicit mixin contract (`hasattr(self, "_conn")`,
         `getattr(self, "state_manager", None)`) with declared abstract
         attributes or a `Protocol` so mypy enforces it.
-- [ ] **3.6 [SC] Servo adapter tightening.**
+- [x] **3.6 [SC] Servo adapter tightening.**
   - [ ] Route `MavlinkServo.set_pwm` through
         `edge_core.safety.validate_servo_command` (the camera-tilt path
         currently transmits an unvalidated locally-computed pulse).
@@ -242,7 +242,7 @@ get an `enable_flag`.
         verbatim or update the test with it).
   - [ ] Replace `init_servo_controller`'s mutation of the private
         `_controller._mavlink_service` with a constructor arg or public setter.
-- [ ] **3.7 [SR] Shrink `create_app`.** After 1.1–1.2 and 2.4, `api.py` holds
+- [x] **3.7 [SR] Shrink `create_app`.** After 1.1–1.2 and 2.4, `api.py` holds
   only app construction, CORS, auth middleware, and route registration. Target
   ≤ 280 lines (from 399).
 

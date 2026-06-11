@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 import math
 import os
+from collections.abc import Callable
+from typing import Any
 
 from pymavlink import mavutil
 
-from edge_core.safety import Decision, FencePolicy, Point, evaluate_position
+from edge_core.safety import VELOCITY_TYPE_MASK, Decision, FencePolicy, Point, evaluate_position
 
 from ..geospatial import GPSCoordinate, calculate_gps_offset_meters
 
@@ -53,7 +55,36 @@ def _load_fence_config() -> tuple[tuple[GPSCoordinate, ...] | None, float]:
 
 
 class MavlinkCommands:
-    """Implements outgoing MAVLink messages and commands."""
+    """Implements outgoing MAVLink messages and commands.
+
+    Mixin: ``MavlinkService(MavlinkConnection, MavlinkCommands)``. The declared
+    attributes below are the contract the connection class must provide; the
+    class-level defaults keep a bare ``MavlinkCommands`` (tests) fail-closed.
+    """
+
+    # Provided by MavlinkConnection: the pymavlink link and the shared state
+    # manager (home position for the local-NED fence gate).
+    _conn: Any = None
+    state_manager: Any = None
+
+    def _send_command_long_and_wait_ack(self, command_id: int, *params: float, timeout_s: float = 0.75) -> bool:
+        raise NotImplementedError("provided by MavlinkConnection")
+
+    def _send_guarded(self, label: str, send: Callable[[], Any]) -> bool:
+        """Run ``send`` against a live link; nothing is transmitted on failure.
+
+        Returns False when disconnected or on any transmit error (logged at
+        debug, matching the historical per-method behavior); a ``send`` that
+        returns a value (the ack result) is passed through as bool.
+        """
+        if self._conn is None:
+            return False
+        try:
+            result = send()
+            return True if result is None else bool(result)
+        except Exception as exc:
+            logger.debug("%s error: %s", label, exc)
+            return False
 
     def __init__(self) -> None:
         self._fence_latlon, self._fence_margin_m = _load_fence_config()
@@ -102,8 +133,7 @@ class MavlinkCommands:
         if not self._fence_latlon:
             logger.warning("Geofence config invalid - rejecting local position target")
             return False
-        state_manager = getattr(self, "state_manager", None)
-        state = state_manager.get_state() if state_manager is not None else None
+        state = self.state_manager.get_state() if self.state_manager is not None else None
         if state is None or state.home_lat is None or state.home_lon is None:
             logger.warning("Geofence configured but home position unknown - rejecting local position target")
             return False
@@ -113,22 +143,14 @@ class MavlinkCommands:
             logger.warning("Geofence rejected local target (N=%.1f, E=%.1f): %s", north, east, decision.message)
         return decision.allowed
 
-    def arm_disarm(self, should_arm: bool) -> None:
-        if not hasattr(self, "_conn") or self._conn is None:  # type: ignore
-            return
-        try:
-            self._send_command_long_and_wait_ack(  # type: ignore
+    def arm_disarm(self, should_arm: bool) -> bool:
+        return self._send_guarded(
+            "Arm/disarm command",
+            lambda: self._send_command_long_and_wait_ack(
                 mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
                 1 if should_arm else 0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-            )
-        except Exception as exc:
-            logger.debug("Arm/disarm command error: %s", exc)
+            ),
+        )
 
     def send_velocity_command(
         self,
@@ -139,21 +161,15 @@ class MavlinkCommands:
         coordinate_frame: int | None = None,
     ) -> bool:
         """Send velocity command via SET_POSITION_TARGET_LOCAL_NED."""
-        if not hasattr(self, "_conn") or self._conn is None:  # type: ignore
-            return False
 
-        try:
-            if coordinate_frame is None:
-                coordinate_frame = mavutil.mavlink.MAV_FRAME_BODY_OFFSET_NED
-
-            type_mask = 0b0000_0111_1100_0111
-
-            self._conn.mav.set_position_target_local_ned_send(  # type: ignore
+        def _send() -> None:
+            frame = coordinate_frame if coordinate_frame is not None else mavutil.mavlink.MAV_FRAME_BODY_OFFSET_NED
+            self._conn.mav.set_position_target_local_ned_send(
                 0,
-                self._conn.target_system,  # type: ignore
-                self._conn.target_component,  # type: ignore
-                coordinate_frame,
-                type_mask,
+                self._conn.target_system,
+                self._conn.target_component,
+                frame,
+                VELOCITY_TYPE_MASK,
                 0,
                 0,
                 0,
@@ -166,10 +182,8 @@ class MavlinkCommands:
                 0,
                 yaw_rate,
             )
-            return True
-        except Exception as e:
-            logger.debug("Velocity command error: %s", e)
-            return False
+
+        return self._send_guarded("Velocity command", _send)
 
     def trigger_payload(
         self,
@@ -177,43 +191,25 @@ class MavlinkCommands:
         servo_channel: int = 9,
     ) -> bool:
         """Trigger payload (water pump) via MAV_CMD_DO_SET_SERVO."""
-        if not hasattr(self, "_conn") or self._conn is None:  # type: ignore
-            return False
-
-        try:
-            return self._send_command_long_and_wait_ack(  # type: ignore
+        return self._send_guarded(
+            "Payload trigger",
+            lambda: self._send_command_long_and_wait_ack(
                 mavutil.mavlink.MAV_CMD_DO_SET_SERVO,
                 servo_channel,
                 pwm_value,
-                0,
-                0,
-                0,
-                0,
-                0,
-            )
-        except Exception as e:
-            logger.debug("Payload trigger error: %s", e)
-            return False
+            ),
+        )
 
     def set_relay(self, relay_number: int, enabled: bool) -> bool:
         """Set a Cube Orange relay through MAV_CMD_DO_SET_RELAY."""
-        if not hasattr(self, "_conn") or self._conn is None:  # type: ignore
-            return False
-
-        try:
-            return self._send_command_long_and_wait_ack(  # type: ignore
+        return self._send_guarded(
+            "Relay command",
+            lambda: self._send_command_long_and_wait_ack(
                 mavutil.mavlink.MAV_CMD_DO_SET_RELAY,
                 int(relay_number),
                 1 if enabled else 0,
-                0,
-                0,
-                0,
-                0,
-                0,
-            )
-        except Exception as e:
-            logger.debug("Relay command error: %s", e)
-            return False
+            ),
+        )
 
     def stop_velocity(self) -> bool:
         """Send zero velocity command to stop movement."""
@@ -225,49 +221,29 @@ class MavlinkCommands:
         severity: int | None = None,
     ) -> bool:
         """Send STATUSTEXT message to GCS."""
-        if not hasattr(self, "_conn") or self._conn is None:  # type: ignore
-            return False
 
-        try:
-            if severity is None:
-                severity = mavutil.mavlink.MAV_SEVERITY_INFO
+        def _send() -> None:
+            sev = severity if severity is not None else mavutil.mavlink.MAV_SEVERITY_INFO
+            self._conn.mav.statustext_send(sev, text[:50].encode("utf-8"))
 
-            text = text[:50]
-            self._conn.mav.statustext_send(  # type: ignore
-                severity,
-                text.encode("utf-8"),
-            )
-            return True
-        except Exception as e:
-            logger.debug("Statustext error: %s", e)
-            return False
+        return self._send_guarded("Statustext", _send)
 
     def set_mode(self, mode_id: int) -> bool:
         """Set the flight mode on the autopilot."""
-        if not hasattr(self, "_conn") or self._conn is None:  # type: ignore
-            return False
-
-        try:
-            return self._send_command_long_and_wait_ack(  # type: ignore
+        return self._send_guarded(
+            "Set mode",
+            lambda: self._send_command_long_and_wait_ack(
                 mavutil.mavlink.MAV_CMD_DO_SET_MODE,
                 1,
                 mode_id,
-                0,
-                0,
-                0,
-                0,
-                0,
-            )
-        except Exception as e:
-            logger.debug("Set mode error: %s", e)
-            return False
+            ),
+        )
 
     def takeoff(self, altitude_m: float) -> bool:
         """Command an autonomous takeoff to ``altitude_m`` AGL."""
-        if not hasattr(self, "_conn") or self._conn is None:  # type: ignore
-            return False
-        try:
-            return self._send_command_long_and_wait_ack(  # type: ignore
+        return self._send_guarded(
+            "Takeoff",
+            lambda: self._send_command_long_and_wait_ack(
                 mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
                 0,
                 0,
@@ -277,10 +253,8 @@ class MavlinkCommands:
                 0,
                 float(altitude_m),
                 timeout_s=2.0,
-            )
-        except Exception as e:
-            logger.debug("Takeoff error: %s", e)
-            return False
+            ),
+        )
 
     def land(self) -> bool:
         """Switch the autopilot to LAND mode for an autonomous descent."""
@@ -288,23 +262,14 @@ class MavlinkCommands:
 
     def request_home_position(self) -> bool:
         """Ask ArduPilot to send HOME_POSITION once."""
-        if not hasattr(self, "_conn") or self._conn is None:  # type: ignore
-            return False
-        try:
-            return self._send_command_long_and_wait_ack(  # type: ignore
+        return self._send_guarded(
+            "Home position request",
+            lambda: self._send_command_long_and_wait_ack(
                 mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE,
                 mavutil.mavlink.MAVLINK_MSG_ID_HOME_POSITION,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
                 timeout_s=1.0,
-            )
-        except Exception as e:
-            logger.debug("Home position request error: %s", e)
-            return False
+            ),
+        )
 
     def send_global_position_target(
         self,
@@ -314,20 +279,19 @@ class MavlinkCommands:
         yaw: float | None = None,
     ) -> bool:
         """Send a GUIDED global position target in WGS84 / MSL."""
-        if not hasattr(self, "_conn") or self._conn is None:  # type: ignore
+        if self._conn is None:
             return False
         if not self._fence_allows_global(lat, lon):
             return False
 
-        try:
+        def _send() -> None:
             type_mask = 0b0000_1111_1111_1000
             if yaw is not None:
                 type_mask &= ~(1 << 10)
-
-            self._conn.mav.set_position_target_global_int_send(  # type: ignore
+            self._conn.mav.set_position_target_global_int_send(
                 0,
-                self._conn.target_system,  # type: ignore
-                self._conn.target_component,  # type: ignore
+                self._conn.target_system,
+                self._conn.target_component,
                 mavutil.mavlink.MAV_FRAME_GLOBAL_INT,
                 type_mask,
                 round(float(lat) * 1e7),
@@ -342,10 +306,8 @@ class MavlinkCommands:
                 float(yaw or 0.0),
                 0,
             )
-            return True
-        except Exception as e:
-            logger.debug("Global position target error: %s", e)
-            return False
+
+        return self._send_guarded("Global position target", _send)
 
     def send_position_target(
         self,
@@ -355,19 +317,18 @@ class MavlinkCommands:
         yaw: float,
     ) -> bool:
         """Send position target via SET_POSITION_TARGET_LOCAL_NED."""
-        if not hasattr(self, "_conn") or self._conn is None:  # type: ignore
+        if self._conn is None:
             return False
         if not self._fence_allows_local(x, y):
             return False
 
-        try:
-            type_mask = 0b0000_1111_1111_1000
-            self._conn.mav.set_position_target_local_ned_send(  # type: ignore
+        def _send() -> None:
+            self._conn.mav.set_position_target_local_ned_send(
                 0,
-                self._conn.target_system,  # type: ignore
-                self._conn.target_component,  # type: ignore
+                self._conn.target_system,
+                self._conn.target_component,
                 mavutil.mavlink.MAV_FRAME_LOCAL_NED,
-                type_mask,
+                0b0000_1111_1111_1000,
                 x,
                 y,
                 z,
@@ -380,7 +341,5 @@ class MavlinkCommands:
                 yaw,
                 0,
             )
-            return True
-        except Exception as e:
-            logger.debug("Position target error: %s", e)
-            return False
+
+        return self._send_guarded("Position target", _send)

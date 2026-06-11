@@ -50,7 +50,6 @@ namespace NOMAD.MissionPlanner
         private Button _btnNoVncStop;
         private Button _btnIsaacRosStart;
         private Button _btnIsaacRosStop;
-        private Button _btnVioReset;
 
         // VIO trajectory info
         private Label _lblVioTrajectoryPoints;
