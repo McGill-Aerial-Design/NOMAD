@@ -7,6 +7,7 @@ Connects via SSH and configures the Jetson Orin Nano
 """
 
 import os
+import shlex
 import sys
 
 import paramiko
@@ -18,6 +19,7 @@ JETSON_USER = os.environ.get("JETSON_SSH_USER", "nomad")
 JETSON_PASS = os.environ.get("JETSON_SSH_PASS", "")
 JETSON_HOME = f"/home/{JETSON_USER}"  # User home directory on Jetson
 NOMAD_HOME = f"{JETSON_HOME}/NOMAD"  # NOMAD repository path
+NOMAD_ENV = f"{NOMAD_HOME}/config/nomad.env"
 
 GCS_IP = os.environ.get("GCS_IP", "")
 
@@ -35,12 +37,64 @@ def run_command(ssh, cmd, show_output=True):
     return out, err
 
 
+def sed_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("&", "\\&").replace("|", "\\|")
+
+
+def set_nomad_env_value(ssh, key: str, value: str) -> None:
+    env_file = shlex.quote(NOMAD_ENV)
+    replacement = f"{key}={sed_escape(value)}"
+    cmd = (
+        f"if grep -q '^{key}=' {env_file}; then "
+        f"sed -i 's|^{key}=.*|{replacement}|' {env_file}; "
+        f"else printf '\\n{replacement}\\n' >> {env_file}; fi"
+    )
+    run_command(ssh, cmd, show_output=False)
+
+
+def configure_nomad_env(ssh) -> None:
+    env_file = shlex.quote(NOMAD_ENV)
+    repo_root = shlex.quote(NOMAD_HOME)
+    run_command(
+        ssh,
+        f"cd {repo_root} && mkdir -p config && ([ -f {env_file} ] || cp config/nomad.env.example {env_file})",
+    )
+
+    values = {
+        "NOMAD_REPO_ROOT": NOMAD_HOME,
+        "NOMAD_LOG_DIR": f"{JETSON_HOME}/nomad_logs",
+        "NOMAD_DATA_DIR": f"{NOMAD_HOME}/data",
+        "NOMAD_MISSION_LOG_DIR": f"{NOMAD_HOME}/data/mission_logs",
+        "NOMAD_VENV": f"{NOMAD_HOME}/venv",
+        "NOMAD_API_HOST": "0.0.0.0",
+        "NOMAD_API_PORT": "8000",
+        "NOMAD_API_URL": "http://localhost:8000",
+        "GCS_IP": GCS_IP,
+        "GCS_PORT_LTE": "14560",
+        "GCS_PORT_LOCAL": "14550",
+        "MAVLINK_UART_DEV": "/dev/ttyTHS1",
+        "MAVLINK_UART_BAUD": "921600",
+        "NOMAD_AUTOSTART_ISAAC_ROS_CONTAINER": "false",
+        "NOMAD_ENABLE_NVBLOX_MESH": "false",
+    }
+
+    for key, value in values.items():
+        set_nomad_env_value(ssh, key, value)
+
+    print(f"Runtime configuration updated at {NOMAD_ENV}")
+
+
 def main():
     print("=" * 50)
     print("NOMAD Jetson Remote Setup")
     print("=" * 50)
 
-    # Validate password is set
+    # Validate connection settings.
+    if not JETSON_IP:
+        print("ERROR: JETSON_IP environment variable not set!")
+        print("Set it before running: export JETSON_IP='<host>'")
+        sys.exit(1)
+
     if not JETSON_PASS:
         print("ERROR: JETSON_SSH_PASS environment variable not set!")
         print("Set it before running: export JETSON_SSH_PASS='your-password'")
@@ -134,22 +188,8 @@ Port=14560
         run_command(ssh, cmd, show_output=False)
     print("Firewall configured for Tailscale access")
 
-    # Create .env file
-    print("\n--- Creating Environment File ---")
-    env_content = f"""# NOMAD Edge Core Environment
-NOMAD_HOST=0.0.0.0
-NOMAD_PORT=8000
-TAILSCALE_IP={JETSON_IP}
-GCS_IP={GCS_IP}
-GCS_PORT_LTE=14560
-GCS_PORT_LOCAL=14550
-MAVLINK_UART_DEV=/dev/ttyTHS1
-MAVLINK_UART_BAUD=921600
-NOMAD_ENABLE_ISAAC_ROS=false
-NOMAD_DEBUG=false
-"""
-    run_command(ssh, f"echo '{env_content}' > {NOMAD_HOME}/.env")
-    print("Environment file created")
+    print("\n--- Configuring Runtime Environment ---")
+    configure_nomad_env(ssh)
 
     # Test Edge Core
     print("\n--- Testing Edge Core ---")
