@@ -115,6 +115,7 @@ def create_app(state_manager: StateManager) -> FastAPI:
         ("POST", "/api/vio/update"),
         ("POST", "/api/slam/mesh/update"),
         ("POST", "/api/servo/camera/tilt"),
+        ("GET", "/api/servo/camera/tilt"),
     }
     _INTERNAL_BRIDGE_MIN_TOKEN_LEN = 32
 

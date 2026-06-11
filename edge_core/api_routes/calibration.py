@@ -9,7 +9,7 @@ import logging
 import subprocess
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from edge_core.core import AppContext, BaseModule, ModuleMetadata
 from edge_core.safety import MAX_PWM_US, MAX_SERVO_CHANNEL, MIN_PWM_US, MIN_SERVO_CHANNEL
@@ -78,14 +78,25 @@ class CalibrationModule(BaseModule):
         servo_router = APIRouter(tags=["Servo & Spray"])
 
         @servo_router.post("/api/servo/camera/tilt")
-        async def set_camera_tilt(angle: int = 90):
+        async def set_camera_tilt(angle: float = Query(90.0, ge=0.0, le=180.0)):
             """Set camera tilt angle (0-180 degrees) via MAVLink servo."""
             servo_ctrl = app.state.servo_controller
             if not servo_ctrl:
                 raise HTTPException(status_code=503, detail="Servo controller not initialized")
-            if servo_ctrl.set_camera_tilt(float(angle)):
+            if servo_ctrl.set_camera_tilt(angle):
                 return {"success": True, "angle": angle}
             raise HTTPException(status_code=502, detail="MAVLink camera tilt command rejected")
+
+        @servo_router.get("/api/servo/camera/tilt")
+        async def get_camera_tilt():
+            """Current commanded camera tilt angle in degrees."""
+            servo_ctrl = app.state.servo_controller
+            if not servo_ctrl:
+                raise HTTPException(status_code=503, detail="Servo controller not initialized")
+            angle = servo_ctrl.get_camera_tilt()
+            if angle is None:
+                raise HTTPException(status_code=503, detail="Camera tilt channel not configured")
+            return {"angle": angle}
 
         @servo_router.post("/api/servo/camera/config")
         async def set_camera_config(request: Request):
