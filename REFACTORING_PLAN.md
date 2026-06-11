@@ -325,7 +325,7 @@ get an `enable_flag`.
   `await request.body(); json.loads(...)` blocks (vio.py ×4, calibration.py ×2)
   with Pydantic request models — this also makes the openapi schema strong
   enough for the Phase 0 gate to verify field names/types.
-- [ ] **5.2 [SR] One error envelope.** Server errors are FastAPI `{"detail": …}`
+- [x] **5.2 [SR] One error envelope.** Server errors are FastAPI `{"detail": …}`
   everywhere; remove the HTTP-200-with-`{"success": false}` pattern, then
   delete `SendHttpPostLongRun`'s application-error double-parse on the C# side.
 - [ ] **5.3 [NC] Config truth.** After 1.10 and 4.4, regenerate

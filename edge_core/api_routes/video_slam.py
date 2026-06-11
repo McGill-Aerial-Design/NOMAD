@@ -54,7 +54,7 @@ class VideoSlamModule(BaseModule):
             """Get status of running RTSP streams."""
             mgr = _manager()
             if not mgr:
-                return {"success": False, "error": "VideoStreamManager not initialized"}
+                raise HTTPException(status_code=503, detail="VideoStreamManager not initialized")
             return {"success": True, "bridges": {"primary": mgr.get_status().to_dict()}}
 
         @router.post("/api/video/bridges/start")
