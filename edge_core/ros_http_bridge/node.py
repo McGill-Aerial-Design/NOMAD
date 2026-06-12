@@ -7,11 +7,9 @@ from __future__ import annotations
 import json
 import logging
 import math
-import os
 import threading
 import time
 from dataclasses import asdict, dataclass
-from http.client import HTTPConnection
 
 import rclpy
 import rclpy.time
@@ -21,6 +19,7 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 
 from .coordinate_math import quat_to_euler, wrap_angle_rad
+from .http_client import EdgeCoreHttpClient
 from .mavlink_velocity import MavlinkVelocityController
 from .mesh_packer import VoxelMeshPacker
 
@@ -111,11 +110,6 @@ class ROSHTTPBridge(Node):
     ):
         super().__init__("nomad_ros_http_bridge")
 
-        self._host = host
-        self._port = port
-        self._api_key = (os.environ.get("NOMAD_API_KEY") or "").strip() or None
-        self._internal_token = (os.environ.get("NOMAD_INTERNAL_TOKEN") or "").strip() or None
-        self._internal_token_header = "X-NOMAD-Internal-Token"
         self._send_interval = 1.0 / send_rate_hz
 
         self._enable_nav_control = enable_nav_control
@@ -130,10 +124,7 @@ class ROSHTTPBridge(Node):
         self._use_imu_attitude = use_imu_attitude and SENSOR_MSGS_AVAILABLE
         self._use_mag_heading = use_mag_heading and SENSOR_MSGS_AVAILABLE
 
-        self._http_timeout_default_s = 0.5
-        self._http_conn = HTTPConnection(host, port, timeout=self._http_timeout_default_s)
-        self._http_lock = threading.Lock()
-        self._last_http_error_log: dict[str, float] = {}
+        self._http = EdgeCoreHttpClient(host, port)
 
         self._latest_vio: VIOData | None = None
         self._latest_cmd_vel: VelocityCommand | None = None
@@ -534,57 +525,11 @@ class ROSHTTPBridge(Node):
             self._mesh_packer.queue_mesh(mesh_data)
 
     def _http_post(self, path: str, data: bytes, timeout: float = 0.5, content_type: str = "application/json") -> bool:
-        with self._http_lock:
-            try:
-                headers = self._build_internal_headers(content_type, keep_alive=True)
-                self._http_conn.timeout = timeout
-                self._http_conn.request("POST", path, body=data, headers=headers)
-                resp = self._http_conn.getresponse()
-                resp.read()
-                return resp.status == 200
-            except Exception as e:
-                now = time.monotonic()
-                if now - self._last_http_error_log.get(path, 0.0) >= 2.0:
-                    logger.warning(f"HTTP POST {path} failed: {e}")
-                    self._last_http_error_log[path] = now
-                self._reconnect_http()
-                return False
+        # Thin delegate kept so VoxelMeshPacker can post through the node.
+        return self._http.post(path, data, timeout=timeout, content_type=content_type)
 
     def _http_get_json(self, path: str, timeout: float = 0.2) -> dict | None:
-        with self._http_lock:
-            try:
-                headers = self._build_internal_headers(keep_alive=True)
-                self._http_conn.timeout = timeout
-                self._http_conn.request("GET", path, headers=headers)
-                resp = self._http_conn.getresponse()
-                body = resp.read()
-                if resp.status == 200:
-                    return json.loads(body.decode("utf-8"))
-            except Exception:
-                self._reconnect_http()
-            return None
-
-    def _reconnect_http(self) -> None:
-        try:
-            self._http_conn.close()
-        except Exception:
-            pass
-        try:
-            self._http_conn = HTTPConnection(self._host, self._port, timeout=self._http_timeout_default_s)
-        except Exception:
-            pass
-
-    def _build_internal_headers(self, content_type: str | None = None, keep_alive: bool = False) -> dict[str, str]:
-        headers = {}
-        if content_type:
-            headers["Content-Type"] = content_type
-        if keep_alive:
-            headers["Connection"] = "keep-alive"
-        if self._internal_token:
-            headers[self._internal_token_header] = self._internal_token
-        if self._api_key:
-            headers["X-API-Key"] = self._api_key
-        return headers
+        return self._http.get_json(path, timeout=timeout)
 
     def _bump_send_errors(self) -> None:
         with self._send_errors_lock:
@@ -595,10 +540,7 @@ class ROSHTTPBridge(Node):
             self._mavlink_vel.stop()
         if self._mesh_packer:
             self._mesh_packer.stop()
-        try:
-            self._http_conn.close()
-        except Exception:
-            pass
+        self._http.close()
         return super().destroy_node()
 
     def get_stats(self) -> dict:
