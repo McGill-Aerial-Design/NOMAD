@@ -265,6 +265,7 @@
     <Compile Include="SLAM3D\Rendering\TrajectoryRenderer.cs" />
     <Compile Include="SLAM3D\Rendering\DetectionRenderer.cs" />
     <Compile Include="SLAM3D\Rendering\VoxelMeshBuilder.cs" />
+    <Compile Include="SLAM3D\Rendering\VoxelMeshBuilder.Storage.cs" />
   </ItemGroup>
 
   <!-- Optional local references for LibVLCSharp managed assemblies (place DLLs in third_party/libvlc) -->
