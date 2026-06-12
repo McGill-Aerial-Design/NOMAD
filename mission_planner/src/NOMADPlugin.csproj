@@ -140,6 +140,8 @@
   <ItemGroup>
     <!-- Plugin entry + shell -->
     <Compile Include="Plugin\NOMADPlugin.cs" />
+    <Compile Include="Plugin\NOMADPlugin.Startup.cs" />
+    <Compile Include="Plugin\NOMADPlugin.Screens.cs" />
     <Compile Include="Plugin\NOMADPlugin.VideoAndLink.cs" />
     <Compile Include="Plugin\NOMADMainScreen.cs" />
     <Compile Include="Plugin\NOMADMainScreen.Layout.cs" />
