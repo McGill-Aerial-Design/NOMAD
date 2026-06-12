@@ -60,7 +60,11 @@ namespace NOMAD.MissionPlanner
             if (CustomMessageBox.Show($"Load preset '{preset.Name}'?\nThis will replace current boundaries.",
                 "Confirm", CustomMessageBox.MessageBoxButtons.YesNo) == CustomMessageBox.DialogResult.Yes)
             {
+                _missionConfig.SoftBoundary.Vertices = preset.SoftBoundary.ToList();
+                _missionConfig.HardBoundary.Vertices = preset.HardBoundary.ToList();
+                _missionConfig.MaxAltitudeAglMeters = preset.MaxAltitudeMeters;
 
+                _missionConfig.Save();
                 LoadBoundaries();
                 _nudMaxAlt.Value = (decimal)preset.MaxAltitudeMeters;
 
@@ -134,10 +138,9 @@ namespace NOMAD.MissionPlanner
                         Name = txtName.Text,
                         Description = txtDesc.Text,
                         CreatedAt = DateTime.Now,
-                        SoftBoundary = new List<GpsPoint>(),
-                        HardBoundary = new List<GpsPoint>(),
-                        MaxAltitudeMeters = 122.0,
-
+                        SoftBoundary = _missionConfig.SoftBoundary.Vertices.ToList(),
+                        HardBoundary = _missionConfig.HardBoundary.Vertices.ToList(),
+                        MaxAltitudeMeters = _missionConfig.MaxAltitudeAglMeters,
                     };
 
                     try

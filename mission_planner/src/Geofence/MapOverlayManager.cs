@@ -45,9 +45,11 @@ namespace NOMAD.MissionPlanner
         // Boundary style constants
         private static readonly Color SOFT_BOUNDARY_STROKE = Color.Yellow;
         private static readonly Color SOFT_BOUNDARY_FILL = Color.FromArgb(40, Color.Yellow);
+        private static readonly int SOFT_BOUNDARY_WIDTH = 2;
 
         private static readonly Color HARD_BOUNDARY_STROKE = Color.Red;
         private static readonly Color HARD_BOUNDARY_FILL = Color.FromArgb(50, Color.Red);
+        private static readonly int HARD_BOUNDARY_WIDTH = 3;
 
         // Reflection plumbing (type discovery, Initialize) lives in
         // MapOverlayManager.Reflection.cs.
@@ -331,6 +333,47 @@ namespace NOMAD.MissionPlanner
                 }
             }
             catch { } // best-effort reflection
+        }
+
+        /// <summary>
+        /// Draw both soft and hard boundaries from a geofence config on the map.
+        /// </summary>
+        public static void DrawBoundaries(GeofenceConfig config)
+        {
+            if (config == null) return;
+
+            if (!_initialized && !Initialize())
+            {
+                Log.Debug("Cannot draw boundaries - map not initialized");
+                return;
+            }
+
+            // Clear existing NOMAD boundaries before redrawing
+            ClearBoundaries();
+
+            // Draw soft boundary (yellow, outer warning zone)
+            if (config.SoftBoundary?.Vertices?.Count >= 3)
+            {
+                DrawPolygon(
+                    config.SoftBoundary.Vertices,
+                    "NOMAD_Soft_Boundary",
+                    SOFT_BOUNDARY_STROKE,
+                    SOFT_BOUNDARY_FILL,
+                    SOFT_BOUNDARY_WIDTH);
+            }
+
+            // Draw hard boundary (red, kill zone)
+            if (config.HardBoundary?.Vertices?.Count >= 3)
+            {
+                DrawPolygon(
+                    config.HardBoundary.Vertices,
+                    "NOMAD_Hard_Boundary",
+                    HARD_BOUNDARY_STROKE,
+                    HARD_BOUNDARY_FILL,
+                    HARD_BOUNDARY_WIDTH);
+            }
+
+            RefreshMap();
         }
 
         /// <summary>

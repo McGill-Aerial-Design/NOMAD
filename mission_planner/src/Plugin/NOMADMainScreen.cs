@@ -57,6 +57,8 @@ namespace NOMAD.MissionPlanner
         private MAVLinkConnectionManager _connectionManager;
         private JetsonConnectionManager _jetsonConnectionManager;
         private NOMADConfig _config;
+        private GeofenceConfig _geofenceConfig;
+        private BoundaryMonitor _boundaryMonitor;
         private Label _profileLabel;
 
         // Layout panels
@@ -152,6 +154,11 @@ namespace NOMAD.MissionPlanner
                 _sender = new DualLinkSender(_config);
             }
 
+            // Geofence config + boundary monitor shared by the boundary view and
+            // the dashboard's notification service.
+            _geofenceConfig = GeofenceConfig.Load();
+            _boundaryMonitor = new BoundaryMonitor(_geofenceConfig, _config);
+
             // Optional module host (set by the plugin). Inert unless it has modules.
             _moduleHost = _staticModuleHost;
 
@@ -241,11 +248,15 @@ namespace NOMAD.MissionPlanner
                     if (_dashboardView == null)
                     {
                         _dashboardView = new NOMADDashboardView(_sender, _config, _connectionManager, _jetsonConnectionManager);
+                        if (_boundaryMonitor != null)
+                        {
+                            _dashboardView.SetBoundaryMonitor(_boundaryMonitor);
+                        }
                     }
                     newView = _dashboardView;
                     break;
                 case "Boundaries":
-                    if (_boundaryView == null) _boundaryView = new NOMADBoundaryView(_config, null);
+                    if (_boundaryView == null) _boundaryView = new NOMADBoundaryView(_geofenceConfig, _config, _boundaryMonitor);
                     newView = _boundaryView;
                     break;
                 case "Video":
@@ -352,6 +363,7 @@ namespace NOMAD.MissionPlanner
                 _updateTimer?.Stop();
                 _updateTimer?.Dispose();
 
+                _boundaryMonitor?.Dispose();
                 _dashboardView?.Dispose();
                 _boundaryView?.Dispose();
                 _videoView?.Dispose();
