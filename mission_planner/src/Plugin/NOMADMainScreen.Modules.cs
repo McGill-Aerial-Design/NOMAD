@@ -97,11 +97,6 @@ namespace NOMAD.MissionPlanner
                 return;
             }
 
-            // Header text
-            var headerLabel = _headerPanel.Controls.Find("lblHeader", false);
-            if (headerLabel.Length > 0)
-                ((Label)headerLabel[0]).Text = descriptor.Title;
-
             // Notify the outgoing view it is being hidden (kept cached, not disposed).
             if (_currentView is INomadView previousView)
                 previousView.OnDeactivated();

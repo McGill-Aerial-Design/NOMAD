@@ -192,7 +192,7 @@ namespace NOMAD.MissionPlanner
                 Location = new Point(10, buttonY),
                 Size = new Size(120, 35),
                 FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(0, 122, 204),
+                BackColor = NOMADTheme.ACCENT,
                 ForeColor = Color.White
             };
             _btnTest.Click += BtnTest_Click;

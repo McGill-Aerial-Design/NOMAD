@@ -38,10 +38,10 @@ namespace NOMAD.MissionPlanner
 
         private const int SIDEBAR_WIDTH = 200;
         // Use NOMADTheme for consistent colors across the plugin
-        private static readonly Color SIDEBAR_BG = Color.FromArgb(25, 25, 28);
+        private static readonly Color SIDEBAR_BG = Color.FromArgb(16, 16, 18);
         private static readonly Color CONTENT_BG = NOMADTheme.BG_DARK;
         private static readonly Color ACCENT_COLOR = NOMADTheme.ACCENT;
-        private static readonly Color ACCENT_HOVER = Color.FromArgb(30, 144, 255);
+        private static readonly Color ACCENT_HOVER = Color.FromArgb(240, 60, 70);
         private static readonly Color TEXT_PRIMARY = NOMADTheme.TEXT_PRIMARY;
         private static readonly Color TEXT_SECONDARY = NOMADTheme.TEXT_SECONDARY;
         private static readonly Color CARD_BG = NOMADTheme.CARD_BG;
@@ -65,7 +65,6 @@ namespace NOMAD.MissionPlanner
         // Layout panels
         private Panel _sidebarPanel;
         private Panel _contentPanel;
-        private Panel _headerPanel;
         private Panel _viewContainer;
 
         // Sidebar buttons
@@ -228,24 +227,6 @@ namespace NOMAD.MissionPlanner
         {
             // Update sidebar button states
             UpdateSidebarButtonState(viewName);
-
-            // Update header
-            var headerLabel = _headerPanel.Controls.Find("lblHeader", false);
-            if (headerLabel.Length > 0)
-            {
-                string headerText = viewName;
-                switch (viewName)
-                {
-                    case "Dashboard": headerText = "Dashboard"; break;
-                    case "Boundaries": headerText = "Flight Boundaries"; break;
-                    case "Video": headerText = "Video Feed"; break;
-                    case "Terminal": headerText = "Jetson Terminal"; break;
-                    case "Health": headerText = "System Health"; break;
-                    case "Links": headerText = "Dual Link Status"; break;
-                    case "Calibration": headerText = "ZED Camera Calibration"; break;
-                }
-                ((Label)headerLabel[0]).Text = headerText;
-            }
 
             // Remove current view
             if (_currentView != null)

@@ -226,7 +226,7 @@ namespace NOMAD.MissionPlanner
                 Location = new Point(535, 3),
                 Size = new Size(75, 27),
                 FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(0, 122, 204),
+                BackColor = NOMADTheme.ACCENT,
                 ForeColor = Color.White,
                 Font = new Font("Segoe UI", 9, FontStyle.Bold),
             };

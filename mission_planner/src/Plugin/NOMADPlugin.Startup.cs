@@ -134,7 +134,7 @@ namespace NOMAD.MissionPlanner
                     nomadMenu = new ToolStripMenuItem("NOMAD")
                     {
                         ForeColor = Color.White,
-                        BackColor = Color.FromArgb(0, 122, 204)
+                        BackColor = NOMADTheme.ACCENT
                     };
                     // Insert before Help menu (usually last)
                     int insertIndex = menuStrip.Items.Count - 1;
@@ -142,29 +142,24 @@ namespace NOMAD.MissionPlanner
                     menuStrip.Items.Insert(insertIndex, nomadMenu);
                 }
 
-                // Make clicking directly on "NOMAD" open the screen.
-                // Use MouseDown event which fires before dropdown opens.
+                // Hovering "NOMAD" opens the dropdown so the user can reach the
+                // items without clicking; a deliberate CLICK opens the NOMAD
+                // screen. Previously the dropdown only opened on click, and that
+                // same click navigated — yanking the user to the dashboard every
+                // time they just wanted the menu.
+                nomadMenu.MouseEnter += (s, e) =>
+                {
+                    if (!nomadMenu.DropDown.Visible)
+                        nomadMenu.ShowDropDown();
+                };
                 nomadMenu.MouseDown += (s, e) =>
                 {
                     if (e.Button == MouseButtons.Left)
-                    {
-                        Log.Debug("Menu bar item clicked directly");
                         ShowMainScreen();
-                    }
                 };
 
                 // Avoid duplicate items if plugin reloads
                 nomadMenu.DropDownItems.Clear();
-
-                // Open NOMAD Screen (Primary action - also in dropdown for accessibility)
-                var openMainItem = new ToolStripMenuItem("Open NOMAD Screen");
-                openMainItem.Font = new Font(openMainItem.Font, FontStyle.Bold);
-                openMainItem.Click += (s, e) =>
-                {
-                    Log.Debug("Open NOMAD Screen clicked from dropdown");
-                    ShowMainScreen();
-                };
-                nomadMenu.DropDownItems.Add(openMainItem);
 
                 // Pop-out window option (for multi-monitor setups)
                 var popOutItem = new ToolStripMenuItem("Pop Out to Window");
@@ -205,17 +200,16 @@ namespace NOMAD.MissionPlanner
                 var aboutItem = new ToolStripMenuItem("About NOMAD");
                 aboutItem.Click += (s, e) => CustomMessageBox.Show(
                     $"NOMAD Plugin v{Version}\n" +
-                    $"McGill Aerial Design\n\n" +
-                    $"Features:\n" +
-                    $"- Full-page sidebar interface\n" +
-                    $"- Dashboard with quick overview\n" +
-                    $"- Embedded video streaming\n" +
-                    $"- Jetson terminal access\n" +
-                    $"- Real-time health monitoring\n" +
-                    $"- MAVLink dual link failover\n" +
-                    $"- Configurable payload controls\n\n" +
+                    $"McGill Aerial Design — AEAC 2026\n\n" +
+                    $"Hover the NOMAD menu for tools; click it to open the\n" +
+                    $"NOMAD screen (dashboard, flight boundaries, video,\n" +
+                    $"terminal, health, dual-link status, ZED calibration).\n\n" +
+                    $"Geofence monitoring with enforced violation actions,\n" +
+                    $"plugin-wide alerts with toast overlays, MAVLink dual-link\n" +
+                    $"failover routing, and configurable payload controls.\n\n" +
                     $"Jetson: {_config.EffectiveIP}:{_config.JetsonPort}\n" +
-                    $"Dual Link: {(_config.DualLinkEnabled ? "Enabled" : "Disabled")}",
+                    $"Dual Link: {(_config.DualLinkEnabled ? "Enabled" : "Disabled")}\n" +
+                    $"Log: %LOCALAPPDATA%\\Mission Planner\\plugins\\NOMAD\\nomad.log",
                     "About NOMAD"
                 );
                 nomadMenu.DropDownItems.Add(aboutItem);

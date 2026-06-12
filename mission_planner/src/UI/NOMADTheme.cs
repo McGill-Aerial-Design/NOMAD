@@ -16,15 +16,15 @@ namespace NOMAD.MissionPlanner
     /// </summary>
     public static class NOMADTheme
     {
-        // Background colors
-        public static readonly Color BG_DARK = Color.FromArgb(30, 30, 33);
-        public static readonly Color CARD_BG = Color.FromArgb(40, 40, 45);
-        public static readonly Color CARD_BORDER = Color.FromArgb(60, 60, 65);
-        public static readonly Color INPUT_BG = Color.FromArgb(50, 50, 53);
-        public static readonly Color BUTTON_BG = Color.FromArgb(60, 60, 65);
+        // Background colors — black-first scheme
+        public static readonly Color BG_DARK = Color.FromArgb(10, 10, 12);
+        public static readonly Color CARD_BG = Color.FromArgb(24, 24, 27);
+        public static readonly Color CARD_BORDER = Color.FromArgb(48, 48, 52);
+        public static readonly Color INPUT_BG = Color.FromArgb(30, 30, 34);
+        public static readonly Color BUTTON_BG = Color.FromArgb(42, 42, 46);
 
-        // State colors
-        public static readonly Color ACCENT = Color.FromArgb(0, 122, 204);
+        // State colors — red accent
+        public static readonly Color ACCENT = Color.FromArgb(220, 30, 40);
         public static readonly Color SUCCESS = Color.FromArgb(76, 175, 80);
         public static readonly Color WARNING = Color.FromArgb(255, 152, 0);
         public static readonly Color ERROR = Color.FromArgb(244, 67, 54);
@@ -49,6 +49,6 @@ namespace NOMAD.MissionPlanner
         // Button action colors
         public static readonly Color BTN_START = Color.FromArgb(0, 120, 60);
         public static readonly Color BTN_STOP = Color.FromArgb(150, 50, 50);
-        public static readonly Color BTN_PRIMARY = Color.FromArgb(0, 122, 204);
+        public static readonly Color BTN_PRIMARY = Color.FromArgb(220, 30, 40);
     }
 }

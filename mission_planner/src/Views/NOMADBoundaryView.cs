@@ -473,7 +473,7 @@ namespace NOMAD.MissionPlanner
                 {
                     BackColor = Color.FromArgb(40, 40, 43),
                     ForeColor = Color.White,
-                    SelectionBackColor = Color.FromArgb(0, 122, 204),
+                    SelectionBackColor = NOMADTheme.ACCENT,
                     SelectionForeColor = Color.White,
                 },
                 EnableHeadersVisualStyles = false,

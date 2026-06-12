@@ -32,7 +32,7 @@ namespace NOMAD.MissionPlanner
     {
         // Plugin metadata
         public override string Name => "NOMAD Control";
-        public override string Version => "3.0.0";
+        public override string Version => "3.1.0";
         public override string Author => "McGill Aerial Design";
 
         // Plugin state
@@ -147,9 +147,9 @@ namespace NOMAD.MissionPlanner
                     Host?.MainForm?.BeginInvoke((MethodInvoker)delegate
                     {
                         CustomMessageBox.Show(
-                            $"NOMAD Plugin v{Version} loaded.\n\n" +
-                            $"Use the NOMAD menu → Open NOMAD Tab\n" +
-                            $"for the complete NOMAD interface.\n\n" +
+                            $"NOMAD Plugin v{Version} loaded (debug mode).\n\n" +
+                            $"Click NOMAD in the menu bar to open the interface;\n" +
+                            $"hover it for tools and settings.\n\n" +
                             $"Jetson IP: {_config.EffectiveIP}",
                             "NOMAD"
                         );

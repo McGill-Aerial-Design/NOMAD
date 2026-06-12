@@ -113,7 +113,7 @@ namespace NOMAD.MissionPlanner
                     Location = new Point(180, 135),
                     Size = new Size(80, 30),
                     DialogResult = DialogResult.OK,
-                    BackColor = Color.FromArgb(0, 122, 204),
+                    BackColor = NOMADTheme.ACCENT,
                     ForeColor = Color.White,
                     FlatStyle = FlatStyle.Flat,
                 };

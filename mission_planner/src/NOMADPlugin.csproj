@@ -196,7 +196,6 @@
     <Compile Include="Panels\EnhancedHealthDashboard.UI.cs" />
     <Compile Include="Panels\EnhancedHealthDashboard.Monitoring.cs" />
     <Compile Include="Panels\EnhancedHealthDashboard.GraphAndAlerts.cs" />
-    <Compile Include="Panels\EkfSourceControlPanel.cs" />
     <Compile Include="Panels\JetsonHealthTab.cs" />
     <Compile Include="Panels\JetsonTerminalControl.cs" />
     <Compile Include="Panels\JetsonTerminalControl.Commands.cs" />

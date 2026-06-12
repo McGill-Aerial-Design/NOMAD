@@ -127,7 +127,7 @@ namespace NOMAD.MissionPlanner
                 Dock = DockStyle.Bottom,
                 Height = 30,
                 FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(0, 122, 204),
+                BackColor = NOMADTheme.ACCENT,
                 ForeColor = Color.White,
             };
             btnOpenFile.Click += (s, e) => OpenSelectedFile();

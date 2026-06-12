@@ -181,7 +181,7 @@ namespace NOMAD.MissionPlanner
                     Location = new Point(330, 330),
                     Size = new Size(90, 30),
                     DialogResult = DialogResult.OK,
-                    BackColor = Color.FromArgb(0, 122, 204),
+                    BackColor = NOMADTheme.ACCENT,
                     ForeColor = Color.White,
                     FlatStyle = FlatStyle.Flat,
                 };
@@ -498,7 +498,7 @@ namespace NOMAD.MissionPlanner
                 {
                     Text = "Import", Left = 300, Width = 80, Top = 240,
                     DialogResult = DialogResult.OK,
-                    BackColor = Color.FromArgb(0, 122, 204),
+                    BackColor = NOMADTheme.ACCENT,
                     ForeColor = Color.White,
                     FlatStyle = FlatStyle.Flat,
                 };

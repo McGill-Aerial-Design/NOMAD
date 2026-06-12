@@ -85,7 +85,7 @@ namespace NOMAD.MissionPlanner
 
             int x = 10, y = 8;
 
-            _btnToggleCamera = CreateButton("View: TPV", x, y, 100, 28, Color.FromArgb(0, 122, 204));
+            _btnToggleCamera = CreateButton("View: TPV", x, y, 100, 28, NOMADTheme.ACCENT);
             _btnToggleCamera.Click += BtnToggleCamera_Click;
             _controlPanel.Controls.Add(_btnToggleCamera);
             x += 105;

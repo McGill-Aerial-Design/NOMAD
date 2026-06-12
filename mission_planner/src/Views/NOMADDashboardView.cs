@@ -3,18 +3,14 @@
 // ============================================================
 // NOMAD Dashboard View - Main Overview Panel
 // ============================================================
-// A simplified, information-dense dashboard showing all key data at a glance.
-// Features:
-// - Connection status with visual indicators
-// - Flight mode and telemetry summary
-// - Enlarged video preview
-// - System health summary
-// - Link status indicators
+// Compact, information-dense dashboard for the operator:
+// - Flight mode / GPS / battery status cards
+// - Geofence, dual-link and Jetson health summaries
+// - Notification feed beside a small auto-playing video preview
 // ============================================================
 
 using System;
 using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using MissionPlanner;
@@ -27,13 +23,6 @@ namespace NOMAD.MissionPlanner
     public partial class NOMADDashboardView : UserControl, IUpdatableView
     {
         // ============================================================
-        // Constants
-        // ============================================================
-
-        // Kept locally because NOMADTheme.TEXT_SECONDARY (150,150,150) differs from this value
-        private static readonly Color TEXT_SECONDARY = Color.FromArgb(180, 180, 180);
-
-        // ============================================================
         // Fields
         // ============================================================
 
@@ -43,33 +32,13 @@ namespace NOMAD.MissionPlanner
         private NOMADConfig _config;
         private System.Threading.Timer _healthPollTimer;
 
-        // Status cards
-        private Panel _connectionCard;
-        private Panel _flightModeCard;
-        private Panel _gpsCard;
-        private Panel _batteryCard;
-        private Panel _vioCard;
-        private Panel _jetsonCard;
-
-        // Status labels
-        private Label _lblConnectionStatus;
-        private Label _lblConnectionValue;
+        // Status card value labels
         private Label _lblFlightMode;
-        private Label _lblGpsStatus;
         private Label _lblGpsFix;
         private Label _lblBattery;
-        private Label _lblBatteryVolts;
-        private Label _lblVioStatus;
-        private Label _lblVioConfidence;
-        private Label _lblJetsonStatus;
-        private Label _lblJetsonTemp;
-
-        // Link indicators
-        private Panel _lteIndicator;
-        private Panel _radioIndicator;
-        private Label _lblLteStatus;
-        private Label _lblRadioStatus;
-        private Label _lblActiveLink;
+        private Label _lblGeofence;
+        private Label _lblLinks;
+        private Label _lblJetson;
 
         // Mini video panel
         private Panel _videoPreviewPanel;
@@ -79,15 +48,8 @@ namespace NOMAD.MissionPlanner
         private bool _jetsonOnline;
         private bool _videoInitialized;
 
-        // Health summary labels (for real-time Jetson health updates)
-        private Label _lblHealthCpu;
-        private Label _lblHealthGpu;
-        private Label _lblHealthMem;
-        private Label _lblHealthDisk;
-        private Label _lblHealthTemp;
-
-        // EKF source control
-        private EkfSourceControlPanel _ekfControlPanel;
+        // Geofence status source (plugin-owned monitor)
+        private BoundaryMonitor _boundaryMonitor;
 
         // Notification system
         private NotificationService _notificationService;
@@ -103,10 +65,12 @@ namespace NOMAD.MissionPlanner
         public NotificationService NotificationService => _notificationService;
 
         /// <summary>
-        /// Sets the boundary monitor for boundary violation notifications.
+        /// Sets the boundary monitor for boundary violation notifications and
+        /// the geofence status card.
         /// </summary>
         public void SetBoundaryMonitor(BoundaryMonitor monitor)
         {
+            _boundaryMonitor = monitor;
             _notificationService?.SetBoundaryMonitor(monitor);
         }
 
@@ -168,7 +132,7 @@ namespace NOMAD.MissionPlanner
 
         /// <summary>
         /// Called when Jetson connection status changes.
-        /// Initializes video only when Jetson is online.
+        /// Initializes the chrome-less auto-playing preview when online.
         /// </summary>
         private void InitializeVideoIfOnline()
         {
@@ -177,10 +141,8 @@ namespace NOMAD.MissionPlanner
 
             try
             {
-                // Clear placeholder
                 _videoPlaceholder.Controls.Clear();
 
-                // Build RTSP URL for left camera
                 string rtspUrl = $"rtsp://{_config.EffectiveIP}:8554/primary";
                 _videoPlayer = new EmbeddedVideoPlayer("ZED Left", rtspUrl, showControls: false, _jetsonConnectionManager);
                 _videoPlayer.Dock = DockStyle.Fill;
@@ -193,11 +155,11 @@ namespace NOMAD.MissionPlanner
                 _lblVideoStatus = new Label
                 {
                     Text = "Video unavailable",
-                    Font = new Font("Segoe UI", 10),
-                    ForeColor = TEXT_SECONDARY,
+                    Font = new Font("Segoe UI", 9),
+                    ForeColor = NOMADTheme.TEXT_MUTED,
                     Dock = DockStyle.Fill,
                     TextAlign = ContentAlignment.MiddleCenter,
-                    BackColor = Color.FromArgb(15, 15, 18),
+                    BackColor = Color.Black,
                 };
                 _videoPlaceholder.Controls.Add(_lblVideoStatus);
             }
@@ -218,78 +180,61 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                // Update from Mission Planner state
                 var cs = MainV2.comPort?.MAV?.cs;
-                if (cs == null) return;
 
-                // Connection status
-                bool connected = cs.connected;
-                _lblConnectionValue.Text = connected ? "CONNECTED" : "DISCONNECTED";
-                _lblConnectionValue.ForeColor = connected ? NOMADTheme.SUCCESS : NOMADTheme.ERROR;
-
-                // Flight mode
-                _lblFlightMode.Text = cs.mode ?? "UNKNOWN";
-                _lblFlightMode.ForeColor = cs.armed ? NOMADTheme.WARNING : NOMADTheme.TEXT_PRIMARY;
-
-                // GPS status
-                int gpsFix = (int)cs.gpsstatus;
-                string gpsText = gpsFix switch
+                // Flight mode (DISCONNECTED stands in for the old connection card)
+                bool connected = cs?.connected ?? false;
+                if (!connected)
                 {
-                    0 => "No GPS",
-                    1 => "No Fix",
-                    2 => "2D Fix",
-                    3 => "3D Fix",
-                    4 => "DGPS",
-                    5 => "RTK Float",
-                    6 => "RTK Fixed",
-                    _ => "Unknown"
-                };
-                _lblGpsFix.Text = $"{gpsText} ({cs.satcount} sats)";
-                _lblGpsFix.ForeColor = gpsFix >= 3 ? NOMADTheme.SUCCESS : (gpsFix >= 1 ? NOMADTheme.WARNING : NOMADTheme.ERROR);
+                    _lblFlightMode.Text = "DISCONNECTED";
+                    _lblFlightMode.ForeColor = NOMADTheme.ERROR;
+                }
+                else
+                {
+                    _lblFlightMode.Text = cs.armed ? $"{cs.mode} · ARMED" : (cs.mode ?? "UNKNOWN");
+                    _lblFlightMode.ForeColor = cs.armed ? NOMADTheme.WARNING : NOMADTheme.TEXT_PRIMARY;
+                }
 
-                // Battery
-                _lblBattery.Text = $"{cs.battery_voltage:F1}V ({cs.battery_remaining}%)";
-                _lblBattery.ForeColor = cs.battery_remaining > 30 ? NOMADTheme.SUCCESS :
-                                        (cs.battery_remaining > 15 ? NOMADTheme.WARNING : NOMADTheme.ERROR);
+                if (cs != null)
+                {
+                    // GPS status
+                    int gpsFix = (int)cs.gpsstatus;
+                    string gpsText = gpsFix switch
+                    {
+                        0 => "No GPS",
+                        1 => "No Fix",
+                        2 => "2D Fix",
+                        3 => "3D Fix",
+                        4 => "DGPS",
+                        5 => "RTK Float",
+                        6 => "RTK Fixed",
+                        _ => "Unknown"
+                    };
+                    _lblGpsFix.Text = $"{gpsText} ({cs.satcount} sats)";
+                    _lblGpsFix.ForeColor = gpsFix >= 3 ? NOMADTheme.SUCCESS : (gpsFix >= 1 ? NOMADTheme.WARNING : NOMADTheme.ERROR);
 
-                // Check Jetson online status and get health data
+                    // Battery
+                    _lblBattery.Text = $"{cs.battery_voltage:F1}V ({cs.battery_remaining}%)";
+                    _lblBattery.ForeColor = cs.battery_remaining > 30 ? NOMADTheme.SUCCESS :
+                                            (cs.battery_remaining > 15 ? NOMADTheme.WARNING : NOMADTheme.ERROR);
+                }
+
+                UpdateGeofenceCard();
+
+                // Jetson online tracking + video init
                 bool jetsonOnline = _sender?.IsJetsonConnected ?? false;
                 if (jetsonOnline && !_jetsonOnline)
                 {
-                    // Jetson just came online - initialize video
                     _jetsonOnline = true;
-                    _lblJetsonTemp.Text = "Online";
-                    _lblJetsonTemp.ForeColor = NOMADTheme.SUCCESS;
                     InitializeVideoIfOnline();
                 }
                 else if (!jetsonOnline && _jetsonOnline)
                 {
-                    // Jetson went offline
                     _jetsonOnline = false;
-                    _lblJetsonTemp.Text = "Offline";
-                    _lblJetsonTemp.ForeColor = NOMADTheme.ERROR;
-
-                    // Reset health indicators to "--"
-                    _lblHealthCpu.Text = "CPU: --";
-                    _lblHealthCpu.ForeColor = NOMADTheme.TEXT_PRIMARY;
-                    _lblHealthGpu.Text = "GPU: --";
-                    _lblHealthGpu.ForeColor = NOMADTheme.TEXT_PRIMARY;
-                    _lblHealthMem.Text = "Memory: --";
-                    _lblHealthMem.ForeColor = NOMADTheme.TEXT_PRIMARY;
-                    _lblHealthDisk.Text = "Disk: --";
-                    _lblHealthDisk.ForeColor = NOMADTheme.TEXT_PRIMARY;
-                    _lblHealthTemp.Text = "Temp: --";
-                    _lblHealthTemp.ForeColor = NOMADTheme.TEXT_PRIMARY;
                 }
+                UpdateJetsonCard(jetsonOnline);
 
-                // Update health data from Jetson if online
-                if (jetsonOnline && _sender != null)
-                {
-                    UpdateJetsonHealth();
-                }
-
-                // Update link status from connection manager
-                UpdateLinkStatus();
+                UpdateLinksCard(jetsonOnline);
             }
             catch
             {
@@ -297,45 +242,72 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        /// <summary>
-        /// Updates Jetson health indicators from real API data.
-        /// </summary>
-        private void UpdateJetsonHealth()
+        /// <summary>Geofence card: monitoring state + containment status.</summary>
+        private void UpdateGeofenceCard()
         {
+            if (_boundaryMonitor == null)
+            {
+                _lblGeofence.Text = "No monitor";
+                _lblGeofence.ForeColor = NOMADTheme.TEXT_MUTED;
+                return;
+            }
+
+            if (!_boundaryMonitor.IsMonitoring)
+            {
+                _lblGeofence.Text = "Monitor OFF";
+                _lblGeofence.ForeColor = NOMADTheme.TEXT_SECONDARY;
+                return;
+            }
+
+            switch (_boundaryMonitor.CurrentStatus)
+            {
+                case "inside":
+                    _lblGeofence.Text = "INSIDE";
+                    _lblGeofence.ForeColor = NOMADTheme.SUCCESS;
+                    break;
+                case "soft_violation":
+                    _lblGeofence.Text = "SOFT VIOLATION";
+                    _lblGeofence.ForeColor = NOMADTheme.WARNING;
+                    break;
+                case "hard_violation":
+                    _lblGeofence.Text = _boundaryMonitor.KillCountdown.HasValue
+                        ? $"HARD — {_boundaryMonitor.KillCountdown}s"
+                        : "HARD VIOLATION";
+                    _lblGeofence.ForeColor = NOMADTheme.ERROR;
+                    break;
+                default:
+                    _lblGeofence.Text = "Waiting for GPS";
+                    _lblGeofence.ForeColor = NOMADTheme.WARNING;
+                    break;
+            }
+        }
+
+        /// <summary>Jetson card: online/offline + temperature and load in one line.</summary>
+        private void UpdateJetsonCard(bool online)
+        {
+            if (!online)
+            {
+                _lblJetson.Text = "Offline";
+                _lblJetson.ForeColor = NOMADTheme.ERROR;
+                return;
+            }
+
             try
             {
-                // Get health data from the sender (which caches the last known values)
                 var health = _sender?.LastHealthStatus;
-                if (health == null) return;
+                if (health == null)
+                {
+                    _lblJetson.Text = "Online";
+                    _lblJetson.ForeColor = NOMADTheme.SUCCESS;
+                    return;
+                }
 
-                // CPU
-                var cpuLoad = health.CpuUsage;
-                _lblHealthCpu.Text = $"CPU: {cpuLoad:F0}%";
-                _lblHealthCpu.ForeColor = cpuLoad > 90 ? NOMADTheme.ERROR : (cpuLoad > 70 ? NOMADTheme.WARNING : NOMADTheme.SUCCESS);
-
-                // GPU
-                var gpuLoad = health.GpuUsage;
-                _lblHealthGpu.Text = $"GPU: {gpuLoad:F0}%";
-                _lblHealthGpu.ForeColor = gpuLoad > 90 ? NOMADTheme.ERROR : (gpuLoad > 70 ? NOMADTheme.WARNING : NOMADTheme.SUCCESS);
-
-                // Memory
-                var memPercent = health.MemoryUsed;
-                _lblHealthMem.Text = $"Memory: {memPercent:F0}%";
-                _lblHealthMem.ForeColor = memPercent > 90 ? NOMADTheme.ERROR : (memPercent > 75 ? NOMADTheme.WARNING : NOMADTheme.SUCCESS);
-
-                // Disk
-                var diskFreeGb = health.DiskFreeGb;
-                _lblHealthDisk.Text = $"Disk: {diskFreeGb:F0} GB free";
-                _lblHealthDisk.ForeColor = diskFreeGb < 10 ? NOMADTheme.ERROR : (diskFreeGb < 25 ? NOMADTheme.WARNING : NOMADTheme.SUCCESS);
-
-                // Temperature (use GPU temp as primary indicator)
                 var temp = health.GpuTemp > 0 ? health.GpuTemp : health.CpuTemp;
-                _lblHealthTemp.Text = $"Temp: {temp:F0}C";
-                _lblHealthTemp.ForeColor = temp > 80 ? NOMADTheme.ERROR : (temp > 65 ? NOMADTheme.WARNING : NOMADTheme.SUCCESS);
+                _lblJetson.Text = $"{temp:F0}°C · CPU {health.CpuUsage:F0}% · GPU {health.GpuUsage:F0}%\nMem {health.MemoryUsed:F0}% · Disk {health.DiskFreeGb:F0} GB free";
 
-                // Also update the Jetson card temperature
-                _lblJetsonTemp.Text = $"{temp:F0}C";
-                _lblJetsonTemp.ForeColor = temp > 80 ? NOMADTheme.ERROR : (temp > 65 ? NOMADTheme.WARNING : NOMADTheme.SUCCESS);
+                bool bad = temp > 80 || health.CpuUsage > 90 || health.GpuUsage > 90 || health.MemoryUsed > 90 || health.DiskFreeGb < 10;
+                bool warn = temp > 65 || health.CpuUsage > 70 || health.GpuUsage > 70 || health.MemoryUsed > 75 || health.DiskFreeGb < 25;
+                _lblJetson.ForeColor = bad ? NOMADTheme.ERROR : (warn ? NOMADTheme.WARNING : NOMADTheme.SUCCESS);
             }
             catch
             {
@@ -343,59 +315,30 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        /// <summary>
-        /// Updates link status indicators from connection manager and Jetson status.
-        /// </summary>
-        private void UpdateLinkStatus()
+        /// <summary>Links card: LTE/Tailscale + RadioMaster + active link.</summary>
+        private void UpdateLinksCard(bool jetsonHttpConnected)
         {
             try
             {
-                // First, check if Jetson is connected via HTTP (Tailscale)
-                bool jetsonHttpConnected = _sender?.IsJetsonConnected ?? false;
+                string lte = jetsonHttpConnected ? "LTE ✓" : "LTE ✗";
+                string radio;
+                string active;
 
-                // Update LTE/Tailscale indicator based on Jetson HTTP connectivity
-                _lteIndicator.BackColor = jetsonHttpConnected ? NOMADTheme.SUCCESS : NOMADTheme.ERROR;
-                _lteIndicator.Invalidate();
-                _lblLteStatus.Text = jetsonHttpConnected
-                    ? "LTE/Tailscale: Connected"
-                    : "LTE/Tailscale: Disconnected";
-
-                // Get MAVLink status from connection manager if available
                 if (_connectionManager != null)
                 {
                     var status = _connectionManager.GetLinkStatus();
-
-                    // Radio status (MAVLink)
-                    bool radioConnected = status.RadioConnected;
-                    _radioIndicator.BackColor = radioConnected ? NOMADTheme.SUCCESS : NOMADTheme.ERROR;
-                    _radioIndicator.Invalidate();
-                    _lblRadioStatus.Text = radioConnected
-                        ? $"RadioMaster: {status.RadioLatencyMs}ms"
-                        : "RadioMaster: Disconnected";
-
-                    // Active link - prefer Tailscale if connected
-                    if (_lblActiveLink != null)
-                    {
-                        if (jetsonHttpConnected)
-                            _lblActiveLink.Text = "Active: Tailscale (HTTP)";
-                        else if (radioConnected)
-                            _lblActiveLink.Text = "Active: RadioMaster";
-                        else
-                            _lblActiveLink.Text = "Active: None";
-                    }
+                    radio = status.RadioConnected ? $"Radio ✓ {status.RadioLatencyMs}ms" : "Radio ✗";
+                    active = jetsonHttpConnected ? "Tailscale" : (status.RadioConnected ? "RadioMaster" : "none");
                 }
                 else
                 {
-                    // No connection manager - show based on Jetson HTTP only
-                    _radioIndicator.BackColor = NOMADTheme.ERROR;
-                    _radioIndicator.Invalidate();
-                    _lblRadioStatus.Text = "RadioMaster: N/A";
-
-                    if (_lblActiveLink != null)
-                    {
-                        _lblActiveLink.Text = jetsonHttpConnected ? "Active: Tailscale (HTTP)" : "Active: None";
-                    }
+                    radio = "Radio —";
+                    active = jetsonHttpConnected ? "Tailscale" : "none";
                 }
+
+                _lblLinks.Text = $"{lte} · {radio}\nActive: {active}";
+                _lblLinks.ForeColor = jetsonHttpConnected ? NOMADTheme.SUCCESS
+                    : (radio.Contains("✓") ? NOMADTheme.WARNING : NOMADTheme.ERROR);
             }
             catch
             {
