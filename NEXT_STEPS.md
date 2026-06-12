@@ -23,15 +23,17 @@ this one.
 
 **Effort:** ~30 minutes. Needs Docker; no hardware.
 
-- [ ] `pixi run dev-up` (Edge Core + ArduPilot SITL stack)
-- [ ] `pixi run sitl-fence` — geofence containment scenario
-- [ ] If it fails: file an issue with the transcript; treat as release-blocking
-- [ ] If it passes: record the run (date, commit, result) in
+- [x] `pixi run dev-up` (Edge Core + ArduPilot SITL stack)
+- [x] `pixi run sitl-fence` — geofence containment scenario — **PASSED**
+      2026-06-11 at commit f69a137
+- [x] If it fails: file an issue with the transcript; treat as release-blocking
+      (N/A — passed)
+- [x] If it passes: record the run (date, commit, result) in
       `docs/safety/hazards.md` next to the fence hazard row, mirroring the
       existing "SITL-proven" entries
-- [ ] While the stack is up, re-run `pixi run sitl-scenario` (velocity loop
-      closure) to reconfirm it on current `main`
-- [ ] `pixi run dev-down`
+- [x] While the stack is up, re-run `pixi run sitl-scenario` (velocity loop
+      closure) — **PASSED** same day/commit
+- [x] `pixi run dev-down`
 
 **Acceptance:** both SITL scenarios pass on current `main` and hazards.md
 cites the runs.
@@ -47,10 +49,10 @@ erode silently.
 
 **Effort:** ~10 minutes.
 
-- [ ] In `pixi.toml`, change the `test` task to `--cov-fail-under=45`
+- [x] In `pixi.toml`, change the `test` task to `--cov-fail-under=45`
       (just below the current ~49% so flaky environments don't trip it)
-- [ ] Run `pixi run test` to confirm the gate passes
-- [ ] Keep the ratchet comment; update it if the wording references the old value
+- [x] Run `pixi run test` to confirm the gate passes (48.68% ≥ 45%)
+- [x] Keep the ratchet comment; update it if the wording references the old value
 
 **Acceptance:** CI fails if coverage drops below 45%.
 
@@ -65,18 +67,13 @@ rules → `CONTRIBUTING.md`; architecture → `docs/`).
 
 **Effort:** ~30 minutes.
 
-- [ ] Skim `BASELINE_POLISH_PLAN.md` one last time; fold anything still
-      load-bearing into `docs/` (expected: nothing — phases recorded done)
-- [ ] Skim `NOMAD_REFACTOR_ROADMAP.md`; the line-size rules and refactor
-      principles worth keeping are already summarized in `CONTRIBUTING.md` §7 —
-      move the "Line Size Rules" table into `CONTRIBUTING.md` if reviewers want
-      the detail, otherwise drop it
-- [ ] Update `CONTRIBUTING.md` §"Safe refactor checklist" — it currently says
-      "see `NOMAD_REFACTOR_ROADMAP.md` for the full rationale"; make the
-      checklist self-contained instead
-- [ ] `git rm BASELINE_POLISH_PLAN.md NOMAD_REFACTOR_ROADMAP.md REFACTORING_PROMPT.md`
-- [ ] Grep for remaining references (`git grep -l "ROADMAP\|POLISH_PLAN\|REFACTORING_PROMPT"`)
-      and fix them (known: `infra/` README table is clean; check `AGENTS.md`)
+- [x] Skim `BASELINE_POLISH_PLAN.md` one last time; fold anything still
+      load-bearing into `docs/` (confirmed: nothing — P0s spot-checked done)
+- [x] Skim `NOMAD_REFACTOR_ROADMAP.md`; the size-limits table moved into
+      `CONTRIBUTING.md`
+- [x] Update `CONTRIBUTING.md` §"Safe refactor checklist" — now self-contained
+- [x] `git rm BASELINE_POLISH_PLAN.md NOMAD_REFACTOR_ROADMAP.md REFACTORING_PROMPT.md`
+- [x] Grep for remaining references — none outside this file
 
 **Acceptance:** repo root contains no historical planning documents;
 `CONTRIBUTING.md` stands alone; no dangling references.
@@ -94,12 +91,15 @@ display/upload is a keep feature and a safety-adjacent one (SC dirs:
 
 **Effort:** one focused session on Windows with Mission Planner installed.
 
-- [ ] Audit `NOMADBoundaryView*.cs`, `BoundaryManager.cs`, `MPFenceUploader.cs`,
+- [x] Audit `NOMADBoundaryView*.cs`, `BoundaryManager.cs`, `MPFenceUploader.cs`,
       `MapOverlayManager*.cs` for empty/no-op method bodies; diff suspicious
-      ones against `origin/AEAC2026`
-- [ ] Restore any missing bodies from `AEAC2026` (competition-only code stays
-      out — boundary is a keep feature)
-- [ ] `pixi run build-plugin && pixi run lint-plugin`
+      ones against `origin/AEAC2026` (found: 7 empty stubs + gutted import
+      handlers, dead fence push, disabled return-point/preset persistence,
+      and no `BoundaryMonitor` ever constructed)
+- [x] Restore any missing bodies from `AEAC2026` (competition-only code stays
+      out — boundary is a keep feature; restored against `GeofenceConfig`,
+      Task fields dropped)
+- [x] `pixi run build-plugin && pixi run lint-plugin` — both pass
 - [ ] Manual verification in Mission Planner against the SITL stack
       (`pixi run dev-up`, connect MP to TCP 5760):
   - [ ] Draw/load a boundary; soft (yellow) and hard (red) polygons render on the map
@@ -116,11 +116,11 @@ demonstrated working; no stub bodies remain in `Geofence/` or the boundary views
 
 ## 5. Small hygiene (batch into any of the above PRs)
 
-- [ ] Migrate the two Pydantic V1 `@validator`s in `edge_core/api_models.py`
+- [x] Migrate the two Pydantic V1 `@validator`s in `edge_core/api_models.py`
       to `@field_validator` (deprecation warnings in every test run; V1 style
       is removed in Pydantic V3)
-- [ ] `.vscode/mcp-settings.json` / `settings.json` — already fixed for the
-      tailscale flatten; spot-check no other stale paths after item 3's deletions
+- [x] `.vscode/mcp-settings.json` / `settings.json` — already fixed for the
+      tailscale flatten; spot-checked: no stale paths after item 3's deletions
 
 ---
 
