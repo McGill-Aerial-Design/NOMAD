@@ -213,10 +213,22 @@ namespace NOMAD.MissionPlanner
                     _lblGpsFix.Text = $"{gpsText} ({cs.satcount} sats)";
                     _lblGpsFix.ForeColor = gpsFix >= 3 ? NOMADTheme.SUCCESS : (gpsFix >= 1 ? NOMADTheme.WARNING : NOMADTheme.ERROR);
 
-                    // Battery
-                    _lblBattery.Text = $"{cs.battery_voltage:F1}V ({cs.battery_remaining}%)";
-                    _lblBattery.ForeColor = cs.battery_remaining > 30 ? NOMADTheme.SUCCESS :
-                                            (cs.battery_remaining > 15 ? NOMADTheme.WARNING : NOMADTheme.ERROR);
+                    // Battery: voltage + remaining mAh, judged against the
+                    // vehicle's own BATTn_* thresholds (no percentage).
+                    var batt = BatteryHealth.Read(1);
+                    if (batt != null)
+                    {
+                        _lblBattery.Text = batt.CapacityMah > 0
+                            ? $"{batt.Voltage:F1}V · {batt.RemainingMah:F0} mAh"
+                            : $"{batt.Voltage:F1}V";
+                        _lblBattery.ForeColor = batt.Severity == 2 ? NOMADTheme.ERROR
+                            : (batt.Severity == 1 ? NOMADTheme.WARNING : NOMADTheme.SUCCESS);
+                    }
+                    else
+                    {
+                        _lblBattery.Text = $"{cs.battery_voltage:F1}V";
+                        _lblBattery.ForeColor = NOMADTheme.TEXT_SECONDARY;
+                    }
                 }
 
                 UpdateGeofenceCard();

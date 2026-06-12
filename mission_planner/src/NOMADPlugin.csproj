@@ -258,6 +258,7 @@
 
     <!-- Telemetry -->
     <Compile Include="Telemetry\TelemetryInjector.cs" />
+    <Compile Include="Telemetry\BatteryHealth.cs" />
 
     <!-- 3D SLAM visualization -->
     <Compile Include="SLAM3D\MathHelper.cs" />

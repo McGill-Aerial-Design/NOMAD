@@ -92,14 +92,7 @@ namespace NOMAD.MissionPlanner
         private const double GPS_HDOP_WARNING = 2.0;
         private const double GPS_HDOP_CRITICAL = 4.0;
 
-        // Battery % thresholds (used when ArduPilot has no capacity-based failsafe set;
-        // voltage thresholds are pulled live from BATTn_LOW_VOLT / BATTn_CRT_VOLT params).
-        private const double BATTERY_WARNING_PERCENT = 30.0;
-        private const double BATTERY_CRITICAL_PERCENT = 15.0;
-        // Fallback voltage thresholds if the BATTn_LOW_VOLT param hasn't been received yet.
-        // ArduPilot convention: 0 means "disabled"; we treat those as "no voltage check".
-        private const double BATTERY_VOLTAGE_FALLBACK_LOW_PER_CELL = 3.5;
-        private const double BATTERY_VOLTAGE_FALLBACK_CRT_PER_CELL = 3.3;
+        // Battery thresholds come from the vehicle's BATTn_* params — see BatteryHealth.
 
         // VIO thresholds
         private const double VIO_CONFIDENCE_WARNING = 0.5;
