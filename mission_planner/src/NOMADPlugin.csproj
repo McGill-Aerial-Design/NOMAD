@@ -199,6 +199,7 @@
     <Compile Include="Panels\EkfSourceControlPanel.cs" />
     <Compile Include="Panels\JetsonHealthTab.cs" />
     <Compile Include="Panels\JetsonTerminalControl.cs" />
+    <Compile Include="Panels\JetsonTerminalControl.Commands.cs" />
 
     <!-- Connectivity (links / transport) -->
     <Compile Include="Connectivity\MAVLinkConnectionManager.cs" />
