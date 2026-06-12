@@ -158,8 +158,7 @@ metadata, `pixi.lock`, and vendored Mission Planner third-party binaries under
 
 ### Safe refactor checklist
 
-For changes that touch source code (see `NOMAD_REFACTOR_ROADMAP.md` for the
-full rationale):
+For changes that touch source code:
 
 - [ ] Deleted unused code before adding new abstractions.
 - [ ] Decision logic stays separate from API/UI/MAVLink/ROS adapters.
@@ -173,6 +172,20 @@ full rationale):
 Do not merge if a route handler contains hardware command logic directly, a UI
 click handler contains a full command workflow, or a safety decision depends on
 UI state.
+
+### Size limits
+
+| Item | Target |
+|---|---|
+| Python line length | 120 characters (enforced by Ruff E501) |
+| C# line length | ~120 characters (manual) |
+| Normal source file length | Aim for 400–600 lines |
+| Hard source file cap | 800 lines (CI-enforced via `pixi run line-report`) |
+| Safety-core files (`edge_core/safety/`) | Aim for under 150 lines |
+| Generated and lock files | Excluded from line-count checks |
+
+Reduce long lines by naming intermediate boolean expressions, extracting
+helper variables, and splitting call arguments — not by disabling the check.
 
 ## 8. Where to start — the onboarding ladder
 
