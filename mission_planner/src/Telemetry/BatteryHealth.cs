@@ -14,6 +14,7 @@
 // ============================================================
 
 using System;
+using System.Collections.Generic;
 using MissionPlanner;
 
 namespace NOMAD.MissionPlanner
@@ -135,10 +136,38 @@ namespace NOMAD.MissionPlanner
             }
         }
 
+        // BATTn_* params change rarely but Read() runs on every dashboard tick
+        // and notification poll; cache reflection lookups for a few seconds.
+        private static readonly object _paramCacheLock = new object();
+        private static readonly Dictionary<string, (double Value, DateTime ReadUtc)> _paramCache
+            = new Dictionary<string, (double, DateTime)>();
+        private static readonly TimeSpan ParamCacheTtl = TimeSpan.FromSeconds(5);
+
         /// <summary>
-        /// Read BATTn_XXX (or BATT_XXX when n==1) from MAVLink params. Returns 0 if missing.
+        /// Read BATTn_XXX (or BATT_XXX when n==1) from MAVLink params, cached
+        /// for a few seconds. Returns 0 if missing.
         /// </summary>
         public static double GetBattParam(dynamic mav, int idx, string suffix)
+        {
+            string cacheKey = (idx == 1 ? "BATT_" : $"BATT{idx}_") + suffix;
+            lock (_paramCacheLock)
+            {
+                if (_paramCache.TryGetValue(cacheKey, out var hit)
+                    && DateTime.UtcNow - hit.ReadUtc < ParamCacheTtl)
+                {
+                    return hit.Value;
+                }
+            }
+
+            double value = ReadBattParamUncached(mav, idx, suffix);
+            lock (_paramCacheLock)
+            {
+                _paramCache[cacheKey] = (value, DateTime.UtcNow);
+            }
+            return value;
+        }
+
+        private static double ReadBattParamUncached(dynamic mav, int idx, string suffix)
         {
             try
             {

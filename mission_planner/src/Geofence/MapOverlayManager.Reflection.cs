@@ -256,7 +256,10 @@ namespace NOMAD.MissionPlanner
                 }
 
                 _initialized = true;
-                Log.Info("Map overlay initialized successfully via reflection");
+                // The overlay only paints once GMap binds it to the control
+                // (Control property set by the Overlays CollectionChanged hook).
+                var boundTo = _boundaryOverlay?.GetType().GetProperty("Control")?.GetValue(_boundaryOverlay);
+                Log.Info($"Map overlay initialized via reflection (bound to map: {(boundTo != null ? "yes" : "NO — polygons will not paint")})");
                 return true;
             }
             catch (Exception ex)

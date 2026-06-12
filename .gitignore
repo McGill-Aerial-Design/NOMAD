@@ -333,3 +333,4 @@ docs/_templates/
 
 # Claude Code local settings
 .claude/
+mission_planner/tests/geometry/bin/

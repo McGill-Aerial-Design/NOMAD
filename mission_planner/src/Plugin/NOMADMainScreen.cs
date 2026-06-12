@@ -190,6 +190,14 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public void Activate()
         {
+            // Mission Planner's ThemeManager restyles this screen around
+            // MainSwitcher.ShowScreen (recursively overwriting Back/ForeColor),
+            // so the NOMAD palette only survived until MP's pass ran. Re-assert
+            // now and once more after the current UI batch, whichever order MP
+            // applies its theme in.
+            ReapplyNomadTheme();
+            try { BeginInvoke((MethodInvoker)ReapplyNomadTheme); } catch { }
+
             StartUpdateTimer();
             if (_isModuleMode)
             {
@@ -199,6 +207,52 @@ namespace NOMAD.MissionPlanner
             else
             {
                 ShowView("Dashboard");
+            }
+        }
+
+        /// <summary>
+        /// Restore the NOMAD chrome colors (sidebar, logo strip, content area)
+        /// after Mission Planner's ThemeManager repaints the control tree.
+        /// View internals are built after MP's pass and keep their own colors.
+        /// </summary>
+        private void ReapplyNomadTheme()
+        {
+            BackColor = CONTENT_BG;
+            if (_contentPanel != null) _contentPanel.BackColor = CONTENT_BG;
+            if (_viewContainer != null) _viewContainer.BackColor = CONTENT_BG;
+            if (_sidebarPanel == null) return;
+
+            _sidebarPanel.BackColor = SIDEBAR_BG;
+            foreach (Control child in _sidebarPanel.Controls)
+            {
+                if (child is FlowLayoutPanel nav)
+                {
+                    nav.BackColor = SIDEBAR_BG;
+                    foreach (Control c in nav.Controls)
+                    {
+                        if (c is Button b)
+                        {
+                            b.BackColor = SIDEBAR_BG;
+                            b.ForeColor = TEXT_SECONDARY;
+                        }
+                        else if (c is Label l)
+                        {
+                            l.BackColor = SIDEBAR_BG;
+                            l.ForeColor = TEXT_SECONDARY;
+                        }
+                    }
+                }
+                else
+                {
+                    // Logo strip
+                    child.BackColor = Color.FromArgb(8, 8, 10);
+                    foreach (Control c in child.Controls)
+                    {
+                        if (c == _profileLabel) continue; // keeps its status color
+                        c.BackColor = Color.FromArgb(8, 8, 10);
+                        c.ForeColor = ACCENT_COLOR;
+                    }
+                }
             }
         }
 
@@ -225,6 +279,9 @@ namespace NOMAD.MissionPlanner
 
         private void ShowView(string viewName)
         {
+            // Keep the chrome on-theme even if MP's ThemeManager ran since.
+            ReapplyNomadTheme();
+
             // Update sidebar button states
             UpdateSidebarButtonState(viewName);
 

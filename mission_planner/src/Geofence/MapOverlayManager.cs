@@ -113,6 +113,15 @@ namespace NOMAD.MissionPlanner
                     var polygons = polygonsProp.GetValue(_boundaryOverlay) as IList;
                     polygons?.Add(polygon);
                 }
+
+                // GMap.NET only computes the polygon's pixel-space LocalPoints
+                // when the overlay's CollectionChanged wiring fires with the
+                // overlay bound to the control. Adding through the reflected
+                // IList can miss that, leaving the polygon present but never
+                // painted — recompute explicitly.
+                var map = _mapControl ?? GetMapControl();
+                map?.GetType().GetMethod("UpdatePolygonLocalPosition")
+                    ?.Invoke(map, new[] { polygon });
             }
             catch (Exception ex)
             {
@@ -416,6 +425,12 @@ namespace NOMAD.MissionPlanner
                 var mymap = _mapControl ?? GetMapControl();
                 if (mymap != null)
                 {
+                    // Recompute every overlay item's pixel position, then repaint.
+                    // Invalidate alone is not enough when items were added through
+                    // reflection: their LocalPoints may have never been computed.
+                    var forceUpdate = mymap.GetType().GetMethod("ForceUpdateOverlays", new Type[0]);
+                    forceUpdate?.Invoke(mymap, null);
+
                     var invalidateMethod = mymap.GetType().GetMethod("Invalidate", new Type[0]);
                     invalidateMethod?.Invoke(mymap, null);
                 }

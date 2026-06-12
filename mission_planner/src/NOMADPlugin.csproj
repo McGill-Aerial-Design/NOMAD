@@ -233,6 +233,8 @@
     <!-- Geofence / boundary -->
     <Compile Include="Geofence\BoundaryManager.cs" />
     <Compile Include="Geofence\GeofenceConfig.cs" />
+    <Compile Include="Geofence\GeofenceTypes.cs" />
+    <Compile Include="Geofence\GeoMath.cs" />
     <Compile Include="Geofence\MapOverlayManager.cs" />
     <Compile Include="Geofence\MapOverlayManager.Reflection.cs" />
     <Compile Include="Geofence\MapOverlayManager.GeoFenceExport.cs" />
