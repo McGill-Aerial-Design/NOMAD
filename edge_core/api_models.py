@@ -2,7 +2,7 @@
 # Copyright 2026 The NOMAD Authors
 """Shared request/response models and command contracts for Edge Core API routes."""
 
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, field_validator
 
 # Whitelist of allowed terminal commands.
 #
@@ -51,7 +51,8 @@ class TerminalCommandRequest(BaseModel):
     command_name: str
     timeout: int = 10
 
-    @validator("timeout")
+    @field_validator("timeout")
+    @classmethod
     def _clamp_terminal_run_timeout(cls, value: int) -> int:
         return max(1, min(int(value), 60))
 
@@ -63,7 +64,8 @@ class TerminalExecRequest(BaseModel):
     timeout: int = 30
     cwd: str | None = None
 
-    @validator("timeout")
+    @field_validator("timeout")
+    @classmethod
     def _clamp_terminal_exec_timeout(cls, value: int) -> int:
         return max(1, min(int(value), 120))
 
