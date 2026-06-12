@@ -168,6 +168,7 @@
 
     <!-- Top-level page views -->
     <Compile Include="Views\NOMADDashboardView.cs" />
+    <Compile Include="Views\NOMADDashboardView.Layout.cs" />
     <Compile Include="Views\NOMADHealthView.cs" />
     <Compile Include="Views\NOMADLinksView.cs" />
     <Compile Include="Views\NOMADTerminalView.cs" />
