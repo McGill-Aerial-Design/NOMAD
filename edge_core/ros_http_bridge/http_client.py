@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
 import time
 from http.client import HTTPConnection
+
+from edge_core.env import env_secret
 
 logger = logging.getLogger("ros_http_bridge.http_client")
 
@@ -28,8 +29,8 @@ class EdgeCoreHttpClient:
         self._host = host
         self._port = port
         self._default_timeout_s = default_timeout_s
-        self._api_key = (os.environ.get("NOMAD_API_KEY") or "").strip() or None
-        self._internal_token = (os.environ.get("NOMAD_INTERNAL_TOKEN") or "").strip() or None
+        self._api_key = env_secret("NOMAD_API_KEY")
+        self._internal_token = env_secret("NOMAD_INTERNAL_TOKEN")
         self._conn = HTTPConnection(host, port, timeout=default_timeout_s)
         self._lock = threading.Lock()
         self._last_error_log: dict[str, float] = {}
