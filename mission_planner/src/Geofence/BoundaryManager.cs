@@ -266,35 +266,86 @@ namespace NOMAD.MissionPlanner
                 AudioAlerts.Speak("Approaching boundary. Turn around.", component: "boundary");
             }
 
-            // "return_to_boundary": command GUIDED back to the configured return
-            // point (or the boundary centroid) at the current altitude. Once per
-            // violation episode so repeated checks don't spam goto commands.
+            // "return_to_boundary": command GUIDED to the closest point just
+            // inside the violated boundary (not all the way to the return
+            // point) at the current altitude. Once per violation episode so
+            // repeated checks don't spam goto commands.
             if (softAction == "return_to_boundary" && !_returnCommanded)
             {
                 _returnCommanded = true;
-                var target = _geofence.ReturnPoint ?? Centroid(
-                    _geofence.SoftBoundary?.Vertices?.Count >= 3
-                        ? _geofence.SoftBoundary : _geofence.HardBoundary);
+                var boundary = _geofence.SoftBoundary?.Vertices?.Count >= 3
+                    ? _geofence.SoftBoundary : _geofence.HardBoundary;
+                var target = NearestPointInside(boundary, position, ReturnInsideMarginMeters);
                 if (target == null)
                 {
-                    Log.Warn("return_to_boundary: no return point or boundary centroid available");
+                    Log.Warn("return_to_boundary: no boundary polygon available");
                     return;
                 }
 
                 double alt = Math.Max(5.0, altAgl); // never command a goto into the ground
                 bool ok = FlightModeController.GuidedGoto(target.Lat, target.Lon, alt);
-                Log.Warn($"Soft boundary action — GUIDED return to {target.Lat:F6}, {target.Lon:F6} @ {alt:F0}m: {(ok ? "dispatched" : "FAILED")}");
-                if (ok) AudioAlerts.Speak("Returning to boundary.", component: "boundary");
+                Log.Warn($"Soft boundary action — GUIDED to nearest inside point {target.Lat:F6}, {target.Lon:F6} @ {alt:F0}m: {(ok ? "dispatched" : "FAILED")}");
+                if (ok) AudioAlerts.Speak("Returning inside boundary.", component: "boundary");
             }
         }
 
-        /// <summary>Centroid of a boundary polygon, or null if undefined.</summary>
-        private static GpsPoint Centroid(FlightBoundary boundary)
+        /// <summary>
+        /// How far past the boundary edge the return goto aims, so the vehicle
+        /// settles inside rather than hovering on the line.
+        /// </summary>
+        private const double ReturnInsideMarginMeters = 1.0;
+
+        /// <summary>
+        /// Closest point on the boundary outline to <paramref name="pos"/>,
+        /// nudged <paramref name="marginM"/> meters toward the polygon centroid
+        /// so the target sits just inside. Null without a valid polygon.
+        /// </summary>
+        private static GpsPoint NearestPointInside(FlightBoundary boundary, GpsPoint pos, double marginM)
         {
-            if (boundary?.Vertices == null || boundary.Vertices.Count < 3) return null;
-            double lat = 0, lon = 0;
-            foreach (var v in boundary.Vertices) { lat += v.Lat; lon += v.Lon; }
-            return new GpsPoint(lat / boundary.Vertices.Count, lon / boundary.Vertices.Count);
+            var verts = boundary?.Vertices;
+            if (verts == null || verts.Count < 3) return null;
+
+            // Local equirectangular frame centered on the drone.
+            double mPerDegLat = 110540.0;
+            double mPerDegLon = 111320.0 * Math.Cos(pos.Lat * Math.PI / 180.0);
+
+            int n = verts.Count;
+            var x = new double[n];
+            var y = new double[n];
+            double cx = 0, cy = 0;
+            for (int i = 0; i < n; i++)
+            {
+                x[i] = (verts[i].Lon - pos.Lon) * mPerDegLon;
+                y[i] = (verts[i].Lat - pos.Lat) * mPerDegLat;
+                cx += x[i];
+                cy += y[i];
+            }
+            cx /= n;
+            cy /= n;
+
+            // Closest point on any edge to the drone (the local origin).
+            double bestD2 = double.MaxValue, bx = 0, by = 0;
+            for (int i = 0; i < n; i++)
+            {
+                int j = (i + 1) % n;
+                double ex = x[j] - x[i], ey = y[j] - y[i];
+                double len2 = ex * ex + ey * ey;
+                double t = len2 < 1e-9 ? 0 : Math.Max(0, Math.Min(1, -(x[i] * ex + y[i] * ey) / len2));
+                double px = x[i] + t * ex, py = y[i] + t * ey;
+                double d2 = px * px + py * py;
+                if (d2 < bestD2) { bestD2 = d2; bx = px; by = py; }
+            }
+
+            // Step off the edge toward the interior (centroid direction).
+            double dx = cx - bx, dy = cy - by;
+            double dist = Math.Sqrt(dx * dx + dy * dy);
+            if (dist > 1e-6)
+            {
+                bx += dx / dist * marginM;
+                by += dy / dist * marginM;
+            }
+
+            return new GpsPoint(pos.Lat + by / mPerDegLat, pos.Lon + bx / mPerDegLon);
         }
 
         /// <summary>
