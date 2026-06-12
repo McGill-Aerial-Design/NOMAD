@@ -37,8 +37,41 @@ namespace NOMAD.MissionPlanner
             UpdatePointCounts();
         }
 
+        private bool _syncingSoftFromHard;
+
+        /// <summary>
+        /// Recompute the derived soft boundary when "auto from hard" is on and
+        /// refresh its grid. Hooked into UpdatePointCounts so every hard-boundary
+        /// mutation path (grid edit, paste, import, clear, add) picks it up.
+        /// </summary>
+        private void SyncSoftFromHard()
+        {
+            if (!_missionConfig.SoftBoundaryFromHard || _syncingSoftFromHard) return;
+            try
+            {
+                _syncingSoftFromHard = true;
+                _missionConfig.RegenerateSoftFromHard();
+                _missionConfig.Save();
+                _dgvSoftBoundary.Rows.Clear();
+                foreach (var p in _missionConfig.SoftBoundary.Vertices)
+                {
+                    _dgvSoftBoundary.Rows.Add(p.Lat.ToString("F8"), p.Lon.ToString("F8"));
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Soft-from-hard sync failed - {ex.Message}");
+            }
+            finally
+            {
+                _syncingSoftFromHard = false;
+            }
+        }
+
         private void UpdatePointCounts()
         {
+            SyncSoftFromHard();
+
             var softLabel = this.Controls.Find("lblSoftCount", true).FirstOrDefault() as Label;
             var hardLabel = this.Controls.Find("lblHardCount", true).FirstOrDefault() as Label;
             var softSaved = this.Controls.Find("lblSoftSaved", true).FirstOrDefault() as Label;
@@ -725,6 +758,9 @@ namespace NOMAD.MissionPlanner
 
         private void SaveBoundaryFromGrid(DataGridView dgv, FlightBoundary boundary)
         {
+            // The derived-soft sync repopulates the soft grid itself; its
+            // CellValueChanged storm must not write partial rows back.
+            if (_syncingSoftFromHard && dgv == _dgvSoftBoundary) return;
             try
             {
                 boundary.Vertices.Clear();

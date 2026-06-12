@@ -217,7 +217,7 @@ namespace NOMAD.MissionPlanner
             // 1) Soft Boundary (top - added last so it docks on top)
             var softCard = CreateCard("SOFT BOUNDARY (Warning)");
             softCard.Dock = DockStyle.Top;
-            softCard.Height = 210;
+            softCard.Height = 235;
             softCard.Margin = new Padding(0, 0, 0, 0);
 
             _dgvSoftBoundary = CreateBoundaryGrid();
@@ -232,8 +232,45 @@ namespace NOMAD.MissionPlanner
             var btnClearSoft = CreateButton("Clear", ERROR_COLOR, 45, 24); btnClearSoft.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnClearSoft.Location = new Point(175, 158); btnClearSoft.Click += (s, e) => ClearBoundary(_dgvSoftBoundary, _missionConfig.SoftBoundary); softCard.Controls.Add(btnClearSoft);
             var lblSoftCount = new Label { Name = "lblSoftCount", Text = $"{_missionConfig.SoftBoundary.Vertices.Count} pts", Font = new Font("Segoe UI", 8, FontStyle.Bold), ForeColor = Color.Yellow, Location = new Point(228, 162), AutoSize = true };
             softCard.Controls.Add(lblSoftCount);
-            var lblSoftSaved = new Label { Name = "lblSoftSaved", Text = "", Font = new Font("Segoe UI", 7), ForeColor = TEXT_SECONDARY, Location = new Point(10, 184), AutoSize = true };
+
+            // Derived mode: soft boundary auto-generated as hard boundary inset
+            // inward by a configurable distance. Locks manual soft editing.
+            var chkAutoSoft = new CheckBox { Text = "Auto: hard boundary −", ForeColor = Color.White, Font = new Font("Segoe UI", 8), Location = new Point(10, 184), AutoSize = true, Checked = _missionConfig.SoftBoundaryFromHard };
+            softCard.Controls.Add(chkAutoSoft);
+            var nudSoftInset = new NumericUpDown { Location = new Point(150, 182), Size = new Size(48, 22), Minimum = 1, Maximum = 100, Value = (decimal)Math.Max(1, Math.Min(100, _missionConfig.SoftBoundaryInsetMeters)), BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White };
+            softCard.Controls.Add(nudSoftInset);
+            var lblInsetM = new Label { Text = "m inward", Font = new Font("Segoe UI", 7), ForeColor = TEXT_SECONDARY, Location = new Point(201, 186), AutoSize = true };
+            softCard.Controls.Add(lblInsetM);
+            var lblSoftSaved = new Label { Name = "lblSoftSaved", Text = "", Font = new Font("Segoe UI", 7), ForeColor = TEXT_SECONDARY, Location = new Point(10, 210), AutoSize = true };
             softCard.Controls.Add(lblSoftSaved);
+
+            Action applySoftAutoState = () =>
+            {
+                bool auto = chkAutoSoft.Checked;
+                _dgvSoftBoundary.ReadOnly = auto;
+                _dgvSoftBoundary.AllowUserToDeleteRows = !auto;
+                btnPasteSoft.Enabled = !auto;
+                btnAddSoft.Enabled = !auto;
+                btnDelSoft.Enabled = !auto;
+                btnClearSoft.Enabled = !auto;
+            };
+            applySoftAutoState();
+            chkAutoSoft.CheckedChanged += (s, e) =>
+            {
+                _missionConfig.SoftBoundaryFromHard = chkAutoSoft.Checked;
+                _missionConfig.Save();
+                applySoftAutoState();
+                UpdatePointCounts();          // triggers SyncSoftFromHard when enabled
+                AutoDrawBoundariesIfEnabled();
+            };
+            nudSoftInset.ValueChanged += (s, e) =>
+            {
+                _missionConfig.SoftBoundaryInsetMeters = (double)nudSoftInset.Value;
+                _missionConfig.Save();
+                UpdatePointCounts();
+                AutoDrawBoundariesIfEnabled();
+            };
+
             leftScroll.Controls.Add(softCard);
 
             mainLayout.Controls.Add(leftScroll, 0, 1);
