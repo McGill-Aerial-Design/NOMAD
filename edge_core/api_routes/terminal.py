@@ -14,6 +14,7 @@ from ..api_models import (
     TerminalCommandResponse,
     TerminalExecRequest,
 )
+from ..env import env_bool
 
 try:
     import msgpack
@@ -76,7 +77,7 @@ def register_terminal_routes(app, ctx) -> None:
     _require_terminal_api_key = ctx.require_terminal_api_key
 
     def _terminal_exec_enabled() -> bool:
-        return (os.environ.get("NOMAD_ENABLE_TERMINAL_EXEC") or "").strip().lower() in {"1", "true", "yes", "on"}
+        return env_bool("NOMAD_ENABLE_TERMINAL_EXEC")
 
     # ==================== Terminal Endpoints ======================================
 

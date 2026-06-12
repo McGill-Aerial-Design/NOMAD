@@ -7,7 +7,6 @@ from __future__ import annotations
 import hmac
 import ipaddress
 import logging
-import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -15,7 +14,8 @@ from fastapi import HTTPException, Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
-TRUE_VALUES = {"1", "true", "yes", "on"}
+from .env import env_bool, env_secret
+
 AUTH_EXEMPT_PATHS = frozenset({"/", "/health", "/docs", "/redoc", "/openapi.json"})
 COMMAND_PATH_PREFIXES = ("/api/servo/", "/api/spray/")
 INTERNAL_BRIDGE_TOKEN_HEADER = "X-NOMAD-Internal-Token"
@@ -28,17 +28,6 @@ INTERNAL_BRIDGE_ALLOWED_ROUTES = frozenset(
         ("GET", "/api/servo/camera/tilt"),
     }
 )
-
-
-def env_bool(name: str, default: bool = False) -> bool:
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    return value.strip().lower() in TRUE_VALUES
-
-
-def env_secret(name: str) -> str | None:
-    return (os.environ.get(name) or "").strip() or None
 
 
 @dataclass(frozen=True)

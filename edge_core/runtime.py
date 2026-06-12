@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import atexit
 import logging
-import os
 import signal
 import threading
 from collections.abc import Callable
@@ -16,12 +15,13 @@ import uvicorn
 from fastapi import FastAPI
 
 from .core import AppContext, wire_modules
+from .env import env_bool
 from .services.state import StateManager
 
 
 def is_sim_mode() -> bool:
     """True when NOMAD_SIM_MODE is set to a truthy value."""
-    return os.environ.get("NOMAD_SIM_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+    return env_bool("NOMAD_SIM_MODE")
 
 
 def cleanup(app: FastAPI, logger: logging.Logger) -> None:
