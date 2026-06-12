@@ -55,7 +55,11 @@ services:
       MODEL: quad
       SPEEDUP: "1"
       # Stream MAVLink to the Edge Core container so telemetry actually flows.
-      SITL_UDP_OUTPUT_ADDRESS: "udp:edge_core:14550"
+      # The second --out (injected via the image's unquoted entrypoint var)
+      # streams to the Windows host for the NOMAD dual-link LTE leg: set the
+      # plugin's LTE MAVLink port to 14600 (remote host empty) and the router
+      # receives SITL telemetry with no TCP bridge involved.
+      SITL_UDP_OUTPUT_ADDRESS: "udp:edge_core:14550 --out udp:host.docker.internal:14600"
     ports:
       - "5760:5760"   # TCP MAVLink (single-client; held by in-container MAVProxy)
     depends_on:
