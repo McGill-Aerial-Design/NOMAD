@@ -46,9 +46,9 @@ namespace NOMAD.MissionPlanner
             string stamp = $"Saved {DateTime.Now:HH:mm:ss} to plugin config";
 
             if (softLabel != null)
-                softLabel.Text = $"Points: {_missionConfig.SoftBoundary.Vertices.Count}";
+                softLabel.Text = $"{_missionConfig.SoftBoundary.Vertices.Count} pts";
             if (hardLabel != null)
-                hardLabel.Text = $"Points: {_missionConfig.HardBoundary.Vertices.Count}";
+                hardLabel.Text = $"{_missionConfig.HardBoundary.Vertices.Count} pts";
             if (softSaved != null)
                 softSaved.Text = _missionConfig.SoftBoundary.Vertices.Count > 0 ? stamp : "No points";
             if (hardSaved != null)
@@ -680,12 +680,14 @@ namespace NOMAD.MissionPlanner
                 catch (Exception ex) { Log.Error($"Plan map inject failed - {ex.Message}"); }
 
                 // 3) Upload to connected vehicle via MAVLink and set FENCE_* params.
-                // For any "kill" action we also force LAND_SPEED to 200 cm/s
-                // (2 m/s) so the descent meets CONOPS §4.5; warn-only flights
-                // leave LAND_SPEED untouched.
+                // For any termination action we also push LAND_SPEED at the
+                // configured descent rate (CONOPS §4.5 requires >= 2 m/s);
+                // warn-only flights leave LAND_SPEED untouched.
                 string hardAction = _missionConfig.Failsafe.HardBoundaryAction;
                 int fenceAction = MapFenceActionToParam(hardAction);
-                int landSpeedCmS = (hardAction ?? "warn_and_kill").ToLower() == "warn_only" ? 0 : 200;
+                int landSpeedCmS = (hardAction ?? "warn_and_kill").ToLower() == "warn_only"
+                    ? 0
+                    : (int)Math.Round(_missionConfig.TerminationDescentRateMps * 100);
                 var upload = MPFenceUploader.UploadPolygon(
                     vertices,
                     _missionConfig.ReturnPoint,

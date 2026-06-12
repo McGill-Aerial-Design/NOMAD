@@ -344,7 +344,7 @@ namespace NOMAD.MissionPlanner
 
             if (!_initialized && !Initialize())
             {
-                Log.Debug("Cannot draw boundaries - map not initialized");
+                Log.Warn("Cannot draw boundaries - map overlay not initialized");
                 return;
             }
 
@@ -374,6 +374,8 @@ namespace NOMAD.MissionPlanner
             }
 
             RefreshMap();
+            Log.Info($"Drew boundaries on map (soft: {config.SoftBoundary?.Vertices?.Count ?? 0} pts, "
+                + $"hard: {config.HardBoundary?.Vertices?.Count ?? 0} pts)");
         }
 
         /// <summary>

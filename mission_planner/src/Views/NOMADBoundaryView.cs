@@ -193,7 +193,7 @@ namespace NOMAD.MissionPlanner
             leftScroll.Controls.Add(importCard);
 
             // 2) Hard Boundary (middle)
-            var hardCard = CreateCard("HARD BOUNDARY (Kill)");
+            var hardCard = CreateCard("HARD BOUNDARY (Descend)");
             hardCard.Dock = DockStyle.Top;
             hardCard.Height = 210;
             hardCard.Margin = new Padding(0, 3, 0, 0);
@@ -208,7 +208,7 @@ namespace NOMAD.MissionPlanner
             var btnAddHard = CreateButton("+ Add", SUCCESS_COLOR, 45, 24); btnAddHard.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnAddHard.Location = new Point(70, 158); btnAddHard.Click += (s, e) => AddManualPoint(_dgvHardBoundary, _missionConfig.HardBoundary); hardCard.Controls.Add(btnAddHard);
             var btnDelHard = CreateButton("Del Pt", ACCENT_COLOR, 50, 24); btnDelHard.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnDelHard.Location = new Point(120, 158); btnDelHard.Click += (s, e) => DeleteSelectedPoint(_dgvHardBoundary, _missionConfig.HardBoundary); hardCard.Controls.Add(btnDelHard);
             var btnClearHard = CreateButton("Clear", ERROR_COLOR, 45, 24); btnClearHard.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnClearHard.Location = new Point(175, 158); btnClearHard.Click += (s, e) => ClearBoundary(_dgvHardBoundary, _missionConfig.HardBoundary); hardCard.Controls.Add(btnClearHard);
-            var lblHardCount = new Label { Name = "lblHardCount", Text = $"{_missionConfig.HardBoundary.Vertices.Count} pts", Font = new Font("Segoe UI", 8, FontStyle.Bold), ForeColor = Color.Red, Location = new Point(150, 22), AutoSize = true };
+            var lblHardCount = new Label { Name = "lblHardCount", Text = $"{_missionConfig.HardBoundary.Vertices.Count} pts", Font = new Font("Segoe UI", 8, FontStyle.Bold), ForeColor = Color.Red, Location = new Point(228, 162), AutoSize = true };
             hardCard.Controls.Add(lblHardCount);
             var lblHardSaved = new Label { Name = "lblHardSaved", Text = "", Font = new Font("Segoe UI", 7), ForeColor = TEXT_SECONDARY, Location = new Point(10, 184), AutoSize = true };
             hardCard.Controls.Add(lblHardSaved);
@@ -230,7 +230,7 @@ namespace NOMAD.MissionPlanner
             var btnAddSoft = CreateButton("+ Add", SUCCESS_COLOR, 45, 24); btnAddSoft.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnAddSoft.Location = new Point(70, 158); btnAddSoft.Click += (s, e) => AddManualPoint(_dgvSoftBoundary, _missionConfig.SoftBoundary); softCard.Controls.Add(btnAddSoft);
             var btnDelSoft = CreateButton("Del Pt", ACCENT_COLOR, 50, 24); btnDelSoft.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnDelSoft.Location = new Point(120, 158); btnDelSoft.Click += (s, e) => DeleteSelectedPoint(_dgvSoftBoundary, _missionConfig.SoftBoundary); softCard.Controls.Add(btnDelSoft);
             var btnClearSoft = CreateButton("Clear", ERROR_COLOR, 45, 24); btnClearSoft.Font = new Font("Segoe UI", 7.5f, FontStyle.Bold); btnClearSoft.Location = new Point(175, 158); btnClearSoft.Click += (s, e) => ClearBoundary(_dgvSoftBoundary, _missionConfig.SoftBoundary); softCard.Controls.Add(btnClearSoft);
-            var lblSoftCount = new Label { Name = "lblSoftCount", Text = $"{_missionConfig.SoftBoundary.Vertices.Count} pts", Font = new Font("Segoe UI", 8, FontStyle.Bold), ForeColor = Color.Yellow, Location = new Point(150, 22), AutoSize = true };
+            var lblSoftCount = new Label { Name = "lblSoftCount", Text = $"{_missionConfig.SoftBoundary.Vertices.Count} pts", Font = new Font("Segoe UI", 8, FontStyle.Bold), ForeColor = Color.Yellow, Location = new Point(228, 162), AutoSize = true };
             softCard.Controls.Add(lblSoftCount);
             var lblSoftSaved = new Label { Name = "lblSoftSaved", Text = "", Font = new Font("Segoe UI", 7), ForeColor = TEXT_SECONDARY, Location = new Point(10, 184), AutoSize = true };
             softCard.Controls.Add(lblSoftSaved);
@@ -266,32 +266,41 @@ namespace NOMAD.MissionPlanner
             // 3) Violation Actions
             var actionCard = CreateCard("VIOLATION ACTIONS");
             actionCard.Dock = DockStyle.Top;
-            actionCard.Height = 105;
+            actionCard.Height = 130;
             actionCard.Margin = new Padding(0, 3, 0, 0);
 
             var lblSoftAction = new Label { Text = "Soft:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(10, 40), AutoSize = true };
             actionCard.Controls.Add(lblSoftAction);
             _cmbSoftAction = new ComboBox { Location = new Point(42, 37), Size = new Size(145, 22), DropDownStyle = ComboBoxStyle.DropDownList, BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White, Font = new Font("Segoe UI", 8) };
             _cmbSoftAction.Items.AddRange(new object[] { "Warn (Audio)", "Warn (Visual)", "Warn (Both)", "Return to Boundary" });
-            var softActionMap = new Dictionary<string, int> { { "warn_audio", 0 }, { "warn_visual", 1 }, { "warn_both", 2 }, { "return_to_boundary", 3 } };
-            _cmbSoftAction.SelectedIndex = softActionMap.TryGetValue(_missionConfig.Failsafe.SoftBoundaryAction ?? "", out int softIdx) ? softIdx : 2;
-            _cmbSoftAction.SelectedIndexChanged += (s, e) => { _missionConfig.Failsafe.SoftBoundaryAction = _cmbSoftAction.SelectedItem.ToString().ToLower().Replace(" ", "_").Replace("(", "").Replace(")", ""); _missionConfig.Save(); };
+            // Display labels are decoupled from the persisted action strings —
+            // map by index so the UI wording can change without breaking configs.
+            var softActions = new[] { "warn_audio", "warn_visual", "warn_both", "return_to_boundary" };
+            _cmbSoftAction.SelectedIndex = Math.Max(0, Array.IndexOf(softActions, _missionConfig.Failsafe.SoftBoundaryAction ?? "warn_both"));
+            _cmbSoftAction.SelectedIndexChanged += (s, e) => { _missionConfig.Failsafe.SoftBoundaryAction = softActions[_cmbSoftAction.SelectedIndex]; _missionConfig.Save(); };
             actionCard.Controls.Add(_cmbSoftAction);
             var lblHardAction = new Label { Text = "Hard:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(10, 65), AutoSize = true };
             actionCard.Controls.Add(lblHardAction);
             _cmbHardAction = new ComboBox { Location = new Point(42, 62), Size = new Size(145, 22), DropDownStyle = ComboBoxStyle.DropDownList, BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White, Font = new Font("Segoe UI", 8) };
-            _cmbHardAction.Items.AddRange(new object[] { "Warn and Kill", "Auto Kill", "Warn Only" });
-            var hardActionMap = new Dictionary<string, int> { { "warn_and_kill", 0 }, { "auto_kill", 1 }, { "warn_only", 2 } };
-            _cmbHardAction.SelectedIndex = hardActionMap.TryGetValue(_missionConfig.Failsafe.HardBoundaryAction ?? "", out int hardIdx) ? hardIdx : 0;
-            _cmbHardAction.SelectedIndexChanged += (s, e) => { _missionConfig.Failsafe.HardBoundaryAction = _cmbHardAction.SelectedItem.ToString().ToLower().Replace(" ", "_"); _missionConfig.Save(); };
+            _cmbHardAction.Items.AddRange(new object[] { "Warn + Descend", "Auto Descend", "Warn Only" });
+            var hardActions = new[] { "warn_and_kill", "auto_kill", "warn_only" };
+            _cmbHardAction.SelectedIndex = Math.Max(0, Array.IndexOf(hardActions, _missionConfig.Failsafe.HardBoundaryAction ?? "warn_and_kill"));
+            _cmbHardAction.SelectedIndexChanged += (s, e) => { _missionConfig.Failsafe.HardBoundaryAction = hardActions[_cmbHardAction.SelectedIndex]; _missionConfig.Save(); };
             actionCard.Controls.Add(_cmbHardAction);
-            var lblKillDelay = new Label { Text = "Kill:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(195, 65), AutoSize = true };
+            var lblKillDelay = new Label { Text = "Delay:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(195, 65), AutoSize = true };
             actionCard.Controls.Add(lblKillDelay);
-            _nudKillDelay = new NumericUpDown { Location = new Point(222, 62), Size = new Size(45, 22), Minimum = 1, Maximum = 30, Value = _missionConfig.Failsafe.HardBoundaryKillDelaySec, BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White };
+            _nudKillDelay = new NumericUpDown { Location = new Point(232, 62), Size = new Size(45, 22), Minimum = 1, Maximum = 30, Value = _missionConfig.Failsafe.HardBoundaryKillDelaySec, BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White };
             _nudKillDelay.ValueChanged += (s, e) => { _missionConfig.Failsafe.HardBoundaryKillDelaySec = (int)_nudKillDelay.Value; _missionConfig.Save(); };
             actionCard.Controls.Add(_nudKillDelay);
-            var lblSec = new Label { Text = "s", Font = new Font("Segoe UI", 7), ForeColor = TEXT_SECONDARY, Location = new Point(270, 67), AutoSize = true };
+            var lblSec = new Label { Text = "s", Font = new Font("Segoe UI", 7), ForeColor = TEXT_SECONDARY, Location = new Point(280, 67), AutoSize = true };
             actionCard.Controls.Add(lblSec);
+            var lblDescent = new Label { Text = "Descent rate:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(10, 92), AutoSize = true };
+            actionCard.Controls.Add(lblDescent);
+            var nudDescentRate = new NumericUpDown { Location = new Point(90, 89), Size = new Size(55, 22), Minimum = 0.5m, Maximum = 10, Increment = 0.5m, DecimalPlaces = 1, Value = (decimal)_missionConfig.TerminationDescentRateMps, BackColor = Color.FromArgb(50, 50, 53), ForeColor = Color.White };
+            nudDescentRate.ValueChanged += (s, e) => { _missionConfig.TerminationDescentRateMps = (double)nudDescentRate.Value; _missionConfig.Save(); };
+            actionCard.Controls.Add(nudDescentRate);
+            var lblMps = new Label { Text = "m/s (LAND_SPEED on push)", Font = new Font("Segoe UI", 7), ForeColor = TEXT_SECONDARY, Location = new Point(150, 93), AutoSize = true };
+            actionCard.Controls.Add(lblMps);
             rightScroll.Controls.Add(actionCard);
 
             // 2) Return Location
@@ -329,8 +338,15 @@ namespace NOMAD.MissionPlanner
             settingsCard.Height = 100;
             settingsCard.Margin = new Padding(0, 0, 0, 0);
 
-            _chkEnableMonitoring = new CheckBox { Text = "Real-time Monitor", ForeColor = Color.White, Font = new Font("Segoe UI", 8), Location = new Point(10, 40), AutoSize = true, Checked = _monitor?.IsMonitoring ?? false };
-            _chkEnableMonitoring.CheckedChanged += (s, e) => { if (_chkEnableMonitoring.Checked) _monitor?.StartMonitoring(); else _monitor?.StopMonitoring(); };
+            _chkEnableMonitoring = new CheckBox { Text = "Real-time Monitor", ForeColor = Color.White, Font = new Font("Segoe UI", 8), Location = new Point(10, 40), AutoSize = true, Checked = _monitor?.IsMonitoring ?? _missionConfig.MonitoringEnabled };
+            _chkEnableMonitoring.CheckedChanged += (s, e) =>
+            {
+                // Persist so monitoring survives page switches and MP restarts
+                // (the monitor itself is plugin-owned and keeps running).
+                _missionConfig.MonitoringEnabled = _chkEnableMonitoring.Checked;
+                _missionConfig.Save();
+                if (_chkEnableMonitoring.Checked) _monitor?.StartMonitoring(); else _monitor?.StopMonitoring();
+            };
             settingsCard.Controls.Add(_chkEnableMonitoring);
             var lblMaxAlt = new Label { Text = "Max Alt:", Font = new Font("Segoe UI", 8), ForeColor = TEXT_PRIMARY, Location = new Point(10, 68), AutoSize = true };
             settingsCard.Controls.Add(lblMaxAlt);
@@ -370,7 +386,7 @@ namespace NOMAD.MissionPlanner
                 switch (kind)
                 {
                     case AlertKind.BoundarySoft:    spoken = "Soft boundary warning. Turn around."; break;
-                    case AlertKind.BoundaryHard:    spoken = "Hard boundary violation. Kill required."; break;
+                    case AlertKind.BoundaryHard:    spoken = "Hard boundary violation. Descend immediately."; break;
                     case AlertKind.BatteryWarning:  spoken = "Battery low. Test alert."; break;
                     case AlertKind.BatteryCritical: spoken = "Battery critical. Land now. Test alert."; break;
                     default: spoken = "Test alert."; break;

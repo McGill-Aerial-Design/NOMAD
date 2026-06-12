@@ -111,6 +111,11 @@ namespace NOMAD.MissionPlanner
 
         private static void PlayPattern(AlertKind kind)
         {
+            // Wake the audio device with 300 ms of silence first — output
+            // devices (especially Bluetooth/USB) power up with latency, which
+            // clipped the start of beep sequences.
+            PlaySine(0, 300);
+
             switch (kind)
             {
                 case AlertKind.BoundarySoft:

@@ -167,6 +167,18 @@ namespace NOMAD.MissionPlanner
         public FailsafeBehavior Failsafe { get; set; } = new FailsafeBehavior();
 
         /// <summary>
+        /// Whether real-time boundary monitoring is active. Persisted so the
+        /// monitor survives Mission Planner page switches and restarts.
+        /// </summary>
+        public bool MonitoringEnabled { get; set; }
+
+        /// <summary>
+        /// Descent rate (m/s) commanded on flight termination (maps to
+        /// LAND_SPEED when pushing the fence to the vehicle).
+        /// </summary>
+        public double TerminationDescentRateMps { get; set; } = 2.0;
+
+        /// <summary>
         /// Boundary violations log.
         /// </summary>
         public List<BoundaryViolation> BoundaryViolations { get; set; } = new List<BoundaryViolation>();

@@ -38,6 +38,8 @@ namespace NOMAD.MissionPlanner
         // Plugin state
         private NOMADConfig _config;
         private NotificationService _notificationService;
+        private GeofenceConfig _geofenceConfig;               // Plugin-owned: survives NOMAD screen disposal
+        private BoundaryMonitor _boundaryMonitor;             // Plugin-owned: alerts fire on every MP page
         private DualLinkSender _sender;
         private MAVLinkConnectionManager _connectionManager;  // Dual link manager
         private JetsonConnectionManager _jetsonConnectionManager;  // Jetson HTTP connectivity
@@ -79,6 +81,22 @@ namespace NOMAD.MissionPlanner
                 _notificationService = new NotificationService(null, _sender);
                 NotificationService.Shared = _notificationService;
                 _notificationService.StartMonitoring();
+
+                // Geofence boundary monitor lives at plugin level so the
+                // "Real-time Monitor" setting persists and violation alerts
+                // keep firing even when the NOMAD screen is disposed (MainSwitcher
+                // recreates it on every page switch).
+                _geofenceConfig = GeofenceConfig.Load();
+                _boundaryMonitor = new BoundaryMonitor(_geofenceConfig, _config);
+                _notificationService.SetBoundaryMonitor(_boundaryMonitor);
+                if (_geofenceConfig.MonitoringEnabled)
+                {
+                    _boundaryMonitor.StartMonitoring();
+                }
+
+                // Toast overlay: Warning/Critical notifications pop bottom-right
+                // on every MP page, not just inside the NOMAD screen.
+                NotificationToast.Attach(_notificationService, Host?.MainForm);
 
                 // Startup chime + spoken welcome (fires once per process).
                 AudioAlerts.PlayWelcomeOnce();
@@ -204,6 +222,13 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
+                // Unhook the toast overlay before the service goes away
+                NotificationToast.Detach();
+
+                // Stop boundary monitor (plugin-owned)
+                _boundaryMonitor?.Dispose();
+                _boundaryMonitor = null;
+
                 // Stop notification service
                 if (NotificationService.Shared == _notificationService) NotificationService.Shared = null;
                 _notificationService?.StopMonitoring();

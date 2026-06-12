@@ -78,30 +78,36 @@ namespace NOMAD.MissionPlanner
 
                 if (flightDataType != null)
                 {
-                    // Try static field first
+                    // Try static field/property first
                     var mymapField = flightDataType.GetField("mymap",
                         BindingFlags.Public | BindingFlags.Static | BindingFlags.NonPublic);
-                    if (mymapField != null)
+                    _mapControl = mymapField?.GetValue(null)
+                        ?? flightDataType.GetProperty("mymap",
+                            BindingFlags.Public | BindingFlags.Static | BindingFlags.NonPublic)?.GetValue(null);
+                    if (_mapControl != null)
                     {
-                        _mapControl = mymapField.GetValue(null);
-                        if (_mapControl != null)
-                        {
-                            Log.Debug($"Found map control via static field (type: {_mapControl.GetType().FullName})");
-                            return _mapControl;
-                        }
+                        Log.Info($"Found map control via static member (type: {_mapControl.GetType().FullName})");
+                        return _mapControl;
                     }
 
-                    // Try instance through MainV2.instance
+                    // Try instance through MainV2.instance. MP exposes 'instance'
+                    // and 'FlightData' as fields in some versions and properties in
+                    // others — probe both member kinds.
                     var mainV2Type = FindTypeInLoadedAssemblies("MissionPlanner.MainV2");
                     if (mainV2Type != null)
                     {
                         var instanceProp = mainV2Type.GetProperty("instance", BindingFlags.Public | BindingFlags.Static);
-                        var instance = instanceProp?.GetValue(null);
+                        var instance = instanceProp?.GetValue(null)
+                            ?? mainV2Type.GetField("instance", BindingFlags.Public | BindingFlags.Static)?.GetValue(null);
                         if (instance != null)
                         {
-                            // Try to get FlightData instance
+                            // Try to get FlightData instance (property, then field,
+                            // then static variants)
                             var flightDataProp = mainV2Type.GetProperty("FlightData", BindingFlags.Public | BindingFlags.Instance);
-                            var flightData = flightDataProp?.GetValue(instance);
+                            var flightData = flightDataProp?.GetValue(instance)
+                                ?? mainV2Type.GetField("FlightData", BindingFlags.Public | BindingFlags.Instance)?.GetValue(instance)
+                                ?? mainV2Type.GetProperty("FlightData", BindingFlags.Public | BindingFlags.Static)?.GetValue(null)
+                                ?? mainV2Type.GetField("FlightData", BindingFlags.Public | BindingFlags.Static)?.GetValue(null);
 
                             if (flightData != null)
                             {
@@ -141,7 +147,8 @@ namespace NOMAD.MissionPlanner
                     }
                 }
 
-                Log.Warn("Could not find map control - FlightData may not be loaded yet");
+                Log.Warn("Could not find map control - FlightData may not be loaded yet "
+                    + "(probed FlightData.mymap static, MainV2.instance.FlightData.mymap/gMapControl1)");
             }
             catch (Exception ex)
             {
@@ -194,15 +201,15 @@ namespace NOMAD.MissionPlanner
                 if (_overlayType == null || _polygonType == null || _pointType == null)
                 {
                     // Log what we found and what we're missing
-                    Log.Debug($"GMap types status - Overlay:{_overlayType != null}, Polygon:{_polygonType != null}, Point:{_pointType != null}");
+                    Log.Warn($"GMap types status - Overlay:{_overlayType != null}, Polygon:{_polygonType != null}, Point:{_pointType != null}");
 
                     // List all assemblies that might be GMap related
                     var gmapAssemblies = AppDomain.CurrentDomain.GetAssemblies()
                         .Where(a => a.GetName().Name.IndexOf("GMap", StringComparison.OrdinalIgnoreCase) >= 0)
                         .Select(a => a.GetName().Name);
-                    Log.Debug($"Found GMap assemblies: {string.Join(", ", gmapAssemblies)}");
+                    Log.Warn($"Found GMap assemblies: {string.Join(", ", gmapAssemblies)}");
 
-                    Log.Debug("Failed to load required GMap.NET types via reflection");
+                    Log.Warn("Failed to load required GMap.NET types via reflection");
                     _initFailed = true;
                     return false;
                 }
@@ -211,7 +218,7 @@ namespace NOMAD.MissionPlanner
                 var mymap = GetMapControl();
                 if (mymap == null)
                 {
-                    Log.Debug("Map not available yet, will retry on next draw");
+                    Log.Warn("Map not available yet, will retry on next draw");
                     return false;  // Don't mark as permanently failed - might succeed later
                 }
 
@@ -249,7 +256,7 @@ namespace NOMAD.MissionPlanner
                 }
 
                 _initialized = true;
-                Log.Debug("Map overlay initialized successfully via reflection");
+                Log.Info("Map overlay initialized successfully via reflection");
                 return true;
             }
             catch (Exception ex)

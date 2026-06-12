@@ -263,7 +263,7 @@ namespace NOMAD.MissionPlanner
                 BoundaryName = _geofence.HardBoundary.Name,
                 DronePosition = position,
                 AltitudeAgl = altAgl,
-                RequiredAction = $"KILL REQUIRED within {_geofence.Failsafe.HardBoundaryKillDelaySec} seconds!",
+                RequiredAction = $"DESCEND REQUIRED within {_geofence.Failsafe.HardBoundaryKillDelaySec} seconds!",
                 Timestamp = DateTime.Now,
             };
 
@@ -285,7 +285,7 @@ namespace NOMAD.MissionPlanner
             if (_geofence.Failsafe.EnableAudioWarnings)
             {
                 PlayWarningSound(true);
-                AudioAlerts.Speak($"Hard boundary violation. Kill required in {_geofence.Failsafe.HardBoundaryKillDelaySec} seconds.",
+                AudioAlerts.Speak($"Hard boundary violation. Descend required in {_geofence.Failsafe.HardBoundaryKillDelaySec} seconds.",
                     component: "boundary");
             }
         }

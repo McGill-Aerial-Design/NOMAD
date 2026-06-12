@@ -251,7 +251,7 @@ namespace NOMAD.MissionPlanner
 
             if (e.BoundaryType == "hard" && _monitor?.KillCountdown != null)
             {
-                _lblCountdown.Text = $"KILL IN {_monitor.KillCountdown} SECONDS!";
+                _lblCountdown.Text = $"FORCED DESCENT IN {_monitor.KillCountdown} SECONDS!";
             }
         }
 

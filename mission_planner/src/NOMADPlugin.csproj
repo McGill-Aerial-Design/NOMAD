@@ -254,6 +254,7 @@
     <Compile Include="Notifications\NotificationService.cs" />
     <Compile Include="Notifications\NotificationService.Monitoring.cs" />
     <Compile Include="Notifications\NotificationPanel.cs" />
+    <Compile Include="Notifications\NotificationToast.cs" />
     <Compile Include="Notifications\AudioAlerts.cs" />
 
     <!-- Telemetry -->
