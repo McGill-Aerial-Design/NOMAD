@@ -78,6 +78,22 @@ pixi run profile-show        # show the active profile
 VS Code users get the same via **Run Task → "Profile: …"**. See
 [Configuration](configuration.md#profiles) for details.
 
+## Hardware required vs sim-safe
+
+Everything in the table below runs without a drone. Hardware is only needed
+for the device-side stack.
+
+| Works in sim (any OS)                              | Requires hardware              |
+|----------------------------------------------------|--------------------------------|
+| Edge Core API (`pixi run dev`)                     | ZED camera capture / VIO       |
+| Full test suite (`pixi run test`)                  | Jetson health (tegrastats)     |
+| ArduPilot SITL stack (`pixi run dev-up`)           | Real MAVLink over serial/radio |
+| SITL safety scenarios (`pixi run sitl-fence`, `sitl-scenario`) | Payload servos / relays |
+| Mission Planner plugin against sim (`pixi run build-plugin`) | RTSP video from the drone |
+
+Module and route code should stay testable in sim: keep hardware access behind
+services/adapters so decision logic runs (and is tested) without the drone.
+
 ## What next
 
 - [Architecture overview](architecture.md) — understand the system design

@@ -42,7 +42,7 @@
 			"version": "1.0.0",
 			"env": {
 				"SERENA_MEMORY_PATH": "${workspaceFolder}/.mcp/serena",
-				"SERENA_INDEX_PATHS": "edge_core,mission_planner/src,tailscale/src"
+				"SERENA_INDEX_PATHS": "edge_core,mission_planner/src,infra/tailscale"
 			}
 		},
 		"io.github.upstash/context7": {

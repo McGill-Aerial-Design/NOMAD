@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from edge_core.core import AppContext  # noqa: E402
 from edge_core.services.network_module import NetworkModule  # noqa: E402
-from infra.tailscale.src.tailscale_manager import TailscaleStatus, parse_status_json  # noqa: E402
+from infra.tailscale.tailscale_manager import TailscaleStatus, parse_status_json  # noqa: E402
 
 
 @pytest.fixture()
@@ -61,8 +61,8 @@ def test_parse_status_json_extracts_consumed_fields():
 
 def test_monitor_threads_start_and_stop(monkeypatch):
     # Keep the first poll from shelling out during the test.
-    import infra.tailscale.src.network_monitor as nm
-    import infra.tailscale.src.tailscale_manager as tm
+    import infra.tailscale.network_monitor as nm
+    import infra.tailscale.tailscale_manager as tm
 
     monkeypatch.setattr(nm, "_run", lambda cmd, timeout=10.0: (1, ""))
     monkeypatch.setattr(tm, "_run", lambda cmd, timeout=10.0: (127, ""))

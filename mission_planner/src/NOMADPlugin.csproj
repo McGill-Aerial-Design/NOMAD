@@ -140,14 +140,19 @@
   <ItemGroup>
     <!-- Plugin entry + shell -->
     <Compile Include="Plugin\NOMADPlugin.cs" />
+    <Compile Include="Plugin\NOMADPlugin.Startup.cs" />
+    <Compile Include="Plugin\NOMADPlugin.Screens.cs" />
     <Compile Include="Plugin\NOMADPlugin.VideoAndLink.cs" />
     <Compile Include="Plugin\NOMADMainScreen.cs" />
+    <Compile Include="Plugin\NOMADMainScreen.Layout.cs" />
+    <Compile Include="Plugin\NOMADMainScreen.Modules.cs" />
 
     <!-- Config -->
     <Compile Include="Config\NOMADConfig.cs" />
     <Compile Include="Config\NOMADConfig.Persistence.cs" />
     <Compile Include="Config\NOMADConfig.Spray.cs" />
     <Compile Include="Config\NOMADSettingsForm.cs" />
+    <Compile Include="Config\NOMADSettingsForm.Settings.cs" />
     <Compile Include="Config\NOMADSettingsForm.ConnectionTab.cs" />
     <Compile Include="Config\NOMADSettingsForm.VideoTab.cs" />
     <Compile Include="Config\NOMADSettingsForm.ServosTab.cs" />
@@ -165,6 +170,7 @@
 
     <!-- Top-level page views -->
     <Compile Include="Views\NOMADDashboardView.cs" />
+    <Compile Include="Views\NOMADDashboardView.Layout.cs" />
     <Compile Include="Views\NOMADHealthView.cs" />
     <Compile Include="Views\NOMADLinksView.cs" />
     <Compile Include="Views\NOMADTerminalView.cs" />
@@ -193,6 +199,7 @@
     <Compile Include="Panels\EkfSourceControlPanel.cs" />
     <Compile Include="Panels\JetsonHealthTab.cs" />
     <Compile Include="Panels\JetsonTerminalControl.cs" />
+    <Compile Include="Panels\JetsonTerminalControl.Commands.cs" />
 
     <!-- Connectivity (links / transport) -->
     <Compile Include="Connectivity\MAVLinkConnectionManager.cs" />
@@ -214,6 +221,7 @@
 
     <!-- Joystick input -->
     <Compile Include="Input\NomadJoystickService.cs" />
+    <Compile Include="Input\NomadJoystickService.Switches.cs" />
     <Compile Include="Input\SerialJoystickBridge.cs" />
 
     <!-- Payload -->
@@ -221,11 +229,13 @@
     <Compile Include="Payload\PayloadActions.cs" />
     <Compile Include="Payload\PayloadControlPanel.cs" />
     <Compile Include="Payload\PayloadControlPanel.Drop.cs" />
+    <Compile Include="Payload\PayloadControlPanel.Reels.cs" />
 
     <!-- Geofence / boundary -->
     <Compile Include="Geofence\BoundaryManager.cs" />
     <Compile Include="Geofence\GeofenceConfig.cs" />
     <Compile Include="Geofence\MapOverlayManager.cs" />
+    <Compile Include="Geofence\MapOverlayManager.Reflection.cs" />
     <Compile Include="Geofence\MapOverlayManager.GeoFenceExport.cs" />
     <Compile Include="Geofence\MPFenceUploader.cs" />
 
@@ -233,6 +243,7 @@
     <Compile Include="Media\EmbeddedVideoPlayer.cs" />
     <Compile Include="Media\EmbeddedVideoPlayer.UI.cs" />
     <Compile Include="Media\EmbeddedVideoPlayer.Playback.cs" />
+    <Compile Include="Media\EmbeddedVideoPlayer.Frames.cs" />
     <Compile Include="Media\SnapshotManager.cs" />
     <Compile Include="Media\BuildingViewer3D.cs" />
     <Compile Include="Media\BuildingViewer3D.UI.cs" />
@@ -265,6 +276,7 @@
     <Compile Include="SLAM3D\Rendering\TrajectoryRenderer.cs" />
     <Compile Include="SLAM3D\Rendering\DetectionRenderer.cs" />
     <Compile Include="SLAM3D\Rendering\VoxelMeshBuilder.cs" />
+    <Compile Include="SLAM3D\Rendering\VoxelMeshBuilder.Storage.cs" />
   </ItemGroup>
 
   <!-- Optional local references for LibVLCSharp managed assemblies (place DLLs in third_party/libvlc) -->

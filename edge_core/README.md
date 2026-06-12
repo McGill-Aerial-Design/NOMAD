@@ -7,20 +7,24 @@ on the drone, or hardware-free in sim mode on any machine.
 
 | Path | Purpose |
 |------|---------|
-| `main.py` | Entry point; boots the module registry and FastAPI server |
-| `api.py` | App factory, API-key auth middleware, app.state wiring |
+| `main.py` / `cli.py` / `runtime.py` | Entry point · argparse · run/cleanup/signal handling |
+| `api.py` | App factory only (`create_app`) |
+| `api_auth.py` / `api_cors.py` | API-key auth middleware + settings · CORS setup |
+| `api_state.py` / `api_route_registry.py` | `app.state` wiring · route registration |
 | `api_context.py` / `api_models.py` | Route DI context + Pydantic models |
+| `env.py` | Shared environment parsing helpers (`env_bool`, `env_secret`) |
 | `core/` | Module SDK: `NomadModule`, `ModuleRegistry`, `AppContext` (entry-point discovery) |
+| `safety/` | Safety-critical decision core (pure, 100% branch coverage enforced) |
+| `platform/` | Platform-specific workarounds (Jetson library preload) |
 | `services/state.py` | Thread-safe state manager singleton |
 | `services/mavlink/` | MAVLink package — `connection` (RX/telemetry), `commands` (TX), `module` (SDK wrapper) |
 | `services/health_monitor.py` | Jetson hardware monitoring (CPU/GPU/temp/mem/disk) |
 | `services/time_manager.py` | NTP/GPS time synchronization |
-| `services/video_stream_manager.py` | Video bridge / overlay / source switching |
+| `services/video_stream_manager.py` / `video_module.py` | Video bridge / overlay / source switching |
 | `services/payload_module.py` | Servo / relay payload module |
-| `services/operational_mode.py` | Operational mode state machine |
-| `services/ipc.py` | ZeroMQ IPC helpers for high-rate ROS data |
-| `services/geospatial.py` · `logging_service.py` | Coordinate conversions · mission logging |
-| `services/ros/` | ROS2-side helper nodes (e.g. video bridge) |
+| `services/network_module.py` | Tailscale / network status |
+| `services/geospatial.py` | Coordinate conversions |
+| `services/nav/` · `services/ros/` | Navigation helpers · ROS2-side helper nodes |
 | `api_routes/` | Route modules (system, services, terminal, streaming, vio, video_slam, isaac, calibration) |
 | `modules/` | Built-in capability modules (slam/isaac, payload/servo) |
 | `ros_http_bridge/` | ROS→Edge Core bridge package (runs inside the Isaac container) — see its own notes |
@@ -28,7 +32,8 @@ on the drone, or hardware-free in sim mode on any machine.
 The bridge package (`ros_http_bridge/`) splits the old monolith into `node.py`
 (the ROS2 node), `coordinate_math.py` (pure quaternion/NED helpers),
 `mesh_packer.py` (voxel serialization + background send), `mavlink_velocity.py`
-(direct `cmd_vel`→ArduPilot GUIDED velocity stream), and `main.py` (CLI).
+(direct `cmd_vel`→ArduPilot GUIDED velocity stream), `http_client.py`
+(keep-alive HTTP transport to Edge Core), and `main.py` (CLI).
 
 ## Quick start
 

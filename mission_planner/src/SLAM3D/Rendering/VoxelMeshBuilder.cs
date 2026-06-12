@@ -24,7 +24,7 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
     /// Thread-safe: data ingestion can happen on a background thread; rendering
     /// reads the latest vertex snapshot on the GL thread.
     /// </summary>
-    public class VoxelMeshBuilder
+    public partial class VoxelMeshBuilder
     {
         // ---- Configuration (operational defaults; relaxed in ParityMode) ----
         private int _maxPersistedVoxels = 5000;
@@ -95,10 +95,8 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
 
         // ---- Mesh rebuild tracking ----
         private bool _meshDirty;
-        private int _lastRenderedCount;
         private bool _pendingMeshUpdate;
         private long _lastMeshRebuildStamp = -1;
-        private DateTime _lastMeshRebuild = DateTime.MinValue;
 
         // ---- Background rebuild handoff ----
         // Face culling + vertex generation for thousands of voxels blocks the
@@ -110,7 +108,6 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
         private float[] _stagedVerts;
         private int[] _stagedIndices;
         private int _stagedIndexCount;
-        private int _stagedRenderedCount;
         private bool _hasStagedMesh;
 
         // Reused by the single background rebuild worker. The GL thread still
@@ -193,7 +190,6 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
                     _voxelVerts = _stagedVerts;
                     _voxelIndices = _stagedIndices;
                     _voxelIndexCount = _stagedIndexCount;
-                    _lastRenderedCount = _stagedRenderedCount;
                     _stagedVerts = null;
                     _stagedIndices = null;
                     _hasStagedMesh = false;
@@ -430,17 +426,14 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
             Dictionary<long, int> lastSeenCopy;
             double vs;
             float half;
-            int parityCount;
             int meshGenSnapshot;
             int voxelMaxAgeSnapshot;
             bool parityModeSnapshot;
             HashSet<long> occupancyLookup;
             lock (_meshLock)
             {
-                _lastMeshRebuild = DateTime.UtcNow;
                 _lastMeshRebuildStamp = Stopwatch.GetTimestamp();
                 _meshDirty = false;
-                parityCount = _persistedBlocks.Count;
 
                 snapshot = new KeyValuePair<long, uint>[_persistedBlocks.Count];
                 int idx = 0;
@@ -524,7 +517,6 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
                 _stagedVerts = finalVerts;
                 _stagedIndices = finalIndices;
                 _stagedIndexCount = finalCount;
-                _stagedRenderedCount = parityCount;
                 _hasStagedMesh = true;
             }
         }
@@ -553,193 +545,8 @@ namespace NOMAD.MissionPlanner.SLAM3D.Rendering
                 : (int)requestedCapacity;
         }
 
-        // ==================== Private: Gap Filling ====================
-
-        private void FillGaps()
-        {
-            var fills = new Dictionary<long, uint>();
-
-            foreach (var kvp in _persistedBlocks)
-            {
-                UnpackVoxelKey(kvp.Key, out int ix, out int iy, out int iz);
-                CheckAndFill(fills, ix, iy, iz, 1, 0, 0, kvp.Value);
-                CheckAndFill(fills, ix, iy, iz, 0, 1, 0, kvp.Value);
-                CheckAndFill(fills, ix, iy, iz, 0, 0, 1, kvp.Value);
-            }
-
-            foreach (var kvp in fills)
-            {
-                if (!_persistedBlocks.ContainsKey(kvp.Key))
-                    QueueForEviction(kvp.Key);
-                _persistedBlocks[kvp.Key] = kvp.Value;
-            }
-
-            if (_currentMeshMode == "block")
-                EvictOldVoxels();
-        }
-
-        private void CheckAndFill(Dictionary<long, uint> fills, int ix, int iy, int iz,
-            int dx, int dy, int dz, uint c1)
-        {
-            int nx = ix + dx, ny = iy + dy, nz = iz + dz;
-            long nk = PackVoxelKey(nx, ny, nz);
-            if (_persistedBlocks.ContainsKey(nk) || fills.ContainsKey(nk)) return;
-
-            int fx = ix + dx * 2, fy = iy + dy * 2, fz = iz + dz * 2;
-            long fk = PackVoxelKey(fx, fy, fz);
-            uint c2;
-            if (!_persistedBlocks.TryGetValue(fk, out c2)) return;
-
-            if (c1 == uint.MaxValue) c1 = c2;
-            if (c2 == uint.MaxValue) c2 = c1;
-            uint r = (((c1 >> 16) & 0xFF) + ((c2 >> 16) & 0xFF)) / 2;
-            uint g = (((c1 >> 8) & 0xFF) + ((c2 >> 8) & 0xFF)) / 2;
-            uint b = ((c1 & 0xFF) + (c2 & 0xFF)) / 2;
-            fills[nk] = (r << 16) | (g << 8) | b;
-        }
-
-        // ==================== Private: Eviction / Expiration ====================
-
-        private void EvictOldVoxels()
-        {
-            if (_parityMode) return; // Parity mode: never cap retention.
-            while (_persistedBlocks.Count > _maxPersistedVoxels && _voxelInsertionOrder.Count > 0)
-            {
-                long key = _voxelInsertionOrder.Dequeue();
-                _queuedForEviction.Remove(key);
-                if (_persistedBlocks.Remove(key))
-                {
-                    _voxelLastSeen.Remove(key);
-                    _meshDirty = true;
-                }
-            }
-        }
-
-        private void ExpireOldVoxels()
-        {
-            if (_parityMode) return; // Parity mode: never age voxels out.
-            int cutoff = _meshGeneration - _voxelMaxAge;
-            if (cutoff < 0) return;
-
-            var expired = new List<long>();
-            foreach (var kvp in _voxelLastSeen)
-            {
-                if (kvp.Value < cutoff)
-                    expired.Add(kvp.Key);
-            }
-
-            bool compactQueue = false;
-            foreach (var key in expired)
-            {
-                _voxelLastSeen.Remove(key);
-                if (_persistedBlocks.Remove(key))
-                {
-                    if (_queuedForEviction.Remove(key))
-                        compactQueue = true;
-                    _meshDirty = true;
-                }
-            }
-
-            if (compactQueue && _voxelInsertionOrder.Count > 0)
-            {
-                var rebuilt = new Queue<long>(_voxelInsertionOrder.Count);
-                while (_voxelInsertionOrder.Count > 0)
-                {
-                    long queued = _voxelInsertionOrder.Dequeue();
-                    if (_queuedForEviction.Contains(queued))
-                        rebuilt.Enqueue(queued);
-                }
-                _voxelInsertionOrder = rebuilt;
-            }
-        }
-
-        // ==================== Private: Key Helpers ====================
-
-        private static long PackVoxelKey(int ix, int iy, int iz)
-        {
-            return ((long)(ix + 32768) << 32) | ((long)(iy + 32768) << 16) | (long)(iz + 32768);
-        }
-
-        private static void UnpackVoxelKey(long key, out int ix, out int iy, out int iz)
-        {
-            iz = (int)((key & 0xFFFF) - 32768);
-            iy = (int)(((key >> 16) & 0xFFFF) - 32768);
-            ix = (int)(((key >> 32) & 0xFFFF) - 32768);
-        }
-
-        // ==================== Private: Eviction Queue Helpers ====================
-
-        private void QueueForEviction(long key)
-        {
-            // Parity mode disables both EvictOldVoxels and ExpireOldVoxels, so any
-            // keys queued here would never be drained -- _voxelInsertionOrder would
-            // grow unbounded for the duration of a parity validation run.
-            if (_parityMode) return;
-            if (_queuedForEviction.Add(key))
-                _voxelInsertionOrder.Enqueue(key);
-        }
-
-        private void UnqueueForEviction(long key)
-        {
-            if (!_queuedForEviction.Remove(key) || _voxelInsertionOrder.Count == 0)
-                return;
-            var rebuilt = new Queue<long>(_voxelInsertionOrder.Count);
-            while (_voxelInsertionOrder.Count > 0)
-            {
-                long queued = _voxelInsertionOrder.Dequeue();
-                if (queued != key)
-                    rebuilt.Enqueue(queued);
-            }
-            _voxelInsertionOrder = rebuilt;
-        }
-
-        private void ClearInternal()
-        {
-            _persistedBlocks.Clear();
-            _voxelInsertionOrder.Clear();
-            _queuedForEviction.Clear();
-            _voxelLastSeen.Clear();
-            _voxelVerts = null;
-            _voxelIndices = null;
-            _voxelIndexCount = 0;
-            _meshDirty = false;
-            _pendingMeshUpdate = false;
-            _lastRenderedCount = 0;
-        }
-
-        private void CullOutsideFocusSphere()
-        {
-            double radiusSq = _focusRadiusM * _focusRadiusM;
-            var toRemove = new List<long>();
-
-            foreach (var kvp in _persistedBlocks)
-            {
-                UnpackVoxelKey(kvp.Key, out int ix, out int iy, out int iz);
-                float cx = (float)((ix + 0.5) * _currentVoxelSize);
-                float cy = (float)((iy + 0.5) * _currentVoxelSize);
-                float cz = (float)((iz + 0.5) * _currentVoxelSize);
-
-                double dx = cx - _focusCenterX;
-                double dy = cy - _focusCenterY;
-                double dz = cz - _focusCenterZ;
-                if ((dx * dx) + (dy * dy) + (dz * dz) > radiusSq)
-                {
-                    toRemove.Add(kvp.Key);
-                }
-            }
-
-            if (toRemove.Count == 0)
-                return;
-
-            foreach (var key in toRemove)
-            {
-                _persistedBlocks.Remove(key);
-                _voxelLastSeen.Remove(key);
-                UnqueueForEviction(key);
-            }
-
-            _meshDirty = true;
-        }
+        // Eviction, expiration, key packing, and clearing live in
+        // VoxelMeshBuilder.Storage.cs.
 
         private static long ElapsedMsSince(long startStamp)
         {

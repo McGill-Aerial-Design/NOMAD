@@ -14,6 +14,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from ..env import parse_bool
+
 
 class AppContext:
     """Holds the FastAPI app, a named service registry, and config access."""
@@ -60,7 +62,4 @@ class AppContext:
 
     def is_enabled(self, key: str, default: bool = False) -> bool:
         """Interpret a ``NOMAD_*`` flag as a boolean (true/1/yes/on)."""
-        raw = self._config.get(key)
-        if raw is None:
-            return default
-        return raw.strip().lower() in ("1", "true", "yes", "on")
+        return parse_bool(self._config.get(key), default)

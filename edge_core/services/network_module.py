@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 
 from edge_core.core import AppContext, BaseModule, ModuleMetadata
-from infra.tailscale.src import NetworkMonitor, TailscaleManager
+from infra.tailscale import NetworkMonitor, TailscaleManager
 
 logger = logging.getLogger("edge_core.services.network")
 

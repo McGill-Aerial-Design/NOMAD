@@ -19,7 +19,7 @@
     // Python analysis
     "python.analysis.extraPaths": [
         "${workspaceFolder}/edge_core",
-        "${workspaceFolder}/infra/tailscale/src"
+        "${workspaceFolder}/infra/tailscale"
     ],
     "python.analysis.typeCheckingMode": "basic",
     // Ruff: lint + format on save (matches pixi.toml tasks)

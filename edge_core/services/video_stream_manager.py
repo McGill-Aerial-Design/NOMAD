@@ -29,6 +29,8 @@ from urllib.error import URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from edge_core.env import env_secret
+
 logger = logging.getLogger("edge_core.video_stream_manager")
 
 _DOCKER_HOST_IP = os.environ.get("NOMAD_DOCKER_HOST_IP", "172.17.0.1")
@@ -90,8 +92,8 @@ class VideoStreamManager:
         self.height = height
         self.fps = fps
         self.bitrate = bitrate
-        self._edge_core_api_key = (os.environ.get("NOMAD_API_KEY") or "").strip()
-        self._edge_core_internal_token = (os.environ.get("NOMAD_INTERNAL_TOKEN") or "").strip()
+        self._edge_core_api_key = env_secret("NOMAD_API_KEY") or ""
+        self._edge_core_internal_token = env_secret("NOMAD_INTERNAL_TOKEN") or ""
 
         self._lock = threading.RLock()
         self._watchdog_stop = threading.Event()

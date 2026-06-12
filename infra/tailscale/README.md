@@ -1,37 +1,29 @@
 # NOMAD Tailscale Integration
 
-This folder contains all Tailscale VPN configuration and code for secure 4G/LTE communication between the Jetson Orin Nano (drone) and Ground Station.
+Tailscale VPN configuration and code for secure 4G/LTE communication between
+the Jetson (drone) and the Ground Station: MAVLink telemetry, the Edge Core
+HTTP API, SSH, and RTSP video all ride the same WireGuard tunnel.
 
-## 📂 Folder Structure
+## Layout
 
 ```
 tailscale/
-├── README.md           # This file
-├── SETUP.md            # Installation & configuration guide
+├── README.md               # This file (architecture + ports)
+├── SETUP.md                # Installation & configuration guide
 ├── scripts/
-│   ├── setup.sh        # Automated Jetson setup
-│   └── watchdog.sh     # Connection watchdog service
+│   ├── setup.sh            # Automated Jetson setup (install + auth + watchdog)
+│   └── watchdog.sh         # Connection watchdog (restarts tailscaled on loss)
 ├── config/
-│   └── tailscale-watchdog.service  # Systemd service file
-└── src/
-    ├── tailscale_manager.py    # Python Tailscale manager
-    └── network_monitor.py      # Network/4G monitoring
+│   └── tailscale-watchdog.service  # Systemd unit for watchdog.sh
+├── network_monitor.py      # LTE/connectivity monitoring (used by edge_core network module)
+└── tailscale_manager.py    # Tailscale status polling (used by edge_core network module)
 ```
 
-## 🔗 Quick Links
+The Python modules are imported by `edge_core/services/network_module.py`
+(`from infra.tailscale import NetworkMonitor, TailscaleManager`), are
+mypy-checked, and are covered by `tests/test_network_module.py`.
 
-- [Setup Guide](SETUP.md) - How to install and configure Tailscale
-
-## 🎯 Purpose
-
-Tailscale provides:
-- **Secure VPN tunnel** over 4G/LTE for beyond-WiFi-range operation
-- **MAVLink telemetry** streaming to Mission Planner
-- **HTTP API access** to Jetson Edge Core
-- **SSH access** for remote debugging
-- **RTSP video streaming** from ZED camera
-
-## 🏗️ Architecture
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -67,22 +59,12 @@ Tailscale provides:
 
 ```bash
 # On Jetson
-cd tailscale/scripts
-sudo ./setup.sh --authkey <YOUR_KEY>
+sudo infra/tailscale/scripts/setup.sh --authkey <YOUR_KEY>
 
 # Verify
 tailscale status
 tailscale ip -4
 ```
 
-## Status
-
-| Component | Status |
-|-----------|--------|
-| Setup Documentation | Complete |
-| MAVLink Router Config | Complete |
-| Python Manager | Pending |
-| Network Monitor | Pending |
-| Watchdog Script | Pending |
-| API Endpoints | Pending |
-| Mission Planner UI | Pending |
+See [SETUP.md](SETUP.md) for ground-station setup, MAVLink router integration,
+security hardening, and troubleshooting.

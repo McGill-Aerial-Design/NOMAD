@@ -74,6 +74,7 @@ sitl-fence = """docker run --rm --network nomad-dev_default -v $PWD:/work -w /wo
 lint = "ruff check ."
 fmt = "ruff format ."
 fmt-check = "ruff format --check ."
+line-report = "python scripts/dev/line_report.py --fail-over-file-limit"
 # Extra rule sets on the SC core + its adapters (rearchitecture plan §6):
 # bugbear, bandit, logging-format, Ruff-specific. The rest of the tree rides
 # the standard `lint` selection.
