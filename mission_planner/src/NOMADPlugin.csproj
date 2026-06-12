@@ -243,6 +243,7 @@
     <Compile Include="Media\EmbeddedVideoPlayer.cs" />
     <Compile Include="Media\EmbeddedVideoPlayer.UI.cs" />
     <Compile Include="Media\EmbeddedVideoPlayer.Playback.cs" />
+    <Compile Include="Media\EmbeddedVideoPlayer.Frames.cs" />
     <Compile Include="Media\SnapshotManager.cs" />
     <Compile Include="Media\BuildingViewer3D.cs" />
     <Compile Include="Media\BuildingViewer3D.UI.cs" />
