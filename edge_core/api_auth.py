@@ -106,7 +106,7 @@ def client_host(request: Request) -> str:
 
 
 def has_valid_api_key(request: Request, api_key: str) -> bool:
-    provided_key = request.headers.get("X-API-Key")
+    provided_key = request.headers.get("X-API-Key") or ""
     return bool(provided_key) and hmac.compare_digest(provided_key, api_key)
 
 
@@ -174,7 +174,9 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
             if self.settings.is_command_path(request_path):
                 self.audit_command(request, request_path, "internal-token")
             return await call_next(request)
-        if not has_valid_api_key(request, self.settings.api_key):
+        # dispatch() only routes here when api_key is configured; the fallback
+        # keeps mypy satisfied without an assert in the hot path.
+        if not has_valid_api_key(request, self.settings.api_key or ""):
             if self.settings.is_command_path(request_path):
                 self.logger.warning(
                     "SC command refused (bad/missing key): %s %s from %s",
