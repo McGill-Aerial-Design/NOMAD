@@ -47,12 +47,12 @@ default = { features = ["dev"] }
 dev = "python -m edge_core.main --sim --host 0.0.0.0 --port 8000"
 # Coverage floor is a ratchet set just below the current level so coverage can
 # only trend up; raise it as more of the codebase gets tested.
-test = "pytest --cov=edge_core --cov=infra/tailscale --cov-report=term-missing --cov-fail-under=25"
+test = "pytest --cov=edge_core --cov=infra/tailscale --cov-report=term-missing --cov-fail-under=45"
 # Plain pytest without the coverage gate (handy for running a single test file).
 test-fast = "pytest"
 # Safety-critical core gate (rearchitecture plan §4.5): the edge_core/safety/
 # package must hold 100% BRANCH coverage. Asymmetric rigor - the rest of the
-# tree rides the modest 25% floor above; the SC core does not get to regress.
+# tree rides the modest 45% floor above; the SC core does not get to regress.
 cov-safety = "pytest tests/test_safety_envelope.py tests/test_safety_gates.py tests/test_safety_limits.py tests/test_safety_watchdog.py tests/test_safety_geofence.py tests/test_safety_payload.py --cov=edge_core.safety --cov-branch --cov-report=term-missing --cov-fail-under=100"
 
 # Hardware-free dev stack (Docker): Edge Core + ArduPilot SITL, no Isaac Sim.
