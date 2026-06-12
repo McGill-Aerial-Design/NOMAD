@@ -77,7 +77,8 @@ isaac = "edge_core.api_routes.isaac:IsaacModule"
 calibration = "edge_core.api_routes.calibration:CalibrationModule"
 
 [tool.setuptools.packages.find]
-include = ["edge_core*", "infra.tailscale*", "infra.transport*"]
+# infra.transport holds only configs (no Python), so it is not packaged.
+include = ["edge_core*", "infra.tailscale*"]
 exclude = ["tests*", "scripts*", "docs*", "build*", "examples*"]
 
 [tool.ruff]

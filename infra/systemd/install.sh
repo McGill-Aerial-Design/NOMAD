@@ -105,6 +105,10 @@ else
 fi
 rm -f "$SUDOERS_TMP"
 
+# Log rotation for ~/nomad_logs (idempotent, like the units below).
+install -m 0644 "$REPO_ROOT/infra/logrotate.conf" /etc/logrotate.d/nomad
+echo "[install] installed /etc/logrotate.d/nomad"
+
 echo "[install] rendering + installing units to $DEST"
 for u in "${UNITS[@]}"; do
     sed -e "s#__NOMAD_ROOT__#$NOMAD_ROOT#g" \

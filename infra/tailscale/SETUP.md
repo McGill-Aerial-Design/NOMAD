@@ -12,29 +12,20 @@ Tailscale creates a secure WireGuard VPN mesh network that allows the Ground Sta
 - SSH access for remote debugging and code deployment
 - RTSP video streaming (primary and gimbal feeds)
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                       Tailscale Cloud                        │
-│                    (Coordination Server)                     │
-└─────────────────────────────────────────────────────────────┘
-                           │
-           ┌───────────────┴───────────────┐
-           │                               │
-    ┌──────▼──────┐               ┌───────▼──────┐
-    │   Jetson    │               │    Ground    │
-    │ Orin Nano   │◄─────────────►│   Station    │
-    │ (on drone)  │  Encrypted    │   (Laptop)   │
-    │             │  WireGuard    │              │
-    │ 4G/LTE USB  │    Tunnel     │  WiFi/LTE    │
-    └─────────────┘               └──────────────┘
-    100.x.x.x                     100.y.y.y
-```
+See [README.md](README.md) for the architecture diagram and port table.
 
 ## Installation
 
 ### 1. Jetson Orin Nano Setup
+
+**Automated (recommended):** `scripts/setup.sh` installs Tailscale,
+authenticates, and installs the connection watchdog service in one step:
+
+```bash
+sudo infra/tailscale/scripts/setup.sh --authkey <YOUR_AUTH_KEY>
+```
+
+The manual steps below are the fallback if you need to do it by hand.
 
 **Prerequisites:**
 - Ubuntu 20.04+ (JetPack SDK)
@@ -114,7 +105,7 @@ curl --interface tailscale0 https://www.google.com
    ping <jetson-tailscale-ip>
    ```
 
-**Linux:**
+**Linux (including a Raspberry Pi ground station):**
 
 ```bash
 # Install Tailscale
@@ -195,16 +186,16 @@ http://<jetson-tailscale-ip>:8000/docs
 
 ```bash
 # From Ground Station
-ssh no<jetson-user>@<jetson-tailscale-ip>
+ssh <jetson-user>@<jetson-tailscale-ip>
 
 # Example:
-ssh no<jetson-user>@100.100.10.5
+ssh <jetson-user>@100.100.10.5
 ```
 
 **Use Cases:**
-- View logs: `journalctl -u nomad -f`
+- View logs: `journalctl -u nomad-edge-core -f`
 - Deploy code: `git pull`
-- Restart services: `sudo systemctl restart nomad`
+- Restart services: `nomad restart all` (or `sudo systemctl restart nomad.target`)
 - Monitor resources: `jtop`
 
 ### RTSP Video Streaming
@@ -347,7 +338,7 @@ tailscale status | grep "relay"
 **Verify Service is Running:**
 ```bash
 # On Jetson
-sudo systemctl status nomad
+sudo systemctl status nomad-edge-core
 curl http://127.0.0.1:8000/health
 ```
 
@@ -423,46 +414,13 @@ Tailscale automatically handles:
 
 ### Connection Monitoring
 
-**Add Watchdog Script:**
+The repo ships a connection watchdog — [scripts/watchdog.sh](scripts/watchdog.sh)
+run by [config/tailscale-watchdog.service](config/tailscale-watchdog.service).
+`scripts/setup.sh` installs and enables it; check it with:
 
 ```bash
-#!/bin/bash
-# /home/nomad/scripts/tailscale_watchdog.sh
-
-while true; do
-    if ! tailscale status &> /dev/null; then
-        echo "Tailscale down, restarting..."
-        sudo systemctl restart tailscaled
-        sleep 10
-        sudo tailscale up --hostname=nomad-jetson
-    fi
-    sleep 30
-done
-```
-
-**Run as Systemd Service:**
-
-Create `/etc/systemd/system/tailscale-watchdog.service`:
-
-```ini
-[Unit]
-Description=Tailscale Connection Watchdog
-After=tailscaled.service
-
-[Service]
-Type=simple
-User=nomad
-ExecStart=/home/nomad/scripts/tailscale_watchdog.sh
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable:
-```bash
-sudo systemctl enable tailscale-watchdog
-sudo systemctl start tailscale-watchdog
+sudo systemctl status tailscale-watchdog
+sudo journalctl -u tailscale-watchdog -f
 ```
 
 ---
