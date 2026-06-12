@@ -142,6 +142,8 @@
     <Compile Include="Plugin\NOMADPlugin.cs" />
     <Compile Include="Plugin\NOMADPlugin.VideoAndLink.cs" />
     <Compile Include="Plugin\NOMADMainScreen.cs" />
+    <Compile Include="Plugin\NOMADMainScreen.Layout.cs" />
+    <Compile Include="Plugin\NOMADMainScreen.Modules.cs" />
 
     <!-- Config -->
     <Compile Include="Config\NOMADConfig.cs" />
