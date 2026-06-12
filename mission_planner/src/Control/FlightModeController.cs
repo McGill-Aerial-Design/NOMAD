@@ -53,6 +53,77 @@ namespace NOMAD.MissionPlanner
             }
         }
 
+        /// <summary>
+        /// Switch to GUIDED and fly to the given position at the given relative
+        /// altitude (meters AGL). Used by the soft-boundary "return to boundary"
+        /// action. Returns true if the goto was dispatched.
+        /// </summary>
+        public static bool GuidedGoto(double lat, double lng, double altRelM)
+        {
+            var comPort = MainV2.comPort;
+            if (comPort == null)
+            {
+                Log.Warn("GuidedGoto: not connected.");
+                return false;
+            }
+            try
+            {
+                var method = comPort.GetType()
+                    .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                    .Where(m => m.Name == "setGuidedModeWP" && m.GetParameters().Length >= 1)
+                    .OrderBy(m => m.GetParameters().Length)
+                    .FirstOrDefault();
+                if (method == null)
+                {
+                    Log.Warn("GuidedGoto: setGuidedModeWP not found on MAVLinkInterface.");
+                    return false;
+                }
+
+                // Build the Locationwp argument via reflection (struct layout is
+                // stable: lat/lng doubles, alt float, id = MAV_CMD_NAV_WAYPOINT).
+                var pars = method.GetParameters();
+                var wpType = pars[0].ParameterType;
+                object wp = Activator.CreateInstance(wpType);
+                SetMember(wpType, wp, "lat", lat);
+                SetMember(wpType, wp, "lng", lng);
+                SetMember(wpType, wp, "alt", (float)altRelM);
+                SetMember(wpType, wp, "id", (ushort)16); // MAV_CMD_NAV_WAYPOINT
+
+                // MP's setGuidedModeWP only sends the target; ensure GUIDED first.
+                if (!TrySetMode(comPort, "GUIDED")) return false;
+
+                var args = new object[pars.Length];
+                args[0] = wp;
+                for (int i = 1; i < pars.Length; i++)
+                {
+                    args[i] = pars[i].HasDefaultValue
+                        ? pars[i].DefaultValue
+                        : (pars[i].ParameterType.IsValueType
+                            ? Activator.CreateInstance(pars[i].ParameterType) : null);
+                }
+                method.Invoke(comPort, args);
+                return true;
+            }
+            catch (TargetInvocationException tie)
+            {
+                Log.Error($"GuidedGoto threw: {tie.InnerException?.Message ?? tie.Message}");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"GuidedGoto error: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static void SetMember(Type type, object boxed, string name, object value)
+        {
+            var f = type.GetField(name, BindingFlags.Public | BindingFlags.Instance);
+            if (f != null) { f.SetValue(boxed, Convert.ChangeType(value, f.FieldType)); return; }
+            var p = type.GetProperty(name, BindingFlags.Public | BindingFlags.Instance);
+            if (p != null && p.CanWrite) p.SetValue(boxed, Convert.ChangeType(value, p.PropertyType));
+        }
+
         // ============================================================
         // Reflection helpers (mirror MPFenceUploader's pattern)
         // ============================================================

@@ -56,9 +56,11 @@ test-fast = "pytest"
 cov-safety = "pytest tests/test_safety_envelope.py tests/test_safety_gates.py tests/test_safety_limits.py tests/test_safety_watchdog.py tests/test_safety_geofence.py tests/test_safety_payload.py --cov=edge_core.safety --cov-branch --cov-report=term-missing --cov-fail-under=100"
 
 # Hardware-free dev stack (Docker): Edge Core + ArduPilot SITL, no Isaac Sim.
-#   pixi run dev-up      # build + start edge_core and SITL (detached)
+#   pixi run dev-up      # build + start edge_core, SITL, and the MP bridge (detached)
 #   pixi run test-api    # exercise every REST endpoint against it
 #   pixi run dev-down    # stop and remove
+# Mission Planner connects to SITL via TCP 127.0.0.1:5762 (the mp_bridge
+# socat relay — 5760 is single-client and held by the in-container MAVProxy).
 dev-build = "docker build -f docker/Dockerfile.dev -t nomad-edge-dev:latest ."
 dev-up = "docker compose -f docker/docker-compose.dev.yml --profile sitl up -d --build"
 dev-down = "docker compose -f docker/docker-compose.dev.yml --profile sitl down"
