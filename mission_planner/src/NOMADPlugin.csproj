@@ -234,6 +234,7 @@
     <Compile Include="Geofence\BoundaryManager.cs" />
     <Compile Include="Geofence\GeofenceConfig.cs" />
     <Compile Include="Geofence\MapOverlayManager.cs" />
+    <Compile Include="Geofence\MapOverlayManager.Reflection.cs" />
     <Compile Include="Geofence\MapOverlayManager.GeoFenceExport.cs" />
     <Compile Include="Geofence\MPFenceUploader.cs" />
 
