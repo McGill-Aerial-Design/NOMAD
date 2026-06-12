@@ -227,6 +227,7 @@
     <Compile Include="Payload\PayloadActions.cs" />
     <Compile Include="Payload\PayloadControlPanel.cs" />
     <Compile Include="Payload\PayloadControlPanel.Drop.cs" />
+    <Compile Include="Payload\PayloadControlPanel.Reels.cs" />
 
     <!-- Geofence / boundary -->
     <Compile Include="Geofence\BoundaryManager.cs" />
