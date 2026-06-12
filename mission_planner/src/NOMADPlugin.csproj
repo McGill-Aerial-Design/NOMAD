@@ -221,6 +221,7 @@
 
     <!-- Joystick input -->
     <Compile Include="Input\NomadJoystickService.cs" />
+    <Compile Include="Input\NomadJoystickService.Switches.cs" />
     <Compile Include="Input\SerialJoystickBridge.cs" />
 
     <!-- Payload -->
