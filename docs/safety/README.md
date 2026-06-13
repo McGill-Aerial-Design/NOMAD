@@ -73,6 +73,9 @@ SITL scenario
 f69a137, PASS) and now gates nightly in
 [../../.github/workflows/sitl.yml](../../.github/workflows/sitl.yml) (H-05).
 SR-FEN-01 (FC-side fence upload) is verified manually before flight — inherent to
-it being a flight-controller function. (The C# tier still carries its own GAPs —
-see [partition.md](partition.md): payload release logic mixed with panel chrome,
-and the removed GCS-side RTH/landing state machine.)
+it being a flight-controller function. The C# payload-release interlock GAP is now
+closed — the drop / momentary-relay arm→confirm decision was extracted into the
+pure, unit-tested `PayloadReleaseInterlock` (see [partition.md](partition.md)). The
+one C# tier GAP that remains is the deliberately-deferred GCS-side RTH/landing
+state machine (removed; ArduPilot's own RTL/LAND is the intentional interim
+mechanism).

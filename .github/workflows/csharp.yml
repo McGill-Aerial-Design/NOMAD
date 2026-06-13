@@ -41,6 +41,25 @@ defaults:
     shell: pwsh
 
 jobs:
+  plugin-tests:
+    name: test plugin SC logic (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The plugin's pure SC logic is tested with standalone Roslyn (csc)
+      # assertion harnesses — no .NET SDK, NuGet, or staged Mission Planner
+      # needed. setup-msbuild puts MSBuild on PATH; the scripts locate csc next
+      # to it. This matches the repo's existing test-plugin-* idiom.
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v3
+
+      - name: Payload-release interlock tests (SR-PAY-03)
+        run: pwsh -File scripts/build/test_plugin_interlock.ps1
+
+      - name: Geofence geometry tests
+        run: pwsh -File scripts/build/test_plugin_geometry.ps1
+
   plugin-build:
     name: build MP plugin (Windows)
     runs-on: windows-latest
