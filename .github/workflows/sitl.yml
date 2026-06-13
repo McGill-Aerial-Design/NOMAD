@@ -1,0 +1,75 @@
+name: sitl
+
+# End-to-end loop-closure against a real ArduPilot SITL vehicle for the
+# safety-critical velocity and geofence core (the §4.5 verification the safety
+# case calls for — see tests/sitl/README.md and docs/safety/hazards.md).
+#
+# This is deliberately NOT on every push/PR: it builds ArduPilot from source
+# and drives a live autopilot, so it runs nightly and on demand. The fast unit
+# + SC-coverage gates in test.yml protect every PR; this proves the same
+# mitigations close the loop on an actual flight controller.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 7 * * *" # 07:00 UTC nightly
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sitl-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sitl:
+    name: SITL loop closure (velocity + geofence)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # The ArduPilot SITL image (Copter-4.6.3, built from source) is not
+      # published anywhere, so build it here. The build is heavy but cached
+      # across runs via the GitHub Actions cache, so steady-state runs restore
+      # it instead of recompiling ArduPilot.
+      - name: Build ArduPilot SITL image
+        uses: docker/build-push-action@v6
+        with:
+          context: https://github.com/radarku/ardupilot-sitl-docker.git
+          build-args: COPTER_TAG=Copter-4.6.3
+          push: false
+          load: true
+          tags: nomad-sitl:copter-4.6.3
+          cache-from: type=gha,scope=sitl
+          cache-to: type=gha,mode=max,scope=sitl
+
+      - uses: prefix-dev/setup-pixi@v0.8.8
+        with:
+          cache: true
+
+      - name: Bring up the dev + SITL stack
+        run: pixi run dev-up
+
+      # ArduPilot needs ~20-30 s for EKF/GPS before it will arm. The scenarios
+      # also wait for heartbeat + a GPS fix internally, so this is just a head
+      # start to let the in-container MAVProxy open its TCP ports.
+      - name: Let SITL warm up
+        run: sleep 25
+
+      - name: Velocity loop-closure scenario (H-01..H-04, SR-VEL/LNK/VIO)
+        run: pixi run sitl-scenario
+
+      - name: Geofence containment scenario (H-05, SR-FEN-02)
+        run: pixi run sitl-fence
+
+      - name: SITL logs on failure
+        if: failure()
+        run: docker logs nomad-dev-sitl-1 2>&1 | tail -120 || true
+
+      - name: Tear down
+        if: always()
+        run: pixi run dev-down

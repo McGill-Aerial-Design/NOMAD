@@ -14,7 +14,7 @@
 
 [workspace]
 name = "nomad"
-version = "0.1.0"
+version = "0.2.0"
 description = "NOMAD drone edge + ground-control framework — dev/sim environment"
 channels = ["conda-forge"]
 platforms = ["linux-64", "win-64", "osx-64", "osx-arm64"]

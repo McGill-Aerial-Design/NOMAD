@@ -7,9 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-12
+
 ### Added
-- `vio` route module (`/api/vio/*`): VIO status, trajectory, and area-map
-  endpoints fed by the ROS-HTTP bridge.
+- `vio` route module (`/api/vio/*`): VIO status and trajectory endpoints fed
+  by the ROS-HTTP bridge.
 - Boot, VIO, auth-middleware, geospatial, coordinate-math, mesh-packer, and
   MAVLink-velocity unit tests; an api_reference ↔ OpenAPI drift guard.
 - Contract gates now verify HTTP verbs for Mission Planner and ROS bridge
