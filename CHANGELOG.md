@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-12
+
 ### Added
 - `vio` route module (`/api/vio/*`): VIO status and trajectory endpoints fed
   by the ROS-HTTP bridge.
