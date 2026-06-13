@@ -457,10 +457,12 @@ namespace NOMAD.MissionPlanner
                 {
                     byte payloadLen = _buf[1];
                     if (_buf[0] == STX_V1) _expected = 6 + payloadLen + 2; // header(6)+payload+crc(2)
-                    else
+                    else if (_len >= 3)
                     {
-                        // v2: header(10)+payload+crc(2)+signature(13 if MAVLINK_IFLAG_SIGNED bit 0 of incompat_flags)
-                        bool signed = _len >= 3 && (_buf[2] & 0x01) != 0;
+                        // v2: header(10)+payload+crc(2)+signature(13 if MAVLINK_IFLAG_SIGNED bit 0
+                        // of incompat_flags). incompat_flags is the third byte, so the frame length
+                        // cannot be decided at _len == 2 — _buf[2] still holds stale data there.
+                        bool signed = (_buf[2] & 0x01) != 0;
                         _expected = 10 + payloadLen + 2 + (signed ? 13 : 0);
                     }
                     if (_expected > MAX_FRAME) { Resync(); continue; }
