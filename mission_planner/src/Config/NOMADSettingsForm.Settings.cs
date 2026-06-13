@@ -155,7 +155,7 @@ namespace NOMAD.MissionPlanner
                                        Math.Min(_numKillLandSpeed.Maximum, Config.JoystickKillLandSpeedCmS));
 
             _chkSerialBridgeEnabled.Checked = Config.SerialJoystickEnabled;
-            _txtSerialBridgePort.Text = Config.SerialJoystickPort ?? "";
+            _cmbSerialBridgePort.Text = Config.SerialJoystickPort ?? "";
             _numSerialBridgeBaud.Value = Math.Max(_numSerialBridgeBaud.Minimum,
                 Math.Min(_numSerialBridgeBaud.Maximum, Config.SerialJoystickBaud));
             _txtSerialBridgePython.Text = Config.SerialJoystickPython ?? "python";
@@ -302,7 +302,7 @@ namespace NOMAD.MissionPlanner
             Config.JoystickKillLandSpeedCmS = (int)_numKillLandSpeed.Value;
 
             Config.SerialJoystickEnabled = _chkSerialBridgeEnabled.Checked;
-            Config.SerialJoystickPort = _txtSerialBridgePort.Text.Trim();
+            Config.SerialJoystickPort = _cmbSerialBridgePort.Text.Trim();
             Config.SerialJoystickBaud = (int)_numSerialBridgeBaud.Value;
             Config.SerialJoystickPython = _txtSerialBridgePython.Text.Trim();
             Config.SerialJoystickScriptPath = _txtSerialBridgeScript.Text.Trim();

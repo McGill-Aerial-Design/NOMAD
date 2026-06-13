@@ -55,9 +55,28 @@ services:
       MODEL: quad
       SPEEDUP: "1"
       # Stream MAVLink to the Edge Core container so telemetry actually flows.
-      SITL_UDP_OUTPUT_ADDRESS: "udp:edge_core:14550"
+      # The second --out (injected via the image's unquoted entrypoint var)
+      # feeds the NOMAD dual-link LTE leg on the host: 14560 is the plugin's
+      # default LTE MAVLink port (leave LTE remote host empty). The router
+      # then serves the merged stream to Mission Planner on UDP 14600
+      # (RouterLocalPort) — no TCP bridge involved.
+      SITL_UDP_OUTPUT_ADDRESS: "udp:edge_core:14550 --out udp:host.docker.internal:14560"
     ports:
-      - "5760:5760"   # TCP MAVLink (connect Mission Planner here)
+      - "5760:5760"   # TCP MAVLink (single-client; held by in-container MAVProxy)
     depends_on:
       - edge_core
+    restart: unless-stopped
+
+  # Relay SITL's extra serial port to the host for Mission Planner. Port 5760
+  # is single-client and already consumed by the MAVProxy that sim_vehicle.py
+  # runs inside the container, so a GCS on the host must use 5762 — which the
+  # sitl service does not publish. Connect Mission Planner to TCP 127.0.0.1:5762.
+  mp_bridge:
+    image: alpine/socat
+    profiles: ["sitl"]
+    command: tcp-listen:5762,fork,reuseaddr tcp:sitl:5762
+    ports:
+      - "5762:5762"
+    depends_on:
+      - sitl
     restart: unless-stopped

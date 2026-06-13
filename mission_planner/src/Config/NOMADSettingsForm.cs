@@ -115,7 +115,8 @@ namespace NOMAD.MissionPlanner
         private CheckBox _chkJoyAutoSelect;
         // Serial bridge sub-section
         private CheckBox _chkSerialBridgeEnabled;
-        private TextBox _txtSerialBridgePort, _txtSerialBridgePython, _txtSerialBridgeScript;
+        private ComboBox _cmbSerialBridgePort;
+        private TextBox _txtSerialBridgePython, _txtSerialBridgeScript;
         private NumericUpDown _numSerialBridgeBaud;
         private Label _lblSerialBridgeStatus;
         private System.Windows.Forms.Timer _serialBridgeStatusTimer;
@@ -192,7 +193,7 @@ namespace NOMAD.MissionPlanner
                 Location = new Point(10, buttonY),
                 Size = new Size(120, 35),
                 FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(0, 122, 204),
+                BackColor = NOMADTheme.ACCENT,
                 ForeColor = Color.White
             };
             _btnTest.Click += BtnTest_Click;

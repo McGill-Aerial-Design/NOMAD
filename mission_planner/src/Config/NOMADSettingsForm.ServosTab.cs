@@ -137,7 +137,7 @@ namespace NOMAD.MissionPlanner
                 Location = new Point(10, y),
                 Size = new Size(130, 30),
                 FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(0, 122, 204),
+                BackColor = NOMADTheme.ACCENT,
                 ForeColor = Color.White,
             };
             _btnPushSprayCalibration.Click += async (s, e) => await PushSprayCalibration();

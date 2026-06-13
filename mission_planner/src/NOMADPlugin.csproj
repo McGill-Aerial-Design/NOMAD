@@ -196,7 +196,6 @@
     <Compile Include="Panels\EnhancedHealthDashboard.UI.cs" />
     <Compile Include="Panels\EnhancedHealthDashboard.Monitoring.cs" />
     <Compile Include="Panels\EnhancedHealthDashboard.GraphAndAlerts.cs" />
-    <Compile Include="Panels\EkfSourceControlPanel.cs" />
     <Compile Include="Panels\JetsonHealthTab.cs" />
     <Compile Include="Panels\JetsonTerminalControl.cs" />
     <Compile Include="Panels\JetsonTerminalControl.Commands.cs" />
@@ -234,9 +233,12 @@
     <!-- Geofence / boundary -->
     <Compile Include="Geofence\BoundaryManager.cs" />
     <Compile Include="Geofence\GeofenceConfig.cs" />
+    <Compile Include="Geofence\GeofenceTypes.cs" />
+    <Compile Include="Geofence\GeoMath.cs" />
     <Compile Include="Geofence\MapOverlayManager.cs" />
     <Compile Include="Geofence\MapOverlayManager.Reflection.cs" />
     <Compile Include="Geofence\MapOverlayManager.GeoFenceExport.cs" />
+    <Compile Include="Geofence\MapOverlayManager.ZoneRendering.cs" />
     <Compile Include="Geofence\MPFenceUploader.cs" />
 
     <!-- Media (video / snapshots / 3D) -->
@@ -254,10 +256,12 @@
     <Compile Include="Notifications\NotificationService.cs" />
     <Compile Include="Notifications\NotificationService.Monitoring.cs" />
     <Compile Include="Notifications\NotificationPanel.cs" />
+    <Compile Include="Notifications\NotificationToast.cs" />
     <Compile Include="Notifications\AudioAlerts.cs" />
 
     <!-- Telemetry -->
     <Compile Include="Telemetry\TelemetryInjector.cs" />
+    <Compile Include="Telemetry\BatteryHealth.cs" />
 
     <!-- 3D SLAM visualization -->
     <Compile Include="SLAM3D\MathHelper.cs" />

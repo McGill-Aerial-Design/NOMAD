@@ -68,12 +68,17 @@ namespace NOMAD.MissionPlanner
         private int _nextBufferIndex;
         private int _frameCount;
 
+        private readonly bool _showControls;
+
         /// <summary>
-        /// Creates an embedded video player.
+        /// Creates an embedded video player. With showControls=false the player
+        /// is chrome-less (no buttons/topic/latency bar) and auto-plays the
+        /// default topic — used for the dashboard mini preview.
         /// </summary>
         public EmbeddedVideoPlayer(string title, string streamUrl, bool showControls = true, JetsonConnectionManager jetsonConnectionManager = null)
         {
             _streamUrl = streamUrl;
+            _showControls = showControls;
             ParseApiUrl(streamUrl);
             InitializeUI();
 
@@ -85,6 +90,11 @@ namespace NOMAD.MissionPlanner
                 }
 
                 await SyncOverlayStatusAsync();
+
+                if (!_showControls && !_isPlaying && !IsDisposed)
+                {
+                    StartStream();
+                }
             }, "EmbeddedVideoHandleCreated");
         }
 

@@ -47,18 +47,20 @@ default = { features = ["dev"] }
 dev = "python -m edge_core.main --sim --host 0.0.0.0 --port 8000"
 # Coverage floor is a ratchet set just below the current level so coverage can
 # only trend up; raise it as more of the codebase gets tested.
-test = "pytest --cov=edge_core --cov=infra/tailscale --cov-report=term-missing --cov-fail-under=25"
+test = "pytest --cov=edge_core --cov=infra/tailscale --cov-report=term-missing --cov-fail-under=45"
 # Plain pytest without the coverage gate (handy for running a single test file).
 test-fast = "pytest"
 # Safety-critical core gate (rearchitecture plan §4.5): the edge_core/safety/
 # package must hold 100% BRANCH coverage. Asymmetric rigor - the rest of the
-# tree rides the modest 25% floor above; the SC core does not get to regress.
+# tree rides the modest 45% floor above; the SC core does not get to regress.
 cov-safety = "pytest tests/test_safety_envelope.py tests/test_safety_gates.py tests/test_safety_limits.py tests/test_safety_watchdog.py tests/test_safety_geofence.py tests/test_safety_payload.py --cov=edge_core.safety --cov-branch --cov-report=term-missing --cov-fail-under=100"
 
 # Hardware-free dev stack (Docker): Edge Core + ArduPilot SITL, no Isaac Sim.
-#   pixi run dev-up      # build + start edge_core and SITL (detached)
+#   pixi run dev-up      # build + start edge_core, SITL, and the MP bridge (detached)
 #   pixi run test-api    # exercise every REST endpoint against it
 #   pixi run dev-down    # stop and remove
+# Mission Planner connects to SITL via TCP 127.0.0.1:5762 (the mp_bridge
+# socat relay — 5760 is single-client and held by the in-container MAVProxy).
 dev-build = "docker build -f docker/Dockerfile.dev -t nomad-edge-dev:latest ."
 dev-up = "docker compose -f docker/docker-compose.dev.yml --profile sitl up -d --build"
 dev-down = "docker compose -f docker/docker-compose.dev.yml --profile sitl down"
@@ -97,6 +99,11 @@ build-plugin = "powershell -ExecutionPolicy Bypass -File scripts/build/build_plu
 # Dead-code lint for the plugin (Windows only) — fails on unused fields/locals,
 # unreachable code, etc. (C# compiler diagnostics promoted to errors).
 lint-plugin = "powershell -ExecutionPolicy Bypass -File scripts/build/lint_plugin_deadcode.ps1"
+
+# Unit tests for the plugin's geofence geometry (Windows only) — compiles the
+# Mission Planner-free GeoMath/GeofenceTypes with VS's csc and runs assertions
+# on polygon inset, point-in-polygon, and nearest-inside-point math.
+test-plugin-geometry = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_geometry.ps1"
 
 # ==================== Configuration Profiles ====================
 # Manage config/nomad.env via named profiles stored in config/profiles/.

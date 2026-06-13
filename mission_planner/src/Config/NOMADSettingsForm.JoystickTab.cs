@@ -172,7 +172,7 @@ namespace NOMAD.MissionPlanner
             y += 36;
 
             // Serial bridge
-            AddSectionLabel(tab, "Serial Bridge (jotystick.py)", ref y);
+            AddSectionLabel(tab, "Serial Bridge (joystick.py)", ref y);
             AddLabel(tab, "Auto-launches a Python serial to virtual Xbox 360 bridge.",
                 10, y, Color.FromArgb(180, 180, 180));
             y += 18;
@@ -180,13 +180,31 @@ namespace NOMAD.MissionPlanner
                 10, y, Color.FromArgb(180, 180, 180));
             y += 24;
 
-            _chkSerialBridgeEnabled = AddCheckBox(tab, "Enable bridge (spawn jotystick.py)", 20, y, Color.LimeGreen);
+            _chkSerialBridgeEnabled = AddCheckBox(tab, "Enable headless serial bridge", 20, y, Color.LimeGreen);
             y += 26;
 
             AddLabel(tab, "Serial port:", 20, y);
-            _txtSerialBridgePort = AddTextBox(tab, 110, y, 80);
-            AddLabel(tab, "Baud:", 210, y);
-            _numSerialBridgeBaud = AddNumericUpDown(tab, 260, y, 80, 1200, 1000000, 115200);
+            _cmbSerialBridgePort = AddComboBox(
+                tab,
+                110,
+                y,
+                80,
+                System.IO.Ports.SerialPort.GetPortNames().OrderBy(port => port).ToArray());
+            _cmbSerialBridgePort.DropDownStyle = ComboBoxStyle.DropDown;
+            var btnRefreshPorts = new Button
+            {
+                Text = "Refresh",
+                Location = new Point(195, y),
+                Size = new Size(58, 23),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(70, 70, 75),
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 7),
+            };
+            btnRefreshPorts.Click += (s, e) => RefreshSerialPortList();
+            tab.Controls.Add(btnRefreshPorts);
+            AddLabel(tab, "Baud:", 265, y);
+            _numSerialBridgeBaud = AddNumericUpDown(tab, 310, y, 80, 1200, 1000000, 115200);
             y += 26;
 
             AddLabel(tab, "Python:", 20, y);
@@ -214,6 +232,15 @@ namespace NOMAD.MissionPlanner
             this.FormClosed   += (s, e) => { try { _serialBridgeStatusTimer?.Stop(); _serialBridgeStatusTimer?.Dispose(); } catch { } };
 
             return tab;
+        }
+
+        private void RefreshSerialPortList()
+        {
+            string selected = _cmbSerialBridgePort?.Text?.Trim();
+            var ports = System.IO.Ports.SerialPort.GetPortNames().OrderBy(port => port).ToArray();
+            _cmbSerialBridgePort.Items.Clear();
+            _cmbSerialBridgePort.Items.AddRange(ports);
+            _cmbSerialBridgePort.Text = selected;
         }
 
         private static readonly (string Id, string Label)[] SwitchActionMap =

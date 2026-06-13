@@ -55,6 +55,8 @@ namespace NOMAD.MissionPlanner
         private System.Timers.Timer _monitorTimer;
         private string _lastStatus = "inside";
         private DateTime? _hardViolationStart;
+        private bool _terminationCommanded;   // one descend command per violation episode
+        private bool _returnCommanded;        // one return-to-boundary goto per episode
         private bool _isDisposed;
 
         /// <summary>
@@ -168,7 +170,10 @@ namespace NOMAD.MissionPlanner
                 _lastStatus = status;
             }
 
-            // Update kill countdown for hard violations
+            // Update kill countdown for hard violations and enforce the
+            // configured action when it expires: "auto_kill" descends
+            // immediately, "warn_and_kill" descends when the delay runs out,
+            // "warn_only" never commands the vehicle.
             if (status == "hard_violation")
             {
                 if (_hardViolationStart.HasValue)
@@ -176,13 +181,23 @@ namespace NOMAD.MissionPlanner
                     var elapsed = (DateTime.Now - _hardViolationStart.Value).TotalSeconds;
                     var remaining = _geofence.Failsafe.HardBoundaryKillDelaySec - (int)elapsed;
                     KillCountdown = Math.Max(0, remaining);
+
+                    var hardAction = (_geofence.Failsafe.HardBoundaryAction ?? "warn_and_kill").ToLower();
+                    if (!_terminationCommanded && hardAction != "warn_only"
+                        && (hardAction == "auto_kill" || KillCountdown == 0))
+                    {
+                        _terminationCommanded = true;
+                        CommandForcedDescent(hardAction);
+                    }
                 }
             }
             else
             {
                 _hardViolationStart = null;
                 KillCountdown = null;
+                _terminationCommanded = false;
             }
+            if (status == "inside") _returnCommanded = false;
 
             CurrentStatus = status;
         }
@@ -242,11 +257,62 @@ namespace NOMAD.MissionPlanner
             // Fire event
             BoundaryViolation?.Invoke(this, args);
 
-            // Audio warning
-            if (_geofence.Failsafe.EnableAudioWarnings)
+            var softAction = (_geofence.Failsafe.SoftBoundaryAction ?? "warn_both").ToLower();
+
+            // Audio warning ("warn_visual" stays silent; everything else beeps)
+            if (_geofence.Failsafe.EnableAudioWarnings && softAction != "warn_visual")
             {
                 PlayWarningSound(false);
                 AudioAlerts.Speak("Approaching boundary. Turn around.", component: "boundary");
+            }
+
+            // "return_to_boundary": command GUIDED to the closest point just
+            // inside the violated boundary (not all the way to the return
+            // point) at the current altitude. Once per violation episode so
+            // repeated checks don't spam goto commands.
+            if (softAction == "return_to_boundary" && !_returnCommanded)
+            {
+                _returnCommanded = true;
+                var boundary = _geofence.SoftBoundary?.Vertices?.Count >= 3
+                    ? _geofence.SoftBoundary : _geofence.HardBoundary;
+                var target = GeoMath.NearestPointInside(boundary?.Vertices, position, ReturnInsideMarginMeters);
+                if (target == null)
+                {
+                    Log.Warn("return_to_boundary: no boundary polygon available");
+                    return;
+                }
+
+                double alt = Math.Max(5.0, altAgl); // never command a goto into the ground
+                bool ok = FlightModeController.GuidedGoto(target.Lat, target.Lon, alt);
+                Log.Warn($"Soft boundary action — GUIDED to nearest inside point {target.Lat:F6}, {target.Lon:F6} @ {alt:F0}m: {(ok ? "dispatched" : "FAILED")}");
+                if (ok) AudioAlerts.Speak("Returning inside boundary.", component: "boundary");
+            }
+        }
+
+        /// <summary>
+        /// How far past the boundary edge the return goto aims, so the vehicle
+        /// settles inside rather than hovering on the line.
+        /// (Geometry lives in GeoMath.NearestPointInside.)
+        /// </summary>
+        private const double ReturnInsideMarginMeters = 1.0;
+
+        /// <summary>
+        /// Hard-boundary enforcement: force LAND at the configured descent rate
+        /// (>= 2 m/s per CONOPS §4.5) once the violation delay expires.
+        /// </summary>
+        private void CommandForcedDescent(string hardAction)
+        {
+            int speedCmS = Math.Max(200, (int)Math.Round(_geofence.TerminationDescentRateMps * 100));
+            Log.Warn($"Hard boundary action '{hardAction}' — commanding LAND @ {speedCmS} cm/s descent");
+            bool ok = FlightModeController.EmergencyLand(speedCmS);
+            if (ok)
+            {
+                AudioAlerts.Speak("Forced descent engaged.", component: "boundary");
+            }
+            else
+            {
+                Log.Error("Forced descent dispatch FAILED — take manual action");
+                AudioAlerts.Speak("Forced descent failed. Take manual control.", component: "boundary");
             }
         }
 
@@ -263,7 +329,7 @@ namespace NOMAD.MissionPlanner
                 BoundaryName = _geofence.HardBoundary.Name,
                 DronePosition = position,
                 AltitudeAgl = altAgl,
-                RequiredAction = $"KILL REQUIRED within {_geofence.Failsafe.HardBoundaryKillDelaySec} seconds!",
+                RequiredAction = $"DESCEND REQUIRED within {_geofence.Failsafe.HardBoundaryKillDelaySec} seconds!",
                 Timestamp = DateTime.Now,
             };
 
@@ -285,7 +351,7 @@ namespace NOMAD.MissionPlanner
             if (_geofence.Failsafe.EnableAudioWarnings)
             {
                 PlayWarningSound(true);
-                AudioAlerts.Speak($"Hard boundary violation. Kill required in {_geofence.Failsafe.HardBoundaryKillDelaySec} seconds.",
+                AudioAlerts.Speak($"Hard boundary violation. Descend required in {_geofence.Failsafe.HardBoundaryKillDelaySec} seconds.",
                     component: "boundary");
             }
         }

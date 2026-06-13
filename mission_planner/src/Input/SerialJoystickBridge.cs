@@ -3,7 +3,7 @@
 // ============================================================
 // NOMAD Serial Joystick Bridge launcher
 // ============================================================
-// Spawns the jotystick.py serial → vgamepad/ViGEmBus process so a
+// Spawns the joystick.py serial → vgamepad/ViGEmBus process so a
 // RadioMaster (or similar) microcontroller flow shows up to Windows
 // as an Xbox 360 controller, which NomadJoystickService can then
 // consume as a DirectInput device just like any other gamepad.
@@ -12,6 +12,9 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
 
 namespace NOMAD.MissionPlanner
 {
@@ -25,8 +28,13 @@ namespace NOMAD.MissionPlanner
         private Process _proc;
         private readonly object _gate = new object();
         private string _lastError;
+        private string _lastOutput;
+        private string _lastLoggedOutput;
         private string _lastResolvedScript;
+        private string _lastResolvedPython;
         private DateTime _lastStartUtc;
+        private DateTime _lastOutputLogUtc;
+        private bool _stopping;
 
         public SerialJoystickBridge(NOMADConfig config)
         {
@@ -50,10 +58,15 @@ namespace NOMAD.MissionPlanner
                 if (_proc.HasExited)
                 {
                     string code; try { code = _proc.ExitCode.ToString(); } catch { code = "?"; }
-                    return $"Exited (code {code})";
+                    return string.IsNullOrWhiteSpace(_lastError)
+                        ? $"Exited (code {code})"
+                        : $"Exited (code {code}): {_lastError}";
                 }
                 var uptime = DateTime.UtcNow - _lastStartUtc;
-                return $"Running (PID {SafePid(_proc)}, up {(int)uptime.TotalSeconds}s) — {Path.GetFileName(_lastResolvedScript ?? "")} @ {_config.SerialJoystickPort}";
+                string detail = string.IsNullOrWhiteSpace(_lastOutput) ? "" : $" - {_lastOutput}";
+                return $"Running (PID {SafePid(_proc)}, up {(int)uptime.TotalSeconds}s) - "
+                    + $"{Path.GetFileName(_lastResolvedPython ?? "")} "
+                    + $"{Path.GetFileName(_lastResolvedScript ?? "")} @ {_config.SerialJoystickPort}{detail}";
             }
         }
 
@@ -78,50 +91,64 @@ namespace NOMAD.MissionPlanner
                 }
                 _lastResolvedScript = script;
 
-                string python = string.IsNullOrWhiteSpace(_config.SerialJoystickPython)
+                string configuredPython = string.IsNullOrWhiteSpace(_config.SerialJoystickPython)
                     ? "python"
                     : _config.SerialJoystickPython;
+                string python = ResolveExecutablePath(configuredPython);
+                if (python == null)
+                {
+                    _lastError = $"Python executable not found: {configuredPython}";
+                    Log.Error($"bridge: {_lastError}");
+                    return;
+                }
+                _lastResolvedPython = python;
 
-                // Spawn python in its own visible console window. Two reasons:
-                //   1. The previous headless launch (UseShellExecute=false +
-                //      CreateNoWindow=true) silently failed for some users —
-                //      vgamepad/ViGEmBus appears to rely on a real console
-                //      session, and redirected stdout fights Python's default
-                //      block-buffering so we couldn't see why.
-                //   2. A visible window means the user immediately sees pyserial
-                //      / vgamepad errors and live telemetry frames, matching
-                //      what they get from running the script in a terminal.
-                // We still own the spawned cmd.exe handle so Stop() can kill it.
-                // Using cmd /k keeps the window open if python exits with an
-                // error so the message stays on screen.
-                string argString = $"/k title NOMAD Joystick Bridge && \"{python}\" \"{script}\" --port {_config.SerialJoystickPort} --baud {_config.SerialJoystickBaud}";
+                string port = (_config.SerialJoystickPort ?? "").Trim();
+                if (string.IsNullOrEmpty(port))
+                {
+                    _lastError = "serial port is blank";
+                    Log.Error($"bridge: {_lastError}");
+                    return;
+                }
+
                 var psi = new ProcessStartInfo
                 {
-                    FileName = "cmd.exe",
-                    Arguments = argString,
-                    UseShellExecute = true,         // required for a real console window
-                    CreateNoWindow = false,
-                    WindowStyle = ProcessWindowStyle.Normal,
+                    FileName = python,
+                    Arguments = $"-u {QuoteArgument(script)} --port {QuoteArgument(port)} "
+                        + $"--baud {_config.SerialJoystickBaud}",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8,
                     WorkingDirectory = Path.GetDirectoryName(script) ?? Environment.CurrentDirectory,
                 };
+                psi.EnvironmentVariables["PYTHONUNBUFFERED"] = "1";
 
                 try
                 {
                     _proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
-                    _proc.Exited += (s, e) =>
-                    {
-                        // Surface unexpected exits so the user notices the bridge died.
-                        Log.Error($"cmd window closed (code {SafeExitCode(_proc)}).");
-                    };
-                    _proc.Start();
+                    _proc.OutputDataReceived += BridgeOutputReceived;
+                    _proc.ErrorDataReceived += BridgeErrorReceived;
+                    _proc.Exited += BridgeExited;
+                    if (!_proc.Start())
+                        throw new InvalidOperationException("Python process did not start");
+
+                    _proc.BeginOutputReadLine();
+                    _proc.BeginErrorReadLine();
                     _lastStartUtc = DateTime.UtcNow;
                     _lastError = null;
-                    Log.Error($"launched in console window ({python} {script} --port {_config.SerialJoystickPort})");
+                    _lastOutput = "starting";
+                    Log.Info($"bridge: started headless PID {SafePid(_proc)} with "
+                        + $"{Path.GetFileName(python)} on {port} @ {_config.SerialJoystickBaud}");
                 }
                 catch (Exception ex)
                 {
                     _lastError = ex.Message;
                     Log.Error($"failed to launch — {ex.Message}");
+                    try { _proc?.Dispose(); } catch { }
                     _proc = null;
                 }
             }
@@ -132,38 +159,20 @@ namespace NOMAD.MissionPlanner
             lock (_gate)
             {
                 if (_proc == null) return;
+                _stopping = true;
                 try
                 {
+                    _proc.Exited -= BridgeExited;
                     if (!_proc.HasExited)
                     {
-                        // cmd.exe's python child won't die from Process.Kill() on
-                        // the parent — taskkill /T walks the tree.
-                        int pid = -1;
-                        try { pid = _proc.Id; } catch { }
-                        if (pid > 0)
-                        {
-                            try
-                            {
-                                var killer = new ProcessStartInfo
-                                {
-                                    FileName = "taskkill",
-                                    Arguments = $"/PID {pid} /T /F",
-                                    UseShellExecute = false,
-                                    CreateNoWindow = true,
-                                    RedirectStandardOutput = true,
-                                    RedirectStandardError = true,
-                                };
-                                using (var p = Process.Start(killer)) { p?.WaitForExit(1500); }
-                            }
-                            catch { }
-                        }
-                        try { if (!_proc.HasExited) _proc.Kill(); } catch { }
+                        try { _proc.Kill(); } catch { }
                         try { _proc.WaitForExit(1500); } catch { }
                     }
                 }
                 catch { }
                 try { _proc.Dispose(); } catch { }
                 _proc = null;
+                _stopping = false;
             }
         }
 
@@ -171,8 +180,8 @@ namespace NOMAD.MissionPlanner
         {
             if (config == null) return;
             _config = config;
-            // Bridge args are baked at process start, so a config change always
-            // means a full relaunch — cheaper and more predictable than IPC.
+            Log.Info($"bridge: applying saved serial setting "
+                + $"{_config.SerialJoystickPort} @ {_config.SerialJoystickBaud}");
             Stop();
             if (_config.SerialJoystickEnabled) Start();
         }
@@ -183,12 +192,78 @@ namespace NOMAD.MissionPlanner
         // Helpers
         // ============================================================
 
+        private void BridgeOutputReceived(object sender, DataReceivedEventArgs e)
+        {
+            if (string.IsNullOrWhiteSpace(e.Data))
+                return;
+
+            if (e.Data.StartsWith("NOMAD bridge:", StringComparison.OrdinalIgnoreCase))
+            {
+                _lastOutput = e.Data.Substring("NOMAD bridge:".Length).Trim();
+                var now = DateTime.UtcNow;
+                bool repeated = string.Equals(_lastLoggedOutput, _lastOutput, StringComparison.Ordinal)
+                    && now - _lastOutputLogUtc < TimeSpan.FromSeconds(30);
+                if (repeated)
+                    return;
+
+                _lastLoggedOutput = _lastOutput;
+                _lastOutputLogUtc = now;
+                if (_lastOutput.IndexOf("failed", StringComparison.OrdinalIgnoreCase) >= 0
+                    || _lastOutput.IndexOf("error", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    Log.Warn($"bridge: {_lastOutput}");
+                }
+                else
+                {
+                    Log.Info($"bridge: {_lastOutput}");
+                }
+            }
+        }
+
+        private void BridgeErrorReceived(object sender, DataReceivedEventArgs e)
+        {
+            if (string.IsNullOrWhiteSpace(e.Data))
+                return;
+
+            _lastError = e.Data;
+            Log.Error($"bridge stderr: {e.Data}");
+        }
+
+        private void BridgeExited(object sender, EventArgs e)
+        {
+            var process = sender as Process;
+            int exitCode = SafeExitCodeValue(process);
+            if (_stopping)
+            {
+                Log.Info("bridge: stopped");
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(_lastError))
+                _lastError = $"Python exited with code {exitCode}";
+            Log.Error($"bridge: exited with code {exitCode}"
+                + (string.IsNullOrWhiteSpace(_lastError) ? "" : $" - {_lastError}"));
+        }
+
         // Tries the configured path verbatim, then a small set of conventional
         // locations relative to the running DLL so a default install Just Works.
         private static string ResolveScriptPath(string configured)
         {
             if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
                 return configured;
+
+            if (!string.IsNullOrWhiteSpace(configured))
+            {
+                string configuredDir;
+                try { configuredDir = Path.GetDirectoryName(configured); }
+                catch { configuredDir = null; }
+
+                foreach (var candidate in EnumerateCandidates(configuredDir))
+                {
+                    if (!string.IsNullOrWhiteSpace(candidate) && File.Exists(candidate))
+                        return candidate;
+                }
+            }
 
             string dllDir;
             try { dllDir = Path.GetDirectoryName(typeof(SerialJoystickBridge).Assembly.Location); }
@@ -200,6 +275,66 @@ namespace NOMAD.MissionPlanner
                     return candidate;
             }
             return null;
+        }
+
+        private static string ResolveExecutablePath(string configured)
+        {
+            string command = Environment.ExpandEnvironmentVariables(configured ?? "").Trim().Trim('"');
+            if (string.IsNullOrWhiteSpace(command))
+                return null;
+
+            if (Path.IsPathRooted(command) || command.IndexOf(Path.DirectorySeparatorChar) >= 0)
+                return File.Exists(command) ? ResolveFinalPath(command) : null;
+
+            string fileName = Path.HasExtension(command) ? command : command + ".exe";
+            foreach (string directory in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';'))
+            {
+                if (string.IsNullOrWhiteSpace(directory))
+                    continue;
+
+                string candidate;
+                try { candidate = Path.Combine(directory.Trim().Trim('"'), fileName); }
+                catch { continue; }
+
+                if (File.Exists(candidate))
+                    return ResolveFinalPath(candidate);
+            }
+            return null;
+        }
+
+        private static string ResolveFinalPath(string path)
+        {
+            try
+            {
+                using (var stream = new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete))
+                {
+                    var resolved = new StringBuilder(1024);
+                    uint length = GetFinalPathNameByHandle(
+                        stream.SafeFileHandle,
+                        resolved,
+                        (uint)resolved.Capacity,
+                        0);
+                    if (length > 0 && length < resolved.Capacity)
+                    {
+                        string finalPath = resolved.ToString();
+                        if (finalPath.StartsWith(@"\\?\", StringComparison.Ordinal))
+                            finalPath = finalPath.Substring(4);
+                        if (File.Exists(finalPath))
+                            return finalPath;
+                    }
+                }
+            }
+            catch { }
+            return path;
+        }
+
+        private static string QuoteArgument(string value)
+        {
+            return "\"" + (value ?? "").Replace("\"", "\\\"") + "\"";
         }
 
         private static System.Collections.Generic.IEnumerable<string> EnumerateCandidates(string dllDir)
@@ -222,14 +357,21 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private static string SafeExitCode(Process p)
+        private static int SafeExitCodeValue(Process p)
         {
-            try { return p.ExitCode.ToString(); } catch { return "?"; }
+            try { return p?.ExitCode ?? -1; } catch { return -1; }
         }
 
         private static string SafePid(Process p)
         {
             try { return p.Id.ToString(); } catch { return "?"; }
         }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern uint GetFinalPathNameByHandle(
+            SafeFileHandle file,
+            StringBuilder path,
+            uint pathLength,
+            uint flags);
     }
 }

@@ -48,7 +48,7 @@ namespace NOMAD.MissionPlanner
             };
             _gridPayloads.DefaultCellStyle.BackColor = Color.FromArgb(40, 40, 43);
             _gridPayloads.DefaultCellStyle.ForeColor = Color.White;
-            _gridPayloads.DefaultCellStyle.SelectionBackColor = Color.FromArgb(0, 122, 204);
+            _gridPayloads.DefaultCellStyle.SelectionBackColor = NOMADTheme.ACCENT;
             _gridPayloads.DefaultCellStyle.SelectionForeColor = Color.White;
             _gridPayloads.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(50, 50, 53);
             _gridPayloads.ColumnHeadersDefaultCellStyle.ForeColor = Color.White;
@@ -82,7 +82,7 @@ namespace NOMAD.MissionPlanner
                     Location = new Point(x, 306),
                     Size = new Size(w, 28),
                     FlatStyle = FlatStyle.Flat,
-                    BackColor = Color.FromArgb(0, 122, 204),
+                    BackColor = NOMADTheme.ACCENT,
                     ForeColor = Color.White,
                     Font = new Font("Segoe UI", 8, FontStyle.Bold),
                 };

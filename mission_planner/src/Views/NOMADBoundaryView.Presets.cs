@@ -60,7 +60,11 @@ namespace NOMAD.MissionPlanner
             if (CustomMessageBox.Show($"Load preset '{preset.Name}'?\nThis will replace current boundaries.",
                 "Confirm", CustomMessageBox.MessageBoxButtons.YesNo) == CustomMessageBox.DialogResult.Yes)
             {
+                _missionConfig.SoftBoundary.Vertices = preset.SoftBoundary.ToList();
+                _missionConfig.HardBoundary.Vertices = preset.HardBoundary.ToList();
+                _missionConfig.MaxAltitudeAglMeters = preset.MaxAltitudeMeters;
 
+                _missionConfig.Save();
                 LoadBoundaries();
                 _nudMaxAlt.Value = (decimal)preset.MaxAltitudeMeters;
 
@@ -109,7 +113,7 @@ namespace NOMAD.MissionPlanner
                     Location = new Point(180, 135),
                     Size = new Size(80, 30),
                     DialogResult = DialogResult.OK,
-                    BackColor = Color.FromArgb(0, 122, 204),
+                    BackColor = NOMADTheme.ACCENT,
                     ForeColor = Color.White,
                     FlatStyle = FlatStyle.Flat,
                 };
@@ -134,10 +138,9 @@ namespace NOMAD.MissionPlanner
                         Name = txtName.Text,
                         Description = txtDesc.Text,
                         CreatedAt = DateTime.Now,
-                        SoftBoundary = new List<GpsPoint>(),
-                        HardBoundary = new List<GpsPoint>(),
-                        MaxAltitudeMeters = 122.0,
-
+                        SoftBoundary = _missionConfig.SoftBoundary.Vertices.ToList(),
+                        HardBoundary = _missionConfig.HardBoundary.Vertices.ToList(),
+                        MaxAltitudeMeters = _missionConfig.MaxAltitudeAglMeters,
                     };
 
                     try
@@ -248,7 +251,7 @@ namespace NOMAD.MissionPlanner
 
             if (e.BoundaryType == "hard" && _monitor?.KillCountdown != null)
             {
-                _lblCountdown.Text = $"KILL IN {_monitor.KillCountdown} SECONDS!";
+                _lblCountdown.Text = $"FORCED DESCENT IN {_monitor.KillCountdown} SECONDS!";
             }
         }
 

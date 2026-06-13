@@ -38,10 +38,10 @@ namespace NOMAD.MissionPlanner
 
         private const int SIDEBAR_WIDTH = 200;
         // Use NOMADTheme for consistent colors across the plugin
-        private static readonly Color SIDEBAR_BG = Color.FromArgb(25, 25, 28);
+        private static readonly Color SIDEBAR_BG = Color.FromArgb(16, 16, 18);
         private static readonly Color CONTENT_BG = NOMADTheme.BG_DARK;
         private static readonly Color ACCENT_COLOR = NOMADTheme.ACCENT;
-        private static readonly Color ACCENT_HOVER = Color.FromArgb(30, 144, 255);
+        private static readonly Color ACCENT_HOVER = Color.FromArgb(240, 60, 70);
         private static readonly Color TEXT_PRIMARY = NOMADTheme.TEXT_PRIMARY;
         private static readonly Color TEXT_SECONDARY = NOMADTheme.TEXT_SECONDARY;
         private static readonly Color CARD_BG = NOMADTheme.CARD_BG;
@@ -57,12 +57,14 @@ namespace NOMAD.MissionPlanner
         private MAVLinkConnectionManager _connectionManager;
         private JetsonConnectionManager _jetsonConnectionManager;
         private NOMADConfig _config;
+        private GeofenceConfig _geofenceConfig;
+        private BoundaryMonitor _boundaryMonitor;
+        private bool _ownsBoundaryMonitor;   // true only when no plugin-owned monitor was provided
         private Label _profileLabel;
 
         // Layout panels
         private Panel _sidebarPanel;
         private Panel _contentPanel;
-        private Panel _headerPanel;
         private Panel _viewContainer;
 
         // Sidebar buttons
@@ -87,6 +89,7 @@ namespace NOMAD.MissionPlanner
 
         // Update timer
         private System.Windows.Forms.Timer _updateTimer;
+        private bool _themeReapplyPending;
 
         // Module-driven sidebar (optional; see src/Core module SDK). When a host
         // with descriptors is supplied, the sidebar is built from those instead of
@@ -104,18 +107,24 @@ namespace NOMAD.MissionPlanner
         private static NOMADConfig _staticConfig;
         private static MAVLinkConnectionManager _staticConnectionManager;
         private static JetsonConnectionManager _staticJetsonConnectionManager;
+        private static GeofenceConfig _staticGeofenceConfig;
+        private static BoundaryMonitor _staticBoundaryMonitor;
         private static ModuleHost _staticModuleHost;
 
         /// <summary>
         /// Sets the static configuration used by the MainSwitcher-created instance.
         /// Call this from the plugin before showing the NOMAD screen.
+        /// The geofence config + boundary monitor are plugin-owned so monitoring
+        /// keeps running when MainSwitcher disposes/recreates this screen.
         /// </summary>
-        public static void SetStaticConfig(DualLinkSender sender, NOMADConfig config, MAVLinkConnectionManager connectionManager = null, JetsonConnectionManager jetsonConnectionManager = null)
+        public static void SetStaticConfig(DualLinkSender sender, NOMADConfig config, MAVLinkConnectionManager connectionManager = null, JetsonConnectionManager jetsonConnectionManager = null, GeofenceConfig geofenceConfig = null, BoundaryMonitor boundaryMonitor = null)
         {
             _staticSender = sender;
             _staticConfig = config;
             _staticConnectionManager = connectionManager;
             _staticJetsonConnectionManager = jetsonConnectionManager;
+            _staticGeofenceConfig = geofenceConfig;
+            _staticBoundaryMonitor = boundaryMonitor;
         }
 
         /// <summary>
@@ -152,6 +161,18 @@ namespace NOMAD.MissionPlanner
                 _sender = new DualLinkSender(_config);
             }
 
+            // Geofence config + boundary monitor shared by the boundary view and
+            // the dashboard's notification service. Prefer the plugin-owned
+            // instances so monitoring/alerts survive screen disposal; fall back
+            // to screen-owned ones (and dispose them) when none were provided.
+            _geofenceConfig = _staticGeofenceConfig ?? GeofenceConfig.Load();
+            _boundaryMonitor = _staticBoundaryMonitor;
+            if (_boundaryMonitor == null)
+            {
+                _boundaryMonitor = new BoundaryMonitor(_geofenceConfig, _config);
+                _ownsBoundaryMonitor = true;
+            }
+
             // Optional module host (set by the plugin). Inert unless it has modules.
             _moduleHost = _staticModuleHost;
 
@@ -170,6 +191,14 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public void Activate()
         {
+            // Mission Planner's ThemeManager restyles this screen around
+            // MainSwitcher.ShowScreen (recursively overwriting Back/ForeColor),
+            // so the NOMAD palette only survived until MP's pass ran. Re-assert
+            // now and once more after the current UI batch, whichever order MP
+            // applies its theme in.
+            ReapplyNomadTheme();
+            QueueThemeReapply();
+
             StartUpdateTimer();
             if (_isModuleMode)
             {
@@ -180,6 +209,78 @@ namespace NOMAD.MissionPlanner
             {
                 ShowView("Dashboard");
             }
+        }
+
+        /// <summary>
+        /// Restore the NOMAD chrome colors (sidebar, logo strip, content area)
+        /// after Mission Planner's ThemeManager repaints the control tree.
+        /// View internals are built after MP's pass and keep their own colors.
+        /// </summary>
+        private void ReapplyNomadTheme()
+        {
+            BackColor = CONTENT_BG;
+            if (_contentPanel != null) _contentPanel.BackColor = CONTENT_BG;
+            if (_viewContainer != null) _viewContainer.BackColor = CONTENT_BG;
+            if (_sidebarPanel == null) return;
+
+            _sidebarPanel.BackColor = SIDEBAR_BG;
+            foreach (Control child in _sidebarPanel.Controls)
+            {
+                if (child is FlowLayoutPanel nav)
+                {
+                    nav.BackColor = SIDEBAR_BG;
+                    foreach (Control c in nav.Controls)
+                    {
+                        if (c is Button b)
+                        {
+                            b.BackColor = SIDEBAR_BG;
+                            b.ForeColor = TEXT_SECONDARY;
+                        }
+                        else if (c is Label l)
+                        {
+                            l.BackColor = SIDEBAR_BG;
+                            l.ForeColor = TEXT_SECONDARY;
+                        }
+                    }
+                }
+                else
+                {
+                    // Logo strip
+                    child.BackColor = Color.FromArgb(8, 8, 10);
+                    foreach (Control c in child.Controls)
+                    {
+                        if (c == _profileLabel) continue; // keeps its status color
+                        c.BackColor = Color.FromArgb(8, 8, 10);
+                        c.ForeColor = ACCENT_COLOR;
+                    }
+                }
+            }
+        }
+
+        private void QueueThemeReapply()
+        {
+            if (IsDisposed)
+                return;
+
+            if (!IsHandleCreated)
+            {
+                _themeReapplyPending = true;
+                return;
+            }
+
+            _themeReapplyPending = false;
+            BeginInvoke((MethodInvoker)(() =>
+            {
+                if (!IsDisposed)
+                    ReapplyNomadTheme();
+            }));
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            if (_themeReapplyPending)
+                QueueThemeReapply();
         }
 
         /// <summary>
@@ -205,26 +306,11 @@ namespace NOMAD.MissionPlanner
 
         private void ShowView(string viewName)
         {
+            // Keep the chrome on-theme even if MP's ThemeManager ran since.
+            ReapplyNomadTheme();
+
             // Update sidebar button states
             UpdateSidebarButtonState(viewName);
-
-            // Update header
-            var headerLabel = _headerPanel.Controls.Find("lblHeader", false);
-            if (headerLabel.Length > 0)
-            {
-                string headerText = viewName;
-                switch (viewName)
-                {
-                    case "Dashboard": headerText = "Dashboard"; break;
-                    case "Boundaries": headerText = "Flight Boundaries"; break;
-                    case "Video": headerText = "Video Feed"; break;
-                    case "Terminal": headerText = "Jetson Terminal"; break;
-                    case "Health": headerText = "System Health"; break;
-                    case "Links": headerText = "Dual Link Status"; break;
-                    case "Calibration": headerText = "ZED Camera Calibration"; break;
-                }
-                ((Label)headerLabel[0]).Text = headerText;
-            }
 
             // Remove current view
             if (_currentView != null)
@@ -241,11 +327,15 @@ namespace NOMAD.MissionPlanner
                     if (_dashboardView == null)
                     {
                         _dashboardView = new NOMADDashboardView(_sender, _config, _connectionManager, _jetsonConnectionManager);
+                        if (_boundaryMonitor != null)
+                        {
+                            _dashboardView.SetBoundaryMonitor(_boundaryMonitor);
+                        }
                     }
                     newView = _dashboardView;
                     break;
                 case "Boundaries":
-                    if (_boundaryView == null) _boundaryView = new NOMADBoundaryView(_config, null);
+                    if (_boundaryView == null) _boundaryView = new NOMADBoundaryView(_geofenceConfig, _config, _boundaryMonitor);
                     newView = _boundaryView;
                     break;
                 case "Video":
@@ -352,6 +442,7 @@ namespace NOMAD.MissionPlanner
                 _updateTimer?.Stop();
                 _updateTimer?.Dispose();
 
+                if (_ownsBoundaryMonitor) _boundaryMonitor?.Dispose();
                 _dashboardView?.Dispose();
                 _boundaryView?.Dispose();
                 _videoView?.Dispose();

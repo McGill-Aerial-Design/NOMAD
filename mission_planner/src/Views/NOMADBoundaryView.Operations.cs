@@ -20,14 +20,104 @@ namespace NOMAD.MissionPlanner
     {
         private void LoadBoundaries()
         {
+            // Load soft boundary
+            _dgvSoftBoundary.Rows.Clear();
+            foreach (var point in _missionConfig.SoftBoundary.Vertices)
+            {
+                _dgvSoftBoundary.Rows.Add(point.Lat.ToString("F8"), point.Lon.ToString("F8"));
+            }
+
+            // Load hard boundary
+            _dgvHardBoundary.Rows.Clear();
+            foreach (var point in _missionConfig.HardBoundary.Vertices)
+            {
+                _dgvHardBoundary.Rows.Add(point.Lat.ToString("F8"), point.Lon.ToString("F8"));
+            }
+
+            UpdatePointCounts();
+        }
+
+        private bool _syncingSoftFromHard;
+
+        /// <summary>
+        /// Recompute the derived soft boundary when "auto from hard" is on and
+        /// refresh its grid. Hooked into UpdatePointCounts so every hard-boundary
+        /// mutation path (grid edit, paste, import, clear, add) picks it up.
+        /// </summary>
+        private void SyncSoftFromHard()
+        {
+            if (!_missionConfig.SoftBoundaryFromHard || _syncingSoftFromHard) return;
+            try
+            {
+                _syncingSoftFromHard = true;
+                _missionConfig.RegenerateSoftFromHard();
+                _missionConfig.Save();
+                _dgvSoftBoundary.Rows.Clear();
+                foreach (var p in _missionConfig.SoftBoundary.Vertices)
+                {
+                    _dgvSoftBoundary.Rows.Add(p.Lat.ToString("F8"), p.Lon.ToString("F8"));
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Soft-from-hard sync failed - {ex.Message}");
+            }
+            finally
+            {
+                _syncingSoftFromHard = false;
+            }
         }
 
         private void UpdatePointCounts()
         {
+            SyncSoftFromHard();
+
+            var softLabel = this.Controls.Find("lblSoftCount", true).FirstOrDefault() as Label;
+            var hardLabel = this.Controls.Find("lblHardCount", true).FirstOrDefault() as Label;
+            var softSaved = this.Controls.Find("lblSoftSaved", true).FirstOrDefault() as Label;
+            var hardSaved = this.Controls.Find("lblHardSaved", true).FirstOrDefault() as Label;
+            string stamp = $"Saved {DateTime.Now:HH:mm:ss} to plugin config";
+
+            if (softLabel != null)
+                softLabel.Text = $"{_missionConfig.SoftBoundary.Vertices.Count} pts";
+            if (hardLabel != null)
+                hardLabel.Text = $"{_missionConfig.HardBoundary.Vertices.Count} pts";
+            if (softSaved != null)
+                softSaved.Text = _missionConfig.SoftBoundary.Vertices.Count > 0 ? stamp : "No points";
+            if (hardSaved != null)
+                hardSaved.Text = _missionConfig.HardBoundary.Vertices.Count > 0 ? stamp : "No points";
         }
 
         private void DeleteSelectedPoint(DataGridView dgv, FlightBoundary boundary)
         {
+            try
+            {
+                var rows = dgv.SelectedRows.Cast<DataGridViewRow>().OrderByDescending(r => r.Index).ToList();
+                if (rows.Count == 0 && dgv.CurrentCell != null)
+                {
+                    var r = dgv.Rows[dgv.CurrentCell.RowIndex];
+                    if (r != null) rows.Add(r);
+                }
+                if (rows.Count == 0)
+                {
+                    CustomMessageBox.Show("Select a row in the grid first.", "Delete Point");
+                    return;
+                }
+                foreach (var r in rows)
+                {
+                    int idx = r.Index;
+                    if (idx >= 0 && idx < boundary.Vertices.Count)
+                        boundary.Vertices.RemoveAt(idx);
+                    dgv.Rows.RemoveAt(idx);
+                }
+                _missionConfig.Save();
+                UpdatePointCounts();
+                AutoDrawBoundariesIfEnabled();
+            }
+            catch (Exception ex)
+            {
+                CustomMessageBox.Show($"Delete failed: {ex.Message}", "Error");
+            }
         }
 
         private void BtnClearVehicleFence_Click(object sender, EventArgs e)
@@ -41,7 +131,104 @@ namespace NOMAD.MissionPlanner
 
         private void PasteCoordinates(DataGridView dgv, FlightBoundary boundary, string boundaryType)
         {
-            CustomMessageBox.Show("Boundary editing is currently unavailable.", "Unavailable");
+            using (var inputForm = new Form())
+            {
+                inputForm.Width = 550;
+                inputForm.Height = 400;
+                inputForm.Text = $"Paste {boundaryType.ToUpper()} Boundary Coordinates";
+                inputForm.StartPosition = FormStartPosition.CenterParent;
+                inputForm.BackColor = Color.FromArgb(40, 40, 45);
+                inputForm.FormBorderStyle = FormBorderStyle.FixedDialog;
+                inputForm.MaximizeBox = false;
+
+                var instructions = new Label
+                {
+                    Text = "Paste coordinates (one per line). Supported formats:\n" +
+                           "- lon, lat (e.g., -75.7554276757985, 45.32367641417768)\n" +
+                           "- lat, lon (e.g., 45.32367641417768, -75.7554276757985)\n" +
+                           "Auto-detects format based on value ranges.",
+                    Location = new Point(20, 20),
+                    Size = new Size(500, 60),
+                    ForeColor = Color.White,
+                };
+                inputForm.Controls.Add(instructions);
+
+                var textBox = new TextBox
+                {
+                    Location = new Point(20, 90),
+                    Size = new Size(500, 200),
+                    Multiline = true,
+                    ScrollBars = ScrollBars.Vertical,
+                    BackColor = Color.FromArgb(30, 30, 33),
+                    ForeColor = Color.White,
+                    Font = new Font("Consolas", 10),
+                };
+                inputForm.Controls.Add(textBox);
+
+                var chkReplace = new CheckBox
+                {
+                    Text = "Replace existing points (unchecked = append)",
+                    Location = new Point(20, 300),
+                    ForeColor = Color.White,
+                    AutoSize = true,
+                    Checked = true,
+                };
+                inputForm.Controls.Add(chkReplace);
+
+                var btnOk = new Button
+                {
+                    Text = "Import",
+                    Location = new Point(330, 330),
+                    Size = new Size(90, 30),
+                    DialogResult = DialogResult.OK,
+                    BackColor = NOMADTheme.ACCENT,
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat,
+                };
+                inputForm.Controls.Add(btnOk);
+
+                var btnCancel = new Button
+                {
+                    Text = "Cancel",
+                    Location = new Point(430, 330),
+                    Size = new Size(90, 30),
+                    DialogResult = DialogResult.Cancel,
+                    FlatStyle = FlatStyle.Flat,
+                    ForeColor = Color.White,
+                };
+                inputForm.Controls.Add(btnCancel);
+
+                inputForm.AcceptButton = btnOk;
+                inputForm.CancelButton = btnCancel;
+
+                if (inputForm.ShowDialog() == DialogResult.OK)
+                {
+                    var points = ParseCoordinates(textBox.Text);
+                    if (points.Count > 0)
+                    {
+                        if (chkReplace.Checked)
+                        {
+                            boundary.Vertices.Clear();
+                            dgv.Rows.Clear();
+                        }
+
+                        foreach (var point in points)
+                        {
+                            boundary.Vertices.Add(point);
+                            dgv.Rows.Add(point.Lat.ToString("F8"), point.Lon.ToString("F8"));
+                        }
+
+                        _missionConfig.Save();
+                        UpdatePointCounts();
+                        AutoDrawBoundariesIfEnabled();
+                        CustomMessageBox.Show($"Imported {points.Count} points to {boundaryType} boundary.", "Success");
+                    }
+                    else
+                    {
+                        CustomMessageBox.Show("No valid coordinates found.", "Warning");
+                    }
+                }
+            }
         }
 
         private List<GpsPoint> ParseCoordinates(string input)
@@ -111,14 +298,44 @@ namespace NOMAD.MissionPlanner
 
         private void ClearBoundary(DataGridView dgv, FlightBoundary boundary)
         {
+            if (CustomMessageBox.Show("Clear all boundary points?", "Confirm",
+                CustomMessageBox.MessageBoxButtons.YesNo) == CustomMessageBox.DialogResult.Yes)
+            {
+                boundary.Vertices.Clear();
+                dgv.Rows.Clear();
+                _missionConfig.Save();
+                UpdatePointCounts();
+            }
         }
 
         private void AddManualPoint(DataGridView dgv, FlightBoundary boundary)
         {
+            // Use current position or last point
+            double lat = MainV2.comPort?.MAV?.cs?.lat ?? 45.0;
+            double lon = MainV2.comPort?.MAV?.cs?.lng ?? -75.0;
+
+            var point = new GpsPoint(lat, lon);
+            boundary.Vertices.Add(point);
+            dgv.Rows.Add(lat.ToString("F8"), lon.ToString("F8"));
+            _missionConfig.Save();
+            UpdatePointCounts();
+            AutoDrawBoundariesIfEnabled();
         }
 
         private void AutoDrawBoundariesIfEnabled()
         {
+            try
+            {
+                var chkAutoDraw = this.Controls.Find("chkAutoDraw", true);
+                if (chkAutoDraw.Length > 0 && chkAutoDraw[0] is CheckBox chk && chk.Checked)
+                {
+                    MapOverlayManager.DrawBoundaries(_missionConfig);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Auto-draw error - {ex.Message}");
+            }
         }
 
         private void BtnImportKml_Click(object sender, EventArgs e)
@@ -167,6 +384,17 @@ namespace NOMAD.MissionPlanner
                                 "Select Boundary Type",
                                 CustomMessageBox.MessageBoxButtons.YesNo);
 
+                            if (result == CustomMessageBox.DialogResult.Yes)
+                            {
+                                _missionConfig.SoftBoundary.Vertices = points;
+                            }
+                            else
+                            {
+                                _missionConfig.HardBoundary.Vertices = points;
+                            }
+                            _missionConfig.Save();
+                            LoadBoundaries();
+                            AutoDrawBoundariesIfEnabled();
                             CustomMessageBox.Show($"Imported {points.Count} boundary points from KML.", "Success");
                         }
                         else
@@ -270,7 +498,7 @@ namespace NOMAD.MissionPlanner
                 {
                     Text = "Import", Left = 300, Width = 80, Top = 240,
                     DialogResult = DialogResult.OK,
-                    BackColor = Color.FromArgb(0, 122, 204),
+                    BackColor = NOMADTheme.ACCENT,
                     ForeColor = Color.White,
                     FlatStyle = FlatStyle.Flat,
                 };
@@ -293,6 +521,28 @@ namespace NOMAD.MissionPlanner
                     var points = ParseCoordinates(textBox.Text);
                     if (points.Count > 0)
                     {
+                        var boundary = cmbTarget.SelectedIndex == 0
+                            ? _missionConfig.SoftBoundary
+                            : _missionConfig.HardBoundary;
+                        var dgv = cmbTarget.SelectedIndex == 0
+                            ? _dgvSoftBoundary
+                            : _dgvHardBoundary;
+
+                        if (chkReplace.Checked)
+                        {
+                            boundary.Vertices.Clear();
+                            dgv.Rows.Clear();
+                        }
+
+                        foreach (var point in points)
+                        {
+                            boundary.Vertices.Add(point);
+                            dgv.Rows.Add(point.Lat.ToString("F8"), point.Lon.ToString("F8"));
+                        }
+
+                        _missionConfig.Save();
+                        UpdatePointCounts();
+                        AutoDrawBoundariesIfEnabled();
                         CustomMessageBox.Show($"Imported {points.Count} points.", "Success");
                     }
                     else
@@ -355,8 +605,13 @@ namespace NOMAD.MissionPlanner
 
                     if (result == CustomMessageBox.DialogResult.Yes)
                     {
-                        }
-
+                        _missionConfig.SoftBoundary.Vertices = points;
+                    }
+                    else
+                    {
+                        _missionConfig.HardBoundary.Vertices = points;
+                    }
+                    _missionConfig.Save();
                     LoadBoundaries();
                     AutoDrawBoundariesIfEnabled();
                     CustomMessageBox.Show($"Imported {points.Count} fence points.", "Success");
@@ -426,7 +681,7 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                var hardVerts = null as List<GpsPoint>;
+                var hardVerts = _missionConfig.HardBoundary?.Vertices;
                 if (hardVerts == null || hardVerts.Count < 3)
                 {
                     CustomMessageBox.Show(
@@ -436,38 +691,43 @@ namespace NOMAD.MissionPlanner
                 }
                 var vertices = hardVerts;
                 string boundaryName = "Hard";
-                bool isSoft = false;
                 var strokeColor = Color.Red;
-                var fillColor = Color.FromArgb(60, Color.Red);
+                var fillColor = Color.Transparent;
                 string polyName = "NOMAD_Hard_Fence";
 
-                // 1) Draw on Data map overlay
+                // 1) Refresh the saved-config zone masks on both maps.
                 try
                 {
-                    MapOverlayManager.DrawPolygon(vertices, polyName, strokeColor, fillColor, isSoft ? 2 : 3);
-                    MapOverlayManager.RefreshMap();
+                    MapOverlayManager.DrawBoundaries(_missionConfig);
                 }
-                catch (Exception ex) { Log.Error($"Data map draw failed - {ex.Message}"); }
+                catch (Exception ex) { Log.Error($"Boundary zone draw failed - {ex.Message}"); }
 
-                // 2) Inject into MP's Plan-view geofence overlay
+                // 2) Keep Mission Planner's native Plan fence as an outline.
                 bool planInjected = false;
                 try
                 {
-                    planInjected = MapOverlayManager.ExportToMPGeoFence(vertices, polyName, strokeColor, fillColor, isSoft ? 2 : 3);
+                    planInjected = MapOverlayManager.ExportToMPGeoFence(
+                        vertices,
+                        polyName,
+                        strokeColor,
+                        fillColor,
+                        3);
                 }
                 catch (Exception ex) { Log.Error($"Plan map inject failed - {ex.Message}"); }
 
                 // 3) Upload to connected vehicle via MAVLink and set FENCE_* params.
-                // For any "kill" action we also force LAND_SPEED to 200 cm/s
-                // (2 m/s) so the descent meets CONOPS §4.5; warn-only flights
-                // leave LAND_SPEED untouched.
-                string hardAction = "warn_and_kill";
+                // For any termination action we also push LAND_SPEED at the
+                // configured descent rate (CONOPS §4.5 requires >= 2 m/s);
+                // warn-only flights leave LAND_SPEED untouched.
+                string hardAction = _missionConfig.Failsafe.HardBoundaryAction;
                 int fenceAction = MapFenceActionToParam(hardAction);
-                int landSpeedCmS = (hardAction ?? "warn_and_kill").ToLower() == "warn_only" ? 0 : 200;
+                int landSpeedCmS = (hardAction ?? "warn_and_kill").ToLower() == "warn_only"
+                    ? 0
+                    : (int)Math.Round(_missionConfig.TerminationDescentRateMps * 100);
                 var upload = MPFenceUploader.UploadPolygon(
                     vertices,
-                    null,
-                    122.0,
+                    _missionConfig.ReturnPoint,
+                    _missionConfig.MaxAltitudeAglMeters,
                     fenceAction,
                     enableFence: true,
                     landSpeedCmS: landSpeedCmS);
@@ -501,6 +761,30 @@ namespace NOMAD.MissionPlanner
 
         private void SaveBoundaryFromGrid(DataGridView dgv, FlightBoundary boundary)
         {
+            // The derived-soft sync repopulates the soft grid itself; its
+            // CellValueChanged storm must not write partial rows back.
+            if (_syncingSoftFromHard && dgv == _dgvSoftBoundary) return;
+            try
+            {
+                boundary.Vertices.Clear();
+                foreach (DataGridViewRow row in dgv.Rows)
+                {
+                    if (row.Cells["Lat"].Value != null && row.Cells["Lon"].Value != null)
+                    {
+                        if (double.TryParse(row.Cells["Lat"].Value.ToString(), out double lat) &&
+                            double.TryParse(row.Cells["Lon"].Value.ToString(), out double lon))
+                        {
+                            boundary.Vertices.Add(new GpsPoint(lat, lon));
+                        }
+                    }
+                }
+                _missionConfig.Save();
+                UpdatePointCounts();
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Save boundary from grid failed - {ex.Message}");
+            }
         }
     }
 }

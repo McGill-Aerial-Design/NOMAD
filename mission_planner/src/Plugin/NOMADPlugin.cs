@@ -32,12 +32,14 @@ namespace NOMAD.MissionPlanner
     {
         // Plugin metadata
         public override string Name => "NOMAD Control";
-        public override string Version => "3.0.0";
+        public override string Version => "3.1.0";
         public override string Author => "McGill Aerial Design";
 
         // Plugin state
         private NOMADConfig _config;
         private NotificationService _notificationService;
+        private GeofenceConfig _geofenceConfig;               // Plugin-owned: survives NOMAD screen disposal
+        private BoundaryMonitor _boundaryMonitor;             // Plugin-owned: alerts fire on every MP page
         private DualLinkSender _sender;
         private MAVLinkConnectionManager _connectionManager;  // Dual link manager
         private JetsonConnectionManager _jetsonConnectionManager;  // Jetson HTTP connectivity
@@ -46,6 +48,7 @@ namespace NOMAD.MissionPlanner
         private Form _popOutForm;                             // Pop-out window for NOMAD screen
         private bool _hudVideoStarted = false;
         private bool _screenRegistered = false;               // Track if NOMAD screen is registered with MainSwitcher
+        private DateTime _nextBoundaryMapBindUtc = DateTime.MinValue;
 
         // Static assembly resolver for HelixToolkit dependencies
         private static bool _assemblyResolverRegistered = false;
@@ -79,6 +82,22 @@ namespace NOMAD.MissionPlanner
                 _notificationService = new NotificationService(null, _sender);
                 NotificationService.Shared = _notificationService;
                 _notificationService.StartMonitoring();
+
+                // Geofence boundary monitor lives at plugin level so the
+                // "Real-time Monitor" setting persists and violation alerts
+                // keep firing even when the NOMAD screen is disposed (MainSwitcher
+                // recreates it on every page switch).
+                _geofenceConfig = GeofenceConfig.Load();
+                _boundaryMonitor = new BoundaryMonitor(_geofenceConfig, _config);
+                _notificationService.SetBoundaryMonitor(_boundaryMonitor);
+                if (_geofenceConfig.MonitoringEnabled)
+                {
+                    _boundaryMonitor.StartMonitoring();
+                }
+
+                // Toast overlay: Warning/Critical notifications pop bottom-right
+                // on every MP page, not just inside the NOMAD screen.
+                NotificationToast.Attach(_notificationService, Host?.MainForm);
 
                 // Startup chime + spoken welcome (fires once per process).
                 AudioAlerts.PlayWelcomeOnce();
@@ -129,9 +148,9 @@ namespace NOMAD.MissionPlanner
                     Host?.MainForm?.BeginInvoke((MethodInvoker)delegate
                     {
                         CustomMessageBox.Show(
-                            $"NOMAD Plugin v{Version} loaded.\n\n" +
-                            $"Use the NOMAD menu → Open NOMAD Tab\n" +
-                            $"for the complete NOMAD interface.\n\n" +
+                            $"NOMAD Plugin v{Version} loaded (debug mode).\n\n" +
+                            $"Click NOMAD in the menu bar to open the interface;\n" +
+                            $"hover it for tools and settings.\n\n" +
                             $"Jetson IP: {_config.EffectiveIP}",
                             "NOMAD"
                         );
@@ -164,6 +183,10 @@ namespace NOMAD.MissionPlanner
                 // Register NOMAD as a top-level screen (no quick tab - use pop-out instead)
                 RegisterNomadScreen();
 
+                // Boundary visualization comes from the saved plugin config and
+                // does not depend on a connected vehicle or a fence upload.
+                MapOverlayManager.DrawBoundaries(_geofenceConfig);
+
                 // Auto-start HUD video if configured
                 if (_config.AutoStartHudVideo && !_hudVideoStarted)
                 {
@@ -192,8 +215,21 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public override bool Loop()
         {
-            // GroundLinkRouter owns the source sockets directly and derives
-            // heartbeat/loss stats from real packet flow — nothing to do here.
+            if (DateTime.UtcNow >= _nextBoundaryMapBindUtc)
+            {
+                _nextBoundaryMapBindUtc = DateTime.UtcNow.AddSeconds(2);
+                var mainForm = Host?.MainForm;
+                if (mainForm != null && !mainForm.IsDisposed && mainForm.IsHandleCreated)
+                {
+                    UiAsync.RunSync(mainForm, () =>
+                    {
+                        if (MapOverlayManager.BoundaryRenderingConfigured)
+                            MapOverlayManager.EnsureBoundaryMaps();
+                        else
+                            MapOverlayManager.DrawBoundaries(_geofenceConfig);
+                    }, "boundary map binding");
+                }
+            }
             return true;
         }
 
@@ -204,6 +240,14 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
+                // Unhook the toast overlay before the service goes away
+                NotificationToast.Detach();
+                MapOverlayManager.StopBoundaryRendering();
+
+                // Stop boundary monitor (plugin-owned)
+                _boundaryMonitor?.Dispose();
+                _boundaryMonitor = null;
+
                 // Stop notification service
                 if (NotificationService.Shared == _notificationService) NotificationService.Shared = null;
                 _notificationService?.StopMonitoring();

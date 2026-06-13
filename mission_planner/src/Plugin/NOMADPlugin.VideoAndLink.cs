@@ -64,6 +64,14 @@ namespace NOMAD.MissionPlanner
             {
                 Log.Error($"Failed to apply dual link settings — {ex.Message}");
             }
+            finally
+            {
+                // _connectionManager may have been recreated or nulled above;
+                // refresh the statics so the next MainSwitcher-created NOMAD
+                // screen (and its Links view) sees the live instance instead of
+                // the stale one captured at plugin load.
+                NOMADMainScreen.SetStaticConfig(_sender, _config, _connectionManager, _jetsonConnectionManager, _geofenceConfig, _boundaryMonitor);
+            }
         }
 
         // ============================================================

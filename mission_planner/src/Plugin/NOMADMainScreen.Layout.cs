@@ -56,7 +56,7 @@ namespace NOMAD.MissionPlanner
             {
                 Dock = DockStyle.Top,
                 Height = 45,
-                BackColor = Color.FromArgb(20, 20, 23),
+                BackColor = Color.FromArgb(8, 8, 10),
                 Padding = new Padding(12, 8, 12, 5),
             };
 
@@ -200,40 +200,17 @@ namespace NOMAD.MissionPlanner
                 Padding = new Padding(0),
             };
 
-            // Header panel with breadcrumb/title - docked at top
-            _headerPanel = new Panel
-            {
-                Dock = DockStyle.Top,
-                Height = 60,
-                BackColor = Color.FromArgb(35, 35, 40),
-                Padding = new Padding(25, 15, 25, 15),
-            };
-
-            var headerLabel = new Label
-            {
-                Name = "lblHeader",
-                Text = "Dashboard",
-                Font = new Font("Segoe UI", 16, FontStyle.Bold),
-                ForeColor = TEXT_PRIMARY,
-                Dock = DockStyle.Fill,
-                TextAlign = ContentAlignment.MiddleLeft,
-            };
-            _headerPanel.Controls.Add(headerLabel);
-
-            // Create a view container panel that will hold the actual view content
-            // This ensures the view doesn't overlap with the header
+            // No header band: the active sidebar button already names the page,
+            // so the view content gets the full height. _headerPanel stays null
+            // and ShowView/ShowEntry skip the title update.
             _viewContainer = new Panel
             {
                 Dock = DockStyle.Fill,
                 BackColor = CONTENT_BG,
-                Padding = new Padding(20), // Padding around view content
+                Padding = new Padding(12),
             };
 
-            // Add header first (will be at bottom of z-order)
-            // Then add view container (will fill remaining space)
-            // In WinForms, controls are docked in reverse order of addition
-            _contentPanel.Controls.Add(_viewContainer);  // Added first, so it fills remaining space
-            _contentPanel.Controls.Add(_headerPanel);    // Added last, so it docks on top
+            _contentPanel.Controls.Add(_viewContainer);
 
             this.Controls.Add(_contentPanel);
         }

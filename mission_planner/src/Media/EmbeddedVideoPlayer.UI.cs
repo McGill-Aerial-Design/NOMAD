@@ -177,8 +177,14 @@ namespace NOMAD.MissionPlanner
             ctrlPanel.Controls.AddRange(new Control[] { btnPlay, btnStop, btnFull, btnVLC, btnSnap, lblTopic, _cmbTopic, btnRefresh, lblLat, _trkLatency, _lblLatencyValue, btnApplyLatency, _chkDetections });
 
             Controls.Add(_videoBox);
-            Controls.Add(_lblStatus);
-            Controls.Add(ctrlPanel);
+            // Chrome-less mode: only the video surface (double-click still
+            // toggles fullscreen). The status label and control strip exist but
+            // stay un-parented so status writes elsewhere in the class are safe.
+            if (_showControls)
+            {
+                Controls.Add(_lblStatus);
+                Controls.Add(ctrlPanel);
+            }
 
             _topics.Add(("/zed/zed_node/rgb/color/rect/image", "Left Rect"));
             PopulateTopics();
