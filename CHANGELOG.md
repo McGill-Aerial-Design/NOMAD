@@ -28,6 +28,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   monitor loop, and the module lifecycle) — all with subprocess, socket, and the
   system clock mocked. Raises the `pixi run test` coverage floor 60% -> 65%
   (66% actual).
+- `TailscaleManager` unit coverage (`tests/test_tailscale_manager.py`): the
+  Tailscale status poller exercised with the module-level `_run` wrapper stubbed —
+  the `parse_status_json` state map + IPv4 extraction, `_check_status`
+  (not-installed/error/parsed/bad-JSON), `_reconnect` (`tailscale up` ok/fail),
+  the auto-reconnect monitor loop, and the thread lifecycle — taking
+  `infra/tailscale/tailscale_manager.py` from 72% to **100%** (total 82.62%).
 - `NetworkMonitor` unit coverage (`tests/test_network_monitor.py`): the 4G/LTE
   modem + connectivity monitor exercised with the module-level `_run` shell
   wrapper stubbed to a command-dispatching fake — the `nmcli`/`mmcli`/`ip`/`ping`
