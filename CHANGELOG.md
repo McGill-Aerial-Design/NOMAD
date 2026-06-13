@@ -25,6 +25,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   changes; uploads `NOMADPlugin.dll` as a build artifact.
 
 ### Changed
+- Type-checking the safety-critical core is now an enforced CI gate. `edge_core/safety`
+  is checked under strict mypy settings (`disallow_untyped_defs` et al.) via the new
+  `pixi run typecheck-safety` task, and the lint workflow fails on a type regression
+  there. The whole-tree mypy run stays advisory — same asymmetric rigor as
+  `cov-safety`/`lint-safety`.
 - Mission Planner plugin C# sources are now globbed
   (`<Compile Include="**\*.cs">`) instead of being listed file-by-file, so new
   files and partial-class splits build without hand-editing the csproj. It stays

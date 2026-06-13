@@ -81,7 +81,14 @@ line-report = "python scripts/dev/line_report.py --fail-over-file-limit"
 # bugbear, bandit, logging-format, Ruff-specific. The rest of the tree rides
 # the standard `lint` selection.
 lint-safety = "ruff check --extend-select B,S,G,LOG,RUF edge_core/safety edge_core/ros_http_bridge/mavlink_velocity.py edge_core/services/mavlink/commands.py edge_core/modules/payload/servo.py"
+# Whole-tree type check — advisory in CI (the bulk of the tree rides basic mypy).
 typecheck = "mypy"
+# SC core type gate: edge_core/safety carries the strict mypy overrides
+# (disallow_untyped_defs et al., see [tool.mypy.overrides] in pyproject.toml) and,
+# unlike the advisory whole-tree `typecheck`, this run is REQUIRED in CI — flight-
+# decision code does not get to regress its types. Asymmetric rigor, mirroring
+# `cov-safety` and `lint-safety`.
+typecheck-safety = "mypy edge_core/safety"
 
 # Documentation. Served on :8001 so it doesn't clash with `pixi run dev` (:8000).
 docs = "properdocs serve --dev-addr localhost:8001"
