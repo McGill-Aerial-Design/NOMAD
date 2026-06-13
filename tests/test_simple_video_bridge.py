@@ -13,6 +13,7 @@ import io
 import json
 import sys
 import time
+import types
 from types import SimpleNamespace
 
 import pytest
@@ -173,6 +174,32 @@ def test_appsrc_pipeline_without_gstreamer_bindings(monkeypatch):
     assert b._error_count == 1
 
 
+def test_appsrc_pipeline_with_gstreamer_bindings(monkeypatch):
+    # Inject a fake `gi` so the appsrc path proceeds to the python pipeline.
+    fake_gi = types.ModuleType("gi")
+    fake_gi.require_version = lambda *a, **k: None
+    fake_repo = types.ModuleType("gi.repository")
+    fake_repo.Gst = SimpleNamespace(init=lambda *a: None)
+    monkeypatch.setitem(sys.modules, "gi", fake_gi)
+    monkeypatch.setitem(sys.modules, "gi.repository", fake_repo)
+    b = _bridge()
+    monkeypatch.setattr(b, "_start_python_subprocess_pipeline", lambda: "py-pipeline")
+    assert b._start_appsrc_pipeline() == "py-pipeline"
+
+
+def test_python_subprocess_pipeline_success(monkeypatch):
+    monkeypatch.setattr(svb.subprocess, "Popen", _FakePopen)
+    b = _bridge()
+    assert b._start_python_subprocess_pipeline() is True
+    assert b.running is True
+
+
+def test_python_subprocess_pipeline_failure(monkeypatch):
+    monkeypatch.setattr(svb.subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    b = _bridge()
+    assert b._start_python_subprocess_pipeline() is False
+
+
 # -- VideoBridge: stop / monitor -------------------------------------------
 
 
@@ -189,6 +216,18 @@ def test_stop_pipeline_kills_when_terminate_hangs():
 
     b._stop_pipeline()
     assert fp.killed is True
+    assert b._pipeline is None
+    assert b._running is False
+
+
+def test_stop_pipeline_swallows_kill_failure():
+    b = _bridge()
+    fp = _FakePopen()
+    fp.wait = lambda timeout=None: (_ for _ in ()).throw(RuntimeError("hung"))
+    fp.kill = lambda: (_ for _ in ()).throw(RuntimeError("kill also failed"))
+    b._pipeline = fp
+    b._running = True
+    b._stop_pipeline()  # both terminate-wait and kill raise -> all swallowed
     assert b._pipeline is None
     assert b._running is False
 
@@ -363,3 +402,60 @@ def test_main_returns_when_pipeline_fails_to_start(monkeypatch):
     monkeypatch.setattr(svb.VideoBridge, "start", lambda self: False)
     # No server is started on the failure path, so this returns promptly.
     svb.main()
+
+
+def test_main_serves_then_shuts_down(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["prog", "--source-topic", "/zed/img", "--http-port", "0"])
+    monkeypatch.setattr(svb.VideoBridge, "start", lambda self: True)
+    # `running` flips False after the first loop iteration so main() exits.
+    running_seq = iter([True, False])
+    monkeypatch.setattr(svb.VideoBridge, "running", property(lambda self: next(running_seq, False)))
+    seen = {"stopped": False, "shutdown": False, "served": False}
+    monkeypatch.setattr(svb.VideoBridge, "stop", lambda self: seen.__setitem__("stopped", True))
+
+    class _FakeServer:
+        def __init__(self, host, port, bridge):
+            self.bridge = bridge
+
+        def serve_forever(self):
+            seen["served"] = True
+
+        def shutdown(self):
+            seen["shutdown"] = True
+
+    monkeypatch.setattr(svb, "BridgeHTTPServer", _FakeServer)
+    monkeypatch.setattr(svb.threading, "Thread", _NoThread)
+    monkeypatch.setattr(svb.time, "sleep", lambda *_: None)
+
+    svb.main()
+    assert seen["stopped"] is True
+    assert seen["shutdown"] is True
+
+
+def test_main_handles_keyboard_interrupt(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["prog", "--source-topic", "/zed/img", "--http-port", "0"])
+    monkeypatch.setattr(svb.VideoBridge, "start", lambda self: True)
+    monkeypatch.setattr(svb.VideoBridge, "running", property(lambda self: True))
+    seen = {"stopped": False, "shutdown": False}
+    monkeypatch.setattr(svb.VideoBridge, "stop", lambda self: seen.__setitem__("stopped", True))
+
+    class _FakeServer:
+        def __init__(self, host, port, bridge):
+            self.bridge = bridge
+
+        def serve_forever(self):
+            pass
+
+        def shutdown(self):
+            seen["shutdown"] = True
+
+    monkeypatch.setattr(svb, "BridgeHTTPServer", _FakeServer)
+    monkeypatch.setattr(svb.threading, "Thread", _NoThread)
+
+    def interrupt(*_):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(svb.time, "sleep", interrupt)
+    svb.main()  # Ctrl-C in the run loop is caught; finally still cleans up.
+    assert seen["stopped"] is True
+    assert seen["shutdown"] is True
