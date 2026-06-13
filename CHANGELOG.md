@@ -28,6 +28,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   monitor loop, and the module lifecycle) — all with subprocess, socket, and the
   system clock mocked. Raises the `pixi run test` coverage floor 60% -> 65%
   (66% actual).
+- `MavlinkConnection` unit coverage (`tests/test_mavlink_connection.py`): the FC
+  receiver loop driven with `mavutil.mavlink_connection` patched to a scripted
+  fake link — endpoint-scheme normalization, the per-message-type dispatch
+  (HEARTBEAT arm/mode, SYS_STATUS, GLOBAL_POSITION_INT with/without fix,
+  HOME_POSITION, ATTITUDE, SYSTEM_TIME, COMMAND_ACK, SERVO_OUTPUT_RAW), the
+  reconnect-on-`None` path, the disconnect watchdog (`LOST` transition), the
+  command-ack wait/confirm/timeout, and the health-broadcast loop — taking
+  `services/mavlink/connection.py` from 23% to **100%**. Raises the `pixi run
+  test` coverage floor 65% -> 70% (70.31% actual).
 - `edge_core.ros_http_bridge.vio_math` (+ `tests/test_vio_math.py`): the VIO
   pose/frame math lifted out of the rclpy-only `node.py` into a pure, 100%-covered
   module — covariance→confidence, the REP-103→NED position/velocity/attitude sign
