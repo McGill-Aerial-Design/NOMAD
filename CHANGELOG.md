@@ -15,6 +15,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   monitor loop, and the module lifecycle) — all with subprocess, socket, and the
   system clock mocked. Raises the `pixi run test` coverage floor 60% -> 65%
   (66% actual).
+- `docker/Dockerfile.jetson` (+ `docker/ros_entrypoint.sh`): the on-board Jetson
+  perception/odometry image, layered on the Isaac ROS dev base — ZED SDK 5.2.3,
+  GStreamer, the ZED/nvblox/nav2 ROS2 runtime, `isaac_ros_nvblox_utils`, and the
+  self-contained NOMAD ROS-HTTP bridge. Resolves the previously dangling
+  `docker/Dockerfile.jetson` references in `.github/workflows/docker.yml` and
+  `docs/deployment.md`; the Jetson deployment docs were corrected to describe the
+  image accurately (perception container on the Isaac ROS base, not an
+  all-in-one) and note the `BASE_IMAGE` prerequisite.
 
 ## [0.2.1] - 2026-06-13
 
