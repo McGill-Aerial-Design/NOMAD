@@ -28,6 +28,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   monitor loop, and the module lifecycle) — all with subprocess, socket, and the
   system clock mocked. Raises the `pixi run test` coverage floor 60% -> 65%
   (66% actual).
+- Payload actuation I/O coverage (`tests/test_payload_servo_io.py`,
+  `tests/test_payload_module.py`): the non-safety MAVLink-I/O surface of the servo
+  adapter — `MavlinkServo` (channel validation, angle clamp/transmit, PWM validate/
+  no-link/result, pulse mapping), `ServoController` (camera tilt config + last-angle
+  preservation, status, lifecycle, defensive branches), the module-global
+  controller helpers, and the `PayloadModule` arm/trigger command routes (200/400/
+  409/503) — taking `modules/payload/servo.py` and `services/payload_module.py`
+  both to **100%**. The SR-PAY-01/02/03 fault-injection guarantees stay in
+  `tests/test_payload_servo.py`; `cov-safety` remains 100%. Raises the `pixi run
+  test` coverage floor 82% -> 84% (84.24% actual).
 - `TailscaleManager` unit coverage (`tests/test_tailscale_manager.py`): the
   Tailscale status poller exercised with the module-level `_run` wrapper stubbed —
   the `parse_status_json` state map + IPv4 extraction, `_check_status`
