@@ -22,6 +22,14 @@ from .coordinate_math import quat_to_euler, wrap_angle_rad
 from .http_client import EdgeCoreHttpClient
 from .mavlink_velocity import MavlinkVelocityController
 from .mesh_packer import VoxelMeshPacker
+from .vio_math import (
+    camera_to_body_pose,
+    flu_to_ned_attitude,
+    flu_to_ned_vec3,
+    position_variance,
+    tilt_compensated_heading,
+    vio_confidence,
+)
 
 try:
     from sensor_msgs.msg import Imu, MagneticField
@@ -195,10 +203,9 @@ class ROSHTTPBridge(Node):
         try:
             pose = msg.pose.pose
             twist = msg.twist.twist
-            cov = msg.pose.covariance
-            pos_var = max(cov[0], cov[7], cov[14])
+            pos_var = position_variance(msg.pose.covariance)
 
-            confidence = max(0.0, min(1.0, 1.0 - pos_var * 10.0))
+            confidence = vio_confidence(pos_var)
 
             if self._mavlink_vel is not None:
                 self._mavlink_vel.note_vio(confidence, healthy=pos_var <= 0.1)
@@ -223,9 +230,9 @@ class ROSHTTPBridge(Node):
                 attitude_yaw = ros_yaw
 
             # REP-103 (X-fwd, Y-left, Z-up) -> NED (X-north, Y-east, Z-down).
-            ned_x, ned_y, ned_z = pose.position.x, -pose.position.y, -pose.position.z
-            ned_roll, ned_pitch, ned_yaw = attitude_roll, -attitude_pitch, -attitude_yaw
-            ned_vx, ned_vy, ned_vz = twist.linear.x, -twist.linear.y, -twist.linear.z
+            ned_x, ned_y, ned_z = flu_to_ned_vec3(pose.position.x, pose.position.y, pose.position.z)
+            ned_roll, ned_pitch, ned_yaw = flu_to_ned_attitude(attitude_roll, attitude_pitch, attitude_yaw)
+            ned_vx, ned_vy, ned_vz = flu_to_ned_vec3(twist.linear.x, twist.linear.y, twist.linear.z)
 
             slam_x, slam_y, slam_z = pose.position.x, pose.position.y, pose.position.z
             slam_roll, slam_pitch, slam_yaw = ros_roll, ros_pitch, ros_yaw
@@ -300,8 +307,6 @@ class ROSHTTPBridge(Node):
             mag_x = msg.magnetic_field.x
             mag_y = msg.magnetic_field.y
             mag_z = msg.magnetic_field.z
-            if math.sqrt(mag_x * mag_x + mag_y * mag_y) < 1e-9:
-                return
 
             with self._lock:
                 imu_roll = self._imu_roll
@@ -310,16 +315,9 @@ class ROSHTTPBridge(Node):
 
             # Tilt-compensate using IMU roll/pitch so yaw stays stable while the
             # camera pitches/rolls. Frame: X-fwd, Y-left, Z-up (REP-103 body).
-            if has_imu:
-                cr, sr = math.cos(imu_roll), math.sin(imu_roll)
-                cp, sp = math.cos(imu_pitch), math.sin(imu_pitch)
-                xh = mag_x * cp + mag_z * sp
-                yh = mag_x * sr * sp + mag_y * cr - mag_z * sr * cp
-                if math.sqrt(xh * xh + yh * yh) < 1e-12:
-                    return
-                heading = math.atan2(-yh, xh)
-            else:
-                heading = math.atan2(-mag_y, mag_x)
+            heading = tilt_compensated_heading(mag_x, mag_y, mag_z, imu_roll, imu_pitch, has_imu)
+            if heading is None:
+                return
 
             with self._lock:
                 self._mag_heading = heading
@@ -431,39 +429,17 @@ class ROSHTTPBridge(Node):
         if vio is None:
             return None
 
-        cx, cy, cz = vio.ros_x, vio.ros_y, vio.ros_z
-        qx, qy, qz, qw = vio.ros_qx, vio.ros_qy, vio.ros_qz, vio.ros_qw
-
-        servo_pitch = self._gimbal_pitch_rad
-        sq_y = math.sin(-servo_pitch / 2.0)
-        sq_w = math.cos(-servo_pitch / 2.0)
-
-        bqx = qw * 0.0 + qx * sq_w + qy * 0.0 - qz * sq_y
-        bqy = qw * sq_y - qx * 0.0 + qy * sq_w + qz * 0.0
-        bqz = qw * 0.0 + qx * sq_y + qy * 0.0 + qz * sq_w
-        bqw = qw * sq_w - qx * 0.0 - qy * sq_y - qz * 0.0
-
-        n = math.sqrt(bqx**2 + bqy**2 + bqz**2 + bqw**2)
-        if n > 1e-9:
-            bqx /= n
-            bqy /= n
-            bqz /= n
-            bqw /= n
-
-        mx, my, mz = self._gimbal_mount_offset
-        tx = 2.0 * (bqy * mz - bqz * my)
-        ty = 2.0 * (bqz * mx - bqx * mz)
-        tz = 2.0 * (bqx * my - bqy * mx)
-        ox = mx + bqw * tx + (bqy * tz - bqz * ty)
-        oy = my + bqw * ty + (bqz * tx - bqx * tz)
-        oz = mz + bqw * tz + (bqx * ty - bqy * tx)
-
-        body_roll, body_pitch, body_yaw = quat_to_euler(bqx, bqy, bqz, bqw)
-
-        return {
-            "position": {"x": round(cx - ox, 4), "y": round(cy - oy, 4), "z": round(cz - oz, 4)},
-            "attitude": {"roll": round(body_roll, 4), "pitch": round(body_pitch, 4), "yaw": round(body_yaw, 4)},
-        }
+        return camera_to_body_pose(
+            vio.ros_x,
+            vio.ros_y,
+            vio.ros_z,
+            vio.ros_qx,
+            vio.ros_qy,
+            vio.ros_qz,
+            vio.ros_qw,
+            self._gimbal_pitch_rad,
+            self._gimbal_mount_offset,
+        )
 
     def _send_to_edge_core(self) -> None:
         with self._lock:
