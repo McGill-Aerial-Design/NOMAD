@@ -28,6 +28,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   monitor loop, and the module lifecycle) — all with subprocess, socket, and the
   system clock mocked. Raises the `pixi run test` coverage floor 60% -> 65%
   (66% actual).
+- Simple video bridge fallback + entrypoint coverage (`tests/test_simple_video_bridge.py`):
+  the appsrc GStreamer fallback (with bindings present and absent), the
+  python-subprocess pipeline (success/failure), the kill-after-terminate-fails
+  teardown branch, and `main()` (serve-then-shutdown and Ctrl-C) — taking
+  `services/ros/simple_video_bridge.py` to 99% (only the `__main__` guard left).
+  Raises the `pixi run test` coverage floor 84% -> 85% (85.40% actual).
 - `MavlinkCommands` unit coverage (`tests/test_mavlink_commands.py`): the MAVLink
   command builders driven with a fake pymavlink link and the command-ack sender
   stubbed — the `_send_guarded` link guard (no-connection / None-result /
