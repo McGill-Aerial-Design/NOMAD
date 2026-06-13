@@ -90,6 +90,39 @@ def _wait_until(predicate, timeout: float, telem: Telemetry, what: str):
     raise ScenarioError(f"timed out after {timeout:.0f}s waiting for {what}; last telemetry={telem.snapshot()}")
 
 
+def _ensure_landed_and_disarmed(conn, telem, timeout: float = 120.0) -> None:
+    """Bring the vehicle to a clean landed + disarmed state before arming it.
+
+    Sequential SITL scenarios share one vehicle, and a scenario's cleanup only
+    *initiates* RTL - it does not wait for landing. So the next scenario can
+    start while the vehicle is still airborne (mid-RTL), which derails its
+    arm -> GUIDED -> takeoff (the takeoff is ignored while already flying, and
+    home gets read mid-transit). Calling this first makes each scenario
+    independent of however the previous one left the vehicle.
+
+    Relies only on ``snapshot()[1]`` (armed), which both scenario telemetry
+    types expose, so it is shared. Disarmed in SITL means motors off on the
+    ground (RTL auto-disarms after landing).
+    """
+    # Let the reader latch a real heartbeat first; ``armed`` defaults to False.
+    time.sleep(2.0)
+    if not telem.snapshot()[1]:
+        return  # already disarmed -> on the ground
+    _log("vehicle still airborne from a prior scenario; RTL + waiting for disarm")
+    try:
+        _set_mode(conn, "RTL")
+    except Exception:
+        pass
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not telem.snapshot()[1]:
+            _log("landed and disarmed; settling before takeoff")
+            time.sleep(3.0)  # let baro/EKF settle on the ground
+            return
+        time.sleep(0.5)
+    raise ScenarioError(f"vehicle did not land + disarm within {timeout:.0f}s for a clean takeoff")
+
+
 def run_scenario(operator_ep: str, controller_ep: str) -> dict:
     """Execute the loop-closure scenario. Raises ScenarioError on failure."""
     results: dict[str, object] = {}
@@ -115,6 +148,10 @@ def run_scenario(operator_ep: str, controller_ep: str) -> dict:
     controller: MavlinkVelocityController | None = None
     vio_stop = threading.Event()
     try:
+        # Start from a clean ground state regardless of how a prior scenario
+        # (sharing this vehicle) left it.
+        _ensure_landed_and_disarmed(op, telem)
+
         # --- arm -> GUIDED -> takeoff -------------------------------------
         _set_mode(op, "GUIDED")
         _wait_until(lambda s: s[0] == "GUIDED", 15, telem, "mode GUIDED")

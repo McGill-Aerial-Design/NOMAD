@@ -19,6 +19,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   files and partial-class splits build without hand-editing the csproj. It stays
   a plain MSBuild project (no .NET SDK prerequisite, unlike SDK-style).
 
+### Fixed
+- [tests] [bug] SITL scenarios now land and disarm before takeoff, so the
+  nightly `sitl-fence` job no longer times out waiting for a climb when it
+  starts while the prior `sitl-scenario` flight is still returning (RTL). Each
+  scenario establishes its own clean ground state, independent of run order.
+
 ## [0.2.0] - 2026-06-12
 
 ### Added

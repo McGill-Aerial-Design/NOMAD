@@ -35,6 +35,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from velocity_loop_closure import (  # noqa: E402
     ScenarioError,
     _command_long,
+    _ensure_landed_and_disarmed,
     _log,
     _set_mode,
     _wait_until,
@@ -125,6 +126,11 @@ def run_scenario(operator_ep: str, controller_ep: str) -> dict:
 
     service: MavlinkService | None = None
     try:
+        # Start from a clean ground state: a prior scenario sharing this vehicle
+        # may have left it airborne (mid-RTL). Land + disarm first so home is
+        # read at the true ground position and takeoff starts from the ground.
+        _ensure_landed_and_disarmed(op, telem)
+
         # --- read home, configure the fence BEFORE building the service ----
         snap = _wait_until(lambda s: math.isfinite(s[3]), 30, telem, "a GPS position")
         home = GPSCoordinate(snap[3], snap[4])
