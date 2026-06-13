@@ -28,6 +28,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   monitor loop, and the module lifecycle) — all with subprocess, socket, and the
   system clock mocked. Raises the `pixi run test` coverage floor 60% -> 65%
   (66% actual).
+- `edge_core.ros_http_bridge.vio_math` (+ `tests/test_vio_math.py`): the VIO
+  pose/frame math lifted out of the rclpy-only `node.py` into a pure, 100%-covered
+  module — covariance→confidence, the REP-103→NED position/velocity/attitude sign
+  conventions, the tilt-compensated magnetometer heading (incl. its degenerate
+  no-update cases), and the gimbal-camera→drone-body pose composition. 17 tests
+  pin the flight-relevant signs that were previously unreachable by the suite.
 - `docker/Dockerfile.jetson` (+ `docker/ros_entrypoint.sh`): the on-board Jetson
   perception/odometry image, layered on the Isaac ROS dev base — ZED SDK 5.2.3,
   GStreamer, the ZED/nvblox/nav2 ROS2 runtime, `isaac_ros_nvblox_utils`, and the
@@ -44,6 +50,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   logic still mixed with panel chrome" (`docs/safety/partition.md`); behaviour is
   unchanged (3-click drop, 2-click relay fire, 3 s window). Also disposes the
   relay-fire reset timers on teardown (previously leaked).
+- The ROS-HTTP bridge node (`ros_http_bridge.node`) is now a thin ROS adapter:
+  its `_handle_vio`/`_handle_mag`/`_get_drone_body_pose` callbacks delegate the
+  frame and pose arithmetic to the new `vio_math` module instead of computing it
+  inline. Behaviour-preserving; the only untested file left in the bridge package
+  shrinks to message unpacking and HTTP forwarding.
 
 ## [0.2.1] - 2026-06-13
 
