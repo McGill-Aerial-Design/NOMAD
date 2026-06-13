@@ -7,6 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `StateManager` and `TimeSyncService` unit coverage: the 10 Hz model-rebuild
+  batching contract (immediate vs. rate-limited snapshots, forced updates) and
+  the NTP/GPS time-sync status machine (`timedatectl`/socket reachability,
+  GPS-offset estimation, `force_sync_from_gps` success/fallback/error paths, the
+  monitor loop, and the module lifecycle) — all with subprocess, socket, and the
+  system clock mocked. Raises the `pixi run test` coverage floor 60% -> 65%
+  (66% actual).
+
 ## [0.2.1] - 2026-06-13
 
 ### Added
