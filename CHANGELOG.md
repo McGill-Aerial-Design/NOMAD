@@ -28,6 +28,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   monitor loop, and the module lifecycle) — all with subprocess, socket, and the
   system clock mocked. Raises the `pixi run test` coverage floor 60% -> 65%
   (66% actual).
+- `MavlinkCommands` unit coverage (`tests/test_mavlink_commands.py`): the MAVLink
+  command builders driven with a fake pymavlink link and the command-ack sender
+  stubbed — the `_send_guarded` link guard (no-connection / None-result /
+  truthy-falsy / exception), `arm_disarm`, `trigger_payload`, `set_relay`,
+  `set_mode`/`land`, `takeoff`, `request_home_position`, velocity (default/custom
+  frame, `stop_velocity`), `send_statustext` (truncation + severity), and the
+  global/local position targets (link guard + yaw mask; fence gating stays in
+  `test_mavlink_fence`) — taking `services/mavlink/commands.py` to **100%** (total
+  84.70%). `cov-safety` unchanged (no SC source touched).
 - Payload actuation I/O coverage (`tests/test_payload_servo_io.py`,
   `tests/test_payload_module.py`): the non-safety MAVLink-I/O surface of the servo
   adapter — `MavlinkServo` (channel validation, angle clamp/transmit, PWM validate/
