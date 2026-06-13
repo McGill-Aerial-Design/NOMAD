@@ -28,6 +28,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   monitor loop, and the module lifecycle) — all with subprocess, socket, and the
   system clock mocked. Raises the `pixi run test` coverage floor 60% -> 65%
   (66% actual).
+- `NetworkMonitor` unit coverage (`tests/test_network_monitor.py`): the 4G/LTE
+  modem + connectivity monitor exercised with the module-level `_run` shell
+  wrapper stubbed to a command-dispatching fake — the `nmcli`/`mmcli`/`ip`/`ping`
+  parsers (RSRP→quality/percent, NM connection lookup + fuzzy LTE-profile
+  heuristics, ModemManager modem read with signal/bearer fallbacks, interface
+  guessing, ping RTT), the NM+MM merge in `_check_modem_status`, `check_connectivity`,
+  and the thread lifecycle — taking `infra/tailscale/network_monitor.py` from 42%
+  to **100%**. Raises the `pixi run test` coverage floor 78% -> 82% (82.06% actual).
 - `VideoStreamManager` unit coverage (`tests/test_video_stream_manager.py`): the
   in-container video-bridge controller driven with `subprocess.run` (a
   docker-command-classifying stub) and `urlopen` (a URL->payload map) faked —
