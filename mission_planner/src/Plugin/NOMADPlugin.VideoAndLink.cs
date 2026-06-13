@@ -319,20 +319,24 @@ namespace NOMAD.MissionPlanner
             {
                 try
                 {
-                    var body = new System.Net.Http.StringContent(
-                        Newtonsoft.Json.JsonConvert.SerializeObject(new
-                        {
-                            channel         = cfg.CameraTiltChannel,
-                            pwm_down        = cfg.CameraTiltPwmMin,
-                            pwm_neutral     = cfg.CameraTiltPwmNeutral,
-                            pwm_up          = cfg.CameraTiltPwmMax,
-                            angle_range_deg = cfg.CameraTiltAngleRange,
-                        }),
-                        System.Text.Encoding.UTF8,
-                        "application/json");
+                    var tilt = cfg.CameraTilt();
+                    if (tilt != null)
+                    {
+                        var body = new System.Net.Http.StringContent(
+                            Newtonsoft.Json.JsonConvert.SerializeObject(new
+                            {
+                                channel         = tilt.Channel,
+                                pwm_down        = tilt.PwmMin,
+                                pwm_neutral     = tilt.PwmNeutral,
+                                pwm_up          = tilt.PwmMax,
+                                angle_range_deg = tilt.AngleRangeDeg,
+                            }),
+                            System.Text.Encoding.UTF8,
+                            "application/json");
 
-                    var response = await JetsonApiService.PostAsync("/api/servo/camera/config", body);
-                    Log.Debug($"Pushed servo config to Jetson — HTTP {(int)response.StatusCode}");
+                        var response = await JetsonApiService.PostAsync("/api/servo/camera/config", body);
+                        Log.Debug($"Pushed servo config to Jetson — HTTP {(int)response.StatusCode}");
+                    }
 
                     // The server consumes only the relay number (extra fields
                     // are rejected); all other spray settings are GCS-local.

@@ -35,12 +35,11 @@ namespace NOMAD.MissionPlanner
         private static readonly Color ACCENT_COLOR   = NOMADTheme.ACCENT;
 
         // Safety limits
-        private const int REEL_SAFETY_MS = 10_000; // max continuous hold-to-reel time
         private const int TILT_SETTLE_MS = 100;    // final send after slider stops moving
 
         // Full-spool reel constants — three-click confirm to start, fourth
-        // click (or any click after start) cancels mid-spool.
-        private const int FULL_REEL_DURATION_MS     = 80_000; // 1 min 20 s
+        // click (or any click after start) cancels mid-spool. Run duration is
+        // per-payload (PayloadControl.FullDurationS).
         private const int FULL_REEL_CLICKS_REQUIRED = 3;
         private const int FULL_REEL_CLICK_RESET_MS  = 3000;
 
@@ -50,21 +49,25 @@ namespace NOMAD.MissionPlanner
 
         private readonly NOMADConfig _config;
 
-        // Reel safety (indexed: 0 = reel 1, 1 = reel 2)
-        private readonly bool[]  _reelActive       = new bool[2];
-        private readonly Timer[] _reelSafetyTimers = new Timer[2];
+        // Reel payloads in panel order (PayloadKind.Reel entries), with
+        // hold-to-reel safety state per reel. Allocated in InitializeUI.
+        private List<PayloadControl> _reelPayloads = new List<PayloadControl>();
+        private bool[]  _reelActive       = new bool[0];
+        private Timer[] _reelSafetyTimers = new Timer[0];
 
-        // Full-spool reel state. Slot layout: 0 = reel-1 IN, 1 = reel-1 OUT,
-        // 2 = reel-2 IN, 3 = reel-2 OUT. Each slot tracks its own arming
-        // click count and its own active 80s countdown so the operator can
-        // cancel mid-spool by clicking the running button again.
-        private readonly Button[] _fullReelButtons     = new Button[4];
-        private readonly string[] _fullReelLabels      = { "In Full", "Out Full", "In Full", "Out Full" };
-        private readonly int[]    _fullReelClickCount   = new int[4];
-        private readonly Timer[]  _fullReelClickReset   = new Timer[4];
-        private readonly Timer[]  _fullReelCountdown    = new Timer[4];
-        private readonly int[]    _fullReelRemainingMs  = new int[4];
-        private readonly bool[]   _fullReelActive       = new bool[4];
+        // Full-spool reel state. Slot layout: reel n IN = slot 2n, reel n
+        // OUT = slot 2n+1. Each slot tracks its own arming click count and its
+        // own active countdown so the operator can cancel mid-spool by
+        // clicking the running button again.
+        private Button[] _fullReelButtons     = new Button[0];
+        private int[]    _fullReelClickCount  = new int[0];
+        private Timer[]  _fullReelClickReset  = new Timer[0];
+        private Timer[]  _fullReelCountdown   = new Timer[0];
+        private int[]    _fullReelRemainingMs = new int[0];
+        private bool[]   _fullReelActive      = new bool[0];
+
+        // The CamTilt payload rendered as the tilt row (first enabled one), or null.
+        private PayloadControl _tiltPayload;
 
         // Tilt debounce
         private TrackBar _tiltSlider;
@@ -147,15 +150,31 @@ namespace NOMAD.MissionPlanner
 
             int y = 26;
 
+            // Allocate per-reel state from the configured reel payloads, then a
+            // full-spool slot pair (IN/OUT) per reel.
+            _reelPayloads = _config.ReelPayloads();
+            int reelCount = _reelPayloads.Count;
+            _reelActive        = new bool[reelCount];
+            _reelSafetyTimers  = new Timer[reelCount];
+            _fullReelButtons     = new Button[reelCount * 2];
+            _fullReelClickCount  = new int[reelCount * 2];
+            _fullReelClickReset  = new Timer[reelCount * 2];
+            _fullReelCountdown   = new Timer[reelCount * 2];
+            _fullReelRemainingMs = new int[reelCount * 2];
+            _fullReelActive      = new bool[reelCount * 2];
+
+            _tiltPayload = _config.CameraTilt();
+
             // Configurable payloads (drop / slider / relay) — see PayloadControlPanel.Drop.cs.
             BuildPayloadRows(ref y);
 
-            // Dedicated strap-reel rows.
-            BuildReelRow(0, ref y);
-            BuildReelRow(1, ref y);
+            // Strap-reel rows, one per configured reel payload.
+            for (int i = 0; i < reelCount; i++)
+                BuildReelRow(i, ref y);
 
-            // Dedicated ZED camera-tilt row.
-            BuildTiltRow(ref y);
+            // ZED camera-tilt row (only when a CamTilt payload is configured).
+            if (_tiltPayload != null)
+                BuildTiltRow(ref y);
 
             // Status label — full width, below everything.
             _lblStatus = new Label
@@ -178,10 +197,11 @@ namespace NOMAD.MissionPlanner
 
         private void BuildReelRow(int reelIdx, ref int y)
         {
+            var reel = ReelPayload(reelIdx);
             int x = 10;
             Controls.Add(new Label
             {
-                Text = $"Reel P{reelIdx + 1}:",
+                Text = $"{ReelName(reelIdx)}:",
                 Font = new Font("Segoe UI", 9),
                 ForeColor = TEXT_SECONDARY,
                 Location = new Point(x, y + 4),
@@ -189,8 +209,8 @@ namespace NOMAD.MissionPlanner
             });
             x += 58;
 
-            int pwmIn  = reelIdx == 0 ? (_config?.ReelPwmIn  ?? 2100) : (_config?.Reel2PwmIn  ?? 2100);
-            int pwmOut = reelIdx == 0 ? (_config?.ReelPwmOut ?? 900)  : (_config?.Reel2PwmOut ?? 900);
+            int pwmIn  = reel?.PwmMax ?? 2100;
+            int pwmOut = reel?.PwmMin ?? 900;
 
             var btnIn = MakeButton("⬆ Reel In", Color.FromArgb(50, 100, 50), 85, ROW_H);
             btnIn.Location = new Point(x, y);
@@ -224,7 +244,7 @@ namespace NOMAD.MissionPlanner
             int x = 10;
             Controls.Add(new Label
             {
-                Text = "Cam Tilt:",
+                Text = $"{_tiltPayload?.Name ?? "Cam Tilt"}:",
                 Font = new Font("Segoe UI", 9),
                 ForeColor = TEXT_SECONDARY,
                 Location = new Point(x, y + 4),
@@ -232,8 +252,8 @@ namespace NOMAD.MissionPlanner
             });
             x += 72;
 
-            int tiltMin     = _config?.CameraTiltPwmMin ?? 700;
-            int tiltMax     = _config?.CameraTiltPwmMax ?? 1450;
+            int tiltMin     = _tiltPayload?.PwmMin ?? 700;
+            int tiltMax     = _tiltPayload?.PwmMax ?? 1450;
             int initialTilt = Math.Max(tiltMin, Math.Min(tiltMax, s_lastTiltPulseUs));
 
             _tiltSlider = new TrackBar
@@ -264,7 +284,7 @@ namespace NOMAD.MissionPlanner
             Controls.Add(_lblTiltValue);
             x += 60;
 
-            int tiltCenter = _config?.CameraTiltPwmNeutral ?? 1250;
+            int tiltCenter = _tiltPayload?.PwmNeutral ?? 1250;
             foreach (var (label, value) in new (string, int)[] { ("▼", tiltMin), ("●", tiltCenter), ("▲", tiltMax) })
             {
                 int v = value;
@@ -280,6 +300,14 @@ namespace NOMAD.MissionPlanner
         }
 
         // Strap-reel command logic lives in PayloadControlPanel.Reels.cs.
+
+        /// <summary>The reel payload at panel index <paramref name="reelIdx"/>, or null.</summary>
+        private PayloadControl ReelPayload(int reelIdx)
+            => reelIdx >= 0 && reelIdx < _reelPayloads.Count ? _reelPayloads[reelIdx] : null;
+
+        /// <summary>Operator-facing label for a reel (its configured name, or a "Reel Pn" fallback).</summary>
+        private string ReelName(int reelIdx)
+            => ReelPayload(reelIdx)?.Name ?? $"Reel P{reelIdx + 1}";
 
 
         // ============================================================
@@ -320,7 +348,8 @@ namespace NOMAD.MissionPlanner
 
         private async void SendCameraTiltAsync(int pulseUs, bool tryOnly = false)
         {
-            int channel = _config?.CameraTiltChannel ?? 0;
+            int channel = _tiltPayload?.Channel ?? 0;
+            if (channel <= 0) return;
             await CubeOutputController.SendServoPwmAsync(channel, pulseUs, tryOnly);
         }
 

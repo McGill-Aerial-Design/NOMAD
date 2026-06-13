@@ -82,8 +82,10 @@ namespace NOMAD.MissionPlanner
 
             // Seed tilt integrator from the live shared value so the first stick
             // motion is relative to where the slider/servo already is.
-            _zedTiltUs = Math.Max(_config.CameraTiltPwmMin,
-                          Math.Min(_config.CameraTiltPwmMax, PayloadControlPanel.LastTiltPulseUs));
+            var tilt = _config.CameraTilt();
+            int tiltMin = tilt?.PwmMin ?? 700;
+            int tiltMax = tilt?.PwmMax ?? 1450;
+            _zedTiltUs = Math.Max(tiltMin, Math.Min(tiltMax, PayloadControlPanel.LastTiltPulseUs));
 
             // The Caddx mount only honors DO_MOUNT_CONTROL absolute-angle commands
             // when it's in MAVLink targeting mode. Without this ping the mount may
@@ -370,8 +372,11 @@ namespace NOMAD.MissionPlanner
             float v = ReadAxisNorm(st, _config.JoystickZedTiltAxis, _config.JoystickZedTiltInvert, _config.JoystickZedDeadzone);
             if (v == 0f) return;
 
-            int pwmMin = _config.CameraTiltPwmMin;
-            int pwmMax = _config.CameraTiltPwmMax;
+            var tilt = _config.CameraTilt();
+            if (tilt == null || tilt.Channel <= 0) return;
+
+            int pwmMin = tilt.PwmMin;
+            int pwmMax = tilt.PwmMax;
             float target = _zedTiltUs + v * _config.JoystickZedMaxRateUsPerSec * dt;
             if (target < pwmMin) target = pwmMin;
             if (target > pwmMax) target = pwmMax;
@@ -382,8 +387,7 @@ namespace NOMAD.MissionPlanner
             _zedTiltUs = target;
             if (newUs == oldUs) return;
 
-            int channel = _config.CameraTiltChannel;
-            if (channel <= 0) return;
+            int channel = tilt.Channel;
 
             _ = CubeOutputController.SendServoPwmAsync(channel, newUs, tryOnly: true);
             PayloadControlPanel.SetExternalTiltPulse(newUs);

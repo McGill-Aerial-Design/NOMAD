@@ -250,17 +250,6 @@ namespace NOMAD.MissionPlanner
             SlamCameraFovDeg = defaults.SlamCameraFovDeg;
             SlamMapRadiusM = defaults.SlamMapRadiusM;
             Payloads = defaults.Payloads;
-            ReelServoChannel = defaults.ReelServoChannel;
-            ReelPwmIn = defaults.ReelPwmIn;
-            ReelPwmOut = defaults.ReelPwmOut;
-            Reel2ServoChannel = defaults.Reel2ServoChannel;
-            Reel2PwmIn = defaults.Reel2PwmIn;
-            Reel2PwmOut = defaults.Reel2PwmOut;
-            CameraTiltChannel = defaults.CameraTiltChannel;
-            CameraTiltPwmMin = defaults.CameraTiltPwmMin;
-            CameraTiltPwmNeutral = defaults.CameraTiltPwmNeutral;
-            CameraTiltPwmMax = defaults.CameraTiltPwmMax;
-            CameraTiltAngleRange = defaults.CameraTiltAngleRange;
             SprayTargetCameraRangeM = defaults.SprayTargetCameraRangeM;
             SprayRangeToleranceM = defaults.SprayRangeToleranceM;
             SprayTriggerMaxDistanceM = defaults.SprayTriggerMaxDistanceM;

@@ -28,15 +28,15 @@ namespace NOMAD.MissionPlanner
             var tab = CreateTabPage("Payloads");
 
             AddLabel(tab,
-                $"Up to {NOMADConfig.MaxPayloads} payloads. Kind: Drop (servo, 3-click), Slider (live PWM), Relay (GPIO: pulse if Pulse>0, else toggle).",
+                $"Up to {NOMADConfig.MaxPayloads} payloads. Kind: Drop (servo 3-click), Slider (live PWM), Relay (GPIO pulse/toggle), Reel (hold + full-spool), CamTilt (tilt slider).",
                 10, 8, Color.Gray);
-            AddLabel(tab, "Ch/Relay = servo channel for Drop/Slider, relay number for Relay. RC = optional TX pass-through channel (5-16).",
+            AddLabel(tab, "Min/Max/Neutral = servo endpoints. Reel: Max=in, Min=out, Neutral=stop, Hold=safety s, Full=spool s. CamTilt: Min=down, Max=up, Neutral=level, Range=deg.",
                 10, 26, Color.Gray);
 
             _gridPayloads = new DataGridView
             {
                 Location = new Point(10, 48),
-                Size = new Size(540, 250),
+                Size = new Size(720, 250),
                 AllowUserToAddRows = false,
                 AllowUserToDeleteRows = false,
                 AutoGenerateColumns = false,
@@ -65,13 +65,16 @@ namespace NOMAD.MissionPlanner
                 ValueType = typeof(PayloadKind),
             };
             _gridPayloads.Columns.Add(kindCol);
-            _gridPayloads.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "Channel",    HeaderText = "Ch/Relay", Width = 58 });
-            _gridPayloads.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "PwmMin",     HeaderText = "Min",      Width = 50 });
-            _gridPayloads.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "PwmMax",     HeaderText = "Max",      Width = 50 });
-            _gridPayloads.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "PwmNeutral", HeaderText = "Neutral",  Width = 54 });
-            _gridPayloads.Columns.Add(new DataGridViewCheckBoxColumn { DataPropertyName = "Reversed",  HeaderText = "Rev",      Width = 36 });
-            _gridPayloads.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "PulseMs",    HeaderText = "Pulse",    Width = 50 });
-            _gridPayloads.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "RcChannel",  HeaderText = "RC",       Width = 36 });
+            _gridPayloads.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "Channel",       HeaderText = "Ch/Relay", Width = 58 });
+            _gridPayloads.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "PwmMin",        HeaderText = "Min",      Width = 50 });
+            _gridPayloads.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "PwmMax",        HeaderText = "Max",      Width = 50 });
+            _gridPayloads.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "PwmNeutral",    HeaderText = "Neutral",  Width = 54 });
+            _gridPayloads.Columns.Add(new DataGridViewCheckBoxColumn { DataPropertyName = "Reversed",     HeaderText = "Rev",      Width = 36 });
+            _gridPayloads.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "PulseMs",       HeaderText = "Pulse",    Width = 50 });
+            _gridPayloads.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "RcChannel",     HeaderText = "RC",       Width = 36 });
+            _gridPayloads.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "HoldSafetyS",   HeaderText = "Hold",     Width = 44 });
+            _gridPayloads.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "FullDurationS", HeaderText = "Full",     Width = 44 });
+            _gridPayloads.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = "AngleRangeDeg", HeaderText = "Range",    Width = 48 });
             tab.Controls.Add(_gridPayloads);
 
             Button MkBtn(string text, int x, int w)
@@ -91,23 +94,47 @@ namespace NOMAD.MissionPlanner
                 return b;
             }
 
-            MkBtn("Add", 10, 70).Click += (s, e) =>
+            bool AtCapacity()
             {
                 if (_payloadsBinding.Count >= NOMADConfig.MaxPayloads)
                 {
                     SetPayloadsStatus($"Maximum is {NOMADConfig.MaxPayloads} payloads.", Color.OrangeRed);
-                    return;
+                    return true;
                 }
+                return false;
+            }
+
+            MkBtn("Add", 10, 56).Click += (s, e) =>
+            {
+                if (AtCapacity()) return;
                 _payloadsBinding.Add(new PayloadControl { Name = $"Payload {_payloadsBinding.Count + 1}" });
             };
 
-            MkBtn("Remove", 86, 70).Click += (s, e) =>
+            MkBtn("Add Reel", 72, 72).Click += (s, e) =>
+            {
+                if (AtCapacity()) return;
+                int n = _payloadsBinding.Count(p => p.Kind == PayloadKind.Reel) + 1;
+                _payloadsBinding.Add(PayloadControl.NewReel($"Reel P{n}", 11 + n));
+            };
+
+            MkBtn("Add Cam Tilt", 150, 88).Click += (s, e) =>
+            {
+                if (AtCapacity()) return;
+                if (_payloadsBinding.Any(p => p.Kind == PayloadKind.CamTilt))
+                {
+                    SetPayloadsStatus("Only one Cam Tilt payload is used (the first enabled one).", Color.Goldenrod);
+                    return;
+                }
+                _payloadsBinding.Add(PayloadControl.NewCamTilt());
+            };
+
+            MkBtn("Remove", 244, 72).Click += (s, e) =>
             {
                 if (_gridPayloads.CurrentRow?.DataBoundItem is PayloadControl p)
                     _payloadsBinding.Remove(p);
             };
 
-            MkBtn("Apply RC Mappings", 170, 150).Click += (s, e) => ApplyPayloadRcMappings();
+            MkBtn("Apply RC Mappings", 322, 150).Click += (s, e) => ApplyPayloadRcMappings();
 
             _lblPayloadsStatus = new Label
             {

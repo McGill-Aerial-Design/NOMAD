@@ -6,14 +6,15 @@
 // A payload is one configurable Cube Orange output. The control panel and the
 // settings editor are both data-driven from NOMADConfig.Payloads, so operators
 // can add / remove / reconfigure up to NOMADConfig.MaxPayloads of them without a
-// code change. Three kinds are supported:
+// code change. Five kinds are supported:
 //
-//   Drop   - a servo with two endpoints; three-click "Drop", click again to retract.
-//   Slider - a servo exposed as a live PWM slider (e.g. an aiming / nozzle servo).
-//   Relay  - a GPIO / relay output (e.g. the water pump); momentary pulse or toggle.
-//
-// Strap reels and the ZED camera tilt remain dedicated sections (they carry
-// bespoke safety / joystick behaviour) and are configured separately.
+//   Drop    - a servo with two endpoints; three-click "Drop", click again to retract.
+//   Slider  - a servo exposed as a live PWM slider (e.g. an aiming / nozzle servo).
+//   Relay   - a GPIO / relay output (e.g. the water pump); momentary pulse or toggle.
+//   Reel    - a strap-reel servo: hold-to-reel with a safety cut-off, plus
+//             three-click-armed full-spool in/out with a configurable duration.
+//   CamTilt - the camera tilt servo: live slider with down/level/up presets,
+//             also driven by the ZED-tilt joystick channel.
 // ============================================================
 
 using System.Collections.Generic;
@@ -32,6 +33,12 @@ namespace NOMAD.MissionPlanner
 
         /// <summary>GPIO / relay output (pump, igniter, ...): momentary pulse or toggle.</summary>
         Relay,
+
+        /// <summary>Strap-reel servo: hold-to-reel + timed full-spool in/out.</summary>
+        Reel,
+
+        /// <summary>Camera tilt servo: live slider with down/level/up presets.</summary>
+        CamTilt,
     }
 
     /// <summary>
@@ -48,16 +55,25 @@ namespace NOMAD.MissionPlanner
         /// <summary>Which output type / UI this payload uses.</summary>
         public PayloadKind Kind { get; set; } = PayloadKind.Drop;
 
-        /// <summary>Cube servo output channel (Drop / Slider) or relay/GPIO number (Relay).</summary>
+        /// <summary>Cube servo output channel (Drop / Slider / Reel / CamTilt) or relay/GPIO number (Relay).</summary>
         public int Channel { get; set; } = 9;
 
-        /// <summary>Servo low endpoint (Drop) / slider minimum (Slider), in microseconds.</summary>
+        /// <summary>
+        /// Servo low endpoint (Drop) / slider minimum (Slider) / reel-out PWM (Reel)
+        /// / fully-down PWM (CamTilt), in microseconds.
+        /// </summary>
         public int PwmMin { get; set; } = 1000;
 
-        /// <summary>Servo high endpoint (Drop) / slider maximum (Slider), in microseconds.</summary>
+        /// <summary>
+        /// Servo high endpoint (Drop) / slider maximum (Slider) / reel-in PWM (Reel)
+        /// / fully-up PWM (CamTilt), in microseconds.
+        /// </summary>
         public int PwmMax { get; set; } = 2000;
 
-        /// <summary>Slider default / resting position, in microseconds.</summary>
+        /// <summary>
+        /// Slider default / resting position (Slider), reel stop PWM (Reel), or
+        /// level / straight-ahead PWM (CamTilt), in microseconds.
+        /// </summary>
         public int PwmNeutral { get; set; } = 1500;
 
         /// <summary>Drop only: when true the servo drops at <see cref="PwmMin"/> instead of <see cref="PwmMax"/>.</summary>
@@ -73,7 +89,38 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public int RcChannel { get; set; }
 
+        /// <summary>Reel only: max continuous hold-to-reel time in seconds before the safety cut-off stops the reel.</summary>
+        public int HoldSafetyS { get; set; } = 10;
+
+        /// <summary>Reel only: full-spool run duration in seconds for the armed "In Full" / "Out Full" buttons.</summary>
+        public int FullDurationS { get; set; } = 80;
+
+        /// <summary>CamTilt only: physical tilt range in degrees each way from level (pushed to the Jetson for angle conversion).</summary>
+        public int AngleRangeDeg { get; set; } = 45;
+
         public PayloadControl Clone() => (PayloadControl)MemberwiseClone();
+
+        /// <summary>A strap reel with the standard NOMAD defaults (out &lt;1000 us, in &gt;2000 us, stop 1500 us).</summary>
+        public static PayloadControl NewReel(string name, int channel = 12) => new PayloadControl
+        {
+            Name = name,
+            Kind = PayloadKind.Reel,
+            Channel = channel,
+            PwmMin = 900,      // reel out
+            PwmMax = 2100,     // reel in
+            PwmNeutral = 1500, // stop
+        };
+
+        /// <summary>The ZED camera tilt servo with the standard NOMAD calibration (700 down / 1250 level / 1450 up).</summary>
+        public static PayloadControl NewCamTilt(string name = "Cam Tilt", int channel = 14) => new PayloadControl
+        {
+            Name = name,
+            Kind = PayloadKind.CamTilt,
+            Channel = channel,
+            PwmMin = 700,      // fully down
+            PwmNeutral = 1250, // level (mechanically offset arm, not 1500)
+            PwmMax = 1450,     // fully up
+        };
     }
 
     /// <summary>Lookup helpers over <c>NOMADConfig.Payloads</c>.</summary>
@@ -91,5 +138,21 @@ namespace NOMAD.MissionPlanner
         /// <summary>The water-pump / spray relay: the first enabled relay payload, or null.</summary>
         public static PayloadControl WaterPump(this NOMADConfig cfg)
             => cfg?.Payloads?.FirstOrDefault(p => p != null && p.Enabled && p.Kind == PayloadKind.Relay);
+
+        /// <summary>Enabled strap-reel payloads in order (joystick "reel P1" == index 0).</summary>
+        public static List<PayloadControl> ReelPayloads(this NOMADConfig cfg)
+            => cfg?.Payloads?.Where(p => p != null && p.Enabled && p.Kind == PayloadKind.Reel).ToList()
+               ?? new List<PayloadControl>();
+
+        /// <summary>The 0-based n-th enabled reel payload, or null.</summary>
+        public static PayloadControl ReelAt(this NOMADConfig cfg, int reelIdx)
+        {
+            var reels = cfg.ReelPayloads();
+            return reelIdx >= 0 && reelIdx < reels.Count ? reels[reelIdx] : null;
+        }
+
+        /// <summary>The camera tilt servo: the first enabled CamTilt payload, or null.</summary>
+        public static PayloadControl CameraTilt(this NOMADConfig cfg)
+            => cfg?.Payloads?.FirstOrDefault(p => p != null && p.Enabled && p.Kind == PayloadKind.CamTilt);
     }
 }

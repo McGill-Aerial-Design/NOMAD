@@ -83,21 +83,8 @@ namespace NOMAD.MissionPlanner
             _numTempCritical.Value = (decimal)Config.TempCriticalC;
             _chkAudioAlerts.Checked = Config.AudioAlerts;
 
-            // Payloads (drop / slider / relay) — own tab
+            // Payloads (drop / slider / relay / reel / cam tilt) — own tab
             LoadPayloads();
-
-            // Reels + camera tilt
-            _numReelCh.Value      = Config.ReelServoChannel;
-            _numReelPwmIn.Value   = Config.ReelPwmIn;
-            _numReelPwmOut.Value  = Config.ReelPwmOut;
-            _numReel2Ch.Value     = Config.Reel2ServoChannel;
-            _numReel2PwmIn.Value  = Config.Reel2PwmIn;
-            _numReel2PwmOut.Value = Config.Reel2PwmOut;
-            _numTiltCh.Value          = Config.CameraTiltChannel;
-            _numTiltPwmMin.Value      = Config.CameraTiltPwmMin;
-            _numTiltPwmNeutral.Value  = Config.CameraTiltPwmNeutral;
-            _numTiltPwmMax.Value      = Config.CameraTiltPwmMax;
-            _numTiltAngleRange.Value  = Config.CameraTiltAngleRange;
 
             // Spray calibration
             _numSprayRange.Value       = (decimal)Config.SprayTargetCameraRangeM;
@@ -234,21 +221,8 @@ namespace NOMAD.MissionPlanner
             Config.TempCriticalC = (float)_numTempCritical.Value;
             Config.AudioAlerts = _chkAudioAlerts.Checked;
 
-            // Payloads (drop / slider / relay) — own tab
+            // Payloads (drop / slider / relay / reel / cam tilt) — own tab
             SavePayloads();
-
-            // Reels + camera tilt
-            Config.ReelServoChannel   = (int)_numReelCh.Value;
-            Config.ReelPwmIn          = (int)_numReelPwmIn.Value;
-            Config.ReelPwmOut         = (int)_numReelPwmOut.Value;
-            Config.Reel2ServoChannel  = (int)_numReel2Ch.Value;
-            Config.Reel2PwmIn         = (int)_numReel2PwmIn.Value;
-            Config.Reel2PwmOut        = (int)_numReel2PwmOut.Value;
-            Config.CameraTiltChannel   = (int)_numTiltCh.Value;
-            Config.CameraTiltPwmMin    = (int)_numTiltPwmMin.Value;
-            Config.CameraTiltPwmNeutral= (int)_numTiltPwmNeutral.Value;
-            Config.CameraTiltPwmMax    = (int)_numTiltPwmMax.Value;
-            Config.CameraTiltAngleRange= (int)_numTiltAngleRange.Value;
 
             // Spray calibration
             Config.SprayTargetCameraRangeM = (float)_numSprayRange.Value;

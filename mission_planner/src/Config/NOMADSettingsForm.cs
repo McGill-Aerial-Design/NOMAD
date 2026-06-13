@@ -87,10 +87,7 @@ namespace NOMAD.MissionPlanner
         private NumericUpDown _numTempCritical;
         private CheckBox _chkAudioAlerts;
 
-        // Servos Tab (strap reels + camera tilt; drop/slider/relay payloads have their own tab)
-        private NumericUpDown _numReelCh, _numReelPwmIn, _numReelPwmOut;
-        private NumericUpDown _numReel2Ch, _numReel2PwmIn, _numReel2PwmOut;
-        private NumericUpDown _numTiltCh, _numTiltPwmMin, _numTiltPwmNeutral, _numTiltPwmMax, _numTiltAngleRange;
+        // Spray Tab (reels, camera tilt + all other payloads live in the Payloads tab)
         private NumericUpDown _numSprayRange, _numSprayRangeTol, _numSprayTriggerMax, _numSprayAimX, _numSprayAimY, _numSprayAimTol;
         private NumericUpDown _numSprayServoAngle, _numSprayForwardGain, _numSprayLateralGain, _numSprayAltitudeGain, _numSprayYawGain;
         private NumericUpDown _numSprayMaxForward, _numSprayMaxLateral, _numSprayMaxAltitude, _numSprayMaxYaw, _numSprayLockMs, _numSprayTimeout;
@@ -183,7 +180,6 @@ namespace NOMAD.MissionPlanner
             _tabControl.TabPages.Add(CreateAlertsTab());
             _tabControl.TabPages.Add(CreatePayloadsTab());
             _tabControl.TabPages.Add(CreateSprayCalibrationTab());
-            _tabControl.TabPages.Add(CreateServosTab());
             _tabControl.TabPages.Add(CreateJoystickTab());
 
             int clientWidth = CalculateSettingsClientWidth();
