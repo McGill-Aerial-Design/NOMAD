@@ -8,6 +8,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `PayloadReleaseInterlock` (C# plugin, tier SC): the pure, UI-free arm→confirm
+  state machine behind every multi-click-armed payload release on the ground
+  station (drop servos + momentary relay/pump fire). N deliberate clicks within a
+  rolling window authorize exactly one actuation, then it disarms; a click after
+  the window lapses (or a backwards clock) restarts the count.
+- First C# unit tests for the plugin (`mission_planner/tests/`,
+  `NOMADPlugin.Tests.csproj`): `PayloadReleaseInterlockTests` covers the interlock
+  arm/fire/expiry/reset paths — the GCS counterpart of `tests/test_safety_payload.py`.
+  A new `plugin-tests` job in `.github/workflows/csharp.yml` runs them via
+  `dotnet test` on `windows-latest` (no staged Mission Planner needed — the test
+  assembly compiles only the pure SC source).
 - `StateManager` and `TimeSyncService` unit coverage: the 10 Hz model-rebuild
   batching contract (immediate vs. rate-limited snapshots, forced updates) and
   the NTP/GPS time-sync status machine (`timedatectl`/socket reachability,
@@ -23,6 +34,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `docs/deployment.md`; the Jetson deployment docs were corrected to describe the
   image accurately (perception container on the Isaac ROS base, not an
   all-in-one) and note the `BASE_IMAGE` prerequisite.
+
+### Changed
+- `PayloadControlPanel` (drop + momentary-relay rows) now delegates its
+  arm/confirm decision to `PayloadReleaseInterlock`, keeping only the rendering
+  and visual-revert timer. Closes the rearchitecture §3.3 GAP "payload release
+  logic still mixed with panel chrome" (`docs/safety/partition.md`); behaviour is
+  unchanged (3-click drop, 2-click relay fire, 3 s window). Also disposes the
+  relay-fire reset timers on teardown (previously leaked).
 
 ## [0.2.1] - 2026-06-13
 

@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Unit tests for the plugin's pure, UI-free safety-critical logic.
+
+    SDK-style and net48 (matching the plugin's target framework) so `dotnet test`
+    runs it on a stock windows-latest runner with the .NET Framework 4.8
+    targeting pack + desktop CLR. It compiles ONLY the pure SC source files under
+    test — no WinForms, no Mission Planner DLLs — so it needs neither a staged
+    Mission Planner nor any HintPath. Source files are linked in (not project-
+    referenced) precisely to keep this test assembly dependency-free.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>NOMADPlugin.Tests</AssemblyName>
+    <RootNamespace>NOMAD.MissionPlanner.Tests</RootNamespace>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pure SC sources under test (linked, not project-referenced). -->
+    <Compile Include="..\src\Payload\PayloadReleaseInterlock.cs" Link="PayloadReleaseInterlock.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

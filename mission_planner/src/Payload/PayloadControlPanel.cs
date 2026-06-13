@@ -449,6 +449,13 @@ namespace NOMAD.MissionPlanner
             }
             _sliderSettleTimers.Clear();
 
+            foreach (var t in _relayFireResetTimers.Values)
+            {
+                t?.Stop();
+                t?.Dispose();
+            }
+            _relayFireResetTimers.Clear();
+
             for (int i = 0; i < _reelSafetyTimers.Length; i++)
             {
                 _reelSafetyTimers[i]?.Stop();

@@ -8,10 +8,15 @@
 //   Slider - live PWM slider for an aiming / nozzle servo.
 //   Relay  - GPIO / relay output: momentary "Fire" pulse or latching toggle.
 // Drop state is shared across panel instances (and read by the joystick service).
+//
+// The arm/confirm decision for the release paths (drop + momentary relay fire)
+// lives in the pure, unit-tested PayloadReleaseInterlock (tier SC); this file is
+// chrome — it renders the returned outcome and drives the visual revert timer.
 // ============================================================
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using Timer = System.Windows.Forms.Timer;
 using System.Windows.Forms;
@@ -30,15 +35,23 @@ namespace NOMAD.MissionPlanner
         private static readonly Color RELAY_COLOR        = Color.FromArgb(30, 100, 180);
         private static readonly Color RELAY_ON_COLOR     = Color.FromArgb(60, 150, 60);
 
-        private const int DROP_CLICKS_REQUIRED = 3;
-        private const int DROP_RESET_MS        = 3000;
+        private const int DROP_CLICKS_REQUIRED  = 3;
+        private const int RELAY_CLICKS_REQUIRED = 2;   // arm → confirm
+        private const int DROP_RESET_MS         = 3000;
 
-        // Per drop-index (0-based, in panel order) UI + arming state.
-        private readonly Dictionary<int, Button>          _dropButtons     = new Dictionary<int, Button>();
-        private readonly Dictionary<int, PayloadControl>  _dropPayloads    = new Dictionary<int, PayloadControl>();
-        private readonly Dictionary<int, int>             _dropClickCount  = new Dictionary<int, int>();
-        private readonly Dictionary<int, Timer>           _dropResetTimers = new Dictionary<int, Timer>();
-        private readonly Dictionary<int, bool>            _dropDropped     = new Dictionary<int, bool>();
+        // Monotonic clock for the release interlocks (never wraps or runs backwards),
+        // so the arm-window decision is independent of wall-clock changes.
+        private static readonly Stopwatch s_clock = Stopwatch.StartNew();
+        private static long NowMs() => s_clock.ElapsedMilliseconds;
+
+        // Per drop-index (0-based, in panel order) UI + arming state. The arm/confirm
+        // decision is delegated to a PayloadReleaseInterlock; the button + reset timer
+        // are the chrome around it.
+        private readonly Dictionary<int, Button>                   _dropButtons     = new Dictionary<int, Button>();
+        private readonly Dictionary<int, PayloadControl>           _dropPayloads    = new Dictionary<int, PayloadControl>();
+        private readonly Dictionary<int, PayloadReleaseInterlock>  _dropInterlocks  = new Dictionary<int, PayloadReleaseInterlock>();
+        private readonly Dictionary<int, Timer>                    _dropResetTimers = new Dictionary<int, Timer>();
+        private readonly Dictionary<int, bool>                     _dropDropped     = new Dictionary<int, bool>();
 
         // Per slider-index settle timers (final send after the slider stops moving).
         private readonly Dictionary<int, Timer> _sliderSettleTimers = new Dictionary<int, Timer>();
@@ -46,10 +59,34 @@ namespace NOMAD.MissionPlanner
         // Latching-relay on/off state, keyed by relay number.
         private readonly Dictionary<int, bool> _relayOn = new Dictionary<int, bool>();
 
-        // Momentary-relay fire arming (SR-PAY-03): first click arms (with a
-        // timeout reset, like drops), second click fires. Keyed by channel.
-        private readonly Dictionary<int, bool>  _relayFireArmed       = new Dictionary<int, bool>();
-        private readonly Dictionary<int, Timer> _relayFireResetTimers = new Dictionary<int, Timer>();
+        // Momentary-relay fire arming (SR-PAY-03): arm → confirm via the same
+        // interlock as drops (two clicks within the window). Keyed by channel.
+        private readonly Dictionary<int, PayloadReleaseInterlock> _relayFireInterlocks  = new Dictionary<int, PayloadReleaseInterlock>();
+        private readonly Dictionary<int, Timer>                   _relayFireResetTimers = new Dictionary<int, Timer>();
+
+        // ============================================================
+        // Release interlocks (pure SC decision, lazily created per actuator)
+        // ============================================================
+
+        private PayloadReleaseInterlock DropInterlock(int dropIdx)
+        {
+            if (!_dropInterlocks.TryGetValue(dropIdx, out var il) || il == null)
+            {
+                il = new PayloadReleaseInterlock(DROP_CLICKS_REQUIRED, DROP_RESET_MS);
+                _dropInterlocks[dropIdx] = il;
+            }
+            return il;
+        }
+
+        private PayloadReleaseInterlock RelayFireInterlock(int channel)
+        {
+            if (!_relayFireInterlocks.TryGetValue(channel, out var il) || il == null)
+            {
+                il = new PayloadReleaseInterlock(RELAY_CLICKS_REQUIRED, DROP_RESET_MS);
+                _relayFireInterlocks[channel] = il;
+            }
+            return il;
+        }
 
         // ============================================================
         // Cross-panel drop-state sync (also read by NomadJoystickService)
@@ -123,7 +160,7 @@ namespace NOMAD.MissionPlanner
 
             _dropButtons[dropIdx]    = btn;
             _dropPayloads[dropIdx]   = p;
-            _dropClickCount[dropIdx] = 0;
+            DropInterlock(dropIdx).Reset();
             _dropDropped[dropIdx]    = IsPayloadDropped(dropIdx);
 
             y += ROW_H + ROW_GAP;
@@ -137,22 +174,19 @@ namespace NOMAD.MissionPlanner
                 return;
             }
 
-            int count = _dropClickCount.TryGetValue(dropIdx, out int c) ? c + 1 : 1;
-            _dropClickCount[dropIdx] = count;
-
+            var result = DropInterlock(dropIdx).RegisterClick(NowMs());
             RestartDropResetTimer(dropIdx);
 
-            if (count < DROP_CLICKS_REQUIRED)
+            if (result.Outcome == ReleaseInterlockOutcome.Arming)
             {
-                int remaining = DROP_CLICKS_REQUIRED - count;
+                int remaining = result.ClicksRemaining;
                 if (_dropButtons.TryGetValue(dropIdx, out var b))
-                    b.BackColor = count == 1 ? DROP_COLOR_ARM1 : DROP_COLOR_ARM2;
+                    b.BackColor = result.ClickCount == 1 ? DROP_COLOR_ARM1 : DROP_COLOR_ARM2;
                 SetStatus($"{DropName(dropIdx)}: {remaining} more click{(remaining == 1 ? "" : "s")} to drop!", WARNING_COLOR);
                 return;
             }
 
             ClearDropResetTimer(dropIdx);
-            _dropClickCount[dropIdx] = 0;
             if (_dropButtons.TryGetValue(dropIdx, out var btn)) btn.BackColor = DROP_COLOR_IDLE;
 
             ExecuteDrop(dropIdx);
@@ -165,7 +199,7 @@ namespace NOMAD.MissionPlanner
             t.Tick += (s, e) =>
             {
                 ClearDropResetTimer(dropIdx);
-                _dropClickCount[dropIdx] = 0;
+                DropInterlock(dropIdx).Reset();
                 if (!IsDisposed && _dropButtons.TryGetValue(dropIdx, out var b) && b != null)
                     b.BackColor = DROP_COLOR_IDLE;
                 SetStatus($"{DropName(dropIdx)} drop cancelled (timeout)", TEXT_SECONDARY);
@@ -235,7 +269,7 @@ namespace NOMAD.MissionPlanner
 
             _dropDropped[dropIdx] = isDropped;
             ClearDropResetTimer(dropIdx);
-            _dropClickCount[dropIdx] = 0;
+            DropInterlock(dropIdx).Reset();
 
             string name = DropName(dropIdx);
             btn.Text = isDropped ? $"Retract {name}" : $"Drop {name}";
@@ -357,10 +391,9 @@ namespace NOMAD.MissionPlanner
 
         private void OnFireRelayClick(PayloadControl p, Button btn)
         {
-            bool armed = _relayFireArmed.TryGetValue(p.Channel, out bool a) && a;
-            if (!armed)
+            var result = RelayFireInterlock(p.Channel).RegisterClick(NowMs());
+            if (result.Outcome == ReleaseInterlockOutcome.Arming)
             {
-                _relayFireArmed[p.Channel] = true;
                 btn.Text = $"Confirm {p.Name}";
                 btn.BackColor = DROP_COLOR_ARM2;
                 SetStatus($"{p.Name} armed — click again to fire", WARNING_COLOR);
@@ -399,7 +432,7 @@ namespace NOMAD.MissionPlanner
 
         private void ResetFireRelayButton(PayloadControl p, Button btn)
         {
-            _relayFireArmed[p.Channel] = false;
+            RelayFireInterlock(p.Channel).Reset();
             if (btn != null && !btn.IsDisposed)
             {
                 btn.Text = $"Fire {p.Name}";
