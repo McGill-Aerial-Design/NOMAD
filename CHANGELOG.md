@@ -28,6 +28,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   monitor loop, and the module lifecycle) — all with subprocess, socket, and the
   system clock mocked. Raises the `pixi run test` coverage floor 60% -> 65%
   (66% actual).
+- `JetsonHealthMonitor` unit coverage (`tests/test_health_monitor.py`): the Jetson
+  sysfs/proc readers and `tailscale` status exercised against a fake file system
+  (scoped `open`/`os.path.exists`, mocked `os.statvfs`/`subprocess`/`time.sleep`)
+  — temperature/CPU-load/GPU-load-EMA/memory/disk/power(INA3221)/throttle/fan
+  parsing, the tailscale cache, the `_update_health` orchestration + state push,
+  and the thread lifecycle/module wiring — taking `services/health_monitor.py`
+  from 27% to **100%**. Raises the `pixi run test` coverage floor 70% -> 75%
+  (75.41% actual).
 - `MavlinkConnection` unit coverage (`tests/test_mavlink_connection.py`): the FC
   receiver loop driven with `mavutil.mavlink_connection` patched to a scripted
   fake link — endpoint-scheme normalization, the per-message-type dispatch
