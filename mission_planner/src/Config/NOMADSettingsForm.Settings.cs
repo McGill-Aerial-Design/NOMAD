@@ -128,9 +128,8 @@ namespace NOMAD.MissionPlanner
             SetComboBoxValue(_cmbJoyGimbalRollAxis, Config.JoystickGimbalRollAxis);
             _chkJoyGimbalRollInvert.Checked = Config.JoystickGimbalRollInvert;
             _numJoyGimbalDeadzone.Value = (decimal)Math.Max(0f, Math.Min(0.5f, Config.JoystickGimbalDeadzone));
-            _numJoyGimbalMaxRate.Value = (decimal)Math.Max(5f, Math.Min(200f, GimbalController.MaxRateDegSec));
-            _numJoyGimbalMaxRate.ValueChanged += (s, e) =>
-                GimbalController.MaxRateDegSec = (float)_numJoyGimbalMaxRate.Value;
+            _numJoyGimbalMaxRate.Value =
+                (decimal)Math.Max(5f, Math.Min(200f, Config.JoystickGimbalMaxRateDegSec));
 
             _chkJoyZedEnabled.Checked = Config.JoystickZedEnabled;
             SetComboBoxValue(_cmbJoyZedDevice,

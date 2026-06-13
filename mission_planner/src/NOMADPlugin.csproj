@@ -152,6 +152,7 @@
     <Compile Include="Config\NOMADConfig.Persistence.cs" />
     <Compile Include="Config\NOMADConfig.Spray.cs" />
     <Compile Include="Config\NOMADSettingsForm.cs" />
+    <Compile Include="Config\NOMADSettingsForm.Profiles.cs" />
     <Compile Include="Config\NOMADSettingsForm.Settings.cs" />
     <Compile Include="Config\NOMADSettingsForm.ConnectionTab.cs" />
     <Compile Include="Config\NOMADSettingsForm.VideoTab.cs" />

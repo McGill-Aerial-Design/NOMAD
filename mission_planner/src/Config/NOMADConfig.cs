@@ -384,16 +384,11 @@ namespace NOMAD.MissionPlanner
         /// Settings → Payloads. Each is a drop servo, a slider servo, or a relay/GPIO
         /// output. See <see cref="PayloadControl"/>.
         /// </summary>
+        [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
         public List<PayloadControl> Payloads { get; set; } = DefaultPayloads();
 
-        /// <summary>Default payload set: three drop servos plus the water-pump relay.</summary>
-        public static List<PayloadControl> DefaultPayloads() => new List<PayloadControl>
-        {
-            new PayloadControl { Name = "Payload 1", Kind = PayloadKind.Drop, Channel = 9 },
-            new PayloadControl { Name = "Payload 2", Kind = PayloadKind.Drop, Channel = 10 },
-            new PayloadControl { Name = "Payload 3", Kind = PayloadKind.Drop, Channel = 11 },
-            new PayloadControl { Name = "Water Pump", Kind = PayloadKind.Relay, Channel = 0, PulseMs = 500 },
-        };
+        /// <summary>Payload controls start empty and are configured per aircraft.</summary>
+        public static List<PayloadControl> DefaultPayloads() => new List<PayloadControl>();
 
         // --- Strap reel servo (payload 1) ---
         /// <summary>Cube servo output channel for payload 1 strap reel.</summary>

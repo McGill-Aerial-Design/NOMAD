@@ -134,7 +134,12 @@ namespace NOMAD.MissionPlanner
         private void SavePayloads()
         {
             if (_payloadsBinding == null) return;
-            Config.Payloads = _payloadsBinding.Take(NOMADConfig.MaxPayloads).ToList();
+            _gridPayloads?.EndEdit();
+            _gridPayloads?.BindingContext[_payloadsBinding]?.EndCurrentEdit();
+            Config.Payloads = _payloadsBinding
+                .Take(NOMADConfig.MaxPayloads)
+                .Select(payload => payload.Clone())
+                .ToList();
         }
 
         // Write RC{n}_OPTION on the Cube for each relay payload with an RC channel set.

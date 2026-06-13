@@ -37,7 +37,7 @@ Upstream (main repo)          Your fork
 4. **Create a feature branch** in your fork (never work on `main`):
 
    ```bash
-   git switch -c <category>/<short-description>
+   git switch -c <category>/<short-description>-<issue-number>
    ```
 
 5. **Set up your environment:**
@@ -49,19 +49,21 @@ Upstream (main repo)          Your fork
 ## 3. Branch naming
 
 ```
-<category>/<short-description>
+<category>/<short-description>-<issue-number>
 ```
 
-| Category   | Use for                     | Example                                    |
-|------------|-----------------------------|--------------------------------------------|
-| `edge`     | Edge Core (Python API)      | `edge/fix-mavlink-reconnect`               |
-| `plugin`   | Mission Planner plugin (C#) | `plugin/add-connection-health`             |
-| `docker`   | Container definitions       | `docker/fix-dev-image-entrypoint`          |
-| `infra`    | Systemd, transport, scripts | `infra/consolidate-service-units`          |
-| `ci`       | CI / workflow changes       | `ci/add-lint-stage`                        |
-| `docs`     | Documentation only          | `docs/rewrite-contributing-guide`          |
-| `refactor` | Behavior-preserving restructure | `refactor/extract-module-registry`     |
-| `chore`    | Tooling, deps, maintenance  | `chore/bump-ruff-to-0.9`                  |
+Append the related GitHub issue number to every branch name.
+
+| Category   | Use for                     | Example                                      |
+|------------|-----------------------------|----------------------------------------------|
+| `edge`     | Edge Core (Python API)      | `edge/fix-mavlink-reconnect-123`             |
+| `plugin`   | Mission Planner plugin (C#) | `plugin/add-connection-health-123`           |
+| `docker`   | Container definitions       | `docker/fix-dev-image-entrypoint-123`        |
+| `infra`    | Systemd, transport, scripts | `infra/consolidate-service-units-123`        |
+| `ci`       | CI / workflow changes       | `ci/add-lint-stage-123`                      |
+| `docs`     | Documentation only          | `docs/rewrite-contributing-guide-123`        |
+| `refactor` | Behavior-preserving restructure | `refactor/extract-module-registry-123`   |
+| `chore`    | Tooling, deps, maintenance  | `chore/bump-ruff-to-0.9-123`                 |
 
 ## 4. Commit messages
 
@@ -93,7 +95,7 @@ Once your feature or fix is complete:
 1. **Push your branch** to your fork:
 
    ```bash
-   git push -u origin <category>/<short-description>
+   git push -u origin <category>/<short-description>-<issue-number>
    ```
 
 2. **Open a merge request** on GitHub from your fork's branch into

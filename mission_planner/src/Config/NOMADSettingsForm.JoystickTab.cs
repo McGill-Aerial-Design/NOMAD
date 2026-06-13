@@ -57,6 +57,8 @@ namespace NOMAD.MissionPlanner
             _numJoyGimbalDeadzone = AddNumericUpDown(tab, 95, y, 60, 0.00m, 0.50m, 0.08m, 2);
             AddLabel(tab, "Max rate (deg/s):", 175, y);
             _numJoyGimbalMaxRate = AddNumericUpDown(tab, 270, y, 70, 5, 200, 60);
+            _numJoyGimbalMaxRate.ValueChanged += (s, e) =>
+                GimbalController.MaxRateDegSec = (float)_numJoyGimbalMaxRate.Value;
             y += 36;
 
             // ZED channel
