@@ -13,7 +13,7 @@ import threading
 import time
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from edge_core.core import AppContext, BaseModule, ModuleMetadata
@@ -125,29 +125,5 @@ class VioModule(BaseModule):
             with lock:
                 trajectory.clear()
             return {"success": True, "message": "Trajectory cleared"}
-
-        # ZED area-map / origin control needs an in-process ZED service, which
-        # this baseline does not ship. 501 is the honest answer: a deployment
-        # module that implements these replaces the handlers; until then no
-        # client may believe the action happened.
-        @router.post("/api/vio/reset_origin")
-        async def reset_vio_origin():
-            """Reset the VIO origin frame (not implemented in this baseline)."""
-            raise HTTPException(status_code=501, detail="VIO origin reset is not implemented in this baseline")
-
-        @router.post("/api/vio/area/save")
-        async def save_area_map():
-            """Save the ZED positional tracking area map (not implemented)."""
-            raise HTTPException(status_code=501, detail="Area map save is not implemented in this baseline")
-
-        @router.post("/api/vio/area/load")
-        async def load_area_map():
-            """Load a previously saved area map (not implemented)."""
-            raise HTTPException(status_code=501, detail="Area map load is not implemented in this baseline")
-
-        @router.post("/api/vio/area/relocalize")
-        async def relocalize_area_map():
-            """Relocalize against an area map (not implemented)."""
-            raise HTTPException(status_code=501, detail="Area map relocalization is not implemented in this baseline")
 
         app.include_router(router)
