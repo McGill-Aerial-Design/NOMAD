@@ -23,6 +23,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   real gate (no SDK needed) catching broken references/syntax that the
   whitespace-only `dotnet format` job could not. Triggered on `mission_planner/`
   changes; uploads `NOMADPlugin.dll` as a build artifact.
+- Mission Planner plugin release packaging (`.github/workflows/release.yml`): on
+  a `v*` tag, the plugin is built and published as a GitHub Release asset — a
+  small zip (`NOMADPlugin.dll` + `INSTALL.ps1` + `README.md`) plus the bare DLL —
+  so users can install it without cloning or building. `INSTALL.ps1` copies the
+  DLL into the per-user `%LOCALAPPDATA%\Mission Planner\plugins` folder (no admin)
+  and warns about a stale Program Files duplicate.
 
 ### Changed
 - Type-checking the safety-critical core is now an enforced CI gate. `edge_core/safety`
