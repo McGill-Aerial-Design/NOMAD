@@ -7,6 +7,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- ROS-HTTP bridge unit coverage: the `simple_video_bridge` GStreamer pipeline
+  lifecycle and HTTP API routing, plus the `mavlink_velocity` connection,
+  setpoint-TX, watchdog, and heartbeat-gating paths and the `mesh_packer`
+  background sender loop. The `pixi run test` coverage floor rises 45% -> 55%.
+
+### Changed
+- Mission Planner plugin C# sources are now globbed
+  (`<Compile Include="**\*.cs">`) instead of being listed file-by-file, so new
+  files and partial-class splits build without hand-editing the csproj. It stays
+  a plain MSBuild project (no .NET SDK prerequisite, unlike SDK-style).
+
 ## [0.2.0] - 2026-06-12
 
 ### Added
