@@ -47,14 +47,18 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # The test project is SDK-style net48 and compiles only the plugin's pure,
-      # UI-free SC sources (no WinForms / Mission Planner DLLs), so it needs the
-      # .NET SDK + NF 4.8 targeting pack (both on windows-latest) but no staged
-      # Mission Planner.
-      - name: Run SC unit tests
-        run: |
-          dotnet test mission_planner/tests/NOMADPlugin.Tests.csproj `
-            --configuration Release --nologo --verbosity minimal
+      # The plugin's pure SC logic is tested with standalone Roslyn (csc)
+      # assertion harnesses — no .NET SDK, NuGet, or staged Mission Planner
+      # needed. setup-msbuild puts MSBuild on PATH; the scripts locate csc next
+      # to it. This matches the repo's existing test-plugin-* idiom.
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v3
+
+      - name: Payload-release interlock tests (SR-PAY-03)
+        run: pwsh -File scripts/build/test_plugin_interlock.ps1
+
+      - name: Geofence geometry tests
+        run: pwsh -File scripts/build/test_plugin_geometry.ps1
 
   plugin-build:
     name: build MP plugin (Windows)

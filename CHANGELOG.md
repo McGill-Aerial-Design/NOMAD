@@ -13,12 +13,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   station (drop servos + momentary relay/pump fire). N deliberate clicks within a
   rolling window authorize exactly one actuation, then it disarms; a click after
   the window lapses (or a backwards clock) restarts the count.
-- First C# unit tests for the plugin (`mission_planner/tests/`,
-  `NOMADPlugin.Tests.csproj`): `PayloadReleaseInterlockTests` covers the interlock
-  arm/fire/expiry/reset paths — the GCS counterpart of `tests/test_safety_payload.py`.
-  A new `plugin-tests` job in `.github/workflows/csharp.yml` runs them via
-  `dotnet test` on `windows-latest` (no staged Mission Planner needed — the test
-  assembly compiles only the pure SC source).
+- `pixi run test-plugin-interlock` (+ `scripts/build/test_plugin_interlock.ps1`):
+  a standalone Roslyn (`csc`) assertion harness covering the interlock
+  arm/fire/rolling-window-expiry/backwards-clock/reset paths — the GCS
+  counterpart of `tests/test_safety_payload.py`, in the same framework-free idiom
+  as the existing `test-plugin-geometry`/`-duallink` tests. A new `plugin-tests`
+  job in `.github/workflows/csharp.yml` runs the interlock and geometry harnesses
+  on `windows-latest` (no .NET SDK, NuGet, or staged Mission Planner needed) —
+  the first plugin unit tests to gate in CI.
 - `StateManager` and `TimeSyncService` unit coverage: the 10 Hz model-rebuild
   batching contract (immediate vs. rate-limited snapshots, forced updates) and
   the NTP/GPS time-sync status machine (`timedatectl`/socket reachability,

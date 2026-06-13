@@ -112,6 +112,12 @@ lint-plugin = "powershell -ExecutionPolicy Bypass -File scripts/build/lint_plugi
 # on polygon inset, point-in-polygon, and nearest-inside-point math.
 test-plugin-geometry = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_geometry.ps1"
 
+# Unit tests for the plugin's safety-critical payload-release interlock (Windows
+# only) — compiles the Mission Planner-free PayloadReleaseInterlock with VS's csc
+# and asserts the multi-click arm/confirm, rolling-window expiry, backwards-clock,
+# and reset behaviour (the GCS counterpart of tests/test_safety_payload.py).
+test-plugin-interlock = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_interlock.ps1"
+
 # Stress/behaviour tests for the dual-link MAVLink router (Windows only) —
 # compiles the Mission Planner-free GroundLinkRouter stack with VS's csc and
 # runs it against real loopback UDP sockets: frame parsing, cross-link dedup,
