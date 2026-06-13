@@ -105,6 +105,14 @@ lint-plugin = "powershell -ExecutionPolicy Bypass -File scripts/build/lint_plugi
 # on polygon inset, point-in-polygon, and nearest-inside-point math.
 test-plugin-geometry = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_geometry.ps1"
 
+# Stress/behaviour tests for the dual-link MAVLink router (Windows only) —
+# compiles the Mission Planner-free GroundLinkRouter stack with VS's csc and
+# runs it against real loopback UDP sockets: frame parsing, cross-link dedup,
+# failover + preferred-link recovery, manual override, outbound single-link
+# routing, param-transaction pinning, watchdog socket reopen, and high-rate
+# mirrored stress with strict no-loss/no-duplication assertions.
+test-plugin-duallink = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_duallink.ps1"
+
 # ==================== Configuration Profiles ====================
 # Manage config/nomad.env via named profiles stored in config/profiles/.
 # Each profile is a complete environment file with all settings for a
