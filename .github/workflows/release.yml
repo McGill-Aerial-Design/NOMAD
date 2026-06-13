@@ -1,0 +1,95 @@
+name: release
+
+# On a v* tag, build the Mission Planner plugin and publish it as a release
+# asset — a small zip (NOMADPlugin.dll + INSTALL.ps1 + README.md) plus the bare
+# DLL — so users can install the plugin without cloning or building. The
+# Mission Planner staging mirrors csharp.yml: a pinned portable Mission Planner
+# provides the reference DLLs the csproj HintPaths point at. No .NET SDK needed.
+#
+# workflow_dispatch builds + uploads a workflow artifact for inspection but does
+# NOT publish a release (there is no tag to attach to).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write # upload assets to the release
+
+env:
+  MP_VERSION: "1.3.83"
+  MP_DIR: 'C:\Program Files (x86)\Mission Planner'
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  package-plugin:
+    name: package MP plugin
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Cache Mission Planner ${{ env.MP_VERSION }}
+        id: mp-cache
+        uses: actions/cache@v4
+        with:
+          path: mp-portable.zip
+          key: missionplanner-${{ env.MP_VERSION }}
+
+      - name: Download Mission Planner ${{ env.MP_VERSION }}
+        if: steps.mp-cache.outputs.cache-hit != 'true'
+        run: |
+          $url = "https://firmware.ardupilot.org/Tools/MissionPlanner/MissionPlanner-$env:MP_VERSION.zip"
+          Write-Host "Downloading $url"
+          Invoke-WebRequest $url -OutFile mp-portable.zip
+
+      - name: Stage Mission Planner reference assemblies
+        run: |
+          $tmp = Join-Path $env:RUNNER_TEMP "mp-extract"
+          Expand-Archive -Path mp-portable.zip -DestinationPath $tmp -Force
+          $exe = Get-ChildItem $tmp -Recurse -Filter MissionPlanner.exe | Select-Object -First 1
+          if (-not $exe) { throw "MissionPlanner.exe not found in the portable zip" }
+          New-Item -ItemType Directory -Force -Path $env:MP_DIR | Out-Null
+          Copy-Item -Path (Join-Path $exe.Directory.FullName '*') -Destination $env:MP_DIR -Recurse -Force
+
+      - name: Build plugin (Release)
+        run: |
+          msbuild mission_planner/src/NOMADPlugin.csproj `
+            /nologo /p:Configuration=Release /p:Platform=AnyCPU /v:minimal
+          if (-not (Test-Path "mission_planner/src/bin/Release/NOMADPlugin.dll")) {
+            throw "build did not produce NOMADPlugin.dll"
+          }
+
+      - name: Assemble release package
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP "NOMADPlugin"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item mission_planner/src/bin/Release/NOMADPlugin.dll $stage
+          Copy-Item mission_planner/packaging/INSTALL.ps1 $stage
+          Copy-Item mission_planner/packaging/README.md $stage
+          $tag = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "dev" }
+          $zip = "NOMADPlugin-$tag.zip"
+          Compress-Archive -Path "$stage/*" -DestinationPath $zip -Force
+          "ASSET_ZIP=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NOMADPlugin-release
+          path: ${{ env.ASSET_ZIP }}
+          if-no-files-found: error
+
+      - name: Publish to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.ASSET_ZIP }}
+            mission_planner/src/bin/Release/NOMADPlugin.dll
