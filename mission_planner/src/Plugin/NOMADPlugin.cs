@@ -48,6 +48,7 @@ namespace NOMAD.MissionPlanner
         private Form _popOutForm;                             // Pop-out window for NOMAD screen
         private bool _hudVideoStarted = false;
         private bool _screenRegistered = false;               // Track if NOMAD screen is registered with MainSwitcher
+        private DateTime _nextBoundaryMapBindUtc = DateTime.MinValue;
 
         // Static assembly resolver for HelixToolkit dependencies
         private static bool _assemblyResolverRegistered = false;
@@ -182,6 +183,10 @@ namespace NOMAD.MissionPlanner
                 // Register NOMAD as a top-level screen (no quick tab - use pop-out instead)
                 RegisterNomadScreen();
 
+                // Boundary visualization comes from the saved plugin config and
+                // does not depend on a connected vehicle or a fence upload.
+                MapOverlayManager.DrawBoundaries(_geofenceConfig);
+
                 // Auto-start HUD video if configured
                 if (_config.AutoStartHudVideo && !_hudVideoStarted)
                 {
@@ -210,8 +215,21 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public override bool Loop()
         {
-            // GroundLinkRouter owns the source sockets directly and derives
-            // heartbeat/loss stats from real packet flow — nothing to do here.
+            if (DateTime.UtcNow >= _nextBoundaryMapBindUtc)
+            {
+                _nextBoundaryMapBindUtc = DateTime.UtcNow.AddSeconds(2);
+                var mainForm = Host?.MainForm;
+                if (mainForm != null && !mainForm.IsDisposed && mainForm.IsHandleCreated)
+                {
+                    UiAsync.RunSync(mainForm, () =>
+                    {
+                        if (MapOverlayManager.BoundaryRenderingConfigured)
+                            MapOverlayManager.EnsureBoundaryMaps();
+                        else
+                            MapOverlayManager.DrawBoundaries(_geofenceConfig);
+                    }, "boundary map binding");
+                }
+            }
             return true;
         }
 
@@ -224,6 +242,7 @@ namespace NOMAD.MissionPlanner
             {
                 // Unhook the toast overlay before the service goes away
                 NotificationToast.Detach();
+                MapOverlayManager.StopBoundaryRendering();
 
                 // Stop boundary monitor (plugin-owned)
                 _boundaryMonitor?.Dispose();

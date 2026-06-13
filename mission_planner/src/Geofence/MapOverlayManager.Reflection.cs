@@ -18,6 +18,58 @@ namespace NOMAD.MissionPlanner
     public static partial class MapOverlayManager
     {
         /// <summary>
+        /// Get a GMap overlay collection across versions that expose Markers,
+        /// Routes, and Polygons as either public fields or properties.
+        /// </summary>
+        private static IList GetOverlayCollection(object overlay, string memberName)
+        {
+            return GetMemberValue(overlay, memberName) as IList;
+        }
+
+        private static object GetMemberValue(object target, string memberName)
+        {
+            if (target == null)
+                return null;
+
+            var type = target.GetType();
+            var property = type.GetProperty(
+                memberName,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            if (property != null && property.CanRead)
+                return property.GetValue(target);
+
+            var field = type.GetField(
+                memberName,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            return field?.GetValue(target);
+        }
+
+        private static bool SetMemberValue(object target, string memberName, object value)
+        {
+            if (target == null)
+                return false;
+
+            var type = target.GetType();
+            var property = type.GetProperty(
+                memberName,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            if (property != null && property.CanWrite)
+            {
+                property.SetValue(target, value);
+                return true;
+            }
+
+            var field = type.GetField(
+                memberName,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            if (field == null || field.IsInitOnly)
+                return false;
+
+            field.SetValue(target, value);
+            return true;
+        }
+
+        /// <summary>
         /// Find a type from loaded assemblies by partial name.
         /// </summary>
         private static Type FindTypeInLoadedAssemblies(params string[] typeNames)
@@ -157,6 +209,51 @@ namespace NOMAD.MissionPlanner
             return null;
         }
 
+        private static object GetFlightPlannerInstance()
+        {
+            var plannerType = FindTypeInLoadedAssemblies(
+                "MissionPlanner.GCSViews.FlightPlanner",
+                "MissionPlanner.FlightPlanner");
+            if (plannerType == null)
+                return null;
+
+            var instance = plannerType.GetProperty(
+                "instance",
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null);
+            if (instance != null)
+                return instance;
+
+            instance = plannerType.GetField(
+                "instance",
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null);
+            if (instance != null)
+                return instance;
+
+            var mainType = FindTypeInLoadedAssemblies("MissionPlanner.MainV2");
+            var main = mainType?.GetProperty(
+                "instance",
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null)
+                ?? mainType?.GetField(
+                    "instance",
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null);
+            return GetMemberValue(main, "FlightPlanner");
+        }
+
+        private static object GetPlanMapControl()
+        {
+            var planner = GetFlightPlannerInstance();
+            if (planner == null)
+                return null;
+
+            foreach (var memberName in new[] { "MainMap", "mymap", "gMapControl1" })
+            {
+                var map = GetMemberValue(planner, memberName);
+                if (map != null)
+                    return map;
+            }
+            return null;
+        }
+
         /// <summary>
         /// Initialize the NOMAD overlay on the map using reflection.
         /// Must be called after FlightData is loaded.
@@ -239,8 +336,7 @@ namespace NOMAD.MissionPlanner
                         bool found = false;
                         foreach (var overlay in overlays)
                         {
-                            var idProp = overlay.GetType().GetProperty("Id");
-                            if (idProp != null && (string)idProp.GetValue(overlay) == "nomad_boundaries")
+                            if ((string)GetMemberValue(overlay, "Id") == "nomad_boundaries")
                             {
                                 found = true;
                                 _boundaryOverlay = overlay;
@@ -258,7 +354,7 @@ namespace NOMAD.MissionPlanner
                 _initialized = true;
                 // The overlay only paints once GMap binds it to the control
                 // (Control property set by the Overlays CollectionChanged hook).
-                var boundTo = _boundaryOverlay?.GetType().GetProperty("Control")?.GetValue(_boundaryOverlay);
+                var boundTo = GetMemberValue(_boundaryOverlay, "Control");
                 Log.Info($"Map overlay initialized via reflection (bound to map: {(boundTo != null ? "yes" : "NO — polygons will not paint")})");
                 return true;
             }

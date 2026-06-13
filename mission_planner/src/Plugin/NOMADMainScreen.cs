@@ -89,6 +89,7 @@ namespace NOMAD.MissionPlanner
 
         // Update timer
         private System.Windows.Forms.Timer _updateTimer;
+        private bool _themeReapplyPending;
 
         // Module-driven sidebar (optional; see src/Core module SDK). When a host
         // with descriptors is supplied, the sidebar is built from those instead of
@@ -196,7 +197,7 @@ namespace NOMAD.MissionPlanner
             // now and once more after the current UI batch, whichever order MP
             // applies its theme in.
             ReapplyNomadTheme();
-            try { BeginInvoke((MethodInvoker)ReapplyNomadTheme); } catch { }
+            QueueThemeReapply();
 
             StartUpdateTimer();
             if (_isModuleMode)
@@ -254,6 +255,32 @@ namespace NOMAD.MissionPlanner
                     }
                 }
             }
+        }
+
+        private void QueueThemeReapply()
+        {
+            if (IsDisposed)
+                return;
+
+            if (!IsHandleCreated)
+            {
+                _themeReapplyPending = true;
+                return;
+            }
+
+            _themeReapplyPending = false;
+            BeginInvoke((MethodInvoker)(() =>
+            {
+                if (!IsDisposed)
+                    ReapplyNomadTheme();
+            }));
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            if (_themeReapplyPending)
+                QueueThemeReapply();
         }
 
         /// <summary>

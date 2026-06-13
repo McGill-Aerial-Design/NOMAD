@@ -691,24 +691,27 @@ namespace NOMAD.MissionPlanner
                 }
                 var vertices = hardVerts;
                 string boundaryName = "Hard";
-                bool isSoft = false;
                 var strokeColor = Color.Red;
-                var fillColor = Color.FromArgb(60, Color.Red);
+                var fillColor = Color.Transparent;
                 string polyName = "NOMAD_Hard_Fence";
 
-                // 1) Draw on Data map overlay
+                // 1) Refresh the saved-config zone masks on both maps.
                 try
                 {
-                    MapOverlayManager.DrawPolygon(vertices, polyName, strokeColor, fillColor, isSoft ? 2 : 3);
-                    MapOverlayManager.RefreshMap();
+                    MapOverlayManager.DrawBoundaries(_missionConfig);
                 }
-                catch (Exception ex) { Log.Error($"Data map draw failed - {ex.Message}"); }
+                catch (Exception ex) { Log.Error($"Boundary zone draw failed - {ex.Message}"); }
 
-                // 2) Inject into MP's Plan-view geofence overlay
+                // 2) Keep Mission Planner's native Plan fence as an outline.
                 bool planInjected = false;
                 try
                 {
-                    planInjected = MapOverlayManager.ExportToMPGeoFence(vertices, polyName, strokeColor, fillColor, isSoft ? 2 : 3);
+                    planInjected = MapOverlayManager.ExportToMPGeoFence(
+                        vertices,
+                        polyName,
+                        strokeColor,
+                        fillColor,
+                        3);
                 }
                 catch (Exception ex) { Log.Error($"Plan map inject failed - {ex.Message}"); }
 

@@ -44,11 +44,9 @@ namespace NOMAD.MissionPlanner
 
         // Boundary style constants
         private static readonly Color SOFT_BOUNDARY_STROKE = Color.Yellow;
-        private static readonly Color SOFT_BOUNDARY_FILL = Color.FromArgb(40, Color.Yellow);
         private static readonly int SOFT_BOUNDARY_WIDTH = 2;
 
         private static readonly Color HARD_BOUNDARY_STROKE = Color.Red;
-        private static readonly Color HARD_BOUNDARY_FILL = Color.FromArgb(50, Color.Red);
         private static readonly int HARD_BOUNDARY_WIDTH = 3;
 
         // Reflection plumbing (type discovery, Initialize) lives in
@@ -57,7 +55,7 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// Draw a single polygon on the map using reflection.
         /// </summary>
-        public static void DrawPolygon(
+        public static bool DrawPolygon(
             List<GpsPoint> vertices,
             string name,
             Color strokeColor,
@@ -65,10 +63,10 @@ namespace NOMAD.MissionPlanner
             int strokeWidth = 2)
         {
             if (!_initialized && !Initialize())
-                return;
+                return false;
 
             if (vertices == null || vertices.Count < 3)
-                return;
+                return false;
 
             try
             {
@@ -95,37 +93,35 @@ namespace NOMAD.MissionPlanner
                 var polygon = Activator.CreateInstance(_polygonType, new object[] { points, name });
 
                 // Set Fill and Stroke
-                var fillProp = _polygonType.GetProperty("Fill");
-                var strokeProp = _polygonType.GetProperty("Stroke");
-
-                if (fillProp != null)
-                    fillProp.SetValue(polygon, new SolidBrush(fillColor));
-                if (strokeProp != null)
-                    strokeProp.SetValue(polygon, new Pen(strokeColor, strokeWidth));
+                if (!SetMemberValue(polygon, "Fill", new SolidBrush(fillColor)))
+                    throw new MissingMemberException(_polygonType.FullName, "Fill");
+                if (!SetMemberValue(polygon, "Stroke", new Pen(strokeColor, strokeWidth)))
+                    throw new MissingMemberException(_polygonType.FullName, "Stroke");
 
                 // Remove existing polygon with same name
                 RemovePolygonByName(name);
 
                 // Add to overlay.Polygons
-                var polygonsProp = _overlayType.GetProperty("Polygons");
-                if (polygonsProp != null)
-                {
-                    var polygons = polygonsProp.GetValue(_boundaryOverlay) as IList;
-                    polygons?.Add(polygon);
-                }
+                var polygons = GetOverlayCollection(_boundaryOverlay, "Polygons");
+                if (polygons == null)
+                    throw new MissingMemberException(_overlayType.FullName, "Polygons");
+
+                polygons.Add(polygon);
+                if (!polygons.Contains(polygon))
+                    throw new InvalidOperationException($"Polygon {name} was not retained by the overlay");
 
                 // GMap.NET only computes the polygon's pixel-space LocalPoints
-                // when the overlay's CollectionChanged wiring fires with the
-                // overlay bound to the control. Adding through the reflected
-                // IList can miss that, leaving the polygon present but never
-                // painted — recompute explicitly.
+                // after the overlay is bound to the control. Recompute explicitly
+                // for compatibility with older Mission Planner GMap builds.
                 var map = _mapControl ?? GetMapControl();
                 map?.GetType().GetMethod("UpdatePolygonLocalPosition")
                     ?.Invoke(map, new[] { polygon });
+                return true;
             }
             catch (Exception ex)
             {
                 Log.Error($"Error drawing polygon {name} - {ex.Message}");
+                return false;
             }
         }
 
@@ -193,11 +189,9 @@ namespace NOMAD.MissionPlanner
                 RemoveRouteByName(name);
                 var points = BuildPointList(vertices.Concat(new[] { vertices[0] }), false);
                 var route = Activator.CreateInstance(_routeType, new object[] { points, name });
-                var strokeProp = _routeType.GetProperty("Stroke");
-                strokeProp?.SetValue(route, new Pen(strokeColor, strokeWidth));
+                SetMemberValue(route, "Stroke", new Pen(strokeColor, strokeWidth));
 
-                var routesProp = _overlayType.GetProperty("Routes");
-                var routes = routesProp?.GetValue(_boundaryOverlay) as IList;
+                var routes = GetOverlayCollection(_boundaryOverlay, "Routes");
                 routes?.Add(route);
             }
             catch (Exception ex)
@@ -214,8 +208,7 @@ namespace NOMAD.MissionPlanner
             {
                 RemoveMarkersByTagPrefix(tagPrefix);
 
-                var markersProp = _overlayType.GetProperty("Markers");
-                var markers = markersProp?.GetValue(_boundaryOverlay) as IList;
+                var markers = GetOverlayCollection(_boundaryOverlay, "Markers");
                 if (markers == null) return;
 
                 object markerKind = null;
@@ -248,10 +241,10 @@ namespace NOMAD.MissionPlanner
                         : Activator.CreateInstance(_markerType, new object[] { point, markerKind });
 
                     string label = (i + 1).ToString();
-                    SetPropertyIfExists(marker, "ToolTipText", label);
-                    SetPropertyIfExists(marker, "Tag", $"{tagPrefix}_{label}");
+                    SetMemberValue(marker, "ToolTipText", label);
+                    SetMemberValue(marker, "Tag", $"{tagPrefix}_{label}");
                     if (tooltipAlways != null)
-                        SetPropertyIfExists(marker, "ToolTipMode", tooltipAlways);
+                        SetMemberValue(marker, "ToolTipMode", tooltipAlways);
 
                     markers.Add(marker);
                 }
@@ -262,31 +255,18 @@ namespace NOMAD.MissionPlanner
             }
         }
 
-        private static void SetPropertyIfExists(object target, string propertyName, object value)
-        {
-            try
-            {
-                var prop = target.GetType().GetProperty(propertyName);
-                if (prop != null && prop.CanWrite)
-                    prop.SetValue(target, value);
-            }
-            catch { } // best-effort reflection
-        }
-
         private static void RemoveRouteByName(string name)
         {
             if (_boundaryOverlay == null || _overlayType == null) return;
 
             try
             {
-                var routesProp = _overlayType.GetProperty("Routes");
-                var routes = routesProp?.GetValue(_boundaryOverlay) as IList;
+                var routes = GetOverlayCollection(_boundaryOverlay, "Routes");
                 if (routes == null) return;
                 for (int i = routes.Count - 1; i >= 0; i--)
                 {
                     var route = routes[i];
-                    var nameProp = route.GetType().GetProperty("Name");
-                    if (nameProp != null && (string)nameProp.GetValue(route) == name)
+                    if ((string)GetMemberValue(route, "Name") == name)
                         routes.RemoveAt(i);
                 }
             }
@@ -299,14 +279,12 @@ namespace NOMAD.MissionPlanner
 
             try
             {
-                var markersProp = _overlayType.GetProperty("Markers");
-                var markers = markersProp?.GetValue(_boundaryOverlay) as IList;
+                var markers = GetOverlayCollection(_boundaryOverlay, "Markers");
                 if (markers == null) return;
                 for (int i = markers.Count - 1; i >= 0; i--)
                 {
                     var marker = markers[i];
-                    var tagProp = marker.GetType().GetProperty("Tag");
-                    var tag = tagProp?.GetValue(marker)?.ToString() ?? "";
+                    var tag = GetMemberValue(marker, "Tag")?.ToString() ?? "";
                     if (tag.StartsWith(tagPrefix, StringComparison.OrdinalIgnoreCase))
                         markers.RemoveAt(i);
                 }
@@ -323,20 +301,15 @@ namespace NOMAD.MissionPlanner
 
             try
             {
-                var polygonsProp = _overlayType.GetProperty("Polygons");
-                if (polygonsProp != null)
+                var polygons = GetOverlayCollection(_boundaryOverlay, "Polygons");
+                if (polygons != null)
                 {
-                    var polygons = polygonsProp.GetValue(_boundaryOverlay) as IList;
-                    if (polygons != null)
+                    for (int i = polygons.Count - 1; i >= 0; i--)
                     {
-                        for (int i = polygons.Count - 1; i >= 0; i--)
+                        var polygon = polygons[i];
+                        if ((string)GetMemberValue(polygon, "Name") == name)
                         {
-                            var polygon = polygons[i];
-                            var nameProp = polygon.GetType().GetProperty("Name");
-                            if (nameProp != null && (string)nameProp.GetValue(polygon) == name)
-                            {
-                                polygons.RemoveAt(i);
-                            }
+                            polygons.RemoveAt(i);
                         }
                     }
                 }
@@ -345,7 +318,7 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Draw both soft and hard boundaries from a geofence config on the map.
+        /// Draw safety zones from the saved geofence config on the Data and Plan maps.
         /// </summary>
         public static void DrawBoundaries(GeofenceConfig config)
         {
@@ -357,34 +330,12 @@ namespace NOMAD.MissionPlanner
                 return;
             }
 
-            // Clear existing NOMAD boundaries before redrawing
-            ClearBoundaries();
+            var polygons = GetOverlayCollection(_boundaryOverlay, "Polygons");
+            polygons?.Clear();
 
-            // Draw soft boundary (yellow, outer warning zone)
-            if (config.SoftBoundary?.Vertices?.Count >= 3)
-            {
-                DrawPolygon(
-                    config.SoftBoundary.Vertices,
-                    "NOMAD_Soft_Boundary",
-                    SOFT_BOUNDARY_STROKE,
-                    SOFT_BOUNDARY_FILL,
-                    SOFT_BOUNDARY_WIDTH);
-            }
-
-            // Draw hard boundary (red, kill zone)
-            if (config.HardBoundary?.Vertices?.Count >= 3)
-            {
-                DrawPolygon(
-                    config.HardBoundary.Vertices,
-                    "NOMAD_Hard_Boundary",
-                    HARD_BOUNDARY_STROKE,
-                    HARD_BOUNDARY_FILL,
-                    HARD_BOUNDARY_WIDTH);
-            }
-
-            RefreshMap();
-            Log.Info($"Drew boundaries on map (soft: {config.SoftBoundary?.Vertices?.Count ?? 0} pts, "
-                + $"hard: {config.HardBoundary?.Vertices?.Count ?? 0} pts)");
+            ConfigureBoundaryZoneRendering(config);
+            Log.Info($"Drew boundary zones (soft: {config.SoftBoundary?.Vertices?.Count ?? 0} pts, "
+                + $"hard: {config.HardBoundary?.Vertices?.Count ?? 0} pts, maps: {EnsureBoundaryMaps()})");
         }
 
         /// <summary>
@@ -392,24 +343,20 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public static void ClearBoundaries()
         {
-            if (_boundaryOverlay == null || _overlayType == null) return;
-
             try
             {
-                var polygonsProp = _overlayType.GetProperty("Polygons");
-                if (polygonsProp != null)
+                if (_boundaryOverlay != null && _overlayType != null)
                 {
-                    var polygons = polygonsProp.GetValue(_boundaryOverlay) as IList;
+                    var polygons = GetOverlayCollection(_boundaryOverlay, "Polygons");
                     polygons?.Clear();
-                }
 
-                var markersProp = _overlayType.GetProperty("Markers");
-                if (markersProp != null)
-                {
-                    var markers = markersProp.GetValue(_boundaryOverlay) as IList;
+                    var markers = GetOverlayCollection(_boundaryOverlay, "Markers");
                     markers?.Clear();
                 }
 
+                _renderHardBoundary.Clear();
+                _renderSoftBoundary.Clear();
+                InvalidateBoundaryMaps();
                 Log.Debug("Cleared map boundaries");
             }
             catch { } // best-effort reflection

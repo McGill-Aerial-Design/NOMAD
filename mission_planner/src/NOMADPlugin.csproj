@@ -238,6 +238,7 @@
     <Compile Include="Geofence\MapOverlayManager.cs" />
     <Compile Include="Geofence\MapOverlayManager.Reflection.cs" />
     <Compile Include="Geofence\MapOverlayManager.GeoFenceExport.cs" />
+    <Compile Include="Geofence\MapOverlayManager.ZoneRendering.cs" />
     <Compile Include="Geofence\MPFenceUploader.cs" />
 
     <!-- Media (video / snapshots / 3D) -->
