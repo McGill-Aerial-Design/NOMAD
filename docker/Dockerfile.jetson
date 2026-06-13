@@ -1,0 +1,156 @@
+# syntax=docker/dockerfile:1
+# ==============================================================
+# NOMAD Jetson image — Isaac ROS + ZED + the ROS-HTTP bridge.
+#
+# The on-companion-computer perception/odometry container for an NVIDIA Jetson
+# Orin Nano (aarch64, JetPack 6.x / L4T r36.4). It is built ON TOP of the
+# official Isaac ROS dev base image, which must already exist on the Jetson
+# (produced by isaac_ros_common/scripts/build_image_layers.sh — see
+# docs/deployment.md). It is NOT buildable on generic x86 CI runners: it targets
+# aarch64, downloads the ZED SDK, and layers on the GPU ROS stack. Build it on a
+# Jetson or a self-hosted aarch64 runner.
+#
+# What this layer adds on top of the Isaac ROS dev base:
+#   - ZED SDK 5.2.3 (matching the ZED ROS2 wrapper) for the ZED 2i camera
+#   - GStreamer (used by the video bridge, services/ros/simple_video_bridge.py)
+#   - the ROS2 runtime packages the ZED wrapper / nvblox / nav2 need
+#   - isaac_ros_nvblox_utils, pre-built to a layer path that survives a restart
+#   - the NOMAD ROS-HTTP bridge (edge_core/ros_http_bridge) and its one optional
+#     runtime dep, pymavlink — the bridge itself talks to Edge Core over the
+#     stdlib http.client and reuses the dependency-light edge_core.safety core.
+#
+# Build (on a Jetson, repo root as context):
+#   docker build -f docker/Dockerfile.jetson \
+#       --build-arg BASE_IMAGE=isaac_ros_dev-aarch64 \
+#       -t nomad-jetson:latest .
+#
+# Launch the bridge inside the running container (Edge Core reachable on the
+# host network):
+#   python3 -m edge_core.ros_http_bridge.main --host 127.0.0.1
+# ==============================================================
+
+ARG BASE_IMAGE=isaac_ros_dev-aarch64
+FROM ${BASE_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+LABEL maintainer="The NOMAD Authors"
+LABEL description="NOMAD Isaac ROS + ZED + ROS-HTTP bridge for Jetson Orin Nano"
+
+# ==============================================================
+# System dependencies (+ GStreamer for the video bridge)
+# ==============================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    wget \
+    git \
+    ca-certificates \
+    libusb-1.0-0-dev \
+    python3-numpy \
+    python3-gi \
+    gir1.2-gst-plugins-base-1.0 \
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-libav \
+    gstreamer1.0-rtsp \
+    && rm -rf /var/lib/apt/lists/*
+
+# ==============================================================
+# ROS2 runtime packages (ZED wrapper + nvblox + nav2 need these after a restart)
+# ==============================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ros-humble-zed-msgs \
+    ros-humble-robot-localization \
+    ros-humble-point-cloud-transport \
+    ros-humble-tf2-ros \
+    ros-humble-tf2-tools \
+    ros-humble-navigation2 \
+    ros-humble-nav2-bringup \
+    ros-humble-nav2-msgs \
+    && rm -rf /var/lib/apt/lists/*
+
+# ==============================================================
+# ZED SDK 5.2.3 for L4T 36.4 (JetPack 6.2)
+# ==============================================================
+ENV ZED_SDK_URL="https://download.stereolabs.com/zedsdk/5.2.3/l4t36.4/jetsons"
+
+RUN curl -L -o /tmp/zed_sdk.run ${ZED_SDK_URL} && \
+    chmod +x /tmp/zed_sdk.run && \
+    /tmp/zed_sdk.run -- silent skip_od_module && \
+    rm /tmp/zed_sdk.run && \
+    ldconfig
+
+RUN test -f /usr/local/zed/lib/libsl_zed.so && \
+    echo "ZED SDK installed successfully"
+
+ENV LD_LIBRARY_PATH="/usr/local/zed/lib:${LD_LIBRARY_PATH}"
+
+# ==============================================================
+# Python deps for the ROS ecosystem. numpy is pinned <2 to stay compatible with
+# the prebuilt ROS/nvblox/ZED packages on the base image.
+# ==============================================================
+RUN pip3 install --no-cache-dir \
+    transforms3d \
+    pymavlink \
+    'numpy<2'
+
+# ==============================================================
+# Pre-build isaac_ros_nvblox_utils to a layer path (/opt) that survives a
+# container restart, independent of any host workspace mount. Drop this stage if
+# you do not use nvblox (the bridge runs fine with --disable-mesh).
+# ==============================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates git && \
+    git clone --branch release-3.2 --depth 1 \
+        https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nvblox.git /tmp/isaac_nvblox_src && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN bash -c "\
+    set -e; \
+    mkdir -p /opt/isaac_ros_installed; \
+    source /opt/ros/humble/setup.bash 2>/dev/null || source /opt/ros/humble/install/setup.bash 2>/dev/null; \
+    cd /tmp; \
+    mkdir -p colcon_ws/src; \
+    cp -r /tmp/isaac_nvblox_src/isaac_ros_nvblox_utils colcon_ws/src/; \
+    cd colcon_ws; \
+    colcon build --packages-select isaac_ros_nvblox_utils \
+        --install-base /opt/isaac_ros_installed \
+        --symlink-install --cmake-args -Wno-dev 2>&1 | tail -20; \
+    rm -rf /tmp/colcon_ws /tmp/isaac_nvblox_src; \
+"
+
+ENV ROS_PACKAGE_PATH="/opt/isaac_ros_installed/share:${ROS_PACKAGE_PATH}"
+ENV CMAKE_PREFIX_PATH="/opt/isaac_ros_installed:${CMAKE_PREFIX_PATH}"
+
+# ==============================================================
+# NOMAD ROS-HTTP bridge. The package is dependency-light (stdlib http.client +
+# the stdlib-only edge_core.safety core); pymavlink above is its only optional
+# runtime dep. Copied to a layer path on PYTHONPATH so it is self-contained — no
+# workspace mount required to run `python3 -m edge_core.ros_http_bridge.main`.
+# ==============================================================
+COPY pyproject.toml README.md /opt/nomad/
+COPY edge_core/ /opt/nomad/edge_core/
+COPY infra/ /opt/nomad/infra/
+ENV PYTHONPATH="/opt/nomad:${PYTHONPATH}"
+
+# ==============================================================
+# Environment
+# ==============================================================
+ENV ROS_DOMAIN_ID=0
+ENV RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH="${CUDA_HOME}/bin:${PATH}"
+ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64:/usr/local/zed/lib:${LD_LIBRARY_PATH}"
+
+WORKDIR /workspaces/isaac_ros-dev
+
+# ==============================================================
+# Entrypoint — sources ROS2 Humble + any built workspace, then exec's the CMD.
+# ==============================================================
+COPY docker/ros_entrypoint.sh /ros_entrypoint.sh
+RUN chmod +x /ros_entrypoint.sh
+
+ENTRYPOINT ["/ros_entrypoint.sh"]
+CMD ["bash"]

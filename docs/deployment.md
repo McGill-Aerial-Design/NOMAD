@@ -7,8 +7,8 @@ with a ground station running Mission Planner + the NOMAD plugin.
 
 | Method | Use case |
 |--------|----------|
-| **Jetson all-in-one Docker image** | Production — single container runs all services |
-| **Bare-metal systemd** | Developers who prefer process-level management |
+| **Jetson Isaac ROS image** | Production perception/odometry container (ZED + ROS-HTTP bridge) on the Jetson |
+| **Bare-metal systemd** | Edge Core API, MediaMTX, and mavlink-router as host services |
 
 ## Prerequisites (Jetson)
 
@@ -19,24 +19,33 @@ with a ground station running Mission Planner + the NOMAD plugin.
 - 4G/LTE modem (optional, for remote connectivity)
 - ZED 2i camera
 
-## Jetson all-in-one image
+## Jetson Isaac ROS image
 
-The Docker image bundles all services:
+[docker/Dockerfile.jetson](../docker/Dockerfile.jetson) builds the on-board
+perception/odometry container, layered on the official **Isaac ROS dev base
+image** (which must be built on the Jetson first — see the Isaac ROS docs and
+`isaac_ros_common`). It provides:
 
-- Edge Core (Python FastAPI)
-- MediaMTX (RTSP server)
-- mavlink-router
-- Isaac ROS container (ZED wrapper, nvblox, ROS-HTTP bridge)
+- the ZED SDK + ZED 2i camera wrapper runtime
+- `isaac_ros_nvblox_utils` (optional — drop the nvblox stage if you don't use it)
+- GStreamer for the RTSP video bridge
+- the NOMAD ROS-HTTP bridge (`edge_core/ros_http_bridge`), copied onto
+  `PYTHONPATH` so it is self-contained — no workspace mount needed
+
+The Edge Core API, MediaMTX (RTSP), and mavlink-router run alongside it as host
+services — see [Bare-metal systemd](#bare-metal-systemd).
 
 ### Build
 
 ```bash
-docker build -f docker/Dockerfile.jetson -t nomad-jetson:latest .
+docker build -f docker/Dockerfile.jetson \
+  --build-arg BASE_IMAGE=isaac_ros_dev-aarch64 \
+  -t nomad-jetson:latest .
 ```
 
-Build requires a Jetson device with the Isaac ROS dev base image. The image is
-too large to build on generic CI runners — use a self-hosted aarch64 runner or
-build directly on the Jetson.
+Build on the Jetson (or a self-hosted aarch64 runner): the image targets
+aarch64, downloads the ZED SDK, and layers on the GPU ROS stack, so it cannot
+build on generic x86 CI runners.
 
 ### Run
 
@@ -46,10 +55,13 @@ docker run --rm --runtime nvidia --privileged --network host \
   -v /usr/local/zed:/usr/local/zed \
   -v /run/udev:/run/udev \
   -v /tmp/argus_socket:/tmp/argus_socket \
-  -v $(pwd)/config:/config \
-  -e NOMAD_API_KEY="<your-api-key>" \
-  nomad-jetson:latest
+  nomad-jetson:latest \
+  python3 -m edge_core.ros_http_bridge.main --host 127.0.0.1
 ```
+
+The default `CMD` is an interactive shell (the entrypoint sources ROS2 first), so
+omit the trailing command to drop into the container for the ZED wrapper / nvblox
+launch files.
 
 ### Configuration
 
