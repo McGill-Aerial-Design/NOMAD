@@ -28,7 +28,12 @@ jobs:
         run: pixi run lint
       - name: Ruff format check
         run: pixi run fmt-check
-      - name: Mypy (advisory)
+      # The SC core (edge_core/safety) is type-checked under strict mypy settings
+      # and this step is REQUIRED — a type regression in flight-decision code
+      # fails the build. The whole-tree run below stays advisory.
+      - name: Mypy — SC core (enforced)
+        run: pixi run typecheck-safety
+      - name: Mypy — full tree (advisory)
         run: pixi run typecheck
         continue-on-error: true
 
