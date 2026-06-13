@@ -31,14 +31,14 @@ jobs:
     name: package MP plugin
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Add MSBuild to PATH
-        uses: microsoft/setup-msbuild@v2
+        uses: microsoft/setup-msbuild@v3
 
       - name: Cache Mission Planner ${{ env.MP_VERSION }}
         id: mp-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: mp-portable.zip
           key: missionplanner-${{ env.MP_VERSION }}
@@ -80,7 +80,7 @@ jobs:
           "ASSET_ZIP=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: NOMADPlugin-release
           path: ${{ env.ASSET_ZIP }}
@@ -88,7 +88,7 @@ jobs:
 
       - name: Publish to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             ${{ env.ASSET_ZIP }}

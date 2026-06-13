@@ -45,16 +45,16 @@ jobs:
     name: build MP plugin (Windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Add MSBuild to PATH
-        uses: microsoft/setup-msbuild@v2
+        uses: microsoft/setup-msbuild@v3
 
       # Cache the 116 MB portable zip keyed on the pinned version so it is
       # downloaded once and restored on subsequent runs.
       - name: Cache Mission Planner ${{ env.MP_VERSION }}
         id: mp-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: mp-portable.zip
           key: missionplanner-${{ env.MP_VERSION }}
@@ -85,7 +85,7 @@ jobs:
           }
 
       - name: Upload plugin artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: NOMADPlugin
           path: mission_planner/src/bin/Release/NOMADPlugin.dll
