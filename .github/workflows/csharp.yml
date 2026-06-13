@@ -1,0 +1,92 @@
+name: csharp
+
+# Real compile gate for the Mission Planner plugin.
+#
+# Hosted windows-latest already ships VS2022 + the .NET Framework 4.8 targeting
+# pack, so WinForms/WPF and the framework references resolve out of the box. The
+# only thing missing is Mission Planner itself: the plugin references ~13 of its
+# DLLs by absolute HintPath (C:\Program Files (x86)\Mission Planner\*). We stage
+# a *pinned* portable Mission Planner build at that canonical path so the csproj
+# HintPaths resolve unchanged, then run MSBuild. No .NET SDK is required (the
+# project is a plain MSBuild/.NET Framework project, not SDK-style).
+#
+# Pin MP_VERSION to the version the plugin is developed against; bump it
+# deliberately when the local Mission Planner is upgraded.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mission_planner/**"
+      - ".github/workflows/csharp.yml"
+  pull_request:
+    paths:
+      - "mission_planner/**"
+      - ".github/workflows/csharp.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: csharp-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MP_VERSION: "1.3.83"
+  MP_DIR: 'C:\Program Files (x86)\Mission Planner'
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  plugin-build:
+    name: build MP plugin (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      # Cache the 116 MB portable zip keyed on the pinned version so it is
+      # downloaded once and restored on subsequent runs.
+      - name: Cache Mission Planner ${{ env.MP_VERSION }}
+        id: mp-cache
+        uses: actions/cache@v4
+        with:
+          path: mp-portable.zip
+          key: missionplanner-${{ env.MP_VERSION }}
+
+      - name: Download Mission Planner ${{ env.MP_VERSION }}
+        if: steps.mp-cache.outputs.cache-hit != 'true'
+        run: |
+          $url = "https://firmware.ardupilot.org/Tools/MissionPlanner/MissionPlanner-$env:MP_VERSION.zip"
+          Write-Host "Downloading $url"
+          Invoke-WebRequest $url -OutFile mp-portable.zip
+
+      - name: Stage Mission Planner reference assemblies
+        run: |
+          $tmp = Join-Path $env:RUNNER_TEMP "mp-extract"
+          Expand-Archive -Path mp-portable.zip -DestinationPath $tmp -Force
+          $exe = Get-ChildItem $tmp -Recurse -Filter MissionPlanner.exe | Select-Object -First 1
+          if (-not $exe) { throw "MissionPlanner.exe not found in the portable zip" }
+          New-Item -ItemType Directory -Force -Path $env:MP_DIR | Out-Null
+          Copy-Item -Path (Join-Path $exe.Directory.FullName '*') -Destination $env:MP_DIR -Recurse -Force
+          Write-Host "Staged Mission Planner $env:MP_VERSION at $env:MP_DIR"
+
+      - name: Build plugin (Release)
+        run: |
+          msbuild mission_planner/src/NOMADPlugin.csproj `
+            /nologo /p:Configuration=Release /p:Platform=AnyCPU /v:minimal /clp:Summary
+          if (-not (Test-Path "mission_planner/src/bin/Release/NOMADPlugin.dll")) {
+            throw "build did not produce NOMADPlugin.dll"
+          }
+
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NOMADPlugin
+          path: mission_planner/src/bin/Release/NOMADPlugin.dll
+          if-no-files-found: error
