@@ -8,9 +8,10 @@
 // NomadJoystickService driven by a transmitter switch) can trigger
 // drops, reels and the water pump directly.
 //
-// Drops and the water pump are driven from the modular NOMADConfig.Payloads
-// list; strap reels keep their dedicated config. Indices are 1-based for drops
-// (payload 1 == first enabled drop payload) to match the joystick mapping.
+// Drops, strap reels and the water pump are all driven from the modular
+// NOMADConfig.Payloads list. Indices are 1-based for drops (payload 1 == first
+// enabled drop payload) and 0-based for reels (reel 0 == first enabled reel
+// payload) to match the joystick mapping.
 // ============================================================
 
 using System;
@@ -59,11 +60,9 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                if (cfg == null) return;
-                int ch = reelIdx == 0 ? cfg.ReelServoChannel : cfg.Reel2ServoChannel;
-                int pwm = reelIdx == 0 ? cfg.ReelPwmIn : cfg.Reel2PwmIn;
-                if (ch <= 0) return;
-                await CubeOutputController.SendServoPwmAsync(ch, pwm).ConfigureAwait(false);
+                var reel = cfg?.ReelAt(reelIdx);
+                if (reel == null || reel.Channel <= 0) return;
+                await CubeOutputController.SendServoPwmAsync(reel.Channel, reel.PwmMax).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -75,11 +74,9 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                if (cfg == null) return;
-                int ch = reelIdx == 0 ? cfg.ReelServoChannel : cfg.Reel2ServoChannel;
-                int pwm = reelIdx == 0 ? cfg.ReelPwmOut : cfg.Reel2PwmOut;
-                if (ch <= 0) return;
-                await CubeOutputController.SendServoPwmAsync(ch, pwm).ConfigureAwait(false);
+                var reel = cfg?.ReelAt(reelIdx);
+                if (reel == null || reel.Channel <= 0) return;
+                await CubeOutputController.SendServoPwmAsync(reel.Channel, reel.PwmMin).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -91,10 +88,9 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                if (cfg == null) return;
-                int ch = reelIdx == 0 ? cfg.ReelServoChannel : cfg.Reel2ServoChannel;
-                if (ch <= 0) return;
-                await CubeOutputController.SendServoPwmAsync(ch, 1500).ConfigureAwait(false);
+                var reel = cfg?.ReelAt(reelIdx);
+                if (reel == null || reel.Channel <= 0) return;
+                await CubeOutputController.SendServoPwmAsync(reel.Channel, reel.PwmNeutral).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

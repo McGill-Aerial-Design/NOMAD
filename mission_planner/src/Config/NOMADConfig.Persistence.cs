@@ -32,14 +32,10 @@ namespace NOMAD.MissionPlanner
                     if (!File.Exists(path)) continue;
                     var json = File.ReadAllText(path);
                     if (string.IsNullOrWhiteSpace(json)) continue;
-                    var config = JsonConvert.DeserializeObject<NOMADConfig>(json);
-                    if (config != null)
-                    {
-                        config.MigrateDefaults();
-                        if (path == backup)
-                            Log.Warn("Loaded config from .bak (primary corrupt or missing).");
-                        return config;
-                    }
+                    var config = Deserialize(json);
+                    if (path == backup)
+                        Log.Warn("Loaded config from .bak (primary corrupt or missing).");
+                    return config;
                 }
                 catch (Exception ex)
                 {
@@ -48,6 +44,19 @@ namespace NOMAD.MissionPlanner
             }
 
             return new NOMADConfig();
+        }
+
+        /// <summary>Load and validate a configuration profile from an arbitrary JSON file.</summary>
+        public static NOMADConfig LoadFromFile(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("A configuration file path is required.", nameof(path));
+
+            var json = File.ReadAllText(path);
+            if (string.IsNullOrWhiteSpace(json))
+                throw new InvalidDataException("The configuration file is empty.");
+
+            return Deserialize(json);
         }
 
         /// <summary>
@@ -85,6 +94,29 @@ namespace NOMAD.MissionPlanner
                 Log.Error($"Failed to save config - {ex.Message}");
                 try { File.Delete(ConfigPath + ".tmp"); } catch { }
             }
+        }
+
+        /// <summary>Export this configuration as a portable JSON profile.</summary>
+        public void ExportToFile(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("A configuration file path is required.", nameof(path));
+
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+                Directory.CreateDirectory(directory);
+
+            File.WriteAllText(path, JsonConvert.SerializeObject(this, Formatting.Indented));
+        }
+
+        private static NOMADConfig Deserialize(string json)
+        {
+            var config = JsonConvert.DeserializeObject<NOMADConfig>(json);
+            if (config == null)
+                throw new JsonSerializationException("The configuration file did not contain a NOMAD configuration.");
+
+            config.MigrateDefaults();
+            return config;
         }
 
         /// <summary>
@@ -137,6 +169,11 @@ namespace NOMAD.MissionPlanner
                 SlamMapRadiusM = 3.0f;
             }
 
+            if (Payloads == null)
+            {
+                Payloads = DefaultPayloads();
+            }
+
             SprayTargetCameraRangeM = Clamp(SprayTargetCameraRangeM, 0.5f, 8.0f, 3.8f);
             SprayRangeToleranceM = Clamp(SprayRangeToleranceM, 0.05f, 1.0f, 0.25f);
             SprayTriggerMaxDistanceM = Clamp(SprayTriggerMaxDistanceM, 1.0f, 8.0f, 5.5f);
@@ -168,7 +205,7 @@ namespace NOMAD.MissionPlanner
         public NOMADConfig Clone()
         {
             var json = JsonConvert.SerializeObject(this);
-            return JsonConvert.DeserializeObject<NOMADConfig>(json) ?? new NOMADConfig();
+            return Deserialize(json);
         }
 
         /// <summary>
@@ -212,18 +249,7 @@ namespace NOMAD.MissionPlanner
             SlamHeadingOffsetDeg = defaults.SlamHeadingOffsetDeg;
             SlamCameraFovDeg = defaults.SlamCameraFovDeg;
             SlamMapRadiusM = defaults.SlamMapRadiusM;
-            Payloads = DefaultPayloads();
-            ReelServoChannel = defaults.ReelServoChannel;
-            ReelPwmIn = defaults.ReelPwmIn;
-            ReelPwmOut = defaults.ReelPwmOut;
-            Reel2ServoChannel = defaults.Reel2ServoChannel;
-            Reel2PwmIn = defaults.Reel2PwmIn;
-            Reel2PwmOut = defaults.Reel2PwmOut;
-            CameraTiltChannel = defaults.CameraTiltChannel;
-            CameraTiltPwmMin = defaults.CameraTiltPwmMin;
-            CameraTiltPwmNeutral = defaults.CameraTiltPwmNeutral;
-            CameraTiltPwmMax = defaults.CameraTiltPwmMax;
-            CameraTiltAngleRange = defaults.CameraTiltAngleRange;
+            Payloads = defaults.Payloads;
             SprayTargetCameraRangeM = defaults.SprayTargetCameraRangeM;
             SprayRangeToleranceM = defaults.SprayRangeToleranceM;
             SprayTriggerMaxDistanceM = defaults.SprayTriggerMaxDistanceM;

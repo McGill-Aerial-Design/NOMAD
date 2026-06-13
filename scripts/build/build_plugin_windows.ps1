@@ -137,18 +137,27 @@ foreach ($dll in $HelixDlls) {
         Copy-Item $_.FullName $AppDataPluginsDir -Force
     }
 
-# Try to deploy to Program Files (may require admin)
-$ProgramFilesPluginsDir = "${env:ProgramFiles(x86)}\Mission Planner\plugins"
-if (Test-Path "${env:ProgramFiles(x86)}\Mission Planner") {
+# Single canonical copy: Mission Planner scans BOTH its install plugins folder
+# (Program Files) and %LOCALAPPDATA%\Mission Planner\plugins. If NOMADPlugin.dll
+# exists in both, MP loads the plugin TWICE — two control panels, two configs —
+# and a stale Program Files build can silently shadow settings (e.g. payloads
+# reappearing after you cleared them, because the old build's defaults differ).
+# AppData is the canonical location (no admin needed, and it's where
+# nomad_config.json lives), so remove any Program Files duplicate here.
+$ProgramFilesPluginDll = "${env:ProgramFiles(x86)}\Mission Planner\plugins\NOMADPlugin.dll"
+if (Test-Path $ProgramFilesPluginDll) {
     try {
-        Copy-Item $BuiltDll $ProgramFilesPluginsDir -Force -ErrorAction Stop
-        Write-Host "  Copied to: $ProgramFilesPluginsDir" -ForegroundColor Green
+        Remove-Item $ProgramFilesPluginDll -Force -ErrorAction Stop
+        Write-Host "  Removed stale duplicate: $ProgramFilesPluginDll" -ForegroundColor Green
     } catch {
-        Write-Host "  Could not copy to Program Files (may need admin rights)" -ForegroundColor Yellow
-        Write-Host "  Run PowerShell as Administrator to deploy there" -ForegroundColor Yellow
+        Write-Host "  WARNING: A duplicate NOMADPlugin.dll is present in Program Files and" -ForegroundColor Red
+        Write-Host "           could not be removed (needs admin). Mission Planner will load" -ForegroundColor Red
+        Write-Host "           the plugin TWICE and may restore old defaults." -ForegroundColor Red
+        Write-Host "           Delete it manually (Run as Administrator):" -ForegroundColor Yellow
+        Write-Host "             Remove-Item '$ProgramFilesPluginDll' -Force" -ForegroundColor Yellow
     }
 } else {
-    Write-Host "  Mission Planner not found in Program Files" -ForegroundColor Gray
+    Write-Host "  No duplicate in Program Files (good — single canonical copy in AppData)" -ForegroundColor Gray
 }
 
 Write-Host ""

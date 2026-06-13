@@ -87,10 +87,7 @@ namespace NOMAD.MissionPlanner
         private NumericUpDown _numTempCritical;
         private CheckBox _chkAudioAlerts;
 
-        // Servos Tab (strap reels + camera tilt; drop/slider/relay payloads have their own tab)
-        private NumericUpDown _numReelCh, _numReelPwmIn, _numReelPwmOut;
-        private NumericUpDown _numReel2Ch, _numReel2PwmIn, _numReel2PwmOut;
-        private NumericUpDown _numTiltCh, _numTiltPwmMin, _numTiltPwmNeutral, _numTiltPwmMax, _numTiltAngleRange;
+        // Spray Tab (reels, camera tilt + all other payloads live in the Payloads tab)
         private NumericUpDown _numSprayRange, _numSprayRangeTol, _numSprayTriggerMax, _numSprayAimX, _numSprayAimY, _numSprayAimTol;
         private NumericUpDown _numSprayServoAngle, _numSprayForwardGain, _numSprayLateralGain, _numSprayAltitudeGain, _numSprayYawGain;
         private NumericUpDown _numSprayMaxForward, _numSprayMaxLateral, _numSprayMaxAltitude, _numSprayMaxYaw, _numSprayLockMs, _numSprayTimeout;
@@ -134,6 +131,8 @@ namespace NOMAD.MissionPlanner
         private Button _btnCancel;
         private Button _btnTest;
         private Button _btnReset;
+        private Button _btnLoadConfig;
+        private Button _btnExportConfig;
 
         public NOMADConfig Config { get; private set; }
 
@@ -143,7 +142,7 @@ namespace NOMAD.MissionPlanner
 
         public NOMADSettingsForm(NOMADConfig config)
         {
-            Config = config ?? new NOMADConfig();
+            Config = (config ?? new NOMADConfig()).Clone();
             InitializeComponents();
             LoadSettings();
         }
@@ -155,7 +154,7 @@ namespace NOMAD.MissionPlanner
         private void InitializeComponents()
         {
             this.Text = "NOMAD Settings";
-            this.Size = new Size(550, 650);
+            this.ClientSize = new Size(760, 610);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
@@ -167,7 +166,7 @@ namespace NOMAD.MissionPlanner
             _tabControl = new TabControl
             {
                 Location = new Point(10, 10),
-                Size = new Size(515, 540),
+                Size = new Size(740, 540),
                 BackColor = Color.FromArgb(45, 45, 48),
             };
             this.Controls.Add(_tabControl);
@@ -181,8 +180,11 @@ namespace NOMAD.MissionPlanner
             _tabControl.TabPages.Add(CreateAlertsTab());
             _tabControl.TabPages.Add(CreatePayloadsTab());
             _tabControl.TabPages.Add(CreateSprayCalibrationTab());
-            _tabControl.TabPages.Add(CreateServosTab());
             _tabControl.TabPages.Add(CreateJoystickTab());
+
+            int clientWidth = CalculateSettingsClientWidth();
+            this.ClientSize = new Size(clientWidth, 610);
+            _tabControl.Width = clientWidth - 20;
 
             // Buttons at bottom
             int buttonY = 560;
@@ -211,10 +213,34 @@ namespace NOMAD.MissionPlanner
             _btnReset.Click += BtnReset_Click;
             this.Controls.Add(_btnReset);
 
+            _btnLoadConfig = new Button
+            {
+                Text = "Load Config...",
+                Location = new Point(260, buttonY),
+                Size = new Size(110, 35),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(70, 90, 130),
+                ForeColor = Color.White
+            };
+            _btnLoadConfig.Click += BtnLoadConfig_Click;
+            this.Controls.Add(_btnLoadConfig);
+
+            _btnExportConfig = new Button
+            {
+                Text = "Export Config...",
+                Location = new Point(380, buttonY),
+                Size = new Size(120, 35),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(70, 90, 130),
+                ForeColor = Color.White
+            };
+            _btnExportConfig.Click += BtnExportConfig_Click;
+            this.Controls.Add(_btnExportConfig);
+
             _btnOK = new Button
             {
                 Text = "Save",
-                Location = new Point(330, buttonY),
+                Location = new Point(clientWidth - 200, buttonY),
                 Size = new Size(90, 35),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(0, 150, 100),
@@ -227,7 +253,7 @@ namespace NOMAD.MissionPlanner
             _btnCancel = new Button
             {
                 Text = "Cancel",
-                Location = new Point(430, buttonY),
+                Location = new Point(clientWidth - 100, buttonY),
                 Size = new Size(90, 35),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(100, 100, 100),
@@ -238,6 +264,22 @@ namespace NOMAD.MissionPlanner
 
             this.AcceptButton = _btnOK;
             this.CancelButton = _btnCancel;
+        }
+
+        private int CalculateSettingsClientWidth()
+        {
+            int widestContent = _tabControl.TabPages
+                .Cast<TabPage>()
+                .SelectMany(tab => tab.Controls.Cast<Control>())
+                .Select(control => control.Right)
+                .DefaultIfEmpty(700)
+                .Max();
+
+            int tabHeadersWidth = _tabControl.TabPages
+                .Cast<TabPage>()
+                .Sum(tab => TextRenderer.MeasureText(tab.Text, _tabControl.Font).Width + 24);
+
+            return Math.Max(760, Math.Max(widestContent + 45, tabHeadersWidth + 35));
         }
 
         // ============================================================

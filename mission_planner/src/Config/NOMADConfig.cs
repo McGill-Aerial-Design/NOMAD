@@ -384,50 +384,18 @@ namespace NOMAD.MissionPlanner
         /// Settings → Payloads. Each is a drop servo, a slider servo, or a relay/GPIO
         /// output. See <see cref="PayloadControl"/>.
         /// </summary>
+        [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
         public List<PayloadControl> Payloads { get; set; } = DefaultPayloads();
 
-        /// <summary>Default payload set: three drop servos plus the water-pump relay.</summary>
-        public static List<PayloadControl> DefaultPayloads() => new List<PayloadControl>
-        {
-            new PayloadControl { Name = "Payload 1", Kind = PayloadKind.Drop, Channel = 9 },
-            new PayloadControl { Name = "Payload 2", Kind = PayloadKind.Drop, Channel = 10 },
-            new PayloadControl { Name = "Payload 3", Kind = PayloadKind.Drop, Channel = 11 },
-            new PayloadControl { Name = "Water Pump", Kind = PayloadKind.Relay, Channel = 0, PulseMs = 500 },
-        };
+        /// <summary>Payload controls start empty and are configured per aircraft.</summary>
+        public static List<PayloadControl> DefaultPayloads() => new List<PayloadControl>();
 
-        // --- Strap reel servo (payload 1) ---
-        /// <summary>Cube servo output channel for payload 1 strap reel.</summary>
-        public int ReelServoChannel { get; set; } = 12;
-        /// <summary>PWM (us) to reel straps in (must be &gt;2000 us).</summary>
-        public int ReelPwmIn { get; set; } = 2100;
-        /// <summary>PWM (us) to reel straps out (must be &lt;1000 us).</summary>
-        public int ReelPwmOut { get; set; } = 900;
-
-        // --- Strap reel servo (payload 2) ---
-        /// <summary>Cube servo output channel for payload 2 strap reel.</summary>
-        public int Reel2ServoChannel { get; set; } = 13;
-        /// <summary>PWM (us) to reel straps in on reel 2 (must be &gt;2000 us).</summary>
-        public int Reel2PwmIn { get; set; } = 2100;
-        /// <summary>PWM (us) to reel straps out on reel 2 (must be &lt;1000 us).</summary>
-        public int Reel2PwmOut { get; set; } = 900;
-
-        // --- Camera tilt servo (Cube MAVLink primary, Edge Core Cube fallback) ---
-        // ZED camera tilt calibration points:
-        //   700 us  → pointing down  (−45° from level)
-        //   1250 us → straight/level ( 0°)
-        //   1450 us → pointing up    (+45° from level)
-        // Neutral is at 1250us, NOT the standard 1500us, because the camera arm
-        // is mechanically offset. Conversion uses piecewise linear interpolation.
-        /// <summary>Cube servo output channel for camera tilt servo.</summary>
-        public int CameraTiltChannel { get; set; } = 14;
-        /// <summary>Camera tilt minimum PWM (us) — fully down.</summary>
-        public int CameraTiltPwmMin { get; set; } = 700;
-        /// <summary>Camera tilt neutral PWM (us) — camera pointing straight/level.</summary>
-        public int CameraTiltPwmNeutral { get; set; } = 1250;
-        /// <summary>Camera tilt maximum PWM (us) — fully up.</summary>
-        public int CameraTiltPwmMax { get; set; } = 1450;
-        /// <summary>Physical tilt range in degrees each way from level (±45°).</summary>
-        public int CameraTiltAngleRange { get; set; } = 45;
+        // Strap reels and the camera tilt servo are regular payload entries now
+        // (PayloadKind.Reel / PayloadKind.CamTilt) — add them in Settings →
+        // Payloads. PayloadControl.NewReel / NewCamTilt carry the standard
+        // NOMAD defaults (reel out <1000 us / in >2000 us / stop 1500 us;
+        // tilt 700 down / 1250 level / 1450 up — the camera arm is mechanically
+        // offset, so level is NOT the standard 1500 us).
 
         // ============================================================
         // Joystick Configuration (Mission Planner DirectInput-based)

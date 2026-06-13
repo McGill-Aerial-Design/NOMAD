@@ -13,64 +13,6 @@ namespace NOMAD.MissionPlanner
 {
     public partial class NOMADSettingsForm
     {
-        private TabPage CreateServosTab()
-        {
-            var tab = CreateTabPage("Servos");
-            int y = 10;
-
-            AddLabel(tab, "Channel = ArduPilot servo output number (e.g. 9 = AUX1).", 10, y, Color.Gray);
-            y += 18;
-
-            void AddServoRow(string label, ref int row,
-                out NumericUpDown ch, out NumericUpDown min, out NumericUpDown max,
-                int defCh, int defMin, int defMax)
-            {
-                AddLabel(tab, label, 10, row);
-                AddLabel(tab, "Ch", 155, row, Color.Gray);
-                ch  = AddNumericUpDown(tab, 175, row, 45, 1, 99, defCh);
-                AddLabel(tab, "Min", 228, row, Color.Gray);
-                min = AddNumericUpDown(tab, 248, row, 55, 500, 2500, defMin);
-                AddLabel(tab, "Max", 310, row, Color.Gray);
-                max = AddNumericUpDown(tab, 330, row, 55, 500, 2500, defMax);
-                row += 28;
-            }
-
-            AddLabel(tab, "Drop / slider / relay payloads are configured in the Payloads tab.", 10, y, Color.Gray);
-            y += 22;
-
-            AddSectionLabel(tab, "Strap Reel (Payload 1)", ref y);
-            AddLabel(tab, "Channel:", 10, y);
-            _numReelCh = AddNumericUpDown(tab, 100, y, 50, 1, 99, 12);
-            y += 28;
-            AddLabel(tab, "PWM In (>2000):", 10, y);
-            _numReelPwmIn  = AddNumericUpDown(tab, 145, y, 60, 2001, 2500, 2100);
-            y += 28;
-            AddLabel(tab, "PWM Out (<1000):", 10, y);
-            _numReelPwmOut = AddNumericUpDown(tab, 145, y, 60, 500, 999, 900);
-            y += 32;
-
-            AddSectionLabel(tab, "Strap Reel (Payload 2)", ref y);
-            AddLabel(tab, "Channel:", 10, y);
-            _numReel2Ch = AddNumericUpDown(tab, 100, y, 50, 1, 99, 13);
-            y += 28;
-            AddLabel(tab, "PWM In (>2000):", 10, y);
-            _numReel2PwmIn  = AddNumericUpDown(tab, 145, y, 60, 2001, 2500, 2100);
-            y += 28;
-            AddLabel(tab, "PWM Out (<1000):", 10, y);
-            _numReel2PwmOut = AddNumericUpDown(tab, 145, y, 60, 500, 999, 900);
-            y += 32;
-
-            AddSectionLabel(tab, "Camera Tilt (MAVLink primary, API fallback)", ref y);
-            AddServoRow("Camera Tilt:", ref y, out _numTiltCh, out _numTiltPwmMin, out _numTiltPwmMax, 14, 700, 1450);
-            AddLabel(tab, "Neutral PWM:", 10, y);
-            _numTiltPwmNeutral = AddNumericUpDown(tab, 120, y, 60, 500, 2500, 1250);
-            AddLabel(tab, "Range (deg):", 190, y, Color.Gray);
-            _numTiltAngleRange = AddNumericUpDown(tab, 258, y, 50, 1, 90, 45);
-            y += 28;
-
-            return tab;
-        }
-
         private TabPage CreateSprayCalibrationTab()
         {
             var tab = CreateTabPage("Spray");
