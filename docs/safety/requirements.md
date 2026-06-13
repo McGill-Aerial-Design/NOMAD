@@ -44,8 +44,8 @@ Numbers are stable identifiers; do not renumber. New requirements append.
 
 | ID | Requirement | Hazard | Status |
 |----|-------------|--------|--------|
-| SR-FEN-01 | The operating boundary shall be uploaded to and enforced by the FC fence before autonomous flight. | H-05 | 🟡 (FC-side; not NOMAD-tested) |
-| SR-FEN-02 | NOMAD shall provide an independent containment check that rejects/clamps any position target outside the configured boundary. | H-05 | ✅ (pure decision `safety/geofence.py::evaluate_position`, enforced in `services/mavlink/commands.py` position-target senders; unit + adapter fault-injection tested. SITL containment scenario exists — `pixi run sitl-fence` — but has **not yet been run**; see H-05) |
+| SR-FEN-01 | The operating boundary shall be uploaded to and enforced by the FC fence before autonomous flight. | H-05 | ✅ (FC-side: boundary uploaded by the C# `MPFenceUploader` and enforced by the FC fence before autonomous flight; verified manually — no automated NOMAD test by nature) |
+| SR-FEN-02 | NOMAD shall provide an independent containment check that rejects/clamps any position target outside the configured boundary. | H-05 | ✅ (pure decision `safety/geofence.py::evaluate_position`, enforced in `services/mavlink/commands.py` position-target senders; unit + adapter fault-injection tested. SITL containment scenario `pixi run sitl-fence` **run & PASS** 2026-06-11, commit f69a137 — now gating nightly; see H-05) |
 
 ## Payload (PAY) — hazard H-06
 
@@ -90,11 +90,15 @@ MAVLink surface contains no failsafe-disabling command (SR-SEC-01 → ✅), and
 command-path endpoints require auth even on loopback with every request
 audit-logged (SR-SEC-03 → ✅).
 
-Remaining work:
+**Phase 4.4** closed the last verification gap: the geofence containment SITL
+scenario (`tests/sitl/geofence_containment.py`, `pixi run sitl-fence`) was run
+against the dev stack (2026-06-11, commit f69a137 — PASS) and now gates nightly
+in `.github/workflows/sitl.yml`, so SR-FEN-02's loop-closure evidence is
+continuously re-checked (SR-FEN-02 SITL → ✅). SR-FEN-01 (FC-side fence upload via
+the C# `MPFenceUploader`) is verified manually before flight.
 
-- **SR-FEN-02 SITL evidence** — run the containment scenario
-  (`tests/sitl/geofence_containment.py`, `pixi run sitl-fence`) against the
-  dev stack; it is written but not yet executed.
-- **SR-FEN-01** — FC-side fence upload remains manually verified.
+No open requirements remain (🔴 0, 🟡 0). SR-FEN-01 carries no automated NOMAD
+test by nature — it is a flight-controller function NOMAD configures but does not
+own; the FC enforces it independently.
 
 See [hazards.md](hazards.md) "How to read the GAPs".

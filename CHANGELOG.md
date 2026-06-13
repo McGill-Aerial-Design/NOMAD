@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-13
+
 ### Added
 - ROS-HTTP bridge unit coverage: the `simple_video_bridge` GStreamer pipeline
   lifecycle and HTTP API routing, plus the `mavlink_velocity` connection,
@@ -40,6 +42,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`<Compile Include="**\*.cs">`) instead of being listed file-by-file, so new
   files and partial-class splits build without hand-editing the csproj. It stays
   a plain MSBuild project (no .NET SDK prerequisite, unlike SDK-style).
+- All GitHub Actions workflows pinned to Node-24 action releases ahead of GitHub
+  forcing Node 24 on 2026-06-16 and removing Node 20 on 2026-09-16: `checkout` v5,
+  `setup-pixi` v0.9.6, `setup-buildx-action` v4, `build-push-action` v7,
+  `upload-artifact` v6, `cache` v5, `setup-dotnet` v5, `login-action` v4,
+  `metadata-action` v6, `action-gh-release` v3, `configure-pages` v6,
+  `upload-pages-artifact` v4, `deploy-pages` v5, `setup-msbuild` v3.
+- Safety case docs brought in line with verification reality. The geofence
+  containment SITL scenario (`pixi run sitl-fence`) is recorded as run & passing
+  (2026-06-11, commit f69a137) and now gating nightly, so SR-FEN-02's loop-closure
+  evidence is ✅; SR-FEN-01 (FC-side fence upload) is marked met (verified
+  manually before flight); and the SC/NC partition rule is documented as enforced
+  by `tests/test_safety_partition.py` rather than a stated intention — leaving no
+  open requirements (🟡 0, 🔴 0) in the Python SC tier.
+- README quick-start fixed: the `pixi`-install lines sat outside the code fence
+  and rendered as oversized headings; install and run steps are now two clean
+  fenced blocks.
 
 ### Fixed
 - [tests] [bug] SITL scenarios now land and disarm before takeoff, so the

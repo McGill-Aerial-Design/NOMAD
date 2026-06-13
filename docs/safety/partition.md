@@ -24,9 +24,11 @@ it is **allowed to call**.
 
 This is the software analogue of DO-178C / ARP4754A partitioning. It is the
 property that keeps a crashing video widget from ever touching a velocity
-setpoint. Today this rule is **stated but not yet enforced by tooling** — the
-architecture test that proves it is a later phase (rearchitecture plan §5).
-**GAP.**
+setpoint. This rule is **enforced by tooling**:
+[`tests/test_safety_partition.py`](../../tests/test_safety_partition.py) asserts
+the SC core (`edge_core/safety/`) imports only the standard library and itself,
+and that the rest of `edge_core/` reaches it only through its public API. It runs
+on every PR — a violation fails CI.
 
 ## Tier membership — Python edge (`edge_core/`)
 

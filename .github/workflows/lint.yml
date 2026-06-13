@@ -18,8 +18,8 @@ jobs:
     name: ruff + mypy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: prefix-dev/setup-pixi@v0.8.8
+      - uses: actions/checkout@v5
+      - uses: prefix-dev/setup-pixi@v0.9.6
         with:
           cache: true
       - name: File and line size report
@@ -41,7 +41,7 @@ jobs:
     name: shellcheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: ludeeus/action-shellcheck@master
         with:
           severity: warning
@@ -62,8 +62,8 @@ jobs:
     # full build + style enforcement happens in Visual Studio on Windows.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "8.0.x"
       - name: dotnet format (whitespace, no restore)

@@ -24,7 +24,7 @@ the autopilot.
 | [partition.md](partition.md) | The SC / SR / NC criticality tiers and which real files fall in each. The single most important architectural decision. | DAL allocation + partitioning (ARP4754A, DO-178C §2) |
 | [hazards.md](hazards.md) | FHA-lite: what NOMAD can cause, severity, current mitigation, residual risk, and the code + test that proves each mitigation. | Functional Hazard Assessment (ARP4761) |
 | [requirements.md](requirements.md) | Short, testable safety requirements (`SR-VEL-01: …`) for the SC tier. | Safety requirements (DO-178C §6) |
-| [traceability.md](traceability.md) | requirement → code symbol → test, kept honest by CI in a later phase. | Bidirectional traceability (DO-178C §6) |
+| [traceability.md](traceability.md) | requirement → code symbol → test, kept honest by CI (`tests/test_safety_traceability.py` parses the normative block and fails on a missing symbol/test). | Bidirectional traceability (DO-178C §6) |
 
 ## How to use it
 
@@ -66,10 +66,13 @@ SITL evidence: the velocity path is **loop-closure-proven** against real
 ArduPilot SITL ([../../tests/sitl/](../../tests/sitl/)) — that run also caught
 a real defect (GCS heartbeat flipping the armed/mode gate → SR-VEL-06).
 
-**Open items** (marked GAP where they appear):
-
-1. The geofence containment SITL scenario
-   ([../../tests/sitl/geofence_containment.py](../../tests/sitl/geofence_containment.py),
-   `pixi run sitl-fence`) is written but has not yet been run against a live
-   SITL (H-05).
-2. SR-FEN-01 (FC-side fence upload) remains manually verified.
+**Open items.** None outstanding for the Python SC tier. The geofence containment
+SITL scenario
+([../../tests/sitl/geofence_containment.py](../../tests/sitl/geofence_containment.py),
+`pixi run sitl-fence`) was run against live ArduPilot SITL on 2026-06-11 (commit
+f69a137, PASS) and now gates nightly in
+[../../.github/workflows/sitl.yml](../../.github/workflows/sitl.yml) (H-05).
+SR-FEN-01 (FC-side fence upload) is verified manually before flight — inherent to
+it being a flight-controller function. (The C# tier still carries its own GAPs —
+see [partition.md](partition.md): payload release logic mixed with panel chrome,
+and the removed GCS-side RTH/landing state machine.)

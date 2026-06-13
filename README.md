@@ -11,9 +11,17 @@ discoverable modules.
 
 ## Quick start (sim, no hardware)
 
-# Install pixi (https://pixi.sh) — one of:
-#   Linux/macOS:  curl -fsSL https://pixi.sh/install.sh | bash
-#   Windows:      iwr -useb https://pixi.sh/install.ps1 | iex
+Install [pixi](https://pixi.sh) (one line, no admin):
+
+```bash
+# Linux/macOS
+curl -fsSL https://pixi.sh/install.sh | bash
+# Windows (PowerShell)
+iwr -useb https://pixi.sh/install.ps1 | iex
+```
+
+Then bring up the sim:
+
 ```bash
 git clone <repo-url> && cd NOMAD
 pixi run dev              # Edge Core sim on http://localhost:8000
