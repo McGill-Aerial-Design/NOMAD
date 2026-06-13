@@ -17,6 +17,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `terminal` runner, and the `calibration`/`isaac` management modules — all
   driven through `TestClient` with subprocess and hardware probes mocked. The
   `pixi run test` coverage floor rises 45% -> 60%.
+- CI now compiles the Mission Planner plugin on a `windows-latest` runner
+  (`.github/workflows/csharp.yml`): it stages a version-pinned portable Mission
+  Planner so the csproj's DLL HintPaths resolve, then builds with MSBuild — a
+  real gate (no SDK needed) catching broken references/syntax that the
+  whitespace-only `dotnet format` job could not. Triggered on `mission_planner/`
+  changes; uploads `NOMADPlugin.dll` as a build artifact.
 
 ### Changed
 - Mission Planner plugin C# sources are now globbed
