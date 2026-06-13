@@ -28,6 +28,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   monitor loop, and the module lifecycle) — all with subprocess, socket, and the
   system clock mocked. Raises the `pixi run test` coverage floor 60% -> 65%
   (66% actual).
+- `VideoStreamManager` unit coverage (`tests/test_video_stream_manager.py`): the
+  in-container video-bridge controller driven with `subprocess.run` (a
+  docker-command-classifying stub) and `urlopen` (a URL->payload map) faked —
+  container/relay status probes, every `start_with_reason` failure branch (stale
+  adopt, container down, missing script, `docker cp`/`exec` errors and timeout,
+  crash/no-frames/uncheckable diagnosis), the crash-recovery watchdog loop
+  (dead-bridge restart, stalled-pipeline `/restart`, relaunch fallbacks), and the
+  switch-topic / overlay / status HTTP API — taking
+  `services/video_stream_manager.py` from 40% to **100%**. Raises the `pixi run
+  test` coverage floor 75% -> 78% (78.52% actual).
 - `JetsonHealthMonitor` unit coverage (`tests/test_health_monitor.py`): the Jetson
   sysfs/proc readers and `tailscale` status exercised against a fake file system
   (scoped `open`/`os.path.exists`, mocked `os.statvfs`/`subprocess`/`time.sleep`)
