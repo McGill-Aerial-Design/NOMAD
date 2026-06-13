@@ -11,7 +11,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - ROS-HTTP bridge unit coverage: the `simple_video_bridge` GStreamer pipeline
   lifecycle and HTTP API routing, plus the `mavlink_velocity` connection,
   setpoint-TX, watchdog, and heartbeat-gating paths and the `mesh_packer`
-  background sender loop. The `pixi run test` coverage floor rises 45% -> 55%.
+  background sender loop.
+- Edge Core API route coverage: the system/network endpoints (health, status,
+  network, ping, `/ws/state`), the `services` status fan-out, the whitelisted
+  `terminal` runner, and the `calibration`/`isaac` management modules — all
+  driven through `TestClient` with subprocess and hardware probes mocked. The
+  `pixi run test` coverage floor rises 45% -> 60%.
 
 ### Changed
 - Mission Planner plugin C# sources are now globbed
