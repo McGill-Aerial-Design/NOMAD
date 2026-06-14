@@ -143,7 +143,7 @@ namespace NOMAD.MissionPlanner
             {
                 _videoPlaceholder.Controls.Clear();
 
-                string rtspUrl = $"rtsp://{_config.EffectiveIP}:8554/primary";
+                string rtspUrl = $"rtsp://{_config.EffectiveIP}:8554/stream";
                 _videoPlayer = new EmbeddedVideoPlayer("ZED Left", rtspUrl, showControls: false, _jetsonConnectionManager);
                 _videoPlayer.Dock = DockStyle.Fill;
                 _videoPlaceholder.Controls.Add(_videoPlayer);

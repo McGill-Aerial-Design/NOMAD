@@ -95,7 +95,7 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// Video stream URL for ZED camera.
         /// Default: RTSP stream supporting multiple simultaneous viewers.
-        /// Format: rtsp://&lt;jetson-ip&gt;:8554/primary
+        /// Format: rtsp://&lt;jetson-ip&gt;:8554/stream
         /// </summary>
         public string VideoUrl { get; set; } = "";
 

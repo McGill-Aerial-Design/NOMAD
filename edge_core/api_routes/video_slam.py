@@ -51,11 +51,11 @@ class VideoSlamModule(BaseModule):
 
         @router.get("/api/video/bridges")
         async def get_video_bridges_status():
-            """Get status of running RTSP streams."""
+            """Get status of the single RTSP stream."""
             mgr = _manager()
             if not mgr:
                 raise HTTPException(status_code=503, detail="VideoStreamManager not initialized")
-            return {"success": True, "bridges": {"primary": mgr.get_status().to_dict()}}
+            return {"success": True, "bridges": {"stream": mgr.get_status().to_dict()}}
 
         @router.post("/api/video/bridges/start")
         async def start_video_bridges():

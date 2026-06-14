@@ -10,7 +10,7 @@ Tailscale creates a secure WireGuard VPN mesh network that allows the Ground Sta
 - MAVLink telemetry streaming to Mission Planner over cellular
 - HTTP access to Jetson API for monitoring and control
 - SSH access for remote debugging and code deployment
-- RTSP video streaming (primary and gimbal feeds)
+- RTSP video streaming (single ZED stream)
 
 See [README.md](README.md) for the architecture diagram and port table.
 
@@ -200,17 +200,16 @@ ssh <jetson-user>@100.100.10.5
 
 ### RTSP Video Streaming
 
-**Access ZED Camera Feed:**
+**Access ZED Camera Feed (single stream):**
 
 ```
-rtsp://<jetson-tailscale-ip>:8554/primary
-rtsp://<jetson-tailscale-ip>:8554/secondary
+rtsp://<jetson-tailscale-ip>:8554/stream
 ```
 
 **VLC Player:**
 ```bash
 # Open video stream
-vlc rtsp://100.100.10.5:8554/primary
+vlc rtsp://100.100.10.5:8554/stream
 ```
 
 **Mission Planner Plugin:**
@@ -486,7 +485,7 @@ curl http://<jetson-tailscale-ip>:8000/health
 - NOMAD plugin LTE input: UDP, Port 14560
 - NOMAD plugin RadioMaster input: UDP, Port 14550
 - Jetson API: `http://<jetson-tailscale-ip>:8000`
-- Video: `rtsp://<jetson-tailscale-ip>:8554/primary`
+- Video: `rtsp://<jetson-tailscale-ip>:8554/stream`
 
 **Configuration Files:**
 - Jetson: `/etc/mavlink-router/main.conf` (update Ground Station IP)

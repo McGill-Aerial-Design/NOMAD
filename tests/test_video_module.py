@@ -36,7 +36,9 @@ def test_bridges_status_degrades_without_docker(app):
     assert resp.status_code == 200
     body = resp.json()
     assert body["success"] is True
-    assert body["bridges"]["primary"]["streaming"] is False
+    # Single stream exposed under the "stream" key (no primary/secondary).
+    assert set(body["bridges"]) == {"stream"}
+    assert body["bridges"]["stream"]["streaming"] is False
 
 
 def test_bridges_start_fails_cleanly_without_container(app):

@@ -149,7 +149,7 @@ Controls which services are started by `nomad start all` and at boot.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VIDEO_BRIDGE_STREAM_PATH` | `primary` | RTSP stream path |
+| `VIDEO_BRIDGE_STREAM_PATH` | `stream` | RTSP stream path (single Jetson stream) |
 | `VIDEO_BRIDGE_WIDTH` | `640` | Stream width |
 | `VIDEO_BRIDGE_HEIGHT` | `360` | Stream height |
 | `VIDEO_BRIDGE_FPS` | `15` | Stream framerate |

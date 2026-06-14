@@ -187,8 +187,7 @@ Example:
   "JetsonPort": 8000,
   "TailscaleIP": "100.100.100.100",
   "UseTailscale": false,
-  "RtspUrlPrimary": "rtsp://192.168.1.100:8554/live",
-  "RtspUrlSecondary": "rtsp://192.168.1.100:8554/gimbal",
+  "VideoUrl": "rtsp://192.168.1.100:8554/stream",
   "VideoNetworkCaching": 100,
   "PreferredVideoPlayer": "Embedded",
   "HttpTimeoutSeconds": 5,
@@ -333,7 +332,7 @@ The plugin runs on Linux via Mono with Mission Planner:
     |  |  +------------------------------+  |   |
     |  |  +------------------------------+  |   |
 | | | MediaMTX RTSP Server | | |
-| | | (port 8554: /primary) | | |
+| | | (port 8554: /stream) | | |
     |  |  +------------------------------+  |   |
     |  +------------------------------------+   |
     +------------------------------------------+

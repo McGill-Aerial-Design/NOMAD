@@ -34,7 +34,9 @@ from edge_core.env import env_secret
 logger = logging.getLogger("edge_core.video_stream_manager")
 
 _DOCKER_HOST_IP = os.environ.get("NOMAD_DOCKER_HOST_IP", "172.17.0.1")
-DEFAULT_RTSP_URL = os.environ.get("NOMAD_RTSP_URL") or f"rtsp://{_DOCKER_HOST_IP}:8554/primary"
+# The Jetson exposes a SINGLE RTSP stream. Its content (which ROS topic) is
+# switched live via the bridge HTTP API — the URL/path never changes.
+DEFAULT_RTSP_URL = os.environ.get("NOMAD_RTSP_URL") or f"rtsp://{_DOCKER_HOST_IP}:8554/stream"
 _NOMAD_ROS_ROOT = os.environ.get("NOMAD_ROS_ROOT", "/opt/ros/humble")
 _NOMAD_ISAAC_WS = os.environ.get("NOMAD_ISAAC_WORKSPACE", "/workspaces/isaac_ros-dev")
 
