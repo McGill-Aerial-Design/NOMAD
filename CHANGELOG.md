@@ -137,6 +137,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   all-in-one) and note the `BASE_IMAGE` prerequisite.
 
 ### Changed
+- Dashboard notifications header (`NotificationPanel`) relaid out as a docked
+  AutoSize table (title/unread badge left, Clear right) instead of absolute
+  positions with a resize handler, and its fonts routed through `NOMADTheme`.
+  Completes the responsive sweep of the operator-facing views — the remaining
+  views (Video/Terminal/Calibration) are already docked, the Dashboard is a
+  percentage `TableLayoutPanel`, and the Settings dialog is an intentionally
+  fixed-size `FixedDialog` with `AutoScroll` tabs.
 - Health + Links panels relaid out responsively: `ServiceControlPanel` (services
   as a reflowing name/status/buttons table + percentage log split, no fixed
   920×650), `LinkHealthPanel` (header and settings rows are AutoSize cards with

@@ -74,56 +74,78 @@ namespace NOMAD.MissionPlanner
             this.Dock = DockStyle.Fill;
             this.Padding = new Padding(0);
 
-            // Header panel
-            _headerPanel = new Panel
+            // Header: title + unread badge on the left, Clear on the right — a
+            // docked AutoSize table so the button stays put without a resize handler.
+            var headerTable = new TableLayoutPanel
             {
                 Dock = DockStyle.Top,
-                Height = 40,
+                ColumnCount = 2,
+                RowCount = 1,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 BackColor = Color.Transparent,
-                Padding = new Padding(15, 10, 10, 5),
+                Padding = new Padding(15, 8, 10, 4),
             };
+            headerTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            headerTable.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            _headerPanel = headerTable;
 
             _lblTitle = new Label
             {
                 Text = "NOTIFICATIONS",
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_HEADING, FontStyle.Bold),
                 ForeColor = ACCENT_COLOR,
-                Location = new Point(15, 10),
                 AutoSize = true,
+                Anchor = AnchorStyles.Left,
+                Margin = new Padding(0, 4, NOMADTheme.GAP, 0),
             };
-            _headerPanel.Controls.Add(_lblTitle);
 
             _lblUnreadCount = new Label
             {
                 Text = "",
-                Font = new Font("Segoe UI", 8, FontStyle.Bold),
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL, FontStyle.Bold),
                 ForeColor = TEXT_PRIMARY,
                 BackColor = ERROR_COLOR,
                 AutoSize = true,
                 Padding = new Padding(4, 2, 4, 2),
+                Anchor = AnchorStyles.Left,
+                Margin = new Padding(0, 3, 0, 0),
                 Visible = false,
             };
-            _lblUnreadCount.Location = new Point(_lblTitle.Right + 8, 10);
-            _headerPanel.Controls.Add(_lblUnreadCount);
+
+            var titleFlow = new FlowLayoutPanel
+            {
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                WrapContents = false,
+                BackColor = Color.Transparent,
+                Margin = new Padding(0),
+                Padding = new Padding(0),
+            };
+            titleFlow.Controls.Add(_lblTitle);
+            titleFlow.Controls.Add(_lblUnreadCount);
+            headerTable.Controls.Add(titleFlow, 0, 0);
 
             _btnClear = new Button
             {
                 Text = "Clear",
-                Size = new Size(50, 22),
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Padding = new Padding(8, 2, 8, 2),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(60, 60, 65),
                 ForeColor = TEXT_SECONDARY,
-                Font = new Font("Segoe UI", 8),
-                Anchor = AnchorStyles.Top | AnchorStyles.Right,
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL),
+                Anchor = AnchorStyles.Right,
+                Margin = new Padding(0),
                 Cursor = Cursors.Hand,
             };
             _btnClear.FlatAppearance.BorderSize = 0;
-            _btnClear.Location = new Point(this.Width - 65, 8);
             _btnClear.Click += (s, e) =>
             {
                 _notificationService.ClearAll();
             };
-            _headerPanel.Controls.Add(_btnClear);
+            headerTable.Controls.Add(_btnClear, 1, 0);
 
             // Scrollable notification list
             _notificationListPanel = new Panel
@@ -138,12 +160,6 @@ namespace NOMAD.MissionPlanner
             // Add list FIRST (fills remaining space), then header (docks top)
             this.Controls.Add(_notificationListPanel);
             this.Controls.Add(_headerPanel);
-
-            // Handle resize to reposition clear button
-            this.Resize += (s, e) =>
-            {
-                _btnClear.Location = new Point(this.Width - 65, 8);
-            };
         }
 
         // ============================================================
@@ -366,7 +382,6 @@ namespace NOMAD.MissionPlanner
             {
                 _lblUnreadCount.Text = count > 99 ? "99+" : count.ToString();
                 _lblUnreadCount.Visible = true;
-                _lblUnreadCount.Location = new Point(_lblTitle.Right + 8, 10);
             }
             else
             {
