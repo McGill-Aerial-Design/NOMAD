@@ -219,10 +219,10 @@ namespace NOMAD.MissionPlanner
                         try
                         {
                             var data = JObject.Parse(bridgesResult.Data);
-                            var primary = data["bridges"]?["primary"]?["state"]?.ToString() ?? "stopped";
-                            // Only check primary bridge (we simplified to single bridge)
-                            bool isStreaming = primary == "playing";
-                            var fps = data["bridges"]?["primary"]?["fps"]?.Value<float>() ?? 0;
+                            // The Jetson exposes a single stream under the "stream" key.
+                            var streamState = data["bridges"]?["stream"]?["state"]?.ToString() ?? "stopped";
+                            bool isStreaming = streamState == "playing";
+                            var fps = data["bridges"]?["stream"]?["fps"]?.Value<float>() ?? 0;
                             string statusText = isStreaming ? $"Streaming ({fps:F1} fps)" : "Stopped";
                             UpdateStatusLabel(_lblVideoBridgesStatus, isStreaming, statusText);
                             _videoFailStreak = 0;

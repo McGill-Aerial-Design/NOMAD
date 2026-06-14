@@ -459,3 +459,96 @@ def test_main_handles_keyboard_interrupt(monkeypatch):
     svb.main()  # Ctrl-C in the run loop is caught; finally still cleans up.
     assert seen["stopped"] is True
     assert seen["shutdown"] is True
+
+
+# -- Pipeline content: single /stream path + low-latency settings -----------
+
+
+class _RecordingPopen:
+    """FakePopen that keeps the launched command so the pipeline can be asserted."""
+
+    def __init__(self, cmd, *args, **kwargs):
+        self.cmd = cmd
+        self.terminated = False
+
+    def poll(self):
+        return None  # stays 'alive'
+
+    def wait(self, timeout=None):
+        return 0
+
+    def terminate(self):
+        self.terminated = True
+
+    def kill(self):
+        pass
+
+
+def _record(monkeypatch):
+    """Patch Popen with a recorder + neutralise the monitor thread."""
+    spawned: list[_RecordingPopen] = []
+
+    def fake(cmd, *args, **kwargs):
+        p = _RecordingPopen(cmd)
+        spawned.append(p)
+        return p
+
+    monkeypatch.setattr(svb.subprocess, "Popen", fake)
+    monkeypatch.setattr(svb.threading, "Thread", _NoThread)
+    return spawned
+
+
+def test_default_rtsp_path_is_stream():
+    # The Jetson serves exactly one stream — no /primary or /secondary.
+    assert _bridge()._rtsp_path == "stream"
+
+
+def test_pipeline_targets_single_stream_path(monkeypatch):
+    spawned = _record(monkeypatch)
+    b = _bridge(source_topic="/zed/zed_node/rgb/color/rect/image")
+    assert b.start() is True
+    cmd = " ".join(spawned[0].cmd)
+    assert "rtspclientsink location=rtsp://localhost:8554/stream" in cmd
+    assert "/primary" not in cmd and "/secondary" not in cmd
+    assert "topic=/zed/zed_node/rgb/color/rect/image" in cmd
+
+
+def test_pipeline_uses_low_latency_settings(monkeypatch):
+    spawned = _record(monkeypatch)
+    _bridge().start()
+    cmd = " ".join(spawned[0].cmd)
+    assert "tune=zerolatency" in cmd
+    assert "speed-preset=ultrafast" in cmd
+    assert "latency=0" in cmd
+
+
+def test_pipeline_reflects_resolution_bitrate_and_fps(monkeypatch):
+    spawned = _record(monkeypatch)
+    _bridge(width=1280, height=720, fps=30, bitrate=2500).start()
+    cmd = " ".join(spawned[0].cmd)
+    assert "width=1280,height=720,framerate=30/1" in cmd
+    assert "bitrate=2500" in cmd
+    assert "key-int-max=60" in cmd  # fps * 2
+
+
+def test_switch_rebuilds_pipeline_on_new_path(monkeypatch):
+    spawned = _record(monkeypatch)
+    b = _bridge(source_topic="/zed/a")
+    b.start()
+    assert b.switch_topic("/zed/b") is True
+    assert len(spawned) == 2
+    assert "topic=/zed/b" in " ".join(spawned[1].cmd)
+    assert spawned[0].terminated is True  # old pipeline torn down
+
+
+def test_rapid_switches_do_not_crash(monkeypatch):
+    spawned = _record(monkeypatch)
+    b = _bridge(source_topic="/zed/a")
+    b.start()
+    topics = ["/zed/a", "/zed/b", "/zed/c", "/zed/d"]
+    for i in range(60):
+        assert b.switch_topic(topics[i % len(topics)]) is True
+    assert b.running is True
+    assert b.source_topic == topics[59 % len(topics)]
+    # Exactly one pipeline is live; every superseded one was terminated.
+    assert sum(1 for p in spawned if not p.terminated) == 1

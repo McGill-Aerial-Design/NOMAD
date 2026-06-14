@@ -8,6 +8,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- [test] Video feed/player coverage: `tests/test_mediamtx_config.py` pins the
+  single-stream / multi-consumer MediaMTX contract (exactly one `publisher`,
+  always-on path; no primary/secondary), and `tests/test_simple_video_bridge.py`
+  gains pipeline-content assertions (single `/stream` target, x264
+  `zerolatency`/`latency=0`, resolution/bitrate/fps) plus a rapid-switch
+  stability test (60 back-to-back topic switches leave exactly one live pipeline)
+  and a same-topic-is-a-no-op (seamless) check.
 - `GimbalCommand` (C# plugin): the pure, Mission-Planner-free core of the gimbal
   control — the `DO_MOUNT_CONTROL`/`DO_MOUNT_CONFIGURE` command frames sent to
   ArduPilot plus the stick-integration and angle-clamping math, extracted from
@@ -138,6 +145,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   all-in-one) and note the `BASE_IMAGE` prerequisite.
 
 ### Changed
+- [edge] [plugin] The Jetson now exposes a **single** RTSP stream at the
+  canonical path `stream` — replacing the old `/primary` + `/secondary` (and the
+  legacy `zed`/`live`/`dynamic`/wildcard) paths. MediaMTX serves it from one
+  always-on `source: publisher` path, so any number of viewers can read it
+  concurrently while the content (which ROS topic) is switched live via the
+  bridge API. The video bridge (`--rtsp-path`/default), `VideoStreamManager`
+  default URL, the `/api/video/bridges` JSON key (`primary` → `stream`),
+  `/api/stream/info`, the plugin's RTSP URLs + status read, and the env/docs are
+  all aligned on `stream`.
 - Dashboard notifications header (`NotificationPanel`) relaid out as a docked
   AutoSize table (title/unread badge left, Clear right) instead of absolute
   positions with a resize handler, and its fonts routed through `NOMADTheme`.
@@ -175,6 +191,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   frame and pose arithmetic to the new `vio_math` module instead of computing it
   inline. Behaviour-preserving; the only untested file left in the bridge package
   shrinks to message unpacking and HTTP forwarding.
+
+### Removed
+- [infra] The separate `/primary` and `/secondary` MediaMTX stream paths (and the
+  legacy `zed`/`live`/`dynamic` + wildcard `all_others` paths) — collapsed into
+  the single `stream` path.
 
 ## [0.2.1] - 2026-06-13
 

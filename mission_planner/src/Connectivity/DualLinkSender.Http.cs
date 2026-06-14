@@ -292,7 +292,7 @@ namespace NOMAD.MissionPlanner
         // ============================================================
 
         /// <summary>
-        /// Get status of all video bridge instances (primary/secondary).
+        /// Get status of the single video stream from the Jetson.
         /// </summary>
         public async Task<CommandResult> GetVideoBridgesStatusAsync()
         {

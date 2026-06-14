@@ -68,8 +68,9 @@ namespace NOMAD.MissionPlanner
 
             try
             {
-                // RTSP URL for ZED stream - left camera will be cropped
-                string rtspUrl = $"rtsp://{_config.EffectiveIP}:8554/primary";
+                // The Jetson exposes a single RTSP stream; its content is switched
+                // via the bridge API rather than by changing the URL.
+                string rtspUrl = $"rtsp://{_config.EffectiveIP}:8554/stream";
                 _videoPlayer = new EmbeddedVideoPlayer("ZED Left Camera", rtspUrl, true, _jetsonConnectionManager);
                 _videoPlayer.Dock = DockStyle.Fill;
                 videoPanel.Controls.Add(_videoPlayer);
@@ -79,7 +80,7 @@ namespace NOMAD.MissionPlanner
                 _lblStatus = new Label
                 {
                     Text = $"Video player unavailable: {ex.Message}\n\n" +
-                           $"Stream URL: rtsp://{_config.EffectiveIP}:8554/primary\n\n" +
+                           $"Stream URL: rtsp://{_config.EffectiveIP}:8554/stream\n\n" +
                            "Use VLC or another player to view the stream.",
                     Font = new Font("Segoe UI", 12),
                     ForeColor = TEXT_SECONDARY,
