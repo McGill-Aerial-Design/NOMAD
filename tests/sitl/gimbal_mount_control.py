@@ -65,14 +65,15 @@ class ScenarioError(AssertionError):
 
 
 class MountNotActuated(Exception):
-    """The SITL firmware build does not actuate a mount (no attitude, no servo
-    movement) — distinct from a real failure, so callers treat it as a skip.
+    """The SITL mount never actuated (no attitude, no servo movement) — distinct
+    from a real failure, so callers treat it as a skip.
 
-    Some ArduCopter SITL builds (e.g. the image CI builds from source) accept the
-    mount params but neither publish gimbal attitude nor drive the servo for
-    DO_MOUNT_CONTROL. The command path is still gated by the offline csc tests
-    (`pixi run test-plugin-gimbal`), and this scenario verifies for real wherever
-    the SITL build does actuate the mount (e.g. local `pixi run dev-up`)."""
+    This happens when the scenario runs on a vehicle that has already flown: state
+    left by the velocity/fence scenarios (persisted across the mount reboot)
+    suppresses mount actuation. Run it on a fresh vehicle (the nightly recreates
+    the SITL container first; locally use a fresh `pixi run dev-up`). The command
+    path is independently gated by the offline csc tests
+    (`pixi run test-plugin-gimbal`)."""
 
 
 def _log(msg: str) -> None:
