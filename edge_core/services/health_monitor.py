@@ -504,19 +504,6 @@ class JetsonHealthMonitor:
             return "unknown"
 
 
-# Convenience function for direct health check
-def get_jetson_health() -> dict:
-    """
-    Get current Jetson health metrics.
-
-    Returns:
-        Dictionary with health metrics
-    """
-    monitor = JetsonHealthMonitor()
-    monitor._update_health()
-    return monitor.health.to_dict()
-
-
 class HealthMonitorModule(BaseModule):
     """Bridges JetsonHealthMonitor into the modular SDK framework."""
 
