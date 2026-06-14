@@ -10,14 +10,12 @@ Target: Python 3.13 | NVIDIA Jetson Orin Nano
 """
 
 from .services.geospatial import (
-    DroneState,
     GPSCoordinate,
     NEDOffset,
     bearing_between_points,
     calculate_gps_offset_meters,
     haversine_distance,
     offset_gps_by_meters,
-    raycast_target_gps,
 )
 from .services.models import SystemState
 from .services.state import StateManager
@@ -36,9 +34,7 @@ __all__ = [
     # Geospatial
     "GPSCoordinate",
     "NEDOffset",
-    "DroneState",
     "calculate_gps_offset_meters",
-    "raycast_target_gps",
     "haversine_distance",
     "offset_gps_by_meters",
     "bearing_between_points",

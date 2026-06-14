@@ -3,8 +3,8 @@
 """
 Geospatial calculations for NOMAD.
 
-Pure functions for GPS coordinate transformations, raycasting,
-and relative position calculations.
+Pure functions for GPS coordinate transformations and relative position
+calculations.
 
 Target: Python 3.13 | NVIDIA Jetson Orin Nano
 """
@@ -12,7 +12,6 @@ Target: Python 3.13 | NVIDIA Jetson Orin Nano
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
 from typing import NamedTuple
 
 # WGS84 Earth constants
@@ -33,16 +32,6 @@ class NEDOffset(NamedTuple):
     north: float  # Positive = North, Negative = South
     east: float  # Positive = East, Negative = West
     down: float = 0.0  # Positive = Down, Negative = Up
-
-
-@dataclass(frozen=True, slots=True)
-class DroneState:
-    """Drone state for geospatial calculations."""
-
-    gps: GPSCoordinate
-    heading_deg: float  # Magnetic heading 0-360 (0 = North, 90 = East)
-    gimbal_pitch_deg: float  # Gimbal pitch angle (-90 to 0, -90 = straight down)
-    lidar_distance_m: float  # LiDAR measured distance to target in meters
 
 
 def deg_to_rad(degrees: float) -> float:
@@ -101,61 +90,6 @@ def calculate_gps_offset_meters(
     down_m = origin.alt - target.alt
 
     return NEDOffset(north=north_m, east=east_m, down=down_m)
-
-
-def raycast_target_gps(drone_state: DroneState) -> GPSCoordinate:
-    """
-    Calculate the GPS location of a target using raycasting.
-
-    Given the drone's GPS position, heading, gimbal pitch, and LiDAR distance,
-    calculates where the target is located on the ground.
-
-    Args:
-        drone_state: Current drone state with GPS, heading, gimbal pitch, and LiDAR
-
-    Returns:
-        GPSCoordinate of the target location
-
-    Algorithm:
-        1. Calculate horizontal distance from LiDAR slant range and gimbal pitch
-        2. Use heading to determine North/East components
-        3. Convert meter offsets back to GPS coordinates
-
-    Example:
-        >>> state = DroneState(
-        ...     gps=GPSCoordinate(lat=45.5, lon=-73.5, alt=50.0),
-        ...     heading_deg=45.0,  # Northeast
-        ...     gimbal_pitch_deg=-45.0,  # 45 degrees down
-        ...     lidar_distance_m=70.71  # sqrt(50^2 + 50^2)
-        ... )
-        >>> target = raycast_target_gps(state)
-    """
-    # Convert angles to radians
-    pitch_rad = deg_to_rad(drone_state.gimbal_pitch_deg)
-    heading_rad = deg_to_rad(drone_state.heading_deg)
-
-    # Calculate horizontal distance from slant range
-    # pitch is negative (pointing down), so we use -pitch for calculation
-    # horizontal_distance = lidar_distance * cos(pitch)
-    # Since pitch is negative for downward, cos(-pitch) = cos(|pitch|)
-    horizontal_distance_m = drone_state.lidar_distance_m * math.cos(pitch_rad)
-
-    # Calculate vertical drop (for altitude calculation)
-    # vertical_drop = lidar_distance * sin(|pitch|) = -lidar_distance * sin(pitch)
-    vertical_drop_m = -drone_state.lidar_distance_m * math.sin(pitch_rad)
-
-    # Calculate North and East offsets using heading
-    # Heading: 0 = North, 90 = East, 180 = South, 270 = West
-    north_offset_m = horizontal_distance_m * math.cos(heading_rad)
-    east_offset_m = horizontal_distance_m * math.sin(heading_rad)
-
-    # Convert meter offsets back to GPS coordinates
-    target_gps = offset_gps_by_meters(
-        drone_state.gps,
-        NEDOffset(north=north_offset_m, east=east_offset_m, down=vertical_drop_m),
-    )
-
-    return target_gps
 
 
 def offset_gps_by_meters(
