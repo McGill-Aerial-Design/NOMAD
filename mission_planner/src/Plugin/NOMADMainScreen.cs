@@ -75,6 +75,7 @@ namespace NOMAD.MissionPlanner
         private Button _btnHealth;
         private Button _btnLinks;
         private Button _btnCalibration;
+        private Button _btnSlam3d;
 
         // Content views
         private UserControl _currentView;
@@ -85,6 +86,7 @@ namespace NOMAD.MissionPlanner
         private NOMADHealthView _healthView;
         private NOMADLinksView _linksView;
         private ZedCalibrationView _calibrationView;
+        private SLAM3DView _slam3dView;
 
 
         // Update timer
@@ -358,6 +360,10 @@ namespace NOMAD.MissionPlanner
                     if (_calibrationView == null) _calibrationView = new ZedCalibrationView(_config);
                     newView = _calibrationView;
                     break;
+                case "Slam3D":
+                    if (_slam3dView == null) _slam3dView = new SLAM3DView(_config, _sender);
+                    newView = _slam3dView;
+                    break;
             }
 
             if (newView != null)
@@ -371,7 +377,7 @@ namespace NOMAD.MissionPlanner
         private void UpdateSidebarButtonState(string viewName)
         {
             // Reset all buttons to default state
-            var buttons = new[] { _btnDashboard, _btnBoundaries, _btnVideo, _btnTerminal, _btnHealth, _btnLinks, _btnCalibration };
+            var buttons = new[] { _btnDashboard, _btnBoundaries, _btnVideo, _btnTerminal, _btnHealth, _btnLinks, _btnCalibration, _btnSlam3d };
             foreach (var btn in buttons)
             {
                 if (btn != null)
@@ -392,6 +398,7 @@ namespace NOMAD.MissionPlanner
                 case "Health": activeBtn = _btnHealth; break;
                 case "Links": activeBtn = _btnLinks; break;
                 case "Calibration": activeBtn = _btnCalibration; break;
+                case "Slam3D": activeBtn = _btnSlam3d; break;
             }
 
             if (activeBtn != null)
@@ -450,6 +457,7 @@ namespace NOMAD.MissionPlanner
                 _healthView?.Dispose();
                 _linksView?.Dispose();
                 _calibrationView?.Dispose();
+                _slam3dView?.Dispose();
                 // Dispose any module-contributed views built in module mode.
                 foreach (var cached in _descriptorViewCache.Values)
                     cached?.Dispose();

@@ -114,6 +114,11 @@ namespace NOMAD.MissionPlanner
             _btnVideo.Click += (s, e) => ShowView("Video");
             navPanel.Controls.Add(_btnVideo);
 
+            // 3D SLAM map button (live nvblox mesh + drone pose visualization)
+            _btnSlam3d = CreateSidebarButton("3D SLAM");
+            _btnSlam3d.Click += (s, e) => ShowView("Slam3D");
+            navPanel.Controls.Add(_btnSlam3d);
+
             // Terminal button
             _btnTerminal = CreateSidebarButton("Terminal");
             _btnTerminal.Click += (s, e) => ShowView("Terminal");

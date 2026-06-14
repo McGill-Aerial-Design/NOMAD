@@ -32,30 +32,3 @@ def quat_to_euler(x: float, y: float, z: float, w: float) -> tuple[float, float,
 def wrap_angle_rad(angle: float) -> float:
     """Normalize an angle in radians to the range [-pi, pi]."""
     return math.atan2(math.sin(angle), math.cos(angle))
-
-
-def quat_to_ned_euler(x: float, y: float, z: float, w: float) -> tuple[float, float, float]:
-    """Convert ROS optical-frame quaternion attitude to NED roll, pitch, and yaw."""
-    # Quaternion -> rotation matrix in ROS optical basis
-    r = [
-        [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)],
-        [2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)],
-        [2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)],
-    ]
-
-    # Basis transform: optical (x-right, y-down, z-forward) -> NED (x-forward, y-right, z-down)
-    b = (
-        (0.0, 0.0, 1.0),
-        (1.0, 0.0, 0.0),
-        (0.0, 1.0, 0.0),
-    )
-
-    # Change basis for rotation matrix: R_ned = B * R_optical * B^T
-    br = [[sum(b[i][k] * r[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
-    r_ned = [[sum(br[i][k] * b[j][k] for k in range(3)) for j in range(3)] for i in range(3)]
-
-    roll = math.atan2(r_ned[2][1], r_ned[2][2])
-    sinp = max(-1.0, min(1.0, -r_ned[2][0]))
-    pitch = math.asin(sinp)
-    yaw = math.atan2(r_ned[1][0], r_ned[0][0])
-    return roll, pitch, yaw

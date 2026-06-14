@@ -19,7 +19,6 @@ from edge_core.services import health_monitor as hm
 from edge_core.services.health_monitor import (
     JetsonHealth,
     JetsonHealthMonitor,
-    get_jetson_health,
 )
 
 ZONES = JetsonHealthMonitor.THERMAL_ZONES
@@ -359,10 +358,15 @@ def test_update_health_survives_state_manager_error(monkeypatch):
     assert m.health.cpu_temp_c == 60.0
 
 
-def test_get_jetson_health_convenience(monkeypatch):
-    _install_fs(monkeypatch, {})  # nothing present -> all-zero, status "unknown"
+def test_health_all_zero_reads_unknown_status(monkeypatch):
+    # Exercises the real production path: the monitoring loop calls
+    # _update_health() and the API serves monitor.health.to_dict(). With nothing
+    # present, every metric reads zero and the status classifies as "unknown".
+    _install_fs(monkeypatch, {})
     monkeypatch.setattr(hm.subprocess, "check_output", lambda *a, **k: (_ for _ in ()).throw(OSError()))
-    d = get_jetson_health()
+    monitor = JetsonHealthMonitor()
+    monitor._update_health()
+    d = monitor.health.to_dict()
     assert d["status"] == "unknown"
     assert d["cpu_temp"] == 0.0
 

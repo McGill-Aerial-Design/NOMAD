@@ -164,6 +164,58 @@ namespace NOMAD.MissionPlanner
             _glControl?.Invalidate();
         }
 
+        /// <summary>
+        /// Populate the viewer with a small synthetic scene — a ~20 x 15 m
+        /// rectangular building, three target markers on its walls/roof, and a
+        /// drone pose — so the control can be dropped into a page and visually
+        /// smoke-tested without a live data source. Development/demo use only;
+        /// a real consumer calls SetCorners/SetTargets/SetDronePoseGps directly.
+        /// </summary>
+        public void LoadSampleBuilding()
+        {
+            const double centerLat = 45.5017;
+            const double centerLon = -73.5673;
+            const double metersPerDeg = 111320.0;
+            double cosLat = Math.Cos(centerLat * Math.PI / 180.0);
+
+            // 20 m (E-W) x 15 m (N-S) footprint, given as (east, north) metre
+            // offsets and converted back to lat/lon (SetCorners re-projects).
+            var offsets = new[]
+            {
+                new { Name = "NW", East = -10f, North = 7.5f },
+                new { Name = "NE", East = 10f, North = 7.5f },
+                new { Name = "SE", East = 10f, North = -7.5f },
+                new { Name = "SW", East = -10f, North = -7.5f },
+            };
+
+            var corners = new List<Corner>();
+            foreach (var o in offsets)
+            {
+                corners.Add(new Corner
+                {
+                    Name = o.Name,
+                    Lat = centerLat + o.North / metersPerDeg,
+                    Lon = centerLon + o.East / (cosLat * metersPerDeg),
+                });
+            }
+
+            SetBuildingHeight(6.0);
+            SetCorners(corners, centerLat, centerLon);
+
+            // Targets in local East/North/Up metres relative to the (re-centred,
+            // symmetric so origin-centred) footprint. Colors are names — see
+            // ColorForTarget in the rendering partial.
+            SetTargets(new List<Target>
+            {
+                new Target { Id = "T1", Color = "red", Description = "North wall marker", East = 0f, North = 7.5f, Up = 3f },
+                new Target { Id = "T2", Color = "green", Description = "East wall marker", East = 10f, North = 0f, Up = 2f },
+                new Target { Id = "T3", Color = "blue", Description = "Roof marker", East = -4f, North = 3f, Up = 6f },
+            });
+
+            // Drone ~12 m south of the building at 8 m AGL, facing north.
+            SetDronePoseGps(centerLat - 12.0 / metersPerDeg, centerLon, 8.0, 0.0, 0.0, 0.0);
+        }
+
         // ==================== Picking ====================
 
         private string PickTarget(Point screen)
