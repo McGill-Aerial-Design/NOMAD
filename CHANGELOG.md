@@ -145,6 +145,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   all-in-one) and note the `BASE_IMAGE` prerequisite.
 
 ### Changed
+- [plugin] Flight Boundaries view spacing tightened further (smaller card
+  padding, inter-card margin, section-title gap, and row gaps) so the SOFT/HARD
+  boundary and IMPORT/EXPORT sections pack closely without needless scrolling.
 - [edge] [plugin] The Jetson now exposes a **single** RTSP stream at the
   canonical path `stream` — replacing the old `/primary` + `/secondary` (and the
   legacy `zed`/`live`/`dynamic`/wildcard) paths. MediaMTX serves it from one
@@ -193,9 +196,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shrinks to message unpacking and HTTP forwarding.
 
 ### Fixed
-- [plugin] [bug] Gimbal joystick PITCH/ROLL axis labels no longer stick out past
-  the pad — they're drawn just inside the ring instead of outside the circle
-  where they were clipped at the panel edge.
+- [plugin] [bug] Gimbal joystick window keeps the NOMAD theme when it loses focus
+  — Mission Planner's `ThemeManager` recolors plugin windows on every
+  activation/deactivation (turning the buttons grey/green and the background
+  light), so the window now re-asserts its palette on focus changes (the same
+  pattern the main screen uses). This also fixes the "Center 0°/0°" and
+  "Look Down −90°" preset buttons that were left green.
+- [plugin] [bug] Gimbal joystick PITCH/ROLL axis labels sit just outside the ring
+  in a reserved gutter — clear of the circle without spilling past the pad edge.
+
 ### Removed
 - [infra] The separate `/primary` and `/secondary` MediaMTX stream paths (and the
   legacy `zed`/`live`/`dynamic` + wildcard `all_others` paths) — collapsed into

@@ -76,7 +76,8 @@ namespace NOMAD.MissionPlanner
 
         // UI
         private JoystickPad _pad;
-        private Label _lblPitch, _lblRoll, _lblMode, _lblStatus, _lblRate;
+        private Label _lblPitch, _lblRoll, _lblMode, _lblStatus, _lblRate, _lblTitle, _lblHint;
+        private TableLayoutPanel _rateRow;
         private TrackBar _trkRate;
         private Button _btnRetract, _btnNeutral, _btnRcTgt, _btnMavTgt, _btnCenter, _btnLevel;
         private CheckBox _chkTopMost;
@@ -189,7 +190,7 @@ namespace NOMAD.MissionPlanner
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 5 status
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 6 hint
 
-            var title = new Label
+            _lblTitle = new Label
             {
                 Text = "GIMBAL — Rate Joystick",
                 Font = NOMADTheme.Font(NOMADTheme.SIZE_HEADING, FontStyle.Bold),
@@ -197,7 +198,7 @@ namespace NOMAD.MissionPlanner
                 AutoSize = true,
                 Margin = new Padding(2, 2, 0, NOMADTheme.GAP),
             };
-            root.Controls.Add(title, 0, 0);
+            root.Controls.Add(_lblTitle, 0, 0);
 
             // Joystick pad — fills the flexible row and stays circular via OnPaint.
             // It caps its own drawn radius so it never grows uncomfortably large.
@@ -228,7 +229,8 @@ namespace NOMAD.MissionPlanner
             readouts.Controls.Add(_lblMode);
             root.Controls.Add(readouts, 0, 2);
 
-            root.Controls.Add(BuildRateRow(), 0, 3);
+            _rateRow = BuildRateRow();
+            root.Controls.Add(_rateRow, 0, 3);
             root.Controls.Add(BuildButtonRows(), 0, 4);
 
             _lblStatus = new Label
@@ -241,7 +243,7 @@ namespace NOMAD.MissionPlanner
             };
             root.Controls.Add(_lblStatus, 0, 5);
 
-            var hint = new Label
+            _lblHint = new Label
             {
                 Text = "Drag pad: pitch (Y) / roll (X). Arrow keys nudge both axes. Release = stop.",
                 AutoSize = true,
@@ -250,7 +252,7 @@ namespace NOMAD.MissionPlanner
                 Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL, FontStyle.Italic),
                 Margin = new Padding(2, 0, 0, 0),
             };
-            root.Controls.Add(hint, 0, 6);
+            root.Controls.Add(_lblHint, 0, 6);
 
             Controls.Add(root);
         }
@@ -372,6 +374,83 @@ namespace NOMAD.MissionPlanner
             if (b == null) return;
             b.BackColor = active ? NOMADTheme.ACCENT : NOMADTheme.CARD_BG;
             b.FlatAppearance.BorderColor = active ? NOMADTheme.ACCENT : NOMADTheme.CARD_BORDER;
+        }
+
+        // ============================================================
+        // Theme persistence
+        // ============================================================
+        // Mission Planner's ThemeManager recolors plugin windows whenever they
+        // activate/deactivate (turning our buttons grey/green and the background
+        // light), exactly as it does to the main screen. Re-assert the NOMAD
+        // palette on every focus change — immediately and once more after MP's
+        // pass via BeginInvoke, whichever order it applies in.
+        protected override void OnActivated(EventArgs e)
+        {
+            base.OnActivated(e);
+            ScheduleThemeReapply();
+        }
+
+        protected override void OnDeactivate(EventArgs e)
+        {
+            base.OnDeactivate(e);
+            ScheduleThemeReapply();
+        }
+
+        private void ScheduleThemeReapply()
+        {
+            ReapplyTheme();
+            if (IsHandleCreated && !IsDisposed)
+                BeginInvoke((MethodInvoker)(() => { if (!IsDisposed) ReapplyTheme(); }));
+        }
+
+        private void ReapplyTheme()
+        {
+            if (IsDisposed) return;
+            BackColor = NOMADTheme.BG_DARK;
+            ForeColor = NOMADTheme.TEXT_PRIMARY;
+            ThemeTree(this);
+
+            // Containers/labels that need a non-default color (ThemeTree leaves
+            // them transparent / primary); the status label keeps its dynamic color.
+            if (_lblTitle != null) _lblTitle.ForeColor = NOMADTheme.ACCENT;
+            if (_lblHint != null) _lblHint.ForeColor = NOMADTheme.TEXT_SECONDARY;
+            if (_rateRow != null) _rateRow.BackColor = NOMADTheme.PANEL_ALT;
+            if (_pad != null) _pad.BackColor = NOMADTheme.CARD_BG;
+
+            HighlightModeButtons(); // re-paints the active mode button red
+        }
+
+        private void ThemeTree(Control parent)
+        {
+            foreach (Control c in parent.Controls)
+            {
+                switch (c)
+                {
+                    case Button b:
+                        b.FlatStyle = FlatStyle.Flat;
+                        b.FlatAppearance.BorderSize = 1;
+                        b.FlatAppearance.BorderColor = NOMADTheme.CARD_BORDER;
+                        b.BackColor = NOMADTheme.CARD_BG;
+                        b.ForeColor = NOMADTheme.TEXT_PRIMARY;
+                        break;
+                    case TrackBar tb:
+                        tb.BackColor = NOMADTheme.PANEL_ALT;
+                        break;
+                    case Label lbl:
+                        lbl.BackColor = Color.Transparent;
+                        if (lbl != _lblStatus) lbl.ForeColor = NOMADTheme.TEXT_PRIMARY;
+                        break;
+                    case CheckBox chk:
+                        chk.BackColor = Color.Transparent;
+                        chk.ForeColor = NOMADTheme.TEXT_SECONDARY;
+                        break;
+                    case TableLayoutPanel _:
+                    case FlowLayoutPanel _:
+                        c.BackColor = Color.Transparent;
+                        break;
+                }
+                if (c.HasChildren) ThemeTree(c);
+            }
         }
 
         private Label MakeReadout(string text) => new Label
@@ -543,11 +622,13 @@ namespace NOMAD.MissionPlanner
             private bool _dragging;
             private PointF _stickNorm; // [-1,1] each axis
 
-            // Gutter reserved inside the control edge for the axis labels, and a cap
-            // on the ring radius so the joystick stays a sensible size even when the
-            // pad cell is large. Both OnPaint and the hit-test use Radius() so the
-            // visual and the interaction always agree.
-            private const int EDGE_MARGIN = 20;
+            // Gutters reserved between the ring and the control edge so the axis
+            // labels sit OUTSIDE the circle yet stay within the pad; the X gutter is
+            // wider because "ROLL+/ROLL-" are wider than they are tall. The radius is
+            // also capped so the joystick stays a sensible size on a large pad. Both
+            // OnPaint and the hit-test use Radius() so visual + interaction agree.
+            private const int LABEL_MARGIN_X = 38;
+            private const int LABEL_MARGIN_Y = 18;
             private const int MAX_RADIUS = 120;
             private const int PUCK = 16;
 
@@ -560,7 +641,7 @@ namespace NOMAD.MissionPlanner
 
             private int Radius()
             {
-                int r = Math.Min(Width, Height) / 2 - EDGE_MARGIN;
+                int r = Math.Min(Width / 2 - LABEL_MARGIN_X, Height / 2 - LABEL_MARGIN_Y);
                 return Math.Min(r, MAX_RADIUS);
             }
 
@@ -646,18 +727,17 @@ namespace NOMAD.MissionPlanner
                 using (var pen = new Pen(Color.White, 2))
                     g.DrawEllipse(pen, px - PUCK, py - PUCK, PUCK * 2, PUCK * 2);
 
-                // Axis labels — drawn just INSIDE the ring so they always stay within
-                // the pad rectangle (they used to be placed outside the circle and
-                // clipped at the panel edge).
+                // Axis labels — drawn just OUTSIDE the ring, in the reserved gutter,
+                // so they sit clear of the circle without spilling past the pad edge.
                 using (var brush = new SolidBrush(NOMADTheme.TEXT_SECONDARY))
                 using (var f = new Font(NOMADTheme.FONT_FAMILY, NOMADTheme.SIZE_SMALL))
                 {
                     var p = g.MeasureString("PITCH+", f);
                     var roll = g.MeasureString("ROLL+", f);
-                    g.DrawString("PITCH+", f, brush, cx - p.Width / 2, cy - r + 3);
-                    g.DrawString("PITCH-", f, brush, cx - p.Width / 2, cy + r - p.Height - 3);
-                    g.DrawString("ROLL+", f, brush, cx - r + 3, cy - roll.Height / 2);
-                    g.DrawString("ROLL-", f, brush, cx + r - roll.Width - 3, cy - roll.Height / 2);
+                    g.DrawString("PITCH+", f, brush, cx - p.Width / 2, cy - r - p.Height + 1);
+                    g.DrawString("PITCH-", f, brush, cx - p.Width / 2, cy + r + 1);
+                    g.DrawString("ROLL+", f, brush, cx - r - roll.Width - 1, cy - roll.Height / 2);
+                    g.DrawString("ROLL-", f, brush, cx + r + 1, cy - roll.Height / 2);
                 }
             }
         }
