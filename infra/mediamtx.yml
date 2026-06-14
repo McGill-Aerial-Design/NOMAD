@@ -105,35 +105,11 @@ pathDefaults:
 # ============================================================
 
 paths:
-  # Primary stream - always running (for Mission Planner main view)
-  # Content is controlled by Jetson API - stream URL stays constant
-  primary:
+  # The ONE stream from the Jetson — always running so any number of viewers
+  # (Mission Planner, VLC, etc.) can read it concurrently. `source: publisher`
+  # lets the video bridge publish and serves an unbounded set of readers.
+  # Content (which ROS topic) is switched via the Jetson API; the URL stays
+  # constant at rtsp://<jetson>:8554/stream.
+  stream:
     source: publisher
     sourceOnDemand: no
-
-  # Secondary stream - always running (for Gimbal/Secondary view)
-  secondary:
-    source: publisher
-    sourceOnDemand: no
-
-  # Legacy endpoints for backward compatibility
-  zed:
-    source: publisher
-    sourceOnDemand: no
-
-  live:
-    source: publisher
-    sourceOnDemand: no
-
-  # Dynamic stream for topic switching
-  dynamic:
-    source: publisher
-    sourceOnDemand: no
-
-  # Wildcard path - accept any stream name
-  # Critical for low latency:
-  all_others:
-    source: publisher
-    sourceOnDemand: no
-    runOnDemandStartTimeout: 10s
-    runOnDemandCloseAfter: 10s

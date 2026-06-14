@@ -93,8 +93,15 @@ def test_stream_status_to_dict():
 
 
 def test_local_rtsp_url_rewrites_docker_host():
-    m = VideoStreamManager(rtsp_url="rtsp://172.17.0.1:8554/primary")
-    assert m._local_rtsp_url() == "rtsp://localhost:8554/primary"
+    m = VideoStreamManager(rtsp_url="rtsp://172.17.0.1:8554/stream")
+    assert m._local_rtsp_url() == "rtsp://localhost:8554/stream"
+
+
+def test_default_rtsp_url_is_single_stream():
+    # The Jetson exposes exactly one stream — no /primary or /secondary.
+    assert vsm.DEFAULT_RTSP_URL.endswith(":8554/stream")
+    assert "/primary" not in vsm.DEFAULT_RTSP_URL
+    assert "/secondary" not in vsm.DEFAULT_RTSP_URL
 
 
 # --------------------------------------------------------------------------- #

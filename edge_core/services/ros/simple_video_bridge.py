@@ -57,7 +57,7 @@ class VideoBridge:
         height: int,
         fps: int,
         bitrate: int,
-        rtsp_path: str = "primary",
+        rtsp_path: str = "stream",
     ):
         self._source_topic = source_topic
         self._width = width
@@ -346,7 +346,7 @@ def main() -> None:
     parser.add_argument("--fps", type=int, default=15, help="Output frame rate")
     parser.add_argument("--bitrate", type=int, default=800, help="H.264 bitrate (kbps)")
     parser.add_argument("--http-port", type=int, default=9200, help="HTTP API port")
-    parser.add_argument("--rtsp-path", default="primary", help="RTSP stream path")
+    parser.add_argument("--rtsp-path", default="stream", help="RTSP stream path")
     args = parser.parse_args()
 
     bridge = VideoBridge(

@@ -131,7 +131,7 @@ namespace NOMAD.MissionPlanner
                 var ip = EffectiveIP;
                 if (string.IsNullOrWhiteSpace(ip))
                     ip = JetsonIP;
-                VideoUrl = $"rtsp://{ip}:8554/primary";
+                VideoUrl = $"rtsp://{ip}:8554/stream";
             }
 
             // Migrate old Jetson IP to Tailscale if using Tailscale
