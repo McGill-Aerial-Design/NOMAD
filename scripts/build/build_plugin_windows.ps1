@@ -139,7 +139,7 @@ foreach ($dll in $HelixDlls) {
 
 # Single canonical copy: Mission Planner scans BOTH its install plugins folder
 # (Program Files) and %LOCALAPPDATA%\Mission Planner\plugins. If NOMADPlugin.dll
-# exists in both, MP loads the plugin TWICE — two control panels, two configs —
+# exists in both, MP loads the plugin TWICE - two control panels, two configs -
 # and a stale Program Files build can silently shadow settings (e.g. payloads
 # reappearing after you cleared them, because the old build's defaults differ).
 # AppData is the canonical location (no admin needed, and it's where
@@ -157,7 +157,7 @@ if (Test-Path $ProgramFilesPluginDll) {
         Write-Host "             Remove-Item '$ProgramFilesPluginDll' -Force" -ForegroundColor Yellow
     }
 } else {
-    Write-Host "  No duplicate in Program Files (good — single canonical copy in AppData)" -ForegroundColor Gray
+    Write-Host "  No duplicate in Program Files (good - single canonical copy in AppData)" -ForegroundColor Gray
 }
 
 Write-Host ""
