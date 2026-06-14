@@ -1,30 +1,32 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// NOMAD Caddx Gimbal Joystick — Floating Dockable Window
+// NOMAD Gimbal Joystick — Floating Dockable Window
 // ============================================================
-// Rate-controlled 2D joystick that streams MAV_CMD_DO_MOUNT_CONTROL
-// angle commands (pitch/roll) to the Caddx brushless gimbal mount on
-// the Cube Orange. Mode buttons send MAV_CMD_DO_MOUNT_CONFIGURE.
+// Rate-controlled 2D joystick that streams MAV_CMD_DO_MOUNT_CONTROL angle
+// commands (pitch/roll) to a brushless gimbal mount on the autopilot. Mode
+// buttons send MAV_CMD_DO_MOUNT_CONFIGURE. Works with any DO_MOUNT_CONTROL
+// mount configured as an MNTx_* mount on ArduPilot.
 //
-// This is independent from the ZED tilt servo (PayloadControlPanel),
-// which is just a SERVOx output. The Caddx is configured as a real
-// MNTx_* mount on ArduPilot.
+// This is independent from the ZED tilt servo (PayloadControlPanel), which is
+// just a SERVOx output. The command construction lives in GimbalCommand and the
+// shared send/integrator in GimbalController, so this window is pure UI.
+//
+// Layout is fully dynamic: a docked TableLayoutPanel with a fill joystick pad
+// (which scales itself in OnPaint) and AutoSize rows that reflow, so the window
+// fits any size/aspect ratio without overlap.
 // ============================================================
 
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
-using System.Threading;
-using System.Threading.Tasks;
 using System.Windows.Forms;
-using MissionPlanner;
 using Timer = System.Windows.Forms.Timer;
 
 namespace NOMAD.MissionPlanner
 {
     /// <summary>
-    /// Floating window with a 2D rate joystick + mode buttons for the Caddx gimbal.
+    /// Floating window with a 2D rate joystick + mode buttons for the camera gimbal.
     /// Open with <see cref="ShowSingleton"/>; only one instance lives at a time.
     /// </summary>
     public class GimbalJoystickWindow : Form
@@ -48,15 +50,15 @@ namespace NOMAD.MissionPlanner
         // ============================================================
         // Tunables
         // ============================================================
-        private const int   STREAM_HZ          = 20;
-        private const float KEY_NUDGE_DEG      = 2.0f;
+        private const int STREAM_HZ = 20;
+        private const float KEY_NUDGE_DEG = 2.0f;
         // Mount limits pulled from GimbalController so both this window and the
         // physical NomadJoystickService stay in sync if the limits ever change.
-        private const float PITCH_MIN_DEG      = GimbalController.PITCH_MIN_DEG;
-        private const float PITCH_MAX_DEG      = GimbalController.PITCH_MAX_DEG;
-        private const float ROLL_MIN_DEG       = GimbalController.ROLL_MIN_DEG;
-        private const float ROLL_MAX_DEG       = GimbalController.ROLL_MAX_DEG;
-        private const float STICK_DEADZONE     = 0.06f;
+        private const float PITCH_MIN_DEG = GimbalController.PITCH_MIN_DEG;
+        private const float PITCH_MAX_DEG = GimbalController.PITCH_MAX_DEG;
+        private const float ROLL_MIN_DEG = GimbalController.ROLL_MIN_DEG;
+        private const float ROLL_MAX_DEG = GimbalController.ROLL_MAX_DEG;
+        private const float STICK_DEADZONE = 0.06f;
 
         // ============================================================
         // State
@@ -68,27 +70,14 @@ namespace NOMAD.MissionPlanner
         // Local mirror of GimbalController target so display label code can read
         // without crossing threads. Authoritative state lives in GimbalController.
         private float _targetPitch, _targetRoll;
-        // Mount mode currently selected for the Caddx mount — mirrors GimbalController.
+        // Mount mode currently selected — mirrors GimbalController.
         private MountMode _mountMode = MountMode.MavlinkTargeting;
         private string _modeLabel = "MAVLINK";
-
-        // Local alias kept for readability; the canonical type lives on GimbalController.
-        private MountMode MapMode(GimbalController.MountMode m) => (MountMode)(int)m;
-        private GimbalController.MountMode ToCtrl(MountMode m) => (GimbalController.MountMode)(int)m;
-
-        private enum MountMode
-        {
-            Retract = 0,
-            Neutral = 1,
-            MavlinkTargeting = 2,
-            RcTargeting = 3,
-        }
 
         // UI
         private JoystickPad _pad;
         private Label _lblPitch, _lblRoll, _lblMode, _lblStatus, _lblRate;
         private TrackBar _trkRate;
-        private Panel _ratePanel;
         private Button _btnRetract, _btnNeutral, _btnRcTgt, _btnMavTgt, _btnCenter, _btnLevel;
         private CheckBox _chkTopMost;
         private Timer _streamTimer;
@@ -96,14 +85,15 @@ namespace NOMAD.MissionPlanner
         private GimbalJoystickWindow(NOMADConfig config)
         {
             _config = config;
-            Text = "Caddx Gimbal Joystick";
+            Text = "Gimbal Joystick";
             StartPosition = FormStartPosition.Manual;
             FormBorderStyle = FormBorderStyle.SizableToolWindow;
             BackColor = NOMADTheme.BG_DARK;
             ForeColor = NOMADTheme.TEXT_PRIMARY;
-            Font = new Font("Segoe UI", 9);
-            MinimumSize = new Size(360, 460);
-            ClientSize = new Size(380, 500);
+            Font = NOMADTheme.Font();
+            MinimumSize = new Size(320, 500);
+            ClientSize = new Size(380, 560);
+            Padding = new Padding(NOMADTheme.GAP);
             ShowInTaskbar = false;
             KeyPreview = true;
             KeyDown += OnWindowKeyDown;
@@ -121,7 +111,7 @@ namespace NOMAD.MissionPlanner
             // Seed local mirror from any prior integrator state so reopening the
             // window doesn't snap the readout back to 0.
             _targetPitch = GimbalController.TargetPitchDeg;
-            _targetRoll  = GimbalController.TargetRollDeg;
+            _targetRoll = GimbalController.TargetRollDeg;
 
             _streamTimer = new Timer { Interval = 1000 / STREAM_HZ };
             _streamTimer.Tick += OnStreamTick;
@@ -135,7 +125,7 @@ namespace NOMAD.MissionPlanner
 
             // Default to MAVLink targeting so the first joystick or keyboard input
             // immediately drives the mount.
-            GimbalController.SetMode(ToCtrl(_mountMode));
+            GimbalController.SetMode(_mountMode);
             UpdateModeLabel();
 
             FormClosed += (s, e) =>
@@ -157,7 +147,7 @@ namespace NOMAD.MissionPlanner
                 _targetPitch = pitch;
                 _targetRoll = roll;
                 if (_lblPitch != null) _lblPitch.Text = $"Pitch: {_targetPitch,+6:0.0}°";
-                if (_lblRoll  != null) _lblRoll.Text  = $"Roll:  {_targetRoll,+6:0.0}°";
+                if (_lblRoll != null) _lblRoll.Text = $"Roll: {_targetRoll,+6:0.0}°";
             }, "OnExternalTargetChanged");
         }
 
@@ -176,62 +166,131 @@ namespace NOMAD.MissionPlanner
         }
 
         // ============================================================
-        // UI
+        // UI — a docked TableLayoutPanel of AutoSize rows + a fill pad row, so
+        // everything reflows and nothing overlaps at any window size.
         // ============================================================
         private void BuildUi()
         {
+            var root = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 7,
+                BackColor = Color.Transparent,
+                Padding = new Padding(0),
+                Margin = new Padding(0),
+            };
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 0 title
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f)); // 1 joystick pad (fills)
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 2 readouts
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 3 rate slider
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 4 mode + preset buttons
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 5 status
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 6 hint
+
             var title = new Label
             {
-                Text = "CADDX GIMBAL — Rate Joystick",
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                Text = "GIMBAL — Rate Joystick",
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_HEADING, FontStyle.Bold),
                 ForeColor = NOMADTheme.ACCENT,
-                Location = new Point(12, 8),
                 AutoSize = true,
+                Margin = new Padding(2, 2, 0, NOMADTheme.GAP),
             };
-            Controls.Add(title);
+            root.Controls.Add(title, 0, 0);
 
-            // Joystick pad
+            // Joystick pad — fills the flexible row and stays circular via OnPaint.
             _pad = new JoystickPad
             {
-                Location = new Point(40, 36),
-                Size = new Size(280, 220),
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 0, 0, NOMADTheme.GAP),
+                MinimumSize = new Size(180, 160),
                 BackColor = NOMADTheme.CARD_BG,
             };
             _pad.StickChanged += (x, y) => { _stickX = x; _stickY = y; };
-            Controls.Add(_pad);
+            root.Controls.Add(_pad, 0, 1);
 
-            // Target readouts
-            _lblPitch = MakeReadout("Pitch:  +0.0°", new Point(20, 268));
-            _lblRoll  = MakeReadout("Roll:   +0.0°", new Point(190, 268));
-            _lblMode  = MakeReadout("Mode: MAVLINK", new Point(20, 290));
-            Controls.Add(_lblPitch); Controls.Add(_lblRoll); Controls.Add(_lblMode);
-
-            // Rate slider
-            _ratePanel = new Panel
+            // Target readouts — a wrapping flow so they never clip.
+            var readouts = new FlowLayoutPanel
             {
-                Location = new Point(12, 314),
-                Size = new Size(356, 48),
-                BackColor = Color.FromArgb(50, 50, 58),
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                WrapContents = true,
+                Margin = new Padding(0, 0, 0, NOMADTheme.GAP),
             };
-            _ratePanel.SendToBack();
-            Controls.Add(_ratePanel);
+            _lblPitch = MakeReadout("Pitch: +0.0°");
+            _lblRoll = MakeReadout("Roll: +0.0°");
+            _lblMode = MakeReadout("Mode: MAVLINK");
+            readouts.Controls.Add(_lblPitch);
+            readouts.Controls.Add(_lblRoll);
+            readouts.Controls.Add(_lblMode);
+            root.Controls.Add(readouts, 0, 2);
 
-            _ratePanel.Controls.Add(new Label
+            root.Controls.Add(BuildRateRow(), 0, 3);
+            root.Controls.Add(BuildButtonRows(), 0, 4);
+
+            _lblStatus = new Label
             {
-                Text = "Max Rate (deg/s):",
-                Location = new Point(8, 9),
+                Text = "Ready",
                 AutoSize = true,
                 ForeColor = NOMADTheme.TEXT_SECONDARY,
-            });
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL),
+                Margin = new Padding(2, NOMADTheme.GAP, 0, 2),
+            };
+            root.Controls.Add(_lblStatus, 0, 5);
+
+            var hint = new Label
+            {
+                Text = "Drag pad: pitch (Y) / roll (X). Arrow keys nudge both axes. Release = stop.",
+                AutoSize = true,
+                MaximumSize = new Size(0, 0),
+                ForeColor = NOMADTheme.TEXT_SECONDARY,
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL, FontStyle.Italic),
+                Margin = new Padding(2, 0, 0, 0),
+            };
+            root.Controls.Add(hint, 0, 6);
+
+            Controls.Add(root);
+        }
+
+        // Rate slider row: "Max Rate (deg/s):" | [====slider====] | value.
+        private TableLayoutPanel BuildRateRow()
+        {
+            var row = new TableLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                ColumnCount = 3,
+                RowCount = 1,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                BackColor = NOMADTheme.PANEL_ALT,
+                Padding = new Padding(NOMADTheme.GAP, 4, NOMADTheme.GAP, 4),
+                Margin = new Padding(0, 0, 0, NOMADTheme.GAP),
+            };
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+            var lbl = new Label
+            {
+                Text = "Max Rate (deg/s):",
+                AutoSize = true,
+                Anchor = AnchorStyles.Left,
+                ForeColor = NOMADTheme.TEXT_SECONDARY,
+                Margin = new Padding(0, 0, NOMADTheme.GAP, 0),
+            };
+            row.Controls.Add(lbl, 0, 0);
+
             _trkRate = new TrackBar
             {
-                Location = new Point(126, 3),
-                Size = new Size(140, 30),
+                Dock = DockStyle.Fill,
                 Minimum = (int)GimbalController.MIN_MAX_RATE_DEG_SEC,
                 Maximum = (int)GimbalController.MAX_MAX_RATE_DEG_SEC,
                 Value = (int)Math.Round(GimbalController.MaxRateDegSec),
                 TickStyle = TickStyle.None,
-                BackColor = Color.FromArgb(50, 50, 58),
+                BackColor = NOMADTheme.PANEL_ALT,
+                Margin = new Padding(0),
             };
             _trkRate.ValueChanged += (s, e) =>
             {
@@ -240,81 +299,85 @@ namespace NOMAD.MissionPlanner
                 GimbalController.MaxRateDegSec = _trkRate.Value;
                 _lblRate.Text = $"{_trkRate.Value}";
             };
-            _ratePanel.Controls.Add(_trkRate);
-            _trkRate.SendToBack();
+            row.Controls.Add(_trkRate, 1, 0);
+
             _lblRate = new Label
             {
                 Text = $"{_trkRate.Value}",
-                Location = new Point(270, 9),
                 AutoSize = true,
+                Anchor = AnchorStyles.Right,
                 ForeColor = NOMADTheme.TEXT_PRIMARY,
+                Margin = new Padding(NOMADTheme.GAP, 0, 0, 0),
             };
-            _ratePanel.Controls.Add(_lblRate);
+            row.Controls.Add(_lblRate, 2, 0);
+            return row;
+        }
 
-            // Mode buttons row 1: control modes (gimbal-manager flag presets)
-            int y = 354;
-            _btnMavTgt  = MakeButton("MAVLink Tgt", new Point(12,  y), 95, c => SetModePreset("MAVLINK", MountMode.MavlinkTargeting));
-            _btnRcTgt   = MakeButton("RC Tgt",      new Point(112, y), 80, c => SetModePreset("RC", MountMode.RcTargeting));
-            _btnNeutral = MakeButton("Neutral",     new Point(197, y), 80, c => SetModePreset("NEUTRAL", MountMode.Neutral));
-            _btnRetract = MakeButton("Retract",     new Point(282, y), 80, c => SetModePreset("RETRACT", MountMode.Retract));
-            Controls.Add(_btnMavTgt); Controls.Add(_btnRcTgt); Controls.Add(_btnNeutral); Controls.Add(_btnRetract);
+        // Mode + preset buttons, each in a wrapping flow so they re-pack when the
+        // window is narrow instead of running off the edge.
+        private FlowLayoutPanel BuildButtonRows()
+        {
+            var flow = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                WrapContents = true,
+                FlowDirection = FlowDirection.LeftToRight,
+                Margin = new Padding(0, 0, 0, 0),
+                Padding = new Padding(0),
+            };
 
-            // Quick angle presets
-            y = 388;
-            _btnCenter = MakeButton("Center (0°/0°)",   new Point(12, y), 130, c => SnapAngles(0, 0));
-            _btnLevel  = MakeButton("Look Down (-90°)", new Point(150, y), 130, c => SnapAngles(-90, _targetRoll));
-            Controls.Add(_btnCenter); Controls.Add(_btnLevel);
+            _btnMavTgt = MakeButton("MAVLink Tgt", c => SetModePreset("MAVLINK", MountMode.MavlinkTargeting));
+            _btnRcTgt = MakeButton("RC Tgt", c => SetModePreset("RC", MountMode.RcTargeting));
+            _btnNeutral = MakeButton("Neutral", c => SetModePreset("NEUTRAL", MountMode.Neutral));
+            _btnRetract = MakeButton("Retract", c => SetModePreset("RETRACT", MountMode.Retract));
+            _btnCenter = MakeButton("Center 0°/0°", c => SnapAngles(0, 0));
+            _btnLevel = MakeButton("Look Down −90°", c => SnapAngles(-90, _targetRoll));
+            flow.Controls.Add(_btnMavTgt);
+            flow.Controls.Add(_btnRcTgt);
+            flow.Controls.Add(_btnNeutral);
+            flow.Controls.Add(_btnRetract);
+            flow.Controls.Add(_btnCenter);
+            flow.Controls.Add(_btnLevel);
 
             _chkTopMost = new CheckBox
             {
                 Text = "Always on top",
-                Location = new Point(285, y + 4),
                 AutoSize = true,
                 ForeColor = NOMADTheme.TEXT_SECONDARY,
+                Margin = new Padding(NOMADTheme.GAP, 4, 0, 0),
             };
             _chkTopMost.CheckedChanged += (s, e) => TopMost = _chkTopMost.Checked;
-            Controls.Add(_chkTopMost);
-
-            _lblStatus = new Label
-            {
-                Text = "Ready",
-                Location = new Point(12, 430),
-                AutoSize = true,
-                ForeColor = NOMADTheme.TEXT_SECONDARY,
-                Font = new Font("Segoe UI", 8),
-            };
-            Controls.Add(_lblStatus);
-
-            // Hint
-            Controls.Add(new Label
-            {
-                Text = "Drag pad: pitch (Y) / roll (X). Arrow keys nudge both axes. Release = stop.",
-                Location = new Point(12, 452),
-                AutoSize = true,
-                ForeColor = NOMADTheme.TEXT_SECONDARY,
-                Font = new Font("Segoe UI", 8, FontStyle.Italic),
-            });
+            flow.Controls.Add(_chkTopMost);
+            return flow;
         }
 
-        private Label MakeReadout(string text, Point loc) => new Label
+        private Label MakeReadout(string text) => new Label
         {
-            Text = text, Location = loc, AutoSize = true,
-            Font = new Font("Consolas", 10, FontStyle.Bold),
+            Text = text,
+            AutoSize = true,
+            Font = NOMADTheme.Mono(NOMADTheme.SIZE_LARGE, FontStyle.Bold),
             ForeColor = NOMADTheme.TEXT_PRIMARY,
+            Margin = new Padding(0, 0, NOMADTheme.PAD, 0),
         };
 
-        private Button MakeButton(string text, Point loc, int width, Action<Button> onClick)
+        private Button MakeButton(string text, Action<Button> onClick)
         {
             var btn = new Button
             {
-                Text = text, Location = loc, Size = new Size(width, 28),
+                Text = text,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Padding = new Padding(6, 3, 6, 3),
+                Margin = new Padding(0, 0, NOMADTheme.GAP, NOMADTheme.GAP),
                 FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(60, 60, 70),
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 8, FontStyle.Bold),
+                BackColor = NOMADTheme.BUTTON_BG,
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL, FontStyle.Bold),
                 Cursor = Cursors.Hand,
             };
-            btn.FlatAppearance.BorderColor = Color.FromArgb(80, 80, 85);
+            btn.FlatAppearance.BorderColor = NOMADTheme.CARD_BORDER;
             btn.Click += (s, e) => onClick(btn);
             return btn;
         }
@@ -325,8 +388,8 @@ namespace NOMAD.MissionPlanner
         private void OnStreamTick(object sender, EventArgs e)
         {
             float dt = 1f / STREAM_HZ;
-            float sx = Math.Abs(_stickX) < STICK_DEADZONE ? 0 : _stickX;
-            float sy = Math.Abs(_stickY) < STICK_DEADZONE ? 0 : _stickY;
+            float sx = GimbalCommand.ApplyDeadzone(_stickX, STICK_DEADZONE);
+            float sy = GimbalCommand.ApplyDeadzone(_stickY, STICK_DEADZONE);
 
             bool active = sx != 0f || sy != 0f;
 
@@ -343,9 +406,9 @@ namespace NOMAD.MissionPlanner
             // also pushes this, but mirroring each tick keeps things visible
             // even when no stick motion fires the event).
             _targetPitch = GimbalController.TargetPitchDeg;
-            _targetRoll  = GimbalController.TargetRollDeg;
+            _targetRoll = GimbalController.TargetRollDeg;
             if (_lblPitch != null) _lblPitch.Text = $"Pitch: {_targetPitch,+6:0.0}°";
-            if (_lblRoll  != null) _lblRoll.Text  = $"Roll:  {_targetRoll,+6:0.0}°";
+            if (_lblRoll != null) _lblRoll.Text = $"Roll: {_targetRoll,+6:0.0}°";
         }
 
         // Helpers for the in-window snap / key-nudge buttons — both go through
@@ -355,11 +418,6 @@ namespace NOMAD.MissionPlanner
         {
             GimbalController.SetTargetAngles(pitchDeg, rollDeg);
             GimbalController.SendPitchRollAngle(GimbalController.TargetPitchDeg, GimbalController.TargetRollDeg);
-        }
-
-        private void SendMountConfigure(MountMode mode)
-        {
-            GimbalController.SetMode(ToCtrl(mode));
         }
 
         // ============================================================
@@ -372,7 +430,7 @@ namespace NOMAD.MissionPlanner
             UpdateModeLabel();
             SetStatus($"Mode → {label}", NOMADTheme.TEXT_PRIMARY);
 
-            SendMountConfigure(mode);
+            GimbalController.SetMode(mode);
         }
 
         private void UpdateModeLabel()
@@ -502,6 +560,7 @@ namespace NOMAD.MissionPlanner
             {
                 int cx = Width / 2, cy = Height / 2;
                 int r = Math.Min(cx, cy) - 8;
+                if (r <= 0) return;
                 float dx = (p.X - cx) / (float)r;
                 float dy = (p.Y - cy) / (float)r;
                 float mag = (float)Math.Sqrt(dx * dx + dy * dy);
@@ -521,6 +580,7 @@ namespace NOMAD.MissionPlanner
 
                 int cx = Width / 2, cy = Height / 2;
                 int r = Math.Min(cx, cy) - 8;
+                if (r <= 0) return;
 
                 // Outer ring
                 using (var ringPen = new Pen(NOMADTheme.TEXT_SECONDARY, 2))
@@ -545,13 +605,13 @@ namespace NOMAD.MissionPlanner
 
                 // Axis labels
                 using (var brush = new SolidBrush(NOMADTheme.TEXT_SECONDARY))
-                using (var f = new Font("Segoe UI", 8))
+                using (var f = new Font(NOMADTheme.FONT_FAMILY, NOMADTheme.SIZE_SMALL))
                 {
                     var sz = g.MeasureString("PITCH+", f);
                     g.DrawString("PITCH+", f, brush, cx - sz.Width / 2, cy - r - sz.Height - 1);
                     g.DrawString("PITCH-", f, brush, cx - sz.Width / 2, cy + r + 1);
-                    g.DrawString("ROLL+",  f, brush, cx - r - g.MeasureString("ROLL+", f).Width - 2, cy - 7);
-                    g.DrawString("ROLL-",  f, brush, cx + r + 2, cy - 7);
+                    g.DrawString("ROLL+", f, brush, cx - r - g.MeasureString("ROLL+", f).Width - 2, cy - 7);
+                    g.DrawString("ROLL-", f, brush, cx + r + 2, cy - 7);
                 }
             }
         }

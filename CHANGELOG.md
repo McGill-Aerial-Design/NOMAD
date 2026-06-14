@@ -8,6 +8,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `GimbalCommand` (C# plugin): the pure, Mission-Planner-free core of the gimbal
+  control — the `DO_MOUNT_CONTROL`/`DO_MOUNT_CONFIGURE` command frames sent to
+  ArduPilot plus the stick-integration and angle-clamping math, extracted from
+  `GimbalController` so it is unit-testable offline (the `PayloadReleaseInterlock`/
+  `GeoMath` idiom). `GimbalController` now delegates to it and just maps the frame
+  onto `MAVLink.MAV_CMD` for the send.
+- `pixi run test-plugin-gimbal` (+ `scripts/build/test_plugin_gimbal.ps1`,
+  `mission_planner/tests/gimbal/GimbalCommandTests.cs`): a `csc` assertion harness
+  pinning the exact MAVLink the gimbal emits — command ids (205/204), the param
+  layout (P1=pitch, P2=roll, P7=MAVLINK_TARGETING; P1=mode), `MAV_MOUNT_MODE`
+  values, and the integrator/clamp math. Added as a step in the `plugin-tests`
+  CI job.
+- `pixi run sitl-gimbal` (+ `tests/sitl/gimbal_mount_control.py` and its skipped
+  pytest wrapper): an end-to-end SITL scenario that configures a servo mount on a
+  live ArduPilot, sends the same `DO_MOUNT_CONFIGURE`/`DO_MOUNT_CONTROL` commands,
+  and asserts the mount's servo output tracks the commanded pitch and saturates at
+  the limit. Wired into the nightly `sitl.yml` as the last scenario (it reboots the
+  shared vehicle to apply `MNT1_TYPE`).
 - Shared responsive-UI foundation for the Mission Planner plugin (`mission_planner/src/UI/`):
   typography + spacing constants and font helpers on `NOMADTheme`
   (`Font()`/`Mono()`, `SIZE_*`, `PAD`/`GAP`, named `CONTROL_BG`/`PANEL_ALT`
@@ -118,6 +136,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   all-in-one) and note the `BASE_IMAGE` prerequisite.
 
 ### Changed
+- Gimbal control de-branded from "Caddx" to a generic gimbal (window title,
+  sidebar button, file headers/comments) so it drives any `DO_MOUNT_CONTROL`
+  mount, and the floating joystick window relaid out with a docked
+  `TableLayoutPanel` — a fill joystick pad plus AutoSize rows and wrapping button
+  rows — so it fits any window size/aspect ratio without overlap. The `MountMode`
+  enum is now shared (was duplicated across `GimbalController` and the window).
 - `PayloadControlPanel` (drop + momentary-relay rows) now delegates its
   arm/confirm decision to `PayloadReleaseInterlock`, keeping only the rendering
   and visual-revert timer. Closes the rearchitecture §3.3 GAP "payload release

@@ -34,6 +34,21 @@ demand against the dev stack.
 | global target 300 m north (outside) | H-05 / SR-FEN-02 | target rejected; vehicle stays inside the box |
 | LOCAL_NED target 300 m north | H-05 / SR-FEN-02 | target rejected |
 
+[gimbal_mount_control.py](gimbal_mount_control.py) (`pixi run sitl-gimbal`) runs
+— it proves the MAVLink the plugin's gimbal control emits actually points a real
+mount (the GCS counterpart of `pixi run test-plugin-gimbal`, which pins the
+command bytes). It needs only `NOMAD_SITL_OPERATOR`:
+
+| Step | Assertion |
+|------|-----------|
+| configure a servo mount (`MNT1_TYPE=1`, AUX tilt/roll) + reboot | `MNT1_TYPE` sticks |
+| `DO_MOUNT_CONFIGURE` MAVLINK_TARGETING + `DO_MOUNT_CONTROL` pitch −45° | servo output moves proportionally |
+| `DO_MOUNT_CONTROL` pitch +45° | servo output moves the opposite way |
+| `DO_MOUNT_CONTROL` pitch beyond the limit | servo output saturates at the limit (clamped) |
+
+> It reboots the vehicle to apply `MNT1_TYPE`, so the nightly job runs it **last**,
+> after the velocity and fence scenarios that share the vehicle.
+
 ## How to run
 
 1. Bring up the hardware-free stack (Edge Core + ArduPilot SITL):
