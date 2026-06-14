@@ -36,12 +36,12 @@ class VioUpdateRequest(BaseModel):
 
 
 class VioModule(BaseModule):
-    """VIO status, trajectory, and area-map route module."""
+    """VIO status and trajectory route module."""
 
     metadata = ModuleMetadata(
         name="vio",
         version="1.0.0",
-        description="Exposes VIO status, trajectory, and area-map endpoints for the GCS",
+        description="Exposes VIO status and trajectory endpoints for the GCS",
     )
 
     def configure(self, ctx: AppContext) -> None:
