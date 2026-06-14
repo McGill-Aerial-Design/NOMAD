@@ -68,40 +68,56 @@ namespace NOMAD.MissionPlanner
                 Dock = DockStyle.Fill,
                 BackColor = Color.FromArgb(45, 45, 48),
                 Margin = new Padding(5),
-                Padding = new Padding(15, 10, 15, 10),
+                Padding = new Padding(15, 8, 15, 8),
             };
+
+            var table = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                RowCount = 2,
+                BackColor = Color.Transparent,
+                Margin = new Padding(0),
+                Padding = new Padding(0),
+            };
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
             _lblOverallStatus = new Label
             {
                 Text = "\u25cf CONNECTING...",
-                Font = new Font("Segoe UI", 18, FontStyle.Bold),
+                Font = NOMADTheme.Font(18, FontStyle.Bold),
                 ForeColor = Color.Yellow,
-                Location = new Point(15, 15),
                 AutoSize = true,
+                Anchor = AnchorStyles.Left,
             };
-            panel.Controls.Add(_lblOverallStatus);
+            table.Controls.Add(_lblOverallStatus, 0, 0);
+
+            // Auto-refresh indicator (no manual button needed)
+            table.Controls.Add(new Label
+            {
+                Text = $"[AUTO] Refreshing every {_config.HealthPollInterval / 1000.0:0.#}s",
+                ForeColor = Color.LimeGreen,
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL),
+                AutoSize = true,
+                Anchor = AnchorStyles.Right,
+                Margin = new Padding(NOMADTheme.PAD, 8, 0, 0),
+            }, 1, 0);
 
             _lblLastUpdate = new Label
             {
                 Text = "Last update: Never",
-                Font = new Font("Segoe UI", 9),
+                Font = NOMADTheme.Font(),
                 ForeColor = Color.Gray,
-                Location = new Point(15, 50),
                 AutoSize = true,
+                Margin = new Padding(0, 2, 0, 0),
             };
-            panel.Controls.Add(_lblLastUpdate);
+            table.Controls.Add(_lblLastUpdate, 0, 1);
+            table.SetColumnSpan(_lblLastUpdate, 2);
 
-            // Auto-refresh indicator (no manual button needed)
-            var lblAutoRefresh = new Label
-            {
-                Text = $"[AUTO] Refreshing every {_config.HealthPollInterval / 1000.0:0.#}s",
-                Location = new Point(400, 28),
-                ForeColor = Color.LimeGreen,
-                Font = new Font("Segoe UI", 8),
-                AutoSize = true,
-            };
-            panel.Controls.Add(lblAutoRefresh);
-
+            panel.Controls.Add(table);
             return panel;
         }
 
@@ -115,93 +131,91 @@ namespace NOMAD.MissionPlanner
                 Padding = new Padding(10),
             };
 
+            // 3-col table: label | progress bar (stretches) | value (right). Rows
+            // AutoSize so the value never clips at narrow widths.
+            var table = new TableLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                ColumnCount = 3,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                BackColor = Color.Transparent,
+            };
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 78));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 86));
+
             var title = new Label
             {
                 Text = "System Metrics",
-                Font = new Font("Segoe UI", 11, FontStyle.Bold),
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_HEADING, FontStyle.Bold),
                 ForeColor = Color.FromArgb(0, 150, 200),
-                Location = new Point(10, 10),
                 AutoSize = true,
+                Margin = new Padding(0, 0, 0, NOMADTheme.GAP),
             };
-            panel.Controls.Add(title);
+            table.Controls.Add(title, 0, 0);
+            table.SetColumnSpan(title, 3);
 
-            int yOffset = 40;
+            MetricRow(table, "CPU Temp:", ref _lblCpuTemp, ref _prgCpuTemp);
+            MetricRow(table, "GPU Temp:", ref _lblGpuTemp, ref _prgGpuTemp);
+            MetricRow(table, "CPU Load:", ref _lblCpuLoad, ref _prgCpuLoad);
+            MetricRow(table, "GPU Load:", ref _lblGpuLoad, ref _prgGpuLoad);
+            MetricRow(table, "Memory:", ref _lblMemory, ref _prgMemory);
+            MetricRow(table, "Disk:", ref _lblDisk, ref _prgDisk);
 
-            // CPU Temperature
-            CreateMetricRow(panel, "CPU Temp:", ref _lblCpuTemp, ref _prgCpuTemp, ref yOffset, Color.Orange);
+            // Power and Fan share one row.
+            _lblPower = new Label { Text = "Power: --W", Font = NOMADTheme.Font(), ForeColor = Color.LightGray, AutoSize = true, Margin = new Padding(0, 6, NOMADTheme.PAD, 0) };
+            _lblFan = new Label { Text = "Fan: --%", Font = NOMADTheme.Font(), ForeColor = Color.LightGray, AutoSize = true, Margin = new Padding(0, 6, 0, 0) };
+            var powerFan = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, BackColor = Color.Transparent, Margin = new Padding(0), Padding = new Padding(0) };
+            powerFan.Controls.Add(_lblPower);
+            powerFan.Controls.Add(_lblFan);
+            int r = table.RowCount;
+            table.RowCount = r + 1;
+            table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            table.Controls.Add(powerFan, 0, r);
+            table.SetColumnSpan(powerFan, 3);
 
-            // GPU Temperature
-            CreateMetricRow(panel, "GPU Temp:", ref _lblGpuTemp, ref _prgGpuTemp, ref yOffset, Color.OrangeRed);
-
-            // CPU Load
-            CreateMetricRow(panel, "CPU Load:", ref _lblCpuLoad, ref _prgCpuLoad, ref yOffset, Color.DodgerBlue);
-
-            // GPU Load
-            CreateMetricRow(panel, "GPU Load:", ref _lblGpuLoad, ref _prgGpuLoad, ref yOffset, Color.LimeGreen);
-
-            // Memory
-            CreateMetricRow(panel, "Memory:", ref _lblMemory, ref _prgMemory, ref yOffset, Color.MediumPurple);
-
-            // Disk
-            CreateMetricRow(panel, "Disk:", ref _lblDisk, ref _prgDisk, ref yOffset, Color.Goldenrod);
-
-            // Power and Fan
-            _lblPower = new Label
-            {
-                Text = "Power: --W",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = Color.LightGray,
-                Location = new Point(10, yOffset),
-                AutoSize = true,
-            };
-            panel.Controls.Add(_lblPower);
-
-            _lblFan = new Label
-            {
-                Text = "Fan: --%",
-                Font = new Font("Segoe UI", 9),
-                ForeColor = Color.LightGray,
-                Location = new Point(150, yOffset),
-                AutoSize = true,
-            };
-            panel.Controls.Add(_lblFan);
-
+            panel.Controls.Add(table);
             return panel;
         }
 
-        private void CreateMetricRow(Panel panel, string label, ref Label valueLabel, ref ProgressBar progressBar, ref int yOffset, Color color)
+        private void MetricRow(TableLayoutPanel table, string label, ref Label valueLabel, ref ProgressBar progressBar)
         {
-            var lblTitle = new Label
+            int r = table.RowCount;
+            table.RowCount = r + 1;
+            table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            table.Controls.Add(new Label
             {
                 Text = label,
-                Font = new Font("Segoe UI", 9),
+                Font = NOMADTheme.Font(),
                 ForeColor = Color.LightGray,
-                Location = new Point(10, yOffset),
-                Width = 70,
-            };
-            panel.Controls.Add(lblTitle);
+                AutoSize = true,
+                Anchor = AnchorStyles.Left,
+                Margin = new Padding(0, 4, NOMADTheme.GAP, 0),
+            }, 0, r);
 
             progressBar = new ProgressBar
             {
-                Location = new Point(85, yOffset),
-                Size = new Size(150, 18),
+                Dock = DockStyle.Fill,
+                Height = 18,
                 Maximum = 100,
                 Style = ProgressBarStyle.Continuous,
+                Margin = new Padding(0, 2, 0, 2),
             };
-            panel.Controls.Add(progressBar);
+            table.Controls.Add(progressBar, 1, r);
 
             valueLabel = new Label
             {
                 Text = "--",
-                Font = new Font("Segoe UI", 9),
+                Font = NOMADTheme.Font(),
                 ForeColor = Color.White,
-                Location = new Point(245, yOffset),
-                Width = 80,
+                AutoSize = false,
+                Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleRight,
+                Margin = new Padding(NOMADTheme.GAP, 2, 0, 2),
             };
-            panel.Controls.Add(valueLabel);
-
-            yOffset += 30;
+            table.Controls.Add(valueLabel, 2, r);
         }
 
         private Panel CreateNetworkPanel()

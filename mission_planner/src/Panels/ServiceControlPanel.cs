@@ -72,14 +72,6 @@ namespace NOMAD.MissionPlanner
         private Panel _servicesPanel;
         private Panel _logPanel;
 
-        // Left service pane layout constants
-        private const int ServiceLeftCol = 15;
-        private const int ServiceStatusCol = 140;
-        private const int ServiceStatusWidth = 280;
-        private const int ServiceActionCol = 430;
-        private const int ServiceStartCol = 385;
-        private const int ServiceStopCol = 460;
-
         public ServiceControlPanel(DualLinkSender sender, int pollIntervalMs = 3000)
         {
             _sender = sender ?? throw new ArgumentNullException(nameof(sender));

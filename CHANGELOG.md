@@ -137,6 +137,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   all-in-one) and note the `BASE_IMAGE` prerequisite.
 
 ### Changed
+- Health + Links panels relaid out responsively: `ServiceControlPanel` (services
+  as a reflowing name/status/buttons table + percentage log split, no fixed
+  920×650), `LinkHealthPanel` (header and settings rows are AutoSize cards with
+  wrapping flows instead of hardcoded x-positions that overlapped at narrow
+  widths), and `EnhancedHealthDashboard` (status + metrics panels as tables so the
+  progress bars stretch and values never clip). All routed through the shared
+  `NOMADTheme`/`ControlFactory` helpers; behaviour unchanged.
 - Flight Boundaries view relaid out responsively: the fixed-height cards with
   absolutely-positioned children are now AutoSize cards of full-width rows
   (wrapping button/control clusters, explicit-height grids), routed through the
