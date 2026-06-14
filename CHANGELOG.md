@@ -138,6 +138,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   all-in-one) and note the `BASE_IMAGE` prerequisite.
 
 ### Changed
+- [plugin] Link Status panel (`LinkHealthPanel`) layout reworked: the live link
+  cards (with the throughput graphs and full per-link stats) now take the bulk of
+  the height, and the failover settings + log share one compact 50/50 bottom
+  strip — so the graphs get the vertical space and the stats beneath them are no
+  longer clipped.
+- [plugin] Gimbal joystick window themed on-brand: black buttons with a red
+  outline and the active mount-mode button filled red, and the pad's drawn radius
+  is capped so it stays a sensible size on large windows.
+- [plugin] Flight Boundaries view spacing tightened (smaller card padding/margins
+  and row gaps) so the sections pack closely and the column rarely needs
+  scrolling. Behaviour and named controls unchanged.
 - Dashboard notifications header (`NotificationPanel`) relaid out as a docked
   AutoSize table (title/unread badge left, Clear right) instead of absolute
   positions with a resize handler, and its fonts routed through `NOMADTheme`.
@@ -175,6 +186,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   frame and pose arithmetic to the new `vio_math` module instead of computing it
   inline. Behaviour-preserving; the only untested file left in the bridge package
   shrinks to message unpacking and HTTP forwarding.
+
+### Fixed
+- [plugin] [bug] Gimbal joystick PITCH/ROLL axis labels no longer stick out past
+  the pad — they're drawn just inside the ring instead of outside the circle
+  where they were clipped at the panel edge.
 
 ## [0.2.1] - 2026-06-13
 
