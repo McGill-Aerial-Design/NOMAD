@@ -49,12 +49,16 @@ command bytes). It needs only `NOMAD_SITL_OPERATOR`:
 > It reboots the vehicle to apply `MNT1_TYPE`, so the nightly job runs it **last**,
 > after the velocity and fence scenarios that share the vehicle.
 >
-> If the SITL build accepts the mount params but neither publishes gimbal attitude
-> nor drives the servo (some source-built ArduCopter 4.6 SITL images don't), the
-> scenario **skips** (exit code 2; the nightly step logs a warning) rather than
-> failing — the command bytes are still gated in CI by `pixi run test-plugin-gimbal`,
-> and this scenario verifies for real wherever the SITL build does actuate the
-> mount (e.g. a local `pixi run dev-up`).
+> **Run it on a vehicle that hasn't flown.** State left by the velocity/fence
+> flights (and persisted across the mount reboot) suppresses mount actuation —
+> the mount stops driving its servo / publishing attitude. The nightly recreates
+> the SITL container (`docker compose ... up -d --force-recreate sitl`, which
+> re-wipes EEPROM via `-w`) before this scenario; locally, run it after a fresh
+> `pixi run dev-up` (or recreate `sitl`) rather than after the other scenarios.
+>
+> As a defensive net the scenario still **skips** (exit 2; the nightly step logs a
+> warning) if the mount never actuates, rather than failing — the command bytes
+> are independently gated in CI by `pixi run test-plugin-gimbal`.
 
 ## How to run
 

@@ -66,18 +66,25 @@ jobs:
       - name: Geofence containment scenario (H-05, SR-FEN-02)
         run: pixi run sitl-fence
 
-      # Last: configures a servo mount and reboots the vehicle to apply it, so it
-      # must not precede the velocity/fence scenarios that share this vehicle.
-      # Exit 2 = the SITL build doesn't actuate the mount (no attitude, no servo
-      # movement) — a build limitation, not a regression — so treat it as a skip.
-      # The command bytes are gated in CI by `pixi run test-plugin-gimbal`.
+      # The gimbal scenario needs a vehicle that has NOT flown: state left by the
+      # velocity/fence scenarios (persisted across the mount reboot) suppresses
+      # mount actuation. Recreate the SITL container for a clean vehicle —
+      # sim_vehicle launches with -w, so a fresh container = wiped EEPROM.
+      - name: Recreate SITL for a clean gimbal vehicle
+        run: |
+          docker compose -f docker/docker-compose.dev.yml --profile sitl up -d --force-recreate sitl
+          sleep 25
+
+      # Configures a servo mount + reboots to apply MNT1_TYPE, then verifies the
+      # mount points where commanded. Exit 2 (mount never actuates) is a defensive
+      # skip net; on the clean vehicle above the scenario actually verifies.
       - name: Gimbal mount-control scenario (DO_MOUNT_CONTROL/CONFIGURE)
         run: |
           set +e
           pixi run sitl-gimbal
           code=$?
           if [ "$code" -eq 2 ]; then
-            echo "::warning::Gimbal SITL scenario skipped — this SITL build does not actuate the mount"
+            echo "::warning::Gimbal SITL scenario skipped — mount did not actuate"
             exit 0
           fi
           exit "$code"
