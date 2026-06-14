@@ -23,9 +23,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `pixi run sitl-gimbal` (+ `tests/sitl/gimbal_mount_control.py` and its skipped
   pytest wrapper): an end-to-end SITL scenario that configures a servo mount on a
   live ArduPilot, sends the same `DO_MOUNT_CONFIGURE`/`DO_MOUNT_CONTROL` commands,
-  and asserts the mount's servo output tracks the commanded pitch and saturates at
-  the limit. Wired into the nightly `sitl.yml` as the last scenario (it reboots the
-  shared vehicle to apply `MNT1_TYPE`).
+  and asserts the mount's reported attitude (`GIMBAL_DEVICE_ATTITUDE_STATUS`)
+  tracks the commanded pitch and reaches the configured limit. Wired into the
+  nightly `sitl.yml` as the last scenario (it reboots the shared vehicle to apply
+  `MNT1_TYPE`).
 - Shared responsive-UI foundation for the Mission Planner plugin (`mission_planner/src/UI/`):
   typography + spacing constants and font helpers on `NOMADTheme`
   (`Font()`/`Mono()`, `SIZE_*`, `PAD`/`GAP`, named `CONTROL_BG`/`PANEL_ALT`
