@@ -8,6 +8,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Shared responsive-UI foundation for the Mission Planner plugin (`mission_planner/src/UI/`):
+  typography + spacing constants and font helpers on `NOMADTheme`
+  (`Font()`/`Mono()`, `SIZE_*`, `PAD`/`GAP`, named `CONTROL_BG`/`PANEL_ALT`
+  surfaces), plus reflowing builders on `ControlFactory` (`Card`, `LabeledRow`,
+  `ButtonRow`, `SectionTitle`, themed `CheckBox`/`Numeric`/`TabControl`/`ListBox`,
+  and the `BoundaryGrid` skin). These replace the per-view ad-hoc fonts/colors and
+  absolute positioning, so the subsequent view-layout work sizes dynamically to
+  any aspect ratio without overlap.
 - `PayloadReleaseInterlock` (C# plugin, tier SC): the pure, UI-free arm→confirm
   state machine behind every multi-click-armed payload release on the ground
   station (drop servos + momentary relay/pump fire). N deliberate clicks within a
