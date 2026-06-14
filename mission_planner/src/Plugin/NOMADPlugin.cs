@@ -44,6 +44,7 @@ namespace NOMAD.MissionPlanner
         private MAVLinkConnectionManager _connectionManager;  // Dual link manager
         private JetsonConnectionManager _jetsonConnectionManager;  // Jetson HTTP connectivity
         private NomadJoystickService _joystickService;        // Physical joysticks → gimbal + ZED tilt
+        private GimbalArrowKeyFilter _gimbalArrowKeyFilter;    // Mission Planner-wide arrow key nudges
         private SerialJoystickBridge _serialBridge;           // Python subprocess: serial → virtual Xbox 360
         private Form _popOutForm;                             // Pop-out window for NOMAD screen
         private bool _hudVideoStarted = false;
@@ -128,6 +129,11 @@ namespace NOMAD.MissionPlanner
                 // service all start with the same value (single source of truth lives
                 // on GimbalController.MaxRateDegSec).
                 GimbalController.MaxRateDegSec = _config.JoystickGimbalMaxRateDegSec;
+
+                // Capture arrow keys at the application message-pump level so
+                // focused buttons, grids, and non-NOMAD views cannot consume them
+                // while the operator has enabled gimbal keyboard control.
+                _gimbalArrowKeyFilter = new GimbalArrowKeyFilter(_config);
 
                 // Physical joystick service — starts only if either channel is enabled in config.
                 _joystickService = new NomadJoystickService(_config);
@@ -267,6 +273,9 @@ namespace NOMAD.MissionPlanner
                 // Release joystick devices
                 _joystickService?.Dispose();
                 _joystickService = null;
+
+                _gimbalArrowKeyFilter?.Dispose();
+                _gimbalArrowKeyFilter = null;
 
                 // Kill serial bridge subprocess
                 _serialBridge?.Dispose();

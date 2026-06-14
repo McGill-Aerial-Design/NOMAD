@@ -51,13 +51,6 @@ namespace NOMAD.MissionPlanner
         // Tunables
         // ============================================================
         private const int STREAM_HZ = 20;
-        private const float KEY_NUDGE_DEG = 2.0f;
-        // Mount limits pulled from GimbalController so both this window and the
-        // physical NomadJoystickService stay in sync if the limits ever change.
-        private const float PITCH_MIN_DEG = GimbalController.PITCH_MIN_DEG;
-        private const float PITCH_MAX_DEG = GimbalController.PITCH_MAX_DEG;
-        private const float ROLL_MIN_DEG = GimbalController.ROLL_MIN_DEG;
-        private const float ROLL_MAX_DEG = GimbalController.ROLL_MAX_DEG;
         private const float STICK_DEADZONE = 0.06f;
 
         // ============================================================
@@ -76,11 +69,11 @@ namespace NOMAD.MissionPlanner
 
         // UI
         private JoystickPad _pad;
-        private Label _lblPitch, _lblRoll, _lblMode, _lblStatus, _lblRate, _lblTitle, _lblHint;
+        private Label _lblPitch, _lblRoll, _lblMode, _lblRate, _lblTitle;
         private TableLayoutPanel _rateRow;
         private TrackBar _trkRate;
         private Button _btnRetract, _btnNeutral, _btnRcTgt, _btnMavTgt, _btnCenter, _btnLevel;
-        private CheckBox _chkTopMost;
+        private CheckBox _chkTopMost, _chkArrowKeys;
         private Timer _streamTimer;
 
         private GimbalJoystickWindow(NOMADConfig config)
@@ -96,8 +89,6 @@ namespace NOMAD.MissionPlanner
             ClientSize = new Size(340, 520);
             Padding = new Padding(NOMADTheme.GAP);
             ShowInTaskbar = false;
-            KeyPreview = true;
-            KeyDown += OnWindowKeyDown;
 
             // Position near top-right corner of screen
             try
@@ -123,6 +114,8 @@ namespace NOMAD.MissionPlanner
             GimbalController.TargetChanged += OnExternalTargetChanged;
             // Mirror max-rate edits made elsewhere (settings dialog, physical service).
             GimbalController.MaxRateChanged += OnExternalMaxRateChanged;
+            GimbalController.ModeChanged += OnExternalModeChanged;
+            GimbalArrowKeyFilter.EnabledChanged += OnArrowKeysEnabledChanged;
 
             // Default to MAVLink targeting so the first joystick or keyboard input
             // immediately drives the mount.
@@ -136,8 +129,17 @@ namespace NOMAD.MissionPlanner
                 _streamTimer = null;
                 GimbalController.TargetChanged -= OnExternalTargetChanged;
                 GimbalController.MaxRateChanged -= OnExternalMaxRateChanged;
+                GimbalController.ModeChanged -= OnExternalModeChanged;
+                GimbalArrowKeyFilter.EnabledChanged -= OnArrowKeysEnabledChanged;
                 s_instance = null;
             };
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if ((keyData & Keys.Modifiers) == Keys.None && GimbalArrowKeyFilter.TryHandleKey(keyData))
+                return true;
+            return base.ProcessCmdKey(ref msg, keyData);
         }
 
         private void OnExternalTargetChanged(float pitch, float roll)
@@ -166,6 +168,28 @@ namespace NOMAD.MissionPlanner
             }, "OnExternalMaxRateChanged");
         }
 
+        private void OnExternalModeChanged(MountMode mode)
+        {
+            if (IsDisposed) return;
+            UiAsync.RunSync(this, () =>
+            {
+                _mountMode = mode;
+                _modeLabel = ModeLabel(mode);
+                UpdateModeLabel();
+                HighlightModeButtons();
+            }, "OnExternalModeChanged");
+        }
+
+        private void OnArrowKeysEnabledChanged(bool enabled)
+        {
+            if (IsDisposed) return;
+            UiAsync.RunSync(this, () =>
+            {
+                if (_chkArrowKeys != null && _chkArrowKeys.Checked != enabled)
+                    _chkArrowKeys.Checked = enabled;
+            }, "OnArrowKeysEnabledChanged");
+        }
+
         // ============================================================
         // UI — a docked TableLayoutPanel of AutoSize rows + a fill pad row, so
         // everything reflows and nothing overlaps at any window size.
@@ -176,7 +200,7 @@ namespace NOMAD.MissionPlanner
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 7,
+                RowCount = 5,
                 BackColor = Color.Transparent,
                 Padding = new Padding(0),
                 Margin = new Padding(0),
@@ -187,8 +211,6 @@ namespace NOMAD.MissionPlanner
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 2 readouts
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 3 rate slider
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 4 mode + preset buttons
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 5 status
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));   // 6 hint
 
             _lblTitle = new Label
             {
@@ -233,27 +255,6 @@ namespace NOMAD.MissionPlanner
             root.Controls.Add(_rateRow, 0, 3);
             root.Controls.Add(BuildButtonRows(), 0, 4);
 
-            _lblStatus = new Label
-            {
-                Text = "Ready",
-                AutoSize = true,
-                ForeColor = NOMADTheme.TEXT_SECONDARY,
-                Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL),
-                Margin = new Padding(2, NOMADTheme.GAP, 0, 2),
-            };
-            root.Controls.Add(_lblStatus, 0, 5);
-
-            _lblHint = new Label
-            {
-                Text = "Drag pad: pitch (Y) / roll (X). Arrow keys nudge both axes. Release = stop.",
-                AutoSize = true,
-                MaximumSize = new Size(0, 0),
-                ForeColor = NOMADTheme.TEXT_SECONDARY,
-                Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL, FontStyle.Italic),
-                Margin = new Padding(2, 0, 0, 0),
-            };
-            root.Controls.Add(_lblHint, 0, 6);
-
             Controls.Add(root);
         }
 
@@ -265,15 +266,16 @@ namespace NOMAD.MissionPlanner
                 Dock = DockStyle.Top,
                 ColumnCount = 3,
                 RowCount = 1,
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                BackColor = NOMADTheme.PANEL_ALT,
+                AutoSize = false,
+                Height = 36,
+                BackColor = NOMADTheme.BG_DARK,
                 Padding = new Padding(NOMADTheme.GAP, 4, NOMADTheme.GAP, 4),
                 Margin = new Padding(0, 0, 0, NOMADTheme.GAP),
             };
             row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            row.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
             var lbl = new Label
             {
@@ -287,12 +289,14 @@ namespace NOMAD.MissionPlanner
 
             _trkRate = new TrackBar
             {
-                Dock = DockStyle.Fill,
                 Minimum = (int)GimbalController.MIN_MAX_RATE_DEG_SEC,
                 Maximum = (int)GimbalController.MAX_MAX_RATE_DEG_SEC,
                 Value = (int)Math.Round(GimbalController.MaxRateDegSec),
                 TickStyle = TickStyle.None,
-                BackColor = NOMADTheme.PANEL_ALT,
+                AutoSize = false,
+                Height = 24,
+                Anchor = AnchorStyles.Left | AnchorStyles.Right,
+                BackColor = NOMADTheme.BG_DARK,
                 Margin = new Padding(0),
             };
             _trkRate.ValueChanged += (s, e) =>
@@ -354,6 +358,18 @@ namespace NOMAD.MissionPlanner
             _chkTopMost.CheckedChanged += (s, e) => TopMost = _chkTopMost.Checked;
             flow.Controls.Add(_chkTopMost);
 
+            _chkArrowKeys = new CheckBox
+            {
+                Text = "Arrow keys across Mission Planner",
+                AutoSize = true,
+                Checked = GimbalArrowKeyFilter.Enabled,
+                ForeColor = NOMADTheme.TEXT_SECONDARY,
+                Margin = new Padding(NOMADTheme.GAP, 4, 0, 0),
+            };
+            _chkArrowKeys.CheckedChanged += (s, e) =>
+                GimbalArrowKeyFilter.SetEnabled(_chkArrowKeys.Checked);
+            flow.Controls.Add(_chkArrowKeys);
+
             HighlightModeButtons();
             return flow;
         }
@@ -411,10 +427,9 @@ namespace NOMAD.MissionPlanner
             ThemeTree(this);
 
             // Containers/labels that need a non-default color (ThemeTree leaves
-            // them transparent / primary); the status label keeps its dynamic color.
+            // them transparent / primary).
             if (_lblTitle != null) _lblTitle.ForeColor = NOMADTheme.ACCENT;
-            if (_lblHint != null) _lblHint.ForeColor = NOMADTheme.TEXT_SECONDARY;
-            if (_rateRow != null) _rateRow.BackColor = NOMADTheme.PANEL_ALT;
+            if (_rateRow != null) _rateRow.BackColor = NOMADTheme.BG_DARK;
             if (_pad != null) _pad.BackColor = NOMADTheme.CARD_BG;
 
             HighlightModeButtons(); // re-paints the active mode button red
@@ -434,11 +449,11 @@ namespace NOMAD.MissionPlanner
                         b.ForeColor = NOMADTheme.TEXT_PRIMARY;
                         break;
                     case TrackBar tb:
-                        tb.BackColor = NOMADTheme.PANEL_ALT;
+                        tb.BackColor = NOMADTheme.BG_DARK;
                         break;
                     case Label lbl:
                         lbl.BackColor = Color.Transparent;
-                        if (lbl != _lblStatus) lbl.ForeColor = NOMADTheme.TEXT_PRIMARY;
+                        lbl.ForeColor = NOMADTheme.TEXT_PRIMARY;
                         break;
                     case CheckBox chk:
                         chk.BackColor = Color.Transparent;
@@ -534,9 +549,23 @@ namespace NOMAD.MissionPlanner
             _modeLabel = label;
             UpdateModeLabel();
             HighlightModeButtons();
-            SetStatus($"Mode → {label}", NOMADTheme.TEXT_PRIMARY);
 
             GimbalController.SetMode(mode);
+        }
+
+        private static string ModeLabel(MountMode mode)
+        {
+            switch (mode)
+            {
+                case MountMode.RcTargeting:
+                    return "RC";
+                case MountMode.Neutral:
+                    return "NEUTRAL";
+                case MountMode.Retract:
+                    return "RETRACT";
+                default:
+                    return "MAVLINK";
+            }
         }
 
         private void UpdateModeLabel()
@@ -553,64 +582,11 @@ namespace NOMAD.MissionPlanner
                 _modeLabel = "MAVLINK";
                 UpdateModeLabel();
                 HighlightModeButtons();
+                GimbalController.SetMode(_mountMode);
             }
             _targetPitch = pitch;
             _targetRoll = roll;
             SendPitchRollAngle(pitch, roll);
-        }
-
-        private void OnWindowKeyDown(object sender, KeyEventArgs e)
-        {
-            float pitchDelta = 0f;
-            float rollDelta = 0f;
-
-            switch (e.KeyCode)
-            {
-                case Keys.Up:
-                    pitchDelta = KEY_NUDGE_DEG;
-                    break;
-                case Keys.Down:
-                    pitchDelta = -KEY_NUDGE_DEG;
-                    break;
-                case Keys.Left:
-                    rollDelta = KEY_NUDGE_DEG;
-                    break;
-                case Keys.Right:
-                    rollDelta = -KEY_NUDGE_DEG;
-                    break;
-                default:
-                    return;
-            }
-
-            if (_mountMode != MountMode.MavlinkTargeting)
-            {
-                _mountMode = MountMode.MavlinkTargeting;
-                _modeLabel = "MAVLINK";
-                UpdateModeLabel();
-                HighlightModeButtons();
-            }
-
-            _targetPitch = Clamp(_targetPitch + pitchDelta, PITCH_MIN_DEG, PITCH_MAX_DEG);
-            _targetRoll = Clamp(_targetRoll + rollDelta, ROLL_MIN_DEG, ROLL_MAX_DEG);
-            SendPitchRollAngle(_targetPitch, _targetRoll);
-
-            e.Handled = true;
-            e.SuppressKeyPress = true;
-        }
-
-        private static float Clamp(float value, float min, float max)
-        {
-            if (value < min) return min;
-            if (value > max) return max;
-            return value;
-        }
-
-        private void SetStatus(string text, Color color)
-        {
-            UiAsync.RunSync(this, () =>
-            {
-                if (_lblStatus != null) { _lblStatus.Text = text; _lblStatus.ForeColor = color; }
-            }, "SetStatus");
         }
 
         // ============================================================
