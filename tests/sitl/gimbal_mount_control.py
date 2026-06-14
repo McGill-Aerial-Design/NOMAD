@@ -191,6 +191,38 @@ def _read_mount_pitch_deg(conn, settle: float = 1.5, wait: float = 12.0) -> floa
     return math.degrees(math.asin(sin_pitch))
 
 
+def _wait_for_attitude(conn, timeout: float = 90.0) -> None:
+    """Block until the mount starts streaming its attitude.
+
+    After a reboot the autopilot's EKF/AHRS takes time to converge, and the
+    (stabilized) mount only publishes its attitude once it is healthy — so the
+    first read right after the reboot can find nothing. Poll, re-requesting the
+    streams and nudging the mount each round, until an attitude sample arrives.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        _request_streams(conn)
+        _mount_control(conn, 0.0, 0.0)
+        start = time.time()
+        while time.time() - start < 5.0:
+            msg = conn.recv_match(
+                type=["GIMBAL_DEVICE_ATTITUDE_STATUS", "MOUNT_ORIENTATION"], blocking=True, timeout=1.0
+            )
+            if msg is not None:
+                _log("mount attitude stream is live")
+                return
+        _log("  waiting for mount attitude stream (EKF settling)...")
+
+    # Diagnostic: show what the autopilot IS sending so a real gap is debuggable.
+    seen: dict[str, int] = {}
+    start = time.time()
+    while time.time() - start < 3.0:
+        msg = conn.recv_match(blocking=True, timeout=1.0)
+        if msg is not None:
+            seen[msg.get_type()] = seen.get(msg.get_type(), 0) + 1
+    raise ScenarioError(f"mount never streamed attitude within {timeout:.0f}s; messages seen: {sorted(seen)}")
+
+
 def _configure_mount(conn, endpoint: str):
     """Set up a servo mount and reboot to instantiate it (idempotent).
 
@@ -277,6 +309,9 @@ def run_scenario(operator_ep: str) -> dict:
         2,
     )
     time.sleep(1.0)
+
+    # Wait for the mount's attitude stream to come up (EKF settle after reboot).
+    _wait_for_attitude(conn)
 
     # Pitch must track the command in both directions, then clamp at the limit.
     _assert_pitch(conn, 0.0, 0.0, "pitch_zero", results)
