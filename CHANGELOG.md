@@ -136,6 +136,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   all-in-one) and note the `BASE_IMAGE` prerequisite.
 
 ### Changed
+- Flight Boundaries view relaid out responsively: the fixed-height cards with
+  absolutely-positioned children are now AutoSize cards of full-width rows
+  (wrapping button/control clusters, explicit-height grids), routed through the
+  shared `NOMADTheme`/`ControlFactory` helpers. Fixes overlap and clipping at
+  narrow widths / non-default aspect ratios; behaviour and all persisted settings
+  are unchanged (the cross-partial `Controls.Find(...)` named controls are kept).
 - Gimbal control de-branded from "Caddx" to a generic gimbal (window title,
   sidebar button, file headers/comments) so it drives any `DO_MOUNT_CONTROL`
   mount, and the floating joystick window relaid out with a docked
