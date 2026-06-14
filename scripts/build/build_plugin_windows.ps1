@@ -17,6 +17,9 @@ Set-Location $ProjectDir
 # Configuration
 $ProjectFile = "NOMADPlugin.csproj"
 $Configuration = "Release"
+$MissionPlannerDir = "${env:ProgramFiles(x86)}\Mission Planner"
+$MissionPlannerExe = Join-Path $MissionPlannerDir "MissionPlanner.exe"
+$MissionPlannerPluginsDir = Join-Path $MissionPlannerDir "plugins"
 
 # Step 1: Find MSBuild
 Write-Host "[1/4] Locating MSBuild..." -ForegroundColor Yellow
@@ -70,6 +73,11 @@ Write-Host ""
 # Step 4: Deploy plugin
 Write-Host "[4/4] Deploying plugin..." -ForegroundColor Yellow
 
+if (-not (Test-Path $MissionPlannerExe)) {
+    Write-Host "ERROR: Mission Planner not found at $MissionPlannerExe" -ForegroundColor Red
+    exit 1
+}
+
 # Try to include libVLC redistributables if present in packaging folder
 try {
     $PackagingDir = Join-Path $RepoRoot "mission_planner\packaging"
@@ -104,14 +112,21 @@ if (-not (Test-Path $BuiltDll)) {
 $FileInfo = Get-Item $BuiltDll
 Write-Host "  Plugin size: $($FileInfo.Length / 1KB) KB" -ForegroundColor Gray
 
-# Deploy to AppData (user plugins folder)
-$AppDataPluginsDir = "$env:LOCALAPPDATA\Mission Planner\plugins"
-if (-not (Test-Path $AppDataPluginsDir)) {
-    New-Item -ItemType Directory -Path $AppDataPluginsDir -Force | Out-Null
+# Mission Planner loads DLL plugins only from the plugins directory next to
+# MissionPlanner.exe. The LocalAppData plugins directory stores NOMAD config,
+# but Mission Planner 1.3.83 does not scan it for plugin assemblies.
+if (-not (Test-Path $MissionPlannerPluginsDir)) {
+    New-Item -ItemType Directory -Path $MissionPlannerPluginsDir -Force | Out-Null
 }
 
-Copy-Item $BuiltDll $AppDataPluginsDir -Force
-Write-Host "  Copied to: $AppDataPluginsDir" -ForegroundColor Green
+try {
+    Copy-Item $BuiltDll $MissionPlannerPluginsDir -Force -ErrorAction Stop
+} catch {
+    Write-Host "ERROR: Could not copy the plugin to $MissionPlannerPluginsDir" -ForegroundColor Red
+    Write-Host "Close Mission Planner and run the build from an Administrator PowerShell terminal." -ForegroundColor Red
+    exit 1
+}
+Write-Host "  Copied to: $MissionPlannerPluginsDir" -ForegroundColor Green
 
 # Copy HelixToolkit dependencies
 $HelixDlls = @(
@@ -120,44 +135,30 @@ $HelixDlls = @(
 )
 foreach ($dll in $HelixDlls) {
     if (Test-Path $dll) {
-        Copy-Item $dll $AppDataPluginsDir -Force
+        Copy-Item $dll $MissionPlannerPluginsDir -Force
         Write-Host "  Copied: $(Split-Path $dll -Leaf)" -ForegroundColor Gray
     }
 }
 
-    # Also copy any libVLC native files, plugins folder, and managed assemblies to the AppData plugin folder
-    $BuildOutputDir = Join-Path $ProjectDir "bin\$Configuration"
-    Get-ChildItem "$BuildOutputDir" -Filter "libvlc*.dll" -File -ErrorAction SilentlyContinue | ForEach-Object {
-        Copy-Item $_.FullName $AppDataPluginsDir -Force
-    }
-    if (Test-Path "$BuildOutputDir\plugins") {
-        Copy-Item "$BuildOutputDir\plugins\*" (Join-Path $AppDataPluginsDir 'plugins') -Recurse -Force -ErrorAction SilentlyContinue
-    }
-    Get-ChildItem "$BuildOutputDir" -Filter "LibVLCSharp*.dll" -File -ErrorAction SilentlyContinue | ForEach-Object {
-        Copy-Item $_.FullName $AppDataPluginsDir -Force
-    }
+# Also copy libVLC native files, plugins, and managed assemblies next to the plugin.
+$BuildOutputDir = Join-Path $ProjectDir "bin\$Configuration"
+Get-ChildItem "$BuildOutputDir" -Filter "libvlc*.dll" -File -ErrorAction SilentlyContinue | ForEach-Object {
+    Copy-Item $_.FullName $MissionPlannerPluginsDir -Force
+}
+if (Test-Path "$BuildOutputDir\plugins") {
+    $VlcPluginsDir = Join-Path $MissionPlannerPluginsDir "plugins"
+    New-Item -ItemType Directory -Path $VlcPluginsDir -Force | Out-Null
+    Copy-Item "$BuildOutputDir\plugins\*" $VlcPluginsDir -Recurse -Force
+}
+Get-ChildItem "$BuildOutputDir" -Filter "LibVLCSharp*.dll" -File -ErrorAction SilentlyContinue | ForEach-Object {
+    Copy-Item $_.FullName $MissionPlannerPluginsDir -Force
+}
 
-# Single canonical copy: Mission Planner scans BOTH its install plugins folder
-# (Program Files) and %LOCALAPPDATA%\Mission Planner\plugins. If NOMADPlugin.dll
-# exists in both, MP loads the plugin TWICE - two control panels, two configs -
-# and a stale Program Files build can silently shadow settings (e.g. payloads
-# reappearing after you cleared them, because the old build's defaults differ).
-# AppData is the canonical location (no admin needed, and it's where
-# nomad_config.json lives), so remove any Program Files duplicate here.
-$ProgramFilesPluginDll = "${env:ProgramFiles(x86)}\Mission Planner\plugins\NOMADPlugin.dll"
-if (Test-Path $ProgramFilesPluginDll) {
-    try {
-        Remove-Item $ProgramFilesPluginDll -Force -ErrorAction Stop
-        Write-Host "  Removed stale duplicate: $ProgramFilesPluginDll" -ForegroundColor Green
-    } catch {
-        Write-Host "  WARNING: A duplicate NOMADPlugin.dll is present in Program Files and" -ForegroundColor Red
-        Write-Host "           could not be removed (needs admin). Mission Planner will load" -ForegroundColor Red
-        Write-Host "           the plugin TWICE and may restore old defaults." -ForegroundColor Red
-        Write-Host "           Delete it manually (Run as Administrator):" -ForegroundColor Yellow
-        Write-Host "             Remove-Item '$ProgramFilesPluginDll' -Force" -ForegroundColor Yellow
-    }
-} else {
-    Write-Host "  No duplicate in Program Files (good - single canonical copy in AppData)" -ForegroundColor Gray
+# Remove the legacy deployment created by older versions of this script.
+$LegacyPluginDll = Join-Path $env:LOCALAPPDATA "Mission Planner\plugins\NOMADPlugin.dll"
+if (Test-Path $LegacyPluginDll) {
+    Remove-Item $LegacyPluginDll -Force
+    Write-Host "  Removed legacy AppData copy: $LegacyPluginDll" -ForegroundColor Gray
 }
 
 Write-Host ""
@@ -166,7 +167,7 @@ Write-Host " Build and Deployment Complete!" -ForegroundColor Green
 Write-Host "======================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor White
-Write-Host "  1. Launch Mission Planner" -ForegroundColor Gray
+Write-Host "  1. Restart Mission Planner" -ForegroundColor Gray
 Write-Host "  2. Click Tools -> NOMAD Settings to configure" -ForegroundColor Gray
 Write-Host "  3. Access NOMAD Control Panel from top menu" -ForegroundColor Gray
 Write-Host ""

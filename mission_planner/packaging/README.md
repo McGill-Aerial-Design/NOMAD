@@ -13,18 +13,15 @@ Core companion-computer service.
    powershell -ExecutionPolicy Bypass -File INSTALL.ps1
    ```
 
-   This copies `NOMADPlugin.dll` into your per-user plugins folder
-   (`%LOCALAPPDATA%\Mission Planner\plugins`) — no admin needed.
+   This copies `NOMADPlugin.dll` into Mission Planner's installation plugins
+   folder (`C:\Program Files (x86)\Mission Planner\plugins`).
 3. Start Mission Planner and open the NOMAD panel from the **Tools** menu.
 
 ### Manual install
 
-Copy `NOMADPlugin.dll` into `%LOCALAPPDATA%\Mission Planner\plugins\` yourself,
-then restart Mission Planner.
-
-> Keep only one copy. If `NOMADPlugin.dll` also sits in
-> `C:\Program Files (x86)\Mission Planner\plugins\`, Mission Planner loads the
-> plugin twice — delete the Program Files copy.
+Copy `NOMADPlugin.dll` into
+`C:\Program Files (x86)\Mission Planner\plugins\` yourself, then restart Mission
+Planner.
 
 ## Requirements
 

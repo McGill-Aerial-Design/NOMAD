@@ -121,7 +121,9 @@ Usage:
    ```powershell
    .\mission_planner\packaging\fetch-libvlc.ps1 -Arch win-x64
    ```
-2. Build using the included build script — it will automatically copy the managed and native files into the plugin output and deploy them to `%LOCALAPPDATA%\Mission Planner\plugins`:
+2. Build using the included build script. It copies the managed and native
+   files into the plugin output and deploys them to Mission Planner's
+   installation `plugins` folder:
 ```powershell
 .\scripts\build\build_plugin_windows.ps1
 ```
@@ -168,9 +170,8 @@ pixi run build-plugin
 
 5. Copy the output DLL to Mission Planner plugins folder:
    ```powershell
-   Copy-Item "bin\Release\NOMADPlugin.dll" "$env:LOCALAPPDATA\Mission Planner\plugins\"
+   Copy-Item "bin\Release\NOMADPlugin.dll" "${env:ProgramFiles(x86)}\Mission Planner\plugins\"
    ```
-   Or: `C:\Program Files (x86)\Mission Planner\plugins\`
 
 ## Configuration
 
