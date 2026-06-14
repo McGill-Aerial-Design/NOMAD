@@ -3,7 +3,7 @@
 // ============================================================
 // NOMAD Joystick Service
 // ============================================================
-// Drives the Caddx gimbal and the ZED tilt servo from up to two
+// Drives the camera gimbal and the ZED tilt servo from up to two
 // physical DirectInput joysticks. Reuses Mission Planner's
 // MissionPlanner.Joystick.JoystickBase device wrapper so we don't
 // duplicate device enumeration / state polling, but DELIBERATELY
@@ -87,7 +87,7 @@ namespace NOMAD.MissionPlanner
             int tiltMax = tilt?.PwmMax ?? 1450;
             _zedTiltUs = Math.Max(tiltMin, Math.Min(tiltMax, PayloadControlPanel.LastTiltPulseUs));
 
-            // The Caddx mount only honors DO_MOUNT_CONTROL absolute-angle commands
+            // The mount only honors DO_MOUNT_CONTROL absolute-angle commands
             // when it's in MAVLink targeting mode. Without this ping the mount may
             // be sitting in RC targeting from a previous session and silently drop
             // every angle command we send — which feels like the joystick is
@@ -95,7 +95,7 @@ namespace NOMAD.MissionPlanner
             // hold the angle we asked for.
             if (_config.JoystickGimbalEnabled)
             {
-                GimbalController.SetMode(GimbalController.MountMode.MavlinkTargeting);
+                GimbalController.SetMode(MountMode.MavlinkTargeting);
             }
 
             // Seed the centralized rate from persisted config so the floating

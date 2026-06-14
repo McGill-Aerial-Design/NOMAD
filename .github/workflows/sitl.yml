@@ -66,6 +66,11 @@ jobs:
       - name: Geofence containment scenario (H-05, SR-FEN-02)
         run: pixi run sitl-fence
 
+      # Last: configures a servo mount and reboots the vehicle to apply it, so it
+      # must not precede the velocity/fence scenarios that share this vehicle.
+      - name: Gimbal mount-control scenario (DO_MOUNT_CONTROL/CONFIGURE)
+        run: pixi run sitl-gimbal
+
       - name: SITL logs on failure
         if: failure()
         run: docker logs nomad-dev-sitl-1 2>&1 | tail -120 || true

@@ -134,7 +134,7 @@ namespace NOMAD.MissionPlanner
             _btnCalibration.Click += (s, e) => ShowView("Calibration");
             navPanel.Controls.Add(_btnCalibration);
 
-            var btnGimbal = CreateSidebarButton("Caddx Gimbal");
+            var btnGimbal = CreateSidebarButton("Gimbal");
             btnGimbal.Click += (s, e) => GimbalJoystickWindow.ShowSingleton(_config, this.FindForm());
             navPanel.Controls.Add(btnGimbal);
 

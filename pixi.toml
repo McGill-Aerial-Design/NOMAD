@@ -73,6 +73,11 @@ test-api = "python scripts/dev/test_api_endpoints.py"
 sitl-scenario = """docker run --rm --network nomad-dev_default -v $PWD:/work -w /work -e PYTHONPATH=/work -e NOMAD_SITL_OPERATOR=tcp:nomad-dev-sitl-1:5762 -e NOMAD_SITL_CONTROLLER=tcp:nomad-dev-sitl-1:5763 --entrypoint python nomad-edge-dev:latest tests/sitl/velocity_loop_closure.py"""
 # Geofence containment scenario (SR-FEN-02): same stack, different script.
 sitl-fence = """docker run --rm --network nomad-dev_default -v $PWD:/work -w /work -e PYTHONPATH=/work -e NOMAD_SITL_OPERATOR=tcp:nomad-dev-sitl-1:5762 -e NOMAD_SITL_CONTROLLER=tcp:nomad-dev-sitl-1:5763 --entrypoint python nomad-edge-dev:latest tests/sitl/geofence_containment.py"""
+# Gimbal mount-control scenario: configures a servo mount on SITL, sends the
+# same DO_MOUNT_CONTROL/DO_MOUNT_CONFIGURE commands the plugin emits, and asserts
+# the mount points where commanded. Reboots the vehicle to apply MNT1_TYPE, so it
+# runs LAST in the nightly sequence. Only needs the operator link.
+sitl-gimbal = """docker run --rm --network nomad-dev_default -v $PWD:/work -w /work -e PYTHONPATH=/work -e NOMAD_SITL_OPERATOR=tcp:nomad-dev-sitl-1:5762 --entrypoint python nomad-edge-dev:latest tests/sitl/gimbal_mount_control.py"""
 lint = "ruff check ."
 fmt = "ruff format ."
 fmt-check = "ruff format --check ."
@@ -117,6 +122,13 @@ test-plugin-geometry = "powershell -ExecutionPolicy Bypass -File scripts/build/t
 # and asserts the multi-click arm/confirm, rolling-window expiry, backwards-clock,
 # and reset behaviour (the GCS counterpart of tests/test_safety_payload.py).
 test-plugin-interlock = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_interlock.ps1"
+
+# Unit tests for the gimbal command core (Windows only) — compiles the Mission
+# Planner-free GimbalCommand with VS's csc and asserts the exact MAVLink it emits
+# (DO_MOUNT_CONTROL/DO_MOUNT_CONFIGURE command ids + param layout, MAV_MOUNT_MODE
+# values) plus the stick-integration and angle-clamping math. The autopilot side
+# is exercised by tests/sitl/gimbal_mount_control.py (`pixi run sitl-gimbal`).
+test-plugin-gimbal = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_gimbal.ps1"
 
 # Stress/behaviour tests for the dual-link MAVLink router (Windows only) —
 # compiles the Mission Planner-free GroundLinkRouter stack with VS's csc and
