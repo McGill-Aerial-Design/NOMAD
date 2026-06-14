@@ -88,11 +88,11 @@ namespace NOMAD.MissionPlanner
                 BackColor = Color.Transparent,
                 Padding = new Padding(12),
             };
-            // Fixed header/settings rows keep WinForms from collapsing the
-            // panel during the first layout pass; the live rows split the rest.
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
+            // Header/settings rows AutoSize so they grow to fit their (wrapping)
+            // content at any width; the live link + log rows split the remainder.
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 60));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 88));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 40));
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
@@ -117,87 +117,102 @@ namespace NOMAD.MissionPlanner
 
         private Panel BuildHeader()
         {
-            var panel = MakeCard();
-            panel.Padding = new Padding(16, 10, 16, 10);
+            // Docked AutoSize card: title | active on top, then router status, then a
+            // wrapping endpoint row — all reflow instead of being absolutely placed.
+            var panel = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                BackColor = NOMADTheme.CARD_BG,
+                Padding = new Padding(16, 10, 16, 10),
+            };
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
-            var title = new Label
+            panel.Controls.Add(new Label
             {
                 Text = "MAVLink Link Status",
-                Font = new Font("Segoe UI", 14, FontStyle.Bold),
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_TITLE, FontStyle.Bold),
                 ForeColor = NOMADTheme.ACCENT,
-                Location = new Point(0, 4),
                 AutoSize = true,
-            };
-            panel.Controls.Add(title);
+                Anchor = AnchorStyles.Left,
+            }, 0, 0);
 
             _lblActive = new Label
             {
                 Text = "Active: —",
-                Font = new Font("Segoe UI", 12, FontStyle.Bold),
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_LARGE, FontStyle.Bold),
                 ForeColor = NOMADTheme.TEXT_PRIMARY,
                 AutoSize = true,
-                Anchor = AnchorStyles.Top | AnchorStyles.Right,
+                Anchor = AnchorStyles.Right,
+                Margin = new Padding(NOMADTheme.PAD, 4, 0, 0),
             };
-            panel.Controls.Add(_lblActive);
-            panel.Resize += (s, e) =>
-            {
-                _lblActive.Location = new Point(panel.ClientSize.Width - _lblActive.Width - 16, 6);
-                LayoutEndpointRow(panel);
-            };
+            panel.Controls.Add(_lblActive, 1, 0);
 
             _lblRouterStatus = new Label
             {
                 Text = "Router: …",
-                Font = new Font("Segoe UI", 9),
+                Font = NOMADTheme.Font(),
                 ForeColor = NOMADTheme.TEXT_SECONDARY,
-                Location = new Point(0, 36),
                 AutoSize = true,
+                Margin = new Padding(0, 6, 0, 0),
             };
-            panel.Controls.Add(_lblRouterStatus);
+            panel.Controls.Add(_lblRouterStatus, 0, 1);
+            panel.SetColumnSpan(_lblRouterStatus, 2);
 
             _lblLocalEndpoint = new Label
             {
                 Text = "",
-                Font = new Font("Consolas", 9),
+                Font = NOMADTheme.Mono(),
                 ForeColor = NOMADTheme.INFO,
-                Location = new Point(0, 56),
                 AutoSize = true,
+                Anchor = AnchorStyles.Left,
+                Margin = new Padding(0, 4, NOMADTheme.GAP, 0),
             };
-            panel.Controls.Add(_lblLocalEndpoint);
-
             _btnCopyEndpoint = new Button
             {
                 Text = "Copy",
-                Size = new Size(60, 22),
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Padding = new Padding(8, 1, 8, 1),
+                Margin = new Padding(0, 2, NOMADTheme.GAP, 0),
                 BackColor = NOMADTheme.BUTTON_BG,
                 ForeColor = NOMADTheme.TEXT_PRIMARY,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 8),
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL),
                 Cursor = Cursors.Hand,
             };
             _btnCopyEndpoint.FlatAppearance.BorderSize = 0;
             _btnCopyEndpoint.Click += (s, e) => CopyEndpoint();
-            panel.Controls.Add(_btnCopyEndpoint);
 
             _lblCopied = new Label
             {
                 Text = "",
-                Font = new Font("Segoe UI", 8),
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL),
                 ForeColor = NOMADTheme.SUCCESS,
                 AutoSize = true,
+                Anchor = AnchorStyles.Left,
+                Margin = new Padding(0, 4, 0, 0),
             };
-            panel.Controls.Add(_lblCopied);
 
-            panel.HandleCreated += (s, e) => LayoutEndpointRow(panel);
+            var endpointRow = new FlowLayoutPanel
+            {
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                WrapContents = true,
+                BackColor = Color.Transparent,
+                Margin = new Padding(0, 2, 0, 0),
+                Padding = new Padding(0),
+            };
+            endpointRow.Controls.Add(_lblLocalEndpoint);
+            endpointRow.Controls.Add(_btnCopyEndpoint);
+            endpointRow.Controls.Add(_lblCopied);
+            panel.Controls.Add(endpointRow, 0, 2);
+            panel.SetColumnSpan(endpointRow, 2);
+
             return panel;
-        }
-
-        private void LayoutEndpointRow(Panel panel)
-        {
-            if (_lblLocalEndpoint == null || _btnCopyEndpoint == null || _lblCopied == null) return;
-            int x = _lblLocalEndpoint.Right + 8;
-            _btnCopyEndpoint.Location = new Point(x, 54);
-            _lblCopied.Location = new Point(_btnCopyEndpoint.Right + 8, 56);
         }
 
         private Panel BuildLinkRow()
@@ -235,52 +250,66 @@ namespace NOMAD.MissionPlanner
 
         private Panel BuildSettingsRow()
         {
-            var panel = MakeCard();
-            panel.Margin = new Padding(0, 6, 0, 0);
-
-            _chkAuto = new CheckBox
+            // AutoSize card holding one wrapping flow of every setting, so the
+            // controls re-pack onto multiple lines when the panel is narrow instead
+            // of overlapping at fixed x positions.
+            var panel = new TableLayoutPanel
             {
-                Text = "Auto-failover",
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Font = new Font("Segoe UI", 9),
-                Location = new Point(14, 12),
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
                 AutoSize = true,
-                Checked = _cm.Config.AutoFailoverEnabled,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                BackColor = NOMADTheme.CARD_BG,
+                Padding = new Padding(14),
+                Margin = new Padding(0, 6, 0, 0),
             };
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+
+            var flow = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                WrapContents = true,
+                FlowDirection = FlowDirection.LeftToRight,
+                BackColor = Color.Transparent,
+                Margin = new Padding(0),
+                Padding = new Padding(0),
+            };
+
+            _chkAuto = SettingCheck("Auto-failover", _cm.Config.AutoFailoverEnabled);
             _chkAuto.CheckedChanged += (s, e) =>
             {
                 _cm.SetAutoFailoverEnabled(_chkAuto.Checked);
                 _config.AutoFailoverEnabled = _chkAuto.Checked;
                 PersistConfig();
             };
-            panel.Controls.Add(_chkAuto);
 
-            _chkAutoReconnect = new CheckBox
-            {
-                Text = "Return to preferred when healthy",
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Font = new Font("Segoe UI", 9),
-                Location = new Point(14, 38),
-                AutoSize = true,
-                Checked = _cm.Config.AutoReconnectPreferred,
-            };
+            _chkAutoReconnect = SettingCheck("Return to preferred when healthy", _cm.Config.AutoReconnectPreferred);
             _chkAutoReconnect.CheckedChanged += (s, e) =>
             {
                 _cm.SetAutoReconnectPreferred(_chkAutoReconnect.Checked);
                 _config.AutoReconnectToPreferred = _chkAutoReconnect.Checked;
                 PersistConfig();
             };
-            panel.Controls.Add(_chkAutoReconnect);
 
-            var lblPref = new Label { Text = "Preferred:", ForeColor = NOMADTheme.TEXT_SECONDARY, Font = new Font("Segoe UI", 9), Location = new Point(240, 13), AutoSize = true };
-            panel.Controls.Add(lblPref);
+            _chkDedup = SettingCheck("Deduplicate cross-link packets", _cm.Config.RouterDedupEnabled);
+            _chkDedup.CheckedChanged += (s, e) =>
+            {
+                _cm.SetDedupEnabled(_chkDedup.Checked);
+                _config.RouterDedupEnabled = _chkDedup.Checked;
+                PersistConfig();
+            };
 
+            var lblPref = new Label { Text = "Preferred:", ForeColor = NOMADTheme.TEXT_SECONDARY, Font = NOMADTheme.Font(), AutoSize = true, Margin = new Padding(0, 5, NOMADTheme.GAP, 0) };
             _cmbPreferred = new ComboBox
             {
-                Location = new Point(310, 10),
-                Size = new Size(110, 22),
+                Width = 110,
                 DropDownStyle = ComboBoxStyle.DropDownList,
-                Font = new Font("Segoe UI", 9),
+                BackColor = NOMADTheme.CONTROL_BG,
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
+                Font = NOMADTheme.Font(),
+                Margin = new Padding(0, 2, NOMADTheme.PAD, 0),
             };
             _cmbPreferred.Items.AddRange(new object[] { "LTE", "RadioMaster", "None" });
             _cmbPreferred.SelectedIndex = _cm.Config.PreferredLink switch
@@ -306,75 +335,65 @@ namespace NOMAD.MissionPlanner
                 };
                 PersistConfig();
             };
-            panel.Controls.Add(_cmbPreferred);
+            var prefGroup = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false, BackColor = Color.Transparent, Margin = new Padding(0), Padding = new Padding(0) };
+            prefGroup.Controls.Add(lblPref);
+            prefGroup.Controls.Add(_cmbPreferred);
 
-            _chkDedup = new CheckBox
-            {
-                Text = "Deduplicate cross-link packets",
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Font = new Font("Segoe UI", 9),
-                Location = new Point(450, 12),
-                AutoSize = true,
-                Checked = _cm.Config.RouterDedupEnabled,
-            };
-            _chkDedup.CheckedChanged += (s, e) =>
-            {
-                _cm.SetDedupEnabled(_chkDedup.Checked);
-                _config.RouterDedupEnabled = _chkDedup.Checked;
-                PersistConfig();
-            };
-            panel.Controls.Add(_chkDedup);
+            _btnReset = SettingButton("Reset counters");
+            _btnReset.Click += (s, e) => _cm.ResetCounters();
+
+            _btnReleaseOverride = SettingButton("Release override");
+            _btnReleaseOverride.Visible = false;
+            _btnReleaseOverride.Click += (s, e) => _cm.SwitchToLink(LinkType.None);
 
             _lblManualOverride = new Label
             {
                 Text = "",
                 ForeColor = NOMADTheme.WARNING,
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                Location = new Point(450, 38),
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_BODY, FontStyle.Bold),
                 AutoSize = true,
+                Margin = new Padding(NOMADTheme.GAP, 5, 0, 0),
             };
-            panel.Controls.Add(_lblManualOverride);
 
-            _btnReleaseOverride = new Button
-            {
-                Text = "Release override",
-                Size = new Size(120, 24),
-                BackColor = NOMADTheme.BUTTON_BG,
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 8),
-                Visible = false,
-                Cursor = Cursors.Hand,
-            };
-            _btnReleaseOverride.FlatAppearance.BorderSize = 0;
-            _btnReleaseOverride.Click += (s, e) => _cm.SwitchToLink(LinkType.None);
-            panel.Controls.Add(_btnReleaseOverride);
+            flow.Controls.Add(_chkAuto);
+            flow.Controls.Add(_chkAutoReconnect);
+            flow.Controls.Add(prefGroup);
+            flow.Controls.Add(_chkDedup);
+            flow.Controls.Add(_btnReset);
+            flow.Controls.Add(_btnReleaseOverride);
+            flow.Controls.Add(_lblManualOverride);
 
-            _btnReset = new Button
-            {
-                Text = "Reset counters",
-                Size = new Size(120, 24),
-                BackColor = NOMADTheme.BUTTON_BG,
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 8),
-                Cursor = Cursors.Hand,
-            };
-            _btnReset.FlatAppearance.BorderSize = 0;
-            _btnReset.Click += (s, e) => _cm.ResetCounters();
-            panel.Controls.Add(_btnReset);
-            panel.Resize += (s, e) => LayoutSettingsButtons(panel);
-            panel.HandleCreated += (s, e) => LayoutSettingsButtons(panel);
-
+            panel.Controls.Add(flow);
             return panel;
         }
 
-        private void LayoutSettingsButtons(Panel panel)
+        private static CheckBox SettingCheck(string text, bool isChecked) => new CheckBox
         {
-            if (_btnReleaseOverride == null || _btnReset == null) return;
-            int x = Math.Max(14, panel.ClientSize.Width - 140);
-            _btnReleaseOverride.Location = new Point(x, 42);
-            _btnReset.Location = new Point(x, 14);
+            Text = text,
+            ForeColor = NOMADTheme.TEXT_PRIMARY,
+            Font = NOMADTheme.Font(),
+            AutoSize = true,
+            Checked = isChecked,
+            Margin = new Padding(0, 3, NOMADTheme.PAD, 0),
+        };
+
+        private static Button SettingButton(string text)
+        {
+            var b = new Button
+            {
+                Text = text,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Padding = new Padding(8, 2, 8, 2),
+                Margin = new Padding(0, 2, NOMADTheme.GAP, 0),
+                BackColor = NOMADTheme.BUTTON_BG,
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
+                FlatStyle = FlatStyle.Flat,
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL),
+                Cursor = Cursors.Hand,
+            };
+            b.FlatAppearance.BorderSize = 0;
+            return b;
         }
 
         private Panel BuildLogPanel()
