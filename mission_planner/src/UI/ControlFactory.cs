@@ -37,7 +37,7 @@ namespace NOMAD.MissionPlanner
             return new Label
             {
                 Text = text,
-                Font = new Font("Segoe UI", fontSize, bold ? FontStyle.Bold : FontStyle.Regular),
+                Font = NOMADTheme.Font(fontSize, bold ? FontStyle.Bold : FontStyle.Regular),
                 ForeColor = foreColor ?? NOMADTheme.TEXT_PRIMARY,
                 AutoSize = true,
                 TextAlign = textAlign,
@@ -49,7 +49,7 @@ namespace NOMAD.MissionPlanner
             return new Label
             {
                 Text = initialValue,
-                Font = new Font("Segoe UI", fontSize, FontStyle.Bold),
+                Font = NOMADTheme.Font(fontSize, FontStyle.Bold),
                 ForeColor = foreColor,
                 AutoSize = true,
             };
@@ -96,7 +96,7 @@ namespace NOMAD.MissionPlanner
             {
                 Text = text,
                 ForeColor = foreColor ?? NOMADTheme.ACCENT,
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_BODY, FontStyle.Bold),
                 BackColor = backColor ?? Color.FromArgb(40, 40, 43),
                 AutoSize = true,
                 AutoSizeMode = AutoSizeMode.GrowAndShrink,
@@ -161,7 +161,7 @@ namespace NOMAD.MissionPlanner
                 ReadOnly = true,
                 BackColor = Color.FromArgb(30, 30, 30),
                 ForeColor = foreColor ?? Color.LightGreen,
-                Font = new Font("Consolas", 8),
+                Font = NOMADTheme.Mono(NOMADTheme.SIZE_SMALL),
             };
         }
 
@@ -183,6 +183,207 @@ namespace NOMAD.MissionPlanner
                 Location = new Point(x, y),
                 Size = new Size(width, 2),
             });
+        }
+
+        // ============================================================
+        // Responsive builders (replace absolute-positioned layouts)
+        // ============================================================
+        // These produce controls that reflow with their container instead of
+        // sitting at hardcoded coordinates, so panels fit any aspect ratio and
+        // never overlap. Used by the view-level relayout work.
+
+        /// <summary>Accent-colored card/section heading label.</summary>
+        public static Label SectionTitle(string text, float fontSize = NOMADTheme.SIZE_HEADING)
+        {
+            return new Label
+            {
+                Text = text,
+                Font = NOMADTheme.Font(fontSize, FontStyle.Bold),
+                ForeColor = NOMADTheme.ACCENT,
+                AutoSize = true,
+                Margin = new Padding(0, 0, 0, NOMADTheme.GAP),
+            };
+        }
+
+        /// <summary>
+        /// A themed card that AutoSizes to its content (drop into a Dock=Top stack)
+        /// or fills a parent table cell. Add your controls to <paramref name="body"/>,
+        /// which is a single-column table that grows with whatever you put in it.
+        /// </summary>
+        public static TableLayoutPanel Card(string title, out TableLayoutPanel body)
+        {
+            var card = new TableLayoutPanel
+            {
+                ColumnCount = 1,
+                RowCount = 2,
+                BackColor = NOMADTheme.CARD_BG,
+                Padding = new Padding(NOMADTheme.PAD),
+                Margin = new Padding(0, 0, 0, NOMADTheme.GAP),
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Dock = DockStyle.Top,
+            };
+            card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            if (!string.IsNullOrEmpty(title))
+                card.Controls.Add(SectionTitle(title), 0, 0);
+
+            body = new TableLayoutPanel
+            {
+                ColumnCount = 1,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                BackColor = Color.Transparent,
+                Margin = new Padding(0),
+                Dock = DockStyle.Top,
+            };
+            body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            card.Controls.Add(body, 0, 1);
+            return card;
+        }
+
+        /// <summary>
+        /// A reflowing "Label: [control] unit" row. The control stretches to fill
+        /// remaining width; the label and optional unit hug their text.
+        /// </summary>
+        public static TableLayoutPanel LabeledRow(string labelText, Control input, string unit = null)
+        {
+            var row = new TableLayoutPanel
+            {
+                ColumnCount = unit == null ? 2 : 3,
+                RowCount = 1,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                BackColor = Color.Transparent,
+                Margin = new Padding(0, 0, 0, NOMADTheme.GAP),
+                Dock = DockStyle.Top,
+            };
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            if (unit != null)
+                row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+            var lbl = Label(labelText);
+            lbl.Anchor = AnchorStyles.Left;
+            lbl.Margin = new Padding(0, 0, NOMADTheme.GAP, 0);
+            row.Controls.Add(lbl, 0, 0);
+
+            input.Dock = DockStyle.Fill;
+            input.Margin = new Padding(0);
+            row.Controls.Add(input, 1, 0);
+
+            if (unit != null)
+            {
+                var unitLbl = Label(unit, foreColor: NOMADTheme.TEXT_SECONDARY, fontSize: NOMADTheme.SIZE_SMALL);
+                unitLbl.Anchor = AnchorStyles.Left;
+                unitLbl.Margin = new Padding(NOMADTheme.GAP, 0, 0, 0);
+                row.Controls.Add(unitLbl, 2, 0);
+            }
+            return row;
+        }
+
+        /// <summary>A row of buttons/controls that wraps when the width is tight.</summary>
+        public static FlowLayoutPanel ButtonRow(params Control[] children)
+        {
+            var row = FlowPanel(children);
+            row.Dock = DockStyle.Top;
+            row.Margin = new Padding(0, 0, 0, NOMADTheme.GAP);
+            return row;
+        }
+
+        public static CheckBox CheckBox(string text, bool isChecked = false, float fontSize = NOMADTheme.SIZE_BODY)
+        {
+            return new CheckBox
+            {
+                Text = text,
+                Checked = isChecked,
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
+                Font = NOMADTheme.Font(fontSize),
+                AutoSize = true,
+                Margin = new Padding(0, 2, 0, 2),
+            };
+        }
+
+        public static NumericUpDown Numeric(decimal min, decimal max, decimal value, decimal increment = 1, int decimals = 0, int width = 60)
+        {
+            return new NumericUpDown
+            {
+                Minimum = min,
+                Maximum = max,
+                Value = value < min ? min : value > max ? max : value,
+                Increment = increment,
+                DecimalPlaces = decimals,
+                BackColor = NOMADTheme.CONTROL_BG,
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
+                Font = NOMADTheme.Font(),
+                Width = width,
+            };
+        }
+
+        public static TabControl TabControl(float fontSize = 10f)
+        {
+            return new TabControl
+            {
+                Dock = DockStyle.Fill,
+                Font = NOMADTheme.Font(fontSize),
+            };
+        }
+
+        public static ListBox ListBox(bool mono = true)
+        {
+            return new ListBox
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(25, 25, 25),
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
+                Font = mono ? NOMADTheme.Mono(NOMADTheme.SIZE_BODY) : NOMADTheme.Font(),
+                BorderStyle = BorderStyle.None,
+                IntegralHeight = false,
+            };
+        }
+
+        /// <summary>
+        /// Dark themed two-column lat/lon grid (the boundary editors' grid skin).
+        /// Columns auto-fill so the grid reflows with its card.
+        /// </summary>
+        public static DataGridView BoundaryGrid()
+        {
+            var dgv = new DataGridView
+            {
+                Dock = DockStyle.Fill,
+                AllowUserToAddRows = false,
+                AllowUserToDeleteRows = true,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+                BackgroundColor = Color.FromArgb(30, 30, 30),
+                BorderStyle = BorderStyle.None,
+                CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal,
+                ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize,
+                DefaultCellStyle = new DataGridViewCellStyle
+                {
+                    BackColor = Color.FromArgb(40, 40, 43),
+                    ForeColor = NOMADTheme.TEXT_PRIMARY,
+                    SelectionBackColor = NOMADTheme.ACCENT,
+                    SelectionForeColor = NOMADTheme.TEXT_PRIMARY,
+                },
+                EnableHeadersVisualStyles = false,
+                GridColor = Color.FromArgb(60, 60, 63),
+                RowHeadersVisible = false,
+                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+            };
+
+            dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "Lat", HeaderText = "Latitude", FillWeight = 50 });
+            dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "Lon", HeaderText = "Longitude", FillWeight = 50 });
+
+            dgv.ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle
+            {
+                BackColor = NOMADTheme.CONTROL_BG,
+                ForeColor = NOMADTheme.TEXT_PRIMARY,
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_BODY, FontStyle.Bold),
+            };
+
+            return dgv;
         }
     }
 }

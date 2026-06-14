@@ -50,5 +50,42 @@ namespace NOMAD.MissionPlanner
         public static readonly Color BTN_START = Color.FromArgb(0, 120, 60);
         public static readonly Color BTN_STOP = Color.FromArgb(150, 50, 50);
         public static readonly Color BTN_PRIMARY = Color.FromArgb(220, 30, 40);
+
+        // Additional surfaces — named replacements for the two ad-hoc greys that
+        // were copy-pasted across the views (combo/numeric/textbox backing, and the
+        // slightly-lighter activity/log panel). Routing them through the theme keeps
+        // inputs and panels uniform everywhere.
+        public static readonly Color CONTROL_BG = Color.FromArgb(50, 50, 53);
+        public static readonly Color PANEL_ALT = Color.FromArgb(38, 38, 42);
+
+        // ============================================================
+        // Typography — single source of truth for fonts + sizes
+        // ============================================================
+        // Every view built fonts inline with magic sizes ("Segoe UI", 9/10/14...).
+        // These constants + helpers make sizing consistent and let a future font
+        // change happen in one place. Callers own the returned Font (WinForms
+        // controls dispose their own on assignment), matching prior inline usage.
+        public const string FONT_FAMILY = "Segoe UI";
+        public const string MONO_FAMILY = "Consolas";
+
+        public const float SIZE_TITLE = 14f;   // page / window titles
+        public const float SIZE_LARGE = 12f;   // prominent status values
+        public const float SIZE_HEADING = 11f; // card / section headings
+        public const float SIZE_BODY = 9f;     // default body text
+        public const float SIZE_SMALL = 8f;    // captions, units, hints
+
+        /// <summary>Themed UI font (Segoe UI) at the given size/style.</summary>
+        public static Font Font(float size = SIZE_BODY, FontStyle style = FontStyle.Regular) =>
+            new Font(FONT_FAMILY, size, style);
+
+        /// <summary>Themed monospace font (Consolas) for readouts/logs.</summary>
+        public static Font Mono(float size = SIZE_BODY, FontStyle style = FontStyle.Regular) =>
+            new Font(MONO_FAMILY, size, style);
+
+        // ============================================================
+        // Layout metrics — consistent spacing across cards/rows
+        // ============================================================
+        public const int PAD = 12;  // card / view inner padding
+        public const int GAP = 6;   // gap between stacked cards / controls
     }
 }
