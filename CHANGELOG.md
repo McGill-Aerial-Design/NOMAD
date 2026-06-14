@@ -192,6 +192,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   inline. Behaviour-preserving; the only untested file left in the bridge package
   shrinks to message unpacking and HTTP forwarding.
 
+### Fixed
+- [plugin] [bug] Gimbal joystick PITCH/ROLL axis labels no longer stick out past
+  the pad — they're drawn just inside the ring instead of outside the circle
+  where they were clipped at the panel edge.
 ### Removed
 - [infra] The separate `/primary` and `/secondary` MediaMTX stream paths (and the
   legacy `zed`/`live`/`dynamic` + wildcard `all_others` paths) — collapsed into

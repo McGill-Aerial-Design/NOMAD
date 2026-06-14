@@ -91,8 +91,8 @@ namespace NOMAD.MissionPlanner
             BackColor = NOMADTheme.BG_DARK;
             ForeColor = NOMADTheme.TEXT_PRIMARY;
             Font = NOMADTheme.Font();
-            MinimumSize = new Size(320, 500);
-            ClientSize = new Size(380, 560);
+            MinimumSize = new Size(300, 470);
+            ClientSize = new Size(340, 520);
             Padding = new Padding(NOMADTheme.GAP);
             ShowInTaskbar = false;
             KeyPreview = true;
@@ -200,11 +200,12 @@ namespace NOMAD.MissionPlanner
             root.Controls.Add(title, 0, 0);
 
             // Joystick pad — fills the flexible row and stays circular via OnPaint.
+            // It caps its own drawn radius so it never grows uncomfortably large.
             _pad = new JoystickPad
             {
                 Dock = DockStyle.Fill,
                 Margin = new Padding(0, 0, 0, NOMADTheme.GAP),
-                MinimumSize = new Size(180, 160),
+                MinimumSize = new Size(150, 150),
                 BackColor = NOMADTheme.CARD_BG,
             };
             _pad.StickChanged += (x, y) => { _stickX = x; _stickY = y; };
@@ -350,7 +351,27 @@ namespace NOMAD.MissionPlanner
             };
             _chkTopMost.CheckedChanged += (s, e) => TopMost = _chkTopMost.Checked;
             flow.Controls.Add(_chkTopMost);
+
+            HighlightModeButtons();
             return flow;
+        }
+
+        // Paint the currently-selected mount mode button filled red (ACCENT); the
+        // rest stay black with a red outline. Keeps the window on-theme and makes
+        // the active mode obvious.
+        private void HighlightModeButtons()
+        {
+            SetModeButtonState(_btnMavTgt, _mountMode == MountMode.MavlinkTargeting);
+            SetModeButtonState(_btnRcTgt, _mountMode == MountMode.RcTargeting);
+            SetModeButtonState(_btnNeutral, _mountMode == MountMode.Neutral);
+            SetModeButtonState(_btnRetract, _mountMode == MountMode.Retract);
+        }
+
+        private static void SetModeButtonState(Button b, bool active)
+        {
+            if (b == null) return;
+            b.BackColor = active ? NOMADTheme.ACCENT : NOMADTheme.CARD_BG;
+            b.FlatAppearance.BorderColor = active ? NOMADTheme.ACCENT : NOMADTheme.CARD_BORDER;
         }
 
         private Label MakeReadout(string text) => new Label
@@ -372,12 +393,17 @@ namespace NOMAD.MissionPlanner
                 Padding = new Padding(6, 3, 6, 3),
                 Margin = new Padding(0, 0, NOMADTheme.GAP, NOMADTheme.GAP),
                 FlatStyle = FlatStyle.Flat,
-                BackColor = NOMADTheme.BUTTON_BG,
+                // Black fill + red outline = on-theme; active mode buttons get
+                // filled red by HighlightModeButtons.
+                BackColor = NOMADTheme.CARD_BG,
                 ForeColor = NOMADTheme.TEXT_PRIMARY,
                 Font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL, FontStyle.Bold),
                 Cursor = Cursors.Hand,
             };
+            btn.FlatAppearance.BorderSize = 1;
             btn.FlatAppearance.BorderColor = NOMADTheme.CARD_BORDER;
+            btn.FlatAppearance.MouseOverBackColor = NOMADTheme.BUTTON_BG;
+            btn.FlatAppearance.MouseDownBackColor = NOMADTheme.ACCENT;
             btn.Click += (s, e) => onClick(btn);
             return btn;
         }
@@ -428,6 +454,7 @@ namespace NOMAD.MissionPlanner
             _mountMode = mode;
             _modeLabel = label;
             UpdateModeLabel();
+            HighlightModeButtons();
             SetStatus($"Mode → {label}", NOMADTheme.TEXT_PRIMARY);
 
             GimbalController.SetMode(mode);
@@ -446,6 +473,7 @@ namespace NOMAD.MissionPlanner
                 _mountMode = MountMode.MavlinkTargeting;
                 _modeLabel = "MAVLINK";
                 UpdateModeLabel();
+                HighlightModeButtons();
             }
             _targetPitch = pitch;
             _targetRoll = roll;
@@ -480,6 +508,7 @@ namespace NOMAD.MissionPlanner
                 _mountMode = MountMode.MavlinkTargeting;
                 _modeLabel = "MAVLINK";
                 UpdateModeLabel();
+                HighlightModeButtons();
             }
 
             _targetPitch = Clamp(_targetPitch + pitchDelta, PITCH_MIN_DEG, PITCH_MAX_DEG);
@@ -514,11 +543,25 @@ namespace NOMAD.MissionPlanner
             private bool _dragging;
             private PointF _stickNorm; // [-1,1] each axis
 
+            // Gutter reserved inside the control edge for the axis labels, and a cap
+            // on the ring radius so the joystick stays a sensible size even when the
+            // pad cell is large. Both OnPaint and the hit-test use Radius() so the
+            // visual and the interaction always agree.
+            private const int EDGE_MARGIN = 20;
+            private const int MAX_RADIUS = 120;
+            private const int PUCK = 16;
+
             public JoystickPad()
             {
                 DoubleBuffered = true;
                 SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint
                          | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            }
+
+            private int Radius()
+            {
+                int r = Math.Min(Width, Height) / 2 - EDGE_MARGIN;
+                return Math.Min(r, MAX_RADIUS);
             }
 
             protected override void OnMouseDown(MouseEventArgs e)
@@ -559,7 +602,7 @@ namespace NOMAD.MissionPlanner
             private void UpdateFromMouse(Point p)
             {
                 int cx = Width / 2, cy = Height / 2;
-                int r = Math.Min(cx, cy) - 8;
+                int r = Radius();
                 if (r <= 0) return;
                 float dx = (p.X - cx) / (float)r;
                 float dy = (p.Y - cy) / (float)r;
@@ -579,7 +622,7 @@ namespace NOMAD.MissionPlanner
                 g.Clear(BackColor);
 
                 int cx = Width / 2, cy = Height / 2;
-                int r = Math.Min(cx, cy) - 8;
+                int r = Radius();
                 if (r <= 0) return;
 
                 // Outer ring
@@ -599,19 +642,22 @@ namespace NOMAD.MissionPlanner
                 int px = cx + (int)(_stickNorm.X * r);
                 int py = cy + (int)(_stickNorm.Y * r);
                 using (var brush = new SolidBrush(NOMADTheme.ACCENT))
-                    g.FillEllipse(brush, px - 12, py - 12, 24, 24);
+                    g.FillEllipse(brush, px - PUCK, py - PUCK, PUCK * 2, PUCK * 2);
                 using (var pen = new Pen(Color.White, 2))
-                    g.DrawEllipse(pen, px - 12, py - 12, 24, 24);
+                    g.DrawEllipse(pen, px - PUCK, py - PUCK, PUCK * 2, PUCK * 2);
 
-                // Axis labels
+                // Axis labels — drawn just INSIDE the ring so they always stay within
+                // the pad rectangle (they used to be placed outside the circle and
+                // clipped at the panel edge).
                 using (var brush = new SolidBrush(NOMADTheme.TEXT_SECONDARY))
                 using (var f = new Font(NOMADTheme.FONT_FAMILY, NOMADTheme.SIZE_SMALL))
                 {
-                    var sz = g.MeasureString("PITCH+", f);
-                    g.DrawString("PITCH+", f, brush, cx - sz.Width / 2, cy - r - sz.Height - 1);
-                    g.DrawString("PITCH-", f, brush, cx - sz.Width / 2, cy + r + 1);
-                    g.DrawString("ROLL+", f, brush, cx - r - g.MeasureString("ROLL+", f).Width - 2, cy - 7);
-                    g.DrawString("ROLL-", f, brush, cx + r + 2, cy - 7);
+                    var p = g.MeasureString("PITCH+", f);
+                    var roll = g.MeasureString("ROLL+", f);
+                    g.DrawString("PITCH+", f, brush, cx - p.Width / 2, cy - r + 3);
+                    g.DrawString("PITCH-", f, brush, cx - p.Width / 2, cy + r - p.Height - 3);
+                    g.DrawString("ROLL+", f, brush, cx - r + 3, cy - roll.Height / 2);
+                    g.DrawString("ROLL-", f, brush, cx + r - roll.Width - 3, cy - roll.Height / 2);
                 }
             }
         }

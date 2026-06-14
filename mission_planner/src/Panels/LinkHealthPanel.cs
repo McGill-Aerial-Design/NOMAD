@@ -84,16 +84,17 @@ namespace NOMAD.MissionPlanner
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 4,
+                RowCount = 3,
                 BackColor = Color.Transparent,
                 Padding = new Padding(12),
             };
-            // Header/settings rows AutoSize so they grow to fit their (wrapping)
-            // content at any width; the live link + log rows split the remainder.
+            // The header AutoSizes; the live link cards (with the throughput graphs
+            // + full per-link stats) take the lion's share of the height; the
+            // settings + failover log share one compact bottom row, so the graphs
+            // get the vertical space and the stats under them are never clipped.
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 60));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 40));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 190));
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
             var header = BuildHeader();
@@ -104,15 +105,40 @@ namespace NOMAD.MissionPlanner
             linkRow.Dock = DockStyle.Fill;
             root.Controls.Add(linkRow, 0, 1);
 
-            var settingsRow = BuildSettingsRow();
-            settingsRow.Dock = DockStyle.Fill;
-            root.Controls.Add(settingsRow, 0, 2);
-
-            var logPanel = BuildLogPanel();
-            logPanel.Dock = DockStyle.Fill;
-            root.Controls.Add(logPanel, 0, 3);
+            var bottomRow = BuildBottomRow();
+            bottomRow.Dock = DockStyle.Fill;
+            root.Controls.Add(bottomRow, 0, 2);
 
             Controls.Add(root);
+        }
+
+        // Bottom strip: settings on the left, failover log on the right, an even
+        // 50/50 split. Keeps both compact so the link graphs above get the height.
+        private TableLayoutPanel BuildBottomRow()
+        {
+            var row = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                RowCount = 1,
+                BackColor = Color.Transparent,
+                Margin = new Padding(0, 6, 0, 0),
+            };
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            row.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+            var settings = BuildSettingsRow();
+            settings.Dock = DockStyle.Fill;
+            settings.Margin = new Padding(0, 0, 6, 0);
+            row.Controls.Add(settings, 0, 0);
+
+            var log = BuildLogPanel();
+            log.Dock = DockStyle.Fill;
+            log.Margin = new Padding(6, 0, 0, 0);
+            row.Controls.Add(log, 1, 0);
+
+            return row;
         }
 
         private Panel BuildHeader()
@@ -257,8 +283,7 @@ namespace NOMAD.MissionPlanner
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                AutoScroll = true,
                 BackColor = NOMADTheme.CARD_BG,
                 Padding = new Padding(14),
                 Margin = new Padding(0, 6, 0, 0),
@@ -417,35 +442,24 @@ namespace NOMAD.MissionPlanner
             var title = new Label
             {
                 Text = "Failover log",
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                Font = NOMADTheme.Font(NOMADTheme.SIZE_HEADING, FontStyle.Bold),
                 ForeColor = NOMADTheme.ACCENT,
                 AutoSize = true,
                 Margin = new Padding(0, 0, 0, 6),
             };
             grid.Controls.Add(title, 0, 0);
 
-            var btnClear = new Button
-            {
-                Text = "Clear",
-                Size = new Size(60, 22),
-                BackColor = NOMADTheme.BUTTON_BG,
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 8),
-                Cursor = Cursors.Hand,
-                Margin = new Padding(0, 0, 0, 6),
-                Anchor = AnchorStyles.Right,
-            };
-            btnClear.FlatAppearance.BorderSize = 0;
+            var btnClear = SettingButton("Clear");
+            btnClear.Anchor = AnchorStyles.Right;
             btnClear.Click += (s, e) => { _lstLog.Items.Clear(); };
             grid.Controls.Add(btnClear, 1, 0);
 
             _lstLog = new ListBox
             {
                 Dock = DockStyle.Fill,
-                BackColor = Color.FromArgb(25, 25, 25),
+                BackColor = NOMADTheme.INPUT_BG,
                 ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Font = new Font("Consolas", 9),
+                Font = NOMADTheme.Mono(NOMADTheme.SIZE_BODY),
                 BorderStyle = BorderStyle.None,
                 IntegralHeight = false,
             };

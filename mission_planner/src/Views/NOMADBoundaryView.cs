@@ -144,8 +144,10 @@ namespace NOMAD.MissionPlanner
                 AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 Dock = DockStyle.Top,
                 BackColor = NOMADTheme.CARD_BG,
-                Padding = new Padding(NOMADTheme.PAD, NOMADTheme.GAP, NOMADTheme.PAD, NOMADTheme.PAD),
-                Margin = new Padding(0, 0, 0, NOMADTheme.GAP),
+                // Tight inner padding + a small inter-card margin so the sections
+                // pack closely and the column rarely needs scrolling.
+                Padding = new Padding(NOMADTheme.PAD, NOMADTheme.GAP, NOMADTheme.PAD, NOMADTheme.GAP),
+                Margin = new Padding(0, 0, 0, 4),
             };
             card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
             card.Controls.Add(ControlFactory.SectionTitle(title));
@@ -172,7 +174,7 @@ namespace NOMAD.MissionPlanner
             body.RowCount = r + 1;
             body.RowStyles.Add(new RowStyle(sizeType, height));
             row.Dock = DockStyle.Fill;
-            row.Margin = new Padding(0, 0, 0, NOMADTheme.GAP);
+            row.Margin = new Padding(0, 0, 0, 3);
             body.Controls.Add(row, 0, r);
         }
 
