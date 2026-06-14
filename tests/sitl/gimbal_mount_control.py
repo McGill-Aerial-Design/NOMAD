@@ -8,7 +8,7 @@ exact command ids + parameter layout that ``GimbalCommand`` produces; this
 scenario sends those same commands to a live ArduPilot SITL and verifies the
 mount responds:
 
-  configure a servo mount (MNT1_TYPE=1, tilt/roll on AUX outputs) + reboot
+  configure a servo mount (MNT1_TYPE=1, tilt/roll on outputs 5/6) + reboot
     -> DO_MOUNT_CONFIGURE MAVLINK_TARGETING
     -> DO_MOUNT_CONTROL pitch sweep   (servo output tracks the commanded angle)
     -> DO_MOUNT_CONTROL beyond limits (servo output clamps at the mount limit)
@@ -36,9 +36,12 @@ PITCH_MAX_DEG = 90.0
 ROLL_MIN_DEG = -30.0
 ROLL_MAX_DEG = 30.0
 
-# AUX servo outputs we assign to the mount (free on a quad; motors are 1-4).
-PITCH_CHANNEL = 9  # SERVO9_FUNCTION = 7 (Mount1 tilt/pitch)
-ROLL_CHANNEL = 10  # SERVO10_FUNCTION = 8 (Mount1 roll)
+# Servo outputs we assign to the mount. Use 5/6: free on a quad (motors are 1-4)
+# and reported in the base (port 0) SERVO_OUTPUT_RAW message. Channels 9+ land in
+# a separate port-1 bank, where ArduPilot does not populate servo9_raw+, so they
+# read as 0.
+PITCH_CHANNEL = 5  # SERVO5_FUNCTION = 7 (Mount1 tilt/pitch)
+ROLL_CHANNEL = 6  # SERVO6_FUNCTION = 8 (Mount1 roll)
 _SERVO_FN_MOUNT_PITCH = 7
 _SERVO_FN_MOUNT_ROLL = 8
 
@@ -121,17 +124,25 @@ def _read_param(conn, name: str, timeout: float = 5.0):
 
 
 def _read_servo_us(conn, channel: int, settle: float = 1.5) -> int:
-    """Let the servo slew, then return the latest reported PWM (us) for a channel."""
+    """Let the servo slew, then return the latest reported PWM (us) for a channel.
+
+    SERVO_OUTPUT_RAW is banked: port 0 carries outputs 1-8 in servo1_raw..servo8_raw,
+    port 1 carries 9-16 in those same fields. Pick the right bank + field for the
+    requested channel.
+    """
     time.sleep(settle)
-    field = f"servo{channel}_raw"
+    port = 0 if channel <= 8 else 1
+    field = f"servo{channel if channel <= 8 else channel - 8}_raw"
     latest = None
     deadline = time.time() + 3.0
     while time.time() < deadline:
         msg = conn.recv_match(type="SERVO_OUTPUT_RAW", blocking=True, timeout=1.0)
-        if msg is not None and hasattr(msg, field):
+        if msg is None or getattr(msg, "port", 0) != port:
+            continue
+        if hasattr(msg, field):
             latest = getattr(msg, field)
     if latest is None:
-        raise ScenarioError(f"no SERVO_OUTPUT_RAW.{field} reported")
+        raise ScenarioError(f"no SERVO_OUTPUT_RAW.{field} (port {port}) reported")
     return int(latest)
 
 
@@ -141,7 +152,7 @@ def _configure_mount(conn) -> None:
         _log("mount already configured (MNT1_TYPE=1); skipping reboot")
         return
 
-    _log("configuring servo mount params (MNT1_TYPE + AUX tilt/roll + limits)")
+    _log("configuring servo mount params (MNT1_TYPE + tilt/roll outputs + limits)")
     _param_set(conn, f"SERVO{PITCH_CHANNEL}_FUNCTION", _SERVO_FN_MOUNT_PITCH)
     _param_set(conn, f"SERVO{ROLL_CHANNEL}_FUNCTION", _SERVO_FN_MOUNT_ROLL)
     _param_set(conn, "MNT1_PITCH_MIN", PITCH_MIN_DEG)
