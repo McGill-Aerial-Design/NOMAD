@@ -103,16 +103,6 @@ def calculate_gps_offset_meters(
     return NEDOffset(north=north_m, east=east_m, down=down_m)
 
 
-def calculate_horizontal_distance(offset: NEDOffset) -> float:
-    """Calculate horizontal distance from NED offset."""
-    return math.sqrt(offset.north**2 + offset.east**2)
-
-
-def calculate_3d_distance(offset: NEDOffset) -> float:
-    """Calculate 3D distance from NED offset."""
-    return math.sqrt(offset.north**2 + offset.east**2 + offset.down**2)
-
-
 def raycast_target_gps(drone_state: DroneState) -> GPSCoordinate:
     """
     Calculate the GPS location of a target using raycasting.
@@ -262,60 +252,3 @@ def haversine_distance(
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
     return EARTH_RADIUS_M * c
-
-
-def calculate_wall_lengths_from_corners(
-    corners: list[dict],
-    center_lat: float,
-    center_lon: float,
-) -> list[dict]:
-    """
-    Calculate wall lengths from GPS corners.
-
-    Args:
-        corners: List of corner dicts with 'name', 'lat', 'lon'
-        center_lat: Building center latitude for reference
-        center_lon: Building center longitude for reference
-
-    Returns:
-        List of wall dicts with 'name', 'corner_a', 'corner_b', 'length_m', 'manual_override_m'
-
-    Example:
-        >>> corners = [
-        ...     {"name": "NW", "lat": 45.5, "lon": -73.5},
-        ...     {"name": "NE", "lat": 45.5, "lon": -73.499},
-        ...     {"name": "SE", "lat": 45.499, "lon": -73.499},
-        ...     {"name": "SW", "lat": 45.499, "lon": -73.5},
-        ... ]
-        >>> walls = calculate_wall_lengths_from_corners(corners, 45.4995, -73.4995)
-    """
-    if len(corners) < 3:
-        return []
-
-    walls = []
-    n = len(corners)
-
-    for i in range(n):
-        corner_a = corners[i]
-        corner_b = corners[(i + 1) % n]
-
-        coord_a = GPSCoordinate(lat=corner_a["lat"], lon=corner_a["lon"])
-        coord_b = GPSCoordinate(lat=corner_b["lat"], lon=corner_b["lon"])
-
-        # Calculate distance using haversine
-        length_m = haversine_distance(coord_a, coord_b)
-
-        # Wall name based on corners
-        wall_name = f"{corner_a['name']}-{corner_b['name']}"
-
-        walls.append(
-            {
-                "name": wall_name,
-                "corner_a": corner_a["name"],
-                "corner_b": corner_b["name"],
-                "length_m": round(length_m, 3),
-                "manual_override_m": None,  # No override by default
-            }
-        )
-
-    return walls

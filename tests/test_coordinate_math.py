@@ -10,7 +10,6 @@ import pytest
 
 from edge_core.ros_http_bridge.coordinate_math import (
     quat_to_euler,
-    quat_to_ned_euler,
     wrap_angle_rad,
 )
 
@@ -41,14 +40,3 @@ def test_wrap_angle_to_pi_range():
     assert wrap_angle_rad(-math.pi / 2) == pytest.approx(-math.pi / 2)
     for raw in (10.0, -10.0, 100.0, 0.0):
         assert -math.pi <= wrap_angle_rad(raw) <= math.pi
-
-
-def test_ned_euler_identity():
-    roll, pitch, yaw = quat_to_ned_euler(0.0, 0.0, 0.0, 1.0)
-    for angle in (roll, pitch, yaw):
-        assert math.isfinite(angle)
-    # Optical identity maps to a fixed NED attitude; verify it is stable/finite
-    # and bounded (regression guard on the basis transform).
-    assert -math.pi <= roll <= math.pi
-    assert -math.pi / 2 <= pitch <= math.pi / 2
-    assert -math.pi <= yaw <= math.pi

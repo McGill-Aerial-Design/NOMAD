@@ -13,10 +13,7 @@ from edge_core.services.geospatial import (
     GPSCoordinate,
     NEDOffset,
     bearing_between_points,
-    calculate_3d_distance,
     calculate_gps_offset_meters,
-    calculate_horizontal_distance,
-    calculate_wall_lengths_from_corners,
     haversine_distance,
     offset_gps_by_meters,
     raycast_target_gps,
@@ -31,12 +28,6 @@ def test_offset_roundtrip():
     back = calculate_gps_offset_meters(MONTREAL, moved)
     assert back.north == pytest.approx(100.0, abs=0.5)
     assert back.east == pytest.approx(50.0, abs=0.5)
-
-
-def test_distance_helpers():
-    offset = NEDOffset(north=3.0, east=4.0, down=12.0)
-    assert calculate_horizontal_distance(offset) == pytest.approx(5.0)
-    assert calculate_3d_distance(offset) == pytest.approx(13.0)
 
 
 def test_haversine_zero_distance():
@@ -81,20 +72,3 @@ def test_raycast_45deg_northeast():
     # Horizontal range 50 m at 45deg heading -> ~35.36 m north and east.
     assert offset.north == pytest.approx(35.36, abs=1.0)
     assert offset.east == pytest.approx(35.36, abs=1.0)
-
-
-def test_wall_lengths_square():
-    corners = [
-        {"name": "NW", "lat": 45.5010, "lon": -73.5000},
-        {"name": "NE", "lat": 45.5010, "lon": -73.4990},
-        {"name": "SE", "lat": 45.5000, "lon": -73.4990},
-        {"name": "SW", "lat": 45.5000, "lon": -73.5000},
-    ]
-    walls = calculate_wall_lengths_from_corners(corners, 45.5005, -73.4995)
-    assert len(walls) == 4
-    assert walls[0]["name"] == "NW-NE"
-    assert all(w["length_m"] > 0 for w in walls)
-
-
-def test_wall_lengths_needs_three_corners():
-    assert calculate_wall_lengths_from_corners([{"name": "A", "lat": 0, "lon": 0}], 0, 0) == []
