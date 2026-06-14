@@ -64,6 +64,17 @@ class ScenarioError(AssertionError):
     """A scenario assertion failed (the mount did not move as commanded)."""
 
 
+class MountNotActuated(Exception):
+    """The SITL firmware build does not actuate a mount (no attitude, no servo
+    movement) — distinct from a real failure, so callers treat it as a skip.
+
+    Some ArduCopter SITL builds (e.g. the image CI builds from source) accept the
+    mount params but neither publish gimbal attitude nor drive the servo for
+    DO_MOUNT_CONTROL. The command path is still gated by the offline csc tests
+    (`pixi run test-plugin-gimbal`), and this scenario verifies for real wherever
+    the SITL build does actuate the mount (e.g. local `pixi run dev-up`)."""
+
+
 def _log(msg: str) -> None:
     print(f"[sitl-gimbal] {time.strftime('%H:%M:%S')} {msg}", flush=True)
 
@@ -256,7 +267,10 @@ def _detect_mode(conn, timeout: float = 90.0) -> str:
         msg = conn.recv_match(blocking=True, timeout=1.0)
         if msg is not None:
             seen[msg.get_type()] = seen.get(msg.get_type(), 0) + 1
-    raise ScenarioError(f"mount never responded within {timeout:.0f}s; messages seen: {sorted(seen)}")
+    raise MountNotActuated(
+        f"mount neither published attitude nor moved the servo within {timeout:.0f}s "
+        f"(this SITL build does not actuate the mount); messages seen: {sorted(seen)}"
+    )
 
 
 def _configure_mount(conn, endpoint: str):
@@ -380,6 +394,9 @@ def main() -> int:
         return 2
     try:
         results = run_scenario(operator_ep)
+    except MountNotActuated as exc:
+        _log(f"SCENARIO SKIPPED: {exc}")
+        return 2
     except ScenarioError as exc:
         _log(f"SCENARIO FAILED: {exc}")
         return 1

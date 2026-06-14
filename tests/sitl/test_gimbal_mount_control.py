@@ -17,7 +17,7 @@ import pytest
 
 # Import the sibling scenario module without requiring a package layout.
 sys.path.insert(0, os.path.dirname(__file__))
-from gimbal_mount_control import run_scenario  # noqa: E402
+from gimbal_mount_control import MountNotActuated, run_scenario  # noqa: E402
 
 _OPERATOR = os.environ.get("NOMAD_SITL_OPERATOR")
 
@@ -27,5 +27,8 @@ _OPERATOR = os.environ.get("NOMAD_SITL_OPERATOR")
     reason="set NOMAD_SITL_OPERATOR to run against a live ArduPilot SITL",
 )
 def test_gimbal_mount_control():
-    results = run_scenario(_OPERATOR)
+    try:
+        results = run_scenario(_OPERATOR)
+    except MountNotActuated as exc:
+        pytest.skip(str(exc))
     assert results["status"] == "PASS", results

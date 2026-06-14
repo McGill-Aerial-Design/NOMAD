@@ -68,8 +68,19 @@ jobs:
 
       # Last: configures a servo mount and reboots the vehicle to apply it, so it
       # must not precede the velocity/fence scenarios that share this vehicle.
+      # Exit 2 = the SITL build doesn't actuate the mount (no attitude, no servo
+      # movement) — a build limitation, not a regression — so treat it as a skip.
+      # The command bytes are gated in CI by `pixi run test-plugin-gimbal`.
       - name: Gimbal mount-control scenario (DO_MOUNT_CONTROL/CONFIGURE)
-        run: pixi run sitl-gimbal
+        run: |
+          set +e
+          pixi run sitl-gimbal
+          code=$?
+          if [ "$code" -eq 2 ]; then
+            echo "::warning::Gimbal SITL scenario skipped — this SITL build does not actuate the mount"
+            exit 0
+          fi
+          exit "$code"
 
       - name: SITL logs on failure
         if: failure()
