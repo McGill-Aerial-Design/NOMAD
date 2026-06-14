@@ -430,6 +430,12 @@ namespace NOMAD.MissionPlanner
         /// read once on plugin start to seed the controller.
         /// </summary>
         public float JoystickGimbalMaxRateDegSec { get; set; } = 60f;
+        /// <summary>
+        /// Capture unmodified arrow keys anywhere in Mission Planner and use them
+        /// to nudge the gimbal pitch/roll target. The floating gimbal window always
+        /// handles arrow keys while it is active.
+        /// </summary>
+        public bool GimbalArrowKeysEnabled { get; set; } = false;
 
         /// <summary>Enable the ZED tilt joystick channel.</summary>
         public bool JoystickZedEnabled { get; set; } = false;

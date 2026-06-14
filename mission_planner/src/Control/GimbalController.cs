@@ -79,6 +79,19 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
+        /// Apply a discrete keyboard nudge and send the resulting target. Keyboard
+        /// input always selects MAVLink targeting so the angle command is honored.
+        /// </summary>
+        public static void NudgeTarget(float pitchDeltaDeg, float rollDeltaDeg)
+        {
+            if (CurrentMode != MountMode.MavlinkTargeting)
+                SetMode(MountMode.MavlinkTargeting);
+
+            SetTargetAngles(TargetPitchDeg + pitchDeltaDeg, TargetRollDeg + rollDeltaDeg);
+            SendPitchRollAngle(TargetPitchDeg, TargetRollDeg);
+        }
+
+        /// <summary>
         /// Integrate a normalized stick reading over dt using the shared
         /// <see cref="MaxRateDegSec"/> and (optionally) push the new angle to the
         /// mount.

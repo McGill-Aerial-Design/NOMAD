@@ -140,6 +140,7 @@ namespace NOMAD.MissionPlanner
             var card = new TableLayoutPanel
             {
                 ColumnCount = 1,
+                RowCount = 2,
                 AutoSize = true,
                 AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 Dock = DockStyle.Top,
@@ -150,9 +151,11 @@ namespace NOMAD.MissionPlanner
                 Margin = new Padding(0, 0, 0, 2),
             };
             card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            card.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             var sectionTitle = ControlFactory.SectionTitle(title);
             sectionTitle.Margin = new Padding(0, 0, 0, 3); // tighter than the default GAP
-            card.Controls.Add(sectionTitle);
+            card.Controls.Add(sectionTitle, 0, 0);
 
             body = new TableLayoutPanel
             {
@@ -164,7 +167,7 @@ namespace NOMAD.MissionPlanner
                 Margin = new Padding(0),
             };
             body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-            card.Controls.Add(body);
+            card.Controls.Add(body, 0, 1);
             return card;
         }
 
