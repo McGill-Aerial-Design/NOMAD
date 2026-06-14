@@ -62,3 +62,44 @@ yield return NomadViewDescriptor.View(
 OpenTK + OpenTK.GLControl (already referenced in `NOMADPlugin.csproj`; they ship
 with Mission Planner) and the shared `SLAM3D.Rendering.DroneRenderer`. No NOMAD
 services, config, or network clients — feed it data and it renders.
+
+## `SnapshotManager`
+
+A self-contained image-gallery `UserControl`: scans a snapshot directory, shows
+thumbnails, and supports preview / open / delete. Useful for any task that
+captures stills (target capture, inspection photos, payload-drop evidence).
+
+```csharp
+var gallery = new SnapshotManager(config) { Dock = DockStyle.Fill };
+host.Controls.Add(gallery);
+gallery.LoadSnapshots();          // populate from the configured snapshot dir
+gallery.AddSnapshot(@"C:\shot.jpg"); // copy a new still in + refresh
+```
+
+`SnapshotInfo` (`FilePath` / `FileName` / `CaptureTime`) is the record type it
+surfaces. Pass a `NOMADConfig` so it resolves the snapshot directory; `null` is
+tolerated (falls back to defaults).
+
+## `JetsonHealthTab`
+
+A compact CPU/GPU load + temperature + status poller (`UserControl`) that reads
+the Jetson `/health` API on a timer. A lightweight, embeddable alternative to the
+full `Panels/EnhancedHealthDashboard` — drop it into the corner of a task page
+when you just want an at-a-glance health readout.
+
+```csharp
+var health = new JetsonHealthTab(pollIntervalMs: 2000) { Dock = DockStyle.Fill };
+host.Controls.Add(health);   // self-polls JetsonApiService.BaseUrl
+```
+
+## Reusable utilities (live outside this folder)
+
+These are page-agnostic too, but they are not controls so they stay in their
+domain folders:
+
+- **`Telemetry/TelemetryInjector`** — pushes short status strings to the Mission
+  Planner HUD message log (`SendVisionStatus`, `SendTargetStatus`, `SendStatus`,
+  `SendCustomStatus`). Construct one and call it from any task that wants operator-
+  visible status (e.g. `injector.SendTargetStatus(isLocked: true, "ArUco 12")`).
+- **`UI/SafeDispose`** — `SafeDispose.Dispose(obj)` / `StopAndDispose(timer)` null-safe
+  disposal helpers for control teardown.
