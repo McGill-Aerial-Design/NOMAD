@@ -23,7 +23,9 @@ namespace NOMAD.MissionPlanner
             _txtJetsonApiKey.Text = Config.JetsonApiKey;
             _txtTailscaleIP.Text = Config.TailscaleIP;
             _chkUseTailscale.Checked = Config.UseTailscale;
-            _txtSshUsername.Text = Config.SshUsername;
+            _txtSshUsername.Text = string.IsNullOrWhiteSpace(Config.JetsonSshUser)
+                ? Config.SshUsername
+                : Config.JetsonSshUser;
             _numHttpTimeout.Value = Config.HttpTimeoutSeconds;
             _chkAutoReconnect.Checked = Config.AutoReconnect;
             _numHealthPollInterval.Value = Config.HealthPollInterval;
@@ -82,6 +84,21 @@ namespace NOMAD.MissionPlanner
             _numTempWarning.Value = (decimal)Config.TempWarningC;
             _numTempCritical.Value = (decimal)Config.TempCriticalC;
             _chkAudioAlerts.Checked = Config.AudioAlerts;
+
+            // Log analysis
+            _txtDefaultLogDirectory.Text = Config.DefaultLogDirectory ?? "";
+            _txtJetsonLogDirectory.Text = Config.JetsonLogDirectory ?? "~/NOMAD/logs";
+            _numLogVibrationWarning.Value = ClampValue(_numLogVibrationWarning, Config.LogVibrationWarning);
+            _numLogVibrationCritical.Value = ClampValue(_numLogVibrationCritical, Config.LogVibrationCritical);
+            _numLogHdopWarning.Value = ClampValue(_numLogHdopWarning, Config.LogHdopWarning);
+            _numLogHdopCritical.Value = ClampValue(_numLogHdopCritical, Config.LogHdopCritical);
+            _numLogMinimumSatellites.Value = ClampValue(_numLogMinimumSatellites, Config.LogMinimumSatellites);
+            _numLogTuneWarning.Value = ClampValue(_numLogTuneWarning, Config.LogTuneRmsWarning);
+            _numLogTuneCritical.Value = ClampValue(_numLogTuneCritical, Config.LogTuneRmsCritical);
+            _numLogEkfWarning.Value = ClampValue(_numLogEkfWarning, Config.LogEkfVarianceWarning);
+            _numLogEkfCritical.Value = ClampValue(_numLogEkfCritical, Config.LogEkfVarianceCritical);
+            _numLogLiveBufferPoints.Value = ClampValue(_numLogLiveBufferPoints, Config.LogLiveBufferPoints);
+            _chkLogInjectHud.Checked = Config.LogInjectAlertsToHud;
 
             // Payloads (drop / slider / relay / reel / cam tilt) — own tab
             LoadPayloads();
@@ -159,7 +176,8 @@ namespace NOMAD.MissionPlanner
             Config.JetsonApiKey = _txtJetsonApiKey.Text.Trim();
             Config.TailscaleIP = _txtTailscaleIP.Text.Trim();
             Config.UseTailscale = _chkUseTailscale.Checked;
-            Config.SshUsername = _txtSshUsername.Text.Trim();
+            Config.JetsonSshUser = _txtSshUsername.Text.Trim();
+            Config.SshUsername = Config.JetsonSshUser;
             Config.HttpTimeoutSeconds = (int)_numHttpTimeout.Value;
             Config.AutoReconnect = _chkAutoReconnect.Checked;
             Config.HealthPollInterval = (int)_numHealthPollInterval.Value;
@@ -220,6 +238,29 @@ namespace NOMAD.MissionPlanner
             Config.TempWarningC = (float)_numTempWarning.Value;
             Config.TempCriticalC = (float)_numTempCritical.Value;
             Config.AudioAlerts = _chkAudioAlerts.Checked;
+
+            // Log analysis
+            Config.DefaultLogDirectory = _txtDefaultLogDirectory.Text.Trim();
+            Config.JetsonLogDirectory = _txtJetsonLogDirectory.Text.Trim();
+            Config.LogVibrationWarning = (double)_numLogVibrationWarning.Value;
+            Config.LogVibrationCritical = Math.Max(
+                Config.LogVibrationWarning,
+                (double)_numLogVibrationCritical.Value);
+            Config.LogHdopWarning = (double)_numLogHdopWarning.Value;
+            Config.LogHdopCritical = Math.Max(
+                Config.LogHdopWarning,
+                (double)_numLogHdopCritical.Value);
+            Config.LogMinimumSatellites = (int)_numLogMinimumSatellites.Value;
+            Config.LogTuneRmsWarning = (double)_numLogTuneWarning.Value;
+            Config.LogTuneRmsCritical = Math.Max(
+                Config.LogTuneRmsWarning,
+                (double)_numLogTuneCritical.Value);
+            Config.LogEkfVarianceWarning = (double)_numLogEkfWarning.Value;
+            Config.LogEkfVarianceCritical = Math.Max(
+                Config.LogEkfVarianceWarning,
+                (double)_numLogEkfCritical.Value);
+            Config.LogLiveBufferPoints = (int)_numLogLiveBufferPoints.Value;
+            Config.LogInjectAlertsToHud = _chkLogInjectHud.Checked;
 
             // Payloads (drop / slider / relay / reel / cam tilt) — own tab
             SavePayloads();
@@ -292,5 +333,8 @@ namespace NOMAD.MissionPlanner
             else if (combo.Items.Count > 0)
                 combo.SelectedIndex = 0;
         }
+
+        private static decimal ClampValue(NumericUpDown control, double value)
+            => Math.Max(control.Minimum, Math.Min(control.Maximum, (decimal)value));
     }
 }

@@ -130,6 +130,12 @@ test-plugin-interlock = "powershell -ExecutionPolicy Bypass -File scripts/build/
 # is exercised by tests/sitl/gimbal_mount_control.py (`pixi run sitl-gimbal`).
 test-plugin-gimbal = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_gimbal.ps1"
 
+# Unit tests for the host-independent flight-log analyzer and shared live issue rules.
+test-plugin-logs = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_logs.ps1"
+
+# Runtime smoke test for Mission Planner's DFLogBuffer adapter (requires a Release plugin build).
+test-plugin-log-adapters = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_log_adapters.ps1"
+
 # Stress/behaviour tests for the dual-link MAVLink router (Windows only) —
 # compiles the Mission Planner-free GroundLinkRouter stack with VS's csc and
 # runs it against real loopback UDP sockets: frame parsing, cross-link dedup,

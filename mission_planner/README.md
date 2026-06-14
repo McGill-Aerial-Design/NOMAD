@@ -14,6 +14,7 @@ The primary interface features a modern sidebar navigation design:
 - **System Health**: Real-time Jetson monitoring (CPU/GPU temps, memory, network)
 - **Link Status**: Dual-link failover monitoring
 - **Boundary**: Soft / hard geofence editing and live monitoring
+- **Log Analysis**: DataFlash/MAVLink post-flight summaries, plotting, and live tuning telemetry
 - **Settings**: Plugin configuration
 
 ### Pop-Out Window Support
@@ -52,15 +53,15 @@ pump) — see [Configuration](#configuration).
 `src/` is organized by responsibility. Namespaces are flat
 (`NOMAD.MissionPlanner`, plus `NOMAD.MissionPlanner.Core`), so a file's folder is
 independent of its namespace. The build file is `src/NOMADPlugin.csproj` — an
-old-style .NET Framework 4.8 project that lists every source file explicitly, so
-**adding or moving a file means updating its `<Compile Include>` entry**.
+old-style .NET Framework 4.8 project that includes C# sources with an MSBuild wildcard.
 
 | Folder | Contents |
 |--------|----------|
 | `src/Plugin/` | `NOMADPlugin` (the `MissionPlanner.Plugin.Plugin` entry point) and `NOMADMainScreen` (full-page sidebar shell + pop-out window) |
 | `src/Config/` | `NOMADConfig` (settings persistence) and `NOMADSettingsForm` (settings dialog) |
 | `src/UI/` | Shared UI scaffolding: `NOMADViewBase` (base view), `NOMADTheme` (theming), `UiAsync` (UI-thread helpers) |
-| `src/Views/` | Top-level page views: Dashboard, Health, Links, Terminal, Video, Boundary, plus `SLAM3DView`, `Rviz2View`, `ZedCalibrationView` |
+| `src/Views/` | Top-level page views: Dashboard, Health, Links, Terminal, Video, Boundary, Log Analysis, SLAM 3D, and calibration |
+| `src/Logs/` | Flight-log adapters, pure analysis/rule engine, summary models, and sample data |
 | `src/Panels/` | Embeddable control panels: service control, link health, health dashboard, EKF source, Jetson health / terminal |
 | `src/Connectivity/` | Links + transport: MAVLink / Jetson connection managers, `JetsonApiService`, `JetsonStateStream`, `DualLinkSender`, `GroundLinkRouter` |
 | `src/Control/` | Flight / gimbal control: flight mode, gimbal (+ joystick window), guided RTH landing, cube outputs |
@@ -217,6 +218,21 @@ The dashboard provides:
 - System status cards showing VIO and GPS state
 - Video preview (loads automatically when Jetson is online)
 - Activity log with recent events
+
+### Log Analysis Tab
+
+- Open local ArduPilot DataFlash `.bin`/`.log` files or MAVLink `.tlog` recordings.
+- Download only the latest flight-controller log, browse older logs with Mission Planner's downloader,
+  or retrieve the latest configured Jetson log over SCP. DataFlash size depends on logging rate, not
+  only flight duration; MAVLink radio downloads can take several minutes, while Jetson SCP is faster.
+- Review flight time, battery/endurance, horizontal GPS distance travelled, vibration, tune quality,
+  GPS/EKF health, peak throttle headroom, and anomalies.
+- Flight modes use distinct colors in a time band aligned to the graph; it zooms, pans, and follows the
+  graph cursor so the active mode is visible at every plotted timestamp.
+- Select individual log fields for the native zoomable plot, or hand DataFlash logs to MP Log Browse.
+- Export the summary as Markdown or the complete view as PNG.
+- Monitor live tuning telemetry, including the rolling five-second vibration peak, surface threshold
+  alerts, and record the live stream to CSV.
 
 ### Video Tab
 
