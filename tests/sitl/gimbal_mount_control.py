@@ -60,27 +60,69 @@ def _log(msg: str) -> None:
     print(f"[sitl-gimbal] {time.strftime('%H:%M:%S')} {msg}", flush=True)
 
 
+# Message ids we explicitly request (some firmwares don't include the mount
+# attitude in MAV_DATA_STREAM_ALL). Fall back to the literal ids if the dialect
+# constant is missing.
+_MSGID_GIMBAL_ATTITUDE = getattr(mavutil.mavlink, "MAVLINK_MSG_ID_GIMBAL_DEVICE_ATTITUDE_STATUS", 285)
+_MSGID_MOUNT_ORIENTATION = getattr(mavutil.mavlink, "MAVLINK_MSG_ID_MOUNT_ORIENTATION", 265)
+
+
+def _request_streams(conn) -> None:
+    """Ask the autopilot for telemetry, including the mount attitude messages."""
+    conn.mav.request_data_stream_send(
+        conn.target_system, conn.target_component, mavutil.mavlink.MAV_DATA_STREAM_ALL, 10, 1
+    )
+    for msgid in (_MSGID_GIMBAL_ATTITUDE, _MSGID_MOUNT_ORIENTATION):
+        conn.mav.command_long_send(
+            conn.target_system,
+            conn.target_component,
+            mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+            0,
+            msgid,
+            100000,
+            0,
+            0,
+            0,
+            0,
+            0,  # 100 ms = 10 Hz
+        )
+
+
 def _connect(endpoint: str, timeout: float = 60.0):
-    """Open a MAVLink connection and wait for the first heartbeat."""
+    """Open a MAVLink connection and latch onto the AUTOPILOT heartbeat.
+
+    Latching the first heartbeat blindly can pick a GCS/MAVProxy component
+    (system 0), which then never answers our stream requests — so the mount
+    attitude is never streamed. Wait specifically for the autopilot.
+    """
     deadline = time.time() + timeout
     last_exc: Exception | None = None
     while time.time() < deadline:
         try:
             conn = mavutil.mavlink_connection(endpoint)
-            if conn.wait_heartbeat(timeout=10):
-                conn.mav.request_data_stream_send(
-                    conn.target_system,
-                    conn.target_component,
-                    mavutil.mavlink.MAV_DATA_STREAM_ALL,
-                    10,
-                    1,
-                )
+            if _latch_autopilot(conn, timeout=15.0):
+                _request_streams(conn)
                 return conn
             conn.close()
         except Exception as exc:  # retry until the relay/firmware is back up
             last_exc = exc
             time.sleep(2.0)
-    raise ScenarioError(f"no heartbeat on {endpoint} within {timeout:.0f}s (last error: {last_exc})")
+    raise ScenarioError(f"no autopilot heartbeat on {endpoint} within {timeout:.0f}s (last error: {last_exc})")
+
+
+def _latch_autopilot(conn, timeout: float = 15.0) -> bool:
+    """Set conn.target_* from the first non-GCS (autopilot) heartbeat."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        msg = conn.recv_match(type="HEARTBEAT", blocking=True, timeout=5.0)
+        if msg is None:
+            continue
+        if msg.type == mavutil.mavlink.MAV_TYPE_GCS:
+            continue  # skip GCS / companion heartbeats
+        conn.target_system = msg.get_srcSystem()
+        conn.target_component = msg.get_srcComponent()
+        return True
+    return False
 
 
 def _command_long(conn, command: int, *params: float) -> None:
@@ -123,18 +165,26 @@ def _read_param(conn, name: str, timeout: float = 5.0):
     return None
 
 
-def _read_mount_pitch_deg(conn, settle: float = 1.5) -> float:
-    """Let the mount slew, then return its reported pitch (deg) from the latest
-    GIMBAL_DEVICE_ATTITUDE_STATUS quaternion."""
+def _read_mount_pitch_deg(conn, settle: float = 1.5, wait: float = 12.0) -> float:
+    """Let the mount slew, then return its latest reported pitch (deg).
+
+    Prefers GIMBAL_DEVICE_ATTITUDE_STATUS (quaternion); falls back to the legacy
+    MOUNT_ORIENTATION (pitch in degrees). Waits up to `wait` for the first sample
+    (the mount can take a few seconds to start publishing after a reboot).
+    """
     time.sleep(settle)
     latest = None
-    deadline = time.time() + 4.0
-    while time.time() < deadline:
-        msg = conn.recv_match(type="GIMBAL_DEVICE_ATTITUDE_STATUS", blocking=True, timeout=1.0)
+    start = time.time()
+    while time.time() - start < wait:
+        msg = conn.recv_match(type=["GIMBAL_DEVICE_ATTITUDE_STATUS", "MOUNT_ORIENTATION"], blocking=True, timeout=1.0)
         if msg is not None:
             latest = msg
+            if time.time() - start > 1.5:  # got a fresh sample after settling
+                break
     if latest is None:
-        raise ScenarioError("no GIMBAL_DEVICE_ATTITUDE_STATUS reported (mount not publishing attitude)")
+        raise ScenarioError("mount published no attitude (GIMBAL_DEVICE_ATTITUDE_STATUS / MOUNT_ORIENTATION)")
+    if latest.get_type() == "MOUNT_ORIENTATION":
+        return float(latest.pitch)
     w, x, y, z = latest.q
     # Pitch from the quaternion (rotation about body Y).
     sin_pitch = max(-1.0, min(1.0, 2.0 * (w * y - x * z)))
