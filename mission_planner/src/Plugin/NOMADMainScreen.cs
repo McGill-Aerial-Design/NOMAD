@@ -76,6 +76,7 @@ namespace NOMAD.MissionPlanner
         private Button _btnLinks;
         private Button _btnCalibration;
         private Button _btnSlam3d;
+        private Button _btnLogs;
 
         // Content views
         private UserControl _currentView;
@@ -87,6 +88,7 @@ namespace NOMAD.MissionPlanner
         private NOMADLinksView _linksView;
         private ZedCalibrationView _calibrationView;
         private SLAM3DView _slam3dView;
+        private NOMADLogView _logView;
 
 
         // Update timer
@@ -364,6 +366,10 @@ namespace NOMAD.MissionPlanner
                     if (_slam3dView == null) _slam3dView = new SLAM3DView(_config, _sender);
                     newView = _slam3dView;
                     break;
+                case "Logs":
+                    if (_logView == null) _logView = new NOMADLogView(_config, _sender);
+                    newView = _logView;
+                    break;
             }
 
             if (newView != null)
@@ -377,7 +383,18 @@ namespace NOMAD.MissionPlanner
         private void UpdateSidebarButtonState(string viewName)
         {
             // Reset all buttons to default state
-            var buttons = new[] { _btnDashboard, _btnBoundaries, _btnVideo, _btnTerminal, _btnHealth, _btnLinks, _btnCalibration, _btnSlam3d };
+            var buttons = new[]
+            {
+                _btnDashboard,
+                _btnBoundaries,
+                _btnVideo,
+                _btnTerminal,
+                _btnHealth,
+                _btnLinks,
+                _btnCalibration,
+                _btnSlam3d,
+                _btnLogs,
+            };
             foreach (var btn in buttons)
             {
                 if (btn != null)
@@ -399,6 +416,7 @@ namespace NOMAD.MissionPlanner
                 case "Links": activeBtn = _btnLinks; break;
                 case "Calibration": activeBtn = _btnCalibration; break;
                 case "Slam3D": activeBtn = _btnSlam3d; break;
+                case "Logs": activeBtn = _btnLogs; break;
             }
 
             if (activeBtn != null)
@@ -458,6 +476,7 @@ namespace NOMAD.MissionPlanner
                 _linksView?.Dispose();
                 _calibrationView?.Dispose();
                 _slam3dView?.Dispose();
+                _logView?.Dispose();
                 // Dispose any module-contributed views built in module mode.
                 foreach (var cached in _descriptorViewCache.Values)
                     cached?.Dispose();

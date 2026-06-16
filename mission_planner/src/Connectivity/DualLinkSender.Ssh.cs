@@ -2,6 +2,8 @@
 // Copyright 2026 The NOMAD Authors
 
 using System;
+using System.Diagnostics;
+using System.IO;
 using System.Threading.Tasks;
 
 namespace NOMAD.MissionPlanner
@@ -116,6 +118,93 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
+        /// Download one file from the configured Jetson with the platform OpenSSH
+        /// scp client. The remote path comes from an SSH listing, not user-entered
+        /// command text, and is rejected if it contains shell-control characters.
+        /// </summary>
+        public async Task<CommandResult> DownloadFileViaScpAsync(
+            string remotePath,
+            string localPath,
+            int timeoutSeconds = 120)
+        {
+            if (string.IsNullOrWhiteSpace(remotePath) || string.IsNullOrWhiteSpace(localPath))
+                return new CommandResult { Success = false, Message = "Remote and local paths are required." };
+            if (remotePath.IndexOfAny(new[] { '\r', '\n', '\0', '\'', '"' }) >= 0)
+                return new CommandResult { Success = false, Message = "The remote log path contains unsupported characters." };
+
+            try
+            {
+                string directory = Path.GetDirectoryName(localPath);
+                if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
+
+                bool isWindows = Environment.OSVersion.Platform == PlatformID.Win32NT;
+                string scpPath = isWindows
+                    ? @"C:\Windows\System32\OpenSSH\scp.exe"
+                    : "/usr/bin/scp";
+                if (!File.Exists(scpPath)) scpPath = isWindows ? "scp.exe" : "scp";
+
+                string sshUser = string.IsNullOrWhiteSpace(_config.JetsonSshUser)
+                    ? "nomad"
+                    : _config.JetsonSshUser;
+                string remote = $"{sshUser}@{_config.EffectiveIP}:'{remotePath}'";
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = scpPath,
+                    Arguments = $"-o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new " +
+                        $"{QuoteProcessArgument(remote)} {QuoteProcessArgument(localPath)}",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = false,
+                    WindowStyle = ProcessWindowStyle.Normal,
+                };
+
+                using (var process = Process.Start(startInfo))
+                {
+                    if (process == null)
+                        return new CommandResult { Success = false, Message = "Could not start scp." };
+                    var outputTask = process.StandardOutput.ReadToEndAsync();
+                    var errorTask = process.StandardError.ReadToEndAsync();
+                    bool exited = await Task.Run(() => process.WaitForExit(timeoutSeconds * 1000));
+                    if (!exited)
+                    {
+                        try { process.Kill(); } catch (InvalidOperationException) { }
+                        _ = outputTask.ContinueWith(
+                            task => { _ = task.Exception; },
+                            TaskContinuationOptions.OnlyOnFaulted);
+                        _ = errorTask.ContinueWith(
+                            task => { _ = task.Exception; },
+                            TaskContinuationOptions.OnlyOnFaulted);
+                        try { File.Delete(localPath); } catch { }
+                        return new CommandResult
+                        {
+                            Success = false,
+                            Message = $"SCP download timed out after {timeoutSeconds}s.",
+                        };
+                    }
+
+                    string output = await outputTask;
+                    string error = await errorTask;
+                    bool success = process.ExitCode == 0 && File.Exists(localPath);
+                    if (!success)
+                    {
+                        try { File.Delete(localPath); } catch { }
+                    }
+                    return new CommandResult
+                    {
+                        Success = success,
+                        Data = output,
+                        Message = success ? "Flight log downloaded." : $"SCP failed: {error}",
+                    };
+                }
+            }
+            catch (Exception ex)
+            {
+                return new CommandResult { Success = false, Message = $"SCP download failed: {ex.Message}" };
+            }
+        }
+
+        /// <summary>
         /// Restart all NOMAD services via SSH (doesn't rely on HTTP API).
         /// Uses the Jetson-side `nomad restart all` hard-reset path, which
         /// stops the autostart set, kills stale launch children, then starts
@@ -128,5 +217,8 @@ namespace NOMAD.MissionPlanner
             var command = "nohup bash -c 'sleep 2 && ${NOMAD_REPO_ROOT:-$HOME/NOMAD}/scripts/nomad restart all' > /dev/null 2>&1 & echo 'restart scheduled (~2s)'";
             return await ExecuteSSHCommandAsync(command, 30);
         }
+
+        private static string QuoteProcessArgument(string value)
+            => "\"" + (value ?? "").Replace("\"", "\\\"") + "\"";
     }
 }

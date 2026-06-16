@@ -87,6 +87,21 @@ namespace NOMAD.MissionPlanner
         private NumericUpDown _numTempCritical;
         private CheckBox _chkAudioAlerts;
 
+        // Log Analysis Tab
+        private TextBox _txtDefaultLogDirectory;
+        private TextBox _txtJetsonLogDirectory;
+        private NumericUpDown _numLogVibrationWarning;
+        private NumericUpDown _numLogVibrationCritical;
+        private NumericUpDown _numLogHdopWarning;
+        private NumericUpDown _numLogHdopCritical;
+        private NumericUpDown _numLogMinimumSatellites;
+        private NumericUpDown _numLogTuneWarning;
+        private NumericUpDown _numLogTuneCritical;
+        private NumericUpDown _numLogEkfWarning;
+        private NumericUpDown _numLogEkfCritical;
+        private NumericUpDown _numLogLiveBufferPoints;
+        private CheckBox _chkLogInjectHud;
+
         // Spray Tab (reels, camera tilt + all other payloads live in the Payloads tab)
         private NumericUpDown _numSprayRange, _numSprayRangeTol, _numSprayTriggerMax, _numSprayAimX, _numSprayAimY, _numSprayAimTol;
         private NumericUpDown _numSprayServoAngle, _numSprayForwardGain, _numSprayLateralGain, _numSprayAltitudeGain, _numSprayYawGain;
@@ -178,6 +193,7 @@ namespace NOMAD.MissionPlanner
             _tabControl.TabPages.Add(CreateVioTab());
             _tabControl.TabPages.Add(CreateUiTab());
             _tabControl.TabPages.Add(CreateAlertsTab());
+            _tabControl.TabPages.Add(CreateLogsTab());
             _tabControl.TabPages.Add(CreatePayloadsTab());
             _tabControl.TabPages.Add(CreateSprayCalibrationTab());
             _tabControl.TabPages.Add(CreateJoystickTab());

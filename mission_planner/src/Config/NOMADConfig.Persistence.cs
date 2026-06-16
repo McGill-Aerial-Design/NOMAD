@@ -169,6 +169,26 @@ namespace NOMAD.MissionPlanner
                 SlamMapRadiusM = 3.0f;
             }
 
+            LogVibrationWarning = ClampLog(LogVibrationWarning, 0, 200, 30);
+            LogVibrationCritical = Math.Max(
+                LogVibrationWarning,
+                ClampLog(LogVibrationCritical, 0, 250, 60));
+            LogHdopWarning = ClampLog(LogHdopWarning, 0, 20, 2);
+            LogHdopCritical = Math.Max(
+                LogHdopWarning,
+                ClampLog(LogHdopCritical, 0, 30, 4));
+            LogTuneRmsWarning = ClampLog(LogTuneRmsWarning, 0, 90, 5);
+            LogTuneRmsCritical = Math.Max(
+                LogTuneRmsWarning,
+                ClampLog(LogTuneRmsCritical, 0, 180, 10));
+            LogEkfVarianceWarning = ClampLog(LogEkfVarianceWarning, 0, 10, 0.8);
+            LogEkfVarianceCritical = Math.Max(
+                LogEkfVarianceWarning,
+                ClampLog(LogEkfVarianceCritical, 0, 20, 1));
+            if (LogMinimumSatellites < 0 || LogMinimumSatellites > 40) LogMinimumSatellites = 8;
+            if (LogLiveBufferPoints < 60 || LogLiveBufferPoints > 10000) LogLiveBufferPoints = 600;
+            if (string.IsNullOrWhiteSpace(JetsonLogDirectory)) JetsonLogDirectory = "~/NOMAD/logs";
+
             if (Payloads == null)
             {
                 Payloads = DefaultPayloads();
@@ -197,6 +217,13 @@ namespace NOMAD.MissionPlanner
         {
             if (float.IsNaN(value) || float.IsInfinity(value)) return fallback;
             return Math.Max(min, Math.Min(max, value));
+        }
+
+        private static double ClampLog(double value, double min, double max, double fallback)
+        {
+            if (double.IsNaN(value) || double.IsInfinity(value) || value < min || value > max)
+                return fallback;
+            return value;
         }
 
         /// <summary>
@@ -241,6 +268,19 @@ namespace NOMAD.MissionPlanner
             TempWarningC = defaults.TempWarningC;
             TempCriticalC = defaults.TempCriticalC;
             AudioAlerts = defaults.AudioAlerts;
+            DefaultLogDirectory = defaults.DefaultLogDirectory;
+            JetsonLogDirectory = defaults.JetsonLogDirectory;
+            LogVibrationWarning = defaults.LogVibrationWarning;
+            LogVibrationCritical = defaults.LogVibrationCritical;
+            LogHdopWarning = defaults.LogHdopWarning;
+            LogHdopCritical = defaults.LogHdopCritical;
+            LogMinimumSatellites = defaults.LogMinimumSatellites;
+            LogTuneRmsWarning = defaults.LogTuneRmsWarning;
+            LogTuneRmsCritical = defaults.LogTuneRmsCritical;
+            LogEkfVarianceWarning = defaults.LogEkfVarianceWarning;
+            LogEkfVarianceCritical = defaults.LogEkfVarianceCritical;
+            LogLiveBufferPoints = defaults.LogLiveBufferPoints;
+            LogInjectAlertsToHud = defaults.LogInjectAlertsToHud;
             DroneLengthCm = defaults.DroneLengthCm;
             DroneWidthCm = defaults.DroneWidthCm;
             DroneHeightCm = defaults.DroneHeightCm;

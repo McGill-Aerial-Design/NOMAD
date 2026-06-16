@@ -260,6 +260,12 @@ nul
 # Logs
 *.log
 logs/
+!mission_planner/src/Logs/
+!mission_planner/src/Logs/*.cs
+!mission_planner/tests/logs/
+!mission_planner/tests/logs/*.cs
+!mission_planner/tests/logs/fixtures/
+!mission_planner/tests/logs/fixtures/*.log
 
 # Test outputs
 test_output/

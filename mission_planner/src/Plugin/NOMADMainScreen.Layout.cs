@@ -106,7 +106,11 @@ namespace NOMAD.MissionPlanner
             _btnBoundaries.Click += (s, e) => ShowView("Boundaries");
             navPanel.Controls.Add(_btnBoundaries);
 
-            // Separator
+            navPanel.Controls.Add(CreateSeparatorLabel("ANALYSIS"));
+            _btnLogs = CreateSidebarButton("Log Analysis");
+            _btnLogs.Click += (s, e) => ShowView("Logs");
+            navPanel.Controls.Add(_btnLogs);
+
             navPanel.Controls.Add(CreateSeparatorLabel("TOOLS"));
 
             // Video button

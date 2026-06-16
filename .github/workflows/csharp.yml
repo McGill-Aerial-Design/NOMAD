@@ -63,6 +63,9 @@ jobs:
       - name: Gimbal command tests
         run: pwsh -File scripts/build/test_plugin_gimbal.ps1
 
+      - name: Flight log analysis tests
+        run: pwsh -File scripts/build/test_plugin_logs.ps1
+
   plugin-build:
     name: build MP plugin (Windows)
     runs-on: windows-latest
@@ -105,6 +108,9 @@ jobs:
           if (-not (Test-Path "mission_planner/src/bin/Release/NOMADPlugin.dll")) {
             throw "build did not produce NOMADPlugin.dll"
           }
+
+      - name: Flight log adapter smoke test
+        run: pwsh -File scripts/build/test_plugin_log_adapters.ps1
 
       - name: Upload plugin artifact
         uses: actions/upload-artifact@v6
