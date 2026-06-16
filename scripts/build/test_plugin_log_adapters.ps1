@@ -51,7 +51,8 @@ try {
     }
 
     $analysis = $plugin.GetType('NOMAD.MissionPlanner.LogAnalysis').GetMethod('Analyze')
-    $summary = $analysis.Invoke($null, @($model, $null))
+    # Reflection does not fill optional parameters, so pass the cancellation token explicitly.
+    $summary = $analysis.Invoke($null, @($model, $null, [System.Threading.CancellationToken]::None))
     if ([Math]::Abs($summary.ArmedDurationSeconds - 21) -gt 0.001) {
         throw "Expected a 21-second armed span, got $($summary.ArmedDurationSeconds)."
     }

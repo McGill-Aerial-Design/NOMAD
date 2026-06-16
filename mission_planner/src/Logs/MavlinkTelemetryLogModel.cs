@@ -20,7 +20,7 @@ namespace NOMAD.MissionPlanner
         private bool? _armed;
         private double? _lastMode;
         private DateTime? _firstTimestamp;
-        private long _packetIndex;
+        private double _lastSeconds;
 
         public MavlinkTelemetryLogModel(string path)
         {
@@ -161,11 +161,24 @@ namespace NOMAD.MissionPlanner
 
         private double RelativeSeconds(DateTime timestamp)
         {
-            _packetIndex++;
+            double seconds;
             if (timestamp == default(DateTime))
-                return (_packetIndex - 1) * 0.1;
-            if (!_firstTimestamp.HasValue) _firstTimestamp = timestamp;
-            return Math.Max(0, (timestamp - _firstTimestamp.Value).TotalSeconds);
+            {
+                // No capture time on this packet: keep the clock moving forward
+                // from the last known time so analysis stays time-ordered.
+                seconds = _lastSeconds + 0.1;
+            }
+            else
+            {
+                if (!_firstTimestamp.HasValue) _firstTimestamp = timestamp;
+                seconds = Math.Max(0, (timestamp - _firstTimestamp.Value).TotalSeconds);
+            }
+
+            // Enforce a monotonic timeline even if timestamped packets follow
+            // untimestamped ones (the anchor would otherwise restart near zero).
+            if (seconds < _lastSeconds) seconds = _lastSeconds;
+            _lastSeconds = seconds;
+            return seconds;
         }
 
         private static Dictionary<string, string> ObjectFields(object data)
@@ -205,7 +218,11 @@ namespace NOMAD.MissionPlanner
         private static string NormalizeTypeName(string name, string fallback)
         {
             string value = string.IsNullOrWhiteSpace(name) ? fallback : name;
-            value = value.Replace("mavlink_", "").Replace("_t", "");
+            value = value.Replace("mavlink_", "");
+            // Strip only the generated "_t" suffix; an inner "_t" (e.g. in
+            // "attitude_target_t") must survive.
+            if (value.EndsWith("_t", StringComparison.OrdinalIgnoreCase))
+                value = value.Substring(0, value.Length - 2);
             return value.ToUpperInvariant();
         }
 

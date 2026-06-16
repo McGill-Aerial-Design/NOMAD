@@ -158,7 +158,7 @@ namespace NOMAD.MissionPlanner
                     try
                     {
                         token.ThrowIfCancellationRequested();
-                        LogSummary summary = LogAnalysis.Analyze(data, CreateThresholds());
+                        LogSummary summary = LogAnalysis.Analyze(data, CreateThresholds(), token);
                         return (Data: data, Summary: summary);
                     }
                     catch

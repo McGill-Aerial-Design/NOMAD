@@ -3,14 +3,19 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
 
 namespace NOMAD.MissionPlanner
 {
     public static class LogAnalysis
     {
-        public static LogSummary Analyze(IFlightLogData log, LogAnalysisThresholds thresholds = null)
+        public static LogSummary Analyze(
+            IFlightLogData log,
+            LogAnalysisThresholds thresholds = null,
+            CancellationToken cancellationToken = default(CancellationToken))
         {
             if (log == null) throw new ArgumentNullException(nameof(log));
             thresholds = thresholds ?? new LogAnalysisThresholds();
@@ -22,17 +27,30 @@ namespace NOMAD.MissionPlanner
                     : Path.GetFileName(log.SourcePath),
             };
 
+            cancellationToken.ThrowIfCancellationRequested();
             var bounds = FindTimeBounds(log);
             summary.LogDurationSeconds = Math.Max(0, bounds.End - bounds.Start);
 
+            // Each step walks one (or a few) message types; checking between steps
+            // lets a superseded reload or a view dispose stop the background work
+            // promptly instead of churning the rest of a large log.
+            cancellationToken.ThrowIfCancellationRequested();
             AnalyzeFlightTime(log, summary, bounds);
+            cancellationToken.ThrowIfCancellationRequested();
             AnalyzeBattery(log, summary);
+            cancellationToken.ThrowIfCancellationRequested();
             AnalyzeGps(log, summary, thresholds);
+            cancellationToken.ThrowIfCancellationRequested();
             AnalyzeVibration(log, summary, thresholds);
+            cancellationToken.ThrowIfCancellationRequested();
             AnalyzeTune(log, summary, thresholds);
+            cancellationToken.ThrowIfCancellationRequested();
             AnalyzeEkf(log, summary, thresholds);
+            cancellationToken.ThrowIfCancellationRequested();
             AnalyzeThrottle(log, summary);
+            cancellationToken.ThrowIfCancellationRequested();
             AnalyzeMessages(log, summary);
+            cancellationToken.ThrowIfCancellationRequested();
             AnalyzeModes(log, summary, bounds);
 
             summary.Anomalies.Sort((a, b) => a.TimeSeconds.CompareTo(b.TimeSeconds));
@@ -516,14 +534,65 @@ namespace NOMAD.MissionPlanner
             var rows = Rows(log, "MODE").OrderBy(r => r.TimeSeconds).ToList();
             for (int i = 0; i < rows.Count; i++)
             {
-                string mode = rows[i].GetString("Mode", "ModeNum", "Name");
-                if (string.IsNullOrWhiteSpace(mode)) mode = "Unknown";
                 summary.Modes.Add(new ModeSpan
                 {
-                    Mode = mode,
+                    Mode = ResolveModeName(rows[i]),
                     StartSeconds = rows[i].TimeSeconds,
                     EndSeconds = i + 1 < rows.Count ? rows[i + 1].TimeSeconds : bounds.End,
                 });
+            }
+        }
+
+        private static string ResolveModeName(LogRecord row)
+        {
+            // Use a textual mode name when the parser already provides one
+            // (some firmwares/exports log the name directly).
+            string name = row.GetString("Mode", "Name");
+            if (!string.IsNullOrWhiteSpace(name)
+                && !double.TryParse(name, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+                return name;
+
+            // Otherwise translate the numeric Copter mode id to something readable.
+            if (row.TryGetDouble(out double number, "ModeNum", "Mode"))
+            {
+                int id = (int)Math.Round(number);
+                return CopterModeName(id) ?? $"Mode {id}";
+            }
+            return string.IsNullOrWhiteSpace(name) ? "Unknown" : name;
+        }
+
+        // ArduCopter flight-mode ids. The plugin and FlightModeVisuals are
+        // Copter-oriented; unknown ids fall back to "Mode N".
+        private static string CopterModeName(int mode)
+        {
+            switch (mode)
+            {
+                case 0: return "STABILIZE";
+                case 1: return "ACRO";
+                case 2: return "ALT_HOLD";
+                case 3: return "AUTO";
+                case 4: return "GUIDED";
+                case 5: return "LOITER";
+                case 6: return "RTL";
+                case 7: return "CIRCLE";
+                case 9: return "LAND";
+                case 11: return "DRIFT";
+                case 13: return "SPORT";
+                case 14: return "FLIP";
+                case 15: return "AUTOTUNE";
+                case 16: return "POSHOLD";
+                case 17: return "BRAKE";
+                case 18: return "THROW";
+                case 19: return "AVOID_ADSB";
+                case 20: return "GUIDED_NOGPS";
+                case 21: return "SMART_RTL";
+                case 22: return "FLOWHOLD";
+                case 23: return "FOLLOW";
+                case 24: return "ZIGZAG";
+                case 25: return "SYSTEMID";
+                case 26: return "AUTOROTATE";
+                case 27: return "AUTO_RTL";
+                default: return null;
             }
         }
 

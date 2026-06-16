@@ -63,29 +63,62 @@ namespace NOMAD.MissionPlanner
 
         private IEnumerable<LogRecord> EnumerateRecords(string actualType)
         {
+            IReadOnlyList<string> fields;
+            IEnumerator<DFLog.DFItem> source;
             lock (_sync)
             {
                 ThrowIfDisposed();
-                IReadOnlyList<string> fields = Fields(actualType);
-                foreach (DFLog.DFItem item in _buffer.GetEnumeratorType(actualType))
+                fields = Fields(actualType);
+                source = _buffer.GetEnumeratorType(actualType).GetEnumerator();
+            }
+
+            try
+            {
+                while (true)
                 {
-                    var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                    foreach (string field in fields)
+                    LogRecord record;
+                    // Only the buffer read is serialised. The lock is released across
+                    // each yield so a consumer's per-row work never blocks Dispose()
+                    // or the metadata accessors, and Dispose() interleaves between rows
+                    // instead of waiting for the whole enumeration to finish.
+                    lock (_sync)
                     {
-                        try
-                        {
-                            values[field] = item[field] ?? "";
-                        }
-                        catch
-                        {
-                            object raw = null;
-                            try { raw = item.GetRaw(field); } catch { }
-                            values[field] = Convert.ToString(raw, CultureInfo.InvariantCulture) ?? "";
-                        }
+                        if (_disposed) yield break;
+                        if (!source.MoveNext()) yield break;
+                        record = BuildRecord(actualType, source.Current, fields);
                     }
-                    yield return new LogRecord(actualType, item.timems / 1000d, values);
+                    yield return record;
                 }
             }
+            finally
+            {
+                lock (_sync)
+                {
+                    if (!_disposed) source.Dispose();
+                }
+            }
+        }
+
+        private static LogRecord BuildRecord(
+            string actualType,
+            DFLog.DFItem item,
+            IReadOnlyList<string> fields)
+        {
+            var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string field in fields)
+            {
+                try
+                {
+                    values[field] = item[field] ?? "";
+                }
+                catch
+                {
+                    object raw = null;
+                    try { raw = item.GetRaw(field); } catch { }
+                    values[field] = Convert.ToString(raw, CultureInfo.InvariantCulture) ?? "";
+                }
+            }
+            return new LogRecord(actualType, item.timems / 1000d, values);
         }
 
         public string Unit(string messageType, string field)

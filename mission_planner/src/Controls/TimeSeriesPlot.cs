@@ -171,12 +171,18 @@ namespace NOMAD.MissionPlanner
             DrawAxes(g, plot, viewMin, viewMax, valueBounds.Min, valueBounds.Max);
             DrawThresholds(g, plot, valueBounds.Min, valueBounds.Max);
             using (var clip = new Region(plot))
+            using (Region previous = g.Clip)
             {
-                Region previous = g.Clip;
                 g.Clip = clip;
-                foreach (TimeSeriesData data in visible)
-                    DrawSeries(g, plot, data, viewMin, viewMax, valueBounds.Min, valueBounds.Max);
-                g.Clip = previous;
+                try
+                {
+                    foreach (TimeSeriesData data in visible)
+                        DrawSeries(g, plot, data, viewMin, viewMax, valueBounds.Min, valueBounds.Max);
+                }
+                finally
+                {
+                    g.Clip = previous;
+                }
             }
             DrawLegend(g, visible);
             DrawHover(g, plot, visible, viewMin, viewMax);
@@ -287,38 +293,44 @@ namespace NOMAD.MissionPlanner
                 g.FillRectangle(background, track);
             using (var clip = new Region(track))
             using (var font = NOMADTheme.Font(NOMADTheme.SIZE_SMALL, FontStyle.Bold))
+            using (Region previous = g.Clip)
             {
-                Region previous = g.Clip;
                 g.Clip = clip;
-                foreach (ModeSpan mode in _modes)
+                try
                 {
-                    double start = Math.Max(minTime, mode.StartSeconds);
-                    double end = Math.Min(maxTime, mode.EndSeconds);
-                    if (end <= start)
-                        continue;
-
-                    int left = track.Left + (int)((start - minTime) / (maxTime - minTime) * track.Width);
-                    int right = track.Left + (int)((end - minTime) / (maxTime - minTime) * track.Width);
-                    var segment = new Rectangle(left, track.Top, Math.Max(2, right - left), track.Height);
-                    Color color = FlightModeVisuals.ColorFor(mode.Mode);
-                    using (var brush = new SolidBrush(color))
-                        g.FillRectangle(brush, segment);
-
-                    SizeF labelSize = g.MeasureString(mode.Mode, font);
-                    if (segment.Width >= labelSize.Width + 8)
+                    foreach (ModeSpan mode in _modes)
                     {
-                        using (var brush = new SolidBrush(ReadableTextColor(color)))
+                        double start = Math.Max(minTime, mode.StartSeconds);
+                        double end = Math.Min(maxTime, mode.EndSeconds);
+                        if (end <= start)
+                            continue;
+
+                        int left = track.Left + (int)((start - minTime) / (maxTime - minTime) * track.Width);
+                        int right = track.Left + (int)((end - minTime) / (maxTime - minTime) * track.Width);
+                        var segment = new Rectangle(left, track.Top, Math.Max(2, right - left), track.Height);
+                        Color color = FlightModeVisuals.ColorFor(mode.Mode);
+                        using (var brush = new SolidBrush(color))
+                            g.FillRectangle(brush, segment);
+
+                        SizeF labelSize = g.MeasureString(mode.Mode, font);
+                        if (segment.Width >= labelSize.Width + 8)
                         {
-                            g.DrawString(
-                                mode.Mode,
-                                font,
-                                brush,
-                                segment.Left + 4,
-                                segment.Top + (segment.Height - labelSize.Height) / 2);
+                            using (var brush = new SolidBrush(ReadableTextColor(color)))
+                            {
+                                g.DrawString(
+                                    mode.Mode,
+                                    font,
+                                    brush,
+                                    segment.Left + 4,
+                                    segment.Top + (segment.Height - labelSize.Height) / 2);
+                            }
                         }
                     }
                 }
-                g.Clip = previous;
+                finally
+                {
+                    g.Clip = previous;
+                }
             }
             using (var border = new Pen(NOMADTheme.CARD_BORDER))
                 g.DrawRectangle(border, track.Left, track.Top, track.Width - 1, track.Height - 1);
