@@ -123,6 +123,10 @@ namespace NOMAD.MissionPlanner
             _btnSlam3d.Click += (s, e) => ShowView("Slam3D");
             navPanel.Controls.Add(_btnSlam3d);
 
+            _btnMotorMusic = CreateSidebarButton("Motor Music");
+            _btnMotorMusic.Click += (s, e) => ShowView("MotorMusic");
+            navPanel.Controls.Add(_btnMotorMusic);
+
             // Terminal button
             _btnTerminal = CreateSidebarButton("Terminal");
             _btnTerminal.Click += (s, e) => ShowView("Terminal");

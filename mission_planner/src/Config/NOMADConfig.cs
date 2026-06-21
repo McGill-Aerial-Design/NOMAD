@@ -336,6 +336,25 @@ namespace NOMAD.MissionPlanner
         public bool AudioAlerts { get; set; } = true;
 
         // ============================================================
+        // Motor Music Configuration
+        // ============================================================
+
+        /// <summary>Number of motor outputs the music bridge should use.</summary>
+        public int MotorMusicMotorCount { get; set; } = 4;
+
+        /// <summary>Lowest active ArduPilot motor output, in PWM-equivalent microseconds.</summary>
+        public int MotorMusicMinOutputPwm { get; set; } = 1100;
+
+        /// <summary>Highest active ArduPilot motor output, in PWM-equivalent microseconds.</summary>
+        public int MotorMusicMaxOutputPwm { get; set; } = 1800;
+
+        /// <summary>Semitone offset applied before notes are sent to the motors.</summary>
+        public int MotorMusicTranspose { get; set; } = -24;
+
+        /// <summary>Playback speed multiplier for MIDI scheduling.</summary>
+        public double MotorMusicTempoScale { get; set; } = 1.0;
+
+        // ============================================================
         // Drone Geometry & SLAM 3D Configuration
         // ============================================================
 

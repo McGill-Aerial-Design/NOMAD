@@ -77,6 +77,7 @@ namespace NOMAD.MissionPlanner
         private Button _btnCalibration;
         private Button _btnSlam3d;
         private Button _btnLogs;
+        private Button _btnMotorMusic;
 
         // Content views
         private UserControl _currentView;
@@ -89,6 +90,7 @@ namespace NOMAD.MissionPlanner
         private ZedCalibrationView _calibrationView;
         private SLAM3DView _slam3dView;
         private NOMADLogView _logView;
+        private NOMADMotorMusicView _motorMusicView;
 
 
         // Update timer
@@ -370,6 +372,10 @@ namespace NOMAD.MissionPlanner
                     if (_logView == null) _logView = new NOMADLogView(_config, _sender);
                     newView = _logView;
                     break;
+                case "MotorMusic":
+                    if (_motorMusicView == null) _motorMusicView = new NOMADMotorMusicView(_config);
+                    newView = _motorMusicView;
+                    break;
             }
 
             if (newView != null)
@@ -394,6 +400,7 @@ namespace NOMAD.MissionPlanner
                 _btnCalibration,
                 _btnSlam3d,
                 _btnLogs,
+                _btnMotorMusic,
             };
             foreach (var btn in buttons)
             {
@@ -417,6 +424,7 @@ namespace NOMAD.MissionPlanner
                 case "Calibration": activeBtn = _btnCalibration; break;
                 case "Slam3D": activeBtn = _btnSlam3d; break;
                 case "Logs": activeBtn = _btnLogs; break;
+                case "MotorMusic": activeBtn = _btnMotorMusic; break;
             }
 
             if (activeBtn != null)
@@ -477,6 +485,7 @@ namespace NOMAD.MissionPlanner
                 _calibrationView?.Dispose();
                 _slam3dView?.Dispose();
                 _logView?.Dispose();
+                _motorMusicView?.Dispose();
                 // Dispose any module-contributed views built in module mode.
                 foreach (var cached in _descriptorViewCache.Values)
                     cached?.Dispose();

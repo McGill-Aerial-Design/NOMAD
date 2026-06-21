@@ -188,6 +188,12 @@ namespace NOMAD.MissionPlanner
             if (LogMinimumSatellites < 0 || LogMinimumSatellites > 40) LogMinimumSatellites = 8;
             if (LogLiveBufferPoints < 60 || LogLiveBufferPoints > 10000) LogLiveBufferPoints = 600;
             if (string.IsNullOrWhiteSpace(JetsonLogDirectory)) JetsonLogDirectory = "~/NOMAD/logs";
+            MotorMusicMotorCount = ClampInt(MotorMusicMotorCount, 1, 12, 4);
+            MotorMusicMinOutputPwm = ClampInt(MotorMusicMinOutputPwm, 1000, 2000, 1100);
+            MotorMusicMaxOutputPwm = ClampInt(MotorMusicMaxOutputPwm, MotorMusicMinOutputPwm, 2000, 1800);
+            MotorMusicTranspose = ClampInt(MotorMusicTranspose, -48, 12, -24);
+            if (MotorMusicTempoScale < 0.25 || MotorMusicTempoScale > 2.0)
+                MotorMusicTempoScale = 1.0;
 
             if (Payloads == null)
             {
@@ -223,6 +229,12 @@ namespace NOMAD.MissionPlanner
         {
             if (double.IsNaN(value) || double.IsInfinity(value) || value < min || value > max)
                 return fallback;
+            return value;
+        }
+
+        private static int ClampInt(int value, int min, int max, int fallback)
+        {
+            if (value < min || value > max) return fallback;
             return value;
         }
 
@@ -268,6 +280,11 @@ namespace NOMAD.MissionPlanner
             TempWarningC = defaults.TempWarningC;
             TempCriticalC = defaults.TempCriticalC;
             AudioAlerts = defaults.AudioAlerts;
+            MotorMusicMotorCount = defaults.MotorMusicMotorCount;
+            MotorMusicMinOutputPwm = defaults.MotorMusicMinOutputPwm;
+            MotorMusicMaxOutputPwm = defaults.MotorMusicMaxOutputPwm;
+            MotorMusicTranspose = defaults.MotorMusicTranspose;
+            MotorMusicTempoScale = defaults.MotorMusicTempoScale;
             DefaultLogDirectory = defaults.DefaultLogDirectory;
             JetsonLogDirectory = defaults.JetsonLogDirectory;
             LogVibrationWarning = defaults.LogVibrationWarning;

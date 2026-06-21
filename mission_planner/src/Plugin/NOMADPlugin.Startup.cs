@@ -203,7 +203,8 @@ namespace NOMAD.MissionPlanner
                     $"McGill Aerial Design — AEAC 2026\n\n" +
                     $"Hover the NOMAD menu for tools; click it to open the\n" +
                     $"NOMAD screen (dashboard, flight boundaries, video,\n" +
-                    $"terminal, health, dual-link status, ZED calibration).\n\n" +
+                    $"terminal, health, motor music, dual-link status,\n" +
+                    $"ZED calibration).\n\n" +
                     $"Geofence monitoring with enforced violation actions,\n" +
                     $"plugin-wide alerts with toast overlays, MAVLink dual-link\n" +
                     $"failover routing, and configurable payload controls.\n\n" +
