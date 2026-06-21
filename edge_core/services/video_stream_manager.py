@@ -20,6 +20,7 @@ Runs on the Jetson Edge Core host, controls the bridge inside Docker.
 import json
 import logging
 import os
+import shlex
 import subprocess
 import threading
 import time
@@ -56,6 +57,7 @@ class StreamStatus:
     width: int
     height: int
     bitrate_kbps: int
+    last_frame_age_s: float = -1.0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -78,6 +80,7 @@ class VideoStreamManager:
     def __init__(
         self,
         container_name: str = "nomad_isaac_ros",
+        relay_http_host: str = "localhost",
         relay_http_port: int = 9200,
         rtsp_url: str = DEFAULT_RTSP_URL,
         default_topic: str = "/zed/zed_node/rgb/color/rect/image",
@@ -85,8 +88,10 @@ class VideoStreamManager:
         height: int = 360,
         fps: int = 15,
         bitrate: int = 800,
+        external_bridge: bool = False,
     ):
         self.container_name = container_name
+        self.relay_http_host = relay_http_host
         self.relay_http_port = relay_http_port
         self.rtsp_url = rtsp_url
         self.default_topic = default_topic
@@ -94,6 +99,7 @@ class VideoStreamManager:
         self.height = height
         self.fps = fps
         self.bitrate = bitrate
+        self.external_bridge = external_bridge
         self._edge_core_api_key = env_secret("NOMAD_API_KEY") or ""
         self._edge_core_internal_token = env_secret("NOMAD_INTERNAL_TOKEN") or ""
 
@@ -101,7 +107,14 @@ class VideoStreamManager:
         self._watchdog_stop = threading.Event()
         self._watchdog_thread: threading.Thread | None = None
 
-        logger.info("VideoStreamManager initialized (container=%s, rtsp=%s)", container_name, rtsp_url)
+        logger.info(
+            "VideoStreamManager initialized (container=%s, relay=%s:%s, rtsp=%s, external=%s)",
+            container_name,
+            relay_http_host,
+            relay_http_port,
+            rtsp_url,
+            external_bridge,
+        )
 
     def is_container_running(self) -> bool:
         """Check if the Isaac ROS container is running."""
@@ -119,9 +132,12 @@ class VideoStreamManager:
 
     def _get_relay_status_data(self, timeout_s: float = 2.0) -> dict[str, Any] | None:
         """Fetch bridge /status JSON, or None if unavailable."""
+        return self._get_relay_json("/status", timeout_s=timeout_s)
+
+    def _get_relay_json(self, path: str, timeout_s: float = 2.0) -> dict[str, Any] | None:
+        """Fetch JSON from the bridge HTTP API, or None if unavailable."""
         try:
-            url = f"http://localhost:{self.relay_http_port}/status"
-            with urlopen(url, timeout=timeout_s) as response:
+            with urlopen(self._relay_url(path), timeout=timeout_s) as response:
                 return json.loads(response.read().decode())
         except Exception:
             return None
@@ -129,8 +145,7 @@ class VideoStreamManager:
     def is_relay_running(self, require_recent_frames: bool = False) -> bool:
         """Check if the simple video bridge is running inside the container."""
         try:
-            url = f"http://localhost:{self.relay_http_port}/health"
-            with urlopen(url, timeout=2) as response:
+            with urlopen(self._relay_url("/health"), timeout=2) as response:
                 data = json.loads(response.read().decode())
             healthy = data.get("healthy", False)
             pipeline_playing = data.get("pipeline_playing", healthy)
@@ -153,8 +168,24 @@ class VideoStreamManager:
             if self.is_relay_running(require_recent_frames=True):
                 logger.info("Simple video bridge already running, adopting existing instance")
                 return (True, "Already running")
-            elif self.is_relay_running(require_recent_frames=False):
+            relay_alive = self.is_relay_running(require_recent_frames=False)
+            if relay_alive and self.external_bridge:
+                logger.info("External simple video bridge is alive, waiting for fresh frames")
+                if self._wait_for_fresh_relay():
+                    return (True, "External bridge running")
+                self._request_pipeline_restart()
+                if self._wait_for_fresh_relay():
+                    return (True, "External bridge running")
+                msg = f"External video bridge is reachable but not receiving fresh frames from {self.default_topic}."
+                logger.warning(msg)
+                return (False, msg)
+            if relay_alive:
                 logger.warning("Simple video bridge process is alive but not receiving fresh frames; restarting bridge")
+
+            if self.external_bridge:
+                msg = f"External video bridge is not reachable at {self.relay_http_host}:{self.relay_http_port}."
+                logger.warning(msg)
+                return (False, msg)
 
             if not self.is_container_running():
                 msg = f"Docker container '{self.container_name}' is not running. Start Isaac ROS first."
@@ -213,15 +244,17 @@ class VideoStreamManager:
                     self.container_name,
                     "bash",
                     "-c",
-                    f"source {_NOMAD_ROS_ROOT}/setup.bash 2>/dev/null; source {_NOMAD_ROS_ROOT}/install/setup.bash 2>/dev/null; "
+                    f"source {_NOMAD_ROS_ROOT}/setup.bash 2>/dev/null; "
+                    f"source {_NOMAD_ROS_ROOT}/install/setup.bash 2>/dev/null; "
                     f"source {_NOMAD_ISAAC_WS}/install/setup.bash 2>/dev/null; "
                     f"python3 /tmp/{script_name} "
-                    f"--source-topic '{self.default_topic}' "
+                    f"--source-topic {shlex.quote(self.default_topic)} "
                     f"--width {self.width} "
                     f"--height {self.height} "
                     f"--fps {self.fps} "
                     f"--bitrate {self.bitrate} "
                     f"--http-port {self.relay_http_port} "
+                    f"--rtsp-url {shlex.quote(self.rtsp_url)} "
                     f"> /tmp/video_bridge.log 2>&1",
                 ]
             )
@@ -274,6 +307,13 @@ class VideoStreamManager:
             logger.error(msg)
             return (False, msg)
 
+    def _wait_for_fresh_relay(self, attempts: int = 10, delay_s: float = 1.0) -> bool:
+        for _ in range(attempts):
+            if self.is_relay_running(require_recent_frames=True):
+                return True
+            time.sleep(delay_s)
+        return False
+
     # -- watchdog (thread lifecycle owned by VideoStreamModule) ---------------
 
     def start_watchdog(self, initial_delay_s: float = 120.0) -> None:
@@ -304,7 +344,16 @@ class VideoStreamManager:
         self._watchdog_stop.wait(initial_delay_s)
         while not self._watchdog_stop.is_set():
             try:
-                if not self.is_container_running():
+                if self.external_bridge:
+                    if not self.is_relay_running(require_recent_frames=False):
+                        logger.warning(
+                            "Watchdog: external video bridge unavailable at %s:%s",
+                            self.relay_http_host,
+                            self.relay_http_port,
+                        )
+                    elif not self.is_relay_running(require_recent_frames=True):
+                        self._request_pipeline_restart()
+                elif not self.is_container_running():
                     pass
                 elif not self.is_relay_running(require_recent_frames=False):
                     logger.warning("Watchdog: video bridge not running, restarting...")
@@ -313,18 +362,24 @@ class VideoStreamManager:
                         logger.error("Watchdog: restart failed - %s", msg)
                 elif not self.is_relay_running(require_recent_frames=True):
                     # Process alive but no frames — GStreamer pipeline stalled.
-                    logger.warning("Watchdog: bridge running but no recent frames, triggering pipeline restart")
-                    try:
-                        req = Request(f"http://localhost:{self.relay_http_port}/restart", method="POST")
-                        urlopen(req, timeout=5)
-                    except Exception as e:
-                        logger.warning("Watchdog: pipeline restart request failed (%s), relaunching bridge", e)
-                        ok, msg = self.start_with_reason()
-                        if not ok:
-                            logger.error("Watchdog: relaunch failed - %s", msg)
+                    self._request_pipeline_restart()
             except Exception as e:
                 logger.error("Watchdog: unexpected error - %s", e)
             self._watchdog_stop.wait(30)
+
+    def _request_pipeline_restart(self) -> None:
+        """Ask the bridge HTTP API to restart its GStreamer pipeline."""
+        logger.warning("Watchdog: bridge running but no recent frames, triggering pipeline restart")
+        try:
+            urlopen(Request(self._relay_url("/restart"), method="POST"), timeout=5)
+        except Exception as e:
+            if self.external_bridge:
+                logger.warning("Watchdog: external pipeline restart request failed (%s)", e)
+                return
+            logger.warning("Watchdog: pipeline restart request failed (%s), relaunching bridge", e)
+            ok, msg = self.start_with_reason()
+            if not ok:
+                logger.error("Watchdog: relaunch failed - %s", msg)
 
     # -- bridge HTTP API ------------------------------------------------------
 
@@ -335,7 +390,7 @@ class VideoStreamManager:
                 logger.warning("Cannot switch topic: bridge not running")
                 return False
             try:
-                url = f"http://localhost:{self.relay_http_port}/switch?topic={quote(topic, safe='')}"
+                url = self._relay_url(f"/switch?topic={quote(topic, safe='')}")
                 with urlopen(Request(url, method="POST"), timeout=5) as response:
                     data = json.loads(response.read().decode())
                 if data.get("success"):
@@ -350,6 +405,32 @@ class VideoStreamManager:
                 logger.error("Error switching topic: %s", e)
                 return False
 
+    def list_topics(self) -> list[dict[str, str]]:
+        """List ROS image topics exposed by the bridge."""
+        fallback = [{"name": self.default_topic, "type": "sensor_msgs/msg/Image"}]
+        data = self._get_relay_json("/topics", timeout_s=5.0)
+        if not data:
+            return fallback
+
+        topics = []
+        for item in data.get("topics", []):
+            if isinstance(item, str):
+                name = item
+                msg_type = "sensor_msgs/msg/Image"
+            else:
+                name = str(item.get("name", ""))
+                msg_type = str(item.get("type", "sensor_msgs/msg/Image"))
+            if name:
+                topics.append({"name": name, "type": msg_type})
+        return topics or fallback
+
+    def get_overlay_status(self) -> dict[str, Any]:
+        """Get detection overlay state from the bridge."""
+        data = self._get_relay_json("/overlay/status", timeout_s=2.0)
+        if data is None:
+            return {"enabled": False, "detection_count": 0}
+        return data
+
     def set_overlay(self, enabled: bool) -> bool:
         """Enable/disable the ROS2 detection overlay drawn onto the RTSP feed."""
         if not self.is_relay_running():
@@ -357,8 +438,7 @@ class VideoStreamManager:
             return False
         action = "enable" if enabled else "disable"
         try:
-            url = f"http://localhost:{self.relay_http_port}/overlay/{action}"
-            with urlopen(Request(url, method="POST"), timeout=5) as response:
+            with urlopen(Request(self._relay_url(f"/overlay/{action}"), method="POST"), timeout=5) as response:
                 data = json.loads(response.read().decode())
             return data.get("success", False)
         except Exception as e:
@@ -379,6 +459,7 @@ class VideoStreamManager:
             width=self.width,
             height=self.height,
             bitrate_kbps=self.bitrate,
+            last_frame_age_s=-1.0,
         )
         if not self.is_relay_running():
             return default_status
@@ -394,10 +475,16 @@ class VideoStreamManager:
             error_count=data.get("error_count", 0),
             dropped_count=data.get("dropped_count", 0),
             uptime_s=0.0,  # not tracked by the bridge
-            width=self.width,
-            height=self.height,
-            bitrate_kbps=self.bitrate,
+            width=data.get("width", self.width),
+            height=data.get("height", self.height),
+            bitrate_kbps=data.get("bitrate_kbps", self.bitrate),
+            last_frame_age_s=data.get("last_frame_age_s", -1.0),
         )
 
     def _local_rtsp_url(self) -> str:
         return self.rtsp_url.replace(_DOCKER_HOST_IP, "localhost")
+
+    def _relay_url(self, path: str) -> str:
+        if not path.startswith("/"):
+            path = f"/{path}"
+        return f"http://{self.relay_http_host}:{self.relay_http_port}{path}"

@@ -97,6 +97,12 @@ def test_local_rtsp_url_rewrites_docker_host():
     assert m._local_rtsp_url() == "rtsp://localhost:8554/stream"
 
 
+def test_relay_url_uses_configured_host():
+    m = VideoStreamManager(relay_http_host="video_bridge_gazebo", relay_http_port=9201)
+    assert m._relay_url("status") == "http://video_bridge_gazebo:9201/status"
+    assert m._relay_url("/health") == "http://video_bridge_gazebo:9201/health"
+
+
 def test_default_rtsp_url_is_single_stream():
     # The Jetson exposes exactly one stream — no /primary or /secondary.
     assert vsm.DEFAULT_RTSP_URL.endswith(":8554/stream")
@@ -129,6 +135,12 @@ def test_get_relay_status_data(monkeypatch):
     assert m._get_relay_status_data() == {"last_frame_age_s": 1.0}
     _urlopen_map(monkeypatch, {"/status": URLError("down")})
     assert m._get_relay_status_data() is None
+
+
+def test_get_relay_status_data_uses_custom_host(monkeypatch):
+    m = VideoStreamManager(relay_http_host="video_bridge_gazebo")
+    _urlopen_map(monkeypatch, {"video_bridge_gazebo:9200/status": '{"last_frame_age_s": 1.0}'})
+    assert m._get_relay_status_data() == {"last_frame_age_s": 1.0}
 
 
 def test_is_relay_running_healthy(monkeypatch):
@@ -182,6 +194,42 @@ def test_start_fails_when_container_down(monkeypatch):
     monkeypatch.setattr(m, "is_container_running", lambda: False)
     ok, msg = m.start_with_reason()
     assert ok is False and "is not running" in msg
+
+
+def test_start_external_bridge_waits_for_recent_frames(monkeypatch):
+    m = VideoStreamManager(relay_http_host="video_bridge_gazebo", external_bridge=True)
+    calls = {"recent": 0}
+
+    def relay(require_recent_frames=False):
+        if not require_recent_frames:
+            return True
+        calls["recent"] += 1
+        return calls["recent"] >= 2
+
+    monkeypatch.setattr(m, "is_relay_running", relay)
+    monkeypatch.setattr(vsm.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(m, "is_container_running", lambda: (_ for _ in ()).throw(AssertionError("no docker")))
+    assert m.start_with_reason() == (True, "External bridge running")
+
+
+def test_start_external_bridge_fails_when_alive_but_stale(monkeypatch):
+    m = VideoStreamManager(relay_http_host="video_bridge_gazebo", external_bridge=True)
+    monkeypatch.setattr(m, "is_relay_running", lambda require_recent_frames=False: not require_recent_frames)
+    monkeypatch.setattr(vsm.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(m, "_request_pipeline_restart", lambda: None)
+    ok, msg = m.start_with_reason()
+    assert ok is False
+    assert "not receiving fresh frames" in msg
+
+
+def test_start_external_bridge_reports_unreachable_without_isaac_container_message(monkeypatch):
+    m = VideoStreamManager(relay_http_host="video_bridge_gazebo", external_bridge=True)
+    monkeypatch.setattr(m, "is_relay_running", lambda require_recent_frames=False: False)
+    monkeypatch.setattr(m, "is_container_running", lambda: (_ for _ in ()).throw(AssertionError("no docker")))
+    ok, msg = m.start_with_reason()
+    assert ok is False
+    assert "video_bridge_gazebo:9200" in msg
+    assert "nomad_isaac_ros" not in msg
 
 
 def test_start_fails_when_script_missing(monkeypatch):
@@ -239,8 +287,18 @@ def test_start_succeeds_when_relay_comes_up(monkeypatch):
     monkeypatch.setattr(m, "is_container_running", lambda: True)
     monkeypatch.setattr(vsm.os.path, "exists", lambda p: True)
     monkeypatch.setattr(vsm.time, "sleep", lambda *_: None)
-    monkeypatch.setattr(vsm.subprocess, "run", _run_handler(exec=_ok(returncode=0)))
+    recorded = []
+    run = _run_handler(exec=_ok(returncode=0))
+
+    def recording_run(cmd, **kwargs):
+        recorded.append(cmd)
+        return run(cmd, **kwargs)
+
+    monkeypatch.setattr(vsm.subprocess, "run", recording_run)
     assert m.start_with_reason() == (True, "Started successfully")
+    docker_exec = next(cmd for cmd in recorded if "-d" in cmd[:3])
+    # shlex.quote leaves a shell-safe URL unquoted; the point is no naive '...'.
+    assert "--rtsp-url rtsp://172.17.0.1:8554/stream" in " ".join(docker_exec)
 
 
 def _start_loop_setup(monkeypatch, m):
@@ -323,6 +381,15 @@ def test_watchdog_restarts_dead_bridge(monkeypatch):
     _drive_watchdog_once(monkeypatch, m)
     m._watchdog_loop(0.0)
     assert restarted == [1]
+
+
+def test_watchdog_external_bridge_does_not_touch_docker_when_unavailable(monkeypatch):
+    m = VideoStreamManager(external_bridge=True)
+    monkeypatch.setattr(m, "is_container_running", lambda: (_ for _ in ()).throw(AssertionError("no docker")))
+    monkeypatch.setattr(m, "is_relay_running", lambda require_recent_frames=False: False)
+    monkeypatch.setattr(m, "start_with_reason", lambda: (_ for _ in ()).throw(AssertionError("no relaunch")))
+    _drive_watchdog_once(monkeypatch, m)
+    m._watchdog_loop(0.0)
 
 
 def test_watchdog_logs_failed_restart(monkeypatch):
@@ -422,6 +489,36 @@ def test_switch_topic_url_and_generic_errors(monkeypatch):
     assert m.switch_topic("/t") is False
 
 
+def test_list_topics_falls_back_when_bridge_unavailable(monkeypatch):
+    m = VideoStreamManager(default_topic="/zed/default")
+    monkeypatch.setattr(m, "_get_relay_json", lambda path, timeout_s=2.0: None)
+    assert m.list_topics() == [{"name": "/zed/default", "type": "sensor_msgs/msg/Image"}]
+
+
+def test_list_topics_normalizes_bridge_payload(monkeypatch):
+    m = VideoStreamManager()
+    monkeypatch.setattr(
+        m,
+        "_get_relay_json",
+        lambda path, timeout_s=2.0: {
+            "topics": [
+                "/zed/zed_node/rgb/color/rect/image",
+                {"name": "/zed/right/image_rect_color", "type": "sensor_msgs/msg/Image"},
+            ]
+        },
+    )
+    assert m.list_topics() == [
+        {"name": "/zed/zed_node/rgb/color/rect/image", "type": "sensor_msgs/msg/Image"},
+        {"name": "/zed/right/image_rect_color", "type": "sensor_msgs/msg/Image"},
+    ]
+
+
+def test_get_overlay_status_defaults_when_bridge_unavailable(monkeypatch):
+    m = VideoStreamManager()
+    monkeypatch.setattr(m, "_get_relay_json", lambda path, timeout_s=2.0: None)
+    assert m.get_overlay_status() == {"enabled": False, "detection_count": 0}
+
+
 def test_set_overlay(monkeypatch):
     m = VideoStreamManager()
     monkeypatch.setattr(m, "is_relay_running", lambda require_recent_frames=False: False)
@@ -463,7 +560,12 @@ def test_get_status_populated_from_bridge(monkeypatch):
             "frame_count": 100,
             "error_count": 1,
             "dropped_count": 2,
+            "last_frame_age_s": 0.25,
+            "width": 800,
+            "height": 600,
+            "bitrate_kbps": 1200,
         },
     )
     s = m.get_status()
     assert s.streaming is True and s.current_topic == "/zed/x" and s.fps == 14.9 and s.frame_count == 100
+    assert s.width == 800 and s.height == 600 and s.bitrate_kbps == 1200 and s.last_frame_age_s == 0.25

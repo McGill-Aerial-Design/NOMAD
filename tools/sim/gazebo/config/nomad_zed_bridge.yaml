@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 The NOMAD Authors
+#
+# ros_gz_bridge config mapping the Gazebo iris's sensor/odometry gz topics onto
+# the ZED-style ROS 2 topics the NOMAD ROS-HTTP bridge subscribes to. The drone
+# is flown by ArduPilot SITL; these are the same topic names the real ZED ROS2
+# wrapper publishes on the Jetson, so edge_core.ros_http_bridge is unchanged.
+#
+# Topic origins (world_name=runway, robot_name=iris — the launch defaults):
+#   /model/iris/odometry ........................... gz ground-truth Odometry
+#   .../zed_camera_link/sensor/zed_left/image ...... gz ZED-2i LEFT camera (pitch servo)
+#   .../zed_camera_link/sensor/zed_right/image ..... gz ZED-2i RIGHT camera (stereo pair)
+#   .../link/imu_link/sensor/imu_sensor/imu ........ gz IMU
+#   .../base_link/sensor/magnetometer_sensor ....... gz magnetometer
+#
+# The ZED 2i is a stereo camera: the model carries two 360p cameras at the 120 mm
+# baseline. The LEFT camera is the ZED "rgb" feed NOMAD's video bridge consumes.
+---
+- ros_topic_name: "/zed/zed_node/odom"
+  gz_topic_name: "/model/iris/odometry"
+  ros_type_name: "nav_msgs/msg/Odometry"
+  gz_type_name: "gz.msgs.Odometry"
+  direction: GZ_TO_ROS
+
+# --- LEFT camera (ZED "rgb"/left) — the feed NOMAD's video bridge consumes ---
+- ros_topic_name: "/zed/zed_node/rgb/color/rect/image"
+  gz_topic_name: "/world/runway/model/iris/link/zed_camera_link/sensor/zed_left/image"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/zed/zed_node/left/image_rect_color"
+  gz_topic_name: "/world/runway/model/iris/link/zed_camera_link/sensor/zed_left/image"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/zed/zed_node/rgb/camera_info"
+  gz_topic_name: "/world/runway/model/iris/link/zed_camera_link/sensor/zed_left/camera_info"
+  ros_type_name: "sensor_msgs/msg/CameraInfo"
+  gz_type_name: "gz.msgs.CameraInfo"
+  direction: GZ_TO_ROS
+
+# --- RIGHT camera (stereo pair) ---
+- ros_topic_name: "/zed/zed_node/right/image_rect_color"
+  gz_topic_name: "/world/runway/model/iris/link/zed_camera_link/sensor/zed_right/image"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/zed/zed_node/right/camera_info"
+  gz_topic_name: "/world/runway/model/iris/link/zed_camera_link/sensor/zed_right/camera_info"
+  ros_type_name: "sensor_msgs/msg/CameraInfo"
+  gz_type_name: "gz.msgs.CameraInfo"
+  direction: GZ_TO_ROS
+
+# --- DEPTH (gz depth camera, ground truth, registered to the LEFT lens) ---
+# The ZED SDK cannot consume Gazebo frames; this gz depth camera stands in for
+# the SDK's stereo depth so the dev environment has /zed/zed_node/depth/*.
+- ros_topic_name: "/zed/zed_node/depth/depth_registered"
+  gz_topic_name: "/world/runway/model/iris/link/zed_camera_link/sensor/zed_depth/depth_image"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/zed/zed_node/depth/camera_info"
+  gz_topic_name: "/world/runway/model/iris/link/zed_camera_link/sensor/zed_depth/camera_info"
+  ros_type_name: "sensor_msgs/msg/CameraInfo"
+  gz_type_name: "gz.msgs.CameraInfo"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/zed/zed_node/point_cloud/cloud_registered"
+  gz_topic_name: "/world/runway/model/iris/link/zed_camera_link/sensor/zed_depth/depth_image/points"
+  ros_type_name: "sensor_msgs/msg/PointCloud2"
+  gz_type_name: "gz.msgs.PointCloudPacked"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/zed/zed_node/imu/data"
+  gz_topic_name: "/world/runway/model/iris/link/imu_link/sensor/imu_sensor/imu"
+  ros_type_name: "sensor_msgs/msg/Imu"
+  gz_type_name: "gz.msgs.IMU"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/zed/zed_node/imu/mag"
+  gz_topic_name: "/world/runway/model/iris/link/base_link/sensor/magnetometer_sensor/magnetometer"
+  ros_type_name: "sensor_msgs/msg/MagneticField"
+  gz_type_name: "gz.msgs.Magnetometer"
+  direction: GZ_TO_ROS

@@ -129,6 +129,30 @@ def test_detailed_health_with_monitor(monkeypatch):
     assert body["thermal_zone"] == "normal"
 
 
+def test_detailed_health_includes_external_vio(monkeypatch):
+    app = _build_app(monkeypatch)
+    app.state.health_monitor = _monitor()
+    app.state.external_vio_state = {
+        "source": "gazebo",
+        "confidence": 0.9,
+        "timestamp": 100.0,
+        "x": 1.0,
+        "y": 2.0,
+        "z": -0.2,
+    }
+    app.state.vio_trajectory = [
+        {"timestamp": 100.0},
+        {"timestamp": 100.5},
+        {"timestamp": 101.0},
+    ]
+    monkeypatch.setattr("edge_core.api_routes.system.time.time", lambda: 101.0)
+    with TestClient(app) as client:
+        body = client.get("/health/detailed").json()
+    assert body["vio"]["health"] == "healthy"
+    assert body["vio"]["source"] == "gazebo"
+    assert body["vio"]["message_rate_hz"] == 2.0
+
+
 # ==================== /network/status ====================
 
 

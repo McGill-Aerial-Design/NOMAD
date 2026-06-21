@@ -78,6 +78,82 @@ sitl-fence = """docker run --rm --network nomad-dev_default -v $PWD:/work -w /wo
 # the mount points where commanded. Reboots the vehicle to apply MNT1_TYPE, so it
 # runs LAST in the nightly sequence. Only needs the operator link.
 sitl-gimbal = """docker run --rm --network nomad-dev_default -v $PWD:/work -w /work -e PYTHONPATH=/work -e NOMAD_SITL_OPERATOR=tcp:nomad-dev-sitl-1:5762 --entrypoint python nomad-edge-dev:latest tests/sitl/gimbal_mount_control.py"""
+# ROS2 simulation stack (Tier 1 — CPU, no GPU/ZED/Jetson required).
+#   pixi run sim-ros-build   # build the nomad-sim-ros:latest image (run once)
+#   pixi run sim-ros-up      # start edge_core + ros_bridge + zed_sim (detached)
+#   pixi run sim-ros-down    # stop and remove the ros-profile containers
+#   pixi run sim-ros-logs    # tail logs from all ros-profile services
+#   pixi run test-ros-integration  # end-to-end bridge integration test (needs sim-ros-build first)
+sim-ros-build = "docker build -f docker/Dockerfile.sim-ros -t nomad-sim-ros:latest ."
+sim-ros-down = "docker compose -p nomad-ros -f docker/docker-compose.dev.yml --profile ros down"
+sim-ros-logs = "docker compose -p nomad-ros -f docker/docker-compose.dev.yml --profile ros logs -f"
+# Runs the integration test INSIDE the sim-ros image (rclpy + pytest present in
+# the image). Volume-mounts tests/ so the test suite is always current code.
+# Exercises the REAL rclpy bridge node end-to-end against an in-process HTTP stub.
+# Requires: pixi run sim-ros-build
+test-ros-integration = """
+docker run --rm -v $PWD/tests:/opt/nomad/tests nomad-sim-ros:latest python3 -m pytest tests/ros/ -v
+"""
+# ROS2 simulation stack (Tier 3 — ArduPilot SITL + visible Gazebo ZED-2i).
+#   Visible by default: gz sim runs with its GUI on a virtual X display exposed
+#   through noVNC at http://localhost:6080/vnc.html. No GPU is required; llvmpipe
+#   software GL is used unless you attach an NVIDIA GPU. A ZED-2i-tuned Gazebo
+#   camera publishes ZED-style ROS2 topics so the REAL ros_http_bridge is driven
+#   by 3D physics simulation instead of synthetic math. Gazebo odometry drives
+#   /zed/zed_node/odom; Edge Core's /api/vio/status reflects that odometry.
+#
+#   pixi run sim-gazebo-build  # build the nomad-sim-gazebo:latest image (run once)
+#   pixi run sim-gazebo-up     # start edge_core + ros_bridge + visible gazebo
+#   pixi run sim-gazebo-open   # open the noVNC Gazebo GUI in your browser
+#   pixi run sim-gazebo-up-headless  # same stack with gz --headless-rendering
+#   pixi run sim-gazebo-up-fast      # headless, lower camera load for RTF checks
+#   pixi run sim-gazebo-down   # stop and remove the gazebo-profile containers
+#   pixi run sim-gazebo-logs   # tail logs from all gazebo-profile services
+#
+# Depth: the gz depth camera publishes /zed/zed_node/depth/depth_registered +
+# /zed/zed_node/point_cloud/cloud_registered (ground truth, no GPU required).
+sim-gazebo-build = "docker build -f docker/Dockerfile.sim-gazebo -t nomad-sim-gazebo:latest ."
+sim-gazebo-open = "python -m webbrowser http://localhost:6080/vnc.html"
+sim-gazebo-down = "docker compose -p nomad-gazebo -f docker/docker-compose.dev.yml --profile gazebo down"
+sim-gazebo-logs = "docker compose -p nomad-gazebo -f docker/docker-compose.dev.yml --profile gazebo logs -f"
+sim-gazebo-ps = "docker compose -p nomad-gazebo -f docker/docker-compose.dev.yml --profile gazebo ps"
+
+# These tasks only set env that differs from the compose `${VAR:-default}`
+# defaults (see docker-compose.dev.yml). The shared perception/video wiring is
+# what selects the profile; Gazebo/SITL tuning (verbosity, rate, synthetic
+# clock, RTSP URL, default headless) already defaults to these values in compose.
+"sim-ros-up".cmd = "docker compose -p nomad-ros -f docker/docker-compose.dev.yml --profile ros up -d --build"
+"sim-ros-up".env.NOMAD_SIM_PERCEPTION_RUNTIME = "ros_sim"
+"sim-ros-up".env.VIDEO_RELAY_HTTP_HOST = "video_bridge"
+"sim-ros-up".env.NOMAD_VIDEO_EXTERNAL_BRIDGE = "1"
+
+"sim-gazebo-up".cmd = "docker compose -p nomad-gazebo -f docker/docker-compose.dev.yml --profile gazebo up -d --build"
+"sim-gazebo-up".env.NOMAD_SIM_PERCEPTION_RUNTIME = "gazebo"
+"sim-gazebo-up".env.VIDEO_RELAY_HTTP_HOST = "video_bridge_gazebo"
+"sim-gazebo-up".env.NOMAD_VIDEO_EXTERNAL_BRIDGE = "1"
+
+"sim-gazebo-up-headless".cmd = """
+docker compose -p nomad-gazebo -f docker/docker-compose.dev.yml --profile gazebo up -d --build
+"""
+"sim-gazebo-up-headless".env.NOMAD_GAZEBO_HEADLESS = "1"
+"sim-gazebo-up-headless".env.NOMAD_SIM_PERCEPTION_RUNTIME = "gazebo"
+"sim-gazebo-up-headless".env.VIDEO_RELAY_HTTP_HOST = "video_bridge_gazebo"
+"sim-gazebo-up-headless".env.NOMAD_VIDEO_EXTERNAL_BRIDGE = "1"
+
+"sim-gazebo-up-fast".cmd = """
+docker compose -p nomad-gazebo -f docker/docker-compose.dev.yml --profile gazebo up -d --build
+"""
+"sim-gazebo-up-fast".env.NOMAD_GAZEBO_HEADLESS = "1"
+"sim-gazebo-up-fast".env.NOMAD_GAZEBO_CAMERA_WIDTH = "160"
+"sim-gazebo-up-fast".env.NOMAD_GAZEBO_CAMERA_HEIGHT = "90"
+"sim-gazebo-up-fast".env.NOMAD_GAZEBO_CAMERA_FPS = "4"
+"sim-gazebo-up-fast".env.NOMAD_GAZEBO_VERBOSITY = "1"
+"sim-gazebo-up-fast".env.NOMAD_GAZEBO_MAX_STEP_SIZE = "0.002"
+"sim-gazebo-up-fast".env.NOMAD_GAZEBO_REAL_TIME_UPDATE_RATE = "500"
+"sim-gazebo-up-fast".env.NOMAD_SIM_PERCEPTION_RUNTIME = "gazebo"
+"sim-gazebo-up-fast".env.VIDEO_RELAY_HTTP_HOST = "video_bridge_gazebo"
+"sim-gazebo-up-fast".env.NOMAD_VIDEO_EXTERNAL_BRIDGE = "1"
+
 lint = "ruff check ."
 fmt = "ruff format ."
 fmt-check = "ruff format --check ."

@@ -66,6 +66,7 @@ nav:
   - Getting Started: getting_started.md
   - Architecture: architecture.md
   - Writing a Module: writing_a_module.md
+  - Simulation: simulation.md
   - Deployment: deployment.md
   - Configuration: configuration.md
   - API Reference: api_reference.md

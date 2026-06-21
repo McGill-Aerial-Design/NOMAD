@@ -17,6 +17,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
+from edge_core.api_routes._isaac_sim import sim_perception_status
 from edge_core.core import AppContext, BaseModule, ModuleMetadata
 
 logger = logging.getLogger("edge_core.api.isaac")
@@ -59,6 +60,10 @@ class IsaacModule(BaseModule):
             """Get detailed status of the container, nvblox, and bridge."""
             cache = request.app.state.isaac_runtime_cache
             now = time.time()
+
+            sim_status = sim_perception_status(request.app.state, now)
+            if sim_status is not None:
+                return sim_status
 
             if now - cache["timestamp"] < 3.0:
                 container_running = cache["container_running"]

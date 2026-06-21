@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -119,11 +120,10 @@ class ROSHTTPBridge(Node):
         super().__init__("nomad_ros_http_bridge")
 
         self._send_interval = 1.0 / send_rate_hz
+        self._vio_source = os.environ.get("NOMAD_BRIDGE_VIO_SOURCE", "isaac_ros")
 
         self._enable_nav_control = enable_nav_control
         self._mavlink_vel = None
-        if self._enable_nav_control:
-            self._mavlink_vel = MavlinkVelocityController(logger_adapter=self.get_logger())
 
         self._enable_mesh = enable_mesh and MARKER_AVAILABLE
         self._mesh_packer = VoxelMeshPacker(self) if self._enable_mesh else None
@@ -199,6 +199,13 @@ class ROSHTTPBridge(Node):
         self.create_timer(self._send_interval, self._send_to_edge_core)
         self.create_timer(0.5, self._poll_gimbal_angle)
 
+        # Open the MAVLink velocity controller last: it binds a UDP socket and
+        # spawns I/O threads, so deferring it until the node is fully built means
+        # a failure in any earlier construction step can't leak those resources.
+        if self._enable_nav_control:
+            self._mavlink_vel = MavlinkVelocityController()
+            self._mavlink_vel.start()
+
     def _handle_vio(self, msg: Odometry) -> None:
         try:
             pose = msg.pose.pose
@@ -269,6 +276,7 @@ class ROSHTTPBridge(Node):
                 vy=ned_vy,
                 vz=ned_vz,
                 confidence=confidence,
+                source=self._vio_source,
                 ros_x=slam_x,
                 ros_y=slam_y,
                 ros_z=slam_z,

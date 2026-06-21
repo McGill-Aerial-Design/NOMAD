@@ -18,6 +18,57 @@ except ImportError:  # pragma: no cover - optional Jetson dependency
     msgpack = None
 
 
+def _vio_rate_hz(trajectory: list[dict]) -> float:
+    if len(trajectory) < 2:
+        return 0.0
+
+    recent = trajectory[-20:]
+    first = float(recent[0].get("timestamp", 0.0))
+    last = float(recent[-1].get("timestamp", 0.0))
+    duration = last - first
+    if duration <= 0:
+        return 0.0
+    return (len(recent) - 1) / duration
+
+
+def _external_vio_summary(app_state) -> dict:
+    vio = getattr(app_state, "external_vio_state", None)
+    if not vio:
+        return {
+            "health": "unknown",
+            "tracking_confidence": 0,
+            "position_valid": False,
+            "message_rate_hz": 0,
+            "source": "none",
+        }
+
+    confidence = float(vio.get("confidence", 0.0))
+    timestamp = float(vio.get("timestamp", 0.0))
+    age_s = max(0.0, time.time() - timestamp) if timestamp > 0 else None
+    # A missing/zero timestamp means we have never seen a stamped update, so the
+    # estimate cannot be treated as fresh.
+    fresh = age_s is not None and age_s < 5.0
+    trajectory = getattr(app_state, "vio_trajectory", [])
+
+    return {
+        "health": "healthy" if confidence > 0.5 and fresh else "degraded",
+        "tracking_confidence": confidence,
+        # Consumers gate navigation on this, so a stale fix must read as invalid
+        # rather than always reporting valid.
+        "position_valid": fresh,
+        "message_rate_hz": _vio_rate_hz(trajectory),
+        "source": vio.get("source", "external"),
+        "timestamp": timestamp,
+        "age_s": age_s,
+        "x": vio.get("x", 0),
+        "y": vio.get("y", 0),
+        "z": vio.get("z", 0),
+        "roll": vio.get("roll", 0),
+        "pitch": vio.get("pitch", 0),
+        "yaw": vio.get("yaw", 0),
+    }
+
+
 def register_system_routes(app, ctx) -> None:
     _NOMAD_API_KEY = ctx.nomad_api_key
     _ALLOW_INSECURE_REMOTE = bool(getattr(ctx, "allow_insecure_remote", False))
@@ -88,6 +139,7 @@ def register_system_routes(app, ctx) -> None:
 
         # VIO health from external source (ros_http_bridge) if available
         # is provided by modules that register the VIO state.
+        response["vio"] = _external_vio_summary(request.app.state)
 
         return response
 
@@ -98,7 +150,9 @@ def register_system_routes(app, ctx) -> None:
         if not health_monitor:
             return {"error": "Health monitor not initialized"}
 
-        return health_monitor.health.to_dict()
+        response = health_monitor.health.to_dict()
+        response["vio"] = _external_vio_summary(request.app.state)
+        return response
 
     # ==================== Status Endpoints ====================
 
