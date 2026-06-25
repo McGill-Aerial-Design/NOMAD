@@ -25,7 +25,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum, auto
 from typing import TYPE_CHECKING
 
@@ -264,16 +264,7 @@ class TimeSyncService:
 
             # Mark GPS time as available if valid
             if unix_time_us > 0:
-                self._status = TimeSyncStatus(
-                    synced=self._status.synced,
-                    source=self._status.source,
-                    offset_seconds=self._status.offset_seconds,
-                    last_sync=self._status.last_sync,
-                    gps_time_available=True,
-                    ntp_reachable=self._status.ntp_reachable,
-                )
-
-                # Check time offset
+                self._status.gps_time_available = True
                 self._check_time_offset()
 
     def _check_time_offset(self) -> None:
@@ -288,14 +279,7 @@ class TimeSyncService:
         offset = abs(system_time_s - gps_time_s)
 
         with self._lock:
-            self._status = TimeSyncStatus(
-                synced=self._status.synced,
-                source=self._status.source,
-                offset_seconds=offset,
-                last_sync=self._status.last_sync,
-                gps_time_available=self._status.gps_time_available,
-                ntp_reachable=self._status.ntp_reachable,
-            )
+            self._status.offset_seconds = offset
 
         # Log warning if offset too large
         if offset > self.OFFSET_WARNING_THRESHOLD:
@@ -371,16 +355,12 @@ class TimeSyncService:
         return False
 
     def _update_sync_status(self, source: TimeSyncSource) -> None:
-        """Update sync status and notify listeners."""
+        """Mark the clock as synced from `source` and notify listeners."""
         with self._lock:
-            self._status = TimeSyncStatus(
-                synced=True,
-                source=source,
-                offset_seconds=0.0,
-                last_sync=datetime.now(timezone.utc),
-                gps_time_available=self._status.gps_time_available,
-                ntp_reachable=self._status.ntp_reachable,
-            )
+            self._status.synced = True
+            self._status.source = source
+            self._status.offset_seconds = 0.0
+            self._status.last_sync = datetime.now(timezone.utc)
 
             # Update state manager
             if self._state_manager:
@@ -398,35 +378,21 @@ class TimeSyncService:
         with self._lock:
             old_synced = self._status.synced
             old_source = self._status.source
+            self._status.ntp_reachable = ntp_reachable
 
             if ntp_synced:
-                self._status = TimeSyncStatus(
-                    synced=True,
-                    source=TimeSyncSource.NTP,
-                    offset_seconds=0.0,
-                    last_sync=datetime.now(timezone.utc),
-                    gps_time_available=self._status.gps_time_available,
-                    ntp_reachable=True,
-                )
+                self._status.synced = True
+                self._status.source = TimeSyncSource.NTP
+                self._status.offset_seconds = 0.0
+                self._status.last_sync = datetime.now(timezone.utc)
             elif self._status.gps_time_available and self._status.offset_seconds < self.OFFSET_WARNING_THRESHOLD:
-                # GPS time is close enough to system time
-                self._status = TimeSyncStatus(
-                    synced=True,
-                    source=TimeSyncSource.GPS,
-                    offset_seconds=self._status.offset_seconds,
-                    last_sync=datetime.now(timezone.utc),
-                    gps_time_available=True,
-                    ntp_reachable=ntp_reachable,
-                )
+                # GPS time is close enough to system time to trust it.
+                self._status.synced = True
+                self._status.source = TimeSyncSource.GPS
+                self._status.last_sync = datetime.now(timezone.utc)
             else:
-                self._status = TimeSyncStatus(
-                    synced=False,
-                    source=TimeSyncSource.NONE,
-                    offset_seconds=self._status.offset_seconds,
-                    last_sync=self._status.last_sync,
-                    gps_time_available=self._status.gps_time_available,
-                    ntp_reachable=ntp_reachable,
-                )
+                self._status.synced = False
+                self._status.source = TimeSyncSource.NONE
 
             # Update state manager
             if self._state_manager:
@@ -487,8 +453,6 @@ class TimeSyncService:
                     gps_time = datetime.fromtimestamp(self._gps_time_us / 1_000_000.0, tz=timezone.utc)
                     # Interpolate: GPS time + elapsed since GPS update
                     elapsed = time.time() - self._last_gps_time_update
-                    from datetime import timedelta
-
                     return gps_time + timedelta(seconds=elapsed)
 
         return now
