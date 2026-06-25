@@ -6,8 +6,7 @@ Direct ROS -> MAVLink velocity controller for the NOMAD ROS-HTTP bridge.
 nav2/nvblox publish ``/cmd_vel`` (Twist, ROS REP-103 FLU body frame). This
 controller opens its own PyMAVLink link to mavlink-router and streams
 SET_POSITION_TARGET_LOCAL_NED setpoints to ArduPilot in GUIDED mode - no HTTP
-hop through Edge Core. It owns the flight-safety gating that previously lived in
-the Edge Core NavController:
+hop through Edge Core. It owns the flight-safety gating for these setpoints:
 
 - velocity clamping (MAX_VELOCITY_XY / _Z, MAX_YAW_RATE) and finite checks,
 - VIO freshness/confidence gate (refuse setpoints when tracking is stale/poor),

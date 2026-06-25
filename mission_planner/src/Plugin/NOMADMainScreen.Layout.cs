@@ -3,9 +3,9 @@
 // ============================================================
 // NOMADMainScreen.Layout.cs - Sidebar and content-area layout
 // ============================================================
-// Builds the legacy (hardcoded) sidebar, sidebar buttons, section
+// Builds the default (hardcoded) sidebar, sidebar buttons, section
 // separators, and the header/content panels. View switching and
-// the module-driven sidebar live in the other partials.
+// the optional module-driven sidebar live in the other partials.
 // ============================================================
 
 using System.Drawing;

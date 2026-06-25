@@ -4,9 +4,8 @@
 
 A module receives an :class:`AppContext` in ``configure(ctx)`` and uses it to
 reach core services (state, mavlink, nav, health, video, ...) and read
-configuration. The context bridges the existing app: services registered
-explicitly take precedence, but it also falls back to ``app.state`` attributes so
-modules can reach services that the (legacy) startup attached there.
+configuration. Services registered explicitly take precedence; if a name is not
+registered, the context falls back to the matching ``app.state`` attribute.
 """
 
 from __future__ import annotations

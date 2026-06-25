@@ -99,8 +99,8 @@ namespace NOMAD.MissionPlanner
 
         // Module-driven sidebar (optional; see src/Core module SDK). When a host
         // with descriptors is supplied, the sidebar is built from those instead of
-        // the hardcoded buttons/views above. With no host the legacy path runs and
-        // behavior is unchanged.
+        // the hardcoded buttons/views above. With no host, that default hardcoded
+        // path runs.
         private ModuleHost _moduleHost;
         private List<NomadViewDescriptor> _descriptors;
         private bool _isModuleMode;

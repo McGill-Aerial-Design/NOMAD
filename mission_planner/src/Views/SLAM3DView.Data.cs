@@ -84,13 +84,11 @@ namespace NOMAD.MissionPlanner
                     hasPosePositionInFrame = true;
                 }
 
-                // NOTE: previously this branch called _poseState.Reset() when
-                // the gap since the last pose frame exceeded 0.4s. That zeroed
-                // the smooth render values and caused the drone to appear to
-                // teleport to (0,0,0) with zero attitude whenever there was a
-                // websocket hiccup (GC pause, net jitter, etc.). PoseState.Update()
-                // already snaps instead of smoothing when its internal gap
-                // exceeds SnapAfterGapSec, so no external reset is needed.
+                // Do NOT reset PoseState when there is a gap since the last pose
+                // frame: PoseState.Update() already snaps (instead of smoothing)
+                // once its internal gap exceeds SnapAfterGapSec. Resetting here
+                // would zero the render values and teleport the drone to (0,0,0)
+                // on any websocket hiccup (GC pause, net jitter, etc.).
 
                 // Server marks attitude_valid=false when it is replaying the
                 // last known-good attitude because the live VIO attitude has

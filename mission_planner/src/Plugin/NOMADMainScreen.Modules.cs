@@ -4,8 +4,8 @@
 // NOMADMainScreen.Modules.cs - Module-driven sidebar
 // ============================================================
 // Built only when a ModuleHost with view descriptors is supplied.
-// The legacy CreateSidebar()/ShowView() path runs by default, so
-// behavior is unchanged unless modules are wired in.
+// The default CreateSidebar()/ShowView() path runs unless modules
+// are wired in.
 // ============================================================
 
 using System;
@@ -21,8 +21,7 @@ namespace NOMAD.MissionPlanner
         // Module-driven Sidebar (NOMAD module SDK — see src/Core)
         // ============================================================
         // Built only when a ModuleHost with view descriptors is supplied. The
-        // legacy CreateSidebar()/ShowView() path above is left untouched and runs
-        // by default, so behavior is unchanged unless modules are wired in.
+        // default CreateSidebar()/ShowView() path runs unless modules are wired in.
 
         private void CreateSidebarFromDescriptors()
         {
@@ -79,7 +78,7 @@ namespace NOMAD.MissionPlanner
                     _descriptorButtons[entry.Id] = btn;
             }
 
-            // Same docking order rules as the legacy sidebar.
+            // Same docking order rules as the default sidebar.
             _sidebarPanel.Controls.Add(navPanel);
             _sidebarPanel.Controls.Add(logoPanel);
             this.Controls.Add(_sidebarPanel);

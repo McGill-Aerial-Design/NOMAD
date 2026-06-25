@@ -98,7 +98,7 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Inject a labeled status message (e.g. "Phase 2: Complete").
+        /// Inject a labeled status message (e.g. "Payload: Released").
         /// </summary>
         public void SendStatus(string label, string status)
         {

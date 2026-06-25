@@ -161,8 +161,6 @@ namespace NOMAD.MissionPlanner
             return !float.IsNaN(value) && !float.IsInfinity(value);
         }
 
-        // Note: AngleMagnitudeDeg and ShouldRejectAttitudeResetGlitch moved to PoseState.cs
-
         // Remap PWM us to the renderer's "90deg = level" space using the rig's
         // mechanical anchors. The mount can only tilt about 45deg either side
         // of horizontal — it cannot look straight down.
