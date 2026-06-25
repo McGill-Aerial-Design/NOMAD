@@ -138,9 +138,12 @@ public class MyCustomModule : NomadModuleBase
 }
 ```
 
-Register the module with a `ModuleHost` before the NOMAD screen is shown; the host
-resolves dependencies and the screen builds the sidebar from the descriptors:
+Register the module in `NOMADPlugin.BuildModuleHost()`; the host resolves
+dependencies and the screen **appends** the descriptors to its sidebar:
 
 ```csharp
-moduleHost.Register(new MyCustomModule());
+host.Register(new MyCustomModule());
 ```
+
+`mission_planner/src/Modules/ExampleModule.cs` is a small working module wired
+exactly this way — start from it.

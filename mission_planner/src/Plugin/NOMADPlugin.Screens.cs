@@ -31,6 +31,7 @@ namespace NOMAD.MissionPlanner
             try
             {
                 NOMADMainScreen.SetStaticConfig(_sender, _config, _connectionManager, _jetsonConnectionManager, _geofenceConfig, _boundaryMonitor);
+                NOMADMainScreen.SetStaticModuleHost(BuildModuleHost());
 
                 object mainSwitcher = null;
 
@@ -144,6 +145,7 @@ namespace NOMAD.MissionPlanner
                 {
                     // Set static configuration for the screen
                     NOMADMainScreen.SetStaticConfig(_sender, _config, _connectionManager, _jetsonConnectionManager, _geofenceConfig, _boundaryMonitor);
+                    NOMADMainScreen.SetStaticModuleHost(BuildModuleHost());
 
                     var nomadScreen = new NOMADMainScreen(_sender, _config, _connectionManager, _jetsonConnectionManager);
 

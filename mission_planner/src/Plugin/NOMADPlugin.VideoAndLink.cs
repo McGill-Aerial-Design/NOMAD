@@ -71,6 +71,7 @@ namespace NOMAD.MissionPlanner
                 // screen (and its Links view) sees the live instance instead of
                 // the stale one captured at plugin load.
                 NOMADMainScreen.SetStaticConfig(_sender, _config, _connectionManager, _jetsonConnectionManager, _geofenceConfig, _boundaryMonitor);
+                NOMADMainScreen.SetStaticModuleHost(BuildModuleHost());
             }
         }
 

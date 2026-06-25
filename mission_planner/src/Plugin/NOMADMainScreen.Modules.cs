@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// NOMADMainScreen.Modules.cs - Module-driven sidebar
+// NOMADMainScreen.Modules.cs - Module-contributed sidebar entries
 // ============================================================
-// Built only when a ModuleHost with view descriptors is supplied.
-// The default CreateSidebar()/ShowView() path runs unless modules
-// are wired in.
+// A plugin-supplied ModuleHost (NOMAD module SDK — see src/Core) can add its
+// own sidebar views and actions. CreateSidebar() appends them after the
+// built-in entries, so modules extend the screen without replacing it.
 // ============================================================
 
 using System;
-using System.Drawing;
 using System.Windows.Forms;
 using NOMAD.MissionPlanner.Core;
 
@@ -17,52 +16,16 @@ namespace NOMAD.MissionPlanner
 {
     public partial class NOMADMainScreen
     {
-        // ============================================================
-        // Module-driven Sidebar (NOMAD module SDK — see src/Core)
-        // ============================================================
-        // Built only when a ModuleHost with view descriptors is supplied. The
-        // default CreateSidebar()/ShowView() path runs unless modules are wired in.
-
-        private void CreateSidebarFromDescriptors()
+        // Append each module-contributed entry to the sidebar nav panel: a
+        // section heading when the group changes, then a button that either
+        // shows the module's view or runs its action.
+        private void AppendModuleEntries(FlowLayoutPanel navPanel)
         {
-            _sidebarPanel = new Panel
-            {
-                Dock = DockStyle.Left,
-                Width = SIDEBAR_WIDTH,
-                BackColor = SIDEBAR_BG,
-                Padding = new Padding(0),
-            };
-
-            var logoPanel = new Panel
-            {
-                Dock = DockStyle.Top,
-                Height = 45,
-                BackColor = Color.FromArgb(20, 20, 23),
-                Padding = new Padding(12, 8, 12, 5),
-            };
-            logoPanel.Controls.Add(new Label
-            {
-                Text = "NOMAD",
-                Font = new Font("Segoe UI", 14, FontStyle.Bold),
-                ForeColor = ACCENT_COLOR,
-                Location = new Point(12, 10),
-                AutoSize = true,
-            });
-
-            var navPanel = new FlowLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                Padding = new Padding(5),
-                AutoScroll = true,
-                BackColor = SIDEBAR_BG,
-                FlowDirection = FlowDirection.TopDown,
-                WrapContents = false,
-            };
+            if (_moduleHost == null) return;
 
             string currentSection = null;
-            foreach (var descriptor in _descriptors)
+            foreach (var descriptor in _moduleHost.GetViewDescriptors())
             {
-                // Emit a section heading whenever the group changes.
                 if (!string.IsNullOrEmpty(descriptor.Section) && descriptor.Section != currentSection)
                 {
                     navPanel.Controls.Add(CreateSeparatorLabel(descriptor.Section));
@@ -77,11 +40,6 @@ namespace NOMAD.MissionPlanner
                 if (entry.Kind == NomadEntryKind.View)
                     _descriptorButtons[entry.Id] = btn;
             }
-
-            // Same docking order rules as the default sidebar.
-            _sidebarPanel.Controls.Add(navPanel);
-            _sidebarPanel.Controls.Add(logoPanel);
-            this.Controls.Add(_sidebarPanel);
         }
 
         private void ShowEntry(NomadViewDescriptor descriptor)
@@ -116,11 +74,12 @@ namespace NOMAD.MissionPlanner
                 control.Dock = DockStyle.Fill;
                 _viewContainer.Controls.Add(control);
                 _currentView = control as UserControl; // keeps the update timer working
-                _currentDescriptorId = descriptor.Id;
                 if (control is INomadView activated)
                     activated.OnActivated();
             }
 
+            // Clear the built-in button highlight, then light up this module button.
+            UpdateSidebarButtonState(null);
             UpdateDescriptorButtonState(descriptor.Id);
         }
 
