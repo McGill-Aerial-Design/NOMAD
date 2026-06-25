@@ -39,12 +39,6 @@ class VideoStreamModule(BaseModule):
             except ValueError:
                 return default
 
-        def _bool(key: str, default: bool = False) -> bool:
-            value = ctx.get_config(key)
-            if value is None:
-                return default
-            return value.strip().lower() in {"1", "true", "yes", "on"}
-
         self._manager = VideoStreamManager(
             container_name=ctx.get_config("ISAAC_CONTAINER_NAME") or "nomad_isaac_ros",
             relay_http_host=ctx.get_config("VIDEO_RELAY_HTTP_HOST") or "localhost",
@@ -55,7 +49,7 @@ class VideoStreamModule(BaseModule):
             height=_int("VIDEO_BRIDGE_HEIGHT", 360),
             fps=_int("VIDEO_BRIDGE_FPS", 15),
             bitrate=_int("VIDEO_BRIDGE_BITRATE", 800),
-            external_bridge=_bool("NOMAD_VIDEO_EXTERNAL_BRIDGE"),
+            external_bridge=ctx.is_enabled("NOMAD_VIDEO_EXTERNAL_BRIDGE"),
         )
         ctx.register_service("video_stream_manager", self._manager)
         ctx.app.state.video_stream_manager = self._manager
