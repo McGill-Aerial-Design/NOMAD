@@ -4,10 +4,9 @@ Copyright 2026 The NOMAD Authors
 -->
 # NOMAD Safety Case
 
-This directory is the **living safety case** for NOMAD. It is the Phase 1
-deliverable of [NOMAD_REARCHITECTURE_PLAN.md](../../NOMAD_REARCHITECTURE_PLAN.md):
-classify the system by criticality and write down what the system can do that is
-dangerous, before any safety-critical code is moved.
+This directory is NOMAD's safety case: it classifies the system by criticality
+and writes down what the system can do that is dangerous, so the dangerous parts
+get the attention they need.
 
 It deliberately borrows the *high-value habits* of aviation software practice
 (DO-178C / ARP4754A / ARP4761 / DO-326A) **proportionately** — NOMAD is a
@@ -40,14 +39,13 @@ the autopilot.
   code does *not* yet implement a mitigation, this directory says so explicitly
   rather than describing the aspiration as fact.
 
-## Status
+## How it is enforced
 
-**The safety case is implemented and CI-enforced.** All decision logic lives in
-the dependency-light, pure-logic [`edge_core/safety/`](../../edge_core/safety/)
-package (`limits`/`gates`/`watchdog`/`envelope`/`geofence`/`payload`) at **100%
-branch coverage**; the I/O adapters (`mavlink_velocity.py`,
-`services/mavlink/commands.py`, `modules/payload/servo.py`) make no safety
-decisions of their own.
+All decision logic lives in the dependency-light, pure-logic
+[`edge_core/safety/`](../../edge_core/safety/) package
+(`limits`/`gates`/`watchdog`/`envelope`/`geofence`/`payload`) at 100% branch
+coverage; the I/O adapters (`mavlink_velocity.py`, `services/mavlink/commands.py`,
+`modules/payload/servo.py`) make no safety decisions of their own.
 
 CI gates, all enforced on every PR:
 
@@ -58,24 +56,12 @@ CI gates, all enforced on every PR:
   the rest of `edge_core/` reaches it only via its public API.
 - `tests/test_safety_command_surface.py` — the MAVLink surface contains no
   failsafe-disabling command (SR-SEC-01).
-- `tests/test_client_contract.py` — the C# client cannot drift from the API
-  (with a two-way-checked known-drift ledger of pre-existing gutted routes).
+- `tests/test_client_contract.py` — the C# client cannot drift from the API.
 - `pixi run lint-safety` / scoped strict mypy — extra rule sets on SC files.
 
-SITL evidence: the velocity path is **loop-closure-proven** against real
-ArduPilot SITL ([../../tests/sitl/](../../tests/sitl/)) — that run also caught
-a real defect (GCS heartbeat flipping the armed/mode gate → SR-VEL-06).
-
-**Open items.** None outstanding for the Python SC tier. The geofence containment
-SITL scenario
-([../../tests/sitl/geofence_containment.py](../../tests/sitl/geofence_containment.py),
-`pixi run sitl-fence`) was run against live ArduPilot SITL on 2026-06-11 (commit
-f69a137, PASS) and now gates nightly in
-[../../.github/workflows/sitl.yml](../../.github/workflows/sitl.yml) (H-05).
+The velocity and geofence paths are also exercised against real ArduPilot SITL
+([../../tests/sitl/](../../tests/sitl/), `pixi run sitl-fence`), which gates
+nightly in [../../.github/workflows/sitl.yml](../../.github/workflows/sitl.yml).
 SR-FEN-01 (FC-side fence upload) is verified manually before flight — inherent to
-it being a flight-controller function. The C# payload-release interlock GAP is now
-closed — the drop / momentary-relay arm→confirm decision was extracted into the
-pure, unit-tested `PayloadReleaseInterlock` (see [partition.md](partition.md)). The
-one C# tier GAP that remains is the deliberately-deferred GCS-side RTH/landing
-state machine (removed; ArduPilot's own RTL/LAND is the intentional interim
-mechanism).
+it being a flight-controller function. GCS-side return-to-home currently relies on
+ArduPilot's own RTL/LAND modes; no NOMAD SC code owns that sequence.
