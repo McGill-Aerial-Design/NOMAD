@@ -68,3 +68,31 @@ jobs:
             -f docker/Dockerfile.jetson \
             -t ghcr.io/${{ github.repository }}-jetson:latest \
             .
+
+  sim-isaac-image:
+    name: build Isaac ROS sim image (x86_64 GPU, self-hosted)
+    # The Tier-2 Isaac ROS simulation image mirrors Dockerfile.jetson on x86_64:
+    # same Isaac ROS stack, ZED SDK 5.2.3, and nvblox — but targeting a developer
+    # workstation with a discrete NVIDIA GPU instead of a Jetson Orin.
+    #
+    # Requirements for the self-hosted runner this job targets:
+    #   - An NVIDIA GPU with nvidia-container-toolkit configured
+    #   - The Isaac ROS x86_64 dev base image present locally
+    #     (build via isaac_ros_common before running this job)
+    #   - Runner label: [self-hosted, X64] — change to [self-hosted, gpu] or a
+    #     custom label if your GPU runner uses a different registration label.
+    #
+    # Hosted runners (ubuntu-latest) have no GPU and cannot build this image.
+    # Run `pixi run sim-ros-build` + `pixi run test-ros-integration` locally or
+    # via the ros-sim.yml workflow for the CPU-only Tier-1 path.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, X64]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build Isaac ROS sim image (x86_64, no push)
+        run: |
+          docker build \
+            -f docker/Dockerfile.sim-isaac \
+            --build-arg BASE_IMAGE=isaac_ros_dev-x86_64 \
+            -t nomad-sim-isaac:latest \
+            .

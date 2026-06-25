@@ -1,0 +1,177 @@
+# syntax=docker/dockerfile:1
+# ==============================================================
+# NOMAD Tier-3 simulation image — ArduPilot SITL + Gazebo Harmonic (x86_64).
+#
+# The official, integrated flight+perception sim (https://ardupilot.org/dev/docs/
+# ros2-gazebo.html): ArduPilot SITL flies a multicopter inside Gazebo Harmonic
+# via the ardupilot_gazebo plugin, AP_DDS publishes the vehicle state to ROS 2,
+# and a ZED-2i camera model rides on the drone. The NOMAD ROS-HTTP bridge
+# consumes the ZED-style topics, exactly as on the Jetson — but here the drone is
+# flown by a REAL flight controller (SITL) responding to MAVLink, so the bridge's
+# velocity/cmd_vel path is exercised end-to-end (unlike the synthetic sim-ros
+# tier, where there is no FC in the loop).
+#
+# ARCHITECTURAL NOTE — why not the ZED SDK:
+#   The ZED SDK cannot ingest Gazebo frames (only physical ZED / .svo / network
+#   stream / Isaac Sim). So Gazebo publishes ZED-style ROS topics directly via the
+#   gz camera/IMU sensors + ros_gz_bridge, using a ZED-2i-accurate model.
+#
+# GPU / rendering:
+#   Gazebo Harmonic camera sensors need OpenGL. With an NVIDIA GPU exposed to the
+#   container (WSL2 + nvidia-container-toolkit) rendering is hardware-accelerated;
+#   the default CMD runs the Gazebo GUI on a lightweight virtual X display and
+#   exposes it through noVNC. Headless EGL rendering remains available through
+#   NOMAD_GAZEBO_HEADLESS=1. Hosted CI has no GPU and does NOT run this image —
+#   the CPU sim-ros tier is the CI gate.
+#
+# The ArduPilot build runs as a non-root user (its install-prereqs script refuses
+# to run as root), so the workspace lives under /home/nomad/ardu_ws and the
+# container runs as user "nomad".
+#
+# Build (repo root as context — LONG: compiles ArduPilot SITL + the gz plugin):
+#   docker build -f docker/Dockerfile.sim-gazebo -t nomad-sim-gazebo:latest .
+# ==============================================================
+
+FROM ros:humble-ros-base
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV GZ_VERSION=harmonic
+SHELL ["/bin/bash", "-c"]
+
+LABEL maintainer="The NOMAD Authors"
+LABEL description="NOMAD ArduPilot SITL + Gazebo Harmonic ZED-2i simulation image"
+
+# ==============================================================
+# Base tooling + the Gazebo Harmonic apt repository, then gz-harmonic itself.
+# Also seeds the rosdep gz mapping (root-only writes). Done as root before we
+# drop to the build user. (Per the ardupilot_gazebo + ArduPilot ROS2/Gazebo docs.)
+# ==============================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        wget curl gnupg lsb-release ca-certificates git sudo \
+        python3-pip python3-vcstool python3-colcon-common-extensions python3-rosdep \
+        rapidjson-dev libgl1-mesa-dri mesa-utils \
+    && wget https://packages.osrfoundation.org/gazebo.gpg \
+        -O /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] http://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" \
+        > /etc/apt/sources.list.d/gazebo-stable.list \
+    && apt-get update && apt-get install -y --no-install-recommends gz-harmonic \
+    && (rosdep init 2>/dev/null || true) \
+    && wget https://raw.githubusercontent.com/osrf/osrf-rosdep/master/gz/00-gazebo.list \
+        -O /etc/ros/rosdep/sources.list.d/00-gazebo.list \
+    && rm -rf /var/lib/apt/lists/*
+
+# ==============================================================
+# Non-root build user with passwordless sudo (ArduPilot's install-prereqs
+# refuses to run as root; rosdep/apt during the build use sudo).
+# ==============================================================
+ARG USER_NAME=nomad
+RUN useradd -U -m -s /bin/bash ${USER_NAME} \
+    && usermod -aG sudo ${USER_NAME} \
+    && echo "${USER_NAME} ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/${USER_NAME} \
+    && chmod 0440 /etc/sudoers.d/${USER_NAME}
+
+USER ${USER_NAME}
+ENV USER=${USER_NAME}
+WORKDIR /home/${USER_NAME}/ardu_ws
+
+# ==============================================================
+# Clone the ArduPilot + Gazebo workspace via vcstool. ros2_gz.repos pulls
+# ArduPilot (SITL source), ardupilot_gazebo (the gz plugin), ardupilot_msgs,
+# ardupilot_gz (bringup/description/worlds), and the micro-ROS agent.
+# ==============================================================
+RUN mkdir -p src \
+    && vcs import --recursive --input \
+        https://raw.githubusercontent.com/ArduPilot/ardupilot_gz/main/ros2_gz.repos src
+
+# ==============================================================
+# ArduPilot waf build prerequisites (needed to compile SITL). Runs as the
+# non-root user; the script uses sudo internally for apt.
+# ==============================================================
+RUN cd src/ardupilot \
+    && Tools/environment_install/install-prereqs-ubuntu.sh -y \
+    && sudo rm -rf /var/lib/apt/lists/*
+
+# ==============================================================
+# Resolve all workspace dependencies (rosdep), then build. rosdep update is
+# per-user; rosdep install uses sudo for apt.
+# ==============================================================
+RUN source /opt/ros/humble/setup.bash \
+    && rosdep update --rosdistro humble \
+    && sudo apt-get update \
+    && rosdep install --from-paths src --ignore-src -y --rosdistro humble \
+    && sudo rm -rf /var/lib/apt/lists/*
+
+# ==============================================================
+# microxrceddsgen — the ArduPilot Micro-XRCE-DDS code generator that the SITL
+# build needs to compile AP_DDS (the ROS 2 link). It is NOT installed by
+# install-prereqs, so build it from ArduPilot's fork (needs a JDK; the repo ships
+# a gradle wrapper) and put its `scripts/` dir on PATH for the colcon build.
+# ==============================================================
+RUN sudo apt-get update \
+    && sudo apt-get install -y --no-install-recommends default-jdk \
+    && sudo rm -rf /var/lib/apt/lists/* \
+    && cd /home/${USER_NAME} \
+    && git clone --recurse-submodules https://github.com/ArduPilot/Micro-XRCE-DDS-Gen.git \
+    && cd Micro-XRCE-DDS-Gen \
+    && ./gradlew assemble
+ENV PATH="/home/${USER_NAME}/Micro-XRCE-DDS-Gen/scripts:${PATH}"
+
+# ==============================================================
+# Build the whole bringup. This compiles ArduPilot SITL (waf, via the
+# ardupilot_sitl package), the ardupilot_gazebo plugin, and the ROS 2 workspace.
+# --parallel-workers is capped to keep peak RAM bounded on Docker Desktop.
+# ==============================================================
+RUN source /opt/ros/humble/setup.bash \
+    && colcon build \
+        --packages-up-to ardupilot_gz_bringup \
+        --parallel-workers 2 \
+        --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    && rm -rf build log
+ENV PATH="/home/${USER_NAME}/.local/bin:${PATH}"
+
+# Gazebo GUI runtime: run the desktop in Xvfb and expose it through noVNC.
+# Installed after the long SITL/colcon build so UI changes do not invalidate it.
+RUN sudo apt-get update \
+    && sudo apt-get install -y --no-install-recommends \
+        libglx-mesa0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+        libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 \
+        libxkbcommon-x11-0 novnc openbox websockify x11-utils x11vnc xauth xvfb \
+    && sudo rm -rf /var/lib/apt/lists/*
+
+# ==============================================================
+# NOMAD Gazebo assets (the integrated launch and ros_gz bridge config). Copied
+# LAST so iterating on them does not invalidate the long ArduPilot/gz build
+# layers above. Added to GZ_SIM_RESOURCE_PATH by the entrypoint.
+# ==============================================================
+COPY --chown=${USER_NAME}:${USER_NAME} tools/ /opt/nomad/tools/
+ENV PYTHONPATH="/opt/nomad"
+
+# ==============================================================
+# Environment
+# ==============================================================
+ENV ROS_DOMAIN_ID=0
+ENV RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+ENV ROS_LOCALHOST_ONLY=0
+# Software GL fallback for EGL headless rendering; set to 0 when an NVIDIA GPU is
+# granted to the container and the driver stack is available.
+ENV LIBGL_ALWAYS_SOFTWARE=1
+ENV NOMAD_GAZEBO_HEADLESS=0
+ENV NOMAD_GAZEBO_NOVNC_PORT=6080
+ENV NOMAD_GAZEBO_VNC_PORT=5900
+
+WORKDIR /home/${USER_NAME}/ardu_ws
+
+# ==============================================================
+# Entrypoint sources ROS 2 + the ardu_ws workspace + gz resource paths.
+# ==============================================================
+COPY docker/gazebo_entrypoint.sh /gazebo_entrypoint.sh
+RUN sudo chmod +x /gazebo_entrypoint.sh
+
+ENTRYPOINT ["/gazebo_entrypoint.sh"]
+EXPOSE 6080 5900
+
+# Default: NOMAD integrated launch (iris flown by SITL + ZED-style topics). The
+# launch starts the Gazebo GUI unless NOMAD_GAZEBO_HEADLESS=1 is set. Override the
+# command to run the upstream examples, e.g.
+#   ros2 launch ardupilot_gz_bringup iris_runway.launch.py
+CMD ["ros2", "launch", "/opt/nomad/tools/sim/gazebo/launch/nomad_iris_zed.launch.py"]

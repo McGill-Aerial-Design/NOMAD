@@ -78,6 +78,22 @@ class VideoSlamModule(BaseModule):
                 return {"success": True, "message": f"Switched to {topic}"}
             raise HTTPException(status_code=502, detail="Failed to switch topic")
 
+        @router.get("/api/video/topics")
+        async def get_video_topics():
+            """List camera topics available to the video bridge."""
+            mgr = _manager()
+            if not mgr:
+                raise HTTPException(status_code=503, detail="VideoStreamManager not initialized")
+            return {"success": True, "topics": mgr.list_topics()}
+
+        @router.get("/api/video/overlay/status")
+        async def get_video_overlay_status():
+            """Get the video overlay state."""
+            mgr = _manager()
+            if not mgr:
+                raise HTTPException(status_code=503, detail="VideoStreamManager not initialized")
+            return mgr.get_overlay_status()
+
         @router.post("/api/video/overlay/{action}")
         async def set_video_overlay(action: str):
             """Enable or disable the ZED detection overlay on the RTSP feed."""

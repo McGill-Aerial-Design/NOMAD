@@ -1,44 +1,51 @@
 # syntax=docker/dockerfile:1
 # ==============================================================
-# NOMAD Jetson image — Isaac ROS + ZED + the ROS-HTTP bridge.
+# NOMAD Isaac ROS simulation image — x86_64 + NVIDIA dGPU.
 #
-# The on-companion-computer perception/odometry container for an NVIDIA Jetson
-# Orin Nano (aarch64, JetPack 6.2 / L4T r36.4). It is built ON TOP of the
-# official Isaac ROS dev base image, which must already exist on the Jetson
-# (produced by isaac_ros_common/scripts/build_image_layers.sh — see
-# docs/deployment.md). It is NOT buildable on generic x86 CI runners: it targets
-# aarch64, downloads the ZED SDK, and layers on the GPU ROS stack. Build it on a
-# Jetson or a self-hosted aarch64 runner.
+# High-fidelity x86 counterpart to Dockerfile.sim-ros (CPU tier). This image
+# mirrors Dockerfile.jetson as closely as x86 allows: same Isaac ROS stack,
+# same ZED SDK 5.2.3, same nvblox pre-build, same ROS-HTTP bridge — running on
+# a developer workstation with a discrete NVIDIA GPU instead of a Jetson Orin.
 #
-# x86 GPU mirror: see docker/Dockerfile.sim-isaac (Isaac ROS x86_64 dev base +
-# same ZED SDK / nvblox / numpy versions — kept in lockstep with this file).
+# Requirements:
+#   - An NVIDIA GPU exposed to Docker (WSL2 + nvidia-container-toolkit on Linux
+#     or WSL2 on Windows; run `nvidia-smi` inside the container to verify).
+#   - The Isaac ROS x86_64 dev base image already present locally. Build it
+#     first via isaac_ros_common/scripts/build_image_layers.sh on your host
+#     (see https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_common). This image
+#     is NOT based on a generic upstream; it requires that pre-built base.
 #
-# What this layer adds on top of the Isaac ROS dev base:
-#   - ZED SDK 5.2.3 (matching the ZED ROS2 wrapper) for the ZED 2i camera
-#   - GStreamer (used by the video bridge, services/ros/simple_video_bridge.py)
-#   - the ROS2 runtime packages the ZED wrapper / nvblox / nav2 need
-#   - isaac_ros_nvblox_utils, pre-built to a layer path that survives a restart
-#   - the NOMAD ROS-HTTP bridge (edge_core/ros_http_bridge) and its one optional
-#     runtime dep, pymavlink — the bridge itself talks to Edge Core over the
-#     stdlib http.client and reuses the dependency-light edge_core.safety core.
+# This image does NOT require a physical ZED camera. Drive ZED via:
+#   - SVO playback:  pass an SVO file to zed_wrapper at launch
+#   - Synthetic pub: tools/sim/zed_sim_publisher.py (see CMD comment below)
 #
-# Build (on a Jetson, repo root as context):
-#   docker build -f docker/Dockerfile.jetson \
-#       --build-arg BASE_IMAGE=isaac_ros_dev-aarch64 \
-#       -t nomad-jetson:latest .
+# Hosted CI cannot build or run this image (no GPU). Use a local machine or a
+# self-hosted runner with an NVIDIA GPU.
 #
-# Launch the bridge inside the running container (Edge Core reachable on the
-# host network):
-#   python3 -m edge_core.ros_http_bridge.main --host 127.0.0.1
+# Build (repo root as context):
+#   docker build -f docker/Dockerfile.sim-isaac \
+#       --build-arg BASE_IMAGE=isaac_ros_dev-x86_64 \
+#       -t nomad-sim-isaac:latest .
+#
+# ZED SDK / L4T / numpy versions are kept in lockstep with Dockerfile.jetson
+# (JetPack 6.2 / L4T r36.4) so the sim mirrors the device as closely as
+# possible. Update both files together when bumping SDK versions.
+#
+# Launch the bridge inside the running container (Edge Core on the host
+# network):
+#   python3 -m edge_core.ros_http_bridge.main --host edge_core
+# Drive ZED (no physical camera):
+#   python3 /opt/nomad/tools/sim/zed_sim_publisher.py
+#   # OR mount an SVO: zed_wrapper --ros-args -p svo_file:=/data/recording.svo
 # ==============================================================
 
-ARG BASE_IMAGE=isaac_ros_dev-aarch64
+ARG BASE_IMAGE=isaac_ros_dev-x86_64
 FROM ${BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 LABEL maintainer="The NOMAD Authors"
-LABEL description="NOMAD Isaac ROS + ZED + ROS-HTTP bridge for Jetson Orin Nano"
+LABEL description="NOMAD Isaac ROS + ZED + ROS-HTTP bridge — x86_64 GPU simulation image"
 
 # ==============================================================
 # System dependencies (+ GStreamer for the video bridge)
@@ -76,20 +83,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ==============================================================
-# ZED SDK 5.2.3 for L4T r36.4 / JetPack 6.2 (kept in lockstep with Dockerfile.sim-isaac)
+# ZED SDK 5.2.3 — x86_64 / Ubuntu 22.04 / CUDA 12 build.
+# skip_drivers: no physical USB camera in the container.
+# URL is overridable via --build-arg for testing against a newer patch release.
+# Kept in lockstep with Dockerfile.jetson (5.2.3 / JetPack 6.2).
 # ==============================================================
-ENV ZED_SDK_URL="https://download.stereolabs.com/zedsdk/5.2.3/l4t36.4/jetsons"
+ARG ZED_SDK_URL="https://download.stereolabs.com/zedsdk/5.2.3/cu12/ubuntu22"
+ENV ZED_SDK_URL=${ZED_SDK_URL}
 
 RUN curl -L -o /tmp/zed_sdk.run ${ZED_SDK_URL} && \
     chmod +x /tmp/zed_sdk.run && \
-    /tmp/zed_sdk.run -- silent skip_od_module && \
+    /tmp/zed_sdk.run -- silent skip_od_module skip_drivers && \
     rm /tmp/zed_sdk.run && \
     ldconfig
 
 RUN test -f /usr/local/zed/lib/libsl_zed.so && \
     echo "ZED SDK installed successfully"
 
-ENV LD_LIBRARY_PATH="/usr/local/zed/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/zed/lib"
 
 # ==============================================================
 # Python deps for the ROS ecosystem. numpy is pinned <2 to stay compatible with
@@ -125,19 +136,20 @@ RUN bash -c "\
     rm -rf /tmp/colcon_ws /tmp/isaac_nvblox_src; \
 "
 
-ENV ROS_PACKAGE_PATH="/opt/isaac_ros_installed/share:${ROS_PACKAGE_PATH}"
-ENV CMAKE_PREFIX_PATH="/opt/isaac_ros_installed:${CMAKE_PREFIX_PATH}"
+ENV ROS_PACKAGE_PATH="/opt/isaac_ros_installed/share"
+ENV CMAKE_PREFIX_PATH="/opt/isaac_ros_installed"
 
 # ==============================================================
-# NOMAD ROS-HTTP bridge. The package is dependency-light (stdlib http.client +
-# the stdlib-only edge_core.safety core); pymavlink above is its only optional
-# runtime dep. Copied to a layer path on PYTHONPATH so it is self-contained — no
-# workspace mount required to run `python3 -m edge_core.ros_http_bridge.main`.
+# NOMAD ROS-HTTP bridge + synthetic publisher tools. The package is
+# dependency-light (stdlib http.client + the stdlib-only edge_core.safety core);
+# pymavlink above is its only optional runtime dep. tools/ is included so
+# zed_sim_publisher.py and other sim helpers are available without a host mount.
 # ==============================================================
 COPY pyproject.toml README.md /opt/nomad/
 COPY edge_core/ /opt/nomad/edge_core/
 COPY infra/ /opt/nomad/infra/
-ENV PYTHONPATH="/opt/nomad:${PYTHONPATH}"
+COPY tools/ /opt/nomad/tools/
+ENV PYTHONPATH="/opt/nomad"
 
 # ==============================================================
 # Environment

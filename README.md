@@ -60,6 +60,7 @@ locally via `pixi run docs`). Key pages:
 - [Getting Started](docs/getting_started.md) — Pixi env, Docker sim, first run
 - [Architecture](docs/architecture.md) — System design and data flow
 - [Writing a Module](docs/writing_a_module.md) — Plugin SDK guide
+- [Simulation](docs/simulation.md) — ROS2 bridge sim: `pixi run sim-ros-up`; Gazebo GUI: `pixi run sim-gazebo-up`
 - [Deployment](docs/deployment.md) — Jetson all-in-one image, systemd
 - [Configuration](docs/configuration.md) — `config/nomad.env` reference
 - [API Reference](docs/api_reference.md) — Edge Core endpoints

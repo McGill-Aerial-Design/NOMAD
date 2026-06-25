@@ -54,6 +54,22 @@ def test_source_switch_503_when_bridge_down(app):
     assert resp.status_code == 503
 
 
+def test_topics_route_returns_default_topic_when_bridge_down(app):
+    client = TestClient(app)
+    resp = client.get("/api/video/topics")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert body["topics"][0]["name"] == "/zed/zed_node/rgb/color/rect/image"
+
+
+def test_overlay_status_route_defaults_when_bridge_down(app):
+    client = TestClient(app)
+    resp = client.get("/api/video/overlay/status")
+    assert resp.status_code == 200
+    assert resp.json() == {"enabled": False, "detection_count": 0}
+
+
 def test_overlay_503_when_bridge_down(app):
     client = TestClient(app)
     resp = client.post("/api/video/overlay/enable")

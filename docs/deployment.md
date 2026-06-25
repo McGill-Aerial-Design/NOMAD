@@ -13,13 +13,18 @@ with a ground station running Mission Planner + the NOMAD plugin.
 ## Prerequisites (Jetson)
 
 - NVIDIA Jetson Orin Nano (or other aarch64 platform)
-- JetPack 6.0+ (L4T r36.4+)
+- JetPack 6.2 (L4T r36.4)
 - [Docker](https://docs.docker.com/engine/install/) with `nvidia-container-toolkit`
 - [Tailscale](https://tailscale.com) for VPN connectivity
 - 4G/LTE modem (optional, for remote connectivity)
 - ZED 2i camera
 
 ## Jetson Isaac ROS image
+
+> **Testing without hardware?** See [Simulation Environments](simulation.md) for
+> the CPU-only ROS2 bridge image (`Dockerfile.sim-ros`, runs in CI), the
+> ArduPilot + Gazebo Harmonic image (`Dockerfile.sim-gazebo`), and the full
+> Isaac ROS + ZED SDK image for x86_64 GPU machines (`Dockerfile.sim-isaac`).
 
 [docker/Dockerfile.jetson](../docker/Dockerfile.jetson) builds the on-board
 perception/odometry container, layered on the official **Isaac ROS dev base

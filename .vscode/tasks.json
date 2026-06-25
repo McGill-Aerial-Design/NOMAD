@@ -132,6 +132,115 @@
       "problemMatcher": [],
       "detail": "Run mypy type checker (gradual, advisory)"
     },
+    // ==================== Simulation Stacks ====================
+    {
+      "label": "Sim ROS: Build image",
+      "type": "shell",
+      "command": "pixi run sim-ros-build",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": [],
+      "detail": "Build the CPU ROS2 simulation image"
+    },
+    {
+      "label": "Sim ROS: Start stack",
+      "type": "shell",
+      "command": "pixi run sim-ros-up",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true, "showReuseMessage": false },
+      "problemMatcher": [],
+      "detail": "Start Edge Core, ROS bridge, and synthetic ZED publisher"
+    },
+    {
+      "label": "Sim ROS: Stop stack",
+      "type": "shell",
+      "command": "pixi run sim-ros-down",
+      "group": "none",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": [],
+      "detail": "Stop and remove the ROS simulation stack"
+    },
+    {
+      "label": "Sim ROS: Logs",
+      "type": "shell",
+      "command": "pixi run sim-ros-logs",
+      "group": "none",
+      "presentation": { "panel": "dedicated", "showReuseMessage": false },
+      "problemMatcher": [],
+      "detail": "Follow logs from the ROS simulation stack"
+    },
+    {
+      "label": "Sim ROS: Integration test",
+      "type": "shell",
+      "command": "pixi run test-ros-integration",
+      "group": "test",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": [],
+      "detail": "Run ROS bridge integration tests inside the sim-ros image"
+    },
+    {
+      "label": "Sim Gazebo: Build image",
+      "type": "shell",
+      "command": "pixi run sim-gazebo-build",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": [],
+      "detail": "Build the ArduPilot SITL + Gazebo Harmonic image"
+    },
+    {
+      "label": "Sim Gazebo: Start visible stack",
+      "type": "shell",
+      "command": "pixi run sim-gazebo-up",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true, "showReuseMessage": false },
+      "problemMatcher": [],
+      "detail": "Start Edge Core, ROS bridge, and Gazebo GUI at http://localhost:6080/vnc.html"
+    },
+    {
+      "label": "Sim Gazebo: Open GUI",
+      "type": "shell",
+      "command": "pixi run sim-gazebo-open",
+      "group": "none",
+      "presentation": { "panel": "shared", "clear": false },
+      "problemMatcher": [],
+      "detail": "Open the Gazebo noVNC GUI in your browser"
+    },
+    {
+      "label": "Sim Gazebo: Start headless stack",
+      "type": "shell",
+      "command": "pixi run sim-gazebo-up-headless",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true, "showReuseMessage": false },
+      "problemMatcher": [],
+      "detail": "Start the Gazebo stack with gz --headless-rendering"
+    },
+    {
+      "label": "Sim Gazebo: Start fast headless stack",
+      "type": "shell",
+      "command": "pixi run sim-gazebo-up-fast",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true, "showReuseMessage": false },
+      "problemMatcher": [],
+      "detail": "Start the lower-load Gazebo stack for real-time-factor checks"
+    },
+    {
+      "label": "Sim Gazebo: Stop stack",
+      "type": "shell",
+      "command": "pixi run sim-gazebo-down",
+      "group": "none",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": [],
+      "detail": "Stop and remove the Gazebo simulation stack"
+    },
+    {
+      "label": "Sim Gazebo: Logs",
+      "type": "shell",
+      "command": "pixi run sim-gazebo-logs",
+      "group": "none",
+      "presentation": { "panel": "dedicated", "showReuseMessage": false },
+      "problemMatcher": [],
+      "detail": "Follow logs from the Gazebo simulation stack"
+    },
     // ==================== C# ====================
     {
       "label": "C#: Build Mission Planner Plugin",

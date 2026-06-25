@@ -154,10 +154,25 @@ Controls which services are started by `nomad start all` and at boot.
 | `VIDEO_BRIDGE_HEIGHT` | `360` | Stream height |
 | `VIDEO_BRIDGE_FPS` | `15` | Stream framerate |
 | `VIDEO_BRIDGE_BITRATE` | `800` | Stream bitrate (kbps) |
+| `VIDEO_RELAY_HTTP_HOST` | `localhost` | Bridge control HTTP host |
 | `VIDEO_RELAY_HTTP_PORT` | `9200` | Bridge control HTTP port |
+| `NOMAD_VIDEO_EXTERNAL_BRIDGE` | `false` | Treat the bridge as externally managed |
 | `NOMAD_ENABLE_VIDEO` | `true` | Enable the video stream module |
 | `NOMAD_DEFAULT_VIDEO_TOPIC` | `/zed/zed_node/rgb/color/rect/image` | Default source topic |
 | `NOMAD_RTSP_URL` | *(blank)* | Explicit RTSP URL override |
+
+### Gazebo simulator
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NOMAD_GAZEBO_HEADLESS` | `0` | Run `gz sim` with headless rendering |
+| `NOMAD_GAZEBO_CAMERA_WIDTH` | `640` | Simulated ZED image width |
+| `NOMAD_GAZEBO_CAMERA_HEIGHT` | `360` | Simulated ZED image height |
+| `NOMAD_GAZEBO_CAMERA_FPS` | `10` | Simulated ZED image frame rate |
+| `NOMAD_GAZEBO_VERBOSITY` | `2` | Gazebo `-v` log level |
+| `NOMAD_SITL_RATE_HZ` | `400` | ArduPilot SITL `SIM_RATE_HZ` for Gazebo |
+| `NOMAD_SITL_SYNTHETIC_CLOCK` | `False` | Enable ArduPilot `--synthetic-clock` |
+| `NOMAD_GAZEBO_APPLY_CONTACT_TUNING` | `0` | Apply optional ODE contact tuning to generated SDF |
 
 ### Detection
 

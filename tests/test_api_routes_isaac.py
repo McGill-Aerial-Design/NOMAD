@@ -86,6 +86,70 @@ def test_status_uses_fresh_cache(monkeypatch):
     assert body["nvblox_running"] is False  # pgrep returns non-zero
 
 
+def test_status_reports_active_sim_bridge(monkeypatch):
+    monkeypatch.setenv("NOMAD_SIM_PERCEPTION_RUNTIME", "gazebo")
+    app = _build_app(monkeypatch)
+    app.state.external_vio_state = {
+        "source": "gazebo",
+        "confidence": 1.0,
+        "timestamp": time.time(),
+    }
+
+    def _boom(*a, **k):
+        raise RuntimeError("docker unreachable")
+
+    monkeypatch.setattr(subprocess, "run", _boom)
+    with TestClient(app) as client:
+        body = client.get("/api/isaac/status").json()
+    assert body["container_running"] is True
+    assert body["container_name"] == "gazebo"
+    assert body["bridge_running"] is True
+    assert body["simulated"] is True
+
+
+def test_status_ignores_none_runtime_placeholder(monkeypatch):
+    monkeypatch.setenv("NOMAD_SIM_PERCEPTION_RUNTIME", "none")
+    app = _build_app(monkeypatch)
+    app.state.external_vio_state = {
+        "source": "gazebo",
+        "confidence": 1.0,
+        "timestamp": time.time(),
+    }
+
+    def _boom(*a, **k):
+        raise RuntimeError("docker unreachable")
+
+    monkeypatch.setattr(subprocess, "run", _boom)
+    with TestClient(app) as client:
+        body = client.get("/api/isaac/status").json()
+    assert body["container_running"] is True
+    assert body["container_name"] == "gazebo"
+    assert body["runtime"] == "gazebo"
+    assert body["simulated"] is True
+
+
+def test_status_reports_configured_sim_when_vio_stale(monkeypatch):
+    monkeypatch.setenv("NOMAD_SIM_PERCEPTION_RUNTIME", "gazebo")
+    app = _build_app(monkeypatch)
+    app.state.external_vio_state = {
+        "source": "gazebo",
+        "confidence": 1.0,
+        "timestamp": time.time() - 30.0,
+    }
+
+    def _boom(*a, **k):
+        raise RuntimeError("docker unreachable")
+
+    monkeypatch.setattr(subprocess, "run", _boom)
+    with TestClient(app) as client:
+        body = client.get("/api/isaac/status").json()
+    assert body["container_running"] is True
+    assert body["container_name"] == "gazebo"
+    assert body["bridge_running"] is False
+    assert body["simulated"] is True
+    assert body["vio_healthy"] is False
+
+
 # ==================== start/stop container + bridge ====================
 
 

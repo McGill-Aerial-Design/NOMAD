@@ -64,8 +64,10 @@ gating (clamp, VIO freshness, armed+GUIDED, watchdog) owned there.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/video/bridges` | List video bridges |
+| GET | `/api/video/topics` | List ROS image topics available to the video bridge |
 | POST | `/api/video/bridges/start` | Start a video bridge |
 | POST | `/api/video/source` | Switch video source |
+| GET | `/api/video/overlay/status` | Current overlay rendering state |
 | POST | `/api/video/overlay/{action}` | Toggle overlay rendering |
 | GET | `/api/stream/info` | Stream/RTSP info |
 
