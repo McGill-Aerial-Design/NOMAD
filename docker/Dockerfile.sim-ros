@@ -1,0 +1,110 @@
+# syntax=docker/dockerfile:1
+# ==============================================================
+# NOMAD Tier-1 hardware-free ROS2 sim image (x86_64, no CUDA/GPU).
+#
+# Runs the REAL edge_core.ros_http_bridge node against the synthetic
+# tools/sim/zed_sim_publisher.py topic publisher, so ROS2 integration can be
+# exercised without a Jetson, ZED camera, or GPU.
+#
+# Relationship to the other images:
+#   - Complements Dockerfile.dev (bare Edge Core, no ROS2) by adding a
+#     full ROS2 Humble runtime for integration-level bridge testing.
+#   - Mirrors Dockerfile.jetson minus the GPU/ZED-SDK/nvblox/colcon layers:
+#     same COPY layout, same PYTHONPATH convention, same entrypoint.
+#   - Does NOT build on aarch64/Jetson — use Dockerfile.jetson for the device.
+#
+# Build (repo root as context):
+#   docker build -f docker/Dockerfile.sim-ros -t nomad-sim-ros:latest .
+#
+# Run the bridge (Edge Core reachable at host "edge_core" on a compose network):
+#   docker run --rm nomad-sim-ros:latest
+#
+# Run the synthetic publisher instead:
+#   docker run --rm nomad-sim-ros:latest \
+#       python3 -m tools.sim.zed_sim_publisher --rate 30
+#
+# Run an integration test suite (volume-mount tests/ at run time):
+#   docker run --rm -v $(pwd)/tests:/opt/nomad/tests nomad-sim-ros:latest \
+#       python3 -m pytest tests/ros/ -v
+# ==============================================================
+
+FROM ros:humble-ros-base
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+LABEL maintainer="The NOMAD Authors"
+LABEL description="NOMAD Tier-1 hardware-free ROS2 sim image for bridge integration testing"
+
+# ==============================================================
+# ROS2 message packages the bridge imports + GStreamer (video bridge)
+# ==============================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ros-humble-geometry-msgs \
+    ros-humble-nav-msgs \
+    ros-humble-sensor-msgs \
+    ros-humble-std-msgs \
+    ros-humble-visualization-msgs \
+    ros-humble-tf2-ros \
+    ros-humble-rmw-fastrtps-cpp \
+    python3-pip \
+    curl \
+    python3-gi \
+    gir1.2-gst-plugins-base-1.0 \
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    gstreamer1.0-libav \
+    gstreamer1.0-rtsp \
+    && rm -rf /var/lib/apt/lists/*
+
+# ==============================================================
+# Python deps. numpy<2 keeps compatibility with the prebuilt ROS message
+# packages (mirrors Dockerfile.jetson). pytest runs the tests/ros/ suite inside
+# the image. pydantic is the only third-party import in edge_core/__init__.py's
+# import chain (services.models) — required for `python3 -m
+# edge_core.ros_http_bridge.main` to import (the Isaac ROS base provides it on
+# the Jetson; the lean ROS base here does not, so install it explicitly).
+# ==============================================================
+RUN pip3 install --no-cache-dir \
+    pymavlink \
+    transforms3d \
+    pytest \
+    pydantic \
+    'numpy<2'
+
+# ==============================================================
+# NOMAD source. Copied to a layer path on PYTHONPATH so the bridge and the
+# synthetic publisher are importable without a workspace mount — mirrors the
+# self-contained COPY layout in Dockerfile.jetson (lines ~133-136).
+# tests/ is deliberately excluded (it is in .dockerignore and volume-mounted
+# at run time so the image stays small and the test suite is always fresh).
+# ==============================================================
+COPY pyproject.toml README.md /opt/nomad/
+COPY edge_core/ /opt/nomad/edge_core/
+COPY infra/ /opt/nomad/infra/
+COPY tools/ /opt/nomad/tools/
+
+ENV PYTHONPATH="/opt/nomad"
+
+# ==============================================================
+# Environment
+# ==============================================================
+ENV ROS_DOMAIN_ID=0
+ENV RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+# ROS_LOCALHOST_ONLY=0 lets DDS discovery work across the compose network.
+ENV ROS_LOCALHOST_ONLY=0
+
+WORKDIR /opt/nomad
+
+# ==============================================================
+# Entrypoint — sources ROS2 Humble, then exec's the CMD.
+# ==============================================================
+COPY docker/ros_entrypoint.sh /ros_entrypoint.sh
+RUN chmod +x /ros_entrypoint.sh
+
+ENTRYPOINT ["/ros_entrypoint.sh"]
+
+# Default: run the bridge node (Edge Core host resolved via compose service name).
+CMD ["python3", "-m", "edge_core.ros_http_bridge.main", "--host", "edge_core"]

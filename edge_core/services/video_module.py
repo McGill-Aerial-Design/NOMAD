@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 
 from edge_core.core import AppContext, BaseModule, ModuleMetadata
-from edge_core.services.video_stream_manager import VideoStreamManager
+from edge_core.services.video_stream_manager import DEFAULT_RTSP_URL, VideoStreamManager
 
 logger = logging.getLogger("edge_core.services.video")
 
@@ -39,14 +39,23 @@ class VideoStreamModule(BaseModule):
             except ValueError:
                 return default
 
+        def _bool(key: str, default: bool = False) -> bool:
+            value = ctx.get_config(key)
+            if value is None:
+                return default
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+
         self._manager = VideoStreamManager(
             container_name=ctx.get_config("ISAAC_CONTAINER_NAME") or "nomad_isaac_ros",
+            relay_http_host=ctx.get_config("VIDEO_RELAY_HTTP_HOST") or "localhost",
             relay_http_port=_int("VIDEO_RELAY_HTTP_PORT", 9200),
+            rtsp_url=ctx.get_config("NOMAD_RTSP_URL") or DEFAULT_RTSP_URL,
             default_topic=ctx.get_config("NOMAD_DEFAULT_VIDEO_TOPIC") or "/zed/zed_node/rgb/color/rect/image",
             width=_int("VIDEO_BRIDGE_WIDTH", 640),
             height=_int("VIDEO_BRIDGE_HEIGHT", 360),
             fps=_int("VIDEO_BRIDGE_FPS", 15),
             bitrate=_int("VIDEO_BRIDGE_BITRATE", 800),
+            external_bridge=_bool("NOMAD_VIDEO_EXTERNAL_BRIDGE"),
         )
         ctx.register_service("video_stream_manager", self._manager)
         ctx.app.state.video_stream_manager = self._manager
