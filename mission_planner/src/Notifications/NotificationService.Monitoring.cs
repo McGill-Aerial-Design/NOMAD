@@ -17,12 +17,15 @@ namespace NOMAD.MissionPlanner
 
             try
             {
+                // Altitude callouts are the most latency-sensitive and a cheap local
+                // read — run them first so they're never delayed behind the VIO HTTP
+                // await below.
+                CheckAltitudeCallouts();
                 CheckGPSHealth();
                 CheckBatteryHealth();
                 CheckEKFSource();
                 await CheckVIOHealthAsync().ConfigureAwait(false);
                 CheckOpticalFlowHealth();
-                CheckAltitudeCallouts();
             }
             catch (Exception ex)
             {

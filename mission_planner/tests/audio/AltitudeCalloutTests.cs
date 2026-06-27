@@ -19,6 +19,7 @@ internal static class AltitudeCalloutTests
     private static int Main()
     {
         FirstReadPrimesSilently();
+        RisingEdgeFiresAtExactThreshold();
         ClimbAnnouncesEachThresholdCrossed();
         DescentAnnouncesThresholdCrossed();
         JitterOnThresholdStaysSilent();
@@ -37,6 +38,14 @@ internal static class AltitudeCalloutTests
         // Powering up already at 12 m must not blurt a callout.
         AssertNull(AltitudeCallout.Next(12.0, ref band), "first read primes silently");
         AssertEqual(3, band, "primed band above 3/5/10");
+    }
+
+    private static void RisingEdgeFiresAtExactThreshold()
+    {
+        int band = -1;
+        AltitudeCallout.Next(9.0, ref band);                        // prime just below 10
+        // Reaching exactly 10 m must announce now — not after climbing past 10 + margin.
+        AssertEqual("10 meters", AltitudeCallout.Next(10.0, ref band), "fires at exact threshold");
     }
 
     private static void ClimbAnnouncesEachThresholdCrossed()

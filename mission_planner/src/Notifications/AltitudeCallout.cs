@@ -20,8 +20,9 @@ namespace NOMAD.MissionPlanner
         // calibration knob if the flight ceiling changes.
         public static readonly double[] Thresholds = { 3, 5, 10, 20, 30, 50, 75, 100, 120 };
 
-        // Hysteresis (m): altitude must clear a threshold by this margin before a
-        // crossing registers, so jitter sitting exactly on a threshold can't chatter.
+        // Hysteresis (m): after a callout, altitude must fall this far back past the
+        // threshold before that band re-arms, so jitter on a threshold can't chatter.
+        // The rising edge has NO margin — callouts fire promptly on the way up.
         public const double Margin = 0.5;
 
         /// <summary>
@@ -39,10 +40,11 @@ namespace NOMAD.MissionPlanner
             if (bandIndex < 0) { bandIndex = BandFrom(altM); return null; }
 
             int band = bandIndex;
-            // Climb a band only once altitude exceeds the next threshold by Margin;
-            // drop a band only once it falls below the current one by Margin. The gap
-            // between these is the deadband that absorbs jitter.
-            while (band < Thresholds.Length && altM >= Thresholds[band] + Margin) band++;
+            // Rising edge fires the instant altitude reaches a threshold — no margin
+            // delay, so the callout isn't late and a level-off exactly on a threshold
+            // still announces. The falling edge needs Margin of overshoot before a
+            // band re-arms, so hovering on a threshold can't chatter.
+            while (band < Thresholds.Length && altM >= Thresholds[band]) band++;
             while (band > 0 && altM < Thresholds[band - 1] - Margin) band--;
 
             if (band == bandIndex) return null;
