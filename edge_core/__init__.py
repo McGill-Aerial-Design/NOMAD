@@ -12,10 +12,7 @@ Target: Python 3.13 | NVIDIA Jetson Orin Nano
 from .services.geospatial import (
     GPSCoordinate,
     NEDOffset,
-    bearing_between_points,
     calculate_gps_offset_meters,
-    haversine_distance,
-    offset_gps_by_meters,
 )
 from .services.models import SystemState
 from .services.state import StateManager
@@ -35,9 +32,6 @@ __all__ = [
     "GPSCoordinate",
     "NEDOffset",
     "calculate_gps_offset_meters",
-    "haversine_distance",
-    "offset_gps_by_meters",
-    "bearing_between_points",
     # Time Synchronization
     "TimeSyncService",
     "TimeSyncStatus",
