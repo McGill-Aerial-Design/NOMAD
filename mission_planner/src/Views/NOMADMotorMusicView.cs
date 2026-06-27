@@ -436,6 +436,15 @@ namespace NOMAD.MissionPlanner
             _lblConnection.ForeColor = MotorMusicCommand.IsConnected ? NOMADTheme.SUCCESS : NOMADTheme.ERROR;
         }
 
+        // Stop local playback + mic when the operator switches away so audio
+        // doesn't keep running behind another tab. (Network stop is left to the
+        // explicit Stop button.)
+        public override void OnDeactivated()
+        {
+            _player.Stop();
+            StopSpeaker();
+        }
+
         protected override void Dispose(bool disposing)
         {
             if (disposing)

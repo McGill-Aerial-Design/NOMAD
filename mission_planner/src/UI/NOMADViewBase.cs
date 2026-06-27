@@ -8,14 +8,23 @@
 
 using System.Drawing;
 using System.Windows.Forms;
+using NOMAD.MissionPlanner.Core;
 
 namespace NOMAD.MissionPlanner
 {
     /// <summary>
-    /// Base class for NOMAD views with common styling
+    /// Base class for NOMAD views with common styling. Implements the optional
+    /// <see cref="INomadView"/> activation hooks as no-ops so a view only
+    /// overrides the one(s) it needs (e.g. to pause work when swapped out).
     /// </summary>
-    public abstract class NOMADViewBase : UserControl
+    public abstract class NOMADViewBase : UserControl, INomadView
     {
+        /// <summary>Called after the view is shown in the content area. Default: no-op.</summary>
+        public virtual void OnActivated() { }
+
+        /// <summary>Called before the view is swapped out (kept cached). Default: no-op.</summary>
+        public virtual void OnDeactivated() { }
+
         // Colors delegated to NOMADTheme for consistency
         protected static readonly Color CARD_BG = NOMADTheme.CARD_BG;
         protected static readonly Color ACCENT_COLOR = NOMADTheme.ACCENT;

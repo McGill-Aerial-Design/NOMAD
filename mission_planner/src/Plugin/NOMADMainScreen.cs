@@ -373,6 +373,7 @@ namespace NOMAD.MissionPlanner
                 newView.Dock = DockStyle.Fill;
                 _viewContainer.Controls.Add(newView);
                 _currentView = newView;
+                if (newView is INomadView activated) activated.OnActivated();
             }
         }
 
