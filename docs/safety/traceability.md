@@ -19,9 +19,9 @@ Columns:
 - **Code symbol** — `module::symbol` implementing it.
 - **Test** — `test_file::test_name` proving it, or **(none)**.
 
-Post-Phase-2: the velocity-path decision logic now lives in the pure
-`edge_core/safety/` package (100% line coverage), so most cells below point there
-rather than at the threaded `mavlink_velocity.py` adapter.
+The velocity-path decision logic lives in the pure `edge_core/safety/` package
+(100% line coverage), so most cells below point there rather than at the threaded
+`mavlink_velocity.py` adapter.
 
 | Requirement | Code symbol | Test |
 |-------------|-------------|------|
@@ -37,7 +37,7 @@ rather than at the threaded `mavlink_velocity.py` adapter.
 | SR-LNK-02 | `safety/watchdog.py::watchdog_decision` (`command_timeout_s`) | `tests/test_safety_watchdog.py::test_command_timeout_stops_with_reason`, `::test_at_timeout_boundary_does_not_stop` |
 | SR-LNK-03 | `mavlink_velocity.py::MavlinkVelocityController.stop` → `_send_stop` | `tests/test_mavlink_velocity.py::test_stop_sends_zero_velocity` |
 | SR-FEN-01 | C# `Geofence/MPFenceUploader.cs`, `BoundaryManager.cs` | **Manual (FC-side)** — boundary uploaded to and enforced by the FC fence before flight; verified operationally. No automated NOMAD test by nature (it is a flight-controller function NOMAD configures, not owns). |
-| SR-FEN-02 | `safety/geofence.py::evaluate_position` (pure decision over `is_contained`); enforced by `services/mavlink/commands.py::_fence_allows_global` / `_fence_allows_local` in the position-target senders | `tests/test_safety_geofence.py::test_evaluate_position_rejects_outside_boundary` (+ fault-injection siblings); `tests/test_mavlink_fence.py` (adapter suite); SITL: `tests/sitl/geofence_containment.py` — **run & PASS** (2026-06-11, commit f69a137; now gates nightly via `.github/workflows/sitl.yml`) |
+| SR-FEN-02 | `safety/geofence.py::evaluate_position` (pure decision over `is_contained`); enforced by `services/mavlink/commands.py::_fence_allows_global` / `_fence_allows_local` in the position-target senders | `tests/test_safety_geofence.py::test_evaluate_position_rejects_outside_boundary` (+ fault-injection siblings); `tests/test_mavlink_fence.py` (adapter suite); SITL: `tests/sitl/geofence_containment.py` (gates nightly via `.github/workflows/sitl.yml`) |
 | SR-PAY-01 | `safety/payload.py::validate_servo_command`; enforced by `modules/payload/servo.py::ServoController.set_channel_pwm` | `tests/test_safety_payload.py::test_validate_servo_command_rejects_bad_channel` (+ siblings); `tests/test_payload_servo.py::test_set_channel_pwm_rejects_out_of_range` |
 | SR-PAY-02 | `safety/payload.py::clamp_release_duration`; `servo.py::trigger_water_shooter` (`finally` de-energize) | `tests/test_safety_payload.py::test_clamp_release_duration_rejects_nonfinite`; `tests/test_payload_servo.py::test_pump_deenergized_when_sleep_raises`, `::test_relay_on_failure_still_attempts_off` |
 | SR-PAY-03 | `safety/payload.py::arm_release` / `evaluate_release` (interlock state machine); `servo.py::ServoController.arm_release` / `trigger_water_shooter`; `/api/servo/shooter/{arm,trigger}` routes; C# fire-button confirm | `tests/test_safety_payload.py::test_release_requires_prior_arm` (+ siblings); `tests/test_payload_servo.py::test_release_without_arm_sends_nothing`, `::test_arm_is_consumed_by_each_attempt` |
@@ -95,12 +95,10 @@ SR-SEC-02 | edge_core.api:create_app | tests/test_auth_middleware.py::test_no_ke
 SR-SEC-03 | edge_core.api:create_app | tests/test_auth_middleware.py::test_command_path_requires_auth_even_on_loopback
 ```
 
-## Verification roadmap
+## SITL verification
 
-All SC requirements are verified. The geofence containment SITL scenario
-([tests/sitl/geofence_containment.py](../../tests/sitl/geofence_containment.py),
-`pixi run sitl-fence`) was executed against the `pixi run dev-up` stack on
-2026-06-11 (commit f69a137, PASS) and now runs nightly in
-[.github/workflows/sitl.yml](../../.github/workflows/sitl.yml) alongside the
-velocity loop-closure scenario — so the loop-closure proof is continuously
-re-checked rather than a one-off.
+The geofence containment and velocity loop-closure scenarios
+([tests/sitl/](../../tests/sitl/), `pixi run sitl-fence` / `sitl-scenario`) run
+against live ArduPilot SITL and gate nightly in
+[.github/workflows/sitl.yml](../../.github/workflows/sitl.yml), so the
+loop-closure proof is continuously re-checked rather than a one-off.

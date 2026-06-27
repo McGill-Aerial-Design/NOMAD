@@ -286,6 +286,9 @@ namespace NOMAD.MissionPlanner
                     _popOutForm.Dispose();
                     _popOutForm = null;
                 }
+
+                _moduleHost?.StopAll();
+                _moduleHost = null;
             }
             catch
             {
@@ -318,6 +321,28 @@ namespace NOMAD.MissionPlanner
         }
 
         private static NomadModuleContext _sharedContext;
+
+        private static ModuleHost _moduleHost;
+
+        /// <summary>
+        /// Build the module host once and return it. Register new modules here.
+        /// Modules read services (e.g. the plugin config) from the shared context
+        /// and contribute their own sidebar views/actions to the NOMAD screen.
+        /// </summary>
+        private ModuleHost BuildModuleHost()
+        {
+            if (_moduleHost != null) return _moduleHost;
+
+            SharedContext.Register(_config); // expose the plugin config to modules
+
+            var host = new ModuleHost();
+            host.Register(new Modules.ExampleModule());
+            host.Configure(SharedContext); // resolve order + Configure each module
+            host.StartAll();
+
+            _moduleHost = host;
+            return host;
+        }
 
         /// <summary>Resolve a module enable flag from an environment variable (true/false/null).</summary>
         private static bool? EnvFlag(string name)

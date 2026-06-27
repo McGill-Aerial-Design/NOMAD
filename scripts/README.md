@@ -98,12 +98,8 @@ Supported local-development entry points:
 | `test_api_endpoints.py` | Exercise every REST endpoint (used by `pixi run test-api`) |
 | `gdrive_auth.py`        | One-time Google Drive OAuth for evidence upload         |
 
-One-off hardware bring-up and debugging throwaways (ZED/USB probes, nvblox mesh
-inspectors, odometry comparisons) have been moved to `dev/archive/` — see
-[`dev/archive/README.md`](dev/archive/README.md). They are unsupported and not
-covered by CI. The historic `restart_nvblox.sh`, `restart_bridge.sh`,
-`full_restart_ros.sh`, `ros_full_launch.sh` are gone — their behavior is now
-`nomad restart nvblox`, `nomad restart ros_http_bridge`, etc.
+To restart a service, use the `nomad` CLI (e.g. `nomad restart nvblox`,
+`nomad restart ros_http_bridge`) rather than a standalone script.
 
 ## build/ and hardware/
 

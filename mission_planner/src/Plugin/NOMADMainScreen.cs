@@ -97,16 +97,12 @@ namespace NOMAD.MissionPlanner
         private System.Windows.Forms.Timer _updateTimer;
         private bool _themeReapplyPending;
 
-        // Module-driven sidebar (optional; see src/Core module SDK). When a host
-        // with descriptors is supplied, the sidebar is built from those instead of
-        // the hardcoded buttons/views above. With no host the legacy path runs and
-        // behavior is unchanged.
+        // Optional module-contributed sidebar entries (NOMAD module SDK — see
+        // src/Core). A plugin-supplied ModuleHost appends its views/actions to the
+        // built-in sidebar; with no host, only the built-in entries appear.
         private ModuleHost _moduleHost;
-        private List<NomadViewDescriptor> _descriptors;
-        private bool _isModuleMode;
         private readonly Dictionary<string, Button> _descriptorButtons = new Dictionary<string, Button>();
         private readonly Dictionary<string, Control> _descriptorViewCache = new Dictionary<string, Control>();
-        private string _currentDescriptorId;
 
         // Static configuration (set by the plugin before this screen is shown)
         private static DualLinkSender _staticSender;
@@ -206,15 +202,7 @@ namespace NOMAD.MissionPlanner
             QueueThemeReapply();
 
             StartUpdateTimer();
-            if (_isModuleMode)
-            {
-                var first = _descriptors.FirstOrDefault(d => d.Kind == NomadEntryKind.View);
-                if (first != null) ShowEntry(first);
-            }
-            else
-            {
-                ShowView("Dashboard");
-            }
+            ShowView("Dashboard");
         }
 
         /// <summary>
@@ -315,12 +303,14 @@ namespace NOMAD.MissionPlanner
             // Keep the chrome on-theme even if MP's ThemeManager ran since.
             ReapplyNomadTheme();
 
-            // Update sidebar button states
+            // Update sidebar button states (and clear any active module button).
             UpdateSidebarButtonState(viewName);
+            UpdateDescriptorButtonState(null);
 
             // Remove current view
             if (_currentView != null)
             {
+                if (_currentView is INomadView leaving) leaving.OnDeactivated();
                 _viewContainer.Controls.Remove(_currentView);
                 // Don't dispose - keep cached for quick switching
             }
@@ -383,6 +373,7 @@ namespace NOMAD.MissionPlanner
                 newView.Dock = DockStyle.Fill;
                 _viewContainer.Controls.Add(newView);
                 _currentView = newView;
+                if (newView is INomadView activated) activated.OnActivated();
             }
         }
 

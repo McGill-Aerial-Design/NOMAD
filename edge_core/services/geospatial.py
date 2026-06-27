@@ -34,21 +34,6 @@ class NEDOffset(NamedTuple):
     down: float = 0.0  # Positive = Down, Negative = Up
 
 
-def deg_to_rad(degrees: float) -> float:
-    """Convert degrees to radians."""
-    return degrees * math.pi / 180.0
-
-
-def rad_to_deg(radians: float) -> float:
-    """Convert radians to degrees."""
-    return radians * 180.0 / math.pi
-
-
-def normalize_heading(heading: float) -> float:
-    """Normalize heading to 0-360 range."""
-    return heading % 360.0
-
-
 def calculate_gps_offset_meters(
     origin: GPSCoordinate,
     target: GPSCoordinate,
@@ -72,117 +57,14 @@ def calculate_gps_offset_meters(
         >>> offset = calculate_gps_offset_meters(origin, target)
         >>> print(f"North: {offset.north:.2f}m, East: {offset.east:.2f}m")
     """
-    # Latitude difference to meters (approximately 111,320 m per degree at equator)
-    lat_diff_rad = deg_to_rad(target.lat - origin.lat)
-    lon_diff_rad = deg_to_rad(target.lon - origin.lon)
+    lat_diff_rad = math.radians(target.lat - origin.lat)
+    lon_diff_rad = math.radians(target.lon - origin.lon)
 
-    # Average latitude for longitude scaling
-    avg_lat_rad = deg_to_rad((origin.lat + target.lat) / 2.0)
+    # Average latitude scales the longitude difference for meridian convergence.
+    avg_lat_rad = math.radians((origin.lat + target.lat) / 2.0)
 
-    # North offset: latitude difference * Earth radius
     north_m = lat_diff_rad * EARTH_RADIUS_M
-
-    # East offset: longitude difference * Earth radius * cos(latitude)
-    # The cos(lat) factor accounts for meridian convergence
     east_m = lon_diff_rad * EARTH_RADIUS_M * math.cos(avg_lat_rad)
-
-    # Down offset: altitude difference (positive down)
-    down_m = origin.alt - target.alt
+    down_m = origin.alt - target.alt  # positive down
 
     return NEDOffset(north=north_m, east=east_m, down=down_m)
-
-
-def offset_gps_by_meters(
-    origin: GPSCoordinate,
-    offset: NEDOffset,
-) -> GPSCoordinate:
-    """
-    Calculate a new GPS coordinate given an origin and NED offset in meters.
-
-    Args:
-        origin: Starting GPS coordinate
-        offset: North/East/Down offset in meters
-
-    Returns:
-        New GPSCoordinate at the offset location
-
-    Example:
-        >>> origin = GPSCoordinate(lat=45.5, lon=-73.5, alt=100.0)
-        >>> offset = NEDOffset(north=100.0, east=50.0, down=50.0)
-        >>> target = offset_gps_by_meters(origin, offset)
-    """
-    # Latitude offset (North/South)
-    lat_offset_deg = rad_to_deg(offset.north / EARTH_RADIUS_M)
-
-    # Longitude offset (East/West) - adjusted for latitude
-    lat_rad = deg_to_rad(origin.lat)
-    lon_offset_deg = rad_to_deg(offset.east / (EARTH_RADIUS_M * math.cos(lat_rad)))
-
-    # Altitude offset (Down is positive, so subtract)
-    new_alt = origin.alt - offset.down
-
-    return GPSCoordinate(
-        lat=origin.lat + lat_offset_deg,
-        lon=origin.lon + lon_offset_deg,
-        alt=new_alt,
-    )
-
-
-def bearing_between_points(
-    origin: GPSCoordinate,
-    target: GPSCoordinate,
-) -> float:
-    """
-    Calculate the initial bearing from origin to target.
-
-    Args:
-        origin: Starting GPS coordinate
-        target: Destination GPS coordinate
-
-    Returns:
-        Bearing in degrees (0-360, 0 = North, 90 = East)
-    """
-    lat1_rad = deg_to_rad(origin.lat)
-    lat2_rad = deg_to_rad(target.lat)
-    lon_diff_rad = deg_to_rad(target.lon - origin.lon)
-
-    x = math.sin(lon_diff_rad) * math.cos(lat2_rad)
-    y = math.cos(lat1_rad) * math.sin(lat2_rad) - math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(lon_diff_rad)
-
-    bearing_rad = math.atan2(x, y)
-    bearing_deg = rad_to_deg(bearing_rad)
-
-    return normalize_heading(bearing_deg)
-
-
-def haversine_distance(
-    coord1: GPSCoordinate,
-    coord2: GPSCoordinate,
-) -> float:
-    """
-    Calculate the great-circle distance between two GPS coordinates.
-
-    Uses the Haversine formula for accurate distance calculation.
-
-    Args:
-        coord1: First GPS coordinate
-        coord2: Second GPS coordinate
-
-    Returns:
-        Distance in meters
-
-    Example:
-        >>> a = GPSCoordinate(lat=45.5, lon=-73.5)
-        >>> b = GPSCoordinate(lat=45.5001, lon=-73.5001)
-        >>> dist = haversine_distance(a, b)
-        >>> print(f"Distance: {dist:.2f}m")
-    """
-    lat1_rad = deg_to_rad(coord1.lat)
-    lat2_rad = deg_to_rad(coord2.lat)
-    delta_lat_rad = deg_to_rad(coord2.lat - coord1.lat)
-    delta_lon_rad = deg_to_rad(coord2.lon - coord1.lon)
-
-    a = math.sin(delta_lat_rad / 2) ** 2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(delta_lon_rad / 2) ** 2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-    return EARTH_RADIUS_M * c

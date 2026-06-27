@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
-"""Traceability CI gate (rearchitecture plan §4.2, DO-178C §6).
+"""Traceability CI gate (DO-178C §6 bidirectional traceability).
 
 Parses the normative ``traceability`` code block in
 ``docs/safety/traceability.md`` and asserts, for every requirement mapping, that

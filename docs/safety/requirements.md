@@ -45,7 +45,7 @@ Numbers are stable identifiers; do not renumber. New requirements append.
 | ID | Requirement | Hazard | Status |
 |----|-------------|--------|--------|
 | SR-FEN-01 | The operating boundary shall be uploaded to and enforced by the FC fence before autonomous flight. | H-05 | ✅ (FC-side: boundary uploaded by the C# `MPFenceUploader` and enforced by the FC fence before autonomous flight; verified manually — no automated NOMAD test by nature) |
-| SR-FEN-02 | NOMAD shall provide an independent containment check that rejects/clamps any position target outside the configured boundary. | H-05 | ✅ (pure decision `safety/geofence.py::evaluate_position`, enforced in `services/mavlink/commands.py` position-target senders; unit + adapter fault-injection tested. SITL containment scenario `pixi run sitl-fence` **run & PASS** 2026-06-11, commit f69a137 — now gating nightly; see H-05) |
+| SR-FEN-02 | NOMAD shall provide an independent containment check that rejects/clamps any position target outside the configured boundary. | H-05 | ✅ (pure decision `safety/geofence.py::evaluate_position`, enforced in `services/mavlink/commands.py` position-target senders; unit + adapter fault-injection tested. SITL containment scenario `pixi run sitl-fence` passes and gates nightly; see H-05) |
 
 ## Payload (PAY) — hazard H-06
 
@@ -63,42 +63,16 @@ Numbers are stable identifiers; do not renumber. New requirements append.
 | SR-SEC-02 | Edge API requests shall be authenticated per the auth middleware (key, loopback-dev fallback, explicit insecure-remote opt-in, length-checked internal token). | H-08 | ✅ |
 | SR-SEC-03 | Command-path endpoints (payload actuation; future velocity/mode routes) shall require authentication even on loopback — never the unauthenticated dev fallbacks — and every command-path request shall be audit-logged with client address and auth mode. | H-08 | ✅ (middleware `_COMMAND_PATH_PREFIXES`; tested in `tests/test_auth_middleware.py`. Identity is client address + auth mode — a single shared key cannot distinguish named operators) |
 
-## Backlog
+## Status
 
-**Phase 2** closed the velocity-path gaps (SR-VEL-05, SR-VIO-01/02, SR-LNK-02 →
-✅) by moving the decision logic into the pure, 100%-covered `edge_core/safety/`
-package. **Phase 3** added the proof infrastructure: a traceability CI gate
-([traceability.md](traceability.md) machine block +
-`tests/test_safety_traceability.py`), a 100%-branch-coverage gate on the SC core
-(`pixi run cov-safety`), and the SR-LNK-03 shutdown-stop test (→ ✅).
+All requirements above are **Met** (🔴 0, 🟡 0). The decision logic for the
+velocity, geofence, payload, and security requirements lives in the pure,
+100%-branch-covered `edge_core/safety/` package, enforced by the matching I/O
+adapters and proven by the tests listed in [traceability.md](traceability.md).
 
-**Phase 4.1** wired the geofence: `safety/geofence.py::evaluate_position` (pure,
-in the 100%-branch gate) is now enforced by the position-target senders in
-`services/mavlink/commands.py`, configured via `NOMAD_FENCE_POLYGON` /
-`NOMAD_FENCE_MARGIN_M` (malformed config fails closed). Unit + adapter
-fault-injection tests prove it (SR-FEN-02 → ✅).
-
-**Phase 4.2** extracted the payload path: pure `safety/payload.py`
-(channel/PWM validation, duration clamp, arm→release interlock) enforced by the
-`servo.py` adapter, with the de-energize-on-exception guarantee fault-injection
-tested; `/api/servo/shooter/{arm,trigger}` give the interlock an operator
-surface and the GCS fire button now requires a confirm click
-(SR-PAY-01/02/03 → ✅).
-
-**Phase 4.3** made security-as-safety checkable: a deny-list scan proves the
-MAVLink surface contains no failsafe-disabling command (SR-SEC-01 → ✅), and
-command-path endpoints require auth even on loopback with every request
-audit-logged (SR-SEC-03 → ✅).
-
-**Phase 4.4** closed the last verification gap: the geofence containment SITL
-scenario (`tests/sitl/geofence_containment.py`, `pixi run sitl-fence`) was run
-against the dev stack (2026-06-11, commit f69a137 — PASS) and now gates nightly
-in `.github/workflows/sitl.yml`, so SR-FEN-02's loop-closure evidence is
-continuously re-checked (SR-FEN-02 SITL → ✅). SR-FEN-01 (FC-side fence upload via
-the C# `MPFenceUploader`) is verified manually before flight.
-
-No open requirements remain (🔴 0, 🟡 0). SR-FEN-01 carries no automated NOMAD
-test by nature — it is a flight-controller function NOMAD configures but does not
-own; the FC enforces it independently.
+SR-FEN-01 is the one requirement with no automated NOMAD test, by nature: it is a
+flight-controller function NOMAD configures (the C# `MPFenceUploader` uploads the
+boundary) but does not own — the FC enforces the fence independently, verified
+manually before flight.
 
 See [hazards.md](hazards.md) "How to read the GAPs".

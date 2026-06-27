@@ -7,34 +7,40 @@ Modules are discovered at startup via the `nomad.modules` Python entry-point gro
 
 ### Module interface
 
-Every module implements the `NomadModule` protocol:
+A module is any object with a `metadata` attribute and the four lifecycle hooks
+below (the `NomadModule` protocol in `edge_core/core/module.py`). The hooks run in
+this order and are all synchronous:
 
 ```python
-class NomadModule:
-    """Protocol for NOMAD modules."""
+from edge_core.core import AppContext, ModuleMetadata
 
-    name: str               # unique module identifier (e.g. "my_detector")
-    version: str            # semver string
-    requires: list[str]     # module names this depends on (optional)
+class MyDetectorModule:
+    # Identity + gating. `requires` lists other module names that must start
+    # first; `enable_flag` is an optional NOMAD_* env flag that turns it on/off.
+    metadata = ModuleMetadata(name="my_detector", version="0.1.0")
 
-    def configure(self, ctx: "AppContext") -> None:
-        """Called during startup. 'ctx' provides access to core services:
-           - ctx.state       (global state manager)
-           - ctx.mavlink     (MAVLink interface)
-           - ctx.nav         (navigation controller)
-           - ctx.health      (health monitor)
-           - ctx.video       (video stream manager)
-        """
+    def configure(self, ctx: AppContext) -> None:
+        """Read config and grab core services from the context, e.g.:
+             ctx.require_service("state_manager")
+             ctx.require_service("mavlink")
+             ctx.require_service("health_monitor")
+             ctx.require_service("video_stream_manager")
+           ctx.get_config("NOMAD_...") reads configuration."""
 
-    def register_routes(self, app: "FastAPI") -> None:
-        """Add FastAPI routes. Called after configure()."""
+    def register_routes(self, app) -> None:
+        """Add FastAPI routes/routers. Called after configure()."""
 
-    async def start(self) -> None:
-        """Start background tasks. Called when the app is ready."""
+    def start(self) -> None:
+        """Start background tasks. Called when the app starts up."""
 
-    async def stop(self) -> None:
-        """Clean up resources. Called during shutdown."""
+    def stop(self) -> None:
+        """Clean up resources. Called on shutdown, in reverse order."""
 ```
+
+Most modules subclass `BaseModule`, which supplies no-op defaults so you only
+override the hooks you need. Service names are whatever each built-in module
+registers with `ctx.register_service(name, obj)` — e.g. `state_manager`,
+`mavlink`, `health_monitor`, `video_stream_manager`, `time_sync`.
 
 ### Registration
 
@@ -106,36 +112,38 @@ class SampleModule(BaseModule):
 
 ## C# module pattern
 
-The Mission Planner plugin uses a similar module interface for views:
+The Mission Planner plugin mirrors the same idea: an `INomadModule` (in
+`mission_planner/src/Core/`) has `Metadata` plus `Configure` / `GetViews` /
+`Start` / `Stop`. Instead of returning a single control, a module contributes one
+or more sidebar entries as `NomadViewDescriptor`s. Derive from `NomadModuleBase`
+for no-op defaults:
 
 ```csharp
-public interface INomadModule
-{
-    string Name { get; }
-    string Version { get; }
-    Control CreateView();
-}
+using System.Collections.Generic;
+using System.Windows.Forms;
+using NOMAD.MissionPlanner.Core;
 
-public class MyCustomView : INomadModule
+public class MyCustomModule : NomadModuleBase
 {
-    public string Name => "My Custom View";
-    public string Version => "1.0.0";
+    public override NomadModuleMetadata Metadata =>
+        new NomadModuleMetadata { Name = "my_custom", Version = "1.0.0" };
 
-    public Control CreateView()
+    public override IEnumerable<NomadViewDescriptor> GetViews()
     {
-        var panel = new UserControl();
-        // ... build your UI ...
-        return panel;
+        // id, button label, header title, sidebar section, view factory
+        yield return NomadViewDescriptor.View(
+            "my_custom", "My View", "My View", "TOOLS",
+            () => new MyCustomControl());
     }
 }
 ```
 
-New views register themselves through the `ModuleHost` registry:
+Register the module in `NOMADPlugin.BuildModuleHost()`; the host resolves
+dependencies and the screen **appends** the descriptors to its sidebar:
 
 ```csharp
-ModuleHost.Register(new MyCustomView());
+host.Register(new MyCustomModule());
 ```
 
-The integration is built on the existing `NOMADViewBase` + view registration
-pattern in `NOMADMainScreen.cs`. See `mission_planner/src/Core/` and
-`mission_planner/src/Modules/` for reference implementations.
+`mission_planner/src/Modules/ExampleModule.cs` is a small working module wired
+exactly this way — start from it.

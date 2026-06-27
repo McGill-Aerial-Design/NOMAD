@@ -144,9 +144,8 @@ namespace NOMAD.MissionPlanner
 
                 // Hovering "NOMAD" opens the dropdown so the user can reach the
                 // items without clicking; a deliberate CLICK opens the NOMAD
-                // screen. Previously the dropdown only opened on click, and that
-                // same click navigated — yanking the user to the dashboard every
-                // time they just wanted the menu.
+                // screen. Splitting hover from click keeps reaching the menu from
+                // navigating away to the dashboard.
                 nomadMenu.MouseEnter += (s, e) =>
                 {
                     if (!nomadMenu.DropDown.Visible)

@@ -74,12 +74,13 @@ host.Register(new MyModule());
 
 ## How it plugs into the screen
 
-`NOMADPlugin` builds a `ModuleHost`, registers the available modules, calls
-`Configure()` + `StartAll()`, and publishes it via
-`NOMADMainScreen.SetStaticModuleHost(host)`. When the screen is constructed and
-the host has descriptors, the sidebar is generated from them; otherwise the
-built-in hardcoded sidebar runs unchanged.
+`NOMADPlugin.BuildModuleHost()` builds a `ModuleHost`, registers the available
+modules, calls `Configure()` + `StartAll()`, and publishes it via
+`NOMADMainScreen.SetStaticModuleHost(host)`. When the screen builds its sidebar,
+it **appends** each module's descriptors after the built-in entries — so modules
+extend the screen rather than replace it. With no host (or no enabled modules),
+only the built-in entries appear.
 
-**This is additive and inert by default.** The bundled reference module
-([`../Modules/AEAC2026`](../Modules/AEAC2026/AEAC2026Module.cs)) is part of
-the AEAC-2026 competition example (moved to the `AEAC2026` branch).
+The bundled [`../Modules/ExampleModule.cs`](../Modules/ExampleModule.cs) is a
+working module wired in this way: it adds an "Example Module" page and action to
+the sidebar (gated by `NOMAD_PLUGIN_EXAMPLE_MODULE`, on by default).

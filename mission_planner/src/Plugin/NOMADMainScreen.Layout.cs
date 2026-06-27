@@ -3,15 +3,13 @@
 // ============================================================
 // NOMADMainScreen.Layout.cs - Sidebar and content-area layout
 // ============================================================
-// Builds the legacy (hardcoded) sidebar, sidebar buttons, section
+// Builds the default (hardcoded) sidebar, sidebar buttons, section
 // separators, and the header/content panels. View switching and
-// the module-driven sidebar live in the other partials.
+// the optional module-driven sidebar live in the other partials.
 // ============================================================
 
 using System.Drawing;
-using System.Linq;
 using System.Windows.Forms;
-using NOMAD.MissionPlanner.Core;
 
 namespace NOMAD.MissionPlanner
 {
@@ -30,15 +28,7 @@ namespace NOMAD.MissionPlanner
             // Controls are docked in REVERSE order of addition.
             // So we add content area FIRST (fills remaining), then sidebar (docks left).
             CreateContentArea();
-
-            // If a module host with descriptors is present, build the sidebar from
-            // those modules; otherwise fall back to the built-in hardcoded sidebar.
-            _descriptors = _moduleHost != null ? _moduleHost.GetViewDescriptors().ToList() : null;
-            _isModuleMode = _descriptors != null && _descriptors.Count > 0;
-            if (_isModuleMode)
-                CreateSidebarFromDescriptors();
-            else
-                CreateSidebar();
+            CreateSidebar();
         }
 
         private void CreateSidebar()
@@ -150,6 +140,9 @@ namespace NOMAD.MissionPlanner
             var btnGimbal = CreateSidebarButton("Gimbal");
             btnGimbal.Click += (s, e) => GimbalJoystickWindow.ShowSingleton(_config, this.FindForm());
             navPanel.Controls.Add(btnGimbal);
+
+            // Append any module-contributed entries (NOMAD module SDK — see src/Core).
+            AppendModuleEntries(navPanel);
 
             // IMPORTANT: In Windows Forms, docking order is reverse of Z-order
             // Add navPanel FIRST (will be at back, fills remaining space)
