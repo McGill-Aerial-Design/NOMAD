@@ -49,11 +49,8 @@ def _instantiate(obj: Any) -> Any:
     Accepts a class (instantiated), a factory callable (called), or an
     already-built instance (used as-is).
     """
-    if isinstance(obj, type):
-        return obj()
-    if callable(obj):
-        return obj()
-    return obj
+    # A class is callable too, so this covers class, factory, and instance.
+    return obj() if callable(obj) else obj
 
 
 def _default_entry_point_loader(group: str) -> Sequence[Any]:
