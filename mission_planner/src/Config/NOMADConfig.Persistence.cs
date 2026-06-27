@@ -280,6 +280,7 @@ namespace NOMAD.MissionPlanner
             TempWarningC = defaults.TempWarningC;
             TempCriticalC = defaults.TempCriticalC;
             AudioAlerts = defaults.AudioAlerts;
+            AltitudeCallouts = defaults.AltitudeCallouts;
             MotorMusicMotorCount = defaults.MotorMusicMotorCount;
             MotorMusicMinOutputPwm = defaults.MotorMusicMinOutputPwm;
             MotorMusicMaxOutputPwm = defaults.MotorMusicMaxOutputPwm;

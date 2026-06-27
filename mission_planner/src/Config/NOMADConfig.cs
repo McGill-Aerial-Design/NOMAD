@@ -335,6 +335,11 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public bool AudioAlerts { get; set; } = true;
 
+        /// <summary>
+        /// Speak Airbus-style altitude callouts in flight (gated by AudioAlerts).
+        /// </summary>
+        public bool AltitudeCallouts { get; set; } = true;
+
         // ============================================================
         // Motor Music Configuration
         // ============================================================

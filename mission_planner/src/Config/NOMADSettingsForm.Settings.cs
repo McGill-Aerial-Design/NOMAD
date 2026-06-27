@@ -84,6 +84,7 @@ namespace NOMAD.MissionPlanner
             _numTempWarning.Value = (decimal)Config.TempWarningC;
             _numTempCritical.Value = (decimal)Config.TempCriticalC;
             _chkAudioAlerts.Checked = Config.AudioAlerts;
+            _chkAltitudeCallouts.Checked = Config.AltitudeCallouts;
 
             // Log analysis
             _txtDefaultLogDirectory.Text = Config.DefaultLogDirectory ?? "";
@@ -238,6 +239,8 @@ namespace NOMAD.MissionPlanner
             Config.TempWarningC = (float)_numTempWarning.Value;
             Config.TempCriticalC = (float)_numTempCritical.Value;
             Config.AudioAlerts = _chkAudioAlerts.Checked;
+            Config.AltitudeCallouts = _chkAltitudeCallouts.Checked;
+            AudioAlerts.ApplyConfig(Config);
 
             // Log analysis
             Config.DefaultLogDirectory = _txtDefaultLogDirectory.Text.Trim();

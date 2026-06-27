@@ -98,6 +98,8 @@ namespace NOMAD.MissionPlanner
             AddSectionLabel(tab, "Notification Settings", ref y);
 
             _chkAudioAlerts = AddCheckBox(tab, "Enable audio alerts for critical warnings", 20, y);
+            y += 30;
+            _chkAltitudeCallouts = AddCheckBox(tab, "Speak altitude callouts in flight (Airbus-style)", 20, y);
 
             return tab;
         }

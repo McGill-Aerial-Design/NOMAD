@@ -22,6 +22,7 @@ namespace NOMAD.MissionPlanner
                 CheckEKFSource();
                 await CheckVIOHealthAsync().ConfigureAwait(false);
                 CheckOpticalFlowHealth();
+                CheckAltitudeCallouts();
             }
             catch (Exception ex)
             {
@@ -251,6 +252,27 @@ namespace NOMAD.MissionPlanner
                         "Jetson Overheating", $"Temperature: {Math.Max(health.GpuTemp, health.CpuTemp):F0}C - VIO may throttle");
                 }
             }
+        }
+
+        // Highest threshold the vehicle is currently above; -1 = unprimed.
+        // Reset to -1 on disarm so the next flight re-primes silently.
+        private int _altBand = -1;
+
+        private void CheckAltitudeCallouts()
+        {
+            var cs = MainV2.comPort?.MAV?.cs;
+            if (!AudioAlerts.AltitudeCalloutsEnabled || cs == null || !cs.armed)
+            {
+                _altBand = -1;
+                return;
+            }
+
+            // cs.alt is altitude above home (m) — same field BoundaryManager uses.
+            // Cast off dynamic: a dynamic arg alongside a ref param dispatches
+            // dynamically and throws on the ref.
+            string phrase = AltitudeCallout.Next((double)cs.alt, ref _altBand);
+            if (phrase != null)
+                AudioAlerts.Speak(phrase, component: "altitude", ignoreRateLimit: true);
         }
 
         private void CheckOpticalFlowHealth()

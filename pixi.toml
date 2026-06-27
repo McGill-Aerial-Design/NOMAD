@@ -209,6 +209,12 @@ test-plugin-gimbal = "powershell -ExecutionPolicy Bypass -File scripts/build/tes
 # Unit tests for the host-independent flight-log analyzer and shared live issue rules.
 test-plugin-logs = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_logs.ps1"
 
+# Unit tests for the Airbus-style altitude callouts (Windows only) — compiles the
+# Mission Planner-free AltitudeCallout with VS's csc and asserts the threshold-
+# crossing logic: silent priming, climb/descent callouts, hysteresis deadband,
+# and nearest-threshold selection on a fast multi-band descent.
+test-plugin-audio = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_audio.ps1"
+
 # Runtime smoke test for Mission Planner's DFLogBuffer adapter (requires a Release plugin build).
 test-plugin-log-adapters = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_log_adapters.ps1"
 
