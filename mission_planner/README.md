@@ -68,7 +68,7 @@ old-style .NET Framework 4.8 project that includes C# sources with an MSBuild wi
 | `src/Input/` | Joystick services: `NomadJoystickService`, `SerialJoystickBridge` |
 | `src/Payload/` | `PayloadActions` and `PayloadControlPanel` (drop / water shooter / nozzle) |
 | `src/Geofence/` | `BoundaryManager` (soft/hard boundary monitor), `MissionConfig` (boundary + mission models), `MapOverlayManager`, `MPFenceUploader` |
-| `src/Media/` | `EmbeddedVideoPlayer` (LibVLC RTSP), `SnapshotManager`, `BuildingViewer3D` |
+| `src/Media/` | `EmbeddedVideoPlayer` (LibVLC RTSP) |
 | `src/Notifications/` | `NotificationService`, `NotificationPanel` (toasts), `AudioAlerts` (chimes / TTS) |
 | `src/Telemetry/` | `TelemetryInjector` (HUD / `STATUSTEXT` injection) |
 | `src/Core/` | Module SDK: `INomadModule`, `INomadView`, `ModuleHost`, `NomadModuleContext`, `NomadViewDescriptor` (see [`src/Core/README.md`](src/Core/README.md)) |
