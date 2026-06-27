@@ -86,6 +86,7 @@ namespace NOMAD.MissionPlanner
         private NumericUpDown _numTempWarning;
         private NumericUpDown _numTempCritical;
         private CheckBox _chkAudioAlerts;
+        private CheckBox _chkAltitudeCallouts;
 
         // Log Analysis Tab
         private TextBox _txtDefaultLogDirectory;

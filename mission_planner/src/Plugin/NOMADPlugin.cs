@@ -100,6 +100,10 @@ namespace NOMAD.MissionPlanner
                 // on every MP page, not just inside the NOMAD screen.
                 NotificationToast.Attach(_notificationService, Host?.MainForm);
 
+                // Apply saved audio preferences (master mute, altitude callouts)
+                // before anything speaks.
+                AudioAlerts.ApplyConfig(_config);
+
                 // Startup chime + spoken welcome (fires once per process).
                 AudioAlerts.PlayWelcomeOnce();
 
