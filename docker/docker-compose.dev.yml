@@ -8,8 +8,8 @@
 #
 # Optional ROS2 simulation (Tier 1 CPU — no GPU/ZED/Jetson required):
 #   docker compose -f docker/docker-compose.dev.yml --profile ros up --build
-#   # Runs the real ros_http_bridge against a synthetic ZED publisher.
-#   # pixi run sim-ros-up   # convenience wrapper for the above.
+#   # Runs the real C++ nomad_vehicle_node against SITL + a synthetic ZED
+#   # publisher (zed_sim). pixi run sim-ros-up is the convenience wrapper.
 #
 # Optional Gazebo ZED-2i simulation (Tier 3 — visible GUI, no GPU required):
 #   docker compose -f docker/docker-compose.dev.yml --profile gazebo up --build
@@ -54,17 +54,23 @@ services:
     # volumes:
     #   - ../config/nomad.env:/app/config/nomad.env:ro
 
-  # Optional: ArduPilot SITL (Copter-4.6.3 stable).
+  # Optional: ArduPilot SITL (Copter-4.7.1 stable).
   # Exposes MAVLink on TCP :5760 (connect Mission Planner, mavproxy, etc.).
-  # Fully wiring edge_core <-> SITL needs a MAVLink TCP endpoint in your config;
-  # by default edge_core sim mocks MAVLink and does not dial out to SITL.
+  # Edge Core receives the stream on its internal UDP port. The C++ smoke test
+  # receives a second copy on the host UDP port configured below.
   sitl:
-    # ArduPilot Copter 4.6.3, built from source once with:
-    #   docker build -t nomad-sitl:copter-4.6.3 \
-    #     --build-arg COPTER_TAG=Copter-4.6.3 \
+    # ArduPilot Copter 4.7.1, built from source once with:
+    #   docker build -t nomad-sitl:copter-4.7.1 \
+    #     --build-arg COPTER_TAG=Copter-4.7.1 \
     #     https://github.com/radarku/ardupilot-sitl-docker.git
-    image: nomad-sitl:copter-4.6.3
-    profiles: ["sitl"]
+    image: nomad-sitl:copter-4.7.1
+    # "ros" brings SITL along so the Tier-1 ROS stack has a live vehicle for
+    # the C++ adapter node.
+    profiles: ["sitl", "ros"]
+    entrypoint: ["/bin/sh", "/nomad/sitl-entrypoint.sh"]
+    volumes:
+      - ./sitl-entrypoint.sh:/nomad/sitl-entrypoint.sh:ro
+      - ./sitl-fence.parm:/nomad/sitl-fence.parm:ro
     # sim_vehicle.py launches MAVProxy on a console; without a TTY it exits
     # immediately and the container restart-loops. Allocate a pseudo-TTY.
     tty: true
@@ -73,15 +79,30 @@ services:
       VEHICLE: ArduCopter
       MODEL: quad
       SPEEDUP: "1"
+      # Enable ArduPilot's polygon fence (FENCE_ENABLE/ACTION/TYPE) so the C++
+      # mission-fence upload/readback acceptance scenario runs against an
+      # enabled fence. Applied by docker/sitl-entrypoint.sh via --add-param-file.
+      SITL_FENCE_DEFAULTS: "/nomad/sitl-fence.parm"
+      INSTANCE: "0"
+      LAT: "42.3898"
+      LON: "-71.1476"
+      ALT: "14"
+      DIR: "270"
       # Stream MAVLink to the Edge Core container so telemetry actually flows.
       # The second --out (injected via the image's unquoted entrypoint var)
       # feeds the NOMAD dual-link LTE leg on the host: 14560 is the plugin's
       # default LTE MAVLink port (leave LTE remote host empty). The router
       # then serves the merged stream to Mission Planner on UDP 14600
       # (RouterLocalPort) — no TCP bridge involved.
-      SITL_UDP_OUTPUT_ADDRESS: "udp:edge_core:14550 --out udp:host.docker.internal:14560"
+      # 14570 feeds the C++ core smoke tests; the always-on 14572 copy feeds
+      # the link-recovery scenario's UDP relay (it binds 14572 as its
+      # upstream, so the stack must forward there regardless of
+      # NOMAD_CORE_SITL_PORT).
+      SITL_UDP_OUTPUT_ADDRESS: "udp:edge_core:14550 --out udp:nomad_vehicle_node:14552 --out udp:host.docker.internal:14560 --out udp:host.docker.internal:${NOMAD_CORE_SITL_PORT:-14570} --out udp:host.docker.internal:14572"
     ports:
       - "5760:5760"   # TCP MAVLink (single-client; held by in-container MAVProxy)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - edge_core
     restart: unless-stopped
@@ -103,66 +124,42 @@ services:
   # ---------------------------------------------------------------------------
   # ROS2 simulation stack — Tier 1 (CPU, no GPU).  Profile: ros
   #
-  # Runs the REAL edge_core.ros_http_bridge node against the synthetic
-  # zed_sim_publisher so ROS2 integration can be exercised without a Jetson,
-  # ZED camera, or GPU.  Uses the same edge_core service defined above (already
-  # in the default profile) for the HTTP backend.
+  # Runs the REAL C++ nomad_vehicle_node adapter against the sitl service and
+  # the synthetic zed_sim_publisher so ROS2 integration can be exercised
+  # without a Jetson, ZED camera, or GPU. The node owns the MAVLink UDP link
+  # (udpin:0.0.0.0:14552) and the core velocity path; edge_core is not in the
+  # loop (the retired Python ROS-HTTP bridge was the last HTTP hop).
   # ---------------------------------------------------------------------------
 
-  # ROS-HTTP bridge node: subscribes to the synthetic publisher's topics and
-  # posts VIO/mesh/servo data to edge_core via HTTP.
-  ros_bridge:
+  # C++ ROS vehicle adapter node (replaces the retired ROS-HTTP bridge). It
+  # subscribes to /nomad/cmd_vel + VIO health/confidence, publishes /nomad/*
+  # telemetry, and drives the core Vehicle over one MAVLink UDP link. Also
+  # serves the gazebo profile, fed by MAVProxy's --out leg.
+  nomad_vehicle_node:
     build:
       context: ..
       dockerfile: docker/Dockerfile.sim-ros
     image: nomad-sim-ros:latest
-    profiles: ["ros"]
-    depends_on:
-      - edge_core
+    profiles: ["ros", "gazebo"]
     environment:
-      # DEV-ONLY — match the values edge_core uses so the internal API accepts
-      # the bridge's requests without auth errors.
-      NOMAD_API_KEY: "nomad-dev-key"
-      NOMAD_INTERNAL_TOKEN: "nomad-dev-internal-token-0123456789ab"
-      # DDS discovery across the compose network (bridge + zed_sim share the
-      # default bridge network, so FastDDS peer discovery works automatically).
       ROS_DOMAIN_ID: "0"
       ROS_LOCALHOST_ONLY: "0"
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
-      NOMAD_BRIDGE_VIO_SOURCE: "ros_sim"
-    command: python3 -m edge_core.ros_http_bridge.main --host edge_core --disable-nav
+    command: >
+      ros2 run nomad_ros nomad_vehicle_node --ros-args
+      -p endpoint:=udpin:0.0.0.0:14552
     restart: unless-stopped
 
-  # Gazebo profile bridge: same ROS-HTTP bridge, but with the direct
-  # cmd_vel -> MAVLink controller enabled and listening for MAVProxy traffic
-  # from the gazebo container on UDP :14552.
-  ros_bridge_gazebo:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.sim-ros
-    image: nomad-sim-ros:latest
-    profiles: ["gazebo"]
-    depends_on:
-      - edge_core
-    environment:
-      NOMAD_API_KEY: "nomad-dev-key"
-      NOMAD_INTERNAL_TOKEN: "nomad-dev-internal-token-0123456789ab"
-      NOMAD_BRIDGE_MAVLINK_ENDPOINT: "udpin:0.0.0.0:14552"
-      NOMAD_BRIDGE_VIO_SOURCE: "gazebo"
-      ROS_DOMAIN_ID: "0"
-      ROS_LOCALHOST_ONLY: "0"
-      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
-    command: python3 -m edge_core.ros_http_bridge.main --host edge_core
-    restart: unless-stopped
-
-  # Synthetic ZED 2i + nvblox + nav2 topic publisher. Publishes the exact
-  # topics the bridge subscribes to so the full pipeline runs without hardware.
+  # Synthetic ZED 2i + nvblox + nav2 topic publisher. Publishes the ZED-style
+  # topics plus the adapter node's /nomad/cmd_vel + VIO health/confidence
+  # topics so the full ROS2 pipeline runs without hardware.
   zed_sim:
     image: nomad-sim-ros:latest
     profiles: ["ros"]
     depends_on:
-      - ros_bridge
-    command: python3 -m tools.sim.zed_sim_publisher --rate 30 --enable-image
+      - nomad_vehicle_node
+    command: >
+      python3 -m tools.sim.zed_sim_publisher --rate 30 --enable-image --node-topics
     environment:
       ROS_DOMAIN_ID: "0"
       ROS_LOCALHOST_ONLY: "0"
@@ -236,24 +233,24 @@ services:
   #   - An NVIDIA GPU exposed to the Docker daemon
   # ---------------------------------------------------------------------------
 
-  # GPU-accelerated ROS-HTTP bridge (Isaac ROS / ZED SDK runtime).
-  ros_bridge_gpu:
+  # GPU-tier C++ adapter node (Isaac ROS / ZED SDK runtime image). Same node
+  # as nomad_vehicle_node, built from the sim-isaac image. Feed it a MAVLink
+  # stream on UDP :14552 (e.g. a real vehicle through mavlink-router, or the
+  # sitl service) for the core to connect.
+  nomad_vehicle_node_gpu:
     build:
       context: ..
       dockerfile: docker/Dockerfile.sim-isaac
       args:
         BASE_IMAGE: isaac_ros_dev-x86_64
     profiles: ["ros-gpu"]
-    depends_on:
-      - edge_core
     environment:
-      NOMAD_API_KEY: "nomad-dev-key"
-      NOMAD_INTERNAL_TOKEN: "nomad-dev-internal-token-0123456789ab"
-      NOMAD_BRIDGE_VIO_SOURCE: "isaac_ros"
       ROS_DOMAIN_ID: "0"
       ROS_LOCALHOST_ONLY: "0"
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
-    command: python3 -m edge_core.ros_http_bridge.main --host edge_core
+    command: >
+      ros2 run nomad_ros nomad_vehicle_node --ros-args
+      -p endpoint:=udpin:0.0.0.0:14552
     deploy:
       resources:
         reservations:
@@ -270,8 +267,9 @@ services:
     image: nomad-sim-ros:latest
     profiles: ["ros-gpu"]
     depends_on:
-      - ros_bridge_gpu
-    command: python3 -m tools.sim.zed_sim_publisher --rate 30
+      - nomad_vehicle_node_gpu
+    command: >
+      python3 -m tools.sim.zed_sim_publisher --rate 30 --node-topics
     environment:
       ROS_DOMAIN_ID: "0"
       ROS_LOCALHOST_ONLY: "0"
@@ -283,9 +281,9 @@ services:
   #
   # Runs gz sim with the Gazebo GUI exposed through noVNC — no GPU required.
   # A ZED-2i-tuned Gazebo model publishes the same ROS2 topics the ZED ROS2
-  # wrapper would, so the REAL ros_http_bridge (ros_bridge_gazebo service above,
-  # included in the gazebo profile) is driven by a 3D physics/sensor simulation
-  # instead of pure synthetic math.
+  # wrapper would, so the REAL C++ nomad_vehicle_node (service above, included
+  # in the gazebo profile) is driven by a 3D physics/sensor simulation instead
+  # of pure synthetic math.
   #
   # The ZED SDK is BYPASSED entirely — Gazebo cannot feed it. The Iris odometry
   # publisher is bridged to /zed/zed_node/odom for VIO updates.
@@ -298,7 +296,7 @@ services:
   #           - driver: nvidia
   #             count: all
   #             capabilities: [gpu]
-  # (Same block used by ros_bridge_gpu above — requires nvidia-container-toolkit.)
+  # (Same block used by nomad_vehicle_node_gpu above — requires nvidia-container-toolkit.)
   # Also set LIBGL_ALWAYS_SOFTWARE to "0" when using a GPU.
   # ---------------------------------------------------------------------------
   gazebo:
@@ -308,12 +306,12 @@ services:
     image: nomad-sim-gazebo:latest
     profiles: ["gazebo"]
     depends_on:
-      - ros_bridge_gazebo
+      - nomad_vehicle_node
     environment:
-      # Feed MAVLink telemetry to Edge Core and to the ROS bridge's dedicated
+      # Feed MAVLink telemetry to Edge Core and to the C++ adapter node's
       # velocity-control socket. The ArduPilot launch passes this through to
       # MAVProxy as --out arguments.
-      NOMAD_GAZEBO_MAVLINK_OUT: "edge_core:14550 --out ros_bridge_gazebo:14552 --out host.docker.internal:14560"
+      NOMAD_GAZEBO_MAVLINK_OUT: "edge_core:14550 --out nomad_vehicle_node:14552 --out host.docker.internal:14560"
       NOMAD_GAZEBO_HEADLESS: "${NOMAD_GAZEBO_HEADLESS:-0}"
       NOMAD_GAZEBO_CAMERA_WIDTH: "${NOMAD_GAZEBO_CAMERA_WIDTH:-640}"
       NOMAD_GAZEBO_CAMERA_HEIGHT: "${NOMAD_GAZEBO_CAMERA_HEIGHT:-360}"

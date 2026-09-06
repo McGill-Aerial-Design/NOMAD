@@ -1,29 +1,19 @@
 # NOMAD documentation
 
-Welcome to the NOMAD documentation. NOMAD is a **reusable drone edge + ground-control
-framework** pairing a Python FastAPI service (onboard companion computer) with a C#
-Mission Planner plugin (ground station).
+NOMAD is migrating to a standalone C++20 vehicle core with independent CLI, ROS 2,
+Python, and Mission Planner clients. The current Python edge service is
+transitional; the target and migration status are explicit in these documents.
 
-## Quick links
-
-| If you want to… | Start here |
+| Topic | Document |
 |---|---|
-| Run the sim without hardware | [Getting Started](getting_started.md) |
-| Understand the architecture | [Architecture](architecture.md) |
-| Write your own module | [Writing a Module](writing_a_module.md) |
-| Deploy to a Jetson | [Deployment](deployment.md) |
-| Configure the system | [Configuration](configuration.md) |
-| Browse the API | [API Reference](api_reference.md) |
-| Understand the safety case | [Safety Case](safety/README.md) |
+| Product requirements | [Product Requirements](prd.md) |
+| Target architecture | [Architecture](architecture.md) |
+| Build and tests | [Development](development.md) |
+| Agent and engineering guidance | [Agent Guidance](agent-guidance.md) |
+| Runtime and deployment | [Operations](operations.md) |
+| C++ migration | [Migration Plan](migration.md) |
+| Safety case | [Safety Case](safety.md) |
 
-## Documentation structure
-
-| Path | Content |
-|------|---------|
-| `getting_started.md` | Pixi dev env, sim Docker, first run |
-| `architecture.md` | System design, domains, data flow |
-| `writing_a_module.md` | Python plugin SDK + C# module pattern |
-| `deployment.md` | Jetson all-in-one image, bare-metal systemd |
-| `configuration.md` | `config/nomad.env` reference |
-| `api_reference.md` | Consolidated Edge Core API endpoints |
-| `safety/` | Safety case: SC/SR/NC partition, FHA-lite hazards, requirements, traceability |
+Start with the [Product Requirements](prd.md), then read the
+[Migration Plan](migration.md) before changing system ownership. Component
+README files contain only local details and point back here.

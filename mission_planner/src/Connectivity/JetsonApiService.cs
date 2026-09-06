@@ -199,7 +199,7 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// Perform a POST request to a Jetson API endpoint.
         /// </summary>
-        /// <param name="path">Relative path (e.g., "/api/servo/shooter/arm").</param>
+        /// <param name="path">Relative path (e.g., "/api/isaac/start").</param>
         /// <param name="content">Optional request body.</param>
         /// <returns>HTTP response.</returns>
         public static Task<HttpResponseMessage> PostAsync(string path, HttpContent content = null)

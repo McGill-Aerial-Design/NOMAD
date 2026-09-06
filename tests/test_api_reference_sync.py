@@ -1,10 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
-"""Guard against docs/api_reference.md drifting from the real routes.
+"""Guard the transitional REST reference against route drift.
 
-The reference is hand-maintained. This wires every module (sim mode, no
-hardware) and asserts that each concrete path documented in an api_reference
-table row actually exists in the live OpenAPI schema.
+This test is deleted with the Python API during the C++ cutover. It is not a
+contract for the target core.
 """
 
 from __future__ import annotations

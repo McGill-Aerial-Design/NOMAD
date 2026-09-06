@@ -1,0 +1,30 @@
+# Existing Python functions above the 40-line improvement threshold.
+# Remove each entry when the function is split during the C++ migration.
+edge_core/api_routes/system.py:register_system_routes
+edge_core/api_routes/system.py:health_check
+edge_core/api_routes/system.py:network_ping
+edge_core/api_routes/system.py:ws_state
+edge_core/api_routes/terminal.py:_run_subprocess_group
+edge_core/api_routes/terminal.py:register_terminal_routes
+edge_core/api_routes/terminal.py:execute_terminal_command
+edge_core/api_routes/terminal.py:exec_terminal_command
+edge_core/api_routes/video_slam.py:register_routes
+edge_core/api_routes/vio.py:register_routes
+edge_core/services/health_monitor.py:_update_health
+edge_core/services/health_monitor.py:_get_gpu_info
+edge_core/services/health_monitor.py:_get_power_info
+edge_core/services/ros/simple_video_bridge.py:_start_pipeline
+edge_core/services/ros/simple_video_bridge.py:_stop_ros_subscription
+edge_core/services/ros/simple_video_bridge.py:_image_to_rgb
+edge_core/services/ros/simple_video_bridge.py:main
+edge_core/services/time_manager.py:force_sync_from_gps
+edge_core/services/video_stream_manager.py:start_with_reason
+infra/tailscale/network_monitor.py:_check_modem_status
+infra/tailscale/network_monitor.py:_read_modem
+scripts/dev/gdrive_auth.py:main
+scripts/dev/test_api_endpoints.py:main
+scripts/hardware/joystick.py:run
+scripts/setup/setup_jetson_remote.py:main
+tests/test_simple_video_bridge.py:_install_fake_runtime
+tools/sim/gazebo/launch/nomad_iris_zed.launch.py:_build_nomad_iris_model
+tools/sim/gazebo/launch/nomad_iris_zed.launch.py:generate_launch_description

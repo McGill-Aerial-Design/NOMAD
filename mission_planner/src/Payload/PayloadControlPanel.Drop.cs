@@ -228,14 +228,14 @@ namespace NOMAD.MissionPlanner
             }
 
             int pwmDrop = p.Reversed ? p.PwmMin : p.PwmMax;
-            if (await CubeOutputController.SendServoPwmAsync(p.Channel, pwmDrop))
+            if (await OutputController.SendServoPwmAsync(p.Channel, pwmDrop))
             {
-                SetStatus($"{p.Name} dropped  (Cube ch{p.Channel} {pwmDrop}us)", SUCCESS_COLOR);
+                SetStatus($"{p.Name} dropped  (ch{p.Channel} {pwmDrop}us)", SUCCESS_COLOR);
                 RaisePayloadDroppedState(dropIdx, true);
             }
             else
             {
-                SetStatus("Drop failed: Cube output command unavailable", ERROR_COLOR);
+                SetStatus("Drop failed: output command unavailable", ERROR_COLOR);
             }
         }
 
@@ -251,10 +251,10 @@ namespace NOMAD.MissionPlanner
             RaisePayloadDroppedState(dropIdx, false);
 
             int pwmRetract = p.Reversed ? p.PwmMax : p.PwmMin;
-            if (await CubeOutputController.SendServoPwmAsync(p.Channel, pwmRetract))
-                SetStatus($"{p.Name} retracted  (Cube ch{p.Channel} {pwmRetract}us)", SUCCESS_COLOR);
+            if (await OutputController.SendServoPwmAsync(p.Channel, pwmRetract))
+                SetStatus($"{p.Name} retracted  (ch{p.Channel} {pwmRetract}us)", SUCCESS_COLOR);
             else
-                SetStatus("Retract failed: Cube output command unavailable", ERROR_COLOR);
+                SetStatus("Retract failed: output command unavailable", ERROR_COLOR);
         }
 
         private void OnPayloadDroppedStateChanged(int dropIdx0, bool isDropped)
@@ -338,7 +338,7 @@ namespace NOMAD.MissionPlanner
             if (channel <= 0) return;
 
             // Stream immediately (drop in-flight duplicates), then settle-send the final value.
-            SendServoPwmFireAndForget(channel, slider.Value, tryOnly: true);
+            SendServoPwmFireAndForget(channel, slider.Value);
 
             if (_sliderSettleTimers.TryGetValue(sliderIdx, out var existing) && existing != null)
             {
@@ -353,16 +353,16 @@ namespace NOMAD.MissionPlanner
                 t.Dispose();
                 _sliderSettleTimers.Remove(sliderIdx);
                 if (!slider.IsDisposed)
-                    SendServoPwmFireAndForget(channel, slider.Value, tryOnly: false);
+                    SendServoPwmFireAndForget(channel, slider.Value);
             };
             _sliderSettleTimers[sliderIdx] = t;
             t.Start();
         }
 
-        private async void SendServoPwmFireAndForget(int channel, int pwmUs, bool tryOnly)
+        private async void SendServoPwmFireAndForget(int channel, int pwmUs)
         {
             if (channel <= 0) return;
-            await CubeOutputController.SendServoPwmAsync(channel, pwmUs, tryOnly);
+            await OutputController.SendServoPwmAsync(channel, pwmUs);
         }
 
         // ---- Relay / GPIO ----
@@ -443,9 +443,9 @@ namespace NOMAD.MissionPlanner
         private async void FireRelay(PayloadControl p)
         {
             SetStatus($"{p.Name} firing  ({p.PulseMs}ms)...", SUCCESS_COLOR);
-            bool success = await CubeOutputController.FireRelayAsync(p.Channel, p.PulseMs);
+            bool success = await OutputController.FireRelayAsync(p.Channel, p.PulseMs);
             SetStatus(
-                success ? $"{p.Name} done" : $"{p.Name} failed: Cube relay command unavailable",
+                success ? $"{p.Name} done" : $"{p.Name} failed: relay command unavailable",
                 success ? SUCCESS_COLOR : ERROR_COLOR);
         }
 
@@ -455,11 +455,11 @@ namespace NOMAD.MissionPlanner
             bool next = !current;
             _relayOn[p.Channel] = next;
 
-            bool sent = CubeOutputController.TrySetRelayMavlink(p.Channel, next);
+            bool sent = OutputController.TrySetRelay(p.Channel, next);
             btn.Text = $"{p.Name}: {(next ? "ON" : "OFF")}";
             btn.BackColor = next ? RELAY_ON_COLOR : Color.FromArgb(70, 70, 78);
             SetStatus(
-                sent ? $"{p.Name} relay {(next ? "ON" : "OFF")}" : $"{p.Name}: Cube relay command unavailable",
+                sent ? $"{p.Name} relay {(next ? "ON" : "OFF")}" : $"{p.Name}: relay command unavailable",
                 sent ? SUCCESS_COLOR : ERROR_COLOR);
         }
     }

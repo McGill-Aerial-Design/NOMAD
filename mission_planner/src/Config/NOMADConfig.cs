@@ -58,6 +58,27 @@ namespace NOMAD.MissionPlanner
         public string JetsonBaseUrl => $"http://{JetsonIP}:{JetsonPort}";
 
         /// <summary>
+        /// Path to the C++ core CLI binary invoked by <c>NomadCoreClient</c>.
+        /// Empty means "nomad" on PATH. In the ground-station configuration
+        /// the core runs on this machine; in the Jetson configuration the
+        /// plugin keeps using the Jetson API until that path migrates.
+        /// </summary>
+        public string CoreExePath { get; set; } = "";
+
+        /// <summary>
+        /// Endpoint the core binds (listen mode) for the MAVLink stream.
+        /// Must match the core's NOMAD_MAVLINK_ENDPOINT on the same host.
+        /// </summary>
+        public string CoreMavlinkEndpoint { get; set; } = "udpin:0.0.0.0:14550";
+
+        /// <summary>
+        /// API key passed to the core as NOMAD_API_KEY. Must match the key the
+        /// core was started with; the documented development key is
+        /// "nomad-dev-sitl-key" (config/nomad.env.example).
+        /// </summary>
+        public string CoreApiKey { get; set; } = "nomad-dev-sitl-key";
+
+        /// <summary>
         /// Tailscale IP address (if using VPN).
         /// </summary>
         public string TailscaleIP { get; set; } = "";
@@ -391,12 +412,15 @@ namespace NOMAD.MissionPlanner
         public float SlamMapRadiusM { get; set; } = 3.0f;
 
         // ============================================================
-        // Servo Configuration (Cube Orange AUX Outputs via MAVLink)
-        // All payloads, reels, water pump and camera tilt are wired to the
-        // Cube and commanded via MAVLink DO_SET_SERVO. Edge Core is used only
-        // as a fallback path to send the same Cube MAVLink commands.
-        // Channel numbers correspond to ArduPilot servo output numbers
-        // (e.g. 9 = SERVO9 = AUX1 on most Cube builds).
+        // Servo Configuration (ArduPilot AUX outputs via MAVLink)
+        // All payloads, reels, water pump and camera tilt are driven through
+        // standard ArduPilot servo/relay outputs on any ArduPilot flight
+        // controller via MAVLink DO_SET_SERVO / DO_SET_RELAY.
+        // Commands are sent through the NOMAD C++ core, which owns the
+        // MAVLink transport.
+        // Channel numbers are ArduPilot servo output numbers (SERVOn_FUNCTION)
+        // and are mapped per-board in the autopilot parameters, not hardcoded
+        // to a specific flight controller.
         // ============================================================
 
         // --- Modular payloads (drop servos, slider servos, relay/GPIO outputs) ---

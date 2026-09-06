@@ -49,11 +49,15 @@ repos:
         entry: >
           python -c "import sys;missing=[p for p in sys.argv[1:] if 'SPDX-License-Identifier' not in open(p, encoding='utf-8').read()];[print(f'SPDX-License-Identifier missing: {p}') for p in missing];exit(1 if missing else 0)"
         language: python
-        files: \.(py|cs|sh)$
-      - id: file-line-count
-        name: File line count (max 800)
-        description: Reject source files that exceed 800 lines
-        entry: >
-          python -c "import sys;errors=[p for p in sys.argv[1:] if sum(1 for _ in open(p, encoding='utf-8')) > 800];[print(f'Over 800 lines: {p}') for p in errors];exit(1 if errors else 0)"
+        files: \.(c|cc|cpp|cs|cxx|h|hpp|py|sh)$
+      - id: complexity-check
+        name: Source size and function size
+        description: Reject new oversized source files and Python functions
+        entry: python scripts/dev/line_report.py --fail-over-file-limit --fail-over-function-limit
+        # language: python (like every other hook) so the entry runs in
+        # pre-commit's own venv: the commit shell may not have `python` on
+        # PATH at all (pixi-managed environments). stdlib-only script, so no
+        # additional_dependencies are needed.
         language: python
-        files: \.(py|cs|sh)$
+        pass_filenames: true
+        files: \.(c|cc|cpp|cs|cxx|h|hpp|py|ps1|sh)$

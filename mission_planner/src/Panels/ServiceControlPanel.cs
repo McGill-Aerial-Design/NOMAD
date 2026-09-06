@@ -54,7 +54,7 @@ namespace NOMAD.MissionPlanner
         private Label _lblVioTrajectoryPoints;
         private Button _btnClearTrajectory;
 
-        // ROS HTTP Bridge
+        // ROS Adapter Node
         private Label _lblRosBridgeStatus;
         private Button _btnStartRosBridge;
         private Button _btnStopRosBridge;

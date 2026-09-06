@@ -1,281 +1,220 @@
-# NOMAD — Contributor & AI Agent Guide
+# NOMAD contributor guide
 
-NOMAD is a reusable drone **edge + ground-control** framework: a Python FastAPI
-service that runs on an onboard companion computer (e.g. NVIDIA Jetson Orin Nano)
-plus a C# Mission Planner plugin for the ground station. Capabilities (SLAM,
-perception, payload, mission tasks) are intended to be added as discoverable
-modules.
+NOMAD is a standalone system for monitoring and controlling ArduPilot vehicles.
+The target product is a small C++20 core with independent clients and adapters.
+The current Python edge service is transitional and must not grow new architecture.
+Verify the source before trusting this document.
 
-This document gives AI coding assistants and new contributors the project-specific
-context that is otherwise expensive to rediscover. Treat it as a map, and always
-verify against the source — the code is the source of truth.
+## Agent operating rules
 
----
+- Read this file and any deeper directory instructions before editing.
+- Start from the concrete request, failure, owning symbol, or nearest test.
+- Trace the controlling implementation, callers, and focused tests before changing code.
+- State assumptions that materially affect correctness, safety, compatibility, or scope.
+- Define an executable check that could disprove the proposed fix.
+- Prefer purpose-built repository tools over shell commands when both are available.
+- Parallelize independent reads only; serialize edits and commands that share mutable state.
+- Keep at most one active work item in a long-running checklist and report material findings.
+- Never expose or persist secrets, raw transcripts, temporary infrastructure state, or machine-specific identifiers.
+- Do not push, publish, deploy, flash, erase, reset, or run destructive commands without explicit authorization.
+- Review the final diff for unrelated changes and verify every claimed check was actually run.
 
-## 1. Connection details (no hardcoded hosts)
+## Product boundary
 
-There are **no hardcoded IPs in the repo.** Real addresses, keys, and host paths
-live only in your local, gitignored `config/nomad.env` (copy it from
-`config/nomad.env.example`) and in the Mission Planner plugin's settings.
-
-| Property | Where it comes from |
-|----------|---------------------|
-| Companion computer address | `tailscale status`, or whatever you set in the plugin |
-| SSH user | your device's login user (`JetsonSshUser` in the plugin; `JETSON_SSH_USER` env for scripts) |
-| Edge Core port | `NOMAD_API_PORT` (default `8000`) |
-| API docs URL | `http://<host>:<port>/docs` |
-| Ground station address | `GCS_IP` in `config/nomad.env` (blank ⇒ discovered from Tailscale peers) |
-
-```bash
-# Discover peers on the tailnet
-tailscale status
-
-# SSH to the companion computer (substitute your user/host)
-ssh "$JETSON_SSH_USER@<host>"
-
-# Smoke-test the Edge Core API
-curl -s "http://<host>:8000/health"
+```text
+CLI / Mission Planner / ROS 2 / Python tools
+                    |
+                    v
+              NOMAD C++ core
+                    |
+              MAVLink transport
+                    |
+                 ArduPilot
 ```
 
----
+The C++ core owns vehicle behavior, telemetry models, missions, command
+validation, and MAVLink interaction. ArduPilot owns stabilization, motor control,
+EKF, low-level navigation, and failsafes.
 
-## 2. Project structure
+Python is for computer vision, machine learning, experiments, simulation,
+analysis, tests, and ground-side utilities. ROS 2 and Mission Planner are
+adapters or clients. They do not own vehicle decisions.
 
-```
+## Target layout
+
+```text
 NOMAD/
-|-- edge_core/              # Python FastAPI server (runs on the companion computer)
-|   |-- api.py              # App factory + API-key auth middleware
-|   |-- api_routes/         # Route modules (system, services, terminal, streaming,
-|   |                       #   vio, video_slam, isaac, calibration)
-|   |-- main.py             # Entry point — boots the module registry
-|   |-- core/               # Module SDK (NomadModule, ModuleRegistry, AppContext)
-|   |-- services/           # state, mavlink/ (package), health_monitor,
-|   |                       #   time_manager, video_stream_manager, payload_module,
-|   |                       #   operational_mode, ipc, geospatial, ros/
-|   |-- modules/            # Built-in capability modules (slam/isaac, payload/servo)
-|   |-- ros_http_bridge/    # ROS→Edge Core bridge package (runs in Isaac container):
-|   |                       #   node, coordinate_math, mesh_packer, mavlink_velocity, main
-|
-|-- docker/
-| |-- Dockerfile.dev # x86_64 dev/sim image (no CUDA/ZED)
-| |-- docker-compose.dev.yml # Hardware-free dev stack (Edge Core + ArduPilot SITL)
-|
-|-- mission_planner/src/ # C# plugin (runs on the Windows ground station)
-|   |-- NOMADPlugin.cs               # Plugin entry point
-|   |-- NOMADMainScreen.cs           # Main plugin host screen
-|   |-- NOMADViewBase.cs             # Base view class (view registration)
-|   |-- NOMADConfig.cs               # Plugin configuration model
-|   |-- ... task/video/health/terminal/SLAM3D views + panels
-|
-|-- scripts/
-|   |-- nomad                        # Single CLI dispatcher (start|stop|restart|status|logs)
-|   |-- lib/common.sh                # Shared service-script helpers
-|   |-- services/                    # One script per service
-|   |-- build/                       # Build / compile helpers
-|   |-- setup/                       # Provisioning + setup scripts
-|   |-- dev/                         # Development tools + ad-hoc diagnostics
-|   |-- hardware/                    # Hardware test utilities (incl. joystick.py)
-|
-|-- infra/systemd/                   # One systemd unit per service + install.sh
-|   |                                # (units are templated; install.sh fills in
-|   |                                #  the service user + paths from config/nomad.env)
-|-- transport/mavlink_router/        # mavlink-router config
-|-- tailscale/                       # VPN configuration and managers
-|-- config/
-|   |-- nomad.env.example            # Template config (committed)
-|   |-- nomad.env                    # Your real runtime config (GITIGNORED)
+├── CMakeLists.txt
+├── include/nomad/       # Public C++ headers
+├── src/                 # C++ implementation and thin CLI
+├── tests/               # CTest and integration tests
+├── examples/            # Small runnable examples
+├── ros2/                # ROS 2 adapter packages, outside the core
+├── python/              # Vision, ML, simulation, analysis, utilities
+├── mission_planner/     # Mission Planner client/integration
+├── docs/                # Canonical product and engineering documents
+├── config/              # Deployment templates, never real secrets
+├── docker/              # Reproducible development and SITL images
+└── infra/               # Deployment and network support
 ```
 
----
+Until the migration completes, `edge_core/`, `scripts/`, and the existing plugin
+remain transitional. Do not add new modules, service registries, REST layers, or
+parallel vehicle logic there. Put new core behavior in the C++ migration plan and
+keep legacy changes limited to safety, correctness, and necessary migration work.
 
-## 3. Key configuration file
+## Code rules
 
-**`config/nomad.env`** is the single source of truth for runtime config. It is
-**gitignored**; copy the committed template and edit it:
+Write code for a first-year engineering student to read.
+
+- Keep functions to about 40 logical lines or fewer.
+- Treat 500 source lines as a refactoring signal; split files by responsibility.
+- Use early returns and keep indentation shallow.
+- Write explicit multi-line `if` and loop bodies.
+- Give each function one job and name it with the exact action it performs.
+- Prefer verbs such as `get`, `set`, `parse`, `send`, `wait`, `format`, and `validate`.
+- Make main functions read as a sequence of named helper calls.
+- Keep helpers small enough to understand and reuse.
+- Keep imports at the top of each file and order them consistently.
+- Use one-line comments only for non-obvious rationale.
+- Prefer the standard library and existing local code before adding dependencies.
+- Delete unused code before adding abstractions.
+- Do not add an interface, factory, registry, service locator, event bus, or config
+  object with one real implementation.
+- Do not build fallback chains for speculative environments.
+- Avoid global mutable state and hidden ownership.
+- Never hardcode secrets, real hosts, emails, or absolute user paths.
+- Keep source lines at 120 characters or less where the language tooling supports it.
+
+A function should read like a short story. A caller should be able to understand
+what happens without opening every implementation detail.
+
+## C++ rules
+
+Use C++20, CMake, RAII, explicit ownership, and ordinary standard-library types.
+Keep public headers in `include/nomad/` and implementation in `src/`. Keep MAVLink
+packing inside the MAVLink implementation. The rest of the core should call
+boring methods such as:
+
+```cpp
+Vehicle vehicle(connection);
+vehicle.arm();
+vehicle.takeoff(10.0);
+vehicle.land();
+```
+
+Do not use advanced templates, unnecessary inheritance, macros, or framework-like
+abstractions. Every dependency must remove meaningful complexity.
+
+## ROS 2 rules
+
+ROS 2 is an adapter, not a core dependency.
+
+- Build nodes as components when ROS 2 composition is useful.
+- Keep callbacks short: validate, translate, enqueue, and return.
+- Do not block or run heavy calculations in a subscription callback.
+- Use timers or owned workers for deferred work.
+- Define callback groups explicitly when concurrency exists.
+- Prefer `SingleThreadedExecutor` unless measured requirements demand more.
+- Reuse standard messages before creating custom interfaces.
+- Put custom `.msg`, `.srv`, and `.action` definitions in a separate interface package.
+- Declare parameters and load them from YAML through launch files.
+- Keep ROS types and dependencies out of the C++ core headers.
+
+## Safety and communication
+
+Validate all external input. Critical commands must be sent, acknowledged or
+verified through a state change, and reported as success or failure. Stale
+telemetry, lost links, invalid values, and shutdown must lead to a safe result or
+relinquish control to ArduPilot. NOMAD must never disable ArduPilot failsafes.
+
+Use services only for short non-blocking operations. Use actions for long-running,
+interruptible goals when an adapter actually needs them. Keep callbacks and route
+handlers thin; decision logic belongs in testable core functions.
+
+## Testing
+
+Every important behavior must be testable without hardware.
+
+- C++ unit tests use fake transports and CTest.
+- SITL tests prove the MAVLink loop against ArduPilot.
+- ROS 2 tests cover adapter translation and callback behavior.
+- Python tests cover retained tools and experiments.
+- Mission Planner tests cover client and UI behavior that remains its responsibility.
+- Safety changes require invalid-input, boundary, and failure-path tests.
+
+Run the smallest relevant test while working, then the full project checks before
+handing off a change.
+
+## Development commands
+
+The exact task names are kept in `pixi.toml`; the target workflow is:
 
 ```bash
-cp config/nomad.env.example config/nomad.env
-# edit values, then:
-nomad restart all       # or: sudo systemctl restart nomad.target
+pixi run build-core
+pixi run test-core
+pixi run test-python
+pixi run lint
+pixi run format
+pixi run docs-build
 ```
 
-Every service script and the systemd units read it via `EnvironmentFile=`. It
-holds service autostart flags (`NOMAD_AUTOSTART_*`), host paths, ports, auth
-tokens, and per-service tuning. Generate an API key with
-`python -c "import secrets; print(secrets.token_hex(32))"` and set the same value
-in the plugin.
+During the transition, the existing Python/SITL tasks remain available. Use
+placeholders for deployment values and keep real configuration in the ignored
+`config/nomad.env`.
 
----
+## Documentation
 
-## 4. Edge Core API endpoints
+The canonical documents are:
 
-> The API is defined in `edge_core/api.py` and `edge_core/api_routes/`. Only key
-> endpoints are listed; always verify the source for the latest parameters.
+| Topic | Document |
+|---|---|
+| Product requirements | `docs/prd.md` |
+| Target architecture | `docs/architecture.md` |
+| Development workflow | `docs/development.md` |
+| Operations and deployment | `docs/operations.md` |
+| Migration plan | `docs/migration.md` |
+| Safety case | `docs/safety.md` |
 
-### System / Network
-- `GET /` · `GET /health` · `GET /health/detailed` · `GET /status`
-- `GET /api/services/status` — process/service status
-- `GET /network/status` · `GET /network/ping/{host}`
+Component READMEs should point to these documents and describe only local details.
+Do not create competing architecture or setup guides.
 
-> Task-specific routes (`/api/task/*`, `/api/detections`, spray, …) are **not**
-> in the baseline — add them per deployment as `NomadModule`s.
+## Test readability
 
-### Navigation
-- Autonomous velocity control is **not** an HTTP route: the ROS→Edge Core bridge
-  streams nav2/nvblox `cmd_vel` straight to ArduPilot GUIDED mode over its own
-  MAVLink link (`ros_http_bridge/mavlink_velocity.py`).
+Tests are diagnostic documentation. Each important test should read as a deterministic
+story: establish known state, perform one action, observe authoritative state, assert
+independent conditions, and restore state when required. Prefer named helpers, explicit
+polling deadlines, narrow fixtures, and assertion messages that identify the observed
+value. Do not replace authoritative state checks with command acknowledgements.
 
-### Servo / Calibration (payload)
-- `POST /api/servo/camera/tilt?angle={0-180}` · `POST /api/servo/channel/{channel}/pwm`
-- `POST /api/servo/shooter/arm` then `POST /api/servo/shooter/trigger` (release interlock, SR-PAY-03)
-- `POST /api/calibration/imu/reset_biases` · `POST /api/calibration/zed/sensor-viewer/start`
+## Technical debt
 
-> Command paths (`/api/servo/*`, `/api/spray/*`) require authentication even on
-> loopback and are audit-logged (SR-SEC-03); they never ride the no-key dev fallback.
+When deliberately deferring complexity, record the ceiling, measurable revisit trigger,
+and upgrade path in a concise local comment or the relevant canonical document:
 
-### Isaac / SLAM / Video
-- `GET /api/isaac/status` · `POST /api/isaac/start` · `POST /api/isaac/stop` · `/api/isaac/bridge/{start,stop}`
-- `GET /api/slam/mesh` · `POST /api/slam/mesh/update` (internal token)
-- `GET /api/video/bridges` · `POST /api/video/source` · `POST /api/video/overlay/{action}` · `GET /api/stream/info`
-
-### Terminal / WebSockets
-- `GET /api/terminal/commands` · `GET /api/terminal/logs` (whitelisted; admin key)
-- `WS /ws/state` (10 Hz state)
-
----
-
-## 5. Development workflows
-
-### Run Edge Core locally without hardware (sim)
-```bash
-python -m edge_core.main --sim --port 8000
-# then open http://localhost:8000/docs
+```text
+debt: <current ceiling>; revisit when <measurable trigger>; then <upgrade path>
 ```
 
-### Deploy to the companion computer
-```bash
-ssh "$JETSON_SSH_USER@<host>"
-cd ~/NOMAD && git pull origin main
-nomad restart all
+Do not use unexplained TODOs as a substitute for an owned decision.
+
+## Contribution workflow
+
+Use a focused branch in a fork and one logical change per merge request. Keep
+commit subjects under 72 characters and use the repository prefix style:
+
+```text
+[part,sub-part] Imperative description
 ```
 
-### Build the Mission Planner plugin (Windows)
-```powershell
-cd NOMAD
-.\scripts\build\build_plugin_windows.ps1
-# Output: %LOCALAPPDATA%\Mission Planner\plugins\NOMADPlugin.dll
-```
+Before requesting review:
 
-### Smoke-test the API
-```bash
-curl -s "http://<host>:8000/health"
-curl -s "http://<host>:8000/network/status" | python -m json.tool
-```
+- run the relevant tests and quality checks;
+- review the diff for unrelated changes;
+- update the canonical document when behavior or ownership changes;
+- include a requirement and fault-path test for safety-critical work;
+- confirm no secrets, real addresses, generated artifacts, or oversized new files
+  were added.
 
----
-
-## 6. Ports reference
-
-| Service | Port | Protocol | Location |
-|---------|------|----------|----------|
-| Edge Core API | 8000 | TCP | companion computer |
-| MAVLink LTE/Tailscale | 14560 | UDP | companion → GCS |
-| MAVLink RadioMaster | 14550 | UDP | GCS local radio link |
-| MAVLink Plugin Router | 14600 | UDP | Mission Planner merged link |
-| RTSP Video | 8554 | TCP | companion (MediaMTX) |
-| SSH | 22 | TCP | companion computer |
-
----
-
-## 7. Engineering conventions
-
-**Prefer simple, human-understandable code.** Write for the reader, not the
-compiler. Favour flat logic over deep nesting, descriptive names over terseness,
-and straightforward data flow over clever abstractions. If a piece of code is
-hard to explain in one sentence, it is too complex.
-
-**No monolithic files.** No file shall exceed 800 lines. CI rejects pull requests
-that add or modify source files breaching this limit. If a module is growing past
-800 lines, split it into smaller focused files.
-
-**Line length cap is 120 characters.** Run `pixi run fmt` to auto-format. CI
-enforces this via ruff lint + format checks.
-
-**Auto-format everything.** `pixi run fmt` runs ruff format on the entire Python
-codebase. The pre-commit hook runs it automatically on staged files. There is no
-excuse for formatting inconsistencies.
-
-**No hardcoded secrets or hosts.** Never commit IPs, keys, emails, or absolute
-user paths. Read them from `config/nomad.env` / environment variables, or use a
-placeholder (`<host>`, `<jetson-ip>`) in docs. The repo must stay clean for
-`git grep` of any real address.
-
-**Pick one approach; don't build fallback chains.** Avoid
-"Strategy 1 → Strategy 2 → Strategy 3" cascades. Analyze the problem, choose the
-most reliable approach, and implement it properly with real error handling. If an
-approach has a prerequisite (a service must be running), ensure the prerequisite
-is met rather than coding around its absence.
-
-**Match the surrounding code.** Follow existing naming, structure, and comment
-density in the file you are editing.
-
----
-
-## 7a. Commit message guidelines
-
-Maximum width is 72 characters. Make one commit per logical change. Resist mixing
-coding-style fixes into feature commits — keep style fixes in their own commits.
-
-```
-[part,sub-part] Short description in imperative
-
-Longer explanation if needed. Skip a line between the subject
-and body. Explain what and why, not how.
-```
-
-- Prefix (always lowercase) names the part and optional sub-part in brackets.
-- Start the description with a capital letter and an imperative verb.
-- Examples:
-
-```
-[sr1000_api,calib] Skip code 6 and 7 in frequency calibration
-[phy] Inverse pulses order
-[link] Fix coding style issues
-[ranging] Add offsets to long range values
-[application] Change radio count value to 2
-```
-
-Examples for this repo:
-
-```
-[edge_core] Add spray aim retry when depth sample is missing
-[mission_planner] Fix WASD key release on panel exit
-[docs] Genericize the lead-in and update module guide
-```
-
----
-
-## 8. Contribution workflow
-
-NOMAD uses the **forking workflow** — see [CONTRIBUTING.md](CONTRIBUTING.md)
-for the full guide: fork, branch naming, commit format, and merge request
-process. The main repo stays branch-free; all development happens in forks.
-
----
-
-## 9. Documentation index
-
-The documentation site is built with MkDocs Material (`pixi run docs`).
-
-| Topic | File |
-|-------|------|
-| Project overview | `README.md` |
-| Getting Started (pixi + Docker sim) | `docs/getting_started.md` |
-| Architecture | `docs/architecture.md` |
-| Writing a Module (plugin SDK) | `docs/writing_a_module.md` |
-| Deployment (Jetson image + systemd) | `docs/deployment.md` |
-| Configuration reference | `docs/configuration.md` |
-| API Reference | `docs/api_reference.md` |
-| Tailscale setup | `infra/tailscale/SETUP.md` |
-| Edge Core | `edge_core/README.md` |
-| Mission Planner plugin | `mission_planner/README.md` |
+Do not commit, push, deploy, or change runtime infrastructure without an explicit
+request.

@@ -1,18 +1,14 @@
-# Infra
+# Infrastructure
 
-Device-side deployment: systemd units, host configs, and the Tailscale VPN
-integration. (CI workflows live in `.github/workflows/`, not here.)
+`infra/` contains deployment support that is outside the NOMAD core:
 
-| Path | Purpose |
-|------|---------|
-| `systemd/` | Per-service units + `install.sh` (renders, installs, enables per `NOMAD_AUTOSTART_*` flags) |
-| `transport/mavlink_router/` | mavlink-router config — FC UART fan-out to local UDP + ground VPN |
-| `tailscale/` | Tailscale VPN: setup/watchdog scripts + Python monitors used by `edge_core` (see its README) |
-| `mediamtx.yml` | MediaMTX RTSP server config (path set via `MEDIAMTX_CONFIG` in `config/nomad.env`) |
-| `logrotate.conf` | Log rotation for `~/nomad_logs` (installed by `systemd/install.sh`) |
+- `systemd/` service templates used by the transitional runtime;
+- `transport/mavlink_router/` routing configuration;
+- `tailscale/` optional network monitoring and setup scripts;
+- `mediamtx.yml` and log rotation configuration.
 
-Install everything on the Jetson with:
+The target deployment is one C++ core process plus only the adapters a vehicle
+needs. Keep network, container, VPN, and service-manager choices out of the core.
 
-```bash
-sudo bash infra/systemd/install.sh
-```
+See [operations](../docs/operations.md) for the canonical deployment model and
+[migration](../docs/migration.md) for deletion/consolidation gates.

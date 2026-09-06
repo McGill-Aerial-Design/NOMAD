@@ -22,4 +22,7 @@ def test_isaac_module_probe_is_wired_after_wire_modules():
     app = create_app(StateManager.instance())
     registry = wire_modules(app)
     assert registry is not None and "isaac_mgmt" in registry.modules
-    assert registry.modules["isaac_mgmt"].cmd_success is not None
+    # The in-container process probe is a module-level helper now.
+    from edge_core.api_routes.isaac import _docker_exec_pgrep
+
+    assert _docker_exec_pgrep is not None

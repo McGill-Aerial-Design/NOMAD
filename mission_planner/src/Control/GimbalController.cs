@@ -6,8 +6,7 @@
 // Extracted from GimbalJoystickWindow so any input source — the floating
 // joystick window, the NomadJoystickService driven by a physical DirectInput
 // stick, or a future scripted automation — can drive the same target-angle
-// integrator and serialize MAVLink access against PayloadControlPanel via
-// CubeOutputController.MavlinkLock.
+// integrator and serialize direct MAVLink access via MavlinkSerialLock.
 //
 // The pure command construction + kinematics live in GimbalCommand (Mission
 // Planner-free, unit-tested by tests/gimbal); this class is the thin send
@@ -115,7 +114,18 @@ namespace NOMAD.MissionPlanner
         {
             CurrentMode = mode;
             ModeChanged?.Invoke(mode);
-            SendMountConfigure(mode);
+            // Discrete mount switch: route through the C++ core boundary first
+            // (MAV_CMD_DO_MOUNT_CONFIGURE, acknowledged); the direct MAVLink
+            // send below is the transitional fallback. The continuous stick
+            // angle stream (SendPitchRollAngle) stays on direct MAVLink by
+            // design — spawning the CLI per frame would not scale.
+            // debt: stick stream; revisit when the core boundary gains a
+            // streaming verb; then route DO_MOUNT_CONTROL through it.
+            var client = OutputController.CreateCoreClient();
+            if (client == null || !client.GimbalConfigure((int)mode))
+            {
+                SendMountConfigure(mode);
+            }
         }
 
         /// <summary>
@@ -136,15 +146,14 @@ namespace NOMAD.MissionPlanner
                 bool acquired = false;
                 try
                 {
-                    acquired = await CubeOutputController.MavlinkLock
-                        .WaitAsync(1000).ConfigureAwait(false);
+                    acquired = await MavlinkSerialLock.WaitAsync(1000).ConfigureAwait(false);
                     if (!acquired) return;
                     await SendFrameAsync(sysid, compid, frame).ConfigureAwait(false);
                 }
                 catch { }
                 finally
                 {
-                    if (acquired) CubeOutputController.MavlinkLock.Release();
+                    if (acquired) MavlinkSerialLock.Release();
                     System.Threading.Interlocked.Exchange(ref _inflight, 0);
                 }
             });
@@ -163,15 +172,14 @@ namespace NOMAD.MissionPlanner
                 bool acquired = false;
                 try
                 {
-                    acquired = await CubeOutputController.MavlinkLock
-                        .WaitAsync(2000).ConfigureAwait(false);
+                    acquired = await MavlinkSerialLock.WaitAsync(2000).ConfigureAwait(false);
                     if (!acquired) return;
                     await SendFrameAsync(sysid, compid, frame).ConfigureAwait(false);
                 }
                 catch { }
                 finally
                 {
-                    if (acquired) CubeOutputController.MavlinkLock.Release();
+                    if (acquired) MavlinkSerialLock.Release();
                 }
             });
         }

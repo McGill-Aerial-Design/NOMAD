@@ -128,13 +128,12 @@ namespace NOMAD.MissionPlanner
                 };
             }
 
-            // Serialize MAVLink writes via the process-wide s_mavlinkLock so
+            // Serialize MAVLink writes via the process-wide MavlinkSerialLock so
             // a concurrent joystick write cannot corrupt the serial stream.
             bool acquired = false;
             try
             {
-                acquired = await CubeOutputController.MavlinkLock
-                    .WaitAsync(5000).ConfigureAwait(false);
+                acquired = await MavlinkSerialLock.WaitAsync(5000).ConfigureAwait(false);
                 if (!acquired)
                 {
                     return new CommandResult
@@ -181,7 +180,7 @@ namespace NOMAD.MissionPlanner
             }
             finally
             {
-                if (acquired) CubeOutputController.MavlinkLock.Release();
+                if (acquired) MavlinkSerialLock.Release();
             }
         }
 

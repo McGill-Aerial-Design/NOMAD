@@ -35,7 +35,7 @@ namespace NOMAD.MissionPlanner
 
             AddSectionLabel(tab, "Nozzle Servo", ref y);
 
-            AddLabel(tab, "Controlled through Cube Orange servo outputs.", 20, y, Color.FromArgb(180, 180, 180));
+            AddLabel(tab, "Controlled through ArduPilot servo outputs.", 20, y, Color.FromArgb(180, 180, 180));
             y += 20;
             AddLabel(tab, "Use the payload servo sliders (Video tab) to adjust live.", 20, y, Color.FromArgb(180, 180, 180));
 

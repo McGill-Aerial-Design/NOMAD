@@ -3,10 +3,12 @@
 // ============================================================
 // NOMAD Payload Configuration Models
 // ============================================================
-// A payload is one configurable Cube Orange output. The control panel and the
-// settings editor are both data-driven from NOMADConfig.Payloads, so operators
-// can add / remove / reconfigure up to NOMADConfig.MaxPayloads of them without a
-// code change. Five kinds are supported:
+// A payload is one configurable ArduPilot output channel. The control panel
+// and the settings editor are both data-driven from NOMADConfig.Payloads, so
+// operators can add / remove / reconfigure up to NOMADConfig.MaxPayloads of
+// them without a code change. Outputs are standard ArduPilot servo/relay
+// channels that work on any ArduPilot flight controller. Five
+// kinds are supported:
 //
 //   Drop    - a servo with two endpoints; three-click "Drop", click again to retract.
 //   Slider  - a servo exposed as a live PWM slider (e.g. an aiming / nozzle servo).
@@ -22,7 +24,7 @@ using System.Linq;
 
 namespace NOMAD.MissionPlanner
 {
-    /// <summary>How a <see cref="PayloadControl"/> drives its Cube output.</summary>
+    /// <summary>How a <see cref="PayloadControl"/> drives its ArduPilot output.</summary>
     public enum PayloadKind
     {
         /// <summary>Servo with two endpoints — drop (with confirm) and retract.</summary>
@@ -55,7 +57,7 @@ namespace NOMAD.MissionPlanner
         /// <summary>Which output type / UI this payload uses.</summary>
         public PayloadKind Kind { get; set; } = PayloadKind.Drop;
 
-        /// <summary>Cube servo output channel (Drop / Slider / Reel / CamTilt) or relay/GPIO number (Relay).</summary>
+        /// <summary>ArduPilot servo output channel (Drop / Slider / Reel / CamTilt) or relay/GPIO number (Relay).</summary>
         public int Channel { get; set; } = 9;
 
         /// <summary>
@@ -85,7 +87,8 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// Relay only: optional RC pass-through input channel (5–16, 0 = disabled). When set, the
         /// operator can hold a transmitter switch on this channel to fire the relay through the flight
-        /// controller directly. Settings → Payloads writes the matching <c>RC{n}_OPTION</c> on the Cube.
+        /// controller directly. Settings → Payloads writes the matching <c>RC{n}_OPTION</c>
+        /// on the autopilot (any ArduPilot flight controller).
         /// </summary>
         public int RcChannel { get; set; }
 

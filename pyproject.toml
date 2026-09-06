@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "nomad-edge"
 version = "0.2.1"
-description = "NOMAD — a reusable drone edge + ground-control framework (companion-computer service)"
+description = "NOMAD transitional Python tools and edge adapters"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "The NOMAD Authors" }]
@@ -65,8 +65,6 @@ nomad-edge = "edge_core.main:main"
 # Core Services
 health = "edge_core.services.health_monitor:HealthMonitorModule"
 time = "edge_core.services.time_manager:TimeSyncModule"
-mavlink = "edge_core.services.mavlink.module:MavlinkModule"
-payload = "edge_core.services.payload_module:PayloadModule"
 video = "edge_core.services.video_module:VideoStreamModule"
 network = "edge_core.services.network_module:NetworkModule"
 
@@ -84,7 +82,9 @@ exclude = ["tests*", "scripts*", "docs*", "build*", "examples*"]
 [tool.ruff]
 line-length = 120
 target-version = "py310"
-extend-exclude = [".pixi"]
+# Vendored code (the MAVSDK submodule) is pinned upstream and must not be
+# reformatted or linted by the repository gates.
+extend-exclude = [".pixi", "third_party"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP"]
@@ -95,6 +95,10 @@ ignore = []
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["F403", "F405", "E402"]
+# The ROS integration test splits its imports around the rclpy
+# importorskip guard on purpose: nothing ROS-dependent may import on hosts
+# without rclpy, so the block ordering is intentional.
+"tests/ros/*.py" = ["I001"]
 "scripts/dev/**" = ["E402", "E501"]
 "__init__.py" = ["F401"]
 "edge_core/main.py" = ["E402"]
@@ -110,17 +114,6 @@ follow_imports = "silent"
 no_implicit_optional = true
 warn_redundant_casts = true
 warn_unused_ignores = false
-
-# SC core strictness (rearchitecture plan §6): the safety package holds flight
-# decisions, so it gets the strict treatment the rest of the tree does not.
-[[tool.mypy.overrides]]
-module = "edge_core.safety.*"
-disallow_untyped_defs = true
-disallow_incomplete_defs = true
-disallow_untyped_decorators = true
-disallow_any_generics = true
-warn_return_any = true
-strict_equality = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -175,8 +175,8 @@ namespace NOMAD.MissionPlanner
 
         private void ApplyReel(int reelIdx, int target)
         {
-            // Only re-send when the commanded direction actually changes. Cube
-            // holds the last PWM, so an idle reel costs zero MAVLink traffic.
+            // Only re-send when the commanded direction actually changes. The
+            // servo holds the last PWM, so an idle reel costs zero MAVLink traffic.
             if (target == _reelDir[reelIdx]) return;
             _reelDir[reelIdx] = target;
             if      (target > 0) RunPayloadAction(() => PayloadActions.ReelStart(_config, reelIdx), $"reel {reelIdx + 1} in");

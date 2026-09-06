@@ -1,31 +1,38 @@
 # ros-sim.yml — Tier-1 real-ROS integration gate
 #
-# This workflow closes the node.py / rclpy coverage gap that existed because
-# rclpy was absent from all hosted CI environments: it builds a self-contained
-# ROS2 Humble image (docker/Dockerfile.sim-ros) that ships rclpy, rclpy message
-# packages, and the synthetic ZED/nvblox/nav2 publisher, then runs the real
-# edge_core.ros_http_bridge node inside it against an in-process HTTP stub.
+# This workflow closes the ROS adapter coverage gap that existed because
+# rclpy was absent from all hosted CI environments: it builds a
+# self-contained ROS2 Humble image (docker/Dockerfile.sim-ros) that compiles
+# the C++ nomad_core + nomad_ros adapter into a colcon workspace and ships
+# rclpy + pymavlink, then runs the real nomad_vehicle_node inside it against
+# an in-process MAVLink responder with VIO + cmd_vel publishers
+# (tests/ros/test_nomad_ros_integration.py).
 #
-# Runs on every PR and push that touches relevant paths — CPU-only, no GPU
-# needed. The Tier-2 GPU image (docker/Dockerfile.sim-isaac, full Isaac ROS +
-# ZED SDK + nvblox) cannot run on hosted runners and is validated separately via
-# a manual workflow_dispatch job in docker.yml (requires a self-hosted GPU runner).
+# Runs on every PR and push that touches the C++ core, the ROS adapter, the
+# sim-ros image, or the integration test — CPU-only, no GPU needed. The
+# Tier-2 GPU image (docker/Dockerfile.sim-isaac, full Isaac ROS + ZED SDK +
+# nvblox) cannot run on hosted runners and is validated separately via a
+# manual workflow_dispatch job in docker.yml (requires a self-hosted GPU runner).
 
 name: ros-sim
 
 on:
   push:
     paths:
-      - "edge_core/**"
-      - "tools/sim/**"
+      - "CMakeLists.txt"
+      - "src/**"
+      - "include/**"
+      - "ros2/**"
       - "docker/Dockerfile.sim-ros"
       - "docker/ros_entrypoint.sh"
       - "tests/ros/**"
       - ".github/workflows/ros-sim.yml"
   pull_request:
     paths:
-      - "edge_core/**"
-      - "tools/sim/**"
+      - "CMakeLists.txt"
+      - "src/**"
+      - "include/**"
+      - "ros2/**"
       - "docker/Dockerfile.sim-ros"
       - "docker/ros_entrypoint.sh"
       - "tests/ros/**"
@@ -41,17 +48,22 @@ concurrency:
 
 jobs:
   ros-integration:
-    name: ROS2 bridge integration test (CPU, no GPU)
+    name: nomad_ros adapter integration test (CPU, no GPU)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      # The sim-ros image compiles nomad_core, which generates its MAVLink
+      # headers from the pinned third_party/ardupilot-mavlink submodule.
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
 
-      # Build the Tier-1 sim-ros image.  Cache is scoped to "sim-ros" so it
-      # does not evict the dev-image or SITL caches.
+      # Build the Tier-1 sim-ros image (compiles nomad_core + nomad_ros).
+      # Cache is scoped to "sim-ros" so it does not evict the dev-image or
+      # SITL caches.
       - name: Build nomad-sim-ros image
         uses: docker/build-push-action@v7
         with:
@@ -66,7 +78,7 @@ jobs:
       # Run the integration test suite.  tests/ is volume-mounted so the image
       # always runs current code without a rebuild.
       # This is the direct docker equivalent of `pixi run test-ros-integration`.
-      - name: Run ROS bridge integration tests
+      - name: Run nomad_ros integration tests
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/tests:/opt/nomad/tests \

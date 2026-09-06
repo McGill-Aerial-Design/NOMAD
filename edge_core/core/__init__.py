@@ -16,7 +16,7 @@ Modules register via the ``nomad.modules`` entry-point group::
     [project.entry-points."nomad.modules"]
     my_module = "my_pkg.my_module:MyModule"
 
-See ``examples/sample_module`` for a minimal, runnable example.
+This module system is transitional and will be removed during the C++ cutover.
 """
 
 from __future__ import annotations
@@ -52,56 +52,47 @@ def _allow_list_from_env() -> list[str] | None:
     return names or None
 
 
-def wire_modules(
-    app: Any,
-    *,
-    allow_list: Iterable[str] | None = None,
-    ctx: AppContext | None = None,
-) -> ModuleRegistry | None:
-    """Discover, configure, and register enabled modules on the FastAPI ``app``.
-
-    Additive and safe: when no modules are installed/enabled (today's default),
-    this is a no-op and returns ``None`` without touching the app. Otherwise it
-    wires routes immediately and registers startup/shutdown hooks that drive the
-    modules' ``start()``/``stop()`` lifecycle.
-    """
-    if allow_list is None:
-        allow_list = _allow_list_from_env()
-
+def _create_registry(allow_list: Iterable[str] | None) -> ModuleRegistry:
     registry = ModuleRegistry(allow_list=list(allow_list) if allow_list is not None else None)
     try:
         registry.discover_entry_points()
     except Exception as exc:  # noqa: BLE001 - never let discovery crash startup
         logger.error("module discovery failed: %s", exc)
+    return registry
 
-    if len(registry) == 0:
-        return None
 
-    if ctx is None:
-        ctx = AppContext(app=app)
-
-    # One source of truth: ModuleRegistry.wire_safe resolves order and
-    # configures + registers routes with per-module fault isolation.
-    wired = registry.wire_safe(ctx, app)
-    if not wired:
-        return None
-
-    # Drive the modules' start()/stop() lifecycle through the ASGI lifespan,
-    # composing with any lifespan already configured on the app rather than the
-    # deprecated @app.on_event hooks.
-    prev_lifespan = app.router.lifespan_context
+def _install_module_lifespan(app: Any, registry: ModuleRegistry) -> None:
+    previous_lifespan = app.router.lifespan_context
 
     @asynccontextmanager
-    async def _module_lifespan(app_: Any) -> Any:  # pragma: no cover - exercised at runtime
-        async with prev_lifespan(app_):
+    async def module_lifespan(app_: Any) -> Any:  # pragma: no cover - exercised at runtime
+        async with previous_lifespan(app_):
             registry.start_all()
             try:
                 yield
             finally:
                 registry.stop_all()
 
-    app.router.lifespan_context = _module_lifespan
+    app.router.lifespan_context = module_lifespan
 
+
+def wire_modules(
+    app: Any,
+    *,
+    allow_list: Iterable[str] | None = None,
+    ctx: AppContext | None = None,
+) -> ModuleRegistry | None:
+    """Discover, configure, and register enabled modules on the FastAPI ``app``."""
+    if allow_list is None:
+        allow_list = _allow_list_from_env()
+    registry = _create_registry(allow_list)
+    if len(registry) == 0:
+        return None
+    if ctx is None:
+        ctx = AppContext(app=app)
+    if not registry.wire_safe(ctx, app):
+        return None
+    _install_module_lifespan(app, registry)
     app.state.module_registry = registry
     logger.info("NOMAD modules wired: %s", ", ".join(registry.order))
     return registry

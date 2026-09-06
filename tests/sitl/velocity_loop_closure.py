@@ -2,35 +2,40 @@
 # Copyright 2026 The NOMAD Authors
 """SITL loop-closure scenario for the safety-critical velocity core.
 
-Drives a real ArduPilot SITL vehicle and exercises
-``MavlinkVelocityController`` (Tier SC) against it end-to-end, proving the
-mitigations in ``docs/safety/hazards.md`` close the loop on a real autopilot:
+Drives a real ArduPilot SITL vehicle through the C++ core CLI (``nomad
+velocity``) and proves the mitigations in ``docs/safety.md`` close the loop on
+a real autopilot:
 
   arm -> GUIDED -> takeoff
     -> velocity step      (H-01/SR-VEL: commanded motion actually happens)
-    -> stop commanding    (H-03/SR-LNK-02 watchdog: vehicle stops on its own)
-    -> switch to LOITER    (H-04/SR-VEL-05 gate: setpoints refused out of GUIDED)
+    -> watchdog stop      (H-03/SR-LNK-02: vehicle stops on command timeout)
+    -> switch to LOITER   (H-04/SR-VEL-05 gate: setpoints refused out of GUIDED)
 
-Two independent MAVLink connections are used: an "operator" link that arms /
-mode-switches / observes, and the controller's own link. ArduPilot SITL exposes
-SERIAL1/SERIAL2 on TCP 5762/5763 for exactly this.
+Two independent MAVLink paths are used: a pymavlink "operator" link that arms /
+mode-switches / observes, and the C++ core CLI, which owns the velocity
+command path. ArduPilot SITL exposes SERIAL1/SERIAL2 on TCP 5762/5763 for the
+operator link; the core CLI receives its own UDP copy of the stream on the
+host (NOMAD_CORE_SITL_PORT, default 14570).
 
-Run standalone inside the dev network (see tests/sitl/README.md):
+Run against the dev stack (see tests/sitl/README.md):
 
-    NOMAD_SITL_OPERATOR=tcp:host:5762 NOMAD_SITL_CONTROLLER=tcp:host:5763 \
-        python tests/sitl/velocity_loop_closure.py
+    pixi run dev-up
+    pixi run sitl-scenario
 """
 
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from pymavlink import mavutil
 
-from edge_core.ros_http_bridge.mavlink_velocity import MavlinkVelocityController
+ROOT = Path(__file__).resolve().parents[2]
 
 
 @dataclass
@@ -68,6 +73,27 @@ class ScenarioError(AssertionError):
 
 def _log(msg: str) -> None:
     print(f"[sitl] {time.strftime('%H:%M:%S')} {msg}", flush=True)
+
+
+def get_sitl_port() -> str:
+    port = os.environ.get("NOMAD_CORE_SITL_PORT", "14570")
+    if not port.isdecimal() or not 1 <= int(port) <= 65535:
+        raise ValueError("NOMAD_CORE_SITL_PORT must be a UDP port from 1 to 65535")
+    return port
+
+
+def find_binary() -> Path | None:
+    names = ("nomad.exe", "nomad")
+    build_dirs = (ROOT / "build" / "core", ROOT / "build-core")
+    configurations = tuple(
+        directory for build_dir in build_dirs for directory in (build_dir, build_dir / "Debug", build_dir / "Release")
+    )
+    for directory in configurations:
+        for name in names:
+            candidate = directory / name
+            if candidate.is_file():
+                return candidate
+    return None
 
 
 def _command_long(conn, command: int, *params: float) -> None:
@@ -123,142 +149,186 @@ def _ensure_landed_and_disarmed(conn, telem, timeout: float = 120.0) -> None:
     raise ScenarioError(f"vehicle did not land + disarm within {timeout:.0f}s for a clean takeoff")
 
 
-def run_scenario(operator_ep: str, controller_ep: str) -> dict:
-    """Execute the loop-closure scenario. Raises ScenarioError on failure."""
-    results: dict[str, object] = {}
-
-    _log(f"operator link  -> {operator_ep}")
-    op = mavutil.mavlink_connection(operator_ep)
-    if not op.wait_heartbeat(timeout=40):
+def _connect_operator(endpoint: str):
+    _log(f"operator link  -> {endpoint}")
+    connection = mavutil.mavlink_connection(endpoint)
+    if not connection.wait_heartbeat(timeout=40):
         raise ScenarioError("no heartbeat on operator link")
-    _log(f"operator heartbeat: sys={op.target_system} comp={op.target_component}")
+    _log(f"operator heartbeat: sys={connection.target_system} comp={connection.target_component}")
+    return connection
 
-    # Stream telemetry and keep the latest in `telem`.
-    op.mav.request_data_stream_send(op.target_system, op.target_component, mavutil.mavlink.MAV_DATA_STREAM_ALL, 5, 1)
-    telem = Telemetry()
-    reader_stop = threading.Event()
 
-    def _reader():
-        while not reader_stop.is_set():
-            telem.update_from(op)
+def _start_telemetry_reader(connection) -> tuple[Telemetry, threading.Event]:
+    connection.mav.request_data_stream_send(
+        connection.target_system,
+        connection.target_component,
+        mavutil.mavlink.MAV_DATA_STREAM_ALL,
+        5,
+        1,
+    )
+    telemetry = Telemetry()
+    stop_event = threading.Event()
 
-    reader = threading.Thread(target=_reader, name="sitl-operator-reader", daemon=True)
+    def read_telemetry():
+        while not stop_event.is_set():
+            telemetry.update_from(connection)
+
+    reader = threading.Thread(target=read_telemetry, name="sitl-operator-reader", daemon=True)
     reader.start()
+    return telemetry, stop_event
 
-    controller: MavlinkVelocityController | None = None
-    vio_stop = threading.Event()
+
+def _arm_vehicle(connection, telemetry: Telemetry) -> None:
+    _log("mode is GUIDED; arming")
+    for attempt in range(20):
+        _command_long(connection, mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 1)
+        try:
+            _wait_until(lambda state: state[1], 2, telemetry, "armed")
+            return
+        except ScenarioError:
+            _log(f"  arm retry {attempt + 1} (prearm may still be settling)")
+    raise ScenarioError("vehicle would not arm")
+
+
+def _prepare_takeoff(connection, telemetry: Telemetry) -> None:
+    _ensure_landed_and_disarmed(connection, telemetry)
+    _set_mode(connection, "GUIDED")
+    _wait_until(lambda state: state[0] == "GUIDED", 15, telemetry, "mode GUIDED")
+    _arm_vehicle(connection, telemetry)
+    _log("armed; commanding takeoff to 10 m")
+    _command_long(connection, mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, 10.0)
+    _wait_until(lambda state: state[3] >= 8.0, 40, telemetry, "takeoff to >=8 m")
+    _log(f"reached altitude {telemetry.snapshot()[3]:.1f} m")
+
+
+def _start_velocity_session(binary: Path, port: str, vx: float, duration_s: float) -> subprocess.Popen:
+    """Spawn the C++ core CLI velocity stream (owns the command path)."""
+    command = [
+        str(binary),
+        "velocity",
+        "--vx",
+        f"{vx}",
+        "--duration",
+        f"{duration_s}",
+        "--endpoint",
+        f"udpin:0.0.0.0:{port}",
+    ]
+    _log(f"$ {' '.join(command)}")
+    return subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=os.environ.copy())
+
+
+def _parse_fields(text: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for line in text.splitlines():
+        for item in line.split():
+            key, separator, value = item.partition("=")
+            if separator:
+                fields[key] = value
+    return fields
+
+
+def _wait_speed_below(telemetry: Telemetry, limit: float, timeout: float, what: str) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        speed = telemetry.snapshot()[2]
+        if speed <= limit:
+            _log(f"  groundspeed {speed:.2f} m/s <= {limit:.2f} m/s ({what})")
+            return
+        time.sleep(0.2)
+    raise ScenarioError(f"vehicle did not slow below {limit:.2f} m/s within {timeout:.0f}s ({what})")
+
+
+def _velocity_step(binary: Path, port: str, telemetry: Telemetry, results: dict[str, object]) -> float:
+    _log("velocity step: core streams vx=1.5 m/s (forward) for 6 s")
+    process = _start_velocity_session(binary, port, 1.5, 6.0)
+    peak_speed = 0.0
+    while process.poll() is None:
+        peak_speed = max(peak_speed, telemetry.snapshot()[2])
+        time.sleep(0.1)
+    peak_speed = max(peak_speed, telemetry.snapshot()[2])
+    stdout, stderr = process.communicate()
+    fields = _parse_fields(stdout)
+    results["velocity_exit"] = process.returncode
+    results["velocity_accepted"] = fields.get("velocity_accepted")
+    results["watchdog_reason"] = fields.get("watchdog_reason")
+    results["peak_groundspeed"] = peak_speed
+    _log(f"  exit={process.returncode} {stdout.strip()} peak_groundspeed={peak_speed:.2f} m/s")
+
+    if process.returncode != 0:
+        raise ScenarioError(f"core velocity session failed: {stderr.strip() or stdout.strip()}")
+    if int(fields.get("velocity_accepted", "0")) <= 0:
+        raise ScenarioError("core sent no velocity setpoints during the step")
+    if peak_speed < 0.8:
+        raise ScenarioError(f"vehicle did not move (peak groundspeed {peak_speed:.2f} < 0.8 m/s)")
+    if fields.get("velocity_active") != "false" or fields.get("watchdog_reason") != "command_timeout":
+        raise ScenarioError(f"watchdog did not stop the session cleanly: {fields}")
+    _log("  PASS: commanded velocity produced real motion and the watchdog stopped it (H-01/H-03 loop closed)")
+    # The CLI exits ~2 s after the watchdog stop, so the vehicle must already
+    # be decelerating toward a stop.
+    _wait_speed_below(telemetry, max(0.5, peak_speed * 0.5), 15.0, "watchdog stop")
+    return peak_speed
+
+
+def _check_mode_gate(connection, telemetry: Telemetry, binary: Path, port: str, results: dict[str, object]) -> None:
+    _log("mode gate: switching to LOITER; core must refuse setpoints")
+    _set_mode(connection, "LOITER")
+    _wait_until(lambda state: state[0] == "LOITER", 15, telemetry, "mode LOITER")
+    time.sleep(2.0)
+    process = _start_velocity_session(binary, port, 1.0, 2.0)
+    stdout, stderr = process.communicate(timeout=60)
+    results["loiter_exit"] = process.returncode
+    results["loiter_stderr"] = stderr.strip()
+    _log(f"  exit={process.returncode} {stderr.strip()}")
+    if process.returncode == 0:
+        raise ScenarioError(f"core accepted a velocity session while NOT in GUIDED: {stdout.strip()}")
+    if "GUIDED" not in stderr:
+        raise ScenarioError(f"unexpected rejection outside GUIDED: {stderr.strip()}")
+    _log("  PASS: setpoint refused outside GUIDED (H-04 gate enforced)")
+
+
+def _cleanup_scenario(connection, reader_stop: threading.Event) -> None:
+    _log("cleanup: returning the vehicle")
     try:
-        # Start from a clean ground state regardless of how a prior scenario
-        # (sharing this vehicle) left it.
-        _ensure_landed_and_disarmed(op, telem)
+        _set_mode(connection, "RTL")
+    except Exception:
+        pass
+    reader_stop.set()
+    time.sleep(0.5)
 
-        # --- arm -> GUIDED -> takeoff -------------------------------------
-        _set_mode(op, "GUIDED")
-        _wait_until(lambda s: s[0] == "GUIDED", 15, telem, "mode GUIDED")
-        _log("mode is GUIDED; arming")
 
-        for attempt in range(20):
-            _command_long(op, mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 1)
-            try:
-                _wait_until(lambda s: s[1], 2, telem, "armed")
-                break
-            except ScenarioError:
-                _log(f"  arm retry {attempt + 1} (prearm may still be settling)")
-        else:
-            raise ScenarioError("vehicle would not arm")
-        _log("armed; commanding takeoff to 10 m")
-
-        _command_long(op, mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, 10.0)
-        _wait_until(lambda s: s[3] >= 8.0, 40, telem, "takeoff to >=8 m")
-        _log(f"reached altitude {telem.snapshot()[3]:.1f} m")
-
-        # --- start the SC controller on its own link ----------------------
-        controller = MavlinkVelocityController(endpoint=controller_ep, require_armed=True, require_guided=True)
-        if not controller.start():
-            raise ScenarioError("controller failed to start (pymavlink unavailable?)")
-
-        # Feed VIO freshness continuously, as the ROS bridge would.
-        def _feed_vio():
-            while not vio_stop.is_set():
-                controller.note_vio(1.0, healthy=True)
-                time.sleep(0.05)
-
-        threading.Thread(target=_feed_vio, name="sitl-vio-feeder", daemon=True).start()
-
-        # Let the controller's rx thread lock onto armed + GUIDED heartbeats.
-        time.sleep(3.0)
-
-        # --- velocity step: command forward, expect real motion -----------
-        _log("velocity step: submitting vx=1.5 m/s (forward) for 6 s")
-        peak_speed = 0.0
-        accepted = 0
-        end = time.time() + 6.0
-        while time.time() < end:
-            if controller.submit(1.5, 0.0, 0.0, 0.0):
-                accepted += 1
-            peak_speed = max(peak_speed, telem.snapshot()[2])
-            time.sleep(0.05)
-        peak_speed = max(peak_speed, telem.snapshot()[2])
-        _log(f"  accepted submits={accepted} sent_count={controller.sent_count} peak_groundspeed={peak_speed:.2f} m/s")
+def run_scenario(operator_ep: str, binary: Path, port: str) -> dict:
+    """Execute the loop-closure scenario. Raises ScenarioError on failure."""
+    operator = _connect_operator(operator_ep)
+    telemetry, reader_stop = _start_telemetry_reader(operator)
+    results: dict[str, object] = {}
+    try:
+        _prepare_takeoff(operator, telemetry)
+        peak_speed = _velocity_step(binary, port, telemetry, results)
         results["peak_groundspeed"] = peak_speed
-        results["sent_count"] = controller.sent_count
-        if controller.sent_count <= 0:
-            raise ScenarioError("controller sent no setpoints despite armed+GUIDED+fresh-VIO")
-        if peak_speed < 0.8:
-            raise ScenarioError(f"vehicle did not move (peak groundspeed {peak_speed:.2f} < 0.8 m/s)")
-        _log("  PASS: commanded velocity produced real motion (H-01 loop closed)")
-
-        # --- watchdog: stop commanding, expect the vehicle to stop --------
-        _log("watchdog: stop submitting + stop VIO; expect zero-velocity failsafe")
-        vio_stop.set()  # also makes VIO go stale
-        time.sleep(5.0)  # > COMMAND_TIMEOUT and > VIO max age; let it settle
-        stopped_speed = telem.snapshot()[2]
-        results["stopped_groundspeed"] = stopped_speed
-        _log(f"  groundspeed after watchdog: {stopped_speed:.2f} m/s (was {peak_speed:.2f})")
-        if stopped_speed > max(0.5, peak_speed * 0.5):
-            raise ScenarioError(f"watchdog did not stop the vehicle (groundspeed {stopped_speed:.2f})")
-        if controller._active:  # noqa: SLF001 - asserting the failsafe latched
-            raise ScenarioError("watchdog fired but controller still marked active")
-        _log("  PASS: vehicle stopped on command-timeout/VIO-stale (H-03/H-02 loop closed)")
-
-        # --- mode gate: leave GUIDED, expect setpoints refused ------------
-        _log("mode gate: switching to LOITER; controller must refuse setpoints")
-        _set_mode(op, "LOITER")
-        _wait_until(lambda s: s[0] == "LOITER", 15, telem, "mode LOITER")
-        time.sleep(2.0)  # let the controller's rx thread see the new mode
-        before = controller.rejected_count
-        # Refresh VIO so the ONLY failing gate is the flight mode.
-        controller.note_vio(1.0, healthy=True)
-        accepted_in_loiter = controller.submit(1.0, 0.0, 0.0, 0.0)
-        results["accepted_in_loiter"] = accepted_in_loiter
-        results["rejected_delta"] = controller.rejected_count - before
-        if accepted_in_loiter:
-            raise ScenarioError("controller accepted a setpoint while NOT in GUIDED")
-        _log("  PASS: setpoint refused outside GUIDED (H-04 gate enforced)")
-
+        _check_mode_gate(operator, telemetry, binary, port, results)
         results["status"] = "PASS"
         return results
     finally:
-        vio_stop.set()
-        _log("cleanup: stopping controller and returning the vehicle")
-        if controller is not None:
-            controller.stop()  # commands zero velocity (SR-LNK-03)
-        try:
-            _set_mode(op, "RTL")
-        except Exception:
-            pass
-        reader_stop.set()
-        time.sleep(0.5)
+        _cleanup_scenario(operator, reader_stop)
 
 
 def main() -> int:
     operator_ep = os.environ.get("NOMAD_SITL_OPERATOR")
-    controller_ep = os.environ.get("NOMAD_SITL_CONTROLLER")
-    if not operator_ep or not controller_ep:
-        print("set NOMAD_SITL_OPERATOR and NOMAD_SITL_CONTROLLER (MAVLink endpoints)")
+    if not operator_ep:
+        print("set NOMAD_SITL_OPERATOR (MAVLink endpoint, e.g. tcp:127.0.0.1:5762)")
+        return 2
+    binary = find_binary()
+    if binary is None:
+        print("error: C++ core binary not found; run `pixi run build-core` first", file=sys.stderr)
+        return 2
+    _log("watch this run live: Mission Planner -> CONNECT -> TCP -> 127.0.0.1:5762 (passive observer)")
+    try:
+        port = get_sitl_port()
+    except ValueError as error:
+        print(f"error: {error}", file=sys.stderr)
         return 2
     try:
-        results = run_scenario(operator_ep, controller_ep)
+        results = run_scenario(operator_ep, binary, port)
     except ScenarioError as exc:
         _log(f"SCENARIO FAILED: {exc}")
         return 1

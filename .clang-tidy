@@ -1,0 +1,12 @@
+Checks: '-*,readability-function-size'
+WarningsAsErrors: ''
+HeaderFilterRegex: '^(include|src)/nomad/'
+CheckOptions:
+  - key: readability-function-size.LineThreshold
+    value: '40'
+  - key: readability-function-size.StatementThreshold
+    value: '80'
+  - key: readability-function-size.BranchThreshold
+    value: '10'
+  - key: readability-function-size.NestingThreshold
+    value: '4'

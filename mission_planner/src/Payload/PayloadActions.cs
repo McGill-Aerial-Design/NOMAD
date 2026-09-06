@@ -3,7 +3,7 @@
 // ============================================================
 // Headless payload-action helpers
 // ============================================================
-// Sends the same Cube servo / relay commands as PayloadControlPanel
+// Sends the same ArduPilot servo / relay commands as PayloadControlPanel
 // without any UI, so input sources without a panel (e.g.
 // NomadJoystickService driven by a transmitter switch) can trigger
 // drops, reels and the water pump directly.
@@ -28,7 +28,7 @@ namespace NOMAD.MissionPlanner
             {
                 var p = DropAt(cfg, payload);
                 if (p == null || p.Channel <= 0) return;
-                if (await CubeOutputController.SendServoPwmAsync(p.Channel, DropPwm(p)).ConfigureAwait(false))
+                if (await OutputController.SendServoPwmAsync(p.Channel, DropPwm(p)).ConfigureAwait(false))
                 {
                     PayloadControlPanel.RaisePayloadDroppedState(payload - 1, true);
                 }
@@ -45,7 +45,7 @@ namespace NOMAD.MissionPlanner
             {
                 var p = DropAt(cfg, payload);
                 if (p == null || p.Channel <= 0) return;
-                if (await CubeOutputController.SendServoPwmAsync(p.Channel, RetractPwm(p)).ConfigureAwait(false))
+                if (await OutputController.SendServoPwmAsync(p.Channel, RetractPwm(p)).ConfigureAwait(false))
                 {
                     PayloadControlPanel.RaisePayloadDroppedState(payload - 1, false);
                 }
@@ -62,7 +62,7 @@ namespace NOMAD.MissionPlanner
             {
                 var reel = cfg?.ReelAt(reelIdx);
                 if (reel == null || reel.Channel <= 0) return;
-                await CubeOutputController.SendServoPwmAsync(reel.Channel, reel.PwmMax).ConfigureAwait(false);
+                await OutputController.SendServoPwmAsync(reel.Channel, reel.PwmMax).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -76,7 +76,7 @@ namespace NOMAD.MissionPlanner
             {
                 var reel = cfg?.ReelAt(reelIdx);
                 if (reel == null || reel.Channel <= 0) return;
-                await CubeOutputController.SendServoPwmAsync(reel.Channel, reel.PwmMin).ConfigureAwait(false);
+                await OutputController.SendServoPwmAsync(reel.Channel, reel.PwmMin).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -90,7 +90,7 @@ namespace NOMAD.MissionPlanner
             {
                 var reel = cfg?.ReelAt(reelIdx);
                 if (reel == null || reel.Channel <= 0) return;
-                await CubeOutputController.SendServoPwmAsync(reel.Channel, reel.PwmNeutral).ConfigureAwait(false);
+                await OutputController.SendServoPwmAsync(reel.Channel, reel.PwmNeutral).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -104,7 +104,7 @@ namespace NOMAD.MissionPlanner
             {
                 var pump = cfg?.WaterPump();
                 if (pump == null) return;
-                await CubeOutputController.FireRelayAsync(pump.Channel, pump.PulseMs > 0 ? pump.PulseMs : 500)
+                await OutputController.FireRelayAsync(pump.Channel, pump.PulseMs > 0 ? pump.PulseMs : 500)
                     .ConfigureAwait(false);
             }
             catch (Exception ex)

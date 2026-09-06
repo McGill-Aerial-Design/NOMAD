@@ -76,7 +76,7 @@ namespace NOMAD.MissionPlanner
             bool acquired = false;
             try
             {
-                acquired = await CubeOutputController.MavlinkLock.WaitAsync(10000, token).ConfigureAwait(false);
+                acquired = await MavlinkSerialLock.WaitAsync(10000, token).ConfigureAwait(false);
                 if (!acquired) return "MAVLink link is busy.";
 
                 var sysid = MainV2.comPort.MAV.sysid;
@@ -100,11 +100,11 @@ namespace NOMAD.MissionPlanner
             }
             finally
             {
-                if (acquired) CubeOutputController.MavlinkLock.Release();
+                if (acquired) MavlinkSerialLock.Release();
             }
         }
 
-        private static async Task<bool> SendAsync(
+        private static Task<bool> SendAsync(
             MotorMusicOpcode opcode,
             int motorSlot,
             int midiNote,
@@ -113,40 +113,22 @@ namespace NOMAD.MissionPlanner
             int maxOutputPwm,
             int minOutputPwm)
         {
-            if (!IsConnected) return false;
-
-            bool acquired = false;
-            try
+            // Discrete command: route through the C++ core boundary so the
+            // command is acknowledged and verified. Fails closed when the core
+            // is not configured, refuses, or cannot reach the vehicle.
+            var client = OutputController.CreateCoreClient();
+            if (client == null)
             {
-                byte sysid = MainV2.comPort.MAV.sysid;
-                byte compid = MainV2.comPort.MAV.compid;
-
-                acquired = await CubeOutputController.MavlinkLock.WaitAsync(500).ConfigureAwait(false);
-                if (!acquired) return false;
-
-                await MainV2.comPort.doCommandAsync(
-                    sysid,
-                    compid,
-                    (MAVLink.MAV_CMD)CommandId,
-                    (float)opcode,
-                    motorSlot,
-                    midiNote,
-                    velocity,
-                    durationMs,
-                    maxOutputPwm,
-                    minOutputPwm,
-                    requireack: false,
-                    uicallback: null).ConfigureAwait(false);
-                return true;
+                return Task.FromResult(false);
             }
-            catch
-            {
-                return false;
-            }
-            finally
-            {
-                if (acquired) CubeOutputController.MavlinkLock.Release();
-            }
+            return Task.FromResult(client.SendUserCommand(
+                (double)opcode,
+                motorSlot,
+                midiNote,
+                velocity,
+                durationMs,
+                maxOutputPwm,
+                minOutputPwm));
         }
 
         private static bool TrySetParam(string name, double value)

@@ -17,6 +17,7 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+build-core/
 !scripts/build/
 !scripts/build/*.sh
 
@@ -282,6 +283,15 @@ test_output/
 # Local development overrides
 local_config.json
 dev_settings.json
+
+# Local planning and agent working state (never commit)
+
+# Compiled object files (any compiler)
+*.o
+*.obj
+
+# Local client state (machine-specific identifiers, never commit)
+.freebuff/
 
 # Large model files (should be downloaded separately)
 models/*.pt

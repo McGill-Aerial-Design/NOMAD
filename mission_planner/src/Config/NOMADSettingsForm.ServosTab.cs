@@ -73,27 +73,6 @@ namespace NOMAD.MissionPlanner
             _numSprayTimeout = AddNumericUpDown(tab, 385, y, 55, 2, 60, 20, 1);
             y += 40;
 
-            _btnPushSprayCalibration = new Button
-            {
-                Text = "Push to Jetson",
-                Location = new Point(10, y),
-                Size = new Size(130, 30),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = NOMADTheme.ACCENT,
-                ForeColor = Color.White,
-            };
-            _btnPushSprayCalibration.Click += async (s, e) => await PushSprayCalibration();
-            tab.Controls.Add(_btnPushSprayCalibration);
-
-            _lblSprayCalibrationStatus = new Label
-            {
-                Text = "",
-                Location = new Point(150, y + 6),
-                AutoSize = true,
-                ForeColor = Color.Gray,
-            };
-            tab.Controls.Add(_lblSprayCalibrationStatus);
-
             return tab;
         }
 
@@ -144,61 +123,10 @@ namespace NOMAD.MissionPlanner
             return false;
         }
 
-        // The server consumes only the relay number; every other spray
-        // setting is GCS-local. The API rejects unknown fields (extra=forbid)
-        // so this payload cannot drift silently.
-        private JObject BuildSprayCalibrationPayload()
-        {
-            return new JObject
-            {
-                ["water_pump_relay_number"] = Config.WaterPump()?.Channel ?? 0,
-            };
-        }
-
-        private async System.Threading.Tasks.Task PushSprayCalibration()
-        {
-            try
-            {
-                _btnPushSprayCalibration.Enabled = false;
-                _lblSprayCalibrationStatus.Text = "Pushing...";
-                _lblSprayCalibrationStatus.ForeColor = Color.Yellow;
-
-                SaveSettings();
-                Config.Save();
-                JetsonApiService.Reconfigure(Config);
-
-                var json = BuildSprayCalibrationPayload().ToString(Newtonsoft.Json.Formatting.None);
-                var content = new StringContent(json, Encoding.UTF8, "application/json");
-                var response = await JetsonApiService.PostAsync("/api/spray/calibration", content);
-
-                if (response.IsSuccessStatusCode)
-                {
-                    _lblSprayCalibrationStatus.Text = "Spray calibration pushed";
-                    _lblSprayCalibrationStatus.ForeColor = Color.LimeGreen;
-                }
-                else
-                {
-                    var body = await response.Content.ReadAsStringAsync();
-                    string detail = body;
-                    try
-                    {
-                        var err = JObject.Parse(body);
-                        detail = err["detail"]?.ToString() ?? body;
-                    }
-                    catch { }
-                    _lblSprayCalibrationStatus.Text = $"Failed: {detail}";
-                    _lblSprayCalibrationStatus.ForeColor = Color.Red;
-                }
-            }
-            catch (Exception ex)
-            {
-                _lblSprayCalibrationStatus.Text = $"Error: {ex.Message}";
-                _lblSprayCalibrationStatus.ForeColor = Color.Red;
-            }
-            finally
-            {
-                _btnPushSprayCalibration.Enabled = true;
-            }
-        }
+        // The spray calibration used to be pushed to the Jetson's Python REST
+        // surface; that surface was removed in the C++ cutover. All spray
+        // settings are GCS-local, and the pump relay itself is driven through
+        // the C++ core boundary (NomadCoreClient.SetRelay) using the channel
+        // configured on the Payloads tab.
     }
 }

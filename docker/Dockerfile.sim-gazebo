@@ -5,9 +5,9 @@
 # The official, integrated flight+perception sim (https://ardupilot.org/dev/docs/
 # ros2-gazebo.html): ArduPilot SITL flies a multicopter inside Gazebo Harmonic
 # via the ardupilot_gazebo plugin, AP_DDS publishes the vehicle state to ROS 2,
-# and a ZED-2i camera model rides on the drone. The NOMAD ROS-HTTP bridge
+# and a ZED-2i camera model rides on the drone. The NOMAD C++ ROS adapter node
 # consumes the ZED-style topics, exactly as on the Jetson — but here the drone is
-# flown by a REAL flight controller (SITL) responding to MAVLink, so the bridge's
+# flown by a REAL flight controller (SITL) responding to MAVLink, so the node's
 # velocity/cmd_vel path is exercised end-to-end (unlike the synthetic sim-ros
 # tier, where there is no FC in the loop).
 #

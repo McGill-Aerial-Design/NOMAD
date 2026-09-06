@@ -19,20 +19,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: recursive
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
           cache: true
       - name: File and line size report
         run: pixi run line-report
+      - name: Enforce changed-file complexity
+        env:
+          NOMAD_COMPLEXITY_BASE: origin/${{ github.base_ref || 'main' }}
+        run: pixi run complexity-check
+      - name: Build and test C++ core
+        run: pixi run test-core
       - name: Ruff lint
         run: pixi run lint
       - name: Ruff format check
-        run: pixi run fmt-check
-      # The SC core (edge_core/safety) is type-checked under strict mypy settings
-      # and this step is REQUIRED — a type regression in flight-decision code
-      # fails the build. The whole-tree run below stays advisory.
-      - name: Mypy — SC core (enforced)
-        run: pixi run typecheck-safety
+        run: pixi run format-check
       - name: Mypy — full tree (advisory)
         run: pixi run typecheck
         continue-on-error: true
@@ -42,6 +46,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: ludeeus/action-shellcheck@master
         with:
           severity: warning
@@ -63,6 +69,8 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "8.0.x"

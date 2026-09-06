@@ -15,7 +15,8 @@
 //   * Gimbal: stick (X,Y) → integrated pitch/roll target via
 //     GimbalController.ApplyStick → MAV_CMD_DO_MOUNT_CONTROL.
 //   * ZED tilt: stick axis → integrated PWM target via
-//     CubeOutputController.SendServoPwmAsync (tryOnly while drag).
+//     OutputController.SendServoPwmAsync (core-mediated; drag streams go
+//     through the same boundary).
 // ============================================================
 
 using System;
@@ -389,7 +390,7 @@ namespace NOMAD.MissionPlanner
 
             int channel = tilt.Channel;
 
-            _ = CubeOutputController.SendServoPwmAsync(channel, newUs, tryOnly: true);
+            _ = OutputController.SendServoPwmAsync(channel, newUs);
             PayloadControlPanel.SetExternalTiltPulse(newUs);
         }
 

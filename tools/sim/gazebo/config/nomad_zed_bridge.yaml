@@ -4,7 +4,7 @@
 # ros_gz_bridge config mapping the Gazebo iris's sensor/odometry gz topics onto
 # the ZED-style ROS 2 topics the NOMAD ROS-HTTP bridge subscribes to. The drone
 # is flown by ArduPilot SITL; these are the same topic names the real ZED ROS2
-# wrapper publishes on the Jetson, so edge_core.ros_http_bridge is unchanged.
+# wrapper publishes on the Jetson, so the C++ adapter node is unchanged.
 #
 # Topic origins (world_name=runway, robot_name=iris — the launch defaults):
 #   /model/iris/odometry ........................... gz ground-truth Odometry

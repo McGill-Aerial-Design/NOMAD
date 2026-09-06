@@ -305,58 +305,5 @@ namespace NOMAD.MissionPlanner
         /// Get the connection manager instance (for external access).
         /// </summary>
         public MAVLinkConnectionManager ConnectionManager => _connectionManager;
-
-        /// <summary>
-        /// Push servo/spray calibration config to Jetson on every new connection so
-        /// the Jetson always uses the settings configured in the NOMAD Settings UI
-        /// rather than its own defaults (e.g. after a NOMAD restart on the Jetson).
-        /// </summary>
-        private void OnJetsonConnected_PushServoConfig(object sender, JetsonConnectionStateChangedEventArgs e)
-        {
-            if (e.NewState != JetsonConnectionState.Connected) return;
-
-            var cfg = _config;
-            _ = System.Threading.Tasks.Task.Run(async () =>
-            {
-                try
-                {
-                    var tilt = cfg.CameraTilt();
-                    if (tilt != null)
-                    {
-                        var body = new System.Net.Http.StringContent(
-                            Newtonsoft.Json.JsonConvert.SerializeObject(new
-                            {
-                                channel         = tilt.Channel,
-                                pwm_down        = tilt.PwmMin,
-                                pwm_neutral     = tilt.PwmNeutral,
-                                pwm_up          = tilt.PwmMax,
-                                angle_range_deg = tilt.AngleRangeDeg,
-                            }),
-                            System.Text.Encoding.UTF8,
-                            "application/json");
-
-                        var response = await JetsonApiService.PostAsync("/api/servo/camera/config", body);
-                        Log.Debug($"Pushed servo config to Jetson — HTTP {(int)response.StatusCode}");
-                    }
-
-                    // The server consumes only the relay number (extra fields
-                    // are rejected); all other spray settings are GCS-local.
-                    var sprayBody = new System.Net.Http.StringContent(
-                        Newtonsoft.Json.JsonConvert.SerializeObject(new
-                        {
-                            water_pump_relay_number = cfg.WaterPump()?.Channel ?? 0,
-                        }),
-                        System.Text.Encoding.UTF8,
-                        "application/json");
-
-                    var sprayResponse = await JetsonApiService.PostAsync("/api/spray/calibration", sprayBody);
-                    Log.Debug($"Pushed spray calibration to Jetson — HTTP {(int)sprayResponse.StatusCode}");
-                }
-                catch (Exception ex)
-                {
-                    Log.Debug($"Failed to push Jetson calibration — {ex.Message}");
-                }
-            });
-        }
     }
 }

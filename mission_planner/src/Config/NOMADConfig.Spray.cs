@@ -3,7 +3,7 @@
 // ============================================================
 // NOMADConfig — spray calibration settings (partial class)
 // ============================================================
-// Split out of NOMADConfig.cs to keep each file under the 800-line limit.
+// Split out of NOMADConfig.cs to keep responsibilities small.
 // Clamping/migration for these fields lives in NOMADConfig.cs.
 // ============================================================
 

@@ -13,11 +13,21 @@ using System;
 using System.Linq;
 using System.Reflection;
 using MissionPlanner;
+using NOMAD.MissionPlanner.Connectivity;
 
 namespace NOMAD.MissionPlanner
 {
     public static class FlightModeController
     {
+        private static NOMADConfig _config;
+
+        /// <summary>
+        /// Called at plugin load so GuidedGoto can build the core client.
+        /// </summary>
+        public static void Initialize(NOMADConfig config)
+        {
+            _config = config;
+        }
         /// <summary>
         /// Emergency-land the vehicle. Forces LAND_SPEED and WPNAV_SPEED_DN to
         /// at least <paramref name="minDescentCmS"/> (≥200 cm/s satisfies the
@@ -56,87 +66,35 @@ namespace NOMAD.MissionPlanner
         /// <summary>
         /// Switch to GUIDED and fly to the given position at the given relative
         /// altitude (meters AGL). Used by the soft-boundary "return to boundary"
-        /// action. Returns true if the goto was dispatched.
+        /// action. Routes through the C++ core client boundary: the core sends
+        /// MAV_CMD_DO_REPOSITION with the change-mode flag and verifies the
+        /// arrival position, so a true return means the vehicle is at the
+        /// target. Returns false (fail closed) when the core is not configured,
+        /// refuses, or cannot reach the vehicle.
         /// </summary>
         public static bool GuidedGoto(double lat, double lng, double altRelM)
         {
-            var comPort = MainV2.comPort;
-            if (comPort == null)
+            var client = CreateCoreClient();
+            if (client == null)
             {
-                Log.Warn("GuidedGoto: not connected.");
+                Log.Warn("GuidedGoto: NOMAD core not configured.");
                 return false;
             }
-            try
+            var ok = client.Goto(lat, lng, altRelM);
+            if (!ok)
             {
-                var method = comPort.GetType()
-                    .GetMethods(BindingFlags.Public | BindingFlags.Instance)
-                    .Where(m => m.Name == "setGuidedModeWP" && m.GetParameters().Length >= 1)
-                    .OrderBy(m => m.GetParameters().Length)
-                    .FirstOrDefault();
-                if (method == null)
-                {
-                    Log.Warn("GuidedGoto: setGuidedModeWP not found on MAVLinkInterface.");
-                    return false;
-                }
-
-                // Build the Locationwp argument via reflection (struct layout is
-                // stable: lat/lng doubles, alt float, id = MAV_CMD_NAV_WAYPOINT).
-                var pars = method.GetParameters();
-                var wpType = pars[0].ParameterType;
-                object wp = Activator.CreateInstance(wpType);
-                SetMember(wpType, wp, "lat", lat);
-                SetMember(wpType, wp, "lng", lng);
-                SetMember(wpType, wp, "alt", (float)altRelM);
-                SetMember(wpType, wp, "id", (ushort)16); // MAV_CMD_NAV_WAYPOINT
-
-                // MP's setGuidedModeWP only sends the target; ensure GUIDED first.
-                if (!TrySetMode(comPort, "GUIDED")) return false;
-
-                var args = new object[pars.Length];
-                args[0] = wp;
-                for (int i = 1; i < pars.Length; i++)
-                {
-                    args[i] = pars[i].HasDefaultValue
-                        ? pars[i].DefaultValue
-                        : (pars[i].ParameterType.IsValueType
-                            ? Activator.CreateInstance(pars[i].ParameterType) : null);
-                }
-                method.Invoke(comPort, args);
-                return true;
+                Log.Warn("GuidedGoto: core rejected or could not reach the vehicle.");
             }
-            catch (TargetInvocationException tie)
-            {
-                Log.Error($"GuidedGoto threw: {tie.InnerException?.Message ?? tie.Message}");
-                return false;
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"GuidedGoto error: {ex.Message}");
-                return false;
-            }
+            return ok;
         }
 
-        private static void SetMember(Type type, object boxed, string name, object value)
+        private static NomadCoreClient CreateCoreClient()
         {
-            var f = type.GetField(name, BindingFlags.Public | BindingFlags.Instance);
-            if (f != null) { f.SetValue(boxed, Convert.ChangeType(value, f.FieldType)); return; }
-            var p = type.GetProperty(name, BindingFlags.Public | BindingFlags.Instance);
-            if (p != null && p.CanWrite) p.SetValue(boxed, Convert.ChangeType(value, p.PropertyType));
-        }
-
-        // ============================================================
-        // Reflection helpers (mirror MPFenceUploader's pattern)
-        // ============================================================
-
-        public static bool SetGuidedMode()
-        {
-            var comPort = MainV2.comPort;
-            if (comPort == null)
+            if (_config == null)
             {
-                Log.Warn("SetGuidedMode: not connected.");
-                return false;
+                return null;
             }
-            return TrySetMode(comPort, "GUIDED");
+            return new NomadCoreClient(_config.CoreExePath, _config.CoreMavlinkEndpoint, _config.CoreApiKey);
         }
 
         private static bool TrySetMode(object comPort, string modeName)
@@ -179,7 +137,7 @@ namespace NOMAD.MissionPlanner
                         return true;
                     }
                 }
-                Log.Debug("EmergencyLand: no compatible setMode overload found.");
+                Log.Debug("FlightModeController: no compatible setMode overload found.");
                 return false;
             }
             catch (TargetInvocationException tie)

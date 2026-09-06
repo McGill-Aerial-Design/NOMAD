@@ -5,8 +5,8 @@ Wants=network-online.target
 PartOf=nomad.target
 
 [Service]
-# Keep the wrapper in the foreground so systemd sees router exits after Cube
-# USB resets and the wrapper can rediscover the serial device.
+# Keep the wrapper in the foreground so systemd sees router exits after flight
+# controller USB resets and the wrapper can rediscover the serial device.
 Type=simple
 User=__NOMAD_USER__
 Group=__NOMAD_USER__
