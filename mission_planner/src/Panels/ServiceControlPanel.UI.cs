@@ -89,7 +89,7 @@ namespace NOMAD.MissionPlanner
             _btnIsaacRosStart.Click += async (s, e) => await StartIsaacRosAsync();
             _btnIsaacRosStop.Click += async (s, e) => await StopIsaacRosAsync();
 
-            Stack(services, ServiceRow("ROS HTTP Bridge", out _lblRosBridgeStatus,
+            Stack(services, ServiceRow("ROS Adapter Node", out _lblRosBridgeStatus,
                 _btnStartRosBridge = ActionBtn("Start", NOMADTheme.BTN_START),
                 _btnStopRosBridge = ActionBtn("Stop", NOMADTheme.BTN_STOP)));
             _lblRosBridgeStatus.Text = "Unknown";

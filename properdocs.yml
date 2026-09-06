@@ -1,9 +1,8 @@
-# NOMAD documentation site — built with ProperDocs (Material theme)
-# Serve locally:  pixi run docs
-# Build:         pixi run docs-build
+# NOMAD documentation site
+# Serve locally with `pixi run docs`; build with `pixi run docs-build`.
 
 site_name: NOMAD
-site_description: A reusable drone edge + ground-control framework
+site_description: Standalone C++ vehicle-control core for ArduPilot systems
 site_url: https://github.com/McGill-Aerial-Design/NOMAD
 repo_url: https://github.com/McGill-Aerial-Design/NOMAD
 edit_uri: blob/main/docs/
@@ -63,24 +62,17 @@ plugins:
 
 nav:
   - Home: index.md
-  - Getting Started: getting_started.md
+  - Product Requirements: prd.md
   - Architecture: architecture.md
-  - Writing a Module: writing_a_module.md
-  - Simulation: simulation.md
-  - Deployment: deployment.md
-  - Configuration: configuration.md
-  - API Reference: api_reference.md
-  - Safety Case:
-      - Overview: safety/README.md
-      - Partition (SC/SR/NC): safety/partition.md
-      - Hazards (FHA-lite): safety/hazards.md
-      - Requirements: safety/requirements.md
-      - Traceability: safety/traceability.md
+  - Development: development.md
+  - Agent and engineering guidance: agent-guidance.md
+  - Operations: operations.md
+  - Migration: migration.md
+  - Safety: safety.md
+  - Transitional API Reference: api_reference.md
+
 validation:
   links:
-    # Safety-case docs link to source files (../../edge_core/...) so they are
-    # clickable when read in-repo / on GitHub; those targets live outside the
-    # built docs tree, so treat "not found" as info rather than failing --strict.
     not_found: info
     absolute_links: info
     unrecognized_links: info

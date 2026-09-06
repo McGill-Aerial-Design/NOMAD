@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
 """
-Push an ArduPilot .param file to the Cube via MAVLink before a task.
+Push an ArduPilot .param file to the flight controller via MAVLink before a task.
 
 Usage:
     load_params.py <task>                # task = "task1" | "task2" | path to .param

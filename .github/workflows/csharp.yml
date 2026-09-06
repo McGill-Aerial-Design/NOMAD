@@ -69,6 +69,9 @@ jobs:
       - name: Altitude callout tests
         run: pwsh -File scripts/build/test_plugin_audio.ps1
 
+      - name: Core client boundary tests
+        run: pwsh -File scripts/build/test_plugin_core_client.ps1
+
   plugin-build:
     name: build MP plugin (Windows)
     runs-on: windows-latest

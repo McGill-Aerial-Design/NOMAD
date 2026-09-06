@@ -25,6 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive
       - uses: docker/setup-buildx-action@v4
       - name: Log in to GHCR
         uses: docker/login-action@v4
@@ -61,6 +63,8 @@ jobs:
     runs-on: [self-hosted, ARM64]
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive
       - name: Build Jetson image
         run: |
           docker buildx build \
@@ -89,6 +93,8 @@ jobs:
     runs-on: [self-hosted, X64]
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive
       - name: Build Isaac ROS sim image (x86_64, no push)
         run: |
           docker build \

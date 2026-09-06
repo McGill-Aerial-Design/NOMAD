@@ -5,8 +5,9 @@
 // ============================================================
 // Renders the configurable payloads from NOMADConfig.Payloads (drop servos,
 // slider servos, relay/GPIO outputs) plus the dedicated strap-reel and ZED
-// camera-tilt sections. Everything is wired to the Cube Orange and commanded via
-// MAVLink DO_SET_SERVO / DO_SET_RELAY (primary), with Edge Core HTTP as fallback.
+// camera-tilt sections. Everything is driven through standard ArduPilot
+// servo/relay outputs (any flight controller) via MAVLink DO_SET_SERVO /
+// DO_SET_RELAY (primary), with Edge Core HTTP as fallback.
 // ============================================================
 
 using System;
@@ -22,7 +23,7 @@ namespace NOMAD.MissionPlanner
     /// <summary>
     /// Payload controls: a configurable list of drop / slider / relay payloads,
     /// plus strap reels (hold-to-reel) and the ZED camera-tilt slider.
-    /// MAVLink is tried first; Edge Core's Cube command API is the fallback.
+    /// MAVLink is tried first; Edge Core's output command API is the fallback.
     /// </summary>
     public partial class PayloadControlPanel : UserControl
     {
@@ -328,7 +329,7 @@ namespace NOMAD.MissionPlanner
 
             // Send immediately — drop if a previous command is still in-flight so
             // rapid drag events never queue up and cause lag.
-            SendCameraTiltAsync(pulseUs, tryOnly: true);
+            SendCameraTiltAsync(pulseUs);
 
             // Restart settle timer so the final resting value is always committed
             // even if the last few drag events were dropped.
@@ -341,16 +342,16 @@ namespace NOMAD.MissionPlanner
                 _tiltDebounceTimer?.Dispose();
                 _tiltDebounceTimer = null;
                 if (_tiltSlider != null && !_tiltSlider.IsDisposed)
-                    SendCameraTiltAsync(_tiltSlider.Value, tryOnly: false);
+                    SendCameraTiltAsync(_tiltSlider.Value);
             };
             _tiltDebounceTimer.Start();
         }
 
-        private async void SendCameraTiltAsync(int pulseUs, bool tryOnly = false)
+        private async void SendCameraTiltAsync(int pulseUs)
         {
             int channel = _tiltPayload?.Channel ?? 0;
             if (channel <= 0) return;
-            await CubeOutputController.SendServoPwmAsync(channel, pulseUs, tryOnly);
+            await OutputController.SendServoPwmAsync(channel, pulseUs);
         }
 
         private void OnCameraTiltChangedExternally(int pulseUs, PayloadControlPanel source)
@@ -387,7 +388,7 @@ namespace NOMAD.MissionPlanner
             ApplyTiltPulseQuietly(pulseUs);
             s_lastTiltPulseUs = pulseUs;
             CameraTiltChanged?.Invoke(pulseUs, this);
-            SendCameraTiltAsync(pulseUs, tryOnly: false);
+            SendCameraTiltAsync(pulseUs);
         }
 
         private void ApplyTiltPulseQuietly(int pulseUs)

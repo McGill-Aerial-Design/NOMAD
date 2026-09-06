@@ -74,6 +74,12 @@ namespace NOMAD.MissionPlanner
                 // Initialize centralized API service (must be before any component that uses HttpClient)
                 JetsonApiService.Initialize(_config);
 
+                // FlightModeController builds core clients from the same config
+                // (CoreExePath / CoreMavlinkEndpoint / CoreApiKey) so GuidedGoto
+                // and EmergencyLand route through the C++ core boundary.
+                FlightModeController.Initialize(_config);
+                OutputController.Initialize(_config);
+
                 // Initialize dual-link sender
                 _sender = new DualLinkSender(_config);
 
@@ -109,7 +115,6 @@ namespace NOMAD.MissionPlanner
 
                 // Initialize Jetson connection manager for non-blocking UI
                 _jetsonConnectionManager = new JetsonConnectionManager(_config);
-                _jetsonConnectionManager.ConnectionStateChanged += OnJetsonConnected_PushServoConfig;
                 _jetsonConnectionManager.StartPolling();
 
                 // Initialize MAVLink dual link connection manager

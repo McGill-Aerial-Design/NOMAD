@@ -17,7 +17,7 @@
 #
 # Services (start order = listed order):
 # edge_core, mavlink_router, mediamtx,
-# isaac_ros_container, ros_http_bridge, zed_wrapper,
+# isaac_ros_container, ros_vehicle, zed_wrapper,
 # video_bridge, nvblox
 #
 # `all` operates on the autostart set from config/nomad.env
@@ -42,7 +42,7 @@ edge_core
 mavlink_router
 mediamtx
 isaac_ros_container
-ros_http_bridge
+ros_vehicle
 zed_wrapper
 video_bridge
 nvblox
@@ -56,7 +56,7 @@ mavlink_router) echo "MAVLINK_ROUTER" ;;
 mediamtx) echo "MEDIAMTX" ;;
 isaac_ros_container) echo "ISAAC_ROS_CONTAINER" ;;
 zed_wrapper) echo "ZED_WRAPPER" ;;
-ros_http_bridge) echo "ROS_HTTP_BRIDGE" ;;
+ros_vehicle) echo "ROS_VEHICLE" ;;
 video_bridge) echo "VIDEO_BRIDGE" ;;
 nvblox) echo "NVBLOX" ;;
 *) return 1 ;;
@@ -88,7 +88,7 @@ printf "%-22s %-10s %s\n" "edge_core" "$NOMAD_AUTOSTART_EDGE_CORE" "Edge Core RE
 printf "%-22s %-10s %s\n" "mavlink_router" "$NOMAD_AUTOSTART_MAVLINK_ROUTER" "MAVLink Router (host)"
 printf "%-22s %-10s %s\n" "mediamtx" "$NOMAD_AUTOSTART_MEDIAMTX" "RTSP server (host)"
 printf "%-22s %-10s %s\n" "isaac_ros_container" "$NOMAD_AUTOSTART_ISAAC_ROS_CONTAINER" "Long-running Docker container"
-printf "%-22s %-10s %s\n" "ros_http_bridge" "$NOMAD_AUTOSTART_ROS_HTTP_BRIDGE" "ROS<->HTTP bridge (in container)"
+printf "%-22s %-10s %s\n" "ros_vehicle" "$NOMAD_AUTOSTART_ROS_VEHICLE" "C++ ROS adapter node (in container)"
 printf "%-22s %-10s %s\n" "zed_wrapper" "$NOMAD_AUTOSTART_ZED_WRAPPER" "ZED camera node (in container)"
 printf "%-22s %-10s %s\n" "video_bridge" "$NOMAD_AUTOSTART_VIDEO_BRIDGE" "RTSP relay (via Edge Core API)"
 printf "%-22s %-10s %s\n" "nvblox" "manual" "nvblox mapping (Mission Planner start only)"
@@ -131,8 +131,8 @@ cmd_stop_all() {
 
 cleanup_orphans() {
     if container_running; then
-        kill_pattern_in_container 'simple_video_bridge|ros_http_bridge\.py|nomad_zed_nvblox\.launch\.py|zed_camera\.launch\.py|servo_tf_publisher|obstacle_distance_bridge|component_container_isolated|component_container_mt' 10
-        in_container "rm -f /dev/shm/fastrtps_* /tmp/zed_nvblox.pid /tmp/ros_bridge.pid /tmp/video_bridge.pid 2>/dev/null || true"
+        kill_pattern_in_container 'simple_video_bridge|nomad_vehicle_node|nomad_zed_nvblox\.launch\.py|zed_camera\.launch\.py|servo_tf_publisher|obstacle_distance_bridge|component_container_isolated|component_container_mt' 10
+        in_container "rm -f /dev/shm/fastrtps_* /tmp/zed_nvblox.pid /tmp/ros_vehicle.pid /tmp/video_bridge.pid 2>/dev/null || true"
     fi
     kill_pattern_host 'edge_core\.main|mediamtx|mavlink-routerd' 5
 }

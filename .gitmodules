@@ -1,0 +1,6 @@
+[submodule "third_party/MAVSDK"]
+	path = third_party/MAVSDK
+	url = https://github.com/mavlink/MAVSDK
+[submodule "third_party/ardupilot-mavlink"]
+	path = third_party/ardupilot-mavlink
+	url = https://github.com/ArduPilot/mavlink.git

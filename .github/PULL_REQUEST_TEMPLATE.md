@@ -5,14 +5,12 @@ changes made. Remove any sections that are not applicable.
 
 ## Safety-critical checklist
 
-<!-- Required ONLY if this PR touches an SC path (edge_core/safety/,
-     mavlink_velocity.py, services/mavlink/, modules/payload/, or the C#
-     Control/, Payload/, Geofence/ dirs — see docs/safety/partition.md).
-     Delete this section otherwise. -->
+<!-- Required if this PR touches an SC path (transitional Python safety,
+     MAVLink, payload, geofence, or future C++ core code). See docs/safety.md. -->
 
-- [ ] Requirement: SR-___ (docs/safety/requirements.md; new ones append, never renumber)
+- [ ] Requirement: SR-___ (docs/safety.md; new IDs append and are never reused)
 - [ ] Test proving it: `tests/...::test_...` (fault inputs included, not just happy path)
-- [ ] `pixi run cov-safety` still 100% and traceability.md updated if symbols moved
+- [ ] Safety coverage passes and the traceability block in `docs/safety.md` is updated
 - [ ] SITL evidence if the velocity/fence/payload command path changed (`pixi run sitl-scenario` / `sitl-fence`), or stated why not run
 - [ ] No gate/clamp/watchdog weakened, reordered, or removed
 

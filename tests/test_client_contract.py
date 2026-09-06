@@ -1,14 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
-"""Client <-> API contract gate (rearchitecture plan Phase 5; verbs added
-by the baseline-polish plan Phase 0).
+"""Transitional client-to-API contract gate.
 
-The hand-written HTTP clients (the C# plugin and the Python ROS bridge) can
-silently drift from the FastAPI routes. The hazard is drift, not hand-writing —
-so this test kills drift: it extracts every route literal from both client
-sources and asserts each ``(method, path)`` pair exists in the live
-``app.openapi()`` schema. A client calling a route (or verb) that no longer
-exists fails CI here instead of failing in the field.
+The C++ migration will replace this REST contract after the new client boundary
+exists. Until then, it prevents the current plugin from drifting.
+
+The hand-written HTTP client (the C# plugin) can silently drift from the
+FastAPI routes. The hazard is drift, not hand-writing — so this test kills
+drift: it extracts every route literal from the C# sources and asserts each
+``(method, path)`` pair exists in the live ``app.openapi()`` schema. A client
+calling a route (or verb) that no longer exists fails CI here instead of
+failing in the field. (The Python ROS-HTTP bridge was the second client; it
+was retired with the bridge on 2026-09-05.)
 """
 
 from __future__ import annotations
@@ -20,7 +23,6 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CS_ROOT = REPO_ROOT / "mission_planner" / "src"
-BRIDGE_NODE = REPO_ROOT / "edge_core" / "ros_http_bridge" / "node.py"
 
 # Route literals in C# string (incl. $"..." interpolated) constants.
 _ROUTE_RE = re.compile(r'"(/(?:api|health|network|status)(?:[/?][^"\s]*)?)"')
@@ -41,10 +43,6 @@ _CS_METHOD_VERB = {
     "DeleteAsync": "delete",
 }
 _CS_METHOD_RE = re.compile(r"\b(" + "|".join(_CS_METHOD_VERB) + r")\s*\(")
-
-# Python ROS bridge client helpers -> HTTP verb.
-_PY_CALL_RE = re.compile(r'_http_(get_json|post)\(\s*f?"([^"]+)"')
-_PY_VERB = {"get_json": "get", "post": "post"}
 
 
 def _normalize(path: str) -> str:
@@ -72,18 +70,6 @@ def _client_routes() -> dict[tuple[str | None, str], list[str]]:
     return routes
 
 
-def _bridge_routes() -> dict[tuple[str, str], list[str]]:
-    """(verb, normalized route) -> reference, from the Python ROS bridge."""
-    routes: dict[tuple[str, str], list[str]] = {}
-    text = BRIDGE_NODE.read_text(encoding="utf-8")
-    for match in _PY_CALL_RE.finditer(text):
-        verb = _PY_VERB[match.group(1)]
-        normalized = _normalize(match.group(2))
-        if normalized:
-            routes.setdefault((verb, normalized), []).append(BRIDGE_NODE.name)
-    return routes
-
-
 @pytest.fixture(scope="module")
 def live_operations() -> set[tuple[str, str]]:
     """Every (method, normalized path) pair served by the live app."""
@@ -104,12 +90,8 @@ def live_paths(live_operations) -> set[str]:
     return {path for _, path in live_operations}
 
 
-# Known drift: C# UI still calls these routes, which were deliberately gutted
-# from the Python baseline. Each entry is tracked debt (rearchitecture plan §6,
-# opportunistic C# cleanup): when the panel/view is next touched, delete the
-# caller (or re-add the route as a deployment module) and remove the row here.
-# This ledger is two-way checked — adding NEW drift fails, and fixing an entry
-# without removing its row also fails, so it cannot rot silently.
+# Known drift is kept empty during the transition. Remove this entire REST test
+# with the Python API once the replacement client boundary is accepted.
 KNOWN_DRIFT: dict[str, str] = {}  # burned down to zero (baseline-polish plan 4.1); keep it that way
 
 
@@ -139,14 +121,4 @@ def test_every_client_route_exists_in_api(live_operations, live_paths):
     assert not verb_drift, (
         f"C# client uses an HTTP method the API does not serve on that path: {verb_drift}. "
         "Add the verb server-side or fix the client call."
-    )
-
-
-def test_every_bridge_route_exists_in_api(live_operations):
-    routes = _bridge_routes()
-    assert routes, "no route literals parsed from the ROS bridge — check the regex"
-    drift = {key: files for key, files in sorted(routes.items()) if key not in live_operations}
-    assert not drift, (
-        f"ROS bridge calls (method, route) pairs the API does not serve: {drift}. "
-        "Add the route/verb server-side or fix the bridge call."
     )

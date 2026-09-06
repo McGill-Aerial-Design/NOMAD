@@ -1,223 +1,126 @@
 # Contributing to NOMAD
 
-## 1. Forking Workflow
+NOMAD is migrating from a Python edge service to a small C++20 vehicle core.
+Keep changes aligned with that direction: simple code, narrow ownership, explicit
+behavior, and tests that do not need a drone.
 
-NOMAD uses the **forking workflow** to keep the main repository clean.
-Developers never push branches directly to `McGill-Aerial-Design/NOMAD`.
-Instead, each contributor works in their own fork and submits changes via
-**merge requests** (pull requests).
+## Start here
 
-```
-Upstream (main repo)          Your fork
-  McGill-Aerial-Design/NOMAD     <your-username>/NOMAD
-           │                           │
-           └──────── merge request ────┘
-```
-
-## 2. Getting started
-
-1. **Fork** the repository on GitHub to your own account.
-2. **Clone your fork** and add the upstream as a remote:
-
-   ```bash
-   git clone https://github.com/<your-username>/NOMAD.git
-   cd NOMAD
-   git remote add upstream https://github.com/McGill-Aerial-Design/NOMAD.git
-   ```
-
-3. **Sync your fork** before starting any work:
-
-   ```bash
-   git fetch upstream
-   git switch main
-   git merge --ff-only upstream/main
-   git push origin main
-   ```
-
-4. **Create a feature branch** in your fork (never work on `main`):
-
-   ```bash
-   git switch -c <category>/<short-description>-<issue-number>
-   ```
-
-5. **Set up your environment:**
-
-   ```bash
-   pixi run bootstrap
-   ```
-
-## 3. Branch naming
-
-```
-<category>/<short-description>-<issue-number>
-```
-
-Append the related GitHub issue number to every branch name.
-
-| Category   | Use for                     | Example                                      |
-|------------|-----------------------------|----------------------------------------------|
-| `edge`     | Edge Core (Python API)      | `edge/fix-mavlink-reconnect-123`             |
-| `plugin`   | Mission Planner plugin (C#) | `plugin/add-connection-health-123`           |
-| `docker`   | Container definitions       | `docker/fix-dev-image-entrypoint-123`        |
-| `infra`    | Systemd, transport, scripts | `infra/consolidate-service-units-123`        |
-| `ci`       | CI / workflow changes       | `ci/add-lint-stage-123`                      |
-| `docs`     | Documentation only          | `docs/rewrite-contributing-guide-123`        |
-| `refactor` | Behavior-preserving restructure | `refactor/extract-module-registry-123`   |
-| `chore`    | Tooling, deps, maintenance  | `chore/bump-ruff-to-0.9-123`                 |
-
-## 4. Commit messages
-
-Maximum width is 72 characters. One commit per logical change. Style fixes
-must be in their own commits — never mix them with feature work.
-
-```
-[part,sub-part] Short description in imperative
-
-Longer explanation if needed. Skip a line between the subject
-and body. Explain what and why, not how.
-```
-
-- Prefix (always lowercase) names the part and optional sub-part in brackets.
-- Start the description with a capital letter and an imperative verb.
-
-Examples:
-
-```
-[edge_core] Fix MAVLink reconnect on serial drop
-[mission_planner] Fix WASD key release on panel exit
-[docs] Rewrite contributing guide for fork-based workflow
-```
-
-## 5. Merge request process
-
-Once your feature or fix is complete:
-
-1. **Push your branch** to your fork:
-
-   ```bash
-   git push -u origin <category>/<short-description>-<issue-number>
-   ```
-
-2. **Open a merge request** on GitHub from your fork's branch into
-   `McGill-Aerial-Design/NOMAD:main`.
-
-3. **MR title format:**
-
-   ```
-   <category>: <short-description>
-   ```
-
-   Examples:
-   ```
-   edge: Fix MAVLink reconnect on serial drop
-   plugin: Add connection health indicator
-   docs: Rewrite contributing guide
-   ```
-
-4. **MR description:** Fill in the [merge request template](.github/PULL_REQUEST_TEMPLATE.md).
-
-5. **Labels:** Add a label matching the category (`edge`, `plugin`, `docker`,
-   `infra`, `ci`, `docs`, `refactor`, `chore`).
-
-6. **Address review feedback** by pushing additional commits to the same branch.
-   Squashing is handled at merge time — do not rebase after opening the MR.
-
-> Never force-push to a branch that has an open merge request.
-
-## 6. Local development
+1. Fork the repository.
+2. Create a focused branch in your fork.
+3. Install Pixi and run the relevant checks.
+4. Read [the architecture](docs/architecture.md) and [the migration plan](docs/migration.md)
+   before changing ownership boundaries.
 
 ```bash
-pixi run dev           # Edge Core sim on http://localhost:8000
-pixi run test          # pytest
-pixi run lint          # ruff check
-pixi run fmt           # ruff format
-pixi run line-report   # largest files and longest source lines
-pixi run docs          # serve docs site locally
-pixi run build-plugin  # build Mission Planner DLL (Windows)
+pixi run lint
+pixi run test-fast
+pixi run docs-build
 ```
 
-Install pre-commit hooks:
+During the transition, use the current Python/SITL commands documented in
+[development](docs/development.md). The C++ workflow is `build-core`, `test-core`,
+and `sitl`.
+
+## Target layout
+
+```text
+include/nomad/       C++ public headers
+src/                 C++ implementation and thin CLI
+tests/               CTest, unit, and integration tests
+ros2/                ROS 2 adapter packages
+python/              CV, ML, simulation, analysis, and utilities
+mission_planner/     Ground-station client
+```
+
+The current `edge_core/` tree is transitional. Do not add new dynamic modules,
+service registries, REST layers, or vehicle-control paths there. Put new product
+behavior in the migration plan first.
+
+## Code standard
+
+Write for a first-year engineering student.
+
+- Keep functions to about 40 logical lines or fewer.
+- Treat 500 source lines as a refactoring signal.
+- Use early returns and shallow indentation.
+- Write explicit multi-line conditionals and loops.
+- Give every function one responsibility and a precise verb name.
+- Keep imports at the top and order them consistently.
+- Keep comments to one line unless a longer explanation is genuinely necessary.
+- Make top-level functions read as named steps.
+- Prefer the standard library and existing project code.
+- Do not add speculative abstractions, factories, registries, or fallback chains.
+- Keep UI, ROS, transport, and core decisions separate.
+- Never commit real hosts, secrets, emails, or absolute paths.
+
+C++ code uses C++20, CMake, RAII, explicit ownership, small headers, and ordinary
+standard-library types. MAVLink packet details stay inside the MAVLink boundary.
+ROS 2 dependencies stay outside the core.
+
+## Safety changes
+
+Read [the safety case](docs/safety.md) before changing a command or actuation path.
+Every safety change needs:
+
+- a stable requirement ID;
+- a test for normal, boundary, invalid, and failure inputs;
+- acknowledgement or state-change verification for critical commands;
+- SITL evidence when the flight behavior is affected;
+- an updated requirement-to-code-to-test mapping.
+
+NOMAD must never weaken or disable ArduPilot failsafes.
+
+## Tests and checks
+
+Run the smallest relevant check during development, then the full checks before
+review:
 
 ```bash
-pixi run precommit
+pixi run build-core
+pixi run test-core
+pixi run test-python
+pixi run lint
+pixi run format-check
+pixi run docs-build
 ```
 
-## 7. Before opening a merge request
+The current Python test suite remains a transition gate. C++ tests use CTest and
+fake transports. ROS 2 integration tests run in the dedicated container. Plugin
+checks remain Windows-only where Mission Planner assemblies are required.
 
-- [ ] **No secrets or PII** — no real IPs, API keys, emails, or absolute
-      user paths. Use env vars or placeholders like `<jetson-ip>`.
-- [ ] `pixi run lint` and `pixi run fmt-check` pass.
-- [ ] `pixi run test` passes (or is N/A for your change).
-- [ ] `pixi run line-report` shows no touched source file over 800 lines.
-- [ ] Docs are updated if behavior or configuration changed.
-- [ ] The MR is focused — one feature/fix per MR.
-- [ ] Branch is up to date with `upstream/main`.
+## Size policy
 
-The line report scans source/docs files only. It excludes generated or bulky
-non-source output such as `.git/`, Pixi/Ruff/Pytest/Mypy caches, `site/`, package
-metadata, `pixi.lock`, and vendored Mission Planner third-party binaries under
-`mission_planner/third_party/`.
-
-### Safe refactor checklist
-
-For changes that touch source code:
-
-- [ ] Deleted unused code before adding new abstractions.
-- [ ] Decision logic stays separate from API/UI/MAVLink/ROS adapters.
-- [ ] Route handlers and UI event handlers stay thin (convert + delegate).
-- [ ] No new file near the 800-line cap; split by responsibility instead
-      (C#: `partial` files; Python: focused modules).
-- [ ] Environment parsing goes through `edge_core/env.py` helpers.
-- [ ] New abstractions have more than one real caller.
-- [ ] The important logic can be tested without the drone.
-
-Do not merge if a route handler contains hardware command logic directly, a UI
-click handler contains a full command workflow, or a safety decision depends on
-UI state.
-
-### Size limits
-
-| Item | Target |
+| Item | Rule |
 |---|---|
-| Python line length | 120 characters (enforced by Ruff E501) |
-| C# line length | ~120 characters (manual) |
-| Normal source file length | Aim for 400–600 lines |
-| Hard source file cap | 800 lines (CI-enforced via `pixi run line-report`) |
-| Safety-core files (`edge_core/safety/`) | Aim for under 150 lines |
-| Generated and lock files | Excluded from line-count checks |
+| Function | About 40 logical lines; split by responsibility |
+| Source file | 500 lines is a refactoring signal |
+| Python line | 120 characters, enforced by Ruff |
+| Generated/third-party files | Excluded from source-size checks |
 
-Reduce long lines by naming intermediate boolean expressions, extracting
-helper variables, and splitting call arguments — not by disabling the check.
+Existing oversized files are tracked as migration debt. New or modified files
+above 500 lines fail the changed-file check unless a temporary, reviewed exception
+names an owner and removal issue.
 
-## 8. Where to start — the onboarding ladder
+## Review checklist
 
-The repo is partitioned by safety tier (see
-[docs/safety/partition.md](docs/safety/partition.md)). The tiers are not
-bureaucracy — they are *why* most of the repo is fast to change: heavy process
-applies only to the thin slice that can move the aircraft or fire the payload.
-Competition-specific code stays in modules so the baseline survives to the next
-season.
+- [ ] The change belongs in this layer.
+- [ ] Unused code was deleted before abstractions were added.
+- [ ] Functions are small, explicit, and named by behavior.
+- [ ] Core logic is testable without ROS, UI, or hardware.
+- [ ] Inputs, errors, timeouts, and shutdown are handled.
+- [ ] Documentation reflects current ownership and status.
+- [ ] No new hardcoded host, secret, or absolute path exists.
+- [ ] Relevant checks pass.
 
-1. **Start in modules.** Competition features are `NomadModule`s on the SDK —
-   isolated, fault-contained, and unable to touch safety-critical code. See
-   [examples/sample_module/](examples/sample_module/) and
-   [docs/writing_a_module.md](docs/writing_a_module.md). This is where new
-   recruits build task code from day one.
-2. **NC (non-critical) next.** Panels, views, video, docs, scripts — normal
-   review, fast merges. Look for `good-first-issue` labels.
-3. **SR/SC last, and paired.** Safety-related/safety-critical paths (listed in
-   [.github/CODEOWNERS](.github/CODEOWNERS) and `partition.md`) require:
-   reading [docs/safety/README.md](docs/safety/README.md) (one page), a named
-   `SR-*` requirement, a test (fault inputs included), the SC checklist in the
-   PR template, and a CODEOWNER review. CI enforces 100% branch coverage on
-   `edge_core/safety/` (`pixi run cov-safety`), the requirement→code→test
-   traceability sync, the SC/NC import partition, and the C# client↔API
-   contract.
+## Branches and commits
 
-## 9. Reporting bugs / requesting features
+Use a focused branch in your fork. Keep one logical change per merge request and
+use a subject no longer than 72 characters:
 
-Open an issue using the templates under **New issue**. Redact any secrets in
-logs and reproduction steps.
+```text
+[part,sub-part] Imperative description
+```
 
-By contributing, you agree that your contributions will be licensed under
-[Apache 2.0](LICENSE).
+Do not commit, push, deploy, or modify production infrastructure without an
+explicit request.

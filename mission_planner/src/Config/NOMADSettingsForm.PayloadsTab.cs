@@ -169,7 +169,7 @@ namespace NOMAD.MissionPlanner
                 .ToList();
         }
 
-        // Write RC{n}_OPTION on the Cube for each relay payload with an RC channel set.
+        // Write RC{n}_OPTION on the autopilot for each relay payload with an RC channel set.
         private void ApplyPayloadRcMappings()
         {
             if (_payloadsBinding == null) return;

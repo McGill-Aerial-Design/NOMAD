@@ -51,7 +51,7 @@ def test_status_stale_container_running(monkeypatch):
         body = client.get("/api/isaac/status").json()
     assert body["container_running"] is True
     assert body["nvblox_running"] is True
-    assert body["bridge_running"] is True
+    assert body["vehicle_running"] is True
 
 
 def test_status_stale_container_stopped(monkeypatch):
@@ -61,7 +61,7 @@ def test_status_stale_container_stopped(monkeypatch):
         body = client.get("/api/isaac/status").json()
     assert body["container_running"] is False
     assert body["nvblox_running"] is False  # probes skipped when container down
-    assert body["bridge_running"] is False
+    assert body["vehicle_running"] is False
 
 
 def test_status_docker_probe_failure(monkeypatch):
@@ -86,7 +86,7 @@ def test_status_uses_fresh_cache(monkeypatch):
     assert body["nvblox_running"] is False  # pgrep returns non-zero
 
 
-def test_status_reports_active_sim_bridge(monkeypatch):
+def test_status_reports_active_sim_vehicle(monkeypatch):
     monkeypatch.setenv("NOMAD_SIM_PERCEPTION_RUNTIME", "gazebo")
     app = _build_app(monkeypatch)
     app.state.external_vio_state = {
@@ -103,7 +103,7 @@ def test_status_reports_active_sim_bridge(monkeypatch):
         body = client.get("/api/isaac/status").json()
     assert body["container_running"] is True
     assert body["container_name"] == "gazebo"
-    assert body["bridge_running"] is True
+    assert body["vehicle_running"] is True
     assert body["simulated"] is True
 
 
@@ -145,7 +145,7 @@ def test_status_reports_configured_sim_when_vio_stale(monkeypatch):
         body = client.get("/api/isaac/status").json()
     assert body["container_running"] is True
     assert body["container_name"] == "gazebo"
-    assert body["bridge_running"] is False
+    assert body["vehicle_running"] is False
     assert body["simulated"] is True
     assert body["vio_healthy"] is False
 

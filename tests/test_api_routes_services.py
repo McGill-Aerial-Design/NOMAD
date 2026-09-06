@@ -4,7 +4,7 @@
 
 The ``/api/services/status`` endpoint fans out to ~10 ``systemctl``/``pgrep``/
 ``docker`` subprocesses and a ``/dev/ttyACM0`` probe. Those are all mocked here
-so the test drives the service-state aggregation, the CubePilot-present gate,
+so the test drives the service-state aggregation, the flight-controller-present gate,
 the TTL cache, and the VIO/Isaac branches without touching the host.
 """
 
@@ -25,7 +25,7 @@ def _build_app(monkeypatch):
     return create_app(StateManager.instance())
 
 
-def _install_fakes(monkeypatch, *, cubepilot=True, active=True, container="Up 2 hours", calls=None):
+def _install_fakes(monkeypatch, *, fc_present=True, active=True, container="Up 2 hours", calls=None):
     """Patch subprocess.run and os.path.exists to deterministic responses."""
 
     def _run(cmd, *a, **k):
@@ -46,19 +46,19 @@ def _install_fakes(monkeypatch, *, cubepilot=True, active=True, container="Up 2 
 
     def _exists(path):
         if path == "/dev/ttyACM0":
-            return cubepilot
+            return fc_present
         return real_exists(path)
 
     monkeypatch.setattr(os.path, "exists", _exists)
 
 
-def test_all_services_active_with_cubepilot(monkeypatch):
+def test_all_services_active_with_flight_controller(monkeypatch):
     app = _build_app(monkeypatch)
-    _install_fakes(monkeypatch, cubepilot=True, active=True, container="Up 5 minutes")
+    _install_fakes(monkeypatch, fc_present=True, active=True, container="Up 5 minutes")
     with TestClient(app) as client:
         body = client.get("/api/services/status").json()
     assert body["mavlink_router"]["running"] is True
-    assert body["mavlink_router"]["cubepilot_present"] is True
+    assert body["mavlink_router"]["flight_controller_present"] is True
     assert body["mediamtx"]["running"] is True
     assert body["novnc"]["running"] is True
     assert body["edge_core"] == {"status": "active", "running": True}
@@ -67,12 +67,12 @@ def test_all_services_active_with_cubepilot(monkeypatch):
     assert body["vio"]["status"] == "not_initialized"
 
 
-def test_no_cubepilot_and_inactive_services(monkeypatch):
+def test_no_flight_controller_and_inactive_services(monkeypatch):
     app = _build_app(monkeypatch)
-    _install_fakes(monkeypatch, cubepilot=False, active=False, container="")
+    _install_fakes(monkeypatch, fc_present=False, active=False, container="")
     with TestClient(app) as client:
         body = client.get("/api/services/status").json()
-    assert body["mavlink_router"]["status"] == "no_cubepilot"
+    assert body["mavlink_router"]["status"] == "no_flight_controller"
     assert body["mavlink_router"]["running"] is False
     assert body["mediamtx"]["running"] is False
     assert body["novnc"]["running"] is False

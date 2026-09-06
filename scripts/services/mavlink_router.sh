@@ -60,10 +60,16 @@ discover_mavlink_dev() {
         return 0
     fi
 
-    # Cube Orange enumerates as two ACM interfaces. Use interface 00 for MAVLink.
+    # ArduPilot flight controllers enumerate as two ACM interfaces. Use
+    # interface 00 for MAVLink. Match by vendor id so the right serial device
+    # is picked when other ACM devices (e.g. LTE modems) are present.
     local by_id
     by_id=$(find /dev/serial/by-id -maxdepth 1 -type l \
-        \( -iname '*CubePilot*if00*' -o -iname '*CubeOrange*if00*' -o -iname '*CubeOrange+*if00*' \) \
+        \( -iname '*CubePilot*if00*' -o -iname '*CubeOrange*if00*' \
+           -o -iname '*CubeOrange+*if00*' -o -iname '*Pixhawk*if00*' \
+           -o -iname '*Holybro*if00*' -o -iname '*mRo*if00*' \
+           -o -iname '*CUAV*if00*' -o -iname '*RadioLink*if00*' \
+           -o -iname '*ArduPilot*if00*' \) \
         2>/dev/null | sort | head -n 1 || true)
     if [ -n "$by_id" ] && [ -e "$by_id" ]; then
         echo "$by_id"
@@ -104,7 +110,7 @@ svc_run() {
     while true; do
         local mavlink_dev=""
         if ! mavlink_dev="$(discover_mavlink_dev)"; then
-            log_warn "CubePilot not present; waiting for USB serial device"
+            log_warn "flight controller not present; waiting for USB serial device"
             sleep "$retry_delay"
             continue
         fi
@@ -121,7 +127,7 @@ svc_run() {
             "$mavlink_dev:${MAVLINK_UART_BAUD:-921600}"
 
         local rc=$?
-        log_warn "mavlink-routerd exited with status $rc; rediscovering Cube USB in ${retry_delay}s"
+        log_warn "mavlink-routerd exited with status $rc; rediscovering flight controller in ${retry_delay}s"
         sleep "$retry_delay"
     done
 }

@@ -1,75 +1,103 @@
 # NOMAD
 
-**A reusable drone edge + ground-control framework.**
+NOMAD is a standalone system for interacting with, monitoring, and controlling
+ArduPilot-based vehicles. The long-term product is a small C++20 core that owns
+vehicle behavior and MAVLink communication while clients use it through simple
+interfaces.
 
-NOMAD pairs a Python FastAPI service running on an onboard companion computer
-(e.g. NVIDIA Jetson Orin Nano) with a C# Mission Planner plugin for the ground
-station. It handles MAVLink telemetry/commands, navigation, video streaming,
-health monitoring, payload actuation, and ROS2 bridges — and is designed so new
-capabilities (SLAM, perception, payloads, mission tasks) are added as
-discoverable modules.
-
-## Quick start (sim, no hardware)
-
-Install [pixi](https://pixi.sh) (one line, no admin):
-
-```bash
-# Linux/macOS
-curl -fsSL https://pixi.sh/install.sh | bash
-# Windows (PowerShell)
-iwr -useb https://pixi.sh/install.ps1 | iex
+```text
+CLI / Mission Planner / ROS 2 / Python tools
+                    |
+              NOMAD C++ core
+                    |
+              MAVLink transport
+                    |
+                 ArduPilot
 ```
 
-Then bring up the sim:
+ArduPilot remains responsible for stabilization, motor control, sensor fusion,
+EKF, low-level navigation, and failsafes. NOMAD operates at the higher level:
+connect, inspect state, issue a verified command, and report the result.
 
-```bash
-git clone <repo-url> && cd NOMAD
-pixi run dev              # Edge Core sim on http://localhost:8000
+## Current status
 
-# Or the full hardware-free Docker stack (Edge Core + ArduPilot SITL):
-pixi run dev-up           # build + start (detached)
-pixi run test-api         # smoke-test every REST endpoint
-pixi run dev-down         # stop
+The repository is in the C++ migration phase. The existing Python FastAPI edge
+service, ROS HTTP bridge, and Mission Planner plugin are transitional. They remain
+available for current simulation and hardware workflows while the C++ core is
+built, but they are not the target architecture and should not receive new
+frameworks or duplicated vehicle logic.
 
-# Switch environments (sim / drone / dev) — also syncs the GCS plugin:
-pixi run profile-load dev
+See [the migration plan](docs/migration.md) for the phase gates and deletion rules.
+
+## Target API
+
+The intended core API stays deliberately boring:
+
+```cpp
+Vehicle vehicle(connection);
+vehicle.arm();
+vehicle.takeoff(10.0);
+vehicle.goto_location(target);
+vehicle.set_velocity({1.0F, 0.0F, 0.0F, 0.0F});
+vehicle.stop_velocity();
+vehicle.land();
 ```
 
-## Repository structure
+The CLI is a thin client. For example, `nomad arm` parses its arguments, creates a
+connection, calls `Vehicle::arm()`, waits for acknowledgement or a state change,
+prints the result, and exits. It does not contain MAVLink packet logic.
 
-```
+## Repository layout
+
+```text
 NOMAD/
-├── edge_core/             # Python FastAPI service (companion computer)
-│   ├── core/              # Module SDK: registry, AppContext, lifecycle
-│   ├── services/          # state, mavlink/, health, video, payload, IPC, geo
-│   ├── api_routes/        # Route modules (system, vio, video_slam, isaac, calibration, …)
-│   ├── modules/           # Built-in pluggable modules (slam, payload)
-│   └── ros_http_bridge/   # ROS→Edge Core bridge package (runs in Isaac container)
-├── mission_planner/src/   # C# Mission Planner plugin
-├── docker/                # Dockerfile.dev + hardware-free dev compose (Edge Core + SITL)
-├── scripts/               # Service mgmt, profiles, build, dev tools
-├── infra/                 # systemd units, transport (mavlink-router), tailscale
-└── config/                # nomad.env (+ profiles/) — runtime config
+├── include/nomad/       # C++ public headers
+├── src/                 # C++ core, transport, and CLI
+├── tests/               # Unit, integration, and SITL tests
+├── ros2/                # ROS 2 adapters, outside the core
+├── python/              # CV, ML, simulation, analysis, and utilities
+├── mission_planner/     # Ground-station integration client
+├── docs/                # Product and engineering documents
+├── docker/              # Reproducible development and SITL images
+└── infra/               # Deployment and network support
 ```
 
 ## Documentation
 
-Full documentation is available at the [docs site](docs/index.md) (served
-locally via `pixi run docs`). Key pages:
+- [Product requirements](docs/prd.md)
+- [Architecture](docs/architecture.md)
+- [Development workflow](docs/development.md)
+- [Operations](docs/operations.md)
+- [Migration plan](docs/migration.md)
+- [Safety case](docs/safety.md)
 
-- [Getting Started](docs/getting_started.md) — Pixi env, Docker sim, first run
-- [Architecture](docs/architecture.md) — System design and data flow
-- [Writing a Module](docs/writing_a_module.md) — Plugin SDK guide
-- [Simulation](docs/simulation.md) — ROS2 bridge sim: `pixi run sim-ros-up`; Gazebo GUI: `pixi run sim-gazebo-up`
-- [Deployment](docs/deployment.md) — Jetson all-in-one image, systemd
-- [Configuration](docs/configuration.md) — `config/nomad.env` reference
-- [API Reference](docs/api_reference.md) — Edge Core endpoints
+## Transitional development
 
-## Forking workflow
+Until the C++ MVP is accepted, the existing hardware-free Python environment can
+still be used:
 
-Contributors work in **personal forks** — no branches are pushed directly to the main repo.
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow.
+```bash
+pixi run dev
+pixi run test-fast
+pixi run lint
+```
+
+The C++ target workflow will become:
+
+```bash
+pixi run build-core
+pixi run test-core
+pixi run sitl
+# With the SITL stack running:
+pixi run core-sitl-status
+pixi run core-sitl-command-flow
+pixi run core-sitl-mission
+```
+
+Use [operations](docs/operations.md) for deployment placeholders and [development](docs/development.md)
+for the full verification workflow. Never commit `config/nomad.env` or real
+connection details.
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Apache 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

@@ -2,7 +2,7 @@ name: sitl
 
 # End-to-end loop-closure against a real ArduPilot SITL vehicle for the
 # safety-critical velocity and geofence core (the §4.5 verification the safety
-# case calls for — see tests/sitl/README.md and docs/safety/hazards.md).
+# case calls for — see tests/sitl/README.md and docs/safety.md).
 #
 # This is deliberately NOT on every push/PR: it builds ArduPilot from source
 # and drives a live autopilot, so it runs nightly and on demand. The fast unit
@@ -26,13 +26,23 @@ jobs:
     name: SITL loop closure (velocity + geofence)
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    # The link-recovery scenario relays the SITL stream, so it must reach a
+    # host port the relay can bind (docker-compose publishes 14570; 14572 is
+    # free). MAVProxy forwards to this port and every core-sitl-* task reads
+    # the same variable, so one value serves the whole job.
+    env:
+      NOMAD_CORE_SITL_PORT: "14572"
     steps:
+      # The C++ codec compiles against headers generated from the pinned
+      # third_party/ardupilot-mavlink submodule (see scripts/dev/generate_mavlink.py).
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
 
-      # The ArduPilot SITL image (Copter-4.6.3, built from source) is not
+      # The ArduPilot SITL image (Copter-4.7.1, built from source) is not
       # published anywhere, so build it here. The build is heavy but cached
       # across runs via the GitHub Actions cache, so steady-state runs restore
       # it instead of recompiling ArduPilot.
@@ -40,10 +50,10 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: https://github.com/radarku/ardupilot-sitl-docker.git
-          build-args: COPTER_TAG=Copter-4.6.3
+          build-args: COPTER_TAG=Copter-4.7.1
           push: false
           load: true
-          tags: nomad-sitl:copter-4.6.3
+          tags: nomad-sitl:copter-4.7.1
           cache-from: type=gha,scope=sitl
           cache-to: type=gha,mode=max,scope=sitl
 
@@ -60,10 +70,42 @@ jobs:
       - name: Let SITL warm up
         run: sleep 25
 
+      - name: C++ core telemetry smoke test (Phase 2)
+        run: pixi run core-sitl-status
+
+      - name: C++ core command flow (Phase 3/4)
+        run: pixi run core-sitl-command-flow
+
+      - name: C++ mission executor scenario (Phase 5)
+        run: pixi run core-sitl-mission
+
+      # Runs while the vehicle is still disarmed (the mission executor waits for
+      # disarm) because the geofence scenario requires a disarmed start.
+      - name: C++ geofence upload/readback scenario (H-05, SR-FEN-01)
+        run: pixi run core-sitl-geofence
+
+      - name: C++ velocity watchdog scenario (H-01..H-04)
+        run: pixi run core-sitl-velocity-watchdog
+
+      - name: C++ payload relay scenario (H-06, SR-PAY-01..03)
+        run: pixi run core-sitl-payload
+
+      - name: C++ link-loss injection scenario (H-03, SR-LNK-01/03)
+        run: pixi run core-sitl-link-loss
+
+      - name: C++ link-recovery scenario (degraded-link semantics)
+        run: pixi run core-sitl-link-recovery
+
+      # Proves the 1 Hz GCS heartbeat opens a heartbeat-gated relay leg (the
+      # mechanism real mavlink-router and MAVProxy setups require). Must run
+      # on the stack's default 14570 copy; it binds its own client port.
+      - name: C++ GCS-heartbeat relay-gate scenario (SR-LNK-04)
+        run: pixi run core-sitl-gcs-heartbeat
+
       - name: Velocity loop-closure scenario (H-01..H-04, SR-VEL/LNK/VIO)
         run: pixi run sitl-scenario
 
-      - name: Geofence containment scenario (H-05, SR-FEN-02)
+      - name: Geofence containment scenario (H-05, SR-FEN-02; C++ CLI drives the vehicle)
         run: pixi run sitl-fence
 
       # The gimbal scenario needs a vehicle that has NOT flown: state left by the

@@ -244,12 +244,12 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Fire-and-forget Cube servo command for time-critical paths (reel MouseDown/Up).
+        /// Fire-and-forget servo command for time-critical paths (reel MouseDown/Up).
         /// </summary>
         private async void SendServoNow(int channel, int pwmUs)
         {
             if (channel <= 0) return;
-            await CubeOutputController.SendServoPwmAsync(channel, pwmUs);
+            await OutputController.SendServoPwmAsync(channel, pwmUs);
         }
     }
 }

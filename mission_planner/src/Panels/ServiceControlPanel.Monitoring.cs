@@ -51,9 +51,9 @@ namespace NOMAD.MissionPlanner
                         {
                             mavText = "Running";
                         }
-                        else if (mavRaw.Equals("no_cubepilot", StringComparison.OrdinalIgnoreCase))
+                        else if (mavRaw.Equals("no_flight_controller", StringComparison.OrdinalIgnoreCase))
                         {
-                            mavText = "No CubePilot";
+                            mavText = "No flight controller";
                         }
                         else
                         {
@@ -128,12 +128,12 @@ namespace NOMAD.MissionPlanner
                             var isaacData = JObject.Parse(isaacResult.Data);
                             var containerRunning = isaacData["container_running"]?.Value<bool>() ?? false;
                             var nvbloxRunning = isaacData["nvblox_running"]?.Value<bool>() ?? false;
-                            var bridgeRunning = isaacData["bridge_running"]?.Value<bool>() ?? false;
+                            var vehicleRunning = isaacData["vehicle_running"]?.Value<bool>() ?? false;
 
                             UpdateStatusLabel(_lblIsaacRosStatus, containerRunning, containerRunning ? "Running" : "Not Running");
 
-                            UpdateStatusLabel(_lblRosBridgeStatus, bridgeRunning,
-                                bridgeRunning ? "Running" : (containerRunning ? "Stopped" : "No Container"));
+                            UpdateStatusLabel(_lblRosBridgeStatus, vehicleRunning,
+                                vehicleRunning ? "Running" : (containerRunning ? "Stopped" : "No Container"));
 
                             if (nvbloxRunning)
                                 UpdateStatusLabel(_lblNvbloxStatus, true, "Running");

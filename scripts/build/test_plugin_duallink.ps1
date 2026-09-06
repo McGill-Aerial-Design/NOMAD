@@ -46,7 +46,9 @@ $sources = @(
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\MAVLinkConnectionManager.cs'),
     (Join-Path $repoRoot 'mission_planner\src\UI\Log.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\duallink\DualLinkStressTests.cs'),
-    (Join-Path $repoRoot 'mission_planner\tests\duallink\DualLinkStressTests.Router.cs')
+    (Join-Path $repoRoot 'mission_planner\tests\duallink\DualLinkStressTests.Harness.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\duallink\DualLinkStressTests.Router.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\duallink\DualLinkStressTests.Stress.cs')
 )
 $outDir = Join-Path $repoRoot 'mission_planner\tests\duallink\bin'
 New-Item -ItemType Directory -Force $outDir | Out-Null

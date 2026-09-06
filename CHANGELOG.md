@@ -7,7 +7,114 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+- [core,ros] The Python ROS-HTTP bridge (`edge_core/ros_http_bridge/`) is
+  **deleted** — the C++ `nomad_vehicle_node` adapter (`ros2/nomad_ros`)
+  replaces it end-to-end: it owns the MAVLink UDP link, the core velocity
+  path (`/nomad/cmd_vel` + VIO health/confidence), and publishes `/nomad/*`
+  telemetry. The compose `ros`/`gazebo`/`ros-gpu` profiles now run the node
+  (fed by SITL / MAVProxy / a real vehicle on :14552); `Dockerfile.jetson`
+  and `Dockerfile.sim-isaac` colcon-build `nomad_core` + `nomad_ros`; the
+  systemd unit is `nomad-ros-vehicle.service` with
+  `scripts/services/nomad_ros_vehicle.sh`; `scripts/nomad` service renamed
+  `ros_http_bridge` → `ros_vehicle`; Isaac API routes manage the node
+  (status key `vehicle_running`). The bridge's host unit tests
+  (`test_bridge_http_client`, `test_coordinate_math`, `test_mavlink_velocity`,
+  `test_mesh_packer`, `test_vio_math`) and its route pinning in
+  `test_client_contract.py` were deleted with it. (Deletion gate 1, 2026-09-05)
+
 ### Added
+- [cli] New `nomad velocity` verb: streams velocity setpoints through the C++
+  core (armed + GUIDED + fresh VIO gates) for a duration, then reports the
+  watchdog stop (`velocity_active`, `watchdog_reason`).
+- [test] `tests/sitl/velocity_loop_closure.py` now drives the C++ CLI velocity
+  verb against SITL (motion, watchdog stop, mode-gate refusal) instead of the
+  retired Python controller — the loop-closure evidence is fully C++-owned.
+
+### Changed
+- [plugin,infra] Flight-controller-generic naming: `CubeOutputController` is
+  renamed `OutputController` (it drives generic ArduPilot `DO_SET_SERVO` /
+  `DO_SET_RELAY` outputs on any board); the services-status key
+  `no_cubepilot` / `cubepilot_present` became `no_flight_controller` /
+  `flight_controller_present` on both the edge_core route and the plugin
+  panel; profiles and deployment wording no longer name a specific board.
+  USB device-id matching in `mavlink_router.sh` intentionally still lists
+  real vendor by-id strings (CubePilot, Pixhawk, Holybro, mRo, CUAV,
+  RadioLink, ArduPilot) to discover any ArduPilot flight controller.
+- [plugin] `CubeOutputController` no longer falls back to the edge_core REST
+  vehicle routes (`/api/servo/channel/*/pwm`, `/api/servo/shooter/arm`,
+  `/api/servo/shooter/trigger`) — the last C# consumers of the `payload` and
+  `mavlink` REST modules (deletion-gate step 2, 2026-09-05). Servo and payload
+  release now fail closed when neither the core client nor a live MAVLink
+  link is available; `SendServoPwmAsync` became a plain `Task<bool>` wrapper.
+- [core] The MAVLink codec no longer hand-maintains dialect tables.
+  `third_party/ardupilot-mavlink` is pinned as a submodule at the exact commit
+  Copter 4.7.1 compiles against, and `scripts/dev/generate_mavlink.py` runs the
+  submodule's own mavgen to produce headers into the gitignored build dir
+  (`build/generated/mavlink`, wired into CMake). `src/mavlink/protocol.cpp`
+  and `fence.cpp` now use the generated message ids, crc_extras, lengths, and
+  per-message pack/decode; NOMAD still owns framing, CRC verification, and the
+  send -> ack -> state-verify semantics. Golden wire-frame tests are
+  byte-identical (all pass unchanged), and the full `core-sitl-*` battery
+  re-passes on Copter 4.7.1 (status, command-flow, mission,
+  velocity-watchdog, geofence upload/readback, payload). Regenerate after any
+  ArduPilot bump with `pixi run generate-mavlink`.
+- [dev] ArduPilot SITL image updated from Copter 4.7.0 to **Copter 4.7.1**
+  (`nomad-sitl:copter-4.7.1`, built from the `Copter-4.7.1` tag; the CI
+  `sitl.yml` build args and docker-compose reference the new tag). All nine
+  `core-sitl-*` scenarios re-verified on 4.7.1 (status, command-flow with
+  verified goto, mission, velocity-watchdog, geofence upload/readback,
+  payload, link-loss, link-recovery) — no wire behavior changes were needed.
+  The dev stack now always forwards a MAVLink copy to host UDP 14572 so the
+  link-recovery scenario's relay works without restarting the stack with a
+  special `NOMAD_CORE_SITL_PORT`.
+
+### Added
+- [dev] Watch SITL runs live in Mission Planner: every `core-sitl-*` scenario
+  now prints a hint pointing at the dev stack's operator MAVLink link
+  (Mission Planner → CONNECT → TCP → 127.0.0.1:5762, via the compose
+  `mp_bridge`). The link is a passive multi-client observer, verified to
+  stream MAVLink v2 to the host without disturbing scenarios or the core CLI;
+  documented in `tests/sitl/README.md` and `docs/development.md`.
+- Core output verbs: `servo <channel> <pwm_us>`, `relay <number> <0|1>`,
+  `motor-test <instance> <pwm_us> <timeout_s>`, `gimbal-config <mount_mode>`
+  and `user-command <7 values>` CLI commands backed by new `Vehicle` methods
+  (`set_relay`, `motor_test`, `configure_gimbal`, `send_user_command`;
+  `set_servo` moved to `src/vehicle/output.cpp`). Each validates its input
+  (relay 0..15, PWM 500..2500, mount mode 0..4, finite parameters, motor-test
+  timeout clamped 0.05..3.0 s) and verifies the ArduPilot acknowledgement.
+- `NomadCoreClient` methods `Servo`, `SetRelay`, `MotorTest`, `GimbalConfigure`
+  and `SendUserCommand` — fail-closed validation gates before spawn, pinned
+  argument vectors in `NomadCoreClientTests`.
+- [plugin] CubeOutputController discrete servo/relay commands and
+  MotorMusicCommand now route through the C++ core client first
+  (acknowledged + verified), with the direct MAVLink and REST paths kept as
+  transitional fallbacks; `GimbalController.SetMode` (mount configure) is
+  core-first. Dead plugin motor-test code (`SendMotorTestPwm*`,
+  `MotorTestCommand`) deleted — the capability moved to the core `motor-test`
+  verb. High-rate drag/stick streams stay on direct MAVLink by design
+  (debt-noted; a core streaming verb is the follow-up).
+- [test] ROS adapter command services: `tests/ros/test_nomad_ros_integration.py`
+  grows five tests exercising `/nomad/arm`, `/nomad/disarm`, `/nomad/land`,
+  `/nomad/rtl` and ACK-rejection against the stateful MAVLink responder —
+  each command is sent through the core, acknowledged, and verified via the
+  authoritative vehicle state (armed bit / custom mode), with
+  `MAV_RESULT_FAILED` surfacing as a failed service response (8/8 in-image).
+- [test] `tests/ros/mavlink_wire.py`: structural MAVLink v1/v2 frame decoding
+  shared by the ROS integration tests (COMMAND_LONG ids, velocity setpoint
+  vx), keeping the assertions independent of a MAVLink parser.
+- `NomadCoreClient` (C# plugin): the Mission Planner-free client for the C++
+  core CLI boundary — spawns the `nomad` binary with the pinned
+  `goto <lat> <lon> <alt> --endpoint <ep>` vector (invariant-culture F7/F1
+  formatting), fails closed on non-finite/out-of-range input and on an
+  unavailable core, and passes the API key through as `NOMAD_API_KEY`.
+- `pixi run test-plugin-core-client` (+ `scripts/build/test_plugin_core_client.ps1`,
+  `mission_planner/tests/coreclient/NomadCoreClientTests.cs`): a `csc`
+  assertion harness pinning the client boundary — argument vector, invariant
+  formatting, lat/lon/alt validation gates, unavailable-core fail-closed, and
+  the live CLI authentication gate (actuation without a key is refused before
+  any socket work, exercised when the C++ binary is built). Added as a step in
+  the `plugin-tests` CI job.
 - [test] Video feed/player coverage: `tests/test_mediamtx_config.py` pins the
   single-stream / multi-consumer MediaMTX contract (exactly one `publisher`,
   always-on path; no primary/secondary), and `tests/test_simple_video_bridge.py`
@@ -145,6 +252,53 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   all-in-one) and note the `BASE_IMAGE` prerequisite.
 
 ### Changed
+- [ros2] [ci] `docker/Dockerfile.sim-ros` now compiles `nomad_core` +
+  `nomad_ros` into a colcon workspace (`/ws/install`, sourced by the
+  entrypoint), replacing the image's Python-only runtime. The root CMake's
+  CTest targets are gated on the `tests/` tree so the subproject build stays
+  clean without it.
+- [ros2] [test] `tests/ros/test_ros_bridge_integration.py` (Python HTTP
+  bridge against a stub) is replaced by
+  `tests/ros/test_nomad_ros_integration.py`: it runs the real C++
+  `nomad_vehicle_node` against an in-process pymavlink MAVLink responder and
+  asserts typed telemetry publication, the fail-closed VIO gate (no feed →
+  no setpoint), and that a healthy VIO feed + `/nomad/cmd_vel` delivers a
+  FLU-to-FRD `SET_POSITION_TARGET_LOCAL_NED` (vx ~= 1.0) to the vehicle.
+  `ros-sim.yml` and `pixi run test-ros-integration` now run this suite; the
+  workflow triggers now cover the core + adapter sources. The Python bridge
+  deletion remains gated on its Jetson/GPU/systemd deployment tail
+  (docs/migration.md Phase 7).
+- [core] [transport] `wait_for_state` now consumes the entire pending queue
+  per call instead of stopping at the first telemetry frame, and
+  `receive_message` drains new datagrams even when the queue is non-empty. A
+  slow sampler (the ROS node's telemetry timer at a few hertz) previously fell
+  behind the MAVProxy stream, leaving heartbeats unread behind a backlog so
+  on-demand freshness checks reported a healthy link as stale and every
+  velocity command was refused. Found by the live ROS-against-SITL proof;
+  covered by a link-flood regression test in `tests/udp_connection_test.cpp`.
+- [ros2] [fix] `nomad_vehicle_node` never set `vio_sample_.updated` in its
+  VIO health/confidence callbacks, so `take_latest_vio_sample` always reported
+  no feed and every `/nomad/cmd_vel` was refused with "without a VIO feed".
+  The flags are now set on each callback; the node drove the live Copter 4.7.0
+  SITL vehicle over `/nomad/cmd_vel` end-to-end after the fix.
+- [ros2] `nomad_ros` compiles and passes its 12 translation unit tests in a
+  ROS 2 Humble image; the live-feed half of deletion-gate step 1
+  (docs/migration.md Phase 7) is closed.
+- [hardware] NOMAD is no longer documented or discovered as Cube-Orange-specific:
+  it targets ArduPilot on any flight controller. The mavlink-router USB discovery
+  (`scripts/services/mavlink_router.sh`) now matches common ArduPilot boards
+  (Pixhawk, Holybro, mRo, CUAV, RadioLink, ArduPilot) in addition to Cube, and
+  plugin payload wording/config comments describe generic ArduPilot
+  servo/relay channels (`DO_SET_SERVO` / `DO_SET_RELAY`) rather than Cube
+  outputs; the C++ core already used only board-independent MAVLink and
+  SERVO1-16/RELAY channels.
+- [plugin] [boundary] `GuidedGoto` (BoundaryManager soft-boundary return) now
+  routes through `NomadCoreClient` to the C++ core CLI instead of the plugin's
+  MAVLink path: the core sends MAV_CMD_DO_REPOSITION with the change-mode flag
+  and verifies the arrival position, so a "return to boundary" means the
+  vehicle is actually at the target. `FlightModeController.Initialize(config)`
+  is wired into plugin load; the dead reflection tail, `SetMember`, and the
+  caller-less `SetGuidedMode` were deleted.
 - [plugin] Flight Boundaries view spacing tightened further (smaller card
   padding, inter-card margin, section-title gap, and row gaps) so the SOFT/HARD
   boundary and IMPORT/EXPORT sections pack closely without needless scrolling.
@@ -196,6 +350,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shrinks to message unpacking and HTTP forwarding.
 
 ### Fixed
+- [core] [bug] The UDP MAVLink transport was single-consumer: with a
+  concurrent telemetry pump (the ROS node's 10 Hz timer) a command
+  acknowledgement could be consumed before `send_command`'s waiter saw it,
+  timing out commands that a single-threaded CLI never lost.
+  `send_command` now holds the receive mutex for the whole exchange and the
+  receive/state helpers use locked variants; the fence helpers follow. Found
+  by the new ROS command-service tests.
 - [plugin] [bug] Gimbal joystick window keeps the NOMAD theme when it loses focus
   — Mission Planner's `ThemeManager` recolors plugin windows on every
   activation/deactivation (turning the buttons grey/green and the background

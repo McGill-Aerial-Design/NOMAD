@@ -56,7 +56,7 @@ UNITS=(
     nomad-mediamtx.service
     nomad-isaac-ros-container.service
     nomad-zed-wrapper.service
-    nomad-ros-http-bridge.service
+    nomad-ros-vehicle.service
     nomad-video-bridge.service
     nomad-nvblox.service
 )
@@ -129,7 +129,7 @@ declare -A FLAG=(
     [nomad-mediamtx.service]="$NOMAD_AUTOSTART_MEDIAMTX"
     [nomad-isaac-ros-container.service]="$NOMAD_AUTOSTART_ISAAC_ROS_CONTAINER"
     [nomad-zed-wrapper.service]="$NOMAD_AUTOSTART_ZED_WRAPPER"
-    [nomad-ros-http-bridge.service]="$NOMAD_AUTOSTART_ROS_HTTP_BRIDGE"
+    [nomad-ros-vehicle.service]="$NOMAD_AUTOSTART_ROS_VEHICLE"
     [nomad-video-bridge.service]="$NOMAD_AUTOSTART_VIDEO_BRIDGE"
 )
 

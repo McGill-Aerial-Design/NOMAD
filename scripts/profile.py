@@ -35,7 +35,7 @@ PROFILES_DIR = REPO_ROOT / "config" / "profiles"
 ENV_FILE = REPO_ROOT / "config" / "nomad.env"
 
 PROFILES = {
-    "drone": "Real Jetson + ZED2i + CubePilot (production)",
+    "drone": "Real Jetson + ZED2i + ArduPilot flight controller (production)",
     "dev": "Minimal Edge Core only (API dev / CI)",
 }
 
@@ -151,6 +151,42 @@ def cmd_list() -> None:
         print(f"{name:<20} {sim_label:<12} {desc}")
 
 
+def _print_load_summary(settings: dict) -> None:
+    desc = settings.get("NOMAD_PROFILE_DESCRIPTION", "")
+    if desc:
+        print(f"      {desc}")
+
+    sim = settings.get("NOMAD_SIM_MODE", "false")
+    servos = settings.get("NOMAD_ENABLE_SERVOS", "false")
+    print()
+    print("Key settings:")
+    print(f"  NOMAD_SIM_MODE      = {sim}")
+    print(f"  NOMAD_ENABLE_SERVOS = {servos}")
+
+
+def _warn_user_placeholder() -> None:
+    if "/home/USER/" not in ENV_FILE.read_text(encoding="utf-8"):
+        return
+    import getpass
+
+    user = getpass.getuser()
+    print()
+    print("[WARN] Paths contain USER placeholder. Fix with:")
+    print(f"  Replace /home/USER/ with /home/{user}/ in {ENV_FILE}")
+
+
+def _print_next_steps(settings: dict) -> None:
+    sim = settings.get("NOMAD_SIM_MODE", "false")
+    print()
+    print("Next steps:")
+    if sim.lower() in ("true", "1", "yes"):
+        print("  1. Edit paths in config/nomad.env if needed")
+        print("  2. Run the hardware-free dev stack:  pixi run dev   (or pixi run dev-up)")
+    else:
+        print("  1. Edit paths and auth tokens in config/nomad.env")
+        print("  2. Deploy to Jetson:                 nomad start all")
+
+
 def cmd_load(name: str) -> None:
     src = PROFILES_DIR / f"{name}.env"
     if not src.exists():
@@ -173,34 +209,9 @@ def cmd_load(name: str) -> None:
     sync_mission_planner(name, _parse_env(ENV_FILE))
 
     settings = _key_settings(src)
-    desc = settings.get("NOMAD_PROFILE_DESCRIPTION", "")
-    if desc:
-        print(f"      {desc}")
-
-    sim = settings.get("NOMAD_SIM_MODE", "false")
-    servos = settings.get("NOMAD_ENABLE_SERVOS", "false")
-
-    print()
-    print("Key settings:")
-    print(f"  NOMAD_SIM_MODE      = {sim}")
-    print(f"  NOMAD_ENABLE_SERVOS = {servos}")
-
-    if "/home/USER/" in ENV_FILE.read_text(encoding="utf-8"):
-        import getpass
-
-        user = getpass.getuser()
-        print()
-        print("[WARN] Paths contain USER placeholder. Fix with:")
-        print(f"  Replace /home/USER/ with /home/{user}/ in {ENV_FILE}")
-
-    print()
-    print("Next steps:")
-    if sim.lower() in ("true", "1", "yes"):
-        print("  1. Edit paths in config/nomad.env if needed")
-        print("  2. Run the hardware-free dev stack:  pixi run dev   (or pixi run dev-up)")
-    else:
-        print("  1. Edit paths and auth tokens in config/nomad.env")
-        print("  2. Deploy to Jetson:                 nomad start all")
+    _print_load_summary(settings)
+    _warn_user_placeholder()
+    _print_next_steps(settings)
 
 
 def cmd_save(name: str) -> None:

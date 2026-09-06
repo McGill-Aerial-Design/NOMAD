@@ -5,7 +5,8 @@
 # nomad-isaac-ros-container service
 #
 # Owns: the long-running `nomad_isaac_ros` Docker container (sleep infinity).
-# Does NOT own ZED, nvblox, the ros_http_bridge, or the video bridge — each of
+# Does NOT own ZED, nvblox, the ROS adapter node (nomad_ros_vehicle), or the
+# video bridge — each of
 # those has its own service that runs `docker exec` against this container.
 #
 # Stopping this service stops the container, which cascades to every in-

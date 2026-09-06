@@ -17,7 +17,7 @@
 #   nomad-profile which           Print the path to the current config
 #
 # Profiles:
-#   drone   Real Jetson + ZED2i + CubePilot (production)
+#   drone   Real Jetson + ZED2i + ArduPilot flight controller (production)
 #   dev     Minimal Edge Core only (API dev / CI)
 #
 # Examples:

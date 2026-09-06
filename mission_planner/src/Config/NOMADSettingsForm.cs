@@ -108,8 +108,6 @@ namespace NOMAD.MissionPlanner
         private NumericUpDown _numSprayServoAngle, _numSprayForwardGain, _numSprayLateralGain, _numSprayAltitudeGain, _numSprayYawGain;
         private NumericUpDown _numSprayMaxForward, _numSprayMaxLateral, _numSprayMaxAltitude, _numSprayMaxYaw, _numSprayLockMs, _numSprayTimeout;
         private CheckBox _chkSprayUseYaw;
-        private Button _btnPushSprayCalibration;
-        private Label _lblSprayCalibrationStatus;
 
         // Joystick Tab
         private CheckBox _chkJoyGimbalEnabled, _chkJoyZedEnabled;

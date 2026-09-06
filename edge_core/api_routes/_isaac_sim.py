@@ -27,6 +27,28 @@ def _configured_sim_runtime() -> str | None:
     return runtime
 
 
+def _sim_status(
+    runtime: str,
+    source: str,
+    now: float,
+    vio_healthy: bool,
+    vio_age_s: float | None,
+) -> dict:
+    """Build the synthetic status payload for a configured sim runtime."""
+    return {
+        "container_running": True,
+        "container_name": runtime,
+        "nvblox_running": False,
+        "vehicle_running": vio_healthy,
+        "runtime": runtime,
+        "simulated": True,
+        "source": source,
+        "vio_healthy": vio_healthy,
+        "vio_age_s": vio_age_s,
+        "timestamp": now,
+    }
+
+
 def sim_perception_status(app_state: Any, now: float) -> dict | None:
     """Return a synthetic Isaac status when running under the sim stacks.
 
@@ -40,22 +62,12 @@ def sim_perception_status(app_state: Any, now: float) -> dict | None:
     vio = getattr(app_state, "external_vio_state", None)
     if not vio:
         if runtime:
-            return {
-                "container_running": True,
-                "container_name": runtime,
-                "nvblox_running": False,
-                "bridge_running": False,
-                "runtime": runtime,
-                "simulated": True,
-                "source": "unavailable",
-                "vio_healthy": False,
-                "timestamp": now,
-            }
+            return _sim_status(runtime, "unavailable", now, False, None)
         return None
 
     timestamp = float(vio.get("timestamp", 0.0))
     age_s = max(0.0, now - timestamp) if timestamp > 0 else None
-    # No (or zero) timestamp means we cannot prove the bridge is publishing, so
+    # No (or zero) timestamp means we cannot prove the adapter is publishing, so
     # treat it the same as a stale update rather than reporting it healthy.
     stale = age_s is None or age_s > 5.0
     source = vio.get("source", "external")
@@ -63,31 +75,8 @@ def sim_perception_status(app_state: Any, now: float) -> dict | None:
         runtime = source
 
     if stale and runtime:
-        return {
-            "container_running": True,
-            "container_name": runtime,
-            "nvblox_running": False,
-            "bridge_running": False,
-            "runtime": runtime,
-            "simulated": True,
-            "source": source,
-            "vio_healthy": False,
-            "vio_age_s": age_s,
-            "timestamp": now,
-        }
+        return _sim_status(runtime, source, now, False, age_s)
     if stale:
         return None
 
-    runtime = runtime or "ros_sim"
-    return {
-        "container_running": True,
-        "container_name": runtime,
-        "nvblox_running": False,
-        "bridge_running": True,
-        "runtime": runtime,
-        "simulated": True,
-        "source": source,
-        "vio_healthy": True,
-        "vio_age_s": age_s,
-        "timestamp": now,
-    }
+    return _sim_status(runtime or "ros_sim", source, now, True, age_s)

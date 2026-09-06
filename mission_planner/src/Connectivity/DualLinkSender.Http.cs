@@ -206,7 +206,7 @@ namespace NOMAD.MissionPlanner
                 "status_video",
                 "status_isaac",
                 "status_zed",
-                "status_ros_bridge",
+                "status_ros_vehicle",
                 "status_nvblox",
                 "status_novnc",
                 "start_nomad",
@@ -272,7 +272,7 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Start the ROS HTTP bridge inside the Isaac ROS container (idempotent).
+        /// Start the C++ ROS adapter node inside the Isaac ROS container (idempotent).
         /// </summary>
         public async Task<CommandResult> StartRosBridgeAsync()
         {
@@ -280,7 +280,7 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Stop the ROS HTTP bridge inside the Isaac ROS container.
+        /// Stop the C++ ROS adapter node inside the Isaac ROS container.
         /// </summary>
         public async Task<CommandResult> StopRosBridgeAsync()
         {

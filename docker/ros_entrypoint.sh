@@ -6,8 +6,9 @@
 #
 # Sources ROS2 Humble plus any built workspace, prints the resolved ROS
 # environment for debuggability, then exec's whatever command was passed
-# (defaults to an interactive shell). The ROS-HTTP bridge is launched on top of
-# this, e.g. `python3 -m edge_core.ros_http_bridge.main --host 127.0.0.1`.
+# (defaults to an interactive shell). The C++ adapter node is launched on top
+# of this, e.g. `ros2 run nomad_ros nomad_vehicle_node --ros-args
+# -p endpoint:=udpin:0.0.0.0:14552`.
 # ==============================================================
 set -e
 
@@ -23,6 +24,13 @@ if [ -f /workspaces/isaac_ros-dev/install/setup.bash ]; then
     # shellcheck disable=SC1091
     source /workspaces/isaac_ros-dev/install/setup.bash
     echo "[ros_entrypoint] sourced local workspace"
+fi
+
+# Source the sim-ros image's colcon workspace (nomad_ros + nomad_core).
+if [ -f /ws/install/setup.bash ]; then
+    # shellcheck disable=SC1091
+    source /ws/install/setup.bash
+    echo "[ros_entrypoint] sourced NOMAD workspace"
 fi
 
 # Source a prebuilt Isaac ROS workspace if present.

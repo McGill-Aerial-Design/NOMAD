@@ -111,6 +111,9 @@ GXF_LIB_DIRS=\$(find ${ros_root}/share -path '*/gxf/lib' -type d 2>/dev/null | t
 export LD_LIBRARY_PATH=${ros_root}/lib:${ros_root}/lib/aarch64-linux-gnu:/usr/local/zed/lib:\${GXF_LIB_DIRS}\${LD_LIBRARY_PATH:-}
 source ${ros_root}/install/setup.bash 2>/dev/null || source ${ros_root}/setup.bash 2>/dev/null
 source ${workspace}/install/setup.bash 2>/dev/null || true
+# NOMAD C++ core + nomad_ros adapter workspace (built into the jetson /
+# sim-isaac / sim-ros images; absent on host-only systems).
+source /ws/install/setup.bash 2>/dev/null || true
 export EGL_PLATFORM=device
 EOS
 }

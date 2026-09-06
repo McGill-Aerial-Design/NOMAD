@@ -1,132 +1,279 @@
 # Architecture
 
-NOMAD is divided into three logical domains:
+**Status:** Target architecture; the Python edge tree is transitional.
 
-- **Transport (A)** — connectivity and MAVLink routing
-- **Edge Core (B)** — the onboard Python FastAPI service
-- **Mission Planner Plugin (C)** — the ground station C# plugin
+## Deployment configurations
 
-## System overview
+One core binary serves both supported configurations; the transport endpoint is
+configuration, not code. No deployment forks the product logic.
 
-```
-            DRONE (companion computer)                         GROUND STATION
- ┌───────────────────────────────────────────────┐        ┌────────────────────┐
- │                                                │        │  Mission Planner   │
- │  Flight Controller (ArduPilot)                 │        │   + NOMAD plugin    │
- │        │ UART (MAVLink)                        │        │        (C#)         │
- │        ▼                                       │        └─────────┬──────────┘
- │  mavlink-router ──────── UDP/VPN ──────────────┼── Tailscale ─────┤  REST/WS
- │        │ localhost UDP                          │   (4G/WiFi)      │  + MAVLink
- │        ▼                                       │                  │
- │  ┌──────────────── Edge Core (FastAPI) ──────┐ │◄─── HTTP/WS ─────┘
- │  │  module registry: configure→routes→       │ │
- │  │  start→stop  (ASGI lifespan)              │ │
- │  │  services: state · mavlink · health ·     │ │
- │  │  video · payload · time · geo             │ │
- │  │  api_routes: system · vio · slam · isaac  │ │
- │  └───────────────▲───────────────────────────┘ │
- │     HTTP (loopback, internal token)            │
- │  ┌──────────────┴── ROS-HTTP bridge ─────────┐ │
- │  │  ZED / nvblox / nav2  →  pose, mesh,       │ │
- │  │  cmd_vel → MAVLink GUIDED (direct link)    │ │
- │  └────────────────────────────────────────────┘ │
- └───────────────────────────────────────────────┘
+### A. Jetson on the drone (existing)
+
+The companion computer on the drone runs the core and any adapters it needs.
+The ground station connects over a secure network (Tailscale/LTE) and runs
+Mission Planner as a client.
+
+### B. Ground-station hosted (no Jetson on the drone)
+
+Everything runs on the ground station computer (or a Jetson at the ground
+station) for weight reduction. The drone carries only an LTE module with a
+thin bridge (Raspberry Pi Zero or similar) running mavlink-router over
+Tailscale — configuration, not product code. A local ELRS transmitter on the
+ground station provides the second MAVLink path.
+
+```text
+Drone:  ArduPilot <-> (serial) RPi Zero mavlink-router <-> LTE/Tailscale
+        ArduPilot <-> ELRS RX (RC + telemetry radio)
+
+GCS:    Tailscale UDP <-> ground link aggregation <-> NOMAD core <-> Mission Planner
+        ELRS TX serial ^
 ```
 
-Module lifecycle: each module is discovered via the `nomad.modules`
-entry-point group, then driven through `configure(ctx)` → `register_routes(app)`
-→ `start()` → `stop()` (start/stop run on the ASGI lifespan; see
-[Writing a Module](writing_a_module.md)).
+Both links converge on the ground station (mavlink-router on a Linux GCS, the
+plugin's GroundLinkRouter on Windows) into the one stream the core and plugin
+consume. The system keeps working for whichever link is available: commands
+flow over the live link, and if both links are down the core fails closed
+(SR-LNK-*) and resumes normal operation when a link returns.
 
-## Domains
+### C. ELRS-only degraded
 
-### A — Transport Layer
+Same ground-station layout with no LTE path. Only the controls the ELRS link
+supports are available; the core behavior is identical.
 
-Responsible for all communication between the flight controller (FC), the
-companion computer, and the ground station:
+Configuration profiles: `config/profiles/drone.env` (A) and
+`config/profiles/groundstation.env` (B/C). Drone-side bridge details live in
+`docs/operations.md`; nothing in the core depends on LTE, Tailscale, or ELRS.
 
-- `mavlink-router` on the companion computer routes MAVLink traffic between FC
-  (UART), Edge Core (localhost UDP), and the ground station (UDP over VPN/radio).
-- Tailscale VPN provides secure connectivity over 4G/LTE or WiFi.
-- ELRS radio links provide a low-latency control backup independent of the
-  companion computer.
+## System boundary
 
-### B — Edge Core
-
-A Python FastAPI service running on the companion computer (e.g. NVIDIA Jetson
-Orin Nano). It owns:
-
-- **REST/WebSocket API** — system status, network, servo/calibration, SLAM mesh,
-  video, and Isaac container control (task-specific routes are added per
-  deployment as modules)
-- **State management** — thread-safe singleton (`services/state.py`)
-- **MAVLink interface** — telemetry and command routing to/from the FC
-  (`services/mavlink/` package: `connection`, `commands`, `module`)
-- **Direct nav velocity** — nav2/nvblox `cmd_vel` is streamed straight to
-  ArduPilot GUIDED mode by the ROS→Edge Core bridge over its own MAVLink link
-  (`ros_http_bridge/mavlink_velocity.py`), with clamping, VIO-freshness gating,
-  and a command-timeout watchdog — no HTTP hop through Edge Core
-- **Video pipeline** — source switching, overlays, RTSP streaming
-  (`services/video_stream_manager.py`)
-- **Payload control** — servo/relay commands (`services/payload_module.py`)
-- **Health monitoring** — CPU/GPU temperature, memory, disk, network
-  (`services/health_monitor.py`)
-- **Module registry** — discovers and loads capabilities via the `nomad.modules`
-  entry-point group (see [Writing a Module](writing_a_module.md))
-
-### C — Mission Planner Plugin
-
-A C# .NET Framework 4.8 plugin that runs inside Mission Planner on the Windows
-ground station. It provides:
-
-- Dashboard with system overview and quick actions
-- Flight-boundary / geofence configuration and upload
-- Embedded RTSP video player and 3D SLAM viewer
-- Remote terminal access to the companion computer
-- Dual-link MAVLink failover management
-- Real-time health and network monitoring
-- Config profiles with an active-profile indicator (synced from `scripts/profile.py`)
-
-## Data flow
-
-```
-FC UART → mavlink-router → Edge Core (localhost UDP)
-                         → Ground Station (UDP over Tailscale/ELRS)
-
-ZED camera → Isaac ROS (Docker) → API state → GCS
-                                → Video bridge → MediaMTX RTSP → GCS
-
-Mission Planner plugin → HTTP API → Edge Core → MAVLink → FC (commands)
-                       ← WebSocket ← Edge Core ← FC (telemetry)
+```text
+┌──────────────────────────────────────────────────────────┐
+│ Clients and adapters                                    │
+│ CLI · Mission Planner · ROS 2 · Python tools            │
+└────────────────────────┬─────────────────────────────────┘
+                         │ calls core API
+                         v
+┌──────────────────────────────────────────────────────────┐
+│ NOMAD C++ core                                           │
+│ Vehicle · telemetry · missions · validation              │
+└────────────────────────┬─────────────────────────────────┘
+                         │ transport boundary
+                         v
+┌──────────────────────────────────────────────────────────┐
+│ MAVLink transport                                        │
+│ UDP · serial · TCP · heartbeat · acknowledgements        │
+└────────────────────────┬─────────────────────────────────┘
+                         │ MAVLink
+                         v
+                    ArduPilot
 ```
 
-## Module system
+ArduPilot owns low-level flight control, stabilization, EKF, motor control, and
+failsafes. NOMAD owns higher-level commands, telemetry models, mission behavior,
+and verification of the commands it sends.
 
-Capabilities are added as discoverable modules that register via the
-`nomad.modules` entry-point group. Each module implements a lifecycle:
+## Dependency direction
 
-1. `configure(ctx)` — receive an `AppContext` with core service references
-2. `register_routes(app)` — add FastAPI routes
-3. `start()` — begin background tasks
-4. `stop()` — clean up resources
+```text
+UI / CLI / ROS 2 / Python tools
+              |
+              v
+        NOMAD C++ core
+              |
+       MAVLink implementation
+              |
+           ArduPilot
+```
 
-Built-in modules include SLAM (Isaac ROS/nvblox bridge), perception
-(detectors/target localizer), and payload (servo/spray).
+Dependencies point inward. The core does not import UI frameworks, ROS 2, Python,
+FastAPI, Mission Planner assemblies, cloud clients, or VPN libraries.
 
-See [Writing a Module](writing_a_module.md) for the full guide.
+## Core ownership
 
-## Performance considerations
+| Area | Owns | Does not own |
+|---|---|---|
+| `mavlink` | Transport, packet conversion, heartbeat, ACKs | Missions or UI decisions |
+| `vehicle` | Arm, mode, takeoff, navigation, land, RTL, state verification | Packet layout or rendering |
+| `telemetry` | Stable state and value types | Transport sockets |
+| `mission` | Small mission data and synchronous execution | UI workflows or scripting language |
+| CLI | Argument parsing, output, exit status | Flight behavior or MAVLink packing |
+| `src/mavlink` | MAVLink frame conversion and UDP peer handling | Vehicle policy |
+| ROS 2 adapter | Message translation and node lifecycle | Core decisions |
+| Mission Planner | Operator UI and client integration | Core mission or safety logic |
+| Python tools | CV, ML, simulation, analysis | Vehicle ownership |
+| ArduPilot | Stabilization, EKF, low-level control, failsafes | NOMAD application concerns |
 
-### Video latency
+## Target project layout
 
-Current pipeline: `ZED → ROS → Python bridge → FFmpeg → MediaMTX → RTSP → GCS`
+```text
+NOMAD/
+├── CMakeLists.txt
+├── include/nomad/
+│   ├── mavlink/
+│   ├── vehicle/
+│   ├── telemetry/
+│   └── mission/
+├── src/
+│   ├── main.cpp
+│   ├── mavlink/
+│   ├── vehicle/
+│   ├── telemetry/
+│   └── mission/
+├── tests/
+├── examples/
+├── ros2/
+│   └── nomad_ros/
+├── python/
+│   ├── vision/
+│   ├── ml/
+│   ├── simulation/
+│   ├── analysis/
+│   └── tools/
+├── mission_planner/
+├── docs/
+├── config/
+├── docker/
+└── infra/
+```
 
-Each hop adds latency. If sub-200ms glass-to-glass latency is required, a direct
-GStreamer pipeline from the ZED wrapper to RTSP can bypass the Python bridge.
+The first C++ build contains one library, one CLI, and small CTest targets. It
+intentionally has no daemon, plugin loader, service locator, message bus, generic
+command framework, or discovery system.
 
-### Resource contention on Jetson
+## CLI flow
 
-The Jetson Orin Nano runs multiple concurrent workloads: Docker (Isaac ROS),
-Python Edge Core, software H.264 encoding (no NVENC on Orin Nano), and
-mavlink-router. The health monitor (`health_monitor.py`) tracks thermals and can
-trigger alerts. Under thermal pressure, consider reducing Isaac ROS update rates.
+```text
+nomad arm
+  -> parse arguments
+  -> open the configured connection
+  -> construct Vehicle
+  -> Vehicle::arm()
+  -> send MAVLink command
+  -> wait for ACK or armed state
+  -> print result
+  -> close connection
+```
+
+The CLI is a client of the core. A future long-running process may reuse the same
+core API, but it is not required for local CLI operation.
+
+## ROS 2 boundary
+
+ROS 2 lives in `ros2/`, outside the core. A ROS node may subscribe to a standard
+message, validate and translate it, then call the core. It must not pack MAVLink
+messages or implement a second vehicle state machine.
+
+Callbacks remain short and non-blocking. Timers or owned workers handle heavy
+processing. Callback groups are explicit when concurrency is needed, and a
+`SingleThreadedExecutor` is the default.
+
+ROS parameters are declared in the node and loaded from YAML through launch files.
+Standard messages are preferred. Custom interfaces, if required, live in a
+separate interface package.
+
+## Mission Planner boundary
+
+The plugin is a ground-station client. It may render telemetry, expose commands,
+manage configuration, and provide operator workflows. It must call a client
+boundary rather than duplicate `Vehicle` or safety logic in event handlers.
+
+The plugin is not the foundation of NOMAD. It can eventually be replaced by
+another ground-control client without changing the core.
+
+## Python boundary
+
+Python remains useful for rapid iteration, computer vision, ML, simulation,
+analysis, testing, and ground utilities. Python code must not become a second
+source of truth for vehicle commands after the C++ cutover.
+
+The current `edge_core/` service is transitional. Its REST API, module registry,
+Python MAVLink path, and ROS HTTP bridge are migration targets rather than new
+extension points.
+
+## Current-to-target mapping
+
+| Current area | Target home | Action |
+|---|---|---|
+| `edge_core/services/mavlink/` | `include/nomad/mavlink`, `src/mavlink` | Port transport, packets, telemetry, ACKs; then delete Python path |
+| ~~`edge_core/ros_http_bridge/`~~ | `ros2/nomad_ros` (C++ adapter node) | **Deleted 2026-09-05** — the adapter node owns the MAVLink link and core velocity path; no HTTP hop |
+| `edge_core/safety/` | C++ vehicle validation and safety modules | Re-establish each requirement and test |
+| `edge_core/api_routes/` | CLI/client operations or delete | No REST route without a real client requirement |
+| `edge_core/core/` | No replacement | Delete dynamic module registry |
+| `edge_core/services/video*` | Python tools or deployment adapter | Keep only if a real product workflow needs it |
+| `edge_core/services/health*` | Client/adapter telemetry | Keep behavior, move ownership |
+| `scripts/nomad` | C++ `nomad` CLI | Replace service dispatcher with core client |
+| `infra/systemd/` | One core unit plus required adapters | One unit per deployment host; ground-station profile disables drone-side services |
+| Mission Planner controls | Plugin client | Remove duplicate core and safety decisions |
+| Removed Python module example | None | Do not recreate the registry pattern |
+
+## What is deliberately absent
+
+The target does not contain:
+
+- a generic module registry;
+- a service locator;
+- a route-driven vehicle API;
+- a second Python MAVLink implementation;
+- an HTTP hop for local core operations;
+- a mission scripting language before a use case exists;
+- a cloud or VPN dependency in the core;
+- a broad fallback chain for transports or runtimes.
+
+Link selection is not a fallback chain: the ground station aggregates the
+available links into one stream, and the core simply uses that stream. It never
+switches transports itself based on availability.
+
+Each new abstraction must have more than one real caller and remove complexity.
+
+## MAVLink library decision
+
+Status: decided (2026-09-05, evidence below).
+
+NOMAD frames MAVLink 2 itself and owns the verification semantics; the dialect
+facts come from generated code, never hand-maintained tables. The C++ core
+pins `third_party/ardupilot-mavlink` as a submodule at the exact commit the
+ArduPilot firmware release compiles against, and
+`scripts/dev/generate_mavlink.py` runs that submodule's own mavgen into the
+gitignored build dir (`build/generated/mavlink`). `src/mavlink/protocol.cpp`
+and `fence.cpp` use the generated message ids, crc_extras, lengths, and
+per-message pack/decode functions; only the framing, CRC check, sequence, and
+payload round-trip helpers are NOMAD's own code (~1,000 lines including tests).
+Golden unit tests (generated with pymavlink) pin the wire bytes, and every
+message NOMAD emits has been accepted live by ArduPilot Copter 4.7.1 (fence
+upload, commands, reposition). Because the tables come from the pinned
+submodule, future ArduPilot version bumps cannot silently drift dialect facts
+(crc_extras, field layouts): updating the pin and regenerating is the whole
+upgrade. The safety-critical part of the core is not the codec: it is the
+verification semantics (send -> ack -> authoritative state check -> fail
+closed), which remains NOMAD's code regardless of library.
+
+A MAVSDK evaluation was carried out in parallel and recorded here for the
+revisit triggers:
+
+- MAVSDK is pinned as a submodule at `third_party/MAVSDK` (v3 main,
+  commit `v3.15.0-441-g34b417d4` at evaluation time).
+- It builds cleanly on Windows with CMake `-A x64` and
+  `-DBUILD_WITHOUT_CURL=ON` (the default superbuild fails at the openssl
+  step on Windows; curl is only needed by the camera/http_loader plugins).
+- A smoke client using `add_any_connection("udpin://0.0.0.0:14570")`
+  discovered the autopilot and streamed telemetry from the live SITL stack
+  (ArduPilot Copter 4.7.0).
+- Two ArduPilot quirks surfaced in the smoke test, both worth knowing before
+  adopting MAVSDK: `Telemetry::FlightMode` reports `Offboard` for an
+  ArduPilot `GUIDED` vehicle (PX4-oriented enum mapping; the
+  `ardupilot_custom_mode` support in the core exists for this), and
+  `Battery.remaining_percent` came back as `100.0` from ArduPilot's percent
+  field (treated as a fraction), so ArduPilot clients must rescale.
+
+Revisit MAVSDK when a measurable trigger fires, then re-evaluate adoption:
+
+- a PX4 product appears; or
+- the core must speak MAVLink directly over serial/TCP without
+  mavlink-router as a sidecar; or
+- the ArduPilot quirks above get fixed upstream and a release is cut.
+
+If adoption happens, use the pinned fork-and-patch model (this submodule) and
+contribute the ArduPilot fixes upstream. Contributing the wire-semantics
+findings (golden frames, `MAV_CMD_DO_REPOSITION` command_long rejection,
+fence import vertex-count quirk) to pymavlink/ArduPilot test suites is a
+cheaper open-source contribution path that does not require adoption.

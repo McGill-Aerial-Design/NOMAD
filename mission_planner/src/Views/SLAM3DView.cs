@@ -56,17 +56,15 @@ namespace NOMAD.MissionPlanner
         private readonly object _poseLock = new object();
 
         // ---- Servo polling ----
-        // Track the camera tilt as PWM microseconds — the server's 0-180 deg
-        // value is a linear projection onto a 500-2500us range that doesn't
-        // match the rig's mechanical limits (700us=down, 1250us=level, 1450us=up).
-        // We display PWM directly and remap to the renderer's "90deg=level" space.
+        // Track the camera tilt as PWM microseconds from the plugin's own
+        // camera-tilt payload calibration (PwmMin=down, PwmNeutral=level,
+        // PwmMax=up — the same PayloadControl the tilt slider and joystick
+        // channel drive). We display PWM directly and remap to the renderer's
+        // "90deg=level" space.
         private const int ServoPulseDownUs  = 700;
         private const int ServoPulseLevelUs = 1250;
         private const int ServoPulseUpUs    = 1450;
-        private const int ServoApiPulseMinUs = 500;
-        private const int ServoApiPulseMaxUs = 2500;
         private int _servoPulseUs = ServoPulseLevelUs;
-        private System.Windows.Forms.Timer _servoTimer;
 
 
         // ---- PoseState (anti-jitter filtering) ----
@@ -181,8 +179,6 @@ namespace NOMAD.MissionPlanner
             {
                 _renderTimer?.Stop();
                 _renderTimer?.Dispose();
-                _servoTimer?.Stop();
-                _servoTimer?.Dispose();
                 try { _webSocketClient.Stop(); } catch { }
                 try { _webSocketClient.Dispose(); } catch { }
                 _glControl?.Dispose();

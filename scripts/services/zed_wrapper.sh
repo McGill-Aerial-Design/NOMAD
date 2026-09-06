@@ -9,7 +9,7 @@
 # (optical-frame TF alias, servo_tf_publisher).
 #
 # Depends on: isaac_ros_container (no service-level pkills cross this boundary).
-# Does NOT manage nvblox, the ros_http_bridge, or the video bridge.
+# Does NOT manage nvblox, the ROS adapter node, or the video bridge.
 # =============================================================================
 set -u
 SERVICE="zed-wrapper"
@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/../lib/common.sh"
 
 # Patterns this service owns. Each is anchored enough to avoid clashing with
-# nvblox or the ROS-HTTP bridge.
+# nvblox or the ROS adapter node.
 PATTERN_LAUNCH='zed_camera\.launch\.py'
 PATTERN_ZED_RUNTIME='component_container_isolated.*zed_container|zed_state_publisher'
 PATTERN_HELPERS='servo_tf_publisher\.py|drone_state_publisher\.py|zed_left_camera_frame_optical'
@@ -124,7 +124,7 @@ python3 /workspaces/isaac_ros-dev/edge_core/ros/servo_tf_publisher.py \
     --port "${NOMAD_API_PORT}" \
     --tf-rate 20.0 \
     --poll-rate 10.0 \
-    --odom-topic "${ROS_HTTP_BRIDGE_VIO_TOPIC}" \
+    --odom-topic "${NOMAD_ZED_ODOM_TOPIC:-/zed/zed_node/odom}" \
     >/tmp/nomad_servo_tf_publisher.log 2>&1 &
 
 wait "$ZED_PID"
@@ -154,7 +154,7 @@ svc_start() {
              ZED_PUB_DOWNSCALE_FACTOR ZED_PUBLISH_RAW ZED_PUBLISH_LEFT_RIGHT \
              ZED_PUBLISH_MAG ZED_DEPTH_CONFIDENCE ZED_DEPTH_TEXTURE_CONF \
              ZED_DEPTH_MODE \
-             ZED_GRAB_RESOLUTION NOMAD_API_PORT ROS_HTTP_BRIDGE_VIO_TOPIC \
+             ZED_GRAB_RESOLUTION NOMAD_API_PORT NOMAD_ZED_ODOM_TOPIC \
              NOMAD_API_KEY; do
         env_args+=("-e" "${v}=${!v}")
     done

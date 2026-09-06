@@ -6,7 +6,6 @@
 
 using System;
 using System.Diagnostics;
-using System.Net.Http;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Newtonsoft.Json.Linq;
@@ -237,42 +236,17 @@ namespace NOMAD.MissionPlanner
 
         // ==================== Servo Polling ====================
 
+        // The tilt indicator reads the plugin's own camera-tilt calibration
+        // (the same PayloadControl the tilt slider and joystick channel drive).
+        // The old Jetson REST poll died with the transitional Python servo
+        // routes (C++ cutover, 2026-09-05).
         private void StartServoPolling()
         {
-            _servoTimer = new System.Windows.Forms.Timer { Interval = 500 };
-            _servoTimer.Tick += async (s, e) =>
-            {
-                try
-                {
-                    var response = await JetsonApiService.GetAsync("/api/servo/camera/tilt");
-                    if (response.IsSuccessStatusCode)
-                    {
-                        var json = await response.Content.ReadAsStringAsync();
-                        var obj = JObject.Parse(json);
-                        // Prefer pwm_us from SERVO_OUTPUT_RAW feedback (actual FC output).
-                        // Fall back to angle_deg → pulse conversion using calibration range.
-                        int pulseUs;
-                        var pwmToken = obj["pwm_us"];
-                        if (pwmToken != null)
-                        {
-                            pulseUs = pwmToken.Value<int>();
-                        }
-                        else
-                        {
-                            float angleDeg = obj["angle"]?.Value<float>() ?? 90f;
-                            // angle_deg is in 0-180 with 90=level; convert using calibration.
-                            // Below neutral uses down-side slope, above uses up-side slope.
-                            if (angleDeg <= 90f)
-                                pulseUs = (int)Math.Round(ServoPulseLevelUs - (90f - angleDeg) / 45f * (ServoPulseLevelUs - ServoPulseDownUs));
-                            else
-                                pulseUs = (int)Math.Round(ServoPulseLevelUs + (angleDeg - 90f) / 45f * (ServoPulseUpUs - ServoPulseLevelUs));
-                        }
-                        lock (_poseLock) { _servoPulseUs = pulseUs; }
-                    }
-                }
-                catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
-            };
-            _servoTimer.Start();
+            var tilt = _config.CameraTilt();
+            if (tilt == null)
+                return;
+
+            lock (_poseLock) { _servoPulseUs = tilt.PwmNeutral; }
         }
 
     }

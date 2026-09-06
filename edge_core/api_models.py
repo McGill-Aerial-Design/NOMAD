@@ -19,7 +19,7 @@ COMMAND_WHITELIST: dict[str, str] = {
     "status_video": "systemctl is-active nomad-video-bridge.service",
     "status_isaac": "systemctl is-active nomad-isaac-ros-container.service",
     "status_zed": "systemctl is-active nomad-zed-wrapper.service",
-    "status_ros_bridge": "systemctl is-active nomad-ros-http-bridge.service",
+    "status_ros_vehicle": "systemctl is-active nomad-ros-vehicle.service",
     "status_nvblox": "systemctl is-active nomad-nvblox.service",
     "status_novnc": "if systemctl --user is-active --quiet novnc 2>/dev/null || systemctl is-active --quiet novnc 2>/dev/null || (pgrep -f '[w]ebsockify.*6080' >/dev/null && pgrep -f '[x]11vnc.*-rfbport 5900' >/dev/null); then echo active; else echo inactive; fi",
     # --- Per-service start / stop / restart ---
@@ -35,11 +35,11 @@ COMMAND_WHITELIST: dict[str, str] = {
     "start_video_bridge": "sudo -n systemctl start   nomad-video-bridge.service 2>&1 && echo started || echo failed",
     "stop_video_bridge": "sudo -n systemctl stop    nomad-video-bridge.service 2>&1 && echo stopped || echo failed",
     "restart_video_bridge": "sudo -n systemctl restart nomad-video-bridge.service 2>&1 && echo restarted || echo failed",
-    "start_isaac": "sudo -n systemctl start   nomad-isaac-ros-container.service nomad-zed-wrapper.service nomad-ros-http-bridge.service 2>&1 && echo started || echo failed",
-    "stop_isaac": "sudo -n systemctl stop    nomad-isaac-ros-container.service nomad-zed-wrapper.service nomad-ros-http-bridge.service 2>&1 && echo stopped || echo failed",
-    "restart_isaac": "nohup bash -c 'sleep 2 && sudo -n systemctl restart nomad-isaac-ros-container.service nomad-zed-wrapper.service nomad-ros-http-bridge.service' > /dev/null 2>&1 & echo 'restart scheduled'",
+    "start_isaac": "sudo -n systemctl start   nomad-isaac-ros-container.service nomad-zed-wrapper.service nomad-ros-vehicle.service 2>&1 && echo started || echo failed",
+    "stop_isaac": "sudo -n systemctl stop    nomad-isaac-ros-container.service nomad-zed-wrapper.service nomad-ros-vehicle.service 2>&1 && echo stopped || echo failed",
+    "restart_isaac": "nohup bash -c 'sleep 2 && sudo -n systemctl restart nomad-isaac-ros-container.service nomad-zed-wrapper.service nomad-ros-vehicle.service' > /dev/null 2>&1 & echo 'restart scheduled'",
     # --- Compound operations ---
-    "restart_all": "nohup bash -c 'sleep 2 && sudo -n systemctl restart nomad-edge-core.service nomad-mediamtx.service nomad-mavlink-router.service nomad-zed-wrapper.service nomad-ros-http-bridge.service' > /dev/null 2>&1 & echo 'restart scheduled'",
+    "restart_all": "nohup bash -c 'sleep 2 && sudo -n systemctl restart nomad-edge-core.service nomad-mediamtx.service nomad-mavlink-router.service nomad-zed-wrapper.service nomad-ros-vehicle.service' > /dev/null 2>&1 & echo 'restart scheduled'",
 }
 
 # ==================== Request/Response Models ====================
