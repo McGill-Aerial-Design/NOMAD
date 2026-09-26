@@ -10,7 +10,7 @@
 #include "nomad/mavlink/mavsdk_transport.hpp"
 #include "nomad/safety/geofence.hpp"
 #include "nomad/vehicle/vehicle.hpp"
-#include "test_harness.hpp"
+#include "support/test_harness.hpp"
 
 #ifdef NDEBUG
 #undef NDEBUG

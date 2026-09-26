@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "nomad/safety/vio_source.hpp"
-#include "test_harness.hpp"
+#include "support/test_harness.hpp"
 
 #ifdef NDEBUG
 #undef NDEBUG

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Velocity configuration tests (SR-VEL-01/02): unset values use the reviewed
 // envelope, valid overrides are loaded, and malformed values fail closed.
-#include "fake_connection.hpp"
+#include "support/fake_connection.hpp"
 #include "nomad/safety/velocity_config.hpp"
 #include "nomad/vehicle/vehicle.hpp"
-#include "test_harness.hpp"
+#include "support/test_harness.hpp"
 
 #include <cstdio>
 #include <stdexcept>

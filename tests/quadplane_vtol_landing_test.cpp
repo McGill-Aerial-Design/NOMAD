@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#include "fake_connection.hpp"
+#include "support/fake_connection.hpp"
 #include "nomad/vehicle/vehicle.hpp"
-#include "test_harness.hpp"
+#include "support/test_harness.hpp"
 
 #include <algorithm>
 #include <array>

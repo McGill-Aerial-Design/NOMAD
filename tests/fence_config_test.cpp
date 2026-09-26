@@ -3,7 +3,7 @@
 // must parse cleanly when configured, allow everything when unset, and fail
 // closed (reject every target) on any malformed configured value.
 #include "nomad/safety/fence_config.hpp"
-#include "test_harness.hpp"
+#include "support/test_harness.hpp"
 
 #ifdef NDEBUG
 #undef NDEBUG

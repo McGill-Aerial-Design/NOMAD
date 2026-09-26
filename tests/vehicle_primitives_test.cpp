@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "geo.hpp"
 #include "state_time.hpp"
-#include "test_harness.hpp"
+#include "support/test_harness.hpp"
 
 #include <array>
 #include <chrono>

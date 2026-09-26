@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fake_connection.hpp"
+#include "support/fixed_wing_waypoint_fake_connection.hpp"
 #include "nomad/vehicle/vehicle.hpp"
-#include "test_harness.hpp"
+#include "support/test_harness.hpp"
+#include "support/vehicle_state_builder.hpp"
 
 #include <array>
 #include <chrono>
 #include <limits>
 #include <string>
+#include <string_view>
 
 namespace {
 
@@ -18,36 +20,31 @@ using nomad::vehicle::Vehicle;
 
 constexpr RecoveryPoint kRecovery{45.0026, -73.0, 20.0F};
 
-void configure(FakeConnection &connection) {
-    connection.connect();
+void configure(FixedWingWaypointFakeConnection &connection) {
     connection.parameters["Q_GUIDED_MODE"] = 0.0F;
-    connection.state->identity = {nomad::telemetry::kArduPilotAutopilot, nomad::telemetry::kFixedWing,
-                                  AircraftClass::QuadPlane};
-    connection.state->connected = true;
-    connection.state->heartbeat_fresh = true;
-    connection.state->armed = true;
-    connection.state->system_id = 1;
-    connection.state->component_id = 1;
-    connection.state->custom_mode = 15;
-    connection.state->position = {45.0, -73.0, 30.0F, 20.0F};
-    connection.state->position_valid = true;
-    connection.state->position_updated_at = std::chrono::steady_clock::now();
-    connection.state->gps = {3, 12};
-    connection.state->gps_valid = true;
-    connection.state->gps_updated_at = std::chrono::steady_clock::now();
-    connection.state->vtol_state = VtolState::FixedWing;
-    connection.state->vtol_state_valid = true;
-    connection.state->vtol_state_updated_at = std::chrono::steady_clock::now();
+    nomad::test::VehicleStateBuilder state;
+    state.set_identity({nomad::telemetry::kArduPilotAutopilot, nomad::telemetry::kFixedWing,
+                        AircraftClass::QuadPlane});
+    state.set_link_state(true, true);
+    state.set_armed(true);
+    state.set_mode(15);
+    state.set_session(1, 1, 1);
+    const auto sample_time = std::chrono::steady_clock::now();
+    state.set_position({45.0, -73.0, 30.0F, 20.0F}, sample_time);
+    state.set_gps({3, 12}, sample_time);
+    state.set_vtol_state(VtolState::FixedWing, sample_time);
+    connection.state = state.build();
+    connection.connect();
 }
 
-Vehicle short_vehicle(FakeConnection &connection) {
+Vehicle short_vehicle(FixedWingWaypointFakeConnection &connection) {
     nomad::vehicle::VehicleConfig config{};
     config.timeouts.fixed_wing_recovery = std::chrono::milliseconds(25);
     return Vehicle(connection, config);
 }
 
 void test_zero_recovery_timeout_rejects_before_parameter_readback() {
-    FakeConnection connection;
+    FixedWingWaypointFakeConnection connection;
     configure(connection);
     nomad::vehicle::VehicleConfig config{};
     config.timeouts.fixed_wing_recovery = std::chrono::milliseconds::zero();
@@ -61,40 +58,74 @@ void test_zero_recovery_timeout_rejects_before_parameter_readback() {
     CHECK(connection.fixed_wing_waypoint_send_count == 0);
 }
 
-void check_no_recovery_send(FakeConnection &connection, const RecoveryPoint &point = kRecovery) {
+void check_no_recovery_send(FixedWingWaypointFakeConnection &connection, const RecoveryPoint &point = kRecovery) {
     Vehicle vehicle(connection);
     CHECK(!vehicle.fixed_wing_recovery(point).success);
     CHECK(connection.fixed_wing_waypoint_send_count == 0);
     CHECK(connection.command_history.empty());
 }
 
+using RecoveryTimestamp = std::chrono::steady_clock::time_point;
+using RecoveryMutation = void (*)(FixedWingWaypointFakeConnection &, RecoveryTimestamp);
+
+struct RecoveryFailureScenario {
+    std::string_view name;
+    RecoveryMutation mutate;
+};
+
 void test_capability_and_readiness_rejections() {
     constexpr std::array classes{AircraftClass::Copter, AircraftClass::Plane, AircraftClass::Unknown};
     for (const auto aircraft_class : classes) {
-        FakeConnection connection;
+        FixedWingWaypointFakeConnection connection;
         configure(connection);
         connection.state->identity.aircraft_class = aircraft_class;
         check_no_recovery_send(connection);
     }
-    for (int failure = 0; failure < 12; ++failure) {
-        FakeConnection connection;
+    const std::array<RecoveryFailureScenario, 12> scenarios{{
+        {"disarmed", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp) {
+             connection.state->armed = false;
+         }},
+        {"heartbeat stale", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp) {
+             connection.state->heartbeat_fresh = false;
+         }},
+        {"position stale", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp stale) {
+             connection.state->position_updated_at = stale;
+         }},
+        {"GPS stale", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp stale) {
+             connection.state->gps_updated_at = stale;
+         }},
+        {"VTOL state stale", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp stale) {
+             connection.state->vtol_state_updated_at = stale;
+         }},
+        {"multicopter VTOL state", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp) {
+             connection.state->vtol_state = VtolState::Multicopter;
+         }},
+        {"not in GUIDED mode", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp) {
+             connection.state->custom_mode = 10;
+         }},
+        {"missing session ID", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp) {
+             connection.state->session_id = 0;
+         }},
+        {"disconnected", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp) {
+             connection.state->connected = false;
+         }},
+        {"position unavailable", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp) {
+             connection.state->position_valid = false;
+         }},
+        {"GPS unavailable", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp) {
+             connection.state->gps_valid = false;
+         }},
+        {"VTOL state unavailable", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp) {
+             connection.state->vtol_state_valid = false;
+         }},
+    }};
+
+    for (const auto &scenario : scenarios) {
+        FixedWingWaypointFakeConnection connection;
         configure(connection);
         const auto stale = std::chrono::steady_clock::now() - std::chrono::seconds(4);
-        switch (failure) {
-        case 0: connection.state->armed = false; break;
-        case 1: connection.state->heartbeat_fresh = false; break;
-        case 2: connection.state->position_updated_at = stale; break;
-        case 3: connection.state->gps_updated_at = stale; break;
-        case 4: connection.state->vtol_state_updated_at = stale; break;
-        case 5: connection.state->vtol_state = VtolState::Multicopter; break;
-        case 6: connection.state->custom_mode = 10; break;
-        case 7: connection.state->session_id = 0; break;
-        case 8: connection.state->connected = false; break;
-        case 9: connection.state->position_valid = false; break;
-        case 10: connection.state->gps_valid = false; break;
-        case 11: connection.state->vtol_state_valid = false; break;
-        }
-        check_no_recovery_send(connection);
+        scenario.mutate(connection, stale);
+        nomad::test::run_scenario(scenario.name, [&connection] { check_no_recovery_send(connection); });
     }
 }
 
@@ -107,11 +138,11 @@ void test_invalid_point_and_near_target_reject_before_send() {
         RecoveryPoint{45.0, -73.0, -1.0F}, RecoveryPoint{45.0, -73.0, 101.0F},
     };
     for (const auto &point : invalid) {
-        FakeConnection connection;
+        FixedWingWaypointFakeConnection connection;
         configure(connection);
         check_no_recovery_send(connection, point);
     }
-    FakeConnection connection;
+    FixedWingWaypointFakeConnection connection;
     configure(connection);
     connection.state->position.latitude_deg = 45.00255;
     check_no_recovery_send(connection);
@@ -119,7 +150,7 @@ void test_invalid_point_and_near_target_reject_before_send() {
 
 void test_guided_vtol_configuration_must_be_read_back() {
     for (int failure = 0; failure < 2; ++failure) {
-        FakeConnection connection;
+        FixedWingWaypointFakeConnection connection;
         configure(connection);
         if (failure == 0) {
             connection.parameters.erase("Q_GUIDED_MODE");
@@ -133,7 +164,7 @@ void test_guided_vtol_configuration_must_be_read_back() {
 }
 
 void test_session_change_after_parameter_readback_rejects_before_send() {
-    FakeConnection connection;
+    FixedWingWaypointFakeConnection connection;
     configure(connection);
     connection.change_session_after_param_read = true;
     check_no_recovery_send(connection);
@@ -141,7 +172,7 @@ void test_session_change_after_parameter_readback_rejects_before_send() {
 }
 
 void test_command_and_authoritative_arrival() {
-    FakeConnection connection;
+    FixedWingWaypointFakeConnection connection;
     configure(connection);
     connection.fixed_wing_waypoint_auto_complete = false;
     connection.fixed_wing_waypoint_samples = {
@@ -166,7 +197,7 @@ void test_command_and_authoritative_arrival() {
 
 void test_command_rejection_and_session_change_at_send() {
     for (int failure = 0; failure < 3; ++failure) {
-        FakeConnection connection;
+        FixedWingWaypointFakeConnection connection;
         configure(connection);
         if (failure == 0) {
             connection.fixed_wing_waypoint_transport_enabled = false;
@@ -185,7 +216,7 @@ void test_command_rejection_and_session_change_at_send() {
 
 void test_ack_without_real_progress_cannot_complete() {
     for (int failure = 0; failure < 5; ++failure) {
-        FakeConnection connection;
+        FixedWingWaypointFakeConnection connection;
         configure(connection);
         connection.fixed_wing_waypoint_auto_complete = false;
         if (failure == 1) {
@@ -212,7 +243,7 @@ void test_ack_without_real_progress_cannot_complete() {
 
 void test_post_command_interruption_fails_closed() {
     for (int failure = 0; failure < 10; ++failure) {
-        FakeConnection connection;
+        FixedWingWaypointFakeConnection connection;
         configure(connection);
         if (failure == 0) {
             connection.fixed_wing_waypoint_session_change_on_send = true;
