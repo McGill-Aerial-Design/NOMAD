@@ -8,6 +8,7 @@
 #include <chrono>
 #include <limits>
 #include <string>
+#include <string_view>
 
 namespace {
 
@@ -64,6 +65,14 @@ void check_no_recovery_send(FixedWingWaypointFakeConnection &connection, const R
     CHECK(connection.command_history.empty());
 }
 
+using RecoveryTimestamp = std::chrono::steady_clock::time_point;
+using RecoveryMutation = void (*)(FixedWingWaypointFakeConnection &, RecoveryTimestamp);
+
+struct RecoveryFailureScenario {
+    std::string_view name;
+    RecoveryMutation mutate;
+};
+
 void test_capability_and_readiness_rejections() {
     constexpr std::array classes{AircraftClass::Copter, AircraftClass::Plane, AircraftClass::Unknown};
     for (const auto aircraft_class : classes) {
@@ -72,25 +81,51 @@ void test_capability_and_readiness_rejections() {
         connection.state->identity.aircraft_class = aircraft_class;
         check_no_recovery_send(connection);
     }
-    for (int failure = 0; failure < 12; ++failure) {
+    const std::array<RecoveryFailureScenario, 12> scenarios{{
+        {"disarmed", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp) {
+             connection.state->armed = false;
+         }},
+        {"heartbeat stale", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp) {
+             connection.state->heartbeat_fresh = false;
+         }},
+        {"position stale", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp stale) {
+             connection.state->position_updated_at = stale;
+         }},
+        {"GPS stale", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp stale) {
+             connection.state->gps_updated_at = stale;
+         }},
+        {"VTOL state stale", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp stale) {
+             connection.state->vtol_state_updated_at = stale;
+         }},
+        {"multicopter VTOL state", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp) {
+             connection.state->vtol_state = VtolState::Multicopter;
+         }},
+        {"not in GUIDED mode", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp) {
+             connection.state->custom_mode = 10;
+         }},
+        {"missing session ID", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp) {
+             connection.state->session_id = 0;
+         }},
+        {"disconnected", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp) {
+             connection.state->connected = false;
+         }},
+        {"position unavailable", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp) {
+             connection.state->position_valid = false;
+         }},
+        {"GPS unavailable", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp) {
+             connection.state->gps_valid = false;
+         }},
+        {"VTOL state unavailable", [](FixedWingWaypointFakeConnection &connection, RecoveryTimestamp) {
+             connection.state->vtol_state_valid = false;
+         }},
+    }};
+
+    for (const auto &scenario : scenarios) {
         FixedWingWaypointFakeConnection connection;
         configure(connection);
         const auto stale = std::chrono::steady_clock::now() - std::chrono::seconds(4);
-        switch (failure) {
-        case 0: connection.state->armed = false; break;
-        case 1: connection.state->heartbeat_fresh = false; break;
-        case 2: connection.state->position_updated_at = stale; break;
-        case 3: connection.state->gps_updated_at = stale; break;
-        case 4: connection.state->vtol_state_updated_at = stale; break;
-        case 5: connection.state->vtol_state = VtolState::Multicopter; break;
-        case 6: connection.state->custom_mode = 10; break;
-        case 7: connection.state->session_id = 0; break;
-        case 8: connection.state->connected = false; break;
-        case 9: connection.state->position_valid = false; break;
-        case 10: connection.state->gps_valid = false; break;
-        case 11: connection.state->vtol_state_valid = false; break;
-        }
-        check_no_recovery_send(connection);
+        scenario.mutate(connection, stale);
+        nomad::test::run_scenario(scenario.name, [&connection] { check_no_recovery_send(connection); });
     }
 }
 

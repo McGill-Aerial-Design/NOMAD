@@ -14,6 +14,7 @@
 #include <functional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace nomad::test {
 
@@ -32,6 +33,14 @@ inline int run_tests(const std::function<void()> &body) {
         return 1;
     }
     return 0;
+}
+
+inline void run_scenario(std::string_view name, const std::function<void()> &body) {
+    try {
+        body();
+    } catch (const std::exception &error) {
+        throw std::runtime_error("scenario " + std::string(name) + ": " + error.what());
+    }
 }
 
 } // namespace nomad::test
