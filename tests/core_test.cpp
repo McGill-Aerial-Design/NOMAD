@@ -139,8 +139,9 @@ void test_quadplane_vtol_takeoff_rejects_partial_climb() {
     connection.connect();
     configure_quadplane_takeoff_state(connection);
     connection.takeoff_altitude_override = 4.0F;
-    nomad::vehicle::Vehicle vehicle(connection, {}, {}, {}, std::chrono::milliseconds(2000),
-                                    std::chrono::milliseconds(20));
+    nomad::vehicle::VehicleConfig config{};
+    config.timeouts.vtol_takeoff_state = std::chrono::milliseconds(20);
+    nomad::vehicle::Vehicle vehicle(connection, config);
 
     const auto result = vehicle.vtol_takeoff(5.0F);
 

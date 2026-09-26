@@ -41,8 +41,24 @@ void configure(FakeConnection &connection) {
 }
 
 Vehicle short_vehicle(FakeConnection &connection) {
-    return Vehicle(connection, {}, {}, {}, std::chrono::seconds(2), std::chrono::seconds(30),
-                   std::chrono::seconds(90), std::chrono::seconds(180), std::chrono::milliseconds(25));
+    nomad::vehicle::VehicleConfig config{};
+    config.timeouts.fixed_wing_recovery = std::chrono::milliseconds(25);
+    return Vehicle(connection, config);
+}
+
+void test_zero_recovery_timeout_rejects_before_parameter_readback() {
+    FakeConnection connection;
+    configure(connection);
+    nomad::vehicle::VehicleConfig config{};
+    config.timeouts.fixed_wing_recovery = std::chrono::milliseconds::zero();
+    Vehicle vehicle(connection, config);
+
+    const auto result = vehicle.fixed_wing_recovery(kRecovery);
+
+    CHECK(!result.success);
+    CHECK(result.message == "fixed-wing recovery rejected: timeout must be positive");
+    CHECK(connection.parameter_read_count == 0);
+    CHECK(connection.fixed_wing_waypoint_send_count == 0);
 }
 
 void check_no_recovery_send(FakeConnection &connection, const RecoveryPoint &point = kRecovery) {
@@ -243,6 +259,7 @@ int main() {
         test_guided_vtol_configuration_must_be_read_back();
         test_session_change_after_parameter_readback_rejects_before_send();
         test_command_and_authoritative_arrival();
+        test_zero_recovery_timeout_rejects_before_parameter_readback();
         test_command_rejection_and_session_change_at_send();
         test_ack_without_real_progress_cannot_complete();
         test_post_command_interruption_fails_closed();

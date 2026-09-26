@@ -149,8 +149,11 @@ class NomadVehicleNode final : public rclcpp::Node {
         if (!connection_->wait_for_heartbeat(std::chrono::seconds(1)).has_value()) {
             return;
         }
-        vehicle_ = std::make_unique<nomad::vehicle::Vehicle>(*connection_, watchdog_policy_,
-                                                              nomad::safety::GlobalFencePolicy{}, velocity_limits_);
+        nomad::vehicle::VehicleConfig vehicle_config{};
+        vehicle_config.watchdog = watchdog_policy_;
+        vehicle_config.fence = nomad::safety::GlobalFencePolicy{};
+        vehicle_config.velocity = velocity_limits_;
+        vehicle_ = std::make_unique<nomad::vehicle::Vehicle>(*connection_, vehicle_config);
         RCLCPP_INFO(get_logger(), "connected to the NOMAD core vehicle");
     }
 

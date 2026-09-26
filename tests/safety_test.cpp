@@ -63,21 +63,6 @@ void test_safety_velocity_rejects_each_fault() {
     CHECK(nonfinite.reason == nomad::safety::RejectReason::nonfinite);
 }
 
-void test_vehicle_rejects_invalid_watchdog_policy_before_transmission() {
-    FakeConnection connection;
-    connection.connect();
-    connection.state->armed = true;
-    nomad::safety::WatchdogPolicy policy{};
-    policy.min_vio_confidence = 2.0F;
-    nomad::vehicle::Vehicle vehicle(connection, policy);
-    CHECK(vehicle.update_vio(true, 1.0F).success);
-
-    const auto result = vehicle.set_velocity({1.0F, 0.0F, 0.0F, 0.0F});
-
-    CHECK(!result.success);
-    CHECK(connection.velocity_send_count == 0);
-}
-
 void test_vehicle_rejects_body_velocity_for_unsupported_aircraft() {
     FakeConnection connection;
     connection.connect();
@@ -132,7 +117,9 @@ void test_vehicle_watchdog_stops_for_command_timeout() {
     nomad::safety::WatchdogPolicy policy{};
     policy.command_timeout = std::chrono::milliseconds(20);
     policy.poll_interval = std::chrono::milliseconds(5);
-    nomad::vehicle::Vehicle vehicle(connection, policy);
+    nomad::vehicle::VehicleConfig config{};
+    config.watchdog = policy;
+    nomad::vehicle::Vehicle vehicle(connection, config);
     CHECK(vehicle.update_vio(true, 1.0F).success);
 
     CHECK(vehicle.set_velocity({1.0F, 0.0F, 0.0F, 0.0F}).success);
@@ -151,7 +138,9 @@ void test_vehicle_watchdog_stops_for_stale_vio_and_mode_loss() {
     policy.command_timeout = std::chrono::milliseconds(200);
     policy.vio_timeout = std::chrono::milliseconds(20);
     policy.poll_interval = std::chrono::milliseconds(5);
-    nomad::vehicle::Vehicle vehicle(connection, policy);
+    nomad::vehicle::VehicleConfig config{};
+    config.watchdog = policy;
+    nomad::vehicle::Vehicle vehicle(connection, config);
     CHECK(vehicle.update_vio(true, 1.0F).success);
     CHECK(vehicle.set_velocity({1.0F, 0.0F, 0.0F, 0.0F}).success);
     std::this_thread::sleep_for(std::chrono::milliseconds(60));
@@ -171,7 +160,9 @@ void test_vehicle_watchdog_stops_for_link_loss() {
     nomad::safety::WatchdogPolicy policy{};
     policy.command_timeout = std::chrono::milliseconds(200);
     policy.poll_interval = std::chrono::milliseconds(5);
-    nomad::vehicle::Vehicle vehicle(connection, policy);
+    nomad::vehicle::VehicleConfig config{};
+    config.watchdog = policy;
+    nomad::vehicle::Vehicle vehicle(connection, config);
     CHECK(vehicle.update_vio(true, 1.0F).success);
     CHECK(vehicle.set_velocity({1.0F, 0.0F, 0.0F, 0.0F}).success);
 
@@ -209,7 +200,9 @@ void test_vehicle_fence_rejects_target_before_transmission() {
         },
         1.0,
     };
-    nomad::vehicle::Vehicle vehicle(connection, {}, policy);
+    nomad::vehicle::VehicleConfig config{};
+    config.fence = policy;
+    nomad::vehicle::Vehicle vehicle(connection, config);
     connection.acknowledgement = nomad::mavlink::CommandAck{192, 0};
 
     const auto result = vehicle.goto_location({45.002, -72.99995, 10.0F});
@@ -469,7 +462,6 @@ int main() {
         test_safety_velocity_accepts_clamped_frd_command();
         test_safety_velocity_accepts_plane_guided_mode_when_selected();
         test_safety_velocity_rejects_each_fault();
-        test_vehicle_rejects_invalid_watchdog_policy_before_transmission();
         test_vehicle_rejects_body_velocity_for_unsupported_aircraft();
         test_watchdog_stops_for_each_fault();
         test_vehicle_watchdog_stops_for_command_timeout();

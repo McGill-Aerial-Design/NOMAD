@@ -45,7 +45,9 @@ void test_vehicle_uses_configured_velocity_limits() {
     connection.connect();
     connection.state->armed = true;
     const nomad::safety::VelocityLimits limits{0.5F, 0.25F, 0.2F};
-    nomad::vehicle::Vehicle vehicle(connection, {}, {}, limits);
+    nomad::vehicle::VehicleConfig config{};
+    config.velocity = limits;
+    nomad::vehicle::Vehicle vehicle(connection, config);
     CHECK(vehicle.update_vio(true, 1.0F).success);
 
     const auto result = vehicle.set_velocity({2.0F, -2.0F, 1.0F, 1.0F});

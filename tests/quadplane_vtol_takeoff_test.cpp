@@ -130,6 +130,32 @@ void test_quadplane_vtol_takeoff_accepts_post_ack_climb_in_admitted_session() {
     CHECK(connection.state->position_updated_at > initial_state.position_updated_at);
 }
 
+void test_zero_vtol_timeout_stops_before_a_post_ack_completion_sample() {
+    PostAckVtolTakeoffConnection connection;
+    connection.connect();
+    configure_quadplane_takeoff_state(connection, 2.0F);
+    connection.auto_stamp_fresh_fields = false;
+    connection.takeoff_altitude_override = 2.0F;
+    auto completion_state = *connection.state;
+    completion_state.armed = true;
+    completion_state.custom_mode = 15;
+    completion_state.position.relative_altitude_m = 7.0F;
+    connection.completion_state = completion_state;
+    nomad::vehicle::VehicleConfig config{};
+    config.timeouts.vtol_takeoff_state = std::chrono::milliseconds::zero();
+    nomad::vehicle::Vehicle vehicle(connection, config);
+    const auto started_at = std::chrono::steady_clock::now();
+
+    const auto result = vehicle.vtol_takeoff(5.0F);
+    const auto elapsed = std::chrono::steady_clock::now() - started_at;
+
+    CHECK(!result.success);
+    CHECK(result.message == "vtol takeoff acknowledgement received but climb verification timed out");
+    CHECK(connection.command_history.size() == 3);
+    CHECK(connection.expected_takeoff_send_count == 1);
+    CHECK(elapsed < std::chrono::milliseconds(500));
+}
+
 void test_quadplane_vtol_takeoff_rejects_pre_ack_high_position_sample() {
     FakeConnection connection;
     connection.connect();
@@ -137,8 +163,9 @@ void test_quadplane_vtol_takeoff_rejects_pre_ack_high_position_sample() {
     connection.auto_stamp_fresh_fields = false;
     connection.takeoff_altitude_override = 7.0F;
     const auto pre_ack_position_timestamp = connection.state->position_updated_at;
-    nomad::vehicle::Vehicle vehicle(connection, {}, {}, {}, std::chrono::milliseconds(2000),
-                                    std::chrono::milliseconds(20));
+    nomad::vehicle::VehicleConfig config{};
+    config.timeouts.vtol_takeoff_state = std::chrono::milliseconds(20);
+    nomad::vehicle::Vehicle vehicle(connection, config);
 
     const auto result = vehicle.vtol_takeoff(5.0F);
 
@@ -231,6 +258,7 @@ void test_quadplane_vtol_takeoff_does_not_send_arm_into_new_session() {
 int main() {
     return nomad::test::run_tests([] {
         test_quadplane_vtol_takeoff_accepts_post_ack_climb_in_admitted_session();
+        test_zero_vtol_timeout_stops_before_a_post_ack_completion_sample();
         test_quadplane_vtol_takeoff_rejects_pre_ack_high_position_sample();
         test_quadplane_vtol_takeoff_rejects_new_session_completion();
         test_quadplane_vtol_takeoff_does_not_send_into_new_session();

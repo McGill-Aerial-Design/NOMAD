@@ -190,7 +190,7 @@ CommandResult Vehicle::wait_for_vtol_takeoff(float target_altitude_m,
         }
         return CommandResult{true, "vtol takeoff verified"};
     };
-    return wait_for_state_until(takeoff_state_timeout_,
+    return wait_for_state_until(vtol_takeoff_state_timeout_,
                                 "vtol takeoff acknowledgement received but climb verification timed out", verdict);
 }
 

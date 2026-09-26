@@ -45,8 +45,24 @@ void configure_fixed_wing_quadplane(FakeConnection &connection) {
 }
 
 Vehicle make_short_timeout_vehicle(FakeConnection &connection) {
-    return Vehicle(connection, {}, {}, {}, std::chrono::milliseconds(2000), std::chrono::seconds(30),
-                   std::chrono::seconds(90), std::chrono::milliseconds(25));
+    nomad::vehicle::VehicleConfig config{};
+    config.timeouts.fixed_wing_route = std::chrono::milliseconds(25);
+    return Vehicle(connection, config);
+}
+
+void test_zero_route_timeout_rejects_before_navigation() {
+    FakeConnection connection;
+    configure_fixed_wing_quadplane(connection);
+    nomad::vehicle::VehicleConfig config{};
+    config.timeouts.fixed_wing_route = std::chrono::milliseconds::zero();
+    Vehicle vehicle(connection, config);
+
+    const auto result = vehicle.fixed_wing_route(kRoute);
+
+    CHECK(!result.success);
+    CHECK(result.message == "fixed-wing route rejected: route timeout must be positive");
+    CHECK(connection.fixed_wing_waypoint_send_count == 0);
+    CHECK(connection.command_history.empty());
 }
 
 void test_fixed_wing_route_sends_two_waypoints_and_verifies_position() {
@@ -297,6 +313,7 @@ void test_session_link_mode_vtol_and_position_interruption_fail_closed() {
 int main() {
     return nomad::test::run_tests([] {
         test_fixed_wing_route_sends_two_waypoints_and_verifies_position();
+        test_zero_route_timeout_rejects_before_navigation();
         test_unqualified_aircraft_reject_route_before_navigation_transport();
         test_empty_malformed_and_unreasonable_routes_reject_before_transmission();
         test_stale_position_gps_vtol_state_and_wrong_vtol_state_reject_before_send();

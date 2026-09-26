@@ -88,6 +88,12 @@ void configure_post_ack_transition_completion(PostAckTransitionConnection &conne
     connection.completion_state = *connection.state;
 }
 
+nomad::vehicle::Vehicle make_short_transition_vehicle(FakeConnection &connection) {
+    nomad::vehicle::VehicleConfig config{};
+    config.timeouts.transition_state = std::chrono::milliseconds(20);
+    return nomad::vehicle::Vehicle(connection, config);
+}
+
 void test_quadplane_transition_constructs_command_and_verifies_fixed_wing_state() {
     FakeConnection connection;
     connection.connect();
@@ -105,6 +111,25 @@ void test_quadplane_transition_constructs_command_and_verifies_fixed_wing_state(
     CHECK(connection.command_history.front().id == 3000);
     CHECK(connection.command_history.front().parameters[0] == 4.0F);
     CHECK(connection.state->vtol_state == nomad::telemetry::VtolState::FixedWing);
+}
+
+void test_zero_transition_timeout_stops_before_post_ack_state_completion() {
+    FakeConnection connection;
+    connection.connect();
+    configure_quadplane_transition_state(connection);
+    nomad::vehicle::VehicleConfig config{};
+    config.timeouts.transition_state = std::chrono::milliseconds::zero();
+    nomad::vehicle::Vehicle vehicle(connection, config);
+    const auto started_at = std::chrono::steady_clock::now();
+
+    const auto result = vehicle.transition_to_fixed_wing();
+    const auto elapsed = std::chrono::steady_clock::now() - started_at;
+
+    CHECK(!result.success);
+    CHECK(result.message ==
+          "transition to fixed wing acknowledgement received but fixed-wing state verification timed out");
+    CHECK(connection.command_history.size() == 1);
+    CHECK(elapsed < std::chrono::milliseconds(500));
 }
 
 void test_quadplane_transition_rejects_same_system_id_new_session() {
@@ -187,8 +212,7 @@ void test_quadplane_transition_does_not_accept_fixed_wing_state_before_ack() {
     configure_quadplane_transition_state(connection);
     connection.auto_stamp_fresh_fields = false;
     connection.complete_transition_on_command = true;
-    nomad::vehicle::Vehicle vehicle(connection, {}, {}, {}, std::chrono::milliseconds(2000),
-                                    std::chrono::seconds(30), std::chrono::milliseconds(20));
+    auto vehicle = make_short_transition_vehicle(connection);
 
     const auto result = vehicle.transition_to_fixed_wing();
 
@@ -264,8 +288,7 @@ void test_quadplane_transition_ack_without_completion_times_out() {
     connection.connect();
     configure_quadplane_transition_state(connection);
     connection.complete_transition_on_command = false;
-    nomad::vehicle::Vehicle vehicle(connection, {}, {}, {}, std::chrono::milliseconds(2000),
-                                    std::chrono::seconds(30), std::chrono::milliseconds(20));
+    auto vehicle = make_short_transition_vehicle(connection);
 
     const auto result = vehicle.transition_to_fixed_wing();
 
@@ -280,8 +303,7 @@ void test_quadplane_transition_intermediate_state_times_out() {
     connection.connect();
     configure_quadplane_transition_state(connection);
     connection.transition_stays_intermediate = true;
-    nomad::vehicle::Vehicle vehicle(connection, {}, {}, {}, std::chrono::milliseconds(2000),
-                                    std::chrono::seconds(30), std::chrono::milliseconds(20));
+    auto vehicle = make_short_transition_vehicle(connection);
 
     const auto result = vehicle.transition_to_fixed_wing();
 
@@ -334,6 +356,7 @@ void test_unsupported_transition_aircrafts_reject_before_transmission() {
 int main() {
     return nomad::test::run_tests([] {
         test_quadplane_transition_constructs_command_and_verifies_fixed_wing_state();
+        test_zero_transition_timeout_stops_before_post_ack_state_completion();
         test_quadplane_transition_rejects_same_system_id_new_session();
         test_quadplane_transition_rejects_changed_component();
         test_quadplane_transition_rejects_disarmed_completion();

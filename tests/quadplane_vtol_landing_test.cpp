@@ -194,8 +194,10 @@ void configure_landing_ready_state(FakeConnection &connection) {
 
 Vehicle short_vehicle(FakeConnection &connection, std::chrono::milliseconds timeout = std::chrono::milliseconds(120),
                      std::chrono::milliseconds dwell = std::chrono::milliseconds(15)) {
-    return Vehicle(connection, {}, {}, {}, std::chrono::seconds(2), std::chrono::seconds(30),
-                   std::chrono::seconds(90), std::chrono::seconds(180), std::chrono::seconds(180), dwell, timeout);
+    nomad::vehicle::VehicleConfig config{};
+    config.timeouts.transition_ready_dwell = dwell;
+    config.timeouts.quadplane_landing = timeout;
+    return Vehicle(connection, config);
 }
 
 void test_valid_landing_requires_command_and_physical_post_ack_evidence() {
@@ -220,6 +222,22 @@ void test_valid_landing_requires_command_and_physical_post_ack_evidence() {
     CHECK(connection.state->landed_state == LandedState::OnGround);
     CHECK(!connection.state->armed);
     CHECK(connection.version_read_count == 1);
+}
+
+void test_zero_landing_budget_rejects_before_profile_read_or_command() {
+    QuadplaneLandingConnection connection;
+    configure_landing_ready_state(connection);
+    auto vehicle = short_vehicle(connection, std::chrono::milliseconds::zero(), std::chrono::milliseconds(10));
+    const auto started = std::chrono::steady_clock::now();
+
+    const auto result = vehicle.quadplane_vtol_land(kLandingPoint);
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+
+    CHECK(!result.success);
+    CHECK(result.message == "QuadPlane VTOL landing rejected: landing deadline and readiness dwell must be positive");
+    CHECK(elapsed < std::chrono::milliseconds(500));
+    CHECK(connection.version_read_count == 0);
+    CHECK(connection.command_history.empty());
 }
 
 void test_unsupported_aircraft_and_wrong_profile_never_send_landing_command() {
@@ -392,6 +410,7 @@ void test_pre_ack_touchdown_and_post_ack_state_changes_fail_closed() {
 int main() {
     return nomad::test::run_tests([] {
         test_valid_landing_requires_command_and_physical_post_ack_evidence();
+        test_zero_landing_budget_rejects_before_profile_read_or_command();
         test_unsupported_aircraft_and_wrong_profile_never_send_landing_command();
         test_initial_state_and_telemetry_fail_closed();
         test_readiness_requires_stable_fresh_samples_and_missing_ack_fails();

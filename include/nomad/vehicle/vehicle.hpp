@@ -2,10 +2,8 @@
 #pragma once
 
 #include "nomad/mavlink/connection.hpp"
-#include "nomad/safety/geofence.hpp"
 #include "nomad/safety/payload.hpp"
-#include "nomad/safety/velocity.hpp"
-#include "nomad/safety/watchdog.hpp"
+#include "nomad/vehicle/config.hpp"
 #include "nomad/vehicle/operation.hpp"
 
 #include <array>
@@ -54,15 +52,7 @@ struct CommandResult {
 
 class Vehicle {
   public:
-    explicit Vehicle(mavlink::MavlinkConnection &connection, safety::WatchdogPolicy watchdog_policy = {},
-                     safety::GlobalFencePolicy fence_policy = {}, safety::VelocityLimits velocity_limits = {},
-                     std::chrono::milliseconds position_freshness_timeout = std::chrono::milliseconds(2000),
-                     std::chrono::milliseconds takeoff_state_timeout = std::chrono::seconds(30),
-                     std::chrono::milliseconds transition_state_timeout = std::chrono::seconds(90),
-                     std::chrono::milliseconds fixed_wing_route_timeout = std::chrono::seconds(180),
-                     std::chrono::milliseconds fixed_wing_recovery_timeout = std::chrono::seconds(180),
-                     std::chrono::milliseconds transition_ready_dwell = std::chrono::seconds(2),
-                     std::chrono::milliseconds quadplane_landing_timeout = std::chrono::seconds(90));
+    explicit Vehicle(mavlink::MavlinkConnection &connection, VehicleConfig config = {});
     ~Vehicle();
 
     Vehicle(const Vehicle &) = delete;
@@ -196,18 +186,18 @@ class Vehicle {
     safety::WatchdogPolicy watchdog_policy_;
     safety::GlobalFencePolicy fence_policy_;
     safety::VelocityLimits velocity_limits_;
-    std::chrono::milliseconds position_freshness_timeout_{std::chrono::milliseconds(2000)};
-    // Bounds the authoritative climb wait; tests use a short deadline for a
-    // deterministic partial-climb falsification while production keeps 30 s.
-    std::chrono::milliseconds takeoff_state_timeout_{std::chrono::seconds(30)};
+    std::chrono::milliseconds position_freshness_timeout_;
+    // Bounds the authoritative VTOL climb wait; generic Copter takeoff uses its
+    // independent fixed deadline.
+    std::chrono::milliseconds vtol_takeoff_state_timeout_;
     // Bounds the authoritative fixed-wing transition wait.
-    std::chrono::milliseconds transition_state_timeout_{std::chrono::seconds(90)};
+    std::chrono::milliseconds transition_state_timeout_;
     // Bounds the full two-point fixed-wing route, including each authoritative
     // position wait after a target request is acknowledged.
-    std::chrono::milliseconds fixed_wing_route_timeout_{std::chrono::seconds(180)};
-    std::chrono::milliseconds fixed_wing_recovery_timeout_{std::chrono::seconds(180)};
-    std::chrono::milliseconds transition_ready_dwell_{std::chrono::seconds(2)};
-    std::chrono::milliseconds quadplane_landing_timeout_{std::chrono::seconds(90)};
+    std::chrono::milliseconds fixed_wing_route_timeout_;
+    std::chrono::milliseconds fixed_wing_recovery_timeout_;
+    std::chrono::milliseconds transition_ready_dwell_;
+    std::chrono::milliseconds quadplane_landing_timeout_;
     safety::ReleaseInterlock payload_interlock_;
     mutable std::mutex payload_mutex_;
     mutable std::mutex velocity_mutex_;

@@ -119,8 +119,10 @@ void configure_transition_ready_state(FakeConnection &connection) {
 
 Vehicle short_vehicle(FakeConnection &connection, std::chrono::milliseconds timeout = std::chrono::milliseconds(300),
                      std::chrono::milliseconds dwell = std::chrono::milliseconds(10)) {
-    return Vehicle(connection, {}, {}, {}, std::chrono::seconds(2), std::chrono::seconds(30), timeout,
-                   std::chrono::seconds(180), std::chrono::seconds(180), dwell);
+    nomad::vehicle::VehicleConfig config{};
+    config.timeouts.transition_state = timeout;
+    config.timeouts.transition_ready_dwell = dwell;
+    return Vehicle(connection, config);
 }
 
 void check_rejects_before_transition(FakeConnection &connection, const RecoveryPoint &point = kTransitionPoint) {
@@ -277,6 +279,25 @@ void test_transition_to_vtol_sends_multicopter_target_and_verifies_stability() {
     CHECK(connection.state->vtol_state == VtolState::Multicopter);
 }
 
+void test_readiness_dwell_does_not_replace_final_multicopter_stability_dwell() {
+    VtolTransitionFakeConnection connection;
+    configure_transition_ready_state(connection);
+    nomad::vehicle::VehicleConfig config{};
+    config.timeouts.transition_state = std::chrono::milliseconds(100);
+    config.timeouts.transition_ready_dwell = std::chrono::milliseconds(10);
+    nomad::vehicle::Vehicle vehicle(connection, config);
+    const auto started_at = std::chrono::steady_clock::now();
+
+    const auto result = vehicle.transition_to_vtol(kTransitionPoint);
+    const auto elapsed = std::chrono::steady_clock::now() - started_at;
+
+    CHECK(!result.success);
+    CHECK(result.message ==
+          "transition to VTOL acknowledgement received but stable multicopter verification timed out");
+    CHECK(connection.command_history.size() == 1);
+    CHECK(elapsed < std::chrono::milliseconds(500));
+}
+
 void test_transition_to_vtol_ack_and_state_are_independent() {
     VtolTransitionFakeConnection missing_ack;
     configure_transition_ready_state(missing_ack);
@@ -351,6 +372,7 @@ int main() {
         test_transition_to_vtol_enforces_pre_transition_altitude_band();
         test_transition_to_vtol_allows_transition_climb_but_keeps_altitude_floor();
         test_transition_to_vtol_sends_multicopter_target_and_verifies_stability();
+        test_readiness_dwell_does_not_replace_final_multicopter_stability_dwell();
         test_transition_to_vtol_ack_and_state_are_independent();
         test_transition_to_vtol_accepts_only_safe_state_progression();
     });

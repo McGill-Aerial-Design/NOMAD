@@ -232,6 +232,11 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests")
     target_compile_definitions(nomad_core_tests PRIVATE NOMAD_TESTS)
     add_test(NAME nomad_core_tests COMMAND nomad_core_tests)
 
+    add_executable(nomad_vehicle_config_tests tests/vehicle_config_test.cpp)
+    target_link_libraries(nomad_vehicle_config_tests PRIVATE nomad_core)
+    target_compile_definitions(nomad_vehicle_config_tests PRIVATE NOMAD_TESTS)
+    add_test(NAME nomad_vehicle_config_tests COMMAND nomad_vehicle_config_tests)
+
     add_executable(nomad_quadplane_vtol_takeoff_tests tests/quadplane_vtol_takeoff_test.cpp)
     target_link_libraries(nomad_quadplane_vtol_takeoff_tests PRIVATE nomad_core)
     target_compile_definitions(nomad_quadplane_vtol_takeoff_tests PRIVATE NOMAD_TESTS)

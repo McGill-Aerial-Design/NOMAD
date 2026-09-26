@@ -120,6 +120,13 @@ mavlink::MavlinkConnection &require_connection(
     return *connection;
 }
 
+vehicle::VehicleConfig make_vehicle_config(const RuntimeConfig &config) {
+    vehicle::VehicleConfig vehicle_config{};
+    vehicle_config.fence = config.fence_policy;
+    vehicle_config.velocity = config.velocity_limits;
+    return vehicle_config;
+}
+
 bool validate_request_fields(Request &request, Json &error) {
     auto &body = request.original;
     if (request.type == "hello" || request.type == "ping" || request.type == "status") {
@@ -251,7 +258,7 @@ struct Runtime::Implementation {
 
     Implementation(std::unique_ptr<mavlink::MavlinkConnection> connection, RuntimeConfig config)
         : connection_(std::move(connection)), config_(std::move(config)),
-          vehicle_(require_connection(connection_), {}, config_.fence_policy, config_.velocity_limits) {}
+          vehicle_(require_connection(connection_), make_vehicle_config(config_)) {}
 
     bool start(std::string &error) {
         if (!server_.start(config_.ipc_port, [this](std::string_view request) { return handle_message(request); },

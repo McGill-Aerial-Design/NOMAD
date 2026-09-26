@@ -105,7 +105,11 @@ int run_command(nomad::mavlink::MavlinkConnection &connection, const Arguments &
     const auto velocity_limits = nomad::safety::load_velocity_limits(
         std::getenv("NOMAD_VELOCITY_MAX_XY"), std::getenv("NOMAD_VELOCITY_MAX_Z"),
         std::getenv("NOMAD_VELOCITY_MAX_YAW_RATE"));
-    nomad::vehicle::Vehicle vehicle(connection, {}, fence_policy, velocity_limits);
+    nomad::vehicle::VehicleConfig vehicle_config{};
+    vehicle_config.watchdog = {};
+    vehicle_config.fence = fence_policy;
+    vehicle_config.velocity = velocity_limits;
+    nomad::vehicle::Vehicle vehicle(connection, vehicle_config);
     if (arguments.command == "arm") {
         return print_result(vehicle.arm());
     }

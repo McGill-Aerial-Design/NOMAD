@@ -45,26 +45,18 @@ CommandResult validate_command_acknowledgement(
 
 } // namespace
 
-Vehicle::Vehicle(mavlink::MavlinkConnection &connection, safety::WatchdogPolicy watchdog_policy,
-                 safety::GlobalFencePolicy fence_policy, safety::VelocityLimits velocity_limits,
-                 std::chrono::milliseconds position_freshness_timeout,
-                 std::chrono::milliseconds takeoff_state_timeout,
-                 std::chrono::milliseconds transition_state_timeout,
-                 std::chrono::milliseconds fixed_wing_route_timeout,
-                 std::chrono::milliseconds fixed_wing_recovery_timeout,
-                 std::chrono::milliseconds transition_ready_dwell,
-                 std::chrono::milliseconds quadplane_landing_timeout)
+Vehicle::Vehicle(mavlink::MavlinkConnection &connection, VehicleConfig config)
     : connection_(connection),
-      watchdog_policy_(watchdog_policy),
-      fence_policy_(std::move(fence_policy)),
-      velocity_limits_(velocity_limits),
-      position_freshness_timeout_(position_freshness_timeout),
-      takeoff_state_timeout_(takeoff_state_timeout),
-      transition_state_timeout_(transition_state_timeout),
-      fixed_wing_route_timeout_(fixed_wing_route_timeout),
-      fixed_wing_recovery_timeout_(fixed_wing_recovery_timeout),
-      transition_ready_dwell_(transition_ready_dwell),
-      quadplane_landing_timeout_(quadplane_landing_timeout) {}
+      watchdog_policy_(config.watchdog),
+      fence_policy_(std::move(config.fence)),
+      velocity_limits_(config.velocity),
+      position_freshness_timeout_(config.timeouts.position_freshness),
+      vtol_takeoff_state_timeout_(config.timeouts.vtol_takeoff_state),
+      transition_state_timeout_(config.timeouts.transition_state),
+      fixed_wing_route_timeout_(config.timeouts.fixed_wing_route),
+      fixed_wing_recovery_timeout_(config.timeouts.fixed_wing_recovery),
+      transition_ready_dwell_(config.timeouts.transition_ready_dwell),
+      quadplane_landing_timeout_(config.timeouts.quadplane_landing) {}
 
 Vehicle::~Vehicle() {
     {

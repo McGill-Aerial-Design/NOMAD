@@ -77,7 +77,9 @@ std::unique_ptr<nomad::vehicle::Vehicle> start_streaming(nomad::mavlink::Mavlink
     if (!connection.wait_for_heartbeat(std::chrono::seconds(3)).has_value()) {
         return nullptr;
     }
-    auto vehicle = std::make_unique<nomad::vehicle::Vehicle>(connection, policy);
+    nomad::vehicle::VehicleConfig config{};
+    config.watchdog = policy;
+    auto vehicle = std::make_unique<nomad::vehicle::Vehicle>(connection, config);
     if (!vehicle->set_mode(nomad::safety::kGuidedMode).success || !vehicle->arm().success) {
         return nullptr;
     }
@@ -232,7 +234,9 @@ void test_velocity_stream_is_refused_without_a_link() {
     CHECK(connection != nullptr);
     CHECK(!connection->connect());
 
-    nomad::vehicle::Vehicle vehicle(*connection, policy);
+    nomad::vehicle::VehicleConfig config{};
+    config.watchdog = policy;
+    nomad::vehicle::Vehicle vehicle(*connection, config);
     CHECK(vehicle.update_vio(true, 1.0F).success);
     CHECK(!vehicle.set_velocity(kStreamedVelocity).success);
     CHECK(!vehicle.velocity_control_active());
