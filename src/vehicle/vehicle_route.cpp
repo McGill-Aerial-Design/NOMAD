@@ -4,11 +4,11 @@
 #include "nomad/vehicle/vehicle.hpp"
 
 #include "command_ids.hpp"
+#include "geo.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <numbers>
 #include <optional>
 #include <string>
 
@@ -18,7 +18,6 @@ namespace {
 using Clock = std::chrono::steady_clock;
 
 constexpr std::size_t kFixedWingRouteWaypointCount = 2;
-constexpr double kEarthRadiusMeters = 6371000.0;
 constexpr double kRouteArrivalRadiusMeters = 45.0;
 constexpr double kMinimumRoutePointSpacingMeters = 100.0;
 constexpr float kRouteLoiterRadiusMeters = 30.0F;
@@ -28,19 +27,6 @@ constexpr float kRouteAltitudeToleranceMeters = 5.0F;
 constexpr auto kRouteVtolFreshnessTimeout = std::chrono::seconds(3);
 constexpr auto kRouteCommandTimeout = std::chrono::seconds(3);
 constexpr auto kRouteStatePollTimeout = std::chrono::milliseconds(50);
-
-double radians(double degrees) {
-    return degrees * std::numbers::pi / 180.0;
-}
-
-double distance_m(double latitude_a, double longitude_a, double latitude_b, double longitude_b) {
-    const double latitude_delta = radians(latitude_b - latitude_a);
-    const double longitude_delta = radians(longitude_b - longitude_a);
-    const double a = std::sin(latitude_delta / 2.0) * std::sin(latitude_delta / 2.0) +
-                     std::cos(radians(latitude_a)) * std::cos(radians(latitude_b)) *
-                         std::sin(longitude_delta / 2.0) * std::sin(longitude_delta / 2.0);
-    return 2.0 * kEarthRadiusMeters * std::asin(std::sqrt(std::clamp(a, 0.0, 1.0)));
-}
 
 std::optional<std::string> validate_route(const std::vector<RouteWaypoint> &route,
                                           const safety::GlobalFencePolicy &fence_policy) {
@@ -64,8 +50,8 @@ std::optional<std::string> validate_route(const std::vector<RouteWaypoint> &rout
             return fence.message;
         }
     }
-    const double spacing = distance_m(route[0].latitude_deg, route[0].longitude_deg,
-                                      route[1].latitude_deg, route[1].longitude_deg);
+    const double spacing = detail::distance_m(route[0].latitude_deg, route[0].longitude_deg,
+                                               route[1].latitude_deg, route[1].longitude_deg);
     if (spacing < kMinimumRoutePointSpacingMeters) {
         return "waypoints must be at least 100 m apart";
     }
@@ -121,8 +107,8 @@ CommandResult Vehicle::execute_fixed_wing_route(const std::vector<RouteWaypoint>
             return {false, "fixed-wing route rejected before waypoint " + std::to_string(index + 1) + ": " + *error};
         }
         const auto &waypoint = route[index];
-        const double initial_distance = distance_m(state.position.latitude_deg, state.position.longitude_deg,
-                                                   waypoint.latitude_deg, waypoint.longitude_deg);
+        const double initial_distance = detail::distance_m(state.position.latitude_deg, state.position.longitude_deg,
+                                                           waypoint.latitude_deg, waypoint.longitude_deg);
         if (initial_distance <= kRouteArrivalRadiusMeters + 10.0) {
             return {false, "fixed-wing route rejected: waypoint is too close to prove new navigation"};
         }
@@ -147,9 +133,9 @@ CommandResult Vehicle::execute_fixed_wing_route(const std::vector<RouteWaypoint>
             return {false, "fixed-wing route verification failed after waypoint " + std::to_string(index + 1) +
                                " ACK: " + *error};
         }
-        const double acknowledgement_distance = distance_m(acknowledgement_state.position.latitude_deg,
-                                                           acknowledgement_state.position.longitude_deg,
-                                                           waypoint.latitude_deg, waypoint.longitude_deg);
+        const double acknowledgement_distance = detail::distance_m(acknowledgement_state.position.latitude_deg,
+                                                                   acknowledgement_state.position.longitude_deg,
+                                                                   waypoint.latitude_deg, waypoint.longitude_deg);
         const auto acknowledgement_boundary =
             std::max(acknowledgement_received_at, acknowledgement_state.position_updated_at);
         const auto reached = wait_for_fixed_wing_waypoint(waypoint, expected_session_id, acknowledgement_boundary,
@@ -223,8 +209,9 @@ CommandResult Vehicle::wait_for_fixed_wing_waypoint(const RouteWaypoint &waypoin
         if (sample.position_updated_at <= acknowledgement_boundary) {
             continue;
         }
-        const double remaining_distance = distance_m(sample.position.latitude_deg, sample.position.longitude_deg,
-                                                     waypoint.latitude_deg, waypoint.longitude_deg);
+        const double remaining_distance = detail::distance_m(sample.position.latitude_deg,
+                                                             sample.position.longitude_deg, waypoint.latitude_deg,
+                                                             waypoint.longitude_deg);
         const double altitude_error = std::abs(sample.position.relative_altitude_m - waypoint.relative_altitude_m);
         if (remaining_distance <= kRouteArrivalRadiusMeters &&
             acknowledgement_distance_m - remaining_distance >= 10.0 &&
