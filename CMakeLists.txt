@@ -232,6 +232,11 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests")
     target_compile_definitions(nomad_core_tests PRIVATE NOMAD_TESTS)
     add_test(NAME nomad_core_tests COMMAND nomad_core_tests)
 
+    add_executable(nomad_fake_connection_contract_tests tests/fake_connection_contract_test.cpp)
+    target_link_libraries(nomad_fake_connection_contract_tests PRIVATE nomad_core)
+    target_compile_definitions(nomad_fake_connection_contract_tests PRIVATE NOMAD_TESTS)
+    add_test(NAME nomad_fake_connection_contract_tests COMMAND nomad_fake_connection_contract_tests)
+
     add_executable(nomad_vehicle_config_tests tests/vehicle_config_test.cpp)
     target_link_libraries(nomad_vehicle_config_tests PRIVATE nomad_core)
     target_compile_definitions(nomad_vehicle_config_tests PRIVATE NOMAD_TESTS)
