@@ -4,12 +4,13 @@
 #include "nomad/vehicle/vehicle.hpp"
 
 #include "command_ids.hpp"
+#include "geo.hpp"
+#include "state_time.hpp"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
-#include <numbers>
 #include <optional>
 #include <string>
 
@@ -22,7 +23,6 @@ constexpr auto kPollTimeout = std::chrono::milliseconds(50);
 constexpr auto kAckTimeout = std::chrono::seconds(3);
 constexpr auto kVersionTimeout = std::chrono::seconds(2);
 constexpr auto kLandedStateFreshness = std::chrono::seconds(3);
-constexpr double kEarthRadiusMeters = 6371000.0;
 constexpr double kLandingRegionRadiusMeters = 5.0;
 constexpr double kLandingPositionSpreadMeters = 1.5;
 constexpr float kMinimumEntryAltitudeMeters = 15.0F;
@@ -61,26 +61,9 @@ struct SampleWindow {
     float maximum_altitude{};
 };
 
-double radians(double degrees) {
-    return degrees * std::numbers::pi / 180.0;
-}
-
-double distance_m(double latitude_a, double longitude_a, double latitude_b, double longitude_b) {
-    const auto latitude_delta = radians(latitude_b - latitude_a);
-    const auto longitude_delta = radians(longitude_b - longitude_a);
-    const auto a = std::sin(latitude_delta / 2.0) * std::sin(latitude_delta / 2.0) +
-                   std::cos(radians(latitude_a)) * std::cos(radians(latitude_b)) *
-                       std::sin(longitude_delta / 2.0) * std::sin(longitude_delta / 2.0);
-    return 2.0 * kEarthRadiusMeters * std::asin(std::sqrt(std::clamp(a, 0.0, 1.0)));
-}
-
 double distance_to_landing_point(const telemetry::VehicleState &state, const LandingPoint &point) {
-    return distance_m(state.position.latitude_deg, state.position.longitude_deg, point.latitude_deg,
-                      point.longitude_deg);
-}
-
-bool is_fresh(Clock::time_point timestamp, std::chrono::milliseconds timeout, Clock::time_point now) {
-    return timestamp != Clock::time_point{} && timestamp <= now && now - timestamp <= timeout;
+    return detail::distance_m(state.position.latitude_deg, state.position.longitude_deg, point.latitude_deg,
+                              point.longitude_deg);
 }
 
 std::optional<std::string> validate_landing_identity(const telemetry::VehicleState &state,
@@ -115,27 +98,28 @@ std::optional<std::string> validate_landing_telemetry(const telemetry::VehicleSt
         return error;
     }
     const auto now = Clock::now();
-    if (!state.position_valid || !is_fresh(state.position_updated_at, freshness, now) ||
+    if (!state.position_valid || !detail::timestamp_is_fresh(state.position_updated_at, freshness, now) ||
         !std::isfinite(state.position.latitude_deg) || state.position.latitude_deg < -90.0 ||
         state.position.latitude_deg > 90.0 || !std::isfinite(state.position.longitude_deg) ||
         state.position.longitude_deg < -180.0 || state.position.longitude_deg > 180.0 ||
         !std::isfinite(state.position.relative_altitude_m)) {
         return "position is invalid or stale";
     }
-    if (!is_fresh(state.velocity_updated_at, freshness, now) || !std::isfinite(state.velocity.groundspeed_mps) ||
+    if (!detail::timestamp_is_fresh(state.velocity_updated_at, freshness, now) ||
+        !std::isfinite(state.velocity.groundspeed_mps) ||
         !std::isfinite(state.velocity.climb_rate_mps)) {
         return "velocity is invalid or stale";
     }
     if (!state.gps_valid || state.gps.fix_type < 3 || state.gps.satellites == 0 ||
-        !is_fresh(state.gps_updated_at, freshness, now)) {
+        !detail::timestamp_is_fresh(state.gps_updated_at, freshness, now)) {
         return "a fresh 3D GPS fix is required";
     }
     if (!state.vtol_state_valid || state.vtol_state != telemetry::VtolState::Multicopter ||
-        !is_fresh(state.vtol_state_updated_at, kLandedStateFreshness, now)) {
+        !detail::timestamp_is_fresh(state.vtol_state_updated_at, kLandedStateFreshness, now)) {
         return "authoritative multicopter VTOL state is unavailable, stale, or changed";
     }
     if (!state.landed_state_valid ||
-        !is_fresh(state.landed_state_updated_at, kLandedStateFreshness, now)) {
+        !detail::timestamp_is_fresh(state.landed_state_updated_at, kLandedStateFreshness, now)) {
         return "landed-state telemetry is unavailable or stale";
     }
     return {};
@@ -200,8 +184,8 @@ bool add_stable_sample(SampleWindow &window, const telemetry::VehicleState &stat
         reset_window(window, state);
         return true;
     }
-    const auto spread = distance_m(window.anchor_latitude, window.anchor_longitude, state.position.latitude_deg,
-                                   state.position.longitude_deg);
+    const auto spread = detail::distance_m(window.anchor_latitude, window.anchor_longitude,
+                                           state.position.latitude_deg, state.position.longitude_deg);
     const auto minimum_altitude = std::min(window.minimum_altitude, state.position.relative_altitude_m);
     const auto maximum_altitude = std::max(window.maximum_altitude, state.position.relative_altitude_m);
     if (spread > kLandingPositionSpreadMeters ||
@@ -250,8 +234,8 @@ bool add_final_landing_sample(SampleWindow &window, const telemetry::VehicleStat
     if (window.count == 0) {
         reset_window(window, state);
     } else if (state.position_updated_at > window.last_position && state.velocity_updated_at > window.last_velocity) {
-        const auto spread = distance_m(window.anchor_latitude, window.anchor_longitude, state.position.latitude_deg,
-                                       state.position.longitude_deg);
+        const auto spread = detail::distance_m(window.anchor_latitude, window.anchor_longitude,
+                                               state.position.latitude_deg, state.position.longitude_deg);
         const auto minimum_altitude = std::min(window.minimum_altitude, state.position.relative_altitude_m);
         const auto maximum_altitude = std::max(window.maximum_altitude, state.position.relative_altitude_m);
         if (spread > kLandingPositionSpreadMeters || maximum_altitude - minimum_altitude > 0.5F) {

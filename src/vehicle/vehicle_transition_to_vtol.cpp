@@ -4,13 +4,14 @@
 #include "nomad/vehicle/vehicle.hpp"
 
 #include "command_ids.hpp"
+#include "geo.hpp"
+#include "state_time.hpp"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
-#include <numbers>
 #include <optional>
 #include <string>
 
@@ -19,7 +20,6 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-constexpr double kEarthRadiusMeters = 6371000.0;
 constexpr double kTransitionRegionRadiusMeters = 55.0;
 constexpr double kReadyMaxGroundspeedMps = 28.0;
 constexpr double kReadyMaxGroundspeedVariationMps = 3.0;
@@ -80,22 +80,9 @@ struct StableVtolWindow {
     float maximum_altitude_m{};
 };
 
-double radians(double degrees) {
-    return degrees * std::numbers::pi / 180.0;
-}
-
-double distance_m(double latitude_a, double longitude_a, double latitude_b, double longitude_b) {
-    const double latitude_delta = radians(latitude_b - latitude_a);
-    const double longitude_delta = radians(longitude_b - longitude_a);
-    const double a = std::sin(latitude_delta / 2.0) * std::sin(latitude_delta / 2.0) +
-                     std::cos(radians(latitude_a)) * std::cos(radians(latitude_b)) *
-                         std::sin(longitude_delta / 2.0) * std::sin(longitude_delta / 2.0);
-    return 2.0 * kEarthRadiusMeters * std::asin(std::sqrt(std::clamp(a, 0.0, 1.0)));
-}
-
 double distance_to_point(const telemetry::VehicleState &state, const RecoveryPoint &point) {
-    return distance_m(state.position.latitude_deg, state.position.longitude_deg,
-                      point.latitude_deg, point.longitude_deg);
+    return detail::distance_m(state.position.latitude_deg, state.position.longitude_deg,
+                              point.latitude_deg, point.longitude_deg);
 }
 
 std::optional<std::string> validate_point(const RecoveryPoint &point,
@@ -114,10 +101,6 @@ std::optional<std::string> validate_point(const RecoveryPoint &point,
         return fence.message;
     }
     return {};
-}
-
-bool timestamp_is_fresh(Clock::time_point timestamp, std::chrono::milliseconds timeout, Clock::time_point now) {
-    return timestamp != Clock::time_point{} && timestamp <= now && now - timestamp <= timeout;
 }
 
 std::optional<std::string> transition_state_error(const telemetry::VehicleState &state, std::uint64_t expected_session,
@@ -142,7 +125,7 @@ std::optional<std::string> transition_state_error(const telemetry::VehicleState 
         return "AUTO mode is required by the pinned transition handler";
     }
     const auto now = Clock::now();
-    if (!state.position_valid || !timestamp_is_fresh(state.position_updated_at, telemetry_freshness, now)) {
+    if (!state.position_valid || !detail::timestamp_is_fresh(state.position_updated_at, telemetry_freshness, now)) {
         return "position is invalid or stale";
     }
     if (!std::isfinite(state.position.latitude_deg) || state.position.latitude_deg < -90.0 ||
@@ -152,15 +135,16 @@ std::optional<std::string> transition_state_error(const telemetry::VehicleState 
         return "position is invalid";
     }
     if (!state.gps_valid || state.gps.fix_type < 3 || state.gps.satellites == 0 ||
-        !timestamp_is_fresh(state.gps_updated_at, telemetry_freshness, now)) {
+        !detail::timestamp_is_fresh(state.gps_updated_at, telemetry_freshness, now)) {
         return "a fresh 3D GPS fix is required";
     }
     if (!state.vtol_state_valid ||
-        !timestamp_is_fresh(state.vtol_state_updated_at,
-                            std::chrono::duration_cast<std::chrono::milliseconds>(kVtolStateFreshnessTimeout), now)) {
+        !detail::timestamp_is_fresh(state.vtol_state_updated_at,
+                                    std::chrono::duration_cast<std::chrono::milliseconds>(kVtolStateFreshnessTimeout),
+                                    now)) {
         return "VTOL state is unavailable or stale";
     }
-    if (!timestamp_is_fresh(state.velocity_updated_at, telemetry_freshness, now) ||
+    if (!detail::timestamp_is_fresh(state.velocity_updated_at, telemetry_freshness, now) ||
         !std::isfinite(state.velocity.groundspeed_mps) || !std::isfinite(state.velocity.climb_rate_mps)) {
         return "velocity telemetry is unavailable or stale";
     }
@@ -281,8 +265,9 @@ void add_stable_vtol_position(StableVtolWindow &window, const telemetry::Vehicle
         start_stable_vtol_window(window, state);
         return;
     }
-    const auto distance_from_anchor = distance_m(window.anchor_latitude_deg, window.anchor_longitude_deg,
-                                                 state.position.latitude_deg, state.position.longitude_deg);
+    const auto distance_from_anchor = detail::distance_m(window.anchor_latitude_deg, window.anchor_longitude_deg,
+                                                         state.position.latitude_deg,
+                                                         state.position.longitude_deg);
     const auto minimum_altitude = std::min(window.minimum_altitude_m, state.position.relative_altitude_m);
     const auto maximum_altitude = std::max(window.maximum_altitude_m, state.position.relative_altitude_m);
     if (distance_from_anchor > kVtolMaxPositionSpreadMeters / 2.0 ||
