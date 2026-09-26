@@ -133,6 +133,9 @@ jobs:
             throw "build did not produce NOMADPlugin.dll"
           }
 
+      - name: Gimbal joystick UI smoke
+        run: pwsh -File scripts/build/test_plugin_gimbal_ui.ps1
+
       - name: Flight log adapter smoke test
         run: pwsh -File scripts/build/test_plugin_log_adapters.ps1
 

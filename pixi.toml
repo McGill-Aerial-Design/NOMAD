@@ -207,6 +207,9 @@ test-plugin-interlock = "powershell -ExecutionPolicy Bypass -File scripts/build/
 # values) plus the stick-integration and angle-clamping math.
 test-plugin-gimbal = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_gimbal.ps1"
 
+# STA WinForms interaction/render smoke for the isolated gimbal joystick pad.
+test-plugin-gimbal-ui = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_gimbal_ui.ps1"
+
 # Unit tests for the NomadCoreClient boundary (Windows only) — compiles the
 # Mission Planner-free NomadCoreClient with VS's csc and pins the exact argument
 # vector the plugin sends to the C++ core CLI (values then --endpoint, invariant
