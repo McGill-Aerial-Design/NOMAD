@@ -141,6 +141,7 @@ void test_expected_session_overload_and_new_fixture_reset_behavior() {
 
 void test_waypoint_poll_completes_transition_then_waypoint_then_sample() {
     FixedWingWaypointFakeConnection connection;
+    connection.auto_stamp_fresh_fields = false;
     connection.set_connected(true);
     connection.state->session_id = 5;
     connection.state->vtol_state = VtolState::TransitionToFixedWing;
@@ -167,6 +168,7 @@ void test_waypoint_poll_completes_transition_then_waypoint_then_sample() {
     CHECK(state->position.longitude_deg == -73.3);
     CHECK(state->position.altitude_m == 31.0F);
     CHECK(state->position.relative_altitude_m == 26.0F);
+    CHECK(state->position_updated_at > Clock::time_point{});
 }
 
 void test_waypoint_expected_session_and_ack_ids_are_returned_as_configured() {

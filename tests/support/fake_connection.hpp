@@ -181,9 +181,9 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
     std::atomic_int connect_count{0};
     std::atomic_bool command_started{false};
     std::chrono::milliseconds command_delay{0};
-    // Most tests model a live telemetry feed, so polling refreshes the sample
-    // timestamps by default. Tests for stale-feed behavior clear this flag and
-    // set the relevant *_updated_at by hand.
+    // Most tests model a live feed, so polling refreshes valid timestamps by default.
+    // Disabling this suppresses only that blanket refresh; simulated effects still
+    // stamp any new samples they create.
     bool auto_stamp_fresh_fields{true};
     int version_read_count{0};
     std::optional<nomad::mavlink::AutopilotVersion> autopilot_version{
