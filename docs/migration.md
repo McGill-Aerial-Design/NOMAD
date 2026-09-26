@@ -477,7 +477,7 @@ ACK wait is capped at 3 s.
 `scripts/dev/mavsdk_connection_fixture.py` exercises the production MAVSDK
 transport against a deterministic peer, advances each target gradually after
 its ACK, and asserts both typed packet frames, mode request, command ID, flags,
-radius, unset heading, coordinates and altitudes. `tests/quadplane_route_test.cpp` falsifies unsupported-class
+radius, unset heading, coordinates and altitudes. `tests/vehicle/quadplane/quadplane_route_test.cpp` falsifies unsupported-class
 transmission, malformed route input, stale telemetry, wrong mode/state,
 post-setup changes, ACK/upload-only completion, pre-ACK arrival without later
 progress, intermediate progress, prior location, timeout and link/session

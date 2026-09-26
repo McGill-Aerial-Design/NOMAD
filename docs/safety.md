@@ -105,7 +105,7 @@ These retain their original obligations; partial coverage is not satisfaction.
 | SR-SEC-01 | No NOMAD command disables FC failsafes | Structural scan only; semantic allowlist and plugin parameter audit open |
 | SR-SEC-02 | Authenticate command clients at trust boundary | Nonempty environment value is not authentication; production gate open |
 | SR-SEC-03 | Authenticate and audit command requests | CLI admission logs only; final outcomes and all client/library entrypoints open |
-| SR-TYP-02 | QuadPlane forward transition and VTOL takeoff stay bound to the admitted aircraft identity and session; transition completion remains armed/AUTO and takeoff requires a fresh post-ACK climb sample | Deterministic counterexamples and controls in `tests/quadplane_transition_test.cpp` and `tests/quadplane_vtol_takeoff_test.cpp`; full pinned QuadPlane chain through stable QLAND remains required |
+| SR-TYP-02 | QuadPlane forward transition and VTOL takeoff stay bound to the admitted aircraft identity and session; transition completion remains armed/AUTO and takeoff requires a fresh post-ACK climb sample | Deterministic counterexamples and controls in `tests/vehicle/quadplane/quadplane_transition_test.cpp` and `tests/quadplane_vtol_takeoff_test.cpp`; full pinned QuadPlane chain through stable QLAND remains required |
 | SR-LND-01 | Pinned QuadPlane landing success requires fresh post-ACK descent, landed-state telemetry, disarm and a stable final envelope; ACK alone is never touchdown | C++ falsification and deterministic MAVSDK landed-state mapping pass; independent full-chain pinned SITL trace passed in [run 36210548163](https://github.com/YoussGm3o8/NOMAD/actions/runs/36210548163) |
 
 ## Additional hazards and proposed obligations
@@ -194,14 +194,14 @@ SR-LNK-03 | src/mavlink/mavsdk_mavlink_connection.cpp:send_velocity | tests/safe
 SR-LNK-03 | src/mavlink/mavsdk_mavlink_connection.cpp:send_velocity | tests/test_mavsdk_connection.py::test_zero_delivery_reaches_the_wire_on_every_stop_path
 SR-LNK-04 | src/mavlink/mavsdk_mavlink_connection.cpp:MavsdkMavlinkConnection | tests/test_mavsdk_connection.py::test_unlatched_link_announces_a_gcs_heartbeat
 SR-MIS-01 | src/vehicle/vehicle_route.cpp:fixed_wing_route | tests/operation_capability_test.cpp::test_quadplane_supports_only_qualified_operations
-SR-MIS-01 | src/vehicle/vehicle_route.cpp:wait_for_fixed_wing_waypoint | tests/quadplane_route_test.cpp::test_fixed_wing_route_sends_two_waypoints_and_verifies_position
-SR-MIS-01 | src/vehicle/vehicle_route.cpp:wait_for_fixed_wing_waypoint | tests/quadplane_route_test.cpp::test_position_reached_before_ack_without_post_ack_progress_does_not_complete_route
+SR-MIS-01 | src/vehicle/vehicle_route.cpp:wait_for_fixed_wing_waypoint | tests/vehicle/quadplane/quadplane_route_test.cpp::test_fixed_wing_route_sends_two_waypoints_and_verifies_position
+SR-MIS-01 | src/vehicle/vehicle_route.cpp:wait_for_fixed_wing_waypoint | tests/vehicle/quadplane/quadplane_route_test.cpp::test_position_reached_before_ack_without_post_ack_progress_does_not_complete_route
 SR-MIS-01 | src/mavlink/mavsdk_route.cpp:send_fixed_wing_waypoint | tests/test_mavsdk_connection.py::test_quadplane_fixed_wing_route_wire_protocol_and_completion
-SR-MIS-01 | src/vehicle/vehicle_recovery.cpp:fixed_wing_recovery | tests/quadplane_recovery_test.cpp::test_capability_and_readiness_rejections
-SR-MIS-01 | src/vehicle/vehicle_recovery.cpp:fixed_wing_recovery | tests/quadplane_recovery_test.cpp::test_ack_without_real_progress_cannot_complete
+SR-MIS-01 | src/vehicle/vehicle_recovery.cpp:fixed_wing_recovery | tests/vehicle/quadplane/quadplane_recovery_test.cpp::test_capability_and_readiness_rejections
+SR-MIS-01 | src/vehicle/vehicle_recovery.cpp:fixed_wing_recovery | tests/vehicle/quadplane/quadplane_recovery_test.cpp::test_ack_without_real_progress_cannot_complete
 SR-MIS-01 | src/mavlink/mavsdk_route.cpp:send_fixed_wing_waypoint | tests/test_mavsdk_connection.py::test_quadplane_fixed_wing_recovery_wire_protocol_and_completion
-SR-TYP-01 | src/vehicle/vehicle_quadplane_landing.cpp:quadplane_vtol_land | tests/quadplane_vtol_landing_test.cpp::test_initial_state_and_telemetry_fail_closed
-SR-LND-01 | src/vehicle/vehicle_quadplane_landing.cpp:verify_quadplane_touchdown | tests/quadplane_vtol_landing_test.cpp::test_valid_landing_requires_command_and_physical_post_ack_evidence
+SR-TYP-01 | src/vehicle/vehicle_quadplane_landing.cpp:quadplane_vtol_land | tests/vehicle/quadplane/quadplane_vtol_landing_test.cpp::test_initial_state_and_telemetry_fail_closed
+SR-LND-01 | src/vehicle/vehicle_quadplane_landing.cpp:verify_quadplane_touchdown | tests/vehicle/quadplane/quadplane_vtol_landing_test.cpp::test_valid_landing_requires_command_and_physical_post_ack_evidence
 SR-FEN-01 | src/vehicle/vehicle_fence.cpp:upload_fence | tests/safety_test.cpp::test_vehicle_upload_fence_validates_boundary
 SR-FEN-01 | src/vehicle/vehicle_fence.cpp:verify_fence_uploaded | tests/safety_test.cpp::test_vehicle_verifies_fence_status_and_fails_closed
 SR-FEN-01 | src/vehicle/vehicle_fence.cpp:upload_fence | tests/safety_test.cpp::test_vehicle_upload_fence_rejects_transport_failure
