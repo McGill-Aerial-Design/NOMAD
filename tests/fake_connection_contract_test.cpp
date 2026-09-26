@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fake_connection.hpp"
+#include "fixed_wing_waypoint_fake_connection.hpp"
 #include "nomad/mavlink/connection.hpp"
 #include "test_harness.hpp"
+#include "vehicle_state_builder.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -13,6 +15,7 @@ using Clock = std::chrono::steady_clock;
 using nomad::mavlink::Command;
 using nomad::telemetry::LandedState;
 using nomad::telemetry::VtolState;
+using nomad::test::VehicleStateBuilder;
 
 Command arm_command() {
     Command command{};
@@ -137,7 +140,7 @@ void test_expected_session_overload_and_new_fixture_reset_behavior() {
 }
 
 void test_waypoint_poll_completes_transition_then_waypoint_then_sample() {
-    FakeConnection connection;
+    FixedWingWaypointFakeConnection connection;
     connection.set_connected(true);
     connection.state->session_id = 5;
     connection.state->vtol_state = VtolState::TransitionToFixedWing;
@@ -167,7 +170,7 @@ void test_waypoint_poll_completes_transition_then_waypoint_then_sample() {
 }
 
 void test_waypoint_expected_session_and_ack_ids_are_returned_as_configured() {
-    FakeConnection wrong_session;
+    FixedWingWaypointFakeConnection wrong_session;
     wrong_session.set_connected(true);
     wrong_session.state->session_id = 5;
     const nomad::mavlink::FixedWingWaypointCommand waypoint{45.1, -73.2, 30.0F, 25.0F};
@@ -177,7 +180,7 @@ void test_waypoint_expected_session_and_ack_ids_are_returned_as_configured() {
     CHECK(!refused.has_value());
     CHECK(wrong_session.fixed_wing_waypoint_send_count == 0);
 
-    FakeConnection wrong_ack;
+    FixedWingWaypointFakeConnection wrong_ack;
     wrong_ack.set_connected(true);
     wrong_ack.state->session_id = 5;
     wrong_ack.fixed_wing_waypoint_ack = nomad::mavlink::CommandAck{191, 0};
@@ -188,7 +191,7 @@ void test_waypoint_expected_session_and_ack_ids_are_returned_as_configured() {
     CHECK(wrong_ack.fixed_wing_waypoint_requests.size() == 1);
     CHECK(wrong_ack.fixed_wing_waypoint_requests.front().latitude_deg == waypoint.latitude_deg);
 
-    FakeConnection session_turnover;
+    FixedWingWaypointFakeConnection session_turnover;
     session_turnover.set_connected(true);
     session_turnover.state->session_id = 5;
     session_turnover.fixed_wing_waypoint_session_change_before_send = true;
@@ -198,6 +201,49 @@ void test_waypoint_expected_session_and_ack_ids_are_returned_as_configured() {
     CHECK(session_turnover.state->session_id == 6);
     CHECK(session_turnover.fixed_wing_waypoint_send_count == 0);
     CHECK(session_turnover.fixed_wing_waypoint_requests.empty());
+}
+
+void test_state_builder_keeps_omitted_samples_invalid_and_timestamps_explicit() {
+    VehicleStateBuilder builder;
+    const auto empty = builder.build();
+    CHECK(!empty.connected);
+    CHECK(!empty.heartbeat_fresh);
+    CHECK(!empty.position_valid);
+    CHECK(!empty.gps_valid);
+    CHECK(!empty.vtol_state_valid);
+    CHECK(empty.position_updated_at == Clock::time_point{});
+    CHECK(empty.gps_updated_at == Clock::time_point{});
+    CHECK(empty.vtol_state_updated_at == Clock::time_point{});
+
+    const auto reference = Clock::now();
+    const auto stale_time = reference - std::chrono::hours(1);
+    const auto future_time = reference + std::chrono::hours(1);
+    builder.set_identity({nomad::telemetry::kArduPilotAutopilot, nomad::telemetry::kFixedWing,
+                          nomad::telemetry::AircraftClass::QuadPlane});
+    builder.set_link_state(true, true);
+    builder.set_armed(true);
+    builder.set_mode(10);
+    builder.set_session(1, 1, 9);
+    builder.set_position({45.0, -73.0, 30.0F, 10.0F}, Clock::time_point{});
+    builder.set_gps({3, 12}, stale_time);
+    builder.set_vtol_state(VtolState::FixedWing, future_time);
+
+    const auto ready = builder.build();
+    CHECK(ready.connected);
+    CHECK(ready.heartbeat_fresh);
+    CHECK(ready.armed);
+    CHECK(ready.custom_mode == 10);
+    CHECK(ready.identity.vehicle_type == nomad::telemetry::kFixedWing);
+    CHECK(ready.identity.aircraft_class == nomad::telemetry::AircraftClass::QuadPlane);
+    CHECK(ready.position_valid);
+    CHECK(ready.gps_valid);
+    CHECK(ready.vtol_state_valid);
+    CHECK(!ready.battery_valid);
+    CHECK(!ready.attitude_valid);
+    CHECK(!ready.landed_state_valid);
+    CHECK(ready.position_updated_at == Clock::time_point{});
+    CHECK(ready.gps_updated_at == stale_time);
+    CHECK(ready.vtol_state_updated_at == future_time);
 }
 
 } // namespace
@@ -210,5 +256,6 @@ int main() {
         test_expected_session_overload_and_new_fixture_reset_behavior();
         test_waypoint_poll_completes_transition_then_waypoint_then_sample();
         test_waypoint_expected_session_and_ack_ids_are_returned_as_configured();
+        test_state_builder_keeps_omitted_samples_invalid_and_timestamps_explicit();
     });
 }

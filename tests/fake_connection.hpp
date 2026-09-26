@@ -54,8 +54,6 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
 
     std::optional<nomad::telemetry::VehicleState> wait_for_state(std::chrono::milliseconds) override {
         complete_transition_after_ack_on_state_poll();
-        complete_fixed_wing_waypoint_after_ack_on_state_poll();
-        apply_fixed_wing_waypoint_sample();
         if (auto_stamp_fresh_fields) {
             stamp_fresh_fields();
         }
@@ -105,80 +103,9 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
     }
 
     std::optional<nomad::mavlink::CommandAck> send_fixed_wing_waypoint(
-        const nomad::mavlink::FixedWingWaypointCommand &waypoint, std::uint64_t expected_session_id,
+        const nomad::mavlink::FixedWingWaypointCommand &, std::uint64_t,
         std::chrono::milliseconds) override {
-        std::lock_guard lock(state_mutex);
-        if (fixed_wing_waypoint_session_change_before_send) {
-            ++state->session_id;
-        }
-        if (expected_session_id == 0 || state->session_id != expected_session_id || !state->connected ||
-            !state->heartbeat_fresh) {
-            return std::nullopt;
-        }
-        fixed_wing_waypoint_requests.push_back(waypoint);
-        ++fixed_wing_waypoint_send_count;
-        if (!fixed_wing_waypoint_transport_enabled || !fixed_wing_waypoint_ack.has_value()) {
-            return std::nullopt;
-        }
-        if (fixed_wing_waypoint_ack->result != 0) {
-            return fixed_wing_waypoint_ack;
-        }
-
-        bool complete_waypoint = fixed_wing_waypoint_auto_complete;
-        if (!fixed_wing_waypoint_completions.empty()) {
-            complete_waypoint = fixed_wing_waypoint_completions.front();
-            fixed_wing_waypoint_completions.erase(fixed_wing_waypoint_completions.begin());
-        }
-        if (fixed_wing_waypoint_session_change_on_send) {
-            ++state->session_id;
-        }
-        if (fixed_wing_waypoint_link_loss_on_send) {
-            state->connected = false;
-            state->heartbeat_fresh = false;
-        }
-        if (fixed_wing_waypoint_heartbeat_loss_on_send) {
-            state->heartbeat_fresh = false;
-        }
-        if (fixed_wing_waypoint_mode_loss_on_send) {
-            state->custom_mode = 10;
-        }
-        if (fixed_wing_waypoint_vtol_loss_on_send) {
-            state->vtol_state_valid = false;
-        }
-        if (fixed_wing_waypoint_vtol_mc_on_send) {
-            state->vtol_state = nomad::telemetry::VtolState::Multicopter;
-        }
-        if (fixed_wing_waypoint_disarm_on_send) {
-            state->armed = false;
-        }
-        if (fixed_wing_waypoint_stale_gps_on_send) {
-            auto_stamp_fresh_fields = false;
-            state->gps_updated_at = std::chrono::steady_clock::now() - std::chrono::seconds(3);
-        }
-        if (fixed_wing_waypoint_stale_vtol_on_send) {
-            auto_stamp_fresh_fields = false;
-            state->vtol_state_updated_at = std::chrono::steady_clock::now() - std::chrono::seconds(4);
-        }
-        if (fixed_wing_waypoint_stale_position_on_send) {
-            auto_stamp_fresh_fields = false;
-            state->position_updated_at = std::chrono::steady_clock::now() - std::chrono::seconds(3);
-        }
-        if (fixed_wing_waypoint_position_before_ack.has_value()) {
-            state->position = *fixed_wing_waypoint_position_before_ack;
-            state->position_updated_at = std::chrono::steady_clock::now();
-        }
-        if (complete_waypoint) {
-            if (fixed_wing_waypoint_completion_before_ack) {
-                state->position.latitude_deg = waypoint.latitude_deg;
-                state->position.longitude_deg = waypoint.longitude_deg;
-                state->position.relative_altitude_m = waypoint.relative_altitude_m;
-                state->position_valid = true;
-                state->position_updated_at = std::chrono::steady_clock::now();
-            } else {
-                fixed_wing_waypoint_after_ack_pending = waypoint;
-            }
-        }
-        return fixed_wing_waypoint_ack;
+        return std::nullopt;
     }
 
     bool send_velocity(const nomad::mavlink::VelocitySetpoint &setpoint) override {
@@ -269,28 +196,6 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
     int velocity_send_count{0};
     nomad::mavlink::Command last_command{};
     std::optional<GotoRequest> last_goto;
-    std::vector<nomad::mavlink::FixedWingWaypointCommand> fixed_wing_waypoint_requests;
-    std::optional<nomad::mavlink::CommandAck> fixed_wing_waypoint_ack{
-        nomad::mavlink::CommandAck{192, 0},
-    };
-    std::vector<bool> fixed_wing_waypoint_completions;
-    int fixed_wing_waypoint_send_count{0};
-    bool fixed_wing_waypoint_transport_enabled{true};
-    bool fixed_wing_waypoint_auto_complete{true};
-    bool fixed_wing_waypoint_completion_before_ack{false};
-    bool fixed_wing_waypoint_session_change_before_send{false};
-    bool fixed_wing_waypoint_session_change_on_send{false};
-    bool fixed_wing_waypoint_link_loss_on_send{false};
-    bool fixed_wing_waypoint_heartbeat_loss_on_send{false};
-    bool fixed_wing_waypoint_mode_loss_on_send{false};
-    bool fixed_wing_waypoint_vtol_loss_on_send{false};
-    bool fixed_wing_waypoint_vtol_mc_on_send{false};
-    bool fixed_wing_waypoint_stale_position_on_send{false};
-    bool fixed_wing_waypoint_stale_gps_on_send{false};
-    bool fixed_wing_waypoint_stale_vtol_on_send{false};
-    bool fixed_wing_waypoint_disarm_on_send{false};
-    std::vector<nomad::telemetry::Position> fixed_wing_waypoint_samples;
-    std::optional<nomad::telemetry::Position> fixed_wing_waypoint_position_before_ack;
     bool invalidate_vtol_after_guided_mode{false};
     bool stale_position_after_guided_mode{false};
     std::optional<nomad::mavlink::CommandAck> acknowledgement{
@@ -346,36 +251,13 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
         return command_history.size();
     }
 
-  private:
+  protected:
     mutable std::mutex state_mutex;
 
+  private:
     bool transition_after_ack_pending{false};
-    std::optional<nomad::mavlink::FixedWingWaypointCommand> fixed_wing_waypoint_after_ack_pending;
-    std::size_t fixed_wing_waypoint_sample_index{0};
 
-    void apply_fixed_wing_waypoint_sample() {
-        std::lock_guard lock(state_mutex);
-        if (fixed_wing_waypoint_sample_index >= fixed_wing_waypoint_samples.size()) {
-            return;
-        }
-        state->position = fixed_wing_waypoint_samples[fixed_wing_waypoint_sample_index++];
-        state->position_valid = true;
-        state->position_updated_at = std::chrono::steady_clock::now();
-    }
-
-    void complete_fixed_wing_waypoint_after_ack_on_state_poll() {
-        std::lock_guard lock(state_mutex);
-        if (!fixed_wing_waypoint_after_ack_pending.has_value()) {
-            return;
-        }
-        state->position.latitude_deg = fixed_wing_waypoint_after_ack_pending->latitude_deg;
-        state->position.longitude_deg = fixed_wing_waypoint_after_ack_pending->longitude_deg;
-        state->position.relative_altitude_m = fixed_wing_waypoint_after_ack_pending->relative_altitude_m;
-        state->position_valid = true;
-        state->position_updated_at = std::chrono::steady_clock::now();
-        fixed_wing_waypoint_after_ack_pending.reset();
-    }
-
+  protected:
     void complete_transition_after_ack_on_state_poll() {
         std::lock_guard lock(state_mutex);
         if (!transition_after_ack_pending) {
@@ -413,6 +295,7 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
         }
     }
 
+  private:
     bool take_fence_send_result() {
         const bool result = fence_send_results.front();
         fence_send_results.erase(fence_send_results.begin());
