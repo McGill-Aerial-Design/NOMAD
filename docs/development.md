@@ -47,7 +47,7 @@ removing it when the file is split, the function is shortened, lines are wrapped
 or the file is deleted non-optional. The C/C++ column limit is enforced through
 this reporter rather than clang-format because the formatter is not a pinned
 repository dependency. Shared helper code lives in exactly one place: C++ tests use
-`tests/test_harness.hpp` (assert/report/pass/fail plus the console-safe `main`)
+`tests/support/test_harness.hpp` (assert/report/pass/fail plus the console-safe `main`)
 and `tests/loopback_socket.hpp`; `nomad::util` owns argv and environment number
 parsing; `infra/tailscale/shell.py` owns the command probe both monitors call. Do
 not copy one of those helpers back into a caller.

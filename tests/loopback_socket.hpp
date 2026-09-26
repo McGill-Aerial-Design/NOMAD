@@ -9,7 +9,7 @@
 // ``#ifdef _WIN32 <winsock2.h>`` blocks used, so winsock2.h still precedes any
 // accidental windows.h.
 
-#include "test_harness.hpp"
+#include "support/test_harness.hpp"
 
 #include <cstdint>
 

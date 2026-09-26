@@ -15,7 +15,7 @@
 // invokes it as `--zero-delivery <endpoint> <system-id> <scenario>`.
 #include "nomad/mavlink/mavsdk_transport.hpp"
 #include "nomad/vehicle/vehicle.hpp"
-#include "test_harness.hpp"
+#include "support/test_harness.hpp"
 
 #include <chrono>
 #include <cstdint>

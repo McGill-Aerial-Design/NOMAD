@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "nomad/telemetry/identity.hpp"
-#include "test_harness.hpp"
+#include "support/test_harness.hpp"
 
 #include <cstdint>
 

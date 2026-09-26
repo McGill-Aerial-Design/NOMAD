@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fake_connection.hpp"
-#include "fixed_wing_waypoint_fake_connection.hpp"
+#include "support/fake_connection.hpp"
+#include "support/fixed_wing_waypoint_fake_connection.hpp"
 #include "nomad/mavlink/connection.hpp"
-#include "test_harness.hpp"
-#include "vehicle_state_builder.hpp"
+#include "support/test_harness.hpp"
+#include "support/vehicle_state_builder.hpp"
 
 #include <chrono>
 #include <cstdint>
