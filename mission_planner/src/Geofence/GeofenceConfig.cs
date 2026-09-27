@@ -36,7 +36,7 @@ namespace NOMAD.MissionPlanner
         };
 
         /// <summary>
-        /// Hard flight boundary (red - forced descent required).
+        /// Hard flight boundary (red - termination required; plugin activation unavailable).
         /// </summary>
         public FlightBoundary HardBoundary { get; set; } = new FlightBoundary
         {
@@ -78,12 +78,6 @@ namespace NOMAD.MissionPlanner
         /// derived soft boundary when <see cref="SoftBoundaryFromHard"/> is on.
         /// </summary>
         public double SoftBoundaryInsetMeters { get; set; } = 5.0;
-
-        /// <summary>
-        /// Descent rate (m/s) commanded on flight termination (maps to
-        /// LAND_SPEED when pushing the fence to the vehicle).
-        /// </summary>
-        public double TerminationDescentRateMps { get; set; } = 2.0;
 
         /// <summary>
         /// Boundary violations log.

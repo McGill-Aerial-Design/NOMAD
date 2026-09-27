@@ -103,6 +103,79 @@ Preserve QLAND physical completion and existing operation admission/freshness.
 No new policy, RC mapping, termination dispatch or authority API is implemented
 by this documentation record. The active G-M item remains open.
 
+### Authority review and plugin termination removal — 2026-09-27
+
+Review baseline: merged `main` `c3167422f18008f35910319535bcb0275b1111f3`
+(PRs #38/#39 included). Six investigation roles were completed read-only by
+three GPT-6 Luna MAX agents in two assignments each; the agent service rejected
+creation of a fourth agent. Pre-existing `.gitignore` and untracked submodule
+state were preserved. This is local development evidence, not clean-head CI.
+
+The synthesized [authority contract](architecture.md#authority-contract-for-the-next-implementation-slice)
+requires one software owner and generation, revocation before sends, explicit
+handback and an overriding aircraft-side termination latch. It is a target,
+not implemented aircraft arbitration. No termination command, RC map, Lua
+script, automatic loss-response recipe or Q02 policy is selected.
+
+The plugin no longer implements `EmergencyLand`, reflective mode/parameter
+helpers, descent-speed settings or the direct vehicle-fence upload/clear writer.
+Its button and boundary callers use one unavailable request boundary and report
+failure audibly; they cannot claim aircraft entry or completion. Review found
+that even report-only fence maintenance lacked disarmed ownership and could leave
+`FENCE_ENABLE=0` after failure. `MPFenceUploader` and its clear control are therefore
+deleted; only visual Plan map export remains. No aircraft fence changes occur.
+Misleading forced-descent countdown displays are removed. Stored obsolete speed
+fields have no runtime reader or compatibility implementation.
+The unused `CommLossAction=hover_and_wait` setting is deleted; it had no caller
+and could misleadingly suggest a QuadPlane loss-response policy.
+
+| Finding and source evidence | Disposition / next falsification |
+|---|---|
+| `FlightModeController`, joystick and boundary monitor treated LAND/parameter writes as termination | Removed with caller failure reporting, compiled request tests and source-boundary guards; no physical termination evidence claimed |
+| `NOMADBoundaryView.MPFence` mapped kill labels to `FENCE_ACTION=2`; `MPFenceUploader` wrote LAND speed | Direct uploader/clear implementation and speed side effect deleted; visual map export only. Delayed/warn-only hard-boundary settings still conflict with immediate aircraft termination and stay GAP-05/06 blockers |
+| `src/main.cpp` direct CLI, default MP `LegacyOneShot`, `ros2/nomad_ros/src/node.cpp` separate Vehicle, native MP flight controls and ELRS RC are independent writers | Active G-M prerequisite: migrate or exclude every software writer and prove FC input selection agrees with core inhibition; concurrent source test must show one effective owner |
+| Plugin gimbal stream/fallback, payload `RCx_OPTION`, fence upload and motor-music `SCR_ENABLE`/MAVFTP writes bypass runtime | Fence writer deleted after review found unsafe disable/failure behavior. Other writers remain active G-M maintenance admission prerequisites: disarmed exclusive ownership or removal/migration |
+| Runtime 256-response cache is evicted and cleared on restart; replay can execute a mutation again (`src/runtime/runtime.cpp`, `tests/runtime_ipc_test.cpp`) | Active G-M stale-request prerequisite: incarnation/session/generation plus bounded expiry and replay policy; test restart, eviction, queued intents and late requests without retransmission |
+| NOMAD joystick handles gimbal/camera/switches, never starts MP flight RC override (`NomadJoystickService.cs`) | LTE flight joystick remains unimplemented/unqualified; prove real pilot input, takeover and handback instead of inferring them from LTE connectivity |
+| Effective pinned profile has `FLTMODE_CH=5`, `RC5_OPTION=0`; no transmitter map/chord export | D09 production map blocked: distinguish transmitter output and FC input, read back mode/auxiliary assignments and prove distinct arming/mode/termination/payload controls |
+| Pinned `docker/quadplane-tilttri.parm` has `Q_TRANS_FAIL=0` | Qualification-only transition-failure setting, not an approved operational failsafe baseline; D01/D09 must review it before flight qualification, without weakening failsafes to pass tests |
+| G3 text still called Jetson undecided; SITL README omitted later qualified chain slices | Corrected current text; historical dated decisions and runs preserved |
+| Existing `test-plugin-geometry` expects null/two-vertex polygons to count as inside (`GeoMath.IsInside`) | GAP-05 containment blocker: missing/invalid competition boundaries must report unavailable and fail preflight; advisory geometry tests do not qualify containment |
+
+Native mechanisms remain the first design choice. The pinned
+[ArduPlane AFS implementation](https://github.com/ArduPilot/ardupilot/blob/dbe792162d06cab66c3475fd5556bf7a120f119e/ArduPlane/afs_plane.cpp)
+uses termination outputs for action 42 and enters QLAND for action 43 whenever
+QuadPlane is available, without a flight-phase check in `terminate_vehicle`.
+This cannot approve fixed-wing/transition QLAND substitution. The
+[AFS documentation](https://ardupilot.org/plane/docs/advanced-failsafe-configuration.html)
+describes dual GPS/GCS loss, not dual ELRS/LTE loss. Ordinary RC/GCS failsafe
+actions are not proof of the directed termination behavior. Dedicated ELRS
+activation of the same aircraft-side function is still unresolved; motor-stop
+auxiliary options are not a controlled descent substitute. Q02 remains blocked.
+
+Next qualification must isolate ELRS/receiver loss, LTE/GCS loss, both lost
+(including FPV still healthy), ground-computer loss with RC healthy and FPV-only
+loss. A passive observer must capture source/fault boundaries, vehicle-facing
+command traffic, mode, armed/VTOL state and motion. Prove each takeover direction,
+cancelled follow-on sends, both explicit handbacks, delayed/replayed requests and
+reconnect without reclaim. Both activation routes, termination override and
+physical completion require the approved mechanism; complete loss requires the
+approved onboard response. ACKs, client exits and host-relay pauses cannot pass
+these gates; MAVProxy/other heartbeat producers must be independently accounted
+for. No live fault or termination qualification is claimed by this cleanup.
+
+Local validation: baseline `pixi run test-core` configured/built and passed
+21/21 CTests (C++ source is unchanged by the cleanup). Focused termination source
+guards passed 4/4; `test-plugin-core-client` compiled and passed the unavailable
+request checks and existing client suite. `lint-plugin` rebuilt Release with
+dead-code errors enabled and passed; `test-plugin-geometry` passed its existing
+geometry expectations, including the explicitly blocked absent-boundary behavior.
+Full `test-python` passed 681 tests with
+4 skipped. Ruff lint/format, source complexity and strict docs build passed.
+These checks do not demonstrate aircraft termination, flight authority or live
+SITL response. Hosted CI and live qualification must be evaluated separately
+from these local checks.
+
 ## Current implementation inventory
 
 The [MAVSDK compatibility handoff](mavsdk-handoff.md) records the 2026-09-19
@@ -118,7 +191,7 @@ merged baseline, hosted qualification results, and remaining fork/adapter work.
 | Missions | src/mission/executor.cpp; core_test.cpp | Synchronous small step executor; no integrated cancellation, persisted resume, survey or Task 2 workflow |
 | Safety | src/safety; safety_test, fence_config_test, velocity_config_test, vio_source_test | Finite/range gates, VIO-conditioned velocity, watchdog, configured target fence, upload/readback and payload interlock |
 | Stop delivery | tests/mavsdk_zero_delivery_test.cpp; scripts/dev/core_sitl_zero_delivery.py | Live peer-driven wire tests cover every stop path on the MAVSDK transport; whole-link outage cannot guarantee delivery; merged-main Copter SITL evidence is recorded below and must be rerun when the transport, fixture or firmware changes |
-| Mission Planner | NomadCoreClient, OutputController, FlightModeController, GimbalController, BoundaryManager, MPFenceUploader | LegacyOneShot retains goto/discrete outputs; PersistentRuntime covers only its protocol-v1 typed subset; native parameter/mode/gimbal/fence paths and UI-owned decisions remain |
+| Mission Planner | NomadCoreClient, OutputController, FlightModeController, GimbalController, BoundaryManager | LegacyOneShot retains goto/discrete outputs; PersistentRuntime covers only its protocol-v1 typed subset; native maintenance parameter/gimbal paths and UI-owned decisions remain; direct plugin fence and termination writers are removed |
 | ROS 2 | ros2/nomad_ros/src/node.cpp, translation.cpp; tests/ros | Owns a Vehicle, telemetry topics, VIO health/source gate and Trigger services; blocking callbacks, no selected estimator or navigation fusion |
 | Video | python/tools/simple_video_bridge.py, video_bridge_server.py; test_simple_video_bridge.py | ROS image to GStreamer/RTSP; control HTTP is loopback-only; no validated capture/CV/VIO product pipeline |
 | Profiles | scripts/profile.py; three product profile files; test_deployment_profiles.py | Canonical endpoint and stale-setting checks exist; optional workloads and hardware remain unqualified |
@@ -140,7 +213,7 @@ for missing workflows.
 | C03 | Older docs said Edge Core still runs and only two deployment profiles exist | Three profiles are product scope; qualify actual entrypoints in G3 |
 | C04 | CLI key check accepts any nonempty value; CLI logs admission before outcome; library has no inherited auth/audit | OS trust boundary now; authenticated client protocol and full lifecycle audit at G2 |
 | C05 | Separate CLI invocations, ROS Vehicle and direct plugin writers can conflict | One integrated command owner, explicit manual handover and per-session cancellation |
-| C06 | FlightModeController.EmergencyLand writes LAND_SPEED/WPNAV_SPEED_DN and returns mode dispatch; plugin comments claim termination compliance | v1.0 does require minimum 2 m/s rotary descent, but dispatch/parameters prove neither touchdown nor five-second/all-mode/C2-loss termination; redesign ownership and prove aircraft-specific behavior at G2/G7 |
+| C06 | Removed plugin LAND-as-termination dispatch, descent tuning and LAND fence-action translation; activators report termination unavailable | Ground-side policy bypass removed; approved aircraft mechanism, activation mapping, authority latch and physical evidence remain G2/G7 blockers |
 | C07 | Generic servo/relay paths bypass release_payload's consuming interlock; plugin has its own timers/confirmation | Reserve hazardous channels, unify authorization in core, provide independent output timeout/feedback |
 | C08 | ROS callbacks wait synchronously; receipt timestamps and mixed odometry frames can misrepresent freshness/frame | Bounded worker operations; acquisition-time/frame contract and independent axis/time tests |
 | C09 | VehicleState had validity flags but no per-field age, so connection freshness was not position freshness. Position freshness is now enforced by the core: `Vehicle::wait_for_location`/`wait_for_altitude` reject a position sample older than the configurable `position_freshness_timeout`, and battery/GPS/attitude timestamps are stamped but not yet gated | Add independent field timestamps; reject fresh-heartbeat/stale-position decisions |
@@ -995,8 +1068,9 @@ velocity. Critical operation completion requires authoritative state.
 For each profile test clean boot, core/ROS/video process absence, missing GPU/
 camera, wrong endpoint, restart, link loss and capability transitions.
 Task 1 primary: groundstation_gpu with aircraft FPV capture and optional Pi Zero
-LTE bridge. Task 2 candidate: onboard_companion if useful autonomy is required;
-Jetson installation is not decided. groundstation_minimal remains supported.
+LTE bridge. Task 2 direction: onboard_companion with Jetson Orin Nano and a robotic arm;
+integration, authority and hardware capability remain unqualified.
+groundstation_minimal remains supported.
 
 Exit: minimal C++ telemetry/eligible mission/output safety works without ROS/
 camera/GPU; both compute profiles run selected workloads with measured CPU/GPU,

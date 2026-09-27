@@ -69,8 +69,8 @@ namespace NOMAD.MissionPlanner
                 _config = NOMADConfig.Load();
 
                 // FlightModeController builds core clients from the same config
-                // (CoreExePath / CoreMavlinkEndpoint / CoreApiKey) so GuidedGoto
-                // and EmergencyLand route through the C++ core boundary.
+                // (CoreExePath / CoreMavlinkEndpoint / CoreApiKey) for GuidedGoto.
+                // Aircraft termination remains unavailable.
                 FlightModeController.Initialize(_config);
                 OutputController.Initialize(_config);
 

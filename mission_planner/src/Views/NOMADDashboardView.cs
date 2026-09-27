@@ -182,9 +182,7 @@ namespace NOMAD.MissionPlanner
                     _lblGeofence.ForeColor = NOMADTheme.WARNING;
                     break;
                 case "hard_violation":
-                    _lblGeofence.Text = _boundaryMonitor.KillCountdown.HasValue
-                        ? $"HARD — {_boundaryMonitor.KillCountdown}s"
-                        : "HARD VIOLATION";
+                    _lblGeofence.Text = "HARD — TERMINATION UNAVAILABLE";
                     _lblGeofence.ForeColor = NOMADTheme.ERROR;
                     break;
                 default:

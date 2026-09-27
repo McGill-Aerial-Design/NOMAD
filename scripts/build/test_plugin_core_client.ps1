@@ -44,6 +44,8 @@ if (-not (Test-Path $csc)) {
 $sources = @(
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadCoreClient.cs'),
     (Join-Path $repoRoot 'mission_planner\src\Connectivity\NomadRuntimeClient.cs'),
+    (Join-Path $repoRoot 'mission_planner\src\Control\FlightModeController.cs'),
+    (Join-Path $repoRoot 'mission_planner\tests\coreclient\TerminationRequestTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientTests.cs'),
     (Join-Path $repoRoot 'mission_planner\tests\coreclient\NomadCoreClientRuntimeTests.cs')
 )

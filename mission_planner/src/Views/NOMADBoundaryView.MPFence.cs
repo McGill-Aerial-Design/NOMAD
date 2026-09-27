@@ -18,15 +18,6 @@ namespace NOMAD.MissionPlanner
 {
     public partial class NOMADBoundaryView
     {
-        private void BtnClearVehicleFence_Click(object sender, EventArgs e)
-        {
-            if (CustomMessageBox.Show("Disable fence and clear all fence points on the connected vehicle?", "Confirm",
-                CustomMessageBox.MessageBoxButtons.YesNo) != CustomMessageBox.DialogResult.Yes)
-                return;
-            var r = MPFenceUploader.ClearFence();
-            CustomMessageBox.Show(r.Message, r.Success ? "Cleared" : "Failed");
-        }
-
         private void BtnGetFromMP_Click(object sender, EventArgs e)
         {
             try
@@ -134,7 +125,7 @@ namespace NOMAD.MissionPlanner
             return hard;
         }
 
-        private void BtnExportToMPFence_Click(object sender, EventArgs e)
+        private void BtnExportToMPPlan_Click(object sender, EventArgs e)
         {
             try
             {
@@ -142,12 +133,11 @@ namespace NOMAD.MissionPlanner
                 if (hardVerts == null || hardVerts.Count < 3)
                 {
                     CustomMessageBox.Show(
-                        "Hard boundary needs at least 3 points before pushing to MP / drone.",
+                        "Hard boundary needs at least 3 points before exporting to the Plan map.",
                         "Warning");
                     return;
                 }
                 var vertices = hardVerts;
-                string boundaryName = "Hard";
                 var strokeColor = Color.Red;
                 var fillColor = Color.Transparent;
                 string polyName = "NOMAD_Hard_Fence";
@@ -172,48 +162,16 @@ namespace NOMAD.MissionPlanner
                 }
                 catch (Exception ex) { Log.Error($"Plan map inject failed - {ex.Message}"); }
 
-                // 3) Upload to connected vehicle via MAVLink and set FENCE_* params.
-                // For any termination action we also push LAND_SPEED at the
-                // configured descent rate (CONOPS §4.5 requires >= 2 m/s);
-                // warn-only flights leave LAND_SPEED untouched.
-                string hardAction = _missionConfig.Failsafe.HardBoundaryAction;
-                int fenceAction = MapFenceActionToParam(hardAction);
-                int landSpeedCmS = (hardAction ?? "warn_and_kill").ToLower() == "warn_only"
-                    ? 0
-                    : (int)Math.Round(_missionConfig.TerminationDescentRateMps * 100);
-                var upload = MPFenceUploader.UploadPolygon(
-                    vertices,
-                    _missionConfig.ReturnPoint,
-                    _missionConfig.MaxAltitudeAglMeters,
-                    fenceAction,
-                    enableFence: true,
-                    landSpeedCmS: landSpeedCmS);
-
-                var parts = new List<string>();
-                parts.Add($"Boundary: {boundaryName} ({vertices.Count} pts)");
-                parts.Add(planInjected ? "Plan map: injected" : "Plan map: not available");
-                parts.Add(upload.Success ? "Vehicle: " + upload.Message : "Vehicle: " + upload.Message);
-                CustomMessageBox.Show(string.Join("\n", parts), upload.Success ? "Pushed to MP + Drone" : "Partial");
+                CustomMessageBox.Show(
+                    planInjected ? "Hard boundary exported to the Plan map. No aircraft fence was changed."
+                                 : "Plan map export unavailable. No aircraft fence was changed.",
+                    "Plan Map Export");
             }
             catch (Exception ex)
             {
-                CustomMessageBox.Show($"Error pushing fence: {ex.Message}", "Error");
+                CustomMessageBox.Show($"Error exporting fence outline: {ex.Message}", "Error");
             }
         }
 
-        private static int MapFenceActionToParam(string action)
-        {
-            // ArduPilot FENCE_ACTION: 0=Report, 1=RTL or Land, 2=Always Land, 3=SmartRTL, 4=Brake, 5=SmartRTL-or-Land.
-            // CONOPS §4.5 requires termination (vertical descent >=2 m/s) on
-            // hard-boundary breach - RTL flies home horizontally first and
-            // does NOT satisfy that, so both "kill" variants map to Land (2).
-            switch ((action ?? "warn_and_kill").ToLower())
-            {
-                case "warn_only": return 0;
-                case "auto_kill": return 2;
-                case "warn_and_kill": return 2;
-                default: return 2;
-            }
-        }
     }
 }

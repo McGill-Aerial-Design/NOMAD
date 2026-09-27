@@ -343,7 +343,7 @@ namespace NOMAD.MissionPlanner
 
         private TableLayoutPanel BuildHardBoundaryCard()
         {
-            var card = Card("HARD BOUNDARY (Descend)", out var body);
+            var card = Card("HARD BOUNDARY (Termination Required)", out var body);
 
             _dgvHardBoundary = ControlFactory.BoundaryGrid();
             _dgvHardBoundary.CellValueChanged += (s, e) => SaveBoundaryFromGrid(_dgvHardBoundary, _missionConfig.HardBoundary);
@@ -371,9 +371,8 @@ namespace NOMAD.MissionPlanner
             var btnGetFromMP = Btn("MP Fence", ACCENT_COLOR, BtnGetFromMP_Click);
             AddRow(body, Row(Lbl("Import:", TEXT_SECONDARY, NOMADTheme.SIZE_SMALL, FontStyle.Bold), btnImportKml, btnImportCSV, btnGetFromMP));
 
-            var btnExportToMPFence = Btn("Push to MP + Drone", SUCCESS_COLOR, BtnExportToMPFence_Click);
-            var btnClearVehicleFence = Btn("Clear on Veh", ERROR_COLOR, BtnClearVehicleFence_Click);
-            AddRow(body, Row(Lbl("Send Fence:", TEXT_SECONDARY, NOMADTheme.SIZE_SMALL, FontStyle.Bold), btnExportToMPFence, btnClearVehicleFence));
+            var btnExportToMPPlan = Btn("Export to Plan Map", SUCCESS_COLOR, BtnExportToMPPlan_Click);
+            AddRow(body, Row(Lbl("Fence Outline:", TEXT_SECONDARY, NOMADTheme.SIZE_SMALL, FontStyle.Bold), btnExportToMPPlan));
 
             // Auto-draw toggle: when checked, AutoDrawBoundariesIfEnabled() pushes
             // imported/edited polygons to the map without a manual refresh. Named so
@@ -426,7 +425,7 @@ namespace NOMAD.MissionPlanner
                 switch (kind)
                 {
                     case AlertKind.BoundarySoft: spoken = "Soft boundary warning. Turn around."; break;
-                    case AlertKind.BoundaryHard: spoken = "Hard boundary violation. Descend immediately."; break;
+                    case AlertKind.BoundaryHard: spoken = "Hard boundary violation. Termination required. Plugin termination unavailable."; break;
                     case AlertKind.BatteryWarning: spoken = "Battery low. Test alert."; break;
                     case AlertKind.BatteryCritical: spoken = "Battery critical. Land now. Test alert."; break;
                     default: spoken = "Test alert."; break;
@@ -488,7 +487,7 @@ namespace NOMAD.MissionPlanner
             _cmbSoftAction.SelectedIndexChanged += (s, e) => { _missionConfig.Failsafe.SoftBoundaryAction = softActions[_cmbSoftAction.SelectedIndex]; _missionConfig.Save(); };
             AddRow(body, Row(Lbl("Soft:", TEXT_PRIMARY), _cmbSoftAction));
 
-            _cmbHardAction = Combo(150, "Warn + Descend", "Auto Descend", "Warn Only");
+            _cmbHardAction = Combo(150, "Delayed Request (Unavailable)", "Request (Unavailable)", "Warn Only");
             var hardActions = new[] { "warn_and_kill", "auto_kill", "warn_only" };
             _cmbHardAction.SelectedIndex = Math.Max(0, Array.IndexOf(hardActions, _missionConfig.Failsafe.HardBoundaryAction ?? "warn_and_kill"));
             _cmbHardAction.SelectedIndexChanged += (s, e) => { _missionConfig.Failsafe.HardBoundaryAction = hardActions[_cmbHardAction.SelectedIndex]; _missionConfig.Save(); };
@@ -496,9 +495,7 @@ namespace NOMAD.MissionPlanner
             _nudKillDelay.ValueChanged += (s, e) => { _missionConfig.Failsafe.HardBoundaryKillDelaySec = (int)_nudKillDelay.Value; _missionConfig.Save(); };
             AddRow(body, Row(Lbl("Hard:", TEXT_PRIMARY), _cmbHardAction, Lbl("Delay:", TEXT_PRIMARY), _nudKillDelay, Lbl("s", TEXT_SECONDARY)));
 
-            var nudDescentRate = ControlFactory.Numeric(0.5m, 10m, (decimal)_missionConfig.TerminationDescentRateMps, increment: 0.5m, decimals: 1, width: 56);
-            nudDescentRate.ValueChanged += (s, e) => { _missionConfig.TerminationDescentRateMps = (double)nudDescentRate.Value; _missionConfig.Save(); };
-            AddRow(body, Row(Lbl("Descent rate:", TEXT_PRIMARY), nudDescentRate, Lbl("m/s (LAND_SPEED on push)", TEXT_SECONDARY)));
+            AddRow(body, Row(Lbl("Aircraft termination unavailable; flight qualification blocked.", TEXT_SECONDARY)));
 
             return card;
         }

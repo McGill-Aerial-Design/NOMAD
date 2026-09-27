@@ -28,6 +28,7 @@ internal static partial class NomadCoreClientTests
 
     private static int Main()
     {
+        Termination_ReportsUnavailableWithoutVehicleDispatch();
         BuildArguments_PinsVerbThenValuesThenEndpoint();
         GotoValues_UseInvariantFormatting();
         LatitudeValidation_RejectsOutOfRangeAndNonFinite();

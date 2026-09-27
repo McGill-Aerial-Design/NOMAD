@@ -109,7 +109,6 @@ namespace NOMAD.MissionPlanner
         private ComboBox _cmbSw1Up, _cmbSw1Down, _cmbSw2Up, _cmbSw2Down, _cmbSw3Up, _cmbSw3Down;
         private ComboBox _cmbSwitchDevice;
         private CheckBox _chkKillSwitchEnabled;
-        private NumericUpDown _numKillLandSpeed;
         private CheckBox _chkJoyAutoSelect;
         // Serial bridge sub-section
         private CheckBox _chkSerialBridgeEnabled;

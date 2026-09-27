@@ -154,23 +154,12 @@ namespace NOMAD.MissionPlanner
             _cmbSw3Down = AddComboBox(tab, 370, y, 130, actionLabels);
             y += 36;
 
-            // Kill switch
-            AddSectionLabel(tab, "Kill Switch (pushbutton)", ref y);
-            AddLabel(tab,
-                "Pressing the radio's kill button commands LAND at the descent",
-                10, y, Color.FromArgb(180, 180, 180));
-            y += 18;
-            AddLabel(tab,
-                "rate below. Minimum 200 cm/s (2 m/s) per CONOPS 4.5.",
-                10, y, Color.FromArgb(180, 180, 180));
-            y += 22;
-
-            _chkKillSwitchEnabled = AddCheckBox(tab, "Enable kill switch", 20, y, Color.IndianRed);
-            y += 28;
-
-            AddLabel(tab, "Descent (cm/s):", 20, y);
-            _numKillLandSpeed = AddNumericUpDown(tab, 130, y, 80, 200, 800, 250);
-            AddLabel(tab, "= 2.5 m/s default", 220, y, Color.Gray);
+            AddSectionLabel(tab, "Termination Button", ref y);
+            AddLabel(tab, "Aircraft termination is unavailable in this plugin.",
+                10, y, Color.IndianRed);
+            y += 24;
+            _chkKillSwitchEnabled = AddCheckBox(tab, "Monitor button requests (reports unavailable)",
+                20, y, Color.IndianRed);
             y += 36;
 
             // Serial bridge

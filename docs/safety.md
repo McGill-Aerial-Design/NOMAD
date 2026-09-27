@@ -56,12 +56,16 @@ requirements below. They have no complete implementation mapping yet.
 | AE27-OPS-024/031 | Under-15-kg project margin and physical ground propeller inhibit | Independent weighing and props-safe inhibit fault tests; G7 |
 
 The C++ watchdog's delivered zero command is not a competition termination
-mechanism. Mission Planner EmergencyLand ignores parameter-write results and
-reports dispatch, while legacy boundary writers also change descent parameters.
-Those paths are neither all-mode nor independent of the lost link, and must not
-be credited as compliance. Preserve existing failsafes; qualify the aircraft's
-termination mechanism and its interaction with them before changing source.
-No emergency/parameter recipe is approved by this documentation pass.
+mechanism. The plugin's LAND-as-termination dispatch and descent-parameter
+recipes have been removed. Its button and hard-boundary request now explicitly
+report termination unavailable, with no aircraft command. The plugin's direct
+vehicle-fence upload/clear writer is deleted because it could disable the fence
+without qualified maintenance ownership or failure restoration. Visual Plan map
+export remains; it sends no aircraft request. This removes a misleading independent writer, not a
+safety mechanism that can satisfy AE27-OPS-015 through AE27-OPS-019. Aircraft
+termination, hard-breach response and flight qualification remain blocked.
+Preserve ArduPilot failsafes and qualify their interaction with the approved
+termination mechanism; no substitute emergency recipe is approved.
 
 Q01 is resolved by the project owner: hard-boundary violation triggers
 termination; the soft boundary is an internal configurable inward margin from

@@ -76,7 +76,7 @@ cause is not identified: treat a repeat as a real signal and capture the arm
 step's full output before retrying.
 
 Flight scenarios remain Copter-oriented except for the separately pinned
-QuadPlane observation, arm/takeoff, VTOL-to-fixed-wing transition and
-fixed-wing route qualification slices. Return/recovery, VTOL-back and landing
-evidence remain separate Task 1 work. Required gate artifacts and historical/current distinctions live in
+QuadPlane chain through return/recovery, VTOL-back and QLAND landing, plus the
+disarmed receiver-fault delivery probe. Those slices do not qualify link loss,
+authority, manual takeover, handback, termination or complete Task 1 flight. Required gate artifacts and historical/current distinctions live in
 [migration](../../docs/migration.md); do not duplicate pass counts here.

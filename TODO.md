@@ -154,7 +154,15 @@ close its integration or release gate.
   Qualify faults separately, source arbitration, stale-command inhibition,
   explicit handback and latched termination intent. Exact RC/ArduPilot mapping,
   approved automatic response and Q02 transition termination remain open; see
-  [current evidence and remaining scope](docs/migration.md#current-baseline-checks-and-d09-direction-2026-09-27).
+  [current evidence and remaining scope](docs/migration.md#reviewed-baseline-checks-and-d09-direction-2026-09-27).
+  The parallel review removed plugin LAND-as-termination, its descent settings
+  and the direct vehicle-fence upload/clear writer; activation now reports unavailable.
+  The [review dispositions](docs/migration.md#authority-review-and-plugin-termination-removal-2026-09-27)
+  explicitly track every remaining writer, replay and failsafe finding.
+  Next single slice: implement the reviewed all-writer admission/inhibition and
+  generation contract, then prove takeover/handback and stale-request rejection
+  before qualifying the approved complete-C2-loss aircraft response. No gate is
+  complete; Q02-dependent termination remains blocked.
 
 - [ ] G-M complete Task 1 flight qualification: integrate the separately
   qualified QuadPlane phases into one end-to-end flight and prove the full

@@ -134,7 +134,6 @@ namespace NOMAD.MissionPlanner
             SetComboBoxValue(_cmbSw3Down, LabelForActionId(Config.JoystickSw3DownAction));
             _chkJoyAutoSelect.Checked = Config.JoystickAutoSelectDevice;
             _chkKillSwitchEnabled.Checked = Config.JoystickKillSwitchEnabled;
-            _numKillLandSpeed.Value = ClampValue(_numKillLandSpeed, Config.JoystickKillLandSpeedCmS);
             _chkSerialBridgeEnabled.Checked = Config.SerialJoystickEnabled;
             _cmbSerialBridgePort.Text = Config.SerialJoystickPort ?? "";
             _numSerialBridgeBaud.Value = ClampValue(_numSerialBridgeBaud, Config.SerialJoystickBaud);
@@ -259,7 +258,6 @@ namespace NOMAD.MissionPlanner
             Config.JoystickSw3DownAction = ActionIdForLabel(_cmbSw3Down?.SelectedItem?.ToString());
             Config.JoystickAutoSelectDevice = _chkJoyAutoSelect.Checked;
             Config.JoystickKillSwitchEnabled = _chkKillSwitchEnabled.Checked;
-            Config.JoystickKillLandSpeedCmS = (int)_numKillLandSpeed.Value;
             Config.SerialJoystickEnabled = _chkSerialBridgeEnabled.Checked;
             Config.SerialJoystickPort = _cmbSerialBridgePort.Text.Trim();
             Config.SerialJoystickBaud = (int)_numSerialBridgeBaud.Value;
