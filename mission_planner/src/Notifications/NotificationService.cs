@@ -228,7 +228,7 @@ namespace NOMAD.MissionPlanner
             else if (e.Status == "hard_violation")
             {
                 AddNotification(NotificationSeverity.Critical, NotificationCategory.Boundary,
-                    "HARD BOUNDARY CROSSED", "Forced descent required per competition rules");
+                    "HARD BOUNDARY CROSSED", "Termination required; plugin activation unavailable");
             }
 
             _lastBoundaryStatus = e.Status;

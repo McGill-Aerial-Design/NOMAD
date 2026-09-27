@@ -181,8 +181,12 @@ The red Arduino HID ground button and independent two-control transmitter chord
 request the same latched termination intent. The chord must work with Mission
 Planner, NOMAD, LTE and the ground computer unavailable. Dedicated RC function,
 MAVLink mechanism, safe multi-route delivery and post-flight reset remain to be
-qualified. Existing plugin LAND dispatch is not that qualification. A restored
-link must not reclaim pilot authority or clear termination.
+qualified. The plugin has no operational termination dispatch: its monitored
+button and hard-boundary request report unavailable and send no substitute
+command. Descent-speed settings and LAND fence-action translation are removed;
+the plugin's vehicle-fence uploader/clear writer is deleted. Export to the Plan
+map changes only the visual outline; it is not aircraft containment evidence. A restored link must not reclaim pilot
+authority or clear termination.
 
 ## Startup, degradation and recovery target
 

@@ -250,9 +250,43 @@ The NOMAD joystick service controls gimbal/camera and switches; it deliberately
 does not start Mission Planner's native RC-override loop. It does not prove the
 intended LTE flight-joystick path. Native joystick integration, competing RC and
 MAVLink input priority, core inhibition and explicit handback need a reviewed
-authority contract. The existing direct plugin LAND/parameter paths do not
-implement this termination intent. A per-runtime mutex or connection session
-ID cannot fence all aircraft writers.
+authority contract. The plugin LAND-as-termination and descent-parameter paths
+are removed; its two activation callers report unavailable. A per-runtime mutex
+or connection session ID cannot fence all aircraft writers.
+
+### Authority contract for the next implementation slice
+
+This is the target contract, not an implemented arbiter or approved aircraft
+loss-response policy. Flight-controller RC/MAVLink input selection and NOMAD
+software-writer admission must agree; the core cannot fence a radio input or an
+independent Mission Planner writer with a process-local mutex.
+
+| State/event | Required admission and outcome |
+|---|---|
+| Startup or core restart | No automatic motion owner; reconcile fresh aircraft state and explicitly admit one source |
+| Normal automation | One core-owned action and one generation; all enabled adapters submit requests through that owner |
+| RC or LTE pilot takeover | Revoke automation, cancel its remaining steps and setpoint streams; invalidate the generation before further sends |
+| Loss or stale pilot input | Revoke that source; link availability or GCS heartbeat alone cannot admit another pilot or automation |
+| Reconnect | Observation only; recovered sources and old requests cannot reclaim authority |
+| Explicit handback | Fresh aircraft/input state plus deliberate operator handback creates a new generation; an old mission does not resume |
+| Accepted termination | Aircraft-side latch overrides every ordinary flight owner; no motion request or reconnect clears it |
+| Both C2 paths lost | Aircraft independently executes the approved onboard response; selection remains blocked, including Q02 phases |
+
+Bind each mutating request to runtime incarnation, aircraft session, authority
+generation, source and a bounded expiry. Check admission immediately before each
+transport send, including follow-on steps and resends. Revoke in-flight outcomes
+on takeover; report interrupted or unknown instead of success from an ACK.
+A boot epoch alone does not reject replay after cache eviction or a queued
+request rebound to a new owner. Termination reset must follow the approved
+post-flight reset procedure, never reconnect or ordinary handback.
+
+Direct CLI, ROS, native Mission Planner, onboard and maintenance writers must be
+migrated or explicitly excluded from an integrated flight configuration before
+qualification. Maintenance ownership requires a disarmed, non-flight session;
+raw output/payload permissions remain separate from flight ownership. Router
+route selection has no power to grant authority. Exact RC/LTE takeover signals,
+FC input priority and deadlines require the reviewed production map and tests;
+this contract does not invent channel assignments or Q02 behavior.
 
 Task 2 direction is an onboard Jetson Orin Nano and robotic arm on a quadcopter,
 not qualified hardware. Jetson requests remain clients of core policy; payload

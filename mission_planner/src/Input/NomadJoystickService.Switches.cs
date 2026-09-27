@@ -102,10 +102,11 @@ namespace NOMAD.MissionPlanner
                 bool killNow = KILL_BUTTON_IDX < buttons.Length && buttons[KILL_BUTTON_IDX];
                 if (killNow && !_prevKillButton)
                 {
-                    int speed = Math.Max(200, _config.JoystickKillLandSpeedCmS);
-                    Log.Warn($"KILL SWITCH pressed — commanding LAND @ {speed} cm/s descent");
-                    bool ok = FlightModeController.EmergencyLand(speed);
-                    if (!ok) Log.Warn("EmergencyLand dispatch failed.");
+                    Log.Warn("Termination button pressed.");
+                    if (!FlightModeController.RequestTermination())
+                    {
+                        AudioAlerts.Speak("Termination unavailable. Take manual control.", component: "joystick");
+                    }
                 }
                 _prevKillButton = killNow;
             }

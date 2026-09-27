@@ -48,7 +48,7 @@ namespace NOMAD.MissionPlanner
         public string Name { get; set; } = "Boundary";
 
         /// <summary>
-        /// Boundary type: "soft" = warning, "hard" = forced descent required.
+        /// Boundary type: "soft" = warning, "hard" = termination required; plugin activation unavailable.
         /// </summary>
         public string BoundaryType { get; set; } = "soft";
 
@@ -104,14 +104,9 @@ namespace NOMAD.MissionPlanner
         public string HardBoundaryAction { get; set; } = "warn_and_kill";
 
         /// <summary>
-        /// Seconds to wait before the forced descent after a hard boundary violation.
+        /// Seconds before reporting the unavailable termination request; not an aircraft safety deadline.
         /// </summary>
         public int HardBoundaryKillDelaySec { get; set; } = 10;
-
-        /// <summary>
-        /// Action on communication loss.
-        /// </summary>
-        public string CommLossAction { get; set; } = "hover_and_wait";
 
         /// <summary>
         /// Enable audible warnings.

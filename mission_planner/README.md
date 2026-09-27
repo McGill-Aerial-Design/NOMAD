@@ -38,12 +38,15 @@ HELLO negotiation, then issues typed requests without spawning `nomad`. It does
 not automatically retry a request whose response is lost. The compatibility
 mode remains available until a deployment selects persistent mode. The runtime
 protocol is local-only and does not authenticate clients. Direct gimbal,
-mode/parameter and fence paths remain; global authority handover is still open.
+maintenance parameter paths remain; global authority handover is open.
 For CONOPS v1.0, the dedicated GCS display must show live aircraft position and
-competition area (AE27-OPS-004). Existing EmergencyLand and boundary parameter
-writes do not establish compliant independent all-mode termination; their
-ownership and acceptance gaps are recorded in migration GAP-05/06. No plugin
-termination behavior is changed or flight-qualified by the requirements review.
+competition area (AE27-OPS-004). The LAND-as-termination recipe and descent-speed
+settings are removed. The monitored termination button and hard-boundary request
+report termination unavailable and send no substitute aircraft command. Direct
+vehicle-fence upload/clear is removed; only visual export to the Plan map remains.
+Flight-controller fence installation/readback belongs through the C++ core and
+still needs integrated authority and containment qualification. Do not use these controls as flight termination.
+Aircraft-side activation, authority and acceptance remain migration GAP-05/06.
 
 Core-client loopback protocol checks are available through
 `pixi run test-plugin-core-client`; the other pure helper checks are available
