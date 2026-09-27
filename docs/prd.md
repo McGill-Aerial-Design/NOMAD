@@ -96,8 +96,10 @@ payload channel mapping, or transport has been qualified.
 
 - Task 1: proposed lightweight VTOL, no onboard Jetson, groundstation_gpu for
   CV/video; Pi Zero for backup LTE and possibly video streaming.
-- Task 2: heavier quadcopter in the 15 kg class, still strictly below 15 kg
-  all-up; Jetson onboard remains optional for the selected scoring strategy.
+- Task 2: quadcopter strictly below 15 kg all-up, with an onboard Jetson Orin
+  Nano and a robotic arm intended to place the tracker and retrieve the egg,
+  droppings and other permitted samples. This is project direction, not
+  qualified hardware or payload capability.
 - Walksnail FPV camera planned; additional camera TBD. No ZED dependency.
 - Use the flight controller's IMU. Cube Orange or a custom ArduPilot controller
   is under consideration; UART/PWM counts and board integration need validation.
@@ -121,6 +123,46 @@ payload channel mapping, or transport has been qualified.
 These are user product directions or explicitly tentative hardware choices,
 not additional organizer rules. ArduPlane/QuadPlane support is necessary for
 the proposed Task 1; Copter evidence cannot establish it.
+
+## C2 and termination direction — 2026-09-27
+
+D09 is substantially resolved at the topology/interface level:
+
+- ELRS is primary C2, carrying normal RC pilot controls and MAVLink telemetry/data.
+  The conventional transmitter is the primary manual interface. CH5 currently
+  arms; verify actual flight-mode and auxiliary-channel mappings before use.
+- LTE/MAVLink is secondary/redundant C2 and data. The intended alternate pilot
+  path is ground-station joystick → Mission Planner/NOMAD → LTE → aircraft.
+  This is not an independent RC radio or a qualified takeover implementation.
+- FPV uses a separate radio and provides awareness, not command authority.
+- The Arduino USB HID ground controller provides the joystick and a physical
+  red termination button. Its termination request should attempt every approved
+  healthy MAVLink C2 route where deterministic safe delivery is supported.
+- A deliberate two-control transmitter chord requests termination through a
+  dedicated ELRS RC function, without the ground computer, Arduino, Mission
+  Planner, NOMAD or LTE. Its exact channel/function must not overlap arming,
+  mode selection, ordinary flight controls or payload functions.
+
+Both human controls request one logical `TERMINATE` operation. Distinguish
+requested, transported, aircraft behavior entered and physically completed;
+neither an ACK nor a mode dispatch proves termination. Once valid termination
+is accepted it is latched for the current flight: autonomous/manual motion,
+stale requests and reconnect must not override it. The reviewed aircraft
+mechanism must define an explicit safe reset; reconnection is not that reset.
+Do not select generic `MAV_CMD_DO_FLIGHTTERMINATION` or in-air disarm as a
+substitute for the required controlled rotary descent.
+
+Source priority, takeover signal/mode, cancellation and explicit handback,
+complete-C2-loss detection, exact termination mapping/mechanism and common-mode
+failures remain D09 engineering work. LTE availability alone does not prove
+valid pilot input or surviving termination authority. Safety/organizer acceptance
+of the surviving LTE path remains required. Q02 stays open: neither fixed-wing
+to VTOL termination descent nor fixed-wing surface behavior throughout transition
+is approved by this direction. No recovered source may unexpectedly reclaim control.
+
+Jetson-originated aircraft requests pass through core authority/safety policy.
+Flight and robotic-arm/payload authority are separate even when transport is shared.
+These decisions do not qualify any aircraft, link, takeover or termination behavior.
 
 ## Internal soft boundary (project decision)
 
@@ -196,12 +238,12 @@ but cannot authorize autonomous actions, runtime changes, or release acceptance.
 | D06 | Is VIO for mapping/perception or required flight navigation? | GNSS/ArduPilot navigation baseline; external-navigation fusion only after end-to-end timing evidence | G3/G7 |
 | D07 | Official server wire contract and traffic semantics (Q04) | Transcribe/version the official portal contract first; model confirmed fields/cylinders in isolated fixtures; no invented events | G4 |
 | D08 | Accuracy, latency, stale-data, reserve and operating-environment budgets | Agree numeric acceptance thresholds before collecting gate evidence | G3–G7 |
-| D09 | Primary radio, communications topology and manual authority | Pi Zero LTE backup is intended for Task 1; primary link and VPN/ELRS choices remain TBD; measure common-mode failures | G3/G7 |
+| D09 | C2, manual authority and termination | Topology/interfaces directed on 2026-09-27: primary ELRS, redundant LTE/MAVLink, separate FPV, RC and ground joystick, red button and independent transmitter chord. Arbitration, handback, exact RC/ArduPilot mapping, automatic loss response, common-mode analysis and qualification remain open | G2/G3/G7 |
 | D10 | Named engineering, payload, perception, safety and test owners; capacity and dates | Assign accountable people to gates before promising a schedule | G1 |
 | D11 | Evidence storage, retention and team/server credentials | Access-controlled artifacts; sanitized manifests in repository; no private datasets or secrets committed | G4/G8 |
 
 User answers above resolve D03 and the initial D05 scope, establish U-MOD-01, and
-partially resolve D01/D04. Other entries and Q02-Q09 remain open; the inventory
+partially resolve D01/D04 and D09. Other entries and Q02-Q09 remain open; the inventory
 records v1.0 provenance, not organizer acceptance of our interpretations. Gate
 ownership still needs named people.
 

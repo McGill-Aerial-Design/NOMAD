@@ -225,6 +225,39 @@ software cannot claim to prevent an independent pilot/autopilot action. Migrate
 plugin boundary returns, emergency parameter changes, direct gimbal streams and
 fence writes through the core or restrict them to documented maintenance mode.
 
+## D09 control paths and authority boundaries
+
+The [2026-09-27 project direction](prd.md#c2-and-termination-direction-2026-09-27)
+selects primary ELRS RC/MAVLink, secondary LTE/MAVLink C2 and separate FPV radio.
+The two intended pilot paths are RC transmitter → ELRS → flight controller and
+ground joystick → Mission Planner/NOMAD → LTE/MAVLink → flight controller.
+FPV is visual awareness only. Observe link availability, command-input validity,
+active authority and termination availability separately; a single `link_up`
+flag or fresh GCS heartbeat cannot establish all four.
+
+The Arduino HID red button and independent ELRS transmitter chord request one
+logical `TERMINATE` operation with aircraft-specific implementation. The chord
+must reach the aircraft without any ground computer dependency. The ground
+request should use every approved healthy MAVLink route where safe deterministic
+delivery is supported; the current router's one-selected-route behavior is not
+such a delivery guarantee. Requested, transported, entered and completed are
+different outcomes. Once accepted, termination is latched against normal mission
+and manual movement; reconnect cannot clear it. Exact mapping, aircraft mechanism
+and safe reset are still unimplemented/unqualified. Q02 still blocks selecting
+transition-phase termination behavior.
+
+The NOMAD joystick service controls gimbal/camera and switches; it deliberately
+does not start Mission Planner's native RC-override loop. It does not prove the
+intended LTE flight-joystick path. Native joystick integration, competing RC and
+MAVLink input priority, core inhibition and explicit handback need a reviewed
+authority contract. The existing direct plugin LAND/parameter paths do not
+implement this termination intent. A per-runtime mutex or connection session
+ID cannot fence all aircraft writers.
+
+Task 2 direction is an onboard Jetson Orin Nano and robotic arm on a quadcopter,
+not qualified hardware. Jetson requests remain clients of core policy; payload
+authority and aircraft flight authority remain separate despite shared LTE.
+
 ## MAVLink and transport decision
 
 The production path is the MAVSDK transport in
@@ -259,9 +292,10 @@ Two radios or UDP legs do not establish independent failure protection.
 ## Deployment profiles
 
 Task 1 direction is a lightweight VTOL with ground GPU CV/video and a Pi Zero
-LTE backup. Task 2 is a quad below 15 kg with optional Jetson; payload and final
-autonomy are TBD. Here4/RTK and Walksnail are intended components; qualification
-and capture/correction interfaces remain open. There is no ZED prerequisite.
+LTE backup. Task 2 is a quad below 15 kg with Jetson Orin Nano and an intended
+robotic arm; hardware integration and final autonomy are unqualified. Here4/RTK
+and Walksnail are intended components; qualification and capture/correction
+interfaces remain open. There is no ZED prerequisite.
 
 Aircraft-class validation and narrow ArduPlane/QuadPlane takeoff, transition,
 route, recovery and landing operations are qualified for the pinned profile in

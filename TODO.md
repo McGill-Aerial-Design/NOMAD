@@ -148,7 +148,13 @@ close its integration or release gate.
 
 - [~] G-M QuadPlane link-loss/manual takeover qualification: define and prove
   the aircraft and operator response to lost link during supported QuadPlane
-  states, without disabling ArduPilot failsafes.
+  states, without disabling ArduPilot failsafes. D09 topology/interfaces are now
+  directed: primary ELRS RC/MAVLink, redundant LTE joystick C2, separate FPV,
+  Arduino HID red termination button and independent transmitter chord.
+  Qualify faults separately, source arbitration, stale-command inhibition,
+  explicit handback and latched termination intent. Exact RC/ArduPilot mapping,
+  approved automatic response and Q02 transition termination remain open; see
+  [current evidence and remaining scope](docs/migration.md#current-baseline-checks-and-d09-direction-2026-09-27).
 
 - [ ] G-M complete Task 1 flight qualification: integrate the separately
   qualified QuadPlane phases into one end-to-end flight and prove the full
@@ -265,9 +271,19 @@ gates. Do not mark multiple work items active or bypass predecessor safety gates
 
 ## Decisions still open
 
+### Direction update — 2026-09-27
+
+The dated 2026-09-08 decisions above are historical. Current D09 topology and
+human interfaces are directed in [PRD](docs/prd.md#c2-and-termination-direction-2026-09-27),
+including LTE as redundant C2 and separate FPV. Task 2 now specifies Jetson Orin
+Nano and intended robotic arm for tracker/egg/droppings; hardware remains
+unqualified. D09 is not closed: arbitration, takeover/handback, dedicated
+termination mapping, automatic response and common-mode qualification remain.
+Verify CH5 arming against actual mode/auxiliary mappings. Q02 stays unresolved.
+
 See D01–D11 in PRD: exact aircraft/firmware and profiles, core host/IPC/remote
-transport, capture and synchronized sensor access, tag/sample design, primary
-radio, numeric performance/safety budgets, server contract, owners and evidence
+transport, capture and synchronized sensor access, tag/sample design, RC and
+termination mappings, numeric performance/safety budgets, server contract, owners and evidence
 retention. The "15 kg class" description does not override the below-15-kg rule.
 
 ## Review follow-through

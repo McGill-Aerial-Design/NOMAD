@@ -10,7 +10,7 @@ owns evidence scope and gates;
 | Task/profile | Aircraft-side functions | Ground-side functions | Qualification status |
 |---|---|---|---|
 | Task 1 / groundstation_gpu | Proposed lightweight VTOL; Walksnail FPV camera; Pi Zero for backup LTE and possibly video; Here4 GNSS | GPU CV, video capture/display, C++ core, Mission Planner and server adapter | User direction; video capture, RF bandwidth, complete QuadPlane mission and endurance unqualified |
-| Task 2 / onboard_companion candidate | Under-15-kg quad; optional Jetson if useful autonomy emerges; tracker/tagging/sampling payload | Mission Planner, operator approvals and tracker CSV export; server applicability Q04 | Jetson placement and payload mechanism TBD |
+| Task 2 / onboard_companion direction | Under-15-kg quad; Jetson Orin Nano and intended robotic arm for tracker/egg/droppings | Mission Planner, operator approvals and tracker CSV export; server applicability Q04 | Project direction only; hardware, arm feedback and integrations unqualified |
 | groundstation_minimal | ArduPilot, navigation and selected command/telemetry link | C++ core and clients; lightweight server exchange when implemented | Product requirement; no ROS/perception dependency |
 | Development | Isolated Copter and pinned QuadPlane SITL | Core, fake/mock services and passive observers | See the [current qualification status](migration.md#current-qualification-status); hardware startup and broader profile matrix remain open |
 
@@ -157,11 +157,27 @@ Until global handover is implemented, use one selected NOMAD runtime owner.
 Running the ROS node, legacy one-shot CLI or another direct MAVLink writer
 against the same endpoint is not a qualified integration.
 
-LTE via Pi Zero is the user's proposed Task 1 backup link, possibly carrying
-video. The primary command/telemetry link is D09. A link budget must separate
-command latency, telemetry, RTK corrections and optional video; LTE/video load
-must not starve safety messages. Independent RC and a second telemetry path
-must be assessed for shared power, antenna, spectrum and router failures.
+The [current D09 direction](prd.md#c2-and-termination-direction-2026-09-27)
+uses ELRS as primary RC/MAVLink C2 and LTE/MAVLink as redundant command/data,
+including an intended ground joystick manual path. FPV uses a separate radio;
+video alone never restores C2. LTE may also serve the Task 2 Jetson. Keep command
+latency, telemetry, RTK and optional video budgets separate; common power,
+receiver, computer, antenna and router failures still require qualification.
+
+CH5 currently arms. Before accepting a configuration, read back the actual
+flight-mode channel, RC auxiliary functions and transmitter channel mapping;
+prove the arming/termination/mode/payload controls are distinct. Do not assume
+defaults: [Copter 4.7.1 defaults mode selection to CH5](https://github.com/ArduPilot/ardupilot/blob/Copter-4.7.1/ArduCopter/config.h#L565-L567),
+while [pinned Plane defaults to CH8](https://github.com/ArduPilot/ardupilot/blob/dbe792162d06cab66c3475fd5556bf7a120f119e/ArduPlane/config.h#L34-L45).
+The repository profile omits `FLTMODE_CH` and `RC5_OPTION`, so production
+CH5 compatibility is not verified by SITL or these documents.
+
+The red Arduino HID ground button and independent two-control transmitter chord
+request the same latched termination intent. The chord must work with Mission
+Planner, NOMAD, LTE and the ground computer unavailable. Dedicated RC function,
+MAVLink mechanism, safe multi-route delivery and post-flight reset remain to be
+qualified. Existing plugin LAND dispatch is not that qualification. A restored
+link must not reclaim pilot authority or clear termination.
 
 ## Startup, degradation and recovery target
 
@@ -182,6 +198,11 @@ must be assessed for shared power, antenna, spectrum and router failures.
 | RTK corrections lost | Show changed fix quality/age; apply reviewed navigation accuracy policy |
 | Traffic/server lost | Mark traffic unknown and delivery impaired; apply approved task loss-of-feed procedure |
 | One link lost | Continue only with termination authority intact and measured surviving capacity; otherwise use approved self-termination behavior |
+| LTE lost, ELRS healthy | Primary RC and intended independent ELRS termination path remain; degrade LTE-dependent services, not complete C2 |
+| ELRS lost, LTE healthy | Alternate joystick/red-button C2 may survive only if the full path is healthy and approved; do not infer total C2 or competition compliance from LTE connectivity |
+| NOMAD/MP/computer lost, ELRS healthy | RC pilot and transmitter termination path must remain independent; revoke stale automation and require explicit handback after recovery |
+| ELRS and LTE lost, with or without FPV | Complete external C2-loss case; require approved onboard aircraft response. Video does not restore command authority |
+| FPV lost, command links healthy | Separate awareness/video fault; apply reviewed flight procedures and visual-operation constraints, not a C2-loss classification |
 | Termination/C2 path lost | Aircraft must self-terminate under the approved all-mode mechanism; a ground stop attempt or ordinary RTL is insufficient evidence (AE27-OPS-015/019) |
 | Core/client restart | Reconcile authoritative aircraft/task state; expire permissions; no automatic motion resume |
 | Payload outcome uncertain | Mark unknown, inhibit retry, inspect/reconcile physical state |
