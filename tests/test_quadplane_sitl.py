@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -18,6 +20,58 @@ import core_sitl_quadplane_route as route  # noqa: E402
 import core_sitl_quadplane_transition as transition  # noqa: E402
 import core_sitl_quadplane_transition_back as transition_back  # noqa: E402
 import core_sitl_quadplane_vtol_takeoff as vtol_takeoff  # noqa: E402
+
+
+def test_rc_probe_ci_is_isolated_bounded_and_preserves_the_flight_chain() -> None:
+    yaml = pytest.importorskip("yaml")
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "sitl.yml").read_text(encoding="utf-8"))
+    job = workflow["jobs"]["quadplane-observation"]
+    assert job["if"] == "github.event_name != 'push'"
+    steps = job["steps"]
+    probe_index = next(index for index, step in enumerate(steps) if "two clean instances" in step.get("name", ""))
+    flight_index = next(index for index, step in enumerate(steps) if step.get("run") == "pixi run quadplane-sitl-up")
+    step = steps[probe_index]
+    assert probe_index < flight_index
+    assert step["timeout-minutes"] == 3
+    commands = step["run"]
+    assert "set -euo pipefail" in commands
+    assert "for attempt in 1 2" in commands
+    assert "-p nomad-quadplane-probe" in commands
+    assert "--rm --name nomad-quadplane-rc-probe" in commands
+    assert "SITL_UDP_OUTPUT_ADDRESS=udp:host.docker.internal:14680" in commands
+    assert "SITL_UDP_OBSERVER_ADDRESS=udp:host.docker.internal:14681" in commands
+    assert 'probe_container=""' in commands
+    assert "probe_container=$(docker compose" in commands
+    assert 'if [[ -n "$probe_container" ]]; then\n' in commands
+    assert "trap stop_probe EXIT" in commands
+    assert "docker stop nomad-quadplane-rc-probe" not in commands
+    assert commands.index('docker stop "$probe_container" >/dev/null\n') > commands.index("core-sitl-")
+    artifact = steps[probe_index + 1]
+    assert artifact["if"] == "always()"
+    assert artifact["with"]["path"].endswith("quadplane-rc-probe-*.json")
+    assert any(step.get("run") == "pixi run core-sitl-quadplane-vtol-landing" for step in steps)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="CI cleanup shell requires native Bash")
+def test_rc_probe_ci_creation_failure_cannot_stop_an_existing_container() -> None:
+    yaml = pytest.importorskip("yaml")
+    bash = shutil.which("bash")
+    assert bash is not None, "CI cleanup falsification requires Bash"
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "sitl.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["quadplane-observation"]["steps"]
+    commands = next(step["run"] for step in steps if "two clean instances" in step.get("name", ""))
+    fake_docker = """
+docker() {
+  if [[ "$1" == "compose" ]]; then
+    return 7
+  fi
+  printf 'unexpected_cleanup\n'
+  return 0
+}
+"""
+    result = subprocess.run([bash, "-c", fake_docker + commands], capture_output=True, text=True, timeout=5)
+    assert result.returncode == 7, "container creation failure must remain a failure"
+    assert "unexpected_cleanup" not in result.stdout, "cleanup must not touch a container this attempt did not create"
 
 
 def test_quadplane_profile_pins_firmware_tooling_frame_and_identity() -> None:

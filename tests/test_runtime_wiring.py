@@ -90,7 +90,7 @@ def test_dev_tasks_and_workflows_reference_existing_tasks() -> None:
         if workflow_name == "docker.yml":
             assert "on: workflow_dispatch" in workflow
             assert "packages: write" not in workflow
-        for task_name in re.findall(r"pixi run ([A-Za-z0-9_-]+)", workflow):
+        for task_name in re.findall(r"pixi run (?:(?:--frozen|--quiet)\s+)*([A-Za-z0-9_][A-Za-z0-9_-]*)", workflow):
             assert task_name in tasks, f"{workflow_name} references missing Pixi task {task_name}"
 
 

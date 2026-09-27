@@ -243,6 +243,39 @@ jobs:
         with:
           cache: true
 
+      - name: Prove disarmed simulated RC fault delivery on two clean instances
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe_container=""
+          stop_probe() {
+            if [[ -n "$probe_container" ]]; then
+              docker stop "$probe_container" >/dev/null 2>&1 || true
+            fi
+          }
+          trap stop_probe EXIT
+          for attempt in 1 2; do
+            probe_container=$(docker compose -p nomad-quadplane-probe -f docker/docker-compose.quadplane.yml run \
+              --rm --name nomad-quadplane-rc-probe -d --no-deps \
+              -e SITL_UDP_OUTPUT_ADDRESS=udp:host.docker.internal:14680 \
+              -e SITL_UDP_OBSERVER_ADDRESS=udp:host.docker.internal:14681 \
+              quadplane_sitl)
+            sleep 25
+            pixi run --frozen --quiet core-sitl-quadplane-rc-loss-probe 2>&1 \
+              | tee "$RUNNER_TEMP/quadplane-rc-probe-$attempt.json"
+            docker stop "$probe_container" >/dev/null
+            probe_container=""
+          done
+
+      - name: Retain disarmed RC fault-delivery evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: quadplane-disarmed-rc-fault-probe
+          path: ${{ runner.temp }}/quadplane-rc-probe-*.json
+          if-no-files-found: warn
+
       - name: Bring up pinned QuadPlane SITL
         run: pixi run quadplane-sitl-up
 

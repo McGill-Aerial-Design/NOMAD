@@ -171,6 +171,11 @@ defaults: [Copter 4.7.1 defaults mode selection to CH5](https://github.com/ArduP
 while [pinned Plane defaults to CH8](https://github.com/ArduPilot/ardupilot/blob/dbe792162d06cab66c3475fd5556bf7a120f119e/ArduPlane/config.h#L34-L45).
 The repository profile omits `FLTMODE_CH` and `RC5_OPTION`, so production
 CH5 compatibility is not verified by SITL or these documents.
+The native `quadplane-tilttri` defaults loaded by the simulator select CH5:
+the disarmed probe read back `FLTMODE_CH=5` and `RC5_OPTION=0`. That profile
+does not implement the team's CH5 arming configuration. Reconcile the actual
+aircraft and transmitter mappings before accepting CH5 arming; the compiled
+Plane default above does not establish the effective channel after profiles load.
 
 The red Arduino HID ground button and independent two-control transmitter chord
 request the same latched termination intent. The chord must work with Mission
@@ -214,6 +219,37 @@ resume a mission, and fixed-wing motion cannot be made safe by a Copter zero
 velocity command.
 
 ## Simulation and test operations
+
+`pixi run core-sitl-quadplane-rc-loss-probe` is a disarmed simulator-only tool.
+It requires the dedicated `nomad-quadplane-probe` Compose project and container
+`nomad-quadplane-rc-probe`, the pinned image/profile and output ports 14680/14681.
+It rejects a reused/default simulator, unexpected firmware, armed aircraft,
+stale observations or missing parameter readback. Build the pinned image first
+with `pixi run quadplane-sitl-build`, then start a fresh instance with:
+
+```bash
+docker compose -p nomad-quadplane-probe -f docker/docker-compose.quadplane.yml run \
+  --rm --name nomad-quadplane-rc-probe -d --no-deps \
+  -e SITL_UDP_OUTPUT_ADDRESS=udp:host.docker.internal:14680 \
+  -e SITL_UDP_OBSERVER_ADDRESS=udp:host.docker.internal:14681 quadplane_sitl
+```
+
+After simulator warm-up, the tool reads failsafe/channel parameters, proves a
+healthy no-injection control, sets only `SIM_RC_FAIL` to 1 (no pulses), observes
+three fresh unhealthy RC-receiver samples, restores 0 and observes healthy
+recovery. The separate observer sends no heartbeat or commands. Failure to
+deliver or restore the fault fails the tool; cleanup errors do not hide the
+original failure. Stop only the dedicated container after the attempt:
+`docker stop nomad-quadplane-rc-probe`. Reset it before another attempt.
+
+JSON evidence records source/firmware identity, dirty-source status, parameter
+readbacks and monotonic health samples. Nightly/manual SITL retains two clean
+attempts before the existing flight chain, with a three-minute step limit.
+This proves simulator RC-fault delivery while the MAVLink observation/control
+path remains available. It does not prove RF loss, airborne failsafe response,
+complete ELRS/LTE loss, manual authority, termination or CH5 production safety.
+Use approved aircraft-specific policy and independent live state evidence for
+those gates; Q02 and the active loss/takeover ledger item remain open.
 
 Read [development](development.md) before running tasks. Current known-good local
 checks include core/Python tests, retained-package checks and daemon-free Compose

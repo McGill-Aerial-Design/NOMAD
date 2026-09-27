@@ -281,6 +281,10 @@ env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
 cmd = "pixi run build-core && python scripts/dev/core_sitl_quadplane_observe.py"
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
 
+# Simulator-only, disarmed receiver-injection proof; never airborne qualification.
+[tasks.core-sitl-quadplane-rc-loss-probe]
+cmd = "python scripts/dev/core_sitl_quadplane_rc_loss_probe.py"
+
 [tasks.core-sitl-quadplane-vtol-takeoff]
 cmd = "pixi run build-core && python scripts/dev/core_sitl_quadplane_vtol_takeoff.py"
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
