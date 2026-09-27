@@ -40,7 +40,6 @@ internal static partial class NomadCoreClientTests
         SetRelay_FailsClosedOnInvalidInput();
         MotorTest_FailsClosedOnInvalidInput();
         GimbalConfigure_FailsClosedOnInvalidInput();
-        SendUserCommand_RequiresExactlySevenFiniteValues();
         PersistentRuntime_SendsTypedRequestWithoutStartingProcess();
         PersistentRuntime_ReportsUnknownOutcomeWithoutReplay();
         PersistentRuntime_RejectsIncompatibleHelloBeforeCommand();
@@ -146,10 +145,6 @@ internal static partial class NomadCoreClientTests
         Expect(gimbal.Length == 4 && gimbal[0] == "gimbal-config" && gimbal[1] == "2" &&
                gimbal[2] == "--endpoint", "gimbal-config vector: verb, mount mode, --endpoint");
 
-        var user = NomadCoreClient.BuildArguments(
-            "udpin:0.0.0.0:14550", "user-command", "1.000", "2.000", "3.000", "4.000", "5.000", "6.000", "7.000");
-        Expect(user.Length == 10 && user[0] == "user-command" && user[1] == "1.000" && user[7] == "7.000" &&
-               user[8] == "--endpoint", "user-command vector: verb plus exactly seven values");
     }
 
     private static void Servo_FailsClosedOnInvalidInput()
@@ -187,17 +182,6 @@ internal static partial class NomadCoreClientTests
         Expect(!client.GimbalConfigure(-1), "negative mount mode rejected");
         Expect(!client.GimbalConfigure(5), "mount mode above 4 rejected");
         Expect(!client.GimbalConfigure(2), "bogus core path fails closed on valid mount mode");
-    }
-
-    private static void SendUserCommand_RequiresExactlySevenFiniteValues()
-    {
-        var client = new NomadCoreClient(@"C:\__nomad_core_does_not_exist__.exe");
-        Expect(!client.SendUserCommand(), "zero values rejected");
-        Expect(!client.SendUserCommand(1, 2, 3, 4, 5, 6), "six values rejected");
-        Expect(!client.SendUserCommand(1, 2, 3, 4, 5, 6, 7, 8), "eight values rejected");
-        Expect(!client.SendUserCommand(1, 2, 3, 4, 5, 6, double.NaN), "NaN parameter rejected");
-        Expect(!client.SendUserCommand(1, 2, 3, 4, 5, 6, double.PositiveInfinity), "infinite parameter rejected");
-        Expect(!client.SendUserCommand(1, 2, 3, 4, 5, 6, 7), "bogus core path fails closed on valid command");
     }
 
     private static void RunCliAuthenticationGate()

@@ -6,7 +6,7 @@ stabilization, EKF, navigation execution and failsafes.
 
 ## Current status
 
-The working migration tree contains a C++ core, UDP MAVLink implementation,
+The working migration tree contains a C++ core, MAVSDK MAVLink transport,
 Copter operations, safety/watchdog/fence/payload primitives and adapters. Edge
 Core source has been removed. Build and profile/service wiring repairs are
 recorded in the migration gates, and setup/provisioning targets the C++ core.

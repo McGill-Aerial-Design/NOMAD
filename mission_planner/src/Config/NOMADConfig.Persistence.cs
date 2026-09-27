@@ -227,12 +227,6 @@ namespace NOMAD.MissionPlanner
                 ClampLog(LogEkfVarianceCritical, 0, 20, 1));
             if (LogMinimumSatellites < 0 || LogMinimumSatellites > 40) LogMinimumSatellites = 8;
             if (LogLiveBufferPoints < 60 || LogLiveBufferPoints > 10000) LogLiveBufferPoints = 600;
-            MotorMusicMotorCount = ClampInt(MotorMusicMotorCount, 1, 12, 4);
-            MotorMusicMinOutputPwm = ClampInt(MotorMusicMinOutputPwm, 1000, 2000, 1100);
-            MotorMusicMaxOutputPwm = ClampInt(MotorMusicMaxOutputPwm, MotorMusicMinOutputPwm, 2000, 1800);
-            MotorMusicTranspose = ClampInt(MotorMusicTranspose, -48, 12, -24);
-            if (MotorMusicTempoScale < 0.25 || MotorMusicTempoScale > 2.0)
-                MotorMusicTempoScale = 1.0;
 
             if (Payloads == null)
             {
@@ -321,11 +315,6 @@ namespace NOMAD.MissionPlanner
             TempCriticalC = defaults.TempCriticalC;
             AudioAlerts = defaults.AudioAlerts;
             AltitudeCallouts = defaults.AltitudeCallouts;
-            MotorMusicMotorCount = defaults.MotorMusicMotorCount;
-            MotorMusicMinOutputPwm = defaults.MotorMusicMinOutputPwm;
-            MotorMusicMaxOutputPwm = defaults.MotorMusicMaxOutputPwm;
-            MotorMusicTranspose = defaults.MotorMusicTranspose;
-            MotorMusicTempoScale = defaults.MotorMusicTempoScale;
             DefaultLogDirectory = defaults.DefaultLogDirectory;
             LogVibrationWarning = defaults.LogVibrationWarning;
             LogVibrationCritical = defaults.LogVibrationCritical;

@@ -14,7 +14,7 @@ namespace NOMAD.MissionPlanner
     // profiles over these generic outputs (NOMADConfig.Payloads); the core
     // knows channels, never a specific payload.
     //
-    // The direct-MAVLink fallback and the edge_core REST fallbacks were
+    // The direct-MAVLink and retired REST fallbacks were
     // removed in the C++ cutover (2026-09-05): commands that the core did not
     // acknowledge and verify must fail closed, and the core must not depend on
     // a GCS link being present.

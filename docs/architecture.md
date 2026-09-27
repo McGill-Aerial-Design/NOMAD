@@ -112,7 +112,6 @@ and `L` means local/read-only with no aircraft command. Entries are ordered
 | `set_relay` | Y/Y/Y/Y | Copter baseline only | Y/N/N/N | Output/channel meaning is not qualified for Plane, QuadPlane or Unknown |
 | `motor_test` | Y/Y/Y/Y | Copter protocol path only | Y/N/N/N | Copter behavior is preserved; its ACK remains insufficient physical motor evidence |
 | `configure_gimbal` | Y/Y/Y/Y | Copter baseline only | Y/N/N/N | Peripheral configuration has no non-Copter profile evidence |
-| `send_user_command` | Y/Y/Y/Y | Copter baseline only | Y/N/N/N | The generic command cannot establish non-Copter qualification by itself |
 | `arm_payload` | L/L/L/L | Local interlock | L/L/L/L | Arms local state only; release remains separately gated |
 | `release_payload` | Y/Y/Y/Y | Copter only | Y/N/N/N | Hosted Copter payload exercise; no Plane/QuadPlane channel or mechanism evidence |
 | `stop_velocity` | Y/Y/Y/Y | Copter only | Y/N/N/N | An inactive fixed-wing call is rejected; safety zero remains available to an already admitted Copter session |
@@ -159,8 +158,10 @@ MAVSDK/MAVLink or actuate the aircraft. Competition-specific configuration stays
 with the module. Core types should not be expanded merely to mirror an external
 schema when translation can remain at the edge.
 
-This is modular composition, not a dynamic plugin framework. Do not add a plugin
-registry, service locator or event bus just to load one module. Prefer an opt-in
+The Mission Planner module SDK supports opt-in operator views and actions; its
+example is disabled by default and explicitly enabled for development.
+The C++ core uses modular composition, without a dynamic plugin framework. Do not
+add a plugin registry, service locator or event bus just to load one module. Prefer an opt-in
 CMake target and a small composition root. Future integrations can be separate
 modules that reuse the same narrow generic boundary without creating dependencies
 between modules.
@@ -491,7 +492,7 @@ attachment/sample feedback or explicit operator confirmation; an ACK only
 establishes command acceptance. Never automatically retry an uncertain
 irreversible action.
 
-Generic servo/relay/user-command paths currently bypass the dedicated
+Generic servo/relay paths currently bypass the dedicated
 release_payload interlock. G2/G6 must reserve hazardous channels and route all
 their access through the same policy. Hardware pulse timeout and safe power-loss
 behavior are required evidence; a ground-side timer cannot guarantee relay-off

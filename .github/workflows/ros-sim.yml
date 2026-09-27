@@ -74,8 +74,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      # The sim-ros image compiles nomad_core, which generates its MAVLink
-      # headers from the pinned third_party/ardupilot-mavlink submodule.
+      # The sim-ros image compiles the core and its pinned MAVSDK transport.
       - uses: actions/checkout@v5
         with:
           submodules: recursive

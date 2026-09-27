@@ -29,7 +29,6 @@ constexpr CliCommand kCommands[] = {
     {"relay", true, "<number> <0|1>"},
     {"motor-test", true, "<instance> <pwm_us> <timeout_s>"},
     {"gimbal-config", true, "<mount_mode>"},
-    {"user-command", true, "<p1> <p2> <p3> <p4> <p5> <p6> <p7>"},
     {"mission-demo", true, ""},
     {"velocity", true, "--vx <m_s> [--vy --vz --yaw-rate] --duration <seconds>"},
     {"velocity-demo", true, ""},

@@ -5,7 +5,6 @@
 #include "nomad/safety/payload.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 
 namespace nomad::vehicle {
@@ -83,20 +82,6 @@ CommandResult Vehicle::configure_gimbal(int mount_mode) {
                                                    2.0F}),
                                      "configure gimbal");
     return verified(result, "gimbal configuration verified");
-}
-
-CommandResult Vehicle::send_user_command(const std::array<float, 7> &parameters) {
-    for (const auto parameter : parameters) {
-        if (!std::isfinite(parameter)) {
-            return {false, "user command parameters must be finite"};
-        }
-    }
-    const auto admission = require_operation(VehicleOperation::SendUserCommand);
-    if (!admission.success) {
-        return admission;
-    }
-    const auto result = send_command(make_command(kUserCommand, parameters), "user command");
-    return verified(result, "user command verified");
 }
 
 } // namespace nomad::vehicle

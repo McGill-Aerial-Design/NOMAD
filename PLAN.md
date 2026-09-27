@@ -70,7 +70,8 @@ an adoption experiment.
 
 Task 1 targets a lightweight VTOL with groundstation_gpu, ground CV/video and
 Pi Zero LTE backup. Task 2 targets a heavier quad below 15 kg with optional onboard
-Jetson. The current Copter-only mode semantics need explicit QuadPlane support.
+Jetson. Narrow pinned-profile QuadPlane operations are qualified in SITL; generic
+mode selection, link-loss response and hardware qualification remain open.
 Traffic advisories and explicit payload authorization are the initial scope;
 manual operation is allowed; Task 2 autonomous collection/takeoff/landing are
 optional scored criteria. Team scoring priorities remain D05/Q06. Hardware

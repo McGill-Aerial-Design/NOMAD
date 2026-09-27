@@ -108,9 +108,6 @@ namespace NOMAD.MissionPlanner
             _btnVideo.Click += (s, e) => ShowView("Video");
             navPanel.Controls.Add(_btnVideo);
 
-            _btnMotorMusic = CreateSidebarButton("Motor Music");
-            _btnMotorMusic.Click += (s, e) => ShowView("MotorMusic");
-            navPanel.Controls.Add(_btnMotorMusic);
 
             // Links button
             _btnLinks = CreateSidebarButton("Link Status");

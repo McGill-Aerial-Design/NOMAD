@@ -176,9 +176,6 @@ int run_command(nomad::mavlink::MavlinkConnection &connection, const Arguments &
     if (arguments.command == "gimbal-config" && arguments.mount_mode.has_value()) {
         return print_result(vehicle.configure_gimbal(*arguments.mount_mode));
     }
-    if (arguments.command == "user-command" && arguments.user_parameters.has_value()) {
-        return print_result(vehicle.send_user_command(*arguments.user_parameters));
-    }
     if (arguments.command == "mission-demo") {
         return run_mission_demo(vehicle);
     }

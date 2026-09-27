@@ -36,7 +36,6 @@ constexpr std::uint16_t kSetServoCommand = 183;       // MAV_CMD_DO_SET_SERVO
 constexpr std::uint16_t kSetRelayCommand = 181;       // MAV_CMD_DO_SET_RELAY
 constexpr std::uint16_t kMotorTestCommand = 209;      // MAV_CMD_DO_MOTOR_TEST
 constexpr std::uint16_t kMountConfigureCommand = 204; // MAV_CMD_DO_MOUNT_CONFIGURE
-constexpr std::uint16_t kUserCommand = 31010;         // MAV_CMD_USER_1
 constexpr std::uint16_t kFenceVertexCommand = 5001;   // MAV_CMD_NAV_FENCE_POLYGON_VERTEX_INCLUSION
 
 constexpr std::uint8_t kAcceptedResult = 0; // MAV_RESULT_ACCEPTED

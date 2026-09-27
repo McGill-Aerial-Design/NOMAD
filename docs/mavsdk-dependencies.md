@@ -52,7 +52,7 @@ All platforms now apply the pinned MAVLink generator patch once, including iOS.
 Debian 11 packaging uses signed, dated Debian and Debian Security snapshots
 because its live indexes referenced unavailable packages. This reproduces the
 build environment and does not promise continued Debian 11 security support.
-Exact-pin qualification is recorded in the [compatibility closeout](mavsdk-handoff.md).
+Exact-pin qualification is recorded in the [dated compatibility evidence](migration.md#mavsdk-compatibility-evidence-2026-09-19).
 
 ## Historical hardening evidence
 

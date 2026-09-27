@@ -70,8 +70,7 @@ Mission Planner client now have these modes:
 
 Mission Planner persistent mode and the C++ CLI runtime mode support the typed
 requests listed below. The protocol does not expose every CLI verb. In
-particular, there is no generic command ID, raw MAVLink, shell command, or
-`send_user_command` passthrough.
+particular, there is no generic command ID, raw MAVLink or shell command.
 
 ## Protocol v1
 

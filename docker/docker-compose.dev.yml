@@ -9,10 +9,6 @@
 #   pixi run sim-ros-up  # also enables the ROS MAVLink output
 #   # Runs the real C++ nomad_vehicle_node against SITL. No sensor provider is configured.
 #
-# Optional Gazebo SITL simulation (Tier 3 — visible GUI, no GPU required):
-#   docker compose -f docker/docker-compose.dev.yml --profile gazebo up --build
-#   # Scaffolding only: no active Gazebo launch or sensor provider is configured.
-#
 # Optional GPU/Isaac ROS simulation (Tier 2 — requires NVIDIA GPU + WSL2 +
 #   nvidia-container-toolkit + isaac_ros_dev-x86_64 base image built locally):
 #   docker compose -f docker/docker-compose.dev.yml --profile ros-gpu up --build
@@ -97,22 +93,20 @@ services:
   # ---------------------------------------------------------------------------
   # ROS2 simulation stack — Tier 1 (CPU, no GPU).  Profile: ros
   #
-  # Runs the REAL C++ nomad_vehicle_node adapter against the sitl service and
-  # an optional synthetic scene publisher so ROS2 telemetry can be exercised
-  # without a Jetson, camera, or GPU. The node owns the MAVLink UDP link
+  # Runs the C++ nomad_vehicle_node against SITL. ROS 2 telemetry can be
+  # exercised without a Jetson, camera or GPU. The node owns the MAVLink UDP link
   # (udpin:0.0.0.0:14552) and the core velocity path.
   # ---------------------------------------------------------------------------
 
   # C++ ROS vehicle adapter node (replaces the retired ROS-HTTP bridge). It
   # subscribes to /nomad/cmd_vel + VIO health/confidence, publishes /nomad/*
-  # telemetry, and drives the core Vehicle over one MAVLink UDP link. Also
-  # serves the gazebo profile, fed by MAVProxy's --out leg.
+  # telemetry, and drives the core Vehicle over one MAVLink UDP link.
   nomad_vehicle_node:
     build:
       context: ..
       dockerfile: docker/Dockerfile.sim-ros
     image: nomad-sim-ros:latest
-    profiles: ["ros", "gazebo"]
+    profiles: ["ros"]
     environment:
       ROS_DOMAIN_ID: "0"
       ROS_LOCALHOST_ONLY: "0"
@@ -120,44 +114,6 @@ services:
     command: >
       ros2 run nomad_ros nomad_vehicle_node --ros-args
       -p endpoint:=udpin:0.0.0.0:14552
-    restart: unless-stopped
-
-  # ---------------------------------------------------------------------------
-  # Video transport scaffolding. No scene publisher currently provides images;
-  # starting MediaMTX alone does not establish perception availability.
-  # ---------------------------------------------------------------------------
-
-  # MediaMTX RTSP server — serves the video stream to Mission Planner / VLC.
-  mediamtx:
-    image: bluenviron/mediamtx:latest
-    profiles: ["ros-perception", "gazebo"]
-    volumes:
-      - ../infra/mediamtx.yml:/mediamtx.yml:ro
-    ports:
-      - "8554:8554"   # RTSP
-    restart: unless-stopped
-
-  # Gazebo video bridge: consumes the optional simulation Image topic and pushes
-  # RTSP to MediaMTX.
-  video_bridge_gazebo:
-    image: nomad-sim-ros:latest
-    profiles: ["gazebo"]
-    depends_on:
-      - mediamtx
-      - gazebo
-    command: >
-      python3 -m python.tools.simple_video_bridge
-      --source-topic /nomad/camera/image
-      --width ${NOMAD_GAZEBO_CAMERA_WIDTH:-640}
-      --height ${NOMAD_GAZEBO_CAMERA_HEIGHT:-360}
-      --fps ${NOMAD_GAZEBO_CAMERA_FPS:-10}
-      --bitrate 800
-      --http-port 9200
-      --rtsp-url rtsp://mediamtx:8554/stream
-    environment:
-      ROS_DOMAIN_ID: "0"
-      ROS_LOCALHOST_ONLY: "0"
-      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
@@ -180,7 +136,7 @@ services:
       dockerfile: docker/Dockerfile.sim-isaac
       args:
         BASE_IMAGE: isaac_ros_dev-x86_64
-    profiles: ["ros-gpu", "ros-gpu-perception"]
+    profiles: ["ros-gpu"]
     environment:
       ROS_DOMAIN_ID: "0"
       ROS_LOCALHOST_ONLY: "0"
@@ -195,66 +151,4 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    restart: unless-stopped
-
-  # ---------------------------------------------------------------------------
-  # ROS2 simulation stack — Tier 3 (Gazebo Harmonic perception).  Profile: gazebo
-  #
-  # Runs gz sim with the Gazebo GUI exposed through noVNC — no GPU required.
-  # The REAL C++ nomad_vehicle_node remains a separate adapter and receives no
-  # VIO source by default.
-  #  # No sensor topics are connected to the adapter by default; this profile is
-  # not VIO or obstacle-avoidance evidence.
-
-  #
-  # To attach a real NVIDIA GPU for faster GL rendering, add to this service:
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices:
-  #           - driver: nvidia
-  #             count: all
-  #             capabilities: [gpu]
-  # (Same block used by nomad_vehicle_node_gpu above — requires nvidia-container-toolkit.)
-  # Also set LIBGL_ALWAYS_SOFTWARE to "0" when using a GPU.
-  # ---------------------------------------------------------------------------
-  gazebo:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.sim-gazebo
-    image: nomad-sim-gazebo:latest
-    profiles: ["gazebo"]
-    depends_on:
-      - nomad_vehicle_node
-    environment:
-      # Feed MAVLink telemetry to the C++ adapter node's velocity-control socket
-      # and to the host GCS. The ArduPilot launch passes this through to MAVProxy.
-      NOMAD_GAZEBO_MAVLINK_OUT: "nomad_vehicle_node:14552 --out host.docker.internal:14560"
-      NOMAD_GAZEBO_HEADLESS: "${NOMAD_GAZEBO_HEADLESS:-0}"
-      NOMAD_GAZEBO_CAMERA_WIDTH: "${NOMAD_GAZEBO_CAMERA_WIDTH:-640}"
-      NOMAD_GAZEBO_CAMERA_HEIGHT: "${NOMAD_GAZEBO_CAMERA_HEIGHT:-360}"
-      NOMAD_GAZEBO_CAMERA_FPS: "${NOMAD_GAZEBO_CAMERA_FPS:-10}"
-      NOMAD_GAZEBO_VERBOSITY: "${NOMAD_GAZEBO_VERBOSITY:-2}"
-      NOMAD_GAZEBO_SPAWN_Z: "${NOMAD_GAZEBO_SPAWN_Z:-0.45}"
-      NOMAD_GAZEBO_MAX_STEP_SIZE: "${NOMAD_GAZEBO_MAX_STEP_SIZE:-0.001}"
-      NOMAD_GAZEBO_REAL_TIME_UPDATE_RATE: "${NOMAD_GAZEBO_REAL_TIME_UPDATE_RATE:-1000}"
-      NOMAD_GAZEBO_APPLY_CONTACT_TUNING: "${NOMAD_GAZEBO_APPLY_CONTACT_TUNING:-0}"
-      NOMAD_GAZEBO_CONTACT_MAX_CORRECTING_VEL: "${NOMAD_GAZEBO_CONTACT_MAX_CORRECTING_VEL:-5}"
-      NOMAD_GAZEBO_CONTACT_SURFACE_LAYER: "${NOMAD_GAZEBO_CONTACT_SURFACE_LAYER:-0.001}"
-      NOMAD_SITL_RATE_HZ: "${NOMAD_SITL_RATE_HZ:-400}"
-      NOMAD_SITL_SPEEDUP: "${NOMAD_SITL_SPEEDUP:-1}"
-      NOMAD_SITL_SYNTHETIC_CLOCK: "${NOMAD_SITL_SYNTHETIC_CLOCK:-False}"
-      NOMAD_GAZEBO_NOVNC_PORT: "6080"
-      NOMAD_GAZEBO_VNC_PORT: "5900"
-      ROS_DOMAIN_ID: "0"
-      ROS_LOCALHOST_ONLY: "0"
-      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
-    ports:
-      - "6080:6080"   # noVNC Gazebo GUI
-      - "5900:5900"   # direct VNC, optional
-      - "${NOMAD_GAZEBO_GCS_PORT:-5764}:5762"  # Mission Planner direct TCP MAVLink
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    # The image starts an inert shell; use an explicit future estimator launch
-    # when this optional simulation is revisited.
     restart: unless-stopped

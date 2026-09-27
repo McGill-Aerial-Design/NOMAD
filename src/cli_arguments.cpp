@@ -6,7 +6,6 @@
 #include "cli_commands.hpp"
 #include "nomad/util/parse.hpp"
 
-#include <array>
 #include <charconv>
 #include <cstdint>
 #include <optional>
@@ -183,18 +182,6 @@ bool consume_gimbal_config(Arguments &arguments, std::string_view value) {
     return true;
 }
 
-bool consume_user_command(Arguments &arguments, std::string_view value) {
-    const auto parsed = parse_float(value);
-    if (!parsed.has_value() || arguments.user_parameter_count >= 7) {
-        return false;
-    }
-    if (!arguments.user_parameters.has_value()) {
-        arguments.user_parameters = std::array<float, 7>{};
-    }
-    (*arguments.user_parameters)[arguments.user_parameter_count++] = *parsed;
-    return true;
-}
-
 bool consume_payload_demo(Arguments &arguments, std::string_view value) {
     if (!arguments.relay_number.has_value()) {
         const auto parsed = parse_output_int(value, 15);
@@ -300,9 +287,6 @@ bool consume_verb_value(Arguments &arguments, std::string_view token, int argc, 
     if (command == "gimbal-config") {
         return consume_gimbal_config(arguments, token);
     }
-    if (command == "user-command") {
-        return consume_user_command(arguments, token);
-    }
     if (command == "payload-demo") {
         return consume_payload_demo(arguments, token);
     }
@@ -339,9 +323,6 @@ bool has_required_arguments(const Arguments &arguments) {
     }
     if (command == "takeoff" || command == "vtol-takeoff") {
         return arguments.altitude.has_value();
-    }
-    if (command == "user-command") {
-        return arguments.user_parameters.has_value() && arguments.user_parameter_count == 7;
     }
     if (command == "velocity") {
         return arguments.velocity_vx.has_value() && arguments.duration_seconds.has_value();

@@ -81,9 +81,7 @@ are distinct faults from loss of the termination path.
 ## Profile and configuration lifecycle
 
 The profile files and scripts/profile.py exist. The three product names are
-onboard_companion, groundstation_gpu and groundstation_minimal. dev, drone and
-the older groundstation template are migration artifacts, not extra product
-architectures. Run profile-list to inspect template names; profile-load writes
+onboard_companion, groundstation_gpu and groundstation_minimal. Run profile-list to inspect template names; profile-load writes
 ignored runtime configuration and also changes Mission Planner configuration.
 Do not load a profile just to read it.
 
@@ -273,8 +271,8 @@ may use the configured simulator TCP observer link; it must not issue commands.
 Use a separate pinned QuadPlane SITL vehicle for transition, route,
 return/recovery and landing qualification. Existing Copter runs do not qualify
 those operations. Add mock competition telemetry/traffic and
-recorded image/tracker feeds before demanding GPU simulation. Gazebo/Isaac are
-optional when sensor/physics evidence requires them, not core build dependencies.
+recorded image/tracker feeds before demanding GPU simulation. The optional
+Isaac ROS adapter image requires a qualified GPU host; it is not a core build dependency.
 
 The bounded fixed-wing recovery verb is `fixed-wing-recovery <latitude>
 <longitude> <relative_altitude_m>`. Supply a deliberate recovery point after
