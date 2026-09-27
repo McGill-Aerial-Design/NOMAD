@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "support/fixed_wing_waypoint_fake_connection.hpp"
+#include "../../support/fixed_wing_waypoint_fake_connection.hpp"
 #include "nomad/vehicle/vehicle.hpp"
-#include "support/test_harness.hpp"
-#include "support/vehicle_state_builder.hpp"
+#include "../../support/test_harness.hpp"
+#include "../../support/vehicle_state_builder.hpp"
 
 #include <array>
 #include <chrono>
