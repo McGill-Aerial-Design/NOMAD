@@ -134,7 +134,7 @@ and could misleadingly suggest a QuadPlane loss-response policy.
 | `FlightModeController`, joystick and boundary monitor treated LAND/parameter writes as termination | Removed with caller failure reporting, compiled request tests and source-boundary guards; no physical termination evidence claimed |
 | `NOMADBoundaryView.MPFence` mapped kill labels to `FENCE_ACTION=2`; `MPFenceUploader` wrote LAND speed | Direct uploader/clear implementation and speed side effect deleted; visual map export only. Delayed/warn-only hard-boundary settings still conflict with immediate aircraft termination and stay GAP-05/06 blockers |
 | `src/main.cpp` direct CLI, default MP `LegacyOneShot`, `ros2/nomad_ros/src/node.cpp` separate Vehicle, native MP flight controls and ELRS RC are independent writers | Active G-M prerequisite: migrate or exclude every software writer and prove FC input selection agrees with core inhibition; concurrent source test must show one effective owner |
-| Plugin gimbal stream/fallback and payload `RCx_OPTION` writes bypass runtime | Fence writer was removed after review; this cleanup also removes the obsolete Lua script installer and its flight-controller setting write. The remaining gimbal/payload writers need disarmed exclusive ownership or removal/migration before G-M authority qualification. |
+| Plugin gimbal stream/fallback, payload `RCx_OPTION`, fence upload and motor-music `SCR_ENABLE`/MAVFTP writes bypass runtime | Fence writer deleted after review found unsafe disable/failure behavior. Other writers remain active G-M maintenance admission prerequisites: disarmed exclusive ownership or removal/migration |
 | Runtime 256-response cache is evicted and cleared on restart; replay can execute a mutation again (`src/runtime/runtime.cpp`, `tests/runtime_ipc_test.cpp`) | Active G-M stale-request prerequisite: incarnation/session/generation plus bounded expiry and replay policy; test restart, eviction, queued intents and late requests without retransmission |
 | NOMAD joystick handles gimbal/camera/switches, never starts MP flight RC override (`NomadJoystickService.cs`) | LTE flight joystick remains unimplemented/unqualified; prove real pilot input, takeover and handback instead of inferring them from LTE connectivity |
 | Effective pinned profile has `FLTMODE_CH=5`, `RC5_OPTION=0`; no transmitter map/chord export | D09 production map blocked: distinguish transmitter output and FC input, read back mode/auxiliary assignments and prove distinct arming/mode/termination/payload controls |
@@ -175,6 +175,26 @@ Full `test-python` passed 681 tests with
 These checks do not demonstrate aircraft termination, flight authority or live
 SITL response. Hosted CI and live qualification must be evaluated separately
 from these local checks.
+
+### Repository hygiene cleanup — 2026-09-27
+
+PR #41 starts from `main` `6c4c78d98d8a7469bf3bccfb64273c06d547d312`;
+its initial cleanup commit is `7d6076ea4535720c371315121bd856ae54faa241`.
+This is separate from the authority review above. It deletes Motor Music,
+including the Lua upload and `SCR_ENABLE` write, and removes its dedicated
+`MAV_CMD_USER_1` operation from the Mission Planner client, C++ public API and
+CLI. It also deletes migration-only deployment profiles, incomplete Gazebo
+services and fail-only tasks, unused Python Edge dependencies, stale handoffs
+and unreferenced scripts. The module SDK, disabled-by-default example, CPU ROS
+integration and qualified Copter/QuadPlane SITL paths remain.
+
+Local validation for the initial cleanup commit: `pixi run test-core` passed
+21/21 CTests; `pixi run test` passed 666 tests with 4 skipped; ROS integration
+passed 9/9 tests. Mission Planner build-only, dead-code lint and focused
+core-client checks passed, as did Ruff lint/format, type checking, source
+complexity, strict docs build, supported Compose configurations, three-profile
+listing and an isolated Python wheel install/import. These checks do not qualify
+live link loss, manual takeover or aircraft termination.
 
 ## Current implementation inventory
 

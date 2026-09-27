@@ -44,7 +44,7 @@ work without ROS/perception, but does not by itself satisfy wildlife assessment.
 | Phase | Outcome | Exit gate |
 |---|---|---|
 | Planning | Reconciled requirements, source inventory, decisions explicitly pending | G0 |
-| Baseline repair | Build/CI/tasks match the deleted Edge Core tree; retain optional compute and video | G1 |
+| Baseline repair | Build/CI/tasks match the deleted Edge Core tree; retain supported compute and video | G1 |
 | MAVSDK adoption | Tested ArduPilot transport parity, production cutover and focused reviewable changes | G-M |
 | Core authority | One active writer, fresh state, cancellable missions, bounded adapters, truthful outcomes | G2 |
 | Profile qualification | Each profile runs its declared capabilities and exposes missing ones | G3 |
@@ -69,9 +69,10 @@ prototypes may proceed independently. Never run two production command owners as
 an adoption experiment.
 
 Task 1 targets a lightweight VTOL with groundstation_gpu, ground CV/video and
-Pi Zero LTE backup. Task 2 targets a heavier quad below 15 kg with optional onboard
-Jetson. Narrow pinned-profile QuadPlane operations are qualified in SITL; generic
-mode selection, link-loss response and hardware qualification remain open.
+Pi Zero LTE backup. Task 2 currently targets a quad below 15 kg with an onboard
+Jetson Orin Nano and robotic arm; hardware integration remains unqualified.
+Narrow pinned-profile QuadPlane operations are qualified in SITL; generic mode
+selection, QuadPlane link-loss/manual takeover and hardware qualification remain open.
 Traffic advisories and explicit payload authorization are the initial scope;
 manual operation is allowed; Task 2 autonomous collection/takeoff/landing are
 optional scored criteria. Team scoring priorities remain D05/Q06. Hardware

@@ -13,13 +13,14 @@ recorded in the migration gates, and setup/provisioning targets the C++ core.
 The [current qualification status](docs/migration.md#current-qualification-status)
 owns the exact aircraft profiles, implementation SHAs, test baseline, hosted SITL
 evidence and remaining gates. Existing Copter scenarios and narrow QuadPlane
-operations through QLAND are SITL evidence for their listed profiles. Fixed-wing
+operations through QLAND are SITL evidence for their listed profiles. QuadPlane
 link-loss/manual takeover, integrated Task 1 flight, competition-server
 integration, command-authority/runtime hardening, generic landing/RTL/QRTL and
 hardware qualification remain open.
 
-Task 1 targets a lightweight VTOL with ground GPU vision. Task 2 targets a quad
-below 15 kg with optional onboard compute. All three product profiles remain:
+Task 1 targets a lightweight VTOL with ground GPU vision. Task 2 currently
+targets a quad below 15 kg with an onboard Jetson Orin Nano and robotic arm;
+hardware integration remains unqualified. All three product profiles remain:
 onboard_companion, groundstation_gpu and groundstation_minimal. See the canonical
 documents for confirmed directions, confirmed source requirements and unresolved choices.
 
