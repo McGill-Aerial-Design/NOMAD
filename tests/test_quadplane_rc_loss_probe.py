@@ -176,21 +176,20 @@ def test_observer_run_ignores_unrelated_system_and_component() -> None:
             OtherMessage("SYS_STATUS", 1, 2, **wrong_component_fields),
             make_heartbeat(),
             make_sys_status(True),
+            make_sys_status(True),
+            make_sys_status(True),
         ]
     )
     observer = probe.ReceiverObserver(connection)
     observer.start()
-    deadline = time.monotonic() + 1.0
-    while not observer.heartbeat_at and time.monotonic() < deadline:
-        time.sleep(0.001)
-    observer.stop_requested.set()
-    observer.thread.join(timeout=1)
+    samples = observer.wait_for_health(True, observer.started_at, timeout=1.0, fail_on_change=True)
+    observer.close()
 
     assert observer.heartbeat_at > 0
-    assert len(observer.samples) == 1
-    assert observer.samples[0][1] is True
+    assert len(samples) == 3
+    assert len(observer.samples) == 3
+    assert all(value is True for _, value in samples)
     assert connection.commands == []
-    connection.close()
 
 
 def test_fault_wait_ignores_pre_boundary_unhealthy_samples() -> None:
