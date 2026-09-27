@@ -39,6 +39,48 @@ do not extend either aircraft row's scope.
 These operation results do not close command-authority/runtime hardening,
 competition-server integration or any unlisted G2-G8 gate.
 
+### Current baseline checks and D09 direction — 2026-09-27
+
+Fetched `main` remains `55a2ac4826e485e92efb5d8f9297561a5498e32d`, the
+PR #37 merge. At this code baseline `pixi run test-core` configured/built and
+passed 21/21 registered CTests; `pixi run test-python` passed 652 tests with
+3 skipped. The focused `test_sitl_harnesses.py` and `test_quadplane_sitl.py`
+run passed 33 tests. These local checks used an existing checkout with
+pre-existing untracked submodule state, not a clean-checkout provenance run.
+The historical 17/17 entry above remains evidence for its original SHA.
+
+Existing manually dispatched [run 36281636286](https://github.com/YoussGm3o8/NOMAD/actions/runs/36281636286)
+passed the full current workflow on that exact baseline SHA. Job steps and the
+QLAND observer trace were inspected: pinned firmware
+`dbe792162d06cab66c3475fd5556bf7a120f119e`, observed QLAND/descent/ON_GROUND,
+final disarm, altitude 0.29 m, groundspeed 0.02 m/s, climb 0.00 m/s and touchdown
+at 42.72 s. This records an existing run, not a newly dispatched qualification;
+its scope remains the Copter matrix and pinned QuadPlane chain through QLAND.
+It does not prove manual takeover, ELRS/LTE loss or termination.
+
+[New project direction](prd.md#c2-and-termination-direction-2026-09-27) resolves
+the topology and human interfaces: primary ELRS RC/MAVLink, redundant LTE C2,
+separate FPV, RC transmitter and intended ground joystick, Arduino HID red
+button and independent transmitter chord for one latched termination intent.
+Task 2 specifies Jetson Orin Nano/robotic-arm direction, not qualified hardware.
+D09 remains open for arbitration/handback, exact channel/aircraft mechanisms,
+automatic loss response, common-mode analysis and evidence. Q02 is unchanged.
+
+The active qualification must separately cover LTE loss, ELRS loss with LTE
+healthy, simultaneous loss (including FPV still available), ground software/
+computer failure with RC healthy, FPV-only loss, both manual takeover paths,
+stale-command/reconnect rejection, both termination activation paths and the
+approved all-phase onboard response. Current client-shutdown and host-relay
+tests do not establish these aircraft outcomes. The host relay leaves the
+SITL/MAVProxy master connection intact; possible heartbeat masking needs
+vehicle-facing capture, not inference credited as qualification.
+
+The minimum authority prerequisite is explicit source arbitration and inhibition
+across every enabled writer; a runtime mutex or connection session is insufficient.
+Preserve QLAND physical completion and existing operation admission/freshness.
+No new policy, RC mapping, termination dispatch or authority API is implemented
+by this documentation record. The active G-M item remains open.
+
 ## Current implementation inventory
 
 The [MAVSDK compatibility handoff](mavsdk-handoff.md) records the 2026-09-19

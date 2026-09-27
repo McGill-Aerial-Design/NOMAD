@@ -79,6 +79,35 @@ Do not remove it to pursue the sample-autonomy bonus. If preauthorization is
 accepted and selected, propose a bounded sequence and intervention/abort contract
 as a later reviewed change with no uncertain-action retries.
 
+## D09 termination intent and independent activation
+
+The [current project direction](prd.md#c2-and-termination-direction-2026-09-27)
+defines ELRS primary C2, redundant LTE/MAVLink C2 and independent FPV awareness.
+The Arduino HID red button and independent transmitter two-control chord both
+request logical `TERMINATE`; exact RC/MAVLink mechanisms are not selected here.
+CH5 arming must be checked against actual mode/auxiliary-channel mappings and
+must not be reused as an assumed termination function.
+
+Once valid termination is accepted it must latch for the current flight, inhibit
+autonomous and manual movement overrides, invalidate stale work and survive
+link restoration. Requested, transported, entered and physically completed must
+be reported separately. The accepted implementation must define the safe reset;
+an ACK or reconnection cannot supply it. These are project requirements, not
+implemented or qualified behavior. A latch in one process alone cannot inhibit
+external RC or native Mission Planner writers.
+
+The [normal Copter 4.7.1 flight-termination handler](https://github.com/ArduPilot/ardupilot/blob/Copter-4.7.1/ArduCopter/GCS_MAVLink_Copter.cpp#L1140-L1152)
+disarms motors; it is not a commanded controlled vertical descent. Do not equate
+that command or existing plugin LAND dispatch with AE27-OPS-017 completion.
+Q02 still requires accepted behavior throughout QuadPlane transitions; no
+fixed-wing-to-VTOL termination substitution is approved.
+
+Qualification must distinguish single-link faults from loss of all approved
+C2/termination paths, include each manual activation with the other path absent,
+and prove no stale/manual/mission request or recovered link cancels termination.
+FPV-only loss is a separate operational awareness fault. Observe independent
+aircraft state/output through completion; preserve ArduPilot failsafes.
+
 ## Stable safety requirements
 
 These retain their original obligations; partial coverage is not satisfaction.
