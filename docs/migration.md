@@ -39,9 +39,31 @@ do not extend either aircraft row's scope.
 These operation results do not close command-authority/runtime hardening,
 competition-server integration or any unlisted G2-G8 gate.
 
-### Current baseline checks and D09 direction — 2026-09-27
+### Disarmed native SITL RC-fault injector
 
-Fetched `main` remains `55a2ac4826e485e92efb5d8f9297561a5498e32d`, the
+`core-sitl-quadplane-rc-loss-probe` provides simulator-only fault-delivery
+infrastructure, not aircraft loss-response qualification. It verifies fresh
+telemetry from a disarmed, isolated pinned Plane/QuadPlane instance. It reads
+effective parameters without changing failsafes, observes a healthy no-injection control, applies
+`SIM_RC_FAIL=1`, then requires fresh unhealthy receiver evidence and confirmed
+restoration to 0/healthy. Parameter readback alone cannot pass. A backend that
+bypasses this injection fails the probe. Failure and restoration errors remain
+separate, and its observer sends no commands or GCS heartbeats.
+
+The nightly/manual QuadPlane job reuses its pinned image for two clean disarmed
+attempts with retained JSON evidence before running the established flight
+chain. An artifact's exact source SHA and `dirty_source` flag own its provenance;
+development runs are not clean-head hosted qualification. The native profile's
+effective `FLTMODE_CH=5`, `RC5_OPTION=0` does not model the team's CH5 arming
+configuration. See [operation and scope](operations.md#simulation-and-test-operations).
+
+This tool does not close G-M loss/manual takeover, D09 or Q02. ELRS/LTE/FPV
+hardware independence, aircraft failsafe/termination response, manual arbitration
+and explicit handback still require their reviewed contracts and live evidence.
+
+### Reviewed baseline checks and D09 direction — 2026-09-27
+
+At startup, fetched `main` was `55a2ac4826e485e92efb5d8f9297561a5498e32d`, the
 PR #37 merge. At this code baseline `pixi run test-core` configured/built and
 passed 21/21 registered CTests; `pixi run test-python` passed 652 tests with
 3 skipped. The focused `test_sitl_harnesses.py` and `test_quadplane_sitl.py`
