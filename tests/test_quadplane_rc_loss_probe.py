@@ -166,7 +166,7 @@ def test_observer_run_ignores_unrelated_system_and_component() -> None:
         def get_srcComponent(self) -> int:
             return self.source_component
 
-    wrong_system_fields = dict(make_heartbeat().__dict__)
+    wrong_system_fields = dict(make_heartbeat(armed=True).__dict__)
     wrong_system_fields.pop("kind")
     wrong_component_fields = dict(make_sys_status(False).__dict__)
     wrong_component_fields.pop("kind")
@@ -182,8 +182,10 @@ def test_observer_run_ignores_unrelated_system_and_component() -> None:
     )
     observer = probe.ReceiverObserver(connection)
     observer.start()
-    samples = observer.wait_for_health(True, observer.started_at, timeout=1.0, fail_on_change=True)
-    observer.close()
+    try:
+        samples = observer.wait_for_health(True, observer.started_at, timeout=1.0, fail_on_change=True)
+    finally:
+        observer.close()
 
     assert observer.heartbeat_at > 0
     assert len(samples) == 3
