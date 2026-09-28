@@ -82,7 +82,42 @@ namespace NOMAD.MissionPlanner
         public int RouterPort { get; set; }
         // Zero learns one loopback client's source port; nonzero is a fixed client-owned listener.
         public int ClientPort { get; set; }
+        // Existing configurations remain bidirectional unless they opt into observation-only mode.
+        public bool AllowOutbound { get; set; } = true;
     }
+
+    public static class RouterConsumerPolicy
+    {
+        public static List<ConsumerConfig> ForIntegratedFlight(IEnumerable<ConsumerConfig> configured)
+        {
+            var consumers = new List<ConsumerConfig>();
+            if (configured == null)
+            {
+                return null;
+            }
+
+            foreach (var consumer in configured)
+            {
+                if (consumer == null)
+                {
+                    consumers.Add(null);
+                    continue;
+                }
+
+                var isMissionPlanner = string.Equals(
+                    consumer.Id, "mission_planner", StringComparison.OrdinalIgnoreCase);
+                consumers.Add(new ConsumerConfig
+                {
+                    Id = consumer.Id,
+                    RouterPort = consumer.RouterPort,
+                    ClientPort = consumer.ClientPort,
+                    AllowOutbound = isMissionPlanner ? false : consumer.AllowOutbound
+                });
+            }
+            return consumers;
+        }
+    }
+
     public partial class GroundLinkRouter
     {
         public class RouterConfig
@@ -100,7 +135,8 @@ namespace NOMAD.MissionPlanner
 
             // RadioMaster
             public string RadioMasterConnectionType = "UDP"; // "COM", "UDP", or "TCP"
-            public int RadioBindPort = 14550;        // UDP listen port / TCP connect port (must differ from LteBindPort)
+            // UDP listen port / TCP connect port; differs from LteBindPort.
+            public int RadioBindPort = 14550;
             public string RadioComPort = "COM3";     // serial path (used when RadioMasterConnectionType == "COM")
             public int RadioBaudRate = 420000;       // baud rate for serial
             public string RadioTcpHost = "127.0.0.1"; // TCP server host to connect to (e.g. SITL) when type == "TCP"

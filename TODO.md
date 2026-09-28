@@ -166,9 +166,12 @@ close its integration or release gate.
   ROS defaults to observation only; Mission Planner defaults to persistent IPC.
   Mission Planner has an explicit authority control and stable plugin-session
   source; session rollover is fenced inside runtime admission.
-  The next single slice is a typed MAVSDK queued-send/retry cancellation gate plus
-  the remaining Mission Planner/native-input writer arbitration and independent
-  physical takeover evidence. Runtime tests do not prove FC input selection.
+  The typed MAVSDK command retry gate and receive-only integrated Mission Planner
+  router consumer are implemented in the current authority slice. The UDP wire
+  peer must prove suppression after revoke; router arbitration does not prove FC
+  input selection. The next single slice is approved D09 RC/ELRS input mapping
+  followed by independent bench takeover and explicit-handback qualification
+  against the actual flight controller. Keep G-M open until that evidence exists.
 
 - [ ] G-M complete Task 1 flight qualification: integrate the separately
   qualified QuadPlane phases into one end-to-end flight and prove the full

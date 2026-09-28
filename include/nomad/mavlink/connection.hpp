@@ -20,8 +20,14 @@ struct Command {
 };
 
 struct CommandAck {
+    enum class Status {
+        Acknowledged,
+        AdmissionCancelled,
+    };
+
     std::uint16_t command{};
     std::uint8_t result{};
+    Status status{Status::Acknowledged};
 };
 
 struct VelocitySetpoint {
@@ -80,6 +86,19 @@ struct AutopilotVersion {
     std::string git_hash;
 };
 
+struct SendAuthorityToken {
+    std::string runtime_incarnation;
+    std::uint64_t vehicle_session{};
+    std::uint64_t authority_generation{};
+    std::string source;
+    std::string request_id;
+    std::uint64_t sequence{};
+    std::int64_t expires_at_ms{};
+};
+
+using TransmissionAdmission = std::function<bool(const std::function<void()> &)>;
+using TransmissionAdmissionFactory = std::function<TransmissionAdmission()>;
+
 // Which half of connect() failed. Opening the endpoint and finding an expected
 // autopilot are different operator problems, so the caller reports the client
 // diagnostic that matches instead of collapsing both into one message.
@@ -93,8 +112,12 @@ class MavlinkConnection {
   public:
     virtual ~MavlinkConnection() = default;
 
-    void set_send_admission(std::function<bool()> admission) {
-        send_admission_ = std::move(admission);
+    void set_transmission_admission_factory(TransmissionAdmissionFactory factory) {
+        transmission_admission_factory_ = std::move(factory);
+    }
+
+    void set_vehicle_session_changed_handler(std::function<void(std::uint64_t)> handler) {
+        vehicle_session_changed_handler_ = std::move(handler);
     }
 
     virtual bool connect() = 0;
@@ -133,11 +156,26 @@ class MavlinkConnection {
 
   protected:
     bool admit_send() const {
-        return !send_admission_ || send_admission_();
+        const auto admission = capture_transmission_admission();
+        return !admission || admission([] {});
+    }
+
+    TransmissionAdmission capture_transmission_admission() const {
+        if (!transmission_admission_factory_) {
+            return {};
+        }
+        return transmission_admission_factory_();
+    }
+
+    void notify_vehicle_session_changed(std::uint64_t session) const {
+        if (vehicle_session_changed_handler_) {
+            vehicle_session_changed_handler_(session);
+        }
     }
 
   private:
-    std::function<bool()> send_admission_;
+    TransmissionAdmissionFactory transmission_admission_factory_;
+    std::function<void(std::uint64_t)> vehicle_session_changed_handler_;
 };
 
 } // namespace nomad::mavlink

@@ -204,7 +204,7 @@ namespace NOMAD.MissionPlanner
             }
             foreach (var consumer in _consumers)
             {
-                try { consumer.Poll(frame => ForwardOutbound(frame)); }
+                try { consumer.Poll(frame => ForwardOutbound(consumer.Config, frame)); }
                 catch (Exception ex)
                 {
                     EmitLog(consumer.Config.Id + ": " + ex.Message);

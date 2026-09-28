@@ -184,7 +184,8 @@ add_library(nomad_mavsdk_connection
     src/mavlink/mavsdk_mavlink_quadplane.cpp
     src/mavlink/mavsdk_route.cpp
     src/mavlink/mavsdk_vtol_state.cpp
-    src/mavlink/mavsdk_system.cpp)
+    src/mavlink/mavsdk_system.cpp
+    src/mavlink/mavsdk_velocity.cpp)
 target_include_directories(nomad_mavsdk_connection PUBLIC include PRIVATE
     "${NOMAD_MAVSDK_SOURCE_DIR}/cpp/src/mavsdk/core/include"
     "${NOMAD_MAVSDK_SOURCE_DIR}/cpp/src/mavsdk/plugins/action/include"
@@ -259,6 +260,11 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests")
     target_link_libraries(nomad_mavsdk_connection_tests PRIVATE nomad_mavsdk_connection nomad_core)
     target_compile_definitions(nomad_mavsdk_connection_tests PRIVATE NOMAD_TESTS)
     add_test(NAME nomad_mavsdk_connection_tests COMMAND nomad_mavsdk_connection_tests)
+
+    if(PROJECT_IS_TOP_LEVEL)
+        add_executable(nomad_mavsdk_authority_wire_probe tests/mavsdk_authority_wire_probe.cpp)
+        target_link_libraries(nomad_mavsdk_authority_wire_probe PRIVATE nomad_mavsdk_connection nomad_core)
+    endif()
 
     # SR-LNK-03. The peer-driven scenarios run from
     # scripts/dev/mavsdk_connection_fixture.py; CTest covers the no-link

@@ -132,7 +132,8 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public static void SendPitchRollAngle(float pitchDeg, float rollDeg)
         {
-            if (Environment.GetEnvironmentVariable("NOMAD_INTEGRATED_FLIGHT") == "1") return;
+            if (OutputController.IntegratedFlightMode ||
+                Environment.GetEnvironmentVariable("NOMAD_INTEGRATED_FLIGHT") == "1") return;
             if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return;
             if (System.Threading.Interlocked.Exchange(ref _inflight, 1) == 1) return;
 

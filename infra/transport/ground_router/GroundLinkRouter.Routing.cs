@@ -147,8 +147,12 @@ namespace NOMAD.MissionPlanner
         private static bool IsParameter(MavlinkFrame frame) =>
             (frame.Msgid >= 20 && frame.Msgid <= 23) || (frame.Msgid >= 320 && frame.Msgid <= 324);
 
-        private void ForwardOutbound(MavlinkFrame frame)
+        private void ForwardOutbound(ConsumerConfig consumer, MavlinkFrame frame)
         {
+            if (!consumer.AllowOutbound)
+            {
+                return;
+            }
             var now = DateTime.UtcNow;
             if (_forwarded.TryGetValue(Convert.ToBase64String(frame.Raw), out var echo) &&
                 (now - echo.Item2).TotalMilliseconds < 750) { return; }

@@ -112,6 +112,28 @@ and prove no stale/manual/mission request or recovered link cancels termination.
 FPV-only loss is a separate operational awareness fault. Observe independent
 aircraft state/output through completion; preserve ArduPilot failsafes.
 
+### Manual takeover hardware qualification still required
+
+The software UDP peer and router tests do not show that a flight controller
+selects RC/ELRS over a MAVLink command. Before a hardware claim, record the
+approved transmitter output map, receiver channel mapping, ArduPilot mode and
+auxiliary parameters, firmware and NOMAD/router revisions, and the intended
+pilot/native takeover signal. No channel or automatic loss response is assigned
+by this procedure.
+
+With propulsion made safe under the team's aircraft test procedure, use an
+independent MAVLink observer and physical output observation. Establish one
+admitted NOMAD generation and observe a valid command at the controller. Trigger
+the approved external takeover; time-stamp the operator input, FC input/mode
+state, NOMAD revoke response and last NOMAD frame. Hold an SDK command ACK to
+force a retry opportunity, and verify no old-generation frame after revoke.
+Demonstrate the external input's intended physical effect, then disconnect and
+restore NOMAD's link. It must stay observation-only until explicit handback;
+after handback a fresh command must work and an old request must stay rejected.
+Repeat for each approved pilot path and supported flight phase, including
+single-link faults. Retain synchronized wire, FC, RC input and physical-output
+records. Failed or absent observations leave aircraft-wide takeover unqualified.
+
 ## Stable safety requirements
 
 These retain their original obligations; partial coverage is not satisfaction.
@@ -213,7 +235,7 @@ SR-VEL-01 | src/safety/velocity_config.cpp:load_velocity_limits | tests/velocity
 SR-VEL-02 | src/vehicle/vehicle_velocity.cpp:set_velocity | tests/safety_test.cpp::test_safety_velocity_accepts_clamped_frd_command
 SR-VEL-02 | src/safety/velocity_config.cpp:load_velocity_limits | tests/velocity_config_test.cpp::test_configured_limits_are_loaded
 SR-VEL-03 | src/vehicle/vehicle_velocity.cpp:set_velocity | tests/safety_test.cpp::test_safety_velocity_rejects_each_fault
-SR-VEL-04 | src/mavlink/mavsdk_mavlink_connection.cpp:queue_velocity_setpoint | tests/test_mavsdk_connection.py::test_velocity_reaches_the_wire_and_is_zeroed_on_disconnect
+SR-VEL-04 | src/mavlink/mavsdk_velocity.cpp:queue_velocity_setpoint | tests/test_mavsdk_connection.py::test_velocity_reaches_the_wire_and_is_zeroed_on_disconnect
 SR-VEL-05 | src/vehicle/vehicle_velocity.cpp:set_velocity | tests/safety_test.cpp::test_safety_velocity_rejects_each_fault
 SR-VEL-06 | src/mavlink/mavsdk_system.cpp:select_expected_autopilot | tests/test_mavsdk_connection.py::test_wrong_autopilot_identity_is_refused
 SR-VIO-01 | src/safety/velocity.cpp:evaluate_velocity | tests/safety_test.cpp::test_safety_velocity_rejects_each_fault

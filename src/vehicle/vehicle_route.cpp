@@ -123,6 +123,10 @@ CommandResult Vehicle::execute_fixed_wing_route(const std::vector<RouteWaypoint>
         if (!acknowledgement.has_value()) {
             return {false, "fixed-wing waypoint " + std::to_string(index + 1) + " received no command ACK"};
         }
+        if (acknowledgement->status == mavlink::CommandAck::Status::AdmissionCancelled) {
+            return {false, "fixed-wing waypoint command was cancelled after authority changed; "
+                           "aircraft outcome is unknown"};
+        }
         if (acknowledgement->command != kDoRepositionCommand || acknowledgement->result != kAcceptedResult) {
             return {false, "fixed-wing waypoint " + std::to_string(index + 1) + " was rejected by ArduPilot"};
         }

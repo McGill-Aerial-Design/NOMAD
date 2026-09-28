@@ -41,7 +41,7 @@ one and two promote an ArduPilot fixed-wing identity to QuadPlane, zero keeps it
 Plane, and a failed read or invalid value leaves it Unknown. A deterministic
 wire fixture proves every branch, and the live QuadPlane observer independently
 confirms the value-two profile used by the transition qualification.
-The parent gitlink pins `3f85f6f808b617c736316d7da5f51f3d3eba1737`; read
+The parent gitlink pins `900fb0fe7fec74608f1911331218557915cc501a`; read
 `.gitmodules`, the gitlinks and the
 [dependency inventory](mavsdk-dependencies.md) for provenance. The Phase A/B
 names survive in task, CI-job and provenance-check names, not as a second build.

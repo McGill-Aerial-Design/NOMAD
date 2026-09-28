@@ -72,6 +72,8 @@ Mission Planner client now have these modes:
 Mission Planner persistent mode and the C++ CLI runtime mode support the typed
 requests listed below. The protocol does not expose every CLI verb. In
 particular, there is no generic command ID, raw MAVLink or shell command.
+An integrated Mission Planner profile rejects `LegacyOneShot` before launching
+the direct CLI. The option remains available only in nonintegrated mode.
 
 ## Protocol v1
 
@@ -168,6 +170,8 @@ admission, `handback_authority` explicitly admits a source into another new
 generation; reconnect alone never does. Loss of the observed aircraft session
 also revokes the owner. A session mismatch is checked and revoked during
 `hello`, `status`, mutation and transport admission, without waiting for the monitor loop.
+The MAVSDK connection also invalidates the shared gate when it changes vehicle
+session, before a later queued command can use the new session.
 No old mission is restored.
 
 Each typed mutation echoes the incarnation, vehicle session, generation and
@@ -179,17 +183,20 @@ a process-lifetime counter and stable logical source across its client instances
 Duplicate requests can retrieve a cached response only while the same authority
 is still current. An evicted replay is rejected. In-flight operations return
 `authority_interrupted` if authority changes before completion. The runtime
-checks admission again at its transport-call boundary. `nomad --runtime admit`,
+captures the request context for each SDK command operation. `nomad --runtime admit`,
 `revoke` and `handback` are explicit local operator controls for the CLI source;
 Mission Planner exposes the same deliberate controls on its Core settings tab.
 Neither client admits itself on reconnect.
 
 This is local-account trust, not authenticated user identity. A local process
-can claim another client ID. The pinned MAVSDK command sender can queue and
-retry internally after NOMAD's transport-call check; it has no per-send
-admission callback. Consequently this foundation does not yet prove that an
-already queued SDK retry stops at physical transmission after revocation.
-That requires a typed cancellable SDK operation checked on its I/O thread.
+can claim another client ID. The pinned MAVSDK fork checks the captured context
+before the first send and each retry of `COMMAND_LONG` and `COMMAND_INT`. Its
+posted UDP delivery also runs under the same authority gate used by revoke and
+handback. Denied passthrough work returns a distinct admission-cancelled result
+to the transport; an interrupted runtime request reports `authority_interrupted` and
+never treats an uncertain aircraft outcome as success. Fence transfer and
+one-shot Offboard setpoints are outside runtime IPC v1 and need their own
+per-frame admission before integrated authority can expose them.
 
 ## Remaining ownership limits
 
@@ -197,8 +204,13 @@ This establishes one admitted software source for typed clients connected to thi
 It does not establish one writer for the aircraft. Native Mission Planner
 MAVLink controls, RC/pilot input, ArduPilot behavior, explicit nonintegrated ROS and
 maintenance/test tools remain independent authorities. Integrated profiles
-inhibit direct CLI actuation and default ROS actuation; native Mission Planner
-and ELRS require independently proven external arbitration. The runtime also does not own a
+inhibit direct CLI actuation and default ROS actuation. Profile sync writes
+`NOMAD_INTEGRATED_FLIGHT` to Mission Planner's `IntegratedFlightMode`; the
+embedded router then makes Mission Planner's consumer receive-only. The
+standalone router example has the same policy, but other standalone router
+configurations, direct Mission Planner links and RC/ELRS are not inhibited.
+Aircraft input selection still needs
+independent proof. The runtime also does not own a
 persistent mission executor or migrate all Mission Planner, ROS or Python
 surfaces. The QuadPlane fixed-wing route is qualified in the core and remains
 outside runtime IPC v1.

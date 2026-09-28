@@ -8,7 +8,7 @@
     { "Id": "wifi", "Name": "Wi-Fi", "Transport": "UDP", "Port": 14570, "Priority": 60 }
   ],
   "Consumers": [
-    { "Id": "mission_planner", "RouterPort": 14600 },
+    { "Id": "mission_planner", "RouterPort": 14600, "AllowOutbound": false },
     { "Id": "nomad_core", "RouterPort": 14602, "ClientPort": 14601 }
   ]
 }

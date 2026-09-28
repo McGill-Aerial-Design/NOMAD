@@ -56,19 +56,22 @@ namespace NOMAD.MissionPlanner.Connectivity
         public string ApiKey { get; }
         public string Mode { get; }
         public int RuntimePort { get; }
+        public bool IntegratedFlightMode { get; }
         public NomadCoreRequestOutcome LastOutcome { get; private set; }
         public string LastErrorCode { get; private set; } = "";
         public string LastMessage { get; private set; } = "";
         private readonly NomadRuntimeClient _runtimeClient;
 
         public NomadCoreClient(string executablePath, string endpoint = DefaultEndpoint, string apiKey = "",
-                               string mode = PersistentRuntime, int runtimePort = DefaultRuntimePort)
+                               string mode = PersistentRuntime, int runtimePort = DefaultRuntimePort,
+                               bool integratedFlightMode = false)
         {
             ExecutablePath = string.IsNullOrWhiteSpace(executablePath) ? "nomad" : executablePath;
             Endpoint = string.IsNullOrWhiteSpace(endpoint) ? DefaultEndpoint : endpoint;
             ApiKey = apiKey ?? "";
             Mode = NormalizeMode(mode);
             RuntimePort = runtimePort >= 1 && runtimePort <= 65535 ? runtimePort : DefaultRuntimePort;
+            IntegratedFlightMode = integratedFlightMode;
             _runtimeClient = new NomadRuntimeClient(RuntimePort, ApiKey, ProcessSource);
         }
 
@@ -247,6 +250,13 @@ namespace NOMAD.MissionPlanner.Connectivity
             LastOutcome = NomadCoreRequestOutcome.NotAttempted;
             LastErrorCode = "";
             LastMessage = "";
+            if (IntegratedFlightMode && Mode == LegacyOneShot)
+            {
+                LastOutcome = NomadCoreRequestOutcome.Rejected;
+                LastErrorCode = "integrated_legacy_oneshot_disabled";
+                LastMessage = "Integrated flight mode requires PersistentRuntime for actuation.";
+                return -1;
+            }
             if (Mode == PersistentRuntime)
             {
                 var result = _runtimeClient.Run(verb, values);
