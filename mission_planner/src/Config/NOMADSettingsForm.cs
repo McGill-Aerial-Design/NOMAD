@@ -26,10 +26,7 @@ namespace NOMAD.MissionPlanner
         private TabControl _tabControl;
 
         // Connection Tab
-        private TextBox _txtCoreExePath;
-        private ComboBox _cmbCoreClientMode;
         private NumericUpDown _numCoreRuntimePort;
-        private TextBox _txtCoreEndpoint;
         private TextBox _txtCoreApiKey;
 
         // Video Tab
@@ -91,9 +88,12 @@ namespace NOMAD.MissionPlanner
         private CheckBox _chkLogInjectHud;
 
         // Spray Tab (reels, camera tilt + all other payloads live in the Payloads tab)
-        private NumericUpDown _numSprayRange, _numSprayRangeTol, _numSprayTriggerMax, _numSprayAimX, _numSprayAimY, _numSprayAimTol;
-        private NumericUpDown _numSprayServoAngle, _numSprayForwardGain, _numSprayLateralGain, _numSprayAltitudeGain, _numSprayYawGain;
-        private NumericUpDown _numSprayMaxForward, _numSprayMaxLateral, _numSprayMaxAltitude, _numSprayMaxYaw, _numSprayLockMs, _numSprayTimeout;
+        private NumericUpDown _numSprayRange, _numSprayRangeTol, _numSprayTriggerMax;
+        private NumericUpDown _numSprayAimX, _numSprayAimY, _numSprayAimTol;
+        private NumericUpDown _numSprayServoAngle, _numSprayForwardGain, _numSprayLateralGain;
+        private NumericUpDown _numSprayAltitudeGain, _numSprayYawGain;
+        private NumericUpDown _numSprayMaxForward, _numSprayMaxLateral, _numSprayMaxAltitude;
+        private NumericUpDown _numSprayMaxYaw, _numSprayLockMs, _numSprayTimeout;
         private CheckBox _chkSprayUseYaw;
 
         // Joystick Tab
@@ -338,7 +338,8 @@ namespace NOMAD.MissionPlanner
             return textBox;
         }
 
-        private NumericUpDown AddNumericUpDown(TabPage tab, int x, int y, int width, decimal min, decimal max, decimal value, int decimals = 0)
+        private NumericUpDown AddNumericUpDown(
+            TabPage tab, int x, int y, int width, decimal min, decimal max, decimal value, int decimals = 0)
         {
             var num = new NumericUpDown
             {
@@ -407,12 +408,13 @@ namespace NOMAD.MissionPlanner
         {
             SaveSettings();
             bool configured = !string.IsNullOrWhiteSpace(Config.CoreApiKey)
-                && !string.IsNullOrWhiteSpace(Config.CoreMavlinkEndpoint);
+                && Config.CoreRuntimePort >= 1 && Config.CoreRuntimePort <= 65535;
             MessageBox.Show(
                 configured
-                    ? "C++ core settings are configured. Live vehicle connectivity is checked by the core command boundary."
-                    : "Configure the C++ core endpoint and API key before issuing vehicle commands.",
-                "NOMAD Core Configuration",
+                    ? $"Runtime IPC is configured for 127.0.0.1:{Config.CoreRuntimePort}. " +
+                      "The supervised runtime must be running to issue commands."
+                    : "Configure the runtime IPC port and local actuation gate before issuing vehicle commands.",
+                "NOMAD Runtime Configuration",
                 MessageBoxButtons.OK,
                 configured ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
         }

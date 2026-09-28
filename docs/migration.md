@@ -118,20 +118,20 @@ Admission now revokes a mismatched owner session itself, even before the
 connection monitor runs. Exact cached outcomes remain readable after request
 expiry while the same authority remains current, without another send.
 
-Default Mission Planner mode is persistent IPC. Integrated deployment profiles
-inhibit direct CLI actuation and plugin gimbal streaming; the ROS adapter is
-observation only by default while explicit nonintegrated tests retain its direct
-Vehicle behavior. The plugin direct mount-config fallback and `RCx_OPTION`
-settings writer are removed. `LegacyOneShot` remains explicitly selectable
-because GuidedGoto has no typed runtime replacement; this mode is excluded
-from integrated operation. Native Mission Planner controls and ELRS RC remain
-external aircraft inputs requiring independent arbitration.
+Mission Planner now uses runtime IPC only. The plugin no longer supports
+`LegacyOneShot`, launches the C++ CLI, or falls back to native MAVLink/direct
+vehicle writes for its typed core command actions. GuidedGoto remains unmigrated
+and reports unavailable; a soft-boundary return does not send a vehicle command
+and tells the operator to take manual control. Core executable, client-mode and
+MAVLink-endpoint settings were removed from Mission Planner configuration; the
+runtime endpoint stays in the supervised runtime environment. The plugin keeps
+its process-lifetime logical source and monotonic sequence, plus explicit admit,
+revoke and handback controls. Non-integrated direct gimbal-angle controls and
+independent native Mission Planner/RC inputs remain separate command sources.
 
-The plugin now retains one process-lifetime logical source and a long-lived
-output client; its Core settings tab offers explicit admit, revoke and handback
-controls. Saved `LegacyOneShot` mode survives configuration reload. The C++
-one-shot CLI obtains its next sequence from the runtime; the Mission Planner
-source uses a monotonic process counter.
+The C++ one-shot CLI remains a separate operator/debug client and is not a
+Mission Planner fallback. The ROS adapter remains observation only by default,
+while explicit nonintegrated tests retain its direct `Vehicle` behavior.
 
 The pinned MAVSDK command sender queues and retries `COMMAND_LONG` and
 `COMMAND_INT` after NOMAD's transport-call admission check. It does not expose a
@@ -236,7 +236,7 @@ and could misleadingly suggest a QuadPlane loss-response policy.
 |---|---|
 | `FlightModeController`, joystick and boundary monitor treated LAND/parameter writes as termination | Removed with caller failure reporting, compiled request tests and source-boundary guards; no physical termination evidence claimed |
 | `NOMADBoundaryView.MPFence` mapped kill labels to `FENCE_ACTION=2`; `MPFenceUploader` wrote LAND speed | Direct uploader/clear implementation and speed side effect deleted; visual map export only. Delayed/warn-only hard-boundary settings still conflict with immediate aircraft termination and stay GAP-05/06 blockers |
-| `src/main.cpp` direct CLI, default MP `LegacyOneShot`, `ros2/nomad_ros/src/node.cpp` separate Vehicle, native MP flight controls and ELRS RC are independent writers | Active G-M prerequisite: migrate or exclude every software writer and prove FC input selection agrees with core inhibition; concurrent source test must show one effective owner |
+| `src/main.cpp` direct CLI, Mission Planner runtime-only typed client (GuidedGoto unavailable), `ros2/nomad_ros/src/node.cpp` separate Vehicle, native MP flight controls and ELRS RC are independent writers | Active G-M prerequisite: migrate or exclude every software writer and prove FC input selection agrees with core inhibition; concurrent source test must show one effective owner |
 | Plugin gimbal stream/fallback, payload `RCx_OPTION`, fence upload and motor-music `SCR_ENABLE`/MAVFTP writes bypass runtime | Fence writer deleted after review found unsafe disable/failure behavior. Other writers remain active G-M maintenance admission prerequisites: disarmed exclusive ownership or removal/migration |
 | Runtime 256-response cache is evicted and cleared on restart; replay can execute a mutation again (`src/runtime/runtime.cpp`, `tests/runtime_ipc_test.cpp`) | Active G-M stale-request prerequisite: incarnation/session/generation plus bounded expiry and replay policy; test restart, eviction, queued intents and late requests without retransmission |
 | NOMAD joystick handles gimbal/camera/switches, never starts MP flight RC override (`NomadJoystickService.cs`) | LTE flight joystick remains unimplemented/unqualified; prove real pilot input, takeover and handback instead of inferring them from LTE connectivity |
@@ -314,7 +314,7 @@ records the historical fork baseline and hosted qualification.
 | Missions | src/mission/executor.cpp; core_test.cpp | Synchronous small step executor; no integrated cancellation, persisted resume, survey or Task 2 workflow |
 | Safety | src/safety; safety_test, fence_config_test, velocity_config_test, vio_source_test | Finite/range gates, VIO-conditioned velocity, watchdog, configured target fence, upload/readback and payload interlock |
 | Stop delivery | tests/mavsdk_zero_delivery_test.cpp; scripts/dev/core_sitl_zero_delivery.py | Live peer-driven wire tests cover every stop path on the MAVSDK transport; whole-link outage cannot guarantee delivery; merged-main Copter SITL evidence is recorded below and must be rerun when the transport, fixture or firmware changes |
-| Mission Planner | NomadCoreClient, OutputController, FlightModeController, GimbalController, BoundaryManager | LegacyOneShot retains goto/discrete outputs; PersistentRuntime covers only its protocol-v1 typed subset; native maintenance parameter/gimbal paths and UI-owned decisions remain; direct plugin fence and termination writers are removed |
+| Mission Planner | NomadCoreClient, OutputController, FlightModeController, GimbalController, BoundaryManager | Typed command actions use runtime IPC only; GuidedGoto is unavailable because protocol v1 has no navigation request; separate direct gimbal-angle controls, maintenance parameter paths and UI-owned decisions remain; direct plugin fence and termination writers are removed |
 | ROS 2 | ros2/nomad_ros/src/node.cpp, translation.cpp; tests/ros | Owns a Vehicle, telemetry topics, VIO health/source gate and Trigger services; blocking callbacks, no selected estimator or navigation fusion |
 | Video | python/tools/simple_video_bridge.py, video_bridge_server.py; test_simple_video_bridge.py | ROS image to GStreamer/RTSP; control HTTP is loopback-only; no validated capture/CV/VIO product pipeline |
 | Profiles | scripts/profile.py; three product profile files; test_deployment_profiles.py | Canonical endpoint and stale-setting checks exist; optional workloads and hardware remain unqualified |

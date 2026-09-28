@@ -56,7 +56,7 @@ namespace NOMAD.MissionPlanner
         private string _lastStatus = "inside";
         private DateTime? _hardViolationStart;
         private bool _terminationReported;   // one request report per violation episode
-        private bool _returnCommanded;        // one return-to-boundary goto per episode
+        private bool _returnUnavailableReported; // one unavailable notice per episode
         private bool _isDisposed;
 
         /// <summary>
@@ -188,7 +188,7 @@ namespace NOMAD.MissionPlanner
                 _hardViolationStart = null;
                 _terminationReported = false;
             }
-            if (status == "inside") _returnCommanded = false;
+            if (status == "inside") _returnUnavailableReported = false;
 
             CurrentStatus = status;
         }
@@ -256,32 +256,38 @@ namespace NOMAD.MissionPlanner
                 AudioAlerts.Speak("Approaching boundary. Turn around.", component: "boundary");
             }
 
-            // "return_to_boundary": command GUIDED to the closest point just
-            // inside the violated boundary (not all the way to the return
-            // point) at the current altitude. Once per violation episode so
-            // repeated checks don't spam goto commands.
-            if (softAction == "return_to_boundary" && !_returnCommanded)
+            // "return_to_boundary" is currently unavailable because runtime
+            // protocol v1 has no typed navigation request. Report it once per
+            // violation episode and require the pilot to take manual control.
+            if (softAction == "return_to_boundary" && !_returnUnavailableReported)
             {
-                _returnCommanded = true;
+                _returnUnavailableReported = true;
                 var boundary = _geofence.SoftBoundary?.Vertices?.Count >= 3
                     ? _geofence.SoftBoundary : _geofence.HardBoundary;
                 var target = GeoMath.NearestPointInside(boundary?.Vertices, position, ReturnInsideMarginMeters);
                 if (target == null)
                 {
-                    Log.Warn("return_to_boundary: no boundary polygon available");
+                    Log.Warn("Automatic boundary return unavailable: no boundary target is available. " +
+                             "Take manual control.");
+                    AudioAlerts.Speak("Boundary return unavailable. Take manual control.", component: "boundary");
                     return;
                 }
 
-                double alt = Math.Max(5.0, altAgl); // never command a goto into the ground
-                bool ok = FlightModeController.GuidedGoto(target.Lat, target.Lon, alt);
-                Log.Warn($"Soft boundary action — GUIDED to nearest inside point {target.Lat:F6}, {target.Lon:F6} @ {alt:F0}m: {(ok ? "dispatched" : "FAILED")}");
-                if (ok) AudioAlerts.Speak("Returning inside boundary.", component: "boundary");
+                double alt = Math.Max(5.0, altAgl); // retain a safe advisory altitude in the log
+                if (!FlightModeController.GuidedGoto(target.Lat, target.Lon, alt))
+                {
+                    Log.Warn($"Soft boundary return unavailable — planned point {target.Lat:F6}, {target.Lon:F6} " +
+                             $"@ {alt:F0}m was not sent. Take manual control.");
+                    AudioAlerts.Speak(
+                        "Automatic boundary return unavailable. Take manual control.", component: "boundary");
+                    return;
+                }
+                AudioAlerts.Speak("Returning inside boundary.", component: "boundary");
             }
         }
 
         /// <summary>
-        /// How far past the boundary edge the return goto aims, so the vehicle
-        /// settles inside rather than hovering on the line.
+        /// How far inside the boundary the unavailable return target is planned.
         /// (Geometry lives in GeoMath.NearestPointInside.)
         /// </summary>
         private const double ReturnInsideMarginMeters = 1.0;

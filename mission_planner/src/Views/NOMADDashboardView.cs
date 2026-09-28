@@ -210,9 +210,9 @@ namespace NOMAD.MissionPlanner
 
         private void UpdateCoreCard()
         {
-            bool configured = !string.IsNullOrWhiteSpace(_config.CoreMavlinkEndpoint)
+            bool configured = _config.CoreRuntimePort >= 1 && _config.CoreRuntimePort <= 65535
                 && !string.IsNullOrWhiteSpace(_config.CoreApiKey);
-            _lblCore.Text = configured ? "Configured" : "Not configured";
+            _lblCore.Text = configured ? "IPC configured" : "Not configured";
             _lblCore.ForeColor = configured ? NOMADTheme.SUCCESS : NOMADTheme.WARNING;
         }
 

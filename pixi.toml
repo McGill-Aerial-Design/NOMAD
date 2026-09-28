@@ -178,13 +178,10 @@ test-plugin-gimbal = "powershell -ExecutionPolicy Bypass -File scripts/build/tes
 # STA WinForms interaction/render smoke for the isolated gimbal joystick pad.
 test-plugin-gimbal-ui = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_gimbal_ui.ps1"
 
-# Unit tests for the NomadCoreClient boundary (Windows only) — compiles the
-# Mission Planner-free NomadCoreClient with VS's csc and pins the exact argument
-# vector the plugin sends to the C++ core CLI (values then --endpoint, invariant
-# formatting), the fail-closed input validation gates, and the unavailable-core
-# failure path. When the C++ binary is built it also exercises the live
-# authentication gate (actuation without NOMAD_API_KEY is refused before any
-# socket work).
+# Unit tests for the Mission Planner runtime IPC client (Windows only) — compiles
+# the Mission Planner-free client with VS's csc and covers typed requests,
+# fail-closed validation, GuidedGoto unavailability, authority controls,
+# protocol negotiation and unknown-outcome no-replay behavior.
 test-plugin-core-client = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_core_client.ps1"
 
 # Unit tests for the host-independent flight-log analyzer and shared live issue rules.

@@ -122,11 +122,14 @@ environment settings before starting it. The runtime retries the same MAVSDK
 connection object after a link loss. A client disconnect does not recreate the
 vehicle connection or cancel a command already executing.
 
-Mission Planner defaults to `PersistentRuntime` in its NOMAD settings and uses
-the configured loopback port. `LegacyOneShot` is an explicit nonintegrated
-compatibility option; `IntegratedFlightMode` rejects it before process launch.
-Profile sync derives that flag from `NOMAD_INTEGRATED_FLIGHT`, which is set in
-the supported integrated profiles. In embedded router mode, it also makes the
+Mission Planner uses runtime IPC only and connects to the configured loopback
+port. It never launches `nomad` or falls back to native MAVLink/direct vehicle
+writes when the runtime is unavailable. GuidedGoto is unavailable until the
+runtime adds a typed navigation request; boundary feedback directs the operator
+to take manual control. Its local API-key setting is a nonempty actuation gate,
+not IPC authentication. Profile sync derives `IntegratedFlightMode` from
+`NOMAD_INTEGRATED_FLIGHT`, which is set in the supported integrated profiles.
+In embedded router mode, it also makes the
 Mission Planner router consumer receive-only; the standalone router requires
 an explicit equivalent configuration. The C++ CLI can use
 `nomad --runtime status`, `nomad --runtime servo <channel> <pwm_us>`, and other

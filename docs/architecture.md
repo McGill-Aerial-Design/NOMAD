@@ -180,9 +180,9 @@ between modules.
 
 The transport records timestamps for several telemetry groups, but a complete
 per-field freshness and aircraft-wide authority model remains open. The ROS node
-creates a `Vehicle` only in explicit nonintegrated mode; Mission Planner defaults
-to persistent runtime but can select its nonintegrated CLI mode. These client
-paths have not been unified with native GCS
+creates a `Vehicle` only in explicit nonintegrated mode; Mission Planner sends
+typed client requests only to the persistent runtime. These client paths have
+not been unified with native GCS
 controls, RC/pilot, ArduPilot or maintenance writers.
 
 ## Boundary geometry
@@ -199,9 +199,10 @@ these semantics and test concave geometry, narrow regions and infeasible insets.
 ## Command authority and client protocol
 
 The implemented software foundation is one ground-hosted C++ runtime. Mission Planner
-defaults to `PersistentRuntime`; explicit `LegacyOneShot` remains a nonintegrated
-path for the still-unmigrated GuidedGoto consumer. The CLI has an explicit runtime
-client mode. Local IPC is bounded JSON Lines over IPv4 loopback TCP. V1 has request
+uses loopback runtime IPC only; there is no one-shot process fallback. GuidedGoto
+is unavailable until the runtime exposes a typed navigation request. The C++ CLI
+has an explicit runtime client mode and retains its separate direct/debug path.
+Local IPC is bounded JSON Lines over IPv4 loopback TCP. V1 has request
 IDs, protocol negotiation, structured errors, a 256-response in-memory cache and a
 one-mutating-command-at-a-time policy. Admission now adds a runtime incarnation,
 vehicle session, authority generation, one owner, bounded expiry and monotonic
@@ -578,9 +579,9 @@ flowchart TD
     ROUTER --> AIRCRAFT[Aircraft]
 ```
 
-`NomadCoreClient` defaults to `PersistentRuntime` and retains an explicit
-`LegacyOneShot` nonintegrated mode; persistent mode never falls back to a new
-process after a command failure. The ROS node is observation only by default.
+`NomadCoreClient` uses runtime IPC only and never starts a new process or falls
+back to a direct vehicle write after a command failure. GuidedGoto is unavailable
+because the protocol has no typed navigation request. The ROS node is observation only by default.
 Two raw MAVLink consumers can both emit
 commands; transport selection is not global single-writer authority. MP native
 controls, pilot/RC and ArduPilot are external authorities. Integrated operation

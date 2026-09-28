@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
-// Core client requests and explicit reporting of unavailable termination.
-
-using NOMAD.MissionPlanner.Connectivity;
+// Explicitly reports vehicle actions that are not available through runtime IPC.
 
 namespace NOMAD.MissionPlanner
 {
@@ -19,31 +17,14 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Switch to GUIDED and fly to the given position at the given relative
-        /// altitude (meters AGL). Used by the soft-boundary "return to boundary"
-        /// action. Routes through the C++ core client boundary: the core sends
-        /// MAV_CMD_DO_REPOSITION with the change-mode flag and verifies the
-        /// arrival position, so a true return means the vehicle is at the
-        /// target. Returns false (fail closed) when the core is not configured,
-        /// refuses, or cannot reach the vehicle.
+        /// Report that navigation commands are unavailable in runtime protocol v1.
+        /// No vehicle command is sent until the runtime exposes a typed goto request.
         /// </summary>
         public static bool GuidedGoto(double lat, double lng, double altRelM)
         {
-            var client = OutputController.CreateCoreClient();
-            if (client == null)
-            {
-                Log.Warn("GuidedGoto: NOMAD core not configured.");
-                return false;
-            }
-            var ok = client.Goto(lat, lng, altRelM);
-            if (!ok)
-            {
-                var outcome = client.LastOutcome == NomadCoreRequestOutcome.UnknownOutcome
-                    ? "vehicle outcome is unknown after the runtime connection ended"
-                    : "core rejected or could not reach the vehicle";
-                Log.Warn($"GuidedGoto: {outcome}.");
-            }
-            return ok;
+            Log.Warn("GuidedGoto unavailable: runtime protocol v1 does not support navigation requests. " +
+                     "No vehicle command was sent; take manual control.");
+            return false;
         }
     }
 }

@@ -271,7 +271,7 @@ void test_protocol_and_status(std::uint16_t port, FakeConnection &connection) {
     CHECK(second_status.get()["ok"] == true);
 }
 
-void test_protocol_errors(std::uint16_t port) {
+void test_protocol_errors(std::uint16_t port, FakeConnection &connection) {
     Client client(port);
     const auto incompatible = client.request([] {
         auto request = base_request("v2", "hello");
@@ -284,8 +284,11 @@ void test_protocol_errors(std::uint16_t port) {
     wrong_name["protocol"] = "nomad-other";
     CHECK(wrong_protocol.request(wrong_name)["error"]["code"] == "incompatible_protocol");
     CHECK(client.request(base_request("unknown", "send_command"))["error"]["code"] == "unsupported_request");
+    const auto commands_before_navigation_request = connection.command_count();
     CHECK(client.request(base_request("no-navigation", "goto_location"))["error"]["code"] ==
           "unsupported_request");
+    CHECK(connection.command_count() == commands_before_navigation_request);
+    CHECK(!connection.last_goto.has_value());
     CHECK(client.request(base_request("no-shell", "execute_shell"))["error"]["code"] == "unsupported_request");
     CHECK(client.request(base_request("no-mavlink", "send_mavlink"))["error"]["code"] ==
           "unsupported_request");
@@ -373,7 +376,7 @@ void test_runtime_owns_one_connection_and_releases_port() {
     CHECK(runtime.start(error));
     wait_until([&runtime] { return runtime.ready(); });
     test_protocol_and_status(port, *observed);
-    test_protocol_errors(port);
+    test_protocol_errors(port, *observed);
     { Client startup(port); read_authority(startup); }
     CHECK(Client(port).request(servo_request("startup-denied", 1500))["error"]["code"] ==
           "not_authoritative");

@@ -13,10 +13,7 @@ namespace NOMAD.MissionPlanner
     {
         private void LoadSettings()
         {
-            _txtCoreExePath.Text = Config.CoreExePath ?? "";
-            SetComboBoxValue(_cmbCoreClientMode, Config.CoreClientMode);
             _numCoreRuntimePort.Value = ClampValue(_numCoreRuntimePort, Config.CoreRuntimePort);
-            _txtCoreEndpoint.Text = Config.CoreMavlinkEndpoint ?? "";
             _txtCoreApiKey.Text = Config.CoreApiKey ?? "";
 
             _txtVideoUrl.Text = Config.VideoUrl;
@@ -47,7 +44,8 @@ namespace NOMAD.MissionPlanner
             }
             _cmbPreferredLink.SelectedItem = Config.PreferredMavlinkLink;
             _chkAutoReconnectPreferred.Checked = Config.AutoReconnectToPreferred;
-            _numPreferredReconnectDelay.Value = ClampValue(_numPreferredReconnectDelay, Config.PreferredLinkReconnectDelay);
+            _numPreferredReconnectDelay.Value =
+                ClampValue(_numPreferredReconnectDelay, Config.PreferredLinkReconnectDelay);
             _numHeartbeatTimeout.Value = ClampValue(_numHeartbeatTimeout, Config.MavlinkHeartbeatTimeout);
             _numLinkMonitorInterval.Value = ClampValue(_numLinkMonitorInterval, Config.LinkMonitorInterval);
             _txtRouterBindAddress.Text = Config.RouterBindAddress;
@@ -110,7 +108,9 @@ namespace NOMAD.MissionPlanner
         private void LoadJoystickSettings()
         {
             _chkJoyGimbalEnabled.Checked = Config.JoystickGimbalEnabled;
-            SetComboBoxValue(_cmbJoyGimbalDevice, string.IsNullOrEmpty(Config.JoystickGimbalDevice) ? "(none)" : Config.JoystickGimbalDevice);
+            SetComboBoxValue(
+                _cmbJoyGimbalDevice,
+                string.IsNullOrEmpty(Config.JoystickGimbalDevice) ? "(none)" : Config.JoystickGimbalDevice);
             SetComboBoxValue(_cmbJoyGimbalPitchAxis, Config.JoystickGimbalPitchAxis);
             _chkJoyGimbalPitchInvert.Checked = Config.JoystickGimbalPitchInvert;
             SetComboBoxValue(_cmbJoyGimbalRollAxis, Config.JoystickGimbalRollAxis);
@@ -119,13 +119,18 @@ namespace NOMAD.MissionPlanner
             _numJoyGimbalMaxRate.Value = ClampValue(_numJoyGimbalMaxRate, Config.JoystickGimbalMaxRateDegSec);
 
             _chkJoyCameraTiltEnabled.Checked = Config.JoystickCameraTiltEnabled;
-            SetComboBoxValue(_cmbJoyCameraTiltDevice, string.IsNullOrEmpty(Config.JoystickCameraTiltDevice) ? "(none)" : Config.JoystickCameraTiltDevice);
+            SetComboBoxValue(
+                _cmbJoyCameraTiltDevice,
+                string.IsNullOrEmpty(Config.JoystickCameraTiltDevice) ? "(none)" : Config.JoystickCameraTiltDevice);
             SetComboBoxValue(_cmbJoyCameraTiltAxis, Config.JoystickCameraTiltAxis);
             _chkJoyCameraTiltInvert.Checked = Config.JoystickCameraTiltInvert;
             _numJoyCameraTiltDeadzone.Value = ClampValue(_numJoyCameraTiltDeadzone, Config.JoystickCameraTiltDeadzone);
-            _numJoyCameraTiltMaxRate.Value = ClampValue(_numJoyCameraTiltMaxRate, Config.JoystickCameraTiltMaxRateUsPerSec);
+            _numJoyCameraTiltMaxRate.Value =
+                ClampValue(_numJoyCameraTiltMaxRate, Config.JoystickCameraTiltMaxRateUsPerSec);
 
-            SetComboBoxValue(_cmbSwitchDevice, string.IsNullOrEmpty(Config.JoystickSwitchDevice) ? "(none)" : Config.JoystickSwitchDevice);
+            SetComboBoxValue(
+                _cmbSwitchDevice,
+                string.IsNullOrEmpty(Config.JoystickSwitchDevice) ? "(none)" : Config.JoystickSwitchDevice);
             SetComboBoxValue(_cmbSw1Up, LabelForActionId(Config.JoystickSw1UpAction));
             SetComboBoxValue(_cmbSw1Down, LabelForActionId(Config.JoystickSw1DownAction));
             SetComboBoxValue(_cmbSw2Up, LabelForActionId(Config.JoystickSw2UpAction));
@@ -143,10 +148,7 @@ namespace NOMAD.MissionPlanner
 
         private void SaveSettings()
         {
-            Config.CoreExePath = _txtCoreExePath.Text.Trim();
-            Config.CoreClientMode = _cmbCoreClientMode.SelectedItem?.ToString() ?? "PersistentRuntime";
             Config.CoreRuntimePort = (int)_numCoreRuntimePort.Value;
-            Config.CoreMavlinkEndpoint = _txtCoreEndpoint.Text.Trim();
             Config.CoreApiKey = _txtCoreApiKey.Text.Trim();
 
             Config.VideoUrl = _txtVideoUrl.Text.Trim();
@@ -165,9 +167,12 @@ namespace NOMAD.MissionPlanner
                 _ => "UDP"
             };
             Config.RadioMasterPort = (int)_numRadioMasterPort.Value;
-            Config.RadioMasterTcpHost = string.IsNullOrWhiteSpace(_txtRadioTcpHost.Text) ? "127.0.0.1" : _txtRadioTcpHost.Text.Trim();
+            Config.RadioMasterTcpHost = string.IsNullOrWhiteSpace(_txtRadioTcpHost.Text)
+                ? "127.0.0.1"
+                : _txtRadioTcpHost.Text.Trim();
             Config.RadioMasterComPort = _cmbRadioMasterComPort.SelectedItem?.ToString() ?? "COM3";
-            Config.RadioMasterBaudRate = int.TryParse(_cmbRadioMasterBaudRate.SelectedItem?.ToString(), out int baud) ? baud : 420000;
+            Config.RadioMasterBaudRate = int.TryParse(
+                _cmbRadioMasterBaudRate.SelectedItem?.ToString(), out int baud) ? baud : 420000;
             Config.LteMavlinkPort = (int)_numLteMavlinkPort.Value;
             Config.AutoFailoverEnabled = _chkAutoFailover.Checked;
             Config.PreferredMavlinkLink = _cmbPreferredLink.SelectedItem as string ?? "None";

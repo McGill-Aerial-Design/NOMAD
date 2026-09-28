@@ -30,13 +30,16 @@ Visual Studio MSBuild. For installation steps, see
 [the packaging guide](packaging/README.md).
 
 Use `lint-plugin` and focused `test-plugin-*` tasks for non-deploying checks.
-`NomadCoreClient` supports `LegacyOneShot` and `PersistentRuntime`. Persistent
-mode connects to the C++ runtime over versioned loopback JSON Lines IPC, performs
-HELLO negotiation, then issues typed requests without spawning `nomad`. It does
-not automatically retry a request whose response is lost. The compatibility
-mode remains available until a deployment selects persistent mode. The runtime
-protocol is local-only and does not authenticate clients. Direct gimbal,
-maintenance parameter paths remain; global authority handover is open.
+`NomadCoreClient` uses only the C++ runtime over versioned loopback JSON Lines
+IPC. It performs HELLO negotiation and sends the typed requests supported by
+protocol v1. If the runtime is unavailable, commands fail closed; Mission Planner
+does not launch the CLI or fall back to native MAVLink or direct vehicle writes.
+Requests with an unknown outcome are not replayed. GuidedGoto is unavailable
+until runtime protocol v1 adds a typed navigation request, and the boundary
+monitor tells the operator to take manual control. The local API-key setting is
+a nonempty actuation gate, not IPC authentication. Separate direct gimbal-angle
+controls and maintenance parameter paths remain outside this client boundary;
+global authority handover is open.
 For CONOPS v1.0, the dedicated GCS display must show live aircraft position and
 competition area (AE27-OPS-004). The LAND-as-termination recipe and descent-speed
 settings are removed. The monitored termination button and hard-boundary request

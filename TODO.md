@@ -163,7 +163,7 @@ close its integration or release gate.
   The local runtime now starts inhibited, admits one software source explicitly,
   advances generations on revoke/handback, and rejects expired, evicted, restarted
   or old-session requests. Integrated profiles inhibit direct CLI actuation;
-  ROS defaults to observation only; Mission Planner defaults to persistent IPC.
+  ROS defaults to observation only; Mission Planner typed command actions are runtime-IPC only.
   Mission Planner has an explicit authority control and stable plugin-session
   source; session rollover is fenced inside runtime admission.
   The typed MAVSDK command retry gate and receive-only integrated Mission Planner

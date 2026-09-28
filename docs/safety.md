@@ -67,6 +67,11 @@ termination, hard-breach response and flight qualification remain blocked.
 Preserve ArduPilot failsafes and qualify their interaction with the approved
 termination mechanism; no substitute emergency recipe is approved.
 
+The soft-boundary `return_to_boundary` action is unavailable until runtime
+protocol v1 has a typed navigation request. Mission Planner reports that no
+command was sent and directs the pilot to take manual control. This does not
+change the hard-boundary termination policy above.
+
 Q01 is resolved by the project owner: hard-boundary violation triggers
 termination; the soft boundary is an internal configurable inward margin from
 the hard polygon, e.g. 5 m. Keep the existing plugin inset implementation as-is.
@@ -153,7 +158,7 @@ These retain their original obligations; partial coverage is not satisfaction.
 | SR-LNK-03 | Shutdown sends zero before closing an active link | Loopback ordering tests; live SITL and physical link evidence separate |
 | SR-LNK-04 | Announce a standard GCS heartbeat for heartbeat-gated relays | MAVSDK `GroundStation` configuration announces at 1 Hz; the closed-gate `core-sitl-gcs-heartbeat` harness requires at least three measured intervals across four announcements at 0.9–1.3 s. Current-head full SITL qualification remains required |
 | SR-FEN-01 | Upload, enable and verify FC fence before autonomous flight | Upload/readback/enable-reading tests; global preflight enforcement and all fence fields open |
-| SR-FEN-02 | Reject position targets outside configured boundary | C++ target tests; live containment and full mission/velocity paths open |
+| SR-FEN-02 | Reject position targets outside configured boundary | C++ target tests; Mission Planner GuidedGoto reports unavailable without dispatch (`mission_planner/tests/coreclient/TerminationRequestTests.cs::GuidedGoto_ReportsUnavailableWithoutDispatch`); unsupported runtime goto produces zero fake commands (`tests/runtime_ipc_test.cpp::test_protocol_errors`); live containment and full mission/velocity paths open |
 | SR-PAY-01 | Validate servo channel and PWM before actuation | C++ generic range tests; board map and reserved payload channels open |
 | SR-PAY-02 | Bound payload duration and de-energize outputs on failure | Dedicated release/off-failure tests; generic relay and physical power-loss behavior open |
 | SR-PAY-03 | Release requires explicit operator interlock | Dedicated core release and UI tests; all raw output access must share authorization |

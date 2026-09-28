@@ -147,7 +147,6 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         private void MigrateDefaults()
         {
-            CoreClientMode = Connectivity.NomadCoreClient.NormalizeMode(CoreClientMode);
             if (CoreRuntimePort < 1 || CoreRuntimePort > 65535)
             {
                 CoreRuntimePort = Connectivity.NomadCoreClient.DefaultRuntimePort;
@@ -184,10 +183,6 @@ namespace NOMAD.MissionPlanner
                 ManagementPort = 14610;
             }
 
-            if (DualLinkEnabled && CoreMavlinkEndpoint == "udpin:0.0.0.0:14550")
-            {
-                CoreMavlinkEndpoint = Connectivity.NomadCoreClient.DefaultEndpoint;
-            }
             if (RouterConsumers != null)
             {
                 var mp = RouterConsumers.Find(c => c.Id == "mission_planner");
@@ -284,10 +279,7 @@ namespace NOMAD.MissionPlanner
             var defaults = new NOMADConfig();
 
             ActiveProfile = defaults.ActiveProfile;
-            CoreExePath = defaults.CoreExePath;
-            CoreClientMode = defaults.CoreClientMode;
             CoreRuntimePort = defaults.CoreRuntimePort;
-            CoreMavlinkEndpoint = defaults.CoreMavlinkEndpoint;
             RouterLinks = defaults.RouterLinks;
             RouterConsumers = defaults.RouterConsumers;
             RouterMode = defaults.RouterMode;

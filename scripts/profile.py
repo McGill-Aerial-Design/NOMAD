@@ -7,10 +7,11 @@ Provides load / save / list / show / diff / edit for configuration profiles.
 Each profile is a complete .env file in config/profiles/ that can be loaded
 into config/nomad.env (the gitignored runtime config).
 
-On `load`, the profile's API key / endpoint are also synced into the Mission
-Planner plugin config (nomad_config.json) along with an ActiveProfile marker,
-so switching profiles also switches the GCS settings and the in-app profile
-indicator. Set NOMAD_MP_CONFIG to override the plugin config path.
+On `load`, the profile's local actuation gate is also synced into the Mission
+Planner plugin config (nomad_config.json) along with an ActiveProfile marker.
+The MAVLink endpoint stays in the runtime environment; Mission Planner connects
+to the runtime over loopback IPC. Set NOMAD_MP_CONFIG to override the plugin
+config path.
 
 Usage:
   python scripts/profile.py load <name>
@@ -46,7 +47,14 @@ _ENDPOINT_PATTERN = re.compile(
     r"^(?:(?P<scheme>udp|udpin|udpout):)?(?P<host>[^:/\s]+):(?P<port>[0-9]+)$",
     re.IGNORECASE,
 )
-_RETIRED_MP_FIELDS = ("JetsonApiKey", "JetsonIP", "JetsonPort")
+_RETIRED_MP_FIELDS = (
+    "JetsonApiKey",
+    "JetsonIP",
+    "JetsonPort",
+    "CoreExePath",
+    "CoreClientMode",
+    "CoreMavlinkEndpoint",
+)
 _UNSAVED_SECRET_KEYS = {"NOMAD_API_KEY"}
 _HOST_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 
@@ -161,7 +169,6 @@ def _apply_env_to_mp_config(cfg: dict[str, object], name: str, env: dict[str, st
     for field in _RETIRED_MP_FIELDS:
         cfg.pop(field, None)
 
-    cfg["CoreMavlinkEndpoint"] = normalize_mavlink_endpoint(env.get("NOMAD_MAVLINK_ENDPOINT", ""))
     integrated_value = env.get("NOMAD_INTEGRATED_FLIGHT", "false").strip().lower()
     if integrated_value not in {"1", "true", "yes", "0", "false", "no"}:
         raise ValueError("NOMAD_INTEGRATED_FLIGHT must be a boolean value")

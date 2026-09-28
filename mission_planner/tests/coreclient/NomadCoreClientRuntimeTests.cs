@@ -14,26 +14,14 @@ using NOMAD.MissionPlanner.Connectivity;
 
 internal static partial class NomadCoreClientTests
 {
-    private static void CoreClientMode_PreservesExplicitLegacySelection()
-    {
-        Expect(NomadCoreClient.NormalizeMode("LegacyOneShot") == NomadCoreClient.LegacyOneShot,
-            "configuration reload preserves an explicit legacy selection");
-        Expect(NomadCoreClient.NormalizeMode("") == NomadCoreClient.PersistentRuntime,
-            "missing configuration defaults to persistent IPC");
-    }
-
-    private static void PersistentRuntime_SendsTypedRequestWithoutStartingProcess()
+    private static void Runtime_SendsTypedRequestOnce()
     {
         using var runtime = new MockRuntime(2);
-        var client = new NomadCoreClient(
-            @"C:\__nomad_core_does_not_exist__.exe", apiKey: "test-key",
-            mode: NomadCoreClient.PersistentRuntime, runtimePort: runtime.Port);
+        var client = new NomadCoreClient("test-key", runtime.Port);
 
-        Expect(client.Servo(8, 1500), "persistent mode succeeds without the configured CLI executable");
-        Expect(!client.Goto(45.5, 9.25, 5.0), "persistent mode rejects goto outside the protocol-v1 subset");
-        Expect(client.SetRelay(3, true), "persistent mode sends a typed relay request");
+        Expect(client.Servo(8, 1500), "runtime sends a typed servo request");
+        Expect(client.SetRelay(3, true), "runtime sends a typed relay request");
         runtime.Wait();
-        Expect(client.Mode == NomadCoreClient.PersistentRuntime, "persistent mode is selected explicitly");
         Expect(runtime.CommandCount == 2, "each action was sent once to the runtime");
         Expect(runtime.LastCommandType == "set_relay", "relay maps to its semantic protocol type");
         Expect(Convert.ToString(runtime.LastCommand["runtime_incarnation"], CultureInfo.InvariantCulture) ==
@@ -47,12 +35,10 @@ internal static partial class NomadCoreClientTests
         Expect(client.LastOutcome == NomadCoreRequestOutcome.Succeeded, "structured success is reported");
     }
 
-    private static void PersistentRuntime_ReportsUnknownOutcomeWithoutReplay()
+    private static void Runtime_ReportsUnknownOutcomeWithoutReplay()
     {
         using var runtime = new MockRuntime(1, dropCommandResponse: true);
-        var client = new NomadCoreClient(
-            "nomad-does-not-need-to-exist", apiKey: "test-key",
-            mode: NomadCoreClient.PersistentRuntime, runtimePort: runtime.Port);
+        var client = new NomadCoreClient("test-key", runtime.Port);
 
         Expect(!client.Servo(8, 1500), "missing command response reports failure to the Boolean caller");
         runtime.Wait();
@@ -61,12 +47,10 @@ internal static partial class NomadCoreClientTests
         Expect(runtime.CommandCount == 1, "the client did not replay the mutating request");
     }
 
-    private static void PersistentRuntime_RejectsIncompatibleHelloBeforeCommand()
+    private static void Runtime_RejectsIncompatibleHelloBeforeCommand()
     {
         using var runtime = new MockRuntime(1, helloVersion: 2);
-        var client = new NomadCoreClient(
-            "nomad-does-not-need-to-exist", apiKey: "test-key",
-            mode: NomadCoreClient.PersistentRuntime, runtimePort: runtime.Port);
+        var client = new NomadCoreClient("test-key", runtime.Port);
 
         Expect(!client.Servo(8, 1500), "incompatible runtime is rejected");
         runtime.Wait();
@@ -76,12 +60,10 @@ internal static partial class NomadCoreClientTests
         Expect(runtime.CommandCount == 0, "no command is sent before successful negotiation");
     }
 
-    private static void PersistentRuntime_RejectsIncompatibleCommandResponseAsUnknown()
+    private static void Runtime_RejectsIncompatibleCommandResponseAsUnknown()
     {
         using var runtime = new MockRuntime(1, commandResponseVersion: 2);
-        var client = new NomadCoreClient(
-            "nomad-does-not-need-to-exist", apiKey: "test-key",
-            mode: NomadCoreClient.PersistentRuntime, runtimePort: runtime.Port);
+        var client = new NomadCoreClient("test-key", runtime.Port);
 
         Expect(!client.Servo(8, 1500), "incompatible command response is not reported as success");
         runtime.Wait();
@@ -90,12 +72,10 @@ internal static partial class NomadCoreClientTests
         Expect(runtime.CommandCount == 1, "the client did not replay after an incompatible response");
     }
 
-    private static void PersistentRuntime_ReconnectsForNextRequest()
+    private static void Runtime_ReconnectsForNextRequest()
     {
         var port = ReservePort();
-        var client = new NomadCoreClient(
-            "nomad-does-not-need-to-exist", apiKey: "test-key",
-            mode: NomadCoreClient.PersistentRuntime, runtimePort: port);
+        var client = new NomadCoreClient("test-key", port);
         using (var firstRuntime = new MockRuntime(1, port: port))
         {
             Expect(client.Servo(8, 1500), "first runtime request succeeds");
@@ -109,11 +89,11 @@ internal static partial class NomadCoreClientTests
         }
     }
 
-    private static void PersistentRuntime_RequiresExplicitOwnershipAcrossClients()
+    private static void Runtime_RequiresExplicitOwnershipAcrossClients()
     {
         using var runtime = new MockRuntime(8, enforceAuthority: true);
-        var first = new NomadCoreClient("unused", apiKey: "test-key", runtimePort: runtime.Port);
-        var second = new NomadCoreClient("unused", apiKey: "test-key", runtimePort: runtime.Port);
+        var first = new NomadCoreClient("test-key", runtime.Port);
+        var second = new NomadCoreClient("test-key", runtime.Port);
 
         Expect(!first.Servo(8, 1500), "Mission Planner starts without command authority");
         Expect(first.LastErrorCode == "not_authoritative", "startup rejection names the missing owner");
@@ -136,10 +116,10 @@ internal static partial class NomadCoreClientTests
         }
     }
 
-    private static void PersistentRuntime_RejectsWrongAuthorityResponseType()
+    private static void Runtime_RejectsWrongAuthorityResponseType()
     {
         using var runtime = new MockRuntime(1, enforceAuthority: true, wrongAuthorityResponseType: true);
-        var client = new NomadCoreClient("unused", apiKey: "test-key", runtimePort: runtime.Port);
+        var client = new NomadCoreClient("test-key", runtime.Port);
         Expect(!client.AdmitAuthority(), "command acknowledgement cannot impersonate authority admission");
         runtime.Wait();
         Expect(client.LastOutcome == NomadCoreRequestOutcome.UnknownOutcome,

@@ -36,10 +36,10 @@ namespace NOMAD.MissionPlanner.Connectivity
             LastOutcome = NomadCoreRequestOutcome.NotAttempted;
             LastErrorCode = "";
             LastMessage = "";
-            return RunPersistentRuntime(verb, values);
+            return RunRuntime(verb, values);
         }
 
-        private int RunPersistentRuntime(string verb, string[] values)
+        private int RunRuntime(string verb, string[] values)
         {
             var command = BuildRuntimeRequest(verb, values);
             if (command == null)
