@@ -47,6 +47,7 @@ class NomadVehicleNode final : public rclcpp::Node {
   public:
     NomadVehicleNode() : Node("nomad_vehicle_node") {
         declare_parameter<std::string>("endpoint", "udpin:0.0.0.0:14570");
+        declare_parameter<bool>("integrated_flight_mode", true);
         declare_parameter<int>("system_id", 1);
         declare_parameter<double>("publish_rate_hz", 10.0);
         const auto reviewed_limits = nomad::safety::reviewed_velocity_limits();
@@ -60,6 +61,7 @@ class NomadVehicleNode final : public rclcpp::Node {
         declare_parameter<std::string>("vio_source_topic", "/nomad/vio_source");
 
         endpoint_ = get_parameter("endpoint").as_string();
+        integrated_flight_mode_ = get_parameter("integrated_flight_mode").as_bool();
         const auto system_id = static_cast<int>(get_parameter("system_id").as_int());
         if (system_id < 1 || system_id > 255) {
             RCLCPP_ERROR(get_logger(), "system_id %d is not a valid autopilot id; the node will not connect",
@@ -135,7 +137,8 @@ class NomadVehicleNode final : public rclcpp::Node {
     }
 
     void ensure_connected() {
-        if (vehicle_ != nullptr || system_id_ == 0) {
+        if (system_id_ == 0 || (connection_ && connection_->is_connected() &&
+                                (integrated_flight_mode_ || vehicle_ != nullptr))) {
             return;
         }
         if (connection_ == nullptr) {
@@ -149,6 +152,10 @@ class NomadVehicleNode final : public rclcpp::Node {
         if (!connection_->wait_for_heartbeat(std::chrono::seconds(1)).has_value()) {
             return;
         }
+        if (integrated_flight_mode_) {
+            RCLCPP_INFO(get_logger(), "connected as an observation-only ROS adapter");
+            return;
+        }
         nomad::vehicle::VehicleConfig vehicle_config{};
         vehicle_config.watchdog = watchdog_policy_;
         vehicle_config.fence = nomad::safety::GlobalFencePolicy{};
@@ -158,10 +165,10 @@ class NomadVehicleNode final : public rclcpp::Node {
     }
 
     void publish_telemetry() {
-        if (vehicle_ == nullptr) {
+        if (connection_ == nullptr) {
             return;
         }
-        const auto state = vehicle_->wait_for_state(std::chrono::milliseconds(100));
+        const auto state = connection_->wait_for_state(std::chrono::milliseconds(100));
         if (!state.has_value()) {
             std_msgs::msg::Bool connected;
             connected.data = false;
@@ -188,6 +195,11 @@ class NomadVehicleNode final : public rclcpp::Node {
     }
 
     void on_velocity_command(const geometry_msgs::msg::TwistStamped::SharedPtr twist) {
+        if (integrated_flight_mode_) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                                 "ROS velocity is inhibited in integrated flight mode");
+            return;
+        }
         if (vehicle_ == nullptr) {
             RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "velocity command before vehicle is connected");
             return;
@@ -264,7 +276,8 @@ class NomadVehicleNode final : public rclcpp::Node {
                                              TriggerService::Response::SharedPtr response) {
                 if (vehicle_ == nullptr) {
                     response->success = false;
-                    response->message = "vehicle is not connected";
+                    response->message = integrated_flight_mode_ ? "ROS actuation is inhibited in integrated flight mode"
+                                                                : "vehicle is not connected";
                     return;
                 }
                 const auto result = (vehicle_.get()->*method)();
@@ -274,6 +287,7 @@ class NomadVehicleNode final : public rclcpp::Node {
     }
 
     std::string endpoint_;
+    bool integrated_flight_mode_{true};
     std::string vio_source_topic_;
     std::chrono::milliseconds vio_timeout_;
     nomad::safety::WatchdogPolicy watchdog_policy_;

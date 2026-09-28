@@ -187,6 +187,8 @@ def verify_cli_servo(binary: Path, peer: VehiclePeer, ipc_port: int) -> dict[str
     """Prove the CLI sends one typed command and closes its client connection."""
     environment = os.environ.copy()
     environment["NOMAD_RUNTIME_IPC_PORT"] = str(ipc_port)
+    admitted = run_cli(binary, environment, "--runtime", "admit")
+    require(admitted.returncode == 0, "CLI explicitly admits its software source")
     result = run_cli(binary, environment, "--runtime", "servo", "8", "1500")
     require(result.returncode == 0, "C++ CLI runtime mode dispatches the typed servo request")
     commands = wait_for_commands(peer, 1)
@@ -204,18 +206,20 @@ def verify_navigation_rejected(binary: Path, peer: VehiclePeer, environment: dic
     require(len(wait_for_commands(peer, 1)) == 1, "rejected navigation produces no MAVLink command")
 
 
-def verify_runtime_reconnect(ipc_port: int, peer: VehiclePeer) -> None:
+def verify_runtime_reconnect(ipc_port: int, peer: VehiclePeer, binary: Path, environment: dict[str, str]) -> None:
     """Verify a disconnected command client leaves runtime service available."""
     reconnected = request(ipc_port, "status-after-disconnect", "status")["status"]
     require(reconnected["runtime_ready"] is True, "runtime remains ready after the client disconnects")
-    second = request(
+    denied = request(
         ipc_port,
         "servo-2",
         "set_servo",
         channel=8,
         pwm_microseconds=1600,
     )
-    require(second["command_result"]["success"] is True, "new IPC client can submit another typed request")
+    require(denied["error"]["code"] == "stale_authority", "unbound client cannot mutate after reconnect")
+    second = run_cli(binary, environment, "--runtime", "servo", "8", "1600")
+    require(second.returncode == 0, "admitted CLI source can issue another fresh request")
     commands = wait_for_commands(peer, 2)
     require(len(commands) == 2, "two client requests produce exactly two SET_SERVO actions")
 
@@ -228,7 +232,7 @@ def verify_runtime(binary: Path, peer: VehiclePeer, udp_port: int, ipc_port: int
         verify_hello_and_status(ipc_port)
         cli_environment = verify_cli_servo(find_cli(), peer, ipc_port)
         verify_navigation_rejected(find_cli(), peer, cli_environment)
-        verify_runtime_reconnect(ipc_port, peer)
+        verify_runtime_reconnect(ipc_port, peer, find_cli(), cli_environment)
     except Exception:
         if process.poll() is None:
             stop_runtime(process)

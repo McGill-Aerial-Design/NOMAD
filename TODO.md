@@ -159,10 +159,16 @@ close its integration or release gate.
   and the direct vehicle-fence upload/clear writer; activation now reports unavailable.
   The [review dispositions](docs/migration.md#authority-review-and-plugin-termination-removal-2026-09-27)
   explicitly track every remaining writer, replay and failsafe finding.
-  Next single slice: implement the reviewed all-writer admission/inhibition and
-  generation contract, then prove takeover/handback and stale-request rejection
-  before qualifying the approved complete-C2-loss aircraft response. No gate is
-  complete; Q02-dependent termination remains blocked.
+  No gate is complete; Q02-dependent termination remains blocked.
+  The local runtime now starts inhibited, admits one software source explicitly,
+  advances generations on revoke/handback, and rejects expired, evicted, restarted
+  or old-session requests. Integrated profiles inhibit direct CLI actuation;
+  ROS defaults to observation only; Mission Planner defaults to persistent IPC.
+  Mission Planner has an explicit authority control and stable plugin-session
+  source; session rollover is fenced inside runtime admission.
+  The next single slice is a typed MAVSDK queued-send/retry cancellation gate plus
+  the remaining Mission Planner/native-input writer arbitration and independent
+  physical takeover evidence. Runtime tests do not prove FC input selection.
 
 - [ ] G-M complete Task 1 flight qualification: integrate the separately
   qualified QuadPlane phases into one end-to-end flight and prove the full

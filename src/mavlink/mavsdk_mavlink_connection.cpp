@@ -391,6 +391,9 @@ mavsdk::MavlinkPassthrough::Result MavsdkMavlinkConnection::send_long(const Comm
     wire.param5 = command.parameters[4];
     wire.param6 = command.parameters[5];
     wire.param7 = command.parameters[6];
+    if (!admit_send()) {
+        return mavsdk::MavlinkPassthrough::Result::CommandDenied;
+    }
     return passthrough_->send_command_long(wire, mavsdk::OperationOptions{timeout});
 }
 
@@ -402,6 +405,9 @@ MavsdkMavlinkConnection::queue_velocity_setpoint(const VelocitySetpoint &setpoin
 }
 
 bool MavsdkMavlinkConnection::send_velocity(const VelocitySetpoint &setpoint) {
+    if (!admit_send()) {
+        return false;
+    }
     std::shared_lock lifetime_lock(plugin_lifetime_mutex_);
     if (!has_finite_components(setpoint) || !offboard_ || target_system_ == 0) {
         return false;
@@ -462,6 +468,9 @@ std::optional<float> MavsdkMavlinkConnection::read_param(const std::string &para
 
 std::optional<CommandAck> MavsdkMavlinkConnection::send_command(const Command &command,
                                                                 std::chrono::milliseconds timeout) {
+    if (!admit_send()) {
+        return std::nullopt;
+    }
     std::shared_lock lifetime_lock(plugin_lifetime_mutex_);
     if (!is_connected_unlocked() || !passthrough_ || timeout <= std::chrono::milliseconds::zero()) {
         return std::nullopt;
@@ -472,16 +481,6 @@ std::optional<CommandAck> MavsdkMavlinkConnection::send_command(const Command &c
         return std::nullopt;
     }
     return CommandAck{command.id, *code};
-}
-
-bool MavsdkMavlinkConnection::goto_location_relative(double latitude_deg, double longitude_deg,
-                                                      float relative_altitude_m, std::chrono::milliseconds timeout) {
-    std::shared_lock lifetime_lock(plugin_lifetime_mutex_);
-    if (!is_connected_unlocked() || !action_ || timeout <= std::chrono::milliseconds::zero()) {
-        return false;
-    }
-    return action_->goto_location_relative(latitude_deg, longitude_deg, relative_altitude_m, NAN,
-                                           mavsdk::OperationOptions{timeout}) == mavsdk::Action::Result::Success;
 }
 
 std::unique_ptr<MavlinkConnection> make_mavsdk_connection(const std::string &endpoint,

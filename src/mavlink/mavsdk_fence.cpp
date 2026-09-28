@@ -58,6 +58,9 @@ std::vector<FencePlanItem> to_plan_items(const mavsdk::Geofence::GeofenceData &d
 } // namespace
 
 bool MavsdkMavlinkConnection::upload_fence_plan(const std::vector<FencePlanItem> &items) {
+    if (!admit_send()) {
+        return false;
+    }
     std::shared_lock lifetime_lock(plugin_lifetime_mutex_);
     if (!is_connected_unlocked() || !geofence_ || items.empty()) {
         return false;

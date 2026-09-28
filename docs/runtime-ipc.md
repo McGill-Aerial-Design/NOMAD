@@ -2,8 +2,8 @@
 
 This document records the source ownership at the PR #23 main baseline
 (`3cd11aee48b9e844e75829a9ef2d65bc1ecfa1f3`) and the runtime IPC foundation
-added from that baseline. It does not change vehicle qualification or command
-admission.
+added from that baseline, followed by the current software-authority foundation.
+It does not qualify aircraft-wide manual takeover.
 
 ## Ownership before the runtime
 
@@ -62,11 +62,12 @@ Mission Planner client now have these modes:
 
 | Client | Mode | Behavior |
 |---|---|---|
-| Mission Planner | `LegacyOneShot` | Compatibility default; starts `nomad` for each supported operation |
-| Mission Planner | `PersistentRuntime` | Connects to configured loopback IPC port; does not spawn `nomad` |
+| Mission Planner | `LegacyOneShot` | Explicit nonintegrated compatibility path; starts `nomad` for each supported operation |
+| Mission Planner | `PersistentRuntime` | Default; connects to configured loopback IPC port and does not spawn `nomad` |
 | C++ CLI | bare verb or `--direct` | Existing one-shot connection and `Vehicle` lifetime |
 | C++ CLI | `--runtime` | Sends supported typed requests to the runtime |
-| ROS 2 | current adapter | Continues to own its independent connection and `Vehicle` |
+| ROS 2 | integrated default | Uses its independent connection for observation; actuation is inhibited |
+| ROS 2 | explicit nonintegrated test mode | Owns its independent connection and `Vehicle` |
 
 Mission Planner persistent mode and the C++ CLI runtime mode support the typed
 requests listed below. The protocol does not expose every CLI verb. In
@@ -105,6 +106,9 @@ fields are ignored. Clients negotiate with `hello` before sending a command.
 | `hello` | Protocol/version, runtime version and supported capabilities |
 | `ping` | `pong` health response |
 | `status` | Runtime readiness; MAVSDK connection open and vehicle transport connected; vehicle session and heartbeat state; identity/class; armed state; current custom mode; valid telemetry fields and their observed ages |
+| `admit_authority` | Explicit first admission of one local software source into a new generation |
+| `revoke_authority` | Invalidate the current generation and inhibit mutations |
+| `handback_authority` | Explicit admission after revocation into another new generation |
 | `set_servo` | Calls `Vehicle::set_servo` with channel and PWM microseconds |
 | `set_relay` | Calls `Vehicle::set_relay` with relay number and boolean state |
 | `motor_test` | Calls `Vehicle::motor_test` with instance, PWM microseconds and timeout seconds |
@@ -131,8 +135,12 @@ The server records up to 256 completed mutating responses in memory, keyed by
 `client_id` and request `id`. Repeating the same ID and payload returns the
 recorded response; reusing an ID with different data is rejected. A repeated
 request still in progress is rejected as `request_in_progress`. The cache is
-bounded and is cleared by runtime restart; it is not durable exactly-once
-execution.
+bounded and is cleared by runtime restart. The authority generation, runtime
+incarnation and monotonic sequence high-water mark now reject stale mutations
+even after cache eviction or restart; the cache remains a response optimization,
+not durable exactly-once execution. An exact cached response can still be read
+after its request expiry while its authority generation remains current; this
+does not dispatch another vehicle command.
 
 Disconnecting a client does not cancel an already-dispatched `Vehicle` call.
 The runtime completes that call and retains its response when possible. If the
@@ -149,13 +157,48 @@ requires its configured value to be non-empty, and the runtime requires its own
 not sent in IPC and the two values are not compared. This is an actuation gate,
 not client authentication; local machine access remains trusted.
 
+## Software authority foundation
+
+The runtime starts with generation zero and no admitted owner. `hello` and
+`status` expose its random incarnation, current vehicle session and authority
+generation. A trusted local client explicitly calls `admit_authority` with the
+current context and its `client_id` as `command_source`. Only one source can win.
+`revoke_authority` advances the generation and removes the owner. After a prior
+admission, `handback_authority` explicitly admits a source into another new
+generation; reconnect alone never does. Loss of the observed aircraft session
+also revokes the owner. A session mismatch is checked and revoked during
+`hello`, `status`, mutation and transport admission, without waiting for the monitor loop.
+No old mission is restored.
+
+Each typed mutation echoes the incarnation, vehicle session, generation and
+source, supplies a positive monotonically increasing `sequence`, and an absolute
+`expires_at_ms` no more than five seconds ahead. The runtime reserves each
+sequence before dispatch and keeps the high-water mark after response eviction.
+`hello` includes the next sequence for the one-shot CLI; Mission Planner uses
+a process-lifetime counter and stable logical source across its client instances.
+Duplicate requests can retrieve a cached response only while the same authority
+is still current. An evicted replay is rejected. In-flight operations return
+`authority_interrupted` if authority changes before completion. The runtime
+checks admission again at its transport-call boundary. `nomad --runtime admit`,
+`revoke` and `handback` are explicit local operator controls for the CLI source;
+Mission Planner exposes the same deliberate controls on its Core settings tab.
+Neither client admits itself on reconnect.
+
+This is local-account trust, not authenticated user identity. A local process
+can claim another client ID. The pinned MAVSDK command sender can queue and
+retry internally after NOMAD's transport-call check; it has no per-send
+admission callback. Consequently this foundation does not yet prove that an
+already queued SDK retry stops at physical transmission after revocation.
+That requires a typed cancellable SDK operation checked on its I/O thread.
+
 ## Remaining ownership limits
 
-This establishes one command owner for typed clients connected to this runtime.
+This establishes one admitted software source for typed clients connected to this runtime.
 It does not establish one writer for the aircraft. Native Mission Planner
-MAVLink controls, RC/pilot input, ArduPilot behavior, the ROS adapter and
-maintenance/test tools remain independent authorities. Global handover and
-inhibition require a later reviewed slice. The runtime also does not own a
+MAVLink controls, RC/pilot input, ArduPilot behavior, explicit nonintegrated ROS and
+maintenance/test tools remain independent authorities. Integrated profiles
+inhibit direct CLI actuation and default ROS actuation; native Mission Planner
+and ELRS require independently proven external arbitration. The runtime also does not own a
 persistent mission executor or migrate all Mission Planner, ROS or Python
 surfaces. The QuadPlane fixed-wing route is qualified in the core and remains
 outside runtime IPC v1.

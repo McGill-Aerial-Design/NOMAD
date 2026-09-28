@@ -4,7 +4,7 @@
 // Gimbal command construction + kinematics (Mission Planner-free)
 // ============================================================
 // The pure, dependency-free core of the gimbal control: the MAVLink command
-// frames sent to ArduPilot (DO_MOUNT_CONTROL / DO_MOUNT_CONFIGURE) plus the
+// frames sent to ArduPilot (DO_MOUNT_CONTROL) plus the
 // stick-integration and angle-clamping math. Extracted from GimbalController so
 // it can be unit-tested offline with the csc harness (no Mission Planner /
 // MAVLink assemblies), mirroring PayloadReleaseInterlock and GeoMath.
@@ -55,7 +55,6 @@ namespace NOMAD.MissionPlanner
     public static class GimbalCommand
     {
         // MAVLink MAV_CMD ids (ArduPilot mount control).
-        public const int DO_MOUNT_CONFIGURE = 204;
         public const int DO_MOUNT_CONTROL = 205;
 
         // Default mount travel limits (deg). Typical brushless-gimbal range, kept
@@ -110,10 +109,5 @@ namespace NOMAD.MissionPlanner
                 ClampPitch(pitchDeg), ClampRoll(rollDeg),
                 0f, 0f, 0f, 0f, (float)MountMode.MavlinkTargeting);
 
-        /// <summary>Build the <c>DO_MOUNT_CONFIGURE</c> frame selecting a mount mode.</summary>
-        public static GimbalFrame BuildMountConfigure(MountMode mode)
-            => new GimbalFrame(
-                DO_MOUNT_CONFIGURE,
-                (float)mode, 1f, 1f, 1f, 2f, 2f, 2f);
     }
 }

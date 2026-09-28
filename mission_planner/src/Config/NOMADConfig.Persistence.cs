@@ -147,11 +147,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         private void MigrateDefaults()
         {
-            if (!string.Equals(CoreClientMode, Connectivity.NomadCoreClient.PersistentRuntime,
-                               StringComparison.OrdinalIgnoreCase))
-            {
-                CoreClientMode = Connectivity.NomadCoreClient.LegacyOneShot;
-            }
+            CoreClientMode = Connectivity.NomadCoreClient.NormalizeMode(CoreClientMode);
             if (CoreRuntimePort < 1 || CoreRuntimePort > 65535)
             {
                 CoreRuntimePort = Connectivity.NomadCoreClient.DefaultRuntimePort;

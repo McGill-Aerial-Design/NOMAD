@@ -265,6 +265,12 @@ bool add_typed_arguments(const Arguments &arguments, Json &request) {
         request = make_request(new_request_id(), "status");
         return true;
     }
+    if (command == "admit" || command == "revoke" || command == "handback") {
+        const auto type = command == "admit" ? "admit_authority" :
+                          command == "revoke" ? "revoke_authority" : "handback_authority";
+        request = make_request(new_request_id(), type);
+        return true;
+    }
     if (command == "servo" && arguments.channel && arguments.pwm_microseconds) {
         request = make_request(new_request_id(), "set_servo");
         request["channel"] = *arguments.channel;
@@ -296,6 +302,26 @@ bool add_typed_arguments(const Arguments &arguments, Json &request) {
 bool is_mutating(const Json &request) {
     const auto type = request.value("type", "");
     return type != "status";
+}
+
+bool bind_authority(Json &request, const Json &hello_response) {
+    if (!hello_response.contains("authority") || !hello_response["authority"].is_object() ||
+        !hello_response.contains("runtime_incarnation")) {
+        return false;
+    }
+    const auto &authority = hello_response["authority"];
+    if (!authority.contains("vehicle_session") || !authority.contains("generation") ||
+        !authority.contains("next_sequence") || !authority["next_sequence"].is_number_unsigned()) {
+        return false;
+    }
+    const auto now = std::chrono::system_clock::now().time_since_epoch();
+    request["runtime_incarnation"] = hello_response["runtime_incarnation"];
+    request["vehicle_session"] = authority["vehicle_session"];
+    request["authority_generation"] = authority["generation"];
+    request["command_source"] = "nomad-cli";
+    request["sequence"] = authority["next_sequence"];
+    request["expires_at_ms"] = std::chrono::duration_cast<std::chrono::milliseconds>(now).count() + 3000;
+    return true;
 }
 
 bool valid_response(const Json &response, const std::string &id) {
@@ -341,6 +367,19 @@ int receive_result(NativeSocket socket, const std::string &request_id, bool muta
 
 } // namespace
 
+bool runtime_endpoint_is_open() {
+    const auto port = runtime_port();
+    if (port == 0) {
+        return true;
+    }
+    const auto socket = connect_loopback(port);
+    if (socket == kInvalidSocket) {
+        return false;
+    }
+    close_socket(socket);
+    return true;
+}
+
 int run_runtime_command(const Arguments &arguments) {
     if (arguments.endpoint_explicit || arguments.system_id_explicit) {
         std::cerr << "error[invalid_configuration]: --runtime uses endpoint and system identity configured by "
@@ -382,6 +421,12 @@ int run_runtime_command(const Arguments &arguments) {
         hello_response.value("type", "") != "hello_response") {
         print_error(hello_response);
         close_socket(socket);
+        return EXIT_FAILURE;
+    }
+
+    if (is_mutating(request) && !bind_authority(request, hello_response)) {
+        close_socket(socket);
+        std::cerr << "error[invalid_response]: runtime did not provide an authority context\n";
         return EXIT_FAILURE;
     }
 

@@ -8,12 +8,14 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading;
 using System.Web.Script.Serialization;
 
 namespace NOMAD.MissionPlanner.Connectivity
 {
     internal sealed class NomadRuntimeClient
     {
+        private static long _nextSequence;
         private readonly int _runtimePort;
         private readonly string _apiKey;
         private readonly string _clientId;
@@ -73,6 +75,14 @@ namespace NOMAD.MissionPlanner.Connectivity
                     return -1;
                 }
 
+                if (!BindAuthority(command, helloResponse))
+                {
+                    LastOutcome = NomadCoreRequestOutcome.FailedBeforeSend;
+                    LastErrorCode = "invalid_response";
+                    LastMessage = "Runtime did not provide an authority context.";
+                    return -1;
+                }
+
                 command["id"] = Guid.NewGuid().ToString("N");
                 command["client_id"] = _clientId;
                 command["protocol"] = "nomad-core";
@@ -80,7 +90,7 @@ namespace NOMAD.MissionPlanner.Connectivity
                 commandWriteStarted = true;
                 WriteMessage(stream, serializer.Serialize(command));
                 var response = ReadResponse(stream, serializer);
-                return ReadCommandResult(response, command["id"].ToString());
+                return ReadCommandResult(response, command["id"].ToString(), verb);
             }
             catch (Exception ex)
             {
@@ -134,8 +144,33 @@ namespace NOMAD.MissionPlanner.Connectivity
             };
         }
 
+        private bool BindAuthority(Dictionary<string, object> command, Dictionary<string, object> hello)
+        {
+            if (!hello.TryGetValue("runtime_incarnation", out var incarnation) ||
+                !hello.TryGetValue("authority", out var rawAuthority) ||
+                !(rawAuthority is Dictionary<string, object> authority) ||
+                !authority.TryGetValue("vehicle_session", out var session) ||
+                !authority.TryGetValue("generation", out var generation))
+            {
+                return false;
+            }
+            command["runtime_incarnation"] = incarnation;
+            command["vehicle_session"] = session;
+            command["authority_generation"] = generation;
+            command["command_source"] = _clientId;
+            command["sequence"] = Interlocked.Increment(ref _nextSequence);
+            command["expires_at_ms"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 3000;
+            return true;
+        }
+
         private Dictionary<string, object> BuildRuntimeRequest(string verb, string[] values)
         {
+            if (IsAuthorityVerb(verb) && values.Length == 0)
+            {
+                var authorityType = verb == "admit" ? "admit_authority" :
+                                    verb == "revoke" ? "revoke_authority" : "handback_authority";
+                return BaseRequest("", authorityType);
+            }
             var type = verb switch
             {
                 "servo" => "set_servo",
@@ -174,6 +209,11 @@ namespace NOMAD.MissionPlanner.Connectivity
                 return null;
             }
             return request;
+        }
+
+        private static bool IsAuthorityVerb(string verb)
+        {
+            return verb == "admit" || verb == "revoke" || verb == "handback";
         }
 
         private static double ParseProtocolNumber(string value)
@@ -220,7 +260,7 @@ namespace NOMAD.MissionPlanner.Connectivity
                    GetString(response, "type") == "hello_response";
         }
 
-        private int ReadCommandResult(Dictionary<string, object> response, string requestId)
+        private int ReadCommandResult(Dictionary<string, object> response, string requestId, string verb)
         {
             if (GetString(response, "id") != requestId || GetString(response, "protocol") != "nomad-core" ||
                 GetInt(response, "version") != 1)
@@ -236,6 +276,22 @@ namespace NOMAD.MissionPlanner.Connectivity
                 LastOutcome = NomadCoreRequestOutcome.Rejected;
                 LastErrorCode = code;
                 LastMessage = message;
+                return -1;
+            }
+            if (IsAuthorityVerb(verb))
+            {
+                if (GetString(response, "type") == "authority_response" &&
+                    response.ContainsKey("authority_generation") &&
+                    (verb == "revoke" ? GetString(response, "authority_owner") == "" :
+                     GetString(response, "authority_owner") == _clientId))
+                {
+                    LastOutcome = NomadCoreRequestOutcome.Succeeded;
+                    LastMessage = "Runtime authority changed explicitly.";
+                    return 0;
+                }
+                LastOutcome = NomadCoreRequestOutcome.UnknownOutcome;
+                LastErrorCode = "unknown_outcome";
+                LastMessage = "The runtime returned no valid authority result; the outcome is unknown.";
                 return -1;
             }
             if (GetString(response, "type") != "command_response" ||

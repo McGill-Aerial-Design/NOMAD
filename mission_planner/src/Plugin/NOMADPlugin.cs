@@ -71,7 +71,6 @@ namespace NOMAD.MissionPlanner
                 // FlightModeController builds core clients from the same config
                 // (CoreExePath / CoreMavlinkEndpoint / CoreApiKey) for GuidedGoto.
                 // Aircraft termination remains unavailable.
-                FlightModeController.Initialize(_config);
                 OutputController.Initialize(_config);
 
                 // Notification service runs plugin-wide so battery / GPS
@@ -368,7 +367,6 @@ namespace NOMAD.MissionPlanner
                 {
                     _config = form.Config;
                     _config.Save();
-                    FlightModeController.Initialize(_config);
                     OutputController.Initialize(_config);
                     ApplyDualLinkSettings();
                     try { _serialBridge?.UpdateConfig(_config); }

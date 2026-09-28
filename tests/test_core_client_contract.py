@@ -251,6 +251,18 @@ def test_actuation_with_key_reaches_transport_and_audits(monkeypatch) -> None:
     assert "timed out waiting for ArduPilot heartbeat" in result.stderr
 
 
+def test_integrated_flight_inhibits_direct_actuation_before_transport(monkeypatch) -> None:
+    monkeypatch.setenv("NOMAD_API_KEY", "nomad-dev-sitl-key")
+    monkeypatch.setenv("NOMAD_INTEGRATED_FLIGHT", "1")
+    port = free_udp_port()
+
+    result = invoke("--direct", "arm", "--endpoint", f"udpin:0.0.0.0:{port}")
+
+    assert result.returncode != 0
+    assert "runtime_owner_required" in result.stderr
+    assert "timed out waiting" not in result.stderr
+
+
 def test_goto_is_an_actuation_verb_and_requires_the_key(monkeypatch) -> None:
     monkeypatch.delenv("NOMAD_API_KEY", raising=False)
 

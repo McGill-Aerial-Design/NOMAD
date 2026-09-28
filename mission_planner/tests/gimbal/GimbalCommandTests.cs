@@ -8,7 +8,7 @@
 // non-zero on failure). Run via `pixi run test-plugin-gimbal`.
 //
 // Pins the exact MAVLink the gimbal control emits to ArduPilot: the
-// DO_MOUNT_CONTROL / DO_MOUNT_CONFIGURE command ids + parameter layout, the
+// DO_MOUNT_CONTROL command id + parameter layout, the
 // MAV_MOUNT_MODE enum values, and the stick-integration / angle-clamping math.
 // The companion tests/sitl/gimbal_mount_control.py proves these same commands
 // actually point a real ArduPilot mount.
@@ -30,7 +30,6 @@ internal static class GimbalCommandTests
         MountControl_MapsPitchRollAndTargetingMode();
         MountControl_ClampsToLimits();
 
-        MountConfigure_MapsModeToParam1();
 
         Clamp_PitchRollRate();
         Deadzone_ZerosInsideKeepsOutside();
@@ -61,7 +60,6 @@ internal static class GimbalCommandTests
     private static void CommandIds_MatchMavlinkSpec()
     {
         AssertEqual(205, GimbalCommand.DO_MOUNT_CONTROL, "DO_MOUNT_CONTROL == 205");
-        AssertEqual(204, GimbalCommand.DO_MOUNT_CONFIGURE, "DO_MOUNT_CONFIGURE == 204");
     }
 
     // ============================================================
@@ -91,20 +89,6 @@ internal static class GimbalCommandTests
         var lo = GimbalCommand.BuildMountControl(-200f, -200f);
         AssertNear(GimbalCommand.PITCH_MIN_DEG, lo.P1, "mount-control clamps pitch to min");
         AssertNear(GimbalCommand.ROLL_MIN_DEG, lo.P2, "mount-control clamps roll to min");
-    }
-
-    // ============================================================
-    // DO_MOUNT_CONFIGURE frame
-    // ============================================================
-
-    private static void MountConfigure_MapsModeToParam1()
-    {
-        foreach (MountMode mode in new[] { MountMode.Retract, MountMode.Neutral, MountMode.MavlinkTargeting, MountMode.RcTargeting })
-        {
-            var f = GimbalCommand.BuildMountConfigure(mode);
-            AssertEqual(204, f.Command, $"mount-configure command id ({mode})");
-            AssertNear((float)mode, f.P1, $"mount-configure P1 = mode ({mode})");
-        }
     }
 
     // ============================================================

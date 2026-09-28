@@ -7,13 +7,29 @@ from __future__ import annotations
 import time
 
 import pytest
+import mavlink_wire as wire
 
 from ros_integration_support import (
+    _start_ros_session,
+    _stop_ros_session,
     _call_trigger_service,
     _GUIDED_CUSTOM_MODE,
     _CUSTOM_MODE_LAND,
     _CUSTOM_MODE_RTL,
 )
+
+
+def test_integrated_mode_observes_but_inhibits_arm() -> None:
+    session = _start_ros_session(integrated_flight_mode=True)
+    try:
+        state, _, _, _, _, control = session
+        before = state.command_ids.count(wire.ARM_DISARM_COMMAND)
+        success, message = _call_trigger_service(control[0], "arm")
+        assert not success, "integrated ROS adapter must refuse arm"
+        assert "inhibited" in message
+        assert state.command_ids.count(wire.ARM_DISARM_COMMAND) == before, "refused arm must not reach the aircraft"
+    finally:
+        _stop_ros_session(session)
 
 
 def _reset_vehicle(state, armed: bool, custom_mode: int) -> None:

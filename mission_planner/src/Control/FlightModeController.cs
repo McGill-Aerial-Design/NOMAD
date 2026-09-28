@@ -8,15 +8,6 @@ namespace NOMAD.MissionPlanner
 {
     public static class FlightModeController
     {
-        private static NOMADConfig _config;
-
-        /// <summary>
-        /// Called at plugin load so GuidedGoto can build the core client.
-        /// </summary>
-        public static void Initialize(NOMADConfig config)
-        {
-            _config = config;
-        }
         /// <summary>
         /// Report the blocked aircraft-side termination integration.
         /// No LAND, disarm or parameter recipe substitutes for termination.
@@ -38,7 +29,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public static bool GuidedGoto(double lat, double lng, double altRelM)
         {
-            var client = CreateCoreClient();
+            var client = OutputController.CreateCoreClient();
             if (client == null)
             {
                 Log.Warn("GuidedGoto: NOMAD core not configured.");
@@ -54,16 +45,5 @@ namespace NOMAD.MissionPlanner
             }
             return ok;
         }
-
-        private static NomadCoreClient CreateCoreClient()
-        {
-            if (_config == null)
-            {
-                return null;
-            }
-            return new NomadCoreClient(_config.CoreExePath, _config.CoreMavlinkEndpoint, _config.CoreApiKey,
-                                       _config.CoreClientMode, _config.CoreRuntimePort);
-        }
-
     }
 }

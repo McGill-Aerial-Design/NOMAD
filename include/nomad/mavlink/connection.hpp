@@ -6,8 +6,10 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace nomad::mavlink {
@@ -91,6 +93,10 @@ class MavlinkConnection {
   public:
     virtual ~MavlinkConnection() = default;
 
+    void set_send_admission(std::function<bool()> admission) {
+        send_admission_ = std::move(admission);
+    }
+
     virtual bool connect() = 0;
     virtual void disconnect() = 0;
     virtual bool is_connected() const = 0;
@@ -124,6 +130,14 @@ class MavlinkConnection {
     // authoritative autopilot state, not an acknowledgement.
     virtual std::optional<float> read_param(const std::string &param_id, std::chrono::milliseconds timeout) = 0;
     virtual std::optional<AutopilotVersion> read_autopilot_version(std::chrono::milliseconds timeout) = 0;
+
+  protected:
+    bool admit_send() const {
+        return !send_admission_ || send_admission_();
+    }
+
+  private:
+    std::function<bool()> send_admission_;
 };
 
 } // namespace nomad::mavlink

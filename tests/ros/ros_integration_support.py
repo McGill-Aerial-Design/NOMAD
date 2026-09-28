@@ -37,6 +37,8 @@ What is exercised end-to-end:
 from __future__ import annotations
 
 import socket
+import os
+import signal
 import subprocess
 import threading
 import time
@@ -74,6 +76,7 @@ class VehicleState:
     armed: bool = True  # the velocity tests command an armed GUIDED vehicle
     custom_mode: int = _GUIDED_CUSTOM_MODE
     reject_next: bool = False  # when set, the next command is ACKed as FAILED
+    command_ids: list[int] = field(default_factory=list)
 
 
 def find_free_udp_port() -> int:
@@ -181,6 +184,7 @@ class MavlinkResponder:
 
     def _handle_commands(self, commands: list[tuple[int, float]]) -> None:
         for command_id, param1 in commands:
+            self.state.command_ids.append(command_id)
             # MAVSDK may issue background protocol requests while the test is
             # preparing a service call. Keep the fault injection attached to a
             # vehicle command so an unrelated request cannot consume it.
@@ -228,7 +232,8 @@ class MavlinkResponder:
         self.socket.close()
 
 
-def _node_command(port: int) -> list[str]:
+def _node_command(port: int, integrated_flight_mode: bool = False) -> list[str]:
+    integrated = "true" if integrated_flight_mode else "false"
     return [
         "/bin/bash",
         "-c",
@@ -236,17 +241,20 @@ def _node_command(port: int) -> list[str]:
         "source /ws/install/setup.bash && "
         f"ros2 run nomad_ros nomad_vehicle_node "
         f"--ros-args -p endpoint:=udpin:127.0.0.1:{port} -p publish_rate_hz:=10.0 "
-        "-p vio_source:=test_vio",
+        f"-p vio_source:=test_vio -p integrated_flight_mode:={integrated}",
     ]
 
 
-def _launch_node(port: int) -> tuple[subprocess.Popen, list[str], threading.Thread]:
+def _launch_node(
+    port: int, integrated_flight_mode: bool = False
+) -> tuple[subprocess.Popen, list[str], threading.Thread]:
     """Start nomad_vehicle_node plus a stdout drain thread."""
     node_process = subprocess.Popen(
-        _node_command(port),
+        _node_command(port, integrated_flight_mode),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        start_new_session=True,
     )
     log_lines: list[str] = []
 
@@ -300,17 +308,20 @@ def _wait_for_node_connect(log_lines: list[str], state: VehicleState) -> None:
     """Wait until the node logs that it latched the vehicle."""
     deadline = time.monotonic() + 25.0
     while time.monotonic() < deadline:
-        if any("connected to the NOMAD core vehicle" in line for line in log_lines):
+        if any(
+            "connected to the NOMAD core vehicle" in line or "connected as an observation-only ROS adapter" in line
+            for line in log_lines
+        ):
             state.node_connected = True
             return
         time.sleep(0.2)
 
 
-def _start_ros_session():
+def _start_ros_session(integrated_flight_mode: bool = False):
     state = VehicleState()
     responder = MavlinkResponder(state, find_free_udp_port())
     responder.start()
-    node_process, log_lines, drain_thread = _launch_node(responder.node_port)
+    node_process, log_lines, drain_thread = _launch_node(responder.node_port, integrated_flight_mode)
     control = _create_ros_control(state)
     _wait_for_node_connect(log_lines, state)
     return state, responder, node_process, log_lines, drain_thread, control
@@ -322,11 +333,11 @@ def _stop_ros_session(session) -> None:
     spin_stop.set()
     print("\n--- node log tail ---")
     print("\n".join(log_lines[-10:]))
-    node_process.terminate()
+    os.killpg(node_process.pid, signal.SIGTERM)
     try:
         node_process.wait(timeout=5.0)
     except subprocess.TimeoutExpired:
-        node_process.kill()
+        os.killpg(node_process.pid, signal.SIGKILL)
     drain_thread.join(timeout=2.0)
     responder.stop()
     control_node.destroy_node()

@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -173,10 +174,54 @@ Json base_request(std::string id, std::string type, std::string client = "test-c
             {"client_id", std::move(client)}, {"type", std::move(type)}};
 }
 
+struct AuthorityContext {
+    std::string incarnation;
+    std::uint64_t session{};
+    std::uint64_t generation{};
+    std::atomic<std::uint64_t> sequence{0};
+};
+
+AuthorityContext authority;
+
+void bind_authority(Json &request) {
+    request["runtime_incarnation"] = authority.incarnation;
+    request["vehicle_session"] = authority.session;
+    request["authority_generation"] = authority.generation;
+    request["command_source"] = "test-client";
+    request["sequence"] = ++authority.sequence;
+    request["expires_at_ms"] = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count() + 3000;
+}
+
+Json authority_request(std::string id, std::string type, std::string source = "test-client") {
+    auto request = base_request(std::move(id), std::move(type), source);
+    bind_authority(request);
+    request["command_source"] = source;
+    return request;
+}
+
+void read_authority(Client &client) {
+    const auto status = client.request(base_request("authority-status", "status"))["status"];
+    authority.incarnation = status["runtime_incarnation"].get<std::string>();
+    authority.session = status["vehicle_session"].get<std::uint64_t>();
+    authority.generation = status["authority_generation"].get<std::uint64_t>();
+    authority.sequence = 0;
+}
+
+void admit_authority(std::uint16_t port) {
+    Client client(port);
+    read_authority(client);
+    const auto admitted = client.request(authority_request("admit", "admit_authority"));
+    CHECK(admitted["ok"] == true);
+    authority.generation = admitted["authority_generation"].get<std::uint64_t>();
+}
+
 Json servo_request(std::string id, int pwm, std::string client = "test-client") {
-    auto request = base_request(std::move(id), "set_servo", std::move(client));
+    auto request = base_request(std::move(id), "set_servo", client);
     request["channel"] = 8;
     request["pwm_microseconds"] = pwm;
+    bind_authority(request);
+    request["command_source"] = client;
     return request;
 }
 
@@ -266,6 +311,8 @@ void test_command_dispatch_and_dedupe(std::uint16_t port, FakeConnection &connec
     const auto result = client.request(request);
     CHECK(result["command_result"]["success"] == true);
     CHECK(connection.command_count() == 1);
+    const auto hello = client.request(base_request("sequence-after-servo", "hello"));
+    CHECK(hello["authority"]["next_sequence"] == request["sequence"].get<std::uint64_t>() + 1);
 
     const auto duplicate = client.request(request);
     CHECK(duplicate == result);
@@ -274,9 +321,9 @@ void test_command_dispatch_and_dedupe(std::uint16_t port, FakeConnection &connec
     CHECK(client.request(reused_id)["error"]["code"] == "request_id_conflict");
     CHECK(connection.command_count() == 1);
 
-    CHECK(client.request(servo_request("c", 1500, "a\nb"))["command_result"]["success"] == true);
-    CHECK(client.request(servo_request("b\nc", 1500, "a"))["command_result"]["success"] == true);
-    CHECK(connection.command_count() == 3);
+    CHECK(client.request(servo_request("c", 1500, "a\nb"))["error"]["code"] == "not_authoritative");
+    CHECK(client.request(servo_request("b\nc", 1500, "a"))["error"]["code"] == "not_authoritative");
+    CHECK(connection.command_count() == 1);
 }
 
 void test_vehicle_admission_is_authoritative(std::uint16_t port, FakeConnection &connection) {
@@ -285,7 +332,7 @@ void test_vehicle_admission_is_authoritative(std::uint16_t port, FakeConnection 
     Client client(port);
     const auto result = client.request(servo_request("unqualified-servo", 1500));
     CHECK(result["command_result"]["success"] == false);
-    CHECK(connection.command_count() == 3);
+    CHECK(connection.command_count() == 1);
 }
 
 void test_busy_and_slow_client(std::uint16_t port, FakeConnection &connection) {
@@ -302,7 +349,7 @@ void test_busy_and_slow_client(std::uint16_t port, FakeConnection &connection) {
     CHECK(second.request(base_request("while-busy", "status"))["ok"] == true);
     const auto completed = first.receive();
     CHECK(completed["command_result"]["success"] == true);
-    CHECK(connection.command_count() == 4);
+    CHECK(connection.command_count() == 2);
 
     Client slow_client(port);
     slow_client.send_partial("{\"protocol\":");
@@ -311,17 +358,7 @@ void test_busy_and_slow_client(std::uint16_t port, FakeConnection &connection) {
     connection.command_delay = std::chrono::milliseconds(0);
 }
 
-void test_disconnect_does_not_cancel_or_replay(std::uint16_t port, FakeConnection &connection) {
-    Client disconnected(port);
-    const auto request = servo_request("lost-response", 1700, "stable-client");
-    disconnected.send(request);
-    disconnected.disconnect();
-    wait_until([&connection] { return connection.command_count() == 5; });
-
-    Client reconnect(port);
-    CHECK(reconnect.request(request)["command_result"]["success"] == true);
-    CHECK(connection.command_count() == 5);
-}
+#include "runtime_authority_cases.hpp"
 
 void test_runtime_owns_one_connection_and_releases_port() {
     const auto port = free_port();
@@ -337,10 +374,20 @@ void test_runtime_owns_one_connection_and_releases_port() {
     wait_until([&runtime] { return runtime.ready(); });
     test_protocol_and_status(port, *observed);
     test_protocol_errors(port);
+    { Client startup(port); read_authority(startup); }
+    CHECK(Client(port).request(servo_request("startup-denied", 1500))["error"]["code"] ==
+          "not_authoritative");
+    admit_authority(port);
     test_command_dispatch_and_dedupe(port, *observed);
     test_vehicle_admission_is_authoritative(port, *observed);
     test_busy_and_slow_client(port, *observed);
     test_disconnect_does_not_cancel_or_replay(port, *observed);
+    test_evicted_replay_and_wrong_source(port, *observed);
+    test_revoke_and_handback(port, *observed);
+    test_expired_and_delayed_request(port, *observed);
+    test_expired_exact_retry_returns_known_outcome(port, *observed);
+    test_reconnect_is_observation_only(port, *observed);
+    test_revoke_during_operation(port, *observed);
     CHECK(observed->connect_count == 1);
     runtime.stop();
     CHECK(!runtime.ready());
@@ -368,11 +415,82 @@ void test_runtime_restart_and_missing_key() {
     }
 }
 
+void test_restart_rejects_old_request() {
+    const auto port = free_port();
+    nomad::runtime::RuntimeConfig config;
+    config.ipc_port = port;
+    config.actuation_enabled = true;
+    std::string error;
+    Json old;
+    {
+        nomad::runtime::Runtime runtime(std::make_unique<FakeConnection>(), config);
+        CHECK(runtime.start(error));
+        Client client(port);
+        wait_until([&client] {
+            return client.request(base_request("restart-ready", "status"))["status"]["vehicle_session"] != 0;
+        });
+        read_authority(client);
+        const auto admitted = client.request(authority_request("restart-admit", "admit_authority"));
+        CHECK(admitted["ok"] == true);
+        authority.generation = admitted["authority_generation"].get<std::uint64_t>();
+        old = servo_request("before-restart", 1500);
+        CHECK(client.request(old)["command_result"]["success"] == true);
+        runtime.stop();
+    }
+    auto replacement = std::make_unique<FakeConnection>();
+    auto *observed = replacement.get();
+    nomad::runtime::Runtime runtime(std::move(replacement), config);
+    CHECK(runtime.start(error));
+    Client client(port);
+    CHECK(client.request(old)["error"]["code"] == "stale_authority");
+    CHECK(observed->command_count() == 0);
+    runtime.stop();
+}
+
+void test_competing_admission() {
+    const auto port = free_port();
+    nomad::runtime::RuntimeConfig config;
+    config.ipc_port = port;
+    config.actuation_enabled = true;
+    auto connection = std::make_unique<FakeConnection>();
+    auto *observed = connection.get();
+    nomad::runtime::Runtime runtime(std::move(connection), config);
+    std::string error;
+    CHECK(runtime.start(error));
+    Client observer(port);
+    wait_until([&observer] {
+        return observer.request(base_request("claim-ready", "status"))["status"]["vehicle_session"] != 0;
+    });
+    read_authority(observer);
+    auto claim = [port](const std::string &source) {
+        Client client(port);
+        return client.request(authority_request("claim-" + source, "admit_authority", source));
+    };
+    auto first = std::async(std::launch::async, claim, "client-a");
+    auto second = std::async(std::launch::async, claim, "client-b");
+    const auto a = first.get();
+    const auto b = second.get();
+    CHECK(a["ok"].get<bool>() != b["ok"].get<bool>());
+    const auto winner = a["ok"].get<bool>() ? "client-a" : "client-b";
+    const auto loser = a["ok"].get<bool>() ? "client-b" : "client-a";
+    authority.generation = (a["ok"].get<bool>() ? a : b)["authority_generation"].get<std::uint64_t>();
+    Client rejected(port);
+    CHECK(rejected.request(servo_request("losing-command", 1500, loser))["error"]["code"] ==
+          "not_authoritative");
+    CHECK(observed->command_count() == 0);
+    CHECK(rejected.request(servo_request("winning-command", 1500, winner))["command_result"]["success"] == true);
+    CHECK(observed->command_count() == 1);
+    runtime.stop();
+}
+
 } // namespace
 
 int main() {
     return nomad::test::run_tests([] {
         test_runtime_owns_one_connection_and_releases_port();
         test_runtime_restart_and_missing_key();
+        test_restart_rejects_old_request();
+        test_competing_admission();
+        test_session_rollover_revokes_at_admission();
     });
 }

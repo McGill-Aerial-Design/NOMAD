@@ -45,6 +45,9 @@ internal static partial class NomadCoreClientTests
         PersistentRuntime_RejectsIncompatibleHelloBeforeCommand();
         PersistentRuntime_RejectsIncompatibleCommandResponseAsUnknown();
         PersistentRuntime_ReconnectsForNextRequest();
+        PersistentRuntime_RequiresExplicitOwnershipAcrossClients();
+        PersistentRuntime_RejectsWrongAuthorityResponseType();
+        CoreClientMode_PreservesExplicitLegacySelection();
         RunCliAuthenticationGate();
 
         Console.WriteLine(_failures == 0
