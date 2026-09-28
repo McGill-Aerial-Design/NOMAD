@@ -67,6 +67,11 @@ termination, hard-breach response and flight qualification remain blocked.
 Preserve ArduPilot failsafes and qualify their interaction with the approved
 termination mechanism; no substitute emergency recipe is approved.
 
+The soft-boundary `return_to_boundary` action is unavailable until runtime
+protocol v1 has a typed navigation request. Mission Planner reports that no
+command was sent and directs the pilot to take manual control. This does not
+change the hard-boundary termination policy above.
+
 Q01 is resolved by the project owner: hard-boundary violation triggers
 termination; the soft boundary is an internal configurable inward margin from
 the hard polygon, e.g. 5 m. Keep the existing plugin inset implementation as-is.
