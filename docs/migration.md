@@ -171,12 +171,19 @@ checks blocked Mission Planner egress, admitted core egress and external-source
 egress. Local results: 21/21 CTests, 674 Python tests (four skipped), both UDP
 authority fixtures in Debug and Release, runtime IPC smoke, MAVSDK Phase A/B
 peer qualification, all Mission Planner C# tests, plugin build/lint and the
-router socket test passed on Windows. Hosted Linux, ROS and SITL results remain
-pending for this dependency pin.
+router socket test passed on Windows. The [PR #43 test run](https://github.com/YoussGm3o8/NOMAD/actions/runs/36456075097)
+passed core, Python and MAVSDK Phase A/B plus wire qualification on Linux and
+Windows. Hosted [ROS integration](https://github.com/YoussGm3o8/NOMAD/actions/runs/36456075155),
+[C# plugin checks](https://github.com/YoussGm3o8/NOMAD/actions/runs/36456075111)
+and [static checks](https://github.com/YoussGm3o8/NOMAD/actions/runs/36456075107)
+passed. Changed-file commit hooks passed; the local all-files pre-commit run
+remains red on untouched EOF/whitespace and missing-SPDX baseline files.
 
-**SITL evidence.** Existing pinned Copter and QuadPlane operation chains remain
-historical evidence only until rerun against this dependency pin. The UDP peer
-does not model FC input selection.
+**SITL evidence.** The fork's [ArduCopter 4.7.1 SITL](https://github.com/YoussGm3o8/MAVSDK/actions/runs/36455879506)
+and the manually triggered [NOMAD SITL run](https://github.com/YoussGm3o8/NOMAD/actions/runs/36456091127)
+passed against this pin. The NOMAD run covered QuadPlane identity, takeoff,
+transitions, route, recovery and landing, plus velocity and geofence loop
+closure. These runs do not model RC/ELRS input selection or physical takeover.
 
 **Hardware evidence.** None for RC/ELRS or native FC takeover. The required
 independent procedure is in [safety](safety.md#manual-takeover-hardware-qualification-still-required).

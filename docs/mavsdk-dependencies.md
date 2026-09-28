@@ -46,8 +46,9 @@ The [fork review](https://github.com/YoussGm3o8/MAVSDK/pull/2) adds
 per-operation admission to the command sender and final UDP delivery for
 `COMMAND_LONG` and `COMMAND_INT`; it does not change a selected
 third-party dependency reference, archive hash, nested proto gitlink or license
-text. The Windows MAVSDK Release target builds at this pin. The peer-level
-authority qualification and its limits are recorded in
+text. The Windows MAVSDK Release target and hosted Linux/Windows MAVSDK
+qualification pass at this pin; the fork's ArduCopter 4.7.1 SITL job also
+passes. The peer-level authority qualification and its limits are recorded in
 [migration](migration.md#command-retry-fencing-and-routed-writer-arbitration-2026-09-28).
 
 ## Rebase audit - 2026-09-19

@@ -168,7 +168,7 @@ close its integration or release gate.
   source; session rollover is fenced inside runtime admission.
   The typed MAVSDK command retry gate and receive-only integrated Mission Planner
   router consumer are implemented in the current authority slice. The UDP wire
-  peer must prove suppression after revoke; router arbitration does not prove FC
+  peer proves suppression after revoke; router arbitration does not prove FC
   input selection. The next single slice is approved D09 RC/ELRS input mapping
   followed by independent bench takeover and explicit-handback qualification
   against the actual flight controller. Keep G-M open until that evidence exists.
