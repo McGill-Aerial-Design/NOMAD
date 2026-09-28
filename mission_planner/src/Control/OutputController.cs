@@ -21,6 +21,7 @@ namespace NOMAD.MissionPlanner
     internal static class OutputController
     {
         private static NomadCoreClient _coreClient;
+        internal static bool IntegratedFlightMode { get; private set; }
 
         /// <summary>
         /// GCS-side audit record for a core-routed actuation command. The core
@@ -43,9 +44,10 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         internal static void Initialize(NOMADConfig config)
         {
+            IntegratedFlightMode = config?.IntegratedFlightMode ?? false;
             _coreClient = config == null ? null :
                 new NomadCoreClient(config.CoreExePath, config.CoreMavlinkEndpoint, config.CoreApiKey,
-                                    config.CoreClientMode, config.CoreRuntimePort);
+                                    config.CoreClientMode, config.CoreRuntimePort, config.IntegratedFlightMode);
         }
 
         internal static NomadCoreClient CreateCoreClient()

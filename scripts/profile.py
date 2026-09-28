@@ -162,6 +162,10 @@ def _apply_env_to_mp_config(cfg: dict[str, object], name: str, env: dict[str, st
         cfg.pop(field, None)
 
     cfg["CoreMavlinkEndpoint"] = normalize_mavlink_endpoint(env.get("NOMAD_MAVLINK_ENDPOINT", ""))
+    integrated_value = env.get("NOMAD_INTEGRATED_FLIGHT", "false").strip().lower()
+    if integrated_value not in {"1", "true", "yes", "0", "false", "no"}:
+        raise ValueError("NOMAD_INTEGRATED_FLIGHT must be a boolean value")
+    cfg["IntegratedFlightMode"] = integrated_value in {"1", "true", "yes"}
     for env_key, config_key in (("NOMAD_API_KEY", "CoreApiKey"), ("NOMAD_VIDEO_RTSP_URL", "VideoUrl")):
         value = env.get(env_key, "").strip()
         if value:

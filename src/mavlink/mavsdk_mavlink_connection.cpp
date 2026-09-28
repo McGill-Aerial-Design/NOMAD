@@ -13,11 +13,9 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <mutex>
-#include <numbers>
 #include <optional>
 #include <string>
 #include <thread>
@@ -29,15 +27,6 @@ namespace {
 
 constexpr auto kTelemetryWaitIncrement = std::chrono::milliseconds(20);
 constexpr auto kQuadplaneParameterTimeout = std::chrono::milliseconds(2000);
-
-bool is_zero_setpoint(const VelocitySetpoint &setpoint) {
-    return setpoint.vx == 0.0F && setpoint.vy == 0.0F && setpoint.vz == 0.0F && setpoint.yaw_rate == 0.0F;
-}
-
-bool has_finite_components(const VelocitySetpoint &setpoint) {
-    return std::isfinite(setpoint.vx) && std::isfinite(setpoint.vy) && std::isfinite(setpoint.vz) &&
-           std::isfinite(setpoint.yaw_rate);
-}
 
 bool has_telemetry(const telemetry::VehicleState &state) {
     return state.position_valid || state.battery_valid || state.gps_valid || state.attitude_valid ||
@@ -131,6 +120,7 @@ bool MavsdkMavlinkConnection::select_system() {
         if (session_id_counter_ == 0) {
             ++session_id_counter_;
         }
+        notify_vehicle_session_changed(session_id_counter_);
         state_.session_id = session_id_counter_;
     }
     subscribe();
@@ -194,6 +184,7 @@ void MavsdkMavlinkConnection::subscribe() {
         if (session_id_counter_ == 0) {
             ++session_id_counter_;
         }
+        notify_vehicle_session_changed(session_id_counter_);
         state_.session_id = session_id_counter_;
         state_.connected = false;
         state_.heartbeat_fresh = false;
@@ -243,6 +234,17 @@ void MavsdkMavlinkConnection::unsubscribe() {
 
 void MavsdkMavlinkConnection::close() {
     std::unique_lock lifetime_lock(plugin_lifetime_mutex_);
+    {
+        ObservationUpdate update(observation_mutex_, observation_changed_);
+        ++session_id_counter_;
+        if (session_id_counter_ == 0) {
+            ++session_id_counter_;
+        }
+        notify_vehicle_session_changed(session_id_counter_);
+        state_.session_id = session_id_counter_;
+        state_.connected = false;
+        state_.heartbeat_fresh = false;
+    }
     unsubscribe();
     action_.reset();
     telemetry_.reset();
@@ -378,8 +380,8 @@ std::optional<telemetry::VehicleState> MavsdkMavlinkConnection::wait_for_state(s
     return std::nullopt;
 }
 
-mavsdk::MavlinkPassthrough::Result MavsdkMavlinkConnection::send_long(const Command &command,
-                                                                      std::chrono::milliseconds timeout) {
+mavsdk::MavlinkPassthrough::Result MavsdkMavlinkConnection::send_long(
+    const Command &command, std::chrono::milliseconds timeout, const TransmissionAdmission &admission) {
     mavsdk::MavlinkPassthrough::CommandLong wire{};
     wire.target_sysid = target_system_;
     wire.target_compid = target_component_;
@@ -391,45 +393,12 @@ mavsdk::MavlinkPassthrough::Result MavsdkMavlinkConnection::send_long(const Comm
     wire.param5 = command.parameters[4];
     wire.param6 = command.parameters[5];
     wire.param7 = command.parameters[6];
-    if (!admit_send()) {
-        return mavsdk::MavlinkPassthrough::Result::CommandDenied;
+    if (admission && !admission([] {})) {
+        return mavsdk::MavlinkPassthrough::Result::CommandAdmissionCancelled;
     }
-    return passthrough_->send_command_long(wire, mavsdk::OperationOptions{timeout});
-}
-
-mavsdk::Offboard::Result
-MavsdkMavlinkConnection::queue_velocity_setpoint(const VelocitySetpoint &setpoint) {
-    // The SDK queues one frame; NOMAD owns refresh, freshness and safety zeroes.
-    const float yaw_rate_deg_s = setpoint.yaw_rate * (180.0F / std::numbers::pi_v<float>);
-    return offboard_->set_velocity_body_once({setpoint.vx, setpoint.vy, setpoint.vz, yaw_rate_deg_s});
-}
-
-bool MavsdkMavlinkConnection::send_velocity(const VelocitySetpoint &setpoint) {
-    if (!admit_send()) {
-        return false;
-    }
-    std::shared_lock lifetime_lock(plugin_lifetime_mutex_);
-    if (!has_finite_components(setpoint) || !offboard_ || target_system_ == 0) {
-        return false;
-    }
-    // A non-zero setpoint needs a live, latched peer. A zero setpoint is the
-    // safety command the watchdog and shutdown paths rely on, so it is allowed
-    // out on a link the core already believes is dead.
-    const bool is_zero = is_zero_setpoint(setpoint);
-    if (!is_zero && (!is_connected_unlocked() || !get_state().connected)) {
-        return false;
-    }
-    if (queue_velocity_setpoint(setpoint) != mavsdk::Offboard::Result::Success) {
-        return false;
-    }
-    std::lock_guard lock(observation_mutex_);
-    velocity_active_ = !is_zero;
-    return true;
-}
-
-bool MavsdkMavlinkConnection::is_velocity_active() const {
-    std::lock_guard lock(observation_mutex_);
-    return velocity_active_;
+    mavsdk::OperationOptions options{timeout};
+    options.transmission_admission = admission;
+    return passthrough_->send_command_long(wire, options);
 }
 
 std::optional<float> MavsdkMavlinkConnection::read_param(const std::string &param_id,
@@ -468,14 +437,15 @@ std::optional<float> MavsdkMavlinkConnection::read_param(const std::string &para
 
 std::optional<CommandAck> MavsdkMavlinkConnection::send_command(const Command &command,
                                                                 std::chrono::milliseconds timeout) {
-    if (!admit_send()) {
-        return std::nullopt;
-    }
+    const auto admission = capture_transmission_admission();
     std::shared_lock lifetime_lock(plugin_lifetime_mutex_);
     if (!is_connected_unlocked() || !passthrough_ || timeout <= std::chrono::milliseconds::zero()) {
         return std::nullopt;
     }
-    const auto result = send_long(command, timeout);
+    const auto result = send_long(command, timeout, admission);
+    if (result == mavsdk::MavlinkPassthrough::Result::CommandAdmissionCancelled) {
+        return CommandAck{command.id, 0, CommandAck::Status::AdmissionCancelled};
+    }
     const auto code = mavsdk_command_result_code(result);
     if (!code.has_value()) {
         return std::nullopt;

@@ -100,6 +100,7 @@ MavsdkMavlinkConnection::read_autopilot_version(std::chrono::milliseconds timeou
 std::optional<CommandAck> MavsdkMavlinkConnection::send_command(const Command &command,
                                                                 std::uint64_t expected_session_id,
                                                                 std::chrono::milliseconds timeout) {
+    const auto admission = capture_transmission_admission();
     std::shared_lock lifetime_lock(plugin_lifetime_mutex_);
     if (expected_session_id == 0 || !is_connected_unlocked() || !passthrough_ ||
         timeout <= std::chrono::milliseconds::zero()) {
@@ -111,7 +112,10 @@ std::optional<CommandAck> MavsdkMavlinkConnection::send_command(const Command &c
             return std::nullopt;
         }
     }
-    const auto result = send_long(command, timeout);
+    const auto result = send_long(command, timeout, admission);
+    if (result == mavsdk::MavlinkPassthrough::Result::CommandAdmissionCancelled) {
+        return CommandAck{command.id, 0, CommandAck::Status::AdmissionCancelled};
+    }
     const auto code = mavsdk_command_result_code(result);
     if (!code.has_value()) {
         return std::nullopt;

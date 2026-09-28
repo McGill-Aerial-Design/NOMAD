@@ -30,6 +30,13 @@ namespace NOMAD.MissionPlanner
         public string ActiveProfile { get; set; } = "dev";
 
         /// <summary>
+        /// Integrated profile mode inhibits plugin-owned legacy actuation and
+        /// makes the routed Mission Planner consumer receive-only.
+        /// Mission Planner native controls and RC remain external writers.
+        /// </summary>
+        public bool IntegratedFlightMode { get; set; } = false;
+
+        /// <summary>
         /// Path to the C++ core CLI binary used by LegacyOneShot mode.
         /// Empty means "nomad" on PATH.
         /// </summary>
@@ -421,7 +428,8 @@ namespace NOMAD.MissionPlanner
         public bool JoystickAutoSelectDevice { get; set; } = true;
 
         // --- Serial → virtual gamepad bridge (jotystick.py) ---
-        /// <summary>Auto-launch jotystick.py on plugin start so a serial-attached MCU appears as an Xbox 360 controller.</summary>
+        /// <summary>Auto-launch jotystick.py on plugin start so a serial-attached MCU
+        /// appears as an Xbox 360 controller.</summary>
         public bool SerialJoystickEnabled { get; set; } = false;
         /// <summary>Serial port the MCU is on (e.g. COM10).</summary>
         public string SerialJoystickPort { get; set; } = "COM10";

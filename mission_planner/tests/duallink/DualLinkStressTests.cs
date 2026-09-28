@@ -56,6 +56,7 @@ internal static partial class DualLinkStressTests
         await RunAsync("review: resolved local destination rejected", ResolvedLocalDestination);
         Run("multi-link: configuration rejection", MultiConfigValidation);
         await RunAsync("multi-link: three links, consumers, pinning and cleanup", MultiLinkRouting);
+        await RunAsync("multi-link: receive-only consumer outbound admission", ReadOnlyConsumerOutboundAdmission);
         await RunAsync("multi-link: initial announcement", InitialAnnouncement);
         await RunAsync("multi-link: TCP isolation and reconnect", TcpIsolation);
         Run("parser: single v2 frame", ParserSingleV2);
@@ -166,7 +167,8 @@ internal static partial class DualLinkStressTests
             .ToArray();
         var msgids = new List<uint>();
         p.Push(buf, buf.Length, m => msgids.Add(m.Msgid));
-        Check(msgids.SequenceEqual(new uint[] { 1, 2, 3 }), $"three frames parsed in order (got [{string.Join(",", msgids)}])");
+        Check(msgids.SequenceEqual(new uint[] { 1, 2, 3 }),
+              $"three frames parsed in order (got [{string.Join(",", msgids)}])");
     }
 
     private static void ParserGarbageSkipped()
@@ -244,7 +246,8 @@ internal static partial class DualLinkStressTests
         Check(Grade(s => s.LastHeartbeatTime = now.AddSeconds(-2)) == LinkHealth.Good, "heartbeat 2s stale → Good");
         Check(Grade(s => s.LastHeartbeatTime = now.AddSeconds(-3)) == LinkHealth.Fair, "heartbeat 3s stale → Fair");
         Check(Grade(s => s.LastHeartbeatTime = now.AddSeconds(-5)) == LinkHealth.Poor, "heartbeat 5s stale → Poor");
-        Check(Grade(s => s.LastHeartbeatTime = now.AddSeconds(-9)) == LinkHealth.Critical, "heartbeat 9s stale → Critical");
+        Check(Grade(s => s.LastHeartbeatTime = now.AddSeconds(-9)) == LinkHealth.Critical,
+              "heartbeat 9s stale → Critical");
         Check(Grade(s => s.LastPacketTime = now.AddSeconds(-6)) == LinkHealth.Critical, "packets 6s stale → Critical");
         Check(Grade(s => s.PacketLossPercent = 10) == LinkHealth.Good, "10% loss → Good");
         Check(Grade(s => s.PacketLossPercent = 30) == LinkHealth.Fair, "30% loss → Fair");

@@ -113,6 +113,50 @@ std::int64_t unix_milliseconds() {
         std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
+struct AuthorityGate {
+    mutable std::shared_mutex mutex;
+    std::string incarnation;
+    std::uint64_t vehicle_session{};
+    std::uint64_t generation{};
+    std::uint64_t last_sequence{};
+    std::string owner;
+    std::uint64_t owner_session{};
+    bool ever_admitted{};
+    bool stopping{};
+};
+
+void update_gate_session(AuthorityGate &gate, std::uint64_t session) {
+    if (gate.vehicle_session == session) {
+        return;
+    }
+    gate.vehicle_session = session;
+    if (gate.owner.empty()) {
+        return;
+    }
+    ++gate.generation;
+    gate.owner.clear();
+    gate.owner_session = 0;
+    gate.last_sequence = 0;
+}
+
+bool is_newer_session(std::uint64_t session, std::uint64_t current_session) {
+    if (session == current_session) {
+        return false;
+    }
+    if (current_session == 0) {
+        return session != 0;
+    }
+    return session - current_session < (std::numeric_limits<std::uint64_t>::max() / 2);
+}
+
+bool matches_authority(const AuthorityGate &gate, const mavlink::SendAuthorityToken &token) {
+    return !gate.stopping && token.runtime_incarnation == gate.incarnation && token.vehicle_session != 0 &&
+           token.vehicle_session == gate.vehicle_session && token.authority_generation == gate.generation &&
+           token.source == gate.owner && token.vehicle_session == gate.owner_session &&
+           token.sequence != 0 && token.sequence <= gate.last_sequence && !token.request_id.empty() &&
+           token.expires_at_ms >= unix_milliseconds();
+}
+
 std::string new_incarnation() {
     std::random_device random;
     constexpr char digits[] = "0123456789abcdef";

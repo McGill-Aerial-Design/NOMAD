@@ -73,20 +73,32 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
 
     std::optional<nomad::mavlink::CommandAck> send_command(const nomad::mavlink::Command &command,
                                                            std::chrono::milliseconds) override {
-        if (!admit_send()) {
-            return std::nullopt;
+        const auto admission = capture_transmission_admission();
+        if (admission && !admission([] {})) {
+            return nomad::mavlink::CommandAck{
+                command.id, 0, nomad::mavlink::CommandAck::Status::AdmissionCancelled};
         }
         command_started = true;
         if (command_delay > std::chrono::milliseconds::zero()) {
             std::this_thread::sleep_for(command_delay);
         }
-        if (!admit_send()) {
-            return std::nullopt;
+
+        const auto transmit = [this, &command] {
+            std::lock_guard lock(state_mutex);
+            last_command = command;
+            command_history.push_back(command);
+            update_state_for_command(command);
+        };
+        if (admission) {
+            if (!admission(transmit)) {
+                return nomad::mavlink::CommandAck{
+                    command.id, 0, nomad::mavlink::CommandAck::Status::AdmissionCancelled};
+            }
+        } else {
+            transmit();
         }
+
         std::lock_guard lock(state_mutex);
-        last_command = command;
-        command_history.push_back(command);
-        update_state_for_command(command);
         if (!command_send_results.empty()) {
             const bool result = command_send_results.front();
             command_send_results.erase(command_send_results.begin());

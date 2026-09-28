@@ -43,7 +43,8 @@ namespace NOMAD.MissionPlanner
                         _connectionManager.StopMonitoring();
                         _connectionManager.Dispose();
                         _connectionManager = null;
-                        Log.Info("Dual link/router disabled — MAVLink sockets released for direct Mission Planner connection");
+                        Log.Info("Dual link/router disabled — MAVLink sockets released " +
+                                 "for direct Mission Planner connection");
                     }
                     return;
                 }
@@ -116,13 +117,22 @@ namespace NOMAD.MissionPlanner
                 {
                     // UDP RTP stream
                     var port = ExtractUdpPort(streamUrl);
-                    pipeline = $"udpsrc port={port} buffer-size=90000 ! application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)H264 ! decodebin3 ! queue max-size-buffers=1 leaky=2 ! videoconvert ! video/x-raw,format=BGRA ! appsink name=outsink sync=false";
+                    pipeline = $"udpsrc port={port} buffer-size=90000 ! " +
+                               "application/x-rtp,media=(string)video,clock-rate=(int)90000," +
+                               "encoding-name=(string)H264 ! decodebin3 ! queue " +
+                               "max-size-buffers=1 leaky=2 ! videoconvert ! " +
+                               "video/x-raw,format=BGRA ! appsink name=outsink sync=false";
                 }
                 else
                 {
                     // RTSP stream - crop to left camera only (left half of 2560x720)
                     // Add videocrop after decoding to extract left 1280 pixels
-                    pipeline = $"rtspsrc location={streamUrl} latency={latency} udp-reconnect=1 timeout=0 do-retransmission=false ! application/x-rtp ! decodebin3 ! queue max-size-buffers=1 leaky=2 ! videocrop right=1280 ! videoconvert ! video/x-raw,format=BGRA ! appsink name=outsink sync=false";
+                    pipeline = $"rtspsrc location={streamUrl} latency={latency} " +
+                               "udp-reconnect=1 timeout=0 do-retransmission=false ! " +
+                               "application/x-rtp ! decodebin3 ! queue " +
+                               "max-size-buffers=1 leaky=2 ! videocrop right=1280 ! " +
+                               "videoconvert ! video/x-raw,format=BGRA ! " +
+                               "appsink name=outsink sync=false";
                 }
 
                 Log.Debug($"Starting HUD video with pipeline: {pipeline}");
@@ -203,7 +213,9 @@ namespace NOMAD.MissionPlanner
                 RadioMasterPort = _config.RadioMasterPort,
                 AutoFailoverEnabled = _config.AutoFailoverEnabled,
                 Links = _config.RouterLinks,
-                Consumers = _config.RouterConsumers,
+                Consumers = _config.IntegratedFlightMode
+                    ? RouterConsumerPolicy.ForIntegratedFlight(_config.RouterConsumers)
+                    : _config.RouterConsumers,
                 PreferredLink = _config.PreferredMavlinkLink == "None" ? "" : _config.PreferredMavlinkLink,
                 AutoReconnectPreferred = _config.AutoReconnectToPreferred,
                 PreferredLinkReconnectDelaySec = _config.PreferredLinkReconnectDelay,

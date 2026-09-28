@@ -339,6 +339,10 @@ CommandResult Vehicle::transition_to_vtol(const RecoveryPoint &point) {
     if (!ack.has_value()) {
         return {false, "transition to VTOL timed out waiting for acknowledgement"};
     }
+    if (ack->status == mavlink::CommandAck::Status::AdmissionCancelled) {
+        return {false, "transition to VTOL command was cancelled after authority changed; "
+                       "aircraft outcome is unknown"};
+    }
     if (ack->command != command.id) {
         return {false, "transition to VTOL received an acknowledgement for a different command"};
     }

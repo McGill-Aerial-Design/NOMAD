@@ -12,8 +12,10 @@ namespace nomad::mavlink {
 std::optional<CommandAck> MavsdkMavlinkConnection::send_fixed_wing_waypoint(
     const FixedWingWaypointCommand &waypoint, std::uint64_t expected_session_id,
     std::chrono::milliseconds timeout) {
-    if (!admit_send()) {
-        return std::nullopt;
+    const auto admission = capture_transmission_admission();
+    if (admission && !admission([] {})) {
+        return CommandAck{static_cast<std::uint16_t>(MAV_CMD_DO_REPOSITION), 0,
+                          CommandAck::Status::AdmissionCancelled};
     }
     std::shared_lock lifetime_lock(plugin_lifetime_mutex_);
     if (!is_connected_unlocked() || !passthrough_ || timeout <= std::chrono::milliseconds::zero()) {
@@ -48,7 +50,13 @@ std::optional<CommandAck> MavsdkMavlinkConnection::send_fixed_wing_waypoint(
             return std::nullopt;
         }
     }
-    const auto result = passthrough_->send_command_int(command, mavsdk::OperationOptions{timeout});
+    mavsdk::OperationOptions options{timeout};
+    options.transmission_admission = admission;
+    const auto result = passthrough_->send_command_int(command, options);
+    if (result == mavsdk::MavlinkPassthrough::Result::CommandAdmissionCancelled) {
+        return CommandAck{static_cast<std::uint16_t>(MAV_CMD_DO_REPOSITION), 0,
+                          CommandAck::Status::AdmissionCancelled};
+    }
     const auto result_code = mavsdk_command_result_code(result);
     if (!result_code.has_value()) {
         return std::nullopt;

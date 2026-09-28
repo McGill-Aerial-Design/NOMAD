@@ -261,6 +261,7 @@ def test_sync_mission_planner_removes_stale_profile_fields(tmp_path: Path, monke
     synced = json.loads(cfg_file.read_text(encoding="utf-8"))
     assert synced["CustomUserSetting"] == "preserved_value"
     assert synced["ActiveProfile"] == "onboard_companion"
+    assert synced["IntegratedFlightMode"] is True
     assert synced["CoreApiKey"] == onboard_env["NOMAD_API_KEY"]
     assert synced["CoreMavlinkEndpoint"] == "udpin:0.0.0.0:14550"
     assert synced["VideoUrl"] == onboard_env["NOMAD_VIDEO_RTSP_URL"]
@@ -272,10 +273,24 @@ def test_sync_mission_planner_removes_stale_profile_fields(tmp_path: Path, monke
     sync_mission_planner("groundstation_minimal", minimal_env)
     synced_min = json.loads(cfg_file.read_text(encoding="utf-8"))
     assert synced_min["ActiveProfile"] == "groundstation_minimal"
+    assert synced_min["IntegratedFlightMode"] is True
     assert "VideoUrl" not in synced_min
     assert "CoreApiKey" not in synced_min
     assert synced_min["CoreMavlinkEndpoint"] == "udpin:127.0.0.1:14601"
     assert synced_min["CustomUserSetting"] == "preserved_value"
+
+
+def test_sync_mission_planner_clears_integrated_mode_for_nonintegrated_profile(tmp_path: Path, monkeypatch) -> None:
+    cfg_file = tmp_path / "nomad_config.json"
+    cfg_file.write_text(json.dumps({"IntegratedFlightMode": True}), encoding="utf-8")
+    monkeypatch.setenv("NOMAD_MP_CONFIG", str(cfg_file))
+    minimal_env = _parse_env(PROFILES_DIR / "groundstation_minimal.env")
+    minimal_env["NOMAD_INTEGRATED_FLIGHT"] = "0"
+
+    sync_mission_planner("groundstation_minimal", minimal_env)
+
+    synced = json.loads(cfg_file.read_text(encoding="utf-8"))
+    assert synced["IntegratedFlightMode"] is False
 
 
 @pytest.mark.parametrize("content", ["not json", "[]"])

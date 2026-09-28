@@ -7,7 +7,10 @@
 
 #include <chrono>
 #include <cstdint>
+#include <memory>
+#include <mutex>
 #include <optional>
+#include <thread>
 
 namespace {
 
@@ -115,6 +118,69 @@ void test_send_command_mutates_and_captures_before_transport_or_ack_result() {
     CHECK(!result.has_value());
     CHECK(transport_failure.command_count() == 1);
     CHECK(transport_failure.state->armed);
+}
+
+void test_queued_fake_transmission_is_cancelled_after_generation_change() {
+    struct Gate {
+        std::mutex mutex;
+        std::uint64_t generation{1};
+        bool admitted{true};
+    };
+
+    FakeConnection connection;
+    const auto gate = std::make_shared<Gate>();
+    connection.set_transmission_admission_factory([gate] {
+        std::uint64_t captured_generation{};
+        {
+            std::lock_guard lock(gate->mutex);
+            captured_generation = gate->generation;
+        }
+        return nomad::mavlink::TransmissionAdmission(
+            [gate, captured_generation](const std::function<void()> &transmit) {
+                std::lock_guard lock(gate->mutex);
+                if (!gate->admitted || gate->generation != captured_generation) {
+                    return false;
+                }
+                transmit();
+                return true;
+            });
+    });
+
+    connection.command_delay = std::chrono::milliseconds(100);
+    std::optional<nomad::mavlink::CommandAck> result;
+    std::thread queued([&] { result = connection.send_command(arm_command(), std::chrono::seconds(1)); });
+    const auto deadline = Clock::now() + std::chrono::seconds(1);
+    while (!connection.command_started && Clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    const bool command_started = connection.command_started.load();
+    if (!command_started) {
+        queued.join();
+    }
+    CHECK(command_started);
+    {
+        std::lock_guard lock(gate->mutex);
+        gate->admitted = false;
+        ++gate->generation;
+    }
+    queued.join();
+
+    CHECK(result.has_value());
+    CHECK(result->status == nomad::mavlink::CommandAck::Status::AdmissionCancelled);
+    CHECK(connection.command_count() == 0);
+    CHECK(!connection.state->armed);
+
+    {
+        std::lock_guard lock(gate->mutex);
+        ++gate->generation;
+        gate->admitted = true;
+    }
+    connection.command_delay = std::chrono::milliseconds::zero();
+    const auto fresh = connection.send_command(arm_command(), std::chrono::seconds(1));
+    CHECK(fresh.has_value());
+    CHECK(fresh->status == nomad::mavlink::CommandAck::Status::Acknowledged);
+    CHECK(connection.command_count() == 1);
+    CHECK(connection.state->armed);
 }
 
 void test_expected_session_overload_and_new_fixture_reset_behavior() {
@@ -255,6 +321,7 @@ int main() {
         test_auto_stamping_refreshes_only_valid_samples();
         test_disabling_auto_stamp_preserves_zero_stale_future_and_repeated_times();
         test_send_command_mutates_and_captures_before_transport_or_ack_result();
+        test_queued_fake_transmission_is_cancelled_after_generation_change();
         test_expected_session_overload_and_new_fixture_reset_behavior();
         test_waypoint_poll_completes_transition_then_waypoint_then_sample();
         test_waypoint_expected_session_and_ack_ids_are_returned_as_configured();

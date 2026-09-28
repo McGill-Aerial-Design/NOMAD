@@ -105,7 +105,8 @@ class MavsdkMavlinkConnection final : public MavlinkConnection {
     void observe_vtol_state(mavsdk::Telemetry::VtolState state);
     void observe_landed_state(mavsdk::Telemetry::LandedState state);
 
-    mavsdk::MavlinkPassthrough::Result send_long(const Command &command, std::chrono::milliseconds timeout);
+    mavsdk::MavlinkPassthrough::Result send_long(const Command &command, std::chrono::milliseconds timeout,
+                                                 const TransmissionAdmission &admission);
     mavsdk::Offboard::Result queue_velocity_setpoint(const VelocitySetpoint &setpoint);
 
     std::string endpoint_;

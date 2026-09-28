@@ -155,6 +155,140 @@ internal static partial class DualLinkStressTests
         }
     }
 
+    private static async Task ReadOnlyConsumerOutboundAdmission()
+    {
+        const int port = 32100;
+        var config = MultiConfig(port);
+        config.Links = new List<LinkConfig>
+        {
+            new LinkConfig { Id = "cell", Port = port + 1, Priority = 100 }
+        };
+        config.PreferredLink = "cell";
+        var configuredConsumers = new List<ConsumerConfig>
+        {
+            new ConsumerConfig { Id = "mission_planner", RouterPort = port },
+            new ConsumerConfig { Id = "nomad_core", RouterPort = port + 5 },
+            new ConsumerConfig { Id = "pilot_native", RouterPort = port + 6 }
+        };
+        config.Consumers = RouterConsumerPolicy.ForIntegratedFlight(configuredConsumers);
+        Check(!config.Consumers[0].AllowOutbound,
+            "integrated profile policy makes the Mission Planner consumer receive-only");
+        Check(config.Consumers[1].AllowOutbound && config.Consumers[2].AllowOutbound,
+            "integrated profile policy leaves core and external pilot consumers command-capable");
+        Check(configuredConsumers[0].AllowOutbound,
+            "integrated policy does not mutate saved consumer configuration");
+
+        using (var router = new GroundLinkRouter(config))
+        using (var aircraft = UdpSink.ConnectedTo(port + 1))
+        using (var missionPlanner = UdpSink.ConnectedTo(port))
+        using (var core = UdpSink.ConnectedTo(port + 5))
+        using (var pilotNative = UdpSink.ConnectedTo(port + 6))
+        {
+            router.Start();
+            using (var heartbeat = new Pump(aircraft.Send, 10))
+            {
+                missionPlanner.Send(Frames.Heartbeat(255, 190, 0));
+                core.Send(Frames.Heartbeat(254, 191, 0));
+                Check(await WaitUntil(() => router.Links[0].IsConnected, 2000),
+                    "physical peer is live before checking outbound admission");
+
+                var downlink = Frames.Marker(91001, 4, 1, 1);
+                aircraft.Send(downlink);
+                var missionPlannerTelemetry = new List<uint>();
+                Check(await WaitUntil(() =>
+                {
+                    DrainMarkers(missionPlanner, missionPlannerTelemetry);
+                    return missionPlannerTelemetry.Contains(91001);
+                }, 1000), "receive-only Mission Planner consumer still receives aircraft telemetry");
+
+                var commandLong = MakeArmCommandLong(21);
+                var commandInt = Frames.V2(255, 190, 75, 22, new byte[35]);
+                missionPlanner.Send(commandLong);
+                missionPlanner.Send(commandInt);
+                await Task.Delay(150);
+                var rejected = aircraft.Drain();
+                CheckEq(rejected.Count(frame => Frames.MsgIdOf(frame) == 76 || Frames.MsgIdOf(frame) == 75), 0,
+                    "receive-only Mission Planner consumer sends no COMMAND_LONG or COMMAND_INT to aircraft");
+
+                var coreCommand = MakeArmCommandLong(23);
+                core.Send(coreCommand);
+                var receivedCoreCommands = new List<byte[]>();
+                Check(await WaitUntil(() =>
+                {
+                    receivedCoreCommands.AddRange(aircraft.Drain());
+                    return receivedCoreCommands.Any(frame => frame.SequenceEqual(coreCommand));
+                }, 1000), "command-capable NOMAD core consumer still reaches the selected physical peer");
+                CheckEq(receivedCoreCommands.Count(frame => frame.SequenceEqual(coreCommand)), 1,
+                    "the admitted core command crosses the physical boundary once");
+
+                var pilotCommand = MakeArmCommandLong(24);
+                pilotNative.Send(pilotCommand);
+                var receivedPilotCommands = new List<byte[]>();
+                Check(await WaitUntil(() =>
+                {
+                    receivedPilotCommands.AddRange(aircraft.Drain());
+                    return receivedPilotCommands.Any(frame => frame.SequenceEqual(pilotCommand));
+                }, 1000), "external pilot consumer still reaches the selected physical peer");
+                CheckEq(receivedPilotCommands.Count(frame => frame.SequenceEqual(pilotCommand)), 1,
+                    "external pilot command crosses the router peer once");
+            }
+        }
+
+        // Model an explicit software-source revoke by rebuilding the router
+        // with NOMAD's consumer inhibited. This is router evidence only; it
+        // does not model flight-controller RC/native input selection.
+        config.Consumers = new List<ConsumerConfig>
+        {
+            new ConsumerConfig { Id = "mission_planner", RouterPort = port, AllowOutbound = false },
+            new ConsumerConfig { Id = "nomad_core", RouterPort = port + 5, AllowOutbound = false },
+            new ConsumerConfig { Id = "pilot_native", RouterPort = port + 6, AllowOutbound = true }
+        };
+        using (var router = new GroundLinkRouter(config))
+        using (var aircraft = UdpSink.ConnectedTo(port + 1))
+        using (var missionPlanner = UdpSink.ConnectedTo(port))
+        using (var core = UdpSink.ConnectedTo(port + 5))
+        using (var pilotNative = UdpSink.ConnectedTo(port + 6))
+        {
+            router.Start();
+            using (var heartbeat = new Pump(aircraft.Send, 10))
+            {
+                missionPlanner.Send(Frames.Heartbeat(255, 190, 0));
+                core.Send(Frames.Heartbeat(254, 191, 0));
+                Check(await WaitUntil(() => router.Links[0].IsConnected, 2000),
+                    "physical peer is live after simulated NOMAD source revoke");
+
+                var staleCoreCommand = MakeArmCommandLong(25);
+                core.Send(staleCoreCommand);
+                await Task.Delay(150);
+                var afterRevoke = aircraft.Drain();
+                CheckEq(afterRevoke.Count(frame => frame.SequenceEqual(staleCoreCommand)), 0,
+                    "reconfigured router blocks a command from the inhibited NOMAD consumer");
+
+                var pilotCommand = MakeArmCommandLong(26);
+                pilotNative.Send(pilotCommand);
+                var receivedPilotCommands = new List<byte[]>();
+                Check(await WaitUntil(() =>
+                {
+                    receivedPilotCommands.AddRange(aircraft.Drain());
+                    return receivedPilotCommands.Any(frame => frame.SequenceEqual(pilotCommand));
+                }, 1000), "external pilot software consumer passes while NOMAD consumer is inhibited");
+                CheckEq(receivedPilotCommands.Count(frame => frame.SequenceEqual(pilotCommand)), 1,
+                    "pilot software command reaches the peer exactly once after NOMAD inhibition");
+            }
+        }
+
+        Check(new ConsumerConfig { Id = "legacy", RouterPort = port }.AllowOutbound,
+            "omitting AllowOutbound preserves the existing bidirectional default");
+    }
+
+    private static byte[] MakeArmCommandLong(byte sequence)
+    {
+        var payload = new byte[33];
+        payload[28] = 144;
+        payload[29] = 1;
+        return Frames.V2(255, 190, 76, sequence, payload);
+    }
+
     private static async Task CheckSequenceIsolation(GroundLinkRouter router, UdpSink cell, UdpSink radio,
         UdpSink wifi)
     {
@@ -187,7 +321,10 @@ internal static partial class DualLinkStressTests
         var frame = Frames.Marker(88001, 8);
         cell.Send(frame);
         var first = new List<uint>();
-        Check(await WaitUntil(() => { DrainMarkers(mp, first); return first.Contains(88001); }, 2000), "first delivery");
+        Check(await WaitUntil(() => {
+            DrainMarkers(mp, first);
+            return first.Contains(88001);
+        }, 2000), "first delivery");
         router.SetManualOverride("radio");
         radio.Send(frame);
         await Task.Delay(30);

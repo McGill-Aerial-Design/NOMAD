@@ -94,6 +94,10 @@ CommandResult Vehicle::fixed_wing_recovery(const RecoveryPoint &point) {
     if (!ack.has_value()) {
         return {false, "fixed-wing recovery received no command ACK"};
     }
+    if (ack->status == mavlink::CommandAck::Status::AdmissionCancelled) {
+        return {false, "fixed-wing recovery command was cancelled after authority changed; "
+                       "aircraft outcome is unknown"};
+    }
     if (ack->command != kDoRepositionCommand || ack->result != kAcceptedResult) {
         return {false, "fixed-wing recovery command was rejected by ArduPilot"};
     }

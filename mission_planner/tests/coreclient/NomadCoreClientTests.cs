@@ -48,6 +48,7 @@ internal static partial class NomadCoreClientTests
         PersistentRuntime_RequiresExplicitOwnershipAcrossClients();
         PersistentRuntime_RejectsWrongAuthorityResponseType();
         CoreClientMode_PreservesExplicitLegacySelection();
+        IntegratedFlightMode_RejectsLegacyOneShotBeforeSpawn();
         RunCliAuthenticationGate();
 
         Console.WriteLine(_failures == 0
@@ -223,6 +224,22 @@ internal static partial class NomadCoreClientTests
         Expect(process.ExitCode != 0, $"core CLI exits nonzero without a key (got {process.ExitCode})");
         Expect(stderr.IndexOf("refused", StringComparison.OrdinalIgnoreCase) >= 0,
             $"stderr names the auth refusal (got: {Truncate(stderr, 120)})");
+    }
+
+    private static void IntegratedFlightMode_RejectsLegacyOneShotBeforeSpawn()
+    {
+        var client = new NomadCoreClient(
+            @"C:\__nomad_core_does_not_exist__.exe",
+            mode: NomadCoreClient.LegacyOneShot,
+            integratedFlightMode: true);
+
+        Expect(!client.Servo(8, 1500), "integrated profile rejects LegacyOneShot actuation");
+        Expect(client.LastOutcome == NomadCoreRequestOutcome.Rejected,
+            "LegacyOneShot exclusion is reported as a policy rejection");
+        Expect(client.LastErrorCode == "integrated_legacy_oneshot_disabled",
+            "LegacyOneShot exclusion has a stable error code before process launch");
+        Expect(client.LastMessage.IndexOf("PersistentRuntime", StringComparison.Ordinal) >= 0,
+            "LegacyOneShot exclusion explains the required runtime mode");
     }
 
     private static string FindCoreBinary()

@@ -74,3 +74,5 @@ jobs:
         run: pixi run test-mavsdk-phase-a
       - name: Run MAVSDK command, link, fence and velocity regressions
         run: pixi run test-mavsdk-phase-b
+      - name: Prove authority cancellation at the MAVLink UDP peer
+        run: pixi run test-mavsdk-authority-wire

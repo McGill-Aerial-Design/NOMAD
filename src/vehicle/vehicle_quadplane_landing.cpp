@@ -377,6 +377,10 @@ CommandResult Vehicle::send_quadplane_qland(std::uint64_t expected_session_id, C
     if (!ack.has_value()) {
         return {false, "QuadPlane VTOL landing timed out waiting for QLAND mode acknowledgement"};
     }
+    if (ack->status == mavlink::CommandAck::Status::AdmissionCancelled) {
+        return {false, "QuadPlane VTOL landing command was cancelled after authority changed; "
+                       "aircraft outcome is unknown"};
+    }
     if (ack->command != command.id || ack->result != kAcceptedResult) {
         return {false, "QuadPlane VTOL landing QLAND request was rejected or mismatched"};
     }

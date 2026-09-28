@@ -137,9 +137,64 @@ The pinned MAVSDK command sender queues and retries `COMMAND_LONG` and
 `COMMAND_INT` after NOMAD's transport-call admission check. It does not expose a
 per-send cancellation hook. This is a blocking qualification gap: an SDK retry
 after a physical takeover has not been excluded by the runtime fake tests.
-debt: runtime transport-call fencing cannot stop an SDK-owned queued retry;
-revisit before enabling integrated motion authority; then add a typed
-per-transmission cancellation hook in the MAVSDK fork and prove the wire boundary.
+The PR42 transport-call boundary left SDK-owned retries unfenced. The next
+section records the command-sender correction and its remaining scope.
+
+### Command retry fencing and routed-writer arbitration — 2026-09-28
+
+**Implemented.** The MAVSDK fork carries a typed, per-operation admission callback
+through `COMMAND_LONG` and `COMMAND_INT` queueing and retry paths to the final
+UDP delivery. Each operation captures its NOMAD incarnation, vehicle session,
+generation, source and expiry by value. A shared gate serializes that final
+delivery with revoke, handback, session rollover and shutdown. Passthrough
+returns an admission-cancelled result distinct from a vehicle ACK, and NOMAD
+reports an interrupted or unknown aircraft outcome rather than success. Action's
+relative goto inherits the gate through its mode and reposition commands, but
+its existing boolean NOMAD wrapper reports only failure; that direct API does
+not expose the cancellation reason.
+
+The integrated profile makes the embedded router's Mission Planner consumer
+receive-only while retaining a command-capable NOMAD core consumer. The
+standalone router example carries the same policy, but other standalone
+configurations do not inherit it. This does not alter Mission Planner's native
+controls when it has a direct aircraft link, nor can it arbitrate RC/ELRS.
+The router's consumer name is a local configuration
+boundary, not authenticated client identity. Integrated deployment must exclude
+direct/bypass links and explicitly revoke NOMAD before pilot/native takeover.
+
+**Automated evidence.** The peer fixtures independently count physical UDP
+`COMMAND_LONG` and `COMMAND_INT` frames. They include a withheld-ACK retry
+control, revocation after the first frame, no later revoked frame, a fresh
+handback send, old-generation rejection, queued-before-first-send cancellation,
+session loss and shutdown with pending work. The router socket test separately
+checks blocked Mission Planner egress, admitted core egress and external-source
+egress. Local results: 21/21 CTests, 674 Python tests (four skipped), both UDP
+authority fixtures in Debug and Release, runtime IPC smoke, MAVSDK Phase A/B
+peer qualification, all Mission Planner C# tests, plugin build/lint and the
+router socket test passed on Windows. The [PR #43 test run](https://github.com/YoussGm3o8/NOMAD/actions/runs/36456075097)
+passed core, Python and MAVSDK Phase A/B plus wire qualification on Linux and
+Windows. Hosted [ROS integration](https://github.com/YoussGm3o8/NOMAD/actions/runs/36456075155),
+[C# plugin checks](https://github.com/YoussGm3o8/NOMAD/actions/runs/36456075111)
+and [static checks](https://github.com/YoussGm3o8/NOMAD/actions/runs/36456075107)
+passed. Changed-file commit hooks passed; the local all-files pre-commit run
+remains red on untouched EOF/whitespace and missing-SPDX baseline files.
+
+**SITL evidence.** The fork's [ArduCopter 4.7.1 SITL](https://github.com/YoussGm3o8/MAVSDK/actions/runs/36455879506)
+and the manually triggered [NOMAD SITL run](https://github.com/YoussGm3o8/NOMAD/actions/runs/36456091127)
+passed against this pin. The NOMAD run covered QuadPlane identity, takeoff,
+transitions, route, recovery and landing, plus velocity and geofence loop
+closure. These runs do not model RC/ELRS input selection or physical takeover.
+
+**Hardware evidence.** None for RC/ELRS or native FC takeover. The required
+independent procedure is in [safety](safety.md#manual-takeover-hardware-qualification-still-required).
+
+**Still unqualified.** Aircraft-wide authority, RC/MAVLink input priority,
+direct Mission Planner links, LTE flight-joystick control, the final RC map,
+complete C2-loss policy, termination and Q02-dependent transitions remain open.
+Offboard one-shot setpoints and Geofence mission transfers are not runtime IPC v1
+commands; they require their own per-frame admission before being enabled under
+integrated authority. TCP/serial SDK delivery is outside NOMAD's supported UDP
+endpoint and has not received an in-flight write lease qualification.
 
 Local validation: 21/21 CTests, 10/10 ROS integration tests, 671 Python tests
 with four skipped, Mission Planner core/gimbal/build/lint checks, runtime IPC

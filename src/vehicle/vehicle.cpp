@@ -34,6 +34,9 @@ CommandResult validate_command_acknowledgement(
     if (!acknowledgement.has_value()) {
         return {false, std::string(name) + " timed out waiting for acknowledgement"};
     }
+    if (acknowledgement->status == mavlink::CommandAck::Status::AdmissionCancelled) {
+        return {false, std::string(name) + " was cancelled by authority; aircraft outcome is unknown"};
+    }
     if (acknowledgement->command != command.id) {
         return {false, std::string(name) + " received an acknowledgement for another command"};
     }

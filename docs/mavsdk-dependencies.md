@@ -12,7 +12,7 @@ reviewed fork gitlink.
 
 | Component | Reviewed source | License found in fetched source |
 |---|---|---|
-| MAVSDK | NOMAD gitlink `3f85f6f808b617c736316d7da5f51f3d3eba1737` | BSD-3-Clause |
+| MAVSDK | NOMAD gitlink `900fb0fe7fec74608f1911331218557915cc501a` | BSD-3-Clause |
 | MAVSDK proto | nested gitlink `5c81ecfeb6110cf74ba75ae50b78a1b265c05670` | Unknown: no separate license declaration found; server disabled |
 | Asio | tag `asio-1-30-2` | Boost-1.0 |
 | fmt | tag `12.1.0` | MIT |
@@ -37,6 +37,19 @@ explicit audit update. The complete selected-build texts and their checked hashe
 are in `licenses/mavsdk-phase-a/`. Recursive checkouts fetch MAVSDK-Proto, but it
 is not compiled or linked while the server remains disabled; enabling it requires
 a new audit.
+
+## Command admission fork update - 2026-09-28
+
+The NOMAD gitlink advances from `3f85f6f808b617c736316d7da5f51f3d3eba1737`
+to `900fb0fe7fec74608f1911331218557915cc501a` in the project fork.
+The [fork review](https://github.com/YoussGm3o8/MAVSDK/pull/2) adds
+per-operation admission to the command sender and final UDP delivery for
+`COMMAND_LONG` and `COMMAND_INT`; it does not change a selected
+third-party dependency reference, archive hash, nested proto gitlink or license
+text. The Windows MAVSDK Release target and hosted Linux/Windows MAVSDK
+qualification pass at this pin; the fork's ArduCopter 4.7.1 SITL job also
+passes. The peer-level authority qualification and its limits are recorded in
+[migration](migration.md#command-retry-fencing-and-routed-writer-arbitration-2026-09-28).
 
 ## Rebase audit - 2026-09-19
 

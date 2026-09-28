@@ -209,7 +209,7 @@ request sequence. Its typed request set and unknown-outcome behavior are documen
 [runtime IPC](runtime-ipc.md).
 
 V1 does not include authenticated user identities, remote transport, durable
-request records, SDK queued-send cancellation, persisted mission state or all outcome phases.
+request records, persisted mission state or all outcome phases.
 The API-key environment check remains a non-empty actuation gate, not client
 authentication. Remote transport still needs mutual endpoint authentication,
 authorization, replay protection, bounded messages and revocation. VPN
@@ -221,13 +221,20 @@ explicit handback advance the generation. Reconnect cannot grant authority, and
 cache eviction cannot make an old sequence executable. Mission Planner native
 controls, RC/pilot input, maintenance tools and ArduPilot remain independent
 authorities. ROS is observation only by default in integrated mode; its direct
-Vehicle path remains for explicit nonintegrated test use. The pinned SDK can
-queue and retry a command without rechecking the runtime lease, so physical
-post-revocation transmission is not yet qualified. Termination priority and
-aircraft-wide takeover remain later work.
+Vehicle path remains for explicit nonintegrated test use. The pinned SDK now
+carries a per-operation admission callback through its `COMMAND_LONG` and
+`COMMAND_INT` retries to the final UDP delivery step. Revocation and that
+delivery share a gate, so a retired operation cannot transmit after revocation
+completes. This is a software UDP command boundary, not aircraft-wide authority.
+Termination priority and aircraft-side takeover remain later work.
 
 Mission Planner native controls and RC remain possible external authorities.
-Integrated operations must define handover and inhibit NOMAD until reconciled;
+`NOMAD_INTEGRATED_FLIGHT` makes the embedded router's Mission Planner consumer
+receive-only while allowing the NOMAD core consumer to send. The standalone
+router example has the same setting. It only applies when those clients use
+that configured router; direct GCS links, other standalone configurations and
+local UDP source spoofing are outside that boundary. Integrated operations must define
+handover and inhibit NOMAD until reconciled;
 software cannot claim to prevent an independent pilot/autopilot action. Migrate
 plugin boundary returns, emergency parameter changes, direct gimbal streams and
 fence writes through the core or restrict them to documented maintenance mode.
@@ -273,12 +280,15 @@ independent Mission Planner writer with a process-local mutex.
 | State/event | Required admission and outcome |
 |---|---|
 | Startup or core restart | No automatic motion owner; reconcile fresh aircraft state and explicitly admit one source |
-| Normal automation | One core-owned action and one generation; all enabled adapters submit requests through that owner |
+| NOMAD software authority active | One core-owned action and one generation; all enabled adapters submit requests through that owner |
+| Handover in progress | Inhibit new NOMAD commands, revoke the old generation and verify queued command suppression before admitting another source |
+| Pilot/native authority active | Keep NOMAD inhibited; verify the intended external aircraft input independently |
 | RC or LTE pilot takeover | Revoke automation, cancel its remaining steps and setpoint streams; invalidate the generation before further sends |
+| Observation only / no NOMAD authority | Report vehicle state without issuing NOMAD mutations |
 | Loss or stale pilot input | Revoke that source; link availability or GCS heartbeat alone cannot admit another pilot or automation |
 | Reconnect | Observation only; recovered sources and old requests cannot reclaim authority |
 | Explicit handback | Fresh aircraft/input state plus deliberate operator handback creates a new generation; an old mission does not resume |
-| Accepted termination | Aircraft-side latch overrides every ordinary flight owner; no motion request or reconnect clears it |
+| Termination intent | Keep requested, transported, entered and completed distinct; an approved aircraft-side latch is still required |
 | Both C2 paths lost | Aircraft independently executes the approved onboard response; selection remains blocked, including Q02 phases |
 
 Bind each mutating request to runtime incarnation, aircraft session, authority
