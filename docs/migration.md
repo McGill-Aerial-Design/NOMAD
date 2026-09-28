@@ -114,6 +114,10 @@ high-water mark. Restart changes incarnation; reconnect revokes and cannot
 restore ownership. Outcome after a mid-operation revocation is interrupted,
 not success merely because an ACK was returned.
 
+Admission now revokes a mismatched owner session itself, even before the
+connection monitor runs. Exact cached outcomes remain readable after request
+expiry while the same authority remains current, without another send.
+
 Default Mission Planner mode is persistent IPC. Integrated deployment profiles
 inhibit direct CLI actuation and plugin gimbal streaming; the ROS adapter is
 observation only by default while explicit nonintegrated tests retain its direct
@@ -123,6 +127,12 @@ because GuidedGoto has no typed runtime replacement; this mode is excluded
 from integrated operation. Native Mission Planner controls and ELRS RC remain
 external aircraft inputs requiring independent arbitration.
 
+The plugin now retains one process-lifetime logical source and a long-lived
+output client; its Core settings tab offers explicit admit, revoke and handback
+controls. Saved `LegacyOneShot` mode survives configuration reload. The C++
+one-shot CLI obtains its next sequence from the runtime; the Mission Planner
+source uses a monotonic process counter.
+
 The pinned MAVSDK command sender queues and retries `COMMAND_LONG` and
 `COMMAND_INT` after NOMAD's transport-call admission check. It does not expose a
 per-send cancellation hook. This is a blocking qualification gap: an SDK retry
@@ -131,14 +141,15 @@ debt: runtime transport-call fencing cannot stop an SDK-owned queued retry;
 revisit before enabling integrated motion authority; then add a typed
 per-transmission cancellation hook in the MAVSDK fork and prove the wire boundary.
 
-Local validation: 21/21 CTests, 10/10 ROS integration tests, 667 Python tests
+Local validation: 21/21 CTests, 10/10 ROS integration tests, 671 Python tests
 with four skipped, Mission Planner core/gimbal/build/lint checks, runtime IPC
 smoke, strict documentation build and the pinned QuadPlane VTOL landing SITL
 chain passed. The focused runtime suite covers competition, in-flight revoke,
-old generations, restart, cache eviction, delayed requests, reconnect and
-explicit handback. Fake transport checks prove no fake send after revocation;
-they do not prove MAVSDK's later physical retries stop. Hosted CI has not run
-for this unpushed working branch.
+old generations, restart, cache eviction, delayed requests, session rollover,
+reconnect and explicit handback. Mission Planner client tests exercise a mock
+that enforces owner identity across separate client instances. Fake transport
+checks prove no fake send after revocation; they do not prove MAVSDK's later
+physical retries stop. Hosted CI results are attached to PR #42.
 
 ### Authority review and plugin termination removal — 2026-09-27
 

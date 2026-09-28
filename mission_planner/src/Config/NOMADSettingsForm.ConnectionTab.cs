@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 
+using System;
 using System.Drawing;
 using System.IO.Ports;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace NOMAD.MissionPlanner
@@ -48,8 +50,52 @@ namespace NOMAD.MissionPlanner
                 MaximumSize = new Size(560, 0),
             };
             tab.Controls.Add(hint);
+            y += 60;
+
+            AddSectionLabel(tab, "Runtime software authority", ref y);
+            AddAuthorityButton(tab, "Admit", 20, y, "admit");
+            AddAuthorityButton(tab, "Revoke", 145, y, "revoke");
+            AddAuthorityButton(tab, "Handback", 270, y, "handback");
+            y += 40;
+            AddLabel(tab, "Save core settings first. Reconnect never admits authority automatically.", 20, y);
 
             return tab;
+        }
+
+        private void AddAuthorityButton(TabPage tab, string label, int x, int y, string action)
+        {
+            var button = new Button { Text = label, Location = new Point(x, y), Size = new Size(110, 30) };
+            button.Click += async (sender, args) => await RunAuthorityControlAsync(tab, action);
+            tab.Controls.Add(button);
+        }
+
+        private async Task RunAuthorityControlAsync(TabPage tab, string action)
+        {
+            var client = OutputController.CreateCoreClient();
+            if (client == null)
+            {
+                MessageBox.Show("Save core settings before changing runtime authority.", "NOMAD Runtime");
+                return;
+            }
+            tab.Enabled = false;
+            bool accepted;
+            try
+            {
+                accepted = await Task.Run(() => action switch
+                {
+                    "admit" => client.AdmitAuthority(),
+                    "revoke" => client.RevokeAuthority(),
+                    _ => client.HandbackAuthority()
+                });
+            }
+            finally
+            {
+                if (!IsDisposed) tab.Enabled = true;
+            }
+            if (IsDisposed) return;
+            var message = accepted ? "Runtime authority changed." : client.LastMessage;
+            MessageBox.Show(message, "NOMAD Runtime", MessageBoxButtons.OK,
+                            accepted ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
         }
 
         private TabPage CreateDualLinkTab()

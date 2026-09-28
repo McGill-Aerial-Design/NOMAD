@@ -60,6 +60,21 @@ void test_expired_and_delayed_request(std::uint16_t port, FakeConnection &connec
     CHECK(connection.command_count() == before);
 }
 
+void test_expired_exact_retry_returns_known_outcome(std::uint16_t port, FakeConnection &connection) {
+    Client client(port);
+    auto request = servo_request("expired-known-outcome", 1500);
+    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    request["expires_at_ms"] = now + 3000;
+    const auto first = client.request(request);
+    CHECK(first["command_result"]["success"] == true);
+    const auto sent = connection.command_count();
+    std::this_thread::sleep_for(std::chrono::milliseconds(3050));
+    Client retry(port);
+    CHECK(retry.request(request) == first);
+    CHECK(connection.command_count() == sent);
+}
+
 void test_revoke_during_operation(std::uint16_t port, FakeConnection &connection) {
     connection.command_started = false;
     connection.command_delay = std::chrono::milliseconds(300);
@@ -94,4 +109,31 @@ void test_reconnect_is_observation_only(std::uint16_t port, FakeConnection &conn
     const auto handback = client.request(authority_request("reconnected-handback", "handback_authority"));
     CHECK(handback["ok"] == true);
     authority.generation = handback["authority_generation"].get<std::uint64_t>();
+}
+
+void test_session_rollover_revokes_at_admission() {
+    const auto port = free_port();
+    auto connection = std::make_unique<FakeConnection>();
+    auto *observed = connection.get();
+    nomad::runtime::RuntimeConfig config;
+    config.ipc_port = port;
+    config.actuation_enabled = true;
+    nomad::runtime::Runtime runtime(std::move(connection), config);
+    std::string error;
+    CHECK(runtime.start(error));
+    Client client(port);
+    wait_until([&client] {
+        return client.request(base_request("rollover-ready", "status"))["status"]["vehicle_session"] != 0;
+    });
+    admit_authority(port);
+    const auto old_generation = authority.generation;
+    observed->advance_session_before_monitor();
+    auto forged = servo_request("new-session-old-owner", 1500);
+    forged["vehicle_session"] = authority.session + 1;
+    CHECK(client.request(forged)["error"]["code"] == "stale_authority");
+    CHECK(observed->command_count() == 0);
+    const auto status = client.request(base_request("rollover-status", "status"))["status"];
+    CHECK(status["authority_owner"].is_null());
+    CHECK(status["authority_generation"].get<std::uint64_t>() > old_generation);
+    runtime.stop();
 }

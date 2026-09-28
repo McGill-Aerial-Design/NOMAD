@@ -14,6 +14,14 @@ using NOMAD.MissionPlanner.Connectivity;
 
 internal static partial class NomadCoreClientTests
 {
+    private static void CoreClientMode_PreservesExplicitLegacySelection()
+    {
+        Expect(NomadCoreClient.NormalizeMode("LegacyOneShot") == NomadCoreClient.LegacyOneShot,
+            "configuration reload preserves an explicit legacy selection");
+        Expect(NomadCoreClient.NormalizeMode("") == NomadCoreClient.PersistentRuntime,
+            "missing configuration defaults to persistent IPC");
+    }
+
     private static void PersistentRuntime_SendsTypedRequestWithoutStartingProcess()
     {
         using var runtime = new MockRuntime(2);
@@ -101,6 +109,43 @@ internal static partial class NomadCoreClientTests
         }
     }
 
+    private static void PersistentRuntime_RequiresExplicitOwnershipAcrossClients()
+    {
+        using var runtime = new MockRuntime(8, enforceAuthority: true);
+        var first = new NomadCoreClient("unused", apiKey: "test-key", runtimePort: runtime.Port);
+        var second = new NomadCoreClient("unused", apiKey: "test-key", runtimePort: runtime.Port);
+
+        Expect(!first.Servo(8, 1500), "Mission Planner starts without command authority");
+        Expect(first.LastErrorCode == "not_authoritative", "startup rejection names the missing owner");
+        Expect(first.AdmitAuthority(), "operator explicitly admits Mission Planner");
+        Expect(first.Servo(8, 1500), "admitted client can issue a typed command");
+        Expect(second.SetRelay(3, true), "another client instance retains the same logical source");
+        Expect(first.RevokeAuthority(), "operator explicitly revokes the source");
+        Expect(!second.Servo(8, 1500), "reconnect after revoke does not reclaim authority");
+        Expect(second.HandbackAuthority(), "operator explicitly creates a handback generation");
+        Expect(first.Servo(8, 1500), "the shared source can command after handback");
+        runtime.Wait();
+
+        Expect(runtime.CommandCount == 8, "every authority and mutation request was observed once");
+        Expect(runtime.CommandSources.TrueForAll(source => source == runtime.CommandSources[0]),
+            "all Mission Planner client instances use one process-lifetime source");
+        for (var index = 1; index < runtime.Sequences.Count; index++)
+        {
+            Expect(runtime.Sequences[index - 1] < runtime.Sequences[index],
+                "request sequence increases across separate client instances");
+        }
+    }
+
+    private static void PersistentRuntime_RejectsWrongAuthorityResponseType()
+    {
+        using var runtime = new MockRuntime(1, enforceAuthority: true, wrongAuthorityResponseType: true);
+        var client = new NomadCoreClient("unused", apiKey: "test-key", runtimePort: runtime.Port);
+        Expect(!client.AdmitAuthority(), "command acknowledgement cannot impersonate authority admission");
+        runtime.Wait();
+        Expect(client.LastOutcome == NomadCoreRequestOutcome.UnknownOutcome,
+            "malformed authority response is not reported as admitted");
+    }
+
     private static int ReservePort()
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -118,20 +163,31 @@ internal static partial class NomadCoreClientTests
         private readonly bool _dropCommandResponse;
         private readonly int _helloVersion;
         private readonly int _commandResponseVersion;
+        private readonly bool _enforceAuthority;
+        private readonly bool _wrongAuthorityResponseType;
+        private string _owner = "";
+        private int _generation;
+        private bool _everAdmitted;
+        private long _lastSequence;
         private Exception _failure;
 
         public int Port { get; }
         public int CommandCount { get; private set; }
         public string LastCommandType { get; private set; } = "";
         public Dictionary<string, object> LastCommand { get; private set; } = new Dictionary<string, object>();
+        public List<string> CommandSources { get; } = new List<string>();
+        public List<long> Sequences { get; } = new List<long>();
 
         public MockRuntime(int expectedConnections, bool dropCommandResponse = false, int helloVersion = 1,
-                           int commandResponseVersion = 1, int port = 0)
+                           int commandResponseVersion = 1, int port = 0, bool enforceAuthority = false,
+                           bool wrongAuthorityResponseType = false)
         {
             _expectedConnections = expectedConnections;
             _dropCommandResponse = dropCommandResponse;
             _helloVersion = helloVersion;
             _commandResponseVersion = commandResponseVersion;
+            _enforceAuthority = enforceAuthority;
+            _wrongAuthorityResponseType = wrongAuthorityResponseType;
             _listener = new TcpListener(IPAddress.Loopback, port);
             _listener.Start();
             Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
@@ -160,7 +216,7 @@ internal static partial class NomadCoreClientTests
                         ["runtime_incarnation"] = "mock-runtime-incarnation",
                         ["authority"] = new Dictionary<string, object>
                         {
-                            ["vehicle_session"] = 1, ["generation"] = 1
+                            ["vehicle_session"] = 1, ["generation"] = _enforceAuthority ? _generation : 1
                         }
                     }));
                     if (_helloVersion != 1)
@@ -170,25 +226,96 @@ internal static partial class NomadCoreClientTests
                     LastCommand = Parse(reader.ReadLine());
                     LastCommandType = Convert.ToString(LastCommand["type"], CultureInfo.InvariantCulture);
                     CommandCount++;
+                    CommandSources.Add(Convert.ToString(LastCommand["command_source"], CultureInfo.InvariantCulture));
+                    if (LastCommand.ContainsKey("sequence"))
+                    {
+                        Sequences.Add(Convert.ToInt64(LastCommand["sequence"], CultureInfo.InvariantCulture));
+                    }
                     if (_dropCommandResponse)
                     {
                         continue;
                     }
-                    writer.WriteLine(Serialize(new Dictionary<string, object>
-                    {
-                        ["protocol"] = "nomad-core", ["version"] = _commandResponseVersion,
-                        ["id"] = LastCommand["id"], ["ok"] = true, ["type"] = "command_response",
-                        ["command_result"] = new Dictionary<string, object>
-                        {
-                            ["success"] = true, ["message"] = "command verified"
-                        }
-                    }));
+                    writer.WriteLine(Serialize(CreateResponse(LastCommand)));
                 }
             }
             catch (Exception error)
             {
                 _failure = error;
             }
+        }
+
+        private Dictionary<string, object> CreateResponse(Dictionary<string, object> command)
+        {
+            var response = new Dictionary<string, object>
+            {
+                ["protocol"] = "nomad-core", ["version"] = _commandResponseVersion,
+                ["id"] = command["id"], ["ok"] = true
+            };
+            if (_enforceAuthority && !ApplyAuthority(command, response))
+            {
+                return response;
+            }
+            if (LastCommandType.EndsWith("_authority", StringComparison.Ordinal) && !_wrongAuthorityResponseType)
+            {
+                response["type"] = "authority_response";
+                response["authority_generation"] = _generation;
+                response["authority_owner"] = string.IsNullOrEmpty(_owner) ? null : _owner;
+                return response;
+            }
+            response["type"] = "command_response";
+            response["command_result"] = new Dictionary<string, object>
+            {
+                ["success"] = true, ["message"] = "command verified"
+            };
+            return response;
+        }
+
+        private bool ApplyAuthority(Dictionary<string, object> command, Dictionary<string, object> response)
+        {
+            var source = Convert.ToString(command["command_source"], CultureInfo.InvariantCulture);
+            var clientId = Convert.ToString(command["client_id"], CultureInfo.InvariantCulture);
+            var generation = Convert.ToInt32(command["authority_generation"], CultureInfo.InvariantCulture);
+            if (generation != _generation || source != clientId)
+            {
+                return Reject(response, "stale_authority");
+            }
+            if (LastCommandType == "revoke_authority")
+            {
+                _generation++;
+                _owner = "";
+                _lastSequence = 0;
+                return true;
+            }
+            if (LastCommandType == "admit_authority" || LastCommandType == "handback_authority")
+            {
+                if (_owner != "" || (LastCommandType == "handback_authority") != _everAdmitted)
+                {
+                    return Reject(response, "authority_unavailable");
+                }
+                _generation++;
+                _owner = source;
+                _everAdmitted = true;
+                _lastSequence = 0;
+                return true;
+            }
+            if (_owner != source)
+            {
+                return Reject(response, "not_authoritative");
+            }
+            var sequence = Convert.ToInt64(command["sequence"], CultureInfo.InvariantCulture);
+            if (sequence <= _lastSequence)
+            {
+                return Reject(response, "stale_request");
+            }
+            _lastSequence = sequence;
+            return true;
+        }
+
+        private static bool Reject(Dictionary<string, object> response, string code)
+        {
+            response["ok"] = false;
+            response["error"] = new Dictionary<string, object> { ["code"] = code, ["message"] = code };
+            return false;
         }
 
         public void Wait()

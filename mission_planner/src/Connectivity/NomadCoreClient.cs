@@ -34,6 +34,8 @@ namespace NOMAD.MissionPlanner.Connectivity
     /// </summary>
     public sealed class NomadCoreClient
     {
+        private static readonly string ProcessSource = "mission-planner:" + Guid.NewGuid().ToString("N");
+
         /// <summary>
         /// The core binds this endpoint in listen mode and learns the vehicle
         /// peer from the first datagram (same as the SITL runners).
@@ -42,6 +44,12 @@ namespace NOMAD.MissionPlanner.Connectivity
         public const int DefaultRuntimePort = 14611;
         public const string LegacyOneShot = "LegacyOneShot";
         public const string PersistentRuntime = "PersistentRuntime";
+
+        public static string NormalizeMode(string mode)
+        {
+            return string.Equals(mode, LegacyOneShot, StringComparison.OrdinalIgnoreCase)
+                ? LegacyOneShot : PersistentRuntime;
+        }
 
         public string ExecutablePath { get; }
         public string Endpoint { get; }
@@ -59,11 +67,29 @@ namespace NOMAD.MissionPlanner.Connectivity
             ExecutablePath = string.IsNullOrWhiteSpace(executablePath) ? "nomad" : executablePath;
             Endpoint = string.IsNullOrWhiteSpace(endpoint) ? DefaultEndpoint : endpoint;
             ApiKey = apiKey ?? "";
-            Mode = string.Equals(mode, LegacyOneShot, StringComparison.OrdinalIgnoreCase)
-                ? LegacyOneShot
-                : PersistentRuntime;
+            Mode = NormalizeMode(mode);
             RuntimePort = runtimePort >= 1 && runtimePort <= 65535 ? runtimePort : DefaultRuntimePort;
-            _runtimeClient = new NomadRuntimeClient(RuntimePort, ApiKey, Guid.NewGuid().ToString("N"));
+            _runtimeClient = new NomadRuntimeClient(RuntimePort, ApiKey, ProcessSource);
+        }
+
+        public bool AdmitAuthority() => RequestAuthority("admit");
+        public bool RevokeAuthority() => RequestAuthority("revoke");
+        public bool HandbackAuthority() => RequestAuthority("handback");
+
+        private bool RequestAuthority(string verb)
+        {
+            if (Mode != PersistentRuntime)
+            {
+                LastOutcome = NomadCoreRequestOutcome.Rejected;
+                LastErrorCode = "unsupported_request";
+                LastMessage = "Authority controls require PersistentRuntime mode.";
+                return false;
+            }
+            var result = _runtimeClient.Run(verb, Array.Empty<string>());
+            LastOutcome = _runtimeClient.LastOutcome;
+            LastErrorCode = _runtimeClient.LastErrorCode;
+            LastMessage = _runtimeClient.LastMessage;
+            return result == 0;
         }
 
         /// <summary>

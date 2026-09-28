@@ -164,6 +164,8 @@ close its integration or release gate.
   advances generations on revoke/handback, and rejects expired, evicted, restarted
   or old-session requests. Integrated profiles inhibit direct CLI actuation;
   ROS defaults to observation only; Mission Planner defaults to persistent IPC.
+  Mission Planner has an explicit authority control and stable plugin-session
+  source; session rollover is fenced inside runtime admission.
   The next single slice is a typed MAVSDK queued-send/retry cancellation gate plus
   the remaining Mission Planner/native-input writer arbitration and independent
   physical takeover evidence. Runtime tests do not prove FC input selection.

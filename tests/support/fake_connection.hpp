@@ -29,6 +29,8 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
     bool connect() override {
         connect_count += 1;
         connected = true;
+        std::lock_guard lock(state_mutex);
+        connection_thread_id_ = std::this_thread::get_id();
         if (state->session_id == 0) {
             state->session_id = 1;
         }
@@ -62,7 +64,11 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
 
     nomad::telemetry::VehicleState get_state() const override {
         std::lock_guard lock(state_mutex);
-        return *state;
+        auto observed = *state;
+        if (std::this_thread::get_id() == connection_thread_id_ && worker_session_override_) {
+            observed.session_id = *worker_session_override_;
+        }
+        return observed;
     }
 
     std::optional<nomad::mavlink::CommandAck> send_command(const nomad::mavlink::Command &command,
@@ -242,6 +248,14 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
         state->heartbeat_fresh = value;
     }
 
+    void advance_session_before_monitor() {
+        std::lock_guard lock(state_mutex);
+        worker_session_override_ = state->session_id;
+        ++state->session_id;
+        state->connected = true;
+        state->heartbeat_fresh = true;
+    }
+
     void set_mode(std::uint32_t mode) {
         std::lock_guard lock(state_mutex);
         state->custom_mode = mode;
@@ -261,6 +275,8 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
     mutable std::mutex state_mutex;
 
   private:
+    std::thread::id connection_thread_id_{};
+    std::optional<std::uint64_t> worker_session_override_;
     bool transition_after_ack_pending{false};
 
   protected:

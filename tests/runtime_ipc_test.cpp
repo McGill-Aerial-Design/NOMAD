@@ -311,6 +311,8 @@ void test_command_dispatch_and_dedupe(std::uint16_t port, FakeConnection &connec
     const auto result = client.request(request);
     CHECK(result["command_result"]["success"] == true);
     CHECK(connection.command_count() == 1);
+    const auto hello = client.request(base_request("sequence-after-servo", "hello"));
+    CHECK(hello["authority"]["next_sequence"] == request["sequence"].get<std::uint64_t>() + 1);
 
     const auto duplicate = client.request(request);
     CHECK(duplicate == result);
@@ -383,6 +385,7 @@ void test_runtime_owns_one_connection_and_releases_port() {
     test_evicted_replay_and_wrong_source(port, *observed);
     test_revoke_and_handback(port, *observed);
     test_expired_and_delayed_request(port, *observed);
+    test_expired_exact_retry_returns_known_outcome(port, *observed);
     test_reconnect_is_observation_only(port, *observed);
     test_revoke_during_operation(port, *observed);
     CHECK(observed->connect_count == 1);
@@ -488,5 +491,6 @@ int main() {
         test_runtime_restart_and_missing_key();
         test_restart_rejects_old_request();
         test_competing_admission();
+        test_session_rollover_revokes_at_admission();
     });
 }

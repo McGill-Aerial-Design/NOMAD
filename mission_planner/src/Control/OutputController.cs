@@ -20,7 +20,7 @@ namespace NOMAD.MissionPlanner
     // a GCS link being present.
     internal static class OutputController
     {
-        private static NOMADConfig _config;
+        private static NomadCoreClient _coreClient;
 
         /// <summary>
         /// GCS-side audit record for a core-routed actuation command. The core
@@ -38,22 +38,19 @@ namespace NOMAD.MissionPlanner
         }
 
         /// <summary>
-        /// Called at plugin load so output commands can build the core client
-        /// (same wiring as FlightModeController).
+        /// Keep one client for output, gimbal and guided callers during the
+        /// current plugin configuration session.
         /// </summary>
         internal static void Initialize(NOMADConfig config)
         {
-            _config = config;
+            _coreClient = config == null ? null :
+                new NomadCoreClient(config.CoreExePath, config.CoreMavlinkEndpoint, config.CoreApiKey,
+                                    config.CoreClientMode, config.CoreRuntimePort);
         }
 
         internal static NomadCoreClient CreateCoreClient()
         {
-            if (_config == null)
-            {
-                return null;
-            }
-            return new NomadCoreClient(_config.CoreExePath, _config.CoreMavlinkEndpoint, _config.CoreApiKey,
-                                       _config.CoreClientMode, _config.CoreRuntimePort);
+            return _coreClient;
         }
 
         /// <summary>

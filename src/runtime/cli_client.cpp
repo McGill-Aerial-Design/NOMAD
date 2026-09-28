@@ -310,7 +310,8 @@ bool bind_authority(Json &request, const Json &hello_response) {
         return false;
     }
     const auto &authority = hello_response["authority"];
-    if (!authority.contains("vehicle_session") || !authority.contains("generation")) {
+    if (!authority.contains("vehicle_session") || !authority.contains("generation") ||
+        !authority.contains("next_sequence") || !authority["next_sequence"].is_number_unsigned()) {
         return false;
     }
     const auto now = std::chrono::system_clock::now().time_since_epoch();
@@ -318,7 +319,7 @@ bool bind_authority(Json &request, const Json &hello_response) {
     request["vehicle_session"] = authority["vehicle_session"];
     request["authority_generation"] = authority["generation"];
     request["command_source"] = "nomad-cli";
-    request["sequence"] = std::chrono::duration_cast<std::chrono::microseconds>(now).count();
+    request["sequence"] = authority["next_sequence"];
     request["expires_at_ms"] = std::chrono::duration_cast<std::chrono::milliseconds>(now).count() + 3000;
     return true;
 }

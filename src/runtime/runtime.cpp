@@ -89,6 +89,10 @@ struct Runtime::Implementation {
     void observe_vehicle_session() {
         const auto state = connection_->get_state();
         std::lock_guard lock(authority_mutex_);
+        revoke_changed_session_locked(state);
+    }
+
+    void revoke_changed_session_locked(const telemetry::VehicleState &state) {
         if (owner_.empty()) {
             return;
         }
@@ -120,7 +124,7 @@ struct Runtime::Implementation {
         if (!config_.actuation_enabled) {
             return error_response(request.id, "missing_api_key", "NOMAD_API_KEY is not set for the runtime");
         }
-        const auto admission = check_request_authority(request);
+        const auto admission = check_request_authority(request, false);
         if (admission.has_value()) {
             return *admission;
         }
@@ -134,6 +138,9 @@ struct Runtime::Implementation {
                     return error_response(request.id, "request_id_conflict", "request ID was used with different data");
                 }
                 return cached->second.response;
+            }
+            if (const auto expired = check_request_authority(request); expired.has_value()) {
+                return *expired;
             }
             if (in_flight_.contains(key)) {
                 return error_response(request.id, "request_in_progress", "request with this ID is still running");
@@ -155,6 +162,9 @@ struct Runtime::Implementation {
     }
 
     Json handle_read_request(const Request &request) {
+        if (request.type == "hello" || request.type == "status") {
+            observe_vehicle_session();
+        }
         if (request.type == "hello") {
             return {{"protocol", kProtocolName},
                     {"version", kProtocolVersion},
@@ -165,6 +175,7 @@ struct Runtime::Implementation {
                     {"runtime_incarnation", incarnation_},
                     {"authority", {{"vehicle_session", connection_->get_state().session_id},
                                     {"generation", current_generation()},
+                                    {"next_sequence", next_sequence()},
                                     {"server_time_ms", unix_milliseconds()}}},
                     {"capabilities",
                      {"hello", "ping", "status", "set_servo", "set_relay", "motor_test",
@@ -221,6 +232,11 @@ struct Runtime::Implementation {
     std::uint64_t current_generation() const {
         std::lock_guard lock(authority_mutex_);
         return generation_;
+    }
+
+    std::uint64_t next_sequence() const {
+        std::lock_guard lock(authority_mutex_);
+        return last_sequence_ + 1;
     }
 
     Json execute_mutating_request(const Request &request) {
@@ -284,9 +300,10 @@ struct Runtime::Implementation {
         return request.expires_at_ms >= now && request.expires_at_ms <= now + 5000;
     }
 
-    std::optional<Json> check_request_authority(const Request &request) {
+    std::optional<Json> check_request_authority(const Request &request, bool require_expiry = true) {
         const auto state = connection_->get_state();
         std::lock_guard lock(authority_mutex_);
+        revoke_changed_session_locked(state);
         if (!valid_context(request, state.session_id) || !connection_->is_connected() ||
             !state.connected || !state.heartbeat_fresh) {
             return error_response(request.id, "stale_authority", "runtime, vehicle session or generation changed");
@@ -294,7 +311,7 @@ struct Runtime::Implementation {
         if (owner_.empty() || request.source != owner_ || request.client_id != owner_) {
             return error_response(request.id, "not_authoritative", "client is not the admitted command source");
         }
-        if (!valid_expiry(request)) {
+        if (require_expiry && !valid_expiry(request)) {
             return error_response(request.id, "expired_request", "request validity must end within five seconds");
         }
         if (request.sequence == 0) {
@@ -307,7 +324,8 @@ struct Runtime::Implementation {
         const auto state = connection_->get_state();
         std::lock_guard lock(authority_mutex_);
         return valid_context(request, state.session_id) && owner_ == request.source &&
-               owner_ == request.client_id && state.connected && connection_->is_connected();
+               owner_ == request.client_id && owner_session_ == state.session_id &&
+               state.connected && connection_->is_connected();
     }
 
     bool reserve_sequence(const Request &request) {
@@ -322,6 +340,7 @@ struct Runtime::Implementation {
     Json handle_authority_request(const Request &request) {
         const auto state = connection_->get_state();
         std::lock_guard lock(authority_mutex_);
+        revoke_changed_session_locked(state);
         if (!config_.actuation_enabled || !valid_context(request, state.session_id) || !valid_expiry(request)) {
             return error_response(request.id, "stale_authority", "authority context or request validity is stale");
         }

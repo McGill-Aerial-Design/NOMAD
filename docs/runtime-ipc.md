@@ -138,7 +138,9 @@ request still in progress is rejected as `request_in_progress`. The cache is
 bounded and is cleared by runtime restart. The authority generation, runtime
 incarnation and monotonic sequence high-water mark now reject stale mutations
 even after cache eviction or restart; the cache remains a response optimization,
-not durable exactly-once execution.
+not durable exactly-once execution. An exact cached response can still be read
+after its request expiry while its authority generation remains current; this
+does not dispatch another vehicle command.
 
 Disconnecting a client does not cancel an already-dispatched `Vehicle` call.
 The runtime completes that call and retains its response when possible. If the
@@ -164,18 +166,23 @@ current context and its `client_id` as `command_source`. Only one source can win
 `revoke_authority` advances the generation and removes the owner. After a prior
 admission, `handback_authority` explicitly admits a source into another new
 generation; reconnect alone never does. Loss of the observed aircraft session
-also revokes the owner. No old mission is restored.
+also revokes the owner. A session mismatch is checked and revoked during
+`hello`, `status`, mutation and transport admission, without waiting for the monitor loop.
+No old mission is restored.
 
 Each typed mutation echoes the incarnation, vehicle session, generation and
 source, supplies a positive monotonically increasing `sequence`, and an absolute
 `expires_at_ms` no more than five seconds ahead. The runtime reserves each
 sequence before dispatch and keeps the high-water mark after response eviction.
+`hello` includes the next sequence for the one-shot CLI; Mission Planner uses
+a process-lifetime counter and stable logical source across its client instances.
 Duplicate requests can retrieve a cached response only while the same authority
 is still current. An evicted replay is rejected. In-flight operations return
 `authority_interrupted` if authority changes before completion. The runtime
 checks admission again at its transport-call boundary. `nomad --runtime admit`,
 `revoke` and `handback` are explicit local operator controls for the CLI source;
-other adapters need their own deliberate admission UX.
+Mission Planner exposes the same deliberate controls on its Core settings tab.
+Neither client admits itself on reconnect.
 
 This is local-account trust, not authenticated user identity. A local process
 can claim another client ID. The pinned MAVSDK command sender can queue and
