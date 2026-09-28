@@ -18,31 +18,21 @@ namespace NOMAD.MissionPlanner
 
             AddSectionLabel(tab, "C++ Core Command Boundary", ref y);
 
-            AddLabel(tab, "Client mode:", 20, y);
-            _cmbCoreClientMode = AddComboBox(tab, 170, y, 180, new[] { "LegacyOneShot", "PersistentRuntime" });
-            y += 30;
-
-            AddLabel(tab, "Core executable:", 20, y);
-            _txtCoreExePath = AddTextBox(tab, 170, y, 360);
-            y += 30;
-
             AddLabel(tab, "Runtime IPC port:", 20, y);
             _numCoreRuntimePort = AddNumericUpDown(tab, 170, y, 90, 1, 65535, 14611);
             y += 30;
 
-            AddLabel(tab, "MAVLink endpoint:", 20, y);
-            _txtCoreEndpoint = AddTextBox(tab, 170, y, 360);
-            y += 30;
-
-            AddLabel(tab, "Core API key:", 20, y);
+            AddLabel(tab, "Local actuation gate:", 20, y);
             _txtCoreApiKey = AddTextBox(tab, 170, y, 360);
             _txtCoreApiKey.UseSystemPasswordChar = true;
             y += 35;
 
             var hint = new Label
             {
-                Text = "PersistentRuntime uses versioned loopback TCP IPC and requires a separately " +
-                       "supervised nomad-runtime process. LegacyOneShot starts nomad for each operation.",
+                Text = "Core command actions use versioned loopback IPC only. The configured key is a " +
+                       "local nonempty gate, not IPC authentication. A separately supervised " +
+                       "nomad-runtime process must be running; these commands fail closed when it is " +
+                       "unavailable. GuidedGoto is unavailable until the runtime adds a typed request.",
                 Font = new Font("Segoe UI", 8, FontStyle.Italic),
                 ForeColor = Color.FromArgb(170, 170, 170),
                 Location = new Point(20, y),

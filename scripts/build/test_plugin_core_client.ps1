@@ -4,15 +4,13 @@
 # NomadCoreClient boundary tests for the Mission Planner plugin
 # ============================================================
 # Compiles the Mission Planner-free NomadCoreClient (the plugin's client for
-# the C++ core CLI boundary) together with the test runner using the Roslyn
+# the C++ runtime IPC boundary) together with the test runner using the Roslyn
 # csc bundled with Visual Studio's MSBuild — no .NET SDK or test-framework
 # packages required.
 #
-# The pure checks (argument vector, invariant formatting, fail-closed input
-# validation, unavailable-core fail-closed) always run. When the C++ core
-# binary has been built (pixi run build-core), the harness also exercises the
-# live CLI authentication gate: an actuation verb without NOMAD_API_KEY must
-# be refused before any socket work. The gate check is skipped otherwise.
+# The harness exercises typed runtime requests, fail-closed validation,
+# explicit GuidedGoto unavailability, authority controls, protocol negotiation,
+# and unknown-outcome no-replay behavior without Mission Planner assemblies.
 #
 # Usage: pixi run test-plugin-core-client
 # Exits non-zero on compile error or test failure.
@@ -67,10 +65,6 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ---- Run ----
-# The auth-gate check inside the test refuses to run while NOMAD_API_KEY is
-# set (the gate needs an unset key to observe the refusal), so clear it here.
-Remove-Item Env:NOMAD_API_KEY -ErrorAction SilentlyContinue
-
 Write-Host "Running core-client tests..." -ForegroundColor Yellow
 & $exe
 $result = $LASTEXITCODE

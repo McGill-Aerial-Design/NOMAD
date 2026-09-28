@@ -24,30 +24,27 @@ namespace NOMAD.MissionPlanner
         internal static bool IntegratedFlightMode { get; private set; }
 
         /// <summary>
-        /// GCS-side audit record for a core-routed actuation command. The core
-        /// CLI already emits the authoritative machine-readable line
-        /// (audit command=... result=... auth=...) on its own stderr; this
+        /// GCS-side audit record for a runtime-routed actuation command. The
+        /// runtime emits the authoritative machine-readable line on its own stderr; this
         /// companion Log line records the outcome where the operator and the
         /// plugin's log adapters can see it.
         /// </summary>
         private static void Audit(string command, bool accepted, string detail)
         {
-            // The command names here are the core CLI verbs, matching the
-            // core's own audit lines so a log can be correlated end to end.
+            // Keep the command name aligned with the runtime audit line for correlation.
             var outcome = accepted ? "accepted" : "failed";
-            Log.Info($"audit command={command} result={outcome} auth=api-key {detail}");
+            Log.Info($"audit command={command} result={outcome} {detail}");
         }
 
         /// <summary>
-        /// Keep one client for output, gimbal and guided callers during the
+        /// Keep one client for output and gimbal callers during the
         /// current plugin configuration session.
         /// </summary>
         internal static void Initialize(NOMADConfig config)
         {
             IntegratedFlightMode = config?.IntegratedFlightMode ?? false;
             _coreClient = config == null ? null :
-                new NomadCoreClient(config.CoreExePath, config.CoreMavlinkEndpoint, config.CoreApiKey,
-                                    config.CoreClientMode, config.CoreRuntimePort, config.IntegratedFlightMode);
+                new NomadCoreClient(config.CoreApiKey, config.CoreRuntimePort);
         }
 
         internal static NomadCoreClient CreateCoreClient()

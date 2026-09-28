@@ -30,29 +30,15 @@ namespace NOMAD.MissionPlanner
         public string ActiveProfile { get; set; } = "dev";
 
         /// <summary>
-        /// Integrated profile mode inhibits plugin-owned legacy actuation and
-        /// makes the routed Mission Planner consumer receive-only.
+        /// Integrated profile mode inhibits plugin actuation that remains
+        /// outside the runtime and makes the routed Mission Planner consumer receive-only.
         /// Mission Planner native controls and RC remain external writers.
         /// </summary>
         public bool IntegratedFlightMode { get; set; } = false;
 
         /// <summary>
-        /// Path to the C++ core CLI binary used by LegacyOneShot mode.
-        /// Empty means "nomad" on PATH.
-        /// </summary>
-        public string CoreExePath { get; set; } = "";
-
-        /// <summary>Client route for C++ vehicle operations: PersistentRuntime or LegacyOneShot.</summary>
-        public string CoreClientMode { get; set; } = Connectivity.NomadCoreClient.PersistentRuntime;
-
         /// <summary>Loopback TCP port used by the persistent C++ runtime.</summary>
         public int CoreRuntimePort { get; set; } = Connectivity.NomadCoreClient.DefaultRuntimePort;
-
-        /// <summary>
-        /// LegacyOneShot endpoint. PersistentRuntime uses the endpoint configured
-        /// for the runtime process and does not send this setting over IPC.
-        /// </summary>
-        public string CoreMavlinkEndpoint { get; set; } = "udpin:127.0.0.1:14601";
         public List<LinkConfig> RouterLinks { get; set; }
         public List<ConsumerConfig> RouterConsumers { get; set; } = new List<ConsumerConfig>
         {
@@ -61,8 +47,8 @@ namespace NOMAD.MissionPlanner
         };
 
         /// <summary>
-        /// Legacy actuation gate value. PersistentRuntime sends no credential;
-        /// the runtime checks that NOMAD_API_KEY is non-empty in its own environment.
+        /// Local nonempty actuation gate. The value is not sent over IPC or
+        /// compared with NOMAD_API_KEY in the runtime environment.
         /// </summary>
         public string CoreApiKey { get; set; } = "nomad-dev-sitl-key";
 

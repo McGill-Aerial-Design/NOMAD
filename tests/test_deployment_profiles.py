@@ -240,6 +240,21 @@ def test_save_uses_template_schema_and_preserves_secret_placeholder(tmp_path: Pa
     assert "NOMAD_DEV_ONLY" not in saved
 
 
+RETIRED_MP_CONFIG_FIELDS = (
+    "JetsonApiKey",
+    "JetsonIP",
+    "JetsonPort",
+    "CoreExePath",
+    "CoreClientMode",
+    "CoreMavlinkEndpoint",
+)
+
+
+def assert_retired_mp_fields_removed(config: dict[str, object]) -> None:
+    for field in RETIRED_MP_CONFIG_FIELDS:
+        assert field not in config
+
+
 def test_sync_mission_planner_removes_stale_profile_fields(tmp_path: Path, monkeypatch) -> None:
     cfg_file = tmp_path / "nomad_config.json"
     initial_config = {
@@ -248,6 +263,9 @@ def test_sync_mission_planner_removes_stale_profile_fields(tmp_path: Path, monke
         "JetsonApiKey": "retired",
         "JetsonIP": "retired",
         "JetsonPort": 8000,
+        "CoreExePath": "retired-nomad-path",
+        "CoreClientMode": "LegacyOneShot",
+        "CoreMavlinkEndpoint": "udpin:0.0.0.0:14550",
         "CoreApiKey": "old-key",
         "VideoUrl": "old-video",
     }
@@ -263,10 +281,8 @@ def test_sync_mission_planner_removes_stale_profile_fields(tmp_path: Path, monke
     assert synced["ActiveProfile"] == "onboard_companion"
     assert synced["IntegratedFlightMode"] is True
     assert synced["CoreApiKey"] == onboard_env["NOMAD_API_KEY"]
-    assert synced["CoreMavlinkEndpoint"] == "udpin:0.0.0.0:14550"
     assert synced["VideoUrl"] == onboard_env["NOMAD_VIDEO_RTSP_URL"]
-    for field in ("JetsonApiKey", "JetsonIP", "JetsonPort"):
-        assert field not in synced
+    assert_retired_mp_fields_removed(synced)
 
     # Sync groundstation_minimal
     minimal_env = _parse_env(PROFILES_DIR / "groundstation_minimal.env")
@@ -276,7 +292,7 @@ def test_sync_mission_planner_removes_stale_profile_fields(tmp_path: Path, monke
     assert synced_min["IntegratedFlightMode"] is True
     assert "VideoUrl" not in synced_min
     assert "CoreApiKey" not in synced_min
-    assert synced_min["CoreMavlinkEndpoint"] == "udpin:127.0.0.1:14601"
+    assert_retired_mp_fields_removed(synced_min)
     assert synced_min["CustomUserSetting"] == "preserved_value"
 
 

@@ -3,10 +3,9 @@
 // ============================================================
 // NOMAD Gimbal Joystick — Floating Dockable Window
 // ============================================================
-// Rate-controlled 2D joystick that streams MAV_CMD_DO_MOUNT_CONTROL angle
-// commands (pitch/roll) to a brushless gimbal mount on the autopilot. Mode
-// buttons send MAV_CMD_DO_MOUNT_CONFIGURE. Works with any DO_MOUNT_CONTROL
-// mount configured as an MNTx_* mount on ArduPilot.
+// Rate-controlled 2D joystick streams pitch/roll through Mission Planner's
+// direct MAVLink path when non-integrated. Mode buttons use runtime IPC and
+// never fall back to direct mount-configuration writes.
 //
 // This is independent from the camera tilt servo (PayloadControlPanel), which is
 // just a SERVOx output. The command construction lives in GimbalCommand and the

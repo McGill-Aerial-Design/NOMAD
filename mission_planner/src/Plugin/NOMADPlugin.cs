@@ -68,9 +68,8 @@ namespace NOMAD.MissionPlanner
                 // Load configuration
                 _config = NOMADConfig.Load();
 
-                // FlightModeController builds core clients from the same config
-                // (CoreExePath / CoreMavlinkEndpoint / CoreApiKey) for GuidedGoto.
-                // Aircraft termination remains unavailable.
+                // OutputController builds the loopback runtime client from the
+                // saved port and local actuation gate. GuidedGoto remains unavailable.
                 OutputController.Initialize(_config);
 
                 // Notification service runs plugin-wide so battery / GPS
@@ -152,7 +151,7 @@ namespace NOMAD.MissionPlanner
                             $"NOMAD Plugin v{Version} loaded (debug mode).\n\n" +
                             $"Click NOMAD in the menu bar to open the interface;\n" +
                             $"hover it for tools and settings.\n\n" +
-                            $"C++ core endpoint: {_config.CoreMavlinkEndpoint}",
+                            $"C++ runtime IPC port: 127.0.0.1:{_config.CoreRuntimePort}",
                             "NOMAD"
                         );
                     });

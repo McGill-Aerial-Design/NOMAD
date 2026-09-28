@@ -62,18 +62,18 @@ Mission Planner client now have these modes:
 
 | Client | Mode | Behavior |
 |---|---|---|
-| Mission Planner | `LegacyOneShot` | Explicit nonintegrated compatibility path; starts `nomad` for each supported operation |
-| Mission Planner | `PersistentRuntime` | Default; connects to configured loopback IPC port and does not spawn `nomad` |
+| Mission Planner | runtime IPC only | Connects to the configured loopback port; never launches the CLI or falls back to native MAVLink/direct vehicle writes |
 | C++ CLI | bare verb or `--direct` | Existing one-shot connection and `Vehicle` lifetime |
 | C++ CLI | `--runtime` | Sends supported typed requests to the runtime |
 | ROS 2 | integrated default | Uses its independent connection for observation; actuation is inhibited |
 | ROS 2 | explicit nonintegrated test mode | Owns its independent connection and `Vehicle` |
 
-Mission Planner persistent mode and the C++ CLI runtime mode support the typed
-requests listed below. The protocol does not expose every CLI verb. In
-particular, there is no generic command ID, raw MAVLink or shell command.
-An integrated Mission Planner profile rejects `LegacyOneShot` before launching
-the direct CLI. The option remains available only in nonintegrated mode.
+Mission Planner and the C++ CLI runtime mode support the typed requests listed
+below. The protocol does not expose every CLI verb. In particular, there is no
+generic command ID, raw MAVLink or shell command. Mission Planner has no
+one-shot compatibility mode. GuidedGoto remains unavailable because protocol v1
+does not expose a typed navigation request; the plugin reports this and sends no
+vehicle command.
 
 ## Protocol v1
 
@@ -147,14 +147,14 @@ does not dispatch another vehicle command.
 Disconnecting a client does not cancel an already-dispatched `Vehicle` call.
 The runtime completes that call and retains its response when possible. If the
 client loses its socket after sending but before receiving the response, its
-outcome is unknown. Mission Planner does not retry the request or fall back to
-one-shot mode after that failure. The next user operation opens a new TCP
-connection and negotiates again. A runtime restart recreates the MAVSDK
+outcome is unknown. Mission Planner does not retry the request or use a CLI,
+native MAVLink or direct-write fallback after that failure. The next user
+operation opens a new TCP connection and negotiates again. A runtime restart recreates the MAVSDK
 connection and `Vehicle`, clears the in-memory request cache, and does not
 resume an in-progress operation.
 
-`NOMAD_API_KEY` retains its current limited meaning. The persistent client
-requires its configured value to be non-empty, and the runtime requires its own
+`NOMAD_API_KEY` retains its current limited meaning. The Mission Planner client
+requires its configured local gate to be non-empty, and the runtime requires its own
 `NOMAD_API_KEY` environment value to be non-empty for mutation. The value is
 not sent in IPC and the two values are not compared. This is an actuation gate,
 not client authentication; local machine access remains trusted.
