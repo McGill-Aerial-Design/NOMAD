@@ -199,11 +199,11 @@ namespace NOMAD.MissionPlanner
                 var aboutItem = new ToolStripMenuItem("About NOMAD");
                 aboutItem.Click += (s, e) => CustomMessageBox.Show(
                     $"NOMAD Plugin v{Version}\n" +
-                    $"McGill Aerial Design — AEAC 2026\n\n" +
+                    $"McGill Aerial Design\n\n" +
                     $"Hover the NOMAD menu for tools; click it to open the\n" +
                     $"NOMAD screen (dashboard, flight boundaries, video,\n" +
-                    $"local log analysis, motor music, and dual-link status).\n\n" +
-                    $"Geofence monitoring with enforced violation actions,\n" +
+                    $"local log analysis and dual-link status).\n\n" +
+                    $"Boundary monitoring with termination-unavailable alerts,\n" +
                     $"plugin-wide alerts with toast overlays, MAVLink dual-link\n" +
                     $"failover routing, and configurable payload controls.\n\n" +
                     $"Video: {_config.VideoUrl}\n" +

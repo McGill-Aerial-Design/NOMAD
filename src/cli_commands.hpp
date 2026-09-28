@@ -4,7 +4,6 @@
 #include "nomad/mavlink/connection.hpp"
 #include "nomad/vehicle/vehicle.hpp"
 
-#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -38,8 +37,6 @@ struct Arguments {
     std::optional<int> motor_instance;
     std::optional<float> timeout_seconds;
     std::optional<int> mount_mode;
-    std::optional<std::array<float, 7>> user_parameters;
-    int user_parameter_count{0};
     std::vector<double> fixed_wing_route_values;
     std::vector<double> fixed_wing_recovery_values;
     std::vector<double> transition_to_vtol_values;

@@ -149,29 +149,6 @@ namespace NOMAD.MissionPlanner.Connectivity
         }
 
         /// <summary>
-        /// Send a MAV_CMD_USER_1 command (the NOMAD motor-music Lua opcode
-        /// protocol) through the core. Exactly seven finite values are
-        /// required; the semantic layout is the adapter's concern.
-        /// </summary>
-        public bool SendUserCommand(params double[] parameters)
-        {
-            if (parameters == null || parameters.Length != 7)
-            {
-                return false;
-            }
-            var values = new string[7];
-            for (var index = 0; index < 7; index++)
-            {
-                if (!IsFinite(parameters[index]))
-                {
-                    return false;
-                }
-                values[index] = parameters[index].ToString("F3", CultureInfo.InvariantCulture);
-            }
-            return RunCore("user-command", values) == 0;
-        }
-
-        /// <summary>
         /// Invariant-culture value vector for the goto verb; pinned by the
         /// standalone tests so a wrapper can trust the exact bytes sent to the
         /// core CLI (the CLI parses with strtof, so F7 lat/lon and F1 altitude

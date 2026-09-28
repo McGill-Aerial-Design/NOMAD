@@ -271,7 +271,7 @@ function Invoke-BuildScript {
     $env:MOCK_BUILD_EXIT = $BuildExitCode
     $env:MOCK_SKIP_ARTIFACT = if ($SkipArtifact) { '1' } else { '0' }
 
-    $output = & $Fixture.PowerShell -NoProfile -ExecutionPolicy Bypass -File $Fixture.Script -NoDeploy 2>&1
+    $output = & $Fixture.PowerShell -NoProfile -ExecutionPolicy Bypass -File $Fixture.Script 2>&1
     $exitCode = $LASTEXITCODE
     $log = Get-Content -LiteralPath $Fixture.MockLog -Raw
 

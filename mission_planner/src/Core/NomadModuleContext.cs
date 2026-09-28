@@ -4,8 +4,7 @@
 // NOMAD Module Context
 // ============================================================
 // Shared service registry + feature-flag accessor handed to every module at
-// Configure() time. This is the C# counterpart of edge_core.core.AppContext on
-// the Jetson side: modules pull the dependencies they need (config, senders,
+// Configure() time. Modules access the dependencies they need (config, clients,
 // connection managers, ...) from here instead of taking a fixed constructor.
 // ============================================================
 
@@ -76,7 +75,7 @@ namespace NOMAD.MissionPlanner.Core
 
         /// <summary>
         /// Evaluate an enable flag. Empty/absent flags return <paramref name="defaultValue"/>,
-        /// matching the opt-in/opt-out semantics of the Jetson module SDK.
+        /// so each module defines its default enablement.
         /// </summary>
         public bool IsEnabled(string flag, bool defaultValue = true)
         {

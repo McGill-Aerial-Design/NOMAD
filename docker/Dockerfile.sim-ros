@@ -69,19 +69,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ==============================================================
 # Python deps. numpy<2 keeps compatibility with the prebuilt ROS message
 # packages (mirrors Dockerfile.jetson). pytest runs the tests/ros/ suite inside
-# the image. pydantic is retained for the Python tooling environment; the video
-# bridge itself lives under python/tools and is optional at runtime.
+# the image. The optional video bridge lives under python/tools.
 # ==============================================================
 RUN pip3 install --no-cache-dir \
     pymavlink \
     transforms3d \
     pytest \
-    pydantic \
     'numpy<2'
 
 # ==============================================================
 # NOMAD source. Copied to a layer path on PYTHONPATH so the video bridge and
-# the synthetic publisher are importable without a workspace mount — mirrors
+# retained tools are importable without a workspace mount — mirrors
 # the self-contained COPY layout in Dockerfile.jetson.
 # tests/ is deliberately excluded (it is in .dockerignore and volume-mounted
 # at run time so the image stays small and the test suite is always fresh).

@@ -59,7 +59,7 @@ NOMAD's core suite passed 9/9, its Phase A and Phase B wire fixtures passed, and
 live zero-delivery and velocity-watchdog probes verified stop and disarm. Wider
 SDK system IDs are checked before narrowing, including rejection of ID 257 for
 expected ID 1. Complete Linux, Apple and Windows workflows pass on that revision;
-see the [closeout record](mavsdk-handoff.md) for the final evidence and remaining gates.
+see the [dated compatibility evidence](migration.md#mavsdk-compatibility-evidence-2026-09-19) for the final evidence and remaining gates.
 
 The merged-main Copter matrix and later pinned QuadPlane operation chain are
 recorded in the [current migration status](migration.md#current-qualification-status).
@@ -314,7 +314,7 @@ also observed the post-route recovery target approached from 242.3 m to a
 42.3 m completion distance at 20 m requested relative-home altitude.
 
 Cover arm/disarm, mode, takeoff, land/RTL, goto, servo, relay, motor-test,
-gimbal-config and user-command. Unsupported verbs now belong in the fork: add the
+gimbal-config. Unsupported verbs now belong in the fork: add the
 missing semantic there with its own test rather than a new NOMAD adapter path, and
 retire the transitional raw-frame route for each verb as it lands. Verify
 COMMAND_INT location semantics and altitude datum rather than assuming a generic

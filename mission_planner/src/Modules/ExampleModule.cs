@@ -6,8 +6,8 @@
 // Demonstrates the C# module SDK (src/Core): metadata with an enable flag,
 // Configure() pulling the plugin config out of the shared context, and
 // GetViews() contributing a sidebar view plus an action. NOMADMainScreen
-// appends these to its sidebar automatically. Turn it off by setting the
-// environment variable NOMAD_PLUGIN_EXAMPLE_MODULE=0.
+// appends these to its sidebar automatically. Enable it for development with
+// the environment variable NOMAD_PLUGIN_EXAMPLE_MODULE=1.
 // ============================================================
 
 using System.Collections.Generic;
@@ -28,7 +28,7 @@ namespace NOMAD.MissionPlanner.Modules
             Version = "1.0.0",
             Description = "Example module demonstrating the NOMAD plugin module SDK.",
             EnableFlag = "NOMAD_PLUGIN_EXAMPLE_MODULE",
-            EnabledByDefault = true,
+            EnabledByDefault = false,
         };
 
         public override void Configure(NomadModuleContext context)
@@ -63,7 +63,7 @@ namespace NOMAD.MissionPlanner.Modules
     {
         public ExampleView(NOMADConfig config)
         {
-            var profile = string.IsNullOrWhiteSpace(config?.ActiveProfile) ? "dev" : config.ActiveProfile;
+            var profile = string.IsNullOrWhiteSpace(config?.ActiveProfile) ? "unconfigured" : config.ActiveProfile;
 
             var layout = new FlowLayoutPanel
             {

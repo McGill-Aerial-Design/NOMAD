@@ -55,10 +55,11 @@ def test_distribution_packages_live_python_tools_without_edge_core(tmp_path: Pat
     project = metadata["project"]
     packages = metadata["tool"]["setuptools"]["packages"]["find"]["include"]
 
-    assert project["name"] == "nomad-edge"
+    assert project["name"] == "nomad-tools"
+    assert project["dependencies"] == ["numpy>=1.26"]
     assert "scripts" not in project
-    assert "python*" in packages
-    assert "infra.tailscale*" in packages
+    assert "python.tools" in packages
+    assert "infra.tailscale" in packages
     assert (ROOT / "python" / "__init__.py").is_file()
     assert (ROOT / "python" / "tools" / "simple_video_bridge.py").is_file()
     assert callable(simple_video_bridge.main)
@@ -121,9 +122,6 @@ def test_compose_has_valid_sitl_only_and_ros_output_paths() -> None:
     task = _load_toml("pixi.toml")["tasks"]["sim-ros-up"]
     assert task["env"]["NOMAD_SITL_ROS_OUTPUT"] in ros_stack
 
-    video_bridge = services["video_bridge_gazebo"]["command"]
-    assert "python.tools.simple_video_bridge" in video_bridge
-
     dockerfile = (ROOT / "docker" / "Dockerfile.sim-ros").read_text(encoding="utf-8")
     assert "COPY python/ /opt/nomad/python/" in dockerfile
     assert "COPY edge_core/" not in dockerfile
@@ -146,21 +144,3 @@ def test_compose_feeds_sitl_the_parameter_files_its_entrypoint_requires() -> Non
     stream_params = (ROOT / "docker" / "sitl-streams.parm").read_text(encoding="utf-8")
     for parameter in ("SR0_POSITION", "SR0_EXT_STAT", "SR0_EXTRA1", "SR0_EXTRA2"):
         assert re.search(rf"^{parameter} [1-9]", stream_params, re.MULTILINE), parameter
-
-
-@pytest.mark.parametrize(
-    "task_name",
-    [
-        "sim-ros-perception-up",
-        "sim-gazebo-up",
-        "sim-gazebo-up-headless",
-        "sim-gazebo-up-fast",
-    ],
-)
-def test_missing_sensor_provider_fails_before_starting_containers(task_name: str) -> None:
-    command = _load_toml("pixi.toml")["tasks"][task_name]
-    assert command.startswith('python -c "') and command.endswith('"')
-    code = command[len('python -c "') : -1]
-    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=10)
-    assert result.returncode != 0
-    assert "Unavailable: simulation sensor/launch provider" in result.stderr

@@ -2,8 +2,7 @@
 
 Product profiles: onboard_companion, groundstation_gpu and groundstation_minimal.
 The profile loader and deterministic configuration tests exist; runtime capability
-and hardware qualification remain open. dev, drone and the older groundstation
-file are migration artifacts, not additional product architectures.
+and hardware qualification remain open.
 
 Use profile-list to inspect names. profile-load writes ignored config/nomad.env
 and synchronizes Mission Planner configuration; it is a state-changing action.

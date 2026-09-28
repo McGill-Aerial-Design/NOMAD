@@ -46,7 +46,6 @@ PINNED_COMMAND_IDS = {
         "kSetRelayCommand": "MAV_CMD_DO_SET_RELAY",
         "kMotorTestCommand": "MAV_CMD_DO_MOTOR_TEST",
         "kMountConfigureCommand": "MAV_CMD_DO_MOUNT_CONFIGURE",
-        "kUserCommand": "MAV_CMD_USER_1",
         "kFenceVertexCommand": "MAV_CMD_NAV_FENCE_POLYGON_VERTEX_INCLUSION",
     },
 }

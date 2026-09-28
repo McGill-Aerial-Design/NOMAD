@@ -7,8 +7,14 @@ An existing packaged DLL may predate that migration; verify its build identity.
 
 ## Install
 
-1. Close Mission Planner.
-2. From this folder, run:
+1. Build the plugin from the repository root with `pixi run build-plugin-only`.
+   From this folder, stage the built DLL beside the installer:
+
+   ```powershell
+   Copy-Item -LiteralPath ..\src\bin\Release\NOMADPlugin.dll -Destination .\NOMADPlugin.dll
+   ```
+
+2. Close Mission Planner. From this folder, run:
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File INSTALL.ps1

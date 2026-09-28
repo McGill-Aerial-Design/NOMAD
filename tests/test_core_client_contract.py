@@ -2,8 +2,8 @@
 # Copyright 2026 The NOMAD Authors
 """Client contract tests for the C++ core CLI boundary.
 
-The C++ ``nomad`` CLI is the replacement client boundary the transitional
-Python vehicle path will hand over to. These tests pin the parts of that
+The C++ ``nomad`` CLI is a client boundary for Mission Planner and tools.
+These tests pin the parts of that
 boundary that are observable without a vehicle or SITL:
 
 - the exact verb surface named by ``usage`` output;
@@ -49,7 +49,6 @@ EXPECTED_VERBS = (
     "relay",
     "motor-test",
     "gimbal-config",
-    "user-command",
     "mission-demo",
     "velocity-demo",
     "fence-demo",
@@ -118,6 +117,14 @@ def test_unknown_command_prints_usage_and_fails() -> None:
     assert "Usage: nomad" in result.stdout
 
 
+def test_removed_user_command_cannot_reach_transport() -> None:
+    result = invoke("user-command", "1", "2", "3", "4", "5", "6", "7")
+
+    assert result.returncode != 0
+    assert "Usage: nomad" in result.stdout
+    assert "user-command" not in result.stdout
+
+
 @pytest.mark.parametrize(
     "arguments",
     [
@@ -154,9 +161,6 @@ def test_unknown_command_prints_usage_and_fails() -> None:
         ("motor-test", "1", "1000", "1.0", "9"),  # extra positional argument
         ("gimbal-config", "x"),  # mount mode must parse as a decimal
         ("gimbal-config", "7"),  # mount mode above the 0..4 bound
-        ("user-command", "1"),  # user-command requires exactly seven values
-        ("user-command", "1", "x", "3", "4", "5", "6", "7"),  # non-numeric parameter
-        ("user-command", "1", "2", "3", "4", "5", "6", "7", "8"),  # more than seven values
         ("--endpoint", "udpin:0.0.0.0:14550"),  # flag without a command
     ],
 )
@@ -209,7 +213,6 @@ def test_silent_endpoint_times_out_cleanly() -> None:
         ("relay", "3", "1"),
         ("motor-test", "1", "1000", "1.0"),
         ("gimbal-config", "2"),
-        ("user-command", "1", "2", "3", "4", "5", "6", "7"),
         ("mission-demo",),
         ("velocity-demo",),
         ("fence-demo",),

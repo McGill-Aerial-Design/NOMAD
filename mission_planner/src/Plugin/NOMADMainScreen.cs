@@ -71,7 +71,6 @@ namespace NOMAD.MissionPlanner
         private Button _btnVideo;
         private Button _btnLinks;
         private Button _btnLogs;
-        private Button _btnMotorMusic;
 
         // Content views
         private UserControl _currentView;
@@ -80,7 +79,6 @@ namespace NOMAD.MissionPlanner
         private NOMADVideoView _videoView;
         private NOMADLinksView _linksView;
         private NOMADLogView _logView;
-        private NOMADMotorMusicView _motorMusicView;
 
 
         // Update timer
@@ -324,10 +322,6 @@ namespace NOMAD.MissionPlanner
                     if (_logView == null) _logView = new NOMADLogView(_config);
                     newView = _logView;
                     break;
-                case "MotorMusic":
-                    if (_motorMusicView == null) _motorMusicView = new NOMADMotorMusicView(_config);
-                    newView = _motorMusicView;
-                    break;
             }
 
             if (newView != null)
@@ -349,7 +343,6 @@ namespace NOMAD.MissionPlanner
                 _btnVideo,
                 _btnLinks,
                 _btnLogs,
-                _btnMotorMusic,
             };
             foreach (var btn in buttons)
             {
@@ -369,7 +362,6 @@ namespace NOMAD.MissionPlanner
                 case "Video": activeBtn = _btnVideo; break;
                 case "Links": activeBtn = _btnLinks; break;
                 case "Logs": activeBtn = _btnLogs; break;
-                case "MotorMusic": activeBtn = _btnMotorMusic; break;
             }
 
             if (activeBtn != null)
@@ -426,7 +418,6 @@ namespace NOMAD.MissionPlanner
                 _videoView?.Dispose();
                 _linksView?.Dispose();
                 _logView?.Dispose();
-                _motorMusicView?.Dispose();
                 // Dispose any module-contributed views built in module mode.
                 foreach (var cached in _descriptorViewCache.Values)
                     cached?.Dispose();

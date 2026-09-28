@@ -36,6 +36,7 @@ from scripts.profile import PROFILES, PROFILES_DIR, _parse_env, normalize_mavlin
 def test_supported_profiles_exist() -> None:
     expected_profiles = {"onboard_companion", "groundstation_gpu", "groundstation_minimal"}
     assert set(PROFILES) == expected_profiles
+    assert {path.stem for path in PROFILES_DIR.glob("*.env")} == expected_profiles
     for name in expected_profiles:
         profile_file = PROFILES_DIR / f"{name}.env"
         assert profile_file.exists(), f"Missing profile file: {profile_file}"

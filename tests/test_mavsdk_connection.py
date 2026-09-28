@@ -190,5 +190,4 @@ def test_output_commands_reach_the_wire() -> None:
     fixture.case_servo_parity(CLI)
     fixture.case_relay_parity(CLI)
     fixture.case_gimbal_config_parity(CLI)
-    fixture.case_user_command_parity(CLI)
     fixture.case_motor_test_parity(CLI)

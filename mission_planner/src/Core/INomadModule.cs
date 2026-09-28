@@ -4,10 +4,9 @@
 // NOMAD Module Contract
 // ============================================================
 // A NOMAD module is a self-contained feature set that contributes one or more
-// sidebar views (and/or actions) to the NOMAD screen. This is the Mission
-// Planner counterpart of the Jetson-side edge_core.core.NomadModule protocol:
-// same metadata (name, version, requires, enable flag) and lifecycle
-// (configure -> start -> stop), expressed in C#.
+// sidebar views and actions to the Mission Planner NOMAD screen. Modules use
+// metadata, enable flags and a configure -> start -> stop lifecycle. Vehicle
+// requests must use the C++ core authority and safety boundary.
 // ============================================================
 
 using System;

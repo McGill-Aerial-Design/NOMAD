@@ -59,7 +59,6 @@ from mavsdk_peer import (
     COMMAND_NAV_TAKEOFF,
     DENIED,
     GLOBAL_RELATIVE_ALT_INT_FRAME,
-    USER_COMMAND_ID,
     CommandRecord,
     VehiclePeer,
 )
@@ -409,21 +408,6 @@ def case_motor_test_parity(cli: Path) -> None:
     )
 
 
-def case_user_command_parity(cli: Path) -> None:
-    result, observed = run_cli_case(cli, "user-command", "1", "2", "3", "4", "5", "6", "7")
-    parameters = find_parameters(observed, USER_COMMAND_ID)
-    require(
-        result.returncode == 0 and "user command verified" in result.stdout,
-        "user command is acknowledged and reported",
-        describe(result, observed),
-    )
-    require(
-        parameters == (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0),
-        "user command carries all seven parameters unchanged",
-        describe(result, observed),
-    )
-
-
 def case_quadplane_navigation(cli: Path) -> None:
     case_quadplane_fixed_wing_route_uses_reposition_command_int(cli)
     case_quadplane_fixed_wing_recovery_uses_reposition_command_int(cli)
@@ -474,7 +458,6 @@ def run_vehicle_operation_cases(cli: Path) -> None:
     case_servo_parity(cli)
     case_relay_parity(cli)
     case_gimbal_config_parity(cli)
-    case_user_command_parity(cli)
     case_motor_test_parity(cli)
 
 

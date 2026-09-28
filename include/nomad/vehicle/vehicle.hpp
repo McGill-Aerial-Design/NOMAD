@@ -85,7 +85,6 @@ class Vehicle {
     CommandResult set_relay(int relay_number, bool on);
     CommandResult motor_test(int motor_instance, int pwm_microseconds, float timeout_seconds);
     CommandResult configure_gimbal(int mount_mode);
-    CommandResult send_user_command(const std::array<float, 7> &parameters);
     CommandResult arm_payload();
     CommandResult release_payload(int relay_number, float duration_seconds);
     CommandResult stop_velocity();

@@ -101,11 +101,10 @@ drops them leaves the scenarios watching heartbeats. See C24 in
 These paths have local configuration checks, but current live image/SITL/ROS
 qualification remains open at G1.
 
-`sim-ros-perception-up` and the three `sim-gazebo-up*` tasks fail with an explicit
-unavailable message: no current sensor/launch provider is configured. Optional
-image builds, GPU adapters and the Python video bridge remain available for
-integration work. Raw Gazebo Compose services are scaffolding, not a working
-simulator or perception demonstration.
+CPU ROS integration and the optional GPU adapter image remain available.
+No simulation sensor provider is included; qualify a selected source before
+claiming perception or VIO availability. The Python video bridge can consume
+an explicitly supplied ROS image stream.
 
 On a configured companion host, `nomad start video_bridge` directly manages the
 retained bridge inside the adapter container; it no longer calls a vehicle REST
@@ -231,10 +230,9 @@ These are pinned SITL qualification bounds, not general flight limits. These
 slices do not qualify disarm as a public operation, generic takeoff/goto, route
 planning, generic land, arbitrary RTL/QRTL, QuadPlane link-loss response or the
 complete Task 1 flight. Copter mode numbers and velocity-stop behavior cannot stand
-in for those tests. Gazebo/Isaac are
-optional sensor-evidence tools; they are not prerequisites for basic unit or
-server-contract tests. The independent pymavlink mode driver establishes
-`AUTO` because NOMAD deliberately rejects arbitrary QuadPlane `set_mode`; this
+in for those tests. GPU adapter images are optional and are not prerequisites
+for basic unit or server-contract tests. The independent pymavlink mode
+driver establishes `AUTO` because NOMAD deliberately rejects arbitrary QuadPlane `set_mode`; this
 does not qualify an autonomous GUIDED -> AUTO -> transition sequence or transfer
 command authority to the test driver.
 
@@ -259,7 +257,7 @@ transport contract check: it builds the CLI, `nomad_mavsdk_connection_tests` and
 `nomad_mavsdk_zero_delivery_tests`, then runs
 `scripts/dev/mavsdk_connection_fixture.py`, which asserts accepted, denied,
 timeout, wire-form, stale-telemetry and wrong-identity behaviour plus
-per-command mode/takeoff/goto/land/RTL/servo/relay/gimbal-config/user-command
+per-command mode/takeoff/goto/land/RTL/servo/relay/gimbal-config
 parity against the deterministic vehicle in `scripts/dev/mavsdk_peer.py`; those
 command cases run the real CLI and assert its verified output against a peer
 whose starting state differs from the required result. The same task covers the
@@ -284,9 +282,8 @@ Use `pixi run build-plugin-only` to compile the plugin to
 `mission_planner/src/bin/Release/NOMADPlugin.dll` without changing the Mission
 Planner installation. `pixi run test-plugin-build-only` checks this dispatch
 with a temporary deny-write installation and the C# compiler bundled with
-Visual Studio MSBuild. The legacy `pixi run build-plugin`
-task still deploys the plugin and dependencies and removes the old AppData copy;
-it prints a warning before doing so. Use it only when deployment is intended.
+Visual Studio MSBuild. Install reviewed artifacts separately using the
+[packaging guide](https://github.com/YoussGm3o8/NOMAD/blob/main/mission_planner/packaging/README.md).
 Use `lint-plugin` and relevant `test-plugin-*` tasks for other non-deploying
 checks. Do not confuse a pure helper test with full plugin integration.
 
@@ -309,3 +306,34 @@ Size/complexity rules and technical-debt format remain in AGENTS. Keep C++ publi
 headers in include/nomad, implementation in src, and ROS/Python/vendor types out
 of the core API. Retained Python is for tools, perception and tests, never a
 parallel vehicle state machine.
+
+## Architecture maintenance
+
+Delete superseded implementations once their replacement is proven. Git is the
+source archive; do not create archive/legacy directories for normal source history.
+Add subsystem code when implementation starts rather than retaining unfinished
+scaffolding indefinitely. Compatibility paths need a concrete current consumer.
+
+Reusable vehicle control, safety, telemetry, transport, operator interfaces,
+deployment and infrastructure belong in base NOMAD. Competition-, event- and
+mission-specific behavior normally belongs in opt-in modules. Modules must use
+the C++ core safety and authority boundaries and must not own parallel vehicle
+commands. Keep examples that teach supported extension patterns, disabled as
+production features by default.
+
+## Python tooling and component versions
+
+The `nomad-tools` package contains retained media adapters and infrastructure
+helpers, with NumPy as its runtime dependency. The `dev` extra supplies MAVLink
+fixtures, process resource measurement and repository checks. The `hardware`
+extra supplies the serial/gamepad joystick bridge dependencies. GStreamer and
+ROS are supplied by their selected runtime images, not by pip. Python does not
+own vehicle behavior; CV/ML dependencies should be added with real consumers.
+
+Components intentionally version independently: the C++ core/package version is
+in CMakeLists.txt, the Mission Planner plugin version in NOMADPlugin.cs, the
+Python tooling version in pyproject.toml, and the ROS adapter version in
+ros2/nomad_ros/package.xml. The Pixi workspace version follows the Python
+tooling environment. There is no unified product release yet; component
+versions are not protocol compatibility guarantees. Qualify the exact component
+revisions and runtime protocol version together before deployment.

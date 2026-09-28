@@ -7,7 +7,7 @@
 // for the multi-click-armed payload-release actions on the ground station: drop
 // servos and momentary relay / water-pump fire. It owns ONLY the arm/confirm
 // decision — no WinForms, no MAVLink, no timers — so it is unit-testable in
-// isolation, mirroring the edge-side interlock in edge_core/safety/payload.py
+// isolation, complementing the core interlock in src/safety/payload.cpp
 // (requirement SR-PAY-03, hazard H-06). PayloadControlPanel is then pure chrome:
 // it renders the returned outcome and drives the visual revert with its own
 // WinForms timer, but makes no release decision itself.
