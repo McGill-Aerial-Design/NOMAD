@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 
-using System;
 using System.Drawing;
-using System.Linq;
 using System.Windows.Forms;
 
 namespace NOMAD.MissionPlanner
@@ -71,53 +69,6 @@ namespace NOMAD.MissionPlanner
             y += 40;
 
             return tab;
-        }
-
-        // RC pass-through option codes for ArduPilot relay numbers (RELAY1..4).
-        internal static int RelayRcOptionCode(int relayNumber)
-        {
-            switch (relayNumber)
-            {
-                case 0: return 28;
-                case 1: return 34;
-                case 2: return 35;
-                case 3: return 36;
-                default: return 0;
-            }
-        }
-
-        private static bool TrySetParamReflect(object comPort, string name, double value)
-        {
-            try
-            {
-                var methods = comPort.GetType()
-                    .GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
-                    .Where(m => m.Name == "setParam").ToList();
-                foreach (var m in methods)
-                {
-                    var p = m.GetParameters();
-                    if (p.Length >= 2 && p[0].ParameterType == typeof(string))
-                    {
-                        var args = new object[p.Length];
-                        args[0] = name;
-                        args[1] = Convert.ChangeType(value, p[1].ParameterType);
-                        for (int i = 2; i < p.Length; i++)
-                        {
-                            if (p[i].HasDefaultValue) args[i] = p[i].DefaultValue;
-                            else if (p[i].ParameterType == typeof(bool)) args[i] = true;
-                            else args[i] = p[i].ParameterType.IsValueType
-                                ? Activator.CreateInstance(p[i].ParameterType) : null;
-                        }
-                        try { m.Invoke(comPort, args); return true; }
-                        catch { }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"setParam({name}) error - {ex.Message}");
-            }
-            return false;
         }
 
     }

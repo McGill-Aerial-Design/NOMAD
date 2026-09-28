@@ -16,7 +16,6 @@
 using System;
 using System.Threading.Tasks;
 using MissionPlanner;
-using NOMAD.MissionPlanner.Connectivity;
 
 namespace NOMAD.MissionPlanner
 {
@@ -115,29 +114,15 @@ namespace NOMAD.MissionPlanner
         {
             CurrentMode = mode;
             ModeChanged?.Invoke(mode);
-            // Discrete mount switch: route through the C++ core boundary first
-            // (MAV_CMD_DO_MOUNT_CONFIGURE, acknowledged); the direct MAVLink
-            // send below is the transitional fallback. The continuous stick
-            // angle stream (SendPitchRollAngle) stays on direct MAVLink by
-            // design — spawning the CLI per frame would not scale.
-            // debt: stick stream; revisit when the core boundary gains a
-            // streaming verb; then route DO_MOUNT_CONTROL through it.
             var client = OutputController.CreateCoreClient();
             if (client == null)
             {
-                SendMountConfigure(mode);
+                Log.Warn("Gimbal configure is unavailable without the NOMAD core client.");
                 return;
             }
             if (!client.GimbalConfigure((int)mode))
             {
-                if (client.Mode == NomadCoreClient.LegacyOneShot)
-                {
-                    SendMountConfigure(mode);
-                }
-                else
-                {
-                    Log.Warn("Gimbal configure was not confirmed by the persistent runtime; it was not replayed.");
-                }
+                Log.Warn("Gimbal configure was not confirmed by the NOMAD runtime; it was not replayed.");
             }
         }
 
@@ -147,6 +132,7 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public static void SendPitchRollAngle(float pitchDeg, float rollDeg)
         {
+            if (Environment.GetEnvironmentVariable("NOMAD_INTEGRATED_FLIGHT") == "1") return;
             if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return;
             if (System.Threading.Interlocked.Exchange(ref _inflight, 1) == 1) return;
 
@@ -168,31 +154,6 @@ namespace NOMAD.MissionPlanner
                 {
                     if (acquired) MavlinkSerialLock.Release();
                     System.Threading.Interlocked.Exchange(ref _inflight, 0);
-                }
-            });
-        }
-
-        public static void SendMountConfigure(MountMode mode)
-        {
-            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return;
-
-            byte sysid = MainV2.comPort.MAV.sysid;
-            byte compid = MainV2.comPort.MAV.compid;
-            var frame = GimbalCommand.BuildMountConfigure(mode);
-
-            Task.Run(async () =>
-            {
-                bool acquired = false;
-                try
-                {
-                    acquired = await MavlinkSerialLock.WaitAsync(2000).ConfigureAwait(false);
-                    if (!acquired) return;
-                    await SendFrameAsync(sysid, compid, frame).ConfigureAwait(false);
-                }
-                catch { }
-                finally
-                {
-                    if (acquired) MavlinkSerialLock.Release();
                 }
             });
         }

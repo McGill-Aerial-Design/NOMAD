@@ -28,6 +28,13 @@ internal static partial class NomadCoreClientTests
         Expect(client.Mode == NomadCoreClient.PersistentRuntime, "persistent mode is selected explicitly");
         Expect(runtime.CommandCount == 2, "each action was sent once to the runtime");
         Expect(runtime.LastCommandType == "set_relay", "relay maps to its semantic protocol type");
+        Expect(Convert.ToString(runtime.LastCommand["runtime_incarnation"], CultureInfo.InvariantCulture) ==
+            "mock-runtime-incarnation", "mutation binds the runtime incarnation");
+        Expect(Convert.ToInt32(runtime.LastCommand["vehicle_session"], CultureInfo.InvariantCulture) == 1,
+            "mutation binds the aircraft session");
+        Expect(Convert.ToInt32(runtime.LastCommand["authority_generation"], CultureInfo.InvariantCulture) == 1,
+            "mutation binds the authority generation");
+        Expect(runtime.LastCommand.ContainsKey("expires_at_ms"), "mutation has a bounded validity deadline");
         Expect(!runtime.LastCommand.ContainsKey("api_key"), "loopback protocol does not claim API-key authentication");
         Expect(client.LastOutcome == NomadCoreRequestOutcome.Succeeded, "structured success is reported");
     }
@@ -149,7 +156,12 @@ internal static partial class NomadCoreClientTests
                     writer.WriteLine(Serialize(new Dictionary<string, object>
                     {
                         ["protocol"] = "nomad-core", ["version"] = _helloVersion,
-                        ["id"] = hello["id"], ["ok"] = true, ["type"] = "hello_response"
+                        ["id"] = hello["id"], ["ok"] = true, ["type"] = "hello_response",
+                        ["runtime_incarnation"] = "mock-runtime-incarnation",
+                        ["authority"] = new Dictionary<string, object>
+                        {
+                            ["vehicle_session"] = 1, ["generation"] = 1
+                        }
                     }));
                     if (_helloVersion != 1)
                     {

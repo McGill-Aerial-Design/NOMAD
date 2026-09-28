@@ -47,6 +47,17 @@ void print_connect_failure(const nomad::mavlink::MavlinkConnection &connection, 
 
 int run_command(nomad::mavlink::MavlinkConnection &connection, const Arguments &arguments) {
     if (is_actuation_command(arguments.command)) {
+        if (runtime_endpoint_is_open()) {
+            audit_command(arguments.command, "refused", "none", "runtime_owner_active");
+            std::cerr << "error: direct actuation is inhibited while the NOMAD runtime is listening\n";
+            return EXIT_FAILURE;
+        }
+        const char *integrated = std::getenv("NOMAD_INTEGRATED_FLIGHT");
+        if (integrated != nullptr && std::string_view(integrated) == "1") {
+            audit_command(arguments.command, "refused", "none", "runtime_owner_required");
+            std::cerr << "error: direct actuation is inhibited in integrated flight mode\n";
+            return EXIT_FAILURE;
+        }
         if (!api_key_configured()) {
             audit_command(arguments.command, "refused", "none", "missing_api_key");
             std::cerr << "error: actuation command refused: NOMAD_API_KEY is not set\n";

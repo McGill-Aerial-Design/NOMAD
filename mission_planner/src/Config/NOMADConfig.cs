@@ -36,7 +36,7 @@ namespace NOMAD.MissionPlanner
         public string CoreExePath { get; set; } = "";
 
         /// <summary>Client route for C++ vehicle operations: PersistentRuntime or LegacyOneShot.</summary>
-        public string CoreClientMode { get; set; } = Connectivity.NomadCoreClient.LegacyOneShot;
+        public string CoreClientMode { get; set; } = Connectivity.NomadCoreClient.PersistentRuntime;
 
         /// <summary>Loopback TCP port used by the persistent C++ runtime.</summary>
         public int CoreRuntimePort { get; set; } = Connectivity.NomadCoreClient.DefaultRuntimePort;

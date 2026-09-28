@@ -11,6 +11,9 @@ namespace {
 constexpr CliCommand kCommands[] = {
     {"connect", false, ""},
     {"status", false, ""},
+    {"admit", true, ""},
+    {"revoke", true, ""},
+    {"handback", true, ""},
     {"arm", true, ""},
     {"disarm", true, ""},
     {"mode", true, "<custom_mode>"},

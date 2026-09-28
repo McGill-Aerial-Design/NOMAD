@@ -144,7 +144,7 @@ namespace NOMAD.MissionPlanner
         private void SaveSettings()
         {
             Config.CoreExePath = _txtCoreExePath.Text.Trim();
-            Config.CoreClientMode = _cmbCoreClientMode.SelectedItem?.ToString() ?? "LegacyOneShot";
+            Config.CoreClientMode = _cmbCoreClientMode.SelectedItem?.ToString() ?? "PersistentRuntime";
             Config.CoreRuntimePort = (int)_numCoreRuntimePort.Value;
             Config.CoreMavlinkEndpoint = _txtCoreEndpoint.Text.Trim();
             Config.CoreApiKey = _txtCoreApiKey.Text.Trim();

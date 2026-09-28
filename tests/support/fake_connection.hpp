@@ -67,9 +67,15 @@ class FakeConnection : public nomad::mavlink::MavlinkConnection {
 
     std::optional<nomad::mavlink::CommandAck> send_command(const nomad::mavlink::Command &command,
                                                            std::chrono::milliseconds) override {
+        if (!admit_send()) {
+            return std::nullopt;
+        }
         command_started = true;
         if (command_delay > std::chrono::milliseconds::zero()) {
             std::this_thread::sleep_for(command_delay);
+        }
+        if (!admit_send()) {
+            return std::nullopt;
         }
         std::lock_guard lock(state_mutex);
         last_command = command;

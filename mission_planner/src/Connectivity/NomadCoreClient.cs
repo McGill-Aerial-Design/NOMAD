@@ -54,14 +54,14 @@ namespace NOMAD.MissionPlanner.Connectivity
         private readonly NomadRuntimeClient _runtimeClient;
 
         public NomadCoreClient(string executablePath, string endpoint = DefaultEndpoint, string apiKey = "",
-                               string mode = LegacyOneShot, int runtimePort = DefaultRuntimePort)
+                               string mode = PersistentRuntime, int runtimePort = DefaultRuntimePort)
         {
             ExecutablePath = string.IsNullOrWhiteSpace(executablePath) ? "nomad" : executablePath;
             Endpoint = string.IsNullOrWhiteSpace(endpoint) ? DefaultEndpoint : endpoint;
             ApiKey = apiKey ?? "";
-            Mode = string.Equals(mode, PersistentRuntime, StringComparison.OrdinalIgnoreCase)
-                ? PersistentRuntime
-                : LegacyOneShot;
+            Mode = string.Equals(mode, LegacyOneShot, StringComparison.OrdinalIgnoreCase)
+                ? LegacyOneShot
+                : PersistentRuntime;
             RuntimePort = runtimePort >= 1 && runtimePort <= 65535 ? runtimePort : DefaultRuntimePort;
             _runtimeClient = new NomadRuntimeClient(RuntimePort, ApiKey, Guid.NewGuid().ToString("N"));
         }

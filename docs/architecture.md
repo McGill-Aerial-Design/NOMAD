@@ -179,9 +179,10 @@ between modules.
 | Routing/deployment | Link routing, process supervision, network access and packaging | Deciding whether a flight action is safe |
 
 The transport records timestamps for several telemetry groups, but a complete
-per-field freshness and global authority model remains open. The ROS node still
-embeds its own `Vehicle`; Mission Planner can select persistent runtime or
-legacy CLI mode. These client paths have not been unified with native GCS
+per-field freshness and aircraft-wide authority model remains open. The ROS node
+creates a `Vehicle` only in explicit nonintegrated mode; Mission Planner defaults
+to persistent runtime but can select its nonintegrated CLI mode. These client
+paths have not been unified with native GCS
 controls, RC/pilot, ArduPilot or maintenance writers.
 
 ## Boundary geometry
@@ -197,28 +198,33 @@ these semantics and test concave geometry, narrow regions and infeasible insets.
 
 ## Command authority and client protocol
 
-The implemented first step is one ground-hosted C++ runtime. Mission Planner can
-select `PersistentRuntime` or compatibility `LegacyOneShot`; the CLI has an
-explicit runtime-client mode. Local IPC is bounded JSON Lines over IPv4 loopback
-TCP. V1 has request IDs, protocol negotiation, structured errors, a 256-response
-in-memory dedupe cache and a one-mutating-command-at-a-time policy. Its limited
-typed request set and unknown-outcome behavior are documented in
+The implemented software foundation is one ground-hosted C++ runtime. Mission Planner
+defaults to `PersistentRuntime`; explicit `LegacyOneShot` remains a nonintegrated
+path for the still-unmigrated GuidedGoto consumer. The CLI has an explicit runtime
+client mode. Local IPC is bounded JSON Lines over IPv4 loopback TCP. V1 has request
+IDs, protocol negotiation, structured errors, a 256-response in-memory cache and a
+one-mutating-command-at-a-time policy. Admission now adds a runtime incarnation,
+vehicle session, authority generation, one owner, bounded expiry and monotonic
+request sequence. Its typed request set and unknown-outcome behavior are documented in
 [runtime IPC](runtime-ipc.md).
 
 V1 does not include authenticated user identities, remote transport, durable
-request records, cancellation, persisted mission state or all outcome phases.
+request records, SDK queued-send cancellation, persisted mission state or all outcome phases.
 The API-key environment check remains a non-empty actuation gate, not client
 authentication. Remote transport still needs mutual endpoint authentication,
 authorization, replay protection, bounded messages and revocation. VPN
 reachability alone is not application authorization. Python REST is not a
 fallback.
 
-The policy is one NOMAD command owner for clients using the runtime. It is not
-one aircraft writer. Mission Planner native controls, RC/pilot input, the ROS
-adapter, maintenance tools and ArduPilot remain independent authorities.
-Concurrent typed mutations are rejected while a command is running. Global
-handover, inhibition, abort priority and stale-session behavior remain later
-work.
+The runtime admits one software source at a time and starts inhibited. Revoke and
+explicit handback advance the generation. Reconnect cannot grant authority, and
+cache eviction cannot make an old sequence executable. Mission Planner native
+controls, RC/pilot input, maintenance tools and ArduPilot remain independent
+authorities. ROS is observation only by default in integrated mode; its direct
+Vehicle path remains for explicit nonintegrated test use. The pinned SDK can
+queue and retry a command without rechecking the runtime lease, so physical
+post-revocation transmission is not yet qualified. Termination priority and
+aircraft-wide takeover remain later work.
 
 Mission Planner native controls and RC remain possible external authorities.
 Integrated operations must define handover and inhibit NOMAD until reconciled;
@@ -255,10 +261,12 @@ authority contract. The plugin LAND-as-termination and descent-parameter paths
 are removed; its two activation callers report unavailable. A per-runtime mutex
 or connection session ID cannot fence all aircraft writers.
 
-### Authority contract for the next implementation slice
+### Authority contract and remaining qualification
 
-This is the target contract, not an implemented arbiter or approved aircraft
-loss-response policy. Flight-controller RC/MAVLink input selection and NOMAD
+The runtime now implements the software request context, one admitted source,
+generation changes and explicit handback. The table also contains aircraft and
+operator behavior that is still a target, not an approved loss-response policy.
+Flight-controller RC/MAVLink input selection and NOMAD
 software-writer admission must agree; the core cannot fence a radio input or an
 independent Mission Planner writer with a process-local mutex.
 
@@ -560,9 +568,10 @@ flowchart TD
     ROUTER --> AIRCRAFT[Aircraft]
 ```
 
-`NomadCoreClient` retains `LegacyOneShot` and can select `PersistentRuntime`;
-the latter never falls back to a new process after a command failure. The ROS
-node still owns a separate `Vehicle`. Two raw MAVLink consumers can both emit
+`NomadCoreClient` defaults to `PersistentRuntime` and retains an explicit
+`LegacyOneShot` nonintegrated mode; persistent mode never falls back to a new
+process after a command failure. The ROS node is observation only by default.
+Two raw MAVLink consumers can both emit
 commands; transport selection is not global single-writer authority. MP native
 controls, pilot/RC and ArduPilot are external authorities. Integrated operation
 needs explicit handover/inhibition. The standalone router survives MP

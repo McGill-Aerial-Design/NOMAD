@@ -150,7 +150,7 @@ namespace NOMAD.MissionPlanner
             if (!string.Equals(CoreClientMode, Connectivity.NomadCoreClient.PersistentRuntime,
                                StringComparison.OrdinalIgnoreCase))
             {
-                CoreClientMode = Connectivity.NomadCoreClient.LegacyOneShot;
+                CoreClientMode = Connectivity.NomadCoreClient.PersistentRuntime;
             }
             if (CoreRuntimePort < 1 || CoreRuntimePort > 65535)
             {

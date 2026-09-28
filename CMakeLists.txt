@@ -175,6 +175,7 @@ set_target_properties(nomad_mavsdk_fmt PROPERTIES
 # The transport every NOMAD binary links: the CLI, the ROS adapter and the
 # connection tests.
 add_library(nomad_mavsdk_connection
+    src/mavlink/mavsdk_action.cpp
     src/mavlink/mavsdk_connection.cpp
     src/mavlink/mavsdk_connection_state.cpp
     src/mavlink/mavsdk_command_result.cpp

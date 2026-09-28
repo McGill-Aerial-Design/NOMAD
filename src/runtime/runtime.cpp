@@ -17,6 +17,7 @@
 #include <iostream>
 #include <mutex>
 #include <optional>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -24,231 +25,9 @@
 #include <unordered_set>
 #include <utility>
 
+#include "runtime_detail.hpp"
+
 namespace nomad::runtime {
-namespace {
-
-using Json = nlohmann::json;
-using Clock = std::chrono::steady_clock;
-
-constexpr std::string_view kProtocolName = "nomad-core";
-constexpr int kProtocolVersion = 1;
-constexpr std::size_t kRequestCacheCapacity = 256;
-constexpr std::size_t kMaximumJsonDepth = 64;
-
-struct Request {
-    std::string id;
-    std::string client_id;
-    std::string type;
-    Json original;
-    double timeout_seconds{};
-    int channel{};
-    int pwm_microseconds{};
-    int relay_number{};
-    int motor_instance{};
-    int mount_mode{};
-    bool relay_on{};
-};
-
-struct ParsedRequest {
-    std::optional<Request> request;
-    Json error;
-};
-
-bool is_string(const Json &object, const char *key) {
-    return object.contains(key) && object[key].is_string();
-}
-
-std::string field_string(const Json &object, const char *key) {
-    if (!is_string(object, key)) {
-        return {};
-    }
-    return object[key].get<std::string>();
-}
-
-Json error_response(std::string id, std::string code, std::string message) {
-    Json response{{"protocol", kProtocolName}, {"version", kProtocolVersion}, {"ok", false}};
-    if (!id.empty()) {
-        response["id"] = std::move(id);
-    }
-    response["error"] = {{"code", std::move(code)}, {"message", std::move(message)}};
-    return response;
-}
-
-bool read_finite_number(const Json &object, const char *key, double &value) {
-    if (!object.contains(key) || !object[key].is_number()) {
-        return false;
-    }
-    value = object[key].get<double>();
-    return std::isfinite(value);
-}
-
-bool read_integer(const Json &object, const char *key, int &value) {
-    if (!object.contains(key) || !object[key].is_number_integer()) {
-        return false;
-    }
-    if (object[key].is_number_unsigned()) {
-        const auto number = object[key].get<std::uint64_t>();
-        if (number > 1000000) {
-            return false;
-        }
-        value = static_cast<int>(number);
-        return true;
-    }
-    const auto number = object[key].get<std::int64_t>();
-    if (number < 0 || number > 1000000) {
-        return false;
-    }
-    value = static_cast<int>(number);
-    return true;
-}
-
-bool has_supported_version(const Json &value) {
-    if (!value.is_number_integer()) {
-        return false;
-    }
-    if (value.is_number_unsigned()) {
-        return value.get<std::uint64_t>() == static_cast<std::uint64_t>(kProtocolVersion);
-    }
-    return value.get<std::int64_t>() == kProtocolVersion;
-}
-
-mavlink::MavlinkConnection &require_connection(
-    const std::unique_ptr<mavlink::MavlinkConnection> &connection) {
-    if (connection == nullptr) {
-        throw std::invalid_argument("runtime requires one MAVLink connection");
-    }
-    return *connection;
-}
-
-vehicle::VehicleConfig make_vehicle_config(const RuntimeConfig &config) {
-    vehicle::VehicleConfig vehicle_config{};
-    vehicle_config.fence = config.fence_policy;
-    vehicle_config.velocity = config.velocity_limits;
-    return vehicle_config;
-}
-
-bool validate_request_fields(Request &request, Json &error) {
-    auto &body = request.original;
-    if (request.type == "hello" || request.type == "ping" || request.type == "status") {
-        return true;
-    }
-    if (request.type == "set_servo" && read_integer(body, "channel", request.channel) &&
-        read_integer(body, "pwm_microseconds", request.pwm_microseconds)) {
-        return true;
-    }
-    if (request.type == "set_relay" && read_integer(body, "relay_number", request.relay_number) &&
-        body.contains("on") && body["on"].is_boolean()) {
-        request.relay_on = body["on"].get<bool>();
-        return true;
-    }
-    if (request.type == "motor_test" && read_integer(body, "motor_instance", request.motor_instance) &&
-        read_integer(body, "pwm_microseconds", request.pwm_microseconds) &&
-        read_finite_number(body, "timeout_seconds", request.timeout_seconds)) {
-        return true;
-    }
-    if (request.type == "configure_gimbal" && read_integer(body, "mount_mode", request.mount_mode)) {
-        return true;
-    }
-    const bool known_type = request.type == "set_servo" || request.type == "set_relay" ||
-                            request.type == "motor_test" ||
-                            request.type == "configure_gimbal";
-    if (!known_type && request.type != "hello" && request.type != "ping" && request.type != "status") {
-        error = error_response(request.id, "unsupported_request", "request type is not supported in protocol v1");
-        return false;
-    }
-    error = error_response(request.id, "invalid_request", "request fields do not match the typed request");
-    return false;
-}
-
-bool has_reasonable_json_depth(std::string_view line);
-
-ParsedRequest parse_request(std::string_view line) {
-    if (line.size() > detail::kMaximumMessageBytes) {
-        return {std::nullopt, error_response({}, "message_too_large", "message exceeds 65536 bytes")};
-    }
-    if (!has_reasonable_json_depth(line)) {
-        return {std::nullopt, error_response({}, "malformed_json", "JSON nesting exceeds the v1 limit")};
-    }
-    const auto body = Json::parse(line, nullptr, false);
-    if (body.is_discarded() || !body.is_object()) {
-        return {std::nullopt, error_response({}, "malformed_json", "request must be a JSON object")};
-    }
-    const auto id = field_string(body, "id");
-    if (id.empty() || id.size() > 64) {
-        return {std::nullopt, error_response({}, "invalid_request", "id must be a non-empty string up to 64 bytes")};
-    }
-    if (!is_string(body, "protocol") || body["protocol"] != "nomad-core") {
-        return {std::nullopt, error_response(id, "incompatible_protocol", "protocol must be nomad-core")};
-    }
-    if (!body.contains("version") || !has_supported_version(body["version"])) {
-        return {std::nullopt, error_response(id, "incompatible_version", "supported protocol version is 1")};
-    }
-    const auto client_id = field_string(body, "client_id");
-    const auto type = field_string(body, "type");
-    if (client_id.empty() || client_id.size() > 64 || type.empty() || type.size() > 64) {
-        return {std::nullopt, error_response(id, "invalid_request", "client_id and type are required strings")};
-    }
-    Request request{id, client_id, type, body};
-    Json error;
-    if (!validate_request_fields(request, error)) {
-        return {std::nullopt, std::move(error)};
-    }
-    return {std::move(request), {}};
-}
-
-bool is_mutating(const std::string &type) {
-    return type == "set_servo" || type == "set_relay" || type == "motor_test" ||
-           type == "configure_gimbal";
-}
-
-std::optional<std::int64_t> age_milliseconds(Clock::time_point timestamp) {
-    if (timestamp == Clock::time_point{}) {
-        return std::nullopt;
-    }
-    const auto age = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - timestamp).count();
-    return std::max<std::int64_t>(0, age);
-}
-
-Json optional_age(std::optional<std::int64_t> age) {
-    return age.has_value() ? Json(*age) : Json(nullptr);
-}
-
-std::string cache_key(const Request &request) {
-    return std::to_string(request.client_id.size()) + ":" + request.client_id + request.id;
-}
-
-bool has_reasonable_json_depth(std::string_view line) {
-    bool in_string = false;
-    bool escaped = false;
-    std::size_t depth = 0;
-    for (const auto character : line) {
-        if (in_string) {
-            if (escaped) {
-                escaped = false;
-            } else if (character == '\\') {
-                escaped = true;
-            } else if (character == '"') {
-                in_string = false;
-            }
-            continue;
-        }
-        if (character == '"') {
-            in_string = true;
-        } else if (character == '{' || character == '[') {
-            if (++depth > kMaximumJsonDepth) {
-                return false;
-            }
-        } else if (character == '}' || character == ']') {
-            if (depth == 0) {
-                return false;
-            }
-            --depth;
-        }
-    }
-    return true;
-}
-
-} // namespace
 
 struct Runtime::Implementation {
     struct CacheEntry {
@@ -258,7 +37,11 @@ struct Runtime::Implementation {
 
     Implementation(std::unique_ptr<mavlink::MavlinkConnection> connection, RuntimeConfig config)
         : connection_(std::move(connection)), config_(std::move(config)),
-          vehicle_(require_connection(connection_), make_vehicle_config(config_)) {}
+          vehicle_(require_connection(connection_), make_vehicle_config(config_)) {
+        connection_->set_send_admission([this] {
+            return active_request != nullptr && !check_request_authority(*active_request).has_value();
+        });
+    }
 
     bool start(std::string &error) {
         if (!server_.start(config_.ipc_port, [this](std::string_view request) { return handle_message(request); },
@@ -293,12 +76,28 @@ struct Runtime::Implementation {
         while (!stopping_) {
             if (!connection_->is_connected()) {
                 if (!connection_->connect()) {
+                    observe_vehicle_session();
                     std::this_thread::sleep_for(config_.reconnect_delay);
                     continue;
                 }
             }
+            observe_vehicle_session();
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
+    }
+
+    void observe_vehicle_session() {
+        const auto state = connection_->get_state();
+        std::lock_guard lock(authority_mutex_);
+        if (owner_.empty()) {
+            return;
+        }
+        if (connection_->is_connected() && state.connected && state.session_id == owner_session_) {
+            return;
+        }
+        ++generation_;
+        owner_.clear();
+        last_sequence_ = 0;
     }
 
     std::string handle_message(std::string_view line) {
@@ -307,6 +106,10 @@ struct Runtime::Implementation {
             return parsed.error.dump();
         }
         const auto &request = *parsed.request;
+        if (request.type == "admit_authority" || request.type == "revoke_authority" ||
+            request.type == "handback_authority") {
+            return handle_authority_request(request).dump();
+        }
         if (is_mutating(request.type)) {
             return handle_mutating_request(request).dump();
         }
@@ -314,6 +117,13 @@ struct Runtime::Implementation {
     }
 
     Json handle_mutating_request(const Request &request) {
+        if (!config_.actuation_enabled) {
+            return error_response(request.id, "missing_api_key", "NOMAD_API_KEY is not set for the runtime");
+        }
+        const auto admission = check_request_authority(request);
+        if (admission.has_value()) {
+            return *admission;
+        }
         const auto key = cache_key(request);
         const auto fingerprint = request.original.dump();
         {
@@ -327,6 +137,9 @@ struct Runtime::Implementation {
             }
             if (in_flight_.contains(key)) {
                 return error_response(request.id, "request_in_progress", "request with this ID is still running");
+            }
+            if (!reserve_sequence(request)) {
+                return error_response(request.id, "stale_request", "request sequence was already consumed");
             }
             in_flight_.insert(key);
         }
@@ -349,9 +162,13 @@ struct Runtime::Implementation {
                     {"ok", true},
                     {"type", "hello_response"},
                     {"runtime_version", config_.version},
+                    {"runtime_incarnation", incarnation_},
+                    {"authority", {{"vehicle_session", connection_->get_state().session_id},
+                                    {"generation", current_generation()},
+                                    {"server_time_ms", unix_milliseconds()}}},
                     {"capabilities",
                      {"hello", "ping", "status", "set_servo", "set_relay", "motor_test",
-                      "configure_gimbal"}}};
+                      "configure_gimbal", "admit_authority", "revoke_authority", "handback_authority"}}};
         }
         if (request.type == "ping") {
             return {{"protocol", kProtocolName}, {"version", kProtocolVersion}, {"id", request.id},
@@ -368,10 +185,22 @@ struct Runtime::Implementation {
         const auto state = connection_->get_state();
         const bool connection_open = connection_->is_connected();
         const auto identity = state.identity.aircraft_class;
+        std::string owner;
+        std::uint64_t generation;
+        {
+            std::lock_guard lock(authority_mutex_);
+            owner = owner_;
+            generation = generation_;
+        }
         return {{"runtime_ready", ready()},
+                {"runtime_incarnation", incarnation_},
+                {"vehicle_session", state.session_id},
+                {"authority_generation", generation},
+                {"authority_owner", owner.empty() ? Json(nullptr) : Json(owner)},
+                {"server_time_ms", unix_milliseconds()},
                 {"mavsdk_connection_open", connection_open},
                 {"vehicle_transport_connected", connection_open},
-                {"vehicle_session_established", state.system_id != 0},
+                {"vehicle_session_established", state.session_id != 0},
                 {"vehicle_connected", state.connected},
                 {"identity_resolved", identity != telemetry::AircraftClass::Unknown},
                 {"aircraft_class", telemetry::aircraft_class_name(identity)},
@@ -389,6 +218,11 @@ struct Runtime::Implementation {
                   {"battery_age_ms", optional_age(age_milliseconds(state.battery_updated_at))}}}};
     }
 
+    std::uint64_t current_generation() const {
+        std::lock_guard lock(authority_mutex_);
+        return generation_;
+    }
+
     Json execute_mutating_request(const Request &request) {
         if (!config_.actuation_enabled) {
             return error_response(request.id, "missing_api_key", "NOMAD_API_KEY is not set for the runtime");
@@ -397,7 +231,14 @@ struct Runtime::Implementation {
         if (!command_lock.owns_lock()) {
             return error_response(request.id, "busy", "another NOMAD command is still executing");
         }
+        if (const auto denied = check_request_authority(request); denied.has_value()) {
+            return *denied;
+        }
+        ActiveRequest active(request);
         const auto result = invoke_vehicle(request);
+        if (!owns_generation(request)) {
+            return error_response(request.id, "authority_interrupted", "authority changed during vehicle operation");
+        }
         Json response{{"protocol", kProtocolName}, {"version", kProtocolVersion}, {"id", request.id},
                       {"ok", true}, {"type", "command_response"},
                       {"command_result", {{"success", result.success}, {"message", result.message}}}};
@@ -433,6 +274,85 @@ struct Runtime::Implementation {
         }
     }
 
+    bool valid_context(const Request &request, std::uint64_t session) const {
+        return request.incarnation == incarnation_ && request.session == session && session != 0 &&
+               request.generation == generation_;
+    }
+
+    bool valid_expiry(const Request &request) const {
+        const auto now = unix_milliseconds();
+        return request.expires_at_ms >= now && request.expires_at_ms <= now + 5000;
+    }
+
+    std::optional<Json> check_request_authority(const Request &request) {
+        const auto state = connection_->get_state();
+        std::lock_guard lock(authority_mutex_);
+        if (!valid_context(request, state.session_id) || !connection_->is_connected() ||
+            !state.connected || !state.heartbeat_fresh) {
+            return error_response(request.id, "stale_authority", "runtime, vehicle session or generation changed");
+        }
+        if (owner_.empty() || request.source != owner_ || request.client_id != owner_) {
+            return error_response(request.id, "not_authoritative", "client is not the admitted command source");
+        }
+        if (!valid_expiry(request)) {
+            return error_response(request.id, "expired_request", "request validity must end within five seconds");
+        }
+        if (request.sequence == 0) {
+            return error_response(request.id, "invalid_request", "mutation requires a positive sequence");
+        }
+        return std::nullopt;
+    }
+
+    bool owns_generation(const Request &request) const {
+        const auto state = connection_->get_state();
+        std::lock_guard lock(authority_mutex_);
+        return valid_context(request, state.session_id) && owner_ == request.source &&
+               owner_ == request.client_id && state.connected && connection_->is_connected();
+    }
+
+    bool reserve_sequence(const Request &request) {
+        std::lock_guard lock(authority_mutex_);
+        if (request.generation != generation_ || request.sequence <= last_sequence_) {
+            return false;
+        }
+        last_sequence_ = request.sequence;
+        return true;
+    }
+
+    Json handle_authority_request(const Request &request) {
+        const auto state = connection_->get_state();
+        std::lock_guard lock(authority_mutex_);
+        if (!config_.actuation_enabled || !valid_context(request, state.session_id) || !valid_expiry(request)) {
+            return error_response(request.id, "stale_authority", "authority context or request validity is stale");
+        }
+        if (request.type == "revoke_authority") {
+            ++generation_;
+            owner_.clear();
+            last_sequence_ = 0;
+            return authority_response(request);
+        }
+        if (!owner_.empty() || !connection_->is_connected() || !state.connected || !state.heartbeat_fresh ||
+            request.source.empty() || request.source != request.client_id || request.source.size() > 64) {
+            return error_response(request.id, "authority_unavailable", "source or fresh aircraft state is unavailable");
+        }
+        const bool handback = request.type == "handback_authority";
+        if (handback == !ever_admitted_) {
+            return error_response(request.id, "invalid_handover", "use admission first and handback after revocation");
+        }
+        ++generation_;
+        owner_ = request.source;
+        owner_session_ = state.session_id;
+        ever_admitted_ = true;
+        last_sequence_ = 0;
+        return authority_response(request);
+    }
+
+    Json authority_response(const Request &request) const {
+        return {{"protocol", kProtocolName}, {"version", kProtocolVersion}, {"id", request.id},
+                {"ok", true}, {"type", "authority_response"}, {"authority_generation", generation_},
+                {"authority_owner", owner_.empty() ? Json(nullptr) : Json(owner_)}};
+    }
+
     std::unique_ptr<mavlink::MavlinkConnection> connection_;
     RuntimeConfig config_;
     vehicle::Vehicle vehicle_;
@@ -444,6 +364,13 @@ struct Runtime::Implementation {
     std::unordered_map<std::string, CacheEntry> response_cache_;
     std::deque<std::string> cache_order_;
     std::unordered_set<std::string> in_flight_;
+    const std::string incarnation_{new_incarnation()};
+    mutable std::mutex authority_mutex_;
+    std::uint64_t generation_{0};
+    std::uint64_t last_sequence_{0};
+    std::string owner_;
+    std::uint64_t owner_session_{0};
+    bool ever_admitted_{false};
 };
 
 Runtime::Runtime(std::unique_ptr<mavlink::MavlinkConnection> connection, RuntimeConfig config)

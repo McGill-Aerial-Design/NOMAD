@@ -134,7 +134,6 @@ namespace NOMAD.MissionPlanner
                     _payloadsBinding.Remove(p);
             };
 
-            MkBtn("Apply RC Mappings", 322, 150).Click += (s, e) => ApplyPayloadRcMappings();
 
             _lblPayloadsStatus = new Label
             {
@@ -167,32 +166,6 @@ namespace NOMAD.MissionPlanner
                 .Take(NOMADConfig.MaxPayloads)
                 .Select(payload => payload.Clone())
                 .ToList();
-        }
-
-        // Write RC{n}_OPTION on the autopilot for each relay payload with an RC channel set.
-        private void ApplyPayloadRcMappings()
-        {
-            if (_payloadsBinding == null) return;
-
-            object comPort = null;
-            try { comPort = global::MissionPlanner.MainV2.comPort; } catch { }
-            if (comPort == null)
-            {
-                SetPayloadsStatus("Not connected to vehicle.", Color.OrangeRed);
-                return;
-            }
-
-            int applied = 0;
-            foreach (var p in _payloadsBinding.Where(p => p.Kind == PayloadKind.Relay && p.RcChannel >= 5 && p.RcChannel <= 16))
-            {
-                int option = RelayRcOptionCode(p.Channel);
-                if (option == 0) continue; // relay number has no RC option code (use 0-3)
-                if (TrySetParamReflect(comPort, $"RC{p.RcChannel}_OPTION", option)) applied++;
-            }
-
-            SetPayloadsStatus(
-                applied > 0 ? $"Applied {applied} RC mapping(s)." : "No relay payloads with RC channel 5-16 (relay number must be 0-3).",
-                applied > 0 ? Color.LightGreen : Color.Gray);
         }
 
         private void SetPayloadsStatus(string text, Color color)

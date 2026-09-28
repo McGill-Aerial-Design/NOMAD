@@ -103,6 +103,43 @@ Preserve QLAND physical completion and existing operation admission/freshness.
 No new policy, RC mapping, termination dispatch or authority API is implemented
 by this documentation record. The active G-M item remains open.
 
+### Software authority foundation — 2026-09-28
+
+The runtime starts without a software command owner. Explicit admission,
+revocation and handback advance its authority generation; each typed mutation
+is bound to a fresh runtime incarnation, aircraft session, source, generation,
+monotonic sequence and five-second maximum expiry. A 256-response cache remains
+only an optimization: its evicted requests cannot pass the generation's sequence
+high-water mark. Restart changes incarnation; reconnect revokes and cannot
+restore ownership. Outcome after a mid-operation revocation is interrupted,
+not success merely because an ACK was returned.
+
+Default Mission Planner mode is persistent IPC. Integrated deployment profiles
+inhibit direct CLI actuation and plugin gimbal streaming; the ROS adapter is
+observation only by default while explicit nonintegrated tests retain its direct
+Vehicle behavior. The plugin direct mount-config fallback and `RCx_OPTION`
+settings writer are removed. `LegacyOneShot` remains explicitly selectable
+because GuidedGoto has no typed runtime replacement; this mode is excluded
+from integrated operation. Native Mission Planner controls and ELRS RC remain
+external aircraft inputs requiring independent arbitration.
+
+The pinned MAVSDK command sender queues and retries `COMMAND_LONG` and
+`COMMAND_INT` after NOMAD's transport-call admission check. It does not expose a
+per-send cancellation hook. This is a blocking qualification gap: an SDK retry
+after a physical takeover has not been excluded by the runtime fake tests.
+debt: runtime transport-call fencing cannot stop an SDK-owned queued retry;
+revisit before enabling integrated motion authority; then add a typed
+per-transmission cancellation hook in the MAVSDK fork and prove the wire boundary.
+
+Local validation: 21/21 CTests, 10/10 ROS integration tests, 667 Python tests
+with four skipped, Mission Planner core/gimbal/build/lint checks, runtime IPC
+smoke, strict documentation build and the pinned QuadPlane VTOL landing SITL
+chain passed. The focused runtime suite covers competition, in-flight revoke,
+old generations, restart, cache eviction, delayed requests, reconnect and
+explicit handback. Fake transport checks prove no fake send after revocation;
+they do not prove MAVSDK's later physical retries stop. Hosted CI has not run
+for this unpushed working branch.
+
 ### Authority review and plugin termination removal — 2026-09-27
 
 Review baseline: merged `main` `c3167422f18008f35910319535bcb0275b1111f3`
@@ -111,7 +148,7 @@ three GPT-6 Luna MAX agents in two assignments each; the agent service rejected
 creation of a fourth agent. Pre-existing `.gitignore` and untracked submodule
 state were preserved. This is local development evidence, not clean-head CI.
 
-The synthesized [authority contract](architecture.md#authority-contract-for-the-next-implementation-slice)
+The synthesized [authority contract](architecture.md#authority-contract-and-remaining-qualification)
 requires one software owner and generation, revocation before sends, explicit
 handback and an overriding aircraft-side termination latch. It is a target,
 not implemented aircraft arbitration. No termination command, RC map, Lua

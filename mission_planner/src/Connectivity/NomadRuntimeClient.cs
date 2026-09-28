@@ -73,6 +73,14 @@ namespace NOMAD.MissionPlanner.Connectivity
                     return -1;
                 }
 
+                if (!BindAuthority(command, helloResponse))
+                {
+                    LastOutcome = NomadCoreRequestOutcome.FailedBeforeSend;
+                    LastErrorCode = "invalid_response";
+                    LastMessage = "Runtime did not provide an authority context.";
+                    return -1;
+                }
+
                 command["id"] = Guid.NewGuid().ToString("N");
                 command["client_id"] = _clientId;
                 command["protocol"] = "nomad-core";
@@ -132,6 +140,25 @@ namespace NOMAD.MissionPlanner.Connectivity
                 ["client_id"] = _clientId,
                 ["type"] = type,
             };
+        }
+
+        private bool BindAuthority(Dictionary<string, object> command, Dictionary<string, object> hello)
+        {
+            if (!hello.TryGetValue("runtime_incarnation", out var incarnation) ||
+                !hello.TryGetValue("authority", out var rawAuthority) ||
+                !(rawAuthority is Dictionary<string, object> authority) ||
+                !authority.TryGetValue("vehicle_session", out var session) ||
+                !authority.TryGetValue("generation", out var generation))
+            {
+                return false;
+            }
+            command["runtime_incarnation"] = incarnation;
+            command["vehicle_session"] = session;
+            command["authority_generation"] = generation;
+            command["command_source"] = _clientId;
+            command["sequence"] = DateTime.UtcNow.Ticks;
+            command["expires_at_ms"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 3000;
+            return true;
         }
 
         private Dictionary<string, object> BuildRuntimeRequest(string verb, string[] values)
