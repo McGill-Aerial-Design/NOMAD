@@ -7,11 +7,8 @@
 // scripts/build/test_plugin_gimbal.ps1 (plain csc, no test framework — exits
 // non-zero on failure). Run via `pixi run test-plugin-gimbal`.
 //
-// Pins the exact MAVLink the gimbal control emits to ArduPilot: the
-// DO_MOUNT_CONTROL command id + parameter layout, the
-// MAV_MOUNT_MODE enum values, and the stick-integration / angle-clamping math.
-// The companion tests/sitl/gimbal_mount_control.py proves these same commands
-// actually point a real ArduPilot mount.
+// Covers the UI-side MAV_MOUNT_MODE values and stick-integration /
+// angle-clamping math. The C++ runtime tests own the MAVLink contract.
 // ============================================================
 
 using System;
@@ -25,12 +22,6 @@ internal static class GimbalCommandTests
     private static int Main()
     {
         MountMode_ValuesMatchMavMountMode();
-        CommandIds_MatchMavlinkSpec();
-
-        MountControl_MapsPitchRollAndTargetingMode();
-        MountControl_ClampsToLimits();
-
-
         Clamp_PitchRollRate();
         Deadzone_ZerosInsideKeepsOutside();
 
@@ -55,40 +46,6 @@ internal static class GimbalCommandTests
         AssertEqual(1, (int)MountMode.Neutral, "MountMode.Neutral == 1");
         AssertEqual(2, (int)MountMode.MavlinkTargeting, "MountMode.MavlinkTargeting == 2");
         AssertEqual(3, (int)MountMode.RcTargeting, "MountMode.RcTargeting == 3");
-    }
-
-    private static void CommandIds_MatchMavlinkSpec()
-    {
-        AssertEqual(205, GimbalCommand.DO_MOUNT_CONTROL, "DO_MOUNT_CONTROL == 205");
-    }
-
-    // ============================================================
-    // DO_MOUNT_CONTROL frame
-    // ============================================================
-
-    private static void MountControl_MapsPitchRollAndTargetingMode()
-    {
-        var f = GimbalCommand.BuildMountControl(-30f, 12f);
-        AssertEqual(205, f.Command, "mount-control command id");
-        AssertNear(-30f, f.P1, "mount-control P1 = pitch");
-        AssertNear(12f, f.P2, "mount-control P2 = roll");
-        AssertNear(0f, f.P3, "mount-control P3 = 0");
-        AssertNear(0f, f.P4, "mount-control P4 = 0");
-        AssertNear(0f, f.P5, "mount-control P5 = 0");
-        AssertNear(0f, f.P6, "mount-control P6 = 0");
-        // P7 selects MAVLINK_TARGETING so the mount honors the absolute angle.
-        AssertNear(2f, f.P7, "mount-control P7 = MAVLINK_TARGETING (2)");
-    }
-
-    private static void MountControl_ClampsToLimits()
-    {
-        var hi = GimbalCommand.BuildMountControl(200f, 200f);
-        AssertNear(GimbalCommand.PITCH_MAX_DEG, hi.P1, "mount-control clamps pitch to max");
-        AssertNear(GimbalCommand.ROLL_MAX_DEG, hi.P2, "mount-control clamps roll to max");
-
-        var lo = GimbalCommand.BuildMountControl(-200f, -200f);
-        AssertNear(GimbalCommand.PITCH_MIN_DEG, lo.P1, "mount-control clamps pitch to min");
-        AssertNear(GimbalCommand.ROLL_MIN_DEG, lo.P2, "mount-control clamps roll to min");
     }
 
     // ============================================================

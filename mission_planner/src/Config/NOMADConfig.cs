@@ -327,7 +327,7 @@ namespace NOMAD.MissionPlanner
         // ============================================================
         // Two independent joystick assignments routed by NomadJoystickService:
         //   * Gimbal: stick deflection → pitch/roll rate, integrated locally
-        //     into MAV_CMD_DO_MOUNT_CONTROL angle commands.
+        //     into typed NOMAD runtime angle-target requests.
         //   * Camera tilt: stick deflection → PWM rate, integrated locally into
         //     the camera tilt servo PWM target (DO_SET_SERVO).
         // Axes are referenced by DirectInput state property name: X, Y, Z,

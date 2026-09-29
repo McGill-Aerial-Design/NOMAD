@@ -85,6 +85,43 @@ void test_vehicle_gimbal_configure_validates_mount_mode() {
     CHECK(connection.last_command.parameters[4] == 2.0F);
 }
 
+void test_vehicle_gimbal_target_validates_and_sends_angles() {
+    FakeConnection connection;
+    connection.connect();
+    connection.acknowledgement = nomad::mavlink::CommandAck{205, 0};
+    nomad::vehicle::Vehicle vehicle(connection);
+
+    CHECK(!vehicle.set_gimbal_target(std::numeric_limits<double>::quiet_NaN(), 0.0).success);
+    CHECK(!vehicle.set_gimbal_target(0.0, std::numeric_limits<double>::infinity()).success);
+    CHECK(!vehicle.set_gimbal_target(-90.01, 0.0).success);
+    CHECK(!vehicle.set_gimbal_target(0.0, 30.01).success);
+    CHECK(connection.command_count() == 0);
+
+    CHECK(vehicle.set_gimbal_target(-90.0, 30.0).success);
+    CHECK(connection.last_command.id == 205);
+    CHECK(connection.last_command.parameters[0] == -90.0F);
+    CHECK(connection.last_command.parameters[1] == 30.0F);
+    CHECK(connection.last_command.parameters[2] == 0.0F);
+    CHECK(connection.last_command.parameters[6] == 2.0F);
+
+    CHECK(vehicle.set_gimbal_target(90.0, -30.0).success);
+    CHECK(connection.last_command.parameters[0] == 90.0F);
+    CHECK(connection.last_command.parameters[1] == -30.0F);
+}
+
+void test_vehicle_gimbal_target_reports_denied_acknowledgement() {
+    FakeConnection connection;
+    connection.connect();
+    connection.acknowledgement = nomad::mavlink::CommandAck{205, 4};
+    nomad::vehicle::Vehicle vehicle(connection);
+
+    const auto result = vehicle.set_gimbal_target(15.0, -5.0);
+
+    CHECK(!result.success);
+    CHECK(result.message.find("rejected") != std::string::npos);
+    CHECK(connection.last_command.id == 205);
+}
+
 void test_unqualified_aircraft_reject_outputs_before_transmission() {
     constexpr std::array unqualified_types{
         nomad::telemetry::kFixedWing,
@@ -107,6 +144,7 @@ void test_unqualified_aircraft_reject_outputs_before_transmission() {
         CHECK(!vehicle.set_relay(2, true).success);
         CHECK(!vehicle.motor_test(1, 1200, 1.0F).success);
         CHECK(!vehicle.configure_gimbal(2).success);
+        CHECK(!vehicle.set_gimbal_target(0.0, 0.0).success);
         CHECK(vehicle.arm_payload().success);
         CHECK(!vehicle.release_payload(2, 0.05F).success);
         CHECK(connection.command_history.empty());
@@ -121,6 +159,8 @@ int main() {
         test_vehicle_relay_rejection_is_reported();
         test_vehicle_motor_test_validates_and_clamps_timeout();
         test_vehicle_gimbal_configure_validates_mount_mode();
+        test_vehicle_gimbal_target_validates_and_sends_angles();
+        test_vehicle_gimbal_target_reports_denied_acknowledgement();
         test_unqualified_aircraft_reject_outputs_before_transmission();
     });
 }

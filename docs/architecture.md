@@ -112,6 +112,7 @@ and `L` means local/read-only with no aircraft command. Entries are ordered
 | `set_relay` | Y/Y/Y/Y | Copter baseline only | Y/N/N/N | Output/channel meaning is not qualified for Plane, QuadPlane or Unknown |
 | `motor_test` | Y/Y/Y/Y | Copter protocol path only | Y/N/N/N | Copter behavior is preserved; its ACK remains insufficient physical motor evidence |
 | `configure_gimbal` | Y/Y/Y/Y | Copter baseline only | Y/N/N/N | Peripheral configuration has no non-Copter profile evidence |
+| `set_gimbal_target` | Y/Y/Y/Y | Copter baseline only | Y/N/N/N | Finite pitch/roll targets use the runtime authority gate and fixed MAVLINK_TARGETING mode; no non-Copter profile evidence |
 | `arm_payload` | L/L/L/L | Local interlock | L/L/L/L | Arms local state only; release remains separately gated |
 | `release_payload` | Y/Y/Y/Y | Copter only | Y/N/N/N | Hosted Copter payload exercise; no Plane/QuadPlane channel or mechanism evidence |
 | `stop_velocity` | Y/Y/Y/Y | Copter only | Y/N/N/N | An inactive fixed-wing call is rejected; safety zero remains available to an already admitted Copter session |
@@ -236,9 +237,10 @@ router example has the same setting. It only applies when those clients use
 that configured router; direct GCS links, other standalone configurations and
 local UDP source spoofing are outside that boundary. Integrated operations must define
 handover and inhibit NOMAD until reconciled;
-software cannot claim to prevent an independent pilot/autopilot action. Migrate
-plugin boundary returns, emergency parameter changes, direct gimbal streams and
-fence writes through the core or restrict them to documented maintenance mode.
+software cannot claim to prevent an independent pilot/autopilot action. Mission
+Planner gimbal angle requests now use the typed runtime operation; plugin
+boundary returns, emergency parameter changes and fence writes still need core
+migration or documented maintenance ownership.
 
 ## D09 control paths and authority boundaries
 
@@ -261,11 +263,12 @@ and manual movement; reconnect cannot clear it. Exact mapping, aircraft mechanis
 and safe reset are still unimplemented/unqualified. Q02 still blocks selecting
 transition-phase termination behavior.
 
-The NOMAD joystick service controls gimbal/camera and switches; it deliberately
-does not start Mission Planner's native RC-override loop. It does not prove the
-intended LTE flight-joystick path. Native joystick integration, competing RC and
-MAVLink input priority, core inhibition and explicit handback need a reviewed
-authority contract. The plugin LAND-as-termination and descent-parameter paths
+The NOMAD joystick service sends gimbal angles through typed runtime requests and
+controls camera/switches; it deliberately does not start Mission Planner's native
+RC-override loop. Runtime authority does not arbitrate native Mission Planner or
+RC inputs. This does not prove the intended LTE flight-joystick path. Native
+joystick integration, competing RC and MAVLink input priority, core inhibition
+and explicit handback need a reviewed authority contract. The plugin LAND-as-termination and descent-parameter paths
 are removed; its two activation callers report unavailable. A per-runtime mutex
 or connection session ID cannot fence all aircraft writers.
 

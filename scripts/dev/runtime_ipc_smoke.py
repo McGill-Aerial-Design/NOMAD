@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from mavsdk_peer import COMMAND_DO_SET_SERVO, VehiclePeer
+from mavsdk_peer import COMMAND_DO_MOUNT_CONTROL, COMMAND_DO_SET_SERVO, VehiclePeer
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -83,14 +83,16 @@ def send_request(port: int, message: dict[str, Any]) -> dict[str, Any]:
     raise ValueError("runtime response exceeded the protocol limit")
 
 
-def request(port: int, request_id: str, request_type: str, **fields: object) -> dict[str, Any]:
+def request(
+    port: int, request_id: str, request_type: str, client_id: str = "runtime-smoke", **fields: object
+) -> dict[str, Any]:
     """Send a protocol-v1 request with a stable client identity."""
     return send_request(
         port,
         {
             "protocol": "nomad-core",
             "version": 1,
-            "client_id": "runtime-smoke",
+            "client_id": client_id,
             "id": request_id,
             "type": request_type,
             **fields,
@@ -153,6 +155,30 @@ def wait_for_commands(peer: VehiclePeer, count: int) -> list[tuple[str, int, int
             return commands
         time.sleep(0.05)
     raise TimeoutError(f"fake vehicle saw {len(peer.commands())} commands, expected {count}")
+
+
+def wait_for_mount_control(peer: VehiclePeer) -> tuple[str, int, int | None, tuple[float, ...]]:
+    """Wait for the MAVSDK transport to send one mount angle target."""
+    deadline = time.monotonic() + 8.0
+    while time.monotonic() < deadline:
+        for command in peer.commands():
+            if command[1] == COMMAND_DO_MOUNT_CONTROL:
+                return command
+        time.sleep(0.05)
+    raise TimeoutError("fake vehicle did not receive DO_MOUNT_CONTROL")
+
+
+def authority_fields(hello: dict[str, Any], source: str) -> dict[str, object]:
+    """Bind one request to the current runtime and vehicle generation."""
+    authority = hello["authority"]
+    return {
+        "runtime_incarnation": hello["runtime_incarnation"],
+        "vehicle_session": authority["vehicle_session"],
+        "authority_generation": authority["generation"],
+        "command_source": source,
+        "sequence": authority["next_sequence"],
+        "expires_at_ms": int(time.time() * 1000) + 3000,
+    }
 
 
 def run_cli(binary: Path, environment: dict[str, str], *arguments: str) -> subprocess.CompletedProcess[str]:
@@ -224,6 +250,47 @@ def verify_runtime_reconnect(ipc_port: int, peer: VehiclePeer, binary: Path, env
     require(len(commands) == 2, "two client requests produce exactly two SET_SERVO actions")
 
 
+def verify_gimbal_target(ipc_port: int, peer: VehiclePeer) -> None:
+    """Prove a typed runtime angle request reaches MAVSDK with fixed semantics."""
+    source = "runtime-gimbal-smoke"
+    hello = request(ipc_port, "gimbal-source-hello", "hello", client_id=source)
+    revoked = request(
+        ipc_port,
+        "gimbal-revoke-cli-source",
+        "revoke_authority",
+        client_id=source,
+        **authority_fields(hello, source),
+    )
+    require(revoked["ok"] is True, "runtime revokes the prior smoke-test owner before handback")
+
+    hello = request(ipc_port, "gimbal-handback-hello", "hello", client_id=source)
+    admitted = request(
+        ipc_port,
+        "gimbal-handback",
+        "handback_authority",
+        client_id=source,
+        **authority_fields(hello, source),
+    )
+    require(admitted["ok"] is True, "runtime explicitly hands authority to the gimbal smoke source")
+
+    hello = request(ipc_port, "gimbal-target-hello", "hello", client_id=source)
+    target = request(
+        ipc_port,
+        "gimbal-target",
+        "set_gimbal_target",
+        client_id=source,
+        pitch_deg=12.5,
+        roll_deg=-7.5,
+        **authority_fields(hello, source),
+    )
+    require(target["command_result"]["success"] is True, "typed gimbal target is acknowledged by the runtime")
+    command = wait_for_mount_control(peer)
+    require(
+        command[0] == "COMMAND_LONG" and command[3] == (12.5, -7.5, 0.0, 0.0, 0.0, 0.0, 2.0),
+        "MAVSDK sends fixed DO_MOUNT_CONTROL pitch, roll and targeting mode",
+    )
+
+
 def verify_runtime(binary: Path, peer: VehiclePeer, udp_port: int, ipc_port: int) -> None:
     """Check handshake, status, typed dispatch, reconnect and client isolation."""
     process, stdout, stderr = start_runtime(binary, udp_port, ipc_port)
@@ -233,6 +300,7 @@ def verify_runtime(binary: Path, peer: VehiclePeer, udp_port: int, ipc_port: int
         cli_environment = verify_cli_servo(find_cli(), peer, ipc_port)
         verify_navigation_rejected(find_cli(), peer, cli_environment)
         verify_runtime_reconnect(ipc_port, peer, find_cli(), cli_environment)
+        verify_gimbal_target(ipc_port, peer)
     except Exception:
         if process.poll() is None:
             stop_runtime(process)

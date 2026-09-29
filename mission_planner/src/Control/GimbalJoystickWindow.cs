@@ -3,13 +3,12 @@
 // ============================================================
 // NOMAD Gimbal Joystick — Floating Dockable Window
 // ============================================================
-// Rate-controlled 2D joystick streams pitch/roll through Mission Planner's
-// direct MAVLink path when non-integrated. Mode buttons use runtime IPC and
-// never fall back to direct mount-configuration writes.
+// Rate-controlled 2D joystick requests pitch/roll targets through the NOMAD
+// runtime. Mode buttons also use runtime IPC.
 //
 // This is independent from the camera tilt servo (PayloadControlPanel), which is
-// just a SERVOx output. The command construction lives in GimbalCommand and the
-// shared send/integrator in GimbalController, so this window is pure UI.
+// just a SERVOx output. Angle integration lives in GimbalCommand and the shared
+// target/request state lives in GimbalController, so this window is pure UI.
 //
 // Layout is fully dynamic: a docked TableLayoutPanel with a fill joystick pad
 // (which scales itself in OnPaint) and AutoSize rows that reflow, so the window
@@ -511,9 +510,7 @@ namespace NOMAD.MissionPlanner
 
             bool active = sx != 0f || sy != 0f;
 
-            // Delegate the rate→target-angle integration and the actual
-            // DO_MOUNT_CONTROL send to GimbalController so this window and the
-            // physical NomadJoystickService share one authoritative target.
+            // Share rate-to-target integration with the physical joystick.
             if (active)
             {
                 GimbalController.ApplyStick(sx, sy, dt,
@@ -532,10 +529,10 @@ namespace NOMAD.MissionPlanner
         // Helpers for the in-window snap / key-nudge buttons — both go through
         // GimbalController so the physical NomadJoystickService sees the same
         // target angles immediately.
-        private void SendPitchRollAngle(float pitchDeg, float rollDeg)
+        private void RequestPitchRollTarget(float pitchDeg, float rollDeg)
         {
             GimbalController.SetTargetAngles(pitchDeg, rollDeg);
-            GimbalController.SendPitchRollAngle(GimbalController.TargetPitchDeg, GimbalController.TargetRollDeg);
+            GimbalController.RequestPitchRollTarget(GimbalController.TargetPitchDeg, GimbalController.TargetRollDeg);
         }
 
         // ============================================================
@@ -584,7 +581,7 @@ namespace NOMAD.MissionPlanner
             }
             _targetPitch = pitch;
             _targetRoll = roll;
-            SendPitchRollAngle(pitch, roll);
+            RequestPitchRollTarget(pitch, roll);
         }
 
     }

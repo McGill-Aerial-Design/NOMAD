@@ -104,6 +104,31 @@ namespace NOMAD.MissionPlanner.Connectivity
             return RunCore("gimbal-config", mountMode.ToString(CultureInfo.InvariantCulture)) == 0;
         }
 
+        /// <summary>
+        /// Set a finite absolute gimbal angle through the runtime.
+        /// </summary>
+        public bool GimbalTarget(double pitchDeg, double rollDeg)
+        {
+            if (!IsFinite(pitchDeg) || pitchDeg < -90.0 || pitchDeg > 90.0)
+            {
+                LastOutcome = NomadCoreRequestOutcome.Rejected;
+                LastErrorCode = "invalid_argument";
+                LastMessage = "Gimbal pitch must be finite and between -90 and 90 degrees.";
+                return false;
+            }
+            if (!IsFinite(rollDeg) || rollDeg < -30.0 || rollDeg > 30.0)
+            {
+                LastOutcome = NomadCoreRequestOutcome.Rejected;
+                LastErrorCode = "invalid_argument";
+                LastMessage = "Gimbal roll must be finite and between -30 and 30 degrees.";
+                return false;
+            }
+            return RunCore(
+                "gimbal-target",
+                pitchDeg.ToString("R", CultureInfo.InvariantCulture),
+                rollDeg.ToString("R", CultureInfo.InvariantCulture)) == 0;
+        }
+
         private static bool IsFinite(double value)
         {
             return !double.IsNaN(value) && !double.IsInfinity(value);

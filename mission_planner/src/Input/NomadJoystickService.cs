@@ -13,7 +13,7 @@
 //
 // Routing:
 //   * Gimbal: stick (X,Y) → integrated pitch/roll target via
-//     GimbalController.ApplyStick → MAV_CMD_DO_MOUNT_CONTROL.
+//     GimbalController.ApplyStick → typed NOMAD runtime angle-target request.
 //   * Camera tilt: stick axis → integrated PWM target via
 //     OutputController.SendServoPwmAsync (core-mediated; drag streams go
 //     through the same boundary).
@@ -88,8 +88,8 @@ namespace NOMAD.MissionPlanner
             int tiltMax = tilt?.PwmMax ?? 1450;
             _cameraTiltUs = Math.Max(tiltMin, Math.Min(tiltMax, PayloadControlPanel.LastTiltPulseUs));
 
-            // The mount only honors DO_MOUNT_CONTROL absolute-angle commands
-            // when it's in MAVLink targeting mode. Without this ping the mount may
+            // The mount only honors absolute-angle requests in MAVLink targeting
+            // mode. Without this ping the mount may
             // be sitting in RC targeting from a previous session and silently drop
             // every angle command we send — which feels like the joystick is
             // controlling a rate instead of a position, since the gimbal won't

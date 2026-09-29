@@ -51,8 +51,8 @@ identity is unresolved, so `STATUS` can report partial startup state.
 
 The runtime loads the existing fence and velocity policies from environment
 configuration and passes them to the existing `Vehicle`. Typed command handlers
-call `Vehicle::set_servo`, `Vehicle::set_relay`, `Vehicle::motor_test` or
-`Vehicle::configure_gimbal` directly. The IPC layer
+call `Vehicle::set_servo`, `Vehicle::set_relay`, `Vehicle::motor_test`,
+`Vehicle::configure_gimbal` or `Vehicle::set_gimbal_target` directly. The IPC layer
 does not pack MAVLink or copy Vehicle capability checks. No Vehicle API,
 capability table, transition behavior, route behavior or completion rule is
 changed here.
@@ -115,6 +115,7 @@ fields are ignored. Clients negotiate with `hello` before sending a command.
 | `set_relay` | Calls `Vehicle::set_relay` with relay number and boolean state |
 | `motor_test` | Calls `Vehicle::motor_test` with instance, PWM microseconds and timeout seconds |
 | `configure_gimbal` | Calls `Vehicle::configure_gimbal` with mount mode |
+| `set_gimbal_target` | Calls `Vehicle::set_gimbal_target` with finite `pitch_deg` and `roll_deg`; pitch is limited to -90..90 degrees and roll to -30..30 degrees |
 
 Vehicle navigation requests are intentionally absent from protocol v1. The
 two-point QuadPlane fixed-wing route is qualified in the core, but it is not
@@ -152,6 +153,12 @@ native MAVLink or direct-write fallback after that failure. The next user
 operation opens a new TCP connection and negotiates again. A runtime restart recreates the MAVSDK
 connection and `Vehicle`, clears the in-memory request cache, and does not
 resume an in-progress operation.
+
+Mission Planner's gimbal window, arrow keys and physical joystick send angle
+targets only as `set_gimbal_target` requests. The runtime/core constructs the
+fixed `DO_MOUNT_CONTROL` command after angle validation. Mission Planner keeps
+its in-flight drop behavior; runtime `busy`, missing authority and unavailable
+runtime outcomes do not trigger a direct MAVLink fallback or replay.
 
 `NOMAD_API_KEY` retains its current limited meaning. The Mission Planner client
 requires its configured local gate to be non-empty, and the runtime requires its own

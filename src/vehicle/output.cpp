@@ -84,4 +84,22 @@ CommandResult Vehicle::configure_gimbal(int mount_mode) {
     return verified(result, "gimbal configuration verified");
 }
 
+CommandResult Vehicle::set_gimbal_target(double pitch_deg, double roll_deg) {
+    if (!std::isfinite(pitch_deg) || pitch_deg < -90.0 || pitch_deg > 90.0) {
+        return {false, "gimbal pitch must be finite and between -90 and 90 degrees"};
+    }
+    if (!std::isfinite(roll_deg) || roll_deg < -30.0 || roll_deg > 30.0) {
+        return {false, "gimbal roll must be finite and between -30 and 30 degrees"};
+    }
+    const auto admission = require_operation(VehicleOperation::SetGimbalTarget);
+    if (!admission.success) {
+        return admission;
+    }
+    const auto result = send_command(
+        make_command(kMountControlCommand, {static_cast<float>(pitch_deg), static_cast<float>(roll_deg), 0, 0, 0, 0,
+                                            2.0F}),
+        "set gimbal target");
+    return verified(result, "gimbal target command acknowledged");
+}
+
 } // namespace nomad::vehicle

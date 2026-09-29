@@ -21,7 +21,10 @@ namespace NOMAD.MissionPlanner
     internal static class OutputController
     {
         private static NomadCoreClient _coreClient;
-        internal static bool IntegratedFlightMode { get; private set; }
+        private static readonly object GimbalRequestLock = new object();
+        private static readonly object GimbalFailureLock = new object();
+        private static string _lastGimbalFailure = "";
+        private static DateTime _lastGimbalFailureAt = DateTime.MinValue;
 
         /// <summary>
         /// GCS-side audit record for a runtime-routed actuation command. The
@@ -42,7 +45,6 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         internal static void Initialize(NOMADConfig config)
         {
-            IntegratedFlightMode = config?.IntegratedFlightMode ?? false;
             _coreClient = config == null ? null :
                 new NomadCoreClient(config.CoreApiKey, config.CoreRuntimePort);
         }
@@ -111,6 +113,77 @@ namespace NOMAD.MissionPlanner
             Log.Warn(DescribeFailure("Relay command", client));
             Audit("relay", false, $"relay={relayNumber} state={(on ? 1 : 0)} reason={FailureReason(client)}");
             return false;
+        }
+
+        internal static bool SendGimbalTarget(double pitchDeg, double rollDeg)
+        {
+            lock (GimbalRequestLock)
+            {
+                var client = CreateCoreClient();
+                if (client == null)
+                {
+                    ReportGimbalFailure("NOMAD core client is not configured; no target was sent.");
+                    return false;
+                }
+                if (client.GimbalTarget(pitchDeg, rollDeg))
+                {
+                    ClearGimbalFailure();
+                    return true;
+                }
+
+                var detail = string.IsNullOrWhiteSpace(client.LastMessage)
+                    ? client.LastErrorCode
+                    : $"{client.LastErrorCode}: {client.LastMessage}";
+                if (client.LastOutcome == NomadCoreRequestOutcome.UnknownOutcome)
+                {
+                    detail += " Do not retry blindly; the vehicle outcome is unknown.";
+                }
+                ReportGimbalFailure(detail);
+                return false;
+            }
+        }
+
+        internal static bool ConfigureGimbal(int mountMode)
+        {
+            lock (GimbalRequestLock)
+            {
+                var client = CreateCoreClient();
+                if (client == null)
+                {
+                    Log.Warn("Gimbal configure failed: NOMAD core client is not configured.");
+                    return false;
+                }
+                if (client.GimbalConfigure(mountMode))
+                {
+                    return true;
+                }
+                Log.Warn($"Gimbal configure failed: {client.LastErrorCode}: {client.LastMessage}");
+                return false;
+            }
+        }
+
+        private static void ReportGimbalFailure(string detail)
+        {
+            lock (GimbalFailureLock)
+            {
+                var now = DateTime.UtcNow;
+                if (detail == _lastGimbalFailure && now - _lastGimbalFailureAt < TimeSpan.FromSeconds(5))
+                {
+                    return;
+                }
+                _lastGimbalFailure = detail;
+                _lastGimbalFailureAt = now;
+            }
+            Log.Warn($"Gimbal target failed: {detail}");
+        }
+
+        private static void ClearGimbalFailure()
+        {
+            lock (GimbalFailureLock)
+            {
+                _lastGimbalFailure = "";
+                _lastGimbalFailureAt = DateTime.MinValue;
+            }
         }
 
         private static string DescribeFailure(string action, NomadCoreClient client)

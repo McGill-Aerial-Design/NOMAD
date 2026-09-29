@@ -129,6 +129,9 @@ runtime adds a typed navigation request; boundary feedback directs the operator
 to take manual control. Its local API-key setting is a nonempty actuation gate,
 not IPC authentication. Profile sync derives `IntegratedFlightMode` from
 `NOMAD_INTEGRATED_FLIGHT`, which is set in the supported integrated profiles.
+The gimbal window, arrow keys and physical gimbal joystick send bounded angle
+targets through typed `set_gimbal_target` requests; runtime, authority and busy
+failures are shown to the operator, with no direct MAVLink fallback.
 In embedded router mode, it also makes the
 Mission Planner router consumer receive-only; the standalone router requires
 an explicit equivalent configuration. The C++ CLI can use
