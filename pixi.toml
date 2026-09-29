@@ -62,7 +62,7 @@ check-mavsdk-phase-a = "python scripts/dev/check_mavsdk_phase_a.py"
 # Phase B transport qualification: build the non-installed direct driver and
 # connection tests, then drive them against the deterministic peer fixture.
 build-mavsdk-phase-b = """
-cmake -S . -B build/mavsdk-phase-a -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON && cmake --build build/mavsdk-phase-a --config Release --target nomad-qualification nomad_mavsdk_connection_tests nomad_mavsdk_zero_delivery_tests nomad_mavsdk_authority_wire_probe
+cmake -S . -B build/mavsdk-phase-a -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON && cmake --build build/mavsdk-phase-a --config Release --target nomad nomad-runtime nomad-qualification nomad_mavsdk_connection_tests nomad_mavsdk_zero_delivery_tests nomad_mavsdk_authority_wire_probe
 """
 test-mavsdk-phase-b = "pixi run build-mavsdk-phase-b && pytest tests/test_qualification_cli.py tests/test_fence_config_env.py -q && python scripts/dev/mavsdk_connection_fixture.py"
 test-mavsdk-authority-wire = "python scripts/dev/mavsdk_authority_wire_fixture.py && python scripts/dev/mavsdk_authority_probe_fixture.py"

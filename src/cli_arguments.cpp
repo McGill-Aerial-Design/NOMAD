@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// One-shot CLI argument parsing: global flags plus one small parser per verb
-// group. Any malformed or extra value rejects the whole invocation, so the
-// caller prints usage and fails before any socket work.
+// Parse one typed command before runtime IPC begins. Reject malformed or extra
+// values so the caller can print usage without opening a runtime connection.
 #include "cli_command_table.hpp"
 #include "cli_commands.hpp"
 #include "nomad/util/parse.hpp"
