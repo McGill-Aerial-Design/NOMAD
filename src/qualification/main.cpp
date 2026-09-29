@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -23,6 +24,27 @@ namespace {
 bool api_key_configured() {
     const char *key = std::getenv("NOMAD_API_KEY");
     return key != nullptr && key[0] != '\0';
+}
+
+std::optional<bool> integrated_flight_enabled() {
+    const char *configured = std::getenv("NOMAD_INTEGRATED_FLIGHT");
+    if (configured == nullptr || configured[0] == '\0') {
+        return false;
+    }
+
+    std::string value(configured);
+    for (auto &character : value) {
+        if (character >= 'A' && character <= 'Z') {
+            character = static_cast<char>(character - 'A' + 'a');
+        }
+    }
+    if (value == "1" || value == "true" || value == "yes") {
+        return true;
+    }
+    if (value == "0" || value == "false" || value == "no") {
+        return false;
+    }
+    return std::nullopt;
 }
 
 void audit_command(std::string_view command, std::string_view result, std::string_view auth,
@@ -52,8 +74,13 @@ int run_command(nomad::mavlink::MavlinkConnection &connection, const Arguments &
             std::cerr << "error: direct actuation is inhibited while the NOMAD runtime is listening\n";
             return EXIT_FAILURE;
         }
-        const char *integrated = std::getenv("NOMAD_INTEGRATED_FLIGHT");
-        if (integrated != nullptr && std::string_view(integrated) == "1") {
+        const auto integrated = integrated_flight_enabled();
+        if (!integrated.has_value()) {
+            audit_command(arguments.command, "refused", "none", "invalid_integrated_flight_setting");
+            std::cerr << "error: NOMAD_INTEGRATED_FLIGHT must be a boolean value\n";
+            return EXIT_FAILURE;
+        }
+        if (*integrated) {
             audit_command(arguments.command, "refused", "none", "runtime_owner_required");
             std::cerr << "error: direct actuation is inhibited in integrated flight mode\n";
             return EXIT_FAILURE;

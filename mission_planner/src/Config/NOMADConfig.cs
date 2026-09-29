@@ -29,22 +29,8 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public string ActiveProfile { get; set; } = "dev";
 
-        /// <summary>
-        /// Integrated profile mode inhibits plugin actuation that remains
-        /// outside the runtime. The standalone router independently enforces
-        /// its Mission Planner consumer as receive-only.
-        /// </summary>
-        public bool IntegratedFlightMode { get; set; } = false;
-
-        /// <summary>
         /// <summary>Loopback TCP port used by the persistent C++ runtime.</summary>
         public int CoreRuntimePort { get; set; } = Connectivity.NomadCoreClient.DefaultRuntimePort;
-        public List<LinkConfig> RouterLinks { get; set; }
-        public List<ConsumerConfig> RouterConsumers { get; set; } = new List<ConsumerConfig>
-        {
-            new ConsumerConfig { Id = "mission_planner", RouterPort = 14600 },
-            new ConsumerConfig { Id = "nomad_core", RouterPort = 14602, ClientPort = 14601 }
-        };
 
         /// <summary>
         /// Local nonempty actuation gate. The value is not sent over IPC or
@@ -95,68 +81,6 @@ namespace NOMAD.MissionPlanner
         public bool DualLinkEnabled { get; set; } = true;
 
         /// <summary>
-        /// RadioMaster connection type: "UDP", "COM", or "TCP"
-        /// UDP uses network port, COM uses serial port (e.g., COM3), TCP uses TCP network port (e.g., SITL)
-        /// </summary>
-        public string RadioMasterConnectionType { get; set; } = "UDP";
-
-        /// <summary>
-        /// RadioMaster UDP port (typically 14550 for RC telemetry).
-        /// Used when RadioMasterConnectionType is "UDP"
-        /// </summary>
-        public int RadioMasterPort { get; set; } = 14550;
-
-        /// <summary>
-        /// RadioMaster COM port (e.g., "COM3", "COM4").
-        /// Used when RadioMasterConnectionType is "COM"
-        /// </summary>
-        public string RadioMasterComPort { get; set; } = "COM3";
-
-        /// <summary>
-        /// RadioMaster TCP host to connect to (e.g. "127.0.0.1" for ArduPilot SITL).
-        /// Used when RadioMasterConnectionType is "TCP" (port = RadioMasterPort).
-        /// </summary>
-        public string RadioMasterTcpHost { get; set; } = "127.0.0.1";
-
-        /// <summary>
-        /// RadioMaster COM port baud rate.
-        /// ELRS typically uses 420000 or 115200
-        /// </summary>
-        public int RadioMasterBaudRate { get; set; } = 420000;
-
-        /// <summary>
-        /// LTE/Tailscale MAVLink UDP port the ground station listens on.
-        /// Default 14560 to avoid colliding with the RadioMaster default (14550).
-        /// </summary>
-        public int LteMavlinkPort { get; set; } = 14560;
-
-        /// <summary>
-        /// Enable automatic failover between links.
-        /// </summary>
-        public bool AutoFailoverEnabled { get; set; } = true;
-
-        /// <summary>
-        /// Preferred MAVLink link when both are available.
-        /// Options: "LTE", "RadioMaster", "None"
-        /// </summary>
-        public string PreferredMavlinkLink { get; set; } = "LTE";
-
-        /// <summary>
-        /// Auto-reconnect to preferred link when it becomes available.
-        /// </summary>
-        public bool AutoReconnectToPreferred { get; set; } = true;
-
-        /// <summary>
-        /// Delay in seconds before switching back to preferred link.
-        /// </summary>
-        public int PreferredLinkReconnectDelay { get; set; } = 10;
-
-        /// <summary>
-        /// MAVLink heartbeat timeout in seconds before considering link dead.
-        /// </summary>
-        public double MavlinkHeartbeatTimeout { get; set; } = 3.0;
-
-        /// <summary>
         /// Link monitoring interval in milliseconds.
         /// </summary>
         public int LinkMonitorInterval { get; set; } = 500;
@@ -168,43 +92,11 @@ namespace NOMAD.MissionPlanner
         // duplicate suppression, and consumer permissions. Mission Planner
         // only consumes telemetry and uses the loopback management client.
 
-        /// <summary>
-        /// Legacy switch retained for existing settings files. When enabled,
-        /// the plugin connects its status client; it never starts the host.
-        /// </summary>
-        public bool RouterEnabled { get; set; } = true;
-
-        /// <summary>
-        /// Legacy setting retained for existing settings files. The only
-        /// supported ownership mode is Standalone.
-        /// </summary>
-        public string RouterMode { get; set; } = "Standalone";
-
-        /// <summary>Local UDP port the router serves the merged stream on.</summary>
+        /// <summary>Mission Planner's local UDP client endpoint for router telemetry.</summary>
         public int RouterLocalPort { get; set; } = 14600;
 
-        /// <summary>Loopback address used by the Mission Planner consumer.</summary>
-        public string RouterBindAddress { get; set; } = "127.0.0.1";
-
-        /// <summary>
-        /// Deduplicate identical packets that arrive on both links (recommended).
-        /// Disable only for diagnostics — costs ~1.5x bandwidth to MP.
-        /// </summary>
-        public bool RouterDedupEnabled { get; set; } = true;
-
-        /// <summary>Loopback TCP endpoint used by Mission Planner in standalone mode.</summary>
-        public string ManagementBindAddress { get; set; } = "127.0.0.1";
+        /// <summary>Loopback TCP destination port for the standalone router management client.</summary>
         public int ManagementPort { get; set; } = 14610;
-
-        /// <summary>
-        /// Optional outbound endpoint for LTE link. When non-empty, router
-        /// sends GCS-originated traffic to this host:port over UDP. Leave
-        /// empty to use the same endpoint packets were received from.
-        /// </summary>
-        public string LteRemoteHost { get; set; } = "";
-
-        /// <summary>Outbound UDP port for LTE link (0 = use last-rx port).</summary>
-        public int LteRemotePort { get; set; } = 0;
 
         // ============================================================
         // UI Configuration

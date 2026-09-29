@@ -238,11 +238,6 @@ internal static partial class DualLinkStressTests
             LocalPort = b; LtePort = b + 1; RadioPort = b + 2;
             var cfg = new GroundLinkRouter.RouterConfig
             {
-                BindAddress = "127.0.0.1",
-                LocalPort = LocalPort,
-                LteBindPort = LtePort,
-                RadioMasterConnectionType = "UDP",
-                RadioBindPort = RadioPort,
                 StatsTickMs = 50,
                 HeartbeatTimeoutSec = 0.6,
                 FailoverCooldownSec = 0.2,
@@ -251,7 +246,12 @@ internal static partial class DualLinkStressTests
                 Consumers = new List<ConsumerConfig>
                 {
                     new ConsumerConfig { Id = "router_test", RouterPort = LocalPort }
-                }
+                },
+                Links = new List<LinkConfig>
+                {
+                    new LinkConfig { Id = LinkType.LTE, Name = "LTE / Tailscale", Port = LtePort, Priority = 100 },
+                    new LinkConfig { Id = LinkType.RadioMaster, Name = "RadioMaster", Port = RadioPort, Priority = 80 },
+                },
             };
             tweak?.Invoke(cfg);
             Router = new GroundLinkRouter(cfg);

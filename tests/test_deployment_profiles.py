@@ -45,9 +45,18 @@ def test_supported_profiles_exist() -> None:
 
 def test_product_profiles_exclude_retired_service_flags() -> None:
     retired = {
+        "NOMAD_ENABLE_SERVOS",
         "NOMAD_AUTOSTART_EDGE_CORE",
         "NOMAD_AUTOSTART_HEALTH_MONITOR",
         "NOMAD_AUTOSTART_TIME_SYNC",
+        "NOMAD_BRIDGE_MAVLINK_ENDPOINT",
+        "NOMAD_CORE_SITL_PORT",
+        "NOMAD_LTE_UDP_PORT",
+        "NOMAD_ELRS_SERIAL",
+        "NOMAD_ELRS_BAUD",
+        "NOMAD_VIDEO_RTSP_PORT",
+        "NOMAD_VIO_SOURCE_REQUIRED",
+        "NOMAD_VIO_MAX_AGE_S",
     }
     for name in PROFILES:
         env = _parse_env(PROFILES_DIR / f"{name}.env")
@@ -60,7 +69,6 @@ def test_onboard_companion_profile_separation() -> None:
     assert env.get("NOMAD_COMPUTE_PLACEMENT") == "onboard"
     assert env.get("NOMAD_HAS_COMPANION") == "true"
     assert env.get("NOMAD_HAS_PERCEPTION") == "true"
-    assert env.get("NOMAD_VIO_SOURCE_REQUIRED") == "true"
     assert "rtsp://" in env.get("NOMAD_VIDEO_RTSP_URL", "")
     assert env.get("NOMAD_MAVLINK_ENDPOINT") == "udpin:0.0.0.0:14550"
     assert env.get("NOMAD_API_KEY", "") == ""
@@ -76,9 +84,7 @@ def test_groundstation_gpu_profile_separation() -> None:
     assert env.get("NOMAD_COMPUTE_PLACEMENT") == "groundstation"
     assert env.get("NOMAD_HAS_COMPANION") == "false"
     assert env.get("NOMAD_HAS_PERCEPTION") == "true"
-    assert env.get("NOMAD_VIO_SOURCE_REQUIRED") == "true"
     assert "127.0.0.1" in env.get("NOMAD_VIDEO_RTSP_URL", "")
-    assert env.get("NOMAD_CORE_SITL_PORT")
     assert env.get("NOMAD_MAVLINK_ENDPOINT") == "udpin:127.0.0.1:14601"
     assert env.get("NOMAD_API_KEY", "") == ""
     assert "NOMAD_ROS_VIO_SOURCE" not in env
@@ -93,10 +99,8 @@ def test_groundstation_minimal_profile_separation() -> None:
     assert env.get("NOMAD_COMPUTE_PLACEMENT") == "groundstation"
     assert env.get("NOMAD_HAS_COMPANION") == "false"
     assert env.get("NOMAD_HAS_PERCEPTION") == "false"
-    assert env.get("NOMAD_VIO_SOURCE_REQUIRED") == "false"
     assert env.get("NOMAD_VIDEO_RTSP_URL", "") == ""
     # Direct MAVLink / C++ core transport remains active
-    assert env.get("NOMAD_CORE_SITL_PORT")
     assert env.get("NOMAD_MAVLINK_ENDPOINT") == "udpin:127.0.0.1:14601"
     assert env.get("NOMAD_API_KEY", "") == ""
     assert "NOMAD_ROS_VIO_SOURCE" not in env
@@ -116,6 +120,15 @@ def test_groundstation_minimal_profile_separation() -> None:
 )
 def test_normalize_mavlink_endpoint(endpoint: str, expected: str) -> None:
     assert normalize_mavlink_endpoint(endpoint) == expected
+
+
+@pytest.mark.parametrize("key", sorted(profile._RETIRED_PROFILE_SETTINGS))
+def test_product_profiles_reject_retired_settings(key: str) -> None:
+    env = _parse_env(PROFILES_DIR / "groundstation_minimal.env")
+    env[key] = "stale-value"
+
+    with pytest.raises(ValueError, match=key):
+        profile._validated_profile_env("groundstation_minimal", env)
 
 
 @pytest.mark.parametrize(
@@ -241,6 +254,27 @@ def test_save_uses_template_schema_and_preserves_secret_placeholder(tmp_path: Pa
 
 
 RETIRED_MP_CONFIG_FIELDS = (
+    "IntegratedFlightMode",
+    "RouterLinks",
+    "RouterConsumers",
+    "RouterEnabled",
+    "RouterMode",
+    "RadioMasterConnectionType",
+    "RadioMasterPort",
+    "RadioMasterComPort",
+    "RadioMasterTcpHost",
+    "RadioMasterBaudRate",
+    "LteMavlinkPort",
+    "LteRemoteHost",
+    "LteRemotePort",
+    "AutoFailoverEnabled",
+    "PreferredMavlinkLink",
+    "AutoReconnectToPreferred",
+    "PreferredLinkReconnectDelay",
+    "MavlinkHeartbeatTimeout",
+    "RouterBindAddress",
+    "RouterDedupEnabled",
+    "ManagementBindAddress",
     "JetsonApiKey",
     "JetsonIP",
     "JetsonPort",
@@ -255,11 +289,17 @@ def assert_retired_mp_fields_removed(config: dict[str, object]) -> None:
         assert field not in config
 
 
-def test_sync_mission_planner_removes_stale_profile_fields(tmp_path: Path, monkeypatch) -> None:
-    cfg_file = tmp_path / "nomad_config.json"
-    initial_config = {
+def legacy_plugin_config() -> dict[str, object]:
+    return {
         "CustomUserSetting": "preserved_value",
         "ActiveProfile": "initial",
+        "IntegratedFlightMode": True,
+        "RouterEnabled": False,
+        "RouterMode": "Standalone",
+        "RadioMasterConnectionType": "COM",
+        "LteMavlinkPort": 14560,
+        "RouterLinks": [],
+        "RouterConsumers": [],
         "JetsonApiKey": "retired",
         "JetsonIP": "retired",
         "JetsonPort": 8000,
@@ -269,7 +309,11 @@ def test_sync_mission_planner_removes_stale_profile_fields(tmp_path: Path, monke
         "CoreApiKey": "old-key",
         "VideoUrl": "old-video",
     }
-    cfg_file.write_text(json.dumps(initial_config), encoding="utf-8")
+
+
+def test_sync_mission_planner_removes_stale_profile_fields(tmp_path: Path, monkeypatch) -> None:
+    cfg_file = tmp_path / "nomad_config.json"
+    cfg_file.write_text(json.dumps(legacy_plugin_config()), encoding="utf-8")
     monkeypatch.setenv("NOMAD_MP_CONFIG", str(cfg_file))
 
     # Sync onboard_companion
@@ -279,7 +323,8 @@ def test_sync_mission_planner_removes_stale_profile_fields(tmp_path: Path, monke
     synced = json.loads(cfg_file.read_text(encoding="utf-8"))
     assert synced["CustomUserSetting"] == "preserved_value"
     assert synced["ActiveProfile"] == "onboard_companion"
-    assert synced["IntegratedFlightMode"] is True
+    assert synced["DualLinkEnabled"] is False
+    assert "IntegratedFlightMode" not in synced
     assert synced["CoreApiKey"] == onboard_env["NOMAD_API_KEY"]
     assert synced["VideoUrl"] == onboard_env["NOMAD_VIDEO_RTSP_URL"]
     assert_retired_mp_fields_removed(synced)
@@ -289,24 +334,84 @@ def test_sync_mission_planner_removes_stale_profile_fields(tmp_path: Path, monke
     sync_mission_planner("groundstation_minimal", minimal_env)
     synced_min = json.loads(cfg_file.read_text(encoding="utf-8"))
     assert synced_min["ActiveProfile"] == "groundstation_minimal"
-    assert synced_min["IntegratedFlightMode"] is True
+    assert "IntegratedFlightMode" not in synced_min
     assert "VideoUrl" not in synced_min
     assert "CoreApiKey" not in synced_min
     assert_retired_mp_fields_removed(synced_min)
     assert synced_min["CustomUserSetting"] == "preserved_value"
 
 
-def test_sync_mission_planner_clears_integrated_mode_for_nonintegrated_profile(tmp_path: Path, monkeypatch) -> None:
+def test_sync_mission_planner_migration_is_deterministic(tmp_path: Path, monkeypatch) -> None:
     cfg_file = tmp_path / "nomad_config.json"
-    cfg_file.write_text(json.dumps({"IntegratedFlightMode": True}), encoding="utf-8")
+    cfg_file.write_text(
+        json.dumps(
+            {
+                "IntegratedFlightMode": True,
+                "RouterEnabled": False,
+                "RouterMode": "Standalone",
+                "DualLinkEnabled": True,
+                "CustomUserSetting": "preserved",
+            }
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("NOMAD_MP_CONFIG", str(cfg_file))
     minimal_env = _parse_env(PROFILES_DIR / "groundstation_minimal.env")
-    minimal_env["NOMAD_INTEGRATED_FLIGHT"] = "0"
-
     sync_mission_planner("groundstation_minimal", minimal_env)
+    first = json.loads(cfg_file.read_text(encoding="utf-8"))
+    sync_mission_planner("groundstation_minimal", minimal_env)
+    second = json.loads(cfg_file.read_text(encoding="utf-8"))
+    assert first == second
+    assert first["DualLinkEnabled"] is True
+    assert first["CustomUserSetting"] == "preserved"
+    assert_retired_mp_fields_removed(first)
 
-    synced = json.loads(cfg_file.read_text(encoding="utf-8"))
-    assert synced["IntegratedFlightMode"] is False
+
+def test_sync_mission_planner_migrates_router_enabled_to_client_setting(tmp_path: Path, monkeypatch) -> None:
+    cfg_file = tmp_path / "nomad_config.json"
+    cfg_file.write_text(json.dumps({"RouterEnabled": True}), encoding="utf-8")
+    monkeypatch.setenv("NOMAD_MP_CONFIG", str(cfg_file))
+    env = _parse_env(PROFILES_DIR / "groundstation_minimal.env")
+
+    sync_mission_planner("groundstation_minimal", env)
+
+    migrated = json.loads(cfg_file.read_text(encoding="utf-8"))
+    assert migrated["DualLinkEnabled"] is True
+    assert "RouterEnabled" not in migrated
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("RouterMode", "Embedded", "RouterMode 'Embedded' is unsupported"),
+        ("RouterBindAddress", "0.0.0.0", "RouterBindAddress must be 127.0.0.1"),
+        ("ManagementBindAddress", "0.0.0.0", "ManagementBindAddress must be 127.0.0.1"),
+    ],
+)
+def test_sync_mission_planner_rejects_unsupported_router_settings(
+    tmp_path: Path, monkeypatch, field: str, value: str, message: str
+) -> None:
+    cfg_file = tmp_path / "nomad_config.json"
+    original = {field: value, "CustomUserSetting": "preserved"}
+    cfg_file.write_text(json.dumps(original), encoding="utf-8")
+    monkeypatch.setenv("NOMAD_MP_CONFIG", str(cfg_file))
+
+    env = _parse_env(PROFILES_DIR / "groundstation_minimal.env")
+    with pytest.raises(ValueError, match=message):
+        sync_mission_planner("groundstation_minimal", env)
+
+    assert json.loads(cfg_file.read_text(encoding="utf-8")) == original
+
+
+def test_sync_mission_planner_keeps_qualification_inhibition_environment_only() -> None:
+    env = _parse_env(PROFILES_DIR / "groundstation_minimal.env")
+    env["NOMAD_INTEGRATED_FLIGHT"] = "yes"
+    normalized = profile._validated_profile_env("groundstation_minimal", env)
+    assert normalized["NOMAD_INTEGRATED_FLIGHT"] == "yes"
+
+    env["NOMAD_INTEGRATED_FLIGHT"] = "maybe"
+    with pytest.raises(ValueError, match="NOMAD_INTEGRATED_FLIGHT"):
+        profile._validated_profile_env("groundstation_minimal", env)
 
 
 @pytest.mark.parametrize("content", ["not json", "[]"])

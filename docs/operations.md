@@ -101,8 +101,9 @@ and capabilities; keep real settings/credentials in ignored local storage.
 
 ## Connection behavior
 
-Only the persistent `nomad-runtime` accepts udp, udpin and udpout aircraft
-endpoint schemes and hands them to the MAVSDK transport. The installed `nomad`
+Only the persistent `nomad-runtime` accepts `udpin` and `udpout` aircraft
+endpoint schemes and hands them to the MAVSDK transport; the product-profile
+loader normalizes its legacy `udp` alias to `udpin`. The installed `nomad`
 CLI has no aircraft endpoint or system-ID options; it connects to runtime IPC.
 In the ground-router topology, the runtime default is `udpin:127.0.0.1:14601`; the router consumer
 sends to that local MAVSDK endpoint from `127.0.0.1:14602`. Runtime IPC is a
@@ -117,7 +118,8 @@ automatically from compute placement.
 Start one `nomad-runtime` process for clients that use persistent mode. It owns
 one MAVSDK connection and one `Vehicle` until shutdown. It starts its local IPC
 listener even while aircraft identity is unresolved; HELLO and STATUS remain
-available during startup. Configure `NOMAD_MAVLINK_ENDPOINT`,
+available during startup. Configure the aircraft MAVSDK endpoint only here with
+`NOMAD_MAVLINK_ENDPOINT` (and the expected system ID with `--system-id`),
 `NOMAD_RUNTIME_IPC_PORT`, `NOMAD_API_KEY`, and the existing fence/velocity
 environment settings before starting it. The runtime retries the same MAVSDK
 connection object after a link loss. A client disconnect does not recreate the
@@ -128,8 +130,9 @@ port. It never launches `nomad` or falls back to native MAVLink/direct vehicle
 writes when the runtime is unavailable. GuidedGoto is unavailable until the
 runtime adds a typed navigation request; boundary feedback directs the operator
 to take manual control. Its local API-key setting is a nonempty actuation gate,
-not IPC authentication. Profile sync derives `IntegratedFlightMode` from
-`NOMAD_INTEGRATED_FLIGHT`, which is set in the supported integrated profiles.
+not IPC authentication. Profile sync keeps `NOMAD_INTEGRATED_FLIGHT` in the
+environment for the direct qualification-tool gate and removes the obsolete
+Mission Planner `IntegratedFlightMode` setting during configuration migration.
 The gimbal window, arrow keys and physical gimbal joystick send bounded angle
 targets through typed `set_gimbal_target` requests; runtime, authority and busy
 failures are shown to the operator, with no direct MAVLink fallback. The

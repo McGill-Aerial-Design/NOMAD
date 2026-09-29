@@ -33,6 +33,26 @@ internal static partial class DualLinkStressTests
         CheckMissionPlannerOutboundRejected(enabledConfig, "AllowOutbound true");
     }
 
+    private static void RouterRequiresExplicitTopology()
+    {
+        var missingLinks = MultiConfig(30900);
+        missingLinks.Links = null;
+        CheckConfigurationRejected(missingLinks, "Router Links are required");
+
+        var missingConsumers = MultiConfig(30900);
+        missingConsumers.Consumers = null;
+        CheckConfigurationRejected(missingConsumers, "Router Consumers are required");
+    }
+
+    private static void CheckConfigurationRejected(GroundLinkRouter.RouterConfig config, string expected)
+    {
+        string error = null;
+        try { using (var router = new GroundLinkRouter(config)) { } }
+        catch (ArgumentException ex) { error = ex.Message; }
+
+        Check(error != null && error.Contains(expected), "missing router topology fails clearly: " + expected);
+    }
+
     private static void CheckMissionPlannerOutboundRejected(GroundLinkRouter.RouterConfig config, string scenario)
     {
         string error = null;
@@ -92,7 +112,8 @@ internal static partial class DualLinkStressTests
             "management failure is distinct from physical link health");
         wifi[0].IsConnected = true;
         wifi[0].IsStale = true;
-        Check(LinkStatusDisplay.FormatRouterStatus(true, true, wifi) == "Router: connected — Physical links: 0/1 connected",
+        Check(
+            LinkStatusDisplay.FormatRouterStatus(true, true, wifi) == "Router: connected — Physical links: 0/1 connected",
             "stale management data is not shown as current");
         Check(LinkStatusDisplay.HasMembershipChanged(wifi, new[] { "WiFi" }), "link IDs remain case sensitive");
         Check(LinkStatusDisplay.HasMembershipChanged(wifi, Array.Empty<string>()), "missing card changes membership");

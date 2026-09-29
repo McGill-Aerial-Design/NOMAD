@@ -1794,7 +1794,9 @@ abrupt process termination, restart, and immediate socket reuse.
 Starting at `9ec3563f16faf24cb475c3508eb1eb12fe8e44b1`, this slice removes the
 plugin-owned router lifecycle. The standalone host is the sole ground-routing
 owner; Mission Planner is always a non-owning management/status client and
-telemetry consumer. Legacy `RouterMode` values migrate to `Standalone`. The local
+telemetry consumer. Legacy `RouterMode=Standalone` is removed during config
+migration; `Embedded` is rejected. The standalone host requires generic
+`Links` and `Consumers` and rejects old LTE/RadioMaster fields. The local
 protocol is limited to status, events, and safe link selection; it does not implement persistent C++ IPC,
 remove one-shot CLI clients, arbitrate global command authority, qualify an
 aircraft operation or establish independent physical redundancy. Mission/fence/FTP

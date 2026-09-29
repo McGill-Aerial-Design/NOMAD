@@ -80,6 +80,32 @@ def test_integrated_flight_blocks_direct_actuation(monkeypatch) -> None:
     assert "heartbeat" not in result.stderr
 
 
+@pytest.mark.parametrize("value", ["true", "TRUE", "yes", "1"])
+def test_integrated_flight_boolean_spellings_block_direct_actuation(monkeypatch, value: str) -> None:
+    monkeypatch.setenv("NOMAD_API_KEY", "qualification-key")
+    monkeypatch.setenv("NOMAD_INTEGRATED_FLIGHT", value)
+    monkeypatch.setenv("NOMAD_RUNTIME_IPC_PORT", str(free_tcp_port()))
+
+    result = invoke("arm", "--endpoint", "invalid")
+
+    assert result.returncode != 0
+    assert "runtime_owner_required" in result.stderr
+    assert "heartbeat" not in result.stderr
+
+
+def test_invalid_integrated_flight_value_fails_closed(monkeypatch) -> None:
+    monkeypatch.setenv("NOMAD_API_KEY", "qualification-key")
+    monkeypatch.setenv("NOMAD_INTEGRATED_FLIGHT", "sometimes")
+    monkeypatch.setenv("NOMAD_RUNTIME_IPC_PORT", str(free_tcp_port()))
+
+    result = invoke("arm", "--endpoint", "invalid")
+
+    assert result.returncode != 0
+    assert "invalid_integrated_flight_setting" in result.stderr
+    assert "NOMAD_INTEGRATED_FLIGHT must be a boolean value" in result.stderr
+    assert "heartbeat" not in result.stderr
+
+
 def test_runtime_listener_blocks_direct_actuation(monkeypatch) -> None:
     monkeypatch.setenv("NOMAD_API_KEY", "qualification-key")
     monkeypatch.delenv("NOMAD_INTEGRATED_FLIGHT", raising=False)

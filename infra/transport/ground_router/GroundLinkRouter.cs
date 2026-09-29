@@ -43,8 +43,7 @@ namespace NOMAD.MissionPlanner
         {
             _cfg = config ?? throw new ArgumentNullException(nameof(config));
             var links = TranslateLinks(config);
-            var consumers = config.Consumers ?? new List<ConsumerConfig>
-            { new ConsumerConfig { Id = "mission_planner", RouterPort = config.LocalPort, AllowOutbound = false } };
+            var consumers = config.Consumers;
             Validate(config, links, consumers);
             var localPorts = new HashSet<int>(links.Where(l => l.Enabled && l.Transport == "UDP")
                 .Select(l => l.Port).Concat(consumers.Select(c => c.RouterPort))

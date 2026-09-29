@@ -146,6 +146,18 @@ def require(condition: bool, description: str) -> None:
     print(f"[OK] {description}")
 
 
+def verify_invalid_runtime_endpoint(binary: Path) -> None:
+    """Reject unsupported aircraft transport before starting the runtime."""
+    environment = os.environ.copy()
+    environment["NOMAD_MAVLINK_ENDPOINT"] = "tcp:127.0.0.1:5760"
+    environment["NOMAD_RUNTIME_IPC_PORT"] = str(free_port(socket.SOCK_STREAM))
+    result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=5, check=False, env=environment)
+    require(
+        result.returncode != 0 and "runtime configuration error: NOMAD_MAVLINK_ENDPOINT" in result.stderr,
+        "runtime rejects unsupported aircraft endpoint configuration before listening",
+    )
+
+
 def wait_for_commands(peer: VehiclePeer, count: int) -> list[tuple[str, int, int | None, tuple[float, ...]]]:
     """Wait until the MAVLink peer has observed the expected command count."""
     deadline = time.monotonic() + 8.0
@@ -331,6 +343,7 @@ def main() -> int:
     udp_port = free_port(socket.SOCK_DGRAM)
     ipc_port = free_port(socket.SOCK_STREAM)
     peer = VehiclePeer(udp_port, 1)
+    verify_invalid_runtime_endpoint(binary)
     peer.start()
     try:
         verify_runtime(binary, peer, udp_port, ipc_port)

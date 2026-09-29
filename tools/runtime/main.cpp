@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "nomad/mavlink/mavsdk_transport.hpp"
+#include "nomad/mavlink/mavsdk_validation.hpp"
 #include "nomad/runtime/runtime.hpp"
 #include "nomad/safety/fence_config.hpp"
 #include "nomad/safety/velocity_config.hpp"
@@ -129,6 +130,11 @@ int main(int argc, char **argv) {
         print_usage();
         return EXIT_FAILURE;
     }
+    const auto endpoint = nomad::mavsdk_phase_a::canonicalize_udp_endpoint(arguments->endpoint);
+    if (!endpoint.has_value()) {
+        std::cerr << "runtime configuration error: NOMAD_MAVLINK_ENDPOINT must be a supported UDP MAVSDK endpoint\n";
+        return EXIT_FAILURE;
+    }
 
     nomad::runtime::RuntimeConfig config;
     config.ipc_port = arguments->port;
@@ -141,7 +147,7 @@ int main(int argc, char **argv) {
     config.velocity_limits = nomad::safety::load_velocity_limits(
         std::getenv("NOMAD_VELOCITY_MAX_XY"), std::getenv("NOMAD_VELOCITY_MAX_Z"),
         std::getenv("NOMAD_VELOCITY_MAX_YAW_RATE"));
-    auto connection = nomad::mavlink::make_mavsdk_connection(arguments->endpoint, arguments->system_id,
+    auto connection = nomad::mavlink::make_mavsdk_connection(*endpoint, arguments->system_id,
                                                               config.discovery_timeout);
     nomad::runtime::Runtime runtime(std::move(connection), std::move(config));
     std::string error;

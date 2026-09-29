@@ -12,35 +12,24 @@ namespace NOMAD.MissionPlanner
     {
         private static List<LinkConfig> TranslateLinks(RouterConfig c)
         {
-            return c.Links ?? new List<LinkConfig>
-            {
-                new LinkConfig { Id = LinkType.LTE, Name = "LTE / Tailscale", Port = c.LteBindPort,
-                    RemoteHost = c.LteRemoteHost, RemotePort = c.LteRemotePort, Priority = 100 },
-                new LinkConfig { Id = LinkType.RadioMaster, Name = "RadioMaster", Port = c.RadioBindPort,
-                    Transport = c.RadioMasterConnectionType.ToUpperInvariant(), Device = c.RadioComPort,
-                    BaudRate = c.RadioBaudRate, RemoteHost = c.RadioIsTcp ? c.RadioTcpHost : "", Priority = 80 }
-            };
+            return c.Links;
         }
 
         private static void Validate(RouterConfig config, List<LinkConfig> links, List<ConsumerConfig> consumers)
         {
-            if (links.Count == 0 || links.Count > 64 || !links.Any(l => l != null && l.Enabled))
+            if (links == null || links.Count == 0 || links.Count > 64 || !links.Any(l => l != null && l.Enabled))
             {
-                throw new ArgumentException("Configure between one and 64 links, at least one enabled");
+                throw new ArgumentException(
+                    "Router Links are required; move legacy LTE/RadioMaster settings into the Links array.");
             }
             if (config.StatsTickMs < 10 || !Positive(config.HeartbeatTimeoutSec) ||
                 !Positive(config.FailoverCooldownSec) || config.PreferredLinkReconnectDelaySec < 0)
             {
                 throw new ArgumentException("Invalid router timing");
             }
-            if (config.BindAddress != "127.0.0.1")
+            if (config.ManagementPort <= 0 || config.ManagementPort > 65535)
             {
-                throw new ArgumentException("Local consumers require IPv4 loopback");
-            }
-            if (config.ManagementBindAddress != "127.0.0.1" ||
-                config.ManagementPort <= 0 || config.ManagementPort > 65535)
-            {
-                throw new ArgumentException("Management endpoint must use IPv4 loopback and a valid port");
+                throw new ArgumentException("Management endpoint requires a valid port");
             }
             var ids = new HashSet<string>(StringComparer.Ordinal);
             var ports = new HashSet<int>();
@@ -60,6 +49,10 @@ namespace NOMAD.MissionPlanner
                 !links.Any(l => l.Id == config.PreferredLink && l.Enabled))
             {
                 throw new ArgumentException("Preferred link is unknown or disabled");
+            }
+            if (consumers == null)
+            {
+                throw new ArgumentException("Router Consumers are required; configure each local client in Consumers.");
             }
             ValidateConsumers(consumers, ports);
             foreach (var link in links.Where(l => l.Enabled && l.Transport == "UDP"))

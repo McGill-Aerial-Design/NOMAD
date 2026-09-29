@@ -75,10 +75,11 @@ enabled link or return to automatic selection.
 The standalone host enforces the `mission_planner` consumer as receive-only for
 all profiles. An explicit entry with `AllowOutbound` omitted (default true) or
 set true is rejected at startup; the example sets it false and leaves
-`nomad_core` command-capable. `IntegratedFlightMode` does not rewrite the
-separately running host configuration. Update the host JSON and Mission Planner's
-UDP consumer port together when changing endpoints. Legacy `RouterMode` values
-are migrated to `Standalone`; there is no embedded mode.
+`nomad_core` command-capable. Mission Planner has no aircraft MAVSDK endpoint or
+router-topology settings. Its `RouterLocalPort` and `ManagementPort` configure
+only its loopback router clients; update the host's matching consumer endpoint
+when changing the UDP port. Profile migration removes retired topology and
+`IntegratedFlightMode` fields; legacy `RouterMode=Embedded` is rejected.
 
 ## Opt-in modules
 

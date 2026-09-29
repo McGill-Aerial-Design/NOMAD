@@ -220,8 +220,9 @@ It does not establish one writer for the aircraft. Native Mission Planner
 MAVLink controls, RC/pilot input, ArduPilot behavior and maintenance/test tools
 remain independent authorities. The ROS observer has no flight command path;
 its temporary MAVLink connection receives telemetry only. Integrated profiles
-inhibit direct CLI actuation. Profile sync writes
-`NOMAD_INTEGRATED_FLIGHT` to Mission Planner's `IntegratedFlightMode`. The
+set `NOMAD_INTEGRATED_FLIGHT` to inhibit direct actuation by the non-installed
+qualification tool. Profile sync removes the obsolete Mission Planner
+`IntegratedFlightMode` field and does not copy the qualification gate there. The
 separately supervised ground router enforces its `mission_planner` consumer as
 receive-only and keeps `nomad_core` command-capable. An explicit Mission Planner
 entry with `AllowOutbound` omitted (default true) or set true is rejected at

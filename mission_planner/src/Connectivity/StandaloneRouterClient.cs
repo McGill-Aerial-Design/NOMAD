@@ -41,10 +41,8 @@ namespace NOMAD.MissionPlanner
         public StandaloneRouterClient(MAVLinkConnectionManager.ConnectionConfig config)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
-            SeedConfiguredLinks();
         }
 
-        public MAVLinkConnectionManager.ConnectionConfig Config => _config;
         public string RouterMode => "Standalone";
         public bool IsMonitoring { get { lock (_gate) { return _connected; } } }
         public bool IsRouterAvailable
@@ -61,10 +59,9 @@ namespace NOMAD.MissionPlanner
                 }
             }
         }
-        public bool SupportsLiveConfiguration => false;
         public string ActiveLink { get { lock (_gate) { return _activeLink; } } }
         public string ManualOverride { get { lock (_gate) { return _manualOverride; } } }
-        public string LocalMergedEndpoint => $"udp://{_config.RouterBindAddress}:{_config.RouterLocalPort}";
+        public string LocalMergedEndpoint => $"udp://127.0.0.1:{_config.RouterLocalPort}";
 
         public IReadOnlyList<LinkStatistics> LinkStatistics
         {
@@ -140,36 +137,6 @@ namespace NOMAD.MissionPlanner
             }
 
             return SendSelection("select_link", target, target);
-        }
-
-        public void SetAutoFailoverEnabled(bool enabled)
-        {
-            LogConfigurationIsRestartRequired("automatic failover");
-        }
-
-        public void SetAutoReconnectPreferred(bool enabled)
-        {
-            LogConfigurationIsRestartRequired("preferred-link recovery");
-        }
-
-        public void SetDedupEnabled(bool enabled)
-        {
-            LogConfigurationIsRestartRequired("deduplication");
-        }
-
-        public void SetPreferredLink(string link)
-        {
-            LogConfigurationIsRestartRequired("preferred link");
-        }
-
-        public void ResetCounters()
-        {
-            LogConfigurationIsRestartRequired("counter reset");
-        }
-
-        public void LogConfigurationIsRestartRequired(string setting)
-        {
-            LogMessage?.Invoke(this, $"Standalone router {setting} is restart-required; only link selection is live.");
         }
 
         public void Dispose()
@@ -278,10 +245,6 @@ namespace NOMAD.MissionPlanner
 
         private TcpClient Connect()
         {
-            if (!string.Equals(_config.ManagementBindAddress, "127.0.0.1", StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException("Standalone management must use IPv4 loopback.");
-            }
             if (_config.ManagementPort <= 0 || _config.ManagementPort > 65535)
             {
                 throw new InvalidOperationException("Standalone management port is invalid.");

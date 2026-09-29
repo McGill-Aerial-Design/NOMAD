@@ -4,10 +4,7 @@
 // MAVLink Link Status panel
 // ============================================================
 // Real-time UI for the multi-link router. Shows live per-link
-// metrics (latency, loss, throughput, RSSI, heartbeat age) for
-// both LTE and RadioMaster, plus router controls, a throughput
-// sparkline per link, failover settings and event log. All data
-// comes from the standalone router management client.
+// metrics and the active route controls reported by the standalone host.
 // ============================================================
 
 using System;
@@ -40,14 +37,9 @@ namespace NOMAD.MissionPlanner
         private FlowLayoutPanel _linkRow;
         private readonly Dictionary<string, LinkCard> _cards = new Dictionary<string, LinkCard>();
 
-        // Settings row
-        private CheckBox _chkAuto;
-        private ComboBox _cmbPreferred;
-        private CheckBox _chkDedup;
-        private CheckBox _chkAutoReconnect;
+        // Route selection
         private Label _lblManualOverride;
         private Button _btnReleaseOverride;
-        private Button _btnReset;
 
         // Log
         private ListBox _lstLog;
@@ -112,8 +104,7 @@ namespace NOMAD.MissionPlanner
             Controls.Add(root);
         }
 
-        // Bottom strip: settings on the left, failover log on the right, an even
-        // 50/50 split. Keeps both compact so the link graphs above get the height.
+        // Bottom strip: route controls on the left and the failover log on the right.
         private TableLayoutPanel BuildBottomRow()
         {
             var row = new TableLayoutPanel
@@ -267,9 +258,6 @@ namespace NOMAD.MissionPlanner
 
         private Panel BuildSettingsRow()
         {
-            // AutoSize card holding one wrapping flow of every setting, so the
-            // controls re-pack onto multiple lines when the panel is narrow instead
-            // of overlapping at fixed x positions.
             var panel = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -293,62 +281,6 @@ namespace NOMAD.MissionPlanner
                 Padding = new Padding(0),
             };
 
-            _chkAuto = SettingCheck("Auto-failover", _provider.Config.AutoFailoverEnabled);
-            _chkAuto.Enabled = _provider.SupportsLiveConfiguration;
-            _chkAuto.CheckedChanged += (s, e) =>
-            {
-                _provider.SetAutoFailoverEnabled(_chkAuto.Checked);
-                _config.AutoFailoverEnabled = _chkAuto.Checked;
-                PersistConfig();
-            };
-
-            _chkAutoReconnect = SettingCheck("Return to preferred when healthy", _provider.Config.AutoReconnectPreferred);
-            _chkAutoReconnect.Enabled = _provider.SupportsLiveConfiguration;
-            _chkAutoReconnect.CheckedChanged += (s, e) =>
-            {
-                _provider.SetAutoReconnectPreferred(_chkAutoReconnect.Checked);
-                _config.AutoReconnectToPreferred = _chkAutoReconnect.Checked;
-                PersistConfig();
-            };
-
-            _chkDedup = SettingCheck("Deduplicate cross-link packets", _provider.Config.RouterDedupEnabled);
-            _chkDedup.Enabled = _provider.SupportsLiveConfiguration;
-            _chkDedup.CheckedChanged += (s, e) =>
-            {
-                _provider.SetDedupEnabled(_chkDedup.Checked);
-                _config.RouterDedupEnabled = _chkDedup.Checked;
-                PersistConfig();
-            };
-
-            var lblPref = new Label { Text = "Preferred:", ForeColor = NOMADTheme.TEXT_SECONDARY, Font = NOMADTheme.Font(), AutoSize = true, Margin = new Padding(0, 5, NOMADTheme.GAP, 0) };
-            _cmbPreferred = new ComboBox
-            {
-                Width = 110,
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                BackColor = NOMADTheme.CONTROL_BG,
-                ForeColor = NOMADTheme.TEXT_PRIMARY,
-                Font = NOMADTheme.Font(),
-                Margin = new Padding(0, 2, NOMADTheme.PAD, 0),
-            };
-            _cmbPreferred.Items.Add("");
-            foreach (var stats in _provider.LinkStatistics) { _cmbPreferred.Items.Add(stats.Type); }
-            _cmbPreferred.SelectedItem = _provider.Config.PreferredLink;
-            _cmbPreferred.Enabled = _provider.SupportsLiveConfiguration;
-            _cmbPreferred.SelectedIndexChanged += (s, e) =>
-            {
-                var pref = _cmbPreferred.SelectedItem as string ?? "";
-                _provider.SetPreferredLink(pref);
-                _config.PreferredMavlinkLink = pref;
-                PersistConfig();
-            };
-            var prefGroup = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false, BackColor = Color.Transparent, Margin = new Padding(0), Padding = new Padding(0) };
-            prefGroup.Controls.Add(lblPref);
-            prefGroup.Controls.Add(_cmbPreferred);
-
-            _btnReset = SettingButton("Reset counters");
-            _btnReset.Enabled = _provider.SupportsLiveConfiguration;
-            _btnReset.Click += (s, e) => _provider.ResetCounters();
-
             _btnReleaseOverride = SettingButton("Release override");
             _btnReleaseOverride.Visible = false;
             _btnReleaseOverride.Click += (s, e) => _provider.SwitchToLink(LinkType.None);
@@ -362,27 +294,12 @@ namespace NOMAD.MissionPlanner
                 Margin = new Padding(NOMADTheme.GAP, 5, 0, 0),
             };
 
-            flow.Controls.Add(_chkAuto);
-            flow.Controls.Add(_chkAutoReconnect);
-            flow.Controls.Add(prefGroup);
-            flow.Controls.Add(_chkDedup);
-            flow.Controls.Add(_btnReset);
             flow.Controls.Add(_btnReleaseOverride);
             flow.Controls.Add(_lblManualOverride);
 
             panel.Controls.Add(flow);
             return panel;
         }
-
-        private static CheckBox SettingCheck(string text, bool isChecked) => new CheckBox
-        {
-            Text = text,
-            ForeColor = NOMADTheme.TEXT_PRIMARY,
-            Font = NOMADTheme.Font(),
-            AutoSize = true,
-            Checked = isChecked,
-            Margin = new Padding(0, 3, NOMADTheme.PAD, 0),
-        };
 
         private static Button SettingButton(string text)
         {
@@ -515,10 +432,6 @@ namespace NOMAD.MissionPlanner
                 if (LinkStatusDisplay.HasMembershipChanged(links, _cards.Keys))
                 {
                     RebuildLinkCards(links);
-                    _cmbPreferred.Items.Clear();
-                    _cmbPreferred.Items.Add("");
-                    foreach (var stats in links) { _cmbPreferred.Items.Add(stats.Type); }
-                    _cmbPreferred.SelectedItem = _provider.Config.PreferredLink;
                 }
                 foreach (var stats in links)
                 {
@@ -549,12 +462,6 @@ namespace NOMAD.MissionPlanner
             _lstLog.Items.Add(line);
             while (_lstLog.Items.Count > 200) _lstLog.Items.RemoveAt(0);
             _lstLog.TopIndex = Math.Max(0, _lstLog.Items.Count - 1);
-        }
-
-        private void PersistConfig()
-        {
-            try { _config.Save(); }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"NOMAD: persist failed - {ex.Message}"); }
         }
 
         private void CopyEndpoint()

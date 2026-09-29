@@ -10,6 +10,11 @@ namespace NOMAD.MissionPlanner
 {
     public partial class NOMADConfig
     {
+        private sealed class UnsupportedConfigurationMigrationException : JsonSerializationException
+        {
+            public UnsupportedConfigurationMigrationException(string message) : base(message) { }
+        }
+
         private static string ConfigPath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Mission Planner",
@@ -37,6 +42,11 @@ namespace NOMAD.MissionPlanner
                     if (path == backup)
                         Log.Warn("Loaded config from .bak (primary corrupt or missing).");
                     return config;
+                }
+                catch (UnsupportedConfigurationMigrationException ex)
+                {
+                    Log.Error($"Configuration requires migration before Mission Planner can start - {ex.Message}");
+                    throw new InvalidDataException(ex.Message, ex);
                 }
                 catch (Exception ex)
                 {
@@ -112,7 +122,7 @@ namespace NOMAD.MissionPlanner
 
         private static NOMADConfig Deserialize(string json)
         {
-            var migratedJson = MigrateLegacyCameraTiltKeys(json);
+            var migratedJson = MigrateLegacyConfigKeys(json);
             var config = JsonConvert.DeserializeObject<NOMADConfig>(migratedJson);
             if (config == null)
                 throw new JsonSerializationException("The configuration file did not contain a NOMAD configuration.");
@@ -121,7 +131,7 @@ namespace NOMAD.MissionPlanner
             return config;
         }
 
-        private static string MigrateLegacyCameraTiltKeys(string json)
+        private static string MigrateLegacyConfigKeys(string json)
         {
             var document = JObject.Parse(json);
             var mappings = new[]
@@ -139,7 +149,64 @@ namespace NOMAD.MissionPlanner
                     document[currentKey] = document[legacyKey];
                 document.Remove(legacyKey);
             }
+
+            var legacyMode = document["RouterMode"]?.Value<string>();
+            if (!string.IsNullOrWhiteSpace(legacyMode) &&
+                !string.Equals(legacyMode, "Standalone", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new UnsupportedConfigurationMigrationException(
+                    $"RouterMode '{legacyMode}' is unsupported; run only the standalone ground router.");
+            }
+
+            ValidateLegacyLoopbackSetting(document, "RouterBindAddress");
+            ValidateLegacyLoopbackSetting(document, "ManagementBindAddress");
+
+            // DualLinkEnabled was the source of truth in the old model. If it
+            // is present it wins; otherwise migrate the older RouterEnabled key.
+            if (document["DualLinkEnabled"] == null && document["RouterEnabled"] != null)
+            {
+                document["DualLinkEnabled"] = document["RouterEnabled"];
+            }
+
+            var removed = new[]
+            {
+                "IntegratedFlightMode",
+                "RouterLinks", "RouterConsumers", "RouterEnabled", "RouterMode",
+                "RadioMasterConnectionType", "RadioMasterPort", "RadioMasterComPort",
+                "RadioMasterTcpHost", "RadioMasterBaudRate", "LteMavlinkPort",
+                "LteRemoteHost", "LteRemotePort", "AutoFailoverEnabled",
+                "PreferredMavlinkLink", "AutoReconnectToPreferred",
+                "PreferredLinkReconnectDelay", "MavlinkHeartbeatTimeout",
+                "RouterBindAddress", "RouterDedupEnabled", "ManagementBindAddress",
+                "CoreMavlinkEndpoint", "CoreClientMode", "CoreExePath",
+                "JetsonApiKey", "JetsonIP", "JetsonPort",
+            };
+            var found = new System.Collections.Generic.List<string>();
+            foreach (var key in removed)
+            {
+                if (document.Property(key) != null)
+                {
+                    found.Add(key);
+                    document.Remove(key);
+                }
+            }
+            if (found.Count > 0)
+            {
+                Log.Warn("Removed retired aircraft/router settings from Mission Planner config: " +
+                    string.Join(", ", found) + ". Configure aircraft transport in nomad-runtime and ground links " +
+                    "in the standalone router JSON.");
+            }
             return document.ToString(Formatting.None);
+        }
+
+        private static void ValidateLegacyLoopbackSetting(JObject document, string key)
+        {
+            var address = document[key]?.Value<string>();
+            if (!string.IsNullOrWhiteSpace(address) && address != "127.0.0.1")
+            {
+                throw new UnsupportedConfigurationMigrationException(
+                    $"{key} must be 127.0.0.1; the standalone router is loopback-only.");
+            }
         }
 
         /// <summary>
@@ -159,35 +226,9 @@ namespace NOMAD.MissionPlanner
                 VideoUrl = "rtsp://127.0.0.1:8554/stream";
             }
 
-            // Bump LTE MAVLink port off the RadioMaster default (14550) so the
-            // two links don't fight for the same UDP port on the GCS. Users
-            // who explicitly set a non-default value keep it.
-            if (LteMavlinkPort == 14550)
-            {
-                LteMavlinkPort = 14560;
-            }
-
-            // Keep the old high-level dual-link toggle and the newer local
-            // router toggle in lockstep unless a future UI exposes them separately.
-            RouterEnabled = DualLinkEnabled;
-            RouterMode = "Standalone";
-            if (RouterBindAddress != "127.0.0.1")
-            {
-                RouterBindAddress = "127.0.0.1";
-            }
-            if (ManagementBindAddress != "127.0.0.1")
-            {
-                ManagementBindAddress = "127.0.0.1";
-            }
             if (ManagementPort < 1 || ManagementPort > 65535)
             {
                 ManagementPort = 14610;
-            }
-
-            if (RouterConsumers != null)
-            {
-                var mp = RouterConsumers.Find(c => c.Id == "mission_planner");
-                if (mp != null) { mp.RouterPort = RouterLocalPort; }
             }
 
             // Keep FOV within a practical range for 3D view usability.
@@ -281,14 +322,7 @@ namespace NOMAD.MissionPlanner
 
             ActiveProfile = defaults.ActiveProfile;
             CoreRuntimePort = defaults.CoreRuntimePort;
-            RouterLinks = defaults.RouterLinks;
-            RouterConsumers = defaults.RouterConsumers;
-            RouterMode = defaults.RouterMode;
-            RouterEnabled = defaults.RouterEnabled;
             RouterLocalPort = defaults.RouterLocalPort;
-            RouterBindAddress = defaults.RouterBindAddress;
-            RouterDedupEnabled = defaults.RouterDedupEnabled;
-            ManagementBindAddress = defaults.ManagementBindAddress;
             ManagementPort = defaults.ManagementPort;
             CoreApiKey = defaults.CoreApiKey;
             VideoUrl = defaults.VideoUrl;

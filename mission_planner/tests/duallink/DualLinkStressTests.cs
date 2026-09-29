@@ -54,6 +54,7 @@ internal static partial class DualLinkStressTests
         Run("review: generic link status and membership", LinkStatusDisplayChecks);
         await RunAsync("review: resolved local destination rejected", ResolvedLocalDestination);
         Run("multi-link: configuration rejection", MultiConfigValidation);
+        Run("multi-link: explicit Links and Consumers are required", RouterRequiresExplicitTopology);
         Run("multi-link: unsafe Mission Planner outbound config rejected", MissionPlannerOutboundConfigRejection);
         await RunAsync("multi-link: three links, consumers, pinning and cleanup", MultiLinkRouting);
         await RunAsync("multi-link: receive-only consumer outbound admission", ReadOnlyConsumerOutboundAdmission);

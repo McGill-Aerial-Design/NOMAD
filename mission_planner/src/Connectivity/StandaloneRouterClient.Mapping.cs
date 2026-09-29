@@ -10,60 +10,6 @@ namespace NOMAD.MissionPlanner
 {
     public sealed partial class StandaloneRouterClient
     {
-        private void SeedConfiguredLinks()
-        {
-            foreach (var link in GetConfiguredLinks())
-            {
-                if (link == null)
-                {
-                    continue;
-                }
-                _links.Add(new LinkStatistics
-                {
-                    Type = link.Id,
-                    Name = link.Name ?? link.Id,
-                    Endpoint = link.Transport == "COM" ? link.Device : link.Transport + ":" + link.Port,
-                    TransportType = link.Transport,
-                    IsEnabled = link.Enabled,
-                    Health = LinkHealth.Disconnected,
-                    IsStale = true,
-                });
-            }
-        }
-
-        private IEnumerable<LinkConfig> GetConfiguredLinks()
-        {
-            if (_config.Links != null)
-            {
-                return _config.Links;
-            }
-
-            return new[]
-            {
-                new LinkConfig
-                {
-                    Id = LinkType.LTE,
-                    Name = "LTE / Tailscale",
-                    Port = _config.LtePort,
-                    RemoteHost = _config.LteRemoteHost,
-                    RemotePort = _config.LteRemotePort,
-                    Priority = 100,
-                },
-                new LinkConfig
-                {
-                    Id = LinkType.RadioMaster,
-                    Name = "RadioMaster",
-                    Port = _config.RadioMasterPort,
-                    Transport = _config.RadioMasterConnectionType.ToUpperInvariant(),
-                    Device = _config.RadioMasterComPort,
-                    BaudRate = _config.RadioMasterBaudRate,
-                    RemoteHost = string.Equals(_config.RadioMasterConnectionType, "TCP",
-                        StringComparison.OrdinalIgnoreCase) ? _config.RadioMasterTcpHost : "",
-                    Priority = 80,
-                },
-            };
-        }
-
         public string GetStatusSummary()
         {
             lock (_gate)

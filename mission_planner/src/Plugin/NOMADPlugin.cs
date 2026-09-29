@@ -103,7 +103,7 @@ namespace NOMAD.MissionPlanner
                 AudioAlerts.PlayWelcomeOnce();
 
                 // Initialize MAVLink dual link connection manager
-                if (_config.DualLinkEnabled && _config.RouterEnabled)
+                if (_config.DualLinkEnabled)
                 {
                     InitializeConnectionManager();
                 }

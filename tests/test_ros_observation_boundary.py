@@ -57,3 +57,17 @@ def test_observer_api_is_receive_only() -> None:
     assert "sendto(" not in observer_source
     assert "MavlinkPassthrough" not in observer_source
     assert "mavsdk::Mavsdk" not in observer_source
+
+
+def test_ros_launch_uses_observation_endpoints_only() -> None:
+    launch_service = (ROOT / "scripts/services/nomad_ros_vehicle.sh").read_text(encoding="utf-8")
+    environment_example = (ROOT / "config/nomad.env.example").read_text(encoding="utf-8")
+
+    for setting in (
+        "NOMAD_ROS_OBSERVATION_PORT",
+        "NOMAD_ROS_EXPECTED_SYSTEM_ID",
+        "NOMAD_ROS_PUBLISH_RATE_HZ",
+    ):
+        assert setting in launch_service
+        assert setting in environment_example
+    assert "NOMAD_MAVLINK_ENDPOINT" not in launch_service
