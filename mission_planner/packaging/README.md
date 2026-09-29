@@ -24,6 +24,23 @@ An existing packaged DLL may predate that migration; verify its build identity.
    folder (`C:\Program Files (x86)\Mission Planner\plugins`).
 3. Start Mission Planner and open the NOMAD panel from the **Tools** menu.
 
+## Ground router host
+
+The plugin does not contain or launch the ground router. Download the separate
+`NOMADLinkRouter` release package, edit `router.example.json` for the physical
+links and consumers, then run `nomad-link-router.exe router.example.json` in an
+independently supervised process. Keep `Nomad.LinkRouter.dll` and the example
+configuration beside the executable. The Mission Planner status panel connects
+to loopback TCP `127.0.0.1:14610`; native Mission Planner uses UDPCl to the
+configured `mission_planner` consumer, normally port `14600`.
+
+The standalone host enforces `mission_planner` as receive-only. An explicit host
+JSON entry with `AllowOutbound` omitted (default true) or set true is rejected;
+the sample sets it false while preserving the separate command-capable
+`nomad_core` consumer. Mission Planner's `IntegratedFlightMode` does not rewrite
+the independently running router configuration. The plugin installer below
+installs only `NOMADPlugin.dll`; it does not install or register a router service.
+
 ### Manual install
 
 Copy `NOMADPlugin.dll` into
@@ -34,6 +51,7 @@ Planner.
 
 - Windows with Mission Planner installed (built against **1.3.83**).
 - .NET Framework 4.8 (ships with current Mission Planner / Windows).
+- The separately distributed `NOMADLinkRouter` host package for multi-link routing.
 
 Core-backed operations also need a compatible configured NOMAD C++ executable.
 Video needs its selected playback/runtime dependencies. Qualify the complete

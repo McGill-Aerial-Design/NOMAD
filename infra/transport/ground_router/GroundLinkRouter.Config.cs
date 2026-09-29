@@ -126,6 +126,11 @@ namespace NOMAD.MissionPlanner
                 {
                     throw new ArgumentException("Invalid or colliding consumer endpoint");
                 }
+                if (consumer.Id == "mission_planner" && consumer.AllowOutbound)
+                {
+                    throw new ArgumentException(
+                        "The mission_planner consumer is receive-only; set AllowOutbound to false.");
+                }
             }
             foreach (var consumer in consumers)
             {

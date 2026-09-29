@@ -12,12 +12,7 @@ namespace NOMAD.MissionPlanner
     {
         private void SeedConfiguredLinks()
         {
-            if (_config.Links == null)
-            {
-                return;
-            }
-
-            foreach (var link in _config.Links)
+            foreach (var link in GetConfiguredLinks())
             {
                 if (link == null)
                 {
@@ -34,6 +29,39 @@ namespace NOMAD.MissionPlanner
                     IsStale = true,
                 });
             }
+        }
+
+        private IEnumerable<LinkConfig> GetConfiguredLinks()
+        {
+            if (_config.Links != null)
+            {
+                return _config.Links;
+            }
+
+            return new[]
+            {
+                new LinkConfig
+                {
+                    Id = LinkType.LTE,
+                    Name = "LTE / Tailscale",
+                    Port = _config.LtePort,
+                    RemoteHost = _config.LteRemoteHost,
+                    RemotePort = _config.LteRemotePort,
+                    Priority = 100,
+                },
+                new LinkConfig
+                {
+                    Id = LinkType.RadioMaster,
+                    Name = "RadioMaster",
+                    Port = _config.RadioMasterPort,
+                    Transport = _config.RadioMasterConnectionType.ToUpperInvariant(),
+                    Device = _config.RadioMasterComPort,
+                    BaudRate = _config.RadioMasterBaudRate,
+                    RemoteHost = string.Equals(_config.RadioMasterConnectionType, "TCP",
+                        StringComparison.OrdinalIgnoreCase) ? _config.RadioMasterTcpHost : "",
+                    Priority = 80,
+                },
+            };
         }
 
         public string GetStatusSummary()

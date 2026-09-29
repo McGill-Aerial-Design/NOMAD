@@ -177,13 +177,14 @@ explicit handback or final-send fencing behavior changed in this slice. The
 existing runtime and MAVSDK authority tests remain the checks for those
 invariants.
 
-The integrated profile makes the embedded router's Mission Planner consumer
-receive-only while retaining a command-capable NOMAD core consumer. The
-standalone router example carries the same policy, but other standalone
-configurations do not inherit it. This does not alter Mission Planner's native
-controls when it has a direct aircraft link, nor can it arbitrate RC/ELRS.
-The router's consumer name is a local configuration
-boundary, not authenticated client identity. Integrated deployment must exclude
+The integrated profile inhibits plugin actions outside the runtime. The
+standalone ground router enforces its `mission_planner` consumer as receive-only
+while retaining the separate command-capable NOMAD core consumer. An explicit
+Mission Planner entry with `AllowOutbound` omitted (default true) or set true is
+rejected at startup; the implicit consumer is receive-only. This does not alter
+Mission Planner's native controls when it has a direct aircraft link, nor can it
+arbitrate RC/ELRS. The router's consumer name is a local configuration boundary,
+not authenticated client identity. Integrated deployment must exclude
 direct/bypass links and explicitly revoke NOMAD before pilot/native takeover.
 
 **Automated evidence.** The peer fixtures independently count physical UDP
@@ -1773,7 +1774,7 @@ documentation, hosted Phase A smoke, or local regressions pass.
 - No SITL startup, hardware actuation, deployment, hosted CI or MAVSDK rebuild
   was performed in this review. Earlier pass counts are historical only.
 
-## Ground router extraction
+## Ground router extraction and lifecycle convergence
 
 The transport slice based on PR #21's merged `main`
 (`ca9f4ee89418e481f37d2faa846c7beec0a869cb`) replaces the hard-coded two-link router
@@ -1786,12 +1787,15 @@ are described in the [router README](https://github.com/YoussGm3o8/NOMAD/blob/ma
 router regressions, three-link handover dedup, single-recipient outbound commands,
 parameter pinning, invalid configuration/override checks, per-source parser and
 sequence isolation, TCP reconnect, consumer isolation, the versioned loopback
-status/control protocol and standalone-client stale/reconnect tests, plus a
-standalone loopback process smoke with failover and immediate port reuse.
+status/control protocol and standalone-client stale/reconnect tests. The process
+smoke verifies Mission Planner receive-only egress, core route egress, failover,
+abrupt process termination, restart, and immediate socket reuse.
 
-The plugin remains an optional embedded host, or a non-owning standalone management
-client selected explicitly by `RouterMode`. The local protocol is limited to
-status, events, and safe link selection; it does not implement persistent C++ IPC,
+Starting at `9ec3563f16faf24cb475c3508eb1eb12fe8e44b1`, this slice removes the
+plugin-owned router lifecycle. The standalone host is the sole ground-routing
+owner; Mission Planner is always a non-owning management/status client and
+telemetry consumer. Legacy `RouterMode` values migrate to `Standalone`. The local
+protocol is limited to status, events, and safe link selection; it does not implement persistent C++ IPC,
 remove one-shot CLI clients, arbitrate global command authority, qualify an
 aircraft operation or establish independent physical redundancy. Mission/fence/FTP
 transaction pinning is not implemented. QuadPlane forward transition and the

@@ -1,13 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// MAVLink Connection Manager — façade over GroundLinkRouter
+// MAVLink Connection Manager — standalone router management client
 // ============================================================
-// Owns a GroundLinkRouter and projects its live state into the
-// LinkStatistics / event surface the rest of the plugin already
-// consumes (LinkHealthPanel, NOMADDashboardView, NOMADLinksView).
-// All real I/O and health tracking happens in the router; this
-// class is the public API + glue.
+// Observes the separately supervised ground router and projects its
+// status into the LinkStatistics / event surface used by the plugin.
 // ============================================================
 
 using System;
@@ -78,8 +75,7 @@ namespace NOMAD.MissionPlanner
     }
 
     /// <summary>
-    /// Common status/control surface for embedded and standalone routers.
-    /// The standalone implementation only enables the two safe selection controls.
+    /// Status and safe link-selection surface for the standalone router.
     /// </summary>
     public interface IRouterStatusProvider : IDisposable
     {
@@ -115,13 +111,12 @@ namespace NOMAD.MissionPlanner
         // ============================================================
 
         /// <summary>
-        /// Connection configuration. Mostly mirrors NOMADConfig fields and
-        /// is translated into a GroundLinkRouter.RouterConfig at Start time.
+        /// Local Mission Planner settings for the external router client.
+        /// Link definitions seed status while the management endpoint is unavailable.
         /// </summary>
         public class ConnectionConfig
         {
             public List<LinkConfig> Links { get; set; }
-            public List<ConsumerConfig> Consumers { get; set; }
             public int LtePort { get; set; } = 14560;
             public string LteRemoteHost { get; set; } = "";
             public int LteRemotePort { get; set; } = 0;
@@ -141,7 +136,7 @@ namespace NOMAD.MissionPlanner
             public double HeartbeatTimeoutSec { get; set; } = 3.0;
 
             // Router endpoint (where MP connects to as UDPCl)
-            public string RouterMode { get; set; } = "Embedded";
+            public string RouterMode { get; set; } = "Standalone";
             public string RouterBindAddress { get; set; } = "127.0.0.1";
             public int RouterLocalPort { get; set; } = 14600;
             public bool RouterDedupEnabled { get; set; } = true;
@@ -154,7 +149,6 @@ namespace NOMAD.MissionPlanner
         // ============================================================
 
         private ConnectionConfig _config;
-        private GroundLinkRouter _router;
         private StandaloneRouterClient _standalone;
         private readonly object _lock = new object();
         private bool _disposed;
@@ -175,77 +169,51 @@ namespace NOMAD.MissionPlanner
         // Properties
         // ============================================================
 
-        public string RouterMode => _config?.RouterMode ?? "Embedded";
-        public string ActiveLink => _standalone?.ActiveLink ?? _router?.ActiveLink ?? LinkType.None;
-        public string ManualOverride => _standalone?.ManualOverride ?? _router?.ManualOverride ?? LinkType.None;
+        public string RouterMode => "Standalone";
+        public string ActiveLink => _standalone?.ActiveLink ?? LinkType.None;
+        public string ManualOverride => _standalone?.ManualOverride ?? LinkType.None;
         public ConnectionConfig Config => _config;
         public IReadOnlyList<LinkStatistics> LinkStatistics => _standalone != null
             ? _standalone.LinkStatistics
-            : _router == null
-            ? (_config.Links == null ? new[] { _lteStats, _radioStats } :
+            : (_config.Links == null ? new[] { _lteStats, _radioStats } :
                 _config.Links.Select(l => new LinkStatistics { Type = l.Id, Name = l.Name ?? l.Id,
                     Endpoint = l.Transport == "COM" ? l.Device : l.Transport + ":" + l.Port,
-                    TransportType = l.Transport, IsEnabled = l.Enabled, Health = LinkHealth.Disconnected }).ToArray())
-            : _router.Links.Select(ToStatistics).ToArray();
-        private static LinkStatistics ToStatistics(LinkSourceStats source)
-        {
-            var result = new LinkStatistics { Type = source.Type, Name = source.Name, Endpoint = source.Endpoint,
-                TransportType = source.Transport, IsEnabled = source.Enabled };
-            ProjectStats(source, result);
-            return result;
-        }
-        public LinkStatistics LteStatistics => _lteStats;
-        public LinkStatistics RadioMasterStatistics => _radioStats;
-        public bool IsMonitoring => _standalone?.IsMonitoring == true || _router?.IsRunning == true;
-        public bool IsRouterAvailable => _standalone != null ? _standalone.IsRouterAvailable : _router?.IsRunning == true;
+                    TransportType = l.Transport, IsEnabled = l.Enabled, Health = LinkHealth.Disconnected }).ToArray());
+        public LinkStatistics LteStatistics => FindLink(LinkType.LTE) ?? _lteStats;
+        public LinkStatistics RadioMasterStatistics => FindLink(LinkType.RadioMaster) ?? _radioStats;
+        public bool IsMonitoring => _standalone?.IsMonitoring == true;
+        public bool IsRouterAvailable => _standalone?.IsRouterAvailable == true;
         public bool IsStatusStale => _standalone?.IsStatusStale == true;
-        public bool SupportsLiveConfiguration =>
-            !string.Equals(RouterMode, "Standalone", StringComparison.OrdinalIgnoreCase);
-        public string LocalMergedEndpoint => _router?.LocalEndpoint != null
-            ? $"udp://{_router.LocalEndpoint.Address}:{_router.LocalEndpoint.Port}"
-            : $"udp://{_config.RouterBindAddress}:{_config.RouterLocalPort}";
+        public bool SupportsLiveConfiguration => false;
+        public string LocalMergedEndpoint => $"udp://{_config.RouterBindAddress}:{_config.RouterLocalPort}";
 
         public IReadOnlyCollection<FailoverEventArgs> FailoverLog =>
-            _standalone?.FailoverLog ?? _router?.FailoverLog ??
+            _standalone?.FailoverLog ??
             (IReadOnlyCollection<FailoverEventArgs>)Array.Empty<FailoverEventArgs>();
 
-        public bool IsLteHealthy => _lteStats.IsConnected &&
-            _lteStats.Health != LinkHealth.Disconnected &&
-            _lteStats.Health != LinkHealth.Critical;
+        public bool IsLteHealthy => IsHealthy(LteStatistics);
 
-        public bool IsRadioMasterHealthy => _radioStats.IsConnected &&
-            _radioStats.Health != LinkHealth.Disconnected &&
-            _radioStats.Health != LinkHealth.Critical;
+        public bool IsRadioMasterHealthy => IsHealthy(RadioMasterStatistics);
+
+        private static bool IsHealthy(LinkStatistics stats) => stats.IsConnected &&
+            stats.Health != LinkHealth.Disconnected && stats.Health != LinkHealth.Critical;
 
         public LinkStatusSnapshot GetLinkStatus()
         {
             lock (_lock)
             {
-                if (_standalone != null)
-                {
-                    var links = _standalone.LinkStatistics;
-                    var lte = links.FirstOrDefault(link => link.Type == LinkType.LTE);
-                    var radio = links.FirstOrDefault(link => link.Type == LinkType.RadioMaster);
-                    return new LinkStatusSnapshot
-                    {
-                        LTEConnected = lte?.IsConnected == true && !lte.IsStale,
-                        LTELatencyMs = lte?.LatencyMs ?? 0,
-                        LTEPacketLoss = lte?.PacketLossPercent ?? 0,
-                        RadioConnected = radio?.IsConnected == true && !radio.IsStale,
-                        RadioLatencyMs = radio?.LatencyMs ?? 0,
-                        RadioPacketLoss = radio?.PacketLossPercent ?? 0,
-                        ActiveLink = ActiveLink,
-                    };
-                }
+                var links = LinkStatistics;
+                var lte = FindLink(links, LinkType.LTE);
+                var radio = FindLink(links, LinkType.RadioMaster);
 
                 return new LinkStatusSnapshot
                 {
-                    LTEConnected = _lteStats.IsConnected,
-                    LTELatencyMs = _lteStats.LatencyMs,
-                    LTEPacketLoss = _lteStats.PacketLossPercent,
-                    RadioConnected = _radioStats.IsConnected,
-                    RadioLatencyMs = _radioStats.LatencyMs,
-                    RadioPacketLoss = _radioStats.PacketLossPercent,
+                    LTEConnected = lte?.IsConnected == true && !lte.IsStale,
+                    LTELatencyMs = lte?.LatencyMs ?? 0,
+                    LTEPacketLoss = lte?.PacketLossPercent ?? 0,
+                    RadioConnected = radio?.IsConnected == true && !radio.IsStale,
+                    RadioLatencyMs = radio?.LatencyMs ?? 0,
+                    RadioPacketLoss = radio?.PacketLossPercent ?? 0,
                     ActiveLink = ActiveLink
                 };
             }
@@ -305,89 +273,29 @@ namespace NOMAD.MissionPlanner
 
         public void StartMonitoring()
         {
-            if (IsMonitoring) return;
-
-            if (string.Equals(_config.RouterMode, "Standalone", StringComparison.OrdinalIgnoreCase))
+            if (_standalone == null)
             {
-                if (_router != null)
-                {
-                    try { _router.Dispose(); } catch { }
-                    _router = null;
-                }
-                StartStandaloneMonitoring();
+                StartManagementClient();
                 return;
             }
-
-            if (_standalone != null)
-            {
-                try { _standalone.Dispose(); } catch { }
-                _standalone = null;
-            }
-
-            // Clean up any previous (stopped) router instance to release sockets.
-            if (_router != null)
-            {
-                try { _router.Dispose(); } catch { }
-                _router = null;
-            }
-
-            var rc = new GroundLinkRouter.RouterConfig
-            {
-                Links = _config.Links,
-                Consumers = _config.Consumers,
-                BindAddress = _config.RouterBindAddress,
-                LocalPort = _config.RouterLocalPort,
-                DedupEnabled = _config.RouterDedupEnabled,
-                LteBindPort = _config.LtePort,
-                LteRemoteHost = _config.LteRemoteHost,
-                LteRemotePort = _config.LteRemotePort,
-                RadioMasterConnectionType = _config.RadioMasterConnectionType,
-                RadioBindPort = _config.RadioMasterPort,
-                RadioComPort = _config.RadioMasterComPort,
-                RadioBaudRate = _config.RadioMasterBaudRate,
-                RadioTcpHost = _config.RadioMasterTcpHost,
-                AutoFailoverEnabled = _config.AutoFailoverEnabled,
-                PreferredLink = _config.PreferredLink,
-                AutoReconnectPreferred = _config.AutoReconnectPreferred,
-                PreferredLinkReconnectDelaySec = _config.PreferredLinkReconnectDelaySec,
-                StatsTickMs = Math.Max(100, _config.MonitorIntervalMs),
-                HeartbeatTimeoutSec = Math.Max(0.5, _config.HeartbeatTimeoutSec),
-                ManagementBindAddress = _config.ManagementBindAddress,
-                ManagementPort = _config.ManagementPort,
-            };
-
-            _router = new GroundLinkRouter(rc);
-            _router.StatsUpdated += OnRouterStatsUpdated;
-            _router.FailoverOccurred += (s, e) => FailoverOccurred?.Invoke(this, e);
-            _router.ActiveLinkChanged += (s, t) => ActiveLinkChanged?.Invoke(this, t);
-            _router.LogMessage += (s, msg) => LogMessage?.Invoke(this, msg);
-
-            try
-            {
-                _router.Start();
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"router failed to start — {ex.Message}");
-            }
+            _standalone.Start();
         }
 
         public void StopMonitoring()
         {
-            try { _router?.Stop(); } catch { }
             try { _standalone?.Stop(); } catch { }
         }
 
         /// <summary>
-        /// Tear down the running router and start a fresh one using the current
-        /// <see cref="Config"/>. Use after <see cref="UpdateConfig"/> when network
-        /// settings (ports, bindings, link type) have changed and the router
-        /// needs to rebind its sockets.
+        /// Reconnect the management client after its local endpoint changes.
+        /// This does not restart the separately supervised router process.
         /// </summary>
-        public void RestartRouter()
+        public void RestartManagementClient()
         {
             StopMonitoring();
-            StartMonitoring();
+            _standalone?.Dispose();
+            _standalone = null;
+            StartManagementClient();
         }
 
         /// <summary>
@@ -396,92 +304,49 @@ namespace NOMAD.MissionPlanner
         /// </summary>
         public bool SwitchToLink(string target)
         {
-            if (_standalone != null) return _standalone.SwitchToLink(target);
-            if (_router == null) return false;
-            return _router.SetManualOverride(target);
+            return _standalone?.SwitchToLink(target) == true;
         }
 
-        /// <summary>
-        /// Live setter for auto-failover. Updates the running router so the
-        /// change takes effect immediately (no restart required).
-        /// </summary>
+        /// <summary>Record the legacy setting; host JSON remains authoritative.</summary>
         public void SetAutoFailoverEnabled(bool enabled)
         {
             _config.AutoFailoverEnabled = enabled;
-            if (_router != null) _router.Config.AutoFailoverEnabled = enabled;
             if (_standalone != null) _standalone.LogConfigurationIsRestartRequired("automatic failover");
         }
 
-        /// <summary>Live setter for auto-reconnect-to-preferred.</summary>
+        /// <summary>Record the legacy setting; host JSON remains authoritative.</summary>
         public void SetAutoReconnectPreferred(bool enabled)
         {
             _config.AutoReconnectPreferred = enabled;
-            if (_router != null) _router.Config.AutoReconnectPreferred = enabled;
             if (_standalone != null) _standalone.LogConfigurationIsRestartRequired("preferred-link recovery");
         }
 
-        /// <summary>Live setter for cross-link dedup.</summary>
+        /// <summary>Record the legacy setting; host JSON remains authoritative.</summary>
         public void SetDedupEnabled(bool enabled)
         {
             _config.RouterDedupEnabled = enabled;
-            if (_router != null) _router.Config.DedupEnabled = enabled;
             if (_standalone != null) _standalone.LogConfigurationIsRestartRequired("deduplication");
         }
 
-        /// <summary>Live setter for the preferred link.</summary>
+        /// <summary>Record the legacy setting; host JSON remains authoritative.</summary>
         public void SetPreferredLink(string link)
         {
             _config.PreferredLink = link;
-            if (_router != null) _router.Config.PreferredLink = link;
             if (_standalone != null) _standalone.LogConfigurationIsRestartRequired("preferred link");
         }
 
-        public string GetStatusSummary() => _standalone?.GetStatusSummary() ?? _router?.GetStatusSummary()
-            ?? $"Active: {ActiveLink} | LTE: offline | Radio: offline";
+        public string GetStatusSummary() => _standalone?.GetStatusSummary()
+            ?? "Standalone router management unavailable";
 
         public void ResetCounters()
         {
-            if (_router != null) _router.ResetCounters();
             if (_standalone != null) _standalone.LogConfigurationIsRestartRequired("counter reset");
         }
 
-        // ============================================================
-        // Bridging router → LinkStatistics
-        // ============================================================
+        private LinkStatistics FindLink(string id) => FindLink(LinkStatistics, id);
 
-        private void OnRouterStatsUpdated(object sender, EventArgs e)
-        {
-            if (_router == null) return;
-            ProjectStats(_router.Lte, _lteStats);
-            ProjectStats(_router.Radio, _radioStats);
-
-            foreach (var stats in LinkStatistics)
-            {
-                LinkStatusChanged?.Invoke(this, new LinkStatusChangedEventArgs
-                { Link = stats.Type, Statistics = stats, IsActive = ActiveLink == stats.Type });
-            }
-        }
-
-        private static void ProjectStats(LinkSourceStats src, LinkStatistics dst)
-        {
-            dst.IsStale = false;
-            dst.IsEnabled = src.Enabled;
-            dst.TransportType = src.Transport;
-            dst.IsConnected = src.IsConnected;
-            dst.Health = src.Health;
-            dst.LatencyMs = src.LatencyMs;
-            dst.PacketLossPercent = src.PacketLossPercent;
-            dst.PacketsReceived = src.FramesReceived;
-            dst.PacketsDuplicate = src.FramesDuplicate;
-            dst.BytesReceived = src.BytesReceived;
-            dst.BytesSent = src.BytesSentOutbound;
-            dst.LastHeartbeat = src.LastHeartbeatTime;
-            dst.LastPacketTime = src.LastPacketTime;
-            dst.HeartbeatCount = src.HeartbeatCount;
-            dst.DataRateBps = src.DataRateBps;
-            dst.Rssi = src.Rssi;
-            dst.RemRssi = src.RemRssi;
-        }
+        private static LinkStatistics FindLink(IEnumerable<LinkStatistics> links, string id) =>
+            links.FirstOrDefault(link => string.Equals(link.Type, id, StringComparison.OrdinalIgnoreCase));
 
         // ============================================================
         // IDisposable
@@ -491,9 +356,7 @@ namespace NOMAD.MissionPlanner
         {
             if (_disposed) return;
             _disposed = true;
-            try { _router?.Dispose(); } catch { }
             try { _standalone?.Dispose(); } catch { }
-            _router = null;
             _standalone = null;
         }
     }

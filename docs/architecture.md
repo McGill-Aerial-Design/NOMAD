@@ -235,12 +235,13 @@ completes. This is a software UDP command boundary, not aircraft-wide authority.
 Termination priority and aircraft-side takeover remain later work.
 
 Mission Planner native controls and RC remain possible external authorities.
-`NOMAD_INTEGRATED_FLIGHT` makes the embedded router's Mission Planner consumer
-receive-only while allowing the NOMAD core consumer to send. The standalone
-router example has the same setting. It only applies when those clients use
-that configured router; direct GCS links, other standalone configurations and
-local UDP source spoofing are outside that boundary. Integrated operations must define
-handover and inhibit NOMAD until reconciled;
+`NOMAD_INTEGRATED_FLIGHT` inhibits plugin actions outside the runtime. The
+standalone router enforces the `mission_planner` consumer as receive-only while
+leaving the separate NOMAD core consumer command-capable. An explicit
+`mission_planner` entry with `AllowOutbound: true`, including the default when
+the JSON field is omitted, is rejected before sockets open; the implicit consumer
+is receive-only. Direct GCS links and local UDP source spoofing are outside that
+boundary. Integrated operations must define handover and inhibit NOMAD until reconciled;
 software cannot claim to prevent an independent pilot/autopilot action. Mission
 Planner gimbal angle requests now use the typed runtime operation; plugin
 boundary returns, emergency parameter changes and fence writes still need core
@@ -552,24 +553,29 @@ automatic resume.
 
 ## Ground multi-link data plane
 
-The shared C# implementation in `infra/transport/ground_router` runs either in
-Mission Planner or as `nomad-link-router.exe`. It selects transport and distributes
-raw MAVLink; it does not admit flight operations.
+The standalone C# process in `infra/transport/ground_router` owns ground-side
+transport selection and raw MAVLink distribution. Mission Planner uses its
+loopback management API and telemetry consumer; it never starts or stops the
+router and the router does not admit flight operations.
 
 ```mermaid
 flowchart TD
     LTE[LTE] --> ROUTER[Multi-Link Router]
     RADIO[Radio] --> ROUTER
     WIFI[Wi-Fi / additional configured links] --> ROUTER
-    ROUTER <--> MP[Mission Planner raw MAVLink]
-    ROUTER <--> CORE[NOMAD C++ MAVSDK]
+    ROUTER --> MP[Mission Planner telemetry consumer]
+    CORE -->|command-capable consumer| ROUTER
+    ROUTER --> CORE
     ROUTER --> MGMT[Loopback JSON Lines management API]
     MGMT <--> UI[Mission Planner router UI]
 ```
 
-The router owns physical connections, per-link parsing/sequence statistics,
-health, selection, deduplication, failover and local MAVLink distribution.
-Outbound requests use exactly one physical transport. C++ retains capability
+The standalone host owns physical connections, per-link parsing/sequence
+statistics, health, selection, deduplication, failover and local MAVLink
+distribution. Consumer `AllowOutbound` controls each local egress path, except
+that router validation reserves `mission_planner` as receive-only; other consumer
+IDs retain their configured setting. Outbound requests use exactly one physical
+transport. C++ retains capability
 admission, safety/payload policy, mission sequencing, deadlines, state verification
 and authoritative NOMAD outcomes. MP retains maps/HUD, diagnostics, native GCS
 functions and NOMAD client UI. ArduPilot retains stabilization, motors, EKF,
@@ -597,8 +603,8 @@ controls, pilot/RC and ArduPilot are external authorities. Integrated operation
 needs explicit handover/inhibition. The standalone router survives MP
 exit. Its version-1 management API is loopback-only, bounded JSON Lines and
 limited to status, events, and selecting an enabled link or returning to automatic
-selection; it carries no raw MAVLink or flight command. The plugin uses that API
-only when `RouterMode` is `Standalone`; embedded mode still has MP-owned lifetime
-and does not create a second management server. See the
+selection; it carries no raw MAVLink or flight command. Mission Planner always
+uses that API as a non-owning client. Legacy `RouterMode` settings migrate to
+`Standalone`; there is no plugin-owned router lifetime. See the
 [router configuration and limitations](https://github.com/YoussGm3o8/NOMAD/blob/main/infra/transport/ground_router/README.md)
 for the schema, socket ownership, parameter pinning and tested process lifecycle.

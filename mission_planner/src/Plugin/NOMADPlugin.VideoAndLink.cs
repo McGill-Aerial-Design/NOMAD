@@ -28,9 +28,7 @@ namespace NOMAD.MissionPlanner
         // ============================================================
 
         /// <summary>
-        /// Bring the live router in sync with the (now-saved) config. Handles
-        /// all three transitions: enabled→disabled, disabled→enabled, and
-        /// changes while still enabled (rebind sockets to new ports/bindings).
+        /// Bring the local status client in sync with the saved connection settings.
         /// </summary>
         private void ApplyDualLinkSettings()
         {
@@ -43,8 +41,7 @@ namespace NOMAD.MissionPlanner
                         _connectionManager.StopMonitoring();
                         _connectionManager.Dispose();
                         _connectionManager = null;
-                        Log.Info("Dual link/router disabled — MAVLink sockets released " +
-                                 "for direct Mission Planner connection");
+                        Log.Info("Standalone router status client disabled; router host remains running");
                     }
                     return;
                 }
@@ -52,13 +49,13 @@ namespace NOMAD.MissionPlanner
                 if (_connectionManager == null)
                 {
                     InitializeConnectionManager();
-                    Log.Info("Dual link enabled — router started");
+                    Log.Info("Standalone router status client started");
                     return;
                 }
 
                 _connectionManager.UpdateConfig(BuildLinkConfig());
-                _connectionManager.RestartRouter();
-                Log.Info("Router restarted with new config");
+                _connectionManager.RestartManagementClient();
+                Log.Info("Standalone router management client reconnected");
             }
             catch (Exception ex)
             {
@@ -200,8 +197,7 @@ namespace NOMAD.MissionPlanner
         // ============================================================
 
         /// <summary>
-        /// Build the ConnectionConfig the router needs from the current NOMADConfig.
-        /// Pulled out so both first-init and settings-save paths produce identical configs.
+        /// Build the local endpoint settings for Mission Planner's router client.
         /// </summary>
         private MAVLinkConnectionManager.ConnectionConfig BuildLinkConfig()
         {
@@ -213,14 +209,11 @@ namespace NOMAD.MissionPlanner
                 RadioMasterPort = _config.RadioMasterPort,
                 AutoFailoverEnabled = _config.AutoFailoverEnabled,
                 Links = _config.RouterLinks,
-                Consumers = _config.IntegratedFlightMode
-                    ? RouterConsumerPolicy.ForIntegratedFlight(_config.RouterConsumers)
-                    : _config.RouterConsumers,
                 PreferredLink = _config.PreferredMavlinkLink == "None" ? "" : _config.PreferredMavlinkLink,
                 AutoReconnectPreferred = _config.AutoReconnectToPreferred,
                 PreferredLinkReconnectDelaySec = _config.PreferredLinkReconnectDelay,
                 MonitorIntervalMs = _config.LinkMonitorInterval,
-                RouterMode = _config.RouterMode,
+                RouterMode = "Standalone",
                 RadioMasterConnectionType = _config.RadioMasterConnectionType,
                 RadioMasterComPort = _config.RadioMasterComPort,
                 RadioMasterBaudRate = _config.RadioMasterBaudRate,

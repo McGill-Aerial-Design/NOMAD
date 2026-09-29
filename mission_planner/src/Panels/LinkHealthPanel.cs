@@ -7,7 +7,7 @@
 // metrics (latency, loss, throughput, RSSI, heartbeat age) for
 // both LTE and RadioMaster, plus router controls, a throughput
 // sparkline per link, failover settings and event log. All data
-// comes from MAVLinkConnectionManager / GroundLinkRouter.
+// comes from the standalone router management client.
 // ============================================================
 
 using System;

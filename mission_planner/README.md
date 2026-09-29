@@ -58,22 +58,27 @@ through `test-plugin-*` Pixi tasks. See
 
 ## Multi-Link routing configuration
 
-Link Status now renders configured physical links and provides manual selection
-per stable ID. Existing LTE/RadioMaster fields remain a compatibility input; add
-`RouterLinks` and `RouterConsumers` to the plugin JSON for additional links.
-See the [shared router reference](../infra/transport/ground_router/README.md) for
-field names, a complete host JSON example, port ownership and recovery policy.
-The plugin's default C++ listener is now loopback `14601`, separate from physical
-RadioMaster `14550`; the router feeds it from `14602`.
+Mission Planner is a management/status client for the standalone ground router.
+It never starts or stops the router process, binds physical links, or configures
+route selection and failover. The router host and plugin are separate release
+packages; `pixi run build-ground-router` writes the host, library, example
+configuration, and README to `build/ground-router/`.
 
-For standalone ownership set `RouterMode` to `Standalone`, configure the
-loopback management endpoint (default `127.0.0.1:14610`), and connect native MP
-via UDPCl to the host's `14600`. MP restart then leaves the host running while
-the plugin reconnects to status/events and marks stale data explicitly. The UI
-can select an enabled link or return to automatic selection; endpoint, consumer,
-and policy changes require a host restart. Embedded mode remains the default and
-keeps plugin-owned lifetime. Do not start both modes against the same endpoints
-or simultaneous CLI processes that bind the same consumer endpoint.
+Configure and supervise `nomad-link-router.exe` separately. Mission Planner's
+native MAVLink connection uses UDPCl to the router's `mission_planner` consumer
+(default `127.0.0.1:14600`). The C++ runtime uses its distinct command-capable
+route: the router's `nomad_core` consumer at `14602` feeds the runtime listener
+at `14601`. Mission Planner's status panel reconnects to loopback management
+TCP `127.0.0.1:14610`, reports stale/unavailable status, and can select an
+enabled link or return to automatic selection.
+
+The standalone host enforces the `mission_planner` consumer as receive-only for
+all profiles. An explicit entry with `AllowOutbound` omitted (default true) or
+set true is rejected at startup; the example sets it false and leaves
+`nomad_core` command-capable. `IntegratedFlightMode` does not rewrite the
+separately running host configuration. Update the host JSON and Mission Planner's
+UDP consumer port together when changing endpoints. Legacy `RouterMode` values
+are migrated to `Standalone`; there is no embedded mode.
 
 ## Opt-in modules
 

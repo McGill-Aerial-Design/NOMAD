@@ -7,10 +7,42 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
+using System.Web.Script.Serialization;
 using NOMAD.MissionPlanner;
 
 internal static partial class DualLinkStressTests
 {
+    private static void MissionPlannerOutboundConfigRejection()
+    {
+        var serializer = new JavaScriptSerializer();
+        const string omittedOutbound =
+            "{\"Links\":[{\"Id\":\"cell\",\"Port\":31101}],"
+            + "\"PreferredLink\":\"cell\","
+            + "\"Consumers\":[{\"Id\":\"mission_planner\",\"RouterPort\":31100}]}";
+        const string enabledOutbound =
+            "{\"Links\":[{\"Id\":\"cell\",\"Port\":31101}],"
+            + "\"PreferredLink\":\"cell\","
+            + "\"Consumers\":[{\"Id\":\"mission_planner\",\"RouterPort\":31100,"
+            + "\"AllowOutbound\":true}]}";
+        var omittedConfig = serializer.Deserialize<GroundLinkRouter.RouterConfig>(omittedOutbound);
+        var enabledConfig = serializer.Deserialize<GroundLinkRouter.RouterConfig>(enabledOutbound);
+
+        Check(omittedConfig.Consumers[0].AllowOutbound,
+            "omitted Mission Planner AllowOutbound resolves to the legacy true default");
+        CheckMissionPlannerOutboundRejected(omittedConfig, "omitted AllowOutbound");
+        CheckMissionPlannerOutboundRejected(enabledConfig, "AllowOutbound true");
+    }
+
+    private static void CheckMissionPlannerOutboundRejected(GroundLinkRouter.RouterConfig config, string scenario)
+    {
+        string error = null;
+        try { using (var router = new GroundLinkRouter(config)) { } }
+        catch (ArgumentException ex) { error = ex.Message; }
+
+        Check(error == "The mission_planner consumer is receive-only; set AllowOutbound to false.",
+            "unsafe Mission Planner " + scenario + " is rejected with a clear error");
+    }
+
     private static void LocalAddressGuardChecks()
     {
         var local = new[] { IPAddress.Parse("192.0.2.10"), IPAddress.Parse("198.51.100.20") };

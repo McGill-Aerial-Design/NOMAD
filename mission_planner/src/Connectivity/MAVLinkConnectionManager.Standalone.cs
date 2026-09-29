@@ -7,7 +7,7 @@ namespace NOMAD.MissionPlanner
 {
     public partial class MAVLinkConnectionManager
     {
-        private void StartStandaloneMonitoring()
+        private void StartManagementClient()
         {
             if (_standalone != null)
             {

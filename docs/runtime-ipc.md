@@ -221,10 +221,11 @@ MAVLink controls, RC/pilot input, ArduPilot behavior and maintenance/test tools
 remain independent authorities. The ROS observer has no flight command path;
 its temporary MAVLink connection receives telemetry only. Integrated profiles
 inhibit direct CLI actuation. Profile sync writes
-`NOMAD_INTEGRATED_FLIGHT` to Mission Planner's `IntegratedFlightMode`; the
-embedded router then makes Mission Planner's consumer receive-only. The
-standalone router example has the same policy, but other standalone router
-configurations, direct Mission Planner links and RC/ELRS are not inhibited.
+`NOMAD_INTEGRATED_FLIGHT` to Mission Planner's `IntegratedFlightMode`. The
+separately supervised ground router enforces its `mission_planner` consumer as
+receive-only and keeps `nomad_core` command-capable. An explicit Mission Planner
+entry with `AllowOutbound` omitted (default true) or set true is rejected at
+startup. Direct Mission Planner links and RC/ELRS are not inhibited.
 Aircraft input selection still needs
 independent proof. The runtime also does not own a
 persistent mission executor or migrate all Mission Planner, ROS or Python

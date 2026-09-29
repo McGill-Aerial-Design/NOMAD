@@ -1,8 +1,8 @@
 name: release
 
-# On a v* tag, build the Mission Planner plugin and publish it as a release
-# asset — a small zip (NOMADPlugin.dll + INSTALL.ps1 + README.md) plus the bare
-# DLL — so users can install the plugin without cloning or building. The
+# On a v* tag, build the Mission Planner plugin and standalone ground router.
+# Publish a plugin zip plus DLL and a separate router host zip so users can
+# deploy routing independently from Mission Planner. The
 # Mission Planner staging mirrors csharp.yml: a pinned portable Mission Planner
 # provides the reference DLLs the csproj HintPaths point at. No .NET SDK needed.
 #
@@ -67,6 +67,9 @@ jobs:
             throw "build did not produce NOMADPlugin.dll"
           }
 
+      - name: Build standalone ground router
+        run: pwsh -File scripts/build/build_ground_router.ps1
+
       - name: Assemble release package
         run: |
           $stage = Join-Path $env:RUNNER_TEMP "NOMADPlugin"
@@ -79,11 +82,20 @@ jobs:
           Compress-Archive -Path "$stage/*" -DestinationPath $zip -Force
           "ASSET_ZIP=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append
 
+          $routerStage = Join-Path $env:RUNNER_TEMP "NOMADLinkRouter"
+          New-Item -ItemType Directory -Force -Path $routerStage | Out-Null
+          Copy-Item "build/ground-router/*" $routerStage
+          $routerZip = "NOMADLinkRouter-$tag.zip"
+          Compress-Archive -Path "$routerStage/*" -DestinationPath $routerZip -Force
+          "ASSET_ROUTER_ZIP=$routerZip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v6
         with:
-          name: NOMADPlugin-release
-          path: ${{ env.ASSET_ZIP }}
+          name: NOMAD-release
+          path: |
+            ${{ env.ASSET_ZIP }}
+            ${{ env.ASSET_ROUTER_ZIP }}
           if-no-files-found: error
 
       - name: Publish to GitHub Release
@@ -92,4 +104,5 @@ jobs:
         with:
           files: |
             ${{ env.ASSET_ZIP }}
+            ${{ env.ASSET_ROUTER_ZIP }}
             mission_planner/src/bin/Release/NOMADPlugin.dll

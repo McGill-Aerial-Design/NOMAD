@@ -1,22 +1,23 @@
-# Ground Multi-Link Router
+# Standalone Ground Multi-Link Router
 
-This Windows/.NET Framework router shares its MP-independent C# implementation
-between the Mission Planner plugin and `nomad-link-router.exe`. There are no
-Mission Planner assembly dependencies in this directory. The namespace retains
-its historical spelling for source compatibility. Product ownership is defined
-in [architecture](../../../docs/architecture.md); deployment policy is in
+This Windows/.NET Framework process is the sole NOMAD ground-routing lifecycle
+owner. Mission Planner uses its loopback management API and does not compile or
+start the router data plane. There are no Mission Planner assembly dependencies
+in this directory. Product ownership is defined in
+[architecture](../../../docs/architecture.md); deployment policy is in
 [operations](../../../docs/operations.md).
 
 ## Build and run
 
 ```powershell
 pixi run build-ground-router
-build/ground-router/nomad-link-router.exe infra/transport/ground_router/example.json
+build/ground-router/nomad-link-router.exe build/ground-router/router.example.json
 pixi run test-ground-router
 ```
 
 Build requires Visual Studio MSBuild/Roslyn and the .NET Framework targeting pack.
-The output includes `Nomad.LinkRouter.dll`; keep it beside the executable.
+The output includes `Nomad.LinkRouter.dll`, `router.example.json`, and this
+README; keep them beside the executable when distributing the host.
 No install, service registration, deployment or aircraft connection is performed
 by the build or tests. The smoke test uses only loopback peers.
 
@@ -29,7 +30,7 @@ described below.
 
 ## Topology and socket ownership
 
-Before this change, plugin-owned `GroundLinkRouter` bound LTE UDP `14560`,
+Historically, plugin-owned `GroundLinkRouter` bound LTE UDP `14560`,
 RadioMaster UDP `14550` (or opened a TCP/COM connection), and loopback UDP `14600`.
 Mission Planner used UDPCl to `14600` from an ephemeral source port; the router
 remembered only the most recent sender. `NomadCoreClient` separately launched
@@ -44,20 +45,17 @@ The [example](example.json) has the following ownership on the ground computer:
 | `0.0.0.0:14560` | Router, physical `lte` | Aircraft traffic in; selected outbound replies to learned peer |
 | `0.0.0.0:14550` | Router, physical `radiomaster` | Same, independently monitored |
 | `0.0.0.0:14570` | Router, physical `wifi` | Same, independently monitored |
-| `127.0.0.1:14600` | Router, consumer `mission_planner` | MP UDPCl sends here; downlink returns to MP's ephemeral socket |
+| `127.0.0.1:14600` | Router, consumer `mission_planner` | MP UDPCl receives telemetry only; unsafe outbound configuration is rejected |
 | Ephemeral MP port | Mission Planner | Receives telemetry and sends native GCS MAVLink |
 | `127.0.0.1:14602` | Router, consumer `nomad_core` | Sends downlink to `14601`; accepts outbound only from `14601` |
 | `127.0.0.1:14601` | One persistent C++ runtime or one exclusive direct CLI process | `udpin:127.0.0.1:14601`; MAVSDK learns router peer `14602` |
 | `127.0.0.1:14610` | Standalone router management server | JSON Lines status, events, and safe link-selection controls |
 
-Never run the embedded and standalone router with the same configuration
-simultaneously. In standalone mode select `RouterMode = Standalone` in the plugin,
-run the host with the same link/consumer configuration, and connect native Mission
-Planner using UDPCl to `14600`. The standalone router survives Mission Planner
-exit; the plugin observes it through the management endpoint and reports an
-unavailable/stale state when that endpoint cannot be reached. Embedded mode keeps
-plugin-owned lifetime and uses the same Link Status cards and safe manual controls
-without starting a second management server.
+Run one standalone host with the configured physical links and consumers, then
+connect native Mission Planner using UDPCl to `14600`. The plugin always observes
+the host through the management endpoint and reports unavailable/stale status if
+that endpoint cannot be reached. Closing Mission Planner does not stop the host.
+There is no embedded mode or plugin-owned routing lifecycle.
 
 ## Local management protocol
 
@@ -86,7 +84,7 @@ plane. The only live mutations are selecting an enabled stable link and releasin
 that selection with `set_auto`. The API has no raw MAVLink operation, command
 admission, mission control, parameter policy, or aircraft-control authority.
 
-The plugin uses this API only in standalone mode. It reconnects in the background,
+When enabled, the plugin connects through this API. It reconnects in the background,
 marks data stale after a bounded silence, and leaves the router process running if
 Mission Planner closes. Structural settings such as link endpoints, consumers,
 deduplication, preferred-link policy, and the management port require a host
@@ -116,7 +114,13 @@ Omitting `Links` translates legacy `LteBindPort`, `RadioBindPort`, COM/TCP setti
 into those two IDs. An explicitly empty/invalid collection is rejected.
 
 `Consumers` contains 1–32 entries with unique `Id`, `RouterPort`, and optional
-`ClientPort`. Every router consumer socket binds IPv4 loopback. `ClientPort = 0`
+`ClientPort`. `AllowOutbound` defaults to true; false lets a consumer receive
+telemetry while preventing its local MAVLink frames from reaching physical
+links. The exact ID `mission_planner` is reserved as receive-only: an explicit
+entry with `AllowOutbound` true, including an omitted field that defaults true,
+is rejected before sockets open. If `Consumers` is omitted, the implicit Mission
+Planner consumer is receive-only. `nomad_core` remains a separate, command-capable
+consumer. Every router consumer socket binds IPv4 loopback. `ClientPort = 0`
 learns one loopback peer; another peer can replace it only after three seconds
 without traffic from the old peer, resetting parser state. A fixed client port
 accepts only that endpoint and receives downlink without first sending anything.
@@ -133,13 +137,12 @@ startup and closes resources already opened. Missing consumers do not stop deliv
 Structural configuration changes require restart; per-link settings are copied
 at construction. Local loopback access is a trust boundary, not authentication.
 
-In the plugin JSON, use `RouterLinks` and `RouterConsumers` for these collections,
-and `PreferredMavlinkLink` for the preferred ID. The legacy settings UI remains
-available for two-link configurations; edit/import JSON to add arbitrary links.
-`RouterLocalPort` continues to set the `mission_planner` consumer's router port.
-Legacy default core endpoint `udpin:0.0.0.0:14550` migrates to `14601` when the
-embedded router is enabled; explicit other endpoints remain unchanged. Review
-custom endpoint/consumer pairs together. One-shot CLI processes must not run
+The standalone host JSON is authoritative for `Links`, `Consumers`, and the
+preferred ID. Mission Planner's `RouterLocalPort` and management port configure
+its local client endpoints only; changing the MP UDP port also requires changing
+the matching host consumer port. Old plugin settings are not copied into the
+standalone host. The default C++ runtime listener is `udpin:127.0.0.1:14601`,
+fed by the `nomad_core` consumer at `14602`. One-shot CLI processes must not run
 concurrently on the same listener.
 
 ## Selection, delivery, and transactions

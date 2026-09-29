@@ -23,37 +23,8 @@ namespace NOMAD.MissionPlanner
             _chkAutoStartHudVideo.Checked = Config.AutoStartHudVideo;
 
             _chkDualLinkEnabled.Checked = Config.DualLinkEnabled && Config.RouterEnabled;
-            SetComboBoxValue(_cmbRouterMode, Config.RouterMode);
-            _cmbRadioMasterConnType.SelectedIndex = Config.RadioMasterConnectionType switch
-            {
-                "COM" => 1,
-                "TCP" => 2,
-                _ => 0
-            };
-            _numRadioMasterPort.Value = ClampValue(_numRadioMasterPort, Config.RadioMasterPort);
-            _txtRadioTcpHost.Text = Config.RadioMasterTcpHost;
-            SetComboBoxValue(_cmbRadioMasterComPort, Config.RadioMasterComPort);
-            SetComboBoxValue(_cmbRadioMasterBaudRate, Config.RadioMasterBaudRate.ToString());
-            _numLteMavlinkPort.Value = ClampValue(_numLteMavlinkPort, Config.LteMavlinkPort);
-            _chkAutoFailover.Checked = Config.AutoFailoverEnabled;
-            if (Config.RouterLinks != null)
-            {
-                _cmbPreferredLink.Items.Clear();
-                _cmbPreferredLink.Items.Add("None");
-                foreach (var link in Config.RouterLinks) { _cmbPreferredLink.Items.Add(link.Id); }
-            }
-            _cmbPreferredLink.SelectedItem = Config.PreferredMavlinkLink;
-            _chkAutoReconnectPreferred.Checked = Config.AutoReconnectToPreferred;
-            _numPreferredReconnectDelay.Value =
-                ClampValue(_numPreferredReconnectDelay, Config.PreferredLinkReconnectDelay);
-            _numHeartbeatTimeout.Value = ClampValue(_numHeartbeatTimeout, Config.MavlinkHeartbeatTimeout);
-            _numLinkMonitorInterval.Value = ClampValue(_numLinkMonitorInterval, Config.LinkMonitorInterval);
-            _txtRouterBindAddress.Text = Config.RouterBindAddress;
             _numRouterLocalPort.Value = ClampValue(_numRouterLocalPort, Config.RouterLocalPort);
-            _chkRouterDedup.Checked = Config.RouterDedupEnabled;
-            _txtManagementBindAddress.Text = Config.ManagementBindAddress;
             _numManagementPort.Value = ClampValue(_numManagementPort, Config.ManagementPort);
-            UpdateRouterModeState();
 
             _chkDarkMode.Checked = Config.DarkMode;
             _chkShowNotifications.Checked = Config.ShowNotifications;
@@ -101,8 +72,6 @@ namespace NOMAD.MissionPlanner
             _numSprayTimeout.Value = (decimal)Config.SprayAlignTimeoutS;
 
             LoadJoystickSettings();
-            UpdateDualLinkControlsState();
-            UpdateRadioMasterConnTypeState();
         }
 
         private void LoadJoystickSettings()
@@ -159,34 +128,11 @@ namespace NOMAD.MissionPlanner
 
             Config.DualLinkEnabled = _chkDualLinkEnabled.Checked;
             Config.RouterEnabled = _chkDualLinkEnabled.Checked;
-            Config.RouterMode = _cmbRouterMode.SelectedItem?.ToString() ?? "Embedded";
-            Config.RadioMasterConnectionType = _cmbRadioMasterConnType.SelectedIndex switch
-            {
-                1 => "COM",
-                2 => "TCP",
-                _ => "UDP"
-            };
-            Config.RadioMasterPort = (int)_numRadioMasterPort.Value;
-            Config.RadioMasterTcpHost = string.IsNullOrWhiteSpace(_txtRadioTcpHost.Text)
-                ? "127.0.0.1"
-                : _txtRadioTcpHost.Text.Trim();
-            Config.RadioMasterComPort = _cmbRadioMasterComPort.SelectedItem?.ToString() ?? "COM3";
-            Config.RadioMasterBaudRate = int.TryParse(
-                _cmbRadioMasterBaudRate.SelectedItem?.ToString(), out int baud) ? baud : 420000;
-            Config.LteMavlinkPort = (int)_numLteMavlinkPort.Value;
-            Config.AutoFailoverEnabled = _chkAutoFailover.Checked;
-            Config.PreferredMavlinkLink = _cmbPreferredLink.SelectedItem as string ?? "None";
-            Config.AutoReconnectToPreferred = _chkAutoReconnectPreferred.Checked;
-            Config.PreferredLinkReconnectDelay = (int)_numPreferredReconnectDelay.Value;
-            Config.MavlinkHeartbeatTimeout = (double)_numHeartbeatTimeout.Value;
-            Config.LinkMonitorInterval = (int)_numLinkMonitorInterval.Value;
-            Config.RouterBindAddress = string.IsNullOrWhiteSpace(_txtRouterBindAddress.Text) ? "127.0.0.1" : _txtRouterBindAddress.Text.Trim();
+            Config.RouterMode = "Standalone";
             Config.RouterLocalPort = (int)_numRouterLocalPort.Value;
             var mpConsumer = Config.RouterConsumers?.Find(c => c.Id == "mission_planner");
             if (mpConsumer != null) { mpConsumer.RouterPort = Config.RouterLocalPort; }
-            Config.RouterDedupEnabled = _chkRouterDedup.Checked;
-            Config.ManagementBindAddress = string.IsNullOrWhiteSpace(_txtManagementBindAddress.Text)
-                ? "127.0.0.1" : _txtManagementBindAddress.Text.Trim();
+            Config.ManagementBindAddress = "127.0.0.1";
             Config.ManagementPort = (int)_numManagementPort.Value;
 
             Config.DarkMode = _chkDarkMode.Checked;

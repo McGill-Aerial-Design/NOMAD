@@ -64,11 +64,10 @@ namespace NOMAD.MissionPlanner
             {
                 Text =
                     "Multi-Link is disabled in settings.\n\n" +
-                    "When enabled, NOMAD opens the configured physical links and monitors their health.\n" +
-                    "One selected link supplies telemetry and carries outbound MAVLink.\n" +
-                    "Mission Planner connects to the local endpoint as a UDP client.\n" +
-                    "For a standalone host, keep the embedded router disabled.\n\n" +
-                    "Enable it in NOMAD → Settings → Connection.",
+                    "When enabled, Mission Planner connects to the separately supervised ground router.\n" +
+                    "The router selects one physical link, supplies telemetry, and reports link health.\n" +
+                    "Mission Planner does not start, stop, or configure the router host.\n\n" +
+                    "Enable the router status client in NOMAD → Settings → Multi-Link.",
                 Font = new Font("Segoe UI", 10),
                 ForeColor = NOMADTheme.TEXT_SECONDARY,
                 AutoSize = true,

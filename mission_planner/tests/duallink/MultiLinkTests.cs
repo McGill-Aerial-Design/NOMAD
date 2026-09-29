@@ -166,17 +166,15 @@ internal static partial class DualLinkStressTests
         config.PreferredLink = "cell";
         var configuredConsumers = new List<ConsumerConfig>
         {
-            new ConsumerConfig { Id = "mission_planner", RouterPort = port },
+            new ConsumerConfig { Id = "mission_planner", RouterPort = port, AllowOutbound = false },
             new ConsumerConfig { Id = "nomad_core", RouterPort = port + 5 },
             new ConsumerConfig { Id = "pilot_native", RouterPort = port + 6 }
         };
-        config.Consumers = RouterConsumerPolicy.ForIntegratedFlight(configuredConsumers);
+        config.Consumers = configuredConsumers;
         Check(!config.Consumers[0].AllowOutbound,
-            "integrated profile policy makes the Mission Planner consumer receive-only");
+            "host configuration keeps the Mission Planner consumer receive-only");
         Check(config.Consumers[1].AllowOutbound && config.Consumers[2].AllowOutbound,
-            "integrated profile policy leaves core and external pilot consumers command-capable");
-        Check(configuredConsumers[0].AllowOutbound,
-            "integrated policy does not mutate saved consumer configuration");
+            "host configuration keeps core and external pilot consumers command-capable");
 
         using (var router = new GroundLinkRouter(config))
         using (var aircraft = UdpSink.ConnectedTo(port + 1))

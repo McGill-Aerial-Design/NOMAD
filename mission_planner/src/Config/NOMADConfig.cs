@@ -31,8 +31,8 @@ namespace NOMAD.MissionPlanner
 
         /// <summary>
         /// Integrated profile mode inhibits plugin actuation that remains
-        /// outside the runtime and makes the routed Mission Planner consumer receive-only.
-        /// Mission Planner native controls and RC remain external writers.
+        /// outside the runtime. The standalone router independently enforces
+        /// its Mission Planner consumer as receive-only.
         /// </summary>
         public bool IntegratedFlightMode { get; set; } = false;
 
@@ -90,7 +90,7 @@ namespace NOMAD.MissionPlanner
         // ============================================================
 
         /// <summary>
-        /// Enable MAVLink dual link management (LTE + RadioMaster failover).
+        /// Enable Mission Planner's standalone router status client.
         /// </summary>
         public bool DualLinkEnabled { get; set; } = true;
 
@@ -162,31 +162,28 @@ namespace NOMAD.MissionPlanner
         public int LinkMonitorInterval { get; set; } = 500;
 
         // ============================================================
-        // Ground-side MAVLink Router (MAVProxy-style multiplexer)
+        // Standalone ground-router connection settings
         // ============================================================
-        // The router opens both source links itself (LTE UDP + RC UDP/COM),
-        // tracks per-link health from real packet flow, dedupes duplicates,
-        // and exposes a single merged UDP endpoint Mission Planner connects
-        // to (UDPCl to 127.0.0.1:<RouterLocalPort>). Failover is zero-gap
-        // because both source links are read in parallel at all times.
+        // The separately supervised host owns physical links, failover,
+        // duplicate suppression, and consumer permissions. Mission Planner
+        // only consumes telemetry and uses the loopback management client.
 
         /// <summary>
-        /// Enable the local MAVLink router. When on, the plugin owns both
-        /// source links and Mission Planner should connect to the local
-        /// loopback endpoint instead of LTE/RC directly.
+        /// Legacy switch retained for existing settings files. When enabled,
+        /// the plugin connects its status client; it never starts the host.
         /// </summary>
         public bool RouterEnabled { get; set; } = true;
 
         /// <summary>
-        /// Router ownership mode: Embedded starts the router in this plugin;
-        /// Standalone observes and controls an independently supervised host.
+        /// Legacy setting retained for existing settings files. The only
+        /// supported ownership mode is Standalone.
         /// </summary>
-        public string RouterMode { get; set; } = "Embedded";
+        public string RouterMode { get; set; } = "Standalone";
 
         /// <summary>Local UDP port the router serves the merged stream on.</summary>
         public int RouterLocalPort { get; set; } = 14600;
 
-        /// <summary>Address the router binds for the local merged stream.</summary>
+        /// <summary>Loopback address used by the Mission Planner consumer.</summary>
         public string RouterBindAddress { get; set; } = "127.0.0.1";
 
         /// <summary>

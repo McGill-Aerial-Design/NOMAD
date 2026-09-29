@@ -132,11 +132,12 @@ not IPC authentication. Profile sync derives `IntegratedFlightMode` from
 `NOMAD_INTEGRATED_FLIGHT`, which is set in the supported integrated profiles.
 The gimbal window, arrow keys and physical gimbal joystick send bounded angle
 targets through typed `set_gimbal_target` requests; runtime, authority and busy
-failures are shown to the operator, with no direct MAVLink fallback.
-In embedded router mode, it also makes the
-Mission Planner router consumer receive-only; the standalone router requires
-an explicit equivalent configuration. The installed CLI sends bare `nomad
-status`, `nomad admit`, `nomad revoke`, `nomad handback`, `nomad servo <channel>
+failures are shown to the operator, with no direct MAVLink fallback. The
+standalone ground router enforces the `mission_planner` consumer as receive-only
+for every profile and rejects an explicit entry with `AllowOutbound` omitted
+(default true) or set true. The sample configuration keeps the separate
+`nomad_core` route command-capable. The installed CLI sends
+bare `nomad status`, `nomad admit`, `nomad revoke`, `nomad handback`, `nomad servo <channel>
 <pwm_us>`, `nomad relay <number> <0|1>`, `nomad motor-test <instance> <pwm_us>
 <timeout_s>` and `nomad gimbal-config <mount_mode>` commands as typed protocol-v1
 requests. Other recognized verbs, including `connect`, flight/navigation,
@@ -420,19 +421,22 @@ for generic N-link deployment and the standalone host build/run commands. The
 example reserves physical UDP `14560`, `14550` and `14570` for the router. MP uses
 UDPCl to router-owned loopback `14600`; C++ alone binds loopback `14601`, receiving
 from the separate router-owned `14602` socket. Do not bind C++ to the RadioMaster
-physical port. Stop the embedded router before starting the standalone host with
-the same endpoints. An absent consumer does not stop other consumers.
+physical port. The standalone ground host owns these sockets and remains running
+when Mission Planner closes. It is separate from the onboard `mavlink-router`
+serial/IP service, which continues forwarding flight-controller traffic. An
+absent ground-router consumer does not stop delivery to other consumers.
 
 The standalone host can outlive Mission Planner. Its default management endpoint
 is loopback TCP `127.0.0.1:14610`, using version-1 bounded UTF-8 JSON Lines. The
-plugin's `RouterMode = Standalone` client reconnects and displays status, health,
+plugin's management client reconnects and displays status, health,
 failover events, and stale/unavailable state. It can only select an enabled link
 or return to automatic selection; it cannot send raw MAVLink or flight commands.
 Structural router settings require restarting the host. Keep the endpoint on
 IPv4 loopback and treat local OS access as the trust boundary.
 
-Select either embedded or standalone ownership explicitly and never run both with
-the same physical/consumer endpoints. Multiple raw clients can issue MAVLink, so
-integrated operation still needs command-authority handover/inhibition. Stateful
+Run one standalone ground router for the configured endpoints. Mission Planner
+does not own router lifecycle or physical-link configuration. Multiple raw clients
+can issue MAVLink if their host consumer configuration allows it, so integrated
+operation still needs command-authority handover/inhibition. Stateful
 mission/fence/FTP exchanges have no router transaction coordinator and require
 caller recovery on link changes.

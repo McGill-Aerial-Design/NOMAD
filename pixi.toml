@@ -197,15 +197,15 @@ test-plugin-audio = "powershell -ExecutionPolicy Bypass -File scripts/build/test
 # Runtime smoke test for Mission Planner's DFLogBuffer adapter (requires a Release plugin build).
 test-plugin-log-adapters = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_log_adapters.ps1"
 
-# Stress/behaviour tests for the dual-link MAVLink router (Windows only) —
-# compiles the Mission Planner-free GroundLinkRouter stack with VS's csc and
+# Stress/behaviour tests for the standalone multi-link router (Windows only) —
+# compiles the MP-independent routing stack and management client with VS's csc and
 # runs it against real loopback UDP sockets: frame parsing, cross-link dedup,
 # failover + preferred-link recovery, manual override, outbound single-link
 # routing, param-transaction pinning, watchdog socket reopen, and high-rate
 # mirrored stress with strict no-loss/no-duplication assertions.
 test-plugin-duallink = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_duallink.ps1"
 
-# Shared MP-independent router and standalone process qualification (Windows).
+# Standalone ground-router build/package and process qualification (Windows).
 build-ground-router = "powershell -NoProfile -File scripts/build/build_ground_router.ps1"
 test-ground-router = "pixi run build-ground-router && pixi run test-plugin-duallink && python scripts/dev/ground_router_smoke.py"
 

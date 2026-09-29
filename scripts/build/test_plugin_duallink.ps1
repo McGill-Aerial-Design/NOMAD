@@ -1,10 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
 # ============================================================
-# Dual-link router stress tests for the Mission Planner plugin
+# Standalone router and Mission Planner management-client stress tests
 # ============================================================
-# Compiles the Mission Planner-free dual-link stack
-# (GroundLinkRouter*.cs + MAVLinkConnectionManager.cs + Log.cs)
+# Compiles the standalone routing stack, management client, and Log.cs
 # together with the test runner using the Roslyn csc bundled
 # with Visual Studio's MSBuild — no .NET SDK or test-framework
 # packages required. The tests run the router against real

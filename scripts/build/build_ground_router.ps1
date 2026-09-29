@@ -20,4 +20,9 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $csc /nologo /target:exe /langversion:latest /r:System.Web.Extensions.dll `
     "/r:$outDir/Nomad.LinkRouter.dll" "/out:$outDir/nomad-link-router.exe" `
     (Join-Path $repoRoot 'infra/transport/ground_router/host/Program.cs')
-exit $LASTEXITCODE
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Copy-Item (Join-Path $repoRoot 'infra/transport/ground_router/example.json') `
+    (Join-Path $outDir 'router.example.json') -Force
+Copy-Item (Join-Path $repoRoot 'infra/transport/ground_router/README.md') `
+    (Join-Path $outDir 'README.md') -Force
+exit 0

@@ -66,7 +66,7 @@ jobs:
       - name: Build standalone ground router
         run: pwsh -File scripts/build/build_ground_router.ps1
 
-      - name: Multi-link and legacy router tests
+      - name: Standalone router and management-client tests
         run: pwsh -File scripts/build/test_plugin_duallink.ps1
 
       - name: Standalone router smoke
@@ -144,4 +144,14 @@ jobs:
         with:
           name: NOMADPlugin
           path: mission_planner/src/bin/Release/NOMADPlugin.dll
+          if-no-files-found: error
+
+      - name: Build standalone ground router package
+        run: pwsh -File scripts/build/build_ground_router.ps1
+
+      - name: Upload standalone ground router artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: NOMADLinkRouter
+          path: build/ground-router/*
           if-no-files-found: error

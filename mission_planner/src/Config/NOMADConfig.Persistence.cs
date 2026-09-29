@@ -170,9 +170,10 @@ namespace NOMAD.MissionPlanner
             // Keep the old high-level dual-link toggle and the newer local
             // router toggle in lockstep unless a future UI exposes them separately.
             RouterEnabled = DualLinkEnabled;
-            if (!string.Equals(RouterMode, "Standalone", StringComparison.OrdinalIgnoreCase))
+            RouterMode = "Standalone";
+            if (RouterBindAddress != "127.0.0.1")
             {
-                RouterMode = "Embedded";
+                RouterBindAddress = "127.0.0.1";
             }
             if (ManagementBindAddress != "127.0.0.1")
             {

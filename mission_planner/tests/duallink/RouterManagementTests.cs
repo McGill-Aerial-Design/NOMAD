@@ -166,12 +166,18 @@ internal static partial class DualLinkStressTests
     {
         const int routerPort = 32100;
         const int managementPort = 32110;
+        using (var defaultClient = new StandaloneRouterClient(new MAVLinkConnectionManager.ConnectionConfig()))
+        {
+            Check(defaultClient.LinkStatistics.Count == 2,
+                "legacy LTE and RadioMaster links remain visible before host status arrives");
+        }
+
         var routerConfig = MultiConfig(routerPort);
         var clientConfig = new MAVLinkConnectionManager.ConnectionConfig
         {
-            RouterMode = "Standalone",
+            // A legacy value must not restore Mission Planner-owned routing.
+            RouterMode = "Embedded",
             Links = routerConfig.Links,
-            Consumers = routerConfig.Consumers,
             RouterBindAddress = "127.0.0.1",
             RouterLocalPort = routerConfig.Consumers[0].RouterPort,
             ManagementBindAddress = "127.0.0.1",
@@ -189,7 +195,7 @@ internal static partial class DualLinkStressTests
             Check(await WaitUntil(() => client.IsRouterAvailable, 3000),
                 "standalone client connects and receives status");
             Check(await WaitUntil(() => manager.IsRouterAvailable, 3000),
-                "connection manager uses standalone client without starting an embedded router");
+                "connection manager uses the standalone host despite a legacy embedded setting");
             Check(manager.RouterMode == "Standalone", "manager reports standalone ownership");
             Check(!manager.SupportsLiveConfiguration, "standalone manager limits live controls to selection");
             Check(client.LinkStatistics.Count == 4, "standalone client exposes arbitrary link collection");

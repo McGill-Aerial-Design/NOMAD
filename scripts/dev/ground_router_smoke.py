@@ -115,7 +115,13 @@ def config_for(ports, consumer_ports, management_port):
             for i, (name, port) in enumerate(zip(("a", "b", "c"), ports[:3], strict=True))
         ],
         "Consumers": [
-            {"Id": str(i), "RouterPort": port, "ClientPort": consumer_ports[i]} for i, port in enumerate(ports[3:5])
+            {
+                "Id": name,
+                "RouterPort": port,
+                "ClientPort": consumer_ports[i],
+                "AllowOutbound": i != 0,
+            }
+            for i, (name, port) in enumerate(zip(("mission_planner", "nomad_core"), ports[3:5], strict=True))
         ],
     }
 
@@ -141,6 +147,7 @@ def exercise_selection(ports, physical, consumers, management_port, stops, worke
     physical[0].sendto(frame, ("127.0.0.1", ports[0]))
     for consumer in consumers:
         receive(consumer, frame)
+    assert_receive_only(ports, physical, consumers[0])
     assert_single_outbound(ports, physical, consumers[1], 0, 702)
     stops[0].set()
     workers[0].join()
@@ -212,6 +219,24 @@ def assert_single_outbound(ports, physical, consumer, selected, value):
         assert frame not in drain(sock), "Outbound command copied or sent to a standby transport"
 
 
+def assert_receive_only(ports, physical, consumer):
+    for sock in physical:
+        drain(sock)
+    frame = marker(4, 707)
+    consumer.sendto(frame, ("127.0.0.1", ports[3]))
+    time.sleep(0.15)
+    for sock in physical:
+        assert frame not in drain(sock), "Receive-only Mission Planner consumer reached a physical link"
+
+
+def assert_ports_released(ports, management_port):
+    for port in ports:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as rebound:
+            rebound.bind(("127.0.0.1", port))
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as rebound:
+        rebound.bind(("127.0.0.1", management_port))
+
+
 def main():
     with contextlib.ExitStack() as stack:
         physical = [stack.enter_context(peer()) for _ in range(3)]
@@ -230,17 +255,23 @@ def main():
         try:
             wait_output(output, "READY")
             exercise(ports, physical, consumers, management_port)
+            process.kill()
+            assert process.wait(timeout=5) != 0, "Unexpected host termination was not observed"
+            assert_ports_released(ports, management_port)
+
+            output = queue.Queue()
+            process = start_host(config_path, output)
+            wait_output(output, "READY")
+            exercise(ports, physical, consumers, management_port)
             process.stdin.write("stop\n")
             process.stdin.flush()
             assert process.wait(timeout=5) == 0, "Router shutdown failed"
-            for port in ports:
-                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as rebound:
-                    rebound.bind(("127.0.0.1", port))
+            assert_ports_released(ports, management_port)
         finally:
             if process.poll() is None:
                 process.kill()
                 process.wait(timeout=5)
-    print("Standalone smoke passed: three links, two consumers, no fan-out, failover, port cleanup")
+    print("Standalone smoke passed: receive-only MP, core egress, failover, and process restart")
 
 
 if __name__ == "__main__":
