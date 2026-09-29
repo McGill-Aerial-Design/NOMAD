@@ -34,6 +34,7 @@ constexpr std::array kAircraftOperations{
     VehicleOperation::SetRelay,
     VehicleOperation::MotorTest,
     VehicleOperation::ConfigureGimbal,
+    VehicleOperation::SetGimbalTarget,
     VehicleOperation::ReleasePayload,
     VehicleOperation::FenceConfiguration,
 };

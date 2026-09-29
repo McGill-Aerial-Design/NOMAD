@@ -1,15 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// Gimbal command construction + kinematics (Mission Planner-free)
+// Gimbal input math (Mission Planner-free)
 // ============================================================
-// The pure, dependency-free core of the gimbal control: the MAVLink command
-// frames sent to ArduPilot (DO_MOUNT_CONTROL) plus the
-// stick-integration and angle-clamping math. Extracted from GimbalController so
-// it can be unit-tested offline with the csc harness (no Mission Planner /
-// MAVLink assemblies), mirroring PayloadReleaseInterlock and GeoMath.
-// GimbalController maps GimbalFrame.Command onto MAVLink.MAV_CMD and performs
-// the actual send; the autopilot side is exercised by tests/sitl.
+// The pure, dependency-free core of the gimbal control: stick integration,
+// deadzone and angle/rate clamping. The C++ runtime owns all MAVLink sends.
 // ============================================================
 
 using System;
@@ -26,39 +21,12 @@ namespace NOMAD.MissionPlanner
     }
 
     /// <summary>
-    /// An ArduPilot <c>COMMAND_LONG</c> payload: a MAV_CMD id plus its seven float
-    /// params, exactly as handed to MAVLink. Lets tests assert the wire-level
-    /// command without a live link.
-    /// </summary>
-    public readonly struct GimbalFrame
-    {
-        public readonly int Command;
-        public readonly float P1, P2, P3, P4, P5, P6, P7;
-
-        public GimbalFrame(int command, float p1, float p2, float p3, float p4, float p5, float p6, float p7)
-        {
-            Command = command;
-            P1 = p1;
-            P2 = p2;
-            P3 = p3;
-            P4 = p4;
-            P5 = p5;
-            P6 = p6;
-            P7 = p7;
-        }
-    }
-
-    /// <summary>
-    /// Pure gimbal command + kinematics — no Mission Planner / MAVLink deps, so it
-    /// unit-tests in isolation. <see cref="GimbalController"/> consumes it.
+    /// Pure gimbal kinematics — no Mission Planner / MAVLink dependencies, so it
+    /// unit-tests in isolation.
     /// </summary>
     public static class GimbalCommand
     {
-        // MAVLink MAV_CMD ids (ArduPilot mount control).
-        public const int DO_MOUNT_CONTROL = 205;
-
-        // Default mount travel limits (deg). Typical brushless-gimbal range, kept
-        // generic so this drives any DO_MOUNT_CONTROL mount — not a specific brand.
+        // Configured target-angle limits, independent of the MAVLink transport.
         public const float PITCH_MIN_DEG = -90f;
         public const float PITCH_MAX_DEG = 90f;
         public const float ROLL_MIN_DEG = -30f;
@@ -97,17 +65,5 @@ namespace NOMAD.MissionPlanner
             newPitch = ClampPitch(curPitch + dPitch);
             newRoll = ClampRoll(curRoll + dRoll);
         }
-
-        /// <summary>
-        /// Build the <c>DO_MOUNT_CONTROL</c> frame for an absolute pitch/roll target.
-        /// Angles are clamped to the mount limits; P7 = MAVLINK_TARGETING (2) so the
-        /// mount honors the absolute angle.
-        /// </summary>
-        public static GimbalFrame BuildMountControl(float pitchDeg, float rollDeg)
-            => new GimbalFrame(
-                DO_MOUNT_CONTROL,
-                ClampPitch(pitchDeg), ClampRoll(rollDeg),
-                0f, 0f, 0f, 0f, (float)MountMode.MavlinkTargeting);
-
     }
 }

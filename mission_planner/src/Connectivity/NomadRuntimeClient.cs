@@ -177,6 +177,7 @@ namespace NOMAD.MissionPlanner.Connectivity
                 "relay" => "set_relay",
                 "motor-test" => "motor_test",
                 "gimbal-config" => "configure_gimbal",
+                "gimbal-target" => "set_gimbal_target",
                 _ => null,
             };
             if (type == null)
@@ -203,6 +204,11 @@ namespace NOMAD.MissionPlanner.Connectivity
             else if (verb == "gimbal-config" && values.Length == 1)
             {
                 request["mount_mode"] = int.Parse(values[0], CultureInfo.InvariantCulture);
+            }
+            else if (verb == "gimbal-target" && values.Length == 2)
+            {
+                request["pitch_deg"] = ParseProtocolNumber(values[0]);
+                request["roll_deg"] = ParseProtocolNumber(values[1]);
             }
             else
             {

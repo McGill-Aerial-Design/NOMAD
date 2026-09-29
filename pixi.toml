@@ -169,10 +169,9 @@ test-plugin-geometry = "powershell -ExecutionPolicy Bypass -File scripts/build/t
 # and reset behaviour (the GCS counterpart of tests/test_safety_payload.py).
 test-plugin-interlock = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_interlock.ps1"
 
-# Unit tests for the gimbal command core (Windows only) — compiles the Mission
-# Planner-free GimbalCommand with VS's csc and asserts the exact MAVLink it emits
-# (DO_MOUNT_CONTROL/DO_MOUNT_CONFIGURE command ids + param layout, MAV_MOUNT_MODE
-# values) plus the stick-integration and angle-clamping math.
+# Unit tests for Mission Planner's gimbal input math (Windows only) — compiles
+# the Mission Planner-free GimbalCommand and checks mode values, stick
+# integration, deadzone, and angle/rate clamping. C++ tests own MAVLink framing.
 test-plugin-gimbal = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_gimbal.ps1"
 
 # STA WinForms interaction/render smoke for the isolated gimbal joystick pad.

@@ -35,6 +35,40 @@ internal static partial class NomadCoreClientTests
         Expect(client.LastOutcome == NomadCoreRequestOutcome.Succeeded, "structured success is reported");
     }
 
+    private static void Runtime_GimbalTarget_UsesTypedRequestAndRequiresAuthority()
+    {
+        using var runtime = new MockRuntime(3, enforceAuthority: true);
+        var client = new NomadCoreClient("test-key", runtime.Port);
+
+        Expect(!client.GimbalTarget(-20.5, 12.25), "gimbal target fails closed before authority admission");
+        Expect(client.LastErrorCode == "not_authoritative", "gimbal target reports missing authority");
+        Expect(client.AdmitAuthority(), "operator explicitly admits gimbal client");
+        Expect(client.GimbalTarget(-20.5, 12.25), "admitted gimbal target succeeds through runtime");
+        runtime.Wait();
+
+        Expect(runtime.CommandCount == 3, "denied target, admission and accepted target are each sent once");
+        Expect(runtime.LastCommandType == "set_gimbal_target", "angles use their typed request name");
+        Expect(Math.Abs(Convert.ToDouble(runtime.LastCommand["pitch_deg"], CultureInfo.InvariantCulture) + 20.5) < 1e-9,
+            "request preserves pitch in degrees");
+        Expect(Math.Abs(Convert.ToDouble(runtime.LastCommand["roll_deg"], CultureInfo.InvariantCulture) - 12.25) < 1e-9,
+            "request preserves roll in degrees");
+        Expect(runtime.LastCommand.ContainsKey("sequence"), "gimbal target binds a request sequence");
+        Expect(runtime.LastCommand.ContainsKey("expires_at_ms"), "gimbal target has a bounded validity deadline");
+    }
+
+    private static void Runtime_GimbalTargetDoesNotReplayUnknownOutcome()
+    {
+        using var runtime = new MockRuntime(1, dropCommandResponse: true);
+        var client = new NomadCoreClient("test-key", runtime.Port);
+
+        Expect(!client.GimbalTarget(0.0, 0.0), "missing gimbal response is not reported as success");
+        runtime.Wait();
+        Expect(client.LastOutcome == NomadCoreRequestOutcome.UnknownOutcome,
+            "gimbal request reports an unknown vehicle outcome");
+        Expect(runtime.CommandCount == 1, "unknown gimbal outcome is not replayed");
+        Expect(runtime.LastCommandType == "set_gimbal_target", "unknown result belongs to the typed gimbal request");
+    }
+
     private static void Runtime_ReportsUnknownOutcomeWithoutReplay()
     {
         using var runtime = new MockRuntime(1, dropCommandResponse: true);

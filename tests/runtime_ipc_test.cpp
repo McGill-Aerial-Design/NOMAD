@@ -236,6 +236,8 @@ void wait_until(const std::function<bool()> &predicate) {
     CHECK(predicate());
 }
 
+#include "runtime_gimbal_cases.hpp"
+#include "runtime_authority_cases.hpp"
 void test_protocol_and_status(std::uint16_t port, FakeConnection &connection) {
     Client client(port);
     const auto hello = client.request(base_request("1", "hello"));
@@ -246,12 +248,13 @@ void test_protocol_and_status(std::uint16_t port, FakeConnection &connection) {
           hello["capabilities"].end());
     CHECK(std::find(hello["capabilities"].begin(), hello["capabilities"].end(), "goto_location") ==
           hello["capabilities"].end());
-
     const auto status = client.request(base_request("2", "status"));
     CHECK(status["status"]["runtime_ready"] == true);
     CHECK(status["status"]["identity_resolved"] == false);
     CHECK(status["status"]["aircraft_class"] == "Unknown");
     CHECK(status["status"]["vehicle_session_established"] == true);
+
+    test_gimbal_target_request_validation(client, connection, hello);
 
     connection.set_identity(nomad::telemetry::identify_vehicle(nomad::telemetry::kArduPilotAutopilot,
                                                                 nomad::telemetry::kQuadrotor));
@@ -292,7 +295,6 @@ void test_protocol_errors(std::uint16_t port, FakeConnection &connection) {
     CHECK(client.request(base_request("no-shell", "execute_shell"))["error"]["code"] == "unsupported_request");
     CHECK(client.request(base_request("no-mavlink", "send_mavlink"))["error"]["code"] ==
           "unsupported_request");
-
     Client malformed(port);
     malformed.send_raw("{bad");
     CHECK(malformed.receive()["error"]["code"] == "malformed_json");
@@ -348,7 +350,7 @@ void test_busy_and_slow_client(std::uint16_t port, FakeConnection &connection) {
     wait_until([&connection] { return connection.command_started.load(); });
 
     Client second(port);
-    CHECK(second.request(servo_request("busy-command", 1600))["error"]["code"] == "busy");
+    CHECK(second.request(gimbal_target_request("busy-gimbal-command", 10.0, 5.0))["error"]["code"] == "busy");
     CHECK(second.request(base_request("while-busy", "status"))["ok"] == true);
     const auto completed = first.receive();
     CHECK(completed["command_result"]["success"] == true);
@@ -360,8 +362,6 @@ void test_busy_and_slow_client(std::uint16_t port, FakeConnection &connection) {
     CHECK(responsive.request(base_request("responsive", "status"))["ok"] == true);
     connection.command_delay = std::chrono::milliseconds(0);
 }
-
-#include "runtime_authority_cases.hpp"
 
 void test_runtime_owns_one_connection_and_releases_port() {
     const auto port = free_port();
@@ -384,6 +384,7 @@ void test_runtime_owns_one_connection_and_releases_port() {
     test_command_dispatch_and_dedupe(port, *observed);
     test_vehicle_admission_is_authoritative(port, *observed);
     test_busy_and_slow_client(port, *observed);
+    test_gimbal_target_dispatch_and_dedupe(port, *observed);
     test_disconnect_does_not_cancel_or_replay(port, *observed);
     test_evicted_replay_and_wrong_source(port, *observed);
     test_revoke_and_handback(port, *observed);

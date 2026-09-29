@@ -24,7 +24,10 @@ internal static partial class NomadCoreClientTests
         SetRelay_FailsClosedOnInvalidInput();
         MotorTest_FailsClosedOnInvalidInput();
         GimbalConfigure_FailsClosedOnInvalidInput();
+        GimbalTarget_FailsClosedOnInvalidInput();
         Runtime_SendsTypedRequestOnce();
+        Runtime_GimbalTarget_UsesTypedRequestAndRequiresAuthority();
+        Runtime_GimbalTargetDoesNotReplayUnknownOutcome();
         Runtime_ReportsUnknownOutcomeWithoutReplay();
         Runtime_RejectsIncompatibleHelloBeforeCommand();
         Runtime_RejectsIncompatibleCommandResponseAsUnknown();
@@ -43,6 +46,7 @@ internal static partial class NomadCoreClientTests
         var client = new NomadCoreClient("test-key", ReservePort());
 
         Expect(!client.Servo(8, 1500), "unavailable runtime makes the action unavailable");
+        Expect(!client.GimbalTarget(0.0, 0.0), "unavailable runtime fails closed for a gimbal target");
         Expect(client.LastOutcome == NomadCoreRequestOutcome.FailedBeforeSend,
             "runtime connection failure is reported before command send");
         Expect(client.LastErrorCode == "runtime_unavailable",
@@ -80,6 +84,17 @@ internal static partial class NomadCoreClientTests
         var client = new NomadCoreClient("test-key", ReservePort());
         Expect(!client.GimbalConfigure(-1), "negative mount mode rejected");
         Expect(!client.GimbalConfigure(5), "mount mode above 4 rejected");
+    }
+
+    private static void GimbalTarget_FailsClosedOnInvalidInput()
+    {
+        var client = new NomadCoreClient("test-key", ReservePort());
+        Expect(!client.GimbalTarget(double.NaN, 0), "NaN pitch rejected");
+        Expect(!client.GimbalTarget(double.PositiveInfinity, 0), "infinite pitch rejected");
+        Expect(!client.GimbalTarget(-90.01, 0), "pitch below limit rejected");
+        Expect(!client.GimbalTarget(0, 30.01), "roll above limit rejected");
+        Expect(client.LastOutcome == NomadCoreRequestOutcome.Rejected, "invalid target is reported as rejected");
+        Expect(client.LastErrorCode == "invalid_argument", "invalid target has a stable error code");
     }
 
     private static void Expect(bool condition, string message)

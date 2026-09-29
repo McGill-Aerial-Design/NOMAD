@@ -229,7 +229,8 @@ struct Runtime::Implementation {
                                     {"server_time_ms", unix_milliseconds()}}},
                     {"capabilities",
                      {"hello", "ping", "status", "set_servo", "set_relay", "motor_test",
-                      "configure_gimbal", "admit_authority", "revoke_authority", "handback_authority"}}};
+                      "configure_gimbal", "set_gimbal_target", "admit_authority", "revoke_authority",
+                      "handback_authority"}}};
         }
         if (request.type == "ping") {
             return {{"protocol", kProtocolName}, {"version", kProtocolVersion}, {"id", request.id},
@@ -324,6 +325,9 @@ struct Runtime::Implementation {
         }
         if (request.type == "configure_gimbal") {
             return vehicle_.configure_gimbal(request.mount_mode);
+        }
+        if (request.type == "set_gimbal_target") {
+            return vehicle_.set_gimbal_target(request.pitch_deg, request.roll_deg);
         }
         return {false, "request type is not supported in protocol v1"};
     }

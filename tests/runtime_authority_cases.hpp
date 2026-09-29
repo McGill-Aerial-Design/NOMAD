@@ -4,13 +4,14 @@
 void test_disconnect_does_not_cancel_or_replay(std::uint16_t port, FakeConnection &connection) {
     Client disconnected(port);
     const auto request = servo_request("lost-response", 1700);
+    const auto before = connection.command_count();
     disconnected.send(request);
     disconnected.disconnect();
-    wait_until([&connection] { return connection.command_count() == 3; });
+    wait_until([&connection, before] { return connection.command_count() == before + 1; });
 
     Client reconnect(port);
     CHECK(reconnect.request(request)["command_result"]["success"] == true);
-    CHECK(connection.command_count() == 3);
+    CHECK(connection.command_count() == before + 1);
 }
 
 void test_evicted_replay_and_wrong_source(std::uint16_t port, FakeConnection &connection) {
@@ -76,11 +77,12 @@ void test_expired_exact_retry_returns_known_outcome(std::uint16_t port, FakeConn
 }
 
 void test_revoke_during_operation(std::uint16_t port, FakeConnection &connection) {
+    connection.acknowledgement = nomad::mavlink::CommandAck{205, 0};
     connection.command_started = false;
     connection.command_delay = std::chrono::milliseconds(300);
     Client first(port);
     const auto before = connection.command_count();
-    first.send(servo_request("in-flight-revoke", 1500));
+    first.send(gimbal_target_request("in-flight-gimbal-revoke", 10.0, 5.0));
     wait_until([&connection] { return connection.command_started.load(); });
     Client operator_client(port);
     const auto revoked = operator_client.request(authority_request("during-revoke", "revoke_authority", "operator"));
@@ -88,7 +90,7 @@ void test_revoke_during_operation(std::uint16_t port, FakeConnection &connection
     authority.generation = revoked["authority_generation"].get<std::uint64_t>();
     CHECK(first.receive()["error"]["code"] == "authority_interrupted");
     CHECK(connection.command_count() == before);
-    CHECK(operator_client.request(servo_request("after-revoke", 1500))["error"]["code"] ==
+    CHECK(operator_client.request(gimbal_target_request("after-gimbal-revoke", 10.0, 5.0))["error"]["code"] ==
           "not_authoritative");
     CHECK(connection.command_count() == before);
     connection.command_delay = std::chrono::milliseconds(0);

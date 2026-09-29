@@ -37,9 +37,10 @@ does not launch the CLI or fall back to native MAVLink or direct vehicle writes.
 Requests with an unknown outcome are not replayed. GuidedGoto is unavailable
 until runtime protocol v1 adds a typed navigation request, and the boundary
 monitor tells the operator to take manual control. The local API-key setting is
-a nonempty actuation gate, not IPC authentication. Separate direct gimbal-angle
-controls and maintenance parameter paths remain outside this client boundary;
-global authority handover is open.
+a nonempty actuation gate, not IPC authentication. Gimbal angle targeting uses
+typed runtime requests; maintenance parameter paths and native
+Mission Planner/RC controls remain outside this client boundary. Global authority
+handover is open.
 For CONOPS v1.0, the dedicated GCS display must show live aircraft position and
 competition area (AE27-OPS-004). The LAND-as-termination recipe and descent-speed
 settings are removed. The monitored termination button and hard-boundary request

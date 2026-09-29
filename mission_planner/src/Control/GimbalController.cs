@@ -1,16 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 // ============================================================
-// NOMAD Gimbal Controller (shared MAVLink sender)
+// NOMAD Gimbal Controller (shared runtime client)
 // ============================================================
-// Extracted from GimbalJoystickWindow so any input source — the floating
-// joystick window, the NomadJoystickService driven by a physical DirectInput
-// stick, or a future scripted automation — can drive the same target-angle
-// integrator and serialize direct MAVLink access via MavlinkSerialLock.
-//
-// The pure command construction + kinematics live in GimbalCommand (Mission
-// Planner-free, unit-tested by tests/gimbal); this class is the thin send
-// adapter that maps a GimbalFrame onto MAVLink.MAV_CMD and ships it.
+// The floating window and physical DirectInput stick share one target-angle
+// integrator. Target requests go through the typed NOMAD runtime client.
 // ============================================================
 
 using System;
@@ -20,7 +14,7 @@ using MissionPlanner;
 namespace NOMAD.MissionPlanner
 {
     /// <summary>
-    /// Process-wide gimbal target state and MAVLink send helpers.
+    /// Process-wide gimbal target state and runtime request helpers.
     /// All state is static so multiple input sources see the same target.
     /// </summary>
     public static class GimbalController
@@ -87,7 +81,7 @@ namespace NOMAD.MissionPlanner
                 SetMode(MountMode.MavlinkTargeting);
 
             SetTargetAngles(TargetPitchDeg + pitchDeltaDeg, TargetRollDeg + rollDeltaDeg);
-            SendPitchRollAngle(TargetPitchDeg, TargetRollDeg);
+            RequestPitchRollTarget(TargetPitchDeg, TargetRollDeg);
         }
 
         /// <summary>
@@ -107,66 +101,39 @@ namespace NOMAD.MissionPlanner
             TargetPitchDeg = p;
             TargetRollDeg = r;
             TargetChanged?.Invoke(p, r);
-            if (send) SendPitchRollAngle(p, r);
+            if (send) RequestPitchRollTarget(p, r);
         }
 
         public static void SetMode(MountMode mode)
         {
             CurrentMode = mode;
             ModeChanged?.Invoke(mode);
-            var client = OutputController.CreateCoreClient();
-            if (client == null)
-            {
-                Log.Warn("Gimbal configure is unavailable without the NOMAD core client.");
-                return;
-            }
-            if (!client.GimbalConfigure((int)mode))
-            {
-                Log.Warn("Gimbal configure was not confirmed by the NOMAD runtime; it was not replayed.");
-            }
+            OutputController.ConfigureGimbal((int)mode);
         }
 
         /// <summary>
-        /// Send DO_MOUNT_CONTROL with absolute pitch/roll. Drops if a previous
-        /// command is still in flight so fast stick motion never queues.
+        /// Request an absolute pitch/roll target through the runtime. Drops a
+        /// new request while the previous one is in flight so stick motion never queues.
         /// </summary>
-        public static void SendPitchRollAngle(float pitchDeg, float rollDeg)
+        public static void RequestPitchRollTarget(float pitchDeg, float rollDeg)
         {
-            if (OutputController.IntegratedFlightMode ||
-                Environment.GetEnvironmentVariable("NOMAD_INTEGRATED_FLIGHT") == "1") return;
-            if (MainV2.comPort == null || !MainV2.comPort.BaseStream.IsOpen) return;
             if (System.Threading.Interlocked.Exchange(ref _inflight, 1) == 1) return;
 
-            byte sysid = MainV2.comPort.MAV.sysid;
-            byte compid = MainV2.comPort.MAV.compid;
-            var frame = GimbalCommand.BuildMountControl(pitchDeg, rollDeg);
-
-            Task.Run(async () =>
+            Task.Run(() =>
             {
-                bool acquired = false;
                 try
                 {
-                    acquired = await MavlinkSerialLock.WaitAsync(1000).ConfigureAwait(false);
-                    if (!acquired) return;
-                    await SendFrameAsync(sysid, compid, frame).ConfigureAwait(false);
+                    OutputController.SendGimbalTarget(pitchDeg, rollDeg);
                 }
-                catch { }
+                catch (Exception error)
+                {
+                    Log.Warn($"Gimbal target request failed: {error.Message}; target was not confirmed.");
+                }
                 finally
                 {
-                    if (acquired) MavlinkSerialLock.Release();
                     System.Threading.Interlocked.Exchange(ref _inflight, 0);
                 }
             });
         }
-
-        // Ship a GimbalFrame as a COMMAND_LONG. The frame's numeric command id is
-        // the MAVLink MAV_CMD value (pinned by GimbalCommand + tests/gimbal), so
-        // the cast is exact.
-        private static Task SendFrameAsync(byte sysid, byte compid, GimbalFrame frame)
-            => MainV2.comPort.doCommandAsync(
-                sysid, compid,
-                (MAVLink.MAV_CMD)frame.Command,
-                frame.P1, frame.P2, frame.P3, frame.P4, frame.P5, frame.P6, frame.P7,
-                requireack: false, uicallback: null);
     }
 }

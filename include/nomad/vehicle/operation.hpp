@@ -27,6 +27,7 @@ enum class VehicleOperation {
     SetRelay,
     MotorTest,
     ConfigureGimbal,
+    SetGimbalTarget,
     ReleasePayload,
     FenceConfiguration,
 };

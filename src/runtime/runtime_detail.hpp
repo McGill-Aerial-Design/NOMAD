@@ -23,6 +23,8 @@ struct Request {
     int relay_number{};
     int motor_instance{};
     int mount_mode{};
+    double pitch_deg{};
+    double roll_deg{};
     bool relay_on{};
     std::string incarnation;
     std::string source;
@@ -216,9 +218,13 @@ bool validate_request_fields(Request &request, Json &error) {
     if (request.type == "configure_gimbal" && read_integer(body, "mount_mode", request.mount_mode)) {
         return true;
     }
+    if (request.type == "set_gimbal_target" && read_finite_number(body, "pitch_deg", request.pitch_deg) &&
+        read_finite_number(body, "roll_deg", request.roll_deg)) {
+        return true;
+    }
     const bool known_type = request.type == "set_servo" || request.type == "set_relay" ||
                             request.type == "motor_test" ||
-                            request.type == "configure_gimbal";
+                            request.type == "configure_gimbal" || request.type == "set_gimbal_target";
     if (!known_type && request.type != "hello" && request.type != "ping" && request.type != "status") {
         error = error_response(request.id, "unsupported_request", "request type is not supported in protocol v1");
         return false;
@@ -273,7 +279,7 @@ ParsedRequest parse_request(std::string_view line) {
 
 bool is_mutating(const std::string &type) {
     return type == "set_servo" || type == "set_relay" || type == "motor_test" ||
-           type == "configure_gimbal";
+           type == "configure_gimbal" || type == "set_gimbal_target";
 }
 
 std::optional<std::int64_t> age_milliseconds(Clock::time_point timestamp) {
