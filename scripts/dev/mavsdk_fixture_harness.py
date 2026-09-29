@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
-"""Primitives shared by the MAVSDK parity fixtures.
+"""Primitives shared by the MAVSDK qualification fixtures.
 
-Both fixtures drive real binaries — `nomad` (through `run_cli`) and the
+Fixtures drive the non-installed `nomad-qualification` tool (through `run_cli`) and the
 connection probe (`run_probe`, `run_staleness_probe`, `run_velocity_probe`) —
 against `mavsdk_peer.VehiclePeer`, and both report the same way. Keeping that in
 one module means a case only has to describe the behavior it proves.

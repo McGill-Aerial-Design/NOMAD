@@ -101,13 +101,14 @@ and capabilities; keep real settings/credentials in ignored local storage.
 
 ## Connection behavior
 
-The persistent `nomad-runtime` and one-shot C++ CLI accept udp, udpin and udpout
-endpoint schemes and hand them to the MAVSDK transport. In the ground-router
-topology, the runtime default is `udpin:127.0.0.1:14601`; the router consumer
+Only the persistent `nomad-runtime` accepts udp, udpin and udpout aircraft
+endpoint schemes and hands them to the MAVSDK transport. The installed `nomad`
+CLI has no aircraft endpoint or system-ID options; it connects to runtime IPC.
+In the ground-router topology, the runtime default is `udpin:127.0.0.1:14601`; the router consumer
 sends to that local MAVSDK endpoint from `127.0.0.1:14602`. Runtime IPC is a
 separate TCP endpoint at `127.0.0.1:14611`. Set `NOMAD_RUNTIME_IPC_PORT` when
 the runtime and clients need another loopback port. Native serial/TCP are
-possible MAVSDK deployment capabilities but are not current CLI transports.
+possible MAVSDK deployment capabilities but are not configured runtime transports.
 Routers bridge selected physical links to UDP. Core placement does not follow
 automatically from compute placement.
 
@@ -134,12 +135,20 @@ targets through typed `set_gimbal_target` requests; runtime, authority and busy
 failures are shown to the operator, with no direct MAVLink fallback.
 In embedded router mode, it also makes the
 Mission Planner router consumer receive-only; the standalone router requires
-an explicit equivalent configuration. The C++ CLI can use
-`nomad --runtime status`, `nomad --runtime servo <channel> <pwm_us>`, and other
-protocol-v1 typed operations. Bare verbs and `nomad --direct` retain a one-shot
-MAVSDK connection for exclusive debugging; use that mode only when no runtime
-or other NOMAD client owns the same MAVSDK endpoint. Runtime mode accepts no
-MAVLink endpoint override; configure the endpoint on `nomad-runtime` instead.
+an explicit equivalent configuration. The installed CLI sends bare `nomad
+status`, `nomad admit`, `nomad revoke`, `nomad handback`, `nomad servo <channel>
+<pwm_us>`, `nomad relay <number> <0|1>`, `nomad motor-test <instance> <pwm_us>
+<timeout_s>` and `nomad gimbal-config <mount_mode>` commands as typed protocol-v1
+requests. Other recognized verbs, including `connect`, flight/navigation,
+mission, velocity, fence-demo and payload-demo commands, report unavailable
+because v1 has no typed request for them. No command falls back to direct
+MAVLink.
+
+`nomad-qualification` is a separately built, non-installed direct vehicle
+driver for SITL and MAVSDK transport qualification. It accepts `--endpoint` and
+`--system-id` for those isolated tests. It is excluded from the default build,
+package and production workflows. Configure production aircraft endpoint and
+system identity on `nomad-runtime` instead.
 
 The protocol is versioned JSON Lines, limited to 64 KiB per message, and bound
 to IPv4 loopback. Mutating requests run one at a time; a concurrent mutation
@@ -148,7 +157,8 @@ runtime process lifetime. If the response is lost, the client reports unknown
 outcome and must not automatically issue a fresh request. The cache is
 in-memory, so restart clears it and does not resume work. Local machine access
 is a trust boundary; `NOMAD_API_KEY` is only a nonempty actuation gate, not
-client authentication. Native Mission Planner MAVLink, RC/pilot, ArduPilot,
+client authentication. The installed CLI does not decide API-key policy; the
+runtime validates mutation requests. Native Mission Planner MAVLink, RC/pilot, ArduPilot,
 ROS and maintenance tools remain independent authorities.
 
 The heartbeat-gated SITL harness uses a `udpout:` endpoint so MAVSDK sends the
@@ -162,8 +172,8 @@ is unrelated to the competition's required 1 Hz telemetry upload.
 For remote core placement, a secure network and an authenticated client protocol
 are both required; current IPC is local-only and does not authenticate clients.
 Until global handover is implemented, use one selected NOMAD runtime owner.
-Running the ROS node, legacy one-shot CLI or another direct MAVLink writer
-against the same endpoint is not a qualified integration.
+Running the ROS node, non-installed `nomad-qualification` driver or another
+direct MAVLink writer against the same endpoint is not a qualified integration.
 
 The [current D09 direction](prd.md#c2-and-termination-direction-2026-09-27)
 uses ELRS as primary RC/MAVLink C2 and LTE/MAVLink as redundant command/data,
@@ -299,7 +309,7 @@ VTOL landing is handled by a separate QLAND operation; it is not part of
 transition-to-VTOL. The overall deadline is 180 s; the ACK wait is capped at
 3 s. Runtime IPC v1 does not expose this verb.
 
-The semantic direct CLI verb `transition-to-vtol <latitude> <longitude>
+The non-installed `nomad-qualification` verb `transition-to-vtol <latitude> <longitude>
 <relative_altitude_m>` qualifies the next handoff for the pinned QuadPlane
 profile. ArduPlane 4.7.1 accepts `MAV_CMD_DO_VTOL_TRANSITION` only in AUTO, so
 the recovered GUIDED aircraft is not ready by itself. An independent operator
@@ -347,7 +357,7 @@ provenance and scope are in the [current qualification status](migration.md#curr
 dated measured traces remain in the migration evidence. Hardware flight remains
 unqualified.
 
-The dedicated direct CLI verb `quadplane-vtol-land <latitude> <longitude>` is
+The dedicated non-installed qualification verb `quadplane-vtol-land <latitude> <longitude>` is
 restricted to the pinned ArduPlane 4.7.1 `quadplane-tilttri` profile. It admits
 only an armed AUTO multicopter with fresh heartbeat, position, velocity, GPS,
 VTOL and landed-state telemetry; exact firmware/profile parameter readback;
@@ -381,9 +391,9 @@ repository evidence manifests are sanitized and reference private artifacts.
 
 ## Security and packaging
 
-The current CLI/runtime accept any nonempty NOMAD_API_KEY: a local opt-in, not
-identity verification. OS account/file/IPC permissions are the immediate trust
-boundary. Runtime IPC has bounded parsing, request IDs and an in-memory dedupe
+The runtime and Mission Planner local gate accept any nonempty NOMAD_API_KEY:
+a local opt-in, not identity verification. OS account/file/IPC permissions are
+the immediate trust boundary. Runtime IPC has bounded parsing, request IDs and an in-memory dedupe
 cache, but no authenticated identities, durable request records, authorization
 policy or complete lifecycle audit. Enable and test DDS security for any exposed
 ROS command surface; no such protection is implied by ROS domain naming.

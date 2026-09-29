@@ -130,9 +130,12 @@ revoke and handback controls. Gimbal angle targets use typed runtime IPC with
 the same request lifecycle; independent native Mission Planner/RC inputs remain
 separate command sources.
 
-The C++ one-shot CLI remains a separate operator/debug client and is not a
-Mission Planner fallback. The ROS adapter remains observation only by default,
-while explicit nonintegrated tests retain its direct `Vehicle` behavior.
+The installed C++ `nomad` CLI now uses runtime IPC only. Recognized commands
+without a typed v1 request report unavailable. Direct MAVSDK/`Vehicle` access
+remains in the non-installed, explicitly built `nomad-qualification` tool for
+SITL and transport qualification; it is not an operator or production client.
+The ROS adapter remains observation only by default, while explicit
+nonintegrated tests retain its direct `Vehicle` behavior.
 
 The pinned MAVSDK command sender queues and retries `COMMAND_LONG` and
 `COMMAND_INT` after NOMAD's transport-call admission check. It does not expose a
@@ -153,6 +156,26 @@ reports an interrupted or unknown aircraft outcome rather than success. Action's
 relative goto inherits the gate through its mode and reposition commands, but
 its existing boolean NOMAD wrapper reports only failure; that direct API does
 not expose the cancellation reason.
+
+### Runtime-only installed CLI — 2026-09-29
+
+At baseline `db206b37f5df1047dde8f805722f14bc2ae6d032`, bare `nomad` commands
+created a direct MAVSDK connection while `--runtime` selected the typed IPC
+client. The installed `nomad` executable now always uses runtime IPC. It has no
+`--direct`, `--runtime`, `--endpoint` or aircraft `--system-id` option; known
+verbs without a v1 typed request return `unsupported_request` before any
+transport connection.
+
+CMake builds the direct driver as `nomad-qualification EXCLUDE_FROM_ALL`; the
+install target includes only `nomad` and `nomad-runtime`. Existing SITL and
+MAVSDK peer qualification harnesses use the explicit test target and retain
+their aircraft endpoint/system-ID controls. Those direct runs are test tooling,
+not part of the installed package or production command path.
+
+No runtime authority, request admission, generation, expiry, sequencing, replay,
+explicit handback or final-send fencing behavior changed in this slice. The
+existing runtime and MAVSDK authority tests remain the checks for those
+invariants.
 
 The integrated profile makes the embedded router's Mission Planner consumer
 receive-only while retaining a command-capable NOMAD core consumer. The
@@ -237,7 +260,7 @@ and could misleadingly suggest a QuadPlane loss-response policy.
 |---|---|
 | `FlightModeController`, joystick and boundary monitor treated LAND/parameter writes as termination | Removed with caller failure reporting, compiled request tests and source-boundary guards; no physical termination evidence claimed |
 | `NOMADBoundaryView.MPFence` mapped kill labels to `FENCE_ACTION=2`; `MPFenceUploader` wrote LAND speed | Direct uploader/clear implementation and speed side effect deleted; visual map export only. Delayed/warn-only hard-boundary settings still conflict with immediate aircraft termination and stay GAP-05/06 blockers |
-| `src/main.cpp` direct CLI, Mission Planner runtime-only typed client (GuidedGoto unavailable), `ros2/nomad_ros/src/node.cpp` separate Vehicle, native MP flight controls and ELRS RC are independent writers | Active G-M prerequisite: migrate or exclude every software writer and prove FC input selection agrees with core inhibition; concurrent source test must show one effective owner |
+| non-installed `nomad-qualification` direct test driver, Mission Planner runtime-only typed client (GuidedGoto unavailable), `ros2/nomad_ros/src/node.cpp` separate Vehicle, native MP flight controls and ELRS RC are separate writers | Active G-M prerequisite: keep the direct test driver out of integrated production use and prove FC input selection agrees with core inhibition; concurrent source test must show one effective owner |
 | Mission Planner gimbal angle stream used a direct MAVLink writer; payload `RCx_OPTION` and motor-music `SCR_ENABLE`/MAVFTP writes still bypass runtime | Gimbal targets now use typed runtime/core requests with finite angle bounds and authority/replay/revocation checks; fence writer was deleted after unsafe disable/failure behavior was found. Remaining bypasses are G-M maintenance admission prerequisites: disarmed exclusive ownership or removal/migration |
 | Runtime 256-response cache is evicted and cleared on restart; replay can execute a mutation again (`src/runtime/runtime.cpp`, `tests/runtime_ipc_test.cpp`) | Active G-M stale-request prerequisite: incarnation/session/generation plus bounded expiry and replay policy; test restart, eviction, queued intents and late requests without retransmission |
 | NOMAD joystick handles gimbal/camera/switches, never starts MP flight RC override (`NomadJoystickService.cs`) | LTE flight joystick remains unimplemented/unqualified; prove real pilot input, takeover and handback instead of inferring them from LTE connectivity |
@@ -1152,8 +1175,11 @@ The runtime IPC slice adds `nomad-runtime`, which owns one long-lived MAVSDK
 connection and one `Vehicle`, plus JSON Lines protocol v1 on IPv4 loopback. HELLO,
 PING, STATUS and typed requests for existing Vehicle methods are covered by
 deterministic fake-connection tests. Mission Planner can opt into persistent
-mode; explicit `LegacyOneShot` remains available. `nomad --runtime` is a typed
-client path, while bare verbs and `--direct` retain the standalone path.
+mode; explicit `LegacyOneShot` remained available at that milestone.
+`nomad --runtime` selected the typed client path, while bare verbs and
+`--direct` retained the standalone path. The later [runtime-only installed CLI
+slice](#runtime-only-installed-cli-2026-09-29) supersedes that behavior and
+moves qualification-only direct access to `nomad-qualification`.
 
 The runtime serializes mutating operations with a try-lock; a second concurrent
 mutation receives `busy`. It keeps 256 completed request responses in memory,

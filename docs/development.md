@@ -26,6 +26,9 @@ pixi run verify-core-package
 ~~~
 
 test-core configures/builds before CTest; build-core builds without tests.
+`build-core` builds the installed runtime-only `nomad` client and
+`nomad-runtime`. Run `pixi run build-qualification-cli` to explicitly build the
+non-installed direct MAVSDK driver needed by SITL and transport qualification.
 format-check is read-only with respect to source; format rewrites source and is
 not appropriate for a documentation-only review of unrelated migration work.
 docs-build is the strict ProperDocs site check.
@@ -132,8 +135,9 @@ requirements edits. A passing structural check does not prove extraction
 completeness, interpretation accuracy or implemented flight compliance.
 
 `pixi run test-runtime-ipc` builds the core and exercises `nomad-runtime` with a
-local fake MAVLink peer, including typed requests, client reconnect and runtime
-restart. It does not require aircraft hardware or Docker.
+local fake MAVLink peer and the installed `nomad` client, including typed
+requests, client reconnect and runtime restart. It does not require aircraft
+hardware or Docker.
 
 ## SITL discipline
 
@@ -152,6 +156,11 @@ core-sitl-quadplane-route, core-sitl-quadplane-transition-back,
 core-sitl-quadplane-vtol-landing and sitl-fence. Use them
 against a configured isolated endpoint with no hardware path attached; a live
 passing run is still required before G1 closes.
+
+These scenarios and `tests/sitl/velocity_loop_closure.py` use the explicitly
+built `nomad-qualification` driver because they exercise direct vehicle methods
+that protocol v1 does not expose. The target is excluded from default builds and
+packages. Production commands use the installed `nomad` IPC client.
 
 The Task 1 observation reference is ArduPlane 4.7.1 at exact commit
 `dbe792162d06cab66c3475fd5556bf7a120f119e`, using the
@@ -243,23 +252,21 @@ qualification.
 
 ## Adapter and optional build checks
 
-The `build-core-mavsdk` and `mavsdk-phase-a-smoke` task names are historical:
-every build is the MAVSDK transport now, and the latter still requires live SITL.
-Follow [MAVSDK parity gates](mavsdk-adoption.md). The build task emits
-configure/build timing and footprint JSON to standard output.
+The `build-core-mavsdk` and `mavsdk-phase-a-smoke` task names are historical.
+The Phase A connect/status executable is excluded from default builds and is
+not installed. Its explicit smoke task still requires live SITL. Follow
+[MAVSDK parity gates](mavsdk-adoption.md). The build task emits configure/build
+timing and footprint JSON to standard output.
 
-MAVSDK is the only transport, so the CLI has no way to select one: `--transport`
-and `NOMAD_TRANSPORT` were removed with the Phase E cutover. `--transport` is now
-an unknown-argument usage failure, and the environment variable is inert because
-nothing can select a transport any more. Run `pixi run test-mavsdk-phase-b` for
-the
-transport contract check: it builds the CLI, `nomad_mavsdk_connection_tests` and
-`nomad_mavsdk_zero_delivery_tests`, then runs
+`nomad` is an IPC-only client and has no aircraft transport selector or endpoint
+configuration. Run `pixi run test-mavsdk-phase-b` for the direct transport
+qualification check: it builds `nomad-qualification`,
+`nomad_mavsdk_connection_tests` and `nomad_mavsdk_zero_delivery_tests`, then runs
 `scripts/dev/mavsdk_connection_fixture.py`, which asserts accepted, denied,
 timeout, wire-form, stale-telemetry and wrong-identity behaviour plus
 per-command mode/takeoff/goto/land/RTL/servo/relay/gimbal-config
 parity against the deterministic vehicle in `scripts/dev/mavsdk_peer.py`; those
-command cases run the real CLI and assert its verified output against a peer
+command cases run the test-only qualification driver and assert its verified output against a peer
 whose starting state differs from the required result. The same task covers the
 link and zero-delivery cases in `scripts/dev/mavsdk_link_fixture.py`: the
 pre-latch GCS-heartbeat announcement, coalesced datagrams, live-to-stale link

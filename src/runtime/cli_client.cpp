@@ -381,11 +381,6 @@ bool runtime_endpoint_is_open() {
 }
 
 int run_runtime_command(const Arguments &arguments) {
-    if (arguments.endpoint_explicit || arguments.system_id_explicit) {
-        std::cerr << "error[invalid_configuration]: --runtime uses endpoint and system identity configured by "
-                     "nomad-runtime\n";
-        return EXIT_FAILURE;
-    }
     Json request;
     if (!add_typed_arguments(arguments, request)) {
         std::cerr << "error[unsupported_request]: " << arguments.command

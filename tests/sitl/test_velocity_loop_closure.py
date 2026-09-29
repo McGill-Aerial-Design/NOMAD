@@ -26,7 +26,7 @@ _BINARY = find_binary()
 
 @pytest.mark.skipif(
     not (_OPERATOR and _BINARY),
-    reason="set NOMAD_SITL_OPERATOR and run `pixi run build-core` to run against a live ArduPilot SITL",
+    reason="set NOMAD_SITL_OPERATOR and run `pixi run build-qualification-cli` for the direct SITL driver",
 )
 def test_velocity_loop_closure():
     results = run_scenario(_OPERATOR, _BINARY, get_sitl_port())

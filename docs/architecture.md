@@ -140,9 +140,10 @@ The `nomad-runtime` executable owns one long-lived MAVSDK connection and one
 set over bounded JSON Lines on loopback TCP. Each command calls an existing
 public `Vehicle` method. It does not own persistent mission state, global
 aircraft authority, or every client. See [runtime IPC](runtime-ipc.md) for the
-source-baseline ownership inventory, wire contract and current limits. Keep the
-runtime composition root small; the one-shot CLI remains available for
-exclusive local/debug use.
+source-baseline ownership inventory, wire contract and current limits. The
+installed `nomad` executable is a typed runtime-IPC client. A separate,
+non-installed qualification target retains direct MAVSDK vehicle access only
+for SITL and transport tests.
 
 ### Modularity and dependency direction
 
@@ -201,8 +202,10 @@ these semantics and test concave geometry, narrow regions and infeasible insets.
 
 The implemented software foundation is one ground-hosted C++ runtime. Mission Planner
 uses loopback runtime IPC only; there is no one-shot process fallback. GuidedGoto
-is unavailable until the runtime exposes a typed navigation request. The C++ CLI
-has an explicit runtime client mode and retains its separate direct/debug path.
+is unavailable until the runtime exposes a typed navigation request. The installed
+C++ CLI always uses runtime IPC and does not accept an aircraft endpoint or
+system-ID override. The direct `nomad-qualification` target is excluded from
+default/install builds and exists only for SITL and transport qualification.
 Local IPC is bounded JSON Lines over IPv4 loopback TCP. V1 has request
 IDs, protocol negotiation, structured errors, a 256-response in-memory cache and a
 one-mutating-command-at-a-time policy. Admission now adds a runtime incarnation,
@@ -303,9 +306,11 @@ A boot epoch alone does not reject replay after cache eviction or a queued
 request rebound to a new owner. Termination reset must follow the approved
 post-flight reset procedure, never reconnect or ordinary handback.
 
-Direct CLI, ROS, native Mission Planner, onboard and maintenance writers must be
-migrated or explicitly excluded from an integrated flight configuration before
-qualification. Maintenance ownership requires a disarmed, non-flight session;
+The installed CLI uses runtime authority. The non-installed
+`nomad-qualification` test driver, ROS, native Mission Planner, onboard and
+maintenance writers remain separate test or command paths and must be explicitly
+excluded from integrated flight configuration before qualification. Maintenance
+ownership requires a disarmed, non-flight session;
 raw output/payload permissions remain separate from flight ownership. Router
 route selection has no power to grant authority. Exact RC/LTE takeover signals,
 FC input priority and deadlines require the reviewed production map and tests;

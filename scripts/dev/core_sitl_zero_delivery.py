@@ -299,7 +299,9 @@ def main() -> int:
         upstream_port = get_sitl_port()
         binary = find_binary()
         if binary is None:
-            print("error: C++ core binary not found; run `pixi run build-core` first", file=sys.stderr)
+            print(
+                "error: qualification driver not found; run `pixi run build-qualification-cli` first", file=sys.stderr
+            )
             return 2
         print_watch_hint()
         run_zero_delivery(binary, upstream_port)

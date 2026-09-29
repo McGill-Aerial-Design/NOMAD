@@ -237,7 +237,7 @@ def test_transition_setup_keeps_the_explicit_recovery_altitude(monkeypatch: pyte
     monkeypatch.setattr(transition_back, "require_fresh_vtol_state", lambda _status, _state: None)
 
     point, recovery_distance, recovery_altitude_error = transition_back.get_transition_point_from_recovery(
-        ROOT / "build" / "core" / "nomad.exe", "14570", (45.0, -73.0, 20.0)
+        ROOT / "build" / "core" / "nomad-qualification.exe", "14570", (45.0, -73.0, 20.0)
     )
 
     assert point == (45.0, -73.0, 20.0)
