@@ -1,23 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
-"""Client contract tests for the C++ core CLI boundary.
+"""Contract tests for the installed runtime-only C++ CLI.
 
-The C++ ``nomad`` CLI is a client boundary for Mission Planner and tools.
-These tests pin the parts of that
-boundary that are observable without a vehicle or SITL:
-
-- the exact verb surface named by ``usage`` output;
-- argument parsing: malformed values fail fast, before any socket work;
-- SR-SEC-02/03 authentication: actuation verbs are refused without
-  ``NOMAD_API_KEY`` before any socket work, accepted attempts carry an audit
-  line, and telemetry verbs keep the no-key local fallback;
-- no-vehicle failure behavior: an occupied endpoint and a silent endpoint
-  each fail with a documented, deterministic diagnostic and a nonzero exit.
-
-Command flows against a real vehicle stay in the ``core-sitl-*`` scenarios;
-this file deliberately opens no MAVLink link to a live peer.
-
-Skipped when the C++ binary has not been built (``pixi run build-core``).
+These tests exercise argument parsing and the protocol-v1 boundary without a
+vehicle. Direct vehicle commands remain in the non-installed qualification tool.
 """
 
 from __future__ import annotations
@@ -30,18 +16,22 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# The usage line is the client-facing verb surface. Every verb below must
-# appear there so a wrapper can trust the help text.
 EXPECTED_VERBS = (
     "connect",
     "status",
+    "admit",
+    "revoke",
+    "handback",
     "arm",
     "disarm",
     "mode",
     "takeoff",
     "vtol-takeoff",
     "transition-to-fixed-wing",
+    "fixed-wing-route",
+    "fixed-wing-recovery",
     "transition-to-vtol",
+    "quadplane-vtol-land",
     "goto",
     "land",
     "rtl",
@@ -50,9 +40,43 @@ EXPECTED_VERBS = (
     "motor-test",
     "gimbal-config",
     "mission-demo",
+    "velocity",
     "velocity-demo",
     "fence-demo",
     "payload-demo",
+)
+
+UNSUPPORTED_REQUESTS = (
+    ("connect",),
+    ("arm",),
+    ("disarm",),
+    ("mode", "4"),
+    ("takeoff", "5"),
+    ("vtol-takeoff", "5"),
+    ("transition-to-fixed-wing",),
+    ("fixed-wing-route", "45", "-73", "10", "45.1", "-73.1", "10"),
+    ("fixed-wing-recovery", "45", "-73", "10"),
+    ("transition-to-vtol", "45", "-73", "10"),
+    ("quadplane-vtol-land", "45", "-73"),
+    ("goto", "45", "-73", "10"),
+    ("land",),
+    ("rtl",),
+    ("mission-demo",),
+    ("velocity", "--vx", "0.1", "--duration", "1"),
+    ("velocity-demo",),
+    ("fence-demo",),
+    ("payload-demo", "3", "1.5"),
+)
+
+TYPED_REQUESTS = (
+    ("status",),
+    ("admit",),
+    ("revoke",),
+    ("handback",),
+    ("servo", "1", "1500"),
+    ("relay", "3", "1"),
+    ("motor-test", "1", "1000", "1.0"),
+    ("gimbal-config", "2"),
 )
 
 
@@ -74,24 +98,24 @@ BINARY = find_binary()
 
 pytestmark = pytest.mark.skipif(
     BINARY is None,
-    reason="C++ core binary not built; run `pixi run build-core` first",
+    reason="production C++ CLI not built; run `pixi run build-core` first",
 )
 
 
-def invoke(*arguments: str) -> subprocess.CompletedProcess:
+def invoke(*arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(BINARY), *arguments],
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=10,
         check=False,
     )
 
 
-def free_udp_port() -> int:
-    """Return a currently unused UDP port (released before the caller binds)."""
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-        probe.bind(("0.0.0.0", 0))
+def free_tcp_port() -> int:
+    """Return a loopback TCP port that is released before the client runs."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
         return int(probe.getsockname()[1])
 
 
@@ -99,15 +123,18 @@ def test_no_arguments_prints_usage_and_fails() -> None:
     result = invoke()
 
     assert result.returncode != 0
-    assert "Usage: nomad" in result.stdout
+    assert "Usage: nomad <" in result.stdout
+    assert "--direct" not in result.stdout
+    assert "--endpoint" not in result.stdout
+    assert "--system-id" not in result.stdout
 
 
-def test_usage_lists_every_supported_verb() -> None:
+def test_usage_lists_every_recognized_verb() -> None:
     result = invoke("not-a-command")
 
     assert result.returncode != 0
     missing = [verb for verb in EXPECTED_VERBS if verb not in result.stdout]
-    assert not missing, f"usage omits supported verbs: {missing}"
+    assert not missing, f"usage omits recognized verbs: {missing}"
 
 
 def test_unknown_command_prints_usage_and_fails() -> None:
@@ -117,7 +144,7 @@ def test_unknown_command_prints_usage_and_fails() -> None:
     assert "Usage: nomad" in result.stdout
 
 
-def test_removed_user_command_cannot_reach_transport() -> None:
+def test_removed_user_command_cannot_reach_runtime() -> None:
     result = invoke("user-command", "1", "2", "3", "4", "5", "6", "7")
 
     assert result.returncode != 0
@@ -128,40 +155,44 @@ def test_removed_user_command_cannot_reach_transport() -> None:
 @pytest.mark.parametrize(
     "arguments",
     [
-        ("takeoff", "banana"),  # altitude must parse as a float
-        ("takeoff", "nan"),  # non-finite altitude must fail before socket work
-        ("takeoff", "inf"),  # non-finite altitude must fail before socket work
-        ("mode", "1x"),  # mode must parse as a decimal
-        ("goto", "nan", "9.0", "5"),  # non-finite latitude must fail before socket work
-        ("goto", "45.0", "inf", "5"),  # non-finite longitude must fail before socket work
-        ("goto", "45.0", "9.0", "nan"),  # non-finite altitude must fail before socket work
-        ("velocity", "--vx", "nan", "--duration", "1"),  # non-finite velocity must fail before socket work
-        ("velocity", "--vx", "1", "--duration", "inf"),  # non-finite duration must fail before socket work
-        ("takeoff", "5", "9"),  # extra positional argument
-        ("vtol-takeoff", "banana"),  # altitude must parse as a float
-        ("vtol-takeoff", "nan"),  # non-finite altitude must fail before socket work
-        ("vtol-takeoff", "5", "9"),  # extra positional argument
-        ("transition-to-vtol", "45.0", "-73.0"),  # requires exactly three values
-        ("transition-to-vtol", "nan", "-73.0", "20"),  # coordinates must be finite
-        ("transition-to-vtol", "45.0", "-73.0", "inf"),  # altitude must be finite
-        ("transition-to-vtol", "45.0", "-73.0", "20", "30"),  # extra positional argument
-        ("mode", "4", "extra"),  # extra positional argument
-        ("goto", "45.0", "9.0"),  # goto requires latitude, longitude, and altitude
-        ("goto", "45.0", "banana", "5"),  # longitude must parse as a float
-        ("goto", "45.0", "9.0", "5", "7"),  # extra positional argument
-        ("payload-demo", "16", "1.5"),  # relay number above the 0..15 bound
-        ("payload-demo", "3", "1.5", "9"),  # extra positional argument
-        ("servo", "1"),  # servo requires channel and pwm
-        ("servo", "1", "1500", "9"),  # extra positional argument
-        ("relay", "3"),  # relay requires number and on/off
-        ("relay", "16", "1"),  # relay number above the 0..15 bound
-        ("relay", "3", "2"),  # relay on/off must be 0 or 1
-        ("motor-test", "1", "1000"),  # motor-test requires instance, pwm, timeout
-        ("motor-test", "1", "banana", "1.0"),  # pwm must parse as a decimal
-        ("motor-test", "1", "1000", "1.0", "9"),  # extra positional argument
-        ("gimbal-config", "x"),  # mount mode must parse as a decimal
-        ("gimbal-config", "7"),  # mount mode above the 0..4 bound
-        ("--endpoint", "udpin:0.0.0.0:14550"),  # flag without a command
+        ("takeoff", "banana"),
+        ("takeoff", "nan"),
+        ("takeoff", "inf"),
+        ("mode", "1x"),
+        ("goto", "nan", "9.0", "5"),
+        ("goto", "45.0", "inf", "5"),
+        ("goto", "45.0", "9.0", "nan"),
+        ("velocity", "--vx", "nan", "--duration", "1"),
+        ("velocity", "--vx", "1", "--duration", "inf"),
+        ("takeoff", "5", "9"),
+        ("vtol-takeoff", "banana"),
+        ("vtol-takeoff", "nan"),
+        ("vtol-takeoff", "5", "9"),
+        ("transition-to-vtol", "45.0", "-73.0"),
+        ("transition-to-vtol", "nan", "-73.0", "20"),
+        ("transition-to-vtol", "45.0", "-73.0", "inf"),
+        ("transition-to-vtol", "45.0", "-73.0", "20", "30"),
+        ("mode", "4", "extra"),
+        ("goto", "45.0", "-73.0"),
+        ("goto", "45.0", "banana", "5"),
+        ("goto", "45.0", "9.0", "5", "7"),
+        ("payload-demo", "16", "1.5"),
+        ("payload-demo", "3", "1.5", "9"),
+        ("servo", "1"),
+        ("servo", "1", "1500", "9"),
+        ("relay", "3"),
+        ("relay", "16", "1"),
+        ("relay", "3", "2"),
+        ("motor-test", "1", "1000"),
+        ("motor-test", "1", "banana", "1.0"),
+        ("motor-test", "1", "1000", "1.0", "9"),
+        ("gimbal-config", "x"),
+        ("gimbal-config", "7"),
+        ("--direct", "arm"),
+        ("--runtime", "status"),
+        ("--endpoint", "udpin:127.0.0.1:14550"),
+        ("status", "--endpoint", "udpin:127.0.0.1:14550"),
+        ("status", "--system-id", "1"),
     ],
 )
 def test_malformed_arguments_fail_fast_with_usage(arguments: tuple[str, ...]) -> None:
@@ -171,133 +202,28 @@ def test_malformed_arguments_fail_fast_with_usage(arguments: tuple[str, ...]) ->
     assert "Usage: nomad" in result.stdout
 
 
-def test_occupied_endpoint_reports_connect_failure() -> None:
-    # Occupy the same bind shape the CLI uses (wildcard address) so its
-    # bind() fails deterministically on both Windows and POSIX.
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as holder:
-        holder.bind(("0.0.0.0", 0))
-        port = int(holder.getsockname()[1])
-
-        result = invoke("connect", "--endpoint", f"udpin:0.0.0.0:{port}")
-
-    assert result.returncode != 0
-    assert "could not connect" in result.stderr
-    # An endpoint that never opened is a different operator problem from a link
-    # that opened with no vehicle on it, so the timeout diagnostic is absent.
-    assert "timed out waiting for ArduPilot heartbeat" not in result.stderr
-
-
-def test_silent_endpoint_times_out_cleanly() -> None:
-    port = free_udp_port()
-
-    result = invoke("connect", "--endpoint", f"udpin:0.0.0.0:{port}")
-
-    assert result.returncode != 0
-    assert "timed out waiting for ArduPilot heartbeat" in result.stderr
-
-
-@pytest.mark.parametrize(
-    "arguments",
-    [
-        ("arm",),
-        ("disarm",),
-        ("mode", "4"),
-        ("takeoff", "5"),
-        ("vtol-takeoff", "5"),
-        ("transition-to-fixed-wing",),
-        ("transition-to-vtol", "45.0", "-73.0", "20"),
-        ("goto", "45.0", "9.0", "5"),
-        ("land",),
-        ("rtl",),
-        ("servo", "1", "1500"),
-        ("relay", "3", "1"),
-        ("motor-test", "1", "1000", "1.0"),
-        ("gimbal-config", "2"),
-        ("mission-demo",),
-        ("velocity-demo",),
-        ("fence-demo",),
-        ("payload-demo", "3", "1.5"),
-    ],
-)
-def test_every_actuation_verb_refused_without_key_before_any_socket_work(
-    monkeypatch, arguments: tuple[str, ...]
-) -> None:
-    monkeypatch.delenv("NOMAD_API_KEY", raising=False)
+@pytest.mark.parametrize("arguments", TYPED_REQUESTS)
+def test_typed_commands_use_runtime_ipc(monkeypatch, arguments: tuple[str, ...]) -> None:
+    monkeypatch.setenv("NOMAD_RUNTIME_IPC_PORT", str(free_tcp_port()))
 
     result = invoke(*arguments)
 
     assert result.returncode != 0
-    assert f"audit command={arguments[0]} result=refused auth=none reason=missing_api_key" in result.stderr
-    assert "timed out waiting" not in result.stderr
+    assert "error[runtime_unavailable]" in result.stderr
+    assert "MAVSDK" not in result.stderr
+    assert "heartbeat" not in result.stderr
 
 
-def test_empty_api_key_is_treated_as_unset(monkeypatch) -> None:
-    monkeypatch.setenv("NOMAD_API_KEY", "")
+@pytest.mark.parametrize("arguments", UNSUPPORTED_REQUESTS)
+def test_unsupported_commands_report_unavailable_without_transport_fallback(
+    monkeypatch, arguments: tuple[str, ...]
+) -> None:
+    monkeypatch.setenv("NOMAD_RUNTIME_IPC_PORT", "invalid")
 
-    result = invoke("arm")
-
-    assert result.returncode != 0
-    assert "result=refused" in result.stderr
-
-
-def test_actuation_with_key_reaches_transport_and_audits(monkeypatch) -> None:
-    monkeypatch.setenv("NOMAD_API_KEY", "nomad-dev-sitl-key")
-    port = free_udp_port()
-
-    result = invoke("arm", "--endpoint", f"udpin:0.0.0.0:{port}")
-
-    assert result.returncode != 0
-    assert "audit command=arm result=accepted auth=api-key" in result.stderr
-    assert "timed out waiting for ArduPilot heartbeat" in result.stderr
-
-
-def test_integrated_flight_inhibits_direct_actuation_before_transport(monkeypatch) -> None:
-    monkeypatch.setenv("NOMAD_API_KEY", "nomad-dev-sitl-key")
-    monkeypatch.setenv("NOMAD_INTEGRATED_FLIGHT", "1")
-    port = free_udp_port()
-
-    result = invoke("--direct", "arm", "--endpoint", f"udpin:0.0.0.0:{port}")
-
-    assert result.returncode != 0
-    assert "runtime_owner_required" in result.stderr
-    assert "timed out waiting" not in result.stderr
-
-
-def test_goto_is_an_actuation_verb_and_requires_the_key(monkeypatch) -> None:
-    monkeypatch.delenv("NOMAD_API_KEY", raising=False)
-
-    result = invoke("goto", "45.0", "9.0", "5")
-
-    assert result.returncode != 0
-    assert "audit command=goto result=refused auth=none reason=missing_api_key" in result.stderr
-    assert "timed out waiting" not in result.stderr
-
-
-def test_transition_to_vtol_is_not_exposed_through_runtime_ipc_v1() -> None:
-    result = invoke("--runtime", "transition-to-vtol", "45.0", "-73.0", "20")
+    result = invoke(*arguments)
 
     assert result.returncode != 0
     assert "error[unsupported_request]" in result.stderr
-    assert "transition-to-vtol is not available through runtime protocol v1" in result.stderr
-
-
-def test_goto_with_key_reaches_transport_and_audits(monkeypatch) -> None:
-    monkeypatch.setenv("NOMAD_API_KEY", "nomad-dev-sitl-key")
-    port = free_udp_port()
-
-    result = invoke("goto", "45.0", "9.0", "5", "--endpoint", f"udpin:0.0.0.0:{port}")
-
-    assert result.returncode != 0
-    assert "audit command=goto result=accepted auth=api-key" in result.stderr
-    assert "timed out waiting for ArduPilot heartbeat" in result.stderr
-
-
-def test_telemetry_verbs_keep_the_no_key_local_fallback(monkeypatch) -> None:
-    monkeypatch.delenv("NOMAD_API_KEY", raising=False)
-    port = free_udp_port()
-
-    result = invoke("status", "--endpoint", f"udpin:0.0.0.0:{port}")
-
-    assert result.returncode != 0
-    assert "timed out waiting for ArduPilot heartbeat" in result.stderr
-    assert "result=refused" not in result.stderr
+    assert f"{arguments[0]} is not available through runtime protocol v1" in result.stderr
+    assert "invalid_configuration" not in result.stderr
+    assert "heartbeat" not in result.stderr

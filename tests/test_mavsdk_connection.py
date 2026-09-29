@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
-"""Phase B transport parity tests driven by the deterministic MAVSDK peer.
+"""Phase B transport qualification tests driven by the deterministic MAVSDK peer.
 
-These run the real `nomad` CLI and the connection probe
+These run the non-installed `nomad-qualification` CLI and the connection probe
 binary against scripts/dev/mavsdk_connection_fixture.py. They skip when the built
 binaries are absent (run `pixi run test-mavsdk-phase-b` first); the fixture's own
 run is the recorded evidence.
@@ -24,13 +24,13 @@ from mavsdk_vtol_transition_fixture import (  # noqa: E402
     case_transition_directions_use_the_same_targeted_command_transport,
 )
 
-CLI = fixture.find_binary("nomad")
+CLI = fixture.find_binary("nomad-qualification")
 PROBE = fixture.find_binary("nomad_mavsdk_connection_tests")
 ZERO_DELIVERY = fixture.find_binary("nomad_mavsdk_zero_delivery_tests")
 
 requires_mavsdk_build = pytest.mark.skipif(
     CLI is None or PROBE is None or ZERO_DELIVERY is None,
-    reason="MAVSDK Phase B binaries not built; run `pixi run build-core-mavsdk`",
+    reason="MAVSDK Phase B binaries not built; run `pixi run build-mavsdk-phase-b`",
 )
 
 

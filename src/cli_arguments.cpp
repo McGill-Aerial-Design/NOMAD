@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// One-shot CLI argument parsing: global flags plus one small parser per verb
-// group. Any malformed or extra value rejects the whole invocation, so the
-// caller prints usage and fails before any socket work.
+// Parse one typed command before runtime IPC begins. Reject malformed or extra
+// values so the caller can print usage without opening a runtime connection.
 #include "cli_command_table.hpp"
 #include "cli_commands.hpp"
 #include "nomad/util/parse.hpp"
@@ -224,31 +223,6 @@ bool consume_velocity(Arguments &arguments, std::string_view flag, int argc, cha
     return slot->has_value();
 }
 
-bool consume_global_flag(Arguments &arguments, std::string_view flag, int argc, char **argv, int &index) {
-    if (index + 1 >= argc) {
-        return false;
-    }
-    if (flag == "--endpoint") {
-        arguments.endpoint = argv[++index];
-        arguments.endpoint_explicit = true;
-        return true;
-    }
-    if (flag == "--system-id") {
-        const auto parsed = parse_output_int(argv[++index], 255);
-        if (!parsed.has_value() || *parsed == 0) {
-            return false;
-        }
-        arguments.system_id = static_cast<std::uint8_t>(*parsed);
-        arguments.system_id_explicit = true;
-        return true;
-    }
-    return false;
-}
-
-bool is_global_flag(std::string_view token) {
-    return token == "--endpoint" || token == "--system-id";
-}
-
 bool consume_verb_value(Arguments &arguments, std::string_view token, int argc, char **argv, int &index) {
     const std::string_view command = arguments.command;
     if (command == "velocity") {
@@ -295,9 +269,6 @@ bool consume_verb_value(Arguments &arguments, std::string_view token, int argc, 
 
 bool consume_token(Arguments &arguments, int argc, char **argv, int &index) {
     const std::string_view token(argv[index]);
-    if (is_global_flag(token)) {
-        return consume_global_flag(arguments, token, argc, argv, index);
-    }
     return consume_verb_value(arguments, token, argc, argv, index);
 }
 

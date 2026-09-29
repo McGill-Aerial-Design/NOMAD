@@ -32,14 +32,14 @@ def find_runtime() -> Path:
 
 
 def find_cli() -> Path:
-    """Find the sibling C++ CLI used to exercise runtime-client mode."""
+    """Find the installed-behavior C++ CLI that sends requests to the runtime."""
     names = ("nomad.exe", "nomad")
     for directory in (ROOT / "build" / "core" / "Debug", ROOT / "build" / "core" / "Release", ROOT / "build" / "core"):
         for name in names:
             candidate = directory / name
             if candidate.is_file():
                 return candidate
-    raise FileNotFoundError("build nomad first")
+    raise FileNotFoundError("build nomad first with `pixi run build-core`")
 
 
 def free_port(protocol: int) -> int:
@@ -213,18 +213,18 @@ def verify_cli_servo(binary: Path, peer: VehiclePeer, ipc_port: int) -> dict[str
     """Prove the CLI sends one typed command and closes its client connection."""
     environment = os.environ.copy()
     environment["NOMAD_RUNTIME_IPC_PORT"] = str(ipc_port)
-    admitted = run_cli(binary, environment, "--runtime", "admit")
+    admitted = run_cli(binary, environment, "admit")
     require(admitted.returncode == 0, "CLI explicitly admits its software source")
-    result = run_cli(binary, environment, "--runtime", "servo", "8", "1500")
-    require(result.returncode == 0, "C++ CLI runtime mode dispatches the typed servo request")
+    result = run_cli(binary, environment, "servo", "8", "1500")
+    require(result.returncode == 0, "C++ CLI dispatches the typed servo request through runtime IPC")
     commands = wait_for_commands(peer, 1)
     require(len(commands) == 1, "fake MAVLink peer observes one SET_SERVO action")
     return environment
 
 
 def verify_navigation_rejected(binary: Path, peer: VehiclePeer, environment: dict[str, str]) -> None:
-    """Ensure protocol-v1 CLI mode cannot issue route or navigation commands."""
-    result = run_cli(binary, environment, "--runtime", "goto", "45.5", "-73.5", "10")
+    """Ensure the installed CLI cannot issue navigation commands outside v1."""
+    result = run_cli(binary, environment, "goto", "45.5", "-73.5", "10")
     require(
         result.returncode != 0 and "unsupported_request" in result.stderr,
         "C++ CLI rejects navigation outside protocol v1",
@@ -244,7 +244,7 @@ def verify_runtime_reconnect(ipc_port: int, peer: VehiclePeer, binary: Path, env
         pwm_microseconds=1600,
     )
     require(denied["error"]["code"] == "stale_authority", "unbound client cannot mutate after reconnect")
-    second = run_cli(binary, environment, "--runtime", "servo", "8", "1600")
+    second = run_cli(binary, environment, "servo", "8", "1600")
     require(second.returncode == 0, "admitted CLI source can issue another fresh request")
     commands = wait_for_commands(peer, 2)
     require(len(commands) == 2, "two client requests produce exactly two SET_SERVO actions")

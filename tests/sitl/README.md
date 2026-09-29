@@ -1,13 +1,16 @@
 # SITL scenario suite
 
-These tests drive isolated ArduPilot SITL and observe authoritative vehicle state.
+These tests drive isolated ArduPilot SITL with the non-installed
+`nomad-qualification` executable and observe authoritative vehicle state. The
+installed `nomad` CLI uses runtime IPC only; commands without a typed v1 request
+report unavailable.
 Normal pytest skips live scenarios without an explicitly configured simulation.
 Nightly/on-demand SITL CI is configured, but a workflow file is not passed-run
 evidence; merge requests must link a successful current-head live run.
 
 ## Local test responsibilities
 
-- velocity_loop_closure.py: C++ CLI velocity command, observed motion/stop and
+- velocity_loop_closure.py: qualification CLI velocity command, observed motion/stop and
   mode-gate checks; Python is a test driver/observer.
 - test_velocity_loop_closure.py: environment-gated pytest wrapper.
 - scripts/dev/core_sitl_containment.py: in-fence movement, rejected out-of-fence

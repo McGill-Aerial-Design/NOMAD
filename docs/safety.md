@@ -33,7 +33,7 @@ Missing hardware, CONOPS detail or evidence keeps the relevant gate open.
 | H-05 | Fence breach | Target polygon validation, upload/readback and enable check; not continuous trajectory/traffic/altitude containment |
 | H-06 | Unintended payload action | Dedicated consuming release interlock and off attempt; raw outputs bypass it; hardware timeout/feedback open |
 | H-07 | Failsafe suppression | Narrow command surface and structural scans; generic user commands/parameter writers require semantic review |
-| H-08 | Unauthorized commands | Local CLI nonempty-key opt-in and admission audit; no authenticated remote boundary or inherited library audit |
+| H-08 | Unauthorized commands | Runtime nonempty-key gate and typed-request admission; no authenticated remote boundary or inherited library audit |
 
 Historical Copter SITL results support development but do not close current
 release gates without artifact provenance. The zero-delivery loopback test keeps
@@ -176,7 +176,7 @@ mappings when implemented; do not invent entries in the existing checked block.
 
 | Hazard | Proposed requirement | Mitigation / objective falsification test | Gate |
 |---|---|---|---|
-| H-09 Conflicting writers | SR-AUT-01: one active owner and explicit handover | Mission Planner gimbal angles now use typed runtime requests; fake-runtime tests cover missing authority, revoke, replay and busy rejection, and the MAVSDK peer checks the fixed command. Native Mission Planner controls, RC/pilot, CLI/ROS and maintenance writers remain independent; aircraft-wide handover is open | G2 |
+| H-09 Conflicting writers | SR-AUT-01: one active owner and explicit handover | Mission Planner gimbal angles now use typed runtime requests; fake-runtime tests cover missing authority, revoke, replay and busy rejection, and the MAVSDK peer checks the fixed command. The installed CLI uses runtime IPC; non-installed `nomad-qualification`, native Mission Planner controls, RC/pilot, ROS and maintenance tools remain separate test or writer paths. Aircraft-wide handover is open | G2 |
 | H-10 Stale position with fresh heartbeat | SR-TEL-01: per-field age and clock validity | Freeze position while heartbeats flow; position-dependent actions fail closed — implemented as a configurable position-freshness gate (`position_freshness_timeout`, default 2000 ms) enforced by the core | G2 |
 | H-11 Collision or missed traffic | SR-AIR-01: unknown/stale traffic never means clear | Crossing/head-on/reordered/expired tracks yield expected advisories with measured warning time | G4 |
 | H-12 Wrong aircraft mode/transition | SR-TYP-01: validate aircraft class and state | Copter mode constants refused for Plane; failed/aborted VTOL transitions use reviewed response | G2/G7 |
@@ -276,9 +276,9 @@ SR-PAY-02 | src/vehicle/vehicle_payload.cpp:release_payload | tests/safety_test.
 SR-PAY-02 | src/vehicle/vehicle_payload.cpp:release_payload | tests/safety_test.cpp::test_vehicle_payload_off_failure_is_reported
 SR-PAY-03 | src/safety/payload.cpp:ReleaseInterlock::evaluate_release | tests/safety_test.cpp::test_payload_validation_and_interlock
 SR-SEC-01 | src/vehicle/vehicle.cpp:send_command | tests/test_mavsdk_connection.py::test_command_wire_forms
-SR-SEC-01 | src/main.cpp:run_command | tests/test_cpp_command_surface.py::test_cpp_command_surface_has_no_failsafe_controls
-SR-SEC-02 | src/main.cpp:run_command | tests/test_core_client_contract.py::test_every_actuation_verb_refused_without_key_before_any_socket_work
-SR-SEC-03 | src/main.cpp:audit_command | tests/test_core_client_contract.py::test_actuation_with_key_reaches_transport_and_audits
+SR-SEC-01 | src/qualification/main.cpp:run_command | tests/test_cpp_command_surface.py::test_cpp_command_surface_has_no_failsafe_controls
+SR-SEC-02 | src/qualification/main.cpp:run_command | tests/test_qualification_cli.py::test_direct_actuation_refused_without_key_before_transport
+SR-SEC-03 | src/qualification/main.cpp:audit_command | tests/test_qualification_cli.py::test_direct_actuation_with_key_is_audited
 SR-TEL-01 | src/vehicle/vehicle.cpp:wait_for_location | tests/safety_test.cpp::test_vehicle_goto_location_rejects_stale_position
 SR-CMD-01 | src/vehicle/output.cpp:motor_test | tests/output_command_test.cpp::test_vehicle_motor_test_validates_and_clamps_timeout
 SR-CMD-01 | src/vehicle/output.cpp:make_command | tests/test_command_ids.py::test_command_id_matches_the_dialect

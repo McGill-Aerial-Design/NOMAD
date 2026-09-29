@@ -30,9 +30,10 @@ and optional compute. The competition web adapter exchanges data without owning
 vehicle decisions.
 
 A small persistent C++ runtime is now justified by concurrent clients, the 1 Hz
-competition exchange, traffic processing, cancellation, and payload state. Keep
-the existing library and CLI; introduce no generic framework or Python vehicle
-service. Local one-shot CLI use remains useful for isolated tests.
+competition exchange, traffic processing, cancellation, and payload state. The
+installed CLI is a typed runtime-IPC client. Keep direct vehicle access in the
+explicitly built, non-installed qualification tool for SITL and transport tests;
+introduce no generic framework or Python vehicle service.
 
 Support all three product profiles: onboard_companion, groundstation_gpu, and
 groundstation_minimal. A profile describes compute placement, not control

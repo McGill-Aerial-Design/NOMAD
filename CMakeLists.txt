@@ -98,13 +98,11 @@ add_executable(nomad
     src/main.cpp
     src/runtime/cli_client.cpp
     src/cli_arguments.cpp
-    src/cli_command_table.cpp
-    src/cli_commands.cpp
-    src/cli_demos.cpp
-    src/cli_velocity.cpp
-)
+    src/cli_command_table.cpp)
+# The CLI uses the pinned JSON headers but does not link the MAVSDK vehicle transport.
 target_include_directories(nomad PRIVATE "${NOMAD_MAVSDK_INSTALL_DIR}/include")
-target_link_libraries(nomad PRIVATE nomad_core nomad_mavsdk_connection)
+add_dependencies(nomad mavsdk)
+target_link_libraries(nomad PRIVATE nomad_core)
 
 add_library(nomad_runtime_core
     src/runtime/ipc_server.cpp
@@ -127,13 +125,27 @@ if(PROJECT_IS_TOP_LEVEL)
     add_executable(nomad-runtime tools/runtime/main.cpp)
     target_link_libraries(nomad-runtime PRIVATE nomad_runtime_core nomad_mavsdk_connection)
     target_compile_definitions(nomad-runtime PRIVATE NOMAD_VERSION="${PROJECT_VERSION}")
+
+    # Direct vehicle access exists only for SITL and transport qualification.
+    # This target is excluded from the default build and is never installed.
+    add_executable(nomad-qualification EXCLUDE_FROM_ALL
+        src/qualification/main.cpp
+        src/qualification/arguments.cpp
+        src/qualification/commands.cpp
+        src/qualification/demos.cpp
+        src/qualification/velocity.cpp
+        src/runtime/cli_client.cpp
+        src/cli_arguments.cpp
+        src/cli_command_table.cpp)
+    target_include_directories(nomad-qualification PRIVATE src "${NOMAD_MAVSDK_INSTALL_DIR}/include")
+    target_link_libraries(nomad-qualification PRIVATE nomad_core nomad_mavsdk_connection)
 endif()
 
 if(PROJECT_IS_TOP_LEVEL)
     include(GNUInstallDirs)
 
     # The core release is an executable package. Static MAVSDK internals are linked
-    # into the CLI, so the staged runtime does not depend on the build tree. Headers,
+    # into the runtime, so the staged binaries do not depend on the build tree. Headers,
     # configuration templates and the reviewed dependency notices travel with the
     # executable for clean install and rollback review.
     install(TARGETS nomad nomad-runtime RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT nomad_runtime)
@@ -172,8 +184,8 @@ set_target_properties(nomad_mavsdk_fmt PROPERTIES
     IMPORTED_LOCATION_DEBUG "${NOMAD_MAVSDK_FMT_DEBUG_LIBRARY}"
     INTERFACE_INCLUDE_DIRECTORIES "${NOMAD_MAVSDK_INSTALL_DIR}/include")
 
-# The transport every NOMAD binary links: the CLI, the ROS adapter and the
-# connection tests.
+# MAVSDK transport used by the runtime, qualification driver, ROS adapter and
+# connection tests. The installed `nomad` CLI is deliberately not a consumer.
 add_library(nomad_mavsdk_connection
     src/mavlink/mavsdk_action.cpp
     src/mavlink/mavsdk_connection.cpp
@@ -204,9 +216,8 @@ else()
     target_compile_options(nomad_mavsdk_connection PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-# Historical Phase A name: the connect/status smoke consumer the qualification
-# tasks and provenance checks still drive.
-add_executable(nomad_mavsdk_phase_a_smoke examples/mavsdk_phase_a_smoke.cpp)
+# Non-installed direct connect/status smoke retained for explicit qualification.
+add_executable(nomad_mavsdk_phase_a_smoke EXCLUDE_FROM_ALL examples/mavsdk_phase_a_smoke.cpp)
 target_include_directories(nomad_mavsdk_phase_a_smoke PRIVATE include)
 add_dependencies(nomad_mavsdk_phase_a_smoke mavsdk)
 target_link_libraries(nomad_mavsdk_phase_a_smoke PRIVATE nomad_mavsdk_connection)

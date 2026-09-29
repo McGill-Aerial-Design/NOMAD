@@ -49,8 +49,34 @@ def test_install_tree_rejects_mavsdk_development_payload(tmp_path: Path) -> None
     assert "package contains development libraries" in errors
 
 
+def test_install_tree_rejects_qualification_driver(tmp_path: Path) -> None:
+    make_install_tree(tmp_path)
+    (tmp_path / "bin" / "nomad-qualification.exe").write_text("placeholder", encoding="utf-8")
+
+    errors = verify_core_package.validate_install_root(tmp_path)
+
+    assert "package contains non-installed qualification driver" in errors
+
+
 def test_find_install_root_accepts_cpack_top_level_directory(tmp_path: Path) -> None:
     nested = tmp_path / "nomad-core-0.1.0"
     (nested / "bin").mkdir(parents=True)
 
     assert verify_core_package.find_install_root(tmp_path) == nested
+
+
+def test_cmake_keeps_direct_driver_outside_the_installed_cli() -> None:
+    cmake = (Path(__file__).resolve().parents[1] / "CMakeLists.txt").read_text(encoding="utf-8")
+    cli_target = cmake.split("add_executable(nomad\n", maxsplit=1)[1].split(
+        "add_library(nomad_runtime_core", maxsplit=1
+    )[0]
+    qualification_target = cmake.split("add_executable(nomad-qualification EXCLUDE_FROM_ALL", maxsplit=1)[1].split(
+        "endif()", maxsplit=1
+    )[0]
+
+    assert "src/qualification/" not in cli_target
+    assert "nomad_mavsdk_connection" not in cli_target
+    assert "src/qualification/main.cpp" in qualification_target
+    assert "nomad_mavsdk_connection" in qualification_target
+    assert "add_executable(nomad_mavsdk_phase_a_smoke EXCLUDE_FROM_ALL" in cmake
+    assert "install(TARGETS nomad nomad-runtime " in cmake

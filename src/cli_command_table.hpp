@@ -4,8 +4,8 @@
 #include <span>
 #include <string_view>
 
-// One CLI verb: its name, whether it can move the aircraft or an output, and
-// the positional values it takes (empty when it takes none).
+// One recognized CLI verb and the positional values it takes (empty when it
+// takes none). Direct actuation is used by the non-installed qualification tool.
 //
 // This table is the single source of truth for the accepted verb surface, the
 // usage text and the API-key boundary. Adding a verb used to mean editing three
@@ -13,8 +13,7 @@
 // is reported at runtime instead of failing silently.
 struct CliCommand {
     std::string_view name;
-    // True when the verb needs the NOMAD_API_KEY boundary credential. Telemetry
-    // verbs stay usable without one for local console work.
+    // True when the direct qualification tool requires NOMAD_API_KEY.
     bool actuation;
     std::string_view arguments;
 };

@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import socket
 import subprocess
 import sys
 import tarfile
@@ -22,6 +24,7 @@ REQUIRED_FILES = (
 )
 CLI_NAMES = ("nomad", "nomad.exe")
 RUNTIME_NAMES = ("nomad-runtime", "nomad-runtime.exe")
+QUALIFICATION_NAMES = ("nomad-qualification", "nomad-qualification.exe")
 
 
 def find_binary(root: Path, names: tuple[str, ...]) -> Path | None:
@@ -46,6 +49,8 @@ def validate_install_root(root: Path) -> list[str]:
         errors.append("missing bin/nomad or bin/nomad.exe")
     if find_binary(root, RUNTIME_NAMES) is None:
         errors.append("missing bin/nomad-runtime or bin/nomad-runtime.exe")
+    if find_binary(root, QUALIFICATION_NAMES) is not None:
+        errors.append("package contains non-installed qualification driver")
     license_dir = root / "share/nomad/licenses/mavsdk-phase-a"
     if not license_dir.is_dir() or not any(license_dir.glob("*.txt")):
         errors.append("missing MAVSDK dependency license bundle")
@@ -58,23 +63,92 @@ def validate_install_root(root: Path) -> list[str]:
     return errors
 
 
+def run_cli(binary: Path, root: Path, arguments: list[str], environment: dict[str, str] | None = None):
+    """Run one installed executable command with a bounded wait."""
+    return subprocess.run(
+        [str(binary.resolve()), *arguments],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+
+def verify_usage(binary: Path, root: Path) -> list[str]:
+    """Check the installed command list omits direct-mode options."""
+    result = run_cli(binary, root, [])
+    errors = []
+    if result.returncode != 1:
+        errors.append(f"usage invocation returned {result.returncode}, expected 1")
+    if "Usage: nomad <" not in result.stdout:
+        errors.append("usage invocation did not print the NOMAD command list")
+    if any(flag in result.stdout for flag in ("--direct", "--endpoint", "--system-id")):
+        errors.append("usage invocation exposes direct CLI configuration")
+    return errors
+
+
+def local_runtime_environment() -> dict[str, str]:
+    """Select a currently unused loopback port for runtime-client checks."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        ipc_port = int(probe.getsockname()[1])
+    environment = os.environ.copy()
+    environment["NOMAD_RUNTIME_IPC_PORT"] = str(ipc_port)
+    return environment
+
+
+def verify_bare_status(binary: Path, root: Path, environment: dict[str, str]) -> list[str]:
+    """Check a bare status command contacts only the local runtime."""
+    status_result = run_cli(binary, root, ["status"], environment)
+    errors = []
+    if status_result.returncode == 0 or "error[runtime_unavailable]" not in status_result.stderr:
+        errors.append("bare status did not fail through runtime IPC")
+    if "heartbeat" in status_result.stderr:
+        errors.append("bare status fell back to a direct MAVLink connection")
+    return errors
+
+
+def verify_unsupported_navigation(binary: Path, root: Path, environment: dict[str, str]) -> list[str]:
+    """Check an unavailable typed request is rejected before IPC or vehicle access."""
+    unsupported_environment = environment.copy()
+    unsupported_environment["NOMAD_RUNTIME_IPC_PORT"] = "invalid"
+    unsupported = run_cli(binary, root, ["goto", "45", "-73", "10"], unsupported_environment)
+    if "error[unsupported_request]" not in unsupported.stderr:
+        return ["unsupported navigation verb did not report unavailable"]
+    return []
+
+
+def verify_direct_flag(binary: Path, root: Path) -> list[str]:
+    """Check the removed direct selector fails before vehicle transport."""
+    direct_flag = run_cli(binary, root, ["--direct", "status"])
+    if "Usage: nomad" not in direct_flag.stdout or "heartbeat" in direct_flag.stderr:
+        return ["--direct did not fail before vehicle transport"]
+    return []
+
+
+def verify_runtime_help(runtime: Path, root: Path) -> list[str]:
+    """Check the installed runtime executable still exposes its help command."""
+    result = run_cli(runtime, root, ["--help"])
+    if result.returncode != 0 or "Usage: nomad-runtime" not in result.stdout:
+        return ["runtime help invocation failed or omitted usage"]
+    return []
+
+
 def verify_cli(root: Path) -> list[str]:
-    """Run only the no-network usage path of the installed executable."""
+    """Check that installed commands use IPC and never expose direct mode."""
     binary = find_binary(root, CLI_NAMES)
     runtime = find_binary(root, RUNTIME_NAMES)
     if binary is None or runtime is None:
         return ["package executable validation skipped because a required executable is missing"]
-    result = subprocess.run([str(binary.resolve())], cwd=root, capture_output=True, text=True, timeout=10, check=False)
-    errors = []
-    if result.returncode != 1:
-        errors.append(f"usage invocation returned {result.returncode}, expected 1")
-    if "Usage: nomad [--runtime|--direct] <" not in result.stdout:
-        errors.append("usage invocation did not print the NOMAD command list")
-    runtime_result = subprocess.run(
-        [str(runtime.resolve()), "--help"], cwd=root, capture_output=True, text=True, timeout=10, check=False
-    )
-    if runtime_result.returncode != 0 or "Usage: nomad-runtime" not in runtime_result.stdout:
-        errors.append("runtime help invocation failed or omitted usage")
+
+    environment = local_runtime_environment()
+    errors = verify_usage(binary, root)
+    errors.extend(verify_bare_status(binary, root, environment))
+    errors.extend(verify_unsupported_navigation(binary, root, environment))
+    errors.extend(verify_direct_flag(binary, root))
+    errors.extend(verify_runtime_help(runtime, root))
     return errors
 
 

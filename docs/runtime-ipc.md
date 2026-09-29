@@ -57,23 +57,27 @@ does not pack MAVLink or copy Vehicle capability checks. No Vehicle API,
 capability table, transition behavior, route behavior or completion rule is
 changed here.
 
-The C++ library, `nomad` one-shot executable, `nomad-runtime` executable and
-Mission Planner client now have these modes:
+The C++ library, installed `nomad` executable, `nomad-runtime` executable and
+Mission Planner client now have these roles:
 
 | Client | Mode | Behavior |
 |---|---|---|
 | Mission Planner | runtime IPC only | Connects to the configured loopback port; never launches the CLI or falls back to native MAVLink/direct vehicle writes |
-| C++ CLI | bare verb or `--direct` | Existing one-shot connection and `Vehicle` lifetime |
-| C++ CLI | `--runtime` | Sends supported typed requests to the runtime |
+| Installed C++ CLI | bare verb | Sends typed requests to runtime IPC; has no MAVSDK connection or direct fallback |
+| `nomad-qualification` | build-tree test target | Direct MAVSDK/`Vehicle` driver for SITL; excluded from install/default build |
 | ROS 2 | integrated default | Uses its independent connection for observation; actuation is inhibited |
 | ROS 2 | explicit nonintegrated test mode | Owns its independent connection and `Vehicle` |
 
-Mission Planner and the C++ CLI runtime mode support the typed requests listed
-below. The protocol does not expose every CLI verb. In particular, there is no
+Mission Planner and the installed C++ CLI support the typed requests listed
+below. Recognized CLI verbs without a typed v1 request return
+`unsupported_request` and do not contact a vehicle. In particular, there is no
 generic command ID, raw MAVLink or shell command. Mission Planner has no
 one-shot compatibility mode. GuidedGoto remains unavailable because protocol v1
 does not expose a typed navigation request; the plugin reports this and sends no
 vehicle command.
+
+The direct test driver accepts aircraft endpoint and system-ID options solely
+for qualification. It is not installed or used by production clients.
 
 ## Protocol v1
 
@@ -119,8 +123,9 @@ fields are ignored. Clients negotiate with `hello` before sending a command.
 
 Vehicle navigation requests are intentionally absent from protocol v1. The
 two-point QuadPlane fixed-wing route is qualified in the core, but it is not
-exposed through runtime IPC v1. Mission Planner's legacy mode retains its
-existing goto CLI path.
+exposed through runtime IPC v1. The installed `nomad goto` command therefore
+reports unavailable; the non-installed qualification driver retains direct
+navigation for its SITL evidence.
 
 `STATUS` reports runtime IPC readiness, MAVSDK connection open, vehicle
 transport connected, vehicle heartbeat/session, identity resolution and
@@ -185,12 +190,13 @@ Each typed mutation echoes the incarnation, vehicle session, generation and
 source, supplies a positive monotonically increasing `sequence`, and an absolute
 `expires_at_ms` no more than five seconds ahead. The runtime reserves each
 sequence before dispatch and keeps the high-water mark after response eviction.
-`hello` includes the next sequence for the one-shot CLI; Mission Planner uses
-a process-lifetime counter and stable logical source across its client instances.
+`hello` includes the next sequence for each short-lived `nomad` invocation;
+Mission Planner uses a process-lifetime counter and stable logical source across
+its client instances.
 Duplicate requests can retrieve a cached response only while the same authority
 is still current. An evicted replay is rejected. In-flight operations return
 `authority_interrupted` if authority changes before completion. The runtime
-captures the request context for each SDK command operation. `nomad --runtime admit`,
+captures the request context for each SDK command operation. `nomad admit`,
 `revoke` and `handback` are explicit local operator controls for the CLI source;
 Mission Planner exposes the same deliberate controls on its Core settings tab.
 Neither client admits itself on reconnect.

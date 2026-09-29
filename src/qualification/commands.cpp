@@ -4,7 +4,7 @@
 // The verb surface, its usage text and the API-key boundary live in
 // cli_command_table.hpp; argument parsing in cli_arguments.cpp; the velocity
 // and demo verbs in cli_velocity.cpp and cli_demos.cpp.
-#include "cli_commands.hpp"
+#include "commands.hpp"
 
 #include <chrono>
 #include <cstdint>

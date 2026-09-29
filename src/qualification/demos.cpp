@@ -2,7 +2,7 @@
 // The demo verbs: a canned mission, a fence upload/readback, and a payload
 // release. They exist to exercise the core against a vehicle; the SITL
 // scenarios in tests/sitl drive the same verbs.
-#include "cli_commands.hpp"
+#include "commands.hpp"
 
 #include "nomad/mission/executor.hpp"
 

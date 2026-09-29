@@ -2,7 +2,7 @@
 // The velocity verbs: a timed setpoint stream and a short fixed demo. Both
 // prove that the watchdog, not the caller, stops the vehicle when the stream
 // ends.
-#include "cli_commands.hpp"
+#include "commands.hpp"
 
 #include "nomad/safety/watchdog.hpp"
 

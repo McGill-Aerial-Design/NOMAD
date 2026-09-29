@@ -67,17 +67,18 @@ bool is_actuation_command(std::string_view command) {
 
 void print_usage() {
     const auto commands = cli_commands();
-    std::cout << "Usage: nomad [--runtime|--direct] <";
+    std::cout << "Usage: nomad <";
     for (std::size_t index = 0; index < commands.size(); ++index) {
         std::cout << (index == 0 ? "" : "|") << commands[index].name;
     }
-    std::cout << "> [value] [--endpoint udpin:host:port]\n";
+    std::cout << "> [value]\n";
     for (const auto &entry : commands) {
         if (!entry.arguments.empty()) {
             std::cout << entry.name << " requires: " << entry.arguments << '\n';
         }
     }
-    std::cout << "Actuation commands require the NOMAD_API_KEY environment variable.\n";
-    std::cout << "--runtime sends the supported typed requests to NOMAD_RUNTIME_IPC_PORT (default 14611).\n";
-    std::cout << "--direct opens a one-shot MAVSDK connection; bare verbs retain this legacy behavior.\n";
+    std::cout << "Typed runtime protocol v1 commands: status, admit, revoke, handback, servo, relay, motor-test, "
+                 "gimbal-config.\n";
+    std::cout << "Other recognized commands are unavailable through runtime protocol v1.\n";
+    std::cout << "Commands use NOMAD_RUNTIME_IPC_PORT (default 14611).\n";
 }
