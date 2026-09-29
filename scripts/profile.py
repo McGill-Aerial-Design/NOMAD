@@ -7,8 +7,9 @@ Provides load / save / list / show / diff / edit for configuration profiles.
 Each profile is a complete .env file in config/profiles/ that can be loaded
 into config/nomad.env (the gitignored runtime config).
 
-On `load`, the profile's local actuation gate is also synced into the Mission
-Planner plugin config (nomad_config.json) along with an ActiveProfile marker.
+On `load`, the local actuation gate is synced into the Mission Planner plugin
+config (nomad_config.json) along with an ActiveProfile marker. The qualification
+inhibition flag remains in the environment and is not a Mission Planner setting.
 The MAVLink endpoint stays in the runtime environment; Mission Planner connects
 to the runtime over loopback IPC. Set NOMAD_MP_CONFIG to override the plugin
 config path.
@@ -33,6 +34,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+if __package__:
+    from .profile_mission_planner import sync_config as _sync_mission_planner_config
+else:
+    from profile_mission_planner import sync_config as _sync_mission_planner_config
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROFILES_DIR = REPO_ROOT / "config" / "profiles"
 ENV_FILE = REPO_ROOT / "config" / "nomad.env"
@@ -47,14 +53,17 @@ _ENDPOINT_PATTERN = re.compile(
     r"^(?:(?P<scheme>udp|udpin|udpout):)?(?P<host>[^:/\s]+):(?P<port>[0-9]+)$",
     re.IGNORECASE,
 )
-_RETIRED_MP_FIELDS = (
-    "JetsonApiKey",
-    "JetsonIP",
-    "JetsonPort",
-    "CoreExePath",
-    "CoreClientMode",
-    "CoreMavlinkEndpoint",
-)
+_RETIRED_PROFILE_SETTINGS = {
+    "NOMAD_ENABLE_SERVOS": "servo outputs are configured as payloads; this environment flag has no consumer",
+    "NOMAD_BRIDGE_MAVLINK_ENDPOINT": "aircraft transport belongs to NOMAD_MAVLINK_ENDPOINT in nomad-runtime",
+    "NOMAD_CORE_SITL_PORT": "this port belongs to test tooling and is not a product-profile setting",
+    "NOMAD_LTE_UDP_PORT": "physical ground links belong in the standalone router Links array",
+    "NOMAD_ELRS_SERIAL": "physical ground links belong in the standalone router Links array",
+    "NOMAD_ELRS_BAUD": "physical ground links belong in the standalone router Links array",
+    "NOMAD_VIDEO_RTSP_PORT": "this profile alias is not consumed; configure the MediaMTX RTSP_PORT",
+    "NOMAD_VIO_SOURCE_REQUIRED": "this profile setting has no runtime consumer and must be removed",
+    "NOMAD_VIO_MAX_AGE_S": "this profile setting has no runtime consumer and must be removed",
+}
 _UNSAVED_SECRET_KEYS = {"NOMAD_API_KEY"}
 _HOST_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 
@@ -108,8 +117,15 @@ def _validated_profile_env(name: str, env: dict[str, str]) -> dict[str, str]:
         raise ValueError(f"Unsupported product profile: {name}")
     if env.get("NOMAD_PROFILE") != name:
         raise ValueError(f"NOMAD_PROFILE must equal {name}")
+    retired = sorted(set(env).intersection(_RETIRED_PROFILE_SETTINGS))
+    if retired:
+        details = "; ".join(f"{key}: {_RETIRED_PROFILE_SETTINGS[key]}" for key in retired)
+        raise ValueError(f"Unsupported product-profile settings: {details}")
     normalized = dict(env)
     normalized["NOMAD_MAVLINK_ENDPOINT"] = normalize_mavlink_endpoint(env.get("NOMAD_MAVLINK_ENDPOINT", ""))
+    integrated_value = env.get("NOMAD_INTEGRATED_FLIGHT", "false").strip().lower()
+    if integrated_value not in {"1", "true", "yes", "0", "false", "no"}:
+        raise ValueError("NOMAD_INTEGRATED_FLIGHT must be a boolean value")
     return normalized
 
 
@@ -150,69 +166,9 @@ def _parse_env(path: Path) -> dict[str, str]:
     return read_env_file(path)
 
 
-def _mp_config_path() -> Path | None:
-    """Resolve the Mission Planner plugin config path (nomad_config.json).
-
-    Honors NOMAD_MP_CONFIG override; otherwise uses the Windows LOCALAPPDATA
-    location the plugin reads. Returns None when it cannot be determined.
-    """
-    override = os.environ.get("NOMAD_MP_CONFIG")
-    if override:
-        return Path(override)
-    local = os.environ.get("LOCALAPPDATA")
-    if not local:
-        return None
-    return Path(local) / "Mission Planner" / "plugins" / "nomad_config.json"
-
-
-def _apply_env_to_mp_config(cfg: dict[str, object], name: str, env: dict[str, str]) -> None:
-    for field in _RETIRED_MP_FIELDS:
-        cfg.pop(field, None)
-
-    integrated_value = env.get("NOMAD_INTEGRATED_FLIGHT", "false").strip().lower()
-    if integrated_value not in {"1", "true", "yes", "0", "false", "no"}:
-        raise ValueError("NOMAD_INTEGRATED_FLIGHT must be a boolean value")
-    cfg["IntegratedFlightMode"] = integrated_value in {"1", "true", "yes"}
-    for env_key, config_key in (("NOMAD_API_KEY", "CoreApiKey"), ("NOMAD_VIDEO_RTSP_URL", "VideoUrl")):
-        value = env.get(env_key, "").strip()
-        if value:
-            cfg[config_key] = value
-        else:
-            cfg.pop(config_key, None)
-    cfg["ActiveProfile"] = name
-
-
 def sync_mission_planner(name: str, env: dict[str, str]) -> None:
     """Merge profile-controlled settings into the Mission Planner plugin config."""
-    import json
-
-    env = _validated_profile_env(name, env)
-    path = _mp_config_path()
-    if path is None:
-        print("[INFO] Mission Planner config path unknown (set NOMAD_MP_CONFIG to sync); skipped MP sync")
-        return
-
-    cfg: dict[str, object] = {}
-    if path.exists():
-        try:
-            loaded = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            print(f"[WARN] Mission Planner config is unreadable; left unchanged: {exc}")
-            return
-        if not isinstance(loaded, dict):
-            print("[WARN] Mission Planner config is not a JSON object; left unchanged")
-            return
-        cfg = loaded
-
-    _apply_env_to_mp_config(cfg, name, env)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
-        tmp.replace(path)
-        print(f"[OK] Synced Mission Planner config (profile: {name}) -> {path}")
-    except Exception as e:  # noqa: BLE001
-        print(f"[WARN] Could not write Mission Planner config: {e}")
+    _sync_mission_planner_config(name, _validated_profile_env(name, env))
 
 
 def cmd_list() -> None:
@@ -236,11 +192,9 @@ def _print_load_summary(settings: dict) -> None:
         print(f"      {desc}")
 
     sim = settings.get("NOMAD_SIM_MODE", "false")
-    servos = settings.get("NOMAD_ENABLE_SERVOS", "false")
     print()
     print("Key settings:")
     print(f"  NOMAD_SIM_MODE      = {sim}")
-    print(f"  NOMAD_ENABLE_SERVOS = {servos}")
 
 
 def _warn_user_placeholder() -> None:
@@ -294,8 +248,12 @@ def cmd_load(name: str) -> None:
     ENV_FILE.write_text(content, encoding="utf-8")
     print(f"[OK] Loaded profile: {name}")
 
-    # Keep the Mission Planner plugin in sync (API key, endpoint, indicator).
-    sync_mission_planner(name, profile_env)
+    # Keep the Mission Planner plugin in sync (actuation gate and client profile).
+    try:
+        sync_mission_planner(name, profile_env)
+    except ValueError as exc:
+        print(f"[FAIL] Mission Planner config migration was not applied: {exc}")
+        sys.exit(1)
 
     settings = _key_settings(src)
     _print_load_summary(settings)

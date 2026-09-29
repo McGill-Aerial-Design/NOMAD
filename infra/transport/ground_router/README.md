@@ -93,8 +93,10 @@ run only by the intended local user.
 
 ## Configuration
 
-JSON is used by both the existing plugin configuration and the host. `Links`
-contains between 1 and 64 entries, at least one enabled. Each link has:
+The standalone host's JSON is authoritative for physical links, local consumers
+and routing policy. Mission Planner separately stores only its client endpoints
+and UI preferences. `Links` contains between 1 and 64 entries, at least one
+enabled. Each link has:
 
 - `Id`: unique, nonempty, case-sensitive stable string; no enum extension required.
 - `Name`: optional display name; `Enabled`: default true.
@@ -108,19 +110,21 @@ contains between 1 and 64 entries, at least one enabled. Each link has:
 - `Priority`: higher is preferred; `ReconnectSeconds`: positive retry interval.
 
 `PreferredLink` optionally ranks one enabled ID ahead of configured priorities.
-Set it to `""` when selection should use priorities alone. The compatibility
-constants `LTE` and `RadioMaster` are strings, not the router's identity model.
-Omitting `Links` translates legacy `LteBindPort`, `RadioBindPort`, COM/TCP settings
-into those two IDs. An explicitly empty/invalid collection is rejected.
+Set it to `""` when selection should use priorities alone. Historical names such
+as `LTE` and `RadioMaster` are ordinary stable IDs, not a transport model.
+`Links` is required. Legacy `LteBindPort`, `RadioBindPort`, COM/TCP, `LocalPort`,
+and top-level bind-address settings are rejected; move physical links into
+`Links` and local endpoints into `Consumers`.
 
 `Consumers` contains 1–32 entries with unique `Id`, `RouterPort`, and optional
 `ClientPort`. `AllowOutbound` defaults to true; false lets a consumer receive
 telemetry while preventing its local MAVLink frames from reaching physical
 links. The exact ID `mission_planner` is reserved as receive-only: an explicit
 entry with `AllowOutbound` true, including an omitted field that defaults true,
-is rejected before sockets open. If `Consumers` is omitted, the implicit Mission
-Planner consumer is receive-only. `nomad_core` remains a separate, command-capable
-consumer. Every router consumer socket binds IPv4 loopback. `ClientPort = 0`
+is rejected before sockets open. `Consumers` is required. `nomad_core` remains a
+separate, command-capable consumer. Every router consumer socket binds IPv4
+loopback. The management listener also binds IPv4 loopback unconditionally;
+only its port is configurable. `ClientPort = 0`
 learns one loopback peer; another peer can replace it only after three seconds
 without traffic from the old peer, resetting parser state. A fixed client port
 accepts only that endpoint and receives downlink without first sending anything.

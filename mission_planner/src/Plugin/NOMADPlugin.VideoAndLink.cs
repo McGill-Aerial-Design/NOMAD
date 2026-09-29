@@ -34,7 +34,7 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                if (!_config.DualLinkEnabled || !_config.RouterEnabled)
+                if (!_config.DualLinkEnabled)
                 {
                     if (_connectionManager != null)
                     {
@@ -203,27 +203,8 @@ namespace NOMAD.MissionPlanner
         {
             return new MAVLinkConnectionManager.ConnectionConfig
             {
-                LtePort = _config.LteMavlinkPort,
-                LteRemoteHost = _config.LteRemoteHost,
-                LteRemotePort = _config.LteRemotePort,
-                RadioMasterPort = _config.RadioMasterPort,
-                AutoFailoverEnabled = _config.AutoFailoverEnabled,
-                Links = _config.RouterLinks,
-                PreferredLink = _config.PreferredMavlinkLink == "None" ? "" : _config.PreferredMavlinkLink,
-                AutoReconnectPreferred = _config.AutoReconnectToPreferred,
-                PreferredLinkReconnectDelaySec = _config.PreferredLinkReconnectDelay,
-                MonitorIntervalMs = _config.LinkMonitorInterval,
-                RouterMode = "Standalone",
-                RadioMasterConnectionType = _config.RadioMasterConnectionType,
-                RadioMasterComPort = _config.RadioMasterComPort,
-                RadioMasterBaudRate = _config.RadioMasterBaudRate,
-                RadioMasterTcpHost = _config.RadioMasterTcpHost,
-                RouterBindAddress = _config.RouterBindAddress,
                 RouterLocalPort = _config.RouterLocalPort,
-                RouterDedupEnabled = _config.RouterDedupEnabled,
-                ManagementBindAddress = _config.ManagementBindAddress,
                 ManagementPort = _config.ManagementPort,
-                HeartbeatTimeoutSec = _config.MavlinkHeartbeatTimeout,
             };
         }
 

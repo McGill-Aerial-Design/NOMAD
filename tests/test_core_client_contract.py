@@ -214,6 +214,19 @@ def test_typed_commands_use_runtime_ipc(monkeypatch, arguments: tuple[str, ...])
     assert "heartbeat" not in result.stderr
 
 
+def test_installed_client_ignores_aircraft_transport_environment(monkeypatch) -> None:
+    monkeypatch.setenv("NOMAD_MAVLINK_ENDPOINT", "invalid-aircraft-endpoint")
+    monkeypatch.setenv("NOMAD_RUNTIME_IPC_PORT", str(free_tcp_port()))
+
+    result = invoke("status")
+
+    assert result.returncode != 0
+    assert "error[runtime_unavailable]" in result.stderr
+    assert "invalid-aircraft-endpoint" not in result.stderr
+    assert "MAVSDK" not in result.stderr
+    assert "heartbeat" not in result.stderr
+
+
 @pytest.mark.parametrize("arguments", UNSUPPORTED_REQUESTS)
 def test_unsupported_commands_report_unavailable_without_transport_fallback(
     monkeypatch, arguments: tuple[str, ...]

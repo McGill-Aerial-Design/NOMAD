@@ -22,7 +22,7 @@ namespace NOMAD.MissionPlanner
             _chkVideoAutoStart.Checked = Config.VideoAutoStart;
             _chkAutoStartHudVideo.Checked = Config.AutoStartHudVideo;
 
-            _chkDualLinkEnabled.Checked = Config.DualLinkEnabled && Config.RouterEnabled;
+            _chkDualLinkEnabled.Checked = Config.DualLinkEnabled;
             _numRouterLocalPort.Value = ClampValue(_numRouterLocalPort, Config.RouterLocalPort);
             _numManagementPort.Value = ClampValue(_numManagementPort, Config.ManagementPort);
 
@@ -127,12 +127,7 @@ namespace NOMAD.MissionPlanner
             Config.AutoStartHudVideo = _chkAutoStartHudVideo.Checked;
 
             Config.DualLinkEnabled = _chkDualLinkEnabled.Checked;
-            Config.RouterEnabled = _chkDualLinkEnabled.Checked;
-            Config.RouterMode = "Standalone";
             Config.RouterLocalPort = (int)_numRouterLocalPort.Value;
-            var mpConsumer = Config.RouterConsumers?.Find(c => c.Id == "mission_planner");
-            if (mpConsumer != null) { mpConsumer.RouterPort = Config.RouterLocalPort; }
-            Config.ManagementBindAddress = "127.0.0.1";
             Config.ManagementPort = (int)_numManagementPort.Value;
 
             Config.DarkMode = _chkDarkMode.Checked;

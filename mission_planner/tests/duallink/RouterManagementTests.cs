@@ -168,19 +168,14 @@ internal static partial class DualLinkStressTests
         const int managementPort = 32110;
         using (var defaultClient = new StandaloneRouterClient(new MAVLinkConnectionManager.ConnectionConfig()))
         {
-            Check(defaultClient.LinkStatistics.Count == 2,
-                "legacy LTE and RadioMaster links remain visible before host status arrives");
+            Check(defaultClient.LinkStatistics.Count == 0,
+                "client does not invent physical links before host status arrives");
         }
 
         var routerConfig = MultiConfig(routerPort);
         var clientConfig = new MAVLinkConnectionManager.ConnectionConfig
         {
-            // A legacy value must not restore Mission Planner-owned routing.
-            RouterMode = "Embedded",
-            Links = routerConfig.Links,
-            RouterBindAddress = "127.0.0.1",
             RouterLocalPort = routerConfig.Consumers[0].RouterPort,
-            ManagementBindAddress = "127.0.0.1",
             ManagementPort = managementPort,
         };
         using (var router = new GroundLinkRouter(routerConfig))
@@ -195,9 +190,8 @@ internal static partial class DualLinkStressTests
             Check(await WaitUntil(() => client.IsRouterAvailable, 3000),
                 "standalone client connects and receives status");
             Check(await WaitUntil(() => manager.IsRouterAvailable, 3000),
-                "connection manager uses the standalone host despite a legacy embedded setting");
+                "connection manager uses the standalone host");
             Check(manager.RouterMode == "Standalone", "manager reports standalone ownership");
-            Check(!manager.SupportsLiveConfiguration, "standalone manager limits live controls to selection");
             Check(client.LinkStatistics.Count == 4, "standalone client exposes arbitrary link collection");
             Check(manager.LinkStatistics.Count == 4, "manager projects arbitrary standalone link collection");
             Check(client.SwitchToLink("wifi"), "standalone client selects a valid link");

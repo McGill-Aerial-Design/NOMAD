@@ -2,13 +2,26 @@
 // Copyright 2026 The NOMAD Authors
 
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Web.Script.Serialization;
 using NOMAD.MissionPlanner;
 
 internal static class Program
 {
+    private static readonly string[] RetiredSettings =
+    {
+        "BindAddress", "LocalPort", "ManagementBindAddress", "LteBindPort", "LteRemoteHost", "LteRemotePort",
+        "LteMavlinkPort", "RouterLocalPort", "RouterBindAddress", "RouterDedupEnabled",
+        "RadioMasterConnectionType", "RadioMasterPort", "RadioMasterComPort", "RadioMasterTcpHost",
+        "RadioMasterBaudRate", "RadioBindPort", "RadioComPort", "RadioBaudRate", "RadioTcpHost",
+        "RadioIsSerial", "RadioIsTcp", "RouterLinks", "RouterConsumers", "RouterEnabled", "RouterMode",
+        "IntegratedFlightMode", "AutoReconnectToPreferred", "PreferredMavlinkLink", "PreferredLinkReconnectDelay",
+        "MavlinkHeartbeatTimeout", "CoreRuntimePort", "CoreApiKey", "CoreMavlinkEndpoint",
+    };
+
     private static int Main(string[] args)
     {
         if (args.Length != 1)
@@ -19,11 +32,13 @@ internal static class Program
         try
         {
             var json = File.ReadAllText(args[0]);
-            var config = new JavaScriptSerializer().Deserialize<GroundLinkRouter.RouterConfig>(json);
+            var serializer = new JavaScriptSerializer();
+            RejectRetiredSettings(serializer, json);
+            var config = serializer.Deserialize<GroundLinkRouter.RouterConfig>(json);
             using (var router = new GroundLinkRouter(config))
             using (var management = new RouterManagementServer(
                 router,
-                config.ManagementBindAddress,
+                "127.0.0.1",
                 config.ManagementPort,
                 "nomad-link-router-1"))
             using (var stop = new ManualResetEvent(false))
@@ -72,6 +87,23 @@ internal static class Program
         catch (Exception ex)
         {
             Console.Error.WriteLine(ex.Message); return 1;
+        }
+    }
+
+    private static void RejectRetiredSettings(JavaScriptSerializer serializer, string json)
+    {
+        var document = serializer.DeserializeObject(json) as Dictionary<string, object>;
+        if (document == null)
+        {
+            throw new InvalidDataException("Router configuration must be a JSON object.");
+        }
+
+        var found = RetiredSettings.Where(document.ContainsKey).ToArray();
+        if (found.Length > 0)
+        {
+            throw new InvalidDataException(
+                "Unsupported router settings: " + string.Join(", ", found) +
+                ". Move physical links into Links and local endpoints into Consumers.");
         }
     }
 }

@@ -153,6 +153,9 @@ bootstrap = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/b
 # Compile the Mission Planner plugin without touching its installation (Windows only)
 build-plugin-only = "powershell -ExecutionPolicy Bypass -File scripts/build/build_plugin_windows.ps1"
 
+# Regression checks for deterministic cleanup/rejection of legacy plugin config.
+test-plugin-config-migration = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_config_migration.ps1"
+
 # Requires Visual Studio's MSBuild/C# compiler; tests dispatch against a temporary deny-write installation.
 test-plugin-build-only = "powershell -ExecutionPolicy Bypass -File scripts/build/test_build_plugin_windows.ps1"
 

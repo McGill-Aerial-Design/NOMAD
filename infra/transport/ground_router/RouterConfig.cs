@@ -6,7 +6,7 @@ using System.Collections.Generic;
 using System.Net;
 namespace NOMAD.MissionPlanner
 {
-    // Compatibility names only; router identity is an arbitrary, case-sensitive string.
+    // Historical Mission Planner display names; router IDs remain arbitrary strings.
     public static class LinkType
     {
         public const string LTE = "LTE";
@@ -92,29 +92,10 @@ namespace NOMAD.MissionPlanner
         {
             public List<LinkConfig> Links;
             public List<ConsumerConfig> Consumers;
-            public string BindAddress = "127.0.0.1";
-            public int LocalPort = 14600;
             public bool DedupEnabled = true;
 
-            // LTE
-            public int LteBindPort = 14560;          // LTE-side uplink (14560 avoids the RC default 14550)
-            public string LteRemoteHost = "";        // outbound LTE host (empty = reply to LastRemote)
-            public int LteRemotePort = 0;
-
-            // RadioMaster
-            public string RadioMasterConnectionType = "UDP"; // "COM", "UDP", or "TCP"
-            // UDP listen port / TCP connect port; differs from LteBindPort.
-            public int RadioBindPort = 14550;
-            public string RadioComPort = "COM3";     // serial path (used when RadioMasterConnectionType == "COM")
-            public int RadioBaudRate = 420000;       // baud rate for serial
-            public string RadioTcpHost = "127.0.0.1"; // TCP server host to connect to (e.g. SITL) when type == "TCP"
-
-            // Connection-type convenience flags.
-            public bool RadioIsSerial => "COM".Equals(RadioMasterConnectionType, StringComparison.OrdinalIgnoreCase);
-            public bool RadioIsTcp => "TCP".Equals(RadioMasterConnectionType, StringComparison.OrdinalIgnoreCase);
-
             public bool AutoFailoverEnabled = true;
-            public string PreferredLink = LinkType.LTE;
+            public string PreferredLink = "";
             public bool AutoReconnectPreferred = true;
             public int PreferredLinkReconnectDelaySec = 10;
 
@@ -123,8 +104,7 @@ namespace NOMAD.MissionPlanner
             public double FailoverCooldownSec = 2.0;
 
             // The management endpoint is deliberately separate from raw MAVLink
-            // consumer sockets and is always loopback-only.
-            public string ManagementBindAddress = "127.0.0.1";
+            // consumer sockets and is always bound to IPv4 loopback.
             public int ManagementPort = 14610;
         }
 

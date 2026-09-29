@@ -235,12 +235,13 @@ completes. This is a software UDP command boundary, not aircraft-wide authority.
 Termination priority and aircraft-side takeover remain later work.
 
 Mission Planner native controls and RC remain possible external authorities.
-`NOMAD_INTEGRATED_FLIGHT` inhibits plugin actions outside the runtime. The
+`NOMAD_INTEGRATED_FLIGHT` inhibits direct actuation by the non-installed
+qualification tool. The
 standalone router enforces the `mission_planner` consumer as receive-only while
 leaving the separate NOMAD core consumer command-capable. An explicit
 `mission_planner` entry with `AllowOutbound: true`, including the default when
-the JSON field is omitted, is rejected before sockets open; the implicit consumer
-is receive-only. Direct GCS links and local UDP source spoofing are outside that
+the JSON field is omitted, is rejected before sockets open. Both `Links` and
+`Consumers` are required; there is no implicit consumer. Direct GCS links and local UDP source spoofing are outside that
 boundary. Integrated operations must define handover and inhibit NOMAD until reconciled;
 software cannot claim to prevent an independent pilot/autopilot action. Mission
 Planner gimbal angle requests now use the typed runtime operation; plugin
@@ -392,9 +393,8 @@ competition exchange. For each expose state, reason, age and configuration
 version. A mission declares prerequisites; missing perception blocks only
 dependent actions, not telemetry or eligible GNSS missions.
 
-The current velocity path requires VIO. The minimal profile does not bypass this
-gate, and NOMAD_VIO_SOURCE_REQUIRED=false is not wired into that C++ policy.
-Use supported non-VIO operations; a future GNSS velocity mode needs an explicit
+The current velocity path requires VIO. Product profiles do not configure VIO
+availability. Use supported non-VIO operations; a future GNSS velocity mode needs an explicit
 reviewed policy and fault tests. Never synthesize healthy VIO for product use.
 
 ## ROS, VIO, perception and video
@@ -581,6 +581,21 @@ and authoritative NOMAD outcomes. MP retains maps/HUD, diagnostics, native GCS
 functions and NOMAD client UI. ArduPilot retains stabilization, motors, EKF,
 low-level navigation/control and aircraft-side failsafes.
 
+### Configuration ownership
+
+| Component | Owns | Does not own |
+|---|---|---|
+| `nomad-runtime` | Aircraft MAVSDK endpoint (`NOMAD_MAVLINK_ENDPOINT` or `--endpoint`) and expected system ID (`--system-id`); runtime IPC listener; safety policy and `NOMAD_API_KEY` actuation gate | Ground physical links or client UI settings |
+| Installed `nomad` CLI | Runtime IPC destination (`NOMAD_RUNTIME_IPC_PORT`) | Aircraft endpoint, system ID, MAVSDK transport |
+| Mission Planner plugin | Runtime IPC destination (`CoreRuntimePort`), router telemetry client (`RouterLocalPort`), loopback management client (`ManagementPort`), local `CoreApiKey` actuation gate | Aircraft endpoint/system ID, physical router links, failover policy |
+| Standalone ground router | Physical `Links`, local `Consumers`, route/failover/dedup policy, loopback management listener port | Aircraft MAVSDK connection or command policy |
+| ROS observer | Observation UDP port, expected observed system ID, publish rate | Runtime control endpoint, commands, actuator policy |
+| Qualification/test tools | Explicit direct MAVSDK endpoint/system ID, test ports and `NOMAD_INTEGRATED_FLIGHT` direct-actuation inhibition | Production runtime transport ownership |
+
+`NOMAD_API_KEY` and Mission Planner's `CoreApiKey` are nonempty actuation gates,
+not IPC authentication. `NOMAD_INTEGRATED_FLIGHT` remains an environment gate for
+the direct qualification tool and is not synchronized into Mission Planner.
+
 Typed clients can use this implemented control path when configured for runtime
 mode. The broader diagram remains **target architecture** because not every
 Mission Planner, CLI, ROS or Python surface has migrated:
@@ -604,7 +619,9 @@ needs explicit handover/inhibition. The standalone router survives MP
 exit. Its version-1 management API is loopback-only, bounded JSON Lines and
 limited to status, events, and selecting an enabled link or returning to automatic
 selection; it carries no raw MAVLink or flight command. Mission Planner always
-uses that API as a non-owning client. Legacy `RouterMode` settings migrate to
-`Standalone`; there is no plugin-owned router lifetime. See the
+uses that API as a non-owning client. Legacy `RouterMode=Standalone` is removed
+during plugin-config migration; `Embedded` is rejected. The host rejects legacy
+physical-link and endpoint aliases and requires generic `Links` and `Consumers`.
+There is no plugin-owned router lifetime. See the
 [router configuration and limitations](https://github.com/YoussGm3o8/NOMAD/blob/main/infra/transport/ground_router/README.md)
 for the schema, socket ownership, parameter pinning and tested process lifecycle.

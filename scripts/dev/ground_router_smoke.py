@@ -66,6 +66,30 @@ def start_host(config_path, output):
     return process
 
 
+def check_invalid_configs(config, directory):
+    executable = Path("build/ground-router/nomad-link-router.exe").resolve()
+    cases = []
+
+    legacy = dict(config)
+    legacy["LteBindPort"] = 14560
+    cases.append((legacy, "Unsupported router settings: LteBindPort"))
+
+    missing_links = dict(config)
+    missing_links.pop("Links")
+    cases.append((missing_links, "Router Links are required"))
+
+    missing_consumers = dict(config)
+    missing_consumers.pop("Consumers")
+    cases.append((missing_consumers, "Router Consumers are required"))
+
+    for index, (invalid, expected) in enumerate(cases):
+        path = Path(directory) / f"invalid-{index}.json"
+        path.write_text(json.dumps(invalid), encoding="utf-8")
+        result = subprocess.run([str(executable), str(path)], capture_output=True, text=True, timeout=5)
+        assert result.returncode == 1, f"Invalid config exited {result.returncode}: {result.stdout} {result.stderr}"
+        assert expected in result.stderr, f"Missing migration error {expected!r}: {result.stderr}"
+
+
 def management_request(port, message):
     message = dict(message)
     message.setdefault("protocol", "nomad-link-router")
@@ -106,7 +130,6 @@ def wait_output(output, expected):
 def config_for(ports, consumer_ports, management_port):
     return {
         "PreferredLink": "a",
-        "ManagementBindAddress": "127.0.0.1",
         "ManagementPort": management_port,
         "HeartbeatTimeoutSec": 0.3,
         "StatsTickMs": 20,
@@ -248,6 +271,7 @@ def main():
         for sock in reserved:
             sock.close()
         directory = stack.enter_context(tempfile.TemporaryDirectory())
+        check_invalid_configs(config, directory)
         config_path = Path(directory) / "router.json"
         config_path.write_text(json.dumps(config), encoding="utf-8")
         output = queue.Queue()
