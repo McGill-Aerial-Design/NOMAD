@@ -4,15 +4,11 @@
 # =============================================================================
 # nomad-ros-vehicle service
 #
-# Owns: the C++ nomad_vehicle_node (ros2 run nomad_ros) inside the Isaac ROS
-# container. Depends on: isaac_ros_container.
+# Owns: the read-only C++ nomad_vehicle_node telemetry observer inside the
+# Isaac ROS container. Depends on: isaac_ros_container.
 #
-# Does NOT require a perception provider to be up — the node simply refuses
-# velocity commands until a configured estimator publishes a valid VIO sample.
-# This is intentional decoupling.
-#
-# Requires the Isaac ROS container image rebuilt with the C++ core + nomad_ros
-# adapter (docker/Dockerfile.jetson, colcon workspace /ws/install).
+# Requires the Isaac ROS container image rebuilt with the MAVSDK observer and
+# nomad_ros adapter (docker/Dockerfile.jetson, colcon workspace /ws/install).
 # =============================================================================
 set -u
 SERVICE="ros-vehicle"
@@ -33,19 +29,14 @@ write_launch_script() {
         # No `set -u`: ROS2's setup.bash isn't -u clean and would abort silently.
         ros_setup_prelude
         cat <<'EOS'
-# Run the C++ adapter node from the image's colcon workspace (/ws/install,
-# sourced by ros_setup_prelude). The node binds one MAVLink UDP link —
-# mavlink-router's nav_bridge leg (127.0.0.1:14552) feeds it.
+# Run the C++ observer from the image's colcon workspace (/ws/install,
+# sourced by ros_setup_prelude). mavlink-router's nav_bridge leg feeds a
+# receive-only telemetry stream on UDP 14552.
 ARGS=(
     --ros-args
-    -p endpoint:=udpin:0.0.0.0:${NOMAD_ROS_MAVLINK_PORT:-14552}
-    -p system_id:=${NOMAD_ROS_SYSTEM_ID:-1}
+    -p observation_endpoint:=udpin:0.0.0.0:${NOMAD_ROS_OBSERVATION_PORT:-14552}
+    -p expected_system_id:=${NOMAD_ROS_EXPECTED_SYSTEM_ID:-1}
     -p publish_rate_hz:=${NOMAD_ROS_PUBLISH_RATE_HZ:-10.0}
-    -p min_vio_confidence:=${NOMAD_ROS_MIN_VIO_CONFIDENCE:-0.3}
-    -p vio_timeout_ms:=${NOMAD_ROS_VIO_TIMEOUT_MS:-1000}
-    -p command_timeout_ms:=${NOMAD_ROS_COMMAND_TIMEOUT_MS:-500}
-    -p vio_source:=${NOMAD_ROS_VIO_SOURCE:-}
-    -p vio_source_topic:=${NOMAD_ROS_VIO_SOURCE_TOPIC:-/nomad/vio_source}
 )
 
 # Restart loop: keeps the node up through transient crashes.
@@ -56,7 +47,7 @@ while true; do
     NODE_PID=$!
     wait "$NODE_PID"
     rc=$?
-    echo "[ros-vehicle] exited rc=$rc, restarting in 10s" >&2
+    echo "[ros-observer] exited rc=$rc, restarting in 10s" >&2
     sleep 10
 done
 EOS
@@ -78,13 +69,9 @@ svc_start() {
     write_launch_script
 
     local env_args=(
-        "-e" "NOMAD_ROS_MAVLINK_PORT=${NOMAD_ROS_MAVLINK_PORT:-14552}"
+        "-e" "NOMAD_ROS_OBSERVATION_PORT=${NOMAD_ROS_OBSERVATION_PORT:-14552}"
+        "-e" "NOMAD_ROS_EXPECTED_SYSTEM_ID=${NOMAD_ROS_EXPECTED_SYSTEM_ID:-1}"
         "-e" "NOMAD_ROS_PUBLISH_RATE_HZ=${NOMAD_ROS_PUBLISH_RATE_HZ:-10.0}"
-        "-e" "NOMAD_ROS_MIN_VIO_CONFIDENCE=${NOMAD_ROS_MIN_VIO_CONFIDENCE:-0.3}"
-        "-e" "NOMAD_ROS_VIO_TIMEOUT_MS=${NOMAD_ROS_VIO_TIMEOUT_MS:-1000}"
-        "-e" "NOMAD_ROS_COMMAND_TIMEOUT_MS=${NOMAD_ROS_COMMAND_TIMEOUT_MS:-500}"
-        "-e" "NOMAD_ROS_VIO_SOURCE=${NOMAD_ROS_VIO_SOURCE:-}"
-        "-e" "NOMAD_ROS_VIO_SOURCE_TOPIC=${NOMAD_ROS_VIO_SOURCE_TOPIC:-/nomad/vio_source}"
     )
 
     log_info "starting node in container"

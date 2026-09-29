@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.22.1)
 project(nomad VERSION 0.1.0 LANGUAGES CXX)
 
 include(CTest)
+find_package(Threads REQUIRED)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -184,11 +185,42 @@ set_target_properties(nomad_mavsdk_fmt PROPERTIES
     IMPORTED_LOCATION_DEBUG "${NOMAD_MAVSDK_FMT_DEBUG_LIBRARY}"
     INTERFACE_INCLUDE_DIRECTORIES "${NOMAD_MAVSDK_INSTALL_DIR}/include")
 
-# MAVSDK transport used by the runtime, qualification driver, ROS adapter and
-# connection tests. The installed `nomad` CLI is deliberately not a consumer.
+# Shared MAVSDK discovery helpers used by the command-capable transport.
+add_library(nomad_mavsdk_system src/mavlink/mavsdk_system.cpp)
+target_include_directories(nomad_mavsdk_system PUBLIC include PRIVATE
+    "${NOMAD_MAVSDK_SOURCE_DIR}/cpp/src/mavsdk/core/include"
+)
+target_compile_features(nomad_mavsdk_system PUBLIC cxx_std_20)
+add_dependencies(nomad_mavsdk_system mavsdk)
+target_link_libraries(nomad_mavsdk_system PRIVATE mavsdk nomad_mavsdk_fmt)
+if(MSVC)
+    target_compile_options(nomad_mavsdk_system PRIVATE /W4 /permissive- /EHsc)
+else()
+    target_compile_options(nomad_mavsdk_system PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# Receive-only UDP telemetry observation used by ROS and the Phase A status smoke.
+# MAVLink parsing uses the generated dialect header but owns no MAVSDK connection.
+add_library(nomad_mavlink_observation src/mavlink/mavlink_observation.cpp)
+target_include_directories(nomad_mavlink_observation PUBLIC include)
+target_include_directories(nomad_mavlink_observation SYSTEM PRIVATE
+    "${NOMAD_MAVSDK_INSTALL_DIR}/include")
+target_compile_features(nomad_mavlink_observation PUBLIC cxx_std_20)
+add_dependencies(nomad_mavlink_observation mavsdk)
+target_link_libraries(nomad_mavlink_observation PUBLIC nomad_mavsdk_validation PRIVATE Threads::Threads)
+if(WIN32)
+    target_link_libraries(nomad_mavlink_observation PRIVATE ws2_32)
+endif()
+if(MSVC)
+    target_compile_options(nomad_mavlink_observation PRIVATE /W4 /permissive- /EHsc)
+else()
+    target_compile_options(nomad_mavlink_observation PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# Command-capable MAVLink transport used only by the runtime, qualification
+# driver and connection tests. The installed `nomad` CLI is not a consumer.
 add_library(nomad_mavsdk_connection
     src/mavlink/mavsdk_action.cpp
-    src/mavlink/mavsdk_connection.cpp
     src/mavlink/mavsdk_connection_state.cpp
     src/mavlink/mavsdk_command_result.cpp
     src/mavlink/mavsdk_fence.cpp
@@ -196,7 +228,6 @@ add_library(nomad_mavsdk_connection
     src/mavlink/mavsdk_mavlink_quadplane.cpp
     src/mavlink/mavsdk_route.cpp
     src/mavlink/mavsdk_vtol_state.cpp
-    src/mavlink/mavsdk_system.cpp
     src/mavlink/mavsdk_velocity.cpp)
 target_include_directories(nomad_mavsdk_connection PUBLIC include PRIVATE
     "${NOMAD_MAVSDK_SOURCE_DIR}/cpp/src/mavsdk/core/include"
@@ -209,7 +240,8 @@ target_include_directories(nomad_mavsdk_connection PUBLIC include PRIVATE
 target_compile_features(nomad_mavsdk_connection PUBLIC cxx_std_20)
 add_dependencies(nomad_mavsdk_connection mavsdk)
 target_link_libraries(
-    nomad_mavsdk_connection PUBLIC nomad_mavsdk_validation PRIVATE mavsdk nomad_mavsdk_fmt)
+    nomad_mavsdk_connection PUBLIC nomad_mavsdk_validation
+    PRIVATE nomad_mavsdk_system mavsdk nomad_mavsdk_fmt)
 if(MSVC)
     target_compile_options(nomad_mavsdk_connection PRIVATE /W4 /permissive- /EHsc)
 else()
@@ -220,7 +252,7 @@ endif()
 add_executable(nomad_mavsdk_phase_a_smoke EXCLUDE_FROM_ALL examples/mavsdk_phase_a_smoke.cpp)
 target_include_directories(nomad_mavsdk_phase_a_smoke PRIVATE include)
 add_dependencies(nomad_mavsdk_phase_a_smoke mavsdk)
-target_link_libraries(nomad_mavsdk_phase_a_smoke PRIVATE nomad_mavsdk_connection)
+target_link_libraries(nomad_mavsdk_phase_a_smoke PRIVATE nomad_mavlink_observation)
 
 # The adapter packages embed this file as a subproject; only build the CTest
 # targets when the tests/ source tree is actually present.

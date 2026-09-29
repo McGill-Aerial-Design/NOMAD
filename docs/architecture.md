@@ -175,16 +175,17 @@ between modules.
 | C++ mission | Survey/task progress, pause/cancel/abort, traffic responses, recovery | Perception inference |
 | MAVLink implementation | Transport, target filtering, packing, ACK matching and protocol exchanges | Mission decisions |
 | Competition module | External schema/auth, cadence, retries, bounded queues, traffic translation and competition diagnostics | Choosing maneuvers or direct vehicle control |
-| ROS 2 adapter | Translate data and requests, validate transport metadata, enqueue | A second Vehicle owner in integrated mode |
+| ROS 2 adapter | Translate validated MAVLink observations | Vehicle construction and direct flight commands |
 | Python CV/VIO/tools | Sensor processing, tracks, candidate observations, replay and analysis | Autonomous MAVLink command path |
 | Mission Planner | Operator review, maps, video, configuration, progress and diagnostics | Independent emergency/fence/payload policy |
 | Routing/deployment | Link routing, process supervision, network access and packaging | Deciding whether a flight action is safe |
 
 The transport records timestamps for several telemetry groups, but a complete
-per-field freshness and aircraft-wide authority model remains open. The ROS node
-creates a `Vehicle` only in explicit nonintegrated mode; Mission Planner sends
-typed client requests only to the persistent runtime. These client paths have
-not been unified with native GCS
+per-field freshness and aircraft-wide authority model remains open. The ROS
+node no longer creates a `Vehicle` or has a direct flight-command path. It uses
+a receive-only MAVLink UDP observer until runtime IPC status exposes the sensor
+values needed by ROS. Mission Planner sends typed client requests only
+to the persistent runtime. These client paths have not been unified with native GCS
 controls, RC/pilot, ArduPilot or maintenance writers.
 
 ## Boundary geometry
@@ -225,8 +226,8 @@ The runtime admits one software source at a time and starts inhibited. Revoke an
 explicit handback advance the generation. Reconnect cannot grant authority, and
 cache eviction cannot make an old sequence executable. Mission Planner native
 controls, RC/pilot input, maintenance tools and ArduPilot remain independent
-authorities. ROS is observation only by default in integrated mode; its direct
-Vehicle path remains for explicit nonintegrated test use. The pinned SDK now
+authorities. ROS is a telemetry observer with no command topic, service, or
+direct actuation fallback. The pinned SDK now
 carries a per-operation admission callback through its `COMMAND_LONG` and
 `COMMAND_INT` retries to the final UDP delivery step. Revocation and that
 delivery share a gate, so a retired operation cannot transmit after revocation

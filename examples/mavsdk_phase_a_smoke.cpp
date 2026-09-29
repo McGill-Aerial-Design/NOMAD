@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The NOMAD Authors
 
-#include "nomad/mavlink/mavsdk_connection.hpp"
+#include "nomad/mavlink/mavlink_observation.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -21,7 +21,7 @@ void print_usage(const char *program) {
     std::cerr << "Usage: " << program << " <connect|status> [udpin:host:port] [expected-system-id]\n";
 }
 
-void print_status(std::uint8_t system_id, const nomad::mavlink::MavsdkStatusSnapshot &snapshot) {
+void print_status(std::uint8_t system_id, const nomad::mavlink::MavlinkObservationSnapshot &snapshot) {
     const auto &values = snapshot.values;
     std::cout << "connected=true system=" << static_cast<int>(system_id)
               << " samples=" << snapshot.position_updates << " observation_ms=" << snapshot.observation_ms
@@ -34,12 +34,12 @@ void print_status(std::uint8_t system_id, const nomad::mavlink::MavsdkStatusSnap
               << " flight_mode=" << values.flight_mode << '\n';
 }
 
-int report_connection_failure(const nomad::mavlink::MavsdkConnection &connection) {
-    std::cerr << nomad::mavlink::mavsdk_connection_error_message(connection.last_error()) << '\n';
+int report_connection_failure(const nomad::mavlink::MavlinkObservation &connection) {
+    std::cerr << nomad::mavlink::mavlink_observation_error_message(connection.last_error()) << '\n';
     return EXIT_FAILURE;
 }
 
-int run_status(nomad::mavlink::MavsdkConnection &connection) {
+int run_status(nomad::mavlink::MavlinkObservation &connection) {
     const auto status = connection.wait_for_status(kTelemetryTimeout);
     if (!status) {
         const auto snapshot = connection.get_status();
@@ -69,11 +69,11 @@ int main(int argc, char **argv) {
     const auto endpoint = std::string(argc >= 3 ? argv[2] : kDefaultEndpoint);
     const auto expected_id = nomad::mavsdk_phase_a::parse_system_id(argc == 4 ? argv[3] : kDefaultSystemId);
     if (!expected_id) {
-        std::cerr << "invalid MAVSDK endpoint or expected system ID\n";
+        std::cerr << "invalid MAVLink UDP input endpoint or expected system ID\n";
         return EXIT_FAILURE;
     }
 
-    nomad::mavlink::MavsdkConnection connection{{endpoint, *expected_id, kDiscoveryTimeout}};
+    nomad::mavlink::MavlinkObservation connection{{endpoint, *expected_id, kDiscoveryTimeout}};
     if (!connection.connect()) {
         return report_connection_failure(connection);
     }

@@ -64,7 +64,7 @@ def test_onboard_companion_profile_separation() -> None:
     assert "rtsp://" in env.get("NOMAD_VIDEO_RTSP_URL", "")
     assert env.get("NOMAD_MAVLINK_ENDPOINT") == "udpin:0.0.0.0:14550"
     assert env.get("NOMAD_API_KEY", "") == ""
-    assert env.get("NOMAD_ROS_VIO_SOURCE", "") == ""
+    assert "NOMAD_ROS_VIO_SOURCE" not in env
     assert env.get("NOMAD_AUTOSTART_ISAAC_ROS_CONTAINER") == "false"
     assert env.get("NOMAD_AUTOSTART_ROS_VEHICLE") == "false"
     assert env.get("NOMAD_AUTOSTART_VIDEO_BRIDGE") == "false"
@@ -81,7 +81,7 @@ def test_groundstation_gpu_profile_separation() -> None:
     assert env.get("NOMAD_CORE_SITL_PORT")
     assert env.get("NOMAD_MAVLINK_ENDPOINT") == "udpin:127.0.0.1:14601"
     assert env.get("NOMAD_API_KEY", "") == ""
-    assert env.get("NOMAD_ROS_VIO_SOURCE", "") == ""
+    assert "NOMAD_ROS_VIO_SOURCE" not in env
     assert env.get("NOMAD_AUTOSTART_ISAAC_ROS_CONTAINER") == "false"
     assert env.get("NOMAD_AUTOSTART_ROS_VEHICLE") == "false"
     assert env.get("NOMAD_AUTOSTART_VIDEO_BRIDGE") == "false"
@@ -99,7 +99,7 @@ def test_groundstation_minimal_profile_separation() -> None:
     assert env.get("NOMAD_CORE_SITL_PORT")
     assert env.get("NOMAD_MAVLINK_ENDPOINT") == "udpin:127.0.0.1:14601"
     assert env.get("NOMAD_API_KEY", "") == ""
-    assert env.get("NOMAD_ROS_VIO_SOURCE", "") == ""
+    assert "NOMAD_ROS_VIO_SOURCE" not in env
     assert env.get("NOMAD_AUTOSTART_ISAAC_ROS_CONTAINER") == "false"
     assert env.get("NOMAD_AUTOSTART_ROS_VEHICLE") == "false"
     assert env.get("NOMAD_AUTOSTART_VIDEO_BRIDGE") == "false"

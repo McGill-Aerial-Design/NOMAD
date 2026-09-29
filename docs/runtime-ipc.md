@@ -26,11 +26,14 @@ child as `NOMAD_API_KEY`; the C++ CLI only checked that the value was non-empty
 before an actuation verb and wrote an audit line. It did not compare a client
 credential with a runtime secret or authenticate a user.
 
-The ROS node has a separate ownership path: `nomad_ros` creates its own
-`MavlinkConnection` and, after heartbeat discovery, its own `Vehicle` in
-`ensure_connected`. ROS is not migrated by this change. Python vehicle-facing
-code found in this source review is limited to test/SITL peers, passive
-observers and maintenance utilities; there is no Python `Vehicle` runtime.
+At the starting baseline, `nomad_ros` created its own command-capable
+`MavlinkConnection` and `Vehicle`. The ROS architecture slice removes that
+path. The shipped node now uses a separate raw UDP `MavlinkObservation` because
+protocol v1 status does not include sensor values. Its API and socket expose no
+MAVLink send path.
+It exposes no flight command topics or services. Python vehicle-facing code
+found in this source review is limited to test/SITL peers, passive observers and
+maintenance utilities; there is no Python `Vehicle` runtime.
 Mission Planner's native MAVLink functions, pilot/RC and ArduPilot remain
 independent command sources.
 
@@ -65,8 +68,7 @@ Mission Planner client now have these roles:
 | Mission Planner | runtime IPC only | Connects to the configured loopback port; never launches the CLI or falls back to native MAVLink/direct vehicle writes |
 | Installed C++ CLI | bare verb | Sends typed requests to runtime IPC; has no MAVSDK connection or direct fallback |
 | `nomad-qualification` | build-tree test target | Direct MAVSDK/`Vehicle` driver for SITL; excluded from install/default build |
-| ROS 2 | integrated default | Uses its independent connection for observation; actuation is inhibited |
-| ROS 2 | explicit nonintegrated test mode | Owns its independent connection and `Vehicle` |
+| ROS 2 | telemetry observer | Uses the receive-only `nomad_mavlink_observation` target; publishes validated GPS and battery samples only |
 
 Mission Planner and the installed C++ CLI support the typed requests listed
 below. Recognized CLI verbs without a typed v1 request return
@@ -215,9 +217,10 @@ per-frame admission before integrated authority can expose them.
 
 This establishes one admitted software source for typed clients connected to this runtime.
 It does not establish one writer for the aircraft. Native Mission Planner
-MAVLink controls, RC/pilot input, ArduPilot behavior, explicit nonintegrated ROS and
-maintenance/test tools remain independent authorities. Integrated profiles
-inhibit direct CLI actuation and default ROS actuation. Profile sync writes
+MAVLink controls, RC/pilot input, ArduPilot behavior and maintenance/test tools
+remain independent authorities. The ROS observer has no flight command path;
+its temporary MAVLink connection receives telemetry only. Integrated profiles
+inhibit direct CLI actuation. Profile sync writes
 `NOMAD_INTEGRATED_FLIGHT` to Mission Planner's `IntegratedFlightMode`; the
 embedded router then makes Mission Planner's consumer receive-only. The
 standalone router example has the same policy, but other standalone router

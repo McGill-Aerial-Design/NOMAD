@@ -1,42 +1,26 @@
 # nomad_ros
 
-ROS 2 adapter for the NOMAD C++ core. It is a client, not a second vehicle
-implementation: it builds the core MAVSDK transport and one core `Vehicle`, then
-translates standard ROS messages into core API calls. ArduPilot-facing safety,
-command validation, and the velocity watchdog stay in `nomad_core` (see
-`docs/architecture.md`, `docs/migration.md`, and `docs/safety.md`).
+Read-only ROS 2 telemetry adapter. It publishes validated GPS and battery
+observations received from MAVLink. The shipped node does not construct
+`nomad::vehicle::Vehicle`, expose vehicle command services, or send MAVLink.
 
-## Why not mavros or ardupilot_ros
-
-Those packages are alternative MAVLink bridges, and adopting one would put a
-second ArduPilot-facing stack in the ROS graph beside the core's own: another
-telemetry model, another set of mode and parameter services, and another answer
-to whether a command succeeded. The project boundary keeps vehicle decisions in
-the C++ core, so this adapter links `nomad_core` and speaks through the same
-`MavlinkConnection` the CLI uses. MAVSDK already provides the connection,
-plugin, and dialect layer a bridge would supply; a ROS bridge above it would only
-re-export state the core already owns.
-
-Current standalone adapter behavior is described below. The integrated G2
-target uses one shared command owner instead of running this Vehicle alongside
-plugin-spawned CLI writers. Current callbacks block on vehicle/telemetry waits;
-bounded callback execution is open work, not an implemented guarantee.
+Runtime IPC protocol v1 reports telemetry validity and sample ages, but does not
+return the measurements needed for ROS sensor messages. Until runtime status
+exposes those source values with per-field timestamps, this adapter uses a
+separate raw UDP receive socket with the generated ArduPilot MAVLink parser.
+`nomad_mavlink_observation` exposes no send operation and the node does not link
+the command-capable transport or `nomad_core`.
 
 ## Build
 
-The adapter links `nomad_core` from the repository root as a subproject, so it
-builds anywhere the repo is mounted into a ROS 2 workspace:
+Build the package from the repository root in a ROS 2 Humble workspace:
 
 ```bash
-mkdir -p /ws/src && cp -r . /ws/src/nomad   # repo root must be /ws/src/nomad
-cd /ws
 colcon build --packages-select nomad_ros
-source install/setup.bash
 ```
 
-The repo's `nomad-sim-ros` Docker image contains the Humble toolchain
-(`colcon`, `rclcpp`, `ament_cmake`) for this build. It does not require a
-camera or perception provider.
+The repository's `nomad-sim-ros` Docker image contains the toolchain for this
+build and its integration suite.
 
 ## Run
 
@@ -44,51 +28,60 @@ camera or perception provider.
 ros2 launch nomad_ros nomad_vehicle.launch.py
 ```
 
-Parameters are declared in `config/params.yaml` and loaded by the launch file:
-`endpoint` (MAVLink UDP), publish rate, the reviewed velocity envelope,
-minimum VIO confidence, and the watchdog/VIO freshness timeouts that configure
-the core `WatchdogPolicy`.
+`config/params.yaml` sets `observation_endpoint` to the MAVLink telemetry feed,
+`expected_system_id` to select the autopilot, and `publish_rate_hz` for ROS
+publication. These parameters configure telemetry reception only.
 
-## Contract
+## Topics
 
-Publishers (telemetry from the core `VehicleState`):
+Publishers:
 
-- `/nomad/fix` — `sensor_msgs/NavSatFix`, WGS-84 position + MSL altitude.
-- `/nomad/battery` — `sensor_msgs/BatteryState`.
-- `/nomad/odom` — `nav_msgs/Odometry`; frame `ned` at the vehicle:
-  `pose.position.z` is relative altitude (up positive), `twist.linear` is
-  north/east/down m/s, orientation is the FC roll/pitch/yaw.
-- `/nomad/connected` — `std_msgs/Bool`.
+- `/nomad/fix` — `sensor_msgs/NavSatFix`; WGS-84 latitude/longitude and MSL
+  altitude. Published only with valid 3D GPS, valid coordinates, and fresh
+  position and GPS samples.
+- `/nomad/battery` — `sensor_msgs/BatteryState`; published only with a valid
+  voltage and percentage from a fresh battery sample.
+- `/nomad/connected` — `std_msgs/Bool`; fresh expected autopilot heartbeat.
 
-Subscriptions:
+Position and GPS source timestamps must advance, and values pass range and fix
+checks. Battery validity requires finite, in-range voltage and percentage;
+`SYS_STATUS` has no source timestamp, so freshness uses the incoming MAVLink
+sequence and local receipt age. Position, GPS, and battery updates older than
+1500 ms are omitted. Sensor message stamps approximate the oldest local receipt
+time used to create each message. Missing, malformed, replayed, or stale source
+data is not republished as healthy current data.
 
-- `/nomad/cmd_vel` — `geometry_msgs/TwistStamped`, vehicle FLU convention
-  (x forward, y left, z up, yaw CCW positive). Converted to the core's FRD
-  velocity command; non-finite commands are rejected. The core clamps the
-  setpoint to its reviewed limits and requires armed + GUIDED + a fresh,
-  healthy VIO feed; its watchdog stops the setpoint when input goes stale.
-- `/nomad/vio_health` — `std_msgs/Bool`.
-- `/nomad/vio_confidence` — `std_msgs/Float32`.
-- `/nomad/vio_source` — `std_msgs/String`; must match the configured source
-  identity. No provider is selected by default; health, confidence, and source
-  are combined into one fresh sample before the core receives a command.
+`/nomad/odom` is not published. The read-only telemetry contract used by this
+adapter does not provide velocity or attitude, and the prior odometry message
+mixed NED/FLU frame conventions. Re-enable odometry only after its source fields
+and frame conversion have a tested contract.
 
-Services (thin wrappers over core `Vehicle` calls):
+## Commands and VIO
 
-- `/nomad/arm`, `/nomad/disarm`, `/nomad/land`, `/nomad/rtl` —
-  `std_srvs/srv/Trigger`.
+`/nomad/cmd_vel` and the `/nomad/arm`, `/nomad/disarm`, `/nomad/land`, and
+`/nomad/rtl` services are not advertised. Protocol v1 has no typed requests for
+these operations, so the ROS adapter reports them as unavailable by omission;
+there is no direct fallback. The runtime's existing servo, relay, motor-test,
+and gimbal requests do not correspond to these ROS APIs and are not exposed
+here.
 
-## Frame and VIO notes
+The node does not subscribe to VIO health, confidence, or source topics. Those
+inputs previously gated only the removed direct velocity path. Protocol v1 has
+no VIO observation-submission request, so this adapter does not synthesize or
+submit VIO state.
 
-The current odometry mixes an NED label with up-positive position and body-frame
-metadata; do not use it as a navigation/fusion input until G2 corrects and tests
-the frame contract. Validate velocity signs independently through both adapter
-and wire conversion. A future perception adapter must
-publish health, confidence, and source identity. The ROS node validates all
-three as one fresh sample with `VioSourceValidator` before the core receives
-it; a missing, stale, unhealthy, low-confidence, or mismatched sample cannot
-open the velocity path. No VIO provider is enabled by the default parameters.
-The configured limits are loaded from `max_velocity_xy`, `max_velocity_z`, and
-`max_yaw_rate`; malformed values fail closed. If the vehicle disarms, leaves
-GUIDED, loses heartbeat, or VIO goes stale, the core stops velocity on its own
-— the adapter does not re-implement those decisions.
+## Transitional telemetry link
+
+The separate MAVLink connection is a temporary observation-only bridge around
+the runtime status contract's missing sensor values. It accepts only `udpin`
+endpoints and its UDP socket only receives datagrams; it does not instantiate a
+MAVSDK system, subscribe to command-capable plugins, or contain a send path. The
+ROS binary links `nomad_mavlink_observation`, not the command-capable MAVLink
+transport or `nomad_core`. The ROS integration suite checks that the observer
+transmits no MAVLink frames and that former control inputs produce no vehicle
+commands or velocity setpoints.
+
+debt: one receive-only MAVLink telemetry connection per ROS adapter; revisit
+when runtime status exposes source-stamped position, GPS, and battery values;
+then publish those runtime-owned values and remove the ROS observation link,
+endpoint parameters, router leg, and generated MAVLink header dependency.

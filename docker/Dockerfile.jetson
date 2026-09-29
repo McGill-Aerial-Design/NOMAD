@@ -3,8 +3,8 @@
 # NOMAD Jetson adapter image — Isaac ROS base + generic C++ ROS adapter.
 #
 # The camera, VIO estimator, mapping, and obstacle-avoidance stacks are not part
-# of the current baseline. A future estimator can publish the generic VIO
-# contract consumed by nomad_vehicle_node without changing this image's core.
+# of the current baseline. This image builds the read-only MAVLink telemetry
+# observer; VIO inputs do not enter the shipped ROS node.
 # ==============================================================
 
 ARG BASE_IMAGE=isaac_ros_dev-aarch64
@@ -17,13 +17,9 @@ LABEL description="NOMAD generic ROS adapter node for Jetson"
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     ros-humble-rclcpp \
-    ros-humble-std-srvs \
     ros-humble-ament-cmake \
-    ros-humble-geometry-msgs \
-    ros-humble-nav-msgs \
     ros-humble-sensor-msgs \
     ros-humble-std-msgs \
-    ros-humble-tf2-ros \
     build-essential \
     cmake \
     python3-colcon-common-extensions \
@@ -64,4 +60,4 @@ RUN chmod +x /ros_entrypoint.sh
 
 WORKDIR /ws
 ENTRYPOINT ["/ros_entrypoint.sh"]
-CMD ["ros2", "run", "nomad_ros", "nomad_vehicle_node", "--ros-args", "-p", "endpoint:=udpin:0.0.0.0:14552"]
+CMD ["ros2", "run", "nomad_ros", "nomad_vehicle_node", "--ros-args", "-p", "observation_endpoint:=udpin:0.0.0.0:14552"]

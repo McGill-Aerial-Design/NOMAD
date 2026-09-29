@@ -89,9 +89,9 @@ The templates use explicit C++ UDP endpoints and contain no deployment key.
 Invalid endpoints and mismatched profile identity fail before activation; profile
 switches clear stale owned Mission Planner settings. Optional ROS, video and
 container services remain disabled until their image, camera and estimator are
-qualified. NOMAD_VIO_SOURCE_REQUIRED=false does not bypass the C++
-VIO-conditioned velocity gate. A capability flag does not establish a healthy
-sensor. G3 must validate effective configuration end to end.
+qualified. The ROS adapter currently observes validated telemetry only; it
+does not submit VIO or expose vehicle commands. A capability flag does not
+establish a healthy sensor. G3 must validate effective configuration end to end.
 
 Target activation: choose profile, aircraft/firmware identity, single core host,
 command transport, navigation capability, video source, payload mapping and
@@ -158,8 +158,9 @@ outcome and must not automatically issue a fresh request. The cache is
 in-memory, so restart clears it and does not resume work. Local machine access
 is a trust boundary; `NOMAD_API_KEY` is only a nonempty actuation gate, not
 client authentication. The installed CLI does not decide API-key policy; the
-runtime validates mutation requests. Native Mission Planner MAVLink, RC/pilot, ArduPilot,
-ROS and maintenance tools remain independent authorities.
+runtime validates mutation requests. Native Mission Planner MAVLink, RC/pilot,
+ArduPilot and maintenance tools remain independent authorities. ROS is a
+read-only telemetry observer.
 
 The heartbeat-gated SITL harness uses a `udpout:` endpoint so MAVSDK sends the
 pre-latch GCS announcement to the relay and the relay can learn the ephemeral
@@ -172,8 +173,9 @@ is unrelated to the competition's required 1 Hz telemetry upload.
 For remote core placement, a secure network and an authenticated client protocol
 are both required; current IPC is local-only and does not authenticate clients.
 Until global handover is implemented, use one selected NOMAD runtime owner.
-Running the ROS node, non-installed `nomad-qualification` driver or another
-direct MAVLink writer against the same endpoint is not a qualified integration.
+Running the non-installed `nomad-qualification` driver or another direct MAVLink
+writer against the same endpoint is not a qualified integration. The ROS node
+receives telemetry only and has no flight command path.
 
 The [current D09 direction](prd.md#c2-and-termination-direction-2026-09-27)
 uses ELRS as primary RC/MAVLink C2 and LTE/MAVLink as redundant command/data,
@@ -395,8 +397,8 @@ The runtime and Mission Planner local gate accept any nonempty NOMAD_API_KEY:
 a local opt-in, not identity verification. OS account/file/IPC permissions are
 the immediate trust boundary. Runtime IPC has bounded parsing, request IDs and an in-memory dedupe
 cache, but no authenticated identities, durable request records, authorization
-policy or complete lifecycle audit. Enable and test DDS security for any exposed
-ROS command surface; no such protection is implied by ROS domain naming.
+policy or complete lifecycle audit. If a ROS command surface is added later,
+enable and test DDS security; ROS domain naming provides no such protection.
 
 Separate competition credentials from local command credentials. Validate TLS
 and server identity for the selected official protocol. Restrict media HTTP,

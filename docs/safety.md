@@ -26,8 +26,8 @@ Missing hardware, CONOPS detail or evidence keeps the relevant gate open.
 
 | ID | Hazard | Implemented mitigation and evidence limit |
 |---|---|---|
-| H-01 | Excessive or wrong-axis velocity | C++ finite/clamp/frame checks; verify each axis through ROS to wire independently |
-| H-02 | Stale/unhealthy VIO motion | C++ VIO/watchdog and ROS source/receipt-age gates; no real estimator/fusion qualification |
+| H-01 | Excessive or wrong-axis velocity | C++ finite/clamp/frame checks; ROS exposes no velocity command path |
+| H-02 | Stale/unhealthy VIO motion | C++ VIO/watchdog tests; ROS submits no VIO, and no real estimator/fusion qualification exists |
 | H-03 | Link loss or shutdown while commanding | Heartbeat/watchdog/zero attempts and loopback tests; no guarantee across a severed link |
 | H-04 | Motion after mode change/disarm | Copter mode/armed watchdog gates; aircraft-class support and authority handover incomplete |
 | H-05 | Fence breach | Target polygon validation, upload/readback and enable check; not continuous trajectory/traffic/altitude containment |
@@ -148,10 +148,10 @@ These retain their original obligations; partial coverage is not satisfaction.
 | SR-VEL-01 | Clamp XY velocity to reviewed limits | C++ tests; per-axis limits, not a proven total horizontal-speed bound |
 | SR-VEL-02 | Clamp vertical and yaw-rate velocity to reviewed limits | C++ tests; qualify per aircraft/profile |
 | SR-VEL-03 | Reject the complete command for any non-finite component | C++ tests |
-| SR-VEL-04 | Convert input and MAVLink frames explicitly and correctly | Core wire tests; end-to-end ROS/frame review open |
+| SR-VEL-04 | Convert input and MAVLink frames explicitly and correctly | Core wire tests; the ROS velocity input surface is removed |
 | SR-VEL-05 | Guided velocity requires armed state and GUIDED mode | Copter tests; never apply its numeric mode to Plane |
 | SR-VEL-06 | Filter heartbeat to the commanded vehicle | MAVSDK autopilot-selection tests; authenticated source/target selection remains a security gate |
-| SR-VIO-01 | Reject unhealthy, low-confidence, stale or unexpected-source VIO | Core/ROS tests; source timestamp, real sensor and fusion gates open |
+| SR-VIO-01 | Reject unhealthy, low-confidence, stale or unexpected-source VIO | Core tests; ROS currently has no VIO submission path, and real sensor/fusion gates remain open |
 | SR-VIO-02 | Stale VIO stops active velocity within watchdog interval | Deterministic tests; live estimator and full-load deadlines open |
 | SR-LNK-01 | Commands require fresh FC heartbeat | Velocity gate/transport behavior tested; audit every discrete command path at G2 |
 | SR-LNK-02 | Missing velocity input triggers a zero command within timeout | Watchdog tests; independent wire and FC observations required |
@@ -245,7 +245,6 @@ SR-VEL-05 | src/vehicle/vehicle_velocity.cpp:set_velocity | tests/safety_test.cp
 SR-VEL-06 | src/mavlink/mavsdk_system.cpp:select_expected_autopilot | tests/test_mavsdk_connection.py::test_wrong_autopilot_identity_is_refused
 SR-VIO-01 | src/safety/velocity.cpp:evaluate_velocity | tests/safety_test.cpp::test_safety_velocity_rejects_each_fault
 SR-VIO-01 | src/safety/vio_source.cpp:VioSourceValidator::validate | tests/vio_source_test.cpp::test_vio_source_validator_rejects_wrong_source
-SR-VIO-01 | ros2/nomad_ros/src/node.cpp:on_velocity_command | tests/ros/test_nomad_ros_integration.py::test_vio_source_gate_blocks_mismatch
 SR-VIO-02 | src/safety/watchdog.cpp:evaluate_watchdog | tests/safety_test.cpp::test_vehicle_watchdog_stops_for_stale_vio_and_mode_loss
 SR-LNK-01 | src/vehicle/vehicle_velocity.cpp:set_velocity | tests/safety_test.cpp::test_vehicle_watchdog_stops_for_link_loss
 SR-LNK-01 | src/mavlink/mavsdk_mavlink_connection.cpp:wait_for_heartbeat | tests/test_mavsdk_connection.py::test_arm_acknowledgement_paths

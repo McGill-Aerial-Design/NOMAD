@@ -33,6 +33,10 @@ void test_endpoints() {
     check(!canonicalize_udp_endpoint("udpin:127.0.0.1:0"), "zero port rejected");
     check(!canonicalize_udp_endpoint("udpin:bad host:14550"), "whitespace host rejected");
     check(!canonicalize_udp_endpoint("udpout:0.0.0.0:14550"), "wildcard output rejected");
+    using nomad::mavsdk_phase_a::canonicalize_udp_input_endpoint;
+    check(canonicalize_udp_input_endpoint("udpin:0.0.0.0:14550") == "udpin://0.0.0.0:14550",
+          "observer accepts UDP input");
+    check(!canonicalize_udp_input_endpoint("udpout:127.0.0.1:14550"), "observer rejects UDP output");
 }
 
 void test_system_identity() {
@@ -51,29 +55,46 @@ void test_system_identity() {
 }
 
 void test_status_validation() {
+    using nomad::mavsdk_phase_a::has_valid_battery;
+    using nomad::mavsdk_phase_a::has_valid_gps;
+    using nomad::mavsdk_phase_a::has_valid_position;
     using nomad::mavsdk_phase_a::has_valid_status;
     auto status = valid_status();
     check(has_valid_status(status), "complete status accepted");
+    check(has_valid_position(status), "global position accepted");
+    check(has_valid_gps(status), "3D GPS status accepted");
+    check(has_valid_battery(status), "battery status accepted");
     status.latitude_deg = 91.0;
     check(!has_valid_status(status), "latitude range checked");
+    check(!has_valid_position(status), "latitude range checked independently");
     status = valid_status();
     status.gps_fix_type = 2;
     check(!has_valid_status(status), "3D GPS fix required");
+    check(!has_valid_gps(status), "GPS validity is available independently");
     status = valid_status();
     status.battery_voltage_v = NAN;
     check(!has_valid_status(status), "finite battery required");
+    check(!has_valid_battery(status), "battery validity is available independently");
     status = valid_status();
     status.flight_mode = 0;
     check(!has_valid_status(status), "known flight mode required");
+    status = valid_status();
+    status.absolute_altitude_m = NAN;
+    check(!has_valid_position(status), "finite absolute altitude required");
 }
 
 void test_freshness() {
+    using nomad::mavsdk_phase_a::has_fresh_telemetry;
     using nomad::mavsdk_phase_a::has_fresh_position_stream;
     check(has_fresh_position_stream(3, 1000, 0), "sustained fresh stream accepted");
     check(!has_fresh_position_stream(2, 1000, 0), "multiple updates required");
     check(!has_fresh_position_stream(3, 999, 0), "observation duration required");
     check(!has_fresh_position_stream(3, 1000, 1501), "stale sample rejected");
     check(!has_fresh_position_stream(3, 1000, -1), "negative age rejected");
+    check(has_fresh_telemetry(1500), "fresh field sample accepted at the age limit");
+    check(!has_fresh_telemetry(1501), "stale field sample rejected");
+    check(!has_fresh_telemetry(-1), "future field sample rejected");
+    check(!has_fresh_telemetry(0, -1), "negative maximum age rejected");
 }
 
 } // namespace

@@ -1,108 +1,55 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
-"""Command-service integration tests for ``nomad_ros``."""
+"""Regression tests for command surfaces removed from the ROS adapter."""
 
 from __future__ import annotations
 
 import time
 
-import pytest
 import mavlink_wire as wire
 
-from ros_integration_support import (
-    _start_ros_session,
-    _stop_ros_session,
-    _call_trigger_service,
-    _GUIDED_CUSTOM_MODE,
-    _CUSTOM_MODE_LAND,
-    _CUSTOM_MODE_RTL,
-)
+from ros_integration_support import _publish_cmd_vel
 
 
-def test_integrated_mode_observes_but_inhibits_arm() -> None:
-    session = _start_ros_session(integrated_flight_mode=True)
-    try:
-        state, _, _, _, _, control = session
-        before = state.command_ids.count(wire.ARM_DISARM_COMMAND)
-        success, message = _call_trigger_service(control[0], "arm")
-        assert not success, "integrated ROS adapter must refuse arm"
-        assert "inhibited" in message
-        assert state.command_ids.count(wire.ARM_DISARM_COMMAND) == before, "refused arm must not reach the aircraft"
-    finally:
-        _stop_ros_session(session)
+def test_ros_command_services_are_not_advertised(ros_session) -> None:
+    """Protocol-v1-unavailable flight operations have no ROS service endpoint."""
+    node = ros_session["control_node"]
+    time.sleep(0.5)
+    services = {name for name, _ in node.get_service_names_and_types()}
+
+    for operation in ("arm", "disarm", "land", "rtl"):
+        assert f"/nomad/{operation}" not in services
 
 
-def _reset_vehicle(state, armed: bool, custom_mode: int) -> None:
-    """Put the responder's vehicle state back to a known starting point."""
-    state.armed = armed
-    state.custom_mode = custom_mode
-
-
-def _require_connection(session) -> None:
-    if not session["connected"]:
-        pytest.fail("node never connected to the MAVLink responder")
-
-
-def test_arm_service_arms_vehicle(ros_session) -> None:
-    """/nomad/arm verifies the authoritative armed bit."""
-    _require_connection(ros_session)
+def test_cmd_vel_cannot_emit_a_setpoint_or_flight_command(ros_session) -> None:
+    """Publishing the old velocity topic reaches no direct MAVLink mutation."""
     state = ros_session["state"]
-    _reset_vehicle(state, armed=False, custom_mode=_GUIDED_CUSTOM_MODE)
+    if not ros_session["connected"]:
+        assert state.node_connected, "node never connected to the MAVLink telemetry responder"
+
+    before_setpoints = len(state.setpoints)
+    before_commands = len(state.command_ids)
+    _publish_cmd_vel(ros_session, 1.0, vx=1.0)
     time.sleep(0.2)
 
-    success, message = _call_trigger_service(ros_session["control_node"], "arm")
-    assert success, f"arm service failed: {message}"
-    assert state.armed, "responder never saw the armed state after the arm service"
+    assert len(state.setpoints) == before_setpoints, "removed cmd_vel topic emitted a velocity setpoint"
+    after_commands = state.command_ids[before_commands:]
+    flight_commands = {
+        wire.ARM_DISARM_COMMAND,
+        wire.LAND_COMMAND,
+        wire.RTL_COMMAND,
+        176,  # MAV_CMD_DO_SET_MODE
+    }
+    assert not flight_commands.intersection(after_commands), (
+        f"removed ROS control path emitted flight commands: {after_commands}"
+    )
 
 
-def test_disarm_service_disarms_vehicle(ros_session) -> None:
-    """/nomad/disarm verifies the cleared armed bit."""
-    _require_connection(ros_session)
+def test_telemetry_observer_emits_no_mavlink_messages(ros_session) -> None:
+    """Telemetry observation emits no heartbeats, requests, or aircraft commands."""
     state = ros_session["state"]
-    _reset_vehicle(state, armed=True, custom_mode=_GUIDED_CUSTOM_MODE)
-    time.sleep(0.2)
-
-    success, message = _call_trigger_service(ros_session["control_node"], "disarm")
-    assert success, f"disarm service failed: {message}"
-    assert not state.armed, "responder still reports armed after the disarm service"
-    _reset_vehicle(state, armed=True, custom_mode=_GUIDED_CUSTOM_MODE)
-
-
-def test_land_service_sets_land_mode(ros_session) -> None:
-    """/nomad/land verifies the LAND mode."""
-    _require_connection(ros_session)
-    state = ros_session["state"]
-    _reset_vehicle(state, armed=True, custom_mode=_GUIDED_CUSTOM_MODE)
-    time.sleep(0.2)
-
-    success, message = _call_trigger_service(ros_session["control_node"], "land")
-    assert success, f"land service failed: {message}"
-    assert state.custom_mode == _CUSTOM_MODE_LAND
-    _reset_vehicle(state, armed=True, custom_mode=_GUIDED_CUSTOM_MODE)
-
-
-def test_rtl_service_sets_rtl_mode(ros_session) -> None:
-    """/nomad/rtl verifies the RTL mode."""
-    _require_connection(ros_session)
-    state = ros_session["state"]
-    _reset_vehicle(state, armed=True, custom_mode=_GUIDED_CUSTOM_MODE)
-    time.sleep(0.2)
-
-    success, message = _call_trigger_service(ros_session["control_node"], "rtl")
-    assert success, f"rtl service failed: {message}"
-    assert state.custom_mode == _CUSTOM_MODE_RTL
-    _reset_vehicle(state, armed=True, custom_mode=_GUIDED_CUSTOM_MODE)
-
-
-def test_rejected_command_returns_service_failure(ros_session) -> None:
-    """An ACKed-as-failed command surfaces as a failed service response."""
-    _require_connection(ros_session)
-    state = ros_session["state"]
-    _reset_vehicle(state, armed=False, custom_mode=_GUIDED_CUSTOM_MODE)
-    state.reject_next = True
-    time.sleep(0.2)
-
-    success, message = _call_trigger_service(ros_session["control_node"], "arm")
-    assert not success, "arm succeeded despite an explicit MAV_RESULT_FAILED ACK"
-    assert "rejected" in message.lower(), f"unexpected failure message: {message}"
-    assert not state.armed, "vehicle armed despite the rejected command"
+    time.sleep(1.5)
+    assert not state.outbound_message_ids, (
+        "receive-only ROS observer transmitted MAVLink messages: "
+        f"message_ids={state.outbound_message_ids}, command_ids={state.command_ids}"
+    )

@@ -7,7 +7,7 @@
 #
 # Optional ROS2 simulation (Tier 1 CPU — no GPU or Jetson required):
 #   pixi run sim-ros-up  # also enables the ROS MAVLink output
-#   # Runs the real C++ nomad_vehicle_node against SITL. No sensor provider is configured.
+#   # Runs the real ROS telemetry observer against SITL. No sensor provider is configured.
 #
 # Optional GPU/Isaac ROS simulation (Tier 2 — requires NVIDIA GPU + WSL2 +
 #   nvidia-container-toolkit + isaac_ros_dev-x86_64 base image built locally):
@@ -94,13 +94,12 @@ services:
   # ROS2 simulation stack — Tier 1 (CPU, no GPU).  Profile: ros
   #
   # Runs the C++ nomad_vehicle_node against SITL. ROS 2 telemetry can be
-  # exercised without a Jetson, camera or GPU. The node owns the MAVLink UDP link
-  # (udpin:0.0.0.0:14552) and the core velocity path.
+  # exercised without a Jetson, camera or GPU. The node receives MAVLink
+  # telemetry on UDP :14552 and has no aircraft command path.
   # ---------------------------------------------------------------------------
 
-  # C++ ROS vehicle adapter node (replaces the retired ROS-HTTP bridge). It
-  # subscribes to /nomad/cmd_vel + VIO health/confidence, publishes /nomad/*
-  # telemetry, and drives the core Vehicle over one MAVLink UDP link.
+  # C++ ROS telemetry observer (replaces the retired ROS-HTTP bridge).
+  # It publishes validated GPS and battery data from the router telemetry feed.
   nomad_vehicle_node:
     build:
       context: ..
@@ -113,7 +112,7 @@ services:
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
     command: >
       ros2 run nomad_ros nomad_vehicle_node --ros-args
-      -p endpoint:=udpin:0.0.0.0:14552
+      -p observation_endpoint:=udpin:0.0.0.0:14552
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
@@ -126,10 +125,8 @@ services:
   #   - An NVIDIA GPU exposed to the Docker daemon
   # ---------------------------------------------------------------------------
 
-  # GPU-tier C++ adapter node (Isaac ROS runtime image). Same node
-  # as nomad_vehicle_node, built from the sim-isaac image. Feed it a MAVLink
-  # stream on UDP :14552 (e.g. a real vehicle through mavlink-router, or the
-  # sitl service) for the core to connect.
+  # GPU-tier telemetry observer (Isaac ROS runtime image). Feed it a MAVLink
+  # stream on UDP :14552 (through mavlink-router or SITL).
   nomad_vehicle_node_gpu:
     build:
       context: ..
@@ -143,7 +140,7 @@ services:
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
     command: >
       ros2 run nomad_ros nomad_vehicle_node --ros-args
-      -p endpoint:=udpin:0.0.0.0:14552
+      -p observation_endpoint:=udpin:0.0.0.0:14552
     deploy:
       resources:
         reservations:

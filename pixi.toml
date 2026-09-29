@@ -105,20 +105,20 @@ quadplane-sitl-ps = "docker compose -f docker/docker-compose.quadplane.yml ps"
 # because it needs the same development API key they do.
 # ROS2 simulation stack (Tier 1 — CPU, no GPU/Jetson required).
 #   pixi run sim-ros-build   # build the nomad-sim-ros:latest image (run once)
-#   pixi run sim-ros-up      # start SITL + nomad_vehicle_node only (detached)
+#   pixi run sim-ros-up      # start SITL + the ROS telemetry observer (detached)
 #   pixi run sim-ros-down    # stop and remove the ros-profile containers
 #   pixi run sim-ros-logs    # tail logs from all ros-profile services
 #   pixi run test-ros-integration  # end-to-end adapter test (needs sim-ros-build first)
 sim-ros-build = "docker build -f docker/Dockerfile.sim-ros -t nomad-sim-ros:latest ."
 sim-ros-down = "docker compose -p nomad-ros -f docker/docker-compose.dev.yml --profile ros down"
 sim-ros-logs = "docker compose -p nomad-ros -f docker/docker-compose.dev.yml --profile ros logs -f"
-# Runs the integration test INSIDE the sim-ros image (rclpy + pytest present in
-# the image; nomad_core + nomad_ros compiled into a colcon workspace).
+# Runs the ROS GTests and integration tests INSIDE the sim-ros image (rclpy +
+# pytest are present; the observer and generated MAVLink dialect are built).
 # Volume-mounts tests/ so the test suite is always current code. Exercises the
-# REAL nomad_vehicle_node (C++) against an in-process MAVLink responder with
-# generic test-VIO + cmd_vel publishers. Requires: pixi run sim-ros-build
+# real nomad_vehicle_node against an in-process MAVLink responder. Covers
+# telemetry freshness and removed ROS command interfaces.
 test-ros-integration = """
-docker run --rm -v $PWD/tests:/opt/nomad/tests nomad-sim-ros:latest python3 -m pytest tests/ros/ -v
+docker run --rm -v $PWD/tests:/opt/nomad/tests nomad-sim-ros:latest bash -c 'ctest --test-dir /ws/build/nomad_ros --output-on-failure && python3 -m pytest tests/ros/ -v'
 """
 # ROS telemetry is usable independently of a sensor publisher.
 "sim-ros-up".cmd = "docker compose -p nomad-ros -f docker/docker-compose.dev.yml --profile ros up -d --build"

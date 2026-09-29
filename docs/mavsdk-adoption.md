@@ -23,9 +23,10 @@ MAVSDK is the transport. The Phase E cutover removed the hand-written codec
 generated dialect headers and the legacy codec test targets), so no build can
 produce a NOMAD binary without a way to reach a vehicle, and the old path cannot
 survive as a hidden runtime fallback. CMake has no MAVSDK on/off option: a
-missing `third_party/MAVSDK` checkout is a configuration error. The CLI, the ROS
-2 adapter (`ros2/nomad_ros`) and the SMP tests build the transport through
-`nomad/mavlink/mavsdk_transport.hpp`. The `--transport` argument and the
+missing `third_party/MAVSDK` checkout is a configuration error. The CLI and
+runtime use the transport through `nomad/mavlink/mavsdk_transport.hpp`. The ROS
+2 adapter (`ros2/nomad_ros`) uses a separate raw UDP receive-only MAVLink
+observer because protocol v1 does not expose sensor values. The `--transport` argument and the
 `NOMAD_TRANSPORT` environment variable were removed in the same cutover, so an
 invocation that names a transport fails closed with usage instead of silently
 selecting something else.

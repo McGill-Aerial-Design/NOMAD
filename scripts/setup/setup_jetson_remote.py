@@ -101,7 +101,6 @@ def configure_nomad_env(ssh) -> None:
         "NOMAD_AUTOSTART_ISAAC_ROS_CONTAINER": "false",
         "NOMAD_AUTOSTART_ROS_VEHICLE": "false",
         "NOMAD_AUTOSTART_VIDEO_BRIDGE": "false",
-        "NOMAD_ROS_VIO_SOURCE": "",
     }
 
     for key, value in values.items():

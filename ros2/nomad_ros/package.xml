@@ -4,9 +4,8 @@
   <name>nomad_ros</name>
   <version>0.1.0</version>
   <description>
-    ROS 2 adapter for the NOMAD C++ core. Translates standard ROS messages into
-    calls on the core Vehicle API and publishes typed telemetry. Contains no
-    vehicle decisions; ArduPilot-facing safety logic lives in nomad_core.
+    Read-only ROS 2 telemetry adapter for NOMAD. Publishes validated GPS and
+    battery observations from the MAVLink telemetry stream.
   </description>
   <maintainer email="nomad@example.com">NOMAD</maintainer>
   <license>Apache-2.0</license>
@@ -16,9 +15,6 @@
   <depend>rclcpp</depend>
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
-  <depend>geometry_msgs</depend>
-  <depend>nav_msgs</depend>
-  <depend>std_srvs</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

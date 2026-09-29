@@ -87,6 +87,14 @@ std::optional<std::string> canonicalize_udp_endpoint(std::string_view endpoint) 
     return std::string(scheme) + "://" + std::string(host) + ":" + std::string(port_text);
 }
 
+std::optional<std::string> canonicalize_udp_input_endpoint(std::string_view endpoint) {
+    auto canonical = canonicalize_udp_endpoint(endpoint);
+    if (!canonical || !canonical->starts_with("udpin://")) {
+        return {};
+    }
+    return canonical;
+}
+
 std::optional<std::uint8_t> parse_system_id(std::string_view value) {
     if (value.empty()) {
         return {};
@@ -112,20 +120,38 @@ SystemSelection classify_system_ids(const std::vector<std::uint32_t> &system_ids
 bool has_valid_status(const StatusValues &values) {
     constexpr double kMinRelativeAltitudeM = -1000.0;
     constexpr double kMaxRelativeAltitudeM = 100000.0;
-    constexpr double kMaxBatteryVoltageV = 1000.0;
+    return has_valid_position(values) && has_valid_gps(values) && has_valid_battery(values) &&
+           std::isfinite(values.relative_altitude_m) && values.relative_altitude_m >= kMinRelativeAltitudeM &&
+           values.relative_altitude_m <= kMaxRelativeAltitudeM && values.flight_mode > 0;
+}
+
+bool has_valid_position(const StatusValues &values) {
+    constexpr double kMinAltitudeM = -1000.0;
+    constexpr double kMaxAltitudeM = 100000.0;
     return std::isfinite(values.latitude_deg) && values.latitude_deg >= -90.0 && values.latitude_deg <= 90.0 &&
            std::isfinite(values.longitude_deg) && values.longitude_deg >= -180.0 && values.longitude_deg <= 180.0 &&
-           std::isfinite(values.relative_altitude_m) && values.relative_altitude_m >= kMinRelativeAltitudeM &&
-           values.relative_altitude_m <= kMaxRelativeAltitudeM && values.gps_fix_type >= 3 && values.satellites > 0 &&
-           values.satellites <= 255 && std::isfinite(values.battery_voltage_v) && values.battery_voltage_v > 0.0 &&
+           std::isfinite(values.absolute_altitude_m) && values.absolute_altitude_m >= kMinAltitudeM &&
+           values.absolute_altitude_m <= kMaxAltitudeM;
+}
+
+bool has_valid_gps(const StatusValues &values) {
+    return values.gps_fix_type >= 3 && values.satellites > 0 && values.satellites <= 255;
+}
+
+bool has_valid_battery(const StatusValues &values) {
+    constexpr double kMaxBatteryVoltageV = 1000.0;
+    return std::isfinite(values.battery_voltage_v) && values.battery_voltage_v > 0.0 &&
            values.battery_voltage_v <= kMaxBatteryVoltageV && std::isfinite(values.battery_remaining_percent) &&
-           values.battery_remaining_percent >= 0.0 && values.battery_remaining_percent <= 100.0 &&
-           values.flight_mode > 0;
+           values.battery_remaining_percent >= 0.0 && values.battery_remaining_percent <= 100.0;
 }
 
 bool has_fresh_position_stream(std::size_t update_count, std::int64_t observation_ms, std::int64_t age_ms) {
     return update_count >= kMinimumPositionUpdates && observation_ms >= kMinimumObservationMs && age_ms >= 0 &&
            age_ms <= kMaximumTelemetryAgeMs;
+}
+
+bool has_fresh_telemetry(std::int64_t age_ms, std::int64_t maximum_age_ms) {
+    return maximum_age_ms >= 0 && age_ms >= 0 && age_ms <= maximum_age_ms;
 }
 
 } // namespace nomad::mavsdk_phase_a

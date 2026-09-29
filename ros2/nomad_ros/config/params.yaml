@@ -1,19 +1,6 @@
 nomad_vehicle_node:
   ros__parameters:
-    # Host UDP MAVLink endpoint that receives the ArduPilot stream. In the dev
-    # Docker stack the C++ core smoke tests use udpin:0.0.0.0:14570.
-    endpoint: "udpin:0.0.0.0:14570"
-    # Expected autopilot system id. MAVSDK only latches a link whose heartbeat
-    # carries this id, so a wrong or zero value leaves the node unconnected.
-    system_id: 1
+    # Transitional receive-only MAVLink telemetry feed from mavlink-router.
+    observation_endpoint: "udpin:0.0.0.0:14552"
+    expected_system_id: 1
     publish_rate_hz: 10.0
-    min_vio_confidence: 0.3
-    max_velocity_xy: 2.0
-    max_velocity_z: 1.0
-    max_yaw_rate: 1.0
-    vio_timeout_ms: 1000
-    command_timeout_ms: 500
-    # No estimator is selected by default. Velocity remains fail-closed until
-    # a real perception adapter supplies and configures a provider identity.
-    vio_source: ""
-    vio_source_topic: "/nomad/vio_source"

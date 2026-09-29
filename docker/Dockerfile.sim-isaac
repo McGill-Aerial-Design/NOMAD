@@ -2,10 +2,9 @@
 # ==============================================================
 # NOMAD Isaac ROS adapter image — x86_64 + NVIDIA dGPU.
 #
-# This optional image provides the generic ROS 2 adapter on an Isaac ROS base.
-# It intentionally contains no camera SDK, mapping stack, or obstacle-avoidance
-# integration. A future estimator may be added behind the documented generic
-# VIO topic contract without changing the C++ core.
+# This optional image provides the read-only ROS telemetry observer on an Isaac
+# ROS base. It contains no camera SDK, mapping stack, obstacle-avoidance
+# integration, or VIO-to-flight-control path.
 # ==============================================================
 
 ARG BASE_IMAGE=isaac_ros_dev-x86_64
@@ -19,13 +18,9 @@ LABEL description="NOMAD generic Isaac ROS adapter node — x86_64 GPU image"
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     ros-humble-rclcpp \
-    ros-humble-std-srvs \
     ros-humble-ament-cmake \
-    ros-humble-geometry-msgs \
-    ros-humble-nav-msgs \
     ros-humble-sensor-msgs \
     ros-humble-std-msgs \
-    ros-humble-tf2-ros \
     build-essential \
     cmake \
     python3-colcon-common-extensions \
@@ -62,4 +57,4 @@ RUN chmod +x /ros_entrypoint.sh
 
 WORKDIR /ws
 ENTRYPOINT ["/ros_entrypoint.sh"]
-CMD ["ros2", "run", "nomad_ros", "nomad_vehicle_node", "--ros-args", "-p", "endpoint:=udpin:0.0.0.0:14552"]
+CMD ["ros2", "run", "nomad_ros", "nomad_vehicle_node", "--ros-args", "-p", "observation_endpoint:=udpin:0.0.0.0:14552"]

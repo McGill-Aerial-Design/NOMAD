@@ -18,6 +18,8 @@ class ArduPilotPeer:
         self._address = ("127.0.0.1", port)
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._mavlink = mavlink.MAVLink(None, srcSystem=system_id, srcComponent=1)
+        self._position_boot_ms = 1000
+        self._gps_time_usec = 1_000_000
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._send_until_stopped, daemon=True)
 
@@ -30,7 +32,9 @@ class ArduPilotPeer:
         self._socket.close()
 
     def _send(self, message) -> None:
-        self._socket.sendto(message.pack(self._mavlink), self._address)
+        packet = message.pack(self._mavlink)
+        self._mavlink.seq = (self._mavlink.seq + 1) & 0xFF
+        self._socket.sendto(packet, self._address)
 
     def _send_until_stopped(self) -> None:
         while not self._stop.wait(0.2):
@@ -46,9 +50,11 @@ class ArduPilotPeer:
                 mavlink.MAV_STATE_ACTIVE,
             )
         )
+        self._position_boot_ms += 200
+        self._gps_time_usec += 200_000
         self._send(
             self._mavlink.global_position_int_encode(
-                1000,
+                self._position_boot_ms,
                 int(45.5017 * 1e7),
                 int(-73.5673 * 1e7),
                 25000,
@@ -64,7 +70,7 @@ class ArduPilotPeer:
 
     def _gps_message(self):
         return self._mavlink.gps_raw_int_encode(
-            1_000_000,
+            self._gps_time_usec,
             3,
             int(45.5017 * 1e7),
             int(-73.5673 * 1e7),
@@ -140,7 +146,7 @@ def main() -> int:
     require_case(valid.returncode == 0 and has_required_output("status", valid.stdout, "1"), "valid peer", valid)
 
     wrong = run_peer_case(binary, peer_id=2, expected_id=1, command="connect")
-    require_case(wrong.returncode != 0 and "wrong autopilot peer" in wrong.stderr, "wrong peer", wrong)
+    require_case(wrong.returncode != 0 and "different system ID" in wrong.stderr, "wrong peer", wrong)
 
     no_peer = run_binary(binary, "connect", find_free_udp_port(), system_id=1)
     require_case(no_peer.returncode != 0 and "timed out" in no_peer.stderr, "no peer", no_peer)

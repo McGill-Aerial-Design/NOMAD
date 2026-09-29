@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Launch the NOMAD ROS 2 vehicle adapter.
+"""Launch the NOMAD ROS 2 telemetry observer.
 
-The adapter is a thin client of the NOMAD C++ core: it publishes typed
-telemetry and translates standard ROS messages into core Vehicle calls. See
-the package README for the topic and service contract.
+The adapter publishes validated MAVLink telemetry only. See the package README
+for its observation topic contract and transitional data source.
 """
 
 import os

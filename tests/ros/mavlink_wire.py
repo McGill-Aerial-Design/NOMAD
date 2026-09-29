@@ -52,6 +52,19 @@ def decode_commands(datagram: bytes) -> list[tuple[int, float]]:
     return commands
 
 
+def decode_message_ids(datagram: bytes) -> list[int]:
+    """Return every MAVLink message id in a datagram."""
+    message_ids: list[int] = []
+    offset = 0
+    while offset + 8 <= len(datagram):
+        message_id, _, total = _next_frame(datagram, offset)
+        if message_id is None:
+            break
+        message_ids.append(message_id)
+        offset += total
+    return message_ids
+
+
 def decode_velocity_setpoints(datagram: bytes) -> list[float]:
     """Return the vx of every velocity setpoint in a datagram."""
     vx_values: list[float] = []

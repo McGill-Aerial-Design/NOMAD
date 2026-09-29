@@ -7,6 +7,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- [ros] The shipped ROS node is now a read-only telemetry observer. It publishes
+  only validated, fresh GPS and battery samples, has no command topics/services,
+  accepts only a UDP input endpoint, and uses a raw receive-only observer target.
+  Runtime IPC v1 has no typed requests for
+  the removed ROS flight operations and exposes no sensor values yet, so ROS
+  does not forward those commands or use a direct fallback.
+
 ### Removed
 - [core,mavlink] The hand-written MAVLink codec is **deleted** at the Phase E
   cutover: `src/mavlink/{protocol,udp_connection,udp_commands,fence,params}.cpp`
@@ -18,20 +26,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `nomad_mavsdk_zero_delivery_tests`. The pinned `third_party/ardupilot-mavlink`
   submodule stays only as the dialect the command-id gate resolves ids against.
   (2026-09-12, with explicit user authorization)
-- [core,ros] The Python ROS-HTTP bridge (`edge_core/ros_http_bridge/`) is
-  **deleted** — the C++ `nomad_vehicle_node` adapter (`ros2/nomad_ros`)
-  replaces it end-to-end: it owns the MAVLink UDP link, the core velocity
-  path (`/nomad/cmd_vel` + VIO health/confidence), and publishes `/nomad/*`
-  telemetry. The compose `ros`/`gazebo`/`ros-gpu` profiles now run the node
-  (fed by SITL / MAVProxy / a real vehicle on :14552); `Dockerfile.jetson`
-  and `Dockerfile.sim-isaac` colcon-build `nomad_core` + `nomad_ros`; the
-  systemd unit is `nomad-ros-vehicle.service` with
-  `scripts/services/nomad_ros_vehicle.sh`; `scripts/nomad` service renamed
-  `ros_http_bridge` → `ros_vehicle`; Isaac API routes manage the node
-  (status key `vehicle_running`). The bridge's host unit tests
-  (`test_bridge_http_client`, `test_coordinate_math`, `test_mavlink_velocity`,
-  `test_mesh_packer`, `test_vio_math`) and its route pinning in
-  `test_client_contract.py` were deleted with it. (Deletion gate 1, 2026-09-05)
+- [core,ros] Historical baseline (2026-09-05; superseded by the read-only
+  observer above): the Python ROS-HTTP bridge (`edge_core/ros_http_bridge/`)
+  was deleted and the C++ `nomad_vehicle_node` initially carried direct core
+  velocity control gated by VIO inputs. At that revision, compose profiles ran
+  the node, Isaac images built `nomad_core` + `nomad_ros`, and the service was
+  named `ros_vehicle`. The bridge's host unit tests and route pinning were
+  removed. (Deletion gate 1, 2026-09-05)
 
 ### Added
 - [core,mavsdk] Historical Phase B entry (2026-09-11; superseded by the Phase E
@@ -68,8 +69,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not an option: `CMakeLists.txt` drops
   `NOMAD_ENABLE_MAVSDK` and fails configuration when `third_party/MAVSDK` is
   missing, so no build can produce a NOMAD binary with no way to reach a vehicle.
-  The ROS 2 adapter builds `make_mavsdk_connection` instead of
-  `UdpMavlinkConnection` and gains a declared `system_id` parameter. The
+  The ROS 2 adapter built `make_mavsdk_connection` instead of
+  `UdpMavlinkConnection` and gained a declared `system_id` parameter. The
   historical `--transport mavsdk` selector was removed; the current CLI has no
   transport selector and does not read `NOMAD_TRANSPORT`, so naming the selector
   fails closed with usage. No path

@@ -88,8 +88,9 @@ API smoke task and gimbal SITL task are removed.
 `dev-up` starts isolated ArduPilot SITL plus the passive Mission Planner bridge;
 it requires Docker and the `nomad-sitl:copter-4.7.1` image (build instructions are
 in docker/docker-compose.dev.yml). `sitl` builds the core first, then starts that
-stack and runs its scenario. `sim-ros-up` additionally forwards MAVLink to the
-ROS adapter. Direct Compose ROS use must set `NOMAD_SITL_ROS_OUTPUT` to
+stack and runs its scenario. `sim-ros-up` additionally forwards a receive-only
+MAVLink telemetry stream to the ROS observer. Direct Compose ROS use must set
+`NOMAD_SITL_ROS_OUTPUT` to
 `--out udp:nomad_vehicle_node:14552`. The simulator always emits the normal host
 stream on 14570 and a private relay copy on 14572; scenario tasks choose which
 stream to read through `NOMAD_CORE_SITL_PORT`.
@@ -120,7 +121,7 @@ other optional compute services disabled until G3 qualification.
 |---|---|---|
 | C++ | Current registrations and qualification scope: see [migration status](migration.md#current-qualification-status) | Authority, per-field freshness, cancellation, MAVSDK and vehicle-class coverage |
 | Python | pytest includes client contracts, traceability, harnesses, profiles and video tools | Mock competition server/traffic, perception replay and tracker fixtures |
-| ROS | ros2/nomad_ros translation plus tests/ros integration | Bounded callbacks, acquisition-time/frame validation, command-owner integration |
+| ROS | ros2/nomad_ros telemetry translation plus tests/ros integration | Runtime-owned telemetry values, source acquisition metadata, and a defined odometry frame contract |
 | Mission Planner | lint-plugin and test-plugin-* helper scripts | Ownership, capabilities, stale displays, action lifecycle and replay |
 | SITL | core-sitl-* and sitl-fence | Current artifacts, QuadPlane transitions, competition scenarios and independent faults |
 | Hardware | No evidence collected in this review | Selected board/sensor/radio/payload/endurance and task gates |
