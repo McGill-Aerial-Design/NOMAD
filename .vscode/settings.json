@@ -46,8 +46,7 @@
     "docker.dockerfileSearchList": [
         "docker/Dockerfile.jetson",
         "docker/Dockerfile.sim-ros",
-        "docker/Dockerfile.sim-isaac",
-        "docker/Dockerfile.sim-gazebo"
+        "docker/Dockerfile.sim-isaac"
     ],
     // ==================== File Associations ====================
     "files.associations": {

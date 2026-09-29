@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -19,6 +20,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _load_toml(name: str) -> dict:
     return tomllib.loads((ROOT / name).read_text(encoding="utf-8"))
+
+
+def _load_jsonc(name: str) -> dict:
+    text = (ROOT / name).read_text(encoding="utf-8")
+    text = re.sub(r"(?m)^[ \t]*//[^\r\n]*(?:\r?\n|$)", "", text)
+    return json.loads(text)
 
 
 def _render_sitl_outputs(template: str, *, ros: bool) -> str:
@@ -93,6 +100,88 @@ def test_dev_tasks_and_workflows_reference_existing_tasks() -> None:
             assert "packages: write" not in workflow
         for task_name in re.findall(r"pixi run (?:(?:--frozen|--quiet)\s+)*([A-Za-z0-9_][A-Za-z0-9_-]*)", workflow):
             assert task_name in tasks, f"{workflow_name} references missing Pixi task {task_name}"
+
+
+def test_vscode_tasks_and_dockerfile_suggestions_are_current() -> None:
+    pixi_tasks = _load_toml("pixi.toml")["tasks"]
+    vscode_tasks = _load_jsonc(".vscode/tasks.json")["tasks"]
+    vscode_task_text = json.dumps(vscode_tasks)
+
+    assert "sim-ros-perception-up" not in pixi_tasks
+    assert not any(name.startswith("sim-gazebo-") for name in pixi_tasks)
+    assert "sim-ros-perception-up" not in vscode_task_text
+    assert "sim-gazebo-" not in vscode_task_text
+
+    for task in vscode_tasks:
+        for task_name in re.findall(r"\bpixi run\s+([A-Za-z0-9_-]+)", task.get("command", "")):
+            assert task_name in pixi_tasks, f"VS Code task {task['label']} references missing Pixi task {task_name}"
+
+    dockerfiles = _load_jsonc(".vscode/settings.json")["docker.dockerfileSearchList"]
+    for dockerfile in dockerfiles:
+        assert (ROOT / dockerfile).is_file(), f"VS Code Dockerfile suggestion does not exist: {dockerfile}"
+
+
+def test_mavlink_and_image_dependencies_match_current_consumers() -> None:
+    metadata = _load_toml("pyproject.toml")["project"]
+    assert metadata["name"] == "nomad-tools"
+    assert "pymavlink>=2.4" in metadata["optional-dependencies"]["dev"]
+
+    pixi_lock = (ROOT / "pixi.lock").read_text(encoding="utf-8")
+    sitl_image = (ROOT / "docker" / "Dockerfile.sitl-plane").read_text(encoding="utf-8")
+    ros_image = (ROOT / "docker" / "Dockerfile.sim-ros").read_text(encoding="utf-8")
+    jetson_image = (ROOT / "docker" / "Dockerfile.jetson").read_text(encoding="utf-8")
+    isaac_image = (ROOT / "docker" / "Dockerfile.sim-isaac").read_text(encoding="utf-8")
+
+    assert "pymavlink" in sitl_image
+    assert "pymavlink" in ros_image
+    assert "pymavlink" not in jetson_image
+    assert "pymavlink" not in isaac_image
+    assert "name: pymavlink" in pixi_lock
+    assert "pytest" in ros_image
+    assert "'numpy<2'" in jetson_image
+    assert "'numpy<2'" in ros_image
+    for image in (sitl_image, ros_image, jetson_image, isaac_image):
+        assert "transforms3d" not in image
+
+
+def test_mission_planner_packages_only_current_video_dependencies() -> None:
+    project = (ROOT / "mission_planner" / "src" / "NOMADPlugin.csproj").read_text(encoding="utf-8")
+    source = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "mission_planner" / "src").rglob("*.cs"))
+    installer = (ROOT / "mission_planner" / "packaging" / "INSTALL.ps1").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "csharp.yml").read_text(encoding="utf-8")
+    release_workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+    retired_references = (
+        "OpenTK",
+        "HelixToolkit",
+        "LibVLCSharp",
+        "PresentationCore",
+        "PresentationFramework",
+        "WindowsBase",
+        "WindowsFormsIntegration",
+        "System.Xaml",
+    )
+    for retired_reference in retired_references:
+        assert retired_reference not in project
+        assert retired_reference not in source
+
+    assert '<Reference Include="System.Memory">' in project
+    assert "GStreamer" in source
+    assert "SkiaSharp" in project
+    assert "SkiaSharp.SKColorType" in source
+    assert "Copy-Item -Path $dll -Destination $plugins -Force" in installer
+    assert "path: mission_planner/src/bin/Release/NOMADPlugin.dll" in workflow
+    assert "Copy-Item mission_planner/src/bin/Release/NOMADPlugin.dll $stage" in release_workflow
+    assert "Copy-Item mission_planner/packaging/libvlc-windows" not in release_workflow
+
+    managed_libs = ROOT / "mission_planner" / "third_party" / "libvlc"
+    assert not managed_libs.exists() or not list(managed_libs.glob("*.dll"))
+    for script in ("copy-libvlc.ps1", "copy-managed-libs.ps1", "fetch-libvlc.ps1"):
+        assert not (ROOT / "mission_planner" / "packaging" / script).exists()
+
+
+def test_unconsumed_opencv_cuda_setup_entrypoint_is_removed() -> None:
+    assert not (ROOT / "scripts" / "setup" / "install_opencv_cuda_container.sh").exists()
 
 
 def test_compose_has_valid_sitl_only_and_ros_output_paths() -> None:

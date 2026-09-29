@@ -16,7 +16,6 @@ LABEL maintainer="The NOMAD Authors"
 LABEL description="NOMAD generic Isaac ROS adapter node — x86_64 GPU image"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3-pip \
     ros-humble-rclcpp \
     ros-humble-ament-cmake \
     ros-humble-sensor-msgs \
@@ -25,8 +24,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     python3-colcon-common-extensions \
     && rm -rf /var/lib/apt/lists/*
-
-RUN pip3 install --no-cache-dir pymavlink transforms3d 'numpy<2'
 
 # The core's transport is MAVSDK, so its pinned submodule ships with the image;
 # the MAVSDK subbuild fetches its own pinned dependencies at configure time.

@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-colcon-common-extensions \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir pymavlink transforms3d 'numpy<2'
+RUN pip3 install --no-cache-dir 'numpy<2'
 
 # The core's transport is MAVSDK, so its pinned submodule ships with the image;
 # the MAVSDK subbuild fetches its own pinned dependencies at configure time.

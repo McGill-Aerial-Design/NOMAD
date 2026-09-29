@@ -48,9 +48,6 @@ namespace NOMAD.MissionPlanner
         private bool _screenRegistered = false;               // Track if NOMAD screen is registered with MainSwitcher
         private DateTime _nextBoundaryMapBindUtc = DateTime.MinValue;
 
-        // Static assembly resolver for HelixToolkit dependencies
-        private static bool _assemblyResolverRegistered = false;
-
         // ============================================================
         // Plugin Lifecycle
         // ============================================================
@@ -62,7 +59,6 @@ namespace NOMAD.MissionPlanner
         {
             try
             {
-                RegisterAssemblyResolver();
                 WarnIfUntestedMissionPlannerVersion();
 
                 // Load configuration

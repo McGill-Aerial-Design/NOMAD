@@ -62,24 +62,6 @@
       <HintPath>C:\Program Files (x86)\Mission Planner\System.Memory.dll</HintPath>
       <Private>False</Private>
     </Reference>
-    <!-- WPF References for Helix Toolkit 3D Visualization -->
-    <Reference Include="PresentationCore" />
-    <Reference Include="PresentationFramework" />
-    <Reference Include="WindowsBase" />
-    <Reference Include="WindowsFormsIntegration" />
-    <Reference Include="System.Xaml" />
-  </ItemGroup>
-
-  <!-- OpenTK for cross-platform 3D SLAM visualization (ships with Mission Planner) -->
-  <ItemGroup>
-    <Reference Include="OpenTK">
-      <HintPath>C:\Program Files (x86)\Mission Planner\OpenTK.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="OpenTK.GLControl">
-      <HintPath>C:\Program Files (x86)\Mission Planner\OpenTK.GLControl.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
   </ItemGroup>
 
   <ItemGroup>
@@ -142,18 +124,6 @@
     <Compile Include="..\..\infra\transport\ground_router\RouterConfig.cs" />
     <Compile Include="..\..\infra\transport\ground_router\RouterManagementProtocol.cs" />
     <Compile Include="**\*.cs" Exclude="obj\**\*.cs;bin\**\*.cs" />
-  </ItemGroup>
-
-  <!-- Optional local references for LibVLCSharp managed assemblies (place DLLs in third_party/libvlc) -->
-  <ItemGroup>
-    <Reference Include="LibVLCSharp.WinForms" Condition="Exists('..\third_party\libvlc\LibVLCSharp.WinForms.dll')">
-      <HintPath>..\third_party\libvlc\LibVLCSharp.WinForms.dll</HintPath>
-      <Private>True</Private>
-    </Reference>
-    <Reference Include="LibVLCSharp.Shared" Condition="Exists('..\third_party\libvlc\LibVLCSharp.Shared.dll')">
-      <HintPath>..\third_party\libvlc\LibVLCSharp.Shared.dll</HintPath>
-      <Private>True</Private>
-    </Reference>
   </ItemGroup>
 
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
