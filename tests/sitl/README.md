@@ -2,6 +2,8 @@
 
 These tests drive isolated ArduPilot SITL with the non-installed
 `nomad-qualification` executable and observe authoritative vehicle state. The
+runtime authority scenario instead uses the production `nomad-runtime` and its
+typed IPC boundary, with an independent simulator GCS and observer. The
 installed `nomad` CLI uses runtime IPC only; commands without a typed v1 request
 report unavailable.
 Normal pytest skips live scenarios without an explicitly configured simulation.
@@ -88,3 +90,56 @@ QuadPlane chain through return/recovery, VTOL-back and QLAND landing, plus the
 disarmed receiver-fault delivery probe. Those slices do not qualify link loss,
 authority, manual takeover, handback, termination or complete Task 1 flight. Required gate artifacts and historical/current distinctions live in
 [migration archive](../../docs/migration.md); do not duplicate pass counts here.
+
+## Runtime authority and independent source
+
+`core-sitl-runtime-authority` uses the production runtime's typed `set_servo`
+request while a dedicated pinned Copter stays disarmed. This scenario is
+separate from the flight chain and does not use the direct qualification driver
+to execute a NOMAD mutation. The independent source-250 test GCS requests modes;
+that is simulated external-source behavior, not physical pilot takeover.
+The [source model and hardware procedure](../../docs/source-arbitration.md)
+define the exact evidence boundaries and required production RC decisions.
+
+Run against its dedicated container, serially with other simulator scenarios:
+
+```sh
+docker compose -p nomad-authority -f docker/docker-compose.dev.yml run \
+  --rm --name nomad-authority-sitl -d --no-deps \
+  -e SITL_UDP_OUTPUT_ADDRESS="udp:host.docker.internal:14690 --out udp:host.docker.internal:14691" sitl
+pixi run core-sitl-runtime-authority
+docker stop nomad-authority-sitl
+```
+
+The guard verifies the native simulator process, exact firmware pin, read-only
+profile mounts and isolated routes before actuation. Runtime traffic is relayed
+from 14690 to an unused local UDP port; the external observer/GCS uses 14691.
+No standalone production ground router or aircraft-side router is exercised by
+this direct simulator topology. Router qualification is a separate software
+gate and physical topology must be recorded at bench qualification.
+
+The scenario requires inhibited startup and rejects a mutation without sending
+it. It explicitly admits, changes the existing disabled-function channel-5
+output (channel 5 with `SERVO5_FUNCTION=0` readback), and observes fresh FC output
+telemetry. Its isolated GCS restores the initial output after NOMAD shutdown,
+including the observed zero disabled output which the runtime validator cannot
+request. This is test cleanup, not a production bypass. ACK filtering supplies a real
+retry control; after runtime revoke, the covered retry must stop on the UDP
+path. It verifies fresh and old-context mutation rejection, explicit handback,
+independent mode acceptance, paused-link session loss/recovery without restored
+ownership, and inhibited restart with stale context rejection. Its final-send
+claim covers observed `COMMAND_LONG` traffic; the existing deterministic probe
+additionally checks queued `COMMAND_LONG` and `COMMAND_INT` sends.
+
+The scheduled/manual Copter job launches this container independently and
+retains structured observations. PRs run its guard/observer regressions and the
+existing deterministic runtime wire gates. A configured workflow is not
+evidence of a pass. Preserve failures; never turn a skipped/live failed test into
+a qualification claim. `SIM_RC_FAIL` stays in the existing separate disarmed
+receiver-health probe and does not close physical RC takeover.
+
+The initial QuadPlane attempt was rejected by NOMAD's existing aircraft
+capability policy: all current v1 mutations are unavailable for QuadPlane.
+The new runtime output result is therefore Copter evidence only. Keep the
+QuadPlane gate intact and qualify any future typed QuadPlane request separately;
+do not add a generic mode/MAVLink request or enable a capability just to pass.

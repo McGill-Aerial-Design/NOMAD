@@ -7,6 +7,15 @@ not claimed as implemented.
 
 ## Safety argument and limits
 
+Aircraft-wide source arbitration and physical pilot takeover remain open.
+The [command-source model](source-arbitration.md) separates runtime request
+authority, wire delivery, SITL controller acceptance and physical control, and
+supplies the required-input table and bench/flight procedure. An external mode
+change does not automatically revoke NOMAD output authority. `revoke` inhibits
+NOMAD; explicit `handback` returns authority to NOMAD, not to a pilot. Neither
+operation blocks native GCS or RC input. The new disarmed SITL scenario cannot
+pass the hardware procedure, select the production RC map, or close C2 loss.
+
 NOMAD validates high-level requests and observes their outcomes. ArduPilot owns
 stabilization, EKF, low-level navigation and its independent failsafes. Loss of
 NOMAD, ROS, perception, video, ground compute or competition connectivity must

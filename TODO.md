@@ -8,6 +8,15 @@ in the [historical migration archive](docs/migration.md).
 ## Aircraft authority and fault response
 
 - [~] Prove aircraft-wide writer arbitration and physical pilot takeover/handback.
+  Software/isolated SITL qualification and a concrete
+  [source model / bench procedure](docs/source-arbitration.md) are tracked
+  separately from physical completion. The software/disarmed Copter slice
+  passed at `aff6d152`; its exact evidence and limits are in qualification status.
+  The new runtime scenario checks
+  inhibited ownership, output delivery/acceptance, external mode control and
+  explicit recovery on Copter; it cannot qualify a physical pilot or decide RC
+  priority. Current runtime v1 mutations are unavailable for QuadPlane; qualify
+  a future typed QuadPlane operation without widening capabilities for a test.
   Set and verify the production RC/ELRS channel map and FC input priority; test
   native GCS, RC, runtime revoke, lost links and reconnects against the actual
   controller. Runtime generations and retry fencing prove only a software
@@ -15,6 +24,10 @@ in the [historical migration archive](docs/migration.md).
 - [ ] Define and qualify the complete C2-loss policy across supported aircraft
   and phases. Keep communication loss, pilot takeover, and termination as
   separate fault paths with observed FC state and physical outcomes.
+- [ ] Resolve the hosted GCS-heartbeat cadence failure in run `36672382568`.
+  The unchanged relay gate observed a `0.000s` interval; isolated local checks
+  did not reproduce it. Identify the actual packet sources/timing before
+  changing the assertion, then rerun the skipped velocity/geofence checks.
 - [ ] Select, implement and qualify production termination behavior. Include
   activation, latching, reset, external-source interaction and every QuadPlane
   phase required by unresolved Q02. The Mission Planner termination control

@@ -71,6 +71,7 @@ nav:
   - Agent and engineering guidance: agent-guidance.md
   - Operations: operations.md
   - Qualification status: qualification.md
+  - Sources and takeover qualification: source-arbitration.md
   - Safety case: safety.md
   - Historical migration evidence: migration.md
   - MAVSDK adoption: mavsdk-adoption.md

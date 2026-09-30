@@ -149,6 +149,37 @@ jobs:
       - name: Let SITL warm up
         run: sleep 25
 
+      - name: Build production runtime for authority qualification
+        run: pixi run build-core
+
+      - name: Qualify runtime authority and independent source on isolated Copter
+        timeout-minutes: 6
+        shell: bash
+        run: |
+          set -euo pipefail
+          authority_container=""
+          stop_authority() {
+            if [[ -n "$authority_container" ]]; then
+              docker stop "$authority_container" >/dev/null 2>&1 || true
+            fi
+          }
+          trap stop_authority EXIT
+          authority_container=$(docker compose -p nomad-authority -f docker/docker-compose.dev.yml run \
+            --rm --name nomad-authority-sitl -d --no-deps \
+            -e SITL_UDP_OUTPUT_ADDRESS="udp:host.docker.internal:14690 --out udp:host.docker.internal:14691" \
+            sitl)
+          sleep 25
+          pixi run --frozen python scripts/dev/core_sitl_authority.py \
+            2>&1 | tee "$RUNNER_TEMP/runtime-authority-sitl.json"
+
+      - name: Retain runtime authority SITL evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: runtime-authority-sitl
+          path: ${{ runner.temp }}/runtime-authority-sitl.json
+          if-no-files-found: warn
+
       - name: C++ runtime telemetry observation scenario
         run: pixi run core-sitl-status
 

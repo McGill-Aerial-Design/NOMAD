@@ -1,9 +1,13 @@
 # Safety and qualification status
 
 This is the current summary of what the repository proves and what remains
-unqualified. The documentation cleanup started from `main` at
-`042c980838007e770894b3fce4e6f8579bc4aaa8`; this change does not alter flight
-code. A test, passing workflow or simulator result proves only the boundary and
+unqualified. The source-arbitration qualification slice started from `main` at
+`34d93335c41a000d78a323436e9027704bffc160` after PR #52. It adds a disarmed
+production-runtime SITL scenario and a physical qualification procedure without
+changing the production command surface or aircraft parameters. The executable
+mutation scenario uses Copter; current runtime v1 mutations are unsupported for
+QuadPlane, and that capability gate remains intact.
+A test, passing workflow or simulator result proves only the boundary and
 revision it actually exercised. This page is not flight authorization.
 
 ## Evidence levels
@@ -21,6 +25,12 @@ historical task names and run-specific reports remain in the
 [migration evidence archive](migration.md).
 
 ## Proven software boundaries
+
+The [source-arbitration model](source-arbitration.md) lists every intended
+source, the software/SITL/bench/flight distinctions, controller mechanisms,
+unresolved production RC inputs and the later hardware procedure. `handback`
+explicitly returns software authority to NOMAD after `revoke`; it does not
+establish pilot control. External mode changes do not revoke runtime ownership.
 
 - The production runtime starts without an admitted software command owner.
   Typed mutations require explicit authority admission and carry the runtime
@@ -99,7 +109,47 @@ from `docker/Dockerfile.sitl-plane`. CPU ROS tests require Docker to build
 need their compatible hardware and base images. See the exact local commands in
 [development](development.md#sitl-and-live-mavsdk-smoke).
 
+## Runtime source qualification evidence
+
+The new [runtime authority SITL scenario](../scripts/dev/core_sitl_authority.py)
+and its [run procedure](../tests/sitl/README.md#runtime-authority-and-independent-source)
+are wired into scheduled/manual Copter CI with a lighter PR guard/observer
+gate. The local disarmed Copter run on 2026-09-30 passed at implementation SHA
+`aff6d152f3f73e0ef45dd5ae8eefa9ee5e23863b`, with firmware
+`dbe792162d06cab66c3475fd5556bf7a120f119e`. Its source-dirty flag records
+preserved pre-existing workspace changes; this is not clean-checkout evidence.
+The same scenario passed from a clean hosted checkout in
+[manual SITL run 36672382568](https://github.com/YoussGm3o8/NOMAD/actions/runs/36672382568)
+at that exact implementation SHA. The `runtime-authority-sitl` artifact records
+all nine checks, actual parameter readbacks and source IDs; its scope is
+`disarmed_pinned_copter_runtime_software_authority_boundary_only`.
+Fresh FC output observations matched runtime requests, source 250 changed FC
+modes while NOMAD was admitted and revoked. Two wire attempts (initial send plus
+one retry) were observed, with two FC ACKs dropped; no further qualified command
+frame was observed after revocation. Link recovery changed the session without
+restoring an owner; runtime restart rejected old context and required new
+admission. The initial simulator output was restored and observed after runtime
+shutdown. These results complete the tested Copter/software slice only.
+
+The full manual run above finished with the complete pinned QuadPlane chain
+passing, including the disarmed RC-fault probe and QLAND landing. Its Copter job
+passed authority, telemetry, connectivity, command flow, mission, velocity
+watchdog, payload, link-loss, zero-delivery and link-recovery checks, then failed
+the existing GCS-heartbeat relay cadence assertion: an observed announcement
+interval was `0.000s`, below the unchanged 0.9 s bound. The later velocity-loop,
+geofence-containment and geofence-upload checks were skipped. Three isolated
+local closed-gate checks passed without reproducing this failure; its cause is
+unresolved. Retain the failed hosted record: this PR does not claim a complete
+Copter workflow pass or relax the heartbeat gate.
+
 ## Not yet equivalent to qualification
+
+Native GCS
+source-250 mode acceptance in a disarmed simulator is simulated external-source
+evidence, not physical pilot takeover. Copter output evidence does not qualify
+a QuadPlane runtime mutation; protocol v1 currently has none that can execute.
+The standalone production router and
+aircraft-side router are absent from this scenario's direct simulator topology.
 
 - Runtime authority is one admitted **software source** for typed requests to
   that runtime. It is not whole-aircraft authority. Native Mission Planner
