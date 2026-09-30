@@ -109,13 +109,30 @@ from `docker/Dockerfile.sitl-plane`. CPU ROS tests require Docker to build
 need their compatible hardware and base images. See the exact local commands in
 [development](development.md#sitl-and-live-mavsdk-smoke).
 
-## Not yet equivalent to qualification
+## Runtime source qualification evidence
 
 The new [runtime authority SITL scenario](../scripts/dev/core_sitl_authority.py)
 and its [run procedure](../tests/sitl/README.md#runtime-authority-and-independent-source)
 are wired into scheduled/manual Copter CI with a lighter PR guard/observer
-gate. Record exact successful runs before calling the software/SITL slice
-complete; configured coverage alone does not establish a pass. Native GCS
+gate. The local disarmed Copter run on 2026-09-30 passed at implementation SHA
+`aff6d152f3f73e0ef45dd5ae8eefa9ee5e23863b`, with firmware
+`dbe792162d06cab66c3475fd5556bf7a120f119e`. Its source-dirty flag records
+preserved pre-existing workspace changes; this is not clean-checkout evidence.
+The same scenario passed from a clean hosted checkout in
+[manual SITL run 36672382568](https://github.com/YoussGm3o8/NOMAD/actions/runs/36672382568)
+at that exact implementation SHA. The `runtime-authority-sitl` artifact records
+all nine checks, actual parameter readbacks and source IDs; its scope is
+`disarmed_pinned_copter_runtime_software_authority_boundary_only`.
+Fresh FC output observations matched runtime requests, source 250 changed FC
+modes while NOMAD was admitted and revoked, and two observed retries with
+dropped FC ACKs stopped after revoke. Link recovery changed the session without
+restoring an owner; runtime restart rejected old context and required new
+admission. The initial simulator output was restored and observed after runtime
+shutdown. These results complete the tested Copter/software slice only.
+
+## Not yet equivalent to qualification
+
+Native GCS
 source-250 mode acceptance in a disarmed simulator is simulated external-source
 evidence, not physical pilot takeover. Copter output evidence does not qualify
 a QuadPlane runtime mutation; protocol v1 currently has none that can execute.

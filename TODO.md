@@ -10,7 +10,9 @@ in the [historical migration archive](docs/migration.md).
 - [~] Prove aircraft-wide writer arbitration and physical pilot takeover/handback.
   Software/isolated SITL qualification and a concrete
   [source model / bench procedure](docs/source-arbitration.md) are tracked
-  separately from physical completion. The new runtime scenario checks
+  separately from physical completion. The software/disarmed Copter slice
+  passed at `aff6d152`; its exact evidence and limits are in qualification status.
+  The new runtime scenario checks
   inhibited ownership, output delivery/acceptance, external mode control and
   explicit recovery on Copter; it cannot qualify a physical pilot or decide RC
   priority. Current runtime v1 mutations are unavailable for QuadPlane; qualify
