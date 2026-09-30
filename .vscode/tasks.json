@@ -177,11 +177,11 @@
     {
       "label": "Core: Build",
       "type": "shell",
-      "command": "pixi run dev-build",
+      "command": "pixi run build-core",
       "group": "build",
       "presentation": { "panel": "dedicated", "clear": true },
       "problemMatcher": [],
-      "detail": "Build the C++ core"
+      "detail": "Build the production C++ executables without installing them"
     },
     {
       "label": "Docker: Build + start dev stack (SITL)",

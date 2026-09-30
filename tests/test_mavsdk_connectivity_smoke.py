@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
-"""Contract tests for the MAVSDK Phase A smoke runner."""
+"""Contract tests for the MAVSDK connect/status smoke runner."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.dev import mavsdk_phase_a_smoke as smoke
+from scripts.dev import mavsdk_connectivity_smoke as smoke
 
 
 @pytest.mark.parametrize("value", ["", "0", "256", "one"])

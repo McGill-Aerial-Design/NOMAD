@@ -25,6 +25,7 @@ REQUIRED_FILES = (
 CLI_NAMES = ("nomad", "nomad.exe")
 RUNTIME_NAMES = ("nomad-runtime", "nomad-runtime.exe")
 QUALIFICATION_NAMES = ("nomad-qualification", "nomad-qualification.exe")
+ALLOWED_BIN_NAMES = set(CLI_NAMES + RUNTIME_NAMES)
 
 
 def find_binary(root: Path, names: tuple[str, ...]) -> Path | None:
@@ -51,6 +52,15 @@ def validate_install_root(root: Path) -> list[str]:
         errors.append("missing bin/nomad-runtime or bin/nomad-runtime.exe")
     if find_binary(root, QUALIFICATION_NAMES) is not None:
         errors.append("package contains non-installed qualification driver")
+    bin_dir = root / "bin"
+    if bin_dir.is_dir():
+        unexpected = sorted(
+            item.relative_to(bin_dir).as_posix()
+            for item in bin_dir.rglob("*")
+            if item.is_file() and item.relative_to(bin_dir).as_posix() not in ALLOWED_BIN_NAMES
+        )
+        if unexpected:
+            errors.append(f"package contains unexpected bin files: {', '.join(unexpected)}")
     license_dir = root / "share/nomad/licenses/mavsdk-phase-a"
     if not license_dir.is_dir() or not any(license_dir.glob("*.txt")):
         errors.append("missing MAVSDK dependency license bundle")

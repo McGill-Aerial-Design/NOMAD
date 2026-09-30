@@ -83,9 +83,9 @@ if ($msbuild -and (Test-Path $msbuild)) {
 
 $mp = "${env:ProgramFiles(x86)}\Mission Planner"
 if (Test-Path $mp) {
-    Log-Ok "Mission Planner found at $mp"
+    Log-Ok "Mission Planner reference assemblies found at $mp"
 } else {
-    Log-Warn "Mission Planner not found - plugin deploy step will skip"
+    Log-Warn "Mission Planner not found - plugin build needs staged reference assemblies"
 }
 
 # ---- Step 2: pixi install ----
@@ -134,7 +134,7 @@ Write-Host " NOMAD dev environment ready!" -ForegroundColor $cOk
 Write-Host "======================================" -ForegroundColor $cInfo
 Write-Host ""
 Write-Host "Quick commands:" -ForegroundColor $cWarn
-Write-Host "  pixi run dev            Build the C++ core"
+Write-Host "  pixi run build-core     Build the production C++ executables"
 Write-Host "  pixi run dev-up         Start the hardware-free SITL stack"
 Write-Host "  pixi run test           Run pytest"
 Write-Host "  pixi run lint           Run ruff check"

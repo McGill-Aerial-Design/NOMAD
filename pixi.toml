@@ -5,7 +5,7 @@
 # simulation images are built separately when their tasks are selected.
 #
 # Quick start:
-#   pixi run dev      # build the C++ core
+#   pixi run build-core   # build the production C++ executables
 #   pixi run test-python  # pytest
 #   pixi run lint         # ruff check
 #   pixi run format       # ruff format
@@ -43,38 +43,35 @@ default = { features = ["dev"] }
 [tasks]
 
 # Production C++ targets. The compiler is intentionally a host prerequisite;
-# the persistent runtime owns the MAVSDK transport.
-build-core = "cmake -S . -B build/core -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && cmake --build build/core"
-build-qualification-cli = "cmake --build build/core --config Debug --target nomad-qualification"
-build-core-qualification = "pixi run build-core && pixi run build-qualification-cli"
-test-core = "cmake -S . -B build/core -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && cmake --build build/core && ctest --test-dir build/core -C Debug --output-on-failure"
+# the persistent runtime owns the MAVSDK transport. This task builds only the
+# two installed executables, even when test targets are configured.
+build-core = "cmake -S . -B build/core -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DBUILD_TESTING=OFF && cmake --build build/core --config Debug --target nomad nomad-runtime"
+build-qualification-cli = "cmake -S . -B build/core -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DBUILD_TESTING=OFF && cmake --build build/core --config Debug --target nomad-qualification"
+build-sitl-tools = "pixi run build-core && pixi run build-qualification-cli"
+test-core = "cmake -S . -B build/core -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DBUILD_TESTING=ON && cmake --build build/core --config Debug && ctest --test-dir build/core -C Debug --output-on-failure"
 test-runtime-ipc = "pixi run build-core && python scripts/dev/runtime_ipc_smoke.py"
-sitl = "pixi run dev-build && pixi run dev-up && pixi run sitl-scenario"
-# Phase A build metrics. The name is historical: this is now the one and only
-# core configuration, and the task measures its configure/build cost.
-build-core-mavsdk = "python scripts/dev/mavsdk_phase_a_metrics.py --build"
-mavsdk-phase-a-smoke = "pixi run build-core-mavsdk && python scripts/dev/mavsdk_phase_a_smoke.py"
-package-core = "cmake -S . -B build/package -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF && cmake --build build/package --config Release --target nomad nomad-runtime && cpack --config build/package/CPackConfig.cmake -C Release"
-verify-core-package = "python scripts/dev/verify_core_package.py build/package"
-verify-core-install = "cmake -E rm -rf build/package/stage && cmake --install build/package --prefix build/package/stage --config Release --component nomad_runtime && python scripts/dev/verify_core_package.py build/package/stage"
-test-mavsdk-phase-a = "pytest tests/test_mavsdk_phase_a_smoke.py tests/test_mavsdk_provenance.py -q && python scripts/dev/mavsdk_phase_a_fixture.py"
-check-mavsdk-phase-a = "python scripts/dev/check_mavsdk_phase_a.py"
-# Phase B transport qualification: build the non-installed direct driver and
-# connection tests, then drive them against the deterministic peer fixture.
-build-mavsdk-phase-b = """
-cmake -S . -B build/mavsdk-phase-a -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON && cmake --build build/mavsdk-phase-a --config Release --target nomad nomad-runtime nomad-qualification nomad_mavsdk_connection_tests nomad_mavsdk_zero_delivery_tests nomad_mavsdk_authority_wire_probe
+sitl = "pixi run build-core && pixi run dev-up && pixi run sitl-scenario"
+# Builds the non-installed MAVSDK connectivity smoke and records build metrics.
+build-mavsdk-connectivity-smoke = "python scripts/dev/mavsdk_build_metrics.py --build"
+run-mavsdk-sitl-smoke = "pixi run build-mavsdk-connectivity-smoke && python scripts/dev/mavsdk_connectivity_smoke.py"
+build-core-release = "cmake -S . -B build/package -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF && cmake --build build/package --config Release --target nomad nomad-runtime"
+package-core = { cmd = "cpack --config build/package/CPackConfig.cmake -C Release", depends-on = ["build-core-release"] }
+verify-core-package = { cmd = "python scripts/dev/verify_core_package.py build/package", depends-on = ["package-core"] }
+verify-core-staged-install = { cmd = "cmake -E rm -rf build/package/stage && cmake --install build/package --prefix build/package/stage --config Release --component nomad_runtime && python scripts/dev/verify_core_package.py build/package/stage", depends-on = ["build-core-release"] }
+install-core = { cmd = "cmake --install build/package --config Release --component nomad_runtime --prefix {{ prefix }}", args = ["prefix"], depends-on = ["build-core-release"] }
+test-mavsdk-connectivity = "pytest tests/test_mavsdk_connectivity_smoke.py tests/test_mavsdk_provenance.py -q && python scripts/dev/mavsdk_connectivity_peer_fixture.py"
+verify-mavsdk-provenance = "python scripts/dev/check_mavsdk_provenance.py"
+# Build the non-installed direct driver and transport tests for deterministic peers.
+build-mavsdk-transport-qualification = """
+cmake -S . -B build/mavsdk-qualification -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON && cmake --build build/mavsdk-qualification --config Release --target nomad nomad-runtime nomad-qualification nomad_mavsdk_connection_tests nomad_mavsdk_zero_delivery_tests nomad_mavsdk_authority_wire_probe
 """
-test-mavsdk-phase-b = "pixi run build-mavsdk-phase-b && pytest tests/test_qualification_cli.py tests/test_fence_config_env.py -q && python scripts/dev/mavsdk_connection_fixture.py"
+test-mavsdk-transport-qualification = "pixi run build-mavsdk-transport-qualification && pytest tests/test_qualification_cli.py tests/test_fence_config_env.py -q && python scripts/dev/mavsdk_connection_fixture.py"
 test-mavsdk-authority-wire = "python scripts/dev/mavsdk_authority_wire_fixture.py && python scripts/dev/mavsdk_authority_probe_fixture.py"
 
-# `dev` builds production binaries. Direct qualification runs have a separate,
-# explicit target so the test driver stays outside installed/default artifacts.
-dev = "pixi run build-core"
 # Coverage floor is a ratchet set just below the current level so coverage can
 # only trend up; raise it as more of the codebase gets tested.
 test = "pytest --cov=python --cov=infra/tailscale --cov-report=term-missing --cov-fail-under=85"
-# Plain pytest without the coverage gate (handy for running a single test file).
-test-fast = "pytest"
+# Plain pytest without the coverage gate.
 test-python = "pytest"
 
 # Hardware-free SITL stack (Docker), no Isaac Sim.
@@ -82,7 +79,6 @@ test-python = "pytest"
 #   pixi run dev-down    # stop and remove
 # Mission Planner connects to SITL via TCP 127.0.0.1:5762 (the mp_bridge
 # socat relay — 5760 is single-client and held by the in-container MAVProxy).
-dev-build = "pixi run build-core"
 dev-up = "docker compose -f docker/docker-compose.dev.yml --profile sitl up -d --build"
 dev-down = "docker compose -f docker/docker-compose.dev.yml --profile sitl down"
 dev-logs = "docker compose -f docker/docker-compose.dev.yml --profile sitl logs -f"
@@ -208,7 +204,8 @@ test-plugin-log-adapters = "powershell -ExecutionPolicy Bypass -File scripts/bui
 # mirrored stress with strict no-loss/no-duplication assertions.
 test-plugin-duallink = "powershell -ExecutionPolicy Bypass -File scripts/build/test_plugin_duallink.ps1"
 
-# Standalone ground-router build/package and process qualification (Windows).
+# Standalone ground-router build writes its artifacts to build/ground-router.
+# Release packaging runs in release.yml; test-ground-router runs process checks.
 build-ground-router = "powershell -NoProfile -File scripts/build/build_ground_router.ps1"
 test-ground-router = "pixi run build-ground-router && pixi run test-plugin-duallink && python scripts/dev/ground_router_smoke.py"
 
@@ -243,11 +240,11 @@ profile-edit = "python scripts/profile.py edit"
 # (SR-SEC-02/03); the key below is the documented development-simulation key
 # from config/nomad.env.example, never a production credential.
 [tasks.core-sitl-status]
-cmd = "pixi run build-core-qualification && python scripts/dev/core_sitl_status.py"
+cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_status.py"
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
 
 [tasks.core-sitl-quadplane-observe]
-cmd = "pixi run build-core-qualification && python scripts/dev/core_sitl_quadplane_observe.py"
+cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_quadplane_observe.py"
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
 
 # Simulator-only, disarmed receiver-injection proof; never airborne qualification.
@@ -255,74 +252,74 @@ env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580
 cmd = "python scripts/dev/core_sitl_quadplane_rc_loss_probe.py"
 
 [tasks.core-sitl-quadplane-vtol-takeoff]
-cmd = "pixi run build-core-qualification && python scripts/dev/core_sitl_quadplane_vtol_takeoff.py"
+cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_quadplane_vtol_takeoff.py"
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
 
 [tasks.core-sitl-quadplane-transition]
-cmd = "pixi run build-core-qualification && python scripts/dev/core_sitl_quadplane_transition.py"
+cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_quadplane_transition.py"
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
 
 [tasks.core-sitl-quadplane-route]
-cmd = "pixi run build-core-qualification && python scripts/dev/core_sitl_quadplane_route.py"
+cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_quadplane_route.py"
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
 
 [tasks.core-sitl-quadplane-recovery]
-cmd = "pixi run build-core-qualification && python scripts/dev/core_sitl_quadplane_recovery.py"
+cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_quadplane_recovery.py"
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
 
 [tasks.core-sitl-quadplane-transition-back]
-cmd = "pixi run build-core-qualification && python scripts/dev/core_sitl_quadplane_transition_back.py"
+cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_quadplane_transition_back.py"
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
 
 [tasks.core-sitl-quadplane-vtol-landing]
-cmd = "pixi run build-core-qualification && python scripts/dev/core_sitl_quadplane_landing.py"
+cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_quadplane_landing.py"
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_QUADPLANE_SITL_PORT = "14580" }
 
 [tasks.core-sitl-command-flow]
-cmd = "pixi run build-core-qualification && python scripts/dev/core_sitl_command_flow.py"
+cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_command_flow.py"
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
 
 [tasks.core-sitl-mission]
-cmd = "pixi run build-core-qualification && python scripts/dev/core_sitl_mission.py"
+cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_mission.py"
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
 
 [tasks.core-sitl-velocity-watchdog]
-cmd = "pixi run build-core-qualification && python scripts/dev/core_sitl_velocity_watchdog.py"
+cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_velocity_watchdog.py"
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
 
 [tasks.core-sitl-geofence]
-cmd = "pixi run build-core-qualification && python scripts/dev/core_sitl_geofence.py"
+cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_geofence.py"
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
 
 [tasks.core-sitl-payload]
-cmd = "pixi run build-core-qualification && python scripts/dev/core_sitl_payload.py"
+cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_payload.py"
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
 
 [tasks.core-sitl-link-loss]
-cmd = "pixi run build-core-qualification && python scripts/dev/core_sitl_link_loss.py"
+cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_link_loss.py"
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
 
 [tasks.core-sitl-zero-delivery]
 # Observes the CLI's wire setpoints through a tee relay (the relay binds the
 # always-on 14572 copy as its upstream, like the link-recovery scenario).
-cmd = "pixi run build-core-qualification && python scripts/dev/core_sitl_zero_delivery.py"
+cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_zero_delivery.py"
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_CORE_SITL_PORT = "14572" }
 
 [tasks.core-sitl-gcs-heartbeat]
 # The relay binds the always-on 14572 copy as its upstream (see
 # docker-compose.dev.yml), like the link-recovery scenario.
-cmd = "pixi run build-core-qualification && python scripts/dev/core_sitl_gcs_heartbeat.py"
+cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_gcs_heartbeat.py"
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }
 
 [tasks.sitl-scenario]
-cmd = "pixi run build-core-qualification && python tests/sitl/velocity_loop_closure.py"
+cmd = "pixi run build-sitl-tools && python tests/sitl/velocity_loop_closure.py"
 env = { NOMAD_SITL_OPERATOR = "tcp:127.0.0.1:5762", NOMAD_API_KEY = "nomad-dev-sitl-key" }
 
 [tasks.core-sitl-link-recovery]
 # The relay binds 14572 as its upstream; the dev stack always forwards a
 # MAVLink copy there (see SITL_UDP_OUTPUT_ADDRESS in docker-compose.dev.yml),
 # so this task works without restarting the stack with special env.
-cmd = "pixi run build-core-qualification && python scripts/dev/core_sitl_link_recovery.py"
+cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_link_recovery.py"
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_CORE_SITL_PORT = "14572" }
 
 [tasks.sitl-fence]
@@ -330,5 +327,5 @@ env = { NOMAD_API_KEY = "nomad-dev-sitl-key", NOMAD_CORE_SITL_PORT = "14572" }
 # (mode/arm/takeoff/goto under the projected fence) against the same host-side
 # SITL UDP copy the other core-sitl-* scenarios use. Every step is an actuation
 # command, so it needs the same development API key the other runners set.
-cmd = "pixi run build-core-qualification && python scripts/dev/core_sitl_containment.py"
+cmd = "pixi run build-sitl-tools && python scripts/dev/core_sitl_containment.py"
 env = { NOMAD_API_KEY = "nomad-dev-sitl-key" }

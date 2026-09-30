@@ -27,7 +27,7 @@ RETRY_WINDOW_SECONDS = 1.8
 def find_runtime() -> Path:
     """Find the release qualification binary or the normal core build."""
     names = ("nomad-runtime.exe", "nomad-runtime")
-    for base in (ROOT / "build/mavsdk-phase-a", ROOT / "build/core"):
+    for base in (ROOT / "build/mavsdk-qualification", ROOT / "build/core"):
         for directory in (base / "Release", base / "Debug", base):
             for name in names:
                 candidate = directory / name

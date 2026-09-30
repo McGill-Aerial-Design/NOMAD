@@ -3,7 +3,7 @@
 
 #pragma once
 
-// Private declaration of the MAVSDK-backed MavlinkConnection (Phase B). Kept in
+// Private declaration of the MAVSDK-backed MavlinkConnection. Kept in
 // src/ so the public surface stays the make_mavsdk_connection() factory in
 // nomad/mavlink/mavsdk_transport.hpp.
 

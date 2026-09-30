@@ -14,7 +14,7 @@ behavior, and tests that do not need a drone.
 
 ```bash
 pixi run lint
-pixi run test-fast
+pixi run test-python
 pixi run docs-build
 ```
 

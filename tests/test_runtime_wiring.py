@@ -82,24 +82,37 @@ def test_distribution_packages_live_python_tools_without_edge_core(tmp_path: Pat
     assert not any(name.endswith("entry_points.txt") for name in names)
 
 
-def test_dev_tasks_and_workflows_reference_existing_tasks() -> None:
+def test_removed_aliases_and_workflows_are_current() -> None:
     pixi = _load_toml("pixi.toml")
     tasks = pixi["tasks"]
 
-    assert tasks["dev"] == "pixi run build-core"
-    assert tasks["dev-build"] == "pixi run build-core"
+    removed_aliases = {
+        "dev",
+        "dev-build",
+        "test-fast",
+        "build-core-mavsdk",
+        "mavsdk-phase-a-smoke",
+        "test-mavsdk-phase-a",
+        "check-mavsdk-phase-a",
+        "build-mavsdk-phase-b",
+        "test-mavsdk-phase-b",
+        "build-core-qualification",
+        "verify-core-install",
+    }
+    assert removed_aliases.isdisjoint(tasks)
     assert "test-api" not in tasks
     assert "sitl-gimbal" not in tasks
 
-    for workflow_name in ("test.yml", "docker.yml", "sitl.yml", "ros-sim.yml"):
-        workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+    for workflow_path in (ROOT / ".github" / "workflows").glob("*.yml"):
+        workflow = workflow_path.read_text(encoding="utf-8")
         assert "Dockerfile.dev" not in workflow
         assert "nomad-edge-dev" not in workflow
-        if workflow_name == "docker.yml":
+        if workflow_path.name == "docker.yml":
             assert "on: workflow_dispatch" in workflow
             assert "packages: write" not in workflow
         for task_name in re.findall(r"pixi run (?:(?:--frozen|--quiet)\s+)*([A-Za-z0-9_][A-Za-z0-9_-]*)", workflow):
-            assert task_name in tasks, f"{workflow_name} references missing Pixi task {task_name}"
+            if task_name not in {"python", "pre-commit"}:
+                assert task_name in tasks, f"{workflow_path.name} references missing Pixi task {task_name}"
 
 
 def test_vscode_tasks_and_dockerfile_suggestions_are_current() -> None:
@@ -119,6 +132,87 @@ def test_vscode_tasks_and_dockerfile_suggestions_are_current() -> None:
     dockerfiles = _load_jsonc(".vscode/settings.json")["docker.dockerfileSearchList"]
     for dockerfile in dockerfiles:
         assert (ROOT / dockerfile).is_file(), f"VS Code Dockerfile suggestion does not exist: {dockerfile}"
+
+
+def test_first_party_pixi_run_guidance_references_existing_tasks() -> None:
+    tasks = _load_toml("pixi.toml")["tasks"]
+    caller_files = [ROOT / name for name in ("README.md", "CONTRIBUTING.md", "AGENTS.md", "pixi.toml")]
+    caller_files.extend((ROOT / ".vscode").rglob("tasks.json"))
+    caller_files.extend((ROOT / ".github").rglob("*.yml"))
+    caller_files.extend((ROOT / "docs").rglob("*.md"))
+    caller_files.extend((ROOT / "scripts").rglob("*.py"))
+    caller_files.extend((ROOT / "scripts").rglob("*.ps1"))
+    caller_files.extend((ROOT / "scripts").rglob("*.sh"))
+    caller_files.extend((ROOT / "tests").rglob("*.py"))
+    caller_files.extend((ROOT / "mission_planner").glob("README.md"))
+    caller_files.extend((ROOT / "mission_planner" / "packaging").glob("README.md"))
+    caller_files.append(ROOT / "examples" / "README.md")
+
+    excluded_history = {ROOT / "docs" / "migration.md"}
+    command_tools = {"python", "pre-commit"}
+    for path in caller_files:
+        if path in excluded_history:
+            continue
+        text = path.read_text(encoding="utf-8")
+        task_names = re.findall(
+            r"\bpixi run(?:\s+--(?:frozen|quiet))*\s+([A-Za-z0-9_][A-Za-z0-9_-]*)",
+            text,
+        )
+        for task_name in task_names:
+            if task_name in command_tools:
+                continue
+            assert task_name in tasks, f"{path.relative_to(ROOT)} references missing Pixi task {task_name}"
+
+
+def test_build_and_package_tasks_keep_installation_explicit() -> None:
+    tasks = _load_toml("pixi.toml")["tasks"]
+    install_entrypoints = ("mission_planner/packaging/INSTALL.ps1", "infra/systemd/install.sh", "setup_jetson")
+
+    def command_text(name: str) -> str:
+        task = tasks[name]
+        return task["cmd"] if isinstance(task, dict) else task
+
+    for name, task in tasks.items():
+        if name != "test" and not name.startswith(("build-", "test-", "package-")):
+            continue
+        command = command_text(name)
+        assert "cmake --install" not in command, name
+        for entrypoint in install_entrypoints:
+            assert entrypoint not in command, name
+
+    stage_command = command_text("verify-core-staged-install")
+    assert "cmake --install build/package --prefix build/package/stage" in stage_command
+    assert tasks["verify-core-staged-install"]["depends-on"] == ["build-core-release"]
+
+    package_command = command_text("package-core")
+    assert package_command.startswith("cpack ")
+    assert "cmake --build" not in package_command
+    assert tasks["package-core"]["depends-on"] == ["build-core-release"]
+    assert tasks["verify-core-package"]["depends-on"] == ["package-core"]
+    assert "cmake --install" not in command_text("test-mavsdk-authority-wire")
+
+    install_task = tasks["install-core"]
+    assert install_task["args"] == ["prefix"]
+    assert "--prefix {{ prefix }}" in install_task["cmd"]
+    assert install_task["depends-on"] == ["build-core-release"]
+
+    plugin_builder = (ROOT / "scripts" / "build" / "build_plugin_windows.ps1").read_text(encoding="utf-8")
+    assert "Deployment skipped" in plugin_builder
+    assert "mission_planner/packaging/INSTALL.ps1" not in plugin_builder
+
+
+def test_production_and_qualification_builds_select_distinct_targets() -> None:
+    tasks = _load_toml("pixi.toml")["tasks"]
+
+    production = tasks["build-core"]
+    release = tasks["build-core-release"]
+    qualification = tasks["build-qualification-cli"]
+    assert "-DBUILD_TESTING=OFF" in production
+    assert "--target nomad nomad-runtime" in production
+    assert "-DBUILD_TESTING=OFF" in release
+    assert "--target nomad nomad-runtime" in release
+    assert "-DBUILD_TESTING=OFF" in qualification
+    assert "--target nomad-qualification" in qualification
 
 
 def test_mavlink_and_image_dependencies_match_current_consumers() -> None:

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
-"""Verify the pinned MAVSDK Phase A source and dependency inventory."""
+"""Verify the pinned MAVSDK source and dependency inventory."""
 
 from __future__ import annotations
 
@@ -177,7 +177,7 @@ def main() -> int:
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
-    print("MAVSDK Phase A provenance matches the reviewed inventory")
+    print("MAVSDK provenance matches the reviewed inventory")
     return 0
 
 

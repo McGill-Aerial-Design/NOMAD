@@ -43,8 +43,8 @@ jobs:
       - name: Build and test C++ core
         run: pixi run test-core
 
-  mavsdk-phase-a:
-    name: MAVSDK Phase A (${{ matrix.os }})
+  mavsdk-qualification:
+    name: MAVSDK qualification (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -58,21 +58,21 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
           cache: true
-      - name: Build the MAVSDK smoke target
+      - name: Build the connectivity smoke and record metrics
         run: >-
-          python scripts/dev/mavsdk_phase_a_metrics.py --build
-          --output "${{ runner.temp }}/mavsdk-phase-a-${{ matrix.os }}.json"
-      - name: Retain Phase A build metrics
+          python scripts/dev/mavsdk_build_metrics.py --build
+          --output "${{ runner.temp }}/mavsdk-connectivity-${{ matrix.os }}.json"
+      - name: Retain connectivity smoke build metrics
         uses: actions/upload-artifact@v6
         with:
-          name: mavsdk-phase-a-metrics-${{ matrix.os }}
-          path: ${{ runner.temp }}/mavsdk-phase-a-${{ matrix.os }}.json
+          name: mavsdk-connectivity-metrics-${{ matrix.os }}
+          path: ${{ runner.temp }}/mavsdk-connectivity-${{ matrix.os }}.json
           if-no-files-found: error
       - name: Verify reviewed MAVSDK provenance
-        run: pixi run check-mavsdk-phase-a
+        run: pixi run verify-mavsdk-provenance
       - name: Run deterministic MAVSDK peer qualification
-        run: pixi run test-mavsdk-phase-a
+        run: pixi run test-mavsdk-connectivity
       - name: Run MAVSDK command, link, fence and velocity regressions
-        run: pixi run test-mavsdk-phase-b
+        run: pixi run test-mavsdk-transport-qualification
       - name: Prove authority cancellation at the MAVLink UDP peer
         run: pixi run test-mavsdk-authority-wire

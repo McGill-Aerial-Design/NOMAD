@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
-"""Collect repeatable build-footprint metrics for MAVSDK Phase A."""
+"""Collect repeatable build-footprint metrics for the MAVSDK connectivity smoke."""
 
 from __future__ import annotations
 
@@ -13,11 +13,11 @@ from argparse import ArgumentParser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_BUILD_DIR = ROOT / "build" / "mavsdk-phase-a"
+DEFAULT_BUILD_DIR = ROOT / "build" / "mavsdk-qualification"
 
 
 def run_build(build_dir: Path = DEFAULT_BUILD_DIR) -> dict[str, float]:
-    """Configure and build the Phase A target while measuring both phases."""
+    """Configure and build the connectivity smoke while measuring both steps."""
     configure = [
         "cmake",
         "-S",
@@ -34,7 +34,7 @@ def run_build(build_dir: Path = DEFAULT_BUILD_DIR) -> dict[str, float]:
         "--config",
         "Release",
         "--target",
-        "nomad_mavsdk_phase_a_smoke",
+        "nomad_mavsdk_connectivity_smoke",
     ]
     durations = {}
     for name, command in (("configure_seconds", configure), ("target_build_seconds", build)):
@@ -50,8 +50,8 @@ def directory_size(path: Path) -> int:
 
 
 def find_smoke_binary(build_dir: Path = DEFAULT_BUILD_DIR) -> Path | None:
-    """Find the single- or multi-config Phase A smoke executable."""
-    names = ("nomad_mavsdk_phase_a_smoke.exe", "nomad_mavsdk_phase_a_smoke")
+    """Find the single- or multi-config connectivity smoke executable."""
+    names = ("nomad_mavsdk_connectivity_smoke.exe", "nomad_mavsdk_connectivity_smoke")
     for directory in (build_dir, build_dir / "Release", build_dir / "Debug"):
         for name in names:
             candidate = directory / name
@@ -61,14 +61,14 @@ def find_smoke_binary(build_dir: Path = DEFAULT_BUILD_DIR) -> Path | None:
 
 
 def collect_build_metrics(build_dir: Path = DEFAULT_BUILD_DIR) -> dict[str, int | str]:
-    """Collect byte-count evidence from a completed Phase A build."""
+    """Collect byte-count evidence from a completed connectivity-smoke build."""
     if not build_dir.is_dir():
-        message = f"MAVSDK Phase A build directory not found: {build_dir}"
+        message = f"MAVSDK qualification build directory not found: {build_dir}"
         raise FileNotFoundError(message)
 
     binary = find_smoke_binary(build_dir)
     if binary is None:
-        raise FileNotFoundError("MAVSDK Phase A smoke executable was not found")
+        raise FileNotFoundError("MAVSDK connectivity smoke executable was not found")
 
     install_lib = build_dir / "mavsdk" / "third_party" / "install" / "lib"
     archives = []
@@ -86,7 +86,7 @@ def collect_build_metrics(build_dir: Path = DEFAULT_BUILD_DIR) -> dict[str, int 
 def write_github_summary(metrics: dict[str, int | str], summary_path: Path) -> None:
     """Append the build metrics to the current GitHub Actions job summary."""
     rows = [
-        "### MAVSDK Phase A build metrics",
+        "### MAVSDK connectivity smoke build metrics",
         "",
         "| Metric | Value |",
         "|---|---:|",
@@ -123,7 +123,7 @@ def main() -> int:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
-    print(f"mavsdk_phase_a_build_metrics={json.dumps(metrics, sort_keys=True)}")
+    print(f"mavsdk_connectivity_build_metrics={json.dumps(metrics, sort_keys=True)}")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         try:

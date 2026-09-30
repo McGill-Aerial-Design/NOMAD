@@ -204,15 +204,15 @@ tests and 10 CTests passed. Those local measurements predate the final published
 fork compatibility changes and remain historical only.
 
 Current accepted technical evidence is the recursive hosted matrix and live SITL
-runs recorded above. Run `pixi run check-mavsdk-phase-a` after any source or
-dependency change, and run `pixi run build-core-mavsdk` followed by
-`pixi run test-mavsdk-phase-a` for the deterministic peer contract. The reduced
-mainline SITL job is the live Phase A regression gate; the larger SITL suite stays
-nightly/on-demand because it exercises later safety and parity behavior. The
+runs recorded above. Run `pixi run verify-mavsdk-provenance` after any source or
+dependency change, and run `pixi run build-mavsdk-connectivity-smoke` followed by
+`pixi run test-mavsdk-connectivity` for the deterministic peer contract. The
+reduced mainline SITL job is the live connectivity-smoke regression gate; the
+larger SITL suite stays nightly/on-demand because it exercises later safety and parity behavior. The
 on-demand full suite passed on merged-main run `35489428247` above; it remains
 an on-demand gate by workflow design.
 
-The Phase A build task now measures configure time, target-build time, build-tree
+The connectivity-smoke build task measures configure time, target-build time, build-tree
 bytes, smoke-executable bytes and selected static-archive bytes in one record.
 Hosted Linux and Windows jobs upload that JSON record as a required artifact.
 This makes samples reviewable but does not make a warm build a clean benchmark or

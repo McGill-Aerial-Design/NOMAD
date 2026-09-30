@@ -466,7 +466,11 @@ def main() -> int:
     probe = find_binary("nomad_mavsdk_connection_tests")
     zero_delivery = find_binary("nomad_mavsdk_zero_delivery_tests")
     if cli is None or probe is None or zero_delivery is None:
-        print("MAVSDK Phase B binaries are missing; run `pixi run build-mavsdk-phase-b` first", file=sys.stderr)
+        print(
+            "MAVSDK transport qualification binaries are missing; run `pixi run "
+            "build-mavsdk-transport-qualification` first",
+            file=sys.stderr,
+        )
         return 2
 
     run_observation_cases(cli, probe, zero_delivery)

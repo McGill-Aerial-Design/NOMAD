@@ -3,7 +3,7 @@
 
 #pragma once
 
-// Shared MAVSDK peer discovery for the Phase A smoke connection and the Phase B
+// Shared MAVSDK peer discovery for the connectivity smoke and the
 // MavlinkConnection transport, so "which MAVSDK system is our autopilot" is
 // answered in exactly one place.
 

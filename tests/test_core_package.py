@@ -58,6 +58,15 @@ def test_install_tree_rejects_qualification_driver(tmp_path: Path) -> None:
     assert "package contains non-installed qualification driver" in errors
 
 
+def test_install_tree_rejects_unexpected_bin_files(tmp_path: Path) -> None:
+    make_install_tree(tmp_path)
+    (tmp_path / "bin" / "qualification-probe.exe").write_text("placeholder", encoding="utf-8")
+
+    errors = verify_core_package.validate_install_root(tmp_path)
+
+    assert "package contains unexpected bin files: qualification-probe.exe" in errors
+
+
 def test_find_install_root_accepts_cpack_top_level_directory(tmp_path: Path) -> None:
     nested = tmp_path / "nomad-core-0.1.0"
     (nested / "bin").mkdir(parents=True)
@@ -78,5 +87,6 @@ def test_cmake_keeps_direct_driver_outside_the_installed_cli() -> None:
     assert "nomad_mavsdk_connection" not in cli_target
     assert "src/qualification/main.cpp" in qualification_target
     assert "nomad_mavsdk_connection" in qualification_target
-    assert "add_executable(nomad_mavsdk_phase_a_smoke EXCLUDE_FROM_ALL" in cmake
+    assert "add_executable(nomad_mavsdk_connectivity_smoke EXCLUDE_FROM_ALL" in cmake
+    assert "add_executable(nomad_mavsdk_authority_wire_probe EXCLUDE_FROM_ALL" in cmake
     assert "install(TARGETS nomad nomad-runtime " in cmake

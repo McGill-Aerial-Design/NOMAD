@@ -6,7 +6,7 @@ name: sitl
 #
 # The full suite is deliberately NOT on every push/PR: it builds ArduPilot from
 # source and drives a live autopilot, so it runs nightly and on demand. Main
-# pushes that change MAVSDK Phase A/SITL qualification inputs run only the
+# pushes that change MAVSDK connectivity/SITL qualification inputs run only the
 # reduced live MAVSDK connect/status smoke below. The fast unit + SC-coverage
 # gates in test.yml protect every PR.
 
@@ -24,11 +24,13 @@ on:
       - "third_party/ardupilot-mavlink/**"
       - "include/nomad/mavlink/mavsdk_*.hpp"
       - "src/mavlink/mavsdk_*.cpp"
-      - "examples/mavsdk_phase_a_smoke.cpp"
-      - "scripts/dev/mavsdk_phase_a_*.py"
-      - "scripts/dev/check_mavsdk_phase_a.py"
-      - "tests/mavsdk_phase_a_test.cpp"
-      - "tests/test_mavsdk_phase_a_*.py"
+      - "examples/mavsdk_connectivity_smoke.cpp"
+      - "scripts/dev/mavsdk_build_metrics.py"
+      - "scripts/dev/mavsdk_connectivity_*.py"
+      - "scripts/dev/check_mavsdk_provenance.py"
+      - "tests/mavsdk_validation_test.cpp"
+      - "tests/test_mavsdk_build_metrics.py"
+      - "tests/test_mavsdk_connectivity_*.py"
       - "tests/test_mavsdk_provenance.py"
       - "licenses/mavsdk-phase-a/**"
   workflow_dispatch:
@@ -43,8 +45,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  mavsdk-phase-a-sitl:
-    name: MAVSDK Phase A SITL smoke
+  mavsdk-connectivity-sitl:
+    name: MAVSDK connectivity SITL smoke
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -79,18 +81,18 @@ jobs:
       - name: Let SITL warm up
         run: sleep 25
 
-      - name: MAVSDK Phase A connect/status smoke
-        run: pixi run mavsdk-phase-a-smoke | tee "$RUNNER_TEMP/mavsdk-phase-a-runtime.txt"
+      - name: MAVSDK connect/status smoke
+        run: pixi run run-mavsdk-sitl-smoke | tee "$RUNNER_TEMP/mavsdk-connectivity-runtime.txt"
 
-      - name: Retain Phase A runtime metrics
+      - name: Retain connectivity runtime metrics
         uses: actions/upload-artifact@v6
         with:
-          name: mavsdk-phase-a-runtime
-          path: ${{ runner.temp }}/mavsdk-phase-a-runtime.txt
+          name: mavsdk-connectivity-runtime
+          path: ${{ runner.temp }}/mavsdk-connectivity-runtime.txt
           if-no-files-found: error
 
-      - name: Record Phase A build metrics
-        run: python scripts/dev/mavsdk_phase_a_metrics.py
+      - name: Record connectivity build metrics
+        run: python scripts/dev/mavsdk_build_metrics.py
 
       - name: SITL logs on failure
         if: failure()
@@ -147,26 +149,26 @@ jobs:
       - name: Let SITL warm up
         run: sleep 25
 
-      - name: C++ core telemetry smoke test (Phase 2)
+      - name: C++ runtime telemetry observation scenario
         run: pixi run core-sitl-status
 
-      - name: MAVSDK Phase A connect/status smoke
-        run: pixi run mavsdk-phase-a-smoke | tee "$RUNNER_TEMP/mavsdk-phase-a-runtime.txt"
+      - name: MAVSDK connect/status smoke
+        run: pixi run run-mavsdk-sitl-smoke | tee "$RUNNER_TEMP/mavsdk-connectivity-runtime.txt"
 
-      - name: Retain Phase A runtime metrics
+      - name: Retain connectivity runtime metrics
         uses: actions/upload-artifact@v6
         with:
-          name: mavsdk-phase-a-runtime
-          path: ${{ runner.temp }}/mavsdk-phase-a-runtime.txt
+          name: mavsdk-connectivity-runtime
+          path: ${{ runner.temp }}/mavsdk-connectivity-runtime.txt
           if-no-files-found: error
 
-      - name: Record Phase A build metrics
-        run: python scripts/dev/mavsdk_phase_a_metrics.py
+      - name: Record connectivity build metrics
+        run: python scripts/dev/mavsdk_build_metrics.py
 
-      - name: C++ core command flow (Phase 3/4)
+      - name: C++ command authorization and flow scenario
         run: pixi run core-sitl-command-flow
 
-      - name: C++ mission executor scenario (Phase 5)
+      - name: C++ mission execution scenario
         run: pixi run core-sitl-mission
 
       - name: C++ velocity watchdog scenario (H-01..H-04)

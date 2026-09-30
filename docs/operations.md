@@ -281,8 +281,8 @@ those gates; Q02 and the active loss/takeover ledger item remain open.
 
 Read [development](development.md) before running tasks. Current known-good local
 checks include core/Python tests, retained-package checks and daemon-free Compose
-resolution. `dev` and `dev-build` build the C++ core; bootstrap and Jetson setup
-use the product profile manager and retained systemd inventory. Remote setup
+resolution. `build-core` builds the production C++ executables; bootstrap and
+Jetson setup use the product profile manager and retained systemd inventory. Remote setup
 requires a pre-trusted SSH host key and does not open an HTTP API port. Live image,
 SITL and ROS runs still require G1 qualification
 before `dev-up` or `sitl` can be treated as verified quickstarts.

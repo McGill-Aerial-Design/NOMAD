@@ -214,7 +214,7 @@ def _print_next_steps(settings: dict) -> None:
     print("Next steps:")
     if sim.lower() in ("true", "1", "yes"):
         print("  1. Edit paths in config/nomad.env if needed")
-        print("  2. Run the hardware-free dev stack:  pixi run dev   (or pixi run dev-up)")
+        print("  2. Run the hardware-free SITL stack: pixi run dev-up")
     else:
         print("  1. Edit paths and auth tokens in config/nomad.env")
         print("  2. Deploy to Jetson:                 nomad start all")

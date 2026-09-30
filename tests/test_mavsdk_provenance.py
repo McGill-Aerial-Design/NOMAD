@@ -1,16 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 The NOMAD Authors
-"""Tests for the MAVSDK Phase A provenance gate."""
+"""Tests for the pinned MAVSDK provenance gate."""
 
-from scripts.dev import check_mavsdk_phase_a
+from scripts.dev import check_mavsdk_provenance
 
 
 def test_reviewed_mavsdk_provenance_is_current() -> None:
-    check_mavsdk_phase_a.verify_provenance()
+    check_mavsdk_provenance.verify_provenance()
 
 
-def test_phase_a_archives_use_strong_hashes() -> None:
-    mavsdk_root = check_mavsdk_phase_a.ROOT / "third_party" / "MAVSDK"
+def test_archives_use_strong_hashes() -> None:
+    mavsdk_root = check_mavsdk_provenance.ROOT / "third_party" / "MAVSDK"
     liblzma = (mavsdk_root / "cpp/third_party/liblzma/CMakeLists.txt").read_text(encoding="utf-8")
     json = (mavsdk_root / "cpp/third_party/nlohmann_json/CMakeLists.txt").read_text(encoding="utf-8")
 
@@ -22,7 +22,7 @@ def test_phase_a_archives_use_strong_hashes() -> None:
 
 
 def test_picosha2_uses_immutable_revision() -> None:
-    source = (check_mavsdk_phase_a.ROOT / "third_party/MAVSDK/cpp/third_party/picosha2/CMakeLists.txt").read_text(
+    source = (check_mavsdk_provenance.ROOT / "third_party/MAVSDK/cpp/third_party/picosha2/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
 
@@ -31,8 +31,8 @@ def test_picosha2_uses_immutable_revision() -> None:
 
 
 def test_mavlink_generator_avoids_build_time_package_resolution() -> None:
-    patch_path = check_mavsdk_phase_a.ROOT / "third_party/MAVSDK/cpp/third_party/mavlink/mavlink.patch"
-    additions = check_mavsdk_phase_a.patch_added_text(patch_path)
+    patch_path = check_mavsdk_provenance.ROOT / "third_party/MAVSDK/cpp/third_party/mavlink/mavlink.patch"
+    additions = check_mavsdk_provenance.patch_added_text(patch_path)
 
     assert '"PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}"' in additions
     assert "-m pip install" not in additions
@@ -40,11 +40,11 @@ def test_mavlink_generator_avoids_build_time_package_resolution() -> None:
 
 
 def test_redistribution_license_inventory_is_exact() -> None:
-    license_root = check_mavsdk_phase_a.ROOT / "licenses" / "mavsdk-phase-a"
+    license_root = check_mavsdk_provenance.ROOT / "licenses" / "mavsdk-phase-a"
     actual = {path.name for path in license_root.glob("*.txt")}
 
-    assert actual == set(check_mavsdk_phase_a.EXPECTED_LICENSE_BLOBS)
+    assert actual == set(check_mavsdk_provenance.EXPECTED_LICENSE_BLOBS)
 
 
 def test_redistribution_license_bundle_is_complete() -> None:
-    check_mavsdk_phase_a.verify_license_bundle()
+    check_mavsdk_provenance.verify_license_bundle()

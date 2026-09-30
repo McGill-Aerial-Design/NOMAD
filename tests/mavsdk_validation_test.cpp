@@ -105,7 +105,7 @@ int main() {
     test_status_validation();
     test_freshness();
     if (failures == 0) {
-        std::cout << "MAVSDK Phase A support tests passed\n";
+        std::cout << "MAVSDK validation tests passed\n";
         return EXIT_SUCCESS;
     }
     return EXIT_FAILURE;
