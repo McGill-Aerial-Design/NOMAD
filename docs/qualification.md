@@ -124,8 +124,9 @@ at that exact implementation SHA. The `runtime-authority-sitl` artifact records
 all nine checks, actual parameter readbacks and source IDs; its scope is
 `disarmed_pinned_copter_runtime_software_authority_boundary_only`.
 Fresh FC output observations matched runtime requests, source 250 changed FC
-modes while NOMAD was admitted and revoked, and two observed retries with
-dropped FC ACKs stopped after revoke. Link recovery changed the session without
+modes while NOMAD was admitted and revoked. Two wire attempts (initial send plus
+one retry) were observed, with two FC ACKs dropped; no further qualified command
+frame was observed after revocation. Link recovery changed the session without
 restoring an owner; runtime restart rejected old context and required new
 admission. The initial simulator output was restored and observed after runtime
 shutdown. These results complete the tested Copter/software slice only.

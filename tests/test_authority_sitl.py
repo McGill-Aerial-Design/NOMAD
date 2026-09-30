@@ -51,18 +51,18 @@ def isolated_container() -> dict[str, object]:
     }
 
 
-def test_authority_job_is_bounded_isolated_and_precedes_flight() -> None:
+def test_authority_probe_is_bounded_isolated_and_ordered_within_copter_job() -> None:
     yaml = pytest.importorskip("yaml")
     workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "sitl.yml").read_text(encoding="utf-8"))
-    steps = [step for job in workflow["jobs"].values() for step in job.get("steps", [])]
+    steps = workflow["jobs"]["sitl"]["steps"]
     probe_index = next(
         i
         for i, step in enumerate(steps)
         if step.get("name") == "Qualify runtime authority and independent source on isolated Copter"
     )
-    flight_index = next(i for i, step in enumerate(steps) if step.get("run") == "pixi run quadplane-sitl-up")
+    copter_index = next(i for i, step in enumerate(steps) if step.get("run") == "pixi run core-sitl-status")
     step = steps[probe_index]
-    assert probe_index < flight_index
+    assert probe_index < copter_index
     assert steps[probe_index - 1]["name"] == "Build production runtime for authority qualification"
     assert step["timeout-minutes"] == 6
     script = step["run"]
