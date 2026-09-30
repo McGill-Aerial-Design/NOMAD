@@ -24,6 +24,10 @@ in the [historical migration archive](docs/migration.md).
 - [ ] Define and qualify the complete C2-loss policy across supported aircraft
   and phases. Keep communication loss, pilot takeover, and termination as
   separate fault paths with observed FC state and physical outcomes.
+- [ ] Resolve the hosted GCS-heartbeat cadence failure in run `36672382568`.
+  The unchanged relay gate observed a `0.000s` interval; isolated local checks
+  did not reproduce it. Identify the actual packet sources/timing before
+  changing the assertion, then rerun the skipped velocity/geofence checks.
 - [ ] Select, implement and qualify production termination behavior. Include
   activation, latching, reset, external-source interaction and every QuadPlane
   phase required by unresolved Q02. The Mission Planner termination control

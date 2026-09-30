@@ -130,6 +130,17 @@ restoring an owner; runtime restart rejected old context and required new
 admission. The initial simulator output was restored and observed after runtime
 shutdown. These results complete the tested Copter/software slice only.
 
+The full manual run above finished with the complete pinned QuadPlane chain
+passing, including the disarmed RC-fault probe and QLAND landing. Its Copter job
+passed authority, telemetry, connectivity, command flow, mission, velocity
+watchdog, payload, link-loss, zero-delivery and link-recovery checks, then failed
+the existing GCS-heartbeat relay cadence assertion: an observed announcement
+interval was `0.000s`, below the unchanged 0.9 s bound. The later velocity-loop,
+geofence-containment and geofence-upload checks were skipped. Three isolated
+local closed-gate checks passed without reproducing this failure; its cause is
+unresolved. Retain the failed hosted record: this PR does not claim a complete
+Copter workflow pass or relax the heartbeat gate.
+
 ## Not yet equivalent to qualification
 
 Native GCS
