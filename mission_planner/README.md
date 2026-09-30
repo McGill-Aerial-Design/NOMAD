@@ -1,17 +1,18 @@
 # Mission Planner integration
 
-`mission_planner/` is the current C# ground-station integration. It is
-transitional while NOMAD moves vehicle behavior into the standalone C++ core.
+`mission_planner/` is the C# operator UI, management and status client. Supported
+typed vehicle requests use local IPC to the long-running C++ `nomad-runtime`.
+The client does not own vehicle policy or a direct command transport.
 
 The plugin may own:
 
 - operator views and configuration;
 - telemetry presentation;
-- mission and command controls that call the NOMAD client boundary;
+- management and the currently supported typed command controls that call the NOMAD runtime client;
 - GCS-native link, video, log, and display workflows.
 
 It must not become a second source of vehicle, mission, or safety logic. The C++
-core is the product boundary; Mission Planner is replaceable.
+core/runtime is the command boundary; Mission Planner is replaceable.
 
 ## Build
 
@@ -27,7 +28,8 @@ copying, creating, or deleting files in the Mission Planner installation. Run
 `pixi run test-plugin-build-only` to check the build-only dispatch against an
 isolated deny-write installation. That test uses the C# compiler bundled with
 Visual Studio MSBuild. For installation steps, see
-[the packaging guide](packaging/README.md).
+[the packaging guide](packaging/README.md) and
+[operations](../docs/operations.md).
 
 Use `lint-plugin` and focused `test-plugin-*` tasks for non-deploying checks.
 `NomadCoreClient` uses only the C++ runtime over versioned loopback JSON Lines
@@ -46,9 +48,11 @@ competition area (AE27-OPS-004). The LAND-as-termination recipe and descent-spee
 settings are removed. The monitored termination button and hard-boundary request
 report termination unavailable and send no substitute aircraft command. Direct
 vehicle-fence upload/clear is removed; only visual export to the Plan map remains.
-Flight-controller fence installation/readback belongs through the C++ core and
-still needs integrated authority and containment qualification. Do not use these controls as flight termination.
-Aircraft-side activation, authority and acceptance remain migration GAP-05/06.
+Flight-controller fence installation/readback is not exposed through runtime
+IPC v1. A future request must use the C++ core and complete integrated authority
+and containment qualification. Do not use these controls as flight termination.
+Aircraft-wide authority arbitration, termination and hardware acceptance remain
+unqualified; see [qualification status](../docs/qualification.md).
 
 Core-client loopback protocol checks are available through
 `pixi run test-plugin-core-client`; the other pure helper checks are available

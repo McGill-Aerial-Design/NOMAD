@@ -9,10 +9,10 @@ it does not approve flight, hardware changes, or deployment.
 1. [Product requirements and decisions](docs/prd.md): requirement provenance,
    competition scope, assumptions, and the decisions requiring team input.
 2. [Architecture](docs/architecture.md): ownership and data/control boundaries.
-3. [Migration and release gates](docs/migration.md): source-backed inventory,
-   contradictions, dependencies, and objective acceptance evidence.
+3. [Qualification status](docs/qualification.md): current evidence and its exact
+   scope; [migration archive](docs/migration.md) preserves dated reasoning.
 4. [Safety case](docs/safety.md) and [operations](docs/operations.md): failure
-   behavior and how each profile is qualified.
+   behavior and supported deployment procedures.
 5. [TODO](TODO.md): the single actionable ledger.
 
 Each subject has one canonical owner above. Component READMEs explain local
@@ -22,12 +22,12 @@ history, not current release evidence.
 
 ## Recommended system
 
-One active C++ command owner per aircraft owns vehicle decisions, mission state,
-traffic response, payload authorization, telemetry validity, and command outcomes.
-ArduPilot owns stabilization, EKF, navigation execution, and independent failsafes.
-Mission Planner presents operator workflows; ROS 2 and Python provide observations
-and optional compute. The competition web adapter exchanges data without owning
-vehicle decisions.
+The persistent C++ runtime is the software owner for supported typed vehicle
+requests. It does not arbitrate native GCS, RC/ELRS or pilot input. ArduPilot
+owns stabilization, EKF, navigation execution and independent failsafes.
+Mission Planner presents operator workflows; ROS 2 observes telemetry and
+Python provides ground-side tools. Competition mission and server adapters are
+future application work, not current runtime capabilities.
 
 A small persistent C++ runtime is now justified by concurrent clients, the 1 Hz
 competition exchange, traffic processing, cancellation, and payload state. The
@@ -47,7 +47,7 @@ work without ROS/perception, but does not by itself satisfy wildlife assessment.
 | Planning | Reconciled requirements, source inventory, decisions explicitly pending | G0 |
 | Baseline repair | Build/CI/tasks match the deleted Edge Core tree; retain supported compute and video | G1 |
 | MAVSDK adoption | Tested ArduPilot transport parity, production cutover and focused reviewable changes | G-M |
-| Core authority | One active writer, fresh state, cancellable missions, bounded adapters, truthful outcomes | G2 |
+| Core authority | Runtime request admission, explicit software handback, fresh state and truthful outcomes; aircraft-wide arbitration remains open | G2 |
 | Profile qualification | Each profile runs its declared capabilities and exposes missing ones | G3 |
 | Competition integration | Armed 1 Hz telemetry, inbound traffic cylinders and demonstrated operator avoidance | G4 |
 | Task 1 | Survey evidence, count/identity review, simulated-UAV coordination, return and landing | G5 |
@@ -97,9 +97,9 @@ promised dates. Team owners and capacity remain D10.
 
 ## Working discipline
 
-The planning/migration baseline is recorded in commit `d31b0aa`. Focused
-implementation follows the single active item in TODO. Runtime/profile/setup
-repairs and MAVSDK Phase A evidence are recorded in migration. The CONOPS
+The planning baseline is recorded in commit `d31b0aa`. Focused implementation
+follows the remaining items in TODO. Runtime/profile/setup repairs and MAVSDK
+Phase A evidence are preserved in the migration archive. The CONOPS
 reconciliation was prepared from clean main at `fab9f46`; subsequent mainline
 commits added MAVSDK hardening, qualification and finally the Phase E cutover,
 which replaced the production transport outright. Preserve unrelated work and
@@ -107,4 +107,5 @@ follow AGENTS for publication and deployment authorization.
 
 Gate closure requires a recorded artifact/configuration and independent observed
 outcome. A source file, a configured CI job, a mock response, or an old pass count
-is not a current integration result. See the evidence contract in migration.
+is not a current integration result. See the current [qualification status](docs/qualification.md)
+and the dated [evidence archive](docs/migration.md).

@@ -227,8 +227,10 @@ separately supervised ground router enforces its `mission_planner` consumer as
 receive-only and keeps `nomad_core` command-capable. An explicit Mission Planner
 entry with `AllowOutbound` omitted (default true) or set true is rejected at
 startup. Direct Mission Planner links and RC/ELRS are not inhibited.
-Aircraft input selection still needs
-independent proof. The runtime also does not own a
-persistent mission executor or migrate all Mission Planner, ROS or Python
-surfaces. The QuadPlane fixed-wing route is qualified in the core and remains
-outside runtime IPC v1.
+Aircraft input selection still needs independent proof. The runtime does not
+own a persistent mission executor. Mission Planner's supported typed requests
+and the installed CLI use this IPC; ROS is observation-only, and Python vehicle
+access is limited to test, SITL and maintenance tools. The QuadPlane fixed-wing
+route is qualified in the core and remains outside runtime IPC v1. Mission,
+navigation, geofence and payload requests are not exposed through the installed
+client protocol.

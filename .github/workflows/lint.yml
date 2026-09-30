@@ -47,6 +47,8 @@ jobs:
         run: pixi run test-core
       - name: Ruff lint
         run: pixi run lint
+      - name: Strict documentation build
+        run: pixi run docs-build
       - name: Ruff format check
         run: |
           if ! pixi run format-check; then

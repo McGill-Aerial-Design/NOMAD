@@ -15,7 +15,9 @@ to exercise them. All IDs are permanent; retire rather than reuse them.
 Safety H = directly safety relevant, M = supporting safety/evidence, L = mainly
 administrative/scoring. Owner names are component or accountable team roles,
 not a claim that software already exists. Every evidence cell is **required**
-future acceptance evidence unless [migration](migration.md) explicitly records it.
+future acceptance evidence. Current implementation scope is in
+[qualification status](qualification.md); dated run records are in the
+[migration archive](migration.md).
 
 ## Administration and assessment
 

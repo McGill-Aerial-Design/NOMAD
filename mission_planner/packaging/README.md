@@ -1,9 +1,9 @@
 # NOMAD Mission Planner Plugin
 
-A drop-in plugin for [Mission Planner](https://ardupilot.org/planner/) that adds
-the NOMAD ground-control integration. The working source uses a local C++ core
-client and direct media playback; it does not require the removed Edge Core API.
-An existing packaged DLL may predate that migration; verify its build identity.
+The NOMAD plugin is a Windows Mission Planner client. Supported command requests
+use runtime IPC to `nomad-runtime`; router telemetry and native Mission Planner
+controls remain separate paths. For current limits, see
+[qualification status](../../docs/qualification.md).
 
 ## Install
 
@@ -23,6 +23,11 @@ An existing packaged DLL may predate that migration; verify its build identity.
    This copies `NOMADPlugin.dll` into Mission Planner's installation plugins
    folder (`C:\Program Files (x86)\Mission Planner\plugins`).
 3. Start Mission Planner and open the NOMAD panel from the **Tools** menu.
+
+The local build task compiles only; it does not make a release archive or install
+the DLL. The repository release workflow packages the plugin and standalone
+ground router separately. A `v*` tag publishes release assets; manual workflow
+dispatch uploads downloadable artifacts. See the [development workflow](../../docs/development.md).
 
 ## Ground router host
 
@@ -54,7 +59,8 @@ Planner.
 - .NET Framework 4.8 (ships with current Mission Planner / Windows).
 - The separately distributed `NOMADLinkRouter` host package for multi-link routing.
 
-Core-backed operations also need a compatible configured NOMAD C++ executable.
+Runtime-backed requests also need one running, compatible `nomad-runtime` with
+the same configured IPC endpoint. See the [operations guide](../../docs/operations.md).
 Plugin video uses Mission Planner's GStreamer wrapper and SkiaSharp frame support.
 The installer deploys only NOMADPlugin.dll; GStreamer is supplied by the
 Mission Planner installation. The Jetson ROS image bridge and MediaMTX are

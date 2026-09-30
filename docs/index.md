@@ -1,23 +1,31 @@
 # NOMAD documentation
 
-One C++ core, independent clients, optional onboard or ground compute. The working
-tree removes Python Edge Core but has not completed deployment or competition
-qualification.
+Start with the root [README](../README.md), then use the subject owners below.
+Current system behavior belongs in the first group. Dated implementation
+reports are preserved as history and do not override the current guides.
 
-| Subject owner | Document |
+## Current system and workflow
+
+| Subject | Canonical document |
 |---|---|
-| Requirements, provenance and user decisions | [PRD](prd.md) |
-| PRD source appendix: official rules, scoring and interpretations | [CONOPS inventory](conops-requirements.md) |
-| Target ownership and data flow | [Architecture](architecture.md) |
-| Persistent C++ runtime and local IPC | [Runtime IPC](runtime-ipc.md) |
-| AEAC 2027 external server contract and competition module | [AEAC 2027 integration](aeac-2027.md) |
-| Source inventory, contradictions and objective gates | [Migration](migration.md) |
-| Build, tests and contribution workflow | [Development](development.md) |
-| Profiles, runtime procedures and evidence handling | [Operations](operations.md) |
-| Hazards and stable requirement/test mappings | [Safety](safety.md) |
-| Subordinate transport decision and parity gates | [MAVSDK adoption](mavsdk-adoption.md) |
-| Agent practices | [Agent guidance](agent-guidance.md) |
+| Current component ownership and command path | [Architecture](architecture.md) |
+| What is proven and what remains unqualified | [Safety and qualification status](qualification.md) |
+| Safety requirements and evidence mappings | [Safety case](safety.md) |
+| Build, tests, CI, SITL, ROS and packaging workflow | [Development](development.md) |
+| Runtime, router, profiles and deployment operation | [Operations](operations.md) |
+| Persistent runtime and local IPC contract | [Runtime IPC](runtime-ipc.md) |
 
-Root PLAN.md is the delivery summary; TODO.md is the only actionable ledger.
-Component READMEs describe local interfaces. Historical CHANGELOG entries are
-not current qualification evidence. Start with PRD, then architecture and migration.
+## Product requirements and component detail
+
+| Subject | Canonical document |
+|---|---|
+| Product requirements and decisions | [PRD](prd.md) |
+| Official rules, scoring and interpretations | [CONOPS requirement inventory](conops-requirements.md) |
+| AEAC 2027 external contract and future integration scope | [AEAC 2027 integration](aeac-2027.md) |
+| MAVSDK transport decision | [MAVSDK adoption](mavsdk-adoption.md) |
+| Reviewed MAVSDK pin, license and dependency provenance | [MAVSDK dependencies](mavsdk-dependencies.md) |
+| Engineering and agent practices | [Agent guidance](agent-guidance.md) |
+
+The [migration archive](migration.md) preserves dated source reviews, decisions
+and run evidence. [TODO](../TODO.md) is the branch-tip actionable ledger.
+Component READMEs link back here and describe only their local interfaces.

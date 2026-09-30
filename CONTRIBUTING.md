@@ -1,41 +1,47 @@
 # Contributing to NOMAD
 
-NOMAD is migrating from a Python edge service to a small C++20 vehicle core.
-Keep changes aligned with that direction: simple code, narrow ownership, explicit
-behavior, and tests that do not need a drone.
+NOMAD's production command path is a persistent C++20 `nomad-runtime` with one
+MAVSDK transport. The installed CLI and supported Mission Planner requests use
+local runtime IPC; ROS 2 is observation-only. Keep changes within these current
+ownership boundaries and make core behavior testable without an aircraft.
 
 ## Start here
 
-1. Fork the repository.
-2. Create a focused branch in your fork.
-3. Install Pixi and run the relevant checks.
-4. Read [the architecture](docs/architecture.md) and [the migration plan](docs/migration.md)
-   before changing ownership boundaries.
+1. Start with the root [README](README.md) and hardware-free first check.
+2. Read [architecture](docs/architecture.md), [development](docs/development.md),
+   and [qualification status](docs/qualification.md) before changing ownership
+   boundaries.
+3. Install Pixi and run the focused checks for your change.
 
 ```bash
-pixi run lint
 pixi run test-python
-pixi run docs-build
+pixi run build-core
+pixi run test-core
+pixi run test-runtime-ipc
 ```
 
-During the transition, use the current Python/SITL commands documented in
-[development](docs/development.md). The C++ workflow is `build-core`, `test-core`,
-and `sitl`.
+The [development guide](docs/development.md) owns quality, ROS, SITL, Mission
+Planner, router, package and install commands. [Qualification status](docs/qualification.md)
+describes what each check proves; the [migration archive](docs/migration.md) is
+historical evidence, not the current architecture guide.
 
 ## Target layout
 
 ```text
 include/nomad/       C++ public headers
-src/                 C++ implementation and thin CLI
-tests/               CTest, unit, and integration tests
-ros2/                ROS 2 adapter packages
-python/              CV, ML, simulation, analysis, and utilities
-mission_planner/     Ground-station client
+src/                 C++ core implementation
+tools/runtime/       Long-running production runtime
+tests/               CTest, unit, integration and qualification tests
+ros2/                Receive-only ROS 2 observer
+python/              CV, ML, simulation, analysis and ground tools
+mission_planner/     UI, status and typed runtime client
 ```
 
 The `edge_core/` tree has been removed. Do not recreate dynamic modules,
-service registries, REST layers, or Python vehicle-control paths. Put new product
-behavior in the migration plan first.
+service registries, REST layers or Python vehicle-control paths. Put reusable
+vehicle behavior in the C++ core/runtime; add new client requests through typed
+runtime IPC. Competition-specific application behavior belongs in a future
+adapter after its requirements and safety boundaries are defined.
 
 ## Code standard
 

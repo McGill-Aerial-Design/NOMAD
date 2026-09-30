@@ -70,10 +70,11 @@ nav:
   - Development: development.md
   - Agent and engineering guidance: agent-guidance.md
   - Operations: operations.md
-  - Migration: migration.md
+  - Qualification status: qualification.md
+  - Safety case: safety.md
+  - Historical migration evidence: migration.md
   - MAVSDK adoption: mavsdk-adoption.md
   - MAVSDK dependencies: mavsdk-dependencies.md
-  - Safety: safety.md
 
 
 validation:
