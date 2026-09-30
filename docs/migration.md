@@ -493,10 +493,36 @@ remains blocked by the pre-existing missing SPDX header in
 scripts/hardware/servo_test.c; that
 unrelated hardware file is unchanged.
 
+At this C02 checkpoint, dependency pruning was deferred; that report said the
+distribution name `nomad-edge` remained for compatibility after CLI removal.
+
 Docker daemon unavailable: no image build, live SITL, ROS integration, sensor
 stream or GPU/hardware qualification was run for this repair. G1 is not closed.
-Python dependency pruning is deferred; the distribution
-name `nomad-edge` remains for compatibility although its deleted CLI is removed.
+
+#### Unsupported scaffolding and dependency prune — 2026-09-29
+
+Starting from PR #49 merge commit 4ef22be451c0dda450e60a387d841a6aa737bbaf,
+sim-ros-perception-up and the Gazebo task/image implementation are already
+absent. Branch-tip Gazebo references were limited to stale VS Code task buttons
+and a Dockerfile search entry; those references are removed. The unused
+OpenCV-CUDA installer had no task, documentation, CI, package, or source
+consumer, so it is removed without replacing the unavailable perception path.
+
+Current Python packaging declares nomad-tools; the old nomad-edge name is
+kept only in dated history and negative regression checks. pymavlink remains a
+development/qualification dependency, a pinned SITL dependency, and the ROS
+integration responder dependency. It is removed from Jetson and Isaac runtime
+images that copy no current pymavlink consumer. transforms3d had no repository
+imports and is removed from the Jetson, Isaac, and simulation ROS images.
+
+Mission Planner continues to use its GStreamer wrapper and SkiaSharp frame
+handling. The tracked `third_party/libvlc` managed assets and unused packaging
+helpers, OpenTK references, and WPF/HelixToolkit resolver are removed. The
+plugin build proved `DFLogModel` compiles against a Mission Planner API
+exposing `ReadOnlySpan<T>`, so System.Memory remains a non-copied host
+reference. SITL, ROS
+observation/integration, the standalone router, and MediaMTX/video services
+remain supported and unchanged.
 
 #### C10-C12 repair evidence - 2026-09-09
 

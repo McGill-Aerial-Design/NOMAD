@@ -55,6 +55,9 @@ Planner.
 - The separately distributed `NOMADLinkRouter` host package for multi-link routing.
 
 Core-backed operations also need a compatible configured NOMAD C++ executable.
-Video needs its selected playback/runtime dependencies. Qualify the complete
-package at G8; a DLL-only install does not establish task readiness. Installation
-changes the local Mission Planner deployment and requires operator authorization.
+Plugin video uses Mission Planner's GStreamer wrapper and SkiaSharp frame support.
+The installer deploys only NOMADPlugin.dll; GStreamer is supplied by the
+Mission Planner installation. The Jetson ROS image bridge and MediaMTX are
+separate video infrastructure. Qualify the complete package at G8; a DLL-only
+install does not establish task readiness. Installation changes the local
+Mission Planner deployment and requires operator authorization.

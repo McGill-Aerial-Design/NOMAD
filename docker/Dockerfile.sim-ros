@@ -68,11 +68,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ==============================================================
 # Python deps. numpy<2 keeps compatibility with the prebuilt ROS message
 # packages (mirrors Dockerfile.jetson). pytest runs the tests/ros/ suite inside
-# the image. The optional video bridge lives under python/tools.
+# the image. pymavlink provides the independent MAVLink test responder. The
+# optional video bridge lives under python/tools.
 # ==============================================================
 RUN pip3 install --no-cache-dir \
     pymavlink \
-    transforms3d \
     pytest \
     'numpy<2'
 
