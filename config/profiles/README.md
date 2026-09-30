@@ -1,16 +1,17 @@
 # Deployment profile templates
 
 Product profiles: onboard_companion, groundstation_gpu and groundstation_minimal.
-The profile loader and deterministic configuration tests exist; runtime capability
-and hardware qualification remain open.
+These files are deployment templates. Deterministic tests check configuration
+shape; they do not prove runtime startup, hardware readiness, or flight capability.
 
 Use profile-list to inspect names. profile-load writes ignored config/nomad.env
 and synchronizes Mission Planner configuration; it is a state-changing action.
 Do not load a profile merely to inspect it.
 
-The three product templates now validate canonical endpoints and remove retired
-profile-owned settings; optional workloads remain disabled until qualified.
-Perception/VIO/autostart flags are not proof that a workload runs; VIO
-availability is not configured by product-profile flags. See the canonical
-[operations](../../docs/operations.md) and [migration](../../docs/migration.md)
-for G1/G3 repairs and acceptance. Do not create another setup plan here.
+The installed CLI/runtime IPC v1 exposes no mission, navigation, geofence, or
+payload request path. Perception/VIO/autostart flags do not prove that a workload
+runs. `NOMAD_AUTOSTART_MAVLINK_ROUTER` refers to the optional aircraft-side
+router service, not the standalone ground router or `nomad-runtime`. See the
+canonical [operations](../../docs/operations.md),
+[qualification status](../../docs/qualification.md), and
+[development workflow](../../docs/development.md).

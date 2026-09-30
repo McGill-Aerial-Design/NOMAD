@@ -1,8 +1,8 @@
 # Safety case
 
-Baseline: CONOPS v1.0 reconciliation, 2026-09-10. This is a safety argument and verification backlog, not a
-flight authorization. Existing requirement IDs remain stable. Current source and
-test results are in [migration](migration.md); proposed requirements below are
+Baseline: CONOPS v1.0 reconciliation, 2026-09-10. This is a safety argument and
+verification backlog, not a flight authorization. Existing requirement IDs
+remain stable. The current evidence boundary and qualification status are in+[Qualification status](qualification.md); dated source and run reports are in+the [migration evidence archive](migration.md). Proposed requirements below are
 not claimed as implemented.
 
 ## Safety argument and limits
@@ -156,7 +156,7 @@ These retain their original obligations; partial coverage is not satisfaction.
 | SR-LNK-01 | Commands require fresh FC heartbeat | Velocity gate/transport behavior tested; audit every discrete command path at G2 |
 | SR-LNK-02 | Missing velocity input triggers a zero command within timeout | Watchdog tests; independent wire and FC observations required |
 | SR-LNK-03 | Shutdown sends zero before closing an active link | Loopback ordering tests; live SITL and physical link evidence separate |
-| SR-LNK-04 | Announce a standard GCS heartbeat for heartbeat-gated relays | MAVSDK `GroundStation` configuration announces at 1 Hz; the closed-gate `core-sitl-gcs-heartbeat` harness requires at least three measured intervals across four announcements at 0.9–1.3 s. Current-head full SITL qualification remains required |
+| SR-LNK-04 | Announce a standard GCS heartbeat for heartbeat-gated relays | MAVSDK `GroundStation` configuration announces at 1 Hz; the closed-gate `core-sitl-gcs-heartbeat` harness requires at least three measured intervals across four announcements at 0.9–1.3 s. Latest full hosted SITL evidence is tied to `cd9eb4e`; exact-base `042c980` push covered connect/status smoke only. See [current scope](qualification.md#sitl-and-ros-readiness) |
 | SR-FEN-01 | Upload, enable and verify FC fence before autonomous flight | Upload/readback/enable-reading tests; global preflight enforcement and all fence fields open |
 | SR-FEN-02 | Reject position targets outside configured boundary | C++ target tests; Mission Planner GuidedGoto reports unavailable without dispatch (`mission_planner/tests/coreclient/TerminationRequestTests.cs::GuidedGoto_ReportsUnavailableWithoutDispatch`); unsupported runtime goto produces zero fake commands (`tests/runtime_ipc_test.cpp::test_protocol_errors`); live containment and full mission/velocity paths open |
 | SR-PAY-01 | Validate servo channel and PWM before actuation | C++ generic range tests; board map and reserved payload channels open |
@@ -164,9 +164,9 @@ These retain their original obligations; partial coverage is not satisfaction.
 | SR-PAY-03 | Release requires explicit operator interlock | Dedicated core release and UI tests; all raw output access must share authorization |
 | SR-SEC-01 | No NOMAD command disables FC failsafes | Structural scan only; semantic allowlist and plugin parameter audit open |
 | SR-SEC-02 | Authenticate command clients at trust boundary | Nonempty environment value is not authentication; production gate open |
-| SR-SEC-03 | Authenticate and audit command requests | CLI admission logs only; final outcomes and all client/library entrypoints open |
-| SR-TYP-02 | QuadPlane forward transition and VTOL takeoff stay bound to the admitted aircraft identity and session; transition completion remains armed/AUTO and takeoff requires a fresh post-ACK climb sample | Deterministic counterexamples and controls in `tests/vehicle/quadplane/quadplane_transition_test.cpp` and `tests/quadplane_vtol_takeoff_test.cpp`; full pinned QuadPlane chain through stable QLAND remains required |
-| SR-LND-01 | Pinned QuadPlane landing success requires fresh post-ACK descent, landed-state telemetry, disarm and a stable final envelope; ACK alone is never touchdown | C++ falsification and deterministic MAVSDK landed-state mapping pass; independent full-chain pinned SITL trace passed in [run 36210548163](https://github.com/YoussGm3o8/NOMAD/actions/runs/36210548163) |
+| SR-SEC-03 | Authenticate and audit command requests | Runtime typed outcomes and authority context are returned to clients and covered by integration tests; local API-key gating is not user authentication, and a durable audit trail remains open |
+| SR-TYP-02 | QuadPlane forward transition and VTOL takeoff stay bound to the admitted aircraft identity and session; transition completion remains armed/AUTO and takeoff requires a fresh post-ACK climb sample | Deterministic counterexamples and controls in `tests/vehicle/quadplane/quadplane_transition_test.cpp` and `tests/quadplane_vtol_takeoff_test.cpp`; the pinned profile chain through QLAND has SITL evidence at the SHA recorded in [qualification status](qualification.md#sitl-and-ros-readiness), with hardware and other scenarios unqualified |
+| SR-LND-01 | Pinned QuadPlane landing success requires fresh post-ACK descent, landed-state telemetry, disarm and a stable final envelope; ACK alone is never touchdown | C++ falsification and deterministic MAVSDK landed-state mapping pass; pinned SITL evidence and exact revision are summarized in [qualification status](qualification.md#sitl-and-ros-readiness) |
 
 ## Additional hazards and proposed obligations
 
@@ -176,7 +176,7 @@ mappings when implemented; do not invent entries in the existing checked block.
 
 | Hazard | Proposed requirement | Mitigation / objective falsification test | Gate |
 |---|---|---|---|
-| H-09 Conflicting writers | SR-AUT-01: one active owner and explicit handover | Mission Planner gimbal angles now use typed runtime requests; fake-runtime tests cover missing authority, revoke, replay and busy rejection, and the MAVSDK peer checks the fixed command. The installed CLI uses runtime IPC; non-installed `nomad-qualification`, native Mission Planner controls, RC/pilot, ROS and maintenance tools remain separate test or writer paths. Aircraft-wide handover is open | G2 |
+| H-09 Conflicting writers | SR-AUT-01: one active owner and explicit handover | Mission Planner's supported typed requests and the installed CLI use runtime IPC; authority lifecycle tests cover missing authority, revoke, replay and busy rejection, and MAVSDK peer checks cover the typed command path. Non-installed `nomad-qualification`, native Mission Planner controls, RC/pilot and maintenance tools remain outside aircraft-wide arbitration. ROS is observation-only. Physical handover is open | G2 |
 | H-10 Stale position with fresh heartbeat | SR-TEL-01: per-field age and clock validity | Freeze position while heartbeats flow; position-dependent actions fail closed — implemented as a configurable position-freshness gate (`position_freshness_timeout`, default 2000 ms) enforced by the core | G2 |
 | H-11 Collision or missed traffic | SR-AIR-01: unknown/stale traffic never means clear | Crossing/head-on/reordered/expired tracks yield expected advisories with measured warning time | G4 |
 | H-12 Wrong aircraft mode/transition | SR-TYP-01: validate aircraft class and state | Copter mode constants refused for Plane; failed/aborted VTOL transitions use reviewed response | G2/G7 |
@@ -295,4 +295,5 @@ Read back the fence, output mapping and required navigation state; invalidate
 payload permissions before maintenance, battery swap or restart. On uncertainty,
 report failed/unknown outcome and follow the reviewed procedure. After the
 session, observe safe payload state, disarmed aircraft and restored configuration.
-Full gate evidence and role ownership are in [migration](migration.md).
+Current outstanding actions are in [TODO](../TODO.md); dated gate records and
+role assignments are retained in the [migration archive](migration.md).

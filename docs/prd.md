@@ -258,5 +258,7 @@ not imply owning a multi-aircraft fleet; simulated traffic uses independent
 track identities. Video display does not imply VIO navigation. Removing a Python
 vehicle service does not remove supported onboard or ground GPU compute.
 
-Implementation status and executable evidence live in [migration](migration.md);
-safety requirements live in [safety](safety.md). Do not duplicate pass counts here.
+Current implementation scope and qualification evidence live in
+[qualification status](qualification.md). Dated implementation evidence is in
+the [migration archive](migration.md); safety requirements live in
+[safety](safety.md). Do not duplicate pass counts here.

@@ -1,22 +1,25 @@
-# MAVSDK adoption decision and parity gates
+# MAVSDK transport decision and adoption evidence
 
 Decision originally recorded 2026-09-06; confirmed by the user on 2026-09-08:
 MAVSDK ArduPilot support must be used during competition. Adoption is an early
 implementation priority with unit tests, integration tests and focused reviewable
-changes. It is gate G-M in [migration](migration.md), a prerequisite for release.
+changes. Remaining release work is in [TODO](../TODO.md); dated implementation
+and qualification evidence is preserved in the [migration archive](migration.md).
 
-This is the transport decision record. Product phases, hardware and competition
-requirements live in the canonical migration, architecture and PRD documents.
+This record preserves the transport decision, reviewed fork changes and dated
+phase-era evidence. Current component ownership is in
+[architecture](architecture.md), live qualification limits are in
+[qualification status](qualification.md), and remaining work is in
+[TODO](../TODO.md). Product requirements remain in the [PRD](prd.md).
 CONOPS v1.0 does not mandate MAVSDK; mandatory adoption is the project decision.
 Its [source requirements](conops-requirements.md) define the acceptance context:
 100 m AGL, all-mode termination, traffic separation and task evidence.
 
 ## Current status
 
-The [migration qualification status](migration.md#current-qualification-status)
-owns current aircraft scope, run and implementation provenance, repository
-baseline counts and open release gates. This document keeps the transport decision
-and its dated parity evidence.
+The [current qualification status](qualification.md) owns the tested scope and
+remaining limits. This document keeps the transport decision and its dated
+parity evidence; it is not the current developer workflow.
 
 MAVSDK is the transport. The Phase E cutover removed the hand-written codec
 (`src/mavlink/{protocol,udp_connection,udp_commands,fence,params}.cpp`, the
@@ -63,7 +66,7 @@ expected ID 1. Complete Linux, Apple and Windows workflows pass on that revision
 see the [dated compatibility evidence](migration.md#mavsdk-compatibility-evidence-2026-09-19) for the final evidence and remaining gates.
 
 The merged-main Copter matrix and later pinned QuadPlane operation chain are
-recorded in the [current migration status](migration.md#current-qualification-status).
+summarized in [current qualification status](qualification.md).
 The detailed observer measurements and earlier failed attempts remain in the
 dated migration evidence. These results do not close resource approval, the
 broader supported-aircraft/QuadPlane matrix, ROS, packaging/install/rollback,
@@ -83,7 +86,13 @@ qualify command parity, aircraft hardware or QuadPlane behavior.
 The remaining Phase A release blocker is resource qualification: collect
 repeatable build-tree, executable, memory, startup and CI-time measurements and
 approve explicit budgets. Historical one-machine measurements below are retained
-for comparison but are not themselves approved thresholds.
+for comparison but are not themselves approved thresholds. Track this in the
+current [remaining work ledger](../TODO.md).
+
+The Phase A-F sections below retain historical planning and implementation
+notes, including task names and run results from their original revisions. Use
+the [development guide](development.md) for current task names and the
+[qualification status](qualification.md) for current evidence.
 
 ## Ownership and rationale
 

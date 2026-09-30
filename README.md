@@ -1,59 +1,58 @@
 # NOMAD
 
-NOMAD is a C++20 vehicle-control core with CLI, Mission Planner and ROS 2 clients,
-prepared for the AEAC SUAS 2027 Wildlife Monitoring CONOPS v1.0. ArduPilot owns
-stabilization, EKF, navigation execution and failsafes.
+NOMAD is a C++20 system for monitoring and controlling ArduPilot vehicles. The
+production NOMAD command path is the installed `nomad` CLI or supported Mission
+Planner requests over local IPC to one long-running `nomad-runtime`; it applies
+vehicle and safety policy, then sends through one MAVSDK transport. ArduPilot
+continues to own stabilization, navigation execution and its failsafes.
 
-## Current status
+Mission Planner provides operator UI, management and status. Its supported
+plugin actions use runtime IPC; its router consumer is receive-only. ROS 2 is an
+optional telemetry observer with no vehicle command interface. The standalone
+ground router routes MAVLink but does not authorize flight actions. The separate
+`nomad-qualification` executable is non-installed test tooling. These software
+boundaries do not arbitrate pilot/RC input or native Mission Planner controls;
+see the [qualification status](docs/qualification.md).
 
-The working migration tree contains a C++ core, MAVSDK MAVLink transport,
-Copter operations, safety/watchdog/fence/payload primitives and adapters. Edge
-Core source has been removed. Build and profile/service wiring repairs are
-recorded in the migration gates, and setup/provisioning targets the C++ core.
-The [current qualification status](docs/migration.md#current-qualification-status)
-owns the exact aircraft profiles, implementation SHAs, test baseline, hosted SITL
-evidence and remaining gates. Existing Copter scenarios and narrow QuadPlane
-operations through QLAND are SITL evidence for their listed profiles. QuadPlane
-link-loss/manual takeover, integrated Task 1 flight, competition-server
-integration, command-authority/runtime hardening, generic landing/RTL/QRTL and
-hardware qualification remain open.
+## First check
 
-Task 1 targets a lightweight VTOL with ground GPU vision. Task 2 currently
-targets a quad below 15 kg with an onboard Jetson Orin Nano and robotic arm;
-hardware integration remains unqualified. All three product profiles remain:
-onboard_companion, groundstation_gpu and groundstation_minimal. See the canonical
-documents for confirmed directions, confirmed source requirements and unresolved choices.
+Prerequisites are Git with the MAVSDK submodule, Pixi, CMake 3.22.1+ and a C++20
+compiler. The first C++ configure/build may need network access for pinned
+dependencies. No aircraft, Docker, ROS or GPU is needed for these checks.
 
-## Start here
-
-- [Delivery plan](PLAN.md) and [working ledger](TODO.md)
-- [Requirements and user decisions](docs/prd.md)
-- [Architecture](docs/architecture.md)
-- [Current qualification status](docs/migration.md#current-qualification-status)
-- [Development](docs/development.md), [operations](docs/operations.md)
-  and [safety case](docs/safety.md)
-
-~~~sh
+```sh
+git submodule update --init --recursive
+pixi run test-python
 pixi run build-core
 pixi run test-core
-pixi run test-python
-pixi run docs-build
-~~~
+pixi run test-runtime-ipc
+```
 
-`build-core` creates the production CLI and runtime in the build tree. It does
-not install them; `package-core` creates release archives, and
-`verify-core-staged-install` checks an isolated staged prefix. These checks do
-not start hardware. The status matrix lists the scoped live SITL
-evidence; broader image/profile and ROS startup gates at G1 remain open. Real
-configuration stays in ignored local storage.
+`test-python` is the quickest hardware-free regression check. `test-runtime-ipc`
+builds and exercises the persistent runtime against a local fake MAVLink peer.
+Builds and tests do not install or deploy executables.
 
-## Layout
+## Guides
 
-C++ headers and implementation live in include/nomad and src; tests in tests.
-ros2 contains adapters, python contains retained tools/perception work,
-mission_planner contains the client, and config/docker/infra contain deployment
-support. Public core headers do not depend on clients, ROS, Python or GPU SDKs.
+- [Architecture](docs/architecture.md) — current components, command path and
+  where changes belong.
+- [Development](docs/development.md) — build, test, SITL, ROS and packaging.
+- [Contributing](CONTRIBUTING.md) — repository workflow and code standards.
+- [Operations](docs/operations.md) — runtime, router, profiles and installation.
+- [Safety case](docs/safety.md) and [qualification status](docs/qualification.md)
+  — implemented boundaries, evidence levels and unqualified behavior.
+- [Runtime IPC](docs/runtime-ipc.md) — local protocol and authority lifecycle.
+- [ROS 2 adapter](ros2/nomad_ros/README.md) and [Mission Planner client](mission_planner/README.md).
+- [Migration evidence archive](docs/migration.md) — dated implementation and
+  qualification records; use the current guides above for branch-tip behavior.
+- [Remaining work](TODO.md) — the actionable branch-tip ledger.
 
-## License
+## Repository map
 
-Apache 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+`include/nomad/` and `src/` contain the reusable C++ core;
+`tools/runtime/` composes the long-running runtime; `tests/` contains C++ and
+Python checks; `scripts/dev/` contains qualification runners; `ros2/nomad_ros/`
+is the ROS observer; `mission_planner/src/` is the Mission Planner client; and
+`python/` contains retained ground-side utilities.
+
+NOMAD is licensed under Apache 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

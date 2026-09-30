@@ -1,16 +1,21 @@
-# Migration and release gates
+# Historical migration and release evidence
+
+This archive preserves dated implementation reviews, run records, migration
+reasoning and release-gate evidence. Its snapshots describe the source revision
+and date recorded there; they are not current operating instructions. Use the
+[current architecture](architecture.md), [development workflow](development.md),
+[operations guide](operations.md), [qualification status](qualification.md),
+and [TODO](../TODO.md) for branch-tip truth. The original dated reports and task
+names below are retained as written so their historical evidence remains clear.
 
 Historical source review baseline: `fab9f46`, inspected 2026-09-10 with a clean working tree;
 includes planning `d31b0aa`, runtime `3ef38e7`, profiles `51f309e`, setup `a9762b0`
 and MAVSDK Phase A `6922371`. Earlier evidence below retains its original dates.
-This document owns implementation status, the
-cutover inventory and gate evidence. [PRD](prd.md) owns requirements and decisions;
-[architecture](architecture.md) owns the target; TODO is the working ledger.
 
-## Current qualification status
+## Historical qualification snapshot — 2026-09-26 { #current-qualification-status }
 
-This is the current owner for qualification scope, provenance and unqualified
-gates. Run [36210548163](https://github.com/YoussGm3o8/NOMAD/actions/runs/36210548163)
+This dated snapshot recorded qualification scope, provenance and unqualified
+gates as of 2026-09-26. Run [36210548163](https://github.com/YoussGm3o8/NOMAD/actions/runs/36210548163)
 was created 2026-09-26T02:04:54Z. Its pinned QuadPlane full chain and Copter
 loop-closure check passed at implementation head
 `dcdd1d121d51eefa451fa5d16ab121ef8793e427`; the separate
@@ -55,7 +60,7 @@ attempts with retained JSON evidence before running the established flight
 chain. An artifact's exact source SHA and `dirty_source` flag own its provenance;
 development runs are not clean-head hosted qualification. The native profile's
 effective `FLTMODE_CH=5`, `RC5_OPTION=0` does not model the team's CH5 arming
-configuration. See [operation and scope](operations.md#simulation-and-test-operations).
+configuration. Current evidence limits are in the [qualification status](qualification.md#sitl-and-ros-readiness).
 
 This tool does not close G-M loss/manual takeover, D09 or Q02. ELRS/LTE/FPV
 hardware independence, aircraft failsafe/termination response, manual arbitration
@@ -239,7 +244,7 @@ three GPT-6 Luna MAX agents in two assignments each; the agent service rejected
 creation of a fourth agent. Pre-existing `.gitignore` and untracked submodule
 state were preserved. This is local development evidence, not clean-head CI.
 
-The synthesized [authority contract](architecture.md#authority-contract-and-remaining-qualification)
+The synthesized [authority contract](architecture.md#runtime-and-authority-boundary)
 requires one software owner and generation, revocation before sends, explicit
 handback and an overriding aircraft-side termination latch. It is a target,
 not implemented aircraft arbitration. No termination command, RC map, Lua
@@ -324,7 +329,7 @@ complexity, strict docs build, supported Compose configurations, three-profile
 listing and an isolated Python wheel install/import. These checks do not qualify
 live link loss, manual takeover or aircraft termination.
 
-## Current implementation inventory
+## Historical implementation inventory — 2026-09-26
 
 The [dated MAVSDK compatibility evidence](#mavsdk-compatibility-evidence-2026-09-19)
 records the historical fork baseline and hosted qualification.
@@ -1148,7 +1153,7 @@ independent pymavlink observer verifies descent and final landing state.
 
 `VehicleOperation` and `supports_operation` now make command admission an
 explicit policy rather than a consequence of recognizing an aircraft class.
-The full before/after audit is in [Aircraft operation capabilities](architecture.md#aircraft-operation-capabilities).
+The current operation scope is in [qualification status](qualification.md).
 The policy now admits only the deliberately narrow QuadPlane operation subset:
 `arm`, semantic
 `set_guided_mode`, dedicated `vtol_takeoff`, dedicated

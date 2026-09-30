@@ -5,8 +5,12 @@ These tests drive isolated ArduPilot SITL with the non-installed
 installed `nomad` CLI uses runtime IPC only; commands without a typed v1 request
 report unavailable.
 Normal pytest skips live scenarios without an explicitly configured simulation.
-Nightly/on-demand SITL CI is configured, but a workflow file is not passed-run
-evidence; merge requests must link a successful current-head live run.
+Pull request CI runs deterministic software tests; path-triggered pushes run a
+reduced Copter connect/status smoke, while scheduled and manually dispatched
+SITL workflows run the full Copter scenarios, RC-fault delivery probe and
+pinned QuadPlane chain. See [current SITL/ROS evidence](../../docs/qualification.md#sitl-and-ros-readiness)
+for the exact run SHAs and limits. A workflow definition alone is not passed-run
+evidence, and a reduced smoke is not the full matrix.
 
 ## Local test responsibilities
 
@@ -46,9 +50,10 @@ evidence; merge requests must link a successful current-head live run.
   ordered waypoint proximity before reporting a pass. This does not
   qualify arbitrary modes, general missions, return/recovery, VTOL-back,
   landing, QuadPlane link-loss response or complete Task 1 execution. The first
-  complete hosted run passed at implementation head `7f6206cbad51aade79ae86b20983d4e1fb818901`
-  in [workflow run 35818612311](https://github.com/YoussGm3o8/NOMAD/actions/runs/35818612311);
-  the PR description records the documentation-inclusive final-head rerun.
+  complete hosted route run was a dated result at implementation head
+  `7f6206cbad51aade79ae86b20983d4e1fb818901` in [workflow run 35818612311](https://github.com/YoussGm3o8/NOMAD/actions/runs/35818612311);
+  current full-chain evidence and limits are in
+  [qualification status](../../docs/qualification.md#sitl-and-ros-readiness).
 
 The obsolete sitl-gimbal task was removed with runtime wiring repair. No successful gimbal evidence is claimed.
 
@@ -82,4 +87,4 @@ Flight scenarios remain Copter-oriented except for the separately pinned
 QuadPlane chain through return/recovery, VTOL-back and QLAND landing, plus the
 disarmed receiver-fault delivery probe. Those slices do not qualify link loss,
 authority, manual takeover, handback, termination or complete Task 1 flight. Required gate artifacts and historical/current distinctions live in
-[migration](../../docs/migration.md); do not duplicate pass counts here.
+[migration archive](../../docs/migration.md); do not duplicate pass counts here.
